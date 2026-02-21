@@ -1,0 +1,26 @@
+schema: spec-driven
+
+context: |
+  Project: Netclaw
+  Runtime: .NET 10, single-process host
+  Core architecture: Akka.NET actor sessions with PostgreSQL persistence
+  Primary channel: Slack Socket Mode
+  Tool integration: local tools plus MCP server support in MVP
+  Security posture: default deny ACL, fail-closed startup validation
+  Session identity: {channelId}/{threadTs}
+  Product method: PRDs in docs/prd + OpenSpec change planning and spec deltas
+
+rules:
+  proposal:
+    - Reference source PRD IDs from docs/prd.
+    - Explicitly state in-scope vs out-of-scope for MVP.
+    - Include security and operational impact section.
+  specs:
+    - Write testable requirements with Given/When/Then scenarios.
+    - Reflect default-deny ACL and Slack Socket Mode assumptions.
+  design:
+    - Describe actor boundaries and persistence implications.
+    - Include failure modes and recovery behavior.
+  tasks:
+    - Break down by vertical slices with verifiable acceptance checks.
+    - Include docs/spec updates as explicit tasks when behavior changes.

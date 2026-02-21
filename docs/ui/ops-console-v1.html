@@ -1,0 +1,351 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Netclaw Ops Console Mockup</title>
+  <style>
+    :root {
+      --bg: #0a1217;
+      --bg2: #0f1a21;
+      --panel: #13232d;
+      --panel2: #162a35;
+      --line: #26414f;
+      --text: #d5e5ea;
+      --muted: #7f9aa5;
+      --ok: #6ac58d;
+      --warn: #e4b266;
+      --critical: #f06f65;
+      --accent: #4fc8d8;
+      --radius: 10px;
+      --shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+      --font: "IBM Plex Sans", "Segoe UI", sans-serif;
+      --mono: "IBM Plex Mono", "Consolas", monospace;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background:
+        radial-gradient(1200px 700px at 110% -20%, #163747 0%, transparent 60%),
+        radial-gradient(900px 600px at -20% 120%, #2a3f2f 0%, transparent 55%),
+        linear-gradient(180deg, var(--bg2), var(--bg));
+      color: var(--text);
+      font-family: var(--font);
+    }
+
+    .shell {
+      display: grid;
+      grid-template-columns: 260px 1fr;
+      min-height: 100vh;
+    }
+
+    .nav {
+      border-right: 1px solid var(--line);
+      background: rgba(9, 19, 24, 0.78);
+      backdrop-filter: blur(6px);
+      padding: 18px;
+    }
+
+    .brand {
+      margin: 0 0 18px;
+      font-size: 18px;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+
+    .brand span {
+      color: var(--accent);
+    }
+
+    .section-title {
+      margin: 16px 0 8px;
+      color: var(--muted);
+      font-size: 12px;
+      letter-spacing: 0.09em;
+      text-transform: uppercase;
+    }
+
+    .menu button,
+    .actions button {
+      width: 100%;
+      text-align: left;
+      border: 1px solid var(--line);
+      background: var(--panel);
+      color: var(--text);
+      border-radius: 8px;
+      padding: 10px 11px;
+      margin: 6px 0;
+      font-size: 14px;
+      cursor: default;
+    }
+
+    .menu button.active {
+      border-color: var(--accent);
+      box-shadow: inset 0 0 0 1px rgba(79, 200, 216, 0.3);
+    }
+
+    .content {
+      padding: 22px;
+      display: grid;
+      grid-template-rows: auto auto 1fr;
+      gap: 16px;
+    }
+
+    .topbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: rgba(19, 35, 45, 0.72);
+      padding: 12px 14px;
+      box-shadow: var(--shadow);
+    }
+
+    .topbar h1 {
+      margin: 0;
+      font-size: 18px;
+      font-weight: 600;
+    }
+
+    .pill-row {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .pill {
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 5px 10px;
+      font-size: 12px;
+      color: var(--muted);
+      background: var(--panel2);
+    }
+
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(160px, 1fr));
+      gap: 12px;
+    }
+
+    .card {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: linear-gradient(180deg, rgba(22, 42, 53, 0.92), rgba(19, 35, 45, 0.92));
+      padding: 12px;
+      box-shadow: var(--shadow);
+    }
+
+    .card .label {
+      color: var(--muted);
+      font-size: 12px;
+      margin-bottom: 6px;
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+    }
+
+    .card .value {
+      font-size: 17px;
+      font-weight: 600;
+      margin-bottom: 4px;
+    }
+
+    .ok { color: var(--ok); }
+    .warn { color: var(--warn); }
+    .critical { color: var(--critical); }
+
+    .main-grid {
+      display: grid;
+      grid-template-columns: 1.5fr 1fr;
+      gap: 12px;
+    }
+
+    .panel {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: rgba(19, 35, 45, 0.9);
+      padding: 12px;
+      box-shadow: var(--shadow);
+    }
+
+    .panel h2 {
+      margin: 0 0 10px;
+      font-size: 14px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--muted);
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+
+    th, td {
+      border-bottom: 1px solid var(--line);
+      padding: 8px 6px;
+      text-align: left;
+      font-family: var(--mono);
+    }
+
+    th {
+      color: var(--muted);
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      font-family: var(--font);
+    }
+
+    .feed-item {
+      border-left: 3px solid var(--line);
+      padding: 7px 10px;
+      margin: 8px 0;
+      background: rgba(15, 26, 33, 0.8);
+      border-radius: 6px;
+      font-size: 13px;
+    }
+
+    .feed-item.warn { border-left-color: var(--warn); }
+    .feed-item.critical { border-left-color: var(--critical); }
+
+    .ts {
+      color: var(--muted);
+      font-size: 12px;
+      font-family: var(--mono);
+    }
+
+    @media (max-width: 1000px) {
+      .shell { grid-template-columns: 1fr; }
+      .nav { border-right: 0; border-bottom: 1px solid var(--line); }
+      .cards { grid-template-columns: repeat(2, minmax(140px, 1fr)); }
+      .main-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <aside class="nav">
+      <p class="brand">net<span>claw</span> ops</p>
+
+      <p class="section-title">Navigation</p>
+      <div class="menu">
+        <button class="active">Overview</button>
+        <button>Onboarding</button>
+        <button>Sessions</button>
+        <button>Policy</button>
+        <button>Tools</button>
+        <button>Security</button>
+        <button>Diagnostics</button>
+      </div>
+
+      <p class="section-title">Quick Actions</p>
+      <div class="actions">
+        <button>Validate Config</button>
+        <button>Run Doctor</button>
+        <button>Inspect ACL</button>
+      </div>
+    </aside>
+
+    <main class="content">
+      <header class="topbar">
+        <h1>Overview</h1>
+        <div class="pill-row">
+          <span class="pill">env: pi1</span>
+          <span class="pill">runtime: single-process</span>
+          <span class="pill">transport: Slack Socket Mode</span>
+        </div>
+      </header>
+
+      <section class="cards">
+        <article class="card">
+          <div class="label">Gateway Health</div>
+          <div class="value ok">Healthy</div>
+          <div class="ts">uptime: 2d 14h</div>
+        </article>
+        <article class="card">
+          <div class="label">Slack</div>
+          <div class="value ok">Connected</div>
+          <div class="ts">socket reconnects (24h): 1</div>
+        </article>
+        <article class="card">
+          <div class="label">Persistence</div>
+          <div class="value ok">Journal + Snapshots</div>
+          <div class="ts">postgres: reachable</div>
+        </article>
+        <article class="card">
+          <div class="label">Model Provider</div>
+          <div class="value">OpenRouter</div>
+          <div class="ts">model: openai/gpt-5-mini</div>
+        </article>
+        <article class="card">
+          <div class="label">MCP Servers</div>
+          <div class="value ok">2 healthy</div>
+          <div class="ts">tools discovered: 17</div>
+        </article>
+        <article class="card">
+          <div class="label">Policy Denies</div>
+          <div class="value warn">7 in 24h</div>
+          <div class="ts">last deny: 00:12 ago</div>
+        </article>
+      </section>
+
+      <section class="main-grid">
+        <article class="panel">
+          <h2>Active Sessions</h2>
+          <table>
+            <thead>
+              <tr>
+                <th>Session</th>
+                <th>Turns</th>
+                <th>Compacted</th>
+                <th>State</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>general/1739403120.0012</td>
+                <td>44</td>
+                <td>yes</td>
+                <td class="ok">active</td>
+              </tr>
+              <tr>
+                <td>homelab/1739409000.5555</td>
+                <td>12</td>
+                <td>no</td>
+                <td class="ok">active</td>
+              </tr>
+              <tr>
+                <td>alerts/1739411000.9011</td>
+                <td>3</td>
+                <td>no</td>
+                <td class="warn">recovering</td>
+              </tr>
+            </tbody>
+          </table>
+        </article>
+
+        <article class="panel">
+          <h2>Recent Events</h2>
+          <div class="feed-item warn">
+            ACL deny: sender not allowed in #general
+            <div class="ts">2026-02-21T07:12:54Z</div>
+          </div>
+          <div class="feed-item">
+            Session compacted: general/1739403120.0012
+            <div class="ts">2026-02-21T06:48:09Z</div>
+          </div>
+          <div class="feed-item critical">
+            Snapshot save latency exceeded threshold
+            <div class="ts">2026-02-21T06:20:11Z</div>
+          </div>
+        </article>
+      </section>
+    </main>
+  </div>
+</body>
+</html>

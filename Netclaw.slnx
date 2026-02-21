@@ -1,0 +1,6 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Akka.Agents/Akka.Agents.csproj" />
+    <Project Path="src/Netclaw.App/Netclaw.App.csproj" />
+  </Folder>
+</Solution>

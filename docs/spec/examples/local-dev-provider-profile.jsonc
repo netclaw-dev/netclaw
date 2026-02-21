@@ -1,0 +1,14 @@
+{
+  "providers": {
+    "default": {
+      "name": "openrouter",
+      "model": "openai/gpt-5-mini"
+    },
+    "ollamaSmoke": {
+      "name": "ollama",
+      "baseUrl": "http://big-gpu:11434/v1",
+      "model": "qwen3:30b",
+      "fallbackModel": "qwen3:14b"
+    }
+  }
+}
