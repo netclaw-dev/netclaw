@@ -33,3 +33,113 @@ The system SHALL show explicit warnings before enabling public exposure modes.
 
 - **WHEN** operator selects `tailscale-funnel`
 - **THEN** onboarding requires explicit confirmation and auth policy validation
+
+### Requirement: Guided onboarding
+
+The CLI SHALL provide guided setup through `netclaw init`. The onboarding
+wizard SHALL collect Slack credentials, provider configuration, ACL inputs,
+PostgreSQL connection string, MCP server configuration, and exposure mode
+selection. On completion, the wizard SHALL run a health check to verify the
+baseline configuration is functional.
+
+#### Scenario: First-time setup
+
+- **WHEN** operator runs `netclaw init` on a fresh install
+- **THEN** guided setup collects Slack, provider, ACL, PostgreSQL, MCP, and
+  exposure mode inputs
+- **AND** writes a runnable baseline configuration
+
+#### Scenario: PostgreSQL connection configured during init
+
+- **WHEN** onboarding reaches the persistence step
+- **THEN** the wizard prompts for a PostgreSQL connection string
+- **AND** validates connectivity before proceeding
+
+#### Scenario: MCP server configured during init
+
+- **WHEN** onboarding reaches the MCP step
+- **THEN** the wizard prompts for at least one MCP server profile (Memorizer
+  recommended)
+- **AND** validates server handshake before proceeding
+
+#### Scenario: Exposure mode selected during init
+
+- **WHEN** onboarding reaches the exposure step
+- **THEN** the wizard presents available exposure modes (local, tailscale-serve,
+  tailscale-funnel, cloudflare-tunnel)
+- **AND** applies security warnings for public modes
+
+#### Scenario: Health check on completion
+
+- **WHEN** onboarding completes all steps
+- **THEN** the wizard runs a health check covering Slack connectivity, provider
+  validation, persistence connectivity, and MCP server reachability
+- **AND** reports pass/fail for each component
+
+### Requirement: Phase 2 conversational personality bootstrap
+
+The system SHALL trigger a conversational personality bootstrap on the first
+conversation if personality files (PERSONALITY.md, INSTRUCTIONS.md, USER.md)
+do not exist. The bootstrap conversation SHALL ask the operator about
+communication preferences, tone, name preferences, and working style, then
+write the resulting soul files to the standard config directory.
+
+#### Scenario: First conversation triggers bootstrap
+
+- **GIVEN** no personality files exist in the config directory
+- **WHEN** the operator starts their first conversation with Netclaw
+- **THEN** the agent initiates a personality bootstrap conversation
+- **AND** asks about communication preferences and working style
+
+#### Scenario: Bootstrap writes soul files
+
+- **GIVEN** the personality bootstrap conversation is complete
+- **WHEN** the operator has answered all preference questions
+- **THEN** the system writes PERSONALITY.md, INSTRUCTIONS.md, and USER.md to
+  the config directory
+
+#### Scenario: Bootstrap skipped when files exist
+
+- **GIVEN** personality files already exist in the config directory
+- **WHEN** a new conversation starts
+- **THEN** no personality bootstrap is triggered
+- **AND** the existing personality files are loaded normally
+
+### Requirement: Environment discovery during onboarding
+
+The system SHALL scan for installed tools and host capabilities as part of
+Phase 2 onboarding. Discovery results SHALL be persisted to the environment
+inventory file for use in session context and capability self-awareness.
+
+#### Scenario: Tool discovery during onboarding
+
+- **WHEN** Phase 2 onboarding runs environment discovery
+- **THEN** the system scans for installed tools (git, gh, claude, opencode,
+  dotnet, node)
+- **AND** checks git credential status
+- **AND** writes results to the environment inventory file
+
+#### Scenario: MCP server reachability check during onboarding
+
+- **GIVEN** MCP servers are configured
+- **WHEN** Phase 2 onboarding runs environment discovery
+- **THEN** the system checks reachability of each configured MCP server
+- **AND** records reachability status in the environment inventory
+
+### Requirement: Project registration during onboarding
+
+The system SHALL ask the operator about repositories to register as part of
+Phase 2 onboarding. Registered projects are added to the project registry
+with their paths, capabilities, and AGENTS.md locations.
+
+#### Scenario: Register projects during onboarding
+
+- **WHEN** Phase 2 onboarding reaches the project registration step
+- **THEN** the system asks the operator about repositories to register
+- **AND** scans provided paths for AGENTS.md files
+
+#### Scenario: Skip project registration
+
+- **WHEN** Phase 2 onboarding reaches the project registration step
+- **AND** the operator indicates no projects to register
+- **THEN** onboarding proceeds with an empty project registry

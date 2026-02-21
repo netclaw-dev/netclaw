@@ -1,0 +1,1 @@
+../../.opencode/command/opsx-bulk-archive.md

@@ -58,219 +58,394 @@ Done when:
 
 ---
 
-## Phase 1: Slack Session Vertical Slice
+## Phase 0.5: Vision Alignment and Spec Revision (Active)
 
-### Task 1.1: Implement framework protocol and persistence-safe message envelopes
+Product vision was significantly expanded on 2026-02-21. Netclaw is no longer
+just a Slack chat assistant — it is an always-on autonomous operations agent.
+All planning artifacts must be revised to match before implementation begins.
+
+See `PROJECT_CONTEXT.md` for the full revised vision.
+See Memorizer memory "Netclaw — Full Product Vision (Interview Feb 2026)" for
+interview context.
+
+### Task 0.5.1: Research agent soul patterns from comparable projects
+
+**PRD:** `docs/prd/PRD-001-netclaw-mvp.md` (to be revised)
+**OpenSpec Capabilities:** `openspec/specs/netclaw-session/spec.md`
+**OpenSpec Changes:** n/a (research task)
+**Surface area:** planning
+**Verification:** L0
+
+Research OpenClaw, IronClaw, ZeroClaw, and similar self-hosted LLM assistant
+projects for patterns around:
+- Agent soul / personality configuration (markdown-based system prompts)
+- Memory.md and persistent memory conventions
+- Tooling configuration and capability discovery
+- Onboarding wizard flows
+- Scheduled task management
+
+Done when:
+- [x] Research findings are saved to Memorizer with tag `netclaw-research`.
+- [x] Summary document created at `docs/research/agent-patterns.md`.
+- [x] Key patterns identified for adoption or rejection with rationale.
+
+### Task 0.5.2: Revise PRDs to match expanded product vision
+
+**PRD:** all `docs/prd/PRD-*.md`
+**OpenSpec Capabilities:** all `openspec/specs/*/spec.md`
+**OpenSpec Changes:** all active changes
+**Surface area:** planning
+**Verification:** L0
+
+Current PRDs describe a narrower "chat assistant with ACL" scope. They need
+revision to reflect the full vision:
+- PRD-001: expand MVP scope (local memory, scheduling, tool access, self-config)
+- PRD-002: keep security envelope, add capability self-discovery context
+- PRD-003: defer ops console to Phase 5
+- PRD-004: revise CLI to focus on onboarding wizard
+- PRD-005: update provider strategy (OpenRouter primary, MSFT.EXT.AI pluggable)
+- PRD-006: expand MCP role (Memorizer as external memory tier)
+- New PRD needed: agent personality / soul and local memory system
+- New PRD needed: scheduling and periodic task management
+- New PRD needed: input adapters (ambient channels, webhooks, timers)
+
+Done when:
+- [x] All existing PRDs revised to align with `PROJECT_CONTEXT.md` vision.
+- [x] New PRDs created for local memory, scheduling, and input adapters.
+- [x] `docs/prd/README.md` index updated.
+
+### Task 0.5.3: Revise engineering specs to match expanded PRDs
+
+**PRD:** all revised PRDs from Task 0.5.2
+**OpenSpec Capabilities:** all `openspec/specs/*/spec.md`
+**OpenSpec Changes:** all active changes
+**Surface area:** planning
+**Verification:** L0
+
+Engineering specs need revision to include:
+- Concrete message protocol types (from Memorizer design memories)
+- Local memory file format and loading mechanism
+- Scheduling actor design
+- Configuration file format and self-modification
+- Environment capability discovery mechanism
+- Serialization strategy (protobuf-net with field numbers)
+
+Done when:
+- [x] Engineering specs revised to include concrete type definitions.
+- [x] Protocol message types documented with code examples.
+- [x] Local memory and config file format specified.
+- [x] Scheduling mechanism specified.
+
+### Task 0.5.4: Revise OpenSpec capabilities and create new change plans
+
+**PRD:** revised PRDs from Task 0.5.2
+**OpenSpec Capabilities:** all `openspec/specs/*/spec.md`
+**OpenSpec Changes:** to be created
+**Surface area:** planning
+**Verification:** L0
+
+OpenSpec artifacts need to match the revised PRDs:
+- Update existing capability specs for expanded scope
+- Create new capability specs for local memory, scheduling, input adapters
+- Create new change plans aligned with the revised phasing
+- Archive or revise existing change plans that no longer match
+
+Done when:
+- [x] OpenSpec capabilities updated to match revised PRDs.
+- [x] New capability specs created for new subsystems.
+- [x] Change plans created for revised Phase 1 (Chat + Memory MVP).
+- [x] `openspec validate --all --no-interactive` passes.
+
+### Task 0.5.5: Revise implementation plan Phase 1+ for new phasing
+
+**PRD:** revised PRDs
+**OpenSpec Capabilities:** revised specs
+**OpenSpec Changes:** revised changes
+**Surface area:** planning
+**Verification:** L0
+
+Rewrite Phase 1 and subsequent phases to match the revised product vision
+phasing from `PROJECT_CONTEXT.md`. Current Phase 1-5 are based on the old
+narrower scope. New phasing:
+
+1. Chat + Memory MVP
+2. Input Expansion (ambient channels, webhooks, channel instructions)
+3. Delegated Coding (Claude Code / OpenCode spawning)
+4. Browser + Research (web automation, research pipelines)
+5. Ops Console (web UI)
+
+Done when:
+- [x] Phase 1+ rewritten with concrete tasks, PRD refs, and OpenSpec refs.
+- [x] Each task has clear done-when criteria suitable for RALPH execution.
+- [x] Implementation plan is RALPH-consumable for Phase 1.
+
+---
+
+## Phase 1: Chat + Memory MVP
+
+OpenSpec Change: `openspec/changes/expand-mvp-for-autonomous-agent-vision/`
+Full task breakdown: `openspec/changes/expand-mvp-for-autonomous-agent-vision/tasks.md`
+
+### Task 1.1: Framework protocol and persistence-safe message envelopes
 
 **PRD:** `docs/prd/PRD-001-netclaw-mvp.md`
-**OpenSpec Capabilities:** `openspec/specs/netclaw-session/spec.md`
-**OpenSpec Changes:** `openspec/changes/define-netclaw-mvp-foundation/`
+**OpenSpec:** `openspec/specs/netclaw-session/spec.md`, `openspec/specs/netclaw-input-adapters/spec.md`
 **Surface area:** actor framework
 **Verification:** L2
 
 Done when:
-- [ ] `Commands`, `Events`, and `Broadcasts` are implemented with concrete types.
-- [ ] Framework-owned serializable chat message type is implemented (no direct persistence of `Microsoft.Extensions.AI` types).
-- [ ] Session entity key semantics `{channelId}/{threadTs}` are encoded in protocol contracts.
-- [ ] Integration tests verify event serialization round-trip.
+- [ ] `SendUserMessage`, `TurnRecorded`, `SessionCompacted`, `TurnBroadcast`, `CompactionBroadcast` implemented with protobuf-net serialization.
+- [ ] `SerializableChatMessage` framework-owned type implemented (no direct persistence of MEAI types).
+- [ ] `SessionMessageExtractor` supports entity key patterns: `{channelId}/{threadTs}` and `schedule/{taskId}/{runTs}`.
+- [ ] Source metadata (adapter type, sender identity, channel, timestamp) on all commands.
+- [ ] Integration tests verify serialization round-trip and entity key extraction.
 
-### Task 1.2: Implement `LlmSessionActor` persistence and turn loop
+### Task 1.2: Session actor core with persistence and turn loop
 
 **PRD:** `docs/prd/PRD-001-netclaw-mvp.md`
-**OpenSpec Capabilities:** `openspec/specs/netclaw-session/spec.md`, `openspec/specs/netclaw-slack-socket/spec.md`
-**OpenSpec Changes:** `openspec/changes/define-netclaw-mvp-foundation/`
+**OpenSpec:** `openspec/specs/netclaw-session/spec.md`
 **Surface area:** actor runtime
 **Verification:** L2
 
 Done when:
-- [ ] Actor recovers state from journal/snapshot before handling new turns.
-- [ ] Turn processing persists turn events and emits turn broadcasts.
-- [ ] Snapshot strategy and compaction trigger plumbing are implemented.
-- [ ] Integration tests prove restart recovery preserves context.
+- [ ] `LlmSessionActor` recovers state from PostgreSQL journal/snapshots.
+- [ ] Turn loop: receive `SendUserMessage`, invoke `IChatClient`, persist `TurnRecorded`, emit `TurnBroadcast` via pub/sub.
+- [ ] Snapshot strategy and compaction via `SummarizingChatReducer`.
+- [ ] Pre-compaction memory flush: silent agentic turn saves durable memories before context resets.
+- [ ] Integration tests prove restart recovery and pre-compaction flush execution.
 
-### Task 1.3: Implement session parent and entity routing
+### Task 1.3: Session parent and entity routing
 
 **PRD:** `docs/prd/PRD-001-netclaw-mvp.md`
-**OpenSpec Capabilities:** `openspec/specs/netclaw-session/spec.md`
-**OpenSpec Changes:** `openspec/changes/define-netclaw-mvp-foundation/`
+**OpenSpec:** `openspec/specs/netclaw-session/spec.md`
 **Surface area:** actor runtime
 **Verification:** L2
 
 Done when:
-- [ ] `LlmAgentParentActor` wraps `GenericChildPerEntityParent` behavior.
-- [ ] Session extraction routes same thread messages to the same child actor.
-- [ ] Parent actor tests verify entity lifecycle and message routing behavior.
+- [ ] `LlmAgentParentActor` wraps `GenericChildPerEntityParent`.
+- [ ] Session extraction routes same-thread messages to same child actor.
+- [ ] Multi-key-pattern support (Slack and timer patterns).
+- [ ] Tests verify entity lifecycle and message routing.
 
-### Task 1.4: Wire Slack Socket Mode vertical slice
+### Task 1.4: Layered system prompt and personality
 
-**PRD:** `docs/prd/PRD-001-netclaw-mvp.md`
-**OpenSpec Capabilities:** `openspec/specs/netclaw-slack-socket/spec.md`, `openspec/specs/netclaw-session/spec.md`
-**OpenSpec Changes:** `openspec/changes/define-netclaw-mvp-foundation/`
-**Surface area:** integration
+**PRD:** `docs/prd/PRD-007-agent-personality-and-local-memory.md`
+**OpenSpec:** `openspec/specs/netclaw-agent-memory/spec.md`
+**Surface area:** agent personality
 **Verification:** L2
 
 Done when:
-- [ ] Slack Socket Mode adapter receives inbound events and dispatches actor commands.
-- [ ] Reply broadcast is posted into the originating Slack thread.
-- [ ] End-to-end local test proves message -> reply loop.
+- [ ] `~/.netclaw/` directory structure created on startup (soul/, projects/, environment/, schedules/, config/).
+- [ ] System prompt assembled from layers: PERSONALITY.md → INSTRUCTIONS.md → USER.md → project AGENTS.md → session context.
+- [ ] Missing layers handled gracefully.
+- [ ] Tests for prompt assembly with missing layers and project overlay injection.
 
----
-
-## Phase 2: Security Envelope and ACL Enforcement
-
-### Task 2.1: Implement ACL configuration loader and evaluator
+### Task 1.5: ACL and policy engine with tool grants
 
 **PRD:** `docs/prd/PRD-002-gateway-security-envelope.md`
-**OpenSpec Capabilities:** `openspec/specs/netclaw-acl/spec.md`, `openspec/specs/netclaw-gateway-security/spec.md`
-**OpenSpec Changes:** `openspec/changes/define-netclaw-mvp-foundation/`
+**OpenSpec:** `openspec/specs/netclaw-acl/spec.md`, `openspec/specs/netclaw-gateway-security/spec.md`
 **Surface area:** security
 **Verification:** L2
 
 Done when:
-- [ ] ACL parser supports channel rules, sender allowlists, and mention/ambient mode.
-- [ ] Default deny behavior is enforced when no explicit allow exists.
+- [ ] ACL parser supports channel rules, sender allowlists, mention/ambient mode, and tool grant categories (shell, web_search, web_fetch, github, mcp:{server}, config_write, schedule_write).
+- [ ] Default deny enforced when no explicit allow.
+- [ ] Self-configuration prohibition: agent cannot modify ACL/security through conversation.
 - [ ] Invalid ACL blocks startup with actionable diagnostics.
-- [ ] Policy decision tests cover allow/deny reason codes.
+- [ ] Shell execution boundaries enforced (SEC-009): timeout, output truncation, no stdin, working dir.
+- [ ] Tool invocation audit logging.
+- [ ] Policy decision tests cover all grant categories.
 
-### Task 2.2: Enforce tool and MCP policy gates
+### Task 1.6: Tool framework and MEAI registration
 
-**PRD:** `docs/prd/PRD-002-gateway-security-envelope.md`, `docs/prd/PRD-006-mcp-tool-integration.md`
-**OpenSpec Capabilities:** `openspec/specs/netclaw-acl/spec.md`, `openspec/specs/netclaw-mcp/spec.md`
-**OpenSpec Changes:** `openspec/changes/add-mcp-support-v1/`
-**Surface area:** security/integration
+**PRD:** `docs/prd/PRD-005-model-provider-strategy.md`, `docs/prd/PRD-007-agent-personality-and-local-memory.md`
+**OpenSpec:** `openspec/specs/netclaw-tools/spec.md`, `openspec/specs/netclaw-model-providers/spec.md`
+**Surface area:** tool framework
 **Verification:** L2
 
 Done when:
-- [ ] Tool and MCP invocations require explicit grants.
-- [ ] Denied calls return policy reason codes and audit records.
-- [ ] Integration tests verify denial path for missing grants.
+- [ ] Tool registry registers `AIFunction` definitions through `Microsoft.Extensions.AI`.
+- [ ] Policy-filtered tool loading: session receives only tools matching ACL grants.
+- [ ] Tool invocation audit logging (tool name, session ID, timestamp, allow/deny).
+- [ ] Tool context added to session state at initialization.
+- [ ] Tests for registration, policy filtering, and audit logging.
 
-### Task 2.3: Implement exposure modes and privileged approval checks
+### Task 1.7: First-party tools (search, fetch, shell, GitHub)
 
-**PRD:** `docs/prd/PRD-002-gateway-security-envelope.md`
-**OpenSpec Capabilities:** `openspec/specs/netclaw-gateway-security/spec.md`
-**OpenSpec Changes:** `openspec/changes/define-netclaw-mvp-foundation/`
-**Surface area:** security/ops
+**PRD:** `docs/prd/PRD-007-agent-personality-and-local-memory.md`
+**OpenSpec:** `openspec/specs/netclaw-tools/spec.md`
+**Surface area:** tools
 **Verification:** L2
 
 Done when:
-- [ ] `local`, `tailscale-serve`, `tailscale-funnel`, and `cloudflare-tunnel` modes are validated.
-- [ ] Public modes require configured auth policy and fail validation otherwise.
-- [ ] `gateway doctor/status` surfaces exposure and approval state.
+- [ ] Web search tool with Brave Search API and SearXNG backends, configurable via `netclaw.json`.
+- [ ] Web fetch tool with HTML-to-text extraction and output truncation.
+- [ ] Shell execution tool with timeout, output truncation, stdin closure, working directory.
+- [ ] GitHub CLI tool via `gh` shell-out with structured output parsing and missing dependency handling.
+- [ ] Tests for each tool with mocked HTTP/process dependencies.
 
----
-
-## Phase 3: Guided Onboarding, Providers, MCP, and Testing
-
-### Task 3.1: Implement guided onboarding CLI flow
-
-**PRD:** `docs/prd/PRD-004-cli-onboarding-and-config.md`
-**OpenSpec Capabilities:** `openspec/specs/netclaw-cli/spec.md`, `openspec/specs/netclaw-onboarding/spec.md`
-**OpenSpec Changes:** `openspec/changes/add-guided-onboarding-and-provider-strategy/`
-**Surface area:** CLI
-**Verification:** L1
-
-Done when:
-- [ ] `netclaw init` implements stepwise onboarding with resume support.
-- [ ] Onboarding captures Slack Socket Mode configuration and ACL bootstrap.
-- [ ] Onboarding output includes final readiness summary and next command.
-
-### Task 3.2: Implement provider abstraction and local smoke profile defaults
+### Task 1.8: Provider abstraction with MEAI and fallback
 
 **PRD:** `docs/prd/PRD-005-model-provider-strategy.md`
-**OpenSpec Capabilities:** `openspec/specs/netclaw-model-providers/spec.md`, `openspec/specs/netclaw-testing/spec.md`
-**OpenSpec Changes:** `openspec/changes/add-guided-onboarding-and-provider-strategy/`, `openspec/changes/add-provider-smoke-and-ci-independence/`
+**OpenSpec:** `openspec/specs/netclaw-model-providers/spec.md`
 **Surface area:** provider integration
 **Verification:** L2
 
 Done when:
-- [ ] Provider abstraction supports OpenRouter, OpenAI, Anthropic, and Ollama profiles.
-- [ ] Local smoke defaults target `http://big-gpu:11434` with `qwen3:30b` (`qwen3:14b` fallback).
-- [ ] `netclaw test smoke --provider ollama` reports actionable pass/fail diagnostics.
+- [ ] `IChatClient` provider registration via DI (OpenRouter, Anthropic, OpenAI, Ollama).
+- [ ] Primary + fallback model with automatic failover on rate limit/timeout/error.
+- [ ] Tool calling through MEAI tool calling API.
+- [ ] CI tests pass without live provider credentials.
+- [ ] Tests for provider switching, fallback activation, tool calling round-trip.
 
-### Task 3.3: Implement MCP server registry and validation commands
+### Task 1.9: MCP integration and Memorizer
 
 **PRD:** `docs/prd/PRD-006-mcp-tool-integration.md`
-**OpenSpec Capabilities:** `openspec/specs/netclaw-mcp/spec.md`, `openspec/specs/netclaw-cli/spec.md`
-**OpenSpec Changes:** `openspec/changes/add-mcp-support-v1/`
-**Surface area:** integration/CLI
+**OpenSpec:** `openspec/specs/netclaw-mcp/spec.md`
+**Surface area:** integration
 **Verification:** L2
 
 Done when:
-- [ ] MCP profile configuration supports named servers with enable/disable control.
-- [ ] `netclaw mcp list|validate|test` commands are implemented.
-- [ ] Runtime degrades gracefully when MCP server is unavailable.
+- [ ] MCP server profiles (named, stdio/SSE transport, enable/disable).
+- [ ] Tool discovery at startup: connect, list tools, register as MEAI definitions.
+- [ ] Graceful degradation: unavailable server returns error, agent continues, reconnect on next call.
+- [ ] Memorizer store/search/get cycle works through session.
+- [ ] Tests for connection, discovery, policy gating, degradation.
 
-### Task 3.4: Implement CI-safe testing split
+### Task 1.10: Local memory (project registry, environment inventory)
 
-**PRD:** `docs/prd/PRD-005-model-provider-strategy.md`, `docs/prd/PRD-001-netclaw-mvp.md`
-**OpenSpec Capabilities:** `openspec/specs/netclaw-testing/spec.md`
-**OpenSpec Changes:** `openspec/changes/add-provider-smoke-and-ci-independence/`
-**Surface area:** testing/CI
+**PRD:** `docs/prd/PRD-007-agent-personality-and-local-memory.md`
+**OpenSpec:** `openspec/specs/netclaw-agent-memory/spec.md`
+**Surface area:** agent memory
 **Verification:** L2
 
 Done when:
-- [ ] CI-required tests run without live provider credentials.
-- [ ] Live provider smoke tests are opt-in and excluded from required CI jobs.
-- [ ] Test docs and pipeline config reflect category split.
+- [ ] Project registry (`projects/registry.json`): add, remove, list, validate paths, load at startup.
+- [ ] Environment inventory (`environment/inventory.json`): scan for git, gh, claude, opencode, dotnet, node.
+- [ ] Capability self-discovery at startup and on-demand rescan.
+- [ ] Tests for project registry CRUD and environment scan.
 
----
+### Task 1.11: Self-configuration through conversation
 
-## Phase 4: Ops Console and Diagnostics Surface
-
-### Task 4.1: Implement management API endpoints for UI contracts
-
-**PRD:** `docs/prd/PRD-003-operator-ux-ops-console.md`
-**OpenSpec Capabilities:** `openspec/specs/netclaw-operator-ui/spec.md`, `openspec/specs/netclaw-cli/spec.md`
-**OpenSpec Changes:** `openspec/changes/design-ops-console-and-cli-v1/`
-**Surface area:** web API
+**PRD:** `docs/prd/PRD-007-agent-personality-and-local-memory.md`
+**OpenSpec:** `openspec/specs/netclaw-agent-memory/spec.md`
+**Surface area:** agent config
 **Verification:** L2
 
 Done when:
-- [ ] API endpoints exist for overview, sessions, policy decisions, security, and MCP health.
-- [ ] Response shapes align with `SPEC-005-operator-ui-contract.md`.
-- [ ] Integration tests cover key API contract responses.
+- [ ] Agent modifies personality, instructions, user preferences, project registry, and environment through conversation.
+- [ ] Validation-before-write and atomic file writes (temp + rename).
+- [ ] Prohibited modification enforcement: reject ACL, security, tool grants, exposure, credentials.
+- [ ] Tests for allowed modifications, prohibited modifications, validation failures.
 
-### Task 4.2: Implement minimal ops console UI shell
+### Task 1.12: Scheduling system
 
-**PRD:** `docs/prd/PRD-003-operator-ux-ops-console.md`
-**OpenSpec Capabilities:** `openspec/specs/netclaw-operator-ui/spec.md`
-**OpenSpec Changes:** `openspec/changes/design-ops-console-and-cli-v1/`
-**Surface area:** UI
-**Verification:** L3
+**PRD:** `docs/prd/PRD-008-scheduling-and-periodic-tasks.md`
+**OpenSpec:** `openspec/specs/netclaw-scheduling/spec.md`
+**Surface area:** scheduling
+**Verification:** L2
 
 Done when:
-- [ ] Routes `/overview`, `/sessions`, `/policy`, `/security`, `/diagnostics`, and `/tools` exist.
-- [ ] UI displays health, policy, and MCP summary data from management APIs.
-- [ ] L3 evidence includes screenshots and console-clean checks.
+- [ ] `ScheduleManagerActor` loads tasks from `schedules/tasks.json`, manages Akka timers.
+- [ ] Chat-driven creation: interval and cron types, validate tool grants, persist task.
+- [ ] Isolated execution: timer dispatches `SendUserMessage` with `schedule/{taskId}/{runTs}` entity key.
+- [ ] Result reporting: post to configured Slack channel, silent-unless-notable mode.
+- [ ] Guardrails: max concurrent (3), timeout (5min), consecutive failure auto-pause (5).
+- [ ] Task management: list, pause, resume, delete via conversation and CLI.
+- [ ] Tests for persistence, timer lifecycle, isolated execution, failure handling.
 
----
-
-## Phase 5: Host Acceptance and OpenSpec Lifecycle
-
-### Task 5.1: Validate pi1 MVP acceptance flow
+### Task 1.13: Slack Socket Mode adapter
 
 **PRD:** `docs/prd/PRD-001-netclaw-mvp.md`
-**OpenSpec Capabilities:** `openspec/specs/netclaw-session/spec.md`, `openspec/specs/netclaw-gateway-security/spec.md`, `openspec/specs/netclaw-mcp/spec.md`
-**OpenSpec Changes:** `openspec/changes/define-netclaw-mvp-foundation/`, `openspec/changes/add-mcp-support-v1/`
+**OpenSpec:** `openspec/specs/netclaw-slack-socket/spec.md`, `openspec/specs/netclaw-input-adapters/spec.md`
+**Surface area:** integration
+**Verification:** L2
+
+Done when:
+- [ ] Socket Mode connection and event handling (`app_mention`, `message`).
+- [ ] Entity key extraction: `{channelId}/{threadTs}`.
+- [ ] Reply delivery: subscribe to session broadcasts, post replies to originating thread.
+- [ ] Reconnection on disconnect.
+- [ ] End-to-end test proves message → reply loop.
+
+### Task 1.14: CLI onboarding and management commands
+
+**PRD:** `docs/prd/PRD-004-cli-onboarding-and-config.md`
+**OpenSpec:** `openspec/specs/netclaw-cli/spec.md`, `openspec/specs/netclaw-onboarding/spec.md`
+**Surface area:** CLI
+**Verification:** L1
+
+Done when:
+- [ ] `netclaw init` guided wizard (provider, Slack, PostgreSQL, ACL, MCP, exposure, health check).
+- [ ] `netclaw config show|validate` and `netclaw acl validate|test|explain`.
+- [ ] `netclaw project list|add|remove` and `netclaw environment scan|show`.
+- [ ] `netclaw schedule list|show|pause|resume|delete`.
+- [ ] `netclaw mcp list|validate|test`.
+- [ ] `netclaw personality reset` and `netclaw memory show`.
+- [ ] `netclaw gateway status|doctor`.
+- [ ] `netclaw test smoke --provider ollama`.
+
+### Task 1.15: Conversational personality bootstrap
+
+**PRD:** `docs/prd/PRD-007-agent-personality-and-local-memory.md`
+**OpenSpec:** `openspec/specs/netclaw-agent-memory/spec.md`, `openspec/specs/netclaw-onboarding/spec.md`
+**Surface area:** onboarding
+**Verification:** L2
+
+Done when:
+- [ ] First-run detection: trigger bootstrap when soul files don't exist.
+- [ ] Bootstrap conversation: introduce, learn preferences, scan environment, write soul files, confirm.
+- [ ] Test for bootstrap trigger and soul file creation.
+
+### Task 1.16: Integration and acceptance
+
+**PRD:** `docs/prd/PRD-001-netclaw-mvp.md`
+**OpenSpec:** all Phase 1 specs
 **Surface area:** end-to-end
 **Verification:** L4
 
 Done when:
-- [ ] Slack in-thread replies work on `pi1` with session continuity across restart.
-- [ ] Compaction preserves working context for long threads.
-- [ ] ACL/exposure policy denial paths are verified on host.
-- [ ] Local smoke test against `big-gpu` succeeds when invoked.
+- [ ] E2E: Slack message → session → tool call → reply in thread.
+- [ ] E2E: scheduled task fires → fresh session → result posted to Slack.
+- [ ] E2E: restart recovery preserves session context and scheduled tasks.
+- [ ] CI test suite passes without live provider credentials.
+- [ ] Deploy to pi1 and verify Slack interaction.
 
-### Task 5.2: Archive completed OpenSpec changes and prep release notes
+### Task 1.17: Sync specs and archive change
 
-**PRD:** `docs/prd/PRD-001-netclaw-mvp.md`
-**OpenSpec Capabilities:** `openspec/specs/README.md`
-**OpenSpec Changes:** `openspec/changes/*`
-**Surface area:** release/process
+**OpenSpec Changes:** `openspec/changes/expand-mvp-for-autonomous-agent-vision/`
+**Surface area:** process
 **Verification:** L0
 
 Done when:
-- [ ] Completed changes are archived with `openspec archive <change-name>`.
-- [ ] Main capability specs reflect implemented behavior.
-- [ ] `RELEASE_NOTES.md` captures user-facing MVP behavior delivered.
+- [ ] Delta specs synced to main specs.
+- [ ] `openspec validate --all --no-interactive` passes.
+- [ ] Change archived with `openspec archive expand-mvp-for-autonomous-agent-vision`.
+
+---
+
+## Phase 2: Input Expansion (Post-MVP)
+
+Ambient channels, webhooks, channel instructions, onboarding wizard.
+Tasks to be defined when Phase 1 is complete.
+
+---
+
+## Phase 3: Delegated Coding (Post-MVP)
+
+Claude Code / OpenCode spawning, process monitoring.
+Tasks to be defined when Phase 2 is complete.
+
+---
+
+## Phase 4: Browser + Research (Post-MVP)
+
+Web automation, price monitoring, research pipelines.
+Tasks to be defined when Phase 3 is complete.
+
+---
+
+## Phase 5: Ops Console (Post-MVP)
+
+Web UI for config, sessions, diagnostics (PRD-003).
+Tasks to be defined when Phase 4 is complete.

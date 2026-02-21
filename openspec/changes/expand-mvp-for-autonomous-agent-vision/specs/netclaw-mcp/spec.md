@@ -1,0 +1,103 @@
+## MODIFIED Requirements
+
+### Requirement: MCP server profile configuration
+
+The system SHALL support named MCP server profiles in configuration. Each
+profile SHALL specify a transport type (`stdio` or `SSE`), the command or URL
+for the server, and optional environment variables to pass to the server
+process.
+
+#### Scenario: Disabled by default
+
+- **WHEN** no MCP profile is enabled
+- **THEN** no MCP tools are loaded
+
+#### Scenario: Stdio transport profile
+
+- **GIVEN** an MCP profile is configured with transport type `stdio`
+- **WHEN** the profile is loaded
+- **THEN** the system launches the server using the configured command
+- **AND** communicates via stdio transport
+
+#### Scenario: SSE transport profile
+
+- **GIVEN** an MCP profile is configured with transport type `SSE`
+- **WHEN** the profile is loaded
+- **THEN** the system connects to the configured URL via SSE transport
+
+#### Scenario: Environment variables passed to server
+
+- **GIVEN** an MCP profile specifies environment variables
+- **WHEN** the server process is launched (stdio transport)
+- **THEN** the configured environment variables are set in the server process
+  environment
+
+## ADDED Requirements
+
+### Requirement: Memorizer as external memory tier
+
+The Memorizer MCP server SHALL be the recommended first MCP server for Netclaw
+deployments. Memorizer provides `store`, `search`, `get`, `delete`, and
+`create_relationship` operations for persisting research findings and
+cross-session learning. Memorizer is an external memory tier complementing
+first-party local memory (personality, project registry, environment inventory).
+
+#### Scenario: Store research finding via Memorizer
+
+- **GIVEN** the `memorizer` MCP server is configured and reachable
+- **AND** the session has `mcp:memorizer` grant
+- **WHEN** the agent stores a research finding
+- **THEN** the finding is persisted in Memorizer and retrievable in future
+  sessions
+
+#### Scenario: Search across sessions via Memorizer
+
+- **GIVEN** prior sessions have stored findings in Memorizer
+- **WHEN** the agent searches Memorizer for a topic
+- **THEN** relevant findings from prior sessions are returned
+
+### Requirement: Tool discovery and registration
+
+On startup, the system SHALL discover tools from all enabled MCP server
+profiles and register them as Microsoft.Extensions.AI (MEAI) tool definitions.
+Tool discovery SHALL refresh on each session start to pick up newly added or
+removed tools from MCP servers.
+
+#### Scenario: Startup tool discovery
+
+- **GIVEN** two MCP servers are enabled with a combined total of 5 tools
+- **WHEN** the system starts
+- **THEN** all 5 tools are discovered and registered as MEAI tool definitions
+
+#### Scenario: Session-start tool refresh
+
+- **GIVEN** an MCP server has added a new tool since last session start
+- **WHEN** a new session actor initializes
+- **THEN** the refreshed tool list includes the newly added tool
+
+### Requirement: Graceful degradation
+
+Tool calls to unavailable MCP servers SHALL return a clear error message to the
+agent. The agent SHALL continue operating with remaining available tools. The
+system SHALL attempt reconnection on the next tool call to a previously
+unavailable server.
+
+#### Scenario: Unavailable server returns clear error
+
+- **GIVEN** a configured MCP server is unreachable
+- **WHEN** the agent invokes a tool from that server
+- **THEN** a clear error is returned indicating the server is unavailable
+- **AND** the agent continues the conversation with remaining tools
+
+#### Scenario: Reconnection on next call
+
+- **GIVEN** an MCP server was previously unreachable
+- **WHEN** the agent invokes a tool from that server again
+- **THEN** the system attempts reconnection before returning an error
+
+#### Scenario: Partial server availability
+
+- **GIVEN** two MCP servers are configured and one is unreachable
+- **WHEN** a session initializes
+- **THEN** tools from the reachable server are available
+- **AND** tools from the unreachable server are marked as unavailable

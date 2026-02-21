@@ -2,20 +2,40 @@
 
 ## Status
 
-- State: Draft for execution
+- State: Draft for execution (revised)
 - Owner: Netclaw engineering
 - Date: 2026-02-21
+- Revised: 2026-02-21 (expanded product vision)
 
 ## Problem Statement
 
-The operator needs a personal assistant that can reliably act through Slack,
-keep conversational context across restarts, and remain secure on a homelab
-host without requiring a complex distributed deployment.
+The operator needs an always-on autonomous operations agent running on homelab
+infrastructure that can answer questions through Slack, remember context across
+restarts, manage its own schedule, discover and use local tools, maintain
+awareness of its environment, and modify its own configuration through
+conversation — all without requiring a complex distributed deployment.
 
 ## Product Goal
 
-Deliver a minimal but dependable Slack-connected assistant that is actor-driven,
-persistence-backed, and safe-by-default.
+Deliver a minimal but dependable autonomous operations agent that is
+actor-driven, persistence-backed, memory-aware, tool-capable, and
+safe-by-default. Netclaw is not just a chat assistant — it is an autonomous
+operations platform that can monitor, react, investigate, delegate work, and
+manage its own schedule.
+
+## Key Architectural Insight
+
+Everything is just a message arriving at a session actor with context-specific
+instructions. The input source (Slack, webhook, timer, future web UI) is
+irrelevant — the differentiator is the instructions attached to the context.
+
+| Input Source          | Delivery Mechanism                          | MVP? |
+|-----------------------|---------------------------------------------|------|
+| User @mention         | Slack Socket Mode                           | Yes  |
+| Scheduled task        | Internal timer                              | Yes  |
+| Ambient channel alert | Slack Socket Mode (require_mention: false)  | No   |
+| Webhook (GitHub, CI)  | HTTP via Tailscale Serve / Cloudflare Tunnel| No   |
+| Web UI (future)       | WebSocket / HTTP                            | No   |
 
 ## MVP Success Criteria
 
@@ -24,18 +44,34 @@ persistence-backed, and safe-by-default.
 3. Long sessions compact context while preserving task continuity.
 4. Unauthorized interactions are denied by policy.
 5. Operator can configure and validate system behavior without source edits.
+6. Agent maintains personality, project registry, and environment awareness
+   across sessions.
+7. Agent can use local tools (web search, shell, GitHub CLI) through
+   policy-gated access.
+8. Agent can create and manage scheduled tasks through conversation.
+9. Agent can discover its own capabilities (installed tools, credentials,
+   host info).
+10. Agent can modify its own configuration through conversation.
+11. MCP integration provides external memory (Memorizer) and tool capabilities.
 
 ## Non-Goals (MVP)
 
 - Multi-process gateway/agent split
-- sub-agent orchestration framework
-- web management UI implementation (spec + mockups only)
-- advanced observability and model capability abstractions
-- branch/revert session editing features
+- Ambient channel monitoring with per-channel instructions
+- Webhook ingress (Tailscale Serve / Cloudflare Tunnel)
+- Sub-agent model routing (cheaper models for high-token tasks)
+- Browser automation
+- Delegated coding (Claude Code / OpenCode spawning)
+- Web management UI implementation (spec + mockups only)
+- Formal approval gates and tool isolation/sandboxing
+- Telemetry and advanced model capability abstraction layers
+- Session branching/revert features
 
 ## Primary Personas
 
-- `Owner-Operator`: runs Netclaw on homelab hardware and interacts through Slack.
+- `Owner-Operator`: runs Netclaw on homelab hardware (pi1), interacts through
+  Slack (including mobile, on the go), needs predictable behavior, persistence,
+  and strong safety defaults.
 - `Future Maintainer`: extends capabilities and needs stable behavioral specs.
 
 ## Functional Requirements
@@ -48,7 +84,9 @@ that thread shall route to the same session actor.
 ### FR-002 Turn Processing and Broadcast
 
 User input shall produce a persisted turn event and a broadcast event consumed
-by the Slack adapter for reply delivery.
+by the Slack adapter for reply delivery. Pub/sub session broadcasts enable
+adapters and future UI subscribers to consume session output without direct
+transport coupling.
 
 ### FR-003 Persistent Recovery
 
@@ -63,17 +101,25 @@ summary reduction and persist a compaction event.
 ### FR-005 Default-Deny ACL
 
 All inbound interactions and privileged operations shall be denied unless
-explicitly allowed by configuration.
+explicitly allowed by configuration. See PRD-002.
 
-### FR-006 System Prompt Contract
+### FR-006 Layered System Prompt
 
-A file-based system prompt, including opening/zero clause guidance, shall be
-injected consistently into turn context.
+Session context shall be assembled from layered system prompt sources:
+
+1. Core personality (PERSONALITY.md — hardcoded agent identity)
+2. Operating instructions (INSTRUCTIONS.md — behavioral guidelines)
+3. User context (USER.md — owner preferences)
+4. Project overlay (AGENTS.md from registered project — loaded on demand)
+5. Session-specific context (conversation, tool results, memory)
+
+Later layers augment or override earlier layers. All soul files are loaded at
+session start and cached.
 
 ### FR-007 Operator Controls
 
 CLI commands and documented UI contracts shall cover onboarding, config
-validation, ACL diagnostics, and session inspection workflows.
+validation, ACL diagnostics, and session inspection workflows. See PRD-004.
 
 ### FR-008 Slack Socket Mode Transport
 
@@ -82,15 +128,83 @@ event handling during MVP, avoiding required public inbound HTTP endpoints.
 
 ### FR-009 MCP Tool Integration
 
-Netclaw shall support MCP server integration in MVP so tool capabilities can be
-loaded from a configured server list with policy enforcement.
+Netclaw shall support MCP server integration so tool capabilities can be loaded
+from a configured server list with policy enforcement. Memorizer shall serve as
+the external memory tier for research, knowledge base, and cross-session
+learning. See PRD-006.
+
+### FR-010 Local Memory System
+
+Netclaw shall maintain first-party local memory on disk:
+
+- Agent soul / personality (markdown files)
+- Project registry (repo paths, capabilities, AGENTS.md paths)
+- Environment inventory (installed tools, credentials, host capabilities)
+- Scheduled task definitions
+- Channel-level instructions (post-MVP)
+
+Local memory is personal and operational (file paths, tool availability,
+project info). Large-corpus knowledge is delegated to Memorizer via MCP.
+See PRD-007.
+
+### FR-011 Tool Access
+
+Netclaw shall provide policy-gated access to local tools:
+
+- Web search (Brave Search API or equivalent)
+- Web fetch (URL content retrieval)
+- Shell execution (sandboxed command execution)
+- GitHub (via `gh` CLI)
+
+Tool invocation is subject to ACL grants per PRD-002. Tool results are included
+in session context for the LLM.
+
+### FR-012 Chat-Driven Scheduling
+
+The agent shall create, list, and cancel scheduled tasks through conversation.
+Scheduled tasks are persisted as JSON and executed by Akka timers. Each
+scheduled execution creates a fresh session or runs in a dedicated scheduling
+actor. See PRD-008.
+
+### FR-013 Capability Self-Discovery
+
+Netclaw shall maintain awareness of its environment:
+
+- Is `claude` / `opencode` CLI available?
+- Do I have git credentials? For which hosts?
+- What .NET SDK is installed?
+- What repos are registered and where on disk?
+- What MCP servers are configured and reachable?
+
+Discovery runs at startup and can be re-triggered through conversation.
+See PRD-007.
+
+### FR-014 Self-Configuration
+
+The agent shall modify its own configuration files through conversation:
+
+- Update personality, instructions, and user preferences
+- Register and unregister projects
+- Update environment inventory
+- Create and manage scheduled tasks
+
+Configuration is cached in LLM context at session start. Session reboot
+refreshes the context. See PRD-007.
+
+### FR-015 Pre-Compaction Memory Flush
+
+Before context compaction occurs, Netclaw shall trigger a silent agentic turn
+prompting the model to write durable memories to disk. This directly counters
+context rot — losing important information when context resets. See PRD-007.
 
 ## Operational Requirements
 
-- single-process host deployment on `pi1`
-- no required public inbound HTTP path for base Slack operation
-- secure failure mode: invalid policy/config blocks startup
+- Single-process host deployment on `pi1`
+- No required public inbound HTTP path for base Slack operation
+- Secure failure mode: invalid policy/config blocks startup
 - CI/CD test path does not require live model provider credentials
+- Agent data directory (`~/.netclaw/` or configured path) stores all local
+  memory, config, and schedule files
 
 ## Acceptance Tests
 
@@ -99,6 +213,21 @@ loaded from a configured server list with policy enforcement.
 3. Long thread triggers compaction without losing active task objective.
 4. Disallowed sender/channel is rejected and logged as policy deny.
 5. CLI config validation reports pass before runtime start.
+6. Agent personality is consistent across sessions and restarts.
+7. Agent can list registered projects and environment capabilities.
+8. Agent can create a scheduled task through conversation.
+9. Agent can use web search and shell tools when policy allows.
+10. MCP Memorizer stores and retrieves cross-session knowledge.
+
+## Phasing
+
+1. **Chat + Memory MVP** (this PRD) — Slack, persistence, compaction, local
+   memory, MCP/Memorizer, basic tools, scheduling
+2. **Input Expansion** — ambient channels, webhooks, channel instructions,
+   onboarding wizard
+3. **Delegated Coding** — Claude Code / OpenCode spawning, process monitoring
+4. **Browser + Research** — web automation, price monitoring, research pipelines
+5. **Ops Console** — web UI for config, sessions, diagnostics
 
 ## Risks and Mitigations
 
@@ -108,3 +237,18 @@ loaded from a configured server list with policy enforcement.
   - `Mitigation`: framework-owned serializable message envelope only.
 - `Risk`: MVP scope creep toward north-star architecture.
   - `Mitigation`: explicit non-goals and change reviews against this PRD.
+- `Risk`: context rot from long-running sessions losing important memories.
+  - `Mitigation`: pre-compaction memory flush pattern (FR-015).
+- `Risk`: agent self-modification introduces inconsistent state.
+  - `Mitigation`: session reboot on config change; validate before write.
+
+## Cross-References
+
+- Security: PRD-002
+- Ops Console: PRD-003 (deferred to Phase 5)
+- CLI Onboarding: PRD-004
+- Model Providers: PRD-005
+- MCP Integration: PRD-006
+- Agent Personality and Memory: PRD-007
+- Scheduling: PRD-008
+- Input Adapters: PRD-009 (post-MVP)

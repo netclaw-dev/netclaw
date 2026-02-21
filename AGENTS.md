@@ -60,7 +60,8 @@ Before coding a capability, discover in this order:
 3. matching OpenSpec capability in `openspec/specs/`
 4. active change plan in `openspec/changes/<name>/`
 
-If those artifacts conflict, update planning artifacts first, then implement.
+If planning and implementation artifacts conflict, fix planning artifacts first.
+If discovery artifacts conflict with each other, update them before implementing.
 
 ## Universal Quality Bar
 
