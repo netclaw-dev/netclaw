@@ -102,6 +102,20 @@ If discovery artifacts conflict with each other, update them before implementing
 - no north-star/deferred features in MVP without explicit PRD update
 - actor boundaries remain transport-agnostic (pub/sub over direct transport asks)
 - persistence types remain framework-owned and serialization-safe
+- no new Slopwatch violations: run `/dotnet-skills:slopwatch` after code changes
+
+## Post-Code Quality Check
+
+After any code changes, run:
+
+```bash
+dotnet slopwatch analyze     # Detect reward hacking (new violations fail CI)
+```
+
+Slopwatch detects: disabled/skipped tests, suppressed warnings, empty catch
+blocks, hardcoded values, TODO-as-done comments. Baseline is in
+`.slopwatch/baseline.json` — existing entries are accepted, new violations
+must be fixed or explicitly baselined with justification.
 
 ## Definition of Done
 
@@ -109,6 +123,7 @@ Done means all of the following are true:
 
 - behavior aligns with PRD + spec
 - acceptance criteria are testable and verified
+- `dotnet slopwatch analyze` passes (no new violations)
 - operational impact is documented (runbooks or CLI help)
 - OpenSpec artifacts are updated or archived appropriately
 

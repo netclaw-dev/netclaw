@@ -48,7 +48,10 @@ jobs:
 
       - name: "dotnet test"
         shell: bash
-        run: dotnet test -c Release 
+        run: dotnet test -c Release
+
+      - name: "slopwatch analyze"
+        run: dotnet slopwatch analyze
 
       - name: "dotnet pack"
         run: dotnet pack -c Release -o ./bin/nuget

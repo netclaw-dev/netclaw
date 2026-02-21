@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "createdAt": "2026-02-21T18:55:14.1378608+00:00",
+  "updatedAt": "2026-02-21T18:55:14.1452473+00:00",
+  "description": "Initial baseline created by 'slopwatch init' on 2026-02-21 18:55:14 UTC",
+  "entries": [
+    {
+      "hash": "9d4a53dc5193e639",
+      "ruleId": "SW005",
+      "filePath": "Directory.Build.props",
+      "lineNumber": 6,
+      "codeSnippet": "<NoWarn>$(NoWarn);CS1591</NoWarn>",
+      "message": "Adding warnings to NoWarn: CS1591",
+      "baselinedAt": "2026-02-21T18:55:14.1452032+00:00"
+    }
+  ]
+}

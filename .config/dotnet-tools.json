@@ -15,6 +15,13 @@
         "docfx"
       ],
       "rollForward": false
+    },
+    "slopwatch.cmd": {
+      "version": "0.3.3",
+      "commands": [
+        "slopwatch"
+      ],
+      "rollForward": false
     }
   }
 }
