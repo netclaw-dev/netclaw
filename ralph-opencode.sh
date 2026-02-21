@@ -174,6 +174,8 @@ ${prior_reviews:-  (none — this is the first review)}
 
 3. **Full review areas (from skill):**
    - A) Checkbox Integrity — do changes satisfy Done-when criteria?
+   - A2) OpenSpec Integrity — code aligned with referenced specs?
+   - A3) OpenSpec Workflow Compliance — were /opsx-* skills used (not manual edits)?
    - B) Testing Strategy Compliance — integration tests for I/O, screenshots for UI
    - C) Architecture Compliance — follow constraints from AGENTS.md/CLAUDE.md
    - D) Framework compliance per CLAUDE.md
@@ -347,6 +349,15 @@ for ((i=1; i<=ITERATIONS; i++)); do
    - REQUIRED: ralph-loop.md (process discipline)
    - If UI impacted: ui-smoke-validation.md (or follow UI validation policy)
    - If schema/events touched: extend-only-design.md (if present)
+
+3b) OpenSpec Workflow (MANDATORY — see AGENTS.md for full details):
+   - If your task involves PLANNING work (new specs, changes, proposals):
+     Use /opsx-new, /opsx-continue, or /opsx-ff — do NOT manually create openspec/ files
+   - If your task involves FINISHING work (syncing specs, archiving):
+     Use /opsx-sync, /opsx-verify, /opsx-archive
+   - The ONLY manual edit allowed under openspec/ is ticking task checkboxes
+     in openspec/changes/*/tasks.md
+   - Run 'openspec validate --all --no-interactive' before every commit
 
 4) BEFORE coding: choose Verification Level (L0-L4) and state why:
    - I/O coordination (DB/HTTP/actors/external) => L2+ (integration tests required)
