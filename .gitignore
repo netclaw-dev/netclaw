@@ -401,3 +401,15 @@ FodyWeavers.xsd
 
 # JetBrains Rider
 *.sln.iml
+
+# RALPH flight recorder (ephemeral)
+.ralph/
+
+# Planning sessions (ephemeral)
+.planning/
+
+# Code health reports (ephemeral)
+.code-health/
+
+# Local Claude permissions
+.claude/settings.local.json

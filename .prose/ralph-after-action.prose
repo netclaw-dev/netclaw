@@ -1,0 +1,346 @@
+# RALPH After-Action Review
+# Orchestrates post-run evaluation: system diagnostics + adversarial output review
+# Runs both reviews in parallel, then synthesizes findings into postmortem
+
+WORKFLOW ralph-after-action
+
+# Configuration - passed as arguments
+CONFIG {
+  run_id: "$RUN_ID"           # From ralph.sh: 20260201-143022
+  run_dir: "$RUN_DIR"         # From ralph.sh: .ralph/runs/20260201-143022
+  branch: "$BRANCH"           # From ralph.sh: ralph/claude-20260201-143022
+}
+
+# -------------------------------------------------------------------
+# STAGE 1: Gather Context (Git is source of truth)
+# -------------------------------------------------------------------
+STAGE gather-context
+  AGENT opus
+  CONTEXT: CLAUDE.md, TOOLING.md, openspec/config.yaml
+  TASK:
+    ## Git Branch Analysis (Primary Source of Truth)
+
+    1. Determine the run branch:
+       - Use {CONFIG.branch} if provided
+       - Otherwise use current branch: `git branch --show-current`
+
+    2. Get ALL commits on this branch since it diverged from the default branch:
+       ```bash
+       git log $(git rev-parse --abbrev-ref origin/HEAD | sed 's|origin/||')..HEAD --oneline
+       ```
+
+    3. Get aggregate diff to understand scope of changes:
+       ```bash
+       git diff $(git rev-parse --abbrev-ref origin/HEAD | sed 's|origin/||')..HEAD --stat
+       ```
+
+    4. Create a commit ledger - for each commit, record:
+       - Commit hash (short)
+       - Commit message
+       - Files changed count
+       - Which run/iteration covered it (if any)
+
+    ## Run Artifact Collection
+
+    5. Find ALL `.ralph/runs/*/` folders on this branch
+       - There may be multiple due to crashes/restarts
+       - Sort by run ID (timestamp)
+
+    6. For each run folder, collect:
+       - `run.md` (run metadata)
+       - All `iter-*.md` files (iteration logs)
+       - All `review-after-iter-*.md` files (mid-loop reviews)
+
+    7. Build a unified timeline across all runs
+
+    8. Identify **orphaned commits** - commits in git but not covered by any iteration log:
+       - Check each commit against all `.ralph/runs/*/iter-*.md` files
+       - Orphaned commits indicate work done outside RALPH loop or during recovery
+       - These MUST be flagged for explicit review
+
+    ## Mid-Loop Review Aggregation
+
+    9. Find all `review-after-iter-*.md` files (sorted by iteration)
+
+    10. Build a review ledger:
+        | Review File | Iterations | Commit Range | Verdict | Open Issues |
+
+    11. Determine the **last reviewed commit** from most recent mid-loop review
+
+    12. Calculate **unreviewed commit range**: `{last_reviewed_commit}..HEAD`
+
+    ## Output Summary
+
+    13. Write context summary to {CONFIG.run_dir}/context-summary.md:
+        ```markdown
+        # After-Action Context Summary
+
+        ## Branch Metadata
+        - Branch: {branch}
+        - Total Commits: {N}
+        - Commit Range: {first}..{HEAD}
+
+        ## Commit Ledger
+        | Commit | Message | Files | Covered By |
+        |--------|---------|-------|------------|
+        | ... | ... | ... | ... |
+
+        ## Orphaned Commits (Need Review)
+        | Commit | Message | Why Orphaned |
+        |--------|---------|--------------|
+        | ... | ... | ... |
+
+        ## Run Summary
+        | Run ID | Iterations | Commits Covered | Status |
+        |--------|------------|-----------------|--------|
+        | ... | ... | ... | ... |
+
+        ## Mid-Loop Review Ledger
+        | Review | Iterations | Verdict | Open Issues |
+        |--------|------------|---------|-------------|
+        | ... | ... | ... | ... |
+
+        ## Unreviewed Range
+        - Last reviewed commit: {hash}
+        - Unreviewed range: {hash}..HEAD
+        - Commits to review: {N}
+        ```
+
+  OUTPUT: {
+    branch: <string>,
+    commit_count: <integer>,
+    commit_range: <string>,
+    orphaned_commits: <string[]>,
+    unreviewed_range: <string>,
+    run_ids: <string[]>,
+    context_file: <string>
+  }
+
+# -------------------------------------------------------------------
+# STAGE 2: Parallel Reviews (diagnostics + adversarial)
+# -------------------------------------------------------------------
+PARALLEL:
+  # -----------------------------------------------------------------
+  # STAGE 2a: System Diagnostics (Process Compliance)
+  # -----------------------------------------------------------------
+  STAGE diagnostics
+    DEPENDS_ON gather-context
+    SKIP_IF: gather-context.commit_count == 0
+    AGENT sonnet
+    CONTEXT: .claude/skills/ralph-run-diagnostics.md, .claude/skills/ralph-loop.md
+    TASK:
+      ## Load Diagnostics Skill
+
+      Execute the ralph-run-diagnostics skill with these inputs:
+
+      - Run ID: {CONFIG.run_id}
+      - Run Directory: {CONFIG.run_dir}
+      - Branch: {gather-context.branch}
+      - Context file: {gather-context.context_file}
+
+      ## Audit Areas (from skill)
+
+      A) Evidence Completeness ("Log or it didn't happen")
+         - For each iteration log, verify required sections exist
+
+      B) Task Selection Discipline
+         - ONE task per iteration, ALL checkboxes completed
+
+      C) Verification Level Discipline
+         - Level appropriate for surface area
+         - L3/L4 evidence present when claimed
+
+      D) Skill Usage Discipline
+         - Required skills consulted (testing-strategy for code)
+
+      E) System Evolution Discipline
+         - Skills/tooling proposed when workflows were unclear
+
+      ## Verdict
+
+      - PASS: All iterations compliant, evidence complete
+      - PARTIAL: Minor gaps, overall usable
+      - FAIL: Missing logs, skipped verification, checkbox fraud
+
+      ## Output
+
+      Write findings to {CONFIG.run_dir}/diagnostics-findings.md
+
+    OUTPUT: {
+      verdict: <enum: PASS|PARTIAL|FAIL>,
+      findings_file: <string>,
+      top_issues: <string[]>,
+      skill_proposals: <string[]>
+    }
+
+  # -----------------------------------------------------------------
+  # STAGE 2b: Adversarial Review (Code Quality)
+  # -----------------------------------------------------------------
+  STAGE adversarial
+    DEPENDS_ON gather-context
+    SKIP_IF: gather-context.commit_count == 0
+    AGENT opus
+    CONTEXT: .claude/skills/ralph-output-adversarial-review.md
+    TASK:
+      ## Load Adversarial Review Skill
+
+      Execute the ralph-output-adversarial-review skill with these inputs:
+
+      - Run ID: {CONFIG.run_id}
+      - Run Directory: {CONFIG.run_dir}
+      - Branch: {gather-context.branch}
+      - Unreviewed commit range: {gather-context.unreviewed_range}
+      - Orphaned commits: {gather-context.orphaned_commits}
+
+      ## This is a META-REVIEW (Final Postmortem)
+
+      The final adversarial review has TWO jobs:
+
+      ### Job 1: Review Unreviewed Commits (Standard)
+
+      Do NOT re-review commits already covered by mid-loop reviews.
+      Only review:
+      1. Commits in the unreviewed range (since last mid-loop review)
+      2. Orphaned commits (these had NO oversight)
+
+      Apply the full review stack: A) through K) from the adversarial skill.
+
+      ### Job 2: Meta-Review of Mid-Loop Reviews (NEW)
+
+      Read ALL mid-loop review files and evaluate them:
+
+      1. **Did the mid-loop reviews catch what they should have?**
+      2. **Were open issues properly tracked across reviews?**
+      3. **Did the reviews use their process improvement authority?**
+      4. **Review quality progression**
+
+      Write a "## Meta-Review: Mid-Loop Review Quality" section in the findings.
+
+      ## Review Areas (from skill)
+
+      A) Checkbox Integrity - Do changes satisfy Done-when criteria?
+      B) Testing Strategy Compliance - Integration tests for I/O, screenshots for UI
+      C) Architecture Compliance - Follow project constraints from AGENTS.md/CLAUDE.md
+      D) Framework/Library Compliance - Per CLAUDE.md mandatory triggers
+      E) UI Sanity - Error states, loading states, runtime errors
+      E2) UI Screenshot Gate - UI files must have L3+ with screenshots
+      F) Regression Risk - Edge cases, N+1 queries, unsafe assumptions
+      G) Slopwatch - Reward hacking patterns
+
+      ## Hard Fail Criteria
+
+      - Verification fraud (L3 claimed without evidence)
+      - Missing required tests
+      - Deferred core functionality
+      - UI work without screenshots (UI files modified + no L3 evidence)
+
+      ## Triage Output
+
+      For each issue found:
+      - NOW: Blocks milestone, breaks core journey, security/data risk
+      - CLEANUP: Bug fix, investigation, clear improvement scope
+      - PARK: Needs human decision, architecture choice, external dependency
+
+      ## Output
+
+      Write findings to {CONFIG.run_dir}/adversarial-findings.md
+
+    OUTPUT: {
+      verdict: <enum: PASS|PARTIAL|FAIL>,
+      findings_file: <string>,
+      now_items: <object[]>,
+      cleanup_items: <object[]>,
+      park_items: <object[]>,
+      skill_proposals: <string[]>
+    }
+
+# -------------------------------------------------------------------
+# STAGE 3: Synthesize Postmortem
+# -------------------------------------------------------------------
+STAGE synthesize
+  DEPENDS_ON diagnostics, adversarial
+  SKIP_IF: gather-context.commit_count == 0
+  AGENT opus
+  CONTEXT: IMPLEMENTATION_PLAN.md, BACKLOG_PARKING_LOT.md, openspec/specs/README.md
+  TASK:
+    ## Combine Verdicts
+
+    1. Read both findings files:
+       - {diagnostics.findings_file}
+       - {adversarial.findings_file}
+
+    2. Determine overall verdict:
+       - FAIL if either is FAIL
+       - PARTIAL if either is PARTIAL
+       - PASS only if both are PASS
+
+    ## Write Postmortem
+
+    3. Write comprehensive postmortem to {CONFIG.run_dir}/postmortem.md
+
+    ## Update IMPLEMENTATION_PLAN.md
+
+    4. If NOW items exist, add at the very top as Fix-it block
+    5. If CLEANUP items exist, add after most recent completed phase
+
+    ## Update BACKLOG_PARKING_LOT.md
+
+    6. For PARK items only (need human decision)
+
+    ## Propose Skill Evolutions
+
+    7. Combine skill proposals from both reviews
+    8. For any failure mode that occurred 2+ times, draft skill outline
+
+    ## Summary Output
+
+    9. Print summary to console
+
+  OUTPUT: {
+    overall_verdict: <enum: PASS|PARTIAL|FAIL>,
+    postmortem_file: <string>,
+    now_count: <integer>,
+    cleanup_count: <integer>,
+    park_count: <integer>
+  }
+
+# -------------------------------------------------------------------
+# Error Handling
+# -------------------------------------------------------------------
+ON_ERROR {
+  stage: gather-context
+  action: ABORT "Failed to gather context - check git branch and .ralph/runs/ directory"
+}
+
+ON_ERROR {
+  stage: diagnostics
+  action: RETRY 1 "Retrying diagnostics review"
+}
+
+ON_ERROR {
+  stage: adversarial
+  action: RETRY 1 "Retrying adversarial review"
+}
+
+ON_ERROR {
+  stage: synthesize
+  action: RETRY 1 "Retrying postmortem synthesis"
+}
+
+# -------------------------------------------------------------------
+# Notes
+# -------------------------------------------------------------------
+# This workflow replaces the /ralph-after-action skill invocation.
+#
+# Usage (from ralph.sh):
+#   /open-prose:prose-run @.prose/ralph-after-action.prose \
+#     RUN_ID=20260201-143022 \
+#     RUN_DIR=.ralph/runs/20260201-143022 \
+#     BRANCH=ralph/claude-20260201-143022
+#
+# The diagnostics and adversarial stages run in PARALLEL (explicit block above).
+#
+# Benefits:
+# - Faster execution (parallel reviews)
+# - Cost optimization (sonnet for diagnostics, opus for adversarial)
+# - Explicit workflow structure

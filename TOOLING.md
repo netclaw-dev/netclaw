@@ -14,6 +14,10 @@
   - OpenCode command/skill files generated under `.opencode/`
   - repository artifacts under `openspec/`
 - markdown docs under `docs/prd/`, `docs/spec/`, and `docs/ui/`
+- RALPH loop infrastructure for iterative implementation
+  - `ralph-opencode.sh`, `ralph.sh`
+  - local Claude skills under `.claude/skills/`
+  - flight recorder at `.ralph/runs/<run-id>/`
 
 ## Source Control and CI Signals
 

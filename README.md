@@ -66,6 +66,19 @@ Netclaw-specific helper skills are available at:
 - `.opencode/skills/netclaw-openspec-planning/SKILL.md`
 - `.opencode/skills/netclaw-openspec-milestones/SKILL.md`
 
+## RALPH Loop
+
+RALPH infrastructure is available in this repo and tuned for OpenSpec-traceable
+execution.
+
+- `ralph-opencode.sh` - OpenCode loop runner
+- `ralph.sh` - Claude Code loop runner
+- `.claude/skills/ralph-loop.md` - loop discipline with OpenSpec gates
+- `.claude/skills/ralph-run-diagnostics.md` - process diagnostics
+- `.claude/skills/ralph-output-adversarial-review.md` - adversarial review
+- `IMPLEMENTATION_PLAN.md` - RALPH task queue
+- `BACKLOG_PARKING_LOT.md` - parked items requiring human decisions
+
 ## Bootstrap Docs
 
 Repository operating guidance lives in:

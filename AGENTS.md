@@ -23,6 +23,7 @@ Read first:
 - `IMPLEMENTATION_PLAN.md`
 - `docs/prd/README.md`
 - `.opencode/skills/netclaw-*/SKILL.md`
+- `.claude/skills/ralph-*.md`
 - relevant `openspec/specs/*/spec.md`
 
 ## Required Task Routing
