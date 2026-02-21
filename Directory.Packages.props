@@ -7,7 +7,7 @@
   <!-- App dependencies -->
   <ItemGroup>
     <PackageVersion Include="Akka.Hosting" Version="$(AkkaHostingVersion)"/>
-    <PackageVersion Include="Microsoft.Extensions.Hosting" Version="10.0.2"/>
+    <PackageVersion Include="Microsoft.Extensions.Hosting" Version="10.0.3"/>
   </ItemGroup>
   <!-- Test dependencies -->
   <!-- SourceLink support for all Akka.NET projects -->
