@@ -50,8 +50,26 @@ jobs:
         shell: bash
         run: dotnet test -c Release
 
-      - name: "slopwatch analyze"
-        run: dotnet slopwatch analyze
-
       - name: "dotnet pack"
         run: dotnet pack -c Release -o ./bin/nuget
+
+  slopwatch:
+    name: Slopwatch
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: "Checkout"
+        uses: actions/checkout@v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: "Install .NET SDK"
+        uses: actions/setup-dotnet@v5.1.0
+        with:
+          global-json-file: "./global.json"
+
+      - name: "Restore .NET tools"
+        run: dotnet tool restore
+
+      - name: "slopwatch analyze"
+        run: dotnet slopwatch analyze
