@@ -52,6 +52,17 @@ If any of these are missing, mark as a diagnostic failure.
 - Was `openspec validate --all --no-interactive` run and logged before commit?
 - Do implementation changes keep capabilities/spec deltas consistent?
 
+### B3) OpenSpec Workflow Discipline
+- Were OpenSpec artifacts created through the `/opsx-*` skills?
+  - `/opsx-new` for new changes
+  - `/opsx-continue` or `/opsx-ff` for artifact creation
+  - `/opsx-sync` for syncing delta specs
+  - `/opsx-archive` for archiving completed changes
+- Manual creation/editing of files under `openspec/` (except task checkbox
+  updates) indicates a workflow violation.
+- Check iteration logs for evidence of skill invocation when OpenSpec work was
+  required.
+
 ### C) Verification Level Discipline
 - Was verification level appropriate for surface area?
   - I/O changes (db/http/actors/external) → L2+ (integration tests)

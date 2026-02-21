@@ -51,6 +51,38 @@ Expected outputs:
 - matching spec updates when behavior changes
 - no undocumented behavior drift
 
+## OpenSpec Workflow (MANDATORY)
+
+**You MUST use OpenSpec skills for all planning and spec work.** Do not manually
+create or edit OpenSpec artifacts (specs, changes, proposals, delta specs,
+design docs, task files). Use the skills listed below.
+
+### When Planning (new feature, capability, or spec change)
+
+1. `/opsx-new` — create a new OpenSpec change
+2. `/opsx-continue` — create next artifact in the change workflow
+3. `/opsx-ff` — fast-forward: generate all remaining artifacts at once
+
+### When Implementing (building code from a change)
+
+4. `/opsx-apply` — implement tasks from an OpenSpec change
+
+### When Finishing (syncing and archiving)
+
+5. `/opsx-sync` — sync delta specs from a change to main specs
+6. `/opsx-verify` — verify implementation matches change artifacts
+7. `/opsx-archive` — archive a completed change
+
+### Supporting Workflows
+
+- `/opsx-explore` — think through ideas before creating a change
+- `/opsx-onboard` — guided walkthrough of the full OpenSpec workflow
+- `/opsx-bulk-archive` — archive multiple completed changes
+
+**Hard rule:** If you need to create or modify files under `openspec/`, use the
+appropriate skill above. The only exception is updating task checkboxes in
+`openspec/changes/*/tasks.md` during RALPH iterations.
+
 ## Discovery Rules
 
 Before coding a capability, discover in this order:

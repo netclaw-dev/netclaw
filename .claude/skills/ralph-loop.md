@@ -440,6 +440,31 @@ If a new component is created but **cannot be visually tested** because it isn't
 
 ---
 
+### 5.9) OpenSpec Artifact Gate (HARD STOP)
+
+**If the task requires creating or modifying OpenSpec artifacts** (specs,
+changes, proposals, delta specs, design docs, tasks files), you MUST use
+the OpenSpec skills. Do NOT manually create or edit files under `openspec/`.
+
+| Need | Skill |
+|------|-------|
+| New feature/capability needs spec work | `/opsx-new` |
+| Continue an in-progress change | `/opsx-continue` |
+| Fast-forward all artifacts at once | `/opsx-ff` |
+| Implement tasks from a change | `/opsx-apply` |
+| Sync delta specs to main specs | `/opsx-sync` |
+| Verify implementation matches specs | `/opsx-verify` |
+| Archive a completed change | `/opsx-archive` |
+
+**The only exception:** Updating task checkboxes in
+`openspec/changes/*/tasks.md` during RALPH iterations (Step 9).
+
+**If you encounter a missing OpenSpec capability during implementation:**
+1. STOP implementation
+2. Use `/opsx-new` to create the change
+3. Use `/opsx-ff` to generate all artifacts
+4. Resume implementation with proper traceability
+
 ### 6) Implement
 
 Follow architecture rules from the constitution (AGENTS.md / CLAUDE.md):

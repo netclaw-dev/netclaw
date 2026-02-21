@@ -183,8 +183,13 @@ Done when:
 
 ## Phase 1: Chat + Memory MVP
 
-OpenSpec Change: `openspec/changes/expand-mvp-for-autonomous-agent-vision/`
-Full task breakdown: `openspec/changes/expand-mvp-for-autonomous-agent-vision/tasks.md`
+OpenSpec Changes:
+- `openspec/changes/expand-mvp-for-autonomous-agent-vision/` (Tasks 1.1–1.12)
+- `openspec/changes/add-tui-adapter-and-config-hot-reload/` (Tasks 1.13–1.19, 1.22)
+
+Full task breakdowns:
+- `openspec/changes/expand-mvp-for-autonomous-agent-vision/tasks.md`
+- `openspec/changes/add-tui-adapter-and-config-hot-reload/tasks.md`
 
 ### Task 1.1: Framework protocol and persistence-safe message envelopes
 
@@ -354,7 +359,119 @@ Done when:
 - [ ] Task management: list, pause, resume, delete via conversation and CLI.
 - [ ] Tests for persistence, timer lifecycle, isolated execution, failure handling.
 
-### Task 1.13: Slack Socket Mode adapter
+### Task 1.13: CLI scaffold with Cocona + Termina hosting
+
+**PRD:** `docs/prd/PRD-004-cli-onboarding-and-config.md` (CLI-010, CLI-012)
+**OpenSpec:** `openspec/specs/netclaw-cli/spec.md`
+**OpenSpec Changes:** `openspec/changes/add-tui-adapter-and-config-hot-reload/` (Section 1)
+**Surface area:** CLI framework
+**Verification:** L1
+
+Done when:
+- [ ] Cocona and Termina package references added to `Directory.Packages.props` and `Netclaw.App.csproj`.
+- [ ] `Program.cs` rewritten as Cocona entry point with DI registration.
+- [ ] `RunCommand.cs` created for daemon mode (`netclaw run`).
+- [ ] Termina wired as hosted service for TUI commands.
+- [ ] `dotnet build` passes with new dependencies.
+
+### Task 1.14: TUI chat adapter (`netclaw chat`)
+
+**PRD:** `docs/prd/PRD-004-cli-onboarding-and-config.md` (CLI-011), `docs/prd/PRD-009-input-adapters-and-unified-input.md` (INPUT-005)
+**OpenSpec:** `openspec/specs/netclaw-input-adapters/spec.md`, `openspec/specs/netclaw-cli/spec.md`
+**OpenSpec Changes:** `openspec/changes/add-tui-adapter-and-config-hot-reload/` (Section 2)
+**Surface area:** TUI + adapter
+**Verification:** L3
+**Wireframe:** `docs/ui/TUI-001-command-wireframes.md` (netclaw chat)
+
+Done when:
+- [ ] `TuiInputAdapter` implementing adapter contract (`SendUserMessage` with entity key `tui/{sessionId}`).
+- [ ] `ChatCommand.cs` hosts actor system in-process and launches TUI.
+- [ ] `ChatPage.cs` with `StreamingTextNode` (scrollable history) and `TextInputNode` (multi-line input).
+- [ ] `ChatViewModel.cs` with session lifecycle and broadcast subscription.
+- [ ] Inline tool activity panel (completed with duration, in-progress with spinner).
+- [ ] MCP status indicator in status bar (green/yellow/red).
+- [ ] E2E: user types → `SendUserMessage` → session actor → LLM → streaming response in TUI.
+
+### Task 1.15: TUI onboarding wizard (`netclaw init`)
+
+**PRD:** `docs/prd/PRD-004-cli-onboarding-and-config.md` (CLI-010)
+**OpenSpec:** `openspec/specs/netclaw-onboarding/spec.md`, `openspec/specs/netclaw-cli/spec.md`
+**OpenSpec Changes:** `openspec/changes/add-tui-adapter-and-config-hot-reload/` (Section 3)
+**Surface area:** TUI + onboarding
+**Verification:** L3
+**Wireframe:** `docs/ui/TUI-001-command-wireframes.md` (netclaw init)
+
+Done when:
+- [ ] `InitCommand.cs` launches Termina wizard.
+- [ ] `InitWizardPage.cs` with 7-step wizard layout (`PanelNode`, progress bar).
+- [ ] `InitWizardViewModel.cs` with step state machine and back-navigation.
+- [ ] Steps: LLM provider, Slack config, PostgreSQL, ACL bootstrap, MCP servers, exposure mode, health check.
+- [ ] Config file written to `~/.netclaw/config/netclaw.json` on completion.
+
+### Task 1.16: Plain CLI commands
+
+**PRD:** `docs/prd/PRD-004-cli-onboarding-and-config.md`
+**OpenSpec:** `openspec/specs/netclaw-cli/spec.md`
+**OpenSpec Changes:** `openspec/changes/add-tui-adapter-and-config-hot-reload/` (Section 4)
+**Surface area:** CLI
+**Verification:** L1
+
+Done when:
+- [ ] `DoctorCommand.cs` — startup checks with remediation guidance, exit codes 0/1/2.
+- [ ] `ConfigCommands.cs` — `config show` and `config validate`.
+- [ ] `AclCommands.cs` — `acl validate`, `acl test`, `acl explain`.
+- [ ] `ProjectCommands.cs` — `project list`, `project add`, `project remove`.
+- [ ] `ScheduleCommands.cs` — `schedule list|show|pause|resume|delete`.
+- [ ] Remaining commands: `environment scan|show`, `mcp list|validate|test`, `memory show`, `tools list|policy`, `test smoke`, `personality reset`.
+
+### Task 1.17: Config hot-reload
+
+**PRD:** `docs/prd/PRD-001-netclaw-mvp.md` (FR-016)
+**OpenSpec:** `openspec/specs/netclaw-config-hot-reload/spec.md`, `openspec/specs/netclaw-session/spec.md`
+**OpenSpec Changes:** `openspec/changes/add-tui-adapter-and-config-hot-reload/` (Section 5)
+**Surface area:** runtime config
+**Verification:** L2
+
+Done when:
+- [ ] `ConfigWatcherService` as `IHostedService` with `FileSystemWatcher` per watched file.
+- [ ] 500ms debounce for file change events.
+- [ ] Validate-before-apply with rejection logging.
+- [ ] Config file deletion handling (warn, keep existing config).
+- [ ] ACL change events published to policy engine via Akka pub/sub.
+- [ ] Provider change events published to provider factory via Akka pub/sub.
+- [ ] MCP profile change events published to MCP manager via Akka pub/sub.
+- [ ] Schedule change events published to `ScheduleManagerActor` via Akka pub/sub.
+- [ ] Integration test: config file write → debounce → validate → actor notification.
+
+### Task 1.18: Conversational personality bootstrap
+
+**PRD:** `docs/prd/PRD-007-agent-personality-and-local-memory.md`
+**OpenSpec:** `openspec/specs/netclaw-agent-memory/spec.md`, `openspec/specs/netclaw-onboarding/spec.md`
+**OpenSpec Changes:** `openspec/changes/add-tui-adapter-and-config-hot-reload/` (Section 6)
+**Surface area:** onboarding
+**Verification:** L2
+
+Done when:
+- [ ] First-run detection: trigger bootstrap when soul files don't exist on first `netclaw chat`.
+- [ ] Bootstrap conversation: introduce, learn preferences, scan environment, write soul files, confirm.
+- [ ] PERSONALITY.md, INSTRUCTIONS.md, USER.md written to config directory.
+- [ ] Test: bootstrap triggers when files missing, skips when files exist.
+
+### Task 1.19: Local E2E validation via TUI
+
+**PRD:** `docs/prd/PRD-001-netclaw-mvp.md`
+**OpenSpec:** all Phase 1 specs
+**OpenSpec Changes:** `openspec/changes/add-tui-adapter-and-config-hot-reload/` (Section 7)
+**Surface area:** end-to-end
+**Verification:** L4
+
+Done when:
+- [ ] E2E: `netclaw chat` → session → tool call → streaming response.
+- [ ] E2E: scheduled task → fresh session → result displayed.
+- [ ] E2E: config change → hot-reload → policy refresh verified.
+- [ ] CI tests pass without live provider credentials.
+
+### Task 1.20: Slack Socket Mode adapter
 
 **PRD:** `docs/prd/PRD-001-netclaw-mvp.md`
 **OpenSpec:** `openspec/specs/netclaw-slack-socket/spec.md`, `openspec/specs/netclaw-input-adapters/spec.md`
@@ -368,36 +485,7 @@ Done when:
 - [ ] Reconnection on disconnect.
 - [ ] End-to-end test proves message → reply loop.
 
-### Task 1.14: CLI onboarding and management commands
-
-**PRD:** `docs/prd/PRD-004-cli-onboarding-and-config.md`
-**OpenSpec:** `openspec/specs/netclaw-cli/spec.md`, `openspec/specs/netclaw-onboarding/spec.md`
-**Surface area:** CLI
-**Verification:** L1
-
-Done when:
-- [ ] `netclaw init` guided wizard (provider, Slack, PostgreSQL, ACL, MCP, exposure, health check).
-- [ ] `netclaw config show|validate` and `netclaw acl validate|test|explain`.
-- [ ] `netclaw project list|add|remove` and `netclaw environment scan|show`.
-- [ ] `netclaw schedule list|show|pause|resume|delete`.
-- [ ] `netclaw mcp list|validate|test`.
-- [ ] `netclaw personality reset` and `netclaw memory show`.
-- [ ] `netclaw gateway status|doctor`.
-- [ ] `netclaw test smoke --provider ollama`.
-
-### Task 1.15: Conversational personality bootstrap
-
-**PRD:** `docs/prd/PRD-007-agent-personality-and-local-memory.md`
-**OpenSpec:** `openspec/specs/netclaw-agent-memory/spec.md`, `openspec/specs/netclaw-onboarding/spec.md`
-**Surface area:** onboarding
-**Verification:** L2
-
-Done when:
-- [ ] First-run detection: trigger bootstrap when soul files don't exist.
-- [ ] Bootstrap conversation: introduce, learn preferences, scan environment, write soul files, confirm.
-- [ ] Test for bootstrap trigger and soul file creation.
-
-### Task 1.16: Integration and acceptance
+### Task 1.21: Full integration and acceptance
 
 **PRD:** `docs/prd/PRD-001-netclaw-mvp.md`
 **OpenSpec:** all Phase 1 specs
@@ -411,16 +499,16 @@ Done when:
 - [ ] CI test suite passes without live provider credentials.
 - [ ] Deploy to pi1 and verify Slack interaction.
 
-### Task 1.17: Sync specs and archive change
+### Task 1.22: Spec sync and archive
 
-**OpenSpec Changes:** `openspec/changes/expand-mvp-for-autonomous-agent-vision/`
+**OpenSpec Changes:** `openspec/changes/expand-mvp-for-autonomous-agent-vision/`, `openspec/changes/add-tui-adapter-and-config-hot-reload/`
 **Surface area:** process
 **Verification:** L0
 
 Done when:
-- [ ] Delta specs synced to main specs.
+- [ ] Delta specs synced to main specs for both changes.
 - [ ] `openspec validate --all --no-interactive` passes.
-- [ ] Change archived with `openspec archive expand-mvp-for-autonomous-agent-vision`.
+- [ ] Changes archived.
 
 ---
 

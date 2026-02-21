@@ -31,6 +31,7 @@ irrelevant — the differentiator is the instructions attached to the context.
 
 | Input Source          | Delivery Mechanism                          | MVP? |
 |-----------------------|---------------------------------------------|------|
+| Local TUI             | `netclaw chat` in-process                   | Yes  |
 | User @mention         | Slack Socket Mode                           | Yes  |
 | Scheduled task        | Internal timer                              | Yes  |
 | Ambient channel alert | Slack Socket Mode (require_mention: false)  | No   |
@@ -196,6 +197,22 @@ refreshes the context. See PRD-007.
 Before context compaction occurs, Netclaw shall trigger a silent agentic turn
 prompting the model to write durable memories to disk. This directly counters
 context rot — losing important information when context resets. See PRD-007.
+
+### FR-016 Config Hot-Reload
+
+Netclaw shall monitor operational configuration files for changes and apply
+updates without process restart:
+
+- **Watched files** (hot-reloaded): ACL rules, provider config, MCP profiles,
+  schedule definitions
+- **Unwatched files** (require restart or session reboot): personality files,
+  project registry, environment inventory
+
+Mechanism: `FileSystemWatcher` + 500ms debounce + validate-before-apply.
+Invalid config changes SHALL be rejected with logged diagnostics. Valid changes
+SHALL notify owning actors (ACL changes → policy engine refresh, provider
+changes → `IChatClient` rebuild, MCP changes → reconnect/disconnect servers,
+schedule changes → timer reconfiguration).
 
 ## Operational Requirements
 

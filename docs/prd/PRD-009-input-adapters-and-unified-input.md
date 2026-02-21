@@ -27,6 +27,7 @@ child session actor.
 
 | Input Source          | Delivery Mechanism                          | Phase | Entity Key Pattern |
 |-----------------------|---------------------------------------------|-------|--------------------|
+| Local TUI             | `netclaw chat` in-process                   | 1     | `tui/{sessionId}` |
 | User @mention         | Slack Socket Mode                           | 1     | `{channelId}/{threadTs}` |
 | Scheduled task        | Internal Akka timer                         | 1     | `schedule/{taskId}/{runTs}` |
 | Ambient channel alert | Slack Socket Mode (require_mention: false)  | 2     | `{channelId}/{threadTs}` |
@@ -34,6 +35,16 @@ child session actor.
 | Web UI (future)       | WebSocket / HTTP                            | 5     | `web/{sessionId}` |
 
 ### MVP Input Adapters
+
+**Local TUI Adapter** (Phase 1):
+- Hosted in-process by `netclaw chat` command
+- Receives keyboard input via Termina TextInputNode
+- Produces `SendUserMessage` commands with entity key `tui/{sessionId}`
+- Subscribes to session broadcasts for reply delivery
+- Renders responses as streaming text via StreamingTextNode
+- Displays tool invocation status inline (name, duration, spinner)
+- Shows MCP server connectivity in status bar
+- Full actor system runs in-process — validates entire agent stack locally
 
 **Slack Socket Mode Adapter** (Phase 1):
 - Connects via Slack's WebSocket-based Socket Mode
@@ -135,12 +146,21 @@ adapters and session actors.
 All inbound commands SHALL carry source metadata sufficient for ACL evaluation
 and audit logging: adapter type, sender identity, channel, timestamp.
 
+### INPUT-005 TUI Adapter
+
+The TUI adapter SHALL receive keyboard input via Termina TextInputNode, produce
+`SendUserMessage` commands with entity key `tui/{sessionId}`, subscribe to
+session broadcasts, and render responses as streaming text. The TUI adapter
+SHALL display tool invocation status inline between user message and response.
+
 ## Acceptance Criteria (MVP)
 
-1. Slack adapter handles @mention events and replies in thread.
-2. Timer adapter fires scheduled tasks and delivers results via Slack.
-3. Session actors receive identical command types regardless of source.
-4. Source metadata is available for ACL checks and audit logging.
+1. TUI adapter receives input, routes through session actor, renders streaming
+   response.
+2. Slack adapter handles @mention events and replies in thread.
+3. Timer adapter fires scheduled tasks and delivers results via Slack.
+4. Session actors receive identical command types regardless of source.
+5. Source metadata is available for ACL checks and audit logging.
 
 ## Acceptance Criteria (Phase 2)
 

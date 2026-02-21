@@ -45,6 +45,7 @@ This directory contains product requirements for Netclaw.
 - Agent personality and memory -> `openspec/specs/netclaw-agent-memory/spec.md` (new)
 - Scheduling -> `openspec/specs/netclaw-scheduling/spec.md` (new)
 - Input adapters -> `openspec/specs/netclaw-input-adapters/spec.md` (new)
+- Config hot-reload -> `openspec/specs/netclaw-config-hot-reload/spec.md` (new)
 - First-party tools -> `openspec/specs/netclaw-tools/spec.md` (new)
 
 ## Cross-Reference Matrix

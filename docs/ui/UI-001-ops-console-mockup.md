@@ -140,9 +140,83 @@ Wizard requirements:
 - Empty states include a concrete next action.
 - Failure states include direct CLI command equivalent.
 
+## 8) Memory and Configuration
+
+Route: `/memory-config`
+
+```
++--------------------------------------------------------------------------------+
+| NETCLAW OPS CONSOLE                                           Memory & Config  |
++----------------------+---------------------------------------------------------+
+| Navigation           | ╭─ Personality ───────────────────────────────────────╮ |
+| - Overview           | │ PERSONALITY.md  │ INSTRUCTIONS.md │ USER.md        │ |
+| - Sessions           | │ [View] [Edit]   │ [View] [Edit]   │ [View] [Edit]  │ |
+| - Policy             | ╰────────────────────────────────────────────────────╯ |
+| - Security           |                                                         |
+| - Diagnostics        | ╭─ Projects ──────────────────────────────────────────╮ |
+| - Memory & Config  * | │ Name       Path                     Lang   CI       │ |
+| - Scheduling         | │ netclaw    /home/user/repos/netclaw  C#     ✓       │ |
+|                      | │ termina    /home/user/repos/termina  C#     ✓       │ |
+| Quick Actions        | │ [Add Project]                                       │ |
+| [Validate Config]    | ╰────────────────────────────────────────────────────╯ |
+| [Run Doctor]         |                                                         |
+| [Inspect ACL]        | ╭─ Environment ───────────────────────────────────────╮ |
+|                      | │ git 2.43  gh 2.62  dotnet 10.0  node 22.1          │ |
+|                      | │ Last scan: 2026-02-21 14:30                         │ |
+|                      | │ [Rescan]                                             │ |
+|                      | ╰────────────────────────────────────────────────────╯ |
++----------------------+---------------------------------------------------------+
+```
+
+Panels:
+
+- **Personality** — view and edit soul files (PERSONALITY.md, INSTRUCTIONS.md,
+  USER.md). Inline markdown editor with preview.
+- **Projects** — registered project list with path, language, CI status.
+  Add/remove projects. Links to project AGENTS.md when present.
+- **Environment** — discovered tools and versions from last environment scan.
+  Rescan button triggers a fresh discovery.
+
+## 9) Scheduling
+
+Route: `/scheduling`
+
+```
++--------------------------------------------------------------------------------+
+| NETCLAW OPS CONSOLE                                              Scheduling    |
++----------------------+---------------------------------------------------------+
+| Navigation           | ╭─ Scheduled Tasks ───────────────────────────────────╮ |
+| - Overview           | │ Name          Type     Schedule     Status   Next   │ |
+| - Sessions           | │ daily-standup  cron     0 9 * * 1-5  active   09:00 │ |
+| - Policy             | │ check-ci       interval 30m          active   14:32 │ |
+| - Security           | │ backup-db      cron     0 2 * * *    paused   --    │ |
+| - Diagnostics        | │                                                     │ |
+| - Memory & Config    | │ [Create Task] [Pause All]                           │ |
+| - Scheduling       * | ╰────────────────────────────────────────────────────╯ |
+|                      |                                                         |
+| Quick Actions        | ╭─ Execution History ─────────────────────────────────╮ |
+| [Validate Config]    | │ Time           Task          Duration  Result       │ |
+| [Run Doctor]         | │ 14:02 today    check-ci      12s       ✓ success   │ |
+| [Inspect ACL]        | │ 09:00 today    daily-standup  45s       ✓ success   │ |
+|                      | │ 02:00 today    backup-db      --        ⊘ paused    │ |
+|                      | │ 14:02 yest.    check-ci      8s        ✓ success   │ |
+|                      | ╰────────────────────────────────────────────────────╯ |
++----------------------+---------------------------------------------------------+
+```
+
+Panels:
+
+- **Scheduled Tasks** — task list with name, type (cron/interval), schedule
+  expression, status (active/paused), next fire time. Actions: create, pause,
+  resume, delete. Pause All for maintenance windows.
+- **Execution History** — recent execution log with timestamp, task name,
+  duration, and result. Click-through to session inspector for full details.
+
 ## CLI Parity Matrix
 
 - Overview health <-> `netclaw gateway status`
 - Policy simulator <-> `netclaw acl test` / `netclaw acl explain`
 - Diagnostics panel <-> `netclaw gateway doctor`
 - Session inspector <-> `netclaw session inspect`
+- Memory & Config <-> `netclaw memory show` / `netclaw project list` / `netclaw environment show`
+- Scheduling <-> `netclaw schedule list` / `netclaw schedule show`

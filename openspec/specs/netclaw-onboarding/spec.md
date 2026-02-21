@@ -79,15 +79,15 @@ baseline configuration is functional.
 ### Requirement: Phase 2 conversational personality bootstrap
 
 The system SHALL trigger a conversational personality bootstrap on the first
-conversation if personality files (PERSONALITY.md, INSTRUCTIONS.md, USER.md)
-do not exist. The bootstrap conversation SHALL ask the operator about
+`netclaw chat` session if personality files (PERSONALITY.md, INSTRUCTIONS.md,
+USER.md) do not exist. The bootstrap conversation SHALL ask the operator about
 communication preferences, tone, name preferences, and working style, then
 write the resulting soul files to the standard config directory.
 
 #### Scenario: First conversation triggers bootstrap
 
 - **GIVEN** no personality files exist in the config directory
-- **WHEN** the operator starts their first conversation with Netclaw
+- **WHEN** the operator starts their first `netclaw chat` session
 - **THEN** the agent initiates a personality bootstrap conversation
 - **AND** asks about communication preferences and working style
 
@@ -143,3 +143,37 @@ with their paths, capabilities, and AGENTS.md locations.
 - **WHEN** Phase 2 onboarding reaches the project registration step
 - **AND** the operator indicates no projects to register
 - **THEN** onboarding proceeds with an empty project registry
+
+### Requirement: TUI wizard delivery mechanism
+
+The `netclaw init` onboarding wizard SHALL be delivered through Termina TUI
+as an interactive 7-step wizard with progress indication, validation, and
+back-navigation.
+
+#### Scenario: Wizard renders in TUI
+
+- **WHEN** operator runs `netclaw init`
+- **THEN** a Termina TUI application launches
+- **AND** the wizard displays step progress (e.g., "Step 2 of 7")
+- **AND** the wizard displays a progress bar
+
+#### Scenario: Step-specific components rendered
+
+- **GIVEN** the wizard is on a step requiring text input
+- **WHEN** the step is displayed
+- **THEN** the wizard renders TextInputNode components for text/secret fields
+- **AND** renders SelectionListNode components for choice fields
+
+#### Scenario: Back navigation between steps
+
+- **GIVEN** the wizard is on step 3
+- **WHEN** the operator presses Esc
+- **THEN** the wizard navigates back to step 2
+- **AND** previous input values are preserved
+
+#### Scenario: Live validation during wizard
+
+- **GIVEN** the wizard is on the PostgreSQL step
+- **WHEN** the operator enters a connection string
+- **THEN** the wizard validates connectivity with a SpinnerNode
+- **AND** displays success or failure before allowing progression

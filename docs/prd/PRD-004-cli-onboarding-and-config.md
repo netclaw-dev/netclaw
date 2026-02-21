@@ -5,7 +5,8 @@
 - State: Draft for execution (revised)
 - Owner: Netclaw engineering
 - Date: 2026-02-21
-- Revised: 2026-02-21 (two-phase onboarding, expanded command surface)
+- Revised: 2026-02-21 (two-phase onboarding, expanded command surface, TUI
+  commands, Cocona + Termina frameworks)
 - Depends on: `PRD-001`, `PRD-002`
 
 ## Goal
@@ -19,6 +20,14 @@ accessible via CLI first.
 
 An owner can go from empty config to safe runtime startup and ongoing
 diagnostics using CLI commands and guided output.
+
+## CLI Framework
+
+- **Cocona** for command routing (lightweight, convention-based, DI integration)
+- **Termina 0.5.1** for interactive TUI commands (`netclaw init`, `netclaw chat`)
+- All other commands use plain console output via Cocona
+- `netclaw run` is the explicit daemon entry point (Slack + timers + health
+  endpoints, no TUI)
 
 ## Two-Phase Onboarding
 
@@ -34,7 +43,7 @@ Technical setup, no LLM required:
 6. Exposure mode selection (local-only default)
 7. Health check (verify Slack connection, DB connection, LLM reachability)
 
-### Phase 2: Conversational Personality Bootstrap (first Slack message)
+### Phase 2: Conversational Personality Bootstrap (first `netclaw chat`)
 
 Agent-driven setup, requires running LLM:
 
@@ -44,14 +53,26 @@ Agent-driven setup, requires running LLM:
 4. Write PERSONALITY.md, USER.md, environment inventory
 5. Confirm readiness
 
-Phase 2 is triggered automatically on first conversation if personality files
+Phase 2 is triggered automatically on first `netclaw chat` if personality files
 don't exist. It can also be re-triggered via CLI (`netclaw personality reset`).
 
 ## Command Surface (MVP)
 
-### Onboarding and Configuration
+### TUI-Interactive Commands (Termina)
 
-- `netclaw init` — guided first-time setup wizard
+- `netclaw init` — guided first-time setup wizard (7-step TUI wizard)
+- `netclaw chat` — interactive agent prompt with streaming responses, tool
+  activity display, and MCP status. Hosts actor system in-process. Session
+  entity key: `tui/{uuid}`. See TUI-001 wireframes.
+
+### Daemon Mode
+
+- `netclaw run` — start daemon mode (Slack Socket Mode + Akka actor system +
+  scheduled task timers + health endpoints). No TUI. Primary production entry
+  point.
+
+### Onboarding and Configuration (Plain CLI)
+
 - `netclaw config show|validate` — display/validate current configuration
 - `netclaw personality reset` — re-trigger conversational personality setup
 
@@ -149,6 +170,29 @@ completed, pending, or invalid.
 - Registered project paths validity
 
 Results are persisted to the environment inventory file.
+
+### CLI-010 TUI Commands
+
+`netclaw init` and `netclaw chat` SHALL use Termina 0.5.1 for interactive TUI
+rendering. All other commands SHALL use plain console output. TUI commands SHALL
+launch Termina as a hosted service within the Cocona command handler.
+
+### CLI-011 Local Chat Adapter
+
+`netclaw chat` SHALL host the full actor system in-process and provide a local
+input adapter for MVP validation. The TUI adapter SHALL:
+
+- Produce `SendUserMessage` commands with entity key `tui/{sessionId}`
+- Render session broadcasts as streaming text via StreamingTextNode
+- Display tool invocation status inline (completed with duration, in-progress
+  with spinner)
+- Show MCP server connectivity status in the status bar
+
+### CLI-012 Daemon Entry Point
+
+`netclaw run` SHALL start the daemon process with Slack Socket Mode adapter,
+Akka actor system, scheduled task timers, and health endpoints. No TUI
+rendering. This is the primary production entry point.
 
 ## UX Requirements
 

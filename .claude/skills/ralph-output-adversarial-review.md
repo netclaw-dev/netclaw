@@ -138,6 +138,17 @@ For each task marked complete IN YOUR COMMIT RANGE:
 - If a task references an OpenSpec change, was the change task list updated?
 - Are spec/implementation changes synchronized (no undocumented behavior drift)?
 
+### A3) OpenSpec Workflow Compliance
+- Were OpenSpec artifacts (specs, changes, proposals, delta specs, design docs)
+  created through the `/opsx-*` skills, or were they manually edited?
+- Manual edits to `openspec/` files (other than task checkbox updates) are a
+  **PARTIAL** finding — the agent MUST use the OpenSpec skills:
+  - `/opsx-new` for new changes
+  - `/opsx-continue` or `/opsx-ff` for artifact creation
+  - `/opsx-sync` for syncing delta specs to main specs
+  - `/opsx-archive` for archiving completed changes
+- Check git diff for manually-created spec files that bypassed the workflow.
+
 ### B) Testing Strategy Compliance
 Using `testing-strategy` (if present):
 - If code coordinates DB/HTTP/actors/external services:
