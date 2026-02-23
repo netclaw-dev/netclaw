@@ -340,11 +340,14 @@ Done when:
 **Previously:** Task 1.7
 
 Done when:
-- [ ] Web search tool with Brave Search API and SearXNG backends, configurable via `netclaw.json`.
-- [ ] Web fetch tool with HTML-to-text extraction and output truncation.
-- [ ] Shell execution tool with timeout, output truncation, stdin closure, working directory.
-- [ ] GitHub CLI tool via `gh` shell-out with structured output parsing and missing dependency handling.
-- [ ] Tests for each tool with mocked HTTP/process dependencies.
+- [x] Shell execution tool with timeout, output truncation, stdin closure, working directory.
+- [x] File read and file write tools with path validation and output truncation.
+- [x] Source-generated tool schemas via Roslyn incremental generator (ADR-001).
+- [ ] ~~Web search tool~~ — deferred, not needed for minimal viable concept.
+- [ ] ~~Web fetch tool~~ — deferred, not needed for minimal viable concept.
+
+> **Note:** GitHub CLI access is handled via `shell_execute` + `gh` — no dedicated tool needed.
+> Web search and web fetch deferred — shell + file tools are sufficient to prove the concept.
 
 ### Task 1.10: Full provider abstraction with MEAI and fallback
 
