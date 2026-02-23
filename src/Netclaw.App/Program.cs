@@ -8,7 +8,20 @@ using Microsoft.Extensions.Logging;
 using Netclaw.Actors.Configuration;
 using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Sessions;
+using Netclaw.Actors.Tools;
+using Netclaw.App;
 using OllamaSharp;
+
+// -- CLI mode selection --
+string? headlessPrompt = null;
+for (var i = 0; i < args.Length; i++)
+{
+    if (args[i] is "-p" or "--prompt" && i + 1 < args.Length)
+    {
+        headlessPrompt = args[i + 1];
+        break;
+    }
+}
 
 var builder = Host.CreateApplicationBuilder(args);
 
@@ -45,6 +58,15 @@ builder.Services.AddSingleton<ISystemPromptProvider>(
     new StaticSystemPromptProvider(
         "You are Netclaw, a helpful homelab operations assistant. Be concise and direct."));
 
+// -- Tools --
+var toolConfig = new ToolConfig();
+builder.Services.AddSingleton(toolConfig);
+
+var toolRegistry = new ToolRegistry();
+toolRegistry.WithFirstPartyTools(toolConfig);
+builder.Services.AddSingleton(toolRegistry);
+builder.Services.AddSingleton<IToolExecutor>(new DispatchingToolExecutor(toolRegistry));
+
 // -- Akka.NET actor system --
 builder.Services.AddAkka("netclaw", (akkaBuilder, sp) =>
 {
@@ -60,7 +82,15 @@ builder.Services.AddAkka("netclaw", (akkaBuilder, sp) =>
         .WithNetclawActors();
 });
 
-// -- Console adapter (TUI proof-of-concept) --
-builder.Services.AddHostedService<ConsoleAdapter>();
+// -- Adapter selection --
+if (headlessPrompt is not null)
+{
+    builder.Services.AddSingleton(new HeadlessOptions { Prompt = headlessPrompt });
+    builder.Services.AddHostedService<HeadlessAdapter>();
+}
+else
+{
+    builder.Services.AddHostedService<ConsoleAdapter>();
+}
 
 await builder.Build().RunAsync();
