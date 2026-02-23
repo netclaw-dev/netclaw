@@ -51,8 +51,11 @@ public class ShellToolTests
     public async Task Output_truncation_applies()
     {
         var tool = new ShellTool(new ToolConfig { MaxOutputChars = 50 });
-        // Generate output longer than 50 chars
-        var args = new Dictionary<string, object?> { ["Command"] = "printf 'x%.0s' {1..200}" };
+        // Generate output longer than 50 chars — use cross-platform command
+        var command = OperatingSystem.IsWindows()
+            ? "python -c \"print('x' * 200)\""
+            : "printf 'x%.0s' {1..200}";
+        var args = new Dictionary<string, object?> { ["Command"] = command };
 
         var result = await tool.ExecuteAsync(args, CancellationToken.None);
 
@@ -63,18 +66,20 @@ public class ShellToolTests
     public async Task Working_directory_is_respected()
     {
         var tmpDir = Path.GetTempPath();
+        // Use platform-appropriate command to print working directory
+        var command = OperatingSystem.IsWindows() ? "cd" : "pwd";
         var args = new Dictionary<string, object?>
         {
-            ["Command"] = "pwd",
+            ["Command"] = command,
             ["WorkingDirectory"] = tmpDir
         };
 
         var result = await _tool.ExecuteAsync(args, CancellationToken.None);
 
-        // Resolve symlinks — /tmp may be a symlink to /private/tmp on macOS
-        var resolvedTmpDir = Path.GetFullPath(tmpDir).TrimEnd('/');
+        // Normalize paths for comparison: resolve symlinks, trim trailing separators
+        var resolvedTmpDir = Path.GetFullPath(tmpDir).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
         Assert.Contains("Exit code: 0", result);
-        Assert.Contains(resolvedTmpDir, result);
+        Assert.Contains(resolvedTmpDir, result, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
