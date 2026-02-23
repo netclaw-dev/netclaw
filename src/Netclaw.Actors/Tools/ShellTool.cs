@@ -87,7 +87,7 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
             }
             catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested)
             {
-                try { process.Kill(entireProcessTree: true); } catch { }
+                try { process.Kill(entireProcessTree: true); } catch (InvalidOperationException) { /* process already exited */ }
                 return $"Error: Command timed out after {_config.ShellTimeoutSeconds} seconds.";
             }
 

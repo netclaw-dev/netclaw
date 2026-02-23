@@ -8,6 +8,7 @@
     <IsRoslynComponent>true</IsRoslynComponent>
     <!-- Generators should not be published as regular libraries -->
     <IncludeBuildOutput>false</IncludeBuildOutput>
+    <IsPackable>false</IsPackable>
   </PropertyGroup>
 
   <ItemGroup>
