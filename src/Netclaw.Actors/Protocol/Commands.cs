@@ -1,3 +1,4 @@
+using Netclaw.Actors.Channels;
 using ProtoBuf;
 
 namespace Netclaw.Actors.Protocol;
@@ -13,4 +14,10 @@ public sealed class SendUserMessage : IWithSessionId
 
     [ProtoMember(2)]
     public string Content { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Ephemeral channel metadata for ACL/audit. Not persisted.
+    /// </summary>
+    [ProtoIgnore]
+    public MessageSource? Source { get; set; }
 }

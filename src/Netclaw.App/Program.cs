@@ -5,7 +5,9 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Netclaw.Actors.Channels;
 using Netclaw.Actors.Configuration;
+using Netclaw.Channels;
 using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Sessions;
 using Netclaw.Actors.Tools;
@@ -38,6 +40,9 @@ builder.Configuration.AddJsonFile(localConfigPath, optional: true, reloadOnChang
 // console is reserved for the chat UI
 builder.Logging.ClearProviders();
 builder.Logging.SetMinimumLevel(LogLevel.Warning);
+
+// -- TimeProvider --
+builder.Services.AddSingleton(TimeProvider.System);
 
 // -- Ollama IChatClient --
 var ollamaUrl = builder.Configuration["Ollama:Url"] ?? "http://localhost:11434";
@@ -82,15 +87,22 @@ builder.Services.AddAkka("netclaw", (akkaBuilder, sp) =>
         .WithNetclawActors();
 });
 
-// -- Adapter selection --
+// -- Session pipeline (stream API for channels) --
+builder.Services.AddSingleton<SessionPipeline>();
+
+// -- Channel selection --
 if (headlessPrompt is not null)
 {
-    builder.Services.AddSingleton(new HeadlessOptions { Prompt = headlessPrompt });
-    builder.Services.AddHostedService<HeadlessAdapter>();
+    builder.Services.AddSingleton<HeadlessChannel>(sp =>
+        ActivatorUtilities.CreateInstance<HeadlessChannel>(sp, headlessPrompt));
+    builder.Services.AddSingleton<IHostedService>(sp => sp.GetRequiredService<HeadlessChannel>());
+    builder.Services.AddSingleton<IChannel>(sp => sp.GetRequiredService<HeadlessChannel>());
 }
 else
 {
-    builder.Services.AddHostedService<ConsoleAdapter>();
+    builder.Services.AddSingleton<ConsoleChannel>();
+    builder.Services.AddSingleton<IHostedService>(sp => sp.GetRequiredService<ConsoleChannel>());
+    builder.Services.AddSingleton<IChannel>(sp => sp.GetRequiredService<ConsoleChannel>());
 }
 
 await builder.Build().RunAsync();

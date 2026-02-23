@@ -20,9 +20,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Netclaw.Tools.Abstractions\Netclaw.Tools.Abstractions.csproj" />
-    <ProjectReference Include="..\Netclaw.Tools.Generators\Netclaw.Tools.Generators.csproj"
-                      OutputItemType="Analyzer"
-                      ReferenceOutputAssembly="false" />
+    <ProjectReference Include="..\Netclaw.Tools.Generators\Netclaw.Tools.Generators.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
   </ItemGroup>
 
 </Project>

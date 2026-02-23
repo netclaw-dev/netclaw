@@ -72,11 +72,10 @@ public sealed record LeaveSession : IWithSessionId
 /// <summary>
 /// Acknowledgement sent to the subscriber after successfully joining a session.
 /// Provides current session state for catch-up.
+/// Lifecycle — always delivered regardless of <see cref="OutputFilter"/>.
 /// </summary>
-public sealed record SessionJoined
+public sealed record SessionJoined : SessionOutput
 {
-    public required SessionId SessionId { get; init; }
-
     /// <summary>
     /// Human-readable session title, if one has been generated.
     /// May be null for brand-new sessions.
