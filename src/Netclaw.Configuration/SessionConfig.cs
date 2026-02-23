@@ -1,8 +1,8 @@
-namespace Netclaw.Actors.Sessions;
+namespace Netclaw.Configuration;
 
 /// <summary>
-/// Configuration for an LLM session actor. Carries model identity and context
-/// window size so the actor can make compaction decisions.
+/// Configuration for an LLM session. Carries model identity and context
+/// window size so sessions can make compaction decisions.
 /// </summary>
 public sealed record SessionConfig
 {
@@ -31,7 +31,7 @@ public sealed record SessionConfig
     /// <summary>
     /// Optional model ID for compaction summarization.
     /// When set, compaction LLM calls use this model (typically cheaper/faster)
-    /// instead of the primary session model. Requires a provider factory that
+    /// instead of the primary session model. Requires a provider that
     /// can resolve an <see cref="Microsoft.Extensions.AI.IChatClient"/> for this model.
     /// </summary>
     public string? CompactionModelId { get; init; }

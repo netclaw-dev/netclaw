@@ -4,8 +4,8 @@ using Akka.Actor;
 using Akka.Event;
 using Akka.Persistence;
 using Microsoft.Extensions.AI;
-using Netclaw.Actors.Configuration;
 using Netclaw.Actors.Protocol;
+using Netclaw.Configuration;
 using Netclaw.Actors.Tools;
 using AiChatMessage = Microsoft.Extensions.AI.ChatMessage;
 
@@ -29,6 +29,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor
 {
     private readonly SessionId _sessionId;
     private readonly IChatClient _chatClient;
+    private readonly IChatClient _compactionClient;
     private readonly SessionConfig _config;
     private readonly ISystemPromptProvider _promptProvider;
     private readonly IToolExecutor? _toolExecutor;
@@ -58,7 +59,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor
 
     public LlmSessionActor(
         string entityId,
-        IChatClient chatClient,
+        IChatClientProvider clientProvider,
         SessionConfig config,
         ISystemPromptProvider promptProvider,
         IToolExecutor? toolExecutor = null,
@@ -68,7 +69,10 @@ public sealed class LlmSessionActor : ReceivePersistentActor
         TimeProvider? timeProvider = null)
     {
         _sessionId = new SessionId(entityId);
-        _chatClient = chatClient;
+        _chatClient = clientProvider.GetClient(ModelRole.Main);
+        _compactionClient = config.CompactionModelId is not null
+            ? clientProvider.GetClient(ModelRole.Compaction)
+            : _chatClient;
         _config = config;
         _promptProvider = promptProvider;
         _toolExecutor = toolExecutor;
@@ -358,7 +362,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor
     {
         var history = _state.History;
         var self = Self;
-        var client = _chatClient;
+        var client = _compactionClient;
 
         _ = InvokeCompactionSequenceAsync(client, history, self, messagesBefore, toolResultsCleared);
     }

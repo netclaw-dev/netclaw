@@ -1,18 +1,16 @@
 using Akka.Hosting;
 using Akka.Persistence.Hosting;
-using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Netclaw.Actors.Channels;
-using Netclaw.Actors.Configuration;
-using Netclaw.Channels;
 using Netclaw.Actors.Hosting;
-using Netclaw.Actors.Sessions;
 using Netclaw.Actors.Tools;
 using Netclaw.App;
-using OllamaSharp;
+using Netclaw.App.Configuration;
+using Netclaw.Channels;
+using Netclaw.Configuration;
 
 // -- CLI mode selection --
 string? headlessPrompt = null;
@@ -32,9 +30,14 @@ var paths = new NetclawPaths();
 paths.EnsureDirectoriesExist();
 builder.Services.AddSingleton(paths);
 
-// Load local overrides from ~/.netclaw/config/ (machine-specific, not in source control)
-var localConfigPath = Path.Combine(paths.ConfigDirectory, "appsettings.Local.json");
-builder.Configuration.AddJsonFile(localConfigPath, optional: true, reloadOnChange: false);
+// -- Layered configuration chain --
+// 1. netclaw.json (base config, optional)
+// 2. secrets.json (credentials overlay, optional)
+// 3. NETCLAW_* environment variables (highest priority)
+builder.Configuration
+    .AddJsonFile(paths.NetclawConfigPath, optional: true, reloadOnChange: false)
+    .AddJsonFile(paths.SecretsPath, optional: true, reloadOnChange: false)
+    .AddEnvironmentVariables("NETCLAW_");
 
 // Suppress all framework console logging — session logs go to disk,
 // console is reserved for the chat UI
@@ -44,33 +47,47 @@ builder.Logging.SetMinimumLevel(LogLevel.Warning);
 // -- TimeProvider --
 builder.Services.AddSingleton(TimeProvider.System);
 
-// -- Ollama IChatClient --
-var ollamaUrl = builder.Configuration["Ollama:Url"] ?? "http://localhost:11434";
-var ollamaModel = builder.Configuration["Ollama:Model"] ?? "qwen3:30b";
+// -- Providers and models --
+var providers = builder.Configuration.GetSection("Providers")
+    .Get<Dictionary<string, ProviderEntry>>()
+    ?? new() { ["local-ollama"] = new ProviderEntry() };
+var models = builder.Configuration.GetSection("Models")
+    .Get<ModelSelection>() ?? new ModelSelection();
 
-builder.Services.AddSingleton<IChatClient>(
-    new OllamaApiClient(new Uri(ollamaUrl), ollamaModel));
+var factory = new ChatClientFactory(providers);
+var clientProvider = new NetclawChatClientProvider(factory, models);
+builder.Services.AddSingleton<IChatClientProvider>(clientProvider);
 
-// -- Session configuration --
+// -- Session config from resolved models --
+var sessionSection = builder.Configuration.GetSection("Session");
 builder.Services.AddSingleton(new SessionConfig
 {
-    ModelId = ollamaModel,
-    ContextWindowTokens = 32_768 // qwen3:30b default
+    ModelId = models.Main.ModelId,
+    ContextWindowTokens = models.Main.ContextWindow ?? 32_768,
+    CompactionModelId = models.Compaction?.ModelId,
+    CompactionThreshold = sessionSection.GetValue("CompactionThreshold", 0.75),
+    SnapshotInterval = sessionSection.GetValue("SnapshotInterval", 20),
+    KeepRecentToolResults = sessionSection.GetValue("KeepRecentToolResults", 3),
+    MaxToolIterationsPerTurn = sessionSection.GetValue("MaxToolIterationsPerTurn", 10),
 });
 
-// -- System prompt --
-builder.Services.AddSingleton<ISystemPromptProvider>(
-    new StaticSystemPromptProvider(
-        "You are Netclaw, a helpful homelab operations assistant. Be concise and direct."));
-
-// -- Tools --
-var toolConfig = new ToolConfig();
+// -- Tools (auto-bound, no required properties) --
+var toolConfig = builder.Configuration.GetSection("Tools")
+    .Get<ToolConfig>() ?? new ToolConfig();
 builder.Services.AddSingleton(toolConfig);
 
 var toolRegistry = new ToolRegistry();
 toolRegistry.WithFirstPartyTools(toolConfig);
 builder.Services.AddSingleton(toolRegistry);
 builder.Services.AddSingleton<IToolExecutor>(new DispatchingToolExecutor(toolRegistry));
+
+// -- System prompt (file-based, with first-run seed) --
+if (!File.Exists(paths.PersonalityPath))
+    File.WriteAllText(paths.PersonalityPath,
+        "You are Netclaw, a helpful homelab operations assistant. "
+        + "Be concise and direct.");
+builder.Services.AddSingleton<ISystemPromptProvider>(
+    new FileSystemPromptProvider(paths));
 
 // -- Akka.NET actor system --
 builder.Services.AddAkka("netclaw", (akkaBuilder, sp) =>

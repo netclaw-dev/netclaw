@@ -5,7 +5,7 @@ using Akka.Persistence.Hosting;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
-using Netclaw.Actors.Configuration;
+using Netclaw.Configuration;
 using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Sessions;
@@ -30,7 +30,7 @@ public class CompactionIntegrationTests : TestKit
 
     protected override void ConfigureServices(HostBuilderContext context, IServiceCollection services)
     {
-        services.AddSingleton<IChatClient>(_fakeChatClient);
+        services.AddSingleton<IChatClientProvider>(new SingleClientProvider(_fakeChatClient));
         // Small context window for easy threshold triggering in tests
         services.AddSingleton(new SessionConfig
         {

@@ -18,6 +18,7 @@
 
   <ItemGroup>
     <ProjectReference Include="../Netclaw.Actors/Netclaw.Actors.csproj"/>
+    <ProjectReference Include="../Netclaw.Configuration/Netclaw.Configuration.csproj"/>
   </ItemGroup>
 
 </Project>

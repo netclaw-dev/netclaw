@@ -1,4 +1,5 @@
 using Netclaw.Actors.Tools;
+using Netclaw.Configuration;
 using Xunit;
 
 namespace Netclaw.Actors.Tests.Tools;

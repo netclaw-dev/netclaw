@@ -1,4 +1,4 @@
-namespace Netclaw.Actors.Configuration;
+namespace Netclaw.Configuration;
 
 /// <summary>
 /// Standard directory layout for Netclaw's local file storage.
@@ -17,6 +17,8 @@ public sealed class NetclawPaths
     public string EnvironmentDirectory => Path.Combine(BasePath, "environment");
     public string SchedulesDirectory => Path.Combine(BasePath, "schedules");
     public string ConfigDirectory => Path.Combine(BasePath, "config");
+    public string NetclawConfigPath => Path.Combine(ConfigDirectory, "netclaw.json");
+    public string SecretsPath => Path.Combine(ConfigDirectory, "secrets.json");
     public string LogsDirectory => Path.Combine(BasePath, "logs");
 
     public NetclawPaths(string? basePath = null)

@@ -1,4 +1,4 @@
-using Netclaw.Actors.Configuration;
+using Netclaw.Configuration;
 using Xunit;
 
 namespace Netclaw.Actors.Tests.Configuration;

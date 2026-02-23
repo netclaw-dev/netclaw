@@ -1,4 +1,4 @@
-namespace Netclaw.Actors.Configuration;
+namespace Netclaw.Configuration;
 
 /// <summary>
 /// Pure function that assembles a system prompt from layered content sources.

@@ -1,4 +1,4 @@
-namespace Netclaw.Actors.Configuration;
+namespace Netclaw.Configuration;
 
 /// <summary>
 /// Provides the assembled system prompt for a session.
