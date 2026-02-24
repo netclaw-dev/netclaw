@@ -9,7 +9,7 @@ using Netclaw.Actors.Protocol;
 using Netclaw.Configuration;
 using Termina.Reactive;
 
-namespace Netclaw.App.Tui;
+namespace Netclaw.Cli.Tui;
 
 /// <summary>
 /// Reactive ViewModel for the chat page. Uses <see cref="SessionPipeline"/>

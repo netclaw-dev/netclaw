@@ -1,15 +1,14 @@
 using Microsoft.Extensions.AI;
+using Netclaw.Configuration;
 using OllamaSharp;
 
-namespace Netclaw.App.Configuration;
+namespace Netclaw.Cli.Configuration;
 
 /// <summary>
-/// Creates <see cref="IChatClient"/> instances from provider credentials
-/// and model references. Looks up the named provider from the configured
-/// dictionary and dispatches to the correct SDK.
-/// Future provider types (OpenRouter, Anthropic, OpenAI) add cases here.
+/// Transitional: duplicated from Netclaw.Daemon. Removed in Task 1.28
+/// when CLI connects to daemon via SignalR instead of running in-process.
 /// </summary>
-public sealed class ChatClientFactory
+internal sealed class ChatClientFactory
 {
     private readonly Dictionary<string, ProviderEntry> _providers;
 

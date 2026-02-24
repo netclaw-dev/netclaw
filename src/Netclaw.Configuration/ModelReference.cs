@@ -1,4 +1,4 @@
-namespace Netclaw.App.Configuration;
+namespace Netclaw.Configuration;
 
 /// <summary>
 /// Points to a specific model on a named provider. Bound from the

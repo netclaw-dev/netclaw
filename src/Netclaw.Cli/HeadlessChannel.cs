@@ -9,7 +9,7 @@ using Netclaw.Configuration;
 using Netclaw.Actors.Protocol;
 using Netclaw.Channels;
 
-namespace Netclaw.App;
+namespace Netclaw.Cli;
 
 /// <summary>
 /// Headless channel for single-prompt mode (<c>-p</c> / <c>--prompt</c>).

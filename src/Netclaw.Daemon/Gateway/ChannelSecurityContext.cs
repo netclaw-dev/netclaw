@@ -1,4 +1,4 @@
-namespace Netclaw.App.Gateway;
+namespace Netclaw.Daemon.Gateway;
 
 /// <summary>
 /// Trust level for a connection to the Netclaw gateway.

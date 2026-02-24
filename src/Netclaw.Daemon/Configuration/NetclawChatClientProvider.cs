@@ -1,7 +1,7 @@
 using Microsoft.Extensions.AI;
 using Netclaw.Configuration;
 
-namespace Netclaw.App.Configuration;
+namespace Netclaw.Daemon.Configuration;
 
 /// <summary>
 /// Resolves <see cref="IChatClient"/> instances by <see cref="ModelRole"/>

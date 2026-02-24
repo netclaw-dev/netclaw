@@ -1,6 +1,6 @@
 using Netclaw.Actors.Protocol;
 
-namespace Netclaw.App.Gateway;
+namespace Netclaw.Daemon.Gateway;
 
 /// <summary>
 /// Maps <see cref="SessionOutput"/> discriminated union types to

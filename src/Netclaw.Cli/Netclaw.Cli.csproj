@@ -1,0 +1,27 @@
+<!-- Transitional: Web SDK needed while CLI runs in-process Akka stack (Task 1.28 switches to plain SDK + SignalR client) -->
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>netclaw</AssemblyName>
+    <OutputType>Exe</OutputType>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Termina" />
+    <!-- Transitional: Akka deps removed in Task 1.28 when ChatViewModel is refactored to SignalR -->
+    <PackageReference Include="Akka.Hosting" />
+    <PackageReference Include="Akka.Persistence.Hosting" />
+    <PackageReference Include="OllamaSharp" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Transitional: Netclaw.Actors dep removed in Task 1.28 -->
+    <ProjectReference Include="..\Netclaw.Actors\Netclaw.Actors.csproj" />
+    <ProjectReference Include="..\Netclaw.Configuration\Netclaw.Configuration.csproj" />
+    <ProjectReference Include="..\Netclaw.Channels\Netclaw.Channels.csproj" />
+  </ItemGroup>
+
+</Project>

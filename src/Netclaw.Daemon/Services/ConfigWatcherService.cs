@@ -2,7 +2,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Netclaw.Configuration;
 
-namespace Netclaw.App.Services;
+namespace Netclaw.Daemon.Services;
 
 /// <summary>
 /// Monitors <c>~/.netclaw/config/</c> for changes to <c>netclaw.json</c> and

@@ -6,7 +6,7 @@ using Termina.Components.Streaming;
 using Termina.Rendering;
 using Termina.Terminal;
 
-namespace Netclaw.App.Tui;
+namespace Netclaw.Cli.Tui;
 
 /// <summary>
 /// Animated text segment that displays elapsed time since creation.

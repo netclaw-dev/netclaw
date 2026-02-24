@@ -1,6 +1,6 @@
 using Microsoft.AspNetCore.SignalR;
 
-namespace Netclaw.App.Gateway;
+namespace Netclaw.Daemon.Gateway;
 
 /// <summary>
 /// SignalR hub for remote session access. Bridges remote clients

@@ -1,9 +1,9 @@
-namespace Netclaw.App.Gateway;
+namespace Netclaw.Actors.Protocol;
 
 /// <summary>
 /// Wire-safe DTO for session output. Flattens the discriminated union
-/// (<see cref="Netclaw.Actors.Protocol.SessionOutput"/>) into a single
-/// serializable type for SignalR transport.
+/// (<see cref="SessionOutput"/>) into a single serializable type for
+/// SignalR transport.
 /// </summary>
 public sealed record SessionOutputDto
 {

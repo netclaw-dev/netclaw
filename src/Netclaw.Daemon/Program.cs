@@ -7,14 +7,10 @@ using Microsoft.Extensions.Logging;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Tools;
-using Netclaw.App;
-using Netclaw.App.Configuration;
-using Netclaw.App.Gateway;
-using Netclaw.App.Services;
-using Netclaw.App.Tui;
-using Netclaw.Channels;
 using Netclaw.Configuration;
-using Termina.Hosting;
+using Netclaw.Daemon.Configuration;
+using Netclaw.Daemon.Gateway;
+using Netclaw.Daemon.Services;
 
 try
 {
@@ -22,94 +18,30 @@ try
 }
 catch (Exception ex)
 {
-    // Write crash log to ~/.netclaw/logs/ so fatal errors are always diagnosable
     WriteCrashLog(ex);
     throw;
 }
 
 static async Task RunAsync(string[] args)
 {
-    // ── Mode selection from CLI args ──
-    var mode = args.Length > 0 ? args[0] : "chat";
-    string? headlessPrompt = null;
-
-    if (mode is "-p" or "--prompt")
-    {
-        headlessPrompt = args.Length > 1
-            ? args[1]
-            : throw new InvalidOperationException("Missing prompt argument after -p/--prompt");
-        mode = "headless";
-    }
-
-    // ── Lightweight modes (no Akka, no persistence, no SignalR) ──
-    if (mode is "init" or "doctor")
-    {
-        var builder = Host.CreateApplicationBuilder(args);
-        ConfigureConfigServices(builder.Services, builder.Configuration);
-
-        // Suppress framework console logging
-        builder.Logging.ClearProviders();
-        builder.Logging.SetMinimumLevel(LogLevel.Warning);
-
-        // TODO: init → Termina TUI wizard (Task 1.22)
-        // TODO: doctor → health checks (Task 1.21)
-        Console.WriteLine($"netclaw {mode}: not yet implemented");
-
-        await builder.Build().RunAsync();
-        return;
-    }
-
-    // ── Daemon modes (Akka, persistence, SignalR, tools) ──
-    var webBuilder = WebApplication.CreateBuilder(args);
+    var builder = WebApplication.CreateBuilder(args);
 
     // Use port 5199 to avoid conflicts with Aspire (5000) and other defaults
-    webBuilder.WebHost.UseUrls("http://127.0.0.1:5199");
+    builder.WebHost.UseUrls("http://127.0.0.1:5199");
 
-    ConfigureConfigServices(webBuilder.Services, webBuilder.Configuration);
-    ConfigureDaemonServices(webBuilder.Services, webBuilder.Configuration);
+    ConfigureConfigServices(builder.Services, builder.Configuration);
+    ConfigureDaemonServices(builder.Services, builder.Configuration);
 
-    // Suppress framework console logging — session logs go to disk,
-    // console is reserved for the chat UI
-    webBuilder.Logging.ClearProviders();
-    webBuilder.Logging.SetMinimumLevel(LogLevel.Warning);
+    // Suppress framework console logging — session logs go to disk
+    builder.Logging.ClearProviders();
+    builder.Logging.SetMinimumLevel(LogLevel.Warning);
 
     // SignalR for future remote clients (Blazor ops console)
-    webBuilder.Services.AddSignalR();
+    builder.Services.AddSignalR();
 
-    // Channel selection based on mode
-    switch (mode)
-    {
-        case "chat":
-            webBuilder.Services.AddTermina("/chat", termina =>
-            {
-                termina.RegisterRoute<ChatPage, ChatViewModel>("/chat");
-            });
-            break;
+    var app = builder.Build();
 
-        case "headless":
-            webBuilder.Services.AddSingleton<HeadlessChannel>(sp =>
-                ActivatorUtilities.CreateInstance<HeadlessChannel>(sp, headlessPrompt!));
-            webBuilder.Services.AddSingleton<IHostedService>(sp => sp.GetRequiredService<HeadlessChannel>());
-            webBuilder.Services.AddSingleton<IChannel>(sp => sp.GetRequiredService<HeadlessChannel>());
-            break;
-
-        case "run":
-            // Daemon only — no interactive channel. Slack adapter, scheduled tasks, etc.
-            // TODO: Slack adapter (Task 1.23)
-            break;
-
-        default:
-            // Treat unknown commands as "chat" for backward compatibility
-            webBuilder.Services.AddTermina("/chat", termina =>
-            {
-                termina.RegisterRoute<ChatPage, ChatViewModel>("/chat");
-            });
-            break;
-    }
-
-    var app = webBuilder.Build();
-
-    // Gateway surface (Phase 1 — minimal)
+    // Gateway surface
     app.MapHub<SessionHub>("/hub/session");
     app.MapGet("/api/health/ready", () => Results.Ok("healthy"));
 
@@ -129,7 +61,7 @@ static void WriteCrashLog(Exception ex)
             $"crash-{DateTime.UtcNow:yyyyMMdd-HHmmss}.log");
         File.WriteAllText(crashPath,
             $"""
-            Netclaw crash at {DateTime.UtcNow:O}
+            Netclaw daemon crash at {DateTime.UtcNow:O}
 
             {ex}
             """);
@@ -138,13 +70,12 @@ static void WriteCrashLog(Exception ex)
     }
     catch
     {
-        // Last resort: write to stderr if we can't write the log file
         Console.Error.WriteLine($"Fatal error (could not write crash log): {ex}");
     }
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// Shared configuration services (all modes)
+// Shared configuration services
 // ═══════════════════════════════════════════════════════════════════════
 
 static void ConfigureConfigServices(IServiceCollection services, IConfigurationManager configuration)
@@ -179,7 +110,7 @@ static void ConfigureConfigServices(IServiceCollection services, IConfigurationM
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// Daemon-only services (run, chat, headless modes)
+// Daemon-only services (actor system, tools, persistence)
 // ═══════════════════════════════════════════════════════════════════════
 
 static void ConfigureDaemonServices(IServiceCollection services, IConfigurationManager configuration)

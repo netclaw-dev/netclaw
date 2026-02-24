@@ -9,7 +9,7 @@ using Termina.Reactive;
 using Termina.Rendering;
 using Termina.Terminal;
 
-namespace Netclaw.App.Tui;
+namespace Netclaw.Cli.Tui;
 
 /// <summary>
 /// Termina page for the interactive chat UI (<c>netclaw chat</c>).

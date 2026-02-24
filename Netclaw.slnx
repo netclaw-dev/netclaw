@@ -8,9 +8,10 @@
   </Folder>
   <Folder Name="/src/">
     <Project Path="src/Netclaw.Actors/Netclaw.Actors.csproj" />
-    <Project Path="src/Netclaw.App/Netclaw.App.csproj" />
     <Project Path="src/Netclaw.Channels/Netclaw.Channels.csproj" />
     <Project Path="src/Netclaw.Configuration/Netclaw.Configuration.csproj" />
+    <Project Path="src/Netclaw.Daemon/Netclaw.Daemon.csproj" />
+    <Project Path="src/Netclaw.Cli/Netclaw.Cli.csproj" />
     <Project Path="src/Netclaw.Actors.Tests/Netclaw.Actors.Tests.csproj" />
     <Project Path="src/Netclaw.Tools.Abstractions/Netclaw.Tools.Abstractions.csproj" />
     <Project Path="src/Netclaw.Tools.Generators/Netclaw.Tools.Generators.csproj" />

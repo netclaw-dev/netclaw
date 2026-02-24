@@ -1,4 +1,4 @@
-namespace Netclaw.App.Configuration;
+namespace Netclaw.Configuration;
 
 /// <summary>
 /// Credential container for an LLM provider. Bound from the

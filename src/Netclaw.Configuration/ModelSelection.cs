@@ -1,4 +1,4 @@
-namespace Netclaw.App.Configuration;
+namespace Netclaw.Configuration;
 
 /// <summary>
 /// Named model roles bound from the "Models" configuration section.
