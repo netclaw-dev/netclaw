@@ -81,6 +81,15 @@ internal sealed class SessionConnectionMap
             RemoveConnectionInternal(connectionId);
     }
 
+    public void Clear()
+    {
+        lock (_gate)
+        {
+            _sessionToConnection.Clear();
+            _connectionToSession.Clear();
+        }
+    }
+
     private void RemoveConnectionInternal(SignalRConnectionId connectionId)
     {
         if (_connectionToSession.TryGetValue(connectionId, out var sessionId))

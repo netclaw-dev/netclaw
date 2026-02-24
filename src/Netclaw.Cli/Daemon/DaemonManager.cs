@@ -110,8 +110,16 @@ public sealed partial class DaemonManager
         // Wait up to 10 seconds for graceful exit.
         if (!await WaitForExitAsync(process, TimeSpan.FromSeconds(10)))
         {
-            // Timed out — force kill and wait briefly again.
-            TryKillProcess(process, out var killError);
+            // Timed out — hard cutoff.
+            string? killError = null;
+            if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS())
+            {
+                if (!SendSignal(pid, Signal.SIGKILL))
+                    killError = "Failed to send SIGKILL.";
+            }
+
+            if (!TryKillProcess(process, out var processKillError) && string.IsNullOrWhiteSpace(killError))
+                killError = processKillError;
 
             if (!await WaitForExitAsync(process, TimeSpan.FromSeconds(5)))
             {
@@ -439,8 +447,12 @@ public sealed partial class DaemonManager
         }
     }
 
-    // SIGTERM via P/Invoke — .NET's Process.Kill() sends SIGKILL
-    private enum Signal { SIGTERM = 15 }
+    // POSIX signals via P/Invoke
+    private enum Signal
+    {
+        SIGKILL = 9,
+        SIGTERM = 15
+    }
 
     [LibraryImport("libc", SetLastError = true)]
     private static partial int kill(int pid, int sig);

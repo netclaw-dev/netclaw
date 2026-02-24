@@ -118,6 +118,11 @@ static NetclawPaths ConfigureConfigServices(IServiceCollection services, IConfig
 
 static void ConfigureDaemonServices(IServiceCollection services, IConfigurationManager configuration, NetclawPaths paths)
 {
+    services.Configure<HostOptions>(options =>
+    {
+        options.ShutdownTimeout = TimeSpan.FromSeconds(10);
+    });
+
     // Resolve models for session config
     var models = configuration.GetSection("Models")
         .Get<ModelSelection>() ?? new ModelSelection();
@@ -178,4 +183,8 @@ static void ConfigureDaemonServices(IServiceCollection services, IConfigurationM
     // PID file authority for daemon lifecycle management
     services.AddSingleton<PidFileService>();
     services.AddSingleton<IHostedService>(sp => sp.GetRequiredService<PidFileService>());
+
+    // Active session cleanup during host shutdown
+    services.AddSingleton<SessionRegistryShutdownService>();
+    services.AddSingleton<IHostedService>(sp => sp.GetRequiredService<SessionRegistryShutdownService>());
 }
