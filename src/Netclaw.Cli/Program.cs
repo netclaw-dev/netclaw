@@ -10,6 +10,7 @@ using Netclaw.Actors.Tools;
 using Netclaw.Channels;
 using Netclaw.Cli;
 using Netclaw.Cli.Configuration;
+using Netclaw.Cli.Daemon;
 using Netclaw.Cli.Tui;
 using Netclaw.Configuration;
 using Termina.Hosting;
@@ -56,18 +57,45 @@ static async Task RunAsync(string[] args)
         return;
     }
 
-    // ── Daemon management stubs ──
+    // ── Daemon management ──
     if (mode is "daemon")
     {
         var subcommand = args.Length > 1 ? args[1] : "help";
-        Console.WriteLine(subcommand switch
+        var paths = new NetclawPaths();
+        paths.EnsureDirectoriesExist();
+        var manager = new DaemonManager(paths, TimeProvider.System);
+
+        switch (subcommand)
         {
-            "start" => "netclaw daemon start: not yet implemented (Task 1.29)",
-            "stop" => "netclaw daemon stop: not yet implemented (Task 1.29)",
-            "status" => "netclaw daemon status: not yet implemented (Task 1.29)",
-            _ => "Usage: netclaw daemon [start|stop|status]"
-        });
-        return;
+            case "start":
+                var startResult = manager.Start();
+                Console.WriteLine(startResult.Message);
+                return;
+
+            case "stop":
+                var stopResult = await manager.StopAsync();
+                Console.WriteLine(stopResult.Message);
+                return;
+
+            case "status":
+                var status = manager.GetStatus();
+                Console.WriteLine(status.Message);
+                return;
+
+            case "install":
+                var installResult = await manager.InstallAsync();
+                Console.WriteLine(installResult.Message);
+                return;
+
+            case "uninstall":
+                var uninstallResult = await manager.UninstallAsync();
+                Console.WriteLine(uninstallResult.Message);
+                return;
+
+            default:
+                Console.WriteLine("Usage: netclaw daemon [start|stop|status|install|uninstall]");
+                return;
+        }
     }
 
     // ── Config management stubs ──

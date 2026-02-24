@@ -20,6 +20,8 @@ public sealed class NetclawPaths
     public string NetclawConfigPath => Path.Combine(ConfigDirectory, "netclaw.json");
     public string SecretsPath => Path.Combine(ConfigDirectory, "secrets.json");
     public string LogsDirectory => Path.Combine(BasePath, "logs");
+    public string DaemonLogPath => Path.Combine(LogsDirectory, "daemon.log");
+    public string PidFilePath => Path.Combine(BasePath, "netclaw.pid");
 
     public NetclawPaths(string? basePath = null)
     {
