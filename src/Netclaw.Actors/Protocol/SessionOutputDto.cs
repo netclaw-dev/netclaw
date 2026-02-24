@@ -8,7 +8,7 @@ namespace Netclaw.Actors.Protocol;
 public sealed record SessionOutputDto
 {
     /// <summary>
-    /// Output type discriminator (e.g. "text", "thinking", "tool_call",
+    /// Output type discriminator (e.g. "text", "text_delta", "thinking", "thinking_delta", "tool_call",
     /// "tool_result", "usage", "turn_completed", "error", "compaction",
     /// "session_joined", "session_title").
     /// </summary>

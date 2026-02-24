@@ -82,6 +82,35 @@ public sealed class SessionRegistry
         return sessionId.Value;
     }
 
+    public async Task<SessionEnsureResultDto> EnsureSessionAsync(
+        string connectionId,
+        string? sessionId,
+        string channelType)
+    {
+        var callerConnectionId = ParseConnectionId(connectionId);
+
+        if (!string.IsNullOrWhiteSpace(sessionId))
+        {
+            var requestedSessionId = ParseSessionId(sessionId);
+            if (_sessions.ContainsKey(requestedSessionId))
+            {
+                _connections.AttachSession(requestedSessionId, callerConnectionId);
+                return new SessionEnsureResultDto
+                {
+                    SessionId = requestedSessionId.Value,
+                    Created = false
+                };
+            }
+        }
+
+        var createdSessionId = await CreateSessionAsync(connectionId, channelType);
+        return new SessionEnsureResultDto
+        {
+            SessionId = createdSessionId,
+            Created = true
+        };
+    }
+
     /// <summary>
     /// Attaches the current SignalR connection to an existing session.
     /// Supports reconnect flows where connection IDs rotate.

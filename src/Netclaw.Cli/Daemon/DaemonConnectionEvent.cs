@@ -8,4 +8,10 @@ public enum DaemonConnectionState
     Disconnected
 }
 
-public sealed record DaemonConnectionEvent(DaemonConnectionState State, string Message);
+public sealed record DaemonConnectionEvent(
+    DaemonConnectionState State,
+    string Endpoint,
+    string Message,
+    int? Attempt = null,
+    int? MaxAttempts = null,
+    int? SecondsUntilRetry = null);

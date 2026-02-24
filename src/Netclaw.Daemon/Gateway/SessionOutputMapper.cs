@@ -18,12 +18,28 @@ public static class SessionOutputMapper
             Text = msg.Text
         },
 
+        TextDeltaOutput msg => new SessionOutputDto
+        {
+            Type = "text_delta",
+            SessionId = msg.SessionId.Value,
+            TimestampMs = msg.TimestampMs,
+            Text = msg.Delta
+        },
+
         ThinkingOutput msg => new SessionOutputDto
         {
             Type = "thinking",
             SessionId = msg.SessionId.Value,
             TimestampMs = msg.TimestampMs,
             Text = msg.Text
+        },
+
+        ThinkingDeltaOutput msg => new SessionOutputDto
+        {
+            Type = "thinking_delta",
+            SessionId = msg.SessionId.Value,
+            TimestampMs = msg.TimestampMs,
+            Text = msg.Delta
         },
 
         ToolCallOutput msg => new SessionOutputDto

@@ -7,6 +7,24 @@ namespace Netclaw.Actors.Tests.Cli;
 public sealed class DaemonClientMappingTests
 {
     [Fact]
+    public void FromDto_maps_text_delta_output()
+    {
+        var dto = new SessionOutputDto
+        {
+            Type = "text_delta",
+            SessionId = "signalr/test",
+            TimestampMs = 123,
+            Text = "hel"
+        };
+
+        var output = DaemonClient.FromDto(dto);
+
+        var delta = Assert.IsType<TextDeltaOutput>(output);
+        Assert.Equal("signalr/test", delta.SessionId.Value);
+        Assert.Equal("hel", delta.Delta);
+    }
+
+    [Fact]
     public void FromDto_maps_tool_result_output()
     {
         var dto = new SessionOutputDto

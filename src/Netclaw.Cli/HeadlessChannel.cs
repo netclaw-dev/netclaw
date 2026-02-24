@@ -23,6 +23,8 @@ public sealed class HeadlessChannel : IChannel
     private readonly ILogger<HeadlessChannel> _logger;
 
     private bool _isConnected;
+    private bool _receivedTextDeltaInCurrentTurn;
+    private bool _receivedThinkingDeltaInCurrentTurn;
 
     public string ChannelType => "headless";
     public string DisplayName => "Headless Prompt";
@@ -129,13 +131,37 @@ public sealed class HeadlessChannel : IChannel
                 break;
 
             case TextOutput msg:
+                if (_receivedTextDeltaInCurrentTurn)
+                {
+                    Log(log, $"ASSISTANT_FINAL: {msg.Text}");
+                    break;
+                }
+
                 Console.WriteLine(msg.Text);
                 Log(log, $"ASSISTANT: {msg.Text}");
                 break;
 
+            case TextDeltaOutput msg:
+                _receivedTextDeltaInCurrentTurn = true;
+                Console.Write(msg.Delta);
+                Log(log, $"ASSISTANT_DELTA: {msg.Delta}");
+                break;
+
             case ThinkingOutput msg:
+                if (_receivedThinkingDeltaInCurrentTurn)
+                {
+                    Log(log, $"THINKING_FINAL: {msg.Text}");
+                    break;
+                }
+
                 Console.WriteLine($"[thinking] {msg.Text}");
                 Log(log, $"THINKING: {msg.Text}");
+                break;
+
+            case ThinkingDeltaOutput msg:
+                _receivedThinkingDeltaInCurrentTurn = true;
+                Console.Write($"[thinking]{msg.Delta}");
+                Log(log, $"THINKING_DELTA: {msg.Delta}");
                 break;
 
             case ToolCallOutput msg:
@@ -161,8 +187,11 @@ public sealed class HeadlessChannel : IChannel
                 break;
 
             case TurnCompleted msg:
+                Console.WriteLine();
                 Log(log, $"TURN_COMPLETED: turn={msg.TurnNumber}");
                 Log(log, "SESSION_ENDED");
+                _receivedTextDeltaInCurrentTurn = false;
+                _receivedThinkingDeltaInCurrentTurn = false;
                 break;
 
             case CompactionOutput msg:

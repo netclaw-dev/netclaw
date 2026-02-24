@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.SignalR;
+using Netclaw.Actors.Protocol;
 
 namespace Netclaw.Daemon.Gateway;
 
@@ -33,6 +34,11 @@ public sealed class SessionHub : Hub<ISessionHubClient>
     public Task<string> CreateSession(string channelType)
     {
         return _registry.CreateSessionAsync(Context.ConnectionId, channelType);
+    }
+
+    public Task<SessionEnsureResultDto> EnsureSession(string? sessionId, string channelType)
+    {
+        return _registry.EnsureSessionAsync(Context.ConnectionId, sessionId, channelType);
     }
 
     public Task AttachSession(string sessionId)

@@ -1,5 +1,6 @@
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
+using System.Text;
 using Netclaw.Actors.Protocol;
 using Termina.Components.Streaming;
 using Termina.Extensions;
@@ -29,6 +30,10 @@ public sealed class ChatPage : ReactivePage<ChatViewModel>
 
     // Track active tool timer so we can read final elapsed on completion
     private ElapsedTimeSegment? _toolTimer;
+
+    // Track active streamed assistant text segment
+    private SegmentId _assistantSegmentId;
+    private readonly StringBuilder _assistantBuffer = new();
 
     protected override void OnBound()
     {
@@ -177,9 +182,28 @@ public sealed class ChatPage : ReactivePage<ChatViewModel>
             case TextOutput msg:
                 // Remove thinking spinner if present
                 RemoveThinkingSpinner();
-                _chatHistory.AppendLine("");
+
+                // When streaming deltas were already rendered, TextOutput is the
+                // final full snapshot for compatibility. Finalize without duplicating.
+                if (_assistantSegmentId.Value != 0)
+                {
+                    FinalizeAssistantSegmentIfNeeded();
+                    _chatHistory.ScrollToBottom();
+                    break;
+                }
+
                 _chatHistory.AppendLine($"Netclaw: {msg.Text}", Color.White);
                 _chatHistory.AppendLine("");
+                _chatHistory.ScrollToBottom();
+                break;
+
+            case TextDeltaOutput msg:
+                RemoveThinkingSpinner();
+                EnsureAssistantSegment();
+                _assistantBuffer.Append(msg.Delta);
+                _chatHistory.Replace(_assistantSegmentId,
+                    new StaticTextSegment($"Netclaw: {_assistantBuffer}", Color.White),
+                    keepTracked: true);
                 _chatHistory.ScrollToBottom();
                 break;
 
@@ -241,6 +265,7 @@ public sealed class ChatPage : ReactivePage<ChatViewModel>
 
             case TurnCompleted:
                 RemoveThinkingSpinner();
+                FinalizeAssistantSegmentIfNeeded();
                 ViewModel.StatusMessage = "Ready";
                 _chatHistory.ScrollToBottom();
                 break;
@@ -274,4 +299,28 @@ public sealed class ChatPage : ReactivePage<ChatViewModel>
         elapsed.TotalSeconds < 60
             ? $"{elapsed.TotalSeconds:F1}s"
             : $"{(int)elapsed.TotalMinutes}m {elapsed.Seconds}s";
+
+    private void EnsureAssistantSegment()
+    {
+        if (_assistantSegmentId.Value != 0)
+            return;
+
+        _assistantBuffer.Clear();
+        _assistantSegmentId = NextSegmentId();
+        _chatHistory.AppendTracked(_assistantSegmentId,
+            new StaticTextSegment("Netclaw: ", Color.White));
+    }
+
+    private void FinalizeAssistantSegmentIfNeeded()
+    {
+        if (_assistantSegmentId.Value == 0)
+            return;
+
+        _chatHistory.Replace(_assistantSegmentId,
+            new StaticTextSegment($"Netclaw: {_assistantBuffer}", Color.White),
+            keepTracked: false);
+        _assistantSegmentId = default;
+        _assistantBuffer.Clear();
+        _chatHistory.AppendLine("");
+    }
 }

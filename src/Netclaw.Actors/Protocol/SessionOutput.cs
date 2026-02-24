@@ -29,12 +29,30 @@ public sealed record TextOutput : SessionOutput
 }
 
 /// <summary>
+/// Incremental text delta from the assistant while a turn is streaming.
+/// Requires <see cref="OutputFilter.Text"/>.
+/// </summary>
+public sealed record TextDeltaOutput : SessionOutput
+{
+    public required string Delta { get; init; }
+}
+
+/// <summary>
 /// Thinking/reasoning tokens from the model (e.g., Claude extended thinking).
 /// Requires <see cref="OutputFilter.Thinking"/>.
 /// </summary>
 public sealed record ThinkingOutput : SessionOutput
 {
     public required string Text { get; init; }
+}
+
+/// <summary>
+/// Incremental thinking/reasoning delta while a turn is streaming.
+/// Requires <see cref="OutputFilter.Thinking"/>.
+/// </summary>
+public sealed record ThinkingDeltaOutput : SessionOutput
+{
+    public required string Delta { get; init; }
 }
 
 /// <summary>

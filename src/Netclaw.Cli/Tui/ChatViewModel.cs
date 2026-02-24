@@ -124,6 +124,8 @@ public partial class ChatViewModel : ReactiveViewModel
 
         try
         {
+            await _daemonClient.EnsureSessionAsync("tui");
+
             await _daemonClient.SendAsync(new ChannelInput
             {
                 SenderId = "local-user",

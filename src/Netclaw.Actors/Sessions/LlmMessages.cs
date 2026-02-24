@@ -8,6 +8,18 @@ namespace Netclaw.Actors.Sessions;
 internal sealed record LlmResponseReceived
 {
     public required ChatResponse Response { get; init; }
+
+    public bool StreamedText { get; init; }
+
+    public bool StreamedThinking { get; init; }
+}
+
+/// <summary>
+/// Incremental streaming delta emitted while an LLM response is in-flight.
+/// </summary>
+internal sealed record LlmResponseDeltaReceived
+{
+    public required AIContent Content { get; init; }
 }
 
 /// <summary>

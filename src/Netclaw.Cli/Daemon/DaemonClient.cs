@@ -23,12 +23,15 @@ public sealed class DaemonClient : IAsyncDisposable
     ];
 
     private readonly HubConnection _connection;
+    private readonly string _daemonEndpoint;
+    private readonly string _hubUrl;
     private readonly Subject<SessionOutput> _outputSubject = new();
     private readonly Subject<DaemonConnectionEvent> _connectionSubject = new();
     private readonly SemaphoreSlim _connectGate = new(1, 1);
     private readonly CancellationTokenSource _lifetimeCts = new();
 
     private string? _sessionId;
+    private string? _channelType;
     private bool _hasConnected;
     private bool _disposed;
 
@@ -37,10 +40,11 @@ public sealed class DaemonClient : IAsyncDisposable
         if (string.IsNullOrWhiteSpace(daemonEndpoint))
             throw new ArgumentException("Daemon endpoint cannot be empty.", nameof(daemonEndpoint));
 
-        var hubUrl = BuildHubUrl(daemonEndpoint);
+        _daemonEndpoint = daemonEndpoint.TrimEnd('/');
+        _hubUrl = BuildHubUrl(_daemonEndpoint);
 
         _connection = new HubConnectionBuilder()
-            .WithUrl(hubUrl)
+            .WithUrl(_hubUrl)
             .WithAutomaticReconnect(ReconnectDelays)
             .Build();
 
@@ -51,13 +55,13 @@ public sealed class DaemonClient : IAsyncDisposable
 
         _connection.Reconnected += async _ =>
         {
-            var sessionId = _sessionId;
-            if (!string.IsNullOrWhiteSpace(sessionId))
-                await _connection.InvokeCoreAsync("AttachSession", [sessionId]);
+            if (!string.IsNullOrWhiteSpace(_channelType))
+                await EnsureSessionInternalAsync(_channelType!, CancellationToken.None);
 
             _connectionSubject.OnNext(new DaemonConnectionEvent(
                 DaemonConnectionState.Connected,
-                "Reconnected to daemon."));
+                _daemonEndpoint,
+                $"Reconnected to daemon at {_daemonEndpoint}."));
         };
 
         _connection.Reconnecting += ex =>
@@ -65,7 +69,8 @@ public sealed class DaemonClient : IAsyncDisposable
             var reason = ex?.Message ?? "connection dropped";
             _connectionSubject.OnNext(new DaemonConnectionEvent(
                 DaemonConnectionState.Reconnecting,
-                $"Reconnecting to daemon: {reason}"));
+                _daemonEndpoint,
+                $"Reconnecting to {_daemonEndpoint}: {reason}"));
             return Task.CompletedTask;
         };
 
@@ -77,7 +82,8 @@ public sealed class DaemonClient : IAsyncDisposable
             var reason = ex?.Message ?? "connection closed";
             _connectionSubject.OnNext(new DaemonConnectionEvent(
                 DaemonConnectionState.Disconnected,
-                $"Disconnected from daemon: {reason}"));
+                _daemonEndpoint,
+                $"Disconnected from daemon at {_daemonEndpoint}: {reason}"));
 
             if (!string.IsNullOrWhiteSpace(_sessionId))
                 await ReconnectLoopAsync();
@@ -100,9 +106,18 @@ public sealed class DaemonClient : IAsyncDisposable
             if (IsConnected)
                 return;
 
+            // Another reconnect/start sequence may already be in-flight.
+            if (_connection.State is HubConnectionState.Connecting or HubConnectionState.Reconnecting)
+            {
+                await WaitForStableConnectionStateAsync(cancellationToken);
+                if (IsConnected)
+                    return;
+            }
+
             _connectionSubject.OnNext(new DaemonConnectionEvent(
                 DaemonConnectionState.Connecting,
-                "Connecting to daemon..."));
+                _daemonEndpoint,
+                $"Connecting to daemon at {_daemonEndpoint}..."));
 
             Exception? lastError = null;
             foreach (var delay in ReconnectDelays)
@@ -114,13 +129,12 @@ public sealed class DaemonClient : IAsyncDisposable
                 {
                     await _connection.StartAsync(cancellationToken);
 
-                    var sessionId = _sessionId;
-                    if (!string.IsNullOrWhiteSpace(sessionId))
-                        await _connection.InvokeCoreAsync("AttachSession", [sessionId], cancellationToken);
-
                     _connectionSubject.OnNext(new DaemonConnectionEvent(
                         DaemonConnectionState.Connected,
-                        _hasConnected ? "Reconnected to daemon." : "Connected to daemon."));
+                        _daemonEndpoint,
+                        _hasConnected
+                            ? $"Reconnected to daemon at {_daemonEndpoint}."
+                            : $"Connected to daemon at {_daemonEndpoint}."));
                     _hasConnected = true;
                     return;
                 }
@@ -138,6 +152,18 @@ public sealed class DaemonClient : IAsyncDisposable
         }
     }
 
+    private async Task WaitForStableConnectionStateAsync(CancellationToken cancellationToken)
+    {
+        var deadline = DateTimeOffset.UtcNow.AddSeconds(15);
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            if (_connection.State is HubConnectionState.Connected or HubConnectionState.Disconnected)
+                return;
+
+            await Task.Delay(100, cancellationToken);
+        }
+    }
+
     public async Task<string> CreateSessionAsync(
         string channelType,
         CancellationToken cancellationToken = default)
@@ -145,14 +171,17 @@ public sealed class DaemonClient : IAsyncDisposable
         if (string.IsNullOrWhiteSpace(channelType))
             throw new ArgumentException("Channel type cannot be empty.", nameof(channelType));
 
-        await ConnectAsync(cancellationToken);
-        var sessionId = await _connection.InvokeCoreAsync<string>(
-            "CreateSession",
-            [channelType],
-            cancellationToken);
+        _channelType = channelType;
+        _sessionId = null;
+        return await EnsureSessionInternalAsync(channelType, cancellationToken);
+    }
 
-        _sessionId = sessionId;
-        return sessionId;
+    public async Task<string> EnsureSessionAsync(
+        string channelType,
+        CancellationToken cancellationToken = default)
+    {
+        _channelType = channelType;
+        return await EnsureSessionInternalAsync(channelType, cancellationToken);
     }
 
     public async Task SendAsync(ChannelInput input, CancellationToken cancellationToken = default)
@@ -191,26 +220,50 @@ public sealed class DaemonClient : IAsyncDisposable
         if (_disposed)
             return;
 
+        const int maxAttempts = 20;
         var attempts = 0;
         while (!_disposed && !_lifetimeCts.Token.IsCancellationRequested)
         {
             attempts++;
             try
             {
+                _connectionSubject.OnNext(new DaemonConnectionEvent(
+                    DaemonConnectionState.Reconnecting,
+                    _daemonEndpoint,
+                    $"Retrying daemon connection at {_daemonEndpoint} (attempt {attempts}/{maxAttempts})...",
+                    attempts,
+                    maxAttempts,
+                    0));
+
                 await ConnectAsync(_lifetimeCts.Token);
                 return;
             }
             catch when (!_disposed && !_lifetimeCts.Token.IsCancellationRequested)
             {
-                if (attempts >= 20)
+                if (attempts >= maxAttempts)
                 {
                     _connectionSubject.OnNext(new DaemonConnectionEvent(
                         DaemonConnectionState.Disconnected,
-                        "Unable to reconnect to daemon after multiple attempts."));
+                        _daemonEndpoint,
+                        $"Unable to reconnect to daemon at {_daemonEndpoint} after {maxAttempts} attempts.",
+                        attempts,
+                        maxAttempts,
+                        0));
                     return;
                 }
 
-                await Task.Delay(TimeSpan.FromSeconds(2), _lifetimeCts.Token);
+                for (var countdown = 2; countdown > 0; countdown--)
+                {
+                    _connectionSubject.OnNext(new DaemonConnectionEvent(
+                        DaemonConnectionState.Reconnecting,
+                        _daemonEndpoint,
+                        $"Retrying daemon connection at {_daemonEndpoint} (attempt {attempts + 1}/{maxAttempts}) in {countdown}s...",
+                        attempts + 1,
+                        maxAttempts,
+                        countdown));
+
+                    await Task.Delay(TimeSpan.FromSeconds(1), _lifetimeCts.Token);
+                }
             }
         }
     }
@@ -219,6 +272,30 @@ public sealed class DaemonClient : IAsyncDisposable
     {
         var trimmed = endpoint.TrimEnd('/');
         return $"{trimmed}/hub/session";
+    }
+
+    private async Task<string> EnsureSessionInternalAsync(
+        string channelType,
+        CancellationToken cancellationToken)
+    {
+        await ConnectAsync(cancellationToken);
+
+        var result = await _connection.InvokeCoreAsync<SessionEnsureResultDto>(
+            "EnsureSession",
+            [_sessionId, channelType],
+            cancellationToken);
+
+        _sessionId = result.SessionId;
+
+        if (result.Created)
+        {
+            _connectionSubject.OnNext(new DaemonConnectionEvent(
+                DaemonConnectionState.Connected,
+                _daemonEndpoint,
+                $"Created a new daemon session at {_daemonEndpoint}."));
+        }
+
+        return result.SessionId;
     }
 
     internal static SessionOutput FromDto(SessionOutputDto dto)
@@ -233,11 +310,23 @@ public sealed class DaemonClient : IAsyncDisposable
                 TimestampMs = dto.TimestampMs,
                 Text = dto.Text ?? string.Empty
             },
+            "text_delta" => new TextDeltaOutput
+            {
+                SessionId = sessionId,
+                TimestampMs = dto.TimestampMs,
+                Delta = dto.Text ?? string.Empty
+            },
             "thinking" => new ThinkingOutput
             {
                 SessionId = sessionId,
                 TimestampMs = dto.TimestampMs,
                 Text = dto.Text ?? string.Empty
+            },
+            "thinking_delta" => new ThinkingDeltaOutput
+            {
+                SessionId = sessionId,
+                TimestampMs = dto.TimestampMs,
+                Delta = dto.Text ?? string.Empty
             },
             "tool_call" => new ToolCallOutput
             {
