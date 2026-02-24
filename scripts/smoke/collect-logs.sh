@@ -36,4 +36,8 @@ run_timed "$STEP_TIMEOUT_SECONDS" docker compose -p "$PROJECT_NAME" -f "$COMPOSE
   'if [ -f /root/.netclaw/netclaw.pid ]; then cat /root/.netclaw/netclaw.pid; fi' \
   >"$LOG_DIR/netclaw.pid" || true
 
+run_timed "$STEP_TIMEOUT_SECONDS" docker compose -p "$PROJECT_NAME" -f "$COMPOSE_FILE" exec -T netclaw-sandbox sh -lc \
+  'ls -la /root/.netclaw || true' \
+  >"$LOG_DIR/netclaw-home-ls.txt" || true
+
 echo "Smoke logs collected at: $LOG_DIR"

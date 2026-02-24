@@ -7,24 +7,13 @@ services:
 
   ollama-init:
     image: curlimages/curl:8.13.0
-    entrypoint: ["/bin/sh", "-c"]
+    entrypoint: ["/bin/sh", "/usr/local/bin/ollama-init.sh"]
     environment:
       SMOKE_OLLAMA_MODEL: ${SMOKE_OLLAMA_MODEL:-qwen2:0.5b}
     depends_on:
       - ollama
-    command: >
-      set -eu;
-      echo "Waiting for Ollama API to become available...";
-      for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
-        if curl -fsS http://ollama:11434/api/tags >/dev/null; then
-          break;
-        fi;
-        echo "Ollama not ready yet (attempt $$i/12).";
-        sleep 5;
-      done;
-      echo "Pulling smoke model: $${SMOKE_OLLAMA_MODEL}";
-      curl -fsS -X POST http://ollama:11434/api/pull -d "{\"name\":\"$${SMOKE_OLLAMA_MODEL}\"}" >/dev/null;
-      echo "Model pull request completed.";
+    volumes:
+      - ./scripts/smoke/ollama-init.sh:/usr/local/bin/ollama-init.sh:ro
 
   netclaw-sandbox:
     image: netclaw-smoke:local

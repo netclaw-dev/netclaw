@@ -26,6 +26,7 @@ jobs:
     env:
       PROJECT_NAME: netclaw-smoke-${{ github.run_id }}-${{ github.run_attempt }}
       SMOKE_OLLAMA_MODEL: qwen2:0.5b
+      SMOKE_BUILD: 0
       INIT_TIMEOUT_SECONDS: 1200
       START_TIMEOUT_SECONDS: 180
       STEP_TIMEOUT_SECONDS: 120
@@ -40,11 +41,27 @@ jobs:
         with:
           global-json-file: ./global.json
 
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build smoke sandbox image (cached)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/smoke/Dockerfile
+          tags: netclaw-smoke:local
+          load: true
+          cache-from: type=gha,scope=netclaw-smoke
+          cache-to: type=gha,mode=max,scope=netclaw-smoke
+
       - name: Start smoke sandbox
         run: bash scripts/smoke/up.sh
 
       - name: Run smoke checks
-        run: bash scripts/smoke/check.sh
+        run: |
+          mkdir -p smoke-logs
+          set -o pipefail
+          bash scripts/smoke/check.sh 2>&1 | tee smoke-logs/check.log
 
       - name: Collect smoke logs
         if: always()

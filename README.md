@@ -43,6 +43,9 @@ command yet).
 # Start sandbox (build local image + start Ollama + pull tiny model)
 scripts/smoke/up.sh
 
+# Start without rebuilding image (useful after pre-building or in CI)
+SMOKE_BUILD=0 scripts/smoke/up.sh
+
 # Run smoke checks (daemon start/status/health/stop)
 scripts/smoke/check.sh
 
@@ -74,9 +77,10 @@ STEP_TIMEOUT_SECONDS=120 scripts/smoke/check.sh
 `smoke_sandbox` is available in GitHub Actions:
 
 - Runs manually via `workflow_dispatch`.
-- Runs on PRs labeled `smoke`.
-- Always uploads `smoke-logs-*` artifact (container logs, compose status,
-  daemon log, PID snapshot) for debugging.
+- Runs on every pull request update.
+- Uses Docker Buildx + GitHub Actions cache for smoke image layers.
+- Always uploads `smoke-logs-*` artifact (including `check.log`, container
+  logs, compose status, daemon log, PID snapshot) for debugging.
 
 ## CLI Reference
 

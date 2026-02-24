@@ -4,8 +4,13 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 COMPOSE_FILE="${COMPOSE_FILE:-$ROOT_DIR/docker-compose.smoke.yml}"
 PROJECT_NAME="${PROJECT_NAME:-netclaw-smoke}"
+SMOKE_BUILD="${SMOKE_BUILD:-1}"
 
-docker compose -p "$PROJECT_NAME" -f "$COMPOSE_FILE" up -d --build
+if [[ "$SMOKE_BUILD" == "1" ]]; then
+  docker compose -p "$PROJECT_NAME" -f "$COMPOSE_FILE" up -d --build
+else
+  docker compose -p "$PROJECT_NAME" -f "$COMPOSE_FILE" up -d
+fi
 
 cat <<EOF
 Smoke sandbox is starting.
