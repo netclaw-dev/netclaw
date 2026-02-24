@@ -37,10 +37,11 @@ child session actor.
 ### MVP Input Adapters
 
 **Local TUI Adapter** (Phase 1):
-- Hosted in-process by `netclaw chat` command
+- Hosted in-process by `netclaw chat` command (daemon mode — full service stack)
+- Uses `SessionPipeline` directly — no SignalR indirection for in-process channels
 - Receives keyboard input via Termina TextInputNode
-- Produces `SendUserMessage` commands with entity key `tui/{sessionId}`
-- Subscribes to session broadcasts for reply delivery
+- Pushes `ChannelInput` to `SessionPipeline` input sink
+- Subscribes to `SessionOutput` source for rendering
 - Renders responses as streaming text via StreamingTextNode
 - Displays tool invocation status inline (name, duration, spinner)
 - Shows MCP server connectivity in status bar
@@ -75,9 +76,12 @@ child session actor.
 - Each webhook hit creates a new session with source-specific instructions
 
 **Web UI Adapter** (Phase 5):
-- WebSocket connection from Blazor Server ops console
+- Connects via SignalR hub (`/hub/session`) — the gateway surface documented in
+  SPEC-011
 - Provides interactive session control and real-time updates
-- Same pub/sub broadcast pattern as Slack adapter
+- Same `SessionPipeline` abstraction as all other channels
+- SignalR hub is mapped from Phase 1 (for future remote clients) but not used
+  by TUI or headless modes
 
 ## Adapter Contract
 
@@ -174,3 +178,5 @@ SHALL display tool invocation status inline between user message and response.
 - Security (ACL per source): PRD-002
 - Scheduling (timer source): PRD-008
 - Ops console (web UI source): PRD-003
+- Daemon architecture and gateway surface: SPEC-011
+- SessionPipeline and channel abstraction: `src/Netclaw.Actors/Channels/ChannelPipeline.cs`

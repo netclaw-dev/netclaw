@@ -169,8 +169,8 @@ public sealed class HeadlessChannel : IChannel
         }
     }
 
-    private static void Log(StreamWriter log, string message)
+    private void Log(StreamWriter log, string message)
     {
-        log.WriteLine($"[{DateTimeOffset.UtcNow:o}] {message}");
+        log.WriteLine($"[{_timeProvider.GetUtcNow():o}] {message}");
     }
 }

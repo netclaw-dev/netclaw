@@ -55,9 +55,37 @@ irrelevant — the differentiator is the instructions attached to the context.
 10. Agent can modify its own configuration through conversation.
 11. MCP integration provides external memory (Memorizer) and tool capabilities.
 
+## Daemon Architecture
+
+Netclaw runs as a single OS process. All components — Akka actor system,
+persistence, gateway endpoints, TUI, and tool execution — share one process
+boundary. This is validated by architecture research across comparable projects
+(see `docs/research/agent-gateway-architecture.md`).
+
+The executable supports multiple modes selected by command-line arguments:
+
+| Mode | Command | Description |
+|------|---------|-------------|
+| Daemon | `netclaw run` | Full service stack. Slack, schedules, SignalR hub, health endpoint. |
+| Chat | `netclaw chat` | Full service stack + Termina TUI. Interactive chat via `SessionPipeline`. |
+| Headless | `netclaw -p "..."` | Full service stack + headless client. Single turn, exits on completion. |
+| Init | `netclaw init` | Lightweight. Config services only, no Akka/persistence. Reentrant TUI wizard. |
+| Doctor | `netclaw doctor` | Lightweight. Config services only. Health checks and diagnostics. |
+
+In-process channels (TUI, headless) use `SessionPipeline` directly — no network
+hop. The SignalR hub exists for future remote clients (Blazor ops console) and
+uses the same `SessionPipeline` internally.
+
+Tools execute on the host process. This is the only model that works for Slack
+(no client to delegate to), scheduled tasks (autonomous), and Docker deployment
+(tools need access to the host's Docker socket).
+
+See `SPEC-011-daemon-architecture.md` for full specification.
+
 ## Non-Goals (MVP)
 
-- Multi-process gateway/agent split
+- Multi-process gateway/agent split (validated by architecture research —
+  single-process is the correct model for homelab/personal agent use)
 - Ambient channel monitoring with per-channel instructions
 - Webhook ingress (Tailscale Serve / Cloudflare Tunnel)
 - Sub-agent model routing (cheaper models for high-token tasks)
@@ -269,3 +297,5 @@ schedule changes → timer reconfiguration).
 - Agent Personality and Memory: PRD-007
 - Scheduling: PRD-008
 - Input Adapters: PRD-009 (post-MVP)
+- Daemon Architecture: SPEC-011
+- Architecture Research: `docs/research/agent-gateway-architecture.md`

@@ -16,6 +16,7 @@
     <PackageVersion Include="Microsoft.Extensions.Configuration.Json" Version="10.0.2" />
     <PackageVersion Include="Microsoft.Extensions.Hosting" Version="10.0.2" />
     <PackageVersion Include="OllamaSharp" Version="5.4.16" />
+    <PackageVersion Include="Termina" Version="0.5.1" />
   </ItemGroup>
   <!-- Serialization -->
   <ItemGroup>

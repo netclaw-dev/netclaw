@@ -200,9 +200,9 @@ Full task breakdowns:
 
 > **Gateway note:** Netclaw.App was temporarily changed from `Microsoft.NET.Sdk.Web`
 > to `Microsoft.NET.Sdk` (plain console host) for the proof-of-concept console
-> adapter. The web gateway (health endpoints, future API surface) must be
-> restored before Slack adapter or any multi-client scenario. Track as part of
-> Task 1.11 (CLI scaffold) or earlier if needed.
+> adapter. Task 1.11 restores `Microsoft.NET.Sdk.Web` for daemon modes per
+> SPEC-011. Single-process architecture validated by research in
+> `docs/research/agent-gateway-architecture.md`.
 
 ### Task 1.1: Framework protocol and persistence-safe message envelopes (DONE)
 
@@ -364,28 +364,36 @@ Done when:
 - [ ] CI tests pass without live provider credentials.
 - [ ] Tests for provider switching, fallback activation, tool calling round-trip.
 
-### Task 1.11: CLI scaffold with Cocona
+### Task 1.11: Daemon architecture scaffold with mode routing
 
 **PRD:** `docs/prd/PRD-004-cli-onboarding-and-config.md` (CLI-010, CLI-012)
+**Spec:** `docs/spec/SPEC-011-daemon-architecture.md`
 **OpenSpec:** `openspec/specs/netclaw-cli/spec.md`
 **OpenSpec Changes:** `openspec/changes/add-tui-adapter-and-config-hot-reload/` (Section 1)
-**Surface area:** CLI framework
+**Surface area:** CLI framework + gateway
 **Verification:** L1
 **Previously:** Task 1.13
 
-Replaces the bare console loop with a proper CLI framework. Restore web gateway
-hosting (`Microsoft.NET.Sdk.Web`) if needed for daemon mode.
+Replaces the bare console loop with mode-selected startup per SPEC-011.
+Daemon modes use `WebApplication.CreateBuilder()` (ASP.NET host for SignalR
+and health endpoints). Lightweight modes use `Host.CreateApplicationBuilder()`.
+Cocona is archived (Dec 2025) — replaced with simple arg routing.
 
 Done when:
-- [ ] Cocona and Termina package references added to `Directory.Packages.props` and `Netclaw.App.csproj`.
-- [ ] `Program.cs` rewritten as Cocona entry point with DI registration.
-- [ ] `RunCommand.cs` created for daemon mode (`netclaw run`).
-- [ ] Termina wired as hosted service for TUI commands.
+- [ ] Termina and System.Reactive package references added to `Directory.Packages.props`.
+- [ ] `Netclaw.App.csproj` SDK changed to `Microsoft.NET.Sdk.Web`, Termina added, Hosting removed.
+- [ ] `Program.cs` rewritten with mode routing: `run`/`chat`/headless use `WebApplication`, `init`/`doctor` use `Host`.
+- [ ] Shared config services extracted to `ConfigureConfigServices()` method.
+- [ ] Daemon-only services extracted to `ConfigureDaemonServices()` method.
+- [ ] SignalR hub mapped at `/hub/session` (stub — Phase 1 placeholder).
+- [ ] Health probe mapped at `/api/health/ready`.
+- [ ] `ConsoleChannel.cs` deleted (replaced by Termina TUI).
 - [ ] `dotnet build` passes with new dependencies.
 
 ### Task 1.12: TUI chat adapter (`netclaw chat`)
 
 **PRD:** `docs/prd/PRD-004-cli-onboarding-and-config.md` (CLI-011), `docs/prd/PRD-009-input-adapters-and-unified-input.md` (INPUT-005)
+**Spec:** `docs/spec/SPEC-011-daemon-architecture.md`
 **OpenSpec:** `openspec/specs/netclaw-input-adapters/spec.md`, `openspec/specs/netclaw-cli/spec.md`
 **OpenSpec Changes:** `openspec/changes/add-tui-adapter-and-config-hot-reload/` (Section 2)
 **Surface area:** TUI + adapter
@@ -393,14 +401,15 @@ Done when:
 **Wireframe:** `docs/ui/TUI-001-command-wireframes.md` (netclaw chat)
 **Previously:** Task 1.14
 
+The TUI uses `SessionPipeline` directly — no SignalR indirection. Same
+in-process pattern as the current ConsoleChannel/HeadlessChannel.
+
 Done when:
-- [ ] `TuiInputAdapter` implementing adapter contract (`SendUserMessage` with entity key `tui/{sessionId}`).
-- [ ] `ChatCommand.cs` hosts actor system in-process and launches TUI.
 - [ ] `ChatPage.cs` with `StreamingTextNode` (scrollable history) and `TextInputNode` (multi-line input).
-- [ ] `ChatViewModel.cs` with session lifecycle and broadcast subscription.
+- [ ] `ChatViewModel.cs` uses `SessionPipeline` directly via DI — calls `CreateAsync()`, pushes `ChannelInput`, subscribes to `SessionOutput`.
 - [ ] Inline tool activity panel (completed with duration, in-progress with spinner).
 - [ ] MCP status indicator in status bar (green/yellow/red).
-- [ ] E2E: user types → `SendUserMessage` → session actor → LLM → streaming response in TUI.
+- [ ] E2E: user types → `ChannelInput` → `SessionPipeline` → session actor → LLM → streaming response in TUI.
 
 ---
 
@@ -703,3 +712,6 @@ the linked research documents.
 - `docs/research/actor-llm-optimization-patterns.md` — Prompt caching,
   safety circuit breakers, parallel execution, streaming, retry, and
   sub-agent isolation patterns for actor-based LLM systems
+- `docs/research/agent-gateway-architecture.md` — Single-process vs
+  multi-process architecture analysis (OpenClaw, IronClaw, ZeroClaw).
+  Validates single-process model for homelab/personal agent use.

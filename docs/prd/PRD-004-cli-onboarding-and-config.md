@@ -23,19 +23,34 @@ diagnostics using CLI commands and guided output.
 
 ## CLI Framework
 
-- **Cocona** for command routing (lightweight, convention-based, DI integration)
+- **Simple arg routing** in `Program.cs` for mode selection (Cocona is archived
+  as of Dec 2025 — replaced with direct `args[0]` routing)
 - **Termina 0.5.1** for interactive TUI commands (`netclaw init`, `netclaw chat`)
-- All other commands use plain console output via Cocona
+- All other commands use plain console output
 - `netclaw run` is the explicit daemon entry point (Slack + timers + health
   endpoints, no TUI)
+- All CLI modes are in-process — no REST client in Phase 1
+- Configuration is privileged local file I/O, never exposed over the wire
+  (contains API keys/secrets)
 
 ## Two-Phase Onboarding
 
 ### Phase 1: CLI Wizard (`netclaw init`)
 
-Technical setup, no LLM required:
+Technical setup, no LLM required. `netclaw init` runs as a **lightweight mode**
+— no Akka actor system, no persistence, no SignalR. Only config services are
+booted. Provider testing uses direct DI service calls (`ChatClientFactory`),
+not REST endpoints.
 
-1. LLM provider configuration (OpenRouter API key, model selection)
+The wizard is **reentrant** — re-running `netclaw init` detects existing config
+and shows a section dashboard with status per section. Each section is
+independently enterable for modification. First-run guides linearly through
+all steps.
+
+Steps:
+
+1. LLM provider configuration (endpoint URL, API key, model selection,
+   connectivity test via direct HTTP to provider)
 2. Slack app setup (bot token, app token for Socket Mode)
 3. PostgreSQL connection string
 4. ACL bootstrap (owner identity, initial channel rules)
@@ -175,7 +190,7 @@ Results are persisted to the environment inventory file.
 
 `netclaw init` and `netclaw chat` SHALL use Termina 0.5.1 for interactive TUI
 rendering. All other commands SHALL use plain console output. TUI commands SHALL
-launch Termina as a hosted service within the Cocona command handler.
+launch Termina as a hosted service within the mode-selected host builder.
 
 ### CLI-011 Local Chat Adapter
 
@@ -219,3 +234,5 @@ rendering. This is the primary production entry point.
 - MCP setup: PRD-006
 - Memory and personality: PRD-007
 - Scheduling: PRD-008
+- Daemon architecture: SPEC-011
+- TUI wireframes: TUI-001

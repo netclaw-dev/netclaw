@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk.Web">
 
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
@@ -10,9 +10,8 @@
   <ItemGroup>
     <PackageReference Include="Akka.Hosting" />
     <PackageReference Include="Akka.Persistence.Hosting" />
-    <PackageReference Include="Microsoft.Extensions.Configuration.Json" />
-    <PackageReference Include="Microsoft.Extensions.Hosting" />
     <PackageReference Include="OllamaSharp" />
+    <PackageReference Include="Termina" />
   </ItemGroup>
 
   <ItemGroup>

@@ -4,15 +4,15 @@ Source PRDs: `PRD-004`, `PRD-009`
 
 ## Overview
 
-Netclaw's CLI uses **Cocona** for command routing and **Termina 0.5.1** for
-interactive TUI commands. Only two commands use Termina TUI rendering — all
-other commands use plain console output via Cocona.
+Netclaw's CLI uses **simple arg routing** in `Program.cs` for mode selection and
+**Termina 0.5.1** for interactive TUI commands. Only two commands use Termina
+TUI rendering — all other commands use plain console output.
 
 | Command         | Interface | Framework |
 |-----------------|-----------|-----------|
-| `netclaw init`  | TUI       | Termina   |
-| `netclaw chat`  | TUI       | Termina   |
-| All others      | Plain CLI | Cocona    |
+| `netclaw init`  | TUI       | Termina (lightweight mode — no Akka) |
+| `netclaw chat`  | TUI       | Termina (daemon mode — full stack)   |
+| All others      | Plain CLI | Plain console output                 |
 
 ## Termina Component Vocabulary
 
@@ -232,7 +232,7 @@ Result: 1 error, 1 warning. Netclaw cannot start.
 
 ## Commands That Stay Plain CLI (No TUI)
 
-All of the following commands use standard console output via Cocona.
+All of the following commands use standard console output.
 No Termina TUI components are used.
 
 | Command                              | Output Style        |
@@ -265,5 +265,5 @@ This is the primary production entry point.
 - CLI command surface: PRD-004
 - TUI adapter contract: PRD-009
 - Ops console (web): UI-001
-- Cocona framework: implementation decision
+- Daemon architecture and mode selection: SPEC-011
 - Termina 0.5.1: implementation decision
