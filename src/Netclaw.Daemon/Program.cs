@@ -36,8 +36,9 @@ static async Task RunAsync(string[] args)
     builder.Logging.ClearProviders();
     builder.Logging.SetMinimumLevel(LogLevel.Warning);
 
-    // SignalR for future remote clients (Blazor ops console)
+    // SignalR for remote clients (CLI thin client, Blazor ops console)
     builder.Services.AddSignalR();
+    builder.Services.AddSingleton<SessionRegistry>();
 
     var app = builder.Build();
 

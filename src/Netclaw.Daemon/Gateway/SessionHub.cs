@@ -4,10 +4,11 @@ namespace Netclaw.Daemon.Gateway;
 
 /// <summary>
 /// SignalR hub for remote session access. Bridges remote clients
-/// (future Blazor ops console, remote CLI) to <see cref="Netclaw.Actors.Channels.SessionPipeline"/>.
+/// (CLI thin client, future Blazor ops console) to <see cref="Netclaw.Actors.Channels.SessionPipeline"/>
+/// via <see cref="SessionRegistry"/>.
 ///
-/// Phase 1: mapped at <c>/hub/session</c> but not actively used by TUI or headless
-/// modes (they use <c>SessionPipeline</c> directly, in-process).
+/// Hub instances are transient (one per method invocation) — all session
+/// state lives in <see cref="SessionRegistry"/> (singleton).
 ///
 /// Contract:
 /// <code>
@@ -19,20 +20,27 @@ namespace Netclaw.Daemon.Gateway;
 ///   ReceiveOutput(output: SessionOutputDto) → void
 /// </code>
 /// </summary>
-public sealed class SessionHub : Hub
+public sealed class SessionHub : Hub<ISessionHubClient>
 {
-    // Phase 1 stub — hub is mapped but not wired to SessionPipeline.
-    // Implementation deferred until remote clients (Blazor ops console) need it.
+    private readonly SessionRegistry _registry;
+
+    public SessionHub(SessionRegistry registry)
+    {
+        _registry = registry;
+    }
 
     public Task<string> CreateSession(string channelType)
     {
-        // TODO: wire to SessionPipeline.CreateAsync() when remote clients are implemented
-        throw new HubException("Remote sessions are not yet implemented. Use netclaw chat for local sessions.");
+        return _registry.CreateSessionAsync(Context.ConnectionId, channelType);
     }
 
     public Task SendMessage(string sessionId, string text)
     {
-        // TODO: wire to materialized session input queue
-        throw new HubException("Remote sessions are not yet implemented. Use netclaw chat for local sessions.");
+        return _registry.SendMessageAsync(sessionId, text);
+    }
+
+    public override Task OnDisconnectedAsync(Exception? exception)
+    {
+        return _registry.OnDisconnectedAsync(Context.ConnectionId);
     }
 }
