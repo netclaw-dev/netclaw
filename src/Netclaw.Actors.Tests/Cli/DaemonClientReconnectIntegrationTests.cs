@@ -17,6 +17,65 @@ namespace Netclaw.Actors.Tests.Cli;
 public sealed class DaemonClientReconnectIntegrationTests
 {
     [Fact]
+    public async Task EnsureSession_reattaches_same_session_after_transport_disconnect()
+    {
+        var port = GetFreeTcpPort();
+        using var host = await StartFakeHubAsync(port);
+
+        await using var client = new DaemonClient($"http://127.0.0.1:{port}");
+
+        var disconnected = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var reconnected = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var reconnectedOutput = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        using var connectionSub = client.ConnectionEvents.Subscribe(evt =>
+        {
+            if (evt.State is DaemonConnectionState.Disconnected)
+                disconnected.TrySetResult();
+
+            if (evt.State is DaemonConnectionState.Connected && disconnected.Task.IsCompleted)
+                reconnected.TrySetResult();
+        });
+
+        using var outputSub = client.SessionOutput.Subscribe(output =>
+        {
+            if (output is TextOutput { Text: "echo:after" })
+                reconnectedOutput.TrySetResult();
+        });
+
+        var sessionId = await client.CreateSessionAsync("tui");
+
+        try
+        {
+            await client.SendAsync(new ChannelInput
+            {
+                SenderId = "test",
+                Contents = [new TextContent("drop")],
+                ReceivedAt = DateTimeOffset.UtcNow
+            });
+        }
+        catch (Exception ex)
+        {
+            Assert.False(string.IsNullOrWhiteSpace(ex.Message));
+        }
+
+        await WaitFor(disconnected.Task, TimeSpan.FromSeconds(5));
+        await WaitFor(reconnected.Task, TimeSpan.FromSeconds(10));
+
+        var ensured = await client.EnsureSessionAsync("tui");
+        Assert.Equal(sessionId, ensured);
+
+        await client.SendAsync(new ChannelInput
+        {
+            SenderId = "test",
+            Contents = [new TextContent("after")],
+            ReceivedAt = DateTimeOffset.UtcNow
+        });
+
+        await WaitFor(reconnectedOutput.Task, TimeSpan.FromSeconds(5));
+    }
+
+    [Fact]
     public async Task EnsureSession_recreates_session_after_server_restart()
     {
         var port = GetFreeTcpPort();
@@ -148,6 +207,12 @@ public sealed class DaemonClientReconnectIntegrationTests
         {
             if (!_state.IsAttached(Context.ConnectionId, sessionId))
                 throw new HubException("session not attached");
+
+            if (string.Equals(text, "drop", StringComparison.Ordinal))
+            {
+                Context.Abort();
+                return;
+            }
 
             await Clients.Caller.ReceiveOutput(new SessionOutputDto
             {

@@ -82,6 +82,10 @@ STEP_TIMEOUT_SECONDS=120 scripts/smoke/check.sh
 - Always uploads `smoke-logs-*` artifact (including `check.log`, container
   logs, compose status, daemon log, PID snapshot) for debugging.
 
+## Operations Runbooks
+
+- Daemon upgrade and rollback planning: `docs/runbooks/daemon-upgrade.md`
+
 ## CLI Reference
 
 ```

@@ -3,6 +3,7 @@
     <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
     <!-- Nuget package versions -->
     <AkkaHostingVersion>1.5.60</AkkaHostingVersion>
+    <AkkaPersistenceSqlHostingVersion>1.5.60.1</AkkaPersistenceSqlHostingVersion>
     <AkkaRemindersVersion>0.4.0</AkkaRemindersVersion>
   </PropertyGroup>
   <!-- App dependencies -->
@@ -11,10 +12,12 @@
     <PackageVersion Include="Akka.Cluster.Sharding" Version="$(AkkaHostingVersion)" />
     <PackageVersion Include="Akka.Persistence" Version="$(AkkaHostingVersion)" />
     <PackageVersion Include="Akka.Persistence.Hosting" Version="$(AkkaHostingVersion)" />
+    <PackageVersion Include="Akka.Persistence.Sql.Hosting" Version="$(AkkaPersistenceSqlHostingVersion)" />
     <PackageVersion Include="Aaron.Akka.Reminders" Version="$(AkkaRemindersVersion)" />
     <PackageVersion Include="Microsoft.Extensions.AI.Abstractions" Version="10.3.0" />
     <PackageVersion Include="Microsoft.AspNetCore.SignalR.Client" Version="10.0.2" />
     <PackageVersion Include="Microsoft.AspNetCore.TestHost" Version="10.0.2" />
+    <PackageVersion Include="Microsoft.Data.Sqlite" Version="10.0.2" />
     <PackageVersion Include="Microsoft.Extensions.Configuration.Json" Version="10.0.2" />
     <PackageVersion Include="Microsoft.Extensions.Hosting" Version="10.0.2" />
     <PackageVersion Include="OllamaSharp" Version="5.4.16" />

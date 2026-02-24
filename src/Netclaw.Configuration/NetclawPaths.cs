@@ -22,6 +22,7 @@ public sealed class NetclawPaths
     public string LogsDirectory => Path.Combine(BasePath, "logs");
     public string DaemonLogPath => Path.Combine(LogsDirectory, "daemon.log");
     public string PidFilePath => Path.Combine(BasePath, "netclaw.pid");
+    public string SqliteDbPath => Path.Combine(BasePath, "netclaw.db");
 
     public NetclawPaths(string? basePath = null)
     {
