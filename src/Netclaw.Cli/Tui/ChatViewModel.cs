@@ -1,31 +1,26 @@
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
-using Akka.Actor;
-using Akka.Streams;
-using Akka.Streams.Dsl;
 using Microsoft.Extensions.AI;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
+using Netclaw.Cli.Daemon;
 using Netclaw.Configuration;
 using Termina.Reactive;
 
 namespace Netclaw.Cli.Tui;
 
 /// <summary>
-/// Reactive ViewModel for the chat page. Uses <see cref="SessionPipeline"/>
-/// directly (in-process, no SignalR indirection). Manages session lifecycle,
-/// input submission, and output forwarding to the page.
+/// Reactive ViewModel for the chat page. Uses <see cref="DaemonClient"/>
+/// to talk to the daemon-hosted session hub over SignalR.
 /// </summary>
 public partial class ChatViewModel : ReactiveViewModel
 {
-    private readonly SessionPipeline _pipeline;
-    private readonly ActorSystem _system;
+    private readonly DaemonClient _daemonClient;
     private readonly TimeProvider _timeProvider;
     private readonly SessionConfig _sessionConfig;
 
-    private MaterializedSession? _session;
-    private ISourceQueueWithComplete<ChannelInput>? _inputQueue;
     private readonly Subject<SessionOutput> _outputSubject = new();
+    private IDisposable? _daemonOutputSubscription;
 
 #pragma warning disable CS0169, CS0414 // Backing fields used by [Reactive] source generator
     [Reactive] private bool _isGenerating;
@@ -48,13 +43,11 @@ public partial class ChatViewModel : ReactiveViewModel
     public int ContextWindowTokens => _sessionConfig.ContextWindowTokens;
 
     public ChatViewModel(
-        SessionPipeline pipeline,
-        ActorSystem system,
+        DaemonClient daemonClient,
         TimeProvider timeProvider,
         SessionConfig sessionConfig)
     {
-        _pipeline = pipeline;
-        _system = system;
+        _daemonClient = daemonClient;
         _timeProvider = timeProvider;
         _sessionConfig = sessionConfig;
     }
@@ -69,17 +62,8 @@ public partial class ChatViewModel : ReactiveViewModel
     {
         try
         {
-            var sessionId = new SessionId($"tui/{Guid.NewGuid():N}");
-            SessionIdDisplay = sessionId.Value;
-
-            _session = await _pipeline.CreateAsync(sessionId, new SessionPipelineOptions
-            {
-                ChannelType = "tui"
-            });
-
-            // Materialize output stream → forward to Subject for page rendering
-            _session.Output
-                .To(Sink.ForEach<Actors.Protocol.SessionOutput>(output =>
+            _daemonOutputSubscription = _daemonClient.SessionOutput
+                .Subscribe(output =>
                 {
                     _outputSubject.OnNext(output);
 
@@ -95,13 +79,11 @@ public partial class ChatViewModel : ReactiveViewModel
                     }
 
                     RequestRedraw();
-                }))
-                .Run(_system);
+                });
 
-            // Materialize input with queue for imperative push
-            _inputQueue = Source.Queue<ChannelInput>(16, OverflowStrategy.Backpressure)
-                .ToMaterialized(_session.Input, Keep.Left)
-                .Run(_system);
+            await ConnectWithRetryAsync();
+            var sessionId = await _daemonClient.CreateSessionAsync("tui");
+            SessionIdDisplay = sessionId;
 
             StatusMessage = "Ready";
             RequestRedraw();
@@ -118,18 +100,27 @@ public partial class ChatViewModel : ReactiveViewModel
     /// </summary>
     public async Task SubmitAsync(string text)
     {
-        if (_inputQueue is null || string.IsNullOrWhiteSpace(text))
+        if (string.IsNullOrWhiteSpace(text))
             return;
 
         IsGenerating = true;
         StatusMessage = "Generating...";
 
-        await _inputQueue.OfferAsync(new ChannelInput
+        try
         {
-            SenderId = "local-user",
-            Contents = [new TextContent(text)],
-            ReceivedAt = _timeProvider.GetUtcNow()
-        });
+            await _daemonClient.SendAsync(new ChannelInput
+            {
+                SenderId = "local-user",
+                Contents = [new TextContent(text)],
+                ReceivedAt = _timeProvider.GetUtcNow()
+            });
+        }
+        catch (Exception ex)
+        {
+            IsGenerating = false;
+            StatusMessage = $"Connection failed: {ex.Message}";
+            RequestRedraw();
+        }
     }
 
     public void RequestAppShutdown()
@@ -139,13 +130,38 @@ public partial class ChatViewModel : ReactiveViewModel
 
     public override void Dispose()
     {
+        _daemonOutputSubscription?.Dispose();
         _outputSubject.Dispose();
-        if (_session is not null)
-        {
-            _ = _session.DisposeAsync();
-        }
 
         DisposeReactiveFields();
         base.Dispose();
+    }
+
+    private async Task ConnectWithRetryAsync()
+    {
+        var delays = new[]
+        {
+            TimeSpan.FromSeconds(1),
+            TimeSpan.FromSeconds(2),
+            TimeSpan.FromSeconds(5),
+            TimeSpan.FromSeconds(10)
+        };
+
+        for (var attempt = 0; attempt <= delays.Length; attempt++)
+        {
+            try
+            {
+                await _daemonClient.ConnectAsync();
+                return;
+            }
+            catch when (attempt < delays.Length)
+            {
+                StatusMessage = $"Connecting... retry {attempt + 1}/{delays.Length}";
+                RequestRedraw();
+                await Task.Delay(delays[attempt]);
+            }
+        }
+
+        throw new InvalidOperationException("Unable to connect to daemon after retries.");
     }
 }

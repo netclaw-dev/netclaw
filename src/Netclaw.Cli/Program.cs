@@ -1,15 +1,9 @@
-using Akka.Hosting;
-using Akka.Persistence.Hosting;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
-using Netclaw.Actors.Channels;
-using Netclaw.Actors.Hosting;
-using Netclaw.Actors.Tools;
 using Netclaw.Channels;
 using Netclaw.Cli;
-using Netclaw.Cli.Configuration;
 using Netclaw.Cli.Daemon;
 using Netclaw.Cli.Tui;
 using Netclaw.Configuration;
@@ -106,23 +100,16 @@ static async Task RunAsync(string[] args)
         return;
     }
 
-    // ── Interactive / headless modes (transitional: full Akka stack in-process) ──
-    // Task 1.28 refactors these to connect to daemon via SignalR instead.
+    // ── Interactive / headless modes (daemon-backed via SignalR) ──
     var webBuilder = WebApplication.CreateBuilder(args);
-
-    // Transitional: use port 0 (random) to avoid conflict with daemon on 5199.
-    // Removed in Task 1.28 when CLI switches to SignalR client.
     webBuilder.WebHost.UseUrls("http://127.0.0.1:0");
 
     var sharedPaths = ConfigureConfigServices(webBuilder.Services, webBuilder.Configuration);
-    ConfigureDaemonServices(webBuilder.Services, webBuilder.Configuration, sharedPaths);
+    ConfigureCliChatServices(webBuilder.Services, webBuilder.Configuration);
 
     // Suppress framework console logging — console is reserved for the chat UI
     webBuilder.Logging.ClearProviders();
     webBuilder.Logging.SetMinimumLevel(LogLevel.Warning);
-
-    // SignalR (transitional — needed for in-process service stack)
-    webBuilder.Services.AddSignalR();
 
     // Channel selection based on mode
     switch (mode)
@@ -211,25 +198,14 @@ static NetclawPaths ConfigureConfigServices(IServiceCollection services, IConfig
     // TimeProvider (virtualized for testing)
     services.AddSingleton(TimeProvider.System);
 
-    // Providers and model resolution
-    var providers = configuration.GetSection("Providers")
-        .Get<Dictionary<string, ProviderEntry>>()
-        ?? new() { ["local-ollama"] = new ProviderEntry() };
-    var models = configuration.GetSection("Models")
-        .Get<ModelSelection>() ?? new ModelSelection();
-
-    var factory = new ChatClientFactory(providers);
-    var clientProvider = new NetclawChatClientProvider(factory, models);
-    services.AddSingleton<IChatClientProvider>(clientProvider);
-
     return paths;
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// Transitional daemon services (removed in Task 1.28 when CLI uses SignalR)
+// Daemon-backed CLI services (SignalR thin client)
 // ═══════════════════════════════════════════════════════════════════════
 
-static void ConfigureDaemonServices(IServiceCollection services, IConfigurationManager configuration, NetclawPaths paths)
+static void ConfigureCliChatServices(IServiceCollection services, IConfigurationManager configuration)
 {
     // Resolve models for session config
     var models = configuration.GetSection("Models")
@@ -248,39 +224,9 @@ static void ConfigureDaemonServices(IServiceCollection services, IConfigurationM
         MaxToolIterationsPerTurn = sessionSection.GetValue("MaxToolIterationsPerTurn", 10),
     });
 
-    // Tools (auto-bound, no required properties)
-    var toolConfig = configuration.GetSection("Tools")
-        .Get<ToolConfig>() ?? new ToolConfig();
-    services.AddSingleton(toolConfig);
-
-    var toolRegistry = new ToolRegistry();
-    toolRegistry.WithFirstPartyTools(toolConfig);
-    services.AddSingleton(toolRegistry);
-    services.AddSingleton<IToolExecutor>(new DispatchingToolExecutor(toolRegistry));
-
-    // System prompt (file-based, with first-run seed)
-    if (!File.Exists(paths.PersonalityPath))
-        File.WriteAllText(paths.PersonalityPath,
-            "You are Netclaw, a helpful homelab operations assistant. "
-            + "Be concise and direct.");
-    services.AddSingleton<ISystemPromptProvider>(
-        new FileSystemPromptProvider(paths));
-
-    // Akka.NET actor system
-    services.AddAkka("netclaw", (akkaBuilder, sp) =>
-    {
-        akkaBuilder
-            .ConfigureLoggers(setup =>
-            {
-                setup.ClearLoggers();
-                setup.AddLoggerFactory();
-                setup.LogLevel = Akka.Event.LogLevel.WarningLevel;
-            })
-            .WithInMemoryJournal()
-            .WithInMemorySnapshotStore()
-            .WithNetclawActors();
-    });
-
-    // Session pipeline (stream API for channels)
-    services.AddSingleton<SessionPipeline>();
+    var daemonEndpoint =
+        configuration["Daemon:Endpoint"]
+        ?? Environment.GetEnvironmentVariable("NETCLAW_DAEMON_ENDPOINT")
+        ?? "http://127.0.0.1:5199";
+    services.AddSingleton(new DaemonClient(daemonEndpoint));
 }

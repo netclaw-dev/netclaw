@@ -1,13 +1,10 @@
-using Akka.Actor;
-using Akka.Streams;
-using Akka.Streams.Dsl;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
-using Netclaw.Actors.Channels;
 using Netclaw.Configuration;
 using Netclaw.Actors.Protocol;
 using Netclaw.Channels;
+using Netclaw.Cli.Daemon;
 
 namespace Netclaw.Cli;
 
@@ -18,34 +15,31 @@ namespace Netclaw.Cli;
 /// </summary>
 public sealed class HeadlessChannel : IChannel
 {
-    private readonly SessionPipeline _pipeline;
-    private readonly ActorSystem _system;
+    private readonly DaemonClient _daemonClient;
     private readonly NetclawPaths _paths;
     private readonly IHostApplicationLifetime _lifetime;
     private readonly TimeProvider _timeProvider;
     private readonly string _prompt;
     private readonly ILogger<HeadlessChannel> _logger;
 
-    private MaterializedSession? _session;
+    private bool _isConnected;
 
     public string ChannelType => "headless";
     public string DisplayName => "Headless Prompt";
 
-    public ChannelHealth GetHealth() => _session is not null
+    public ChannelHealth GetHealth() => _isConnected
         ? new ChannelHealth(ChannelHealthStatus.Healthy)
-        : new ChannelHealth(ChannelHealthStatus.Disconnected, "No active session");
+        : new ChannelHealth(ChannelHealthStatus.Disconnected, "No active daemon connection");
 
     public HeadlessChannel(
-        SessionPipeline pipeline,
-        ActorSystem system,
+        DaemonClient daemonClient,
         NetclawPaths paths,
         IHostApplicationLifetime lifetime,
         TimeProvider timeProvider,
         string prompt,
         ILogger<HeadlessChannel> logger)
     {
-        _pipeline = pipeline;
-        _system = system;
+        _daemonClient = daemonClient;
         _paths = paths;
         _lifetime = lifetime;
         _timeProvider = timeProvider;
@@ -61,8 +55,8 @@ public sealed class HeadlessChannel : IChannel
 
     public async Task StopAsync(CancellationToken cancellationToken)
     {
-        if (_session is not null)
-            await _session.DisposeAsync();
+        _isConnected = false;
+        await Task.CompletedTask;
     }
 
     private async Task RunHeadlessAsync(CancellationToken stopping)
@@ -75,43 +69,48 @@ public sealed class HeadlessChannel : IChannel
             _paths.EnsureDirectoriesExist();
             var logFileName = $"{sessionId.Value.Replace("/", "-")}.log";
             var logPath = Path.Combine(_paths.LogsDirectory, logFileName);
-            var logWriter = new StreamWriter(logPath, append: false) { AutoFlush = true };
+            await using var logWriter = new StreamWriter(logPath, append: false) { AutoFlush = true };
 
             logWriter.WriteLine($"[{_timeProvider.GetUtcNow():o}] Headless session started: {sessionId}");
             logWriter.WriteLine($"[{_timeProvider.GetUtcNow():o}] PROMPT: {_prompt}");
 
-            // Create session pipeline
-            _session = await _pipeline.CreateAsync(sessionId, new SessionPipelineOptions
+            var turnCompleted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            using var subscription = _daemonClient.SessionOutput.Subscribe(output =>
             {
-                ChannelType = ChannelType
-            }, stopping);
+                HandleOutput(output, logWriter);
+                if (output is TurnCompleted)
+                    turnCompleted.TrySetResult();
+            });
 
-            // Materialize output stream → console + disk logging, exit on TurnCompleted
-            _session.Output
-                .To(Sink.ForEach<SessionOutput>(output => HandleOutput(output, logWriter)))
-                .Run(_system);
+            await _daemonClient.ConnectAsync(stopping);
+            _isConnected = true;
 
-            // Materialize input with queue and send the single prompt
-            var inputQueue = Source.Queue<ChannelInput>(16, OverflowStrategy.Backpressure)
-                .ToMaterialized(_session.Input, Keep.Left)
-                .Run(_system);
+            sessionId = new SessionId(await _daemonClient.CreateSessionAsync(ChannelType, stopping));
 
-            await inputQueue.OfferAsync(new ChannelInput
+            await _daemonClient.SendAsync(new Netclaw.Actors.Channels.ChannelInput
             {
                 SenderId = "local-user",
                 Contents = [new TextContent(_prompt)],
                 ReceivedAt = _timeProvider.GetUtcNow()
-            });
+            }, stopping);
 
             _logger.LogInformation("Headless session started: {SessionId} (log: {LogPath})", sessionId, logPath);
+
+            await turnCompleted.Task.WaitAsync(stopping);
+            _lifetime.StopApplication();
         }
         catch (OperationCanceledException ex)
         {
             _logger.LogDebug(ex, "Headless channel cancelled (shutdown)");
+            WriteFailureLog("CANCELLED", ex);
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Headless channel failed");
+            Console.Error.WriteLine($"[headless:error] {ex.Message}");
+            WriteFailureLog("FAILED", ex);
+            Environment.ExitCode = 1;
             _lifetime.StopApplication();
         }
     }
@@ -159,7 +158,6 @@ public sealed class HeadlessChannel : IChannel
             case TurnCompleted msg:
                 Log(log, $"TURN_COMPLETED: turn={msg.TurnNumber}");
                 Log(log, "SESSION_ENDED");
-                _lifetime.StopApplication();
                 break;
 
             case CompactionOutput msg:
@@ -172,5 +170,20 @@ public sealed class HeadlessChannel : IChannel
     private void Log(StreamWriter log, string message)
     {
         log.WriteLine($"[{_timeProvider.GetUtcNow():o}] {message}");
+    }
+
+    private void WriteFailureLog(string kind, Exception ex)
+    {
+        try
+        {
+            _paths.EnsureDirectoriesExist();
+            var path = Path.Combine(_paths.LogsDirectory, "headless-errors.log");
+            File.AppendAllText(path,
+                $"[{_timeProvider.GetUtcNow():o}] {kind}: {ex}\n");
+        }
+        catch
+        {
+            // Ignore secondary logging failures.
+        }
     }
 }

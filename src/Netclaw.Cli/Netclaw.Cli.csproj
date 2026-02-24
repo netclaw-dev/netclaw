@@ -1,4 +1,4 @@
-<!-- Transitional: Web SDK needed while CLI runs in-process Akka stack (Task 1.28 switches to plain SDK + SignalR client) -->
+<!-- Transitional: Web SDK retained for Termina hosting route wiring. -->
 <Project Sdk="Microsoft.NET.Sdk.Web">
 
   <PropertyGroup>
@@ -12,14 +12,10 @@
 
   <ItemGroup>
     <PackageReference Include="Termina" />
-    <!-- Transitional: Akka deps removed in Task 1.28 when ChatViewModel is refactored to SignalR -->
-    <PackageReference Include="Akka.Hosting" />
-    <PackageReference Include="Akka.Persistence.Hosting" />
-    <PackageReference Include="OllamaSharp" />
+    <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" />
   </ItemGroup>
 
   <ItemGroup>
-    <!-- Transitional: Netclaw.Actors dep removed in Task 1.28 -->
     <ProjectReference Include="..\Netclaw.Actors\Netclaw.Actors.csproj" />
     <ProjectReference Include="..\Netclaw.Configuration\Netclaw.Configuration.csproj" />
     <ProjectReference Include="..\Netclaw.Channels\Netclaw.Channels.csproj" />
