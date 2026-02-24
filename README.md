@@ -218,3 +218,8 @@ Repository operating guidance lives in:
 - `TOOLING.md`
 
 These files define how planning and implementation work should be routed.
+
+## License
+
+Netclaw is source-available under AGPLv3 with Commons Clause.
+See `LICENSE` and `LICENSE-AGPL-3.0.txt`.
