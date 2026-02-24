@@ -1,8 +1,14 @@
 namespace Netclaw.Daemon.Configuration;
 
+public enum PersistenceProvider
+{
+    Sqlite,
+    InMemory
+}
+
 public sealed class DaemonPersistenceOptions
 {
-    public string Provider { get; init; } = "Sqlite";
+    public PersistenceProvider Provider { get; init; } = PersistenceProvider.Sqlite;
 
     public SqlitePersistenceOptions Sqlite { get; init; } = new();
 }

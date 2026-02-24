@@ -86,6 +86,23 @@ STEP_TIMEOUT_SECONDS=120 scripts/smoke/check.sh
 
 - Daemon upgrade and rollback planning: `docs/runbooks/daemon-upgrade.md`
 
+## Persistence Config
+
+Daemon persistence config belongs in `~/.netclaw/config/netclaw.json` (not
+`secrets.json`). SQLite path is local file state, not a secret.
+
+```json
+{
+  "Persistence": {
+    "Provider": "Sqlite",
+    "Sqlite": {
+      "Path": "/home/your-user/.netclaw/netclaw.db",
+      "AutoMigrate": true
+    }
+  }
+}
+```
+
 ## CLI Reference
 
 ```

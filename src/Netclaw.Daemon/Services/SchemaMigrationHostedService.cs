@@ -26,7 +26,7 @@ public sealed class SchemaMigrationHostedService : IHostedService
 
     public async Task StartAsync(CancellationToken cancellationToken)
     {
-        if (!string.Equals(_options.Provider, "Sqlite", StringComparison.OrdinalIgnoreCase))
+        if (_options.Provider is not PersistenceProvider.Sqlite)
             return;
 
         if (!_options.Sqlite.AutoMigrate)

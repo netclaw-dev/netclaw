@@ -5,6 +5,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Tools;
@@ -119,6 +120,12 @@ static NetclawPaths ConfigureConfigServices(IServiceCollection services, IConfig
 
 static void ConfigureDaemonServices(IServiceCollection services, IConfigurationManager configuration, NetclawPaths paths)
 {
+    services
+        .AddOptions<DaemonPersistenceOptions>()
+        .Bind(configuration.GetSection("Persistence"))
+        .ValidateOnStart();
+    services.AddSingleton<IValidateOptions<DaemonPersistenceOptions>, DaemonPersistenceOptionsValidator>();
+
     var persistence = configuration.GetSection("Persistence")
         .Get<DaemonPersistenceOptions>() ?? new DaemonPersistenceOptions();
     services.AddSingleton(persistence);
@@ -182,7 +189,7 @@ static void ConfigureDaemonServices(IServiceCollection services, IConfigurationM
             setup.LogLevel = Akka.Event.LogLevel.WarningLevel;
         });
 
-        if (string.Equals(persistence.Provider, "Sqlite", StringComparison.OrdinalIgnoreCase))
+        if (persistence.Provider is PersistenceProvider.Sqlite)
         {
             var connectionString = $"Data Source={sqlitePath}";
             akkaBuilder = akkaBuilder.WithSqlPersistence(
