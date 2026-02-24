@@ -23,6 +23,11 @@ This directory contains product requirements for Netclaw.
 - **2026-02-21 (expanded)**: All PRDs revised to match expanded product vision.
   Netclaw is now an always-on autonomous operations agent. PRDs 007-009 added
   for local memory, scheduling, and input adapters.
+- **2026-02-23 (architecture split)**: PRDs 001, 004, 009 revised for daemon +
+  thin client architecture. Two binaries: `Netclaw.Daemon` (always-on service)
+  and `Netclaw.Cli` (lightweight TUI/CLI client connecting via SignalR). Follows
+  OpenClaw/IronClaw/PicoClaw architectural pattern. Daemon management commands
+  added. Commands categorized as offline vs daemon-required.
 
 ## Traceability Rules
 

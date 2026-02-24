@@ -2,9 +2,10 @@
 
 ## Status
 
-- State: Draft for execution (new, mostly post-MVP)
+- State: Draft for execution (revised)
 - Owner: Netclaw engineering
 - Date: 2026-02-21
+- Revised: 2026-02-23 (daemon + thin client split, TUI as SignalR client)
 - Depends on: `PRD-001`, `PRD-002`, `PRD-008`
 
 ## Goal
@@ -19,35 +20,45 @@ Everything is just a message arriving at a session actor with context-specific
 instructions. The input source is irrelevant — the differentiator is the
 instructions attached to the context.
 
-All inputs produce a `SendUserMessage` command routed to the session parent
-actor. The session parent extracts an entity key and routes to the correct
+Adapters fall into two categories based on where they run:
+
+- **Daemon-side adapters** (Slack, timer) — run in-process within the daemon,
+  use `SessionPipeline` directly. These have no connected client to delegate to.
+- **Client-side adapters** (TUI, CLI, future web UI) — run in a separate process,
+  connect to the daemon over SignalR. These are thin presentation layers.
+
+All inputs ultimately produce a `SendUserMessage` command routed to the session
+parent actor. The session parent extracts an entity key and routes to the correct
 child session actor.
 
 ## Input Source Taxonomy
 
 | Input Source          | Delivery Mechanism                          | Phase | Entity Key Pattern |
 |-----------------------|---------------------------------------------|-------|--------------------|
-| Local TUI             | `netclaw chat` in-process                   | 1     | `tui/{sessionId}` |
-| User @mention         | Slack Socket Mode                           | 1     | `{channelId}/{threadTs}` |
-| Scheduled task        | Internal Akka timer                         | 1     | `schedule/{taskId}/{runTs}` |
+| Local TUI             | `netclaw chat` → SignalR to daemon          | 1     | `tui/{sessionId}` |
+| User @mention         | Slack Socket Mode (daemon in-process)       | 1     | `{channelId}/{threadTs}` |
+| Scheduled task        | Internal Akka timer (daemon in-process)     | 1     | `schedule/{taskId}/{runTs}` |
+| CLI commands          | `netclaw <cmd>` → SignalR/HTTP to daemon    | 1     | n/a (request/response) |
 | Ambient channel alert | Slack Socket Mode (require_mention: false)  | 2     | `{channelId}/{threadTs}` |
 | Webhook (GitHub, CI)  | HTTP via Tailscale Serve / Cloudflare Tunnel| 2     | `webhook/{source}/{eventId}` |
 | Web UI (future)       | WebSocket / HTTP                            | 5     | `web/{sessionId}` |
 
 ### MVP Input Adapters
 
-**Local TUI Adapter** (Phase 1):
-- Hosted in-process by `netclaw chat` command (daemon mode — full service stack)
-- Uses `SessionPipeline` directly — no SignalR indirection for in-process channels
+**TUI Client Adapter** (Phase 1):
+- Runs in the `Netclaw.Cli` binary, separate process from the daemon
+- Connects to daemon's SignalR hub at `http://127.0.0.1:5199/hub/session`
+- Pure thin client — all agent logic, tool execution, and persistence live in
+  the daemon
 - Receives keyboard input via Termina TextInputNode
-- Pushes `ChannelInput` to `SessionPipeline` input sink
-- Subscribes to `SessionOutput` source for rendering
+- Sends `ChannelInput` to daemon over SignalR
+- Subscribes to `SessionOutput` stream over SignalR for rendering
 - Renders responses as streaming text via StreamingTextNode
 - Displays tool invocation status inline (name, duration, spinner)
-- Shows MCP server connectivity in status bar
-- Full actor system runs in-process — validates entire agent stack locally
+- Shows model name, token usage, and context percentage in status bar
 
 **Slack Socket Mode Adapter** (Phase 1):
+- Runs in-process within the daemon
 - Connects via Slack's WebSocket-based Socket Mode
 - Receives `message` and `app_mention` events
 - Extracts entity key: `{channelId}/{threadTs}`
@@ -56,6 +67,7 @@ child session actor.
 - Posts reply messages back to originating Slack thread
 
 **Internal Timer Adapter** (Phase 1):
+- Runs in-process within the daemon
 - Fires on Akka timer ticks for scheduled tasks
 - Creates `SendUserMessage` with task instruction as content
 - Uses entity key: `schedule/{taskId}/{runTs}`
@@ -76,12 +88,9 @@ child session actor.
 - Each webhook hit creates a new session with source-specific instructions
 
 **Web UI Adapter** (Phase 5):
-- Connects via SignalR hub (`/hub/session`) — the gateway surface documented in
-  SPEC-011
+- Connects via SignalR hub (`/hub/session`) — same transport as the TUI client
 - Provides interactive session control and real-time updates
-- Same `SessionPipeline` abstraction as all other channels
-- SignalR hub is mapped from Phase 1 (for future remote clients) but not used
-  by TUI or headless modes
+- Same `SessionOutput`/`ChannelInput` protocol as the TUI adapter
 
 ## Adapter Contract
 
@@ -152,10 +161,11 @@ and audit logging: adapter type, sender identity, channel, timestamp.
 
 ### INPUT-005 TUI Adapter
 
-The TUI adapter SHALL receive keyboard input via Termina TextInputNode, produce
-`SendUserMessage` commands with entity key `tui/{sessionId}`, subscribe to
-session broadcasts, and render responses as streaming text. The TUI adapter
-SHALL display tool invocation status inline between user message and response.
+The TUI adapter SHALL connect to the daemon's SignalR hub, create a session,
+send `ChannelInput` messages, and subscribe to `SessionOutput` for rendering.
+The TUI adapter is a pure thin client running in the `Netclaw.Cli` binary —
+all agent logic lives in the daemon. The TUI adapter SHALL display tool
+invocation status inline between user message and response.
 
 ## Acceptance Criteria (MVP)
 
@@ -176,7 +186,8 @@ SHALL display tool invocation status inline between user message and response.
 
 - Session architecture: PRD-001 (FR-001, FR-002, FR-008)
 - Security (ACL per source): PRD-002
+- CLI and daemon management: PRD-004
 - Scheduling (timer source): PRD-008
 - Ops console (web UI source): PRD-003
 - Daemon architecture and gateway surface: SPEC-011
-- SessionPipeline and channel abstraction: `src/Netclaw.Actors/Channels/ChannelPipeline.cs`
+- SessionPipeline and channel abstraction: `src/Netclaw.Actors/Channels/`

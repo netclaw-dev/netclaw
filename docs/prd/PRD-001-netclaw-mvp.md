@@ -6,6 +6,7 @@
 - Owner: Netclaw engineering
 - Date: 2026-02-21
 - Revised: 2026-02-21 (expanded product vision)
+- Revised: 2026-02-23 (daemon + thin client split)
 
 ## Problem Statement
 
@@ -29,11 +30,16 @@ Everything is just a message arriving at a session actor with context-specific
 instructions. The input source (Slack, webhook, timer, future web UI) is
 irrelevant — the differentiator is the instructions attached to the context.
 
+All external clients — TUI, CLI commands, future web UI — connect to the daemon
+over SignalR. The daemon owns all agent logic, tool execution, persistence, and
+channel management. Clients are thin presentation layers.
+
 | Input Source          | Delivery Mechanism                          | MVP? |
 |-----------------------|---------------------------------------------|------|
-| Local TUI             | `netclaw chat` in-process                   | Yes  |
-| User @mention         | Slack Socket Mode                           | Yes  |
-| Scheduled task        | Internal timer                              | Yes  |
+| Local TUI             | `netclaw chat` → SignalR to daemon          | Yes  |
+| User @mention         | Slack Socket Mode (in daemon)               | Yes  |
+| Scheduled task        | Internal timer (in daemon)                  | Yes  |
+| CLI commands          | `netclaw <cmd>` → SignalR/HTTP to daemon    | Yes  |
 | Ambient channel alert | Slack Socket Mode (require_mention: false)  | No   |
 | Webhook (GitHub, CI)  | HTTP via Tailscale Serve / Cloudflare Tunnel| No   |
 | Web UI (future)       | WebSocket / HTTP                            | No   |
@@ -55,37 +61,76 @@ irrelevant — the differentiator is the instructions attached to the context.
 10. Agent can modify its own configuration through conversation.
 11. MCP integration provides external memory (Memorizer) and tool capabilities.
 
-## Daemon Architecture
+## Daemon + Thin Client Architecture
 
-Netclaw runs as a single OS process. All components — Akka actor system,
-persistence, gateway endpoints, TUI, and tool execution — share one process
-boundary. This is validated by architecture research across comparable projects
-(see `docs/research/agent-gateway-architecture.md`).
+Netclaw is split into two binaries following the same pattern as OpenClaw,
+IronClaw, and PicoClaw:
 
-The executable supports multiple modes selected by command-line arguments:
+- **`Netclaw.Daemon`** — always-on background service. Owns the Akka actor
+  system, persistence, tool execution, Slack adapter, scheduled tasks, SignalR
+  hub, and health endpoints. Runs as a user-level systemd service or foreground
+  process.
+- **`Netclaw.Cli`** — lightweight CLI and TUI client. Connects to the running
+  daemon over SignalR for commands that need runtime state. Some commands (config,
+  doctor, init) work offline by reading local files directly.
 
-| Mode | Command | Description |
-|------|---------|-------------|
-| Daemon | `netclaw run` | Full service stack. Slack, schedules, SignalR hub, health endpoint. |
-| Chat | `netclaw chat` | Full service stack + Termina TUI. Interactive chat via `SessionPipeline`. |
-| Headless | `netclaw -p "..."` | Full service stack + headless client. Single turn, exits on completion. |
-| Init | `netclaw init` | Lightweight. Config services only, no Akka/persistence. Reentrant TUI wizard. |
-| Doctor | `netclaw doctor` | Lightweight. Config services only. Health checks and diagnostics. |
+### Why Two Binaries
 
-In-process channels (TUI, headless) use `SessionPipeline` directly — no network
-hop. The SignalR hub exists for future remote clients (Blazor ops console) and
-uses the same `SessionPipeline` internally.
+The daemon loads Akka, ASP.NET, persistence providers, and tool execution
+frameworks — heavy dependencies that slow startup. The CLI only needs Termina
+(for TUI), a SignalR client, and config file reading. Keeping them separate means
+the CLI starts instantly.
 
-Tools execute on the host process. This is the only model that works for Slack
-(no client to delegate to), scheduled tasks (autonomous), and Docker deployment
-(tools need access to the host's Docker socket).
+### Daemon (`netclawd` / `netclaw daemon start`)
+
+| Component | Description |
+|-----------|-------------|
+| Akka actor system | Session actors, persistence, scheduling |
+| SessionPipeline | Akka.Streams typed input/output channels |
+| SignalR hub | `/hub/session` — primary client API |
+| Slack adapter | Socket Mode, in-process channel |
+| Tool execution | Shell, web fetch, GitHub CLI, MCP |
+| Health endpoint | `GET /api/health/ready` |
+| Config hot-reload | FileSystemWatcher on `~/.netclaw/` |
+
+The daemon binds `http://127.0.0.1:5199` (loopback only). It can be registered
+as a systemd user service (`systemctl --user`, no sudo required) or run in the
+foreground for development.
+
+### CLI Client (`netclaw`)
+
+The CLI connects to the daemon via SignalR when needed. If the daemon isn't
+running and a command requires it, the CLI prints an error with instructions
+(`Daemon not running. Start it with: netclaw daemon start`).
+
+| Category | Commands | Needs Daemon? |
+|----------|----------|---------------|
+| Daemon management | `daemon start\|stop\|status\|install` | No (manages the daemon itself) |
+| Interactive chat | `chat` | Yes (SignalR thin client) |
+| Onboarding | `init` | No (reads/writes local config files) |
+| Diagnostics | `doctor` | No (reads config, probes services) |
+| Configuration | `config show\|validate` | No (reads local files) |
+| Personality | `personality reset` | No (resets local files) |
+| Sessions | `session list\|inspect\|compact` | Yes (queries daemon state) |
+| Tools | `tools list\|policy` | Yes (queries daemon registry) |
+| MCP | `mcp list\|validate\|test` | Yes (queries daemon connections) |
+| Scheduling | `schedule list\|show\|pause\|resume\|delete` | Yes (queries daemon timers) |
+| Memory | `memory show` | Yes (queries daemon memory) |
+| Projects | `project list\|add\|remove` | No (reads/writes local files) |
+| Environment | `environment scan\|show` | No (scans local system) |
+| ACL | `acl validate\|test\|explain` | Yes (tests against running policy engine) |
+| Testing | `test smoke` | Yes (end-to-end through daemon) |
+
+Tools execute on the daemon host process. This is the only model that works for
+Slack (no client to delegate to), scheduled tasks (autonomous), and Docker
+deployment (tools need access to the host's Docker socket). The TUI is a pure
+presentation layer — it renders tool call/result output but does not execute
+tools.
 
 See `SPEC-011-daemon-architecture.md` for full specification.
 
 ## Non-Goals (MVP)
 
-- Multi-process gateway/agent split (validated by architecture research —
-  single-process is the correct model for homelab/personal agent use)
 - Ambient channel monitoring with per-channel instructions
 - Webhook ingress (Tailscale Serve / Cloudflare Tunnel)
 - Sub-agent model routing (cheaper models for high-token tasks)
@@ -244,7 +289,8 @@ schedule changes → timer reconfiguration).
 
 ## Operational Requirements
 
-- Single-process host deployment on `pi1`
+- Daemon deploys as a user-level systemd service on `pi1` (no sudo required)
+- CLI binary is a separate lightweight executable
 - No required public inbound HTTP path for base Slack operation
 - Secure failure mode: invalid policy/config blocks startup
 - CI/CD test path does not require live model provider credentials

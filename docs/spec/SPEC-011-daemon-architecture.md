@@ -4,147 +4,257 @@ Source PRDs: `PRD-001`, `PRD-002`, `PRD-004`
 
 ## Purpose
 
-Define the single-process daemon model, mode selection, gateway surface,
-configuration hot-reload, and deployment model for Netclaw.
+Define the daemon + thin client architecture, binary split, SignalR transport,
+daemon lifecycle management, command routing, and deployment model for Netclaw.
 
 This spec complements:
-- `SPEC-001` (runtime boundaries — logical separation within the process)
+- `SPEC-001` (runtime boundaries — logical separation within the daemon)
 - `SPEC-004` (CLI contract — command surface)
 - `SPEC-006` (gateway exposure — network access controls)
 - `SPEC-007` (guided onboarding — init wizard flow)
 
-Research basis: `docs/research/agent-gateway-architecture.md` — analysis of
-OpenClaw, IronClaw, and ZeroClaw validates single-process architecture for
-homelab/personal agent use.
+Architecture follows the pattern established by OpenClaw, IronClaw, and PicoClaw:
+a persistent daemon process with thin CLI/TUI clients connecting over a local
+transport.
 
-## Single-Process Model
+## Two-Binary Architecture
 
-Netclaw runs as a single OS process. All components — Akka actor system,
-persistence, gateway endpoints, TUI, and tool execution — share one process
-boundary. This matches the consensus architecture from OpenClaw, IronClaw, and
-ZeroClaw.
+Netclaw ships as two binaries with distinct dependency profiles:
 
-The CLI/TUI is "just another channel" that uses the same `SessionPipeline`
-abstraction as any other channel adapter (Slack, scheduled tasks, webhooks).
+### `Netclaw.Daemon`
 
-### Logical Boundaries (within one process)
+Always-on background service. Owns all agent logic, persistence, tool execution,
+and channel management.
 
 ```
-┌────────────────────────────────────────────────────────────┐
-│                     Netclaw Process                        │
-│                                                            │
-│  ┌──────────────────┐  ┌────────────────────────────────┐  │
-│  │   Presentation   │  │          Gateway               │  │
-│  │                  │  │                                │  │
-│  │  Termina TUI     │  │  SignalR Hub (/hub/session)   │  │
-│  │  Headless Client │  │  Health Probe (/api/health)   │  │
-│  └────────┬─────────┘  └──────────────┬─────────────────┘  │
-│           │                           │                    │
-│           ▼                           ▼                    │
-│  ┌─────────────────────────────────────────────────────┐   │
-│  │              SessionPipeline                        │   │
-│  │   (Akka.Streams — typed Input/Output channels)      │   │
-│  └────────────────────────┬────────────────────────────┘   │
-│                           │                                │
-│  ┌────────────────────────▼────────────────────────────┐   │
-│  │           Akka Actor System                         │   │
-│  │   SessionManager → LlmSessionActor (per session)   │   │
-│  │   Persistence (journal + snapshots)                 │   │
-│  │   Tool Execution (shell, file, MCP)                 │   │
-│  └─────────────────────────────────────────────────────┘   │
-└────────────────────────────────────────────────────────────┘
+Netclaw.Daemon Process
+├── ASP.NET Host (WebApplication)
+│   ├── SignalR Hub (/hub/session)     ← primary client API
+│   └── Health Probe (/api/health/ready)
+│
+├── SessionPipeline (Akka.Streams — typed Input/Output channels)
+│
+├── Akka Actor System
+│   ├── SessionManager → LlmSessionActor (per session)
+│   ├── ScheduleManagerActor (scheduled tasks)
+│   ├── Persistence (journal + snapshots)
+│   └── ToolRegistry + IToolExecutor
+│
+├── Channel Adapters (in-process)
+│   ├── Slack Socket Mode
+│   └── Internal Timer
+│
+├── ConfigWatcherService (FileSystemWatcher hot-reload)
+└── ISystemPromptProvider (layered soul files)
 ```
 
-In-process channels (TUI, headless) call `SessionPipeline.CreateAsync()`
-directly — no network hop. The SignalR hub uses the same `SessionPipeline`
-for remote clients.
+SDK: `Microsoft.NET.Sdk.Web`
+Key dependencies: Akka.NET, Akka.Persistence, ASP.NET Core (SignalR server),
+Netclaw.Actors, Netclaw.Configuration, OllamaSharp / OpenAI client
 
-## Mode Selection
+Binds: `http://127.0.0.1:5199` (loopback only, configurable)
 
-The executable supports multiple modes selected by command-line arguments.
-Modes fall into two categories based on service requirements.
+### `Netclaw.Cli`
 
-### Daemon Modes (full service stack)
+Lightweight CLI and TUI client. No actor system, no persistence, no tool
+execution.
 
-These modes boot the complete service stack: Akka actor system, persistence,
-`SessionPipeline`, tool registry, SignalR hub, and health endpoint.
+```
+Netclaw.Cli Process
+├── Command Router (args[0] dispatch)
+│
+├── TUI Commands (Termina)
+│   ├── ChatPage → SignalR client → daemon
+│   └── InitWizardPage → local file I/O
+│
+├── Daemon Management
+│   ├── start/stop/status (process control)
+│   └── install/uninstall (systemd user service)
+│
+├── Plain CLI Commands
+│   ├── Offline: config, doctor, project, environment, personality
+│   └── Daemon-required: session, tools, mcp, schedule, memory, acl, test
+│
+└── SignalR Client (Microsoft.AspNetCore.SignalR.Client)
+    └── Connects to daemon at http://127.0.0.1:5199/hub/session
+```
+
+SDK: `Microsoft.NET.Sdk`
+Key dependencies: Termina, Microsoft.AspNetCore.SignalR.Client,
+Netclaw.Actors (protocol types only), Netclaw.Configuration
+
+### Shared Libraries
+
+Both binaries reference these class libraries:
+
+- **`Netclaw.Actors`** — protocol types (`SessionOutput`, `ChannelInput`,
+  `SessionId`), actor interfaces. The CLI only uses the protocol types for
+  SignalR serialization — it does not host actors.
+- **`Netclaw.Configuration`** — `SessionConfig`, `ProviderEntry`,
+  `ModelSelection`, `NetclawPaths`. Used by the CLI for config file operations
+  and by the daemon for runtime configuration.
+
+## SignalR Hub Contract
+
+The SignalR hub at `/hub/session` is the primary API between clients and the
+daemon. Both the TUI and daemon-required CLI commands use this transport.
+
+### Client → Server (Hub Methods)
+
+```
+CreateSession(channelType: string) → sessionId: string
+SendMessage(sessionId: string, text: string) → void
+CompactSession(sessionId: string) → void
+ListSessions() → SessionSummary[]
+GetSessionState(sessionId: string) → SessionStateDto
+ListTools() → ToolSummary[]
+ListSchedules() → ScheduleSummary[]
+// Additional methods per CLI command requirements
+```
+
+### Server → Client (Callbacks)
+
+```
+ReceiveOutput(output: SessionOutputDto) → void
+```
+
+`SessionOutputDto` is a wire-safe mapping of the `SessionOutput` discriminated
+union. The mapper handles union → flat DTO conversion for SignalR serialization.
+
+### Connection Lifecycle
+
+1. Client connects to `http://127.0.0.1:5199/hub/session`
+2. For chat: client calls `CreateSession("tui")` → receives session ID
+3. Client subscribes to output via `ReceiveOutput` callback
+4. Client sends messages via `SendMessage(sessionId, text)`
+5. Daemon streams `SessionOutput` events back to client
+6. Client disconnects on exit — daemon keeps session alive for reconnection
+
+## Command Routing
+
+Commands fall into three categories based on their runtime requirements:
+
+### Daemon Management (no daemon required)
+
+These commands manage the daemon process itself. They work whether or not the
+daemon is running.
 
 | Command | Behavior |
 |---------|----------|
-| `netclaw run` | Daemon only. Hosts actors, gateway, Slack adapter, scheduler. Runs as a service. |
-| `netclaw chat` | Daemon + Termina TUI. Interactive chat via `SessionPipeline`. |
-| `netclaw -p "prompt"` | Daemon + headless client. Single turn via `SessionPipeline`, exits on `TurnCompleted`. |
+| `netclaw daemon start` | Start daemon as background process |
+| `netclaw daemon stop` | Stop running daemon gracefully |
+| `netclaw daemon status` | Report running/stopped, PID, uptime |
+| `netclaw daemon install` | Register systemd user service |
+| `netclaw daemon uninstall` | Remove service registration |
 
-### Lightweight Modes (config services only)
+### Offline Commands (no daemon required)
 
-These modes boot a minimal host with configuration services only. No Akka
-actor system, no persistence, no SignalR, no tool execution.
+These commands read/write local files in `~/.netclaw/` and scan the local
+system. They never connect to the daemon.
 
 | Command | Behavior |
 |---------|----------|
-| `netclaw init` | Reentrant TUI wizard for provider/model/Slack/MCP configuration. |
-| `netclaw doctor` | Health checks against config files and provider connectivity. |
+| `netclaw init` | TUI onboarding wizard (config file I/O) |
+| `netclaw doctor` | Validate config, probe services |
+| `netclaw config show` | Dump merged config to stdout |
+| `netclaw config validate` | Check config for errors |
+| `netclaw project list\|add\|remove` | Manage project registry (local files) |
+| `netclaw environment scan\|show` | Discover local system capabilities |
+| `netclaw personality reset` | Reset soul file to default |
 
-### Service Registration Split
+### Daemon-Required Commands
 
-Shared services (all modes):
-- `NetclawPaths` — directory layout
-- `IConfiguration` chain — netclaw.json + secrets.json + NETCLAW_* env vars
-- `ChatClientFactory` — creates `IChatClient` from provider config
-- `IChatClientProvider` — resolves clients by model role
-- `TimeProvider` — virtualized time
+These commands connect to the daemon over SignalR. If the daemon isn't running,
+the CLI prints an error and exits with code 1:
 
-Daemon-only services:
-- Akka actor system (with `WithNetclawActors()`)
-- Persistence (journal + snapshot store)
-- `SessionPipeline` — stream factory for channels
-- `ToolRegistry` + `IToolExecutor` — tool execution
-- `ISystemPromptProvider` — layered system prompt assembly
-- `ConfigWatcherService` — file system hot-reload
-- SignalR hub
-
-### Host Selection
-
-Lightweight modes use `Host.CreateApplicationBuilder()` (standard .NET host).
-Daemon modes use `WebApplication.CreateBuilder()` (ASP.NET host for SignalR
-and health endpoints).
-
-## Gateway Surface
-
-### Phase 1 (MVP)
-
-Minimal external surface. In-process channels are the primary interaction model.
-
-**SignalR Hub** (`/hub/session`):
-Mapped and documented for future remote clients (Blazor ops console, remote
-CLI). Not actively used by the TUI or headless modes in Phase 1.
-
-Contract:
 ```
-Client → Server:
-  CreateSession(channelType: string) → sessionId: string
-  SendMessage(sessionId: string, text: string) → void
-
-Server → Client:
-  ReceiveOutput(output: SessionOutputDto) → void
+Error: Daemon not running.
+Start it with: netclaw daemon start
 ```
 
-`SessionOutputDto` is a wire-safe mapping of `SessionOutput` (the actor
-protocol type). The mapper handles discriminated union → flat DTO conversion.
+| Command | Behavior |
+|---------|----------|
+| `netclaw chat` | TUI thin client (streaming SignalR session) |
+| `netclaw session list\|inspect\|compact` | Query session state |
+| `netclaw tools list\|policy` | Query tool registry |
+| `netclaw mcp list\|validate\|test` | Query MCP connections |
+| `netclaw schedule list\|show\|pause\|resume\|delete` | Manage scheduled tasks |
+| `netclaw memory show` | Query agent memory |
+| `netclaw acl validate\|test\|explain` | Test against running policy engine |
+| `netclaw test smoke` | End-to-end smoke test |
 
-**Health Probe** (`GET /api/health/ready`):
-Returns `200 OK` when the host is accepting connections. Used for Docker
-health checks and external monitoring.
+## Daemon Lifecycle Management
 
-### Future Phases
+### Process Control
 
-REST endpoints for schedule CRUD, project management, tool listing, etc. will
-be added when remote clients (Blazor ops console) require them. The ASP.NET
-pipeline is already in place — no architectural debt.
+`netclaw daemon start` spawns the daemon as a detached background process.
+The daemon writes its PID to `~/.netclaw/netclaw.pid` for lifecycle management.
+
+`netclaw daemon stop` reads the PID file and sends SIGTERM for graceful
+shutdown. The daemon handles SIGTERM by draining active sessions and stopping
+the actor system cleanly.
+
+`netclaw daemon status` checks the PID file and verifies the process is alive.
+Reports: running/stopped, PID, uptime, port, number of active sessions.
+
+### Service Registration (Linux)
+
+`netclaw daemon install` creates a systemd user service at
+`~/.config/systemd/user/netclaw.service`:
+
+```ini
+[Unit]
+Description=Netclaw Agent Daemon
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/path/to/netclawd
+Restart=always
+RestartSec=5
+Environment=DOTNET_ENVIRONMENT=Production
+
+[Install]
+WantedBy=default.target
+```
+
+No sudo required. Uses `systemctl --user enable netclaw` and
+`loginctl enable-linger $USER` to survive user logout.
+
+`netclaw daemon uninstall` stops the service and removes the unit file.
+
+### Service Registration (macOS)
+
+`netclaw daemon install` creates a LaunchAgent at
+`~/Library/LaunchAgents/com.stannardlabs.netclaw.plist` with `KeepAlive=true`
+and `RunAtLoad=true`.
+
+## TUI Chat Client
+
+`netclaw chat` is a pure thin client. It contains no agent logic, tool
+execution, or persistence. The architecture:
+
+```
+ChatPage (Termina rendering)
+    ↕ binds to
+ChatViewModel (reactive state)
+    ↕ uses
+SignalR Client Adapter
+    ↕ connects to
+Daemon SignalR Hub (/hub/session)
+```
+
+The `ChatViewModel` interface remains the same as the current in-process
+implementation — it exposes `IObservable<SessionOutput>` and accepts
+`SubmitAsync(text)`. The only change is the backend: SignalR client instead of
+direct `SessionPipeline`.
+
+`ChatPage` does not change at all. Same rendering, same paste debounce, same
+status bar, same tool call spinners.
 
 ## Tool Execution Model
 
-Tools execute on the host process. The daemon runs shell commands, file
+Tools execute on the daemon host process. The daemon runs shell commands, file
 operations, Docker commands, and MCP tool calls. This is the only model that
 works for:
 
@@ -192,59 +302,64 @@ not execute tools.
 All changes go to disk first. The `FileSystemWatcher` is the single reload
 trigger — there is no in-memory config mutation path.
 
-## Reentrant Init Wizard
-
-`netclaw init` is designed for both first-run and reconfiguration.
-
-### First Run
-
-Linear guided flow through all sections (per SPEC-007). Config written
-incrementally as each section completes.
-
-### Subsequent Runs
-
-Dashboard view showing current configuration state per section. Each section
-shows status (configured/unconfigured/error). Operator can jump to any section
-to modify or add entries.
-
-### Sections
-
-| Section | Purpose |
-|---------|---------|
-| Providers | Add/modify LLM provider endpoints and credentials |
-| Models | Assign provider + model to each role (main, fallback, compaction) |
-| Slack | Bot token, app token, Socket Mode configuration |
-| Persistence | PostgreSQL connection string (future, in-memory for MVP) |
-| MCP | Add/modify MCP server connections |
-| Exposure | Choose network exposure mode (local/tailscale/cloudflare) |
-| Health Check | Run validation across all configured services |
-
-### Provider Onboarding Flow (within Providers section)
-
-1. Choose provider type (Ollama, OpenRouter, future: Anthropic, OpenAI)
-2. Enter endpoint URL
-3. Enter API key (if required, masked input)
-4. Test connectivity (direct HTTP to provider endpoint)
-5. List available models from provider
-6. Select default model
-7. Write to `netclaw.json` / `secrets.json`
-
-This is a local operation — the wizard calls `ChatClientFactory` and provider
-APIs directly through DI. No daemon or REST endpoint required.
-
 ## Security Context
 
-Every connection (SignalR, in-process channel) carries a `ChannelSecurityContext`
-that identifies the trust level.
+Every SignalR connection carries a `ChannelSecurityContext` that identifies the
+trust level.
 
 | Level | Description | Phase |
 |-------|-------------|-------|
-| `LocalOperator` | Local connection, full trust | Phase 1 (MVP) |
+| `LocalOperator` | Loopback connection, full trust | Phase 1 (MVP) |
 | `Authenticated` | Validated remote sender, ACL-gated | Future |
 | `Anonymous` | Default deny | Future |
 
-In Phase 1, all connections are `LocalOperator` and the gateway binds
+In Phase 1, all connections are `LocalOperator` and the daemon binds
 loopback-only (SEC-005).
+
+## Distribution and Installation
+
+Netclaw ships as a single tarball containing both binaries. The user adds
+`netclaw` to their `PATH` — the CLI binary handles everything including
+launching the daemon.
+
+### Package Layout
+
+```
+netclaw-{version}-{os}-{arch}.tar.gz
+├── netclaw          # CLI binary (goes on PATH)
+├── netclawd         # Daemon binary (managed by CLI)
+└── README.md        # Quick start
+```
+
+### Installation
+
+```bash
+# Extract and add to PATH
+tar xzf netclaw-*.tar.gz -C ~/.local/share/netclaw/
+ln -s ~/.local/share/netclaw/netclaw ~/.local/bin/netclaw
+
+# Or system-wide
+sudo tar xzf netclaw-*.tar.gz -C /usr/local/lib/netclaw/
+sudo ln -s /usr/local/lib/netclaw/netclaw /usr/local/bin/netclaw
+```
+
+### Binary Discovery
+
+The CLI locates the daemon binary by checking (in order):
+1. Same directory as the CLI binary (`Path.GetDirectoryName(Assembly.Location)`)
+2. `NETCLAW_DAEMON_PATH` environment variable (override)
+
+When `netclaw daemon start` is invoked, the CLI spawns `netclawd` from the
+discovered path as a detached background process.
+
+### .NET Tool Distribution (future)
+
+For .NET developers, Netclaw can also be distributed as a .NET global tool:
+```bash
+dotnet tool install --global netclaw
+```
+This installs both binaries via NuGet package. The `netclaw` tool shim handles
+PATH automatically.
 
 ## Docker Deployment Model
 
@@ -254,18 +369,16 @@ Recommended production deployment:
 docker run -d \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v ~/.netclaw:/root/.netclaw \
-  -p 127.0.0.1:5000:5000 \
-  netclaw run
+  -p 127.0.0.1:5199:5199 \
+  netclaw-daemon
 ```
 
 - Docker socket mount enables host container management
 - Config volume persists across container restarts
 - Port binding on loopback only (SEC-005 default)
 - Container includes Docker CLI, git, and other management tools
-
-Tools executed by the agent (shell commands, Docker operations) run inside the
-container and reach the host Docker daemon via the mounted socket. This is the
-same pattern used by Portainer, Watchtower, and Dockge.
+- Only the daemon runs in Docker — the CLI runs on the host and connects
+  to the daemon's exposed SignalR port
 
 ## Cross-References
 
@@ -276,4 +389,3 @@ same pattern used by Portainer, Watchtower, and Dockge.
 - Operator UI: SPEC-005
 - Gateway exposure: SPEC-006
 - Guided onboarding: SPEC-007
-- Architecture research: `docs/research/agent-gateway-architecture.md`

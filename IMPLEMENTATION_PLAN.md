@@ -1,6 +1,6 @@
 # Netclaw Implementation Plan
 
-Last updated: 2026-02-21
+Last updated: 2026-02-23
 Mode: build
 
 This file is RALPH-consumable.
@@ -349,71 +349,166 @@ Done when:
 > **Note:** GitHub CLI access is handled via `shell_execute` + `gh` — no dedicated tool needed.
 > Web search and web fetch deferred — shell + file tools are sufficient to prove the concept.
 
-### Task 1.10: Full provider abstraction with MEAI and fallback
+### Task 1.10: Multi-provider config system (DONE)
 
 **PRD:** `docs/prd/PRD-005-model-provider-strategy.md`
-**OpenSpec:** `openspec/specs/netclaw-model-providers/spec.md`
 **Surface area:** provider integration
 **Verification:** L2
 **Previously:** Task 1.8 (remainder — multi-provider, fallback)
 
 Done when:
-- [ ] `IChatClient` provider registration via DI (OpenRouter, Anthropic, OpenAI, Ollama).
-- [ ] Primary + fallback model with automatic failover on rate limit/timeout/error.
-- [ ] Tool calling through MEAI tool calling API.
-- [ ] CI tests pass without live provider credentials.
-- [ ] Tests for provider switching, fallback activation, tool calling round-trip.
+- [x] `Netclaw.Configuration` library with `ChatClientFactory`, `ProviderEntry`, `ModelSelection`.
+- [x] `NetclawChatClientProvider` resolves clients by model role (main, compaction).
+- [x] Layered config chain: netclaw.json + secrets.json + NETCLAW_* env vars.
+- [x] Multi-provider support (Ollama, OpenRouter via OpenAI adapter).
+- [ ] Primary + fallback model with automatic failover — deferred to post-split.
 
-### Task 1.11: Daemon architecture scaffold with mode routing
+### Task 1.11: Daemon architecture scaffold (DONE)
 
-**PRD:** `docs/prd/PRD-004-cli-onboarding-and-config.md` (CLI-010, CLI-012)
+**PRD:** `docs/prd/PRD-004-cli-onboarding-and-config.md`
 **Spec:** `docs/spec/SPEC-011-daemon-architecture.md`
-**OpenSpec:** `openspec/specs/netclaw-cli/spec.md`
-**OpenSpec Changes:** `openspec/changes/add-tui-adapter-and-config-hot-reload/` (Section 1)
 **Surface area:** CLI framework + gateway
 **Verification:** L1
-**Previously:** Task 1.13
-
-Replaces the bare console loop with mode-selected startup per SPEC-011.
-Daemon modes use `WebApplication.CreateBuilder()` (ASP.NET host for SignalR
-and health endpoints). Lightweight modes use `Host.CreateApplicationBuilder()`.
-Cocona is archived (Dec 2025) — replaced with simple arg routing.
 
 Done when:
-- [ ] Termina and System.Reactive package references added to `Directory.Packages.props`.
-- [ ] `Netclaw.App.csproj` SDK changed to `Microsoft.NET.Sdk.Web`, Termina added, Hosting removed.
-- [ ] `Program.cs` rewritten with mode routing: `run`/`chat`/headless use `WebApplication`, `init`/`doctor` use `Host`.
-- [ ] Shared config services extracted to `ConfigureConfigServices()` method.
-- [ ] Daemon-only services extracted to `ConfigureDaemonServices()` method.
-- [ ] SignalR hub mapped at `/hub/session` (stub — Phase 1 placeholder).
-- [ ] Health probe mapped at `/api/health/ready`.
-- [ ] `ConsoleChannel.cs` deleted (replaced by Termina TUI).
-- [ ] `dotnet build` passes with new dependencies.
+- [x] Termina and System.Reactive package references added to `Directory.Packages.props`.
+- [x] `Netclaw.App.csproj` SDK changed to `Microsoft.NET.Sdk.Web`, Termina added.
+- [x] `Program.cs` with mode routing: `run`/`chat`/headless use `WebApplication`, `init`/`doctor` use `Host`.
+- [x] Shared config services extracted to `ConfigureConfigServices()` method.
+- [x] Daemon-only services extracted to `ConfigureDaemonServices()` method.
+- [x] SignalR hub stub mapped at `/hub/session`.
+- [x] Health probe mapped at `/api/health/ready`.
+- [x] `ConsoleChannel.cs` deleted (replaced by Termina TUI).
+- [x] Crash logging to `~/.netclaw/logs/crash-{timestamp}.log`.
 
-### Task 1.12: TUI chat adapter (`netclaw chat`)
+### Task 1.12: TUI chat adapter — in-process prototype (DONE)
 
-**PRD:** `docs/prd/PRD-004-cli-onboarding-and-config.md` (CLI-011), `docs/prd/PRD-009-input-adapters-and-unified-input.md` (INPUT-005)
-**Spec:** `docs/spec/SPEC-011-daemon-architecture.md`
-**OpenSpec:** `openspec/specs/netclaw-input-adapters/spec.md`, `openspec/specs/netclaw-cli/spec.md`
-**OpenSpec Changes:** `openspec/changes/add-tui-adapter-and-config-hot-reload/` (Section 2)
+**PRD:** `docs/prd/PRD-004-cli-onboarding-and-config.md` (CLI-011)
 **Surface area:** TUI + adapter
 **Verification:** L3
-**Wireframe:** `docs/ui/TUI-001-command-wireframes.md` (netclaw chat)
-**Previously:** Task 1.14
 
-The TUI uses `SessionPipeline` directly — no SignalR indirection. Same
-in-process pattern as the current ConsoleChannel/HeadlessChannel.
+In-process prototype using `SessionPipeline` directly. Will be refactored to
+thin SignalR client in Task 1.26.
 
 Done when:
-- [ ] `ChatPage.cs` with `StreamingTextNode` (scrollable history) and `TextInputNode` (multi-line input).
-- [ ] `ChatViewModel.cs` uses `SessionPipeline` directly via DI — calls `CreateAsync()`, pushes `ChannelInput`, subscribes to `SessionOutput`.
-- [ ] Inline tool activity panel (completed with duration, in-progress with spinner).
-- [ ] MCP status indicator in status bar (green/yellow/red).
-- [ ] E2E: user types → `ChannelInput` → `SessionPipeline` → session actor → LLM → streaming response in TUI.
+- [x] `ChatPage.cs` with `StreamingTextNode`, `TextInputNode`, paste debounce, scrolling.
+- [x] `ChatViewModel.cs` uses `SessionPipeline` directly via DI.
+- [x] Status bar with model name, token usage, context percentage.
+- [x] Tool call spinners with elapsed time (`ElapsedTimeSegment`).
+- [x] E2E: user types → session actor → LLM → streaming response in TUI.
 
 ---
 
-### Tier 3: Production hardening
+### Tier 3: Daemon + Thin Client Split
+
+> **Architecture revision (2026-02-23):** Netclaw follows the OpenClaw pattern
+> — persistent daemon + thin CLI/TUI clients. Two binaries: `Netclaw.Daemon`
+> (always-on service) and `Netclaw.Cli` (lightweight client connecting via
+> SignalR). See SPEC-011 for full specification.
+
+### Task 1.26: Project split — Netclaw.Daemon and Netclaw.Cli
+
+**PRD:** `docs/prd/PRD-001-netclaw-mvp.md` (Daemon Architecture)
+**Spec:** `docs/spec/SPEC-011-daemon-architecture.md`
+**Surface area:** project structure
+**Verification:** L1
+
+Split `Netclaw.App` into two projects with distinct dependency profiles.
+
+Done when:
+- [ ] `src/Netclaw.Daemon/` project created (`Microsoft.NET.Sdk.Web`).
+- [ ] `src/Netclaw.Cli/` project created (`Microsoft.NET.Sdk`).
+- [ ] Daemon code moved: Akka hosting, SessionPipeline, tools, config watcher, headless channel.
+- [ ] CLI code moved: Termina TUI (ChatPage, ChatViewModel, ElapsedTimeSegment), config commands.
+- [ ] Shared types remain in `Netclaw.Actors` (protocol) and `Netclaw.Configuration`.
+- [ ] `Netclaw.Cli` references `Microsoft.AspNetCore.SignalR.Client`.
+- [ ] `Netclaw.Daemon` references `Microsoft.AspNetCore.SignalR` (server).
+- [ ] `Netclaw.slnx` updated. `dotnet build` passes.
+- [ ] Old `Netclaw.App` removed.
+
+### Task 1.27: Functional SessionHub in daemon
+
+**PRD:** `docs/prd/PRD-004-cli-onboarding-and-config.md` (CLI-013)
+**Spec:** `docs/spec/SPEC-011-daemon-architecture.md`
+**Surface area:** gateway
+**Verification:** L2
+
+Make the SignalR hub functional — the primary API for all clients.
+
+Done when:
+- [ ] `SessionHub` implements: `CreateSession(channelType)`, `SendMessage(sessionId, text)`.
+- [ ] `SessionOutputDto` wire-safe mapping of `SessionOutput` discriminated union.
+- [ ] Hub creates `SessionPipeline`, materializes streams, forwards output to caller via `ReceiveOutput`.
+- [ ] Connection lifecycle: sessions survive client disconnect/reconnect.
+- [ ] Integration test: hub creates session, sends message, receives output.
+
+### Task 1.28: SignalR client adapter in CLI
+
+**PRD:** `docs/prd/PRD-004-cli-onboarding-and-config.md` (CLI-011)
+**Spec:** `docs/spec/SPEC-011-daemon-architecture.md`
+**Surface area:** CLI + TUI
+**Verification:** L2
+
+Replace `ChatViewModel`'s direct `SessionPipeline` usage with a SignalR client.
+
+Done when:
+- [ ] `DaemonClient` class wrapping `HubConnection` — exposes `IObservable<SessionOutput>` and `SendAsync(ChannelInput)`.
+- [ ] `ChatViewModel` constructor takes `DaemonClient` instead of `SessionPipeline`.
+- [ ] `ChatPage` unchanged — same rendering, same paste debounce, same status bar.
+- [ ] Connection error handling: retry with backoff, clear error message on failure.
+- [ ] E2E: `netclaw chat` → SignalR → daemon → LLM → streaming response in TUI.
+
+### Task 1.29: Daemon management commands
+
+**PRD:** `docs/prd/PRD-004-cli-onboarding-and-config.md` (CLI-012)
+**Spec:** `docs/spec/SPEC-011-daemon-architecture.md`
+**Surface area:** CLI
+**Verification:** L1
+
+Done when:
+- [ ] `netclaw daemon start` — spawns `netclawd` as detached background process, writes PID to `~/.netclaw/netclaw.pid`.
+- [ ] `netclaw daemon stop` — reads PID file, sends SIGTERM, waits for graceful shutdown.
+- [ ] `netclaw daemon status` — reports running/stopped, PID, uptime.
+- [ ] `netclaw daemon install` — creates systemd user service at `~/.config/systemd/user/netclaw.service`, enables linger.
+- [ ] `netclaw daemon uninstall` — stops service, removes unit file.
+- [ ] Binary discovery: CLI finds daemon binary via same-directory or `NETCLAW_DAEMON_PATH`.
+
+### Task 1.30: Daemon-required CLI commands (query via SignalR)
+
+**PRD:** `docs/prd/PRD-004-cli-onboarding-and-config.md`
+**Spec:** `docs/spec/SPEC-011-daemon-architecture.md`
+**Surface area:** CLI
+**Verification:** L1
+
+CLI commands that query daemon state over SignalR. Each command connects,
+sends one RPC, prints result, disconnects.
+
+Done when:
+- [ ] `netclaw session list|inspect|compact` — query session state from daemon.
+- [ ] `netclaw tools list|policy` — query tool registry from daemon.
+- [ ] `netclaw mcp list|validate|test` — query MCP connections from daemon.
+- [ ] `netclaw schedule list|show|pause|resume|delete` — manage scheduled tasks via daemon.
+- [ ] `netclaw memory show` — query agent memory from daemon.
+- [ ] `netclaw acl validate|test|explain` — test against running policy engine.
+- [ ] `netclaw test smoke` — end-to-end smoke test through daemon.
+- [ ] All commands print clear error if daemon not running.
+
+### Task 1.31: Offline CLI commands (local file I/O)
+
+**PRD:** `docs/prd/PRD-004-cli-onboarding-and-config.md`
+**Surface area:** CLI
+**Verification:** L1
+
+CLI commands that work without the daemon by reading local files.
+
+Done when:
+- [ ] `netclaw doctor` — validate config files, probe daemon reachability, test provider connectivity.
+- [ ] `netclaw config show|validate` — dump/validate merged config.
+- [ ] `netclaw project list|add|remove` — manage project registry (local JSON files).
+- [ ] `netclaw environment scan|show` — discover local system capabilities.
+- [ ] `netclaw personality reset` — reset soul file to default.
+
+---
 
 ### Task 1.13: ACL and policy engine with tool grants
 
@@ -452,7 +547,7 @@ Done when:
 
 ---
 
-### Tier 4: Full capability
+### Tier 5: Full capability
 
 ### Task 1.15: MCP integration and Memorizer
 
@@ -516,7 +611,7 @@ Done when:
 
 ---
 
-### Tier 5: Polish and ship
+### Tier 6: Polish and ship
 
 ### Task 1.19: Config hot-reload
 
@@ -555,20 +650,7 @@ Done when:
 
 ### Task 1.21: Plain CLI commands
 
-**PRD:** `docs/prd/PRD-004-cli-onboarding-and-config.md`
-**OpenSpec:** `openspec/specs/netclaw-cli/spec.md`
-**OpenSpec Changes:** `openspec/changes/add-tui-adapter-and-config-hot-reload/` (Section 4)
-**Surface area:** CLI
-**Verification:** L1
-**Previously:** Task 1.16
-
-Done when:
-- [ ] `DoctorCommand.cs` — startup checks with remediation guidance, exit codes 0/1/2.
-- [ ] `ConfigCommands.cs` — `config show` and `config validate`.
-- [ ] `AclCommands.cs` — `acl validate`, `acl test`, `acl explain`.
-- [ ] `ProjectCommands.cs` — `project list`, `project add`, `project remove`.
-- [ ] `ScheduleCommands.cs` — `schedule list|show|pause|resume|delete`.
-- [ ] Remaining commands: `environment scan|show`, `mcp list|validate|test`, `memory show`, `tools list|policy`, `test smoke`, `personality reset`.
+Superseded by Tasks 1.30 (daemon-required) and 1.31 (offline). See Tier 3.
 
 ### Task 1.22: TUI onboarding wizard (`netclaw init`)
 
@@ -712,6 +794,5 @@ the linked research documents.
 - `docs/research/actor-llm-optimization-patterns.md` — Prompt caching,
   safety circuit breakers, parallel execution, streaming, retry, and
   sub-agent isolation patterns for actor-based LLM systems
-- `docs/research/agent-gateway-architecture.md` — Single-process vs
-  multi-process architecture analysis (OpenClaw, IronClaw, ZeroClaw).
-  Validates single-process model for homelab/personal agent use.
+- `docs/research/agent-gateway-architecture.md` — Architecture analysis
+  (OpenClaw, IronClaw, PicoClaw). Informed the daemon + thin client split.

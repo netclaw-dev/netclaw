@@ -7,6 +7,8 @@
 - Date: 2026-02-21
 - Revised: 2026-02-21 (two-phase onboarding, expanded command surface, TUI
   commands, Cocona + Termina frameworks)
+- Revised: 2026-02-23 (daemon + thin client split, daemon management commands,
+  offline vs daemon-required command categorization)
 - Depends on: `PRD-001`, `PRD-002`
 
 ## Goal
@@ -21,17 +23,26 @@ accessible via CLI first.
 An owner can go from empty config to safe runtime startup and ongoing
 diagnostics using CLI commands and guided output.
 
-## CLI Framework
+## CLI Architecture
 
-- **Simple arg routing** in `Program.cs` for mode selection (Cocona is archived
+Netclaw ships as two binaries (see PRD-001 for full architecture):
+
+- **`Netclaw.Daemon`** — always-on service owning all agent logic, persistence,
+  tools, and channels. Exposes SignalR hub at `/hub/session` and health endpoint.
+- **`Netclaw.Cli`** — lightweight client. Connects to the daemon over SignalR
+  for commands that need runtime state. Some commands work offline.
+
+### CLI Framework
+
+- **Simple arg routing** in `Program.cs` for command selection (Cocona is archived
   as of Dec 2025 — replaced with direct `args[0]` routing)
 - **Termina 0.5.1** for interactive TUI commands (`netclaw init`, `netclaw chat`)
 - All other commands use plain console output
-- `netclaw run` is the explicit daemon entry point (Slack + timers + health
-  endpoints, no TUI)
-- All CLI modes are in-process — no REST client in Phase 1
-- Configuration is privileged local file I/O, never exposed over the wire
-  (contains API keys/secrets)
+- Commands that need the daemon connect via `Microsoft.AspNetCore.SignalR.Client`
+- If the daemon isn't running and a command requires it, print an error with
+  instructions: `Daemon not running. Start it with: netclaw daemon start`
+- Configuration files contain API keys/secrets — config read/write commands
+  operate on local files directly, never query config over the wire
 
 ## Two-Phase Onboarding
 
@@ -73,51 +84,64 @@ don't exist. It can also be re-triggered via CLI (`netclaw personality reset`).
 
 ## Command Surface (MVP)
 
-### TUI-Interactive Commands (Termina)
+### Daemon Management (no daemon required)
 
-- `netclaw init` — guided first-time setup wizard (7-step TUI wizard)
-- `netclaw chat` — interactive agent prompt with streaming responses, tool
-  activity display, and MCP status. Hosts actor system in-process. Session
-  entity key: `tui/{uuid}`. See TUI-001 wireframes.
+- `netclaw daemon start` — start the daemon as a background process
+- `netclaw daemon stop` — stop the running daemon
+- `netclaw daemon status` — check if daemon is running, show PID and uptime
+- `netclaw daemon install` — register as a systemd user service
+  (`~/.config/systemd/user/netclaw.service`, no sudo). Supports
+  `loginctl enable-linger` for surviving logout.
+- `netclaw daemon uninstall` — remove systemd user service registration
 
-### Daemon Mode
+### TUI-Interactive Commands (Termina, daemon required)
 
-- `netclaw run` — start daemon mode (Slack Socket Mode + Akka actor system +
-  scheduled task timers + health endpoints). No TUI. Primary production entry
-  point.
+- `netclaw chat` — interactive agent prompt. Pure thin client connecting to the
+  daemon over SignalR. Renders `SessionOutput` stream, sends `ChannelInput`.
+  Session entity key: `tui/{uuid}`. See TUI-001 wireframes.
 
-### Onboarding and Configuration (Plain CLI)
+### TUI-Interactive Commands (Termina, offline)
+
+- `netclaw init` — guided first-time setup wizard (7-step TUI wizard). Reads
+  and writes local config files directly. No daemon required.
+
+### Onboarding and Configuration (Plain CLI, offline)
 
 - `netclaw config show|validate` — display/validate current configuration
 - `netclaw personality reset` — re-trigger conversational personality setup
+- `netclaw project list|add|remove` — project registry management (local files)
+- `netclaw environment scan|show` — capability self-discovery (scans local system)
 
-### Security and Policy
+### Diagnostics (Plain CLI, offline)
 
-- `netclaw acl validate|test|explain` — ACL validation, testing, explanation
-- `netclaw gateway status|doctor` — connectivity, exposure, health diagnostics
+- `netclaw doctor` — validate config files, check daemon reachability, test
+  provider connectivity, report system health
 
-### Sessions
+### Security and Policy (daemon required)
+
+- `netclaw acl validate|test|explain` — ACL validation and testing against the
+  running policy engine
+
+### Sessions (daemon required)
 
 - `netclaw session list|inspect|compact` — session management and inspection
 
-### Memory and Projects
+### Memory (daemon required)
 
-- `netclaw project list|add|remove` — project registry management
-- `netclaw environment scan|show` — capability self-discovery and display
-- `netclaw memory show` — display current agent memory files
+- `netclaw memory show` — display current agent memory
 
-### Scheduling
+### Scheduling (daemon required)
 
 - `netclaw schedule list|show|pause|resume|delete` — scheduled task management
 
-### Tools and MCP
+### Tools and MCP (daemon required)
 
 - `netclaw tools list|policy` — tool availability and policy display
 - `netclaw mcp list|validate|test` — MCP server management
 
-### Testing
+### Testing (daemon required)
 
-- `netclaw test smoke [--provider ollama]` — provider smoke test
+- `netclaw test smoke [--provider ollama]` — end-to-end smoke test through daemon
 
 ## Requirements
 
@@ -192,22 +216,38 @@ Results are persisted to the environment inventory file.
 rendering. All other commands SHALL use plain console output. TUI commands SHALL
 launch Termina as a hosted service within the mode-selected host builder.
 
-### CLI-011 Local Chat Adapter
+### CLI-011 Chat Thin Client
 
-`netclaw chat` SHALL host the full actor system in-process and provide a local
-input adapter for MVP validation. The TUI adapter SHALL:
+`netclaw chat` SHALL connect to the running daemon over SignalR and provide an
+interactive TUI for agent conversations. The TUI SHALL:
 
-- Produce `SendUserMessage` commands with entity key `tui/{sessionId}`
-- Render session broadcasts as streaming text via StreamingTextNode
+- Connect to the daemon's SignalR hub at `http://127.0.0.1:5199/hub/session`
+- Create a session via the hub and receive a session ID
+- Send `ChannelInput` messages via SignalR
+- Subscribe to `SessionOutput` stream for rendering
+- Render session output as streaming text via StreamingTextNode
 - Display tool invocation status inline (completed with duration, in-progress
   with spinner)
-- Show MCP server connectivity status in the status bar
+- Show model name, token usage, and context percentage in status bar
+- Print a clear error if the daemon is not running
 
-### CLI-012 Daemon Entry Point
+### CLI-012 Daemon Management
 
-`netclaw run` SHALL start the daemon process with Slack Socket Mode adapter,
-Akka actor system, scheduled task timers, and health endpoints. No TUI
-rendering. This is the primary production entry point.
+The CLI SHALL provide commands to manage the daemon lifecycle:
+
+- `netclaw daemon start` SHALL start the daemon as a background process
+- `netclaw daemon stop` SHALL stop the running daemon gracefully
+- `netclaw daemon status` SHALL report daemon state (running/stopped, PID, uptime)
+- `netclaw daemon install` SHALL register as a systemd user service (Linux) or
+  LaunchAgent (macOS). No sudo required — uses `systemctl --user` and
+  `loginctl enable-linger` on Linux.
+- `netclaw daemon uninstall` SHALL remove the service registration
+
+### CLI-013 Daemon Process
+
+The daemon (`Netclaw.Daemon`) SHALL run as a standalone service with Slack Socket
+Mode adapter, Akka actor system, scheduled task timers, SignalR hub, and health
+endpoints. No TUI rendering. This is the primary production entry point.
 
 ## UX Requirements
 
