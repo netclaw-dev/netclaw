@@ -1,0 +1,17 @@
+.git
+.github
+.idea
+.ralph
+.opencode
+.claude
+
+**/bin
+**/obj
+
+*.user
+*.suo
+*.swp
+
+README.md
+docs
+openspec

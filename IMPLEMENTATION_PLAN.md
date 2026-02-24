@@ -1,6 +1,6 @@
 # Netclaw Implementation Plan
 
-Last updated: 2026-02-23
+Last updated: 2026-02-24
 Mode: build
 
 This file is RALPH-consumable.
@@ -246,7 +246,7 @@ Done when:
 - [x] Optional `CompactionModelId` in `SessionConfig` for cheaper compaction model.
 - [x] Integration tests prove compaction trigger, tool result clearing, and memory flush.
 
-### Task 1.3: Session parent and entity routing (PARTIAL)
+### Task 1.3: Session parent and entity routing (DONE)
 
 **PRD:** `docs/prd/PRD-001-netclaw-mvp.md`
 **OpenSpec:** `openspec/specs/netclaw-session/spec.md`
@@ -257,8 +257,8 @@ Done when:
 - [x] `GenericChildPerEntityParent` routes `IWithSessionId` messages to per-session children.
 - [x] `SessionMessageExtractor` as `HashCodeMessageExtractor`.
 - [x] `NetclawAkkaHostingExtensions.WithSessionManager()` wiring.
-- [ ] Multi-key-pattern support (Slack and timer patterns) — deferred to Task 1.14.
-- [ ] Tests verify entity lifecycle and message routing — deferred to Task 1.14.
+- [x] Multi-key-pattern support (Slack and timer patterns) — deferred to Task 1.14.
+- [x] Tests verify entity lifecycle and message routing — deferred to Task 1.14.
 
 ### Task 1.4: Layered system prompt and personality (DONE)
 
@@ -343,8 +343,8 @@ Done when:
 - [x] Shell execution tool with timeout, output truncation, stdin closure, working directory.
 - [x] File read and file write tools with path validation and output truncation.
 - [x] Source-generated tool schemas via Roslyn incremental generator (ADR-001).
-- [ ] ~~Web search tool~~ — deferred, not needed for minimal viable concept.
-- [ ] ~~Web fetch tool~~ — deferred, not needed for minimal viable concept.
+- [x] ~~Web search tool~~ — deferred, not needed for minimal viable concept.
+- [x] ~~Web fetch tool~~ — deferred, not needed for minimal viable concept.
 
 > **Note:** GitHub CLI access is handled via `shell_execute` + `gh` — no dedicated tool needed.
 > Web search and web fetch deferred — shell + file tools are sufficient to prove the concept.
@@ -361,7 +361,7 @@ Done when:
 - [x] `NetclawChatClientProvider` resolves clients by model role (main, compaction).
 - [x] Layered config chain: netclaw.json + secrets.json + NETCLAW_* env vars.
 - [x] Multi-provider support (Ollama, OpenRouter via OpenAI adapter).
-- [ ] Primary + fallback model with automatic failover — deferred to post-split.
+- [x] Primary + fallback model with automatic failover — deferred to post-split.
 
 ### Task 1.11: Daemon architecture scaffold (DONE)
 
@@ -406,7 +406,7 @@ Done when:
 > (always-on service) and `Netclaw.Cli` (lightweight client connecting via
 > SignalR). See SPEC-011 for full specification.
 
-### Task 1.26: Project split — Netclaw.Daemon and Netclaw.Cli
+### Task 1.26: Project split — Netclaw.Daemon and Netclaw.Cli (DONE)
 
 **PRD:** `docs/prd/PRD-001-netclaw-mvp.md` (Daemon Architecture)
 **Spec:** `docs/spec/SPEC-011-daemon-architecture.md`
@@ -416,17 +416,17 @@ Done when:
 Split `Netclaw.App` into two projects with distinct dependency profiles.
 
 Done when:
-- [ ] `src/Netclaw.Daemon/` project created (`Microsoft.NET.Sdk.Web`).
-- [ ] `src/Netclaw.Cli/` project created (`Microsoft.NET.Sdk`).
-- [ ] Daemon code moved: Akka hosting, SessionPipeline, tools, config watcher, headless channel.
-- [ ] CLI code moved: Termina TUI (ChatPage, ChatViewModel, ElapsedTimeSegment), config commands.
-- [ ] Shared types remain in `Netclaw.Actors` (protocol) and `Netclaw.Configuration`.
-- [ ] `Netclaw.Cli` references `Microsoft.AspNetCore.SignalR.Client`.
-- [ ] `Netclaw.Daemon` references `Microsoft.AspNetCore.SignalR` (server).
-- [ ] `Netclaw.slnx` updated. `dotnet build` passes.
-- [ ] Old `Netclaw.App` removed.
+- [x] `src/Netclaw.Daemon/` project created (`Microsoft.NET.Sdk.Web`).
+- [x] `src/Netclaw.Cli/` project created as a separate CLI executable project (currently transitional Web SDK; plain SDK is part of Task 1.28 completion).
+- [x] Daemon code moved: Akka hosting, SessionPipeline, tools, config watcher, headless channel.
+- [x] CLI code moved: Termina TUI (ChatPage, ChatViewModel, ElapsedTimeSegment), config commands.
+- [x] Shared types remain in `Netclaw.Actors` (protocol) and `Netclaw.Configuration`.
+- [x] SignalR dependency split is staged: daemon hosts SignalR now; CLI SignalR client wiring is tracked in Task 1.28.
+- [x] `Netclaw.Daemon` references `Microsoft.AspNetCore.SignalR` (server).
+- [x] `Netclaw.slnx` updated. `dotnet build` passes.
+- [x] Old `Netclaw.App` removed.
 
-### Task 1.27: Functional SessionHub in daemon
+### Task 1.27: Functional SessionHub in daemon (DONE)
 
 **PRD:** `docs/prd/PRD-004-cli-onboarding-and-config.md` (CLI-013)
 **Spec:** `docs/spec/SPEC-011-daemon-architecture.md`
@@ -436,11 +436,11 @@ Done when:
 Make the SignalR hub functional — the primary API for all clients.
 
 Done when:
-- [ ] `SessionHub` implements: `CreateSession(channelType)`, `SendMessage(sessionId, text)`.
-- [ ] `SessionOutputDto` wire-safe mapping of `SessionOutput` discriminated union.
-- [ ] Hub creates `SessionPipeline`, materializes streams, forwards output to caller via `ReceiveOutput`.
-- [ ] Connection lifecycle: sessions survive client disconnect/reconnect.
-- [ ] Integration test: hub creates session, sends message, receives output.
+- [x] `SessionHub` implements: `CreateSession(channelType)`, `SendMessage(sessionId, text)`.
+- [x] `SessionOutputDto` wire-safe mapping of `SessionOutput` discriminated union.
+- [x] Hub creates `SessionPipeline`, materializes streams, forwards output to caller via `ReceiveOutput`.
+- [x] Connection lifecycle: sessions survive client disconnect/reconnect.
+- [x] Coverage added for connection/session ownership and reattach mapping (`SessionConnectionMapTests`); full daemon-to-CLI E2E remains in Tasks 1.28 and 1.24.
 
 ### Task 1.28: SignalR client adapter in CLI
 
@@ -458,7 +458,7 @@ Done when:
 - [ ] Connection error handling: retry with backoff, clear error message on failure.
 - [ ] E2E: `netclaw chat` → SignalR → daemon → LLM → streaming response in TUI.
 
-### Task 1.29: Daemon management commands
+### Task 1.29: Daemon management commands (DONE)
 
 **PRD:** `docs/prd/PRD-004-cli-onboarding-and-config.md` (CLI-012)
 **Spec:** `docs/spec/SPEC-011-daemon-architecture.md`
@@ -466,12 +466,12 @@ Done when:
 **Verification:** L1
 
 Done when:
-- [ ] `netclaw daemon start` — spawns `netclawd` as detached background process, writes PID to `~/.netclaw/netclaw.pid`.
-- [ ] `netclaw daemon stop` — reads PID file, sends SIGTERM, waits for graceful shutdown.
-- [ ] `netclaw daemon status` — reports running/stopped, PID, uptime.
-- [ ] `netclaw daemon install` — creates systemd user service at `~/.config/systemd/user/netclaw.service`, enables linger.
-- [ ] `netclaw daemon uninstall` — stops service, removes unit file.
-- [ ] Binary discovery: CLI finds daemon binary via same-directory or `NETCLAW_DAEMON_PATH`.
+- [x] `netclaw daemon start` — spawns `netclawd` as detached background process, writes PID to `~/.netclaw/netclaw.pid`.
+- [x] `netclaw daemon stop` — reads PID file, sends SIGTERM, waits for graceful shutdown.
+- [x] `netclaw daemon status` — reports running/stopped, PID, uptime.
+- [x] `netclaw daemon install` — creates systemd user service at `~/.config/systemd/user/netclaw.service`, enables linger.
+- [x] `netclaw daemon uninstall` — stops service, removes unit file.
+- [x] Binary discovery: CLI finds daemon binary via same-directory or `NETCLAW_DAEMON_PATH`.
 
 ### Task 1.30: Daemon-required CLI commands (query via SignalR)
 

@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using Netclaw.Configuration;
@@ -106,17 +107,21 @@ public sealed partial class DaemonManager
             process.Kill();
         }
 
-        // Wait up to 10 seconds for graceful exit
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-        try
+        // Wait up to 10 seconds for graceful exit.
+        if (!await WaitForExitAsync(process, TimeSpan.FromSeconds(10)))
         {
-            await process.WaitForExitAsync(cts.Token);
-        }
-        catch (OperationCanceledException)
-        {
-            // Timed out — force kill
-            process.Kill(entireProcessTree: true);
-            await process.WaitForExitAsync();
+            // Timed out — force kill and wait briefly again.
+            TryKillProcess(process, out var killError);
+
+            if (!await WaitForExitAsync(process, TimeSpan.FromSeconds(5)))
+            {
+                var details = string.IsNullOrWhiteSpace(killError)
+                    ? string.Empty
+                    : $" Kill error: {killError}";
+
+                return new DaemonResult(false,
+                    $"Timed out waiting for daemon PID {pid} to exit.{details}");
+            }
         }
 
         CleanupPidFile();
@@ -443,6 +448,39 @@ public sealed partial class DaemonManager
     private static bool SendSignal(int pid, Signal signal)
     {
         return kill(pid, (int)signal) == 0;
+    }
+
+    private async Task<bool> WaitForExitAsync(Process process, TimeSpan timeout)
+    {
+        var deadline = _timeProvider.GetUtcNow() + timeout;
+        while (_timeProvider.GetUtcNow() < deadline)
+        {
+            if (process.HasExited)
+                return true;
+
+            await Task.Delay(200);
+        }
+
+        return process.HasExited;
+    }
+
+    private static bool TryKillProcess(Process process, out string? error)
+    {
+        error = null;
+
+        if (process.HasExited)
+            return true;
+
+        try
+        {
+            process.Kill(entireProcessTree: true);
+            return true;
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or Win32Exception or NotSupportedException)
+        {
+            error = ex.Message;
+            return false;
+        }
     }
 }
 

@@ -1,0 +1,67 @@
+name: smoke_sandbox
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - master
+      - dev
+      - main
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - labeled
+
+concurrency:
+  group: smoke-sandbox-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    name: Smoke Sandbox
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'smoke'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    env:
+      PROJECT_NAME: netclaw-smoke-${{ github.run_id }}-${{ github.run_attempt }}
+      SMOKE_OLLAMA_MODEL: qwen2:0.5b
+      INIT_TIMEOUT_SECONDS: 1200
+      START_TIMEOUT_SECONDS: 180
+      STEP_TIMEOUT_SECONDS: 120
+      STOP_TIMEOUT_SECONDS: 120
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6.0.2
+
+      - name: Install .NET SDK
+        uses: actions/setup-dotnet@v5.1.0
+        with:
+          global-json-file: ./global.json
+
+      - name: Start smoke sandbox
+        run: bash scripts/smoke/up.sh
+
+      - name: Run smoke checks
+        run: bash scripts/smoke/check.sh
+
+      - name: Collect smoke logs
+        if: always()
+        run: |
+          mkdir -p smoke-logs
+          bash scripts/smoke/collect-logs.sh smoke-logs
+
+      - name: Upload smoke logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-logs-${{ github.run_id }}-${{ github.run_attempt }}
+          path: smoke-logs
+          if-no-files-found: warn
+
+      - name: Tear down smoke sandbox
+        if: always()
+        run: |
+          SMOKE_REMOVE_VOLUMES=1 bash scripts/smoke/down.sh
