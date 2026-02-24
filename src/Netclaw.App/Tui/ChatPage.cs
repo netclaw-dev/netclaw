@@ -1,0 +1,273 @@
+using System.Reactive.Disposables;
+using System.Reactive.Linq;
+using Netclaw.Actors.Protocol;
+using Termina.Components.Streaming;
+using Termina.Extensions;
+using Termina.Input;
+using Termina.Layout;
+using Termina.Reactive;
+using Termina.Rendering;
+using Termina.Terminal;
+
+namespace Netclaw.App.Tui;
+
+/// <summary>
+/// Termina page for the interactive chat UI (<c>netclaw chat</c>).
+/// Layout: scrollable chat history (fill) + fixed input panel (3 rows) + status bar.
+/// </summary>
+public sealed class ChatPage : ReactivePage<ChatViewModel>
+{
+    private StreamingTextNode _chatHistory = null!;
+    private TextInputNode _promptInput = null!;
+
+    private int _nextSegmentId = 1;
+
+    private SegmentId NextSegmentId() => new(_nextSegmentId++);
+
+    // Track the current "thinking" spinner segment so we can replace it
+    private SegmentId _thinkingSegmentId;
+
+    // Track active tool timer so we can read final elapsed on completion
+    private ElapsedTimeSegment? _toolTimer;
+
+    protected override void OnBound()
+    {
+        base.OnBound();
+
+        _chatHistory = StreamingTextNode.Create();
+        _promptInput = new TextInputNode()
+            .WithPlaceholder("Type a message...");
+
+        // Handle prompt submission — Buffer coalesces rapid-fire submissions
+        // (e.g., pasting multi-line text where each CRLF triggers Submitted)
+        // into a single message. Normal typing produces one item per buffer window.
+        _promptInput.Submitted
+            .Where(text => !string.IsNullOrWhiteSpace(text))
+            .Buffer(TimeSpan.FromMilliseconds(100))
+            .Where(batch => batch.Count > 0)
+            .Subscribe(batch =>
+            {
+                _promptInput.Clear();
+
+                var combined = string.Join("\n", batch);
+
+                // Render user message
+                _chatHistory.AppendLine("");
+                _chatHistory.AppendLine($"You: {combined}", Color.Cyan);
+
+                _ = ViewModel.SubmitAsync(combined);
+            })
+            .DisposeWith(Subscriptions);
+
+        // Subscribe to session output
+        ViewModel.SessionOutput
+            .ObserveOn(System.Reactive.Concurrency.CurrentThreadScheduler.Instance)
+            .Subscribe(HandleOutput)
+            .DisposeWith(Subscriptions);
+
+        // Route keyboard input
+        ViewModel.Input.OfType<KeyPressed>()
+            .Subscribe(HandleKeyPress)
+            .DisposeWith(Subscriptions);
+    }
+
+    public override ILayoutNode BuildLayout()
+    {
+        return Layouts.Vertical()
+            // Chat history panel (fills available space)
+            .WithChild(
+                new PanelNode()
+                    .WithTitle("Netclaw Chat")
+                    .WithBorder(BorderStyle.Rounded)
+                    .WithBorderColor(Color.Gray)
+                    .WithContent(_chatHistory.Fill())
+                    .Fill())
+            // Input panel (fixed 3 rows)
+            .WithChild(
+                new PanelNode()
+                    .WithTitle("Input")
+                    .WithBorder(BorderStyle.Rounded)
+                    .WithBorderColor(Color.Cyan)
+                    .WithContent(_promptInput)
+                    .Height(3))
+            // Status bar
+            .WithChild(
+                BuildStatusBar());
+    }
+
+    private LayoutNode BuildStatusBar()
+    {
+        return Observable.CombineLatest(
+                ViewModel.IsGeneratingChanged,
+                ViewModel.StatusMessageChanged,
+                ViewModel.UsageDisplayChanged.StartWith((string?)null),
+                (isGenerating, status, usage) =>
+                {
+                    var keys = isGenerating
+                        ? "[Ctrl+Q] Quit"
+                        : "[Enter] Send  [PgUp/PgDn] Scroll  [Ctrl+Q] Quit";
+
+                    var usagePart = usage is not null ? $"  |  {usage}" : "";
+                    var text = $" {keys}  |  {status}  |  {ViewModel.ModelId}{usagePart}";
+
+                    var barColor = status switch
+                    {
+                        "Ready" => Color.Green,
+                        "Connecting..." => Color.Yellow,
+                        _ when status.StartsWith("Generating") => Color.Yellow,
+                        _ when status.StartsWith("Connection failed") => Color.Red,
+                        _ => Color.BrightBlack
+                    };
+
+                    return (ILayoutNode)new TextNode(text).WithForeground(barColor);
+                })
+            .AsLayout()
+            .Height(1);
+    }
+
+    private void HandleKeyPress(KeyPressed key)
+    {
+        var keyInfo = key.KeyInfo;
+
+        // Ctrl+Q always quits
+        if (keyInfo.Key == ConsoleKey.Q && keyInfo.Modifiers.HasFlag(ConsoleModifiers.Control))
+        {
+            ViewModel.RequestAppShutdown();
+            return;
+        }
+
+        // Escape: cancel or quit
+        if (keyInfo.Key == ConsoleKey.Escape)
+        {
+            if (ViewModel.IsGenerating)
+            {
+                // TODO: cancel generation when supported
+            }
+            else
+            {
+                ViewModel.RequestAppShutdown();
+            }
+
+            return;
+        }
+
+        // PageUp/PageDown: scroll chat history
+        if (_chatHistory.HandleInput(keyInfo, viewportHeight: 20, viewportWidth: 80))
+            return;
+
+        // Everything else goes to the text input
+        _promptInput.HandleInput(keyInfo);
+    }
+
+    private void HandleOutput(SessionOutput output)
+    {
+        switch (output)
+        {
+            case SessionJoined msg:
+                _chatHistory.AppendLine(
+                    $"System: Session started. {(msg.Title is not null ? $"Title: {msg.Title}" : "New session.")}",
+                    Color.BrightBlack);
+                _chatHistory.AppendLine("");
+                break;
+
+            case TextOutput msg:
+                // Remove thinking spinner if present
+                RemoveThinkingSpinner();
+                _chatHistory.AppendLine("");
+                _chatHistory.AppendLine($"Netclaw: {msg.Text}", Color.White);
+                _chatHistory.AppendLine("");
+                _chatHistory.ScrollToBottom();
+                break;
+
+            case ThinkingOutput:
+                // Hidden — reasoning output is too verbose for the chat view.
+                // TODO: collapsible thinking sections when Termina supports it.
+                break;
+
+            case ToolCallOutput msg:
+                RemoveThinkingSpinner();
+                var toolSegmentId = NextSegmentId();
+                _thinkingSegmentId = toolSegmentId;
+                _toolTimer = new ElapsedTimeSegment(Color.BrightBlack);
+                _chatHistory.AppendTracked(toolSegmentId,
+                    new CompositeTextSegment(
+                        new SpinnerSegment(Termina.Components.Streaming.SpinnerStyle.Dots, Color.Yellow, intervalMs: 80),
+                        new StaticTextSegment($" {msg.ToolName}({TruncateArgs(msg.ArgumentsJson)})",
+                            Color.Yellow),
+                        _toolTimer));
+                break;
+
+            case ToolResultOutput msg:
+                // Replace spinner+timer with checkmark and final elapsed time
+                if (_thinkingSegmentId.Value != 0)
+                {
+                    // Read elapsed from the timer segment before it gets disposed by Replace
+                    var elapsed = _toolTimer is not null
+                        ? $" ({FormatElapsed(_toolTimer.Elapsed)})"
+                        : "";
+                    _toolTimer = null;
+
+                    _chatHistory.Replace(_thinkingSegmentId,
+                        new StaticTextSegment(
+                            $"  \u2713 {msg.ToolName} \u2192 {Truncate(msg.Result, 80)}{elapsed}",
+                            Color.Green),
+                        keepTracked: false);
+                    _thinkingSegmentId = default;
+                }
+
+                break;
+
+            case UsageOutput msg:
+                // Compute context % from ViewModel's SessionConfig (known-good)
+                // rather than msg.ContextWindowTokens which may be default(0)
+                var ctxWindow = ViewModel.ContextWindowTokens;
+                var usagePercent = msg.InputTokens.HasValue && ctxWindow > 0
+                    ? (double)msg.InputTokens.Value / ctxWindow
+                    : (double?)null;
+                var ctxPart = usagePercent.HasValue
+                    ? $" ({usagePercent.Value:P0} ctx)"
+                    : "";
+                ViewModel.UsageDisplay = $"in={msg.InputTokens ?? 0} out={msg.OutputTokens ?? 0}{ctxPart}";
+                break;
+
+            case ErrorOutput msg:
+                RemoveThinkingSpinner();
+                _chatHistory.AppendLine($"  [error] {msg.Message}", Color.Red);
+                break;
+
+            case TurnCompleted:
+                RemoveThinkingSpinner();
+                ViewModel.StatusMessage = "Ready";
+                _chatHistory.ScrollToBottom();
+                break;
+
+            case CompactionOutput msg:
+                _chatHistory.AppendLine(
+                    $"  [compaction] {msg.MessagesBefore} \u2192 {msg.MessagesAfter} messages",
+                    Color.Yellow);
+                break;
+        }
+
+        ViewModel.RequestRedraw();
+    }
+
+    private void RemoveThinkingSpinner()
+    {
+        if (_thinkingSegmentId.Value != 0)
+        {
+            _chatHistory.Remove(_thinkingSegmentId);
+            _thinkingSegmentId = default;
+        }
+    }
+
+    private static string TruncateArgs(string? json) =>
+        json is null or "" ? "" : Truncate(json, 60);
+
+    private static string Truncate(string text, int maxLength) =>
+        text.Length <= maxLength ? text : string.Concat(text.AsSpan(0, maxLength - 3), "...");
+
+    private static string FormatElapsed(TimeSpan elapsed) =>
+        elapsed.TotalSeconds < 60
+            ? $"{elapsed.TotalSeconds:F1}s"
+            : $"{(int)elapsed.TotalMinutes}m {elapsed.Seconds}s";
+}
