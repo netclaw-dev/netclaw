@@ -39,8 +39,9 @@ public sealed class SessionHub : Hub<ISessionHubClient>
         return _registry.SendMessageAsync(sessionId, text);
     }
 
-    public override Task OnDisconnectedAsync(Exception? exception)
+    public override async Task OnDisconnectedAsync(Exception? exception)
     {
-        return _registry.OnDisconnectedAsync(Context.ConnectionId);
+        await _registry.OnDisconnectedAsync(Context.ConnectionId);
+        await base.OnDisconnectedAsync(exception);
     }
 }

@@ -3,14 +3,67 @@
 Netclaw is a Slack-connected homelab assistant built on top of a minimal
 actor-driven session framework called Akka.Agents.
 
-This repository currently contains a documentation-first implementation track:
+## Architecture
 
-- product requirements documents (PRDs)
-- technical specifications
-- OpenSpec change artifacts and capability specs
-- management UI mockups and CLI contracts
+Netclaw uses a **daemon + thin client** architecture:
 
-Code implementation follows these artifacts.
+- **`netclawd`** (`src/Netclaw.Daemon/`) — always-on daemon process hosting
+  the Akka actor system, LLM sessions, tool execution, and persistence.
+  Exposes a SignalR hub at `/hub/session` for remote clients.
+
+- **`netclaw`** (`src/Netclaw.Cli/`) — thin CLI client for interactive chat,
+  daemon management, and configuration. Connects to the daemon via SignalR.
+
+## Quick Start
+
+```bash
+# Build everything
+dotnet build Netclaw.slnx
+
+# Start the daemon
+netclaw daemon start
+
+# Check daemon status
+netclaw daemon status
+
+# Interactive chat (connects to running daemon)
+netclaw chat
+
+# Stop the daemon
+netclaw daemon stop
+```
+
+## CLI Reference
+
+```
+netclaw chat                  Interactive TUI chat session
+netclaw -p "prompt"           Headless single-prompt mode
+netclaw daemon start          Start the daemon as a background process
+netclaw daemon stop           Gracefully stop the daemon (SIGTERM)
+netclaw daemon status         Show daemon PID and uptime
+netclaw daemon install        Install as systemd user service (Linux)
+netclaw daemon uninstall      Remove systemd user service (Linux)
+netclaw config                Configuration management (planned)
+netclaw init                  First-run setup wizard (planned)
+netclaw doctor                Health checks (planned)
+```
+
+### Daemon Binary Discovery
+
+The `daemon start` command locates `netclawd` by:
+
+1. `NETCLAW_DAEMON_PATH` environment variable (explicit path)
+2. Same directory as the `netclaw` CLI binary
+
+### systemd Service
+
+On Linux, `netclaw daemon install` creates a user-level systemd service:
+
+```bash
+netclaw daemon install        # Creates ~/.config/systemd/user/netclaw.service
+systemctl --user start netclaw
+systemctl --user status netclaw
+```
 
 ## Current Focus
 
@@ -28,15 +81,22 @@ Primary constraints:
 - protobuf-net for persistence types (no direct serialization of
   `Microsoft.Extensions.AI` message types)
 
-## Scaffold
+## Project Structure
 
 - Solution: `Netclaw.slnx`
-- Framework project: `src/Akka.Agents/Akka.Agents.csproj`
-- Host application: `src/Netclaw.App/Netclaw.App.csproj` (minimal Web API host)
+- Daemon: `src/Netclaw.Daemon/Netclaw.Daemon.csproj` (Web API host, `netclawd`)
+- CLI: `src/Netclaw.Cli/Netclaw.Cli.csproj` (thin client, `netclaw`)
+- Actors: `src/Netclaw.Actors/` (session management, persistence, tools)
+- Configuration: `src/Netclaw.Configuration/` (paths, providers, models)
+- Channels: `src/Netclaw.Channels/` (channel abstractions)
 
-Build:
+Build and test:
 
-- `dotnet build Netclaw.slnx`
+```bash
+dotnet build Netclaw.slnx
+dotnet test Netclaw.slnx
+dotnet slopwatch analyze
+```
 
 ## Planning Artifacts
 

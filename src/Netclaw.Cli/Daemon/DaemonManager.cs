@@ -40,9 +40,12 @@ public sealed partial class DaemonManager
             FileName = binaryPath,
             UseShellExecute = false,
             CreateNoWindow = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            RedirectStandardInput = true,
+            // Don't redirect stdio — holding pipe handles prevents clean CLI exit
+            // and can cause the daemon to get SIGPIPE. The daemon handles its own
+            // logging via the ASP.NET Core logging infrastructure.
+            RedirectStandardOutput = false,
+            RedirectStandardError = false,
+            RedirectStandardInput = false,
         };
 
         Process process;
@@ -54,12 +57,6 @@ public sealed partial class DaemonManager
         {
             return new DaemonResult(false, $"Failed to start daemon: {ex.Message}");
         }
-
-        // Detach stdio so the CLI can exit without blocking the daemon
-        process.StandardInput.Close();
-
-        // Write log asynchronously — fire and forget, daemon owns its own lifecycle
-        _ = PipeToDaemonLogAsync(process);
 
         File.WriteAllText(_paths.PidFilePath, process.Id.ToString());
 
@@ -86,10 +83,22 @@ public sealed partial class DaemonManager
             return new DaemonResult(true, "Daemon was not running (stale PID file cleaned up).");
         }
 
+        if (!IsDaemonProcess(process))
+        {
+            CleanupPidFile();
+            return new DaemonResult(false,
+                $"PID {pid} is not a netclawd process (was '{process.ProcessName}'). " +
+                "Stale PID file cleaned up.");
+        }
+
         // Graceful shutdown: SIGTERM on Unix, Kill on Windows (no SIGTERM equivalent)
         if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS())
         {
-            SendSignal(pid, Signal.SIGTERM);
+            if (!SendSignal(pid, Signal.SIGTERM))
+            {
+                CleanupPidFile();
+                return new DaemonResult(false, $"Failed to send SIGTERM to PID {pid}.");
+            }
         }
         else
         {
@@ -132,7 +141,7 @@ public sealed partial class DaemonManager
                     Message: "Daemon is not running (stale PID file cleaned up).");
             }
 
-            var uptime = _timeProvider.GetUtcNow() - process.StartTime.ToUniversalTime();
+            var uptime = _timeProvider.GetUtcNow() - new DateTimeOffset(process.StartTime.ToUniversalTime(), TimeSpan.Zero);
             return new DaemonStatus(IsRunning: true, Pid: pid,
                 Message: $"Daemon running (PID {pid}, uptime {FormatUptime(uptime)}).");
         }
@@ -260,11 +269,29 @@ public sealed partial class DaemonManager
         try
         {
             var process = Process.GetProcessById(pid);
-            return !process.HasExited;
+            if (process.HasExited || !IsDaemonProcess(process))
+            {
+                CleanupPidFile();
+                return false;
+            }
+            return true;
         }
         catch (ArgumentException)
         {
             CleanupPidFile();
+            return false;
+        }
+    }
+
+    private static bool IsDaemonProcess(Process process)
+    {
+        try
+        {
+            // ProcessName does not include extension on any platform
+            return process.ProcessName is "netclawd" or "dotnet";
+        }
+        catch
+        {
             return false;
         }
     }
@@ -283,31 +310,6 @@ public sealed partial class DaemonManager
     {
         try { File.Delete(_paths.PidFilePath); }
         catch (IOException ex) { Console.Error.WriteLine($"Warning: could not remove PID file: {ex.Message}"); }
-    }
-
-    private async Task PipeToDaemonLogAsync(Process process)
-    {
-        try
-        {
-            await using var logStream = new FileStream(_paths.DaemonLogPath,
-                FileMode.Append, FileAccess.Write, FileShare.Read);
-            await using var writer = new StreamWriter(logStream) { AutoFlush = true };
-
-            var stdoutTask = PipeStreamAsync(process.StandardOutput, writer);
-            var stderrTask = PipeStreamAsync(process.StandardError, writer);
-
-            await Task.WhenAll(stdoutTask, stderrTask);
-        }
-        catch (IOException ex)
-        {
-            Console.Error.WriteLine($"Warning: could not write daemon log: {ex.Message}");
-        }
-    }
-
-    private static async Task PipeStreamAsync(StreamReader reader, StreamWriter writer)
-    {
-        while (await reader.ReadLineAsync() is { } line)
-            await writer.WriteLineAsync(line);
     }
 
     private static string FormatUptime(TimeSpan uptime)
@@ -353,9 +355,9 @@ public sealed partial class DaemonManager
     [LibraryImport("libc", SetLastError = true)]
     private static partial int kill(int pid, int sig);
 
-    private static void SendSignal(int pid, Signal signal)
+    private static bool SendSignal(int pid, Signal signal)
     {
-        kill(pid, (int)signal);
+        return kill(pid, (int)signal) == 0;
     }
 }
 

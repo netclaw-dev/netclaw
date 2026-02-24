@@ -109,11 +109,12 @@ static async Task RunAsync(string[] args)
     // Task 1.28 refactors these to connect to daemon via SignalR instead.
     var webBuilder = WebApplication.CreateBuilder(args);
 
-    // Use port 5199 to avoid conflicts with Aspire (5000) and other defaults
-    webBuilder.WebHost.UseUrls("http://127.0.0.1:5199");
+    // Transitional: use port 0 (random) to avoid conflict with daemon on 5199.
+    // Removed in Task 1.28 when CLI switches to SignalR client.
+    webBuilder.WebHost.UseUrls("http://127.0.0.1:0");
 
-    ConfigureConfigServices(webBuilder.Services, webBuilder.Configuration);
-    ConfigureDaemonServices(webBuilder.Services, webBuilder.Configuration);
+    var sharedPaths = ConfigureConfigServices(webBuilder.Services, webBuilder.Configuration);
+    ConfigureDaemonServices(webBuilder.Services, webBuilder.Configuration, sharedPaths);
 
     // Suppress framework console logging — console is reserved for the chat UI
     webBuilder.Logging.ClearProviders();
@@ -183,7 +184,7 @@ static void WriteCrashLog(Exception ex)
 // Shared configuration services (all modes)
 // ═══════════════════════════════════════════════════════════════════════
 
-static void ConfigureConfigServices(IServiceCollection services, IConfigurationManager configuration)
+static NetclawPaths ConfigureConfigServices(IServiceCollection services, IConfigurationManager configuration)
 {
     // Netclaw paths (creates ~/.netclaw/ structure)
     var paths = new NetclawPaths();
@@ -212,13 +213,15 @@ static void ConfigureConfigServices(IServiceCollection services, IConfigurationM
     var factory = new ChatClientFactory(providers);
     var clientProvider = new NetclawChatClientProvider(factory, models);
     services.AddSingleton<IChatClientProvider>(clientProvider);
+
+    return paths;
 }
 
 // ═══════════════════════════════════════════════════════════════════════
 // Transitional daemon services (removed in Task 1.28 when CLI uses SignalR)
 // ═══════════════════════════════════════════════════════════════════════
 
-static void ConfigureDaemonServices(IServiceCollection services, IConfigurationManager configuration)
+static void ConfigureDaemonServices(IServiceCollection services, IConfigurationManager configuration, NetclawPaths paths)
 {
     // Resolve models for session config
     var models = configuration.GetSection("Models")
@@ -248,7 +251,6 @@ static void ConfigureDaemonServices(IServiceCollection services, IConfigurationM
     services.AddSingleton<IToolExecutor>(new DispatchingToolExecutor(toolRegistry));
 
     // System prompt (file-based, with first-run seed)
-    var paths = new NetclawPaths();
     if (!File.Exists(paths.PersonalityPath))
         File.WriteAllText(paths.PersonalityPath,
             "You are Netclaw, a helpful homelab operations assistant. "

@@ -29,8 +29,8 @@ static async Task RunAsync(string[] args)
     // Use port 5199 to avoid conflicts with Aspire (5000) and other defaults
     builder.WebHost.UseUrls("http://127.0.0.1:5199");
 
-    ConfigureConfigServices(builder.Services, builder.Configuration);
-    ConfigureDaemonServices(builder.Services, builder.Configuration);
+    var paths = ConfigureConfigServices(builder.Services, builder.Configuration);
+    ConfigureDaemonServices(builder.Services, builder.Configuration, paths);
 
     // Suppress framework console logging — session logs go to disk
     builder.Logging.ClearProviders();
@@ -79,7 +79,7 @@ static void WriteCrashLog(Exception ex)
 // Shared configuration services
 // ═══════════════════════════════════════════════════════════════════════
 
-static void ConfigureConfigServices(IServiceCollection services, IConfigurationManager configuration)
+static NetclawPaths ConfigureConfigServices(IServiceCollection services, IConfigurationManager configuration)
 {
     // Netclaw paths (creates ~/.netclaw/ structure)
     var paths = new NetclawPaths();
@@ -108,13 +108,15 @@ static void ConfigureConfigServices(IServiceCollection services, IConfigurationM
     var factory = new ChatClientFactory(providers);
     var clientProvider = new NetclawChatClientProvider(factory, models);
     services.AddSingleton<IChatClientProvider>(clientProvider);
+
+    return paths;
 }
 
 // ═══════════════════════════════════════════════════════════════════════
 // Daemon-only services (actor system, tools, persistence)
 // ═══════════════════════════════════════════════════════════════════════
 
-static void ConfigureDaemonServices(IServiceCollection services, IConfigurationManager configuration)
+static void ConfigureDaemonServices(IServiceCollection services, IConfigurationManager configuration, NetclawPaths paths)
 {
     // Resolve models for session config
     var models = configuration.GetSection("Models")
@@ -144,7 +146,6 @@ static void ConfigureDaemonServices(IServiceCollection services, IConfigurationM
     services.AddSingleton<IToolExecutor>(new DispatchingToolExecutor(toolRegistry));
 
     // System prompt (file-based, with first-run seed)
-    var paths = new NetclawPaths();
     if (!File.Exists(paths.PersonalityPath))
         File.WriteAllText(paths.PersonalityPath,
             "You are Netclaw, a helpful homelab operations assistant. "
