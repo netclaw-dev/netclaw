@@ -76,6 +76,11 @@ public sealed class HeadlessChannel : IChannel
 
             var turnCompleted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
+            using var connectionSubscription = _daemonClient.ConnectionEvents.Subscribe(evt =>
+            {
+                Log(logWriter, $"CONNECTION: {evt.Message}");
+            });
+
             using var subscription = _daemonClient.SessionOutput.Subscribe(output =>
             {
                 HandleOutput(output, logWriter);
@@ -181,9 +186,9 @@ public sealed class HeadlessChannel : IChannel
             File.AppendAllText(path,
                 $"[{_timeProvider.GetUtcNow():o}] {kind}: {ex}\n");
         }
-        catch
+        catch (Exception logEx)
         {
-            // Ignore secondary logging failures.
+            Console.Error.WriteLine($"[headless:error] Failed to write failure log: {logEx.Message}");
         }
     }
 }

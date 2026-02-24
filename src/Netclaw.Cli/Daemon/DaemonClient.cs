@@ -24,9 +24,13 @@ public sealed class DaemonClient : IAsyncDisposable
 
     private readonly HubConnection _connection;
     private readonly Subject<SessionOutput> _outputSubject = new();
+    private readonly Subject<DaemonConnectionEvent> _connectionSubject = new();
     private readonly SemaphoreSlim _connectGate = new(1, 1);
+    private readonly CancellationTokenSource _lifetimeCts = new();
 
     private string? _sessionId;
+    private bool _hasConnected;
+    private bool _disposed;
 
     public DaemonClient(string daemonEndpoint)
     {
@@ -50,10 +54,38 @@ public sealed class DaemonClient : IAsyncDisposable
             var sessionId = _sessionId;
             if (!string.IsNullOrWhiteSpace(sessionId))
                 await _connection.InvokeCoreAsync("AttachSession", [sessionId]);
+
+            _connectionSubject.OnNext(new DaemonConnectionEvent(
+                DaemonConnectionState.Connected,
+                "Reconnected to daemon."));
+        };
+
+        _connection.Reconnecting += ex =>
+        {
+            var reason = ex?.Message ?? "connection dropped";
+            _connectionSubject.OnNext(new DaemonConnectionEvent(
+                DaemonConnectionState.Reconnecting,
+                $"Reconnecting to daemon: {reason}"));
+            return Task.CompletedTask;
+        };
+
+        _connection.Closed += async ex =>
+        {
+            if (_disposed)
+                return;
+
+            var reason = ex?.Message ?? "connection closed";
+            _connectionSubject.OnNext(new DaemonConnectionEvent(
+                DaemonConnectionState.Disconnected,
+                $"Disconnected from daemon: {reason}"));
+
+            if (!string.IsNullOrWhiteSpace(_sessionId))
+                await ReconnectLoopAsync();
         };
     }
 
     public IObservable<SessionOutput> SessionOutput => _outputSubject.AsObservable();
+    public IObservable<DaemonConnectionEvent> ConnectionEvents => _connectionSubject.AsObservable();
 
     public bool IsConnected => _connection.State is HubConnectionState.Connected;
 
@@ -68,6 +100,10 @@ public sealed class DaemonClient : IAsyncDisposable
             if (IsConnected)
                 return;
 
+            _connectionSubject.OnNext(new DaemonConnectionEvent(
+                DaemonConnectionState.Connecting,
+                "Connecting to daemon..."));
+
             Exception? lastError = null;
             foreach (var delay in ReconnectDelays)
             {
@@ -77,6 +113,15 @@ public sealed class DaemonClient : IAsyncDisposable
                 try
                 {
                     await _connection.StartAsync(cancellationToken);
+
+                    var sessionId = _sessionId;
+                    if (!string.IsNullOrWhiteSpace(sessionId))
+                        await _connection.InvokeCoreAsync("AttachSession", [sessionId], cancellationToken);
+
+                    _connectionSubject.OnNext(new DaemonConnectionEvent(
+                        DaemonConnectionState.Connected,
+                        _hasConnected ? "Reconnected to daemon." : "Connected to daemon."));
+                    _hasConnected = true;
                     return;
                 }
                 catch (Exception ex)
@@ -133,8 +178,41 @@ public sealed class DaemonClient : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         _outputSubject.Dispose();
+        _connectionSubject.Dispose();
+        _lifetimeCts.Cancel();
+        _lifetimeCts.Dispose();
+        _disposed = true;
         await _connection.DisposeAsync();
         _connectGate.Dispose();
+    }
+
+    private async Task ReconnectLoopAsync()
+    {
+        if (_disposed)
+            return;
+
+        var attempts = 0;
+        while (!_disposed && !_lifetimeCts.Token.IsCancellationRequested)
+        {
+            attempts++;
+            try
+            {
+                await ConnectAsync(_lifetimeCts.Token);
+                return;
+            }
+            catch when (!_disposed && !_lifetimeCts.Token.IsCancellationRequested)
+            {
+                if (attempts >= 20)
+                {
+                    _connectionSubject.OnNext(new DaemonConnectionEvent(
+                        DaemonConnectionState.Disconnected,
+                        "Unable to reconnect to daemon after multiple attempts."));
+                    return;
+                }
+
+                await Task.Delay(TimeSpan.FromSeconds(2), _lifetimeCts.Token);
+            }
+        }
     }
 
     private static string BuildHubUrl(string endpoint)

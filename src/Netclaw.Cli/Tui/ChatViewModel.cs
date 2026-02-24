@@ -21,6 +21,7 @@ public partial class ChatViewModel : ReactiveViewModel
 
     private readonly Subject<SessionOutput> _outputSubject = new();
     private IDisposable? _daemonOutputSubscription;
+    private IDisposable? _daemonConnectionSubscription;
 
 #pragma warning disable CS0169, CS0414 // Backing fields used by [Reactive] source generator
     [Reactive] private bool _isGenerating;
@@ -81,6 +82,21 @@ public partial class ChatViewModel : ReactiveViewModel
                     RequestRedraw();
                 });
 
+            _daemonConnectionSubscription = _daemonClient.ConnectionEvents
+                .Subscribe(evt =>
+                {
+                    if (IsGenerating && evt.State is DaemonConnectionState.Connected)
+                    {
+                        StatusMessage = "Generating...";
+                    }
+                    else
+                    {
+                        StatusMessage = evt.Message;
+                    }
+
+                    RequestRedraw();
+                });
+
             await ConnectWithRetryAsync();
             var sessionId = await _daemonClient.CreateSessionAsync("tui");
             SessionIdDisplay = sessionId;
@@ -131,6 +147,7 @@ public partial class ChatViewModel : ReactiveViewModel
     public override void Dispose()
     {
         _daemonOutputSubscription?.Dispose();
+        _daemonConnectionSubscription?.Dispose();
         _outputSubject.Dispose();
 
         DisposeReactiveFields();
