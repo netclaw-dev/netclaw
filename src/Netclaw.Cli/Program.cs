@@ -69,12 +69,12 @@ static async Task RunAsync(string[] args)
         {
             case "start":
                 var startResult = manager.Start();
-                Console.WriteLine(startResult.Message);
+                WriteDaemonResult(startResult);
                 return;
 
             case "stop":
                 var stopResult = await manager.StopAsync();
-                Console.WriteLine(stopResult.Message);
+                WriteDaemonResult(stopResult);
                 return;
 
             case "status":
@@ -84,16 +84,17 @@ static async Task RunAsync(string[] args)
 
             case "install":
                 var installResult = await manager.InstallAsync();
-                Console.WriteLine(installResult.Message);
+                WriteDaemonResult(installResult);
                 return;
 
             case "uninstall":
                 var uninstallResult = await manager.UninstallAsync();
-                Console.WriteLine(uninstallResult.Message);
+                WriteDaemonResult(uninstallResult);
                 return;
 
             default:
                 Console.WriteLine("Usage: netclaw daemon [start|stop|status|install|uninstall]");
+                Environment.ExitCode = 1;
                 return;
         }
     }
@@ -178,6 +179,13 @@ static void WriteCrashLog(Exception ex)
     {
         Console.Error.WriteLine($"Fatal error (could not write crash log): {ex}");
     }
+}
+
+static void WriteDaemonResult(DaemonResult result)
+{
+    Console.WriteLine(result.Message);
+    if (!result.Success)
+        Environment.ExitCode = 1;
 }
 
 // ═══════════════════════════════════════════════════════════════════════

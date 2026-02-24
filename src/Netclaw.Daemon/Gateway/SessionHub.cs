@@ -14,6 +14,7 @@ namespace Netclaw.Daemon.Gateway;
 /// <code>
 /// Client → Server:
 ///   CreateSession(channelType: string) → sessionId: string
+///   AttachSession(sessionId: string) → void
 ///   SendMessage(sessionId: string, text: string) → void
 ///
 /// Server → Client:
@@ -34,9 +35,14 @@ public sealed class SessionHub : Hub<ISessionHubClient>
         return _registry.CreateSessionAsync(Context.ConnectionId, channelType);
     }
 
+    public Task AttachSession(string sessionId)
+    {
+        return _registry.AttachSessionAsync(Context.ConnectionId, sessionId);
+    }
+
     public Task SendMessage(string sessionId, string text)
     {
-        return _registry.SendMessageAsync(sessionId, text);
+        return _registry.SendMessageAsync(Context.ConnectionId, sessionId, text);
     }
 
     public override async Task OnDisconnectedAsync(Exception? exception)

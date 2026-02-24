@@ -174,4 +174,8 @@ static void ConfigureDaemonServices(IServiceCollection services, IConfigurationM
     // Config hot-reload watcher
     services.AddSingleton<ConfigWatcherService>();
     services.AddSingleton<IHostedService>(sp => sp.GetRequiredService<ConfigWatcherService>());
+
+    // PID file authority for daemon lifecycle management
+    services.AddSingleton<PidFileService>();
+    services.AddSingleton<IHostedService>(sp => sp.GetRequiredService<PidFileService>());
 }

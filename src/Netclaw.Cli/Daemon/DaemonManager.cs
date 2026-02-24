@@ -141,6 +141,13 @@ public sealed partial class DaemonManager
                     Message: "Daemon is not running (stale PID file cleaned up).");
             }
 
+            if (!IsDaemonProcess(process))
+            {
+                CleanupPidFile();
+                return new DaemonStatus(IsRunning: false, Pid: null,
+                    Message: "Daemon is not running (PID file pointed to a different process).");
+            }
+
             var uptime = _timeProvider.GetUtcNow() - new DateTimeOffset(process.StartTime.ToUniversalTime(), TimeSpan.Zero);
             return new DaemonStatus(IsRunning: true, Pid: pid,
                 Message: $"Daemon running (PID {pid}, uptime {FormatUptime(uptime)}).");
@@ -287,12 +294,90 @@ public sealed partial class DaemonManager
     {
         try
         {
-            // ProcessName does not include extension on any platform
-            return process.ProcessName is "netclawd" or "dotnet";
+            // ProcessName does not include extension on any platform.
+            if (string.Equals(process.ProcessName, "netclawd", StringComparison.OrdinalIgnoreCase))
+                return true;
+
+            if (!string.Equals(process.ProcessName, "dotnet", StringComparison.OrdinalIgnoreCase))
+                return false;
+
+            var commandLine = TryReadProcessCommandLine(process.Id);
+            if (string.IsNullOrWhiteSpace(commandLine))
+                return OperatingSystem.IsWindows();
+
+            return LooksLikeDaemonCommandLine(commandLine);
         }
         catch
         {
             return false;
+        }
+    }
+
+    internal static bool LooksLikeDaemonCommandLine(string commandLine)
+    {
+        return commandLine.Contains("netclawd.dll", StringComparison.OrdinalIgnoreCase)
+            || commandLine.Contains("/netclawd", StringComparison.OrdinalIgnoreCase)
+            || commandLine.Contains("\\netclawd", StringComparison.OrdinalIgnoreCase)
+            || commandLine.EndsWith(" netclawd", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(commandLine.Trim(), "netclawd", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string? TryReadProcessCommandLine(int pid)
+    {
+        if (OperatingSystem.IsLinux())
+            return TryReadLinuxCommandLine(pid);
+
+        if (OperatingSystem.IsMacOS())
+            return TryReadMacOsCommandLine(pid);
+
+        // Windows command-line inspection requires additional APIs; daemon
+        // management on Windows is tracked separately in issue #21.
+        return null;
+    }
+
+    private static string? TryReadLinuxCommandLine(int pid)
+    {
+        try
+        {
+            var procCmdlinePath = $"/proc/{pid}/cmdline";
+            if (!File.Exists(procCmdlinePath))
+                return null;
+
+            var raw = File.ReadAllText(procCmdlinePath);
+            return raw.Replace('\0', ' ').Trim();
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static string? TryReadMacOsCommandLine(int pid)
+    {
+        try
+        {
+            var psi = new ProcessStartInfo
+            {
+                FileName = "ps",
+                Arguments = $"-p {pid} -o command=",
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true,
+            };
+
+            using var proc = Process.Start(psi);
+            if (proc is null)
+                return null;
+
+            var stdout = proc.StandardOutput.ReadToEnd();
+            proc.WaitForExit();
+
+            return proc.ExitCode == 0 ? stdout.Trim() : null;
+        }
+        catch
+        {
+            return null;
         }
     }
 

@@ -18,7 +18,9 @@
 
   <ItemGroup>
     <ProjectReference Include="../Netclaw.Actors/Netclaw.Actors.csproj"/>
+    <ProjectReference Include="../Netclaw.Cli/Netclaw.Cli.csproj" />
     <ProjectReference Include="../Netclaw.Configuration/Netclaw.Configuration.csproj"/>
+    <ProjectReference Include="../Netclaw.Daemon/Netclaw.Daemon.csproj" />
   </ItemGroup>
 
 </Project>
