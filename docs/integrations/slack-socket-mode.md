@@ -64,9 +64,9 @@ Supported Slack settings:
 - `DefaultChannelId` - optional hard filter to one channel ID
 - `DefaultChannelName` - optional channel name resolved at startup
 - `MentionOnly` - if `true`, plain `message` events require bot mention
-- `AllowDirectMessages` - if `true`, direct messages do not require mention
-- `AllowedChannelIds` - optional channel allow-list
-- `AllowedUserIds` - optional user allow-list
+- `AllowDirectMessages` - defaults to `false` (secure by default)
+- `AllowedChannelIds` - defaults to empty array (`[]`), so no channels are allowed until explicitly configured
+- `AllowedUserIds` - defaults to empty array (`[]`), meaning no user filter is applied beyond channel/DM policy
 
 ## Runtime behavior
 

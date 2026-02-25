@@ -172,9 +172,9 @@ Slack Socket Mode channel configuration.
 | `DefaultChannelId` | string? | `null` | Optional fixed channel ID filter. |
 | `DefaultChannelName` | string? | `null` | Optional channel name resolved to channel ID at startup. |
 | `MentionOnly` | bool | `true` | If true, plain `message` events are ignored unless the bot is mentioned. |
-| `AllowDirectMessages` | bool | `true` | If true, DM messages do not require mention. |
-| `AllowedChannelIds` | string[]? | `null` | Optional allow-list of Slack channel IDs. |
-| `AllowedUserIds` | string[]? | `null` | Optional allow-list of Slack user IDs. |
+| `AllowDirectMessages` | bool | `false` | If true, DM messages do not require mention. |
+| `AllowedChannelIds` | string[] | `[]` | Allow-list of Slack channel IDs. Empty means no channels are allowed. |
+| `AllowedUserIds` | string[] | `[]` | Optional allow-list of Slack user IDs. Empty means all users in allowed channels/DM policy are accepted. |
 
 ### Logging
 

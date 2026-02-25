@@ -106,15 +106,13 @@ public sealed class SlackConversationActor : ReceiveActor
         if (message.IsDirectMessage)
             return _dependencies.Options.AllowDirectMessages;
 
-        if (!string.IsNullOrWhiteSpace(_dependencies.DefaultChannelId)
-            && !string.Equals(message.ChannelId, _dependencies.DefaultChannelId, StringComparison.Ordinal))
-            return false;
+        var matchesDefaultChannel = !string.IsNullOrWhiteSpace(_dependencies.DefaultChannelId)
+            && string.Equals(message.ChannelId, _dependencies.DefaultChannelId, StringComparison.Ordinal);
 
-        if (_dependencies.Options.AllowedChannelIds is { Length: > 0 }
-            && !_dependencies.Options.AllowedChannelIds.Contains(message.ChannelId, StringComparer.Ordinal))
-            return false;
+        var matchesAllowedChannel = _dependencies.Options.AllowedChannelIds
+            .Contains(message.ChannelId, StringComparer.Ordinal);
 
-        return true;
+        return matchesDefaultChannel || matchesAllowedChannel;
     }
 
     private bool IsBotMessage(SlackInboundMessage message)
@@ -131,7 +129,7 @@ public sealed class SlackConversationActor : ReceiveActor
 
     private bool IsAllowedUser(SlackInboundMessage message)
     {
-        if (_dependencies.Options.AllowedUserIds is not { Length: > 0 })
+        if (_dependencies.Options.AllowedUserIds.Length == 0)
             return true;
 
         if (string.IsNullOrWhiteSpace(message.UserId))

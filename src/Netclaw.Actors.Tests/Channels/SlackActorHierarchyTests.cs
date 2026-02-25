@@ -135,7 +135,8 @@ public sealed class SlackActorHierarchyTests(ITestOutputHelper output) : TestKit
             Options: new SlackChannelOptions
             {
                 MentionOnly = true,
-                AllowDirectMessages = true
+                AllowDirectMessages = true,
+                AllowedChannelIds = ["C1"]
             },
             BotUserId: "UBOT",
             DefaultChannelId: null,

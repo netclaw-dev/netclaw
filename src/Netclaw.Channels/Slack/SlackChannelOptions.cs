@@ -16,9 +16,9 @@ public sealed class SlackChannelOptions
 
     public bool MentionOnly { get; init; } = true;
 
-    public bool AllowDirectMessages { get; init; } = true;
+    public bool AllowDirectMessages { get; init; }
 
-    public string[]? AllowedChannelIds { get; init; }
+    public string[] AllowedChannelIds { get; init; } = [];
 
-    public string[]? AllowedUserIds { get; init; }
+    public string[] AllowedUserIds { get; init; } = [];
 }
