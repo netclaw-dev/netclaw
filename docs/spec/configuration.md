@@ -148,6 +148,34 @@ Configuration for first-party tool execution.
 | `ShellTimeoutSeconds` | int | `60` | Timeout for shell command execution. |
 | `MaxOutputChars` | int | `32000` | Maximum characters captured from tool output. |
 
+### Slack
+
+Slack Socket Mode channel configuration.
+
+```json
+{
+  "Slack": {
+    "Enabled": true,
+    "SocketMode": true,
+    "MentionOnly": true,
+    "DefaultChannelName": "openclaw"
+  }
+}
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `Enabled` | bool | `false` | Enables Slack channel startup in the daemon. |
+| `SocketMode` | bool | `true` | Slack transport mode. MVP supports Socket Mode only. |
+| `BotToken` | string? | `null` | Slack bot token (`xoxb-...`). Store in `secrets.json`. |
+| `AppToken` | string? | `null` | Slack app-level token (`xapp-...`). Required for Socket Mode. Store in `secrets.json`. |
+| `DefaultChannelId` | string? | `null` | Optional fixed channel ID filter. |
+| `DefaultChannelName` | string? | `null` | Optional channel name resolved to channel ID at startup. |
+| `MentionOnly` | bool | `true` | If true, plain `message` events are ignored unless the bot is mentioned. |
+| `AllowDirectMessages` | bool | `true` | If true, DM messages do not require mention. |
+| `AllowedChannelIds` | string[]? | `null` | Optional allow-list of Slack channel IDs. |
+| `AllowedUserIds` | string[]? | `null` | Optional allow-list of Slack user IDs. |
+
 ## Secrets
 
 API keys and tokens should be stored in `secrets.json` using the same key
@@ -155,6 +183,10 @@ paths as `netclaw.json`. The configuration system merges them automatically.
 
 ```json
 {
+  "Slack": {
+    "BotToken": "xoxb-your-bot-token",
+    "AppToken": "xapp-your-app-token"
+  },
   "Providers": {
     "openrouter": {
       "ApiKey": "sk-or-v1-your-key-here"
@@ -178,6 +210,10 @@ export NETCLAW_Models__Main__ModelId="anthropic/claude-sonnet-4"
 
 # Set a provider API key
 export NETCLAW_Providers__openrouter__ApiKey="sk-or-v1-..."
+
+# Set Slack tokens
+export NETCLAW_Slack__BotToken="xoxb-..."
+export NETCLAW_Slack__AppToken="xapp-..."
 
 # Override session settings
 export NETCLAW_Session__MaxToolIterationsPerTurn="5"

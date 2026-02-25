@@ -15,6 +15,11 @@ public sealed record ChannelInput
     public required string SenderId { get; init; }
 
     /// <summary>
+    /// Optional channel-specific identifier (e.g. Slack channel ID).
+    /// </summary>
+    public string? ChannelId { get; init; }
+
+    /// <summary>
     /// Optional message ID for correlation and deduplication.
     /// </summary>
     public string? MessageId { get; init; }

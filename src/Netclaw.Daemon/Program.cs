@@ -10,9 +10,13 @@ using Netclaw.Actors.Channels;
 using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
+using Netclaw.Channels;
+using Netclaw.Channels.Slack;
 using Netclaw.Daemon.Configuration;
 using Netclaw.Daemon.Gateway;
 using Netclaw.Daemon.Services;
+using SlackNet.Events;
+using SlackNet.Extensions.DependencyInjection;
 
 try
 {
@@ -209,6 +213,8 @@ static void ConfigureDaemonServices(IServiceCollection services, IConfigurationM
     // Session pipeline (stream API for channels)
     services.AddSingleton<SessionPipeline>();
 
+    ConfigureSlackChannel(services, configuration);
+
     // Config hot-reload watcher
     services.AddSingleton<ConfigWatcherService>();
     services.AddSingleton<IHostedService>(sp => sp.GetRequiredService<ConfigWatcherService>());
@@ -220,4 +226,35 @@ static void ConfigureDaemonServices(IServiceCollection services, IConfigurationM
     // Active session cleanup during host shutdown
     services.AddSingleton<SessionRegistryShutdownService>();
     services.AddSingleton<IHostedService>(sp => sp.GetRequiredService<SessionRegistryShutdownService>());
+}
+
+static void ConfigureSlackChannel(IServiceCollection services, IConfiguration configuration)
+{
+    var slackOptions = configuration.GetSection("Slack").Get<SlackChannelOptions>() ?? new SlackChannelOptions();
+    services.AddSingleton(slackOptions);
+
+    if (!slackOptions.Enabled)
+        return;
+
+    if (string.IsNullOrWhiteSpace(slackOptions.BotToken))
+        throw new InvalidOperationException("Slack is enabled but Slack:BotToken is not configured.");
+
+    if (slackOptions.SocketMode && string.IsNullOrWhiteSpace(slackOptions.AppToken))
+        throw new InvalidOperationException("Slack Socket Mode is enabled but Slack:AppToken is not configured.");
+
+    services.AddSingleton<SlackChannel>();
+
+    services.AddSlackNet(c =>
+    {
+        c.UseApiToken(slackOptions.BotToken!);
+
+        if (slackOptions.SocketMode)
+            c.UseAppLevelToken(slackOptions.AppToken!);
+
+        c.RegisterEventHandler<MessageEvent, SlackChannel>();
+        c.RegisterEventHandler<AppMention, SlackChannel>();
+    });
+
+    services.AddSingleton<IChannel>(sp => sp.GetRequiredService<SlackChannel>());
+    services.AddSingleton<IHostedService>(sp => sp.GetRequiredService<SlackChannel>());
 }

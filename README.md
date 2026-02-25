@@ -86,6 +86,12 @@ STEP_TIMEOUT_SECONDS=120 scripts/smoke/check.sh
 
 - Daemon upgrade and rollback planning: `docs/runbooks/daemon-upgrade.md`
 
+## Integrations
+
+- Integration docs index: `docs/integrations/README.md`
+- Slack Socket Mode setup: `docs/integrations/slack-socket-mode.md`
+- Slack ACL policy model: `docs/integrations/slack-acl-policy.md`
+
 ## Persistence Config
 
 Daemon persistence config belongs in `~/.netclaw/config/netclaw.json` (not

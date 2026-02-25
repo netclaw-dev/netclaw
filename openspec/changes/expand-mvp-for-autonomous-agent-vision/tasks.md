@@ -143,13 +143,13 @@
 
 ## 12. Slack Socket Mode Adapter
 
-- [ ] 12.1 Implement Slack Socket Mode connection and event handling
+- [x] 12.1 Implement Slack Socket Mode connection and event handling
   (`app_mention`, `message` events).
-- [ ] 12.2 Implement entity key extraction from Slack events
+- [x] 12.2 Implement entity key extraction from Slack events
   (`{channelId}/{threadTs}`).
-- [ ] 12.3 Implement reply delivery: subscribe to session broadcasts, post
+- [x] 12.3 Implement reply delivery: subscribe to session broadcasts, post
   replies to originating Slack thread.
-- [ ] 12.4 Implement reconnection on disconnect.
+- [x] 12.4 Implement reconnection on disconnect.
 - [ ] 12.5 Write end-to-end test proving message → reply loop.
 
 ## 13. Provider Abstraction

@@ -160,6 +160,7 @@ public sealed class SessionPipeline
             {
                 ChannelType = options.ChannelType,
                 SenderId = input.SenderId,
+                ChannelId = input.ChannelId,
                 ReceivedAt = input.ReceivedAt
             }
         };
