@@ -18,6 +18,8 @@ using Netclaw.Daemon.Services;
 using SlackNet.Events;
 using SlackNet.Extensions.DependencyInjection;
 
+const string SlackChannelKey = "slack";
+
 try
 {
     await RunAsync(args);
@@ -242,7 +244,10 @@ static void ConfigureSlackChannel(IServiceCollection services, IConfiguration co
     if (slackOptions.SocketMode && string.IsNullOrWhiteSpace(slackOptions.AppToken))
         throw new InvalidOperationException("Slack Socket Mode is enabled but Slack:AppToken is not configured.");
 
-    services.AddSingleton<SlackChannel>();
+    services.AddSingleton<ISlackReplyClient, SlackReplyClient>();
+    services.AddKeyedSingleton<IChannel, SlackChannel>(SlackChannelKey);
+    services.AddSingleton<SlackChannel>(sp =>
+        (SlackChannel)sp.GetRequiredKeyedService<IChannel>(SlackChannelKey));
 
     services.AddSlackNet(c =>
     {
@@ -255,6 +260,6 @@ static void ConfigureSlackChannel(IServiceCollection services, IConfiguration co
         c.RegisterEventHandler<AppMention, SlackChannel>();
     });
 
-    services.AddSingleton<IChannel>(sp => sp.GetRequiredService<SlackChannel>());
-    services.AddSingleton<IHostedService>(sp => sp.GetRequiredService<SlackChannel>());
+    services.AddSingleton<IHostedService>(sp =>
+        (IHostedService)sp.GetRequiredKeyedService<IChannel>(SlackChannelKey));
 }

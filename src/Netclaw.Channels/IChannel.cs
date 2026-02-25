@@ -12,7 +12,7 @@ public interface IChannel : IHostedService
 
     string DisplayName { get; }
 
-    ChannelHealth GetHealth();
+    ValueTask<ChannelHealth> GetHealthAsync(CancellationToken cancellationToken = default);
 }
 
 public enum ChannelHealthStatus

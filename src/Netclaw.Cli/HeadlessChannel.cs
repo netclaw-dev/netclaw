@@ -29,9 +29,14 @@ public sealed class HeadlessChannel : IChannel
     public string ChannelType => "headless";
     public string DisplayName => "Headless Prompt";
 
-    public ChannelHealth GetHealth() => _isConnected
-        ? new ChannelHealth(ChannelHealthStatus.Healthy)
-        : new ChannelHealth(ChannelHealthStatus.Disconnected, "No active daemon connection");
+    public ValueTask<ChannelHealth> GetHealthAsync(CancellationToken cancellationToken = default)
+    {
+        var health = _isConnected
+            ? new ChannelHealth(ChannelHealthStatus.Healthy)
+            : new ChannelHealth(ChannelHealthStatus.Disconnected, "No active daemon connection");
+
+        return ValueTask.FromResult(health);
+    }
 
     public HeadlessChannel(
         DaemonClient daemonClient,

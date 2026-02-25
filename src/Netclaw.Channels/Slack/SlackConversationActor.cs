@@ -1,4 +1,5 @@
 using Akka.Actor;
+using Akka.Event;
 using Netclaw.Actors.Protocol;
 
 namespace Netclaw.Channels.Slack;
@@ -7,19 +8,29 @@ public sealed class SlackConversationActor : ReceiveActor
 {
     private readonly string _conversationId;
     private readonly SlackGatewayDependencies _dependencies;
+    private readonly ILoggingAdapter _log;
 
     public SlackConversationActor(string conversationId, SlackGatewayDependencies dependencies)
     {
         _conversationId = conversationId;
         _dependencies = dependencies;
+        _log = Context.GetLogger()
+            .WithContext("Adapter", "slack")
+            .WithContext("SlackChannelId", _conversationId);
 
         Receive<SlackInboundMessage>(message =>
         {
             if (!IsAllowedConversation(message))
+            {
+                _log.Debug("Ignoring Slack event {0}: channel not allowed", message.EventId);
                 return;
+            }
 
             if (!IsAllowedUser(message))
+            {
+                _log.Debug("Ignoring Slack event {0}: user not allowed", message.EventId);
                 return;
+            }
 
             var containsMention = ContainsBotMention(message.Text);
             var threadTs = string.IsNullOrWhiteSpace(message.ThreadTs) ? message.EventTs : message.ThreadTs!;
@@ -35,10 +46,16 @@ public sealed class SlackConversationActor : ReceiveActor
                 containsMention);
 
             if (decision is SlackRoutingDecision.Ignore)
+            {
+                _log.Debug("Ignoring Slack event {0}: routing policy decision ignore", message.EventId);
                 return;
+            }
 
             if (decision is SlackRoutingDecision.ContinueOnly && !threadExists)
+            {
+                _log.Debug("Ignoring Slack event {0}: thread continuation requested but no thread actor exists", message.EventId);
                 return;
+            }
 
             var thread = existingThread.IsNobody()
                 ? Context.ActorOf(CreateThreadProps(message.ChannelId, threadTs), threadActorName)
@@ -46,10 +63,20 @@ public sealed class SlackConversationActor : ReceiveActor
 
             var normalized = NormalizeInboundText(message.Text);
             if (string.IsNullOrWhiteSpace(normalized))
+            {
+                _log.Debug("Ignoring Slack event {0}: normalized text is empty", message.EventId);
                 return;
+            }
+
+            var sessionId = new SessionId($"{_conversationId}/{threadTs}");
+            var log = _log
+                .WithContext("SlackThreadTs", threadTs)
+                .WithContext("SessionId", sessionId.Value);
+
+            log.Debug("Routing Slack event {0} to session thread actor", message.EventId);
 
             thread.Forward(new SlackThreadInbound(
-                SessionId: new SessionId($"{_conversationId}/{threadTs}"),
+                SessionId: sessionId,
                 ChannelId: message.ChannelId,
                 ThreadTs: threadTs,
                 SenderId: message.UserId ?? "slack-user",

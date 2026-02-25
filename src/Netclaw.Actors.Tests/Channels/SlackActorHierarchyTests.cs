@@ -114,7 +114,7 @@ public sealed class SlackActorHierarchyTests(ITestOutputHelper output) : TestKit
             },
             BotUserId: "UBOT",
             DefaultChannelId: null,
-            PostMessageAsync: _ => Task.CompletedTask,
+            ReplyClient: new NoopReplyClient(),
             ConversationPropsFactory: conversationPropsFactory,
             ThreadPropsFactory: threadPropsFactory);
     }
@@ -167,5 +167,11 @@ public sealed class SlackActorHierarchyTests(ITestOutputHelper output) : TestKit
         {
             ReceiveAny(msg => target.Tell(msg));
         }
+    }
+
+    private sealed class NoopReplyClient : ISlackReplyClient
+    {
+        public Task PostThreadReplyAsync(SlackPostMessage message, CancellationToken cancellationToken = default)
+            => Task.CompletedTask;
     }
 }

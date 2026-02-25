@@ -9,12 +9,13 @@ using SlackNet.WebApi;
 
 namespace Netclaw.Channels.Slack;
 
-public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEventHandler<AppMention>, IHostedService
+public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEventHandler<AppMention>
 {
     private readonly SessionPipeline _pipeline;
     private readonly ActorSystem _system;
     private readonly ISlackApiClient _slack;
     private readonly ISlackSocketModeClient _socketModeClient;
+    private readonly ISlackReplyClient _replyClient;
     private readonly TimeProvider _timeProvider;
     private readonly SlackChannelOptions _options;
     private readonly ILogger<SlackChannel> _logger;
@@ -29,6 +30,7 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
         ActorSystem system,
         ISlackApiClient slack,
         ISlackSocketModeClient socketModeClient,
+        ISlackReplyClient replyClient,
         TimeProvider timeProvider,
         SlackChannelOptions options,
         ILogger<SlackChannel> logger)
@@ -37,6 +39,7 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
         _system = system;
         _slack = slack;
         _socketModeClient = socketModeClient;
+        _replyClient = replyClient;
         _timeProvider = timeProvider;
         _options = options;
         _logger = logger;
@@ -46,15 +49,15 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
 
     public string DisplayName => "Slack";
 
-    public ChannelHealth GetHealth()
+    public ValueTask<ChannelHealth> GetHealthAsync(CancellationToken cancellationToken = default)
     {
         if (!_options.Enabled)
-            return new ChannelHealth(ChannelHealthStatus.Degraded, "Slack channel disabled.");
+            return ValueTask.FromResult(new ChannelHealth(ChannelHealthStatus.Degraded, "Slack channel disabled."));
 
         if (_connected)
-            return new ChannelHealth(ChannelHealthStatus.Healthy);
+            return ValueTask.FromResult(new ChannelHealth(ChannelHealthStatus.Healthy));
 
-        return new ChannelHealth(ChannelHealthStatus.Disconnected, "Slack socket mode disconnected.");
+        return ValueTask.FromResult(new ChannelHealth(ChannelHealthStatus.Disconnected, "Slack socket mode disconnected."));
     }
 
     public async Task StartAsync(CancellationToken cancellationToken)
@@ -80,7 +83,7 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
                 Options: _options,
                 BotUserId: _botUserId,
                 DefaultChannelId: _defaultChannelId,
-                PostMessageAsync: PostReplyAsync)),
+                ReplyClient: _replyClient)),
             "slack-gateway");
 
         await _socketModeClient.Connect(cancellationToken: cancellationToken);
@@ -113,7 +116,12 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
     {
         _gateway?.Tell(new SlackInboundMessage(
             Kind: SlackInboundKind.Message,
-            EventId: BuildEventId(slackEvent.Channel, slackEvent.Ts),
+            EventId: BuildEventId(
+                channelId: slackEvent.Channel,
+                eventTs: slackEvent.Ts,
+                threadTs: slackEvent.ThreadTs,
+                userId: slackEvent.User,
+                text: slackEvent.Text),
             ChannelId: slackEvent.Channel,
             ThreadTs: slackEvent.ThreadTs,
             EventTs: slackEvent.Ts,
@@ -131,7 +139,12 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
     {
         _gateway?.Tell(new SlackInboundMessage(
             Kind: SlackInboundKind.AppMention,
-            EventId: BuildEventId(slackEvent.Channel, slackEvent.Ts),
+            EventId: BuildEventId(
+                channelId: slackEvent.Channel,
+                eventTs: slackEvent.Ts,
+                threadTs: slackEvent.ThreadTs,
+                userId: slackEvent.User,
+                text: slackEvent.Text),
             ChannelId: slackEvent.Channel,
             ThreadTs: slackEvent.ThreadTs,
             EventTs: slackEvent.Ts,
@@ -145,28 +158,34 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
         return Task.CompletedTask;
     }
 
-    private Task PostReplyAsync(SlackPostMessage message)
-    {
-        return _slack.Chat.PostMessage(new Message
-        {
-            Channel = message.ChannelId,
-            ThreadTs = message.ThreadTs,
-            Text = message.Text
-        });
-    }
-
     private static bool IsDirectConversation(string channelId)
     {
         if (string.IsNullOrWhiteSpace(channelId))
             return false;
 
-        return channelId.StartsWith("D", StringComparison.Ordinal);
+        return channelId.StartsWith('D');
     }
 
-    private static string BuildEventId(string channelId, string eventTs) =>
-        string.IsNullOrWhiteSpace(channelId) || string.IsNullOrWhiteSpace(eventTs)
-            ? Guid.NewGuid().ToString("N")
-            : $"{channelId}:{eventTs}";
+    private static string BuildEventId(
+        string? channelId,
+        string? eventTs,
+        string? threadTs,
+        string? userId,
+        string? text)
+    {
+        if (!string.IsNullOrWhiteSpace(channelId) && !string.IsNullOrWhiteSpace(eventTs))
+            return $"{channelId}:{eventTs}";
+
+        var fallback = string.Join("|", [
+            channelId ?? string.Empty,
+            threadTs ?? string.Empty,
+            eventTs ?? string.Empty,
+            userId ?? string.Empty,
+            text ?? string.Empty
+        ]);
+
+        return fallback;
+    }
 
     private async Task<string?> ResolveDefaultChannelIdAsync(CancellationToken cancellationToken)
     {

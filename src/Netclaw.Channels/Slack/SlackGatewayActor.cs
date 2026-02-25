@@ -1,4 +1,5 @@
 using Akka.Actor;
+using Akka.Event;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
 
@@ -9,17 +10,22 @@ public sealed class SlackGatewayActor : ReceiveActor
     private const int MaxProcessedEventIds = 4096;
 
     private readonly SlackGatewayDependencies _dependencies;
+    private readonly ILoggingAdapter _log;
     private readonly Dictionary<string, byte> _processedEventIds = new(StringComparer.Ordinal);
     private readonly Queue<string> _processedEventOrder = new();
 
     public SlackGatewayActor(SlackGatewayDependencies dependencies)
     {
         _dependencies = dependencies;
+        _log = Context.GetLogger().WithContext("Adapter", "slack");
 
         Receive<SlackInboundMessage>(message =>
         {
             if (!TryMarkEventProcessed(message.EventId))
+            {
+                _log.Debug("Dropping duplicate Slack event {0}", message.EventId);
                 return;
+            }
 
             var actorName = Uri.EscapeDataString(message.ChannelId);
             var conversationProps = _dependencies.ConversationPropsFactory?.Invoke(message.ChannelId, _dependencies)
@@ -29,6 +35,7 @@ public sealed class SlackGatewayActor : ReceiveActor
                     conversationProps,
                     actorName));
 
+            _log.Debug("Routing Slack event {0} to conversation {1}", message.EventId, message.ChannelId);
             conversation.Forward(message);
         });
     }
@@ -62,6 +69,6 @@ public sealed record SlackGatewayDependencies(
     SlackChannelOptions Options,
     string? BotUserId,
     string? DefaultChannelId,
-    Func<SlackPostMessage, Task> PostMessageAsync,
+    ISlackReplyClient ReplyClient,
     Func<string, SlackGatewayDependencies, Props>? ConversationPropsFactory = null,
     Func<SessionId, string, string, SlackGatewayDependencies, Props>? ThreadPropsFactory = null);
