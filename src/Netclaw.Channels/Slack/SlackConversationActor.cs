@@ -26,6 +26,12 @@ public sealed class SlackConversationActor : ReceiveActor
                 return;
             }
 
+            if (IsBotMessage(message))
+            {
+                _log.Debug("Ignoring Slack event {0}: bot/self message", message.EventId);
+                return;
+            }
+
             if (!IsAllowedUser(message))
             {
                 _log.Debug("Ignoring Slack event {0}: user not allowed", message.EventId);
@@ -90,6 +96,9 @@ public sealed class SlackConversationActor : ReceiveActor
 
     private bool IsAllowedConversation(SlackInboundMessage message)
     {
+        if (message.IsDirectMessage)
+            return _dependencies.Options.AllowDirectMessages;
+
         if (!string.IsNullOrWhiteSpace(_dependencies.DefaultChannelId)
             && !string.Equals(message.ChannelId, _dependencies.DefaultChannelId, StringComparison.Ordinal))
             return false;
@@ -99,6 +108,18 @@ public sealed class SlackConversationActor : ReceiveActor
             return false;
 
         return true;
+    }
+
+    private bool IsBotMessage(SlackInboundMessage message)
+    {
+        if (!string.IsNullOrWhiteSpace(message.BotId))
+            return true;
+
+        if (!string.IsNullOrWhiteSpace(_dependencies.BotUserId)
+            && string.Equals(message.UserId, _dependencies.BotUserId, StringComparison.Ordinal))
+            return true;
+
+        return false;
     }
 
     private bool IsAllowedUser(SlackInboundMessage message)

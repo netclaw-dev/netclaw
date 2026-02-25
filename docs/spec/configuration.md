@@ -176,6 +176,29 @@ Slack Socket Mode channel configuration.
 | `AllowedChannelIds` | string[]? | `null` | Optional allow-list of Slack channel IDs. |
 | `AllowedUserIds` | string[]? | `null` | Optional allow-list of Slack user IDs. |
 
+### Logging
+
+Unified daemon logging settings used by both Microsoft.Extensions.Logging and
+Akka.NET logger integration.
+
+```json
+{
+  "Logging": {
+    "LogLevel": {
+      "Default": "Debug"
+    },
+    "Console": {
+      "Enabled": true
+    }
+  }
+}
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `LogLevel:Default` | string | `Warning` | Minimum log level (`Debug`, `Information`, `Warning`, `Error`, etc.) shared by MEL and Akka.NET. |
+| `Console:Enabled` | bool | `false` | Enables console logger provider output for daemon debugging. |
+
 ## Secrets
 
 API keys and tokens should be stored in `secrets.json` using the same key

@@ -137,7 +137,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor
 
             _toolIterationCount = 0;
             _state = _state.AddUserMessage(cmd.Content);
-            Sender.Tell(CommandAck.For(_sessionId));
+            TryReplyAck();
             FireLlmCall();
             Become(Processing);
         });
@@ -152,7 +152,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor
         {
             _log.Info("Buffering user message (LLM call in progress)");
             _buffer.Add(cmd);
-            Sender.Tell(CommandAck.For(_sessionId));
+            TryReplyAck();
         });
 
         Command<LlmResponseReceived>(msg =>
@@ -276,7 +276,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor
         {
             _log.Info("Buffering user message (compaction in progress)");
             _buffer.Add(cmd);
-            Sender.Tell(CommandAck.For(_sessionId));
+            TryReplyAck();
         });
 
         Command<CompactionTriggered>(msg =>
@@ -931,6 +931,14 @@ public sealed class LlmSessionActor : ReceivePersistentActor
                 subscriber.Tell(output);
             }
         }
+    }
+
+    private void TryReplyAck()
+    {
+        if (Sender.IsNobody() || Equals(Sender, Context.System.DeadLetters))
+            return;
+
+        Sender.Tell(CommandAck.For(_sessionId));
     }
 
     internal void SetTitle(string title)

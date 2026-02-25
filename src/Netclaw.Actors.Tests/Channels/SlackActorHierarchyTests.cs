@@ -99,6 +99,31 @@ public sealed class SlackActorHierarchyTests(ITestOutputHelper output) : TestKit
         Assert.Equal("hello from dm", inbound.Text);
     }
 
+    [Fact]
+    public void Conversation_ignores_bot_messages_to_prevent_feedback_loop()
+    {
+        var sink = CreateTestProbe("bot-loop-sink");
+        var deps = CreateDependencies(
+            threadPropsFactory: (_, _, _, _) => Props.Create(() => new ForwardActor(sink.Ref)));
+
+        var conversation = Sys.ActorOf(SlackConversationActor.CreateProps("C1", deps), "slack-conversation-test-3");
+
+        conversation.Tell(new SlackInboundMessage(
+            Kind: SlackInboundKind.Message,
+            EventId: "C1:400",
+            ChannelId: "C1",
+            ThreadTs: "400.1",
+            EventTs: "400.2",
+            UserId: "UBOT",
+            BotId: "B1",
+            Text: "bot output",
+            Subtype: "bot_message",
+            Hidden: false,
+            IsDirectMessage: false));
+
+        sink.ExpectNoMsg(TimeSpan.FromMilliseconds(250));
+    }
+
     private static SlackGatewayDependencies CreateDependencies(
         Func<string, SlackGatewayDependencies, Props>? conversationPropsFactory = null,
         Func<SessionId, string, string, SlackGatewayDependencies, Props>? threadPropsFactory = null)

@@ -90,6 +90,7 @@ internal sealed class SlackThreadBindingActor : ReceiveActor
             return;
 
         _log.Info("Initializing Slack thread binding pipeline");
+        var self = Self;
 
         var materialized = await _dependencies.Pipeline.CreateAsync(_sessionId, new SessionPipelineOptions
         {
@@ -102,7 +103,7 @@ internal sealed class SlackThreadBindingActor : ReceiveActor
             .Run(_dependencies.ActorSystem);
 
         materialized.Output
-            .To(Sink.ForEach<SessionOutput>(output => Self.Tell(new ThreadOutput(output))))
+            .To(Sink.ForEach<SessionOutput>(output => self.Tell(new ThreadOutput(output))))
             .Run(_dependencies.ActorSystem);
 
         _session = materialized;
