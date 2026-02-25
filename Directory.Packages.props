@@ -5,6 +5,7 @@
     <AkkaHostingVersion>1.5.60</AkkaHostingVersion>
     <AkkaPersistenceSqlHostingVersion>1.5.60.1</AkkaPersistenceSqlHostingVersion>
     <AkkaRemindersVersion>0.4.0</AkkaRemindersVersion>
+    <OpenTelemetryVersion>1.13.1</OpenTelemetryVersion>
   </PropertyGroup>
   <!-- App dependencies -->
   <ItemGroup>
@@ -20,6 +21,9 @@
     <PackageVersion Include="Microsoft.Data.Sqlite" Version="10.0.3" />
     <PackageVersion Include="Microsoft.Extensions.Configuration.Json" Version="10.0.2" />
     <PackageVersion Include="Microsoft.Extensions.Hosting" Version="10.0.2" />
+    <PackageVersion Include="OpenTelemetry" Version="$(OpenTelemetryVersion)" />
+    <PackageVersion Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="$(OpenTelemetryVersion)" />
+    <PackageVersion Include="OpenTelemetry.Extensions.Hosting" Version="$(OpenTelemetryVersion)" />
     <PackageVersion Include="OllamaSharp" Version="5.4.16" />
     <PackageVersion Include="SlackNet" Version="0.17.9" />
     <PackageVersion Include="SlackNet.Extensions.DependencyInjection" Version="0.17.9" />

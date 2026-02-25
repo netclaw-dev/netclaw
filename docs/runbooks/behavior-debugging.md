@@ -80,21 +80,67 @@ If steps 1-4 appear but step 5 does not, inspect Slack outbound posting path.
 3. Confirm the bot user ID and mention parsing are correct.
 4. Confirm session key is stable: `{channelId}/{threadTs}`.
 
-## Optional OTEL Workstream (Recommended)
+## OTLP Telemetry (logs + metrics)
 
-If debugging latency/routing frequently, add OpenTelemetry instrumentation:
+Enable OpenTelemetry export from daemon:
 
-- activity source spans for:
-  - Slack ingress event receive
-  - conversation routing decision
-  - session enqueue
-  - model/tool turn completion
-  - Slack reply post
-- span attributes:
-  - `session.id`
-  - `slack.channel_id`
-  - `slack.thread_ts`
-  - `slack.event_id`
-- OTLP export to local collector (e.g. LocalTelemetry)
+```json
+{
+  "Telemetry": {
+    "Enabled": true,
+    "Otlp": {
+      "Endpoint": "http://127.0.0.1:4317"
+    }
+  }
+}
+```
+
+Current instrumentation emits:
+
+- metrics for:
+  - events received, dropped, routed
+  - messages enqueued
+  - replies posted/failed and reply latency histogram
+
+Export target can be LocalTelemetry (or any OTLP collector).
 
 This gives per-turn causality and timing without heavy log spelunking.
+
+## OTLP Query Cheat Sheet
+
+Use these metric names in your local telemetry UI (or PromQL-compatible query layer):
+
+- `netclaw.slack.events.received`
+  - event ingress count
+  - attributes: `kind`
+- `netclaw.slack.events.dropped`
+  - policy/guard drops (duplicates, ACL, loop prevention, etc.)
+  - attributes: `reason`
+- `netclaw.slack.events.routed`
+  - events that reached conversation routing
+  - attributes: `kind`
+- `netclaw.slack.messages.enqueued`
+  - messages accepted into session input queue
+- `netclaw.slack.replies.posted`
+  - successful Slack thread replies
+- `netclaw.slack.replies.failed`
+  - failed Slack reply attempts
+- `netclaw.slack.reply.duration.ms`
+  - histogram of reply post call duration (ms)
+
+Suggested quick checks:
+
+1. **No reply symptom**
+   - `events.received > 0` and `messages.enqueued > 0` but `replies.posted = 0`
+   - likely outbound post failure or output mapping issue.
+
+2. **Loop symptom**
+   - high `events.dropped{reason="bot_message"}` and high `events.received`
+   - indicates self-echo events are arriving and being correctly filtered.
+
+3. **Policy mismatch symptom**
+   - spikes in `events.dropped{reason="channel_not_allowed"}` or `user_not_allowed`
+   - check Slack ACL config (`AllowedChannelIds`, `AllowedUserIds`, DM settings).
+
+Tracing spans are intentionally disabled for now to avoid disconnected
+cross-actor telemetry noise.

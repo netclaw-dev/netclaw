@@ -6,6 +6,7 @@ using Akka.Streams.Dsl;
 using Microsoft.Extensions.AI;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
+using Netclaw.Channels.Telemetry;
 
 namespace Netclaw.Channels.Slack;
 
@@ -78,7 +79,10 @@ internal sealed class SlackThreadBindingActor : ReceiveActor
         }
 
         if (result is QueueOfferResult.Enqueued)
+        {
             _log.Debug("Accepted inbound Slack message for session queue");
+            ChannelTelemetry.RecordSlackMessageEnqueued();
+        }
 
         if (result is QueueOfferResult.Failure failure)
             _log.Error(failure.Cause, "Failed to enqueue Slack message for session {0}", _sessionId.Value);
@@ -159,6 +163,7 @@ internal sealed class SlackThreadBindingActor : ReceiveActor
 
     private async Task SafePostAsync(string text)
     {
+        var startedAt = _dependencies.TimeProvider.GetTimestamp();
         try
         {
             await _dependencies.ReplyClient.PostThreadReplyAsync(new SlackPostMessage(
@@ -167,10 +172,12 @@ internal sealed class SlackThreadBindingActor : ReceiveActor
                 Text: text));
 
             _log.Info("Posted Slack reply message");
+            ChannelTelemetry.RecordSlackReplyPosted(_dependencies.TimeProvider.GetElapsedTime(startedAt).TotalMilliseconds);
         }
         catch (Exception ex)
         {
             _log.Error(ex, "Failed posting Slack reply for session {0}", _sessionId.Value);
+            ChannelTelemetry.RecordSlackReplyFailed(_dependencies.TimeProvider.GetElapsedTime(startedAt).TotalMilliseconds);
         }
     }
 

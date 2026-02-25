@@ -2,6 +2,7 @@ using Akka.Actor;
 using Akka.Event;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
+using Netclaw.Channels.Telemetry;
 
 namespace Netclaw.Channels.Slack;
 
@@ -21,9 +22,12 @@ public sealed class SlackGatewayActor : ReceiveActor
 
         Receive<SlackInboundMessage>(message =>
         {
+            ChannelTelemetry.RecordSlackEventReceived(message.Kind.ToString());
+
             if (!TryMarkEventProcessed(message.EventId))
             {
                 _log.Debug("Dropping duplicate Slack event {0}", message.EventId);
+                ChannelTelemetry.RecordSlackEventDropped("duplicate_event");
                 return;
             }
 
@@ -36,6 +40,7 @@ public sealed class SlackGatewayActor : ReceiveActor
                     actorName));
 
             _log.Debug("Routing Slack event {0} to conversation {1}", message.EventId, message.ChannelId);
+            ChannelTelemetry.RecordSlackEventRouted(message.Kind.ToString());
             conversation.Forward(message);
         });
     }

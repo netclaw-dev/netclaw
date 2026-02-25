@@ -199,6 +199,26 @@ Akka.NET logger integration.
 | `LogLevel:Default` | string | `Warning` | Minimum log level (`Debug`, `Information`, `Warning`, `Error`, etc.) shared by MEL and Akka.NET. |
 | `Console:Enabled` | bool | `false` | Enables console logger provider output for daemon debugging. |
 
+### Telemetry
+
+Optional OpenTelemetry export for logs and metrics.
+
+```json
+{
+  "Telemetry": {
+    "Enabled": true,
+    "Otlp": {
+      "Endpoint": "http://127.0.0.1:4317"
+    }
+  }
+}
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `Enabled` | bool | `false` | Enables OTLP export pipeline in daemon. |
+| `Otlp:Endpoint` | string | `http://127.0.0.1:4317` | OTLP collector endpoint (gRPC). |
+
 ## Secrets
 
 API keys and tokens should be stored in `secrets.json` using the same key
@@ -237,6 +257,10 @@ export NETCLAW_Providers__openrouter__ApiKey="sk-or-v1-..."
 # Set Slack tokens
 export NETCLAW_Slack__BotToken="xoxb-..."
 export NETCLAW_Slack__AppToken="xapp-..."
+
+# Enable OTLP telemetry
+export NETCLAW_Telemetry__Enabled="true"
+export NETCLAW_Telemetry__Otlp__Endpoint="http://127.0.0.1:4317"
 
 # Override session settings
 export NETCLAW_Session__MaxToolIterationsPerTurn="5"

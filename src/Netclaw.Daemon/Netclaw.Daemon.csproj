@@ -13,6 +13,9 @@
     <PackageReference Include="Akka.Persistence.Hosting" />
     <PackageReference Include="Akka.Persistence.Sql.Hosting" />
     <PackageReference Include="Microsoft.Data.Sqlite" />
+    <PackageReference Include="OpenTelemetry" />
+    <PackageReference Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" />
+    <PackageReference Include="OpenTelemetry.Extensions.Hosting" />
     <PackageReference Include="OllamaSharp" />
     <PackageReference Include="SlackNet.Extensions.DependencyInjection" />
   </ItemGroup>

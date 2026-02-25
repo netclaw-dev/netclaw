@@ -1,6 +1,7 @@
 using Akka.Actor;
 using Akka.Event;
 using Netclaw.Actors.Protocol;
+using Netclaw.Channels.Telemetry;
 
 namespace Netclaw.Channels.Slack;
 
@@ -23,18 +24,21 @@ public sealed class SlackConversationActor : ReceiveActor
             if (!IsAllowedConversation(message))
             {
                 _log.Debug("Ignoring Slack event {0}: channel not allowed", message.EventId);
+                ChannelTelemetry.RecordSlackEventDropped("channel_not_allowed");
                 return;
             }
 
             if (IsBotMessage(message))
             {
                 _log.Debug("Ignoring Slack event {0}: bot/self message", message.EventId);
+                ChannelTelemetry.RecordSlackEventDropped("bot_message");
                 return;
             }
 
             if (!IsAllowedUser(message))
             {
                 _log.Debug("Ignoring Slack event {0}: user not allowed", message.EventId);
+                ChannelTelemetry.RecordSlackEventDropped("user_not_allowed");
                 return;
             }
 
@@ -54,12 +58,14 @@ public sealed class SlackConversationActor : ReceiveActor
             if (decision is SlackRoutingDecision.Ignore)
             {
                 _log.Debug("Ignoring Slack event {0}: routing policy decision ignore", message.EventId);
+                ChannelTelemetry.RecordSlackEventDropped("routing_policy_ignore");
                 return;
             }
 
             if (decision is SlackRoutingDecision.ContinueOnly && !threadExists)
             {
                 _log.Debug("Ignoring Slack event {0}: thread continuation requested but no thread actor exists", message.EventId);
+                ChannelTelemetry.RecordSlackEventDropped("thread_not_initialized");
                 return;
             }
 
@@ -71,6 +77,7 @@ public sealed class SlackConversationActor : ReceiveActor
             if (string.IsNullOrWhiteSpace(normalized))
             {
                 _log.Debug("Ignoring Slack event {0}: normalized text is empty", message.EventId);
+                ChannelTelemetry.RecordSlackEventDropped("empty_text");
                 return;
             }
 
