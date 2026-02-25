@@ -35,11 +35,16 @@ public sealed class ChatPage : ReactivePage<ChatViewModel>
     private SegmentId _assistantSegmentId;
     private readonly StringBuilder _assistantBuffer = new();
 
+    // Prompt history navigation
+    private readonly List<string> _promptHistory = [];
+    private int _historyIndex = -1;
+    private string _historyDraft = string.Empty;
+
     protected override void OnBound()
     {
         base.OnBound();
 
-        _chatHistory = StreamingTextNode.Create();
+        _chatHistory = StreamingTextNode.Create().WithScrollbar();
         _promptInput = new TextInputNode()
             .WithPlaceholder("Type a message...");
 
@@ -55,6 +60,8 @@ public sealed class ChatPage : ReactivePage<ChatViewModel>
                 _promptInput.Clear();
 
                 var combined = string.Join("\n", batch);
+
+                RememberPrompt(combined);
 
                 // Render user message
                 _chatHistory.AppendLine("");
@@ -73,6 +80,16 @@ public sealed class ChatPage : ReactivePage<ChatViewModel>
         // Route keyboard input
         ViewModel.Input.OfType<KeyPressed>()
             .Subscribe(HandleKeyPress)
+            .DisposeWith(Subscriptions);
+
+        // Route bracketed paste events directly to the text input node
+        ViewModel.Input.OfType<PasteEvent>()
+            .Subscribe(paste => _promptInput.HandlePaste(paste))
+            .DisposeWith(Subscriptions);
+
+        // Route mouse wheel scrolling to chat history
+        ViewModel.Input.OfType<MouseScrollEvent>()
+            .Subscribe(HandleMouseScroll)
             .DisposeWith(Subscriptions);
     }
 
@@ -104,13 +121,14 @@ public sealed class ChatPage : ReactivePage<ChatViewModel>
     {
         return Observable.CombineLatest(
                 ViewModel.IsGeneratingChanged,
+                ViewModel.IsInputEnabledChanged,
                 ViewModel.StatusMessageChanged,
                 ViewModel.UsageDisplayChanged.StartWith((string?)null),
-                (isGenerating, status, usage) =>
+                (isGenerating, isInputEnabled, status, usage) =>
                 {
                     var keys = isGenerating
                         ? "[Ctrl+Q] Quit"
-                        : "[Enter] Send  [PgUp/PgDn] Scroll  [Ctrl+Q] Quit";
+                        : "[Enter] Send  [Ctrl+Shift+V] Paste  [PgUp/PgDn/Wheel] Scroll  [Ctrl+Q] Quit";
 
                     var usagePart = usage is not null ? $"  |  {usage}" : "";
                     var text = $" {keys}  |  {status}  |  {ViewModel.ModelId}{usagePart}";
@@ -165,7 +183,28 @@ public sealed class ChatPage : ReactivePage<ChatViewModel>
             return;
 
         // Everything else goes to the text input
+        if (keyInfo.Key == ConsoleKey.UpArrow)
+        {
+            NavigateHistoryUp();
+            return;
+        }
+
+        if (keyInfo.Key == ConsoleKey.DownArrow)
+        {
+            NavigateHistoryDown();
+            return;
+        }
+
         _promptInput.HandleInput(keyInfo);
+    }
+
+    private void HandleMouseScroll(MouseScrollEvent evt)
+    {
+        // +1 = wheel up, -1 = wheel down
+        if (evt.Delta > 0)
+            _chatHistory.ScrollUp(3, 80);
+        else if (evt.Delta < 0)
+            _chatHistory.ScrollDown(3);
     }
 
     private void HandleOutput(SessionOutput output)
@@ -173,8 +212,9 @@ public sealed class ChatPage : ReactivePage<ChatViewModel>
         switch (output)
         {
             case SessionJoined msg:
+                var sessionState = msg.TurnCount > 0 ? "Resumed session." : "New session.";
                 _chatHistory.AppendLine(
-                    $"System: Session started. {(msg.Title is not null ? $"Title: {msg.Title}" : "New session.")}",
+                    $"System: Session started. {(msg.Title is not null ? $"Title: {msg.Title}" : sessionState)}",
                     Color.BrightBlack);
                 _chatHistory.AppendLine("");
                 break;
@@ -322,5 +362,54 @@ public sealed class ChatPage : ReactivePage<ChatViewModel>
         _assistantSegmentId = default;
         _assistantBuffer.Clear();
         _chatHistory.AppendLine("");
+    }
+
+    private void RememberPrompt(string prompt)
+    {
+        if (string.IsNullOrWhiteSpace(prompt))
+            return;
+
+        if (_promptHistory.Count == 0 || !string.Equals(_promptHistory[^1], prompt, StringComparison.Ordinal))
+            _promptHistory.Add(prompt);
+
+        if (_promptHistory.Count > 100)
+            _promptHistory.RemoveAt(0);
+
+        _historyIndex = -1;
+        _historyDraft = string.Empty;
+    }
+
+    private void NavigateHistoryUp()
+    {
+        if (_promptHistory.Count == 0)
+            return;
+
+        if (_historyIndex < 0)
+        {
+            _historyDraft = _promptInput.Text;
+            _historyIndex = _promptHistory.Count - 1;
+        }
+        else if (_historyIndex > 0)
+        {
+            _historyIndex--;
+        }
+
+        _promptInput.Text = _promptHistory[_historyIndex];
+    }
+
+    private void NavigateHistoryDown()
+    {
+        if (_historyIndex < 0)
+            return;
+
+        if (_historyIndex < _promptHistory.Count - 1)
+        {
+            _historyIndex++;
+            _promptInput.Text = _promptHistory[_historyIndex];
+            return;
+        }
+
+        _historyIndex = -1;
+        _promptInput.Text = _historyDraft;
     }
 }

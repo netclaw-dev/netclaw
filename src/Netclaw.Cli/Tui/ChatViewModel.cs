@@ -20,11 +20,15 @@ public partial class ChatViewModel : ReactiveViewModel
     private readonly SessionConfig _sessionConfig;
 
     private readonly Subject<SessionOutput> _outputSubject = new();
+    private readonly Queue<string> _pendingMessages = new();
     private IDisposable? _daemonOutputSubscription;
     private IDisposable? _daemonConnectionSubscription;
+    private bool _sessionReady;
+    private int _connectAttempts;
 
 #pragma warning disable CS0169, CS0414 // Backing fields used by [Reactive] source generator
     [Reactive] private bool _isGenerating;
+    [Reactive] private bool _isInputEnabled = true;
     [Reactive] private string _statusMessage = "Connecting...";
     [Reactive] private string? _sessionIdDisplay;
     [Reactive] private string? _usageDisplay;
@@ -59,56 +63,49 @@ public partial class ChatViewModel : ReactiveViewModel
         _ = InitializeSessionAsync();
     }
 
-    private async Task InitializeSessionAsync()
+    private Task InitializeSessionAsync()
     {
-        try
-        {
-            _daemonOutputSubscription = _daemonClient.SessionOutput
-                .Subscribe(output =>
+        _daemonOutputSubscription = _daemonClient.SessionOutput
+            .Subscribe(output =>
+            {
+                _outputSubject.OnNext(output);
+
+                switch (output)
                 {
-                    _outputSubject.OnNext(output);
+                    case TurnCompleted:
+                        IsGenerating = false;
+                        break;
+                    case ErrorOutput:
+                        IsGenerating = false;
+                        break;
+                }
 
-                    // Track turn lifecycle for generation state
-                    switch (output)
-                    {
-                        case TurnCompleted:
-                            IsGenerating = false;
-                            break;
-                        case ErrorOutput:
-                            IsGenerating = false;
-                            break;
-                    }
+                RequestRedraw();
+            });
 
-                    RequestRedraw();
-                });
-
-            _daemonConnectionSubscription = _daemonClient.ConnectionEvents
-                .Subscribe(evt =>
+        _daemonConnectionSubscription = _daemonClient.ConnectionEvents
+            .Subscribe(evt =>
+            {
+                if (evt.State is DaemonConnectionState.Disconnected or DaemonConnectionState.Reconnecting)
                 {
-                    if (IsGenerating && evt.State is DaemonConnectionState.Connected)
-                    {
-                        StatusMessage = "Generating...";
-                    }
-                    else
-                    {
-                        StatusMessage = evt.Message;
-                    }
+                    _sessionReady = false;
+                }
 
-                    RequestRedraw();
-                });
+                if (evt.State is DaemonConnectionState.Connected)
+                {
+                    _ = EnsureSessionAndFlushAsync();
+                }
 
-            await ConnectWithRetryAsync();
-            var sessionId = await _daemonClient.CreateSessionAsync("tui");
-            SessionIdDisplay = sessionId;
+                if (IsGenerating && evt.State is DaemonConnectionState.Connected)
+                    StatusMessage = "Generating...";
+                else
+                    StatusMessage = evt.Message;
 
-            StatusMessage = "Ready";
-            RequestRedraw();
-        }
-        catch (Exception ex)
-        {
-            StatusMessage = $"Connection failed: {ex.Message}";
-            RequestRedraw();
-        }
+                RequestRedraw();
+            });
+
+        _ = ConnectUntilReadyAsync();
+        return Task.CompletedTask;
     }
 
     /// <summary>
@@ -118,6 +115,17 @@ public partial class ChatViewModel : ReactiveViewModel
     {
         if (string.IsNullOrWhiteSpace(text))
             return;
+
+        if (!_sessionReady || !_daemonClient.IsConnected)
+        {
+            _pendingMessages.Enqueue(text);
+            IsGenerating = false;
+            IsInputEnabled = true;
+            StatusMessage = $"Queued {_pendingMessages.Count} message(s). Reconnecting...";
+            RequestRedraw();
+            _ = ConnectUntilReadyAsync();
+            return;
+        }
 
         IsGenerating = true;
         StatusMessage = "Generating...";
@@ -136,8 +144,12 @@ public partial class ChatViewModel : ReactiveViewModel
         catch (Exception ex)
         {
             IsGenerating = false;
-            StatusMessage = $"Connection failed: {ex.Message}";
+            _sessionReady = false;
+            IsInputEnabled = true;
+            _pendingMessages.Enqueue(text);
+            StatusMessage = $"Send failed ({ex.Message}). Reconnecting...";
             RequestRedraw();
+            _ = ConnectUntilReadyAsync();
         }
     }
 
@@ -156,7 +168,7 @@ public partial class ChatViewModel : ReactiveViewModel
         base.Dispose();
     }
 
-    private async Task ConnectWithRetryAsync()
+    private async Task ConnectUntilReadyAsync()
     {
         var delays = new[]
         {
@@ -166,21 +178,47 @@ public partial class ChatViewModel : ReactiveViewModel
             TimeSpan.FromSeconds(10)
         };
 
-        for (var attempt = 0; attempt <= delays.Length; attempt++)
+        while (!_sessionReady)
         {
             try
             {
                 await _daemonClient.ConnectAsync();
+                await EnsureSessionAndFlushAsync();
                 return;
             }
-            catch when (attempt < delays.Length)
+            catch
             {
-                StatusMessage = $"Connecting... retry {attempt + 1}/{delays.Length}";
+                _connectAttempts++;
+                var idx = Math.Min(_connectAttempts - 1, delays.Length - 1);
+                StatusMessage = $"Connecting... retry {_connectAttempts} in {delays[idx].TotalSeconds:0}s";
                 RequestRedraw();
-                await Task.Delay(delays[attempt]);
+                await Task.Delay(delays[idx]);
             }
         }
+    }
 
-        throw new InvalidOperationException("Unable to connect to daemon after retries.");
+    private async Task EnsureSessionAndFlushAsync()
+    {
+        var sessionId = await _daemonClient.EnsureSessionAsync("tui");
+        SessionIdDisplay = sessionId;
+        _sessionReady = true;
+        IsInputEnabled = true;
+        _connectAttempts = 0;
+
+        while (_pendingMessages.Count > 0)
+        {
+            var pending = _pendingMessages.Dequeue();
+            await _daemonClient.SendAsync(new ChannelInput
+            {
+                SenderId = "local-user",
+                Contents = [new TextContent(pending)],
+                ReceivedAt = _timeProvider.GetUtcNow()
+            });
+        }
+
+        if (!IsGenerating)
+            StatusMessage = "Ready";
+
+        RequestRedraw();
     }
 }

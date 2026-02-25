@@ -53,6 +53,20 @@ public sealed class SessionRegistry
         var callerConnectionId = ParseConnectionId(connectionId);
         var sessionId = new SessionId($"signalr/{Guid.NewGuid():N}");
 
+        await MaterializeAndBindSessionAsync(sessionId, callerConnectionId, channelType);
+
+        return sessionId.Value;
+    }
+
+    private async Task MaterializeAndBindSessionAsync(
+        SessionId sessionId,
+        SignalRConnectionId callerConnectionId,
+        string channelType)
+    {
+        var existing = _sessions.TryGetValue(sessionId, out var existingSession)
+            ? existingSession
+            : null;
+
         var session = await _pipeline.CreateAsync(sessionId, new SessionPipelineOptions
         {
             ChannelType = channelType
@@ -74,12 +88,13 @@ public sealed class SessionRegistry
             await previous.Session.DisposeAsync();
         }
 
+        if (existing is not null)
+            await existing.Session.DisposeAsync();
+
         // Materialize output: stream → currently attached SignalR connection.
         session.Output
             .To(Sink.ForEach<SessionOutput>(output => PublishOutput(sessionId, output)))
             .Run(_system);
-
-        return sessionId.Value;
     }
 
     public async Task<SessionEnsureResultDto> EnsureSessionAsync(
@@ -101,6 +116,13 @@ public sealed class SessionRegistry
                     Created = false
                 };
             }
+
+            await MaterializeAndBindSessionAsync(requestedSessionId, callerConnectionId, channelType);
+            return new SessionEnsureResultDto
+            {
+                SessionId = requestedSessionId.Value,
+                Created = false
+            };
         }
 
         var createdSessionId = await CreateSessionAsync(connectionId, channelType);
