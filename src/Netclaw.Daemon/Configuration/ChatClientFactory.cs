@@ -1,6 +1,9 @@
+using System.ClientModel;
+using Anthropic;
 using Microsoft.Extensions.AI;
 using Netclaw.Configuration;
 using OllamaSharp;
+using OpenAI;
 
 namespace Netclaw.Daemon.Configuration;
 
@@ -8,7 +11,6 @@ namespace Netclaw.Daemon.Configuration;
 /// Creates <see cref="IChatClient"/> instances from provider credentials
 /// and model references. Looks up the named provider from the configured
 /// dictionary and dispatches to the correct SDK.
-/// Future provider types (OpenRouter, Anthropic, OpenAI) add cases here.
 /// </summary>
 public sealed class ChatClientFactory
 {
@@ -26,10 +28,62 @@ public sealed class ChatClientFactory
 
         return provider.Type.ToLowerInvariant() switch
         {
-            "ollama" => new OllamaApiClient(
-                new Uri(provider.Endpoint), model.ModelId),
+            "ollama" => CreateOllamaClient(provider, model),
+            "openai" => CreateOpenAIClient(provider, model),
+            "anthropic" => CreateAnthropicClient(provider, model),
+            "openrouter" => CreateOpenRouterClient(provider, model),
             _ => throw new InvalidOperationException(
-                $"Unknown provider type '{provider.Type}'. Supported: ollama")
+                $"Unknown provider type '{provider.Type}'. "
+                + $"Supported: {string.Join(", ", ProviderCapabilities.KnownProviderTypes)}")
         };
+    }
+
+    private static IChatClient CreateOllamaClient(ProviderEntry provider, ModelReference model)
+        => new OllamaApiClient(new Uri(provider.Endpoint), model.ModelId);
+
+    private static IChatClient CreateOpenAIClient(ProviderEntry provider, ModelReference model)
+    {
+        var apiKey = GetRequiredApiKey(provider, "openai");
+        return new OpenAI.Chat.ChatClient(model.ModelId, apiKey)
+            .AsIChatClient();
+    }
+
+    private static IChatClient CreateAnthropicClient(ProviderEntry provider, ModelReference model)
+    {
+        var apiKey = GetRequiredApiKey(provider, "anthropic");
+        var client = new AnthropicClient(new()
+        {
+            ApiKey = apiKey
+        });
+        return client.AsIChatClient(model.ModelId);
+    }
+
+    private static IChatClient CreateOpenRouterClient(ProviderEntry provider, ModelReference model)
+    {
+        var apiKey = GetRequiredApiKey(provider, "openrouter");
+        var endpoint = string.IsNullOrWhiteSpace(provider.Endpoint)
+            ? new Uri("https://openrouter.ai/api/v1")
+            : new Uri(provider.Endpoint);
+
+        var client = new OpenAIClient(
+            new ApiKeyCredential(apiKey),
+            new OpenAIClientOptions { Endpoint = endpoint });
+
+        return client.GetChatClient(model.ModelId).AsIChatClient();
+    }
+
+    private static string GetRequiredApiKey(ProviderEntry provider, string providerType)
+    {
+        // Check API key first (works for all keyed providers)
+        if (provider.ApiKey is { } apiKey && !string.IsNullOrWhiteSpace(apiKey.Value))
+            return apiKey.Value;
+
+        // Check OAuth access token as fallback for OAuth-capable providers
+        if (provider.OAuthAccessToken is { } oauthToken && !string.IsNullOrWhiteSpace(oauthToken.Value))
+            return oauthToken.Value;
+
+        throw new InvalidOperationException(
+            $"Provider type '{providerType}' requires authentication. "
+            + "Configure ApiKey or OAuthAccessToken in secrets.json.");
     }
 }
