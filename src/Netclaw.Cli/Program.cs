@@ -75,10 +75,15 @@ static async Task RunAsync(string[] args)
         builder.Logging.ClearProviders();
         builder.Logging.SetMinimumLevel(LogLevel.Warning);
 
-        // TODO: init → Termina TUI wizard (Task 1.22)
         if (mode is "init")
         {
-            Console.WriteLine("netclaw init: not yet implemented");
+            builder.Services.AddTermina("/init", termina =>
+            {
+                termina.RegisterRoute<InitWizardPage, InitWizardViewModel>("/init");
+            });
+
+            var initApp = builder.Build();
+            await initApp.RunAsync();
             return;
         }
 
