@@ -1,20 +1,20 @@
 ## 1. CLI Scaffold with Cocona + Termina Hosting
 
-- [ ] 1.1 Add Cocona and Termina package references to Directory.Packages.props and Netclaw.App.csproj
-- [ ] 1.2 Rewrite Program.cs as Cocona entry point with DI registration
-- [ ] 1.3 Create RunCommand.cs for daemon mode (`netclaw run`)
-- [ ] 1.4 Wire Termina as hosted service for TUI commands
-- [ ] 1.5 Verify `dotnet build` passes with new dependencies
+- [x] 1.1 Add Cocona and Termina package references to Directory.Packages.props and Netclaw.App.csproj
+- [x] 1.2 Rewrite Program.cs as Cocona entry point with DI registration
+- [x] 1.3 Create RunCommand.cs for daemon mode (`netclaw run`)
+- [x] 1.4 Wire Termina as hosted service for TUI commands
+- [x] 1.5 Verify `dotnet build` passes with new dependencies
 
 ## 2. TUI Chat Adapter (`netclaw chat`)
 
-- [ ] 2.1 Create TuiInputAdapter implementing adapter contract (SendUserMessage with entity key `tui/{sessionId}`)
-- [ ] 2.2 Create ChatCommand.cs that hosts actor system in-process and launches TUI
-- [ ] 2.3 Create ChatPage.cs with StreamingTextNode (scrollable history) and TextInputNode (multi-line input)
-- [ ] 2.4 Create ChatViewModel.cs with session lifecycle and broadcast subscription
-- [ ] 2.5 Implement inline tool activity panel (completed with duration, in-progress with spinner)
+- [x] 2.1 Create TuiInputAdapter implementing adapter contract (SendUserMessage with entity key `tui/{sessionId}`)
+- [x] 2.2 Create ChatCommand.cs that hosts actor system in-process and launches TUI
+- [x] 2.3 Create ChatPage.cs with StreamingTextNode (scrollable history) and TextInputNode (multi-line input)
+- [x] 2.4 Create ChatViewModel.cs with session lifecycle and broadcast subscription
+- [x] 2.5 Implement inline tool activity panel (completed with duration, in-progress with spinner)
 - [ ] 2.6 Implement MCP status indicator in status bar (green/yellow/red)
-- [ ] 2.7 E2E: user types → SendUserMessage → session actor → LLM → streaming response in TUI
+- [x] 2.7 E2E: user types → SendUserMessage → session actor → LLM → streaming response in TUI
 
 ## 3. TUI Onboarding Wizard (`netclaw init`)
 

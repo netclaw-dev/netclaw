@@ -22,7 +22,7 @@
   structured summarization), and `Compacting` behavior state.
 - [x] 2.4 Implement pre-compaction memory flush: memory extraction LLM call
   persisted via `IMemoryExtractor` interface before compaction.
-- [ ] 2.5 Add source metadata to `SendUserMessage` (adapter type, sender
+- [x] 2.5 Add source metadata to `SendUserMessage` (adapter type, sender
   identity, channel, timestamp) per netclaw-input-adapters spec.
 - [x] 2.6 Write integration tests proving restart recovery preserves context
   and compaction trigger/execution/recovery.
@@ -154,11 +154,11 @@
 
 ## 13. Provider Abstraction
 
-- [ ] 13.1 Wire `Microsoft.Extensions.AI` `IChatClient` provider registration
+- [x] 13.1 Wire `Microsoft.Extensions.AI` `IChatClient` provider registration
   with DI (OpenRouter, Anthropic, OpenAI, Ollama profiles).
 - [ ] 13.2 Implement primary + fallback model configuration with automatic
   failover on rate limit, timeout, or provider error.
-- [ ] 13.3 Implement tool calling support through MEAI tool calling API.
+- [x] 13.3 Implement tool calling support through MEAI tool calling API.
 - [ ] 13.4 Write tests for provider switching, fallback activation, and tool
   calling round-trip.
 
