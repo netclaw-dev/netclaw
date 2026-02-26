@@ -272,17 +272,72 @@ Rule: provider change clears everything downstream within Step 1. Auth method
 change clears auth artifacts. Steps 2–5 are independent and never clear each
 other.
 
-### Multi-Provider Configuration
+### Multi-Provider Configuration and Dual-Mode CLI
 
-The wizard configures the **first** provider. Post-wizard, operators use CLI
-commands to manage additional providers:
+The wizard configures the **first** provider. Post-wizard, operators manage
+providers and models through dual-mode commands that follow a consistent
+pattern: **no args = Termina TUI discovery, args = single-shot scriptable.**
+
+#### `netclaw provider` — Provider credential management
 
 ```
-netclaw provider add       # interactive: pick type, enter credentials
-netclaw provider list      # show all configured providers and active models
-netclaw provider switch    # change which provider is used for a model role
-netclaw provider remove    # remove a configured provider
+netclaw provider              # TUI: guided walk-through (add provider, auth,
+                              # model selection — reuses wizard Step 1 components)
+netclaw provider add          # single-shot: add with explicit args
+  --name my-anthropic
+  --type anthropic
+  --auth-method oauth-device
+netclaw provider list         # plain CLI: show configured providers + auth status
+netclaw provider remove <name> # plain CLI: remove provider (warn if models reference it)
 ```
+
+Bare `netclaw provider` launches the same Termina components used in the wizard's
+Step 1 — provider selection, auth method branching, OAuth device flow, credential
+entry. This is the "hold my hand" path and also serves as the entry point for
+OAuth flows that require interactive browser authorization.
+
+#### `netclaw model` — Model selection and role assignment
+
+```
+netclaw model                 # TUI: tree-based browser showing all providers
+                              # and their available models, current role assignments
+netclaw model                 # single-shot: assign model to role directly
+  --role main
+  --provider my-anthropic
+  --model claude-sonnet-4-20250514
+```
+
+Bare `netclaw model` launches Termina with a tree-based model browser:
+
+```
+╭─ Model Selection ────────────────────────────────────────────╮
+│                                                              │
+│  Current assignments:                                        │
+│    Main:       claude-sonnet-4-20250514 (my-anthropic)       │
+│    Fallback:   qwen3:30b (local-ollama)                      │
+│    Compaction: qwen3:8b (local-ollama)                       │
+│                                                              │
+│  Select role to change: [Main ▾]                             │
+│                                                              │
+│  Available models:                                           │
+│  ├── my-anthropic (OAuth ✓)                                  │
+│  │   ├── claude-sonnet-4-20250514 (128k) ← current          │
+│  │   ├── claude-haiku-4-5-20251001 (200k)                    │
+│  │   └── claude-opus-4-20250514 (200k)                       │
+│  ├── local-ollama                                            │
+│  │   ├── qwen3:30b (32k)                                    │
+│  │   └── qwen3:8b (32k)                                     │
+│  └── my-openrouter (API key ✓)                               │
+│      ├── google/gemini-2.5-pro                               │
+│      └── anthropic/claude-sonnet-4-20250514                  │
+│                                                              │
+│  [Enter] Select   [Esc] Cancel   [Ctrl+Q] Quit              │
+╰──────────────────────────────────────────────────────────────╯
+```
+
+The tree is populated from model discovery (live → cache → defaults) across all
+configured providers. The model selector component is shared with the wizard's
+Step 1c.
 
 Config structure in `netclaw.json`:
 
@@ -381,5 +436,6 @@ credential-dependent interactive work:
 - Real OAuth device flow endpoints (Anthropic, OpenAI)
 - Real API key validation against live endpoints
 - Real model catalog discovery from live APIs
-- Provider `add`/`switch`/`remove` CLI commands with live validation
+- `netclaw provider` TUI and `provider add/list/remove` single-shot commands
+- `netclaw model` TUI and single-shot model role assignment
 - End-to-end onboarding smoke test with real provider

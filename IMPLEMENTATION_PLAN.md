@@ -219,18 +219,22 @@ Done when:
 - [ ] Live model catalog discovery from provider APIs populates `SelectionListNode` in wizard.
 - [ ] Doctor verifies live provider reachability and auth validity.
 
-#### Task M1.B3: Provider management CLI commands
+#### Task M1.B3: Provider and model management commands (dual-mode)
 
 **PRD:** `docs/prd/PRD-004-cli-onboarding-and-config.md`
 **OpenSpec:** `openspec/specs/netclaw-cli/spec.md`
-**Surface area:** CLI
-**Verification:** L2
+**Wireframe:** `docs/ui/TUI-001-command-wireframes.md` (netclaw provider, netclaw model)
+**Surface area:** CLI + TUI
+**Verification:** L3
 
 Done when:
-- [ ] `netclaw provider add` — interactive: pick type, enter credentials, validate, save.
-- [ ] `netclaw provider list` — show all configured providers, active model assignments, auth status.
-- [ ] `netclaw provider switch` — change which provider is used for a model role (Main/Fallback/Compaction).
-- [ ] `netclaw provider remove` — remove a configured provider (warn if models still reference it).
+- [ ] `netclaw provider` (bare) — Termina TUI guided setup reusing wizard Step 1 components (provider type, auth, credentials).
+- [ ] `netclaw provider add` — single-shot: add with explicit `--name`, `--type`, `--auth-method` args.
+- [ ] `netclaw provider list` — plain CLI: show configured providers, auth status.
+- [ ] `netclaw provider remove` — plain CLI: remove provider (warn if model roles reference it).
+- [ ] `netclaw model` (bare) — Termina TUI tree-based browser: providers → models, current role assignments, select to reassign.
+- [ ] `netclaw model --role --provider --model` — single-shot: assign model to role directly.
+- [ ] Model selector TUI component shared between `netclaw model` and `netclaw init` Step 1c.
 
 #### Task M1.B4: End-to-end onboarding smoke test
 

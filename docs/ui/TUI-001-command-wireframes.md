@@ -5,14 +5,20 @@ Source PRDs: `PRD-004`, `PRD-009`
 ## Overview
 
 Netclaw's CLI uses **simple arg routing** in `Program.cs` for mode selection and
-**Termina 0.5.1** for interactive TUI commands. Only two commands use Termina
-TUI rendering — all other commands use plain console output.
+**Termina 0.5.1** for interactive TUI commands. Several commands use Termina TUI
+rendering — all other commands use plain console output.
 
-| Command         | Interface | Framework |
-|-----------------|-----------|-----------|
-| `netclaw init`  | TUI       | Termina (lightweight mode — no Akka) |
-| `netclaw chat`  | TUI       | Termina (daemon mode — full stack)   |
-| All others      | Plain CLI | Plain console output                 |
+**Dual-mode pattern:** Some commands are **dual-mode** — bare invocation (no args)
+launches Termina TUI for interactive discovery; with explicit args, they run as
+single-shot CLI commands suitable for scripting.
+
+| Command              | Interface    | Framework |
+|----------------------|--------------|-----------|
+| `netclaw init`       | TUI          | Termina (lightweight mode — no Akka) |
+| `netclaw chat`       | TUI          | Termina (daemon mode — full stack)   |
+| `netclaw provider`   | Dual-mode    | Termina (bare) / Plain CLI (with subcommand) |
+| `netclaw model`      | Dual-mode    | Termina (bare) / Plain CLI (with args) |
+| All others           | Plain CLI    | Plain console output                 |
 
 ## Termina Component Vocabulary
 
@@ -78,7 +84,7 @@ PanelNode (outer: "Netclaw Setup")
 └── TextNode (key bindings: Enter/Esc/Ctrl+Q)
 ```
 
-### Step Detail: Health Check (Step 7)
+### Step Detail: Health Check (Step 6)
 
 ```
 ╭─ Netclaw Setup ──────────────────────────────────────────────╮
@@ -190,6 +196,131 @@ TextNode (status bar: key bindings + MCP indicator)
 
 ---
 
+## `netclaw provider` — Dual-Mode Provider Management
+
+**Bare invocation** launches Termina TUI — a guided walk-through that reuses the
+wizard's Step 1 components (provider selection, auth method branching, OAuth
+device flow, credential entry, model selection). This is the "hold my hand" path.
+
+**With subcommands** (`add`, `list`, `remove`) runs as single-shot plain CLI.
+
+### Wireframe (TUI mode — bare `netclaw provider`)
+
+```
+╭─ Provider Setup ─────────────────────────────────────────────╮
+│                                                              │
+│  Configure a new LLM provider                               │
+│                                                              │
+│  Select provider type:                                       │
+│                                                              │
+│  ╭───────────────────────────────────────────────────────╮   │
+│  │  ● Anthropic          (OAuth + API key)               │   │
+│  │    OpenAI             (OAuth + API key)               │   │
+│  │    OpenRouter         (API key)                       │   │
+│  │    Ollama             (local, no auth)                │   │
+│  ╰───────────────────────────────────────────────────────╯   │
+│                                                              │
+│  [Enter] Select   [Esc] Cancel   [Ctrl+Q] Quit              │
+╰──────────────────────────────────────────────────────────────╯
+```
+
+### Behaviors
+
+- Reuses the same provider setup components as `netclaw init` Step 1
+- After provider is configured, prompts for model role assignment
+- New provider is added to `~/.netclaw/config/netclaw.json`
+- Secrets written to `~/.netclaw/config/secrets.json`
+- OAuth device flow uses same Termina `SpinnerNode` poll-wait as wizard
+
+### Single-Shot Examples
+
+```
+$ netclaw provider add --name my-anthropic --type anthropic --auth-method api-key
+API key: ****
+Provider 'my-anthropic' configured.
+
+$ netclaw provider list
+Name            Type         Auth         Status
+my-anthropic    anthropic    API key      ✓ valid
+local-ollama    ollama       none         ✓ reachable
+my-openrouter   openrouter   API key      ✓ valid
+
+$ netclaw provider remove my-openrouter
+⚠ Model 'Compaction' references this provider. Reassign first.
+```
+
+---
+
+## `netclaw model` — Dual-Mode Model Selection
+
+**Bare invocation** launches Termina TUI — a tree-based model browser showing all
+configured providers, their available models (via live/cached discovery), and
+current role assignments. Operator selects a role, browses models, and assigns.
+
+**With args** (`--role`, `--provider`, `--model`) runs as single-shot assignment.
+
+### Wireframe (TUI mode — bare `netclaw model`)
+
+```
+╭─ Model Selection ────────────────────────────────────────────╮
+│                                                              │
+│  Current assignments:                                        │
+│    Main:       claude-sonnet-4-20250514 (my-anthropic)       │
+│    Fallback:   qwen3:30b (local-ollama)                      │
+│    Compaction: qwen3:8b (local-ollama)                       │
+│                                                              │
+│  Select role to change: [Main ▾]                             │
+│                                                              │
+│  Available models:                                           │
+│  ├── my-anthropic (OAuth ✓)                                  │
+│  │   ├── claude-sonnet-4-20250514 (128k) ← current          │
+│  │   ├── claude-haiku-4-5-20251001 (200k)                    │
+│  │   └── claude-opus-4-20250514 (200k)                       │
+│  ├── local-ollama                                            │
+│  │   ├── qwen3:30b (32k)                                    │
+│  │   └── qwen3:8b (32k)                                     │
+│  └── my-openrouter (API key ✓)                               │
+│      ├── google/gemini-2.5-pro                               │
+│      └── anthropic/claude-sonnet-4-20250514                  │
+│                                                              │
+│  [Enter] Select   [Esc] Cancel   [Ctrl+Q] Quit              │
+╰──────────────────────────────────────────────────────────────╯
+```
+
+### Layout Structure
+
+```
+PanelNode (outer: "Model Selection")
+├── TextNode (current role assignments)
+├── SelectionListNode (role selector: Main/Fallback/Compaction)
+├── [tree view of providers and models]
+│   ├── TextNode (provider name + auth status)
+│   └── SelectionListNode (models under that provider)
+└── TextNode (key bindings)
+```
+
+### Behaviors
+
+- Tree populated via model discovery (live → cache → defaults) across all
+  configured providers
+- SpinnerNode shown while discovering models from each provider
+- Provider auth status shown inline (✓ valid / ⚠ expired / ✗ unreachable)
+- Current model for selected role marked with `← current`
+- On selection: updates `Models` section of `netclaw.json`, confirms change
+- Model selector component is shared with `netclaw init` Step 1c
+
+### Single-Shot Examples
+
+```
+$ netclaw model --role main --provider my-anthropic --model claude-sonnet-4-20250514
+Main model set to claude-sonnet-4-20250514 (my-anthropic).
+
+$ netclaw model --role fallback --provider local-ollama --model qwen3:30b
+Fallback model set to qwen3:30b (local-ollama).
+```
+
+---
+
 ## `netclaw doctor` — Plain CLI Output (No TUI)
 
 Simple check-and-report command. Runs startup checks, prints color-coded
@@ -236,6 +367,8 @@ No Termina TUI components are used.
 | `netclaw doctor`                     | Check list          |
 | `netclaw config show`                | Formatted text/JSON |
 | `netclaw config validate`            | Validation results  |
+| `netclaw provider add\|list\|remove`   | Simple CRUD         |
+| `netclaw model --role ... --model ...` | Single-shot assign |
 | `netclaw acl validate\|test\|explain`  | Policy check results|
 | `netclaw session list\|inspect`        | Tabular             |
 | `netclaw project list\|add\|remove`    | Simple CRUD         |
@@ -247,6 +380,9 @@ No Termina TUI components are used.
 | `netclaw test smoke`                 | Test results        |
 | `netclaw personality reset`          | Confirmation        |
 | `netclaw run`                        | Daemon (no TUI)     |
+
+Note: `netclaw provider` (bare) and `netclaw model` (bare) are dual-mode — they
+launch Termina TUI when invoked without subcommands or args. See wireframes above.
 
 ### `netclaw run` — Daemon Mode
 
