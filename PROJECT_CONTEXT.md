@@ -59,7 +59,7 @@ In scope:
 - single-process host (gateway + actors in same process)
 - Slack Socket Mode adapter
 - per-thread session actors keyed by `{channelId}/{threadTs}`
-- PostgreSQL journal and snapshot persistence
+- SQLite journal and snapshot persistence (in-memory for tests)
 - compaction via summarization reducer
 - pub/sub session broadcasts for adapters and future UI subscribers
 - default-deny ACL with explicit channel/sender/data grants

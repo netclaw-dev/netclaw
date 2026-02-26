@@ -4,8 +4,8 @@
 
 The CLI SHALL provide guided setup through `netclaw init` using explicit Termina
 decision trees for provider onboarding. The onboarding wizard SHALL collect
-Slack credentials, provider configuration, ACL inputs, PostgreSQL connection
-string, MCP server configuration, and exposure mode selection. Provider setup
+Slack credentials, provider configuration, ACL inputs, MCP server
+configuration, and exposure mode selection. Provider setup
 SHALL branch by selected provider and auth method, and SHALL include model
 discovery fallback behavior when live provider catalogs are unavailable. On
 completion, the wizard SHALL run a health check to verify the baseline
@@ -34,13 +34,13 @@ configuration is functional.
 #### Scenario: Health check on completion
 - **WHEN** onboarding completes all steps
 - **THEN** the wizard runs a health check covering Slack connectivity, provider
-  validation, persistence connectivity, and MCP server reachability
+  validation, and MCP server reachability
 - **AND** reports pass/fail for each component
 
 ### Requirement: TUI wizard delivery mechanism
 
 The `netclaw init` onboarding wizard SHALL be delivered through Termina TUI as
-an interactive 7-step wizard with progress indication, validation,
+an interactive 6-step wizard with progress indication, validation,
 back-navigation, and branch-context display for provider onboarding decisions.
 
 #### Scenario: Wizard renders branch context in TUI

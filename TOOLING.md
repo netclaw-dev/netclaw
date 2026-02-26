@@ -30,7 +30,7 @@
 - Slack Socket Mode
   - requires bot token and app token
   - no public inbound HTTP required for base interaction
-- PostgreSQL for Akka.Persistence journal and snapshots
+- SQLite for Akka.Persistence journal and snapshots (in-memory for tests)
 - MCP servers for external tool integration (MVP requirement)
 - local Ollama endpoint can be used for optional smoke tests
   - local dev host: `big-gpu` on Tailscale (`http://big-gpu:11434`)

@@ -15,7 +15,7 @@
 ## 2. Session Actor Core
 
 - [x] 2.1 Implement `LlmSessionActor` with persistent state recovery from
-  journal/snapshots (in-memory for MVP, PostgreSQL deferred).
+  journal/snapshots (SQLite for production, in-memory for tests).
 - [x] 2.2 Implement turn processing loop: receive `SendUserMessage`, invoke
   `IChatClient`, persist `TurnRecorded`, emit typed outputs to subscribers.
 - [x] 2.3 Implement snapshot strategy, tiered compaction (tool result clearing +
@@ -165,8 +165,7 @@
 ## 14. CLI Onboarding and Management
 
 - [ ] 14.1 Implement `netclaw init` guided wizard (LLM provider, Slack
-  credentials, PostgreSQL connection, ACL bootstrap, MCP config, exposure mode,
-  health check).
+  credentials, ACL bootstrap, MCP config, exposure mode, health check).
 - [ ] 14.2 Implement `netclaw config show|validate` and
   `netclaw acl validate|test|explain`.
 - [ ] 14.3 Implement `netclaw project list|add|remove` and

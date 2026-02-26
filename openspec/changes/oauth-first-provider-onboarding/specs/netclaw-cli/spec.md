@@ -4,16 +4,16 @@
 
 The CLI SHALL provide guided setup through `netclaw init`. The onboarding
 wizard SHALL collect Slack credentials, provider configuration, ACL inputs,
-PostgreSQL connection string, MCP server configuration, and exposure mode
-selection. Provider setup SHALL use explicit Termina decision trees for
+MCP server configuration, and exposure mode selection. Provider setup SHALL
+use explicit Termina decision trees for
 provider selection, auth method branching, OAuth device flow progression (when
 applicable), and model discovery fallback paths. On completion, the wizard
 SHALL run a health check to verify the baseline configuration is functional.
 
 #### Scenario: First-time setup with provider decision tree
 - **WHEN** operator runs `netclaw init` on a fresh install
-- **THEN** guided setup collects Slack, provider, ACL, PostgreSQL, MCP, and
-  exposure mode inputs
+- **THEN** guided setup collects provider, Slack, ACL, MCP, and exposure mode
+  inputs
 - **AND** provider setup executes explicit branches for provider choice, auth
   method, and model resolution path before writing config
 

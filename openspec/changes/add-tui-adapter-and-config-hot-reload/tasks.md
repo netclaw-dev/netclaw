@@ -19,15 +19,14 @@
 ## 3. TUI Onboarding Wizard (`netclaw init`)
 
 - [ ] 3.1 Create InitCommand.cs that launches Termina wizard
-- [ ] 3.2 Create InitWizardPage.cs with 7-step wizard layout (PanelNode, progress bar)
+- [ ] 3.2 Create InitWizardPage.cs with 6-step wizard layout (PanelNode, progress bar)
 - [ ] 3.3 Create InitWizardViewModel.cs with step state machine and back-navigation
-- [ ] 3.4 Implement Step 1: LLM provider (SelectionListNode + TextInputNode for API key)
+- [ ] 3.4 Implement Step 1: LLM provider (SelectionListNode + TextInputNode for API key / OAuth branch)
 - [ ] 3.5 Implement Step 2: Slack configuration (masked TextInputNodes for tokens)
-- [ ] 3.6 Implement Step 3: PostgreSQL connection (TextInputNode + live validation SpinnerNode)
-- [ ] 3.7 Implement Step 4: ACL bootstrap (owner identity + initial channels)
-- [ ] 3.8 Implement Step 5: MCP servers (SelectionListNode with Memorizer recommended)
-- [ ] 3.9 Implement Step 6: Exposure mode (SelectionListNode with security warnings)
-- [ ] 3.10 Implement Step 7: Health check (live probe panel with SpinnerNodes → checkmarks)
+- [ ] 3.6 Implement Step 3: ACL bootstrap (owner identity + initial channels)
+- [ ] 3.7 Implement Step 4: MCP servers (SelectionListNode with Memorizer recommended)
+- [ ] 3.8 Implement Step 5: Exposure mode (SelectionListNode with security warnings)
+- [ ] 3.9 Implement Step 6: Health check (live probe panel with SpinnerNodes → checkmarks)
 - [ ] 3.11 Write config file to ~/.netclaw/config/netclaw.json on completion
 
 ## 4. Plain CLI Commands

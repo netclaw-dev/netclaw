@@ -3,14 +3,14 @@
 ### Requirement: TUI wizard delivery mechanism
 
 The `netclaw init` onboarding wizard SHALL be delivered through Termina TUI
-as an interactive 7-step wizard with progress indication, validation, and
+as an interactive 6-step wizard with progress indication, validation, and
 back-navigation.
 
 #### Scenario: Wizard renders in TUI
 
 - **WHEN** operator runs `netclaw init`
 - **THEN** a Termina TUI application launches
-- **AND** the wizard displays step progress (e.g., "Step 2 of 7")
+- **AND** the wizard displays step progress (e.g., "Step 2 of 6")
 - **AND** the wizard displays a progress bar
 
 #### Scenario: Step-specific components rendered
@@ -29,8 +29,8 @@ back-navigation.
 
 #### Scenario: Live validation during wizard
 
-- **GIVEN** the wizard is on the PostgreSQL step
-- **WHEN** the operator enters a connection string
+- **GIVEN** the wizard is on the MCP server step
+- **WHEN** the operator enters a server profile
 - **THEN** the wizard validates connectivity with a SpinnerNode
 - **AND** displays success or failure before allowing progression
 

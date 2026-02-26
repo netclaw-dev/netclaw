@@ -4,22 +4,16 @@
 
 The CLI SHALL provide guided setup through `netclaw init`. The onboarding
 wizard SHALL collect Slack credentials, provider configuration, ACL inputs,
-PostgreSQL connection string, MCP server configuration, and exposure mode
-selection. On completion, the wizard SHALL run a health check to verify the
-baseline configuration is functional.
+MCP server configuration, and exposure mode selection. On completion, the
+wizard SHALL run a health check to verify the baseline configuration is
+functional.
 
 #### Scenario: First-time setup
 
 - **WHEN** operator runs `netclaw init` on a fresh install
-- **THEN** guided setup collects Slack, provider, ACL, PostgreSQL, MCP, and
-  exposure mode inputs
+- **THEN** guided setup collects provider, Slack, ACL, MCP, and exposure mode
+  inputs
 - **AND** writes a runnable baseline configuration
-
-#### Scenario: PostgreSQL connection configured during init
-
-- **WHEN** onboarding reaches the persistence step
-- **THEN** the wizard prompts for a PostgreSQL connection string
-- **AND** validates connectivity before proceeding
 
 #### Scenario: MCP server configured during init
 

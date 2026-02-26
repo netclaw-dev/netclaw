@@ -60,14 +60,13 @@ all steps.
 
 Steps:
 
-1. LLM provider configuration (endpoint URL, API key, model selection,
-   connectivity test via direct HTTP to provider)
+1. LLM provider configuration (endpoint URL, API key or OAuth device flow,
+   model selection, connectivity test via direct HTTP to provider)
 2. Slack app setup (bot token, app token for Socket Mode)
-3. PostgreSQL connection string
-4. ACL bootstrap (owner identity, initial channel rules)
-5. MCP server configuration (optional — Memorizer recommended)
-6. Exposure mode selection (local-only default)
-7. Health check (verify Slack connection, DB connection, LLM reachability)
+3. ACL bootstrap (owner identity, initial channel rules)
+4. MCP server configuration (optional — Memorizer recommended)
+5. Exposure mode selection (local-only default)
+6. Health check (verify Slack connection, LLM reachability, MCP connectivity)
 
 ### Phase 2: Conversational Personality Bootstrap (first `netclaw chat`)
 
@@ -154,13 +153,12 @@ Onboarding captures all Phase 1 setup items in a stepwise flow.
 
 `netclaw init` SHALL support an interactive guided onboarding flow that:
 
-1. Captures LLM provider configuration (OpenRouter default)
+1. Captures LLM provider configuration (OpenRouter default, OAuth or API key)
 2. Configures Slack Socket Mode credentials (bot token + app token)
-3. Configures PostgreSQL connection string
-4. Scaffolds ACL in default-deny mode with owner identity
-5. Optionally configures MCP servers (Memorizer recommended)
-6. Selects exposure mode (local default)
-7. Runs final validation and prints next-step run commands
+3. Scaffolds ACL in default-deny mode with owner identity
+4. Optionally configures MCP servers (Memorizer recommended)
+5. Selects exposure mode (local default)
+6. Runs final validation and prints next-step run commands
 
 ### CLI-002 Validation
 

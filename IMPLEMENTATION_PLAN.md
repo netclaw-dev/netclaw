@@ -121,9 +121,9 @@ Done when:
 
 Done when:
 - [ ] `InitCommand.cs` launches Termina wizard.
-- [ ] `InitWizardPage.cs` with 7-step wizard layout (`PanelNode`, progress bar).
+- [ ] `InitWizardPage.cs` with 6-step wizard layout (`PanelNode`, progress bar).
 - [ ] `InitWizardViewModel.cs` with step state machine and back-navigation.
-- [ ] Steps: LLM provider (with OAuth/API key branch from M1.1–M1.2), Slack config, PostgreSQL, ACL bootstrap, MCP servers, exposure mode, health check.
+- [ ] Steps: LLM provider (with OAuth/API key branch from M1.1–M1.2), Slack config, ACL bootstrap, MCP servers, exposure mode, health check.
 - [ ] Config file written to `~/.netclaw/config/netclaw.json` on completion.
 
 ### Task M1.5: Doctor follow-up checks for provider onboarding

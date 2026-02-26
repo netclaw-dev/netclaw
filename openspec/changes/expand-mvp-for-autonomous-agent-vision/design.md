@@ -16,7 +16,7 @@ extends it with new actor types, tool integration, and file-based state.
   by entity key using `SessionMessageExtractor`
 - `SerializableChatMessage`: framework-owned persistence type (protobuf-net)
 - Slack Socket Mode adapter: planned but not yet implemented
-- PostgreSQL journal/snapshots via Akka.Persistence
+- SQLite journal/snapshots via Akka.Persistence (in-memory for tests)
 - Microsoft.Extensions.AI `IChatClient` for LLM interaction
 
 ### Constraints

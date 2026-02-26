@@ -38,22 +38,16 @@ The system SHALL show explicit warnings before enabling public exposure modes.
 
 The CLI SHALL provide guided setup through `netclaw init`. The onboarding
 wizard SHALL collect Slack credentials, provider configuration, ACL inputs,
-PostgreSQL connection string, MCP server configuration, and exposure mode
-selection. On completion, the wizard SHALL run a health check to verify the
-baseline configuration is functional.
+MCP server configuration, and exposure mode selection. On completion, the
+wizard SHALL run a health check to verify the baseline configuration is
+functional.
 
 #### Scenario: First-time setup
 
 - **WHEN** operator runs `netclaw init` on a fresh install
-- **THEN** guided setup collects Slack, provider, ACL, PostgreSQL, MCP, and
-  exposure mode inputs
+- **THEN** guided setup collects provider, Slack, ACL, MCP, and exposure mode
+  inputs
 - **AND** writes a runnable baseline configuration
-
-#### Scenario: PostgreSQL connection configured during init
-
-- **WHEN** onboarding reaches the persistence step
-- **THEN** the wizard prompts for a PostgreSQL connection string
-- **AND** validates connectivity before proceeding
 
 #### Scenario: MCP server configured during init
 
@@ -73,7 +67,7 @@ baseline configuration is functional.
 
 - **WHEN** onboarding completes all steps
 - **THEN** the wizard runs a health check covering Slack connectivity, provider
-  validation, persistence connectivity, and MCP server reachability
+  validation, and MCP server reachability
 - **AND** reports pass/fail for each component
 
 ### Requirement: Phase 2 conversational personality bootstrap
@@ -147,14 +141,14 @@ with their paths, capabilities, and AGENTS.md locations.
 ### Requirement: TUI wizard delivery mechanism
 
 The `netclaw init` onboarding wizard SHALL be delivered through Termina TUI
-as an interactive 7-step wizard with progress indication, validation, and
+as an interactive 6-step wizard with progress indication, validation, and
 back-navigation.
 
 #### Scenario: Wizard renders in TUI
 
 - **WHEN** operator runs `netclaw init`
 - **THEN** a Termina TUI application launches
-- **AND** the wizard displays step progress (e.g., "Step 2 of 7")
+- **AND** the wizard displays step progress (e.g., "Step 2 of 6")
 - **AND** the wizard displays a progress bar
 
 #### Scenario: Step-specific components rendered
@@ -173,7 +167,7 @@ back-navigation.
 
 #### Scenario: Live validation during wizard
 
-- **GIVEN** the wizard is on the PostgreSQL step
-- **WHEN** the operator enters a connection string
+- **GIVEN** the wizard is on the MCP server step
+- **WHEN** the operator enters a server profile
 - **THEN** the wizard validates connectivity with a SpinnerNode
 - **AND** displays success or failure before allowing progression

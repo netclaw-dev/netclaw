@@ -29,7 +29,7 @@ All wireframes reference actual Termina 0.5.1 components:
 
 ## `netclaw init` — Onboarding Wizard (TUI)
 
-Interactive 7-step setup wizard. Termina hosts the full wizard as a single
+Interactive 6-step setup wizard. Termina hosts the full wizard as a single
 application with step navigation.
 
 ### Wireframe
@@ -37,7 +37,7 @@ application with step navigation.
 ```
 ╭─ Netclaw Setup ──────────────────────────────────────────────╮
 │                                                              │
-│  Step 2 of 7: Slack Configuration        [■■□□□□□] 28%      │
+│  Step 2 of 6: Slack Configuration        [■■□□□□□] 33%      │
 │                                                              │
 │  ╭─ Slack Bot Token ───────────────────────────────────────╮ │
 │  │ xoxb-************************************               │ │
@@ -58,13 +58,12 @@ application with step navigation.
 
 | Step | Title                  | Components                                            |
 |------|------------------------|-------------------------------------------------------|
-| 1    | LLM Provider           | SelectionListNode (OpenRouter/Anthropic/OpenAI/Ollama) + TextInputNode (API key) |
+| 1    | LLM Provider           | SelectionListNode (OpenRouter/Anthropic/OpenAI/Ollama) + auth branch (API key or OAuth device flow) |
 | 2    | Slack Configuration    | TextInputNode (bot token) + TextInputNode (app token) |
-| 3    | PostgreSQL Connection  | TextInputNode (connection string) + SpinnerNode (live validation) |
-| 4    | ACL Bootstrap          | TextInputNode (owner identity) + SelectionListNode (initial channels) |
-| 5    | MCP Servers            | SelectionListNode (Memorizer recommended / custom / skip) |
-| 6    | Exposure Mode          | SelectionListNode (local-only default / tailscale / cloudflare) |
-| 7    | Health Check           | TextNode (validation results with SpinnerNodes → checkmarks) |
+| 3    | ACL Bootstrap          | TextInputNode (owner identity) + SelectionListNode (initial channels) |
+| 4    | MCP Servers            | SelectionListNode (Memorizer recommended / custom / skip) |
+| 5    | Exposure Mode          | SelectionListNode (local-only default / tailscale / cloudflare) |
+| 6    | Health Check           | TextNode (validation results with SpinnerNodes → checkmarks) |
 
 ### Layout Structure
 
@@ -84,14 +83,13 @@ PanelNode (outer: "Netclaw Setup")
 ```
 ╭─ Netclaw Setup ──────────────────────────────────────────────╮
 │                                                              │
-│  Step 7 of 7: Health Check               [■■■■■■■] 100%     │
+│  Step 6 of 6: Health Check               [■■■■■■■] 100%     │
 │                                                              │
 │  Verifying configuration...                                  │
 │                                                              │
 │  ✓  LLM provider reachable (OpenRouter)                      │
 │  ✓  Slack bot token valid                                    │
 │  ✓  Slack app token valid                                    │
-│  ✓  PostgreSQL connected (3ms)                               │
 │  ✓  MCP: memorizer connected (12 tools)                      │
 │  ●  Exposure: local-only (no public endpoint)                │
 │                                                              │
@@ -105,8 +103,7 @@ PanelNode (outer: "Netclaw Setup")
 
 - Progress bar uses block characters (■□) rendered via TextNode
 - Secret inputs (API keys, tokens) use masked TextInputNode
-- Step 3 (PostgreSQL) validates connectivity live with SpinnerNode → checkmark
-- Step 7 (Health Check) runs all probes in sequence with SpinnerNode → result
+- Step 6 (Health Check) runs all probes in sequence with SpinnerNode → result
 - [Esc] navigates back to previous step; [Ctrl+Q] exits with confirmation
 - Config file written to `~/.netclaw/config/netclaw.json` on completion
 
@@ -210,7 +207,6 @@ Checking startup requirements...
   ✓  Config file valid
   ✓  ACL valid (3 channel rules, 2 tool grants)
   ✓  LLM provider reachable (OpenRouter)
-  ✓  PostgreSQL connected (2ms)
   ✗  Slack bot token invalid or expired
      Fix: netclaw init --step slack
   ✓  MCP: memorizer connected (12 tools)

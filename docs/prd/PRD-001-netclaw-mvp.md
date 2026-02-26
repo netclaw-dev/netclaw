@@ -164,7 +164,7 @@ transport coupling.
 
 ### FR-003 Persistent Recovery
 
-Session state shall recover from PostgreSQL journal and snapshots after
+Session state shall recover from SQLite journal and snapshots after
 process restart.
 
 ### FR-004 Conversation Compaction
