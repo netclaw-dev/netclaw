@@ -121,6 +121,61 @@ static async Task RunAsync(string[] args)
             return;
         }
 
+        var statusAsJson = false;
+        for (var i = 1; i < args.Length; i++)
+        {
+            var arg = args[i];
+            if (arg is "--json")
+            {
+                statusAsJson = true;
+                continue;
+            }
+
+            if (arg is "--format")
+            {
+                if (i + 1 >= args.Length)
+                {
+                    Console.WriteLine("[FAIL] status options: Missing value after --format. Expected text or json.");
+                    WriteStatusHelp();
+                    Environment.ExitCode = 1;
+                    return;
+                }
+
+                i++;
+                var format = args[i];
+                statusAsJson = string.Equals(format, "json", StringComparison.OrdinalIgnoreCase);
+                if (!statusAsJson && !string.Equals(format, "text", StringComparison.OrdinalIgnoreCase))
+                {
+                    Console.WriteLine($"[FAIL] status options: Unsupported format '{format}'. Expected text or json.");
+                    WriteStatusHelp();
+                    Environment.ExitCode = 1;
+                    return;
+                }
+
+                continue;
+            }
+
+            if (arg.StartsWith("--format=", StringComparison.Ordinal))
+            {
+                var format = arg.Substring("--format=".Length);
+                statusAsJson = string.Equals(format, "json", StringComparison.OrdinalIgnoreCase);
+                if (!statusAsJson && !string.Equals(format, "text", StringComparison.OrdinalIgnoreCase))
+                {
+                    Console.WriteLine($"[FAIL] status options: Unsupported format '{format}'. Expected text or json.");
+                    WriteStatusHelp();
+                    Environment.ExitCode = 1;
+                    return;
+                }
+
+                continue;
+            }
+
+            Console.WriteLine($"[FAIL] status options: Unknown option '{arg}'.");
+            WriteStatusHelp();
+            Environment.ExitCode = 1;
+            return;
+        }
+
         var builder = Host.CreateApplicationBuilder(args);
         ConfigureConfigServices(builder.Services, builder.Configuration);
         builder.Services.AddHttpClient();
@@ -130,7 +185,7 @@ static async Task RunAsync(string[] args)
 
         using var host = builder.Build();
         using var scope = host.Services.CreateScope();
-        var exitCode = await RunStatusAsync(scope.ServiceProvider, builder.Configuration);
+        var exitCode = await RunStatusAsync(scope.ServiceProvider, builder.Configuration, statusAsJson);
         Environment.ExitCode = exitCode;
         return;
     }
@@ -326,6 +381,10 @@ static void WriteStatusHelp()
     Console.WriteLine("  - daemon process uptime");
     Console.WriteLine("  - connector health (including disabled connectors)");
     Console.WriteLine("  - persistence and telemetry summary");
+    Console.WriteLine();
+    Console.WriteLine("Options:");
+    Console.WriteLine("  --json                 Alias for --format json");
+    Console.WriteLine("  --format <text|json>   Output format (default: text)");
 }
 
 static void WriteDoctorResult(DoctorRunResult result)
@@ -432,7 +491,7 @@ static void WriteSimpleDiff(string original, string updated)
     }
 }
 
-static async Task<int> RunStatusAsync(IServiceProvider services, IConfiguration configuration)
+static async Task<int> RunStatusAsync(IServiceProvider services, IConfiguration configuration, bool jsonOutput)
 {
     var endpoint = configuration["Daemon:Endpoint"]
         ?? Environment.GetEnvironmentVariable("NETCLAW_DAEMON_ENDPOINT")
@@ -466,7 +525,17 @@ static async Task<int> RunStatusAsync(IServiceProvider services, IConfiguration 
             return 1;
         }
 
-        WriteStatusResult(status, endpoint);
+        if (jsonOutput)
+        {
+            Console.WriteLine(JsonSerializer.Serialize(status, new JsonSerializerOptions
+            {
+                WriteIndented = true
+            }));
+        }
+        else
+        {
+            WriteStatusResult(status, endpoint);
+        }
 
         return status.Overall.ToLowerInvariant() switch
         {

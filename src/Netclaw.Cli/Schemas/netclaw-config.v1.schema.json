@@ -27,10 +27,29 @@
           "items": { "type": "string" }
         }
       },
-      "additionalProperties": true
+      "additionalProperties": false
     },
     "Logging": {
       "type": "object",
+      "properties": {
+        "LogLevel": {
+          "type": "object",
+          "properties": {
+            "Default": {
+              "type": "string",
+              "enum": ["Trace", "Debug", "Information", "Warning", "Error", "Critical", "None"]
+            }
+          },
+          "additionalProperties": true
+        },
+        "Console": {
+          "type": "object",
+          "properties": {
+            "Enabled": { "type": "boolean" }
+          },
+          "additionalProperties": false
+        }
+      },
       "additionalProperties": true
     },
     "Telemetry": {
@@ -40,12 +59,12 @@
         "Otlp": {
           "type": "object",
           "properties": {
-            "Endpoint": { "type": "string" }
+            "Endpoint": { "type": "string", "format": "uri" }
           },
-          "additionalProperties": true
+          "additionalProperties": false
         }
       },
-      "additionalProperties": true
+      "additionalProperties": false
     },
     "Persistence": {
       "type": "object",
