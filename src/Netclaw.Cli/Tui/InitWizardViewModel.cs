@@ -60,6 +60,11 @@ public partial class InitWizardViewModel : ReactiveViewModel
     // ── Step 6: Health Check ──
     public List<HealthCheckItem> HealthCheckResults { get; } = [];
 
+    /// <summary>
+    /// Completes when the health check finishes. Used for testing without polling.
+    /// </summary>
+    internal Task? HealthCheckCompletion { get; private set; }
+
     public InitWizardViewModel(NetclawPaths paths)
     {
         _paths = paths;
@@ -82,7 +87,7 @@ public partial class InitWizardViewModel : ReactiveViewModel
         if (CurrentStep == WizardStep.HealthCheck)
         {
             if (!IsHealthCheckRunning && !IsComplete)
-                _ = RunHealthCheckAsync();
+                HealthCheckCompletion = RunHealthCheckAsync();
             return;
         }
 
