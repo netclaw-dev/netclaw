@@ -1,7 +1,6 @@
-using System.Reactive.Disposables;
-using System.Reactive.Linq;
 using System.Text;
 using Netclaw.Actors.Protocol;
+using R3;
 using Termina.Components.Streaming;
 using Termina.Extensions;
 using Termina.Input;
@@ -48,13 +47,13 @@ public sealed class ChatPage : ReactivePage<ChatViewModel>
         _promptInput = new TextInputNode()
             .WithPlaceholder("Type a message...");
 
-        // Handle prompt submission — Buffer coalesces rapid-fire submissions
+        // Handle prompt submission — Chunk coalesces rapid-fire submissions
         // (e.g., pasting multi-line text where each CRLF triggers Submitted)
         // into a single message. Normal typing produces one item per buffer window.
         _promptInput.Submitted
             .Where(text => !string.IsNullOrWhiteSpace(text))
-            .Buffer(TimeSpan.FromMilliseconds(100))
-            .Where(batch => batch.Count > 0)
+            .Chunk(TimeSpan.FromMilliseconds(100))
+            .Where(batch => batch.Length > 0)
             .Subscribe(batch =>
             {
                 _promptInput.Clear();
@@ -73,22 +72,21 @@ public sealed class ChatPage : ReactivePage<ChatViewModel>
 
         // Subscribe to session output
         ViewModel.SessionOutput
-            .ObserveOn(System.Reactive.Concurrency.CurrentThreadScheduler.Instance)
             .Subscribe(HandleOutput)
             .DisposeWith(Subscriptions);
 
         // Route keyboard input
-        ViewModel.Input.OfType<KeyPressed>()
+        ViewModel.Input.OfType<IInputEvent, KeyPressed>()
             .Subscribe(HandleKeyPress)
             .DisposeWith(Subscriptions);
 
         // Route bracketed paste events directly to the text input node
-        ViewModel.Input.OfType<PasteEvent>()
+        ViewModel.Input.OfType<IInputEvent, PasteEvent>()
             .Subscribe(paste => _promptInput.HandlePaste(paste))
             .DisposeWith(Subscriptions);
 
         // Route mouse wheel scrolling to chat history
-        ViewModel.Input.OfType<MouseScrollEvent>()
+        ViewModel.Input.OfType<IInputEvent, MouseScrollEvent>()
             .Subscribe(HandleMouseScroll)
             .DisposeWith(Subscriptions);
     }
@@ -120,10 +118,10 @@ public sealed class ChatPage : ReactivePage<ChatViewModel>
     private LayoutNode BuildStatusBar()
     {
         return Observable.CombineLatest(
-                ViewModel.IsGeneratingChanged,
-                ViewModel.IsInputEnabledChanged,
-                ViewModel.StatusMessageChanged,
-                ViewModel.UsageDisplayChanged.StartWith((string?)null),
+                ViewModel.IsGenerating,
+                ViewModel.IsInputEnabled,
+                ViewModel.StatusMessage,
+                ViewModel.UsageDisplay,
                 (isGenerating, isInputEnabled, status, usage) =>
                 {
                     var keys = isGenerating
@@ -166,7 +164,7 @@ public sealed class ChatPage : ReactivePage<ChatViewModel>
         // Escape: cancel or quit
         if (keyInfo.Key == ConsoleKey.Escape)
         {
-            if (ViewModel.IsGenerating)
+            if (ViewModel.IsGenerating.Value)
             {
                 // TODO: cancel generation when supported
             }
@@ -295,7 +293,7 @@ public sealed class ChatPage : ReactivePage<ChatViewModel>
                 var ctxPart = usagePercent.HasValue
                     ? $" ({usagePercent.Value:P0} ctx)"
                     : "";
-                ViewModel.UsageDisplay = $"in={msg.InputTokens ?? 0} out={msg.OutputTokens ?? 0}{ctxPart}";
+                ViewModel.UsageDisplay.Value = $"in={msg.InputTokens ?? 0} out={msg.OutputTokens ?? 0}{ctxPart}";
                 break;
 
             case ErrorOutput msg:
@@ -306,7 +304,7 @@ public sealed class ChatPage : ReactivePage<ChatViewModel>
             case TurnCompleted:
                 RemoveThinkingSpinner();
                 FinalizeAssistantSegmentIfNeeded();
-                ViewModel.StatusMessage = "Ready";
+                ViewModel.StatusMessage.Value = "Ready";
                 _chatHistory.ScrollToBottom();
                 break;
 

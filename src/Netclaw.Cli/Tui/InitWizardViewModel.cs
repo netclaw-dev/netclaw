@@ -1,7 +1,6 @@
-using System.Reactive.Disposables;
-using System.Reactive.Linq;
 using System.Text.Json;
 using Netclaw.Configuration;
+using R3;
 using Termina.Input;
 using Termina.Reactive;
 
@@ -30,12 +29,10 @@ public partial class InitWizardViewModel : ReactiveViewModel
 
     private readonly NetclawPaths _paths;
 
-#pragma warning disable CS0169, CS0414
-    [Reactive] private WizardStep _currentStep = WizardStep.Provider;
-    [Reactive] private string _statusMessage = "";
-    [Reactive] private bool _isHealthCheckRunning;
-    [Reactive] private bool _isComplete;
-#pragma warning restore CS0169, CS0414
+    public ReactiveProperty<WizardStep> CurrentStep { get; } = new(WizardStep.Provider);
+    public ReactiveProperty<string> StatusMessage { get; } = new("");
+    public ReactiveProperty<bool> IsHealthCheckRunning { get; } = new(false);
+    public ReactiveProperty<bool> IsComplete { get; } = new(false);
 
     // ── Step 1: Provider ──
     public string? SelectedProviderType { get; set; }
@@ -74,7 +71,7 @@ public partial class InitWizardViewModel : ReactiveViewModel
     {
         base.OnActivated();
 
-        Input.OfType<KeyPressed>()
+        Input.OfType<IInputEvent, KeyPressed>()
             .Subscribe(HandleGlobalKey)
             .DisposeWith(Subscriptions);
     }
@@ -84,16 +81,16 @@ public partial class InitWizardViewModel : ReactiveViewModel
     /// </summary>
     public void GoNext()
     {
-        if (CurrentStep == WizardStep.HealthCheck)
+        if (CurrentStep.Value == WizardStep.HealthCheck)
         {
-            if (!IsHealthCheckRunning && !IsComplete)
+            if (!IsHealthCheckRunning.Value && !IsComplete.Value)
                 HealthCheckCompletion = RunHealthCheckAsync();
             return;
         }
 
-        var next = (WizardStep)((int)CurrentStep + 1);
-        CurrentStep = next;
-        StatusMessage = "";
+        var next = (WizardStep)((int)CurrentStep.Value + 1);
+        CurrentStep.Value = next;
+        StatusMessage.Value = "";
         RequestRedraw();
     }
 
@@ -103,14 +100,14 @@ public partial class InitWizardViewModel : ReactiveViewModel
     /// </summary>
     public void GoBack()
     {
-        if (CurrentStep == WizardStep.Provider)
+        if (CurrentStep.Value == WizardStep.Provider)
         {
             // Can't go back from step 1 — quit
             Shutdown();
             return;
         }
 
-        var previous = (WizardStep)((int)CurrentStep - 1);
+        var previous = (WizardStep)((int)CurrentStep.Value - 1);
 
         // Back-navigation clearing rules from design doc:
         // Provider change clears auth + model downstream
@@ -119,8 +116,8 @@ public partial class InitWizardViewModel : ReactiveViewModel
             ClearFromProvider();
         }
 
-        CurrentStep = previous;
-        StatusMessage = "";
+        CurrentStep.Value = previous;
+        StatusMessage.Value = "";
         RequestRedraw();
     }
 
@@ -147,7 +144,7 @@ public partial class InitWizardViewModel : ReactiveViewModel
 
     private async Task RunHealthCheckAsync()
     {
-        IsHealthCheckRunning = true;
+        IsHealthCheckRunning.Value = true;
         HealthCheckResults.Clear();
         RequestRedraw();
 
@@ -192,9 +189,9 @@ public partial class InitWizardViewModel : ReactiveViewModel
                 $"Configuration write failed: {ex.Message}", false);
         }
 
-        IsHealthCheckRunning = false;
-        IsComplete = true;
-        StatusMessage = "Setup complete! Run `netclaw daemon start` to begin.";
+        IsHealthCheckRunning.Value = false;
+        IsComplete.Value = true;
+        StatusMessage.Value = "Setup complete! Run `netclaw daemon start` to begin.";
         RequestRedraw();
     }
 
@@ -290,7 +287,10 @@ public partial class InitWizardViewModel : ReactiveViewModel
 
     public override void Dispose()
     {
-        DisposeReactiveFields();
+        CurrentStep.Dispose();
+        StatusMessage.Dispose();
+        IsHealthCheckRunning.Dispose();
+        IsComplete.Dispose();
         base.Dispose();
     }
 }

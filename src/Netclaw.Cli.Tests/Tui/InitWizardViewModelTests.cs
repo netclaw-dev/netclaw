@@ -31,29 +31,29 @@ public sealed class InitWizardViewModelTests : IDisposable
     public void StartsAtProviderStep()
     {
         using var vm = CreateViewModel();
-        Assert.Equal(WizardStep.Provider, vm.CurrentStep);
+        Assert.Equal(WizardStep.Provider, vm.CurrentStep.Value);
     }
 
     [Fact]
     public void GoNext_AdvancesStep()
     {
         using var vm = CreateViewModel();
-        Assert.Equal(WizardStep.Provider, vm.CurrentStep);
+        Assert.Equal(WizardStep.Provider, vm.CurrentStep.Value);
 
         vm.GoNext();
-        Assert.Equal(WizardStep.Slack, vm.CurrentStep);
+        Assert.Equal(WizardStep.Slack, vm.CurrentStep.Value);
 
         vm.GoNext();
-        Assert.Equal(WizardStep.Acl, vm.CurrentStep);
+        Assert.Equal(WizardStep.Acl, vm.CurrentStep.Value);
 
         vm.GoNext();
-        Assert.Equal(WizardStep.Mcp, vm.CurrentStep);
+        Assert.Equal(WizardStep.Mcp, vm.CurrentStep.Value);
 
         vm.GoNext();
-        Assert.Equal(WizardStep.Exposure, vm.CurrentStep);
+        Assert.Equal(WizardStep.Exposure, vm.CurrentStep.Value);
 
         vm.GoNext();
-        Assert.Equal(WizardStep.HealthCheck, vm.CurrentStep);
+        Assert.Equal(WizardStep.HealthCheck, vm.CurrentStep.Value);
     }
 
     [Fact]
@@ -64,10 +64,10 @@ public sealed class InitWizardViewModelTests : IDisposable
         vm.GoNext(); // → Acl
 
         vm.GoBack(); // → Slack
-        Assert.Equal(WizardStep.Slack, vm.CurrentStep);
+        Assert.Equal(WizardStep.Slack, vm.CurrentStep.Value);
 
         vm.GoBack(); // → Provider
-        Assert.Equal(WizardStep.Provider, vm.CurrentStep);
+        Assert.Equal(WizardStep.Provider, vm.CurrentStep.Value);
     }
 
     [Fact]
@@ -112,11 +112,11 @@ public sealed class InitWizardViewModelTests : IDisposable
         vm.EndpointInput = "http://big-gpu:11434";
         vm.SlackEnabled = false;
 
-        vm.CurrentStep = WizardStep.HealthCheck;
+        vm.CurrentStep.Value = WizardStep.HealthCheck;
         vm.GoNext(); // triggers health check
 
         await vm.HealthCheckCompletion!.WaitAsync(TimeSpan.FromSeconds(5));
-        Assert.True(vm.IsComplete);
+        Assert.True(vm.IsComplete.Value);
 
         // Verify netclaw.json
         Assert.True(File.Exists(_paths.NetclawConfigPath));
@@ -146,11 +146,11 @@ public sealed class InitWizardViewModelTests : IDisposable
         vm.ApiKeyInput = "sk-or-test-1234567890";
         vm.SlackEnabled = false;
 
-        vm.CurrentStep = WizardStep.HealthCheck;
+        vm.CurrentStep.Value = WizardStep.HealthCheck;
         vm.GoNext();
 
         await vm.HealthCheckCompletion!.WaitAsync(TimeSpan.FromSeconds(5));
-        Assert.True(vm.IsComplete);
+        Assert.True(vm.IsComplete.Value);
 
         // secrets.json contains the API key
         Assert.True(File.Exists(_paths.SecretsPath));
@@ -173,11 +173,11 @@ public sealed class InitWizardViewModelTests : IDisposable
         vm.SlackBotToken = "xoxb-test-bot-token";
         vm.SlackAppToken = "xapp-test-app-token";
 
-        vm.CurrentStep = WizardStep.HealthCheck;
+        vm.CurrentStep.Value = WizardStep.HealthCheck;
         vm.GoNext();
 
         await vm.HealthCheckCompletion!.WaitAsync(TimeSpan.FromSeconds(5));
-        Assert.True(vm.IsComplete);
+        Assert.True(vm.IsComplete.Value);
 
         var secrets = JsonDocument.Parse(File.ReadAllText(_paths.SecretsPath));
         Assert.True(secrets.RootElement.TryGetProperty("Slack", out var slack));
@@ -198,11 +198,11 @@ public sealed class InitWizardViewModelTests : IDisposable
         vm.SelectedAuthMethod = AuthMethod.ApiKey;
         vm.ApiKeyInput = "sk-ant-test-key";
 
-        vm.CurrentStep = WizardStep.HealthCheck;
+        vm.CurrentStep.Value = WizardStep.HealthCheck;
         vm.GoNext();
 
         await vm.HealthCheckCompletion!.WaitAsync(TimeSpan.FromSeconds(5));
-        Assert.True(vm.IsComplete);
+        Assert.True(vm.IsComplete.Value);
         Assert.NotEmpty(vm.HealthCheckResults);
 
         var providerCheck = vm.HealthCheckResults
@@ -218,7 +218,7 @@ public sealed class InitWizardViewModelTests : IDisposable
         vm.SelectedProviderType = "ollama";
         vm.SlackEnabled = false;
 
-        vm.CurrentStep = WizardStep.HealthCheck;
+        vm.CurrentStep.Value = WizardStep.HealthCheck;
         vm.GoNext();
 
         await vm.HealthCheckCompletion!.WaitAsync(TimeSpan.FromSeconds(5));

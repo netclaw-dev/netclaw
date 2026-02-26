@@ -1,6 +1,5 @@
-using System.Reactive.Linq;
-using System.Reactive.Subjects;
 using Microsoft.AspNetCore.SignalR.Client;
+using R3;
 using Microsoft.Extensions.AI;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
@@ -90,8 +89,8 @@ public sealed class DaemonClient : IAsyncDisposable
         };
     }
 
-    public IObservable<SessionOutput> SessionOutput => _outputSubject.AsObservable();
-    public IObservable<DaemonConnectionEvent> ConnectionEvents => _connectionSubject.AsObservable();
+    public Observable<SessionOutput> SessionOutput => _outputSubject.AsObservable();
+    public Observable<DaemonConnectionEvent> ConnectionEvents => _connectionSubject.AsObservable();
 
     public bool IsConnected => _connection.State is HubConnectionState.Connected;
 

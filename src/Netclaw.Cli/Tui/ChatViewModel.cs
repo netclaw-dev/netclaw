@@ -1,10 +1,9 @@
-using System.Reactive.Linq;
-using System.Reactive.Subjects;
 using Microsoft.Extensions.AI;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
 using Netclaw.Cli.Daemon;
 using Netclaw.Configuration;
+using R3;
 using Termina.Reactive;
 
 namespace Netclaw.Cli.Tui;
@@ -26,19 +25,17 @@ public partial class ChatViewModel : ReactiveViewModel
     private bool _sessionReady;
     private int _connectAttempts;
 
-#pragma warning disable CS0169, CS0414 // Backing fields used by [Reactive] source generator
-    [Reactive] private bool _isGenerating;
-    [Reactive] private bool _isInputEnabled = true;
-    [Reactive] private string _statusMessage = "Connecting...";
-    [Reactive] private string? _sessionIdDisplay;
-    [Reactive] private string? _usageDisplay;
-#pragma warning restore CS0169, CS0414
+    public ReactiveProperty<bool> IsGenerating { get; } = new(false);
+    public ReactiveProperty<bool> IsInputEnabled { get; } = new(true);
+    public ReactiveProperty<string> StatusMessage { get; } = new("Connecting...");
+    public ReactiveProperty<string?> SessionIdDisplay { get; } = new(null);
+    public ReactiveProperty<string?> UsageDisplay { get; } = new(null);
 
     /// <summary>
     /// Observable stream of session output events. The page subscribes to this
     /// to render chat messages, tool activity, usage, etc.
     /// </summary>
-    public IObservable<SessionOutput> SessionOutput => _outputSubject.AsObservable();
+    public Observable<SessionOutput> SessionOutput => _outputSubject.AsObservable();
 
     /// <summary>
     /// The configured model identifier for display in the status bar.
@@ -73,10 +70,10 @@ public partial class ChatViewModel : ReactiveViewModel
                 switch (output)
                 {
                     case TurnCompleted:
-                        IsGenerating = false;
+                        IsGenerating.Value = false;
                         break;
                     case ErrorOutput:
-                        IsGenerating = false;
+                        IsGenerating.Value = false;
                         break;
                 }
 
@@ -96,10 +93,10 @@ public partial class ChatViewModel : ReactiveViewModel
                     _ = EnsureSessionAndFlushAsync();
                 }
 
-                if (IsGenerating && evt.State is DaemonConnectionState.Connected)
-                    StatusMessage = "Generating...";
+                if (IsGenerating.Value && evt.State is DaemonConnectionState.Connected)
+                    StatusMessage.Value = "Generating...";
                 else
-                    StatusMessage = evt.Message;
+                    StatusMessage.Value = evt.Message;
 
                 RequestRedraw();
             });
@@ -119,16 +116,16 @@ public partial class ChatViewModel : ReactiveViewModel
         if (!_sessionReady || !_daemonClient.IsConnected)
         {
             _pendingMessages.Enqueue(text);
-            IsGenerating = false;
-            IsInputEnabled = true;
-            StatusMessage = $"Queued {_pendingMessages.Count} message(s). Reconnecting...";
+            IsGenerating.Value = false;
+            IsInputEnabled.Value = true;
+            StatusMessage.Value = $"Queued {_pendingMessages.Count} message(s). Reconnecting...";
             RequestRedraw();
             _ = ConnectUntilReadyAsync();
             return;
         }
 
-        IsGenerating = true;
-        StatusMessage = "Generating...";
+        IsGenerating.Value = true;
+        StatusMessage.Value = "Generating...";
 
         try
         {
@@ -143,11 +140,11 @@ public partial class ChatViewModel : ReactiveViewModel
         }
         catch (Exception ex)
         {
-            IsGenerating = false;
+            IsGenerating.Value = false;
             _sessionReady = false;
-            IsInputEnabled = true;
+            IsInputEnabled.Value = true;
             _pendingMessages.Enqueue(text);
-            StatusMessage = $"Send failed ({ex.Message}). Reconnecting...";
+            StatusMessage.Value = $"Send failed ({ex.Message}). Reconnecting...";
             RequestRedraw();
             _ = ConnectUntilReadyAsync();
         }
@@ -164,7 +161,11 @@ public partial class ChatViewModel : ReactiveViewModel
         _daemonConnectionSubscription?.Dispose();
         _outputSubject.Dispose();
 
-        DisposeReactiveFields();
+        IsGenerating.Dispose();
+        IsInputEnabled.Dispose();
+        StatusMessage.Dispose();
+        SessionIdDisplay.Dispose();
+        UsageDisplay.Dispose();
         base.Dispose();
     }
 
@@ -190,7 +191,7 @@ public partial class ChatViewModel : ReactiveViewModel
             {
                 _connectAttempts++;
                 var idx = Math.Min(_connectAttempts - 1, delays.Length - 1);
-                StatusMessage = $"Connecting... retry {_connectAttempts} in {delays[idx].TotalSeconds:0}s";
+                StatusMessage.Value = $"Connecting... retry {_connectAttempts} in {delays[idx].TotalSeconds:0}s";
                 RequestRedraw();
                 await Task.Delay(delays[idx]);
             }
@@ -200,9 +201,9 @@ public partial class ChatViewModel : ReactiveViewModel
     private async Task EnsureSessionAndFlushAsync()
     {
         var sessionId = await _daemonClient.EnsureSessionAsync("tui");
-        SessionIdDisplay = sessionId;
+        SessionIdDisplay.Value = sessionId;
         _sessionReady = true;
-        IsInputEnabled = true;
+        IsInputEnabled.Value = true;
         _connectAttempts = 0;
 
         while (_pendingMessages.Count > 0)
@@ -216,8 +217,8 @@ public partial class ChatViewModel : ReactiveViewModel
             });
         }
 
-        if (!IsGenerating)
-            StatusMessage = "Ready";
+        if (!IsGenerating.Value)
+            StatusMessage.Value = "Ready";
 
         RequestRedraw();
     }

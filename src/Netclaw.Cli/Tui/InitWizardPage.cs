@@ -1,6 +1,5 @@
-using System.Reactive.Disposables;
-using System.Reactive.Linq;
 using Netclaw.Configuration;
+using R3;
 using Termina.Extensions;
 using Termina.Input;
 using Termina.Layout;
@@ -40,13 +39,26 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
     private int _providerSubStep; // 0=select provider, 1=select auth, 2=enter key/endpoint
     private int _slackSubStep;    // 0=enable?, 1=bot token, 2=app token
 
+    // Focus tracking for selection lists (mirrors _lastFocusedInput for text inputs)
+    private IFocusable? _lastFocusedList;
+    private TextInputNode? _lastFocusedInput;
+
+    // Dynamic layout node for step content — invalidated on sub-step changes
+    private DynamicLayoutNode? _stepContentNode;
+    private DynamicLayoutNode? _helpTextNode;
+
+    public InitWizardPage()
+    {
+        FocusPolicy = FocusPolicy.FirstFocusable;
+    }
+
     protected override void OnBound()
     {
         base.OnBound();
         InitializeComponents();
 
         // Route keyboard input
-        ViewModel.Input.OfType<KeyPressed>()
+        ViewModel.Input.OfType<IInputEvent, KeyPressed>()
             .Subscribe(HandleKeyPress)
             .DisposeWith(Subscriptions);
     }
@@ -70,9 +82,9 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             .WithSpacing(1)
             // Step indicator + progress
             .WithChild(BuildStepIndicator())
-            // Step content (reactive)
+            // Step content (dynamic — rebuilds on step and sub-step changes)
             .WithChild(BuildStepContent())
-            // Help text (reactive)
+            // Help text (dynamic — rebuilds on step and sub-step changes)
             .WithChild(BuildHelpText())
             // Status message
             .WithChild(BuildStatusBar())
@@ -82,7 +94,7 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
 
     private LayoutNode BuildStepIndicator()
     {
-        return ViewModel.CurrentStepChanged
+        return ViewModel.CurrentStep
             .Select(step =>
             {
                 var stepNum = (int)step;
@@ -110,57 +122,59 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
 
     private LayoutNode BuildStepContent()
     {
-        return ViewModel.CurrentStepChanged
-            .Select(step => (ILayoutNode)(step switch
-            {
-                WizardStep.Provider => BuildProviderStep(),
-                WizardStep.Slack => BuildSlackStep(),
-                WizardStep.Acl => BuildAclStep(),
-                WizardStep.Mcp => BuildMcpStep(),
-                WizardStep.Exposure => BuildExposureStep(),
-                WizardStep.HealthCheck => BuildHealthCheckStep(),
-                _ => Layouts.Empty()
-            }))
-            .AsLayout()
-            .Fill();
+        // DynamicLayoutNode re-evaluates the factory on every render cycle.
+        // Step changes trigger RequestRedraw via the observable subscription in InitializeComponents.
+        // Sub-step changes call Invalidate() directly.
+        _stepContentNode = new DynamicLayoutNode(() => ViewModel.CurrentStep.Value switch
+        {
+            WizardStep.Provider => BuildProviderStep(),
+            WizardStep.Slack => BuildSlackStep(),
+            WizardStep.Acl => BuildAclStep(),
+            WizardStep.Mcp => BuildMcpStep(),
+            WizardStep.Exposure => BuildExposureStep(),
+            WizardStep.HealthCheck => BuildHealthCheckStep(),
+            _ => Layouts.Empty()
+        });
+
+        return _stepContentNode.Fill();
     }
 
     private LayoutNode BuildHelpText()
     {
-        return ViewModel.CurrentStepChanged
-            .Select(step =>
+        _helpTextNode = new DynamicLayoutNode(() =>
+        {
+            var step = ViewModel.CurrentStep.Value;
+            var text = step switch
             {
-                var text = step switch
-                {
-                    WizardStep.Provider when _providerSubStep == 0 =>
-                        "  Select your LLM provider. Ollama runs locally (no auth required).",
-                    WizardStep.Provider when _providerSubStep == 1 =>
-                        "  Choose how to authenticate with this provider.",
-                    WizardStep.Provider when _providerSubStep == 2 =>
-                        "  Enter your API key. It will be stored in secrets.json.",
-                    WizardStep.Slack when _slackSubStep == 0 =>
-                        "  Enable Slack to connect Netclaw as a Slack bot.",
-                    WizardStep.Slack =>
-                        "  Socket Mode requires both tokens. See: https://api.slack.com/apis/socket-mode",
-                    WizardStep.Acl =>
-                        "  Your Slack user ID (e.g., U01234ABCDE) for admin access.",
-                    WizardStep.Mcp =>
-                        "  MCP servers provide external tools. Memorizer adds persistent memory.",
-                    WizardStep.Exposure =>
-                        "  Local-only is recommended for homelab use.",
-                    WizardStep.HealthCheck =>
-                        "  Validating your configuration...",
-                    _ => ""
-                };
-                return (ILayoutNode)new TextNode(text).WithForeground(Color.BrightBlack);
-            })
-            .AsLayout()
-            .Height(2);
+                WizardStep.Provider when _providerSubStep == 0 =>
+                    "  Select your LLM provider. Ollama runs locally (no auth required).",
+                WizardStep.Provider when _providerSubStep == 1 =>
+                    "  Choose how to authenticate with this provider.",
+                WizardStep.Provider when _providerSubStep == 2 =>
+                    "  Enter your API key. It will be stored in secrets.json.",
+                WizardStep.Slack when _slackSubStep == 0 =>
+                    "  Enable Slack to connect Netclaw as a Slack bot.",
+                WizardStep.Slack =>
+                    "  Socket Mode requires both tokens. See: https://api.slack.com/apis/socket-mode",
+                WizardStep.Acl =>
+                    "  Your Slack user ID (e.g., U01234ABCDE) for admin access.",
+                WizardStep.Mcp =>
+                    "  MCP servers provide external tools. Memorizer adds persistent memory.",
+                WizardStep.Exposure =>
+                    "  Local-only is recommended for homelab use.",
+                WizardStep.HealthCheck =>
+                    "  Validating your configuration...",
+                _ => ""
+            };
+            return (ILayoutNode)new TextNode(text).WithForeground(Color.BrightBlack);
+        });
+
+        return _helpTextNode.Height(2);
     }
 
     private LayoutNode BuildStatusBar()
     {
-        return ViewModel.StatusMessageChanged
+        return ViewModel.StatusMessage
             .Select(msg => (ILayoutNode)(string.IsNullOrWhiteSpace(msg)
                 ? Layouts.Empty()
                 : new TextNode($"  {msg}").WithForeground(Color.Green)))
@@ -170,17 +184,17 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
 
     private LayoutNode BuildKeyBindings()
     {
-        return ViewModel.CurrentStepChanged
-            .CombineLatest(ViewModel.IsCompleteChanged, (step, complete) =>
-            {
-                if (complete)
-                    return (ILayoutNode)new TextNode(
-                        " [Enter] Exit  [Ctrl+Q] Quit").WithForeground(Color.BrightBlack);
+        return Observable.CombineLatest(ViewModel.CurrentStep, ViewModel.IsComplete,
+                (step, complete) =>
+                {
+                    if (complete)
+                        return (ILayoutNode)new TextNode(
+                            " [Enter] Exit  [Ctrl+Q] Quit").WithForeground(Color.BrightBlack);
 
-                var backLabel = step == WizardStep.Provider ? "Quit" : "Back";
-                return (ILayoutNode)new TextNode(
-                    $" [Enter] Next  [Esc] {backLabel}  [Ctrl+Q] Quit").WithForeground(Color.BrightBlack);
-            })
+                    var backLabel = step == WizardStep.Provider ? "Quit" : "Back";
+                    return (ILayoutNode)new TextNode(
+                        $" [Enter] Next  [Esc] {backLabel}  [Ctrl+Q] Quit").WithForeground(Color.BrightBlack);
+                })
             .AsLayout()
             .Height(1);
     }
@@ -207,6 +221,10 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             .WithMode(SelectionMode.Single)
             .WithHighlightColors(Color.Black, Color.Cyan);
 
+        // Auto-focus so the highlight bar is visible immediately
+        _providerList.OnFocused();
+        _lastFocusedList = _providerList;
+
         _providerList.SelectionConfirmed
             .Subscribe(selected =>
             {
@@ -218,13 +236,12 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
                     {
                         // Ollama — no auth needed, skip to endpoint
                         ViewModel.SelectedAuthMethod = AuthMethod.None;
-                        _providerSubStep = 2;
+                        SetProviderSubStep(2);
                     }
                     else
                     {
-                        _providerSubStep = 1;
+                        SetProviderSubStep(1);
                     }
-                    ViewModel.RequestRedraw();
                 }
             })
             .DisposeWith(Subscriptions);
@@ -251,6 +268,10 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             .WithMode(SelectionMode.Single)
             .WithHighlightColors(Color.Black, Color.Cyan);
 
+        // Auto-focus so the highlight bar is visible immediately
+        _authMethodList.OnFocused();
+        _lastFocusedList = _authMethodList;
+
         _authMethodList.SelectionConfirmed
             .Subscribe(selected =>
             {
@@ -259,8 +280,7 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
                     ViewModel.SelectedAuthMethod = selected[0].StartsWith("API", StringComparison.Ordinal)
                         ? AuthMethod.ApiKey
                         : AuthMethod.OAuthDevice;
-                    _providerSubStep = 2;
-                    ViewModel.RequestRedraw();
+                    SetProviderSubStep(2);
                 }
             })
             .DisposeWith(Subscriptions);
@@ -268,8 +288,7 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
         _authMethodList.Cancelled
             .Subscribe(_ =>
             {
-                _providerSubStep = 0;
-                ViewModel.RequestRedraw();
+                SetProviderSubStep(0);
             })
             .DisposeWith(Subscriptions);
 
@@ -288,6 +307,10 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             _endpointInput = new TextInputNode()
                 .WithPlaceholder("http://localhost:11434");
             _endpointInput.Text = ViewModel.EndpointInput ?? "http://localhost:11434";
+
+            // Auto-focus for cursor display
+            _endpointInput.OnFocused();
+            _lastFocusedInput = _endpointInput;
 
             _endpointInput.Submitted
                 .Subscribe(text =>
@@ -314,6 +337,10 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
 
         if (!string.IsNullOrWhiteSpace(ViewModel.ApiKeyInput))
             _apiKeyInput.Text = ViewModel.ApiKeyInput;
+
+        // Auto-focus for cursor display
+        _apiKeyInput.OnFocused();
+        _lastFocusedInput = _apiKeyInput;
 
         _apiKeyInput.Submitted
             .Where(text => !string.IsNullOrWhiteSpace(text))
@@ -351,6 +378,10 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             .WithMode(SelectionMode.Single)
             .WithHighlightColors(Color.Black, Color.Cyan);
 
+        // Auto-focus so the highlight bar is visible immediately
+        _slackEnabledList.OnFocused();
+        _lastFocusedList = _slackEnabledList;
+
         _slackEnabledList.SelectionConfirmed
             .Subscribe(selected =>
             {
@@ -359,8 +390,7 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
                     ViewModel.SlackEnabled = selected[0].StartsWith("Yes", StringComparison.Ordinal);
                     if (ViewModel.SlackEnabled)
                     {
-                        _slackSubStep = 1;
-                        ViewModel.RequestRedraw();
+                        SetSlackSubStep(1);
                     }
                     else
                     {
@@ -382,13 +412,16 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             .AsPassword()
             .WithPlaceholder("xoxb-...");
 
+        // Auto-focus for cursor display
+        _slackBotTokenInput.OnFocused();
+        _lastFocusedInput = _slackBotTokenInput;
+
         _slackBotTokenInput.Submitted
             .Where(text => !string.IsNullOrWhiteSpace(text))
             .Subscribe(text =>
             {
                 ViewModel.SlackBotToken = text;
-                _slackSubStep = 2;
-                ViewModel.RequestRedraw();
+                SetSlackSubStep(2);
             })
             .DisposeWith(Subscriptions);
 
@@ -407,6 +440,10 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
         _slackAppTokenInput = new TextInputNode()
             .AsPassword()
             .WithPlaceholder("xapp-...");
+
+        // Auto-focus for cursor display
+        _slackAppTokenInput.OnFocused();
+        _lastFocusedInput = _slackAppTokenInput;
 
         _slackAppTokenInput.Submitted
             .Where(text => !string.IsNullOrWhiteSpace(text))
@@ -436,6 +473,10 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
         if (!string.IsNullOrWhiteSpace(ViewModel.OwnerIdentity))
             _ownerIdentityInput.Text = ViewModel.OwnerIdentity;
 
+        // Auto-focus for cursor display
+        _ownerIdentityInput.OnFocused();
+        _lastFocusedInput = _ownerIdentityInput;
+
         _ownerIdentityInput.Submitted
             .Subscribe(text =>
             {
@@ -463,6 +504,10 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             .WithMode(SelectionMode.Single)
             .WithHighlightColors(Color.Black, Color.Cyan);
 
+        // Auto-focus so the highlight bar is visible immediately
+        _mcpList.OnFocused();
+        _lastFocusedList = _mcpList;
+
         _mcpList.SelectionConfirmed
             .Subscribe(selected =>
             {
@@ -487,6 +532,10 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
                 "Cloudflare Tunnel (configure later)")
             .WithMode(SelectionMode.Single)
             .WithHighlightColors(Color.Black, Color.Cyan);
+
+        // Auto-focus so the highlight bar is visible immediately
+        _exposureList.OnFocused();
+        _lastFocusedList = _exposureList;
 
         _exposureList.SelectionConfirmed
             .Subscribe(selected =>
@@ -552,26 +601,22 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
 
     private bool HandleSubStepBack()
     {
-        if (ViewModel.CurrentStep == WizardStep.Provider && _providerSubStep > 0)
+        if (ViewModel.CurrentStep.Value == WizardStep.Provider && _providerSubStep > 0)
         {
             if (_providerSubStep == 2)
                 ViewModel.ClearFromProvider();
-            _providerSubStep--;
-            ViewModel.RequestRedraw();
+            SetProviderSubStep(_providerSubStep - 1);
             return true;
         }
 
-        if (ViewModel.CurrentStep == WizardStep.Slack && _slackSubStep > 0)
+        if (ViewModel.CurrentStep.Value == WizardStep.Slack && _slackSubStep > 0)
         {
-            _slackSubStep--;
-            ViewModel.RequestRedraw();
+            SetSlackSubStep(_slackSubStep - 1);
             return true;
         }
 
         return false;
     }
-
-    private TextInputNode? _lastFocusedInput;
 
     private void RouteInputToActiveComponent(ConsoleKeyInfo keyInfo)
     {
@@ -585,7 +630,17 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
                 _lastFocusedInput.OnBlurred();
                 _lastFocusedInput = null;
             }
+
+            // Focus the selection list if it changed
+            if (_lastFocusedList != activeList)
+            {
+                _lastFocusedList?.OnBlurred();
+                activeList.OnFocused();
+                _lastFocusedList = activeList;
+            }
+
             activeList.HandleInput(keyInfo);
+            ViewModel.RequestRedraw();
             return;
         }
 
@@ -593,6 +648,13 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
         var activeInput = GetActiveTextInput();
         if (activeInput is not null)
         {
+            // Blur any previously focused selection list
+            if (_lastFocusedList is not null)
+            {
+                _lastFocusedList.OnBlurred();
+                _lastFocusedList = null;
+            }
+
             // Auto-focus the text input for cursor display
             if (_lastFocusedInput != activeInput)
             {
@@ -601,13 +663,14 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
                 _lastFocusedInput = activeInput;
             }
             activeInput.HandleInput(keyInfo);
+            ViewModel.RequestRedraw();
             return;
         }
 
         // On health check step, Enter triggers the check
-        if (ViewModel.CurrentStep == WizardStep.HealthCheck && keyInfo.Key == ConsoleKey.Enter)
+        if (ViewModel.CurrentStep.Value == WizardStep.HealthCheck && keyInfo.Key == ConsoleKey.Enter)
         {
-            if (ViewModel.IsComplete)
+            if (ViewModel.IsComplete.Value)
                 ViewModel.RequestQuit();
             else
                 ViewModel.GoNext();
@@ -616,7 +679,7 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
 
     private IFocusable? GetActiveSelectionList()
     {
-        return ViewModel.CurrentStep switch
+        return ViewModel.CurrentStep.Value switch
         {
             WizardStep.Provider when _providerSubStep == 0 => _providerList,
             WizardStep.Provider when _providerSubStep == 1 => _authMethodList,
@@ -629,7 +692,7 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
 
     private TextInputNode? GetActiveTextInput()
     {
-        return ViewModel.CurrentStep switch
+        return ViewModel.CurrentStep.Value switch
         {
             WizardStep.Provider when _providerSubStep == 2 && _endpointInput is not null => _endpointInput,
             WizardStep.Provider when _providerSubStep == 2 => _apiKeyInput,
@@ -640,22 +703,33 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
         };
     }
 
+    private void SetProviderSubStep(int step)
+    {
+        _providerSubStep = step;
+        _stepContentNode?.Invalidate();
+        _helpTextNode?.Invalidate();
+        ViewModel.RequestRedraw();
+    }
+
+    private void SetSlackSubStep(int step)
+    {
+        _slackSubStep = step;
+        _stepContentNode?.Invalidate();
+        _helpTextNode?.Invalidate();
+        ViewModel.RequestRedraw();
+    }
+
     private void InitializeComponents()
     {
-        // Components are lazily created per step, so nothing to do here yet.
-        // Reset sub-steps when step changes
-        ViewModel.CurrentStepChanged
+        // Invalidate dynamic layouts when step changes so they re-evaluate their factories
+        ViewModel.CurrentStep
             .Subscribe(step =>
             {
-                // Reset sub-steps when entering a step fresh
-                if (step == WizardStep.Provider)
-                {
-                    // Don't reset if we're already in the provider step with sub-steps
-                }
-                else if (step == WizardStep.Slack)
-                {
+                if (step == WizardStep.Slack)
                     _slackSubStep = 0;
-                }
+
+                _stepContentNode?.Invalidate();
+                _helpTextNode?.Invalidate();
             })
             .DisposeWith(Subscriptions);
     }

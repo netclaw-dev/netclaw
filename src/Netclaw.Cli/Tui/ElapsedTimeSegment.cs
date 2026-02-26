@@ -1,7 +1,5 @@
 using System.Diagnostics;
-using System.Reactive;
-using System.Reactive.Linq;
-using System.Reactive.Subjects;
+using R3;
 using Termina.Components.Streaming;
 using Termina.Rendering;
 using Termina.Terminal;
@@ -21,7 +19,7 @@ public sealed class ElapsedTimeSegment : IAnimatedTextSegment
     private readonly TextStyle _style;
     private bool _disposed;
 
-    public IObservable<Unit> Invalidated => _invalidated.AsObservable();
+    public Observable<Unit> Invalidated => _invalidated.AsObservable();
 
     public bool IsAnimating => _timer.Enabled;
 
