@@ -10,7 +10,9 @@
     <Project Path="src/Netclaw.Actors/Netclaw.Actors.csproj" />
     <Project Path="src/Netclaw.Channels/Netclaw.Channels.csproj" />
     <Project Path="src/Netclaw.Configuration/Netclaw.Configuration.csproj" />
+    <Project Path="src/Netclaw.Daemon.Tests/Netclaw.Daemon.Tests.csproj" />
     <Project Path="src/Netclaw.Daemon/Netclaw.Daemon.csproj" />
+    <Project Path="src/Netclaw.Cli.Tests/Netclaw.Cli.Tests.csproj" />
     <Project Path="src/Netclaw.Cli/Netclaw.Cli.csproj" />
     <Project Path="src/Netclaw.Actors.Tests/Netclaw.Actors.Tests.csproj" />
     <Project Path="src/Netclaw.Tools.Abstractions/Netclaw.Tools.Abstractions.csproj" />

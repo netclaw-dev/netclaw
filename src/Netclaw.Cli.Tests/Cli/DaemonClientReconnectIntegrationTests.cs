@@ -12,7 +12,7 @@ using Netclaw.Cli.Daemon;
 using Netclaw.Daemon.Gateway;
 using Xunit;
 
-namespace Netclaw.Actors.Tests.Cli;
+namespace Netclaw.Cli.Tests.Cli;
 
 public sealed class DaemonClientReconnectIntegrationTests
 {

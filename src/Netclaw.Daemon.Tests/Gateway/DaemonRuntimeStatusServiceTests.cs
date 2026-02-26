@@ -5,7 +5,7 @@ using Netclaw.Daemon.Configuration;
 using Netclaw.Daemon.Gateway;
 using Xunit;
 
-namespace Netclaw.Actors.Tests.Gateway;
+namespace Netclaw.Daemon.Tests.Gateway;
 
 public sealed class DaemonRuntimeStatusServiceTests
 {

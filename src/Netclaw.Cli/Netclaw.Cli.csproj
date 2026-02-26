@@ -11,6 +11,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="Netclaw.Cli.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="JsonSchema.Net" />
     <PackageReference Include="Termina" />
     <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" />

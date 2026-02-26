@@ -1,7 +1,7 @@
 using Netclaw.Cli.Daemon;
 using Xunit;
 
-namespace Netclaw.Actors.Tests.Cli;
+namespace Netclaw.Cli.Tests.Cli;
 
 public sealed class DaemonManagerCommandLineTests
 {

@@ -50,6 +50,22 @@ static async Task RunAsync(string[] args)
             return;
         }
 
+        DoctorCommandOptions? doctorOptions = null;
+        if (mode is "doctor")
+        {
+            try
+            {
+                doctorOptions = DoctorCommandOptions.Parse(args);
+            }
+            catch (InvalidOperationException ex)
+            {
+                Console.WriteLine($"[FAIL] doctor options: {ex.Message}");
+                WriteDoctorHelp();
+                Environment.ExitCode = 1;
+                return;
+            }
+        }
+
         var builder = Host.CreateApplicationBuilder(args);
         ConfigureConfigServices(builder.Services, builder.Configuration);
         if (mode is "doctor")
@@ -69,9 +85,30 @@ static async Task RunAsync(string[] args)
         using var host = builder.Build();
         using var scope = host.Services.CreateScope();
         var runner = scope.ServiceProvider.GetRequiredService<DoctorRunner>();
+        var fixService = scope.ServiceProvider.GetRequiredService<DoctorFixService>();
+
+        DoctorFixPlan? fixPlan = null;
+        if (doctorOptions!.Fix)
+        {
+            fixPlan = await fixService.BuildPlanAsync();
+            if (doctorOptions.Format is DoctorOutputFormat.Text)
+                WriteDoctorFixPlan(fixPlan, doctorOptions.DryRun);
+
+            if (fixPlan.HasChanges && !doctorOptions.DryRun)
+            {
+                var shouldApply = doctorOptions.Yes || PromptForDoctorFixApply();
+                if (shouldApply)
+                    await fixService.ApplyAsync(fixPlan);
+            }
+        }
+
         var result = await runner.RunAsync();
 
-        WriteDoctorResult(result);
+        if (doctorOptions.Format is DoctorOutputFormat.Json)
+            WriteDoctorJsonResult(result, fixPlan, doctorOptions);
+        else
+            WriteDoctorResult(result);
+
         Environment.ExitCode = result.ExitCode;
         return;
     }
@@ -268,6 +305,12 @@ static void WriteDoctorHelp()
     Console.WriteLine("  - netclaw.json schema validation (versioned by configVersion)");
     Console.WriteLine("  - secrets.json syntax validation");
     Console.WriteLine();
+    Console.WriteLine("Options:");
+    Console.WriteLine("  --format <text|json>   Output format (default: text)");
+    Console.WriteLine("  --fix                  Apply safe automatic fixes");
+    Console.WriteLine("  --dry-run              Show fixes without writing files (implies --fix)");
+    Console.WriteLine("  --yes, -y              Apply fixes without confirmation prompt");
+    Console.WriteLine();
     Console.WriteLine("Exit codes:");
     Console.WriteLine("  0  all checks passed");
     Console.WriteLine("  1  one or more checks failed");
@@ -304,6 +347,89 @@ static void WriteDoctorResult(DoctorRunResult result)
 
     Console.WriteLine();
     Console.WriteLine($"doctor exit code: {result.ExitCode}");
+}
+
+static void WriteDoctorJsonResult(DoctorRunResult result, DoctorFixPlan? fixPlan, DoctorCommandOptions options)
+{
+    var payload = new
+    {
+        exitCode = result.ExitCode,
+        checks = result.Results.Select(r => new
+        {
+            name = r.Name,
+            severity = r.Severity.ToString().ToLowerInvariant(),
+            message = r.Message,
+            remediation = r.Remediation
+        }),
+        fix = new
+        {
+            requested = options.Fix,
+            dryRun = options.DryRun,
+            changedFiles = fixPlan?.Fixes.Count ?? 0,
+            files = (fixPlan?.Fixes ?? []).Select(f => new
+            {
+                path = f.FilePath,
+                description = f.Description
+            })
+        }
+    };
+
+    Console.WriteLine(JsonSerializer.Serialize(payload, new JsonSerializerOptions
+    {
+        WriteIndented = true
+    }));
+}
+
+static void WriteDoctorFixPlan(DoctorFixPlan plan, bool dryRun)
+{
+    if (!plan.HasChanges)
+    {
+        Console.WriteLine("No safe autofixes available.");
+        return;
+    }
+
+    Console.WriteLine(dryRun
+        ? "Planned fixes (dry-run):"
+        : "Planned fixes:");
+
+    foreach (var fix in plan.Fixes)
+    {
+        Console.WriteLine($"- {fix.FilePath}");
+        Console.WriteLine($"  {fix.Description}");
+        WriteSimpleDiff(fix.OriginalText, fix.UpdatedText);
+    }
+}
+
+static bool PromptForDoctorFixApply()
+{
+    Console.Write("Apply these fixes? [y/N]: ");
+    var response = Console.ReadLine();
+    return string.Equals(response, "y", StringComparison.OrdinalIgnoreCase)
+           || string.Equals(response, "yes", StringComparison.OrdinalIgnoreCase);
+}
+
+static void WriteSimpleDiff(string original, string updated)
+{
+    var oldLines = original.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n');
+    var newLines = updated.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n');
+
+    Console.WriteLine("  --- before");
+    Console.WriteLine("  +++ after");
+
+    var max = Math.Max(oldLines.Length, newLines.Length);
+    for (var i = 0; i < max; i++)
+    {
+        var oldLine = i < oldLines.Length ? oldLines[i] : null;
+        var newLine = i < newLines.Length ? newLines[i] : null;
+
+        if (string.Equals(oldLine, newLine, StringComparison.Ordinal))
+            continue;
+
+        if (oldLine is not null)
+            Console.WriteLine($"  - {oldLine}");
+        if (newLine is not null)
+            Console.WriteLine($"  + {newLine}");
+    }
 }
 
 static async Task<int> RunStatusAsync(IServiceProvider services, IConfiguration configuration)

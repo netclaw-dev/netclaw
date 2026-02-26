@@ -11,7 +11,6 @@
   <ItemGroup>
     <PackageReference Include="Akka.Hosting.TestKit"/>
     <PackageReference Include="Akka.Persistence.Hosting"/>
-    <PackageReference Include="Microsoft.AspNetCore.TestHost" />
     <PackageReference Include="Microsoft.NET.Test.Sdk"/>
     <PackageReference Include="xunit"/>
     <PackageReference Include="xunit.runner.visualstudio"/>
@@ -19,9 +18,8 @@
 
   <ItemGroup>
     <ProjectReference Include="../Netclaw.Actors/Netclaw.Actors.csproj"/>
-    <ProjectReference Include="../Netclaw.Cli/Netclaw.Cli.csproj" />
+    <ProjectReference Include="../Netclaw.Channels/Netclaw.Channels.csproj" />
     <ProjectReference Include="../Netclaw.Configuration/Netclaw.Configuration.csproj"/>
-    <ProjectReference Include="../Netclaw.Daemon/Netclaw.Daemon.csproj" />
   </ItemGroup>
 
 </Project>

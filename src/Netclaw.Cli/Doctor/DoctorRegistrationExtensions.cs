@@ -7,6 +7,7 @@ public static class DoctorRegistrationExtensions
     public static void AddDoctorChecks(this IServiceCollection services)
     {
         services.AddSingleton<DoctorRunner>();
+        services.AddSingleton<DoctorFixService>();
         services.AddSingleton<IDoctorCheck, ConfigSchemaDoctorCheck>();
         services.AddSingleton<IDoctorCheck, SecretsJsonDoctorCheck>();
     }

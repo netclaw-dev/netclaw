@@ -2,7 +2,7 @@ using Netclaw.Cli.Doctor;
 using Netclaw.Configuration;
 using Xunit;
 
-namespace Netclaw.Actors.Tests.Doctor;
+namespace Netclaw.Cli.Tests.Doctor;
 
 public sealed class ConfigSchemaDoctorCheckTests
 {
