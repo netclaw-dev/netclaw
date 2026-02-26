@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.netclaw.local/config/v1",
+  "title": "Netclaw Config v1",
+  "type": "object",
+  "required": ["configVersion"],
+  "properties": {
+    "configVersion": {
+      "type": "integer",
+      "const": 1
+    },
+    "Slack": {
+      "type": "object",
+      "properties": {
+        "Enabled": { "type": "boolean" },
+        "SocketMode": { "type": "boolean" },
+        "DefaultChannelId": { "type": ["string", "null"] },
+        "DefaultChannelName": { "type": ["string", "null"] },
+        "MentionOnly": { "type": "boolean" },
+        "AllowDirectMessages": { "type": "boolean" },
+        "AllowedChannelIds": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "AllowedUserIds": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      },
+      "additionalProperties": true
+    },
+    "Logging": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "Telemetry": {
+      "type": "object",
+      "properties": {
+        "Enabled": { "type": "boolean" },
+        "Otlp": {
+          "type": "object",
+          "properties": {
+            "Endpoint": { "type": "string" }
+          },
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": true
+    },
+    "Persistence": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "Session": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "Tools": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "Providers": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "Models": {
+      "type": "object",
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}

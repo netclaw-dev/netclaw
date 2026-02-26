@@ -122,7 +122,7 @@ netclaw daemon install        Install as systemd user service (Linux)
 netclaw daemon uninstall      Remove systemd user service (Linux)
 netclaw config                Configuration management (planned)
 netclaw init                  First-run setup wizard (planned)
-netclaw doctor                Health checks (planned)
+netclaw doctor                Configuration diagnostics (schema + secrets syntax)
 ```
 
 ### Daemon Binary Discovery

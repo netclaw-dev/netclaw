@@ -36,6 +36,20 @@ All configuration lives under `~/.netclaw/`:
 
 Directories are created automatically on first run.
 
+## Schema Versioning
+
+`netclaw doctor` validates `netclaw.json` against versioned JSON schema files.
+Set a root `configVersion` field in your config to opt into strict schema
+validation.
+
+Example:
+
+```json
+{
+  "configVersion": 1
+}
+```
+
 ## Configuration Sections
 
 ### Providers

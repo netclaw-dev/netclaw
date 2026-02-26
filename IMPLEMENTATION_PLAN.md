@@ -502,7 +502,9 @@ Done when:
 CLI commands that work without the daemon by reading local files.
 
 Done when:
-- [ ] `netclaw doctor` — validate config files, probe daemon reachability, test provider connectivity.
+- [ ] `netclaw doctor` — validate local configuration files only (schema + semantic checks), no daemon/runtime probes.
+- [ ] `netclaw doctor --fix` (future) — optional safe autofix mode for config-only issues (with `--dry-run` support).
+- [ ] `netclaw doctor --interactive` (future) — optional Termina remediation flow for guided config repair.
 - [ ] `netclaw config show|validate` — dump/validate merged config.
 - [ ] `netclaw project list|add|remove` — manage project registry (local JSON files).
 - [ ] `netclaw environment scan|show` — discover local system capabilities.

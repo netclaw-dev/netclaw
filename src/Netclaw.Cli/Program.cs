@@ -5,6 +5,7 @@ using Microsoft.Extensions.Logging;
 using Netclaw.Channels;
 using Netclaw.Cli;
 using Netclaw.Cli.Daemon;
+using Netclaw.Cli.Doctor;
 using Netclaw.Cli.Tui;
 using Netclaw.Configuration;
 using Termina.Hosting;
@@ -38,16 +39,27 @@ static async Task RunAsync(string[] args)
     {
         var builder = Host.CreateApplicationBuilder(args);
         ConfigureConfigServices(builder.Services, builder.Configuration);
+        if (mode is "doctor")
+            builder.Services.AddDoctorChecks();
 
         // Suppress framework console logging
         builder.Logging.ClearProviders();
         builder.Logging.SetMinimumLevel(LogLevel.Warning);
 
         // TODO: init → Termina TUI wizard (Task 1.22)
-        // TODO: doctor → health checks (Task 1.21)
-        Console.WriteLine($"netclaw {mode}: not yet implemented");
+        if (mode is "init")
+        {
+            Console.WriteLine("netclaw init: not yet implemented");
+            return;
+        }
 
-        await builder.Build().RunAsync();
+        using var host = builder.Build();
+        using var scope = host.Services.CreateScope();
+        var runner = scope.ServiceProvider.GetRequiredService<DoctorRunner>();
+        var result = await runner.RunAsync();
+
+        WriteDoctorResult(result);
+        Environment.ExitCode = result.ExitCode;
         return;
     }
 
@@ -173,6 +185,27 @@ static void WriteDaemonResult(DaemonResult result)
     Console.WriteLine(result.Message);
     if (!result.Success)
         Environment.ExitCode = 1;
+}
+
+static void WriteDoctorResult(DoctorRunResult result)
+{
+    foreach (var check in result.Results)
+    {
+        var prefix = check.Severity switch
+        {
+            DoctorSeverity.Pass => "[PASS]",
+            DoctorSeverity.Warning => "[WARN]",
+            DoctorSeverity.Error => "[FAIL]",
+            _ => "[INFO]"
+        };
+
+        Console.WriteLine($"{prefix} {check.Name}: {check.Message}");
+        if (!string.IsNullOrWhiteSpace(check.Remediation))
+            Console.WriteLine($"       fix: {check.Remediation}");
+    }
+
+    Console.WriteLine();
+    Console.WriteLine($"doctor exit code: {result.ExitCode}");
 }
 
 // ═══════════════════════════════════════════════════════════════════════
