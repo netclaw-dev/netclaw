@@ -254,7 +254,7 @@ $ netclaw provider remove my-openrouter
 ## `netclaw model` — Dual-Mode Model Selection
 
 **Bare invocation** launches Termina TUI — a tree-based model browser showing all
-configured providers, their available models (via live/cached discovery), and
+configured providers, their available models (via live discovery or curated defaults), and
 current role assignments. Operator selects a role, browses models, and assigns.
 
 **With args** (`--role`, `--provider`, `--model`) runs as single-shot assignment.
@@ -301,7 +301,7 @@ PanelNode (outer: "Model Selection")
 
 ### Behaviors
 
-- Tree populated via model discovery (live → cache → defaults) across all
+- Tree populated via model discovery (live → curated defaults) across all
   configured providers
 - SpinnerNode shown while discovering models from each provider
 - Provider auth status shown inline (✓ valid / ⚠ expired / ✗ unreachable)

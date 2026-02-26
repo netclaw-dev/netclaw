@@ -17,10 +17,10 @@ public static class SlackChannelRegistrationExtensions
         if (!slackOptions.Enabled)
             return;
 
-        if (string.IsNullOrWhiteSpace(slackOptions.BotToken))
+        if (slackOptions.BotToken is null || string.IsNullOrWhiteSpace(slackOptions.BotToken.Value))
             throw new InvalidOperationException("Slack is enabled but Slack:BotToken is not configured.");
 
-        if (slackOptions.SocketMode && string.IsNullOrWhiteSpace(slackOptions.AppToken))
+        if (slackOptions.SocketMode && (slackOptions.AppToken is null || string.IsNullOrWhiteSpace(slackOptions.AppToken.Value)))
             throw new InvalidOperationException("Slack Socket Mode is enabled but Slack:AppToken is not configured.");
 
         services.AddSingleton<ISlackReplyClient, SlackReplyClient>();
@@ -32,10 +32,10 @@ public static class SlackChannelRegistrationExtensions
 
         services.AddSlackNet(c =>
         {
-            c.UseApiToken(slackOptions.BotToken!);
+            c.UseApiToken(slackOptions.BotToken!.Value);
 
             if (slackOptions.SocketMode)
-                c.UseAppLevelToken(slackOptions.AppToken!);
+                c.UseAppLevelToken(slackOptions.AppToken!.Value);
 
             c.RegisterEventHandler<MessageEvent, SlackChannel>();
             c.RegisterEventHandler<AppMention, SlackChannel>();

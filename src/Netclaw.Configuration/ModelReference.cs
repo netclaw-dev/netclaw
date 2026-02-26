@@ -10,4 +10,10 @@ public sealed class ModelReference
     public string Provider { get; set; } = "local-ollama";
     public string ModelId { get; set; } = "qwen3:30b";
     public int? ContextWindow { get; set; }
+
+    /// <summary>
+    /// How this model ID was resolved during onboarding or model selection.
+    /// Null for models configured before provenance tracking was added.
+    /// </summary>
+    public ModelDiscoverySource? Provenance { get; set; }
 }

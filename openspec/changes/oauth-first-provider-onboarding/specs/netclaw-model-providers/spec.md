@@ -57,18 +57,18 @@ authorization as a first-class provider onboarding method.
 ### Requirement: Model discovery fallback sequence
 
 Model selection SHALL use deterministic fallback when live model discovery is
-unavailable. The fallback order SHALL be: live provider catalog, cached
-last-known-good catalog, curated provider defaults, then manual model entry.
+unavailable. The fallback order SHALL be: live provider catalog, curated
+provider defaults, then manual model entry.
 
 #### Scenario: Live catalog unavailable
 - **GIVEN** provider profile and auth are configured
 - **WHEN** live model catalog request fails
-- **THEN** system attempts cached catalog and then curated defaults in order
-- **AND** onboarding prompts for manual entry only if prior fallback paths fail
+- **THEN** system attempts curated defaults
+- **AND** onboarding prompts for manual entry only if curated defaults fail
 
 #### Scenario: Model provenance recorded
 - **GIVEN** model is selected through any discovery path
 - **WHEN** provider configuration is saved
-- **THEN** system records the model source as one of `live`, `cache`,
-  `defaults`, or `manual`
+- **THEN** system records the model source as one of `live`, `defaults`,
+  or `manual`
 - **AND** diagnostics expose this provenance to operators

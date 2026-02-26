@@ -12,8 +12,8 @@
 
 ## 3. Model Discovery Fallback Paths
 
-- [ ] 3.1 Implement model discovery fallback order (live catalog -> cache -> curated defaults -> manual entry)
-- [ ] 3.2 Persist model provenance (`live`, `cache`, `defaults`, `manual`) with provider config
+- [ ] 3.1 Implement model discovery fallback order (live catalog -> curated defaults -> manual entry)
+- [ ] 3.2 Persist model provenance (`live`, `defaults`, `manual`) with provider config
 - [ ] 3.3 Add onboarding completion summary details for selected model source and fallback/degraded state
 
 ## 4. Doctor Follow-Up Checks

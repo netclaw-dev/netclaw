@@ -1,3 +1,5 @@
+using Netclaw.Configuration;
+
 namespace Netclaw.Channels.Slack;
 
 public sealed class SlackChannelOptions
@@ -6,9 +8,9 @@ public sealed class SlackChannelOptions
 
     public bool SocketMode { get; init; } = true;
 
-    public string? BotToken { get; init; }
+    public SensitiveString? BotToken { get; init; }
 
-    public string? AppToken { get; init; }
+    public SensitiveString? AppToken { get; init; }
 
     public string? DefaultChannelId { get; init; }
 

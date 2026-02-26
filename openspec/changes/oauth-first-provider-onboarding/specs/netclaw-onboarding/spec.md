@@ -27,8 +27,8 @@ configuration is functional.
 #### Scenario: Model discovery fallback branch
 - **GIVEN** provider and auth branch are selected
 - **WHEN** live model catalog discovery fails or returns no usable models
-- **THEN** onboarding executes fallback in order: cached catalog, curated
-  defaults, manual model entry
+- **THEN** onboarding executes fallback in order: curated defaults, manual
+  model entry
 - **AND** the selected model source provenance is recorded for diagnostics
 
 #### Scenario: Health check on completion

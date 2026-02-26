@@ -47,7 +47,7 @@ Alternatives considered:
 
 ### Decision: Model discovery uses tiered fallback path with explicit provenance
 
-Model selection will attempt, in order: (1) live provider catalog API, (2) cached last-known-good catalog, (3) curated provider defaults in config templates, (4) operator manual model entry with validation.
+Model selection will attempt, in order: (1) live provider catalog API, (2) curated provider defaults in config templates, (3) operator manual model entry with validation.
 
 Rationale:
 - Preserves onboarding momentum during transient provider outages.
@@ -71,7 +71,7 @@ Alternatives considered:
 ## Risks / Trade-offs
 
 - [OAuth polling variability across providers] -> Mitigation: normalize polling interval/backoff policy in provider profile metadata and surface wait state in Termina progress components.
-- [Catalog fallback picks outdated models] -> Mitigation: annotate model provenance in config and doctor output, warn when using cache/default/manual sources.
+- [Catalog fallback picks outdated models] -> Mitigation: annotate model provenance in config and doctor output, warn when using default/manual sources.
 - [Increased onboarding complexity] -> Mitigation: render branch context headers in Termina ("Provider: X | Auth: OAuth device flow") and allow back-navigation without data loss.
 - [Security regression from mixed credential modes] -> Mitigation: enforce masked input, redact logs, and fail closed when required auth artifacts are missing for selected branch.
 
@@ -112,10 +112,12 @@ model selection just used a degraded source. Doctor output will include the
 provenance and a suggestion to re-run model discovery when the catalog is
 available again.
 
-### Q: Should onboarding cache model catalogs per profile or per provider name?
+### Q: Should onboarding cache model catalogs?
 
-**Resolved.** Per provider name. Multiple profiles pointing to the same provider
-type share cached catalog data. Cache location: `~/.netclaw/cache/models/`.
+**Resolved.** No. Model selection is infrequent (onboarding and occasional
+`netclaw model` invocation). The fallback to curated defaults already covers
+the "provider is down" case. A stale cache would create more confusion than
+a slightly slower live lookup.
 
 ---
 
@@ -141,7 +143,6 @@ public enum AuthMethod
 public enum ModelDiscoverySource
 {
     Live,     // From provider's model listing API
-    Cache,    // From cached last-known-good catalog
     Defaults, // From curated defaults in config templates
     Manual    // Operator typed it in
 }
@@ -154,14 +155,15 @@ public sealed class ProviderEntry
 {
     public string Type { get; set; } = "ollama";
     public string Endpoint { get; set; } = "http://localhost:11434";
-    public string? ApiKey { get; set; }
 
     // NEW: resolved auth method for this provider instance
     public AuthMethod AuthMethod { get; set; } = AuthMethod.None;
 
-    // NEW: OAuth artifacts (populated after successful device flow)
-    public string? OAuthAccessToken { get; set; }
-    public string? OAuthRefreshToken { get; set; }
+    // Secret fields use SensitiveString — ToString() returns "***REDACTED***"
+    // to prevent accidental logging. TypeConverter enables config binding.
+    public SensitiveString? ApiKey { get; set; }
+    public SensitiveString? OAuthAccessToken { get; set; }
+    public SensitiveString? OAuthRefreshToken { get; set; }
     public DateTimeOffset? OAuthTokenExpiry { get; set; }
 }
 ```
@@ -242,7 +244,7 @@ Step 1: Provider Selection
 │       └── TextInputNode: "Ollama endpoint" (default: http://localhost:11434)
 │
 └── Step 1c: Model Selection
-    ├── Attempt live discovery → cache → defaults → manual
+    ├── Attempt live discovery → defaults → manual
     ├── SelectionListNode: [discovered models] or TextInputNode for manual
     └── TextNode: "Source: {provenance}" (live/cache/defaults/manual)
 
@@ -335,7 +337,7 @@ Bare `netclaw model` launches Termina with a tree-based model browser:
 ╰──────────────────────────────────────────────────────────────╯
 ```
 
-The tree is populated from model discovery (live → cache → defaults) across all
+The tree is populated from model discovery (live → curated defaults) across all
 configured providers. The model selector component is shared with the wizard's
 Step 1c.
 

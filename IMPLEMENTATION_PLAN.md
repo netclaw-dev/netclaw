@@ -97,7 +97,7 @@ rules, provider capability matrix, and headless testing guidance).
 
 Done when:
 - [ ] `AuthMethod` enum added (`None`, `ApiKey`, `OAuthDevice`).
-- [ ] `ModelDiscoverySource` enum added (`Live`, `Cache`, `Defaults`, `Manual`).
+- [ ] `ModelDiscoverySource` enum added (`Live`, `Defaults`, `Manual`).
 - [ ] `ProviderEntry` extended with `AuthMethod` property (default `None`), OAuth token fields (`OAuthAccessToken`, `OAuthRefreshToken`, `OAuthTokenExpiry`).
 - [ ] `ModelReference` extended with `Provenance` property (`ModelDiscoverySource?`).
 - [ ] `ProviderCapabilities` static class mapping provider type → supported auth methods and model discovery support.
@@ -160,7 +160,7 @@ Done when:
 
 Done when:
 - [ ] `netclaw doctor` validates provider entry has required fields for its auth method (API key present for `ApiKey`, OAuth tokens for `OAuthDevice`).
-- [ ] Doctor checks model provenance and warns (exit 2) when model source is `Cache`, `Defaults`, or `Manual`.
+- [ ] Doctor checks model provenance and warns (exit 2) when model source is `Defaults` or `Manual`.
 - [ ] Doctor checks primary model provider is reachable (ping endpoint, verify auth).
 - [ ] Remediation-first output for each failure with specific fix commands.
 
@@ -173,8 +173,7 @@ Done when:
 **Verification:** L2
 
 Done when:
-- [ ] Model discovery fallback order implemented: live catalog → cache → curated defaults → manual entry.
-- [ ] Cached catalogs stored per provider type in `~/.netclaw/cache/models/`.
+- [ ] Model discovery fallback order implemented: live catalog → curated defaults → manual entry.
 - [ ] `ModelDiscoverySource` provenance persisted with `ModelReference` in config.
 - [ ] Tests with mocked discovery API verify fallback cascade and provenance tagging.
 
