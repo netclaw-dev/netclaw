@@ -25,6 +25,8 @@ public static class SlackChannelRegistrationExtensions
 
         services.AddSingleton<ISlackReplyClient, SlackReplyClient>();
         services.AddKeyedSingleton<IChannel, SlackChannel>(SlackChannelKey);
+        services.AddSingleton<IChannel>(sp =>
+            sp.GetRequiredKeyedService<IChannel>(SlackChannelKey));
         services.AddSingleton<SlackChannel>(sp =>
             (SlackChannel)sp.GetRequiredKeyedService<IChannel>(SlackChannelKey));
 

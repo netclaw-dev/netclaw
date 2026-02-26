@@ -24,6 +24,7 @@ data.
 3. Start new image version.
 4. Wait for startup migration + readiness:
    - `/api/health/ready`
+   - `/api/health/status`
    - `netclaw daemon status` (if CLI available)
 
 ## Direct Host Upgrade
@@ -38,8 +39,10 @@ data.
    - `netclaw daemon start`
    - or `systemctl --user start netclaw`
 5. Verify health:
-   - `netclaw daemon status`
-   - `curl http://127.0.0.1:5199/api/health/ready`
+    - `netclaw daemon status`
+    - `netclaw status`
+    - `curl http://127.0.0.1:5199/api/health/ready`
+    - `curl http://127.0.0.1:5199/api/health/status`
 
 ## Rollback Notes
 

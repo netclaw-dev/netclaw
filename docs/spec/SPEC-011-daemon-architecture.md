@@ -30,7 +30,8 @@ and channel management.
 Netclaw.Daemon Process
 ├── ASP.NET Host (WebApplication)
 │   ├── SignalR Hub (/hub/session)     ← primary client API
-│   └── Health Probe (/api/health/ready)
+│   ├── Readiness Probe (/api/health/ready)
+│   └── Runtime Status JSON (/api/health/status)
 │
 ├── SessionPipeline (Akka.Streams — typed Input/Output channels)
 │

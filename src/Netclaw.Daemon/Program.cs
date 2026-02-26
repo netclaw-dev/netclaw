@@ -39,12 +39,15 @@ static async Task RunAsync(string[] args)
     // SignalR for remote clients (CLI thin client, Blazor ops console)
     builder.Services.AddSignalR();
     builder.Services.AddSingleton<SessionRegistry>();
+    builder.Services.AddSingleton<DaemonRuntimeStatusService>();
 
     var app = builder.Build();
 
     // Gateway surface
     app.MapHub<SessionHub>("/hub/session");
     app.MapGet("/api/health/ready", () => Results.Ok("healthy"));
+    app.MapGet("/api/health/status", async (DaemonRuntimeStatusService statusService, CancellationToken cancellationToken) =>
+        Results.Ok(await statusService.GetStatusAsync(cancellationToken)));
 
     await app.RunAsync();
 }

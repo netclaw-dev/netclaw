@@ -120,6 +120,7 @@ netclaw daemon stop           Gracefully stop the daemon (SIGTERM)
 netclaw daemon status         Show daemon PID and uptime
 netclaw daemon install        Install as systemd user service (Linux)
 netclaw daemon uninstall      Remove systemd user service (Linux)
+netclaw status                Runtime status from daemon health JSON endpoint
 netclaw config                Configuration management (planned)
 netclaw init                  First-run setup wizard (planned)
 netclaw doctor                Configuration diagnostics (schema + secrets syntax)
