@@ -88,8 +88,298 @@ Rollback strategy:
 - Revert to pre-change onboarding branch behavior while retaining backward-compatible config fields.
 - Keep existing API-key path operational if OAuth-specific branches are disabled.
 
-## Open Questions
+## Open Questions (Resolved)
 
-- Which providers in MVP are marked OAuth-capable at launch versus API-key-only?
-- Should doctor hard-fail (exit 1) or warn (exit 2) when model provenance is fallback-derived but still usable?
-- Should onboarding cache model catalogs per provider profile or globally per provider name?
+### Q: Which providers are OAuth-capable vs API-key-only?
+
+**Resolved.** Provider capability matrix for MVP:
+
+| Provider    | Auth Methods               | Model Discovery API         | Notes                          |
+|-------------|----------------------------|-----------------------------|--------------------------------|
+| Anthropic   | OAuth device flow, API key | `GET /v1/models`            | OAuth-first, API key fallback  |
+| OpenAI      | OAuth device flow, API key | `GET /v1/models`            | OAuth-first, API key fallback  |
+| OpenRouter   | API key only               | `GET /api/v1/models`        | No OAuth support               |
+| Ollama      | None (local)               | `GET /api/tags`             | No auth required               |
+
+Wizard presents OAuth as the recommended path for Anthropic and OpenAI. API key
+is always available as fallback. OpenRouter and Ollama skip the auth-method
+selection step entirely.
+
+### Q: Should doctor hard-fail or warn for fallback-derived model provenance?
+
+**Resolved.** Warning (exit 2). The provider is reachable and functional — the
+model selection just used a degraded source. Doctor output will include the
+provenance and a suggestion to re-run model discovery when the catalog is
+available again.
+
+### Q: Should onboarding cache model catalogs per profile or per provider name?
+
+**Resolved.** Per provider name. Multiple profiles pointing to the same provider
+type share cached catalog data. Cache location: `~/.netclaw/cache/models/`.
+
+---
+
+## Addendum: Concrete Type Definitions and Multi-Provider Design
+
+This section provides the concrete C# types, state model, and algorithms that
+RALPH needs to implement Milestone 1 without ambiguity.
+
+### Provider Capability Model
+
+Extend existing `ProviderEntry` with auth method metadata:
+
+```csharp
+// New enum — auth methods a provider supports
+public enum AuthMethod
+{
+    None,        // Ollama — no auth required
+    ApiKey,      // Static API key in secrets.json
+    OAuthDevice  // OAuth 2.0 device authorization grant
+}
+
+// New enum — how a model ID was resolved
+public enum ModelDiscoverySource
+{
+    Live,     // From provider's model listing API
+    Cache,    // From cached last-known-good catalog
+    Defaults, // From curated defaults in config templates
+    Manual    // Operator typed it in
+}
+```
+
+Extend `ProviderEntry` (existing type in `Netclaw.Configuration`):
+
+```csharp
+public sealed class ProviderEntry
+{
+    public string Type { get; set; } = "ollama";
+    public string Endpoint { get; set; } = "http://localhost:11434";
+    public string? ApiKey { get; set; }
+
+    // NEW: resolved auth method for this provider instance
+    public AuthMethod AuthMethod { get; set; } = AuthMethod.None;
+
+    // NEW: OAuth artifacts (populated after successful device flow)
+    public string? OAuthAccessToken { get; set; }
+    public string? OAuthRefreshToken { get; set; }
+    public DateTimeOffset? OAuthTokenExpiry { get; set; }
+}
+```
+
+Extend `ModelReference` (existing type in `Netclaw.Configuration`):
+
+```csharp
+public sealed class ModelReference
+{
+    public string Provider { get; set; } = "local-ollama";
+    public string ModelId { get; set; } = "qwen3:30b";
+    public int? ContextWindow { get; set; }
+
+    // NEW: how this model ID was resolved during onboarding
+    public ModelDiscoverySource? Provenance { get; set; }
+}
+```
+
+**Important:** OAuth tokens go in `secrets.json`, NOT `netclaw.json`. The
+`ProviderEntry` class binds from layered config (netclaw.json + secrets.json),
+so the secrets overlay provides the token fields while netclaw.json has the
+non-secret fields (Type, Endpoint, AuthMethod).
+
+### Provider Capability Registry
+
+Static metadata about what each provider type supports. Not persisted — compiled
+into the application:
+
+```csharp
+public static class ProviderCapabilities
+{
+    public static IReadOnlyList<AuthMethod> GetSupportedAuthMethods(string providerType)
+        => providerType.ToLowerInvariant() switch
+        {
+            "anthropic" => [AuthMethod.OAuthDevice, AuthMethod.ApiKey],
+            "openai" => [AuthMethod.OAuthDevice, AuthMethod.ApiKey],
+            "openrouter" => [AuthMethod.ApiKey],
+            "ollama" => [AuthMethod.None],
+            _ => [AuthMethod.ApiKey] // unknown providers default to API key
+        };
+
+    public static bool SupportsModelDiscovery(string providerType)
+        => providerType.ToLowerInvariant() is
+            "ollama" or "openrouter" or "anthropic" or "openai";
+}
+```
+
+### Wizard State Machine
+
+The init wizard has 6 steps. Step 1 (LLM provider) branches based on provider
+type and auth method:
+
+```
+Step 1: Provider Selection
+├── SelectionListNode: [Anthropic, OpenAI, OpenRouter, Ollama]
+│
+├── IF provider supports multiple auth methods:
+│   └── Step 1a: Auth Method Selection
+│       ├── SelectionListNode: [OAuth Device Flow (recommended), API Key]
+│       │
+│       ├── IF OAuth Device Flow:
+│       │   └── Step 1b: OAuth Device Flow
+│       │       ├── TextNode: "Visit {verification_uri}"
+│       │       ├── TextNode: "Enter code: {user_code}"
+│       │       ├── SpinnerNode: "Waiting for authorization..."
+│       │       └── Outcomes: success → Step 1c | denied/expired → retry or back
+│       │
+│       └── IF API Key:
+│           └── Step 1b: API Key Entry
+│               └── TextInputNode (masked): "Enter API key"
+│
+├── IF provider is API-key-only (OpenRouter):
+│   └── Step 1b: API Key Entry
+│       └── TextInputNode (masked): "Enter API key"
+│
+├── IF provider is Ollama:
+│   └── Step 1b: Endpoint Configuration
+│       └── TextInputNode: "Ollama endpoint" (default: http://localhost:11434)
+│
+└── Step 1c: Model Selection
+    ├── Attempt live discovery → cache → defaults → manual
+    ├── SelectionListNode: [discovered models] or TextInputNode for manual
+    └── TextNode: "Source: {provenance}" (live/cache/defaults/manual)
+
+Step 2: Slack Configuration (unchanged from wireframe)
+Step 3: ACL Bootstrap (unchanged)
+Step 4: MCP Servers (unchanged)
+Step 5: Exposure Mode (unchanged)
+Step 6: Health Check (unchanged)
+```
+
+### Back-Navigation Clearing Rules
+
+When the operator presses Esc to go back, downstream state must be cleared if
+the changed step invalidates it:
+
+| Changed Step         | Clears                                              |
+|----------------------|-----------------------------------------------------|
+| Provider selection   | Auth method, auth artifacts, model selection, model provenance |
+| Auth method          | Auth artifacts (tokens/API key), model selection (if provider changed) |
+| Model selection      | Nothing downstream                                  |
+| Slack config         | Nothing downstream                                  |
+| ACL bootstrap        | Nothing downstream                                  |
+| MCP servers          | Nothing downstream                                  |
+| Exposure mode        | Nothing downstream                                  |
+
+Rule: provider change clears everything downstream within Step 1. Auth method
+change clears auth artifacts. Steps 2–5 are independent and never clear each
+other.
+
+### Multi-Provider Configuration
+
+The wizard configures the **first** provider. Post-wizard, operators use CLI
+commands to manage additional providers:
+
+```
+netclaw provider add       # interactive: pick type, enter credentials
+netclaw provider list      # show all configured providers and active models
+netclaw provider switch    # change which provider is used for a model role
+netclaw provider remove    # remove a configured provider
+```
+
+Config structure in `netclaw.json`:
+
+```json
+{
+  "Providers": {
+    "my-anthropic": {
+      "Type": "anthropic",
+      "Endpoint": "https://api.anthropic.com",
+      "AuthMethod": "OAuthDevice"
+    },
+    "my-openrouter": {
+      "Type": "openrouter",
+      "Endpoint": "https://openrouter.ai/api",
+      "AuthMethod": "ApiKey"
+    },
+    "local-ollama": {
+      "Type": "ollama",
+      "Endpoint": "http://localhost:11434",
+      "AuthMethod": "None"
+    }
+  },
+  "Models": {
+    "Main": { "Provider": "my-anthropic", "ModelId": "claude-sonnet-4-20250514" },
+    "Fallback": { "Provider": "local-ollama", "ModelId": "qwen3:30b" },
+    "Compaction": { "Provider": "local-ollama", "ModelId": "qwen3:8b" }
+  }
+}
+```
+
+Secrets in `secrets.json`:
+
+```json
+{
+  "Providers": {
+    "my-anthropic": {
+      "OAuthAccessToken": "sk-ant-...",
+      "OAuthRefreshToken": "rt-ant-...",
+      "OAuthTokenExpiry": "2026-03-25T00:00:00Z"
+    },
+    "my-openrouter": {
+      "ApiKey": "sk-or-..."
+    }
+  }
+}
+```
+
+### ChatClientFactory Extension Points
+
+The existing `ChatClientFactory` switch expression adds new cases:
+
+```csharp
+return provider.Type.ToLowerInvariant() switch
+{
+    "ollama" => new OllamaApiClient(...),
+    "openrouter" => CreateOpenRouterClient(provider, model),
+    "anthropic" => CreateAnthropicClient(provider, model),
+    "openai" => CreateOpenAIClient(provider, model),
+    _ => throw new InvalidOperationException(...)
+};
+```
+
+Each `Create*Client` method reads from the layered config (netclaw.json +
+secrets.json) to get both endpoint/type and auth credentials.
+
+### Headless TUI Testing
+
+Termina 0.6.0 ships `VirtualTerminal` and `VirtualInputSource` for headless
+testing. The wizard tests should:
+
+1. Create `VirtualTerminal` + `VirtualInputSource`
+2. Launch `InitWizardPage` headlessly
+3. Simulate keystrokes via `VirtualInputSource` to navigate wizard steps
+4. Assert on `VirtualTerminal` output state
+
+This allows RALPH to write comprehensive wizard tests without needing a real
+terminal or live provider credentials. Use fake/mock provider backends for
+credential validation steps.
+
+### RALPH Phase Split
+
+Milestone 1 is split into two phases to separate autonomous work from
+credential-dependent interactive work:
+
+**Phase A (autonomous — RALPH can execute alone):**
+- Config types: `AuthMethod`, `ModelDiscoverySource`, `ProviderEntry` extensions
+- `ProviderCapabilities` static registry
+- `ChatClientFactory` provider type cases (OpenRouter, Anthropic, OpenAI)
+- Init wizard scaffold with Termina (page, view model, step state machine)
+- Back-navigation clearing algorithm
+- Fake/mock provider backends for testing
+- Headless TUI tests via `VirtualTerminal`
+- Doctor config-shape checks (does provider entry have required fields?)
+
+**Phase B (interactive — needs operator for real credentials):**
+- Real OAuth device flow endpoints (Anthropic, OpenAI)
+- Real API key validation against live endpoints
+- Real model catalog discovery from live APIs
+- Provider `add`/`switch`/`remove` CLI commands with live validation
+- End-to-end onboarding smoke test with real provider

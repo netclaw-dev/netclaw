@@ -1,6 +1,6 @@
 # Netclaw Implementation Plan
 
-Last updated: 2026-02-25
+Last updated: 2026-02-26
 Mode: build
 
 This file is RALPH-consumable.
@@ -69,64 +69,88 @@ actor-LLM optimization patterns, gateway architecture analysis.
 - `openspec/changes/add-tui-adapter-and-config-hot-reload/` (wizard tasks)
 
 **Goal:** Connect to cloud inference providers (OpenRouter, Anthropic, OpenAI) via
-guided onboarding wizard with OAuth device flow and API key paths.
+guided onboarding wizard with OAuth device flow and API key paths. Multi-provider
+configuration from day one.
 
-### Task M1.1: Provider onboarding branch state model
+**Design reference:** `openspec/changes/oauth-first-provider-onboarding/design.md`
+(includes concrete type definitions, state machine, back-navigation clearing
+rules, provider capability matrix, and headless testing guidance).
 
-**PRD:** `docs/prd/PRD-004-cli-onboarding-and-config.md`, `docs/prd/PRD-005-model-provider-strategy.md`
-**OpenSpec:** `openspec/specs/netclaw-onboarding/spec.md`, `openspec/specs/netclaw-model-providers/spec.md`
-**OpenSpec Tasks:** oauth-first-provider-onboarding 1.1–1.3
-**Surface area:** onboarding wizard
-**Verification:** L2
+**Provider capability matrix:**
 
-Done when:
-- [ ] Provider onboarding branch state model added for Termina wizard (provider selection, auth method, model discovery path).
-- [ ] Branch transition guards so back-navigation recalculates and clears invalid downstream values.
-- [ ] Branch context indicators rendered in Termina (`provider`, `auth method`, `model source`) and verified on branch changes.
+| Provider    | Auth Methods               | Model Discovery | Notes                |
+|-------------|----------------------------|-----------------|----------------------|
+| Anthropic   | OAuth device flow, API key | Yes             | OAuth-first          |
+| OpenAI      | OAuth device flow, API key | Yes             | OAuth-first          |
+| OpenRouter  | API key only               | Yes             | No OAuth support     |
+| Ollama      | None (local)               | Yes             | No auth required     |
 
-### Task M1.2: OAuth device flow implementation
+### Phase A: Autonomous (RALPH-executable without operator credentials)
 
-**PRD:** `docs/prd/PRD-005-model-provider-strategy.md`
-**OpenSpec:** `openspec/specs/netclaw-model-providers/spec.md`
-**OpenSpec Tasks:** oauth-first-provider-onboarding 2.1–2.3
-**Surface area:** authentication
-**Verification:** L2
-
-Done when:
-- [ ] OAuth-capable provider profile metadata and auth-method resolver (`oauth-device` vs `api-key`).
-- [ ] OAuth device flow sequence (`start`, `show code`, `poll`, `success`, `denied/expired/cancel`) with retry and branch-switch actions.
-- [ ] OAuth auth artifacts persisted through secret-safe config pipeline, redacted in logs/output.
-
-### Task M1.3: Model discovery fallback pipeline
+#### Task M1.A1: Provider config types and capability registry
 
 **PRD:** `docs/prd/PRD-005-model-provider-strategy.md`
 **OpenSpec:** `openspec/specs/netclaw-model-providers/spec.md`
-**OpenSpec Tasks:** oauth-first-provider-onboarding 3.1–3.3
-**Surface area:** provider integration
+**OpenSpec Tasks:** oauth-first-provider-onboarding 1.1
+**Surface area:** `Netclaw.Configuration`
 **Verification:** L2
 
 Done when:
-- [ ] Model discovery fallback order implemented (live catalog → cache → curated defaults → manual entry).
-- [ ] Model provenance (`live`, `cache`, `defaults`, `manual`) persisted with provider config.
-- [ ] Onboarding completion summary shows selected model source and fallback/degraded state.
+- [ ] `AuthMethod` enum added (`None`, `ApiKey`, `OAuthDevice`).
+- [ ] `ModelDiscoverySource` enum added (`Live`, `Cache`, `Defaults`, `Manual`).
+- [ ] `ProviderEntry` extended with `AuthMethod` property (default `None`), OAuth token fields (`OAuthAccessToken`, `OAuthRefreshToken`, `OAuthTokenExpiry`).
+- [ ] `ModelReference` extended with `Provenance` property (`ModelDiscoverySource?`).
+- [ ] `ProviderCapabilities` static class mapping provider type → supported auth methods and model discovery support.
+- [ ] OAuth token fields bound from `secrets.json` overlay, not `netclaw.json`.
 
-### Task M1.4: Init wizard scaffold
+#### Task M1.A2: ChatClientFactory cloud provider cases
+
+**PRD:** `docs/prd/PRD-005-model-provider-strategy.md`
+**OpenSpec:** `openspec/specs/netclaw-model-providers/spec.md`
+**OpenSpec Tasks:** expand-mvp 13.1
+**Surface area:** `Netclaw.Daemon`
+**Verification:** L2
+
+Done when:
+- [ ] `ChatClientFactory.Create()` switch handles `openrouter`, `anthropic`, `openai` provider types.
+- [ ] Each provider creates appropriate `IChatClient` using MEAI-compatible SDK or HTTP client.
+- [ ] Tests with fake/mock HTTP backends verify client creation for each provider type.
+
+#### Task M1.A3: Init wizard scaffold (Termina)
 
 **PRD:** `docs/prd/PRD-004-cli-onboarding-and-config.md` (CLI-010)
 **OpenSpec:** `openspec/specs/netclaw-onboarding/spec.md`, `openspec/specs/netclaw-cli/spec.md`
-**OpenSpec Tasks:** add-tui-adapter 3.1–3.11
-**Surface area:** TUI + onboarding
+**OpenSpec Tasks:** add-tui-adapter 3.1–3.9
+**Surface area:** `Netclaw.Cli` TUI
 **Verification:** L3
 **Wireframe:** `docs/ui/TUI-001-command-wireframes.md` (netclaw init)
 
 Done when:
-- [ ] `InitCommand.cs` launches Termina wizard.
-- [ ] `InitWizardPage.cs` with 6-step wizard layout (`PanelNode`, progress bar).
-- [ ] `InitWizardViewModel.cs` with step state machine and back-navigation.
-- [ ] Steps: LLM provider (with OAuth/API key branch from M1.1–M1.2), Slack config, ACL bootstrap, MCP servers, exposure mode, health check.
-- [ ] Config file written to `~/.netclaw/config/netclaw.json` on completion.
+- [ ] `InitCommand.cs` launches Termina wizard (replaces stub).
+- [ ] `InitWizardPage.cs` with 6-step wizard layout (`PanelNode`, progress bar, step indicator).
+- [ ] `InitWizardViewModel.cs` with step state machine and back-navigation (Esc goes back, preserves prior input).
+- [ ] Step 1 (LLM provider) branches by provider type and auth method per design doc state machine.
+- [ ] Back-navigation clearing rules: provider change clears auth + model; auth method change clears artifacts.
+- [ ] Steps 2–5 (Slack, ACL, MCP, exposure) render with appropriate `TextInputNode`/`SelectionListNode` components.
+- [ ] Step 6 (health check) runs validation probes with `SpinnerNode` → result indicator.
+- [ ] Config written to `~/.netclaw/config/netclaw.json` and secrets to `~/.netclaw/config/secrets.json` on completion.
 
-### Task M1.5: Doctor follow-up checks for provider onboarding
+#### Task M1.A4: Headless wizard tests (VirtualTerminal)
+
+**PRD:** `docs/prd/PRD-004-cli-onboarding-and-config.md`
+**OpenSpec:** `openspec/specs/netclaw-onboarding/spec.md`
+**Surface area:** testing
+**Verification:** L3
+
+Done when:
+- [ ] Tests use Termina `VirtualTerminal` + `VirtualInputSource` for headless wizard testing.
+- [ ] Test: full wizard flow with Ollama (no auth) produces valid config file.
+- [ ] Test: provider selection → back-navigation clears downstream state.
+- [ ] Test: API key entry with masked input produces correct secrets.json.
+- [ ] Test: health check step reports validation results.
+- [ ] All tests use fake/mock provider backends (no live API calls).
+
+#### Task M1.A5: Doctor config-shape checks
 
 **PRD:** `docs/prd/PRD-004-cli-onboarding-and-config.md`
 **OpenSpec:** `openspec/specs/netclaw-cli/spec.md`
@@ -135,11 +159,26 @@ Done when:
 **Verification:** L2
 
 Done when:
-- [ ] `netclaw doctor` checks extended for provider onboarding outcomes (auth method, auth artifact presence, primary/fallback validity, model provenance).
-- [ ] Remediation-first output text for each failure/degraded check with exit code behavior (0/1/2).
-- [ ] Degraded fallback-only model state returns warning exit code 2 unless required auth/provider checks fail.
+- [ ] `netclaw doctor` validates provider entry has required fields for its auth method (API key present for `ApiKey`, OAuth tokens for `OAuthDevice`).
+- [ ] Doctor checks model provenance and warns (exit 2) when model source is `Cache`, `Defaults`, or `Manual`.
+- [ ] Doctor checks primary model provider is reachable (ping endpoint, verify auth).
+- [ ] Remediation-first output for each failure with specific fix commands.
 
-### Task M1.6: Provider fallback model failover
+#### Task M1.A6: Model discovery fallback pipeline
+
+**PRD:** `docs/prd/PRD-005-model-provider-strategy.md`
+**OpenSpec:** `openspec/specs/netclaw-model-providers/spec.md`
+**OpenSpec Tasks:** oauth-first-provider-onboarding 3.1–3.3
+**Surface area:** provider integration
+**Verification:** L2
+
+Done when:
+- [ ] Model discovery fallback order implemented: live catalog → cache → curated defaults → manual entry.
+- [ ] Cached catalogs stored per provider type in `~/.netclaw/cache/models/`.
+- [ ] `ModelDiscoverySource` provenance persisted with `ModelReference` in config.
+- [ ] Tests with mocked discovery API verify fallback cascade and provenance tagging.
+
+#### Task M1.A7: Provider fallback model failover
 
 **PRD:** `docs/prd/PRD-005-model-provider-strategy.md`
 **OpenSpec:** `openspec/specs/netclaw-model-providers/spec.md`
@@ -149,9 +188,51 @@ Done when:
 
 Done when:
 - [ ] Primary + fallback model configuration with automatic failover on rate limit, timeout, or provider error.
-- [ ] Tests for provider switching and fallback activation.
+- [ ] Failover logic in `NetclawChatClientProvider` or `IChatClient` decorator.
+- [ ] Tests for provider switching and fallback activation with simulated failures.
 
-### Task M1.7: Milestone 1 validation and tests
+### Phase B: Interactive (needs operator for real credentials)
+
+#### Task M1.B1: OAuth device flow implementation
+
+**PRD:** `docs/prd/PRD-005-model-provider-strategy.md`
+**OpenSpec:** `openspec/specs/netclaw-model-providers/spec.md`
+**OpenSpec Tasks:** oauth-first-provider-onboarding 2.1–2.3
+**Surface area:** authentication
+**Verification:** L2
+
+Done when:
+- [ ] OAuth device flow client for Anthropic (`start` → `show code` → `poll` → `success`/`denied`/`expired`/`cancel`).
+- [ ] OAuth device flow client for OpenAI (same state machine, different endpoints).
+- [ ] OAuth tokens persisted to `secrets.json` via secure config pipeline, redacted in all logs/output.
+- [ ] Wizard Step 1b (OAuth) integrates device flow with Termina `SpinnerNode` for poll-wait state.
+
+#### Task M1.B2: Live provider validation
+
+**PRD:** `docs/prd/PRD-005-model-provider-strategy.md`
+**OpenSpec:** `openspec/specs/netclaw-model-providers/spec.md`
+**Surface area:** provider integration + onboarding
+**Verification:** L2
+
+Done when:
+- [ ] API key validation against live endpoints (OpenRouter, Anthropic, OpenAI) during wizard and doctor.
+- [ ] Live model catalog discovery from provider APIs populates `SelectionListNode` in wizard.
+- [ ] Doctor verifies live provider reachability and auth validity.
+
+#### Task M1.B3: Provider management CLI commands
+
+**PRD:** `docs/prd/PRD-004-cli-onboarding-and-config.md`
+**OpenSpec:** `openspec/specs/netclaw-cli/spec.md`
+**Surface area:** CLI
+**Verification:** L2
+
+Done when:
+- [ ] `netclaw provider add` — interactive: pick type, enter credentials, validate, save.
+- [ ] `netclaw provider list` — show all configured providers, active model assignments, auth status.
+- [ ] `netclaw provider switch` — change which provider is used for a model role (Main/Fallback/Compaction).
+- [ ] `netclaw provider remove` — remove a configured provider (warn if models still reference it).
+
+#### Task M1.B4: End-to-end onboarding smoke test
 
 **PRD:** all Milestone 1 PRDs
 **OpenSpec Tasks:** oauth-first-provider-onboarding 5.1–5.3
@@ -159,9 +240,9 @@ Done when:
 **Verification:** L2
 
 Done when:
-- [ ] Tests for onboarding branch transitions, OAuth device flow failure recovery, and model fallback sequencing.
-- [ ] Tests for doctor follow-up checks and exit-code semantics.
-- [ ] CLI/operator docs updated to reflect OAuth-first onboarding tree and doctor follow-up checks, with explicit references to PRD-004 and PRD-005.
+- [ ] End-to-end onboarding with real provider credentials verified manually.
+- [ ] Doctor follow-up checks pass after successful onboarding.
+- [ ] CLI/operator docs updated to reflect OAuth-first onboarding tree, provider management commands, and doctor follow-up checks.
 
 ---
 
