@@ -441,3 +441,52 @@ credential-dependent interactive work:
 - `netclaw provider` TUI and `provider add/list/remove` single-shot commands
 - `netclaw model` TUI and single-shot model role assignment
 - End-to-end onboarding smoke test with real provider
+
+---
+
+## Implementation Notes (from Phase A build-out)
+
+Findings from implementing the init wizard provider validation and model
+discovery (Feb 2026). These affect Phase B planning.
+
+### Anthropic OAuth Device Flow — confirmed viable
+
+In Feb 2026, Anthropic initially appeared to ban all third-party OAuth use but
+quickly clarified it was a "docs clean up" that caused confusion. The actual
+policy:
+
+- **OAuth via Agent SDK for local/personal use: allowed.** This is Netclaw's
+  use case (homelab assistant).
+- **Commercial businesses built on OAuth tokens: should use API keys instead.**
+- Quote from Anthropic: "Nothing is changing about how you can use the Agent SDK
+  and MAX subscriptions."
+
+Sources:
+- https://thenewstack.io/anthropic-agent-sdk-confusion/
+- https://alternativeto.net/news/2026/2/anthropic-officially-bans-using-subscription-authentication-for-third-party-claude-use/
+
+The Anthropic SDK handles token lifecycle (refresh, expiry). Phase B
+implementation needs RFC 8628 device authorization grant polling loop +
+storing/refreshing tokens via the SDK.
+
+### OpenRouter model listing is public
+
+OpenRouter's `GET /api/v1/models` returns 200 with the full model catalog
+regardless of whether the bearer token is valid. The API key is only validated
+on actual inference calls. This means:
+
+- **Probe validates connectivity but NOT key validity** for OpenRouter.
+- Users with a bogus key will successfully complete onboarding and only discover
+  the key is bad when they try to chat.
+- A future `netclaw doctor` check could hit a key-validation endpoint (e.g.,
+  `/api/v1/auth/key`) to catch this, but that's separate from onboarding.
+
+### Termina DynamicLayoutNode factory purity rule
+
+DynamicLayoutNode factories must be **pure render functions** — no state
+mutations, no `Invalidate()` calls, no sub-step transitions. Calling
+`SetProviderSubStep()` inside a factory re-entrantly invalidates the node during
+its own evaluation, blanking the screen.
+
+State transitions belong in reactive subscriptions outside the factory. Filed
+as Termina issue: https://github.com/Aaronontheweb/termina/issues/159
