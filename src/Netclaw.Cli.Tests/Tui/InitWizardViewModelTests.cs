@@ -428,6 +428,156 @@ public sealed class InitWizardViewModelTests : IDisposable
         Assert.Contains("invalid", slackCheck.Label, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public async Task HealthCheck_ChannelResolutionSuccess_WritesChannelIdsToConfig()
+    {
+        using var vm = CreateViewModel();
+        vm.SelectedProviderType = "ollama";
+        vm.SlackEnabled = true;
+        vm.SlackBotToken = "xoxb-test-bot-token";
+        vm.SlackAppToken = "xapp-test-app-token";
+        vm.SlackChannelNamesInput = "general, dev";
+
+        _fakeSlackProbe.NextResolutionResult = new Channels.Slack.SlackChannelResolutionResult(
+            true, null,
+            [
+                new Channels.Slack.ResolvedSlackChannel("general", "C001"),
+                new Channels.Slack.ResolvedSlackChannel("dev", "C002")
+            ],
+            []);
+
+        vm.CurrentStep.Value = WizardStep.HealthCheck;
+        vm.GoNext();
+        await vm.HealthCheckCompletion!.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.True(vm.IsComplete.Value);
+        Assert.Equal(1, _fakeSlackProbe.ResolveCallCount);
+
+        // Verify config file has channel IDs
+        var config = JsonDocument.Parse(File.ReadAllText(_paths.NetclawConfigPath));
+        Assert.True(config.RootElement.TryGetProperty("Slack", out var slack));
+        Assert.Equal("C001", slack.GetProperty("DefaultChannelId").GetString());
+
+        var allowed = slack.GetProperty("AllowedChannelIds");
+        Assert.Equal(2, allowed.GetArrayLength());
+        Assert.Equal("C001", allowed[0].GetString());
+        Assert.Equal("C002", allowed[1].GetString());
+    }
+
+    [Fact]
+    public async Task HealthCheck_BlankChannelInput_SkipsResolution()
+    {
+        using var vm = CreateViewModel();
+        vm.SelectedProviderType = "ollama";
+        vm.SlackEnabled = true;
+        vm.SlackBotToken = "xoxb-test-bot-token";
+        vm.SlackAppToken = "xapp-test-app-token";
+        vm.SlackChannelNamesInput = null;
+
+        vm.CurrentStep.Value = WizardStep.HealthCheck;
+        vm.GoNext();
+        await vm.HealthCheckCompletion!.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.True(vm.IsComplete.Value);
+        Assert.Equal(0, _fakeSlackProbe.ResolveCallCount);
+
+        // Config should not have channel fields
+        var config = JsonDocument.Parse(File.ReadAllText(_paths.NetclawConfigPath));
+        Assert.True(config.RootElement.TryGetProperty("Slack", out var slack));
+        Assert.False(slack.TryGetProperty("AllowedChannelIds", out _));
+        Assert.False(slack.TryGetProperty("DefaultChannelId", out _));
+    }
+
+    [Fact]
+    public async Task HealthCheck_PartialChannelResolution_WritesOnlyResolved()
+    {
+        using var vm = CreateViewModel();
+        vm.SelectedProviderType = "ollama";
+        vm.SlackEnabled = true;
+        vm.SlackBotToken = "xoxb-test-bot-token";
+        vm.SlackAppToken = "xapp-test-app-token";
+        vm.SlackChannelNamesInput = "general, nonexistent";
+
+        _fakeSlackProbe.NextResolutionResult = new Channels.Slack.SlackChannelResolutionResult(
+            false, null,
+            [new Channels.Slack.ResolvedSlackChannel("general", "C001")],
+            ["nonexistent"]);
+
+        vm.CurrentStep.Value = WizardStep.HealthCheck;
+        vm.GoNext();
+        await vm.HealthCheckCompletion!.WaitAsync(TimeSpan.FromSeconds(5));
+
+        // Wizard completes despite partial resolution
+        Assert.True(vm.IsComplete.Value);
+
+        // Health check shows the failure
+        var channelCheck = vm.HealthCheckResults
+            .FirstOrDefault(h => h.Label.Contains("Slack channels", StringComparison.OrdinalIgnoreCase));
+        Assert.NotNull(channelCheck);
+        Assert.False(channelCheck.Passed);
+        Assert.Contains("#nonexistent", channelCheck.Label, StringComparison.Ordinal);
+
+        // Only resolved ID written
+        var config = JsonDocument.Parse(File.ReadAllText(_paths.NetclawConfigPath));
+        var slack = config.RootElement.GetProperty("Slack");
+        var allowed = slack.GetProperty("AllowedChannelIds");
+        Assert.Equal(1, allowed.GetArrayLength());
+        Assert.Equal("C001", allowed[0].GetString());
+    }
+
+    [Fact]
+    public async Task HealthCheck_ChannelResolutionApiError_NonBlocking()
+    {
+        using var vm = CreateViewModel();
+        vm.SelectedProviderType = "ollama";
+        vm.SlackEnabled = true;
+        vm.SlackBotToken = "xoxb-test-bot-token";
+        vm.SlackAppToken = "xapp-test-app-token";
+        vm.SlackChannelNamesInput = "general";
+
+        _fakeSlackProbe.NextResolutionResult = new Channels.Slack.SlackChannelResolutionResult(
+            false, "Bot token lacks channels:read scope.", [], ["general"]);
+
+        vm.CurrentStep.Value = WizardStep.HealthCheck;
+        vm.GoNext();
+        await vm.HealthCheckCompletion!.WaitAsync(TimeSpan.FromSeconds(5));
+
+        // Wizard completes despite API error
+        Assert.True(vm.IsComplete.Value);
+
+        var channelCheck = vm.HealthCheckResults
+            .FirstOrDefault(h => h.Label.Contains("channel lookup", StringComparison.OrdinalIgnoreCase));
+        Assert.NotNull(channelCheck);
+        Assert.False(channelCheck.Passed);
+        Assert.Contains("channels:read", channelCheck.Label, StringComparison.Ordinal);
+
+        // No channel IDs in config
+        var config = JsonDocument.Parse(File.ReadAllText(_paths.NetclawConfigPath));
+        var slack = config.RootElement.GetProperty("Slack");
+        Assert.False(slack.TryGetProperty("AllowedChannelIds", out _));
+    }
+
+    [Fact]
+    public async Task HealthCheck_AuthFailure_SkipsChannelResolution()
+    {
+        using var vm = CreateViewModel();
+        vm.SelectedProviderType = "ollama";
+        vm.SlackEnabled = true;
+        vm.SlackBotToken = "xoxb-bad-token";
+        vm.SlackAppToken = "xapp-test-app-token";
+        vm.SlackChannelNamesInput = "general, dev";
+
+        _fakeSlackProbe.NextResult = new Channels.Slack.SlackProbeResult(
+            false, "Bot token is invalid.", null, null);
+
+        vm.CurrentStep.Value = WizardStep.HealthCheck;
+        vm.GoNext();
+        await vm.HealthCheckCompletion!.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.True(vm.IsComplete.Value);
+        Assert.Equal(0, _fakeSlackProbe.ResolveCallCount);
+    }
+
     private InitWizardViewModel CreateViewModel()
     {
         return new InitWizardViewModel(_paths, _fakeProbe, _fakeSlackProbe);

@@ -25,10 +25,34 @@ public sealed class FakeSlackProbe : ISlackProbe
     /// </summary>
     public string? LastBotToken { get; private set; }
 
+    /// <summary>
+    /// The result to return from <see cref="ResolveChannelNamesAsync"/>.
+    /// Defaults to a successful empty resolution.
+    /// </summary>
+    public SlackChannelResolutionResult NextResolutionResult { get; set; } = new(true, null, [], []);
+
+    /// <summary>
+    /// Number of times <see cref="ResolveChannelNamesAsync"/> has been called.
+    /// </summary>
+    public int ResolveCallCount { get; private set; }
+
+    /// <summary>
+    /// The channel names from the last <see cref="ResolveChannelNamesAsync"/> call.
+    /// </summary>
+    public IReadOnlyList<string>? LastResolvedNames { get; private set; }
+
     public Task<SlackProbeResult> ProbeAsync(string botToken, CancellationToken ct = default)
     {
         ProbeCallCount++;
         LastBotToken = botToken;
         return Task.FromResult(NextResult);
+    }
+
+    public Task<SlackChannelResolutionResult> ResolveChannelNamesAsync(
+        string botToken, IReadOnlyList<string> channelNames, CancellationToken ct = default)
+    {
+        ResolveCallCount++;
+        LastResolvedNames = channelNames;
+        return Task.FromResult(NextResolutionResult);
     }
 }

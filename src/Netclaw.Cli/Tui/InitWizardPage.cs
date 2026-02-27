@@ -30,6 +30,7 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
     // Step 2: Chat Services (Slack)
     private TextInputNode? _slackBotTokenInput;
     private TextInputNode? _slackAppTokenInput;
+    private TextInputNode? _slackChannelNamesInput;
     private SelectionListNode<string>? _slackEnabledList;
 
     // Step 3: ACL
@@ -43,7 +44,7 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
 
     // Track sub-step for provider (0=select, 1=auth, 2=credentials, 3=validate, 4=model)
     private int _providerSubStep;
-    private int _chatServicesSubStep; // 0=enable?, 1=bot token, 2=app token
+    private int _chatServicesSubStep; // 0=enable?, 1=bot token, 2=app token, 3=channel names
 
     // Focus tracking for selection lists (mirrors _lastFocusedInput for text inputs)
     private IFocusable? _lastFocusedList;
@@ -191,6 +192,8 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
                     "  Select the model to use for conversations.",
                 WizardStep.ChatServices when _chatServicesSubStep == 0 =>
                     "  Enable Slack to connect Netclaw as a Slack bot.",
+                WizardStep.ChatServices when _chatServicesSubStep == 3 =>
+                    "  Channel names separated by commas. Bot needs channels:read scope to resolve.",
                 WizardStep.ChatServices =>
                     "  Socket Mode requires both tokens. See: https://api.slack.com/apis/socket-mode",
                 WizardStep.Acl =>
@@ -533,6 +536,7 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             0 => BuildSlackEnableSubStep(),
             1 => BuildSlackBotTokenSubStep(),
             2 => BuildSlackAppTokenSubStep(),
+            3 => BuildSlackChannelNamesSubStep(),
             _ => Layouts.Empty()
         };
     }
@@ -612,8 +616,7 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             .Subscribe(text =>
             {
                 ViewModel.SlackAppToken = text;
-                _chatServicesSubStep = 0;
-                ViewModel.GoNext();
+                SetChatServicesSubStep(3);
             })
             .DisposeWith(_stepSubs);
 
@@ -624,6 +627,36 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
                 .WithBorder(BorderStyle.Rounded)
                 .WithBorderColor(Color.Gray)
                 .WithContent(_slackAppTokenInput)
+                .Height(3));
+    }
+
+    private ILayoutNode BuildSlackChannelNamesSubStep()
+    {
+        _slackChannelNamesInput = new TextInputNode()
+            .WithPlaceholder("general, dev, random  (leave blank to skip)");
+
+        if (!string.IsNullOrWhiteSpace(ViewModel.SlackChannelNamesInput))
+            _slackChannelNamesInput.Text = ViewModel.SlackChannelNamesInput;
+
+        _slackChannelNamesInput.OnFocused();
+        _lastFocusedInput = _slackChannelNamesInput;
+
+        _slackChannelNamesInput.Submitted
+            .Subscribe(text =>
+            {
+                ViewModel.SlackChannelNamesInput = string.IsNullOrWhiteSpace(text) ? null : text;
+                _chatServicesSubStep = 0;
+                ViewModel.GoNext();
+            })
+            .DisposeWith(_stepSubs);
+
+        return Layouts.Vertical()
+            .WithChild(new TextNode("  Channel names (press Enter to skip):").WithForeground(Color.White))
+            .WithChild(new PanelNode()
+                .WithTitle("Channel Names")
+                .WithBorder(BorderStyle.Rounded)
+                .WithBorderColor(Color.Gray)
+                .WithContent(_slackChannelNamesInput)
                 .Height(3));
     }
 
@@ -882,6 +915,7 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             WizardStep.Provider when _providerSubStep == 4 && _manualModelEntry => _manualModelInput,
             WizardStep.ChatServices when _chatServicesSubStep == 1 => _slackBotTokenInput,
             WizardStep.ChatServices when _chatServicesSubStep == 2 => _slackAppTokenInput,
+            WizardStep.ChatServices when _chatServicesSubStep == 3 => _slackChannelNamesInput,
             WizardStep.Acl => _ownerIdentityInput,
             _ => null
         };
