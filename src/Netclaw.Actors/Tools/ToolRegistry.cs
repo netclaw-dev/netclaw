@@ -103,21 +103,35 @@ public sealed class ToolRegistry
             return string.Empty;
 
         var sb = new StringBuilder();
-        sb.AppendLine("[available tools — use search_tools to load full definitions]");
 
-        var grouped = _tools.GroupBy(t => t.GrantCategory);
-        foreach (var group in grouped)
+        // Separate always-loaded (directly callable) tools from MCP (dynamic) tools
+        var builtinTools = _tools.Where(t => t.Tool is not McpToolAdapter).ToList();
+        var mcpTools = _tools.Where(t => t.Tool is McpToolAdapter).ToList();
+
+        if (builtinTools.Count > 0)
         {
-            var names = group.Select(t =>
+            sb.AppendLine("[directly callable tools]");
+            var builtinGrouped = builtinTools.GroupBy(t => t.GrantCategory);
+            foreach (var group in builtinGrouped)
             {
-                if (t.Tool is McpToolAdapter mcp)
-                    return mcp.BareToolName;
-                return t.Tool.Name;
-            });
-            sb.AppendLine($"{group.Key}: {string.Join(", ", names)}");
+                var names = group.Select(t => t.Tool.Name);
+                sb.AppendLine($"{group.Key}: {string.Join(", ", names)}");
+            }
         }
 
-        sb.AppendLine("→ call search_tools(\"query\") to load any tool above before using it");
+        if (mcpTools.Count > 0)
+        {
+            sb.AppendLine();
+            sb.AppendLine("[MCP tools — NOT directly callable, must load first via search_tools]");
+            var mcpGrouped = mcpTools.GroupBy(t => t.GrantCategory);
+            foreach (var group in mcpGrouped)
+            {
+                var names = group.Select(t => ((McpToolAdapter)t.Tool).BareToolName);
+                sb.AppendLine($"{group.Key}: {string.Join(", ", names)}");
+            }
+            sb.AppendLine("→ REQUIRED: call search_tools(\"query\") first to load MCP tools, then call them");
+        }
+
         return sb.ToString();
     }
 

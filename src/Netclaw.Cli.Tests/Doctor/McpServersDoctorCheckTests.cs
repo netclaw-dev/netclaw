@@ -45,7 +45,7 @@ public sealed class McpServersDoctorCheckTests : IDisposable
     }
 
     [Fact]
-    public async Task ValidStdioServer_Passes()
+    public async Task ValidStdioServer_UnreachableEndpoint_ReportsError()
     {
         WriteConfig(new
         {
@@ -65,8 +65,9 @@ public sealed class McpServersDoctorCheckTests : IDisposable
         var check = new McpServersDoctorCheck(_paths);
         var result = await check.RunAsync();
 
-        Assert.Equal(DoctorSeverity.Pass, result.Severity);
-        Assert.Contains("1 server(s) configured", result.Message);
+        // Single enabled server that can't connect → Error
+        Assert.Equal(DoctorSeverity.Error, result.Severity);
+        Assert.Contains("unreachable", result.Message);
     }
 
     [Fact]
@@ -139,14 +140,13 @@ public sealed class McpServersDoctorCheckTests : IDisposable
     }
 
     [Fact]
-    public async Task DisabledServer_CountsCorrectly()
+    public async Task DisabledServer_SkipsProbe()
     {
         WriteConfig(new
         {
             configVersion = 1,
             McpServers = new
             {
-                enabled_one = new { Transport = "stdio", Command = "npx", Enabled = true },
                 disabled_one = new { Transport = "stdio", Command = "npx", Enabled = false }
             }
         });
@@ -154,8 +154,9 @@ public sealed class McpServersDoctorCheckTests : IDisposable
         var check = new McpServersDoctorCheck(_paths);
         var result = await check.RunAsync();
 
+        // Only disabled servers → all pass (no enabled servers to fail)
         Assert.Equal(DoctorSeverity.Pass, result.Severity);
-        Assert.Contains("2 server(s) configured (1 enabled)", result.Message);
+        Assert.Contains("disabled", result.Message);
     }
 
     private void WriteConfig(object config)

@@ -178,6 +178,19 @@ public sealed class LlmSessionActor : ReceivePersistentActor
                 return;
             }
 
+            // Guard: if the LLM produced no text and no tool calls, it likely tried to
+            // call an MCP tool that isn't in ChatOptions.Tools yet. Add a nudge and retry.
+            var hasText = lastMessage.Contents.OfType<TextContent>().Any(t => !string.IsNullOrWhiteSpace(t.Text));
+            if (!hasText && _toolIterationCount == 0)
+            {
+                _log.Warning("LLM produced empty response (no text, no tool calls) — retrying with nudge");
+                _state = _state.AddSystemNudge(
+                    "Your previous response was empty. If you need MCP tools, call search_tools(\"query\") first to load them. "
+                    + "MCP tools listed in the index are NOT directly callable — you must use search_tools to load them before calling.");
+                FireLlmCall();
+                return;
+            }
+
             // Normal text response — persist turn
             HandleTextResponse(lastMessage, response.Usage, msg.StreamedText, msg.StreamedThinking);
         });

@@ -160,13 +160,12 @@ public sealed class HeadlessChannel : IChannel
                     break;
                 }
 
-                Console.WriteLine($"[thinking] {msg.Text}");
+                // Don't write thinking tokens to stdout — only log them
                 Log(log, $"THINKING: {msg.Text}");
                 break;
 
             case ThinkingDeltaOutput msg:
                 _receivedThinkingDeltaInCurrentTurn = true;
-                Console.Write($"[thinking]{msg.Delta}");
                 Log(log, $"THINKING_DELTA: {msg.Delta}");
                 break;
 

@@ -1,13 +1,27 @@
+using System.Net.Sockets;
 using System.Text.Json;
 using ModelContextProtocol.Client;
 using Netclaw.Configuration;
 
 namespace Netclaw.Cli.Mcp;
 
+internal enum McpProbeStatus { Connected, AuthFailed, Unreachable, Disabled }
+
+internal readonly record struct McpProbeResult(
+    McpProbeStatus Status, int ToolCount, string? ErrorMessage)
+{
+    public string FormatStatus() => Status switch
+    {
+        McpProbeStatus.Connected => $"connected ({ToolCount} tools)",
+        McpProbeStatus.AuthFailed => $"auth failed ({ErrorMessage})",
+        McpProbeStatus.Unreachable => $"unreachable — {ErrorMessage}",
+        McpProbeStatus.Disabled => "disabled",
+        _ => "unknown"
+    };
+}
+
 /// <summary>
-/// Handles <c>netclaw mcp</c> CLI subcommands: add, list, get, remove, enable, disable, validate.
-/// All commands are offline (read/write config files directly) except <c>validate</c>
-/// which spawns one-shot MCP client connections.
+/// Handles <c>netclaw mcp</c> CLI subcommands: add, list, get, remove, enable, disable.
 /// </summary>
 internal static class McpCommand
 {
@@ -20,12 +34,11 @@ internal static class McpCommand
         return subcommand switch
         {
             "add" => RunAdd(args, paths),
-            "list" => RunList(paths),
+            "list" => await RunListAsync(paths),
             "get" => RunGet(args, paths),
             "remove" => RunRemove(args, paths),
             "enable" => RunToggle(args, paths, enabled: true),
             "disable" => RunToggle(args, paths, enabled: false),
-            "validate" => await RunValidateAsync(args, paths),
             "help" or "-h" or "--help" => WriteHelp(),
             _ => WriteHelp()
         };
@@ -174,7 +187,7 @@ internal static class McpCommand
         return 0;
     }
 
-    private static int RunList(NetclawPaths paths)
+    private static async Task<int> RunListAsync(NetclawPaths paths)
     {
         var servers = LoadMcpServers(paths);
 
@@ -185,11 +198,12 @@ internal static class McpCommand
             return 0;
         }
 
-        Console.WriteLine($"{"Name",-20} {"Transport",-10} {"Enabled",-8} {"Status",-10}");
+        Console.WriteLine($"{"Name",-20} {"Transport",-10} {"Enabled",-8} {"Status"}");
         foreach (var (name, entry) in servers)
         {
             var enabled = entry.Enabled ? "yes" : "no";
-            Console.WriteLine($"{name,-20} {entry.Transport,-10} {enabled,-8} {"-",-10}");
+            var probe = await ProbeServerAsync(name, entry);
+            Console.WriteLine($"{name,-20} {entry.Transport,-10} {enabled,-8} {probe.FormatStatus()}");
         }
 
         return 0;
@@ -310,44 +324,46 @@ internal static class McpCommand
         return 0;
     }
 
-    private static async Task<int> RunValidateAsync(string[] args, NetclawPaths paths)
+    private static readonly TimeSpan ProbeTimeout = TimeSpan.FromSeconds(15);
+
+    internal static async Task<McpProbeResult> ProbeServerAsync(
+        string name, McpServerEntry entry, CancellationToken ct = default)
     {
-        var targetName = args.Length >= 3 ? args[2] : null;
-        var servers = LoadMcpServers(paths);
+        if (!entry.Enabled)
+            return new McpProbeResult(McpProbeStatus.Disabled, 0, null);
 
-        if (servers.Count == 0)
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeoutCts.CancelAfter(ProbeTimeout);
+
+        try
         {
-            Console.WriteLine("No MCP servers configured.");
-            return 0;
+            await using var client = await CreateOneOffClientAsync(name, entry);
+            var tools = await client.ListToolsAsync(cancellationToken: timeoutCts.Token);
+            return new McpProbeResult(McpProbeStatus.Connected, tools.Count, null);
         }
-
-        var hasFailure = false;
-
-        foreach (var (name, entry) in servers)
+        catch (HttpRequestException ex) when (ex.StatusCode is System.Net.HttpStatusCode.Unauthorized
+            or System.Net.HttpStatusCode.Forbidden)
         {
-            if (targetName is not null && !string.Equals(name, targetName, StringComparison.OrdinalIgnoreCase))
-                continue;
-
-            if (!entry.Enabled)
+            var statusText = ex.StatusCode switch
             {
-                Console.WriteLine($"{name}: disabled (skipped)");
-                continue;
-            }
-
-            try
-            {
-                await using var client = await CreateOneOffClientAsync(name, entry);
-                var tools = await client.ListToolsAsync();
-                Console.WriteLine($"{name}: connected ({tools.Count} tools discovered)");
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"{name}: failed — {ex.Message}");
-                hasFailure = true;
-            }
+                System.Net.HttpStatusCode.Unauthorized => "401 Unauthorized",
+                System.Net.HttpStatusCode.Forbidden => "403 Forbidden",
+                _ => ex.StatusCode.ToString()
+            };
+            return new McpProbeResult(McpProbeStatus.AuthFailed, 0, statusText);
         }
-
-        return hasFailure ? 1 : 0;
+        catch (HttpRequestException ex)
+        {
+            return new McpProbeResult(McpProbeStatus.Unreachable, 0, ex.Message);
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            return new McpProbeResult(McpProbeStatus.Unreachable, 0, "connection timed out");
+        }
+        catch (Exception ex) when (ex is IOException or SocketException)
+        {
+            return new McpProbeResult(McpProbeStatus.Unreachable, 0, ex.Message);
+        }
     }
 
     internal static async Task<McpClient> CreateOneOffClientAsync(string name, McpServerEntry entry)
@@ -517,13 +533,11 @@ internal static class McpCommand
         Console.WriteLine("  remove     Remove an MCP server profile");
         Console.WriteLine("  enable     Enable a disabled MCP server");
         Console.WriteLine("  disable    Disable an MCP server without removing it");
-        Console.WriteLine("  validate   Test connectivity to MCP server(s)");
         Console.WriteLine();
         Console.WriteLine("Examples:");
         Console.WriteLine("  netclaw mcp add --transport stdio memorizer -- npx -y @memorizer/mcp-server");
         Console.WriteLine("  netclaw mcp add --transport http --header \"Authorization: Bearer tok-...\" myapi https://api.example.com/mcp");
         Console.WriteLine("  netclaw mcp list");
-        Console.WriteLine("  netclaw mcp validate");
         return 0;
     }
 }

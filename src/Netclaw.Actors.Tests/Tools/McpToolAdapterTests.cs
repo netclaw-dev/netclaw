@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Microsoft.Extensions.AI;
 using Netclaw.Actors.Tools;
 using Xunit;
@@ -52,12 +53,16 @@ public class McpToolAdapterTests
     }
 
     [Fact]
-    public void ToAITool_ReturnsSameInstance()
+    public void ToAITool_ReturnsSanitizedWrapper()
     {
         var fakeTool = AIFunctionFactory.Create(() => "result", "store");
         var adapter = new McpToolAdapter(fakeTool, "memorizer", "store");
 
-        Assert.Same(fakeTool, adapter.ToAITool());
+        var aiTool = adapter.ToAITool();
+        // Should return a sanitized wrapper, not the raw tool
+        Assert.IsAssignableFrom<AIFunction>(aiTool);
+        var func = (AIFunction)aiTool;
+        Assert.Equal("memorizer/store", func.Name);
     }
 
     [Fact]
@@ -82,5 +87,86 @@ public class McpToolAdapterTests
 
         Assert.Contains("connection lost", result);
         Assert.StartsWith("Error:", result);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_CoercesStringArguments()
+    {
+        // Simulate Ollama sending a number as a string
+        string EchoLimit(int limit) => $"limit={limit}";
+        var fakeTool = AIFunctionFactory.Create(EchoLimit, "search");
+        var adapter = new McpToolAdapter(fakeTool, "server", "search");
+
+        var args = new Dictionary<string, object?> { ["limit"] = "10" };
+        var result = await adapter.ExecuteAsync(args, CancellationToken.None);
+
+        Assert.Equal("limit=10", result);
+    }
+}
+
+public class McpSchemaSanitizerTests
+{
+    [Fact]
+    public void SanitizeSchema_SimplifiesNullableTypeArray()
+    {
+        var schema = JsonDocument.Parse("""
+            {
+                "type": "object",
+                "properties": {
+                    "query": { "type": "string" },
+                    "limit": { "type": ["integer", "null"], "default": 10 }
+                }
+            }
+            """).RootElement;
+
+        var sanitized = McpSchemaSanitizer.SanitizeSchema(schema);
+        var limitProp = sanitized.GetProperty("properties").GetProperty("limit");
+
+        // Should be simplified to just "integer"
+        Assert.Equal(JsonValueKind.String, limitProp.GetProperty("type").ValueKind);
+        Assert.Equal("integer", limitProp.GetProperty("type").GetString());
+    }
+
+    [Fact]
+    public void SanitizeSchema_PreservesNonNullableTypes()
+    {
+        var schema = JsonDocument.Parse("""
+            {
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string" }
+                }
+            }
+            """).RootElement;
+
+        var sanitized = McpSchemaSanitizer.SanitizeSchema(schema);
+        var nameProp = sanitized.GetProperty("properties").GetProperty("name");
+
+        Assert.Equal("string", nameProp.GetProperty("type").GetString());
+    }
+
+    [Fact]
+    public void CoerceArguments_ConvertsStringNumbers()
+    {
+        var args = new Dictionary<string, object?>
+        {
+            ["count"] = "42",
+            ["ratio"] = "3.14",
+            ["name"] = "hello",
+            ["flag"] = "true"
+        };
+
+        var coerced = McpSchemaSanitizer.CoerceArguments(args)!;
+
+        Assert.Equal(42L, coerced["count"]);
+        Assert.Equal(3.14, coerced["ratio"]);
+        Assert.Equal("hello", coerced["name"]);
+        Assert.Equal(true, coerced["flag"]);
+    }
+
+    [Fact]
+    public void CoerceArguments_ReturnsNullForNull()
+    {
+        Assert.Null(McpSchemaSanitizer.CoerceArguments(null));
     }
 }

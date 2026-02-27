@@ -104,6 +104,22 @@ public sealed record SessionState
     }
 
     /// <summary>
+    /// Add a transient system nudge to history to correct LLM behavior (e.g., empty response recovery).
+    /// Not persisted as a turn — just injected into the conversation to guide the next LLM call.
+    /// </summary>
+    public SessionState AddSystemNudge(string nudge)
+    {
+        return this with
+        {
+            History = History.Add(new SerializableChatMessage
+            {
+                Role = ChatRole.User,
+                Content = $"[system: {nudge}]"
+            })
+        };
+    }
+
+    /// <summary>
     /// Find the last user message in history (for building persistence events).
     /// </summary>
     public SerializableChatMessage? FindLastUserMessage()

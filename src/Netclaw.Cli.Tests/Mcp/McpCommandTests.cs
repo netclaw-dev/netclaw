@@ -95,7 +95,7 @@ public sealed class McpCommandTests : IDisposable
     }
 
     [Fact]
-    public async Task List_ShowsConfiguredServers()
+    public async Task List_ShowsConfiguredServersWithStatus()
     {
         // Add a server first
         await McpCommand.RunAsync(
@@ -107,6 +107,24 @@ public sealed class McpCommandTests : IDisposable
 
         Assert.Contains("memorizer", output);
         Assert.Contains("stdio", output);
+        // Server is unreachable in test environment — status column should reflect that
+        Assert.Contains("unreachable", output);
+    }
+
+    [Fact]
+    public async Task List_DisabledServer_ShowsDisabledStatus()
+    {
+        await McpCommand.RunAsync(
+            new[] { "mcp", "add", "--transport", "stdio", "memorizer", "--", "npx", "-y", "@memorizer/mcp" },
+            _paths);
+        await McpCommand.RunAsync(
+            new[] { "mcp", "disable", "memorizer" }, _paths);
+
+        var output = CaptureConsoleOutput(async () =>
+            await McpCommand.RunAsync(new[] { "mcp", "list" }, _paths));
+
+        Assert.Contains("memorizer", output);
+        Assert.Contains("disabled", output);
     }
 
     [Fact]

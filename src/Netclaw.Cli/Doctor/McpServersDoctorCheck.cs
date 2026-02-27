@@ -1,19 +1,20 @@
 using System.Text.Json;
+using Netclaw.Cli.Mcp;
 using Netclaw.Configuration;
 
 namespace Netclaw.Cli.Doctor;
 
 /// <summary>
-/// Doctor check that validates MCP server configuration entries.
-/// Checks: required fields per transport type, valid transport values.
-/// Non-blocking warning if no MCP servers configured.
+/// Doctor check that validates MCP server configuration entries and connectivity.
+/// First pass: required fields per transport type, valid transport values.
+/// Second pass: probe enabled servers for connectivity.
 /// </summary>
 public sealed class McpServersDoctorCheck(NetclawPaths paths) : IDoctorCheck
 {
-    public Task<DoctorCheckResult> RunAsync(CancellationToken cancellationToken = default)
+    public async Task<DoctorCheckResult> RunAsync(CancellationToken cancellationToken = default)
     {
         if (!File.Exists(paths.NetclawConfigPath))
-            return Task.FromResult(DoctorCheckResult.Pass("mcp-servers", "No config file (skipped)"));
+            return DoctorCheckResult.Pass("mcp-servers", "No config file (skipped)");
 
         Dictionary<string, McpServerEntry> servers;
         try
@@ -22,46 +23,111 @@ public sealed class McpServersDoctorCheck(NetclawPaths paths) : IDoctorCheck
             using var doc = JsonDocument.Parse(text);
 
             if (!doc.RootElement.TryGetProperty("McpServers", out var mcpSection))
-                return Task.FromResult(DoctorCheckResult.Pass("mcp-servers",
-                    "No MCP servers configured (use `netclaw mcp add` to add one)"));
+                return DoctorCheckResult.Pass("mcp-servers",
+                    "No MCP servers configured (use `netclaw mcp add` to add one)");
 
             servers = JsonSerializer.Deserialize<Dictionary<string, McpServerEntry>>(mcpSection.GetRawText())
                 ?? new();
         }
         catch (Exception ex)
         {
-            return Task.FromResult(DoctorCheckResult.Error("mcp-servers",
-                $"Failed to read MCP config: {ex.Message}"));
+            return DoctorCheckResult.Error("mcp-servers",
+                $"Failed to read MCP config: {ex.Message}");
         }
 
         if (servers.Count == 0)
-            return Task.FromResult(DoctorCheckResult.Pass("mcp-servers",
-                "No MCP servers configured"));
+            return DoctorCheckResult.Pass("mcp-servers",
+                "No MCP servers configured");
 
-        var errors = new List<string>();
+        // First pass: static config validation (fail fast on bad config)
+        var configErrors = new List<string>();
+        var validServers = new Dictionary<string, McpServerEntry>();
 
         foreach (var (name, entry) in servers)
         {
             if (entry.Transport is not ("stdio" or "sse" or "http"))
             {
-                errors.Add($"{name}: invalid transport '{entry.Transport}' (must be stdio, sse, or http)");
+                configErrors.Add($"{name}: invalid transport '{entry.Transport}' (must be stdio, sse, or http)");
                 continue;
             }
 
             if (entry.Transport is "stdio" && string.IsNullOrWhiteSpace(entry.Command))
-                errors.Add($"{name}: stdio transport requires 'Command'");
+            {
+                configErrors.Add($"{name}: stdio transport requires 'Command'");
+                continue;
+            }
 
             if (entry.Transport is "sse" or "http" && string.IsNullOrWhiteSpace(entry.Url))
-                errors.Add($"{name}: {entry.Transport} transport requires 'Url'");
+            {
+                configErrors.Add($"{name}: {entry.Transport} transport requires 'Url'");
+                continue;
+            }
+
+            validServers[name] = entry;
         }
 
-        if (errors.Count > 0)
-            return Task.FromResult(DoctorCheckResult.Error("mcp-servers",
-                $"MCP config issues: {string.Join("; ", errors)}",
-                "Run `netclaw mcp list` and fix entries with `netclaw mcp remove` + `netclaw mcp add`"));
+        if (configErrors.Count > 0)
+            return DoctorCheckResult.Error("mcp-servers",
+                $"MCP config issues: {string.Join("; ", configErrors)}",
+                "Run `netclaw mcp list` and fix entries with `netclaw mcp remove` + `netclaw mcp add`");
 
-        var enabledCount = servers.Count(s => s.Value.Enabled);
-        return Task.FromResult(DoctorCheckResult.Pass("mcp-servers",
-            $"{servers.Count} server(s) configured ({enabledCount} enabled)"));
+        // Second pass: connectivity probe for enabled servers with valid config
+        // Merge secrets so probes have auth headers / env vars
+        var fullServers = McpCommand.LoadMcpServers(paths);
+        var statusMessages = new List<string>();
+        var hasAuthFailure = false;
+        var enabledCount = 0;
+        var connectedCount = 0;
+        var failedCount = 0;
+
+        foreach (var (name, entry) in validServers)
+        {
+            // Use full entry (with secrets merged) if available
+            var probeEntry = fullServers.TryGetValue(name, out var full) ? full : entry;
+            var probe = await McpCommand.ProbeServerAsync(name, probeEntry, cancellationToken);
+
+            switch (probe.Status)
+            {
+                case McpProbeStatus.Disabled:
+                    statusMessages.Add($"{name}: disabled");
+                    break;
+                case McpProbeStatus.Connected:
+                    enabledCount++;
+                    connectedCount++;
+                    statusMessages.Add($"{name}: {probe.FormatStatus()}");
+                    break;
+                case McpProbeStatus.AuthFailed:
+                    enabledCount++;
+                    failedCount++;
+                    hasAuthFailure = true;
+                    statusMessages.Add($"{name}: {probe.FormatStatus()}");
+                    break;
+                case McpProbeStatus.Unreachable:
+                    enabledCount++;
+                    failedCount++;
+                    statusMessages.Add($"{name}: {probe.FormatStatus()}");
+                    break;
+            }
+        }
+
+        var summary = string.Join("; ", statusMessages);
+
+        // Auth failures are always Error severity (won't self-resolve)
+        if (hasAuthFailure)
+            return DoctorCheckResult.Error("mcp-servers", summary,
+                "Check API keys and credentials for failing servers");
+
+        // All enabled servers failed
+        if (enabledCount > 0 && failedCount == enabledCount)
+            return DoctorCheckResult.Error("mcp-servers", summary,
+                "No MCP servers are reachable — check network and server configuration");
+
+        // Some enabled servers failed
+        if (failedCount > 0)
+            return DoctorCheckResult.Warning("mcp-servers", summary,
+                "Some MCP servers are unreachable — check network and server configuration");
+
+        // All good
+        return DoctorCheckResult.Pass("mcp-servers", summary);
     }
 }
