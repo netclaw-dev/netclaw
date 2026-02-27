@@ -504,3 +504,7 @@ the linked research documents.
   sub-agent isolation patterns
 - `docs/research/agent-gateway-architecture.md` — Architecture analysis
   (OpenClaw, IronClaw, PicoClaw). Informed the daemon + thin client split.
+- `docs/research/dynamic-context-discovery.md` — Tool/memory/skill
+  discovery patterns (Anthropic defer_loading, Cursor file-based, DCL
+  three-tier). Compressed index design, deferred memory retrieval
+  decisions. Informs M2 (MCP) and M5 (memory) architecture.

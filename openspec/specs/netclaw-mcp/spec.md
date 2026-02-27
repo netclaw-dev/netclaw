@@ -1,5 +1,7 @@
 # netclaw-mcp Specification
 
+Research: `docs/research/dynamic-context-discovery.md`
+
 ## Purpose
 
 Define MCP server integration, validation, policy enforcement, and diagnostics.
@@ -93,6 +95,13 @@ On startup, the system SHALL discover tools from all enabled MCP server
 profiles and register them as Microsoft.Extensions.AI (MEAI) tool definitions.
 Tool discovery SHALL refresh on each session start to pick up newly added or
 removed tools from MCP servers.
+
+To avoid context window bloat with large tool catalogs (see
+`docs/research/dynamic-context-discovery.md` §1–2), the system SHALL use a
+two-layer discovery strategy: a compressed tool index injected into the system
+prompt for agent awareness, and a `search_tools` meta-tool for on-demand
+loading of full tool definitions. Core tools (shell, file operations) SHALL
+remain always-loaded; MCP tools SHALL be deferred by default.
 
 #### Scenario: Startup tool discovery
 

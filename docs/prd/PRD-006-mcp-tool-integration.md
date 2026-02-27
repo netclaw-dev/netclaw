@@ -118,3 +118,4 @@ Runtime SHALL degrade gracefully when MCP server is unavailable:
 - CLI validation: PRD-004
 - Provider tool calling: PRD-005 (MP-010)
 - Local memory tier: PRD-007
+- Dynamic context discovery research: `docs/research/dynamic-context-discovery.md`

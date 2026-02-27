@@ -1,5 +1,9 @@
 # netclaw-agent-memory Specification
 
+Research: `docs/research/agent-patterns.md`,
+`docs/research/dynamic-context-discovery.md` (§5 — deferred memory retrieval
+decisions: keyword vs. vector search, embedding strategy, injection budgets)
+
 ## Purpose
 
 Define agent personality (soul files), local memory (project registry,
