@@ -15,13 +15,19 @@ namespace Netclaw.Cli.Tui;
 /// </summary>
 public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
 {
-    // Step 1: Provider selection list + auth input
+    private const int MaxDisplayedModels = 30;
+    private static readonly string[] SpinnerFrames = ["\u280b", "\u2819", "\u2838", "\u2834", "\u2826", "\u2807"];
+
+    // Step 1: Provider selection list + auth input + model selection
     private SelectionListNode<string>? _providerList;
     private SelectionListNode<string>? _authMethodList;
     private TextInputNode? _apiKeyInput;
     private TextInputNode? _endpointInput;
+    private SelectionListNode<string>? _modelList;
+    private TextInputNode? _manualModelInput;
+    private bool _manualModelEntry; // true when user chose "Enter model ID manually..."
 
-    // Step 2: Slack tokens
+    // Step 2: Chat Services (Slack)
     private TextInputNode? _slackBotTokenInput;
     private TextInputNode? _slackAppTokenInput;
     private SelectionListNode<string>? _slackEnabledList;
@@ -35,9 +41,9 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
     // Step 5: Exposure
     private SelectionListNode<string>? _exposureList;
 
-    // Track sub-step for provider (selection → auth → key)
-    private int _providerSubStep; // 0=select provider, 1=select auth, 2=enter key/endpoint
-    private int _slackSubStep;    // 0=enable?, 1=bot token, 2=app token
+    // Track sub-step for provider (0=select, 1=auth, 2=credentials, 3=validate, 4=model)
+    private int _providerSubStep;
+    private int _chatServicesSubStep; // 0=enable?, 1=bot token, 2=app token
 
     // Focus tracking for selection lists (mirrors _lastFocusedInput for text inputs)
     private IFocusable? _lastFocusedList;
@@ -97,14 +103,15 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
         return ViewModel.CurrentStep
             .Select(step =>
             {
-                var stepNum = (int)step;
-                var filled = new string('\u25a0', stepNum);
-                var empty = new string('\u25a1', InitWizardViewModel.TotalSteps - stepNum);
-                var pct = stepNum * 100 / InitWizardViewModel.TotalSteps;
+                var activeCount = ViewModel.ActiveStepCount;
+                var displayNum = ViewModel.GetDisplayStepNumber(step);
+                var filled = new string('\u25a0', displayNum);
+                var empty = new string('\u25a1', activeCount - displayNum);
+                var pct = displayNum * 100 / activeCount;
                 var title = step switch
                 {
                     WizardStep.Provider => "LLM Provider",
-                    WizardStep.Slack => "Slack Configuration",
+                    WizardStep.ChatServices => "Chat Services",
                     WizardStep.Acl => "Access Control",
                     WizardStep.Mcp => "MCP Servers",
                     WizardStep.Exposure => "Exposure Mode",
@@ -112,7 +119,7 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
                     _ => ""
                 };
                 return (ILayoutNode)new TextNode(
-                        $"  Step {stepNum} of {InitWizardViewModel.TotalSteps}: {title}        [{filled}{empty}] {pct}%")
+                        $"  Step {displayNum} of {activeCount}: {title}        [{filled}{empty}] {pct}%")
                     .WithForeground(Color.White)
                     .Bold();
             })
@@ -130,13 +137,21 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             if (step == WizardStep.HealthCheck)
                 return BuildHealthCheckStep();
 
+            // Clear stale focus references BEFORE building new content.
+            // The old components are about to be replaced/disposed by DynamicLayoutNode.
+            // If we leave _lastFocused* pointing at disposed components, the next
+            // RouteInputToActiveComponent call will OnBlurred() a disposed component,
+            // throwing ObjectDisposedException and killing the input subscription.
+            _lastFocusedList = null;
+            _lastFocusedInput = null;
+
             // Clear subscriptions from previous step content before building new
             _stepSubs.Clear();
 
             return step switch
             {
                 WizardStep.Provider => BuildProviderStep(),
-                WizardStep.Slack => BuildSlackStep(),
+                WizardStep.ChatServices => BuildChatServicesStep(),
                 WizardStep.Acl => BuildAclStep(),
                 WizardStep.Mcp => BuildMcpStep(),
                 WizardStep.Exposure => BuildExposureStep(),
@@ -160,9 +175,13 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
                     "  Choose how to authenticate with this provider.",
                 WizardStep.Provider when _providerSubStep == 2 =>
                     "  Enter your API key. It will be stored in secrets.json.",
-                WizardStep.Slack when _slackSubStep == 0 =>
+                WizardStep.Provider when _providerSubStep == 3 =>
+                    "  Validating connection and discovering available models...",
+                WizardStep.Provider when _providerSubStep == 4 =>
+                    "  Select the model to use for conversations.",
+                WizardStep.ChatServices when _chatServicesSubStep == 0 =>
                     "  Enable Slack to connect Netclaw as a Slack bot.",
-                WizardStep.Slack =>
+                WizardStep.ChatServices =>
                     "  Socket Mode requires both tokens. See: https://api.slack.com/apis/socket-mode",
                 WizardStep.Acl =>
                     "  Your Slack user ID (e.g., U01234ABCDE) for admin access.",
@@ -218,6 +237,8 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             0 => BuildProviderSelectionSubStep(),
             1 => BuildAuthMethodSubStep(),
             2 => BuildCredentialInputSubStep(),
+            3 => BuildValidationSubStep(),
+            4 => BuildModelSelectionSubStep(),
             _ => Layouts.Empty()
         };
     }
@@ -319,7 +340,9 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
                 .Subscribe(text =>
                 {
                     ViewModel.EndpointInput = string.IsNullOrWhiteSpace(text) ? "http://localhost:11434" : text;
-                    ViewModel.GoNext();
+                    // Start validation instead of advancing to next step
+                    SetProviderSubStep(3);
+                    ViewModel.StartProbe();
                 })
                 .DisposeWith(_stepSubs);
 
@@ -348,7 +371,9 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             .Subscribe(text =>
             {
                 ViewModel.ApiKeyInput = text;
-                ViewModel.GoNext();
+                // Start validation instead of advancing to next step
+                SetProviderSubStep(3);
+                ViewModel.StartProbe();
             })
             .DisposeWith(_stepSubs);
 
@@ -362,9 +387,126 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
                 .Height(3));
     }
 
-    private ILayoutNode BuildSlackStep()
+    private ILayoutNode BuildValidationSubStep()
     {
-        return _slackSubStep switch
+        var probeResult = ViewModel.ProbeResult.Value;
+
+        if (ViewModel.IsProbing.Value || probeResult is null)
+        {
+            // Animated spinner + elapsed timer
+            var elapsed = ViewModel.ProbeElapsedSeconds.Value;
+            var frame = SpinnerFrames[elapsed % SpinnerFrames.Length];
+            var timerText = elapsed > 0 ? $" ({elapsed}s)" : "";
+            var provider = ViewModel.SelectedProviderType ?? "provider";
+
+            return Layouts.Vertical()
+                .WithChild(new TextNode($"  {frame} Validating connection to {provider}...{timerText}")
+                    .WithForeground(Color.Yellow));
+        }
+
+        if (probeResult.Success)
+        {
+            // Auto-advance to model selection on success
+            SetProviderSubStep(4);
+            return Layouts.Empty(); // will be replaced by model selection on next invalidation
+        }
+
+        // Failure — show error and prompt to retry or go back
+        return Layouts.Vertical()
+            .WithChild(new TextNode($"  \u2717 {probeResult.ErrorMessage}").WithForeground(Color.Red))
+            .WithChild(new TextNode(""))
+            .WithChild(new TextNode("  Press Enter to retry, or Esc to go back.").WithForeground(Color.BrightBlack));
+    }
+
+    private ILayoutNode BuildModelSelectionSubStep()
+    {
+        if (_manualModelEntry)
+        {
+            return BuildManualModelInput();
+        }
+
+        var models = ViewModel.DiscoveredModels;
+        var items = new List<string>();
+
+        // Limit display for large catalogs (e.g., OpenRouter)
+        var displayCount = Math.Min(models.Count, MaxDisplayedModels);
+        for (var i = 0; i < displayCount; i++)
+            items.Add(models[i].ModelId);
+
+        if (models.Count > MaxDisplayedModels)
+            items.Add($"... and {models.Count - MaxDisplayedModels} more (enter manually)");
+
+        items.Add("Enter model ID manually...");
+
+        _modelList = Layouts.SelectionList(items)
+            .WithMode(SelectionMode.Single)
+            .WithHighlightColors(Color.Black, Color.Cyan);
+
+        _modelList.OnFocused();
+        _lastFocusedList = _modelList;
+
+        _modelList.SelectionConfirmed
+            .Subscribe(selected =>
+            {
+                if (selected.Count > 0)
+                {
+                    var choice = selected[0];
+                    if (choice == "Enter model ID manually..." || choice.StartsWith("... and ", StringComparison.Ordinal))
+                    {
+                        _manualModelEntry = true;
+                        InvalidateProviderSubStep();
+                    }
+                    else
+                    {
+                        ViewModel.SelectedModelId = choice;
+                        _providerSubStep = 0;
+                        ViewModel.GoNext();
+                    }
+                }
+            })
+            .DisposeWith(_stepSubs);
+
+        var header = models.Count > 0
+            ? $"  Select a model ({models.Count} available):"
+            : "  No models discovered. Enter a model ID manually:";
+
+        return Layouts.Vertical()
+            .WithChild(new TextNode(header).WithForeground(Color.White))
+            .WithChild(_modelList);
+    }
+
+    private ILayoutNode BuildManualModelInput()
+    {
+        _manualModelInput = new TextInputNode()
+            .WithPlaceholder("e.g., anthropic/claude-sonnet-4-20250514");
+
+        _manualModelInput.OnFocused();
+        _lastFocusedInput = _manualModelInput;
+
+        _manualModelInput.Submitted
+            .Where(text => !string.IsNullOrWhiteSpace(text))
+            .Subscribe(text =>
+            {
+                ViewModel.SelectedModelId = text;
+                _manualModelEntry = false;
+                _providerSubStep = 0;
+                ViewModel.GoNext();
+            })
+            .DisposeWith(_stepSubs);
+
+        return Layouts.Vertical()
+            .WithChild(new TextNode("  Enter model ID:").WithForeground(Color.White))
+            .WithChild(new PanelNode()
+                .WithTitle("Model ID")
+                .WithBorder(BorderStyle.Rounded)
+                .WithBorderColor(Color.Gray)
+                .WithContent(_manualModelInput)
+                .Height(3));
+    }
+
+    private ILayoutNode BuildChatServicesStep()
+    {
+        return _chatServicesSubStep switch
         {
             0 => BuildSlackEnableSubStep(),
             1 => BuildSlackBotTokenSubStep(),
@@ -390,11 +532,11 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
                     ViewModel.SlackEnabled = selected[0].StartsWith("Yes", StringComparison.Ordinal);
                     if (ViewModel.SlackEnabled)
                     {
-                        SetSlackSubStep(1);
+                        SetChatServicesSubStep(1);
                     }
                     else
                     {
-                        _slackSubStep = 0;
+                        _chatServicesSubStep = 0;
                         ViewModel.GoNext();
                     }
                 }
@@ -420,7 +562,7 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             .Subscribe(text =>
             {
                 ViewModel.SlackBotToken = text;
-                SetSlackSubStep(2);
+                SetChatServicesSubStep(2);
             })
             .DisposeWith(_stepSubs);
 
@@ -448,7 +590,7 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             .Subscribe(text =>
             {
                 ViewModel.SlackAppToken = text;
-                _slackSubStep = 0;
+                _chatServicesSubStep = 0;
                 ViewModel.GoNext();
             })
             .DisposeWith(_stepSubs);
@@ -600,13 +742,27 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
         {
             if (_providerSubStep == 2)
                 ViewModel.ClearFromProvider();
+            if (_providerSubStep == 4)
+            {
+                // Going back from model selection to validation — re-probe or skip to credentials
+                _manualModelEntry = false;
+                SetProviderSubStep(2);
+                return true;
+            }
+            if (_providerSubStep == 3)
+            {
+                // Going back from validation to credentials — cancel in-flight probe
+                ViewModel.CancelProbe();
+                SetProviderSubStep(2);
+                return true;
+            }
             SetProviderSubStep(_providerSubStep - 1);
             return true;
         }
 
-        if (ViewModel.CurrentStep.Value == WizardStep.Slack && _slackSubStep > 0)
+        if (ViewModel.CurrentStep.Value == WizardStep.ChatServices && _chatServicesSubStep > 0)
         {
-            SetSlackSubStep(_slackSubStep - 1);
+            SetChatServicesSubStep(_chatServicesSubStep - 1);
             return true;
         }
 
@@ -658,6 +814,19 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             return;
         }
 
+        // On validation sub-step with failed result, Enter triggers retry
+        if (ViewModel.CurrentStep.Value == WizardStep.Provider
+            && _providerSubStep == 3
+            && keyInfo.Key == ConsoleKey.Enter
+            && ViewModel.ProbeResult.Value is { Success: false })
+        {
+            ViewModel.StartProbe();
+            _stepContentNode?.Invalidate();
+            _helpTextNode?.Invalidate();
+            ViewModel.RequestRedraw();
+            return;
+        }
+
         // On health check step, Enter triggers the check
         if (ViewModel.CurrentStep.Value == WizardStep.HealthCheck && keyInfo.Key == ConsoleKey.Enter)
         {
@@ -674,7 +843,8 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
         {
             WizardStep.Provider when _providerSubStep == 0 => _providerList,
             WizardStep.Provider when _providerSubStep == 1 => _authMethodList,
-            WizardStep.Slack when _slackSubStep == 0 => _slackEnabledList,
+            WizardStep.Provider when _providerSubStep == 4 && !_manualModelEntry => _modelList,
+            WizardStep.ChatServices when _chatServicesSubStep == 0 => _slackEnabledList,
             WizardStep.Mcp => _mcpList,
             WizardStep.Exposure => _exposureList,
             _ => null
@@ -687,8 +857,9 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
         {
             WizardStep.Provider when _providerSubStep == 2 && _endpointInput is not null => _endpointInput,
             WizardStep.Provider when _providerSubStep == 2 => _apiKeyInput,
-            WizardStep.Slack when _slackSubStep == 1 => _slackBotTokenInput,
-            WizardStep.Slack when _slackSubStep == 2 => _slackAppTokenInput,
+            WizardStep.Provider when _providerSubStep == 4 && _manualModelEntry => _manualModelInput,
+            WizardStep.ChatServices when _chatServicesSubStep == 1 => _slackBotTokenInput,
+            WizardStep.ChatServices when _chatServicesSubStep == 2 => _slackAppTokenInput,
             WizardStep.Acl => _ownerIdentityInput,
             _ => null
         };
@@ -702,9 +873,16 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
         ViewModel.RequestRedraw();
     }
 
-    private void SetSlackSubStep(int step)
+    private void InvalidateProviderSubStep()
     {
-        _slackSubStep = step;
+        _stepContentNode?.Invalidate();
+        _helpTextNode?.Invalidate();
+        ViewModel.RequestRedraw();
+    }
+
+    private void SetChatServicesSubStep(int step)
+    {
+        _chatServicesSubStep = step;
         _stepContentNode?.Invalidate();
         _helpTextNode?.Invalidate();
         ViewModel.RequestRedraw();
@@ -719,11 +897,32 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             {
                 if (step == WizardStep.Provider)
                     _providerSubStep = 0;
-                if (step == WizardStep.Slack)
-                    _slackSubStep = 0;
+                if (step == WizardStep.ChatServices)
+                    _chatServicesSubStep = 0;
 
                 _stepContentNode?.Invalidate();
                 _helpTextNode?.Invalidate();
+            })
+            .DisposeWith(Subscriptions);
+
+        // Invalidate when probe result changes (validation sub-step transitions)
+        ViewModel.ProbeResult
+            .Subscribe(_ =>
+            {
+                if (ViewModel.CurrentStep.Value == WizardStep.Provider && _providerSubStep == 3)
+                {
+                    _stepContentNode?.Invalidate();
+                    _helpTextNode?.Invalidate();
+                }
+            })
+            .DisposeWith(Subscriptions);
+
+        // Animate spinner on validation sub-step every second
+        ViewModel.ProbeElapsedSeconds
+            .Subscribe(_ =>
+            {
+                if (ViewModel.CurrentStep.Value == WizardStep.Provider && _providerSubStep == 3)
+                    _stepContentNode?.Invalidate();
             })
             .DisposeWith(Subscriptions);
 

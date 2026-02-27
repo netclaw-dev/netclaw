@@ -9,6 +9,7 @@ using Netclaw.Cli.Daemon;
 using Netclaw.Cli.Doctor;
 using Netclaw.Cli.Tui;
 using Netclaw.Configuration;
+using Termina.Diagnostics;
 using Termina.Hosting;
 
 try
@@ -77,6 +78,14 @@ static async Task RunAsync(string[] args)
 
         if (mode is "init")
         {
+            // Enable Termina trace logging for debugging TUI input/rendering issues
+            var traceFile = Path.Combine(Path.GetTempPath(), "netclaw-init-trace.log");
+            builder.Services.AddTerminaFileTracing(traceFile, TerminaTraceCategory.All, TerminaTraceLevel.Trace);
+            Console.Error.WriteLine($"Trace log: {traceFile}");
+
+            // Provider probe for credential validation + model discovery
+            builder.Services.AddHttpClient<IProviderProbe, ProviderProbe>();
+
             builder.Services.AddTermina("/init", termina =>
             {
                 termina.RegisterRoute<InitWizardPage, InitWizardViewModel>("/init");
