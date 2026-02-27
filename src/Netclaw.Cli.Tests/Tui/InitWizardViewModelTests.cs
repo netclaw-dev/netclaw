@@ -14,6 +14,7 @@ public sealed class InitWizardViewModelTests : IDisposable
     private readonly string _tempDir;
     private readonly NetclawPaths _paths;
     private readonly FakeProviderProbe _fakeProbe = new();
+    private readonly FakeSlackProbe _fakeSlackProbe = new();
 
     public InitWizardViewModelTests()
     {
@@ -377,8 +378,58 @@ public sealed class InitWizardViewModelTests : IDisposable
         Assert.Equal(5, vm.GetDisplayStepNumber(WizardStep.HealthCheck));
     }
 
+    [Fact]
+    public async Task HealthCheck_SlackEnabled_ProbeSuccess_ShowsTeamName()
+    {
+        using var vm = CreateViewModel();
+        vm.SelectedProviderType = "ollama";
+        vm.SlackEnabled = true;
+        vm.SlackBotToken = "xoxb-test-bot-token";
+        vm.SlackAppToken = "xapp-test-app-token";
+
+        _fakeSlackProbe.NextResult = new Channels.Slack.SlackProbeResult(
+            true, null, "Acme Corp", "U99999");
+
+        vm.CurrentStep.Value = WizardStep.HealthCheck;
+        vm.GoNext();
+
+        await vm.HealthCheckCompletion!.WaitAsync(TimeSpan.FromSeconds(5));
+
+        var slackCheck = vm.HealthCheckResults
+            .FirstOrDefault(h => h.Label.Contains("Slack", StringComparison.OrdinalIgnoreCase));
+        Assert.NotNull(slackCheck);
+        Assert.True(slackCheck.Passed);
+        Assert.Contains("Acme Corp", slackCheck.Label, StringComparison.Ordinal);
+        Assert.Equal(1, _fakeSlackProbe.ProbeCallCount);
+        Assert.Equal("xoxb-test-bot-token", _fakeSlackProbe.LastBotToken);
+    }
+
+    [Fact]
+    public async Task HealthCheck_SlackEnabled_ProbeFailure_ShowsError()
+    {
+        using var vm = CreateViewModel();
+        vm.SelectedProviderType = "ollama";
+        vm.SlackEnabled = true;
+        vm.SlackBotToken = "xoxb-bad-token";
+        vm.SlackAppToken = "xapp-test-app-token";
+
+        _fakeSlackProbe.NextResult = new Channels.Slack.SlackProbeResult(
+            false, "Bot token is invalid. Check your Slack app's Bot User OAuth Token.", null, null);
+
+        vm.CurrentStep.Value = WizardStep.HealthCheck;
+        vm.GoNext();
+
+        await vm.HealthCheckCompletion!.WaitAsync(TimeSpan.FromSeconds(5));
+
+        var slackCheck = vm.HealthCheckResults
+            .FirstOrDefault(h => h.Label.Contains("Slack", StringComparison.OrdinalIgnoreCase));
+        Assert.NotNull(slackCheck);
+        Assert.False(slackCheck.Passed);
+        Assert.Contains("invalid", slackCheck.Label, StringComparison.OrdinalIgnoreCase);
+    }
+
     private InitWizardViewModel CreateViewModel()
     {
-        return new InitWizardViewModel(_paths, _fakeProbe);
+        return new InitWizardViewModel(_paths, _fakeProbe, _fakeSlackProbe);
     }
 }

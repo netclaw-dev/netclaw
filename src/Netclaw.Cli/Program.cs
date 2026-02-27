@@ -4,6 +4,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using System.Text.Json;
 using Netclaw.Channels;
+using Netclaw.Channels.Slack;
 using Netclaw.Cli;
 using Netclaw.Cli.Daemon;
 using Netclaw.Cli.Doctor;
@@ -70,7 +71,10 @@ static async Task RunAsync(string[] args)
         var builder = Host.CreateApplicationBuilder(args);
         ConfigureConfigServices(builder.Services, builder.Configuration);
         if (mode is "doctor")
+        {
+            builder.Services.AddHttpClient<ISlackProbe, SlackProbe>();
             builder.Services.AddDoctorChecks();
+        }
 
         // Suppress framework console logging
         builder.Logging.ClearProviders();
@@ -85,6 +89,7 @@ static async Task RunAsync(string[] args)
 
             // Provider probe for credential validation + model discovery
             builder.Services.AddHttpClient<IProviderProbe, ProviderProbe>();
+            builder.Services.AddHttpClient<ISlackProbe, SlackProbe>();
 
             builder.Services.AddTermina("/init", termina =>
             {
