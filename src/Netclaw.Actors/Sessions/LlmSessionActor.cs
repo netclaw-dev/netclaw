@@ -44,6 +44,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor
     private readonly Dictionary<IActorRef, OutputFilter> _subscribers = new();
     private readonly List<AITool> _availableTools = new();
     private readonly ToolRegistry? _fullRegistry;
+    private int _baseToolCount; // count of always-loaded tools; dynamic tools appended after this
 
     // Last observed input token count from LLM response (for compaction trigger)
     private long _lastInputTokenCount;
@@ -87,12 +88,13 @@ public sealed class LlmSessionActor : ReceivePersistentActor
         _log = Context.GetLogger().WithContext("SessionId", _sessionId.Value);
 
         // Load all non-MCP tools for initial LLM calls.
-        // MCP tools are loaded dynamically via search_tools meta-tool.
+        // MCP tools are loaded dynamically via search_tools meta-tool and reset each turn.
         _fullRegistry = toolRegistry;
         if (toolRegistry is not null)
         {
             _availableTools.AddRange(toolRegistry.GetAlwaysLoadedTools());
         }
+        _baseToolCount = _availableTools.Count;
 
         // ── Recovery handlers ──
         Recover<SystemPromptSet>(evt =>
@@ -139,6 +141,11 @@ public sealed class LlmSessionActor : ReceivePersistentActor
             _log.Info("Received user message");
 
             _toolIterationCount = 0;
+
+            // Reset dynamically-loaded MCP tools — the LLM can re-discover via search_tools
+            if (_availableTools.Count > _baseToolCount)
+                _availableTools.RemoveRange(_baseToolCount, _availableTools.Count - _baseToolCount);
+
             _state = _state.AddUserMessage(cmd.Content);
             TryReplyAck();
             FireLlmCall();
