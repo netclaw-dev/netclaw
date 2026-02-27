@@ -12,6 +12,7 @@ using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 using Netclaw.Daemon.Configuration;
 using Netclaw.Daemon.Gateway;
+using Netclaw.Daemon.Mcp;
 using Netclaw.Daemon.Services;
 
 try
@@ -166,13 +167,31 @@ static void ConfigureDaemonServices(
     services.AddSingleton(toolRegistry);
     services.AddSingleton<IToolExecutor>(new DispatchingToolExecutor(toolRegistry));
 
+    // MCP server lifecycle management
+    var mcpServers = configuration.GetSection("McpServers")
+        .Get<Dictionary<string, McpServerEntry>>() ?? new();
+    services.AddSingleton(mcpServers);
+    services.AddSingleton<McpClientManager>();
+    services.AddHostedService(sp => sp.GetRequiredService<McpClientManager>());
+
+    // Refresh tool index in system prompt after MCP tools are discovered
+    services.AddHostedService<ToolIndexUpdater>();
+
     // System prompt (file-based, with first-run seed)
     if (!File.Exists(paths.PersonalityPath))
         File.WriteAllText(paths.PersonalityPath,
             "You are Netclaw, a helpful homelab operations assistant. "
             + "Be concise and direct.");
-    services.AddSingleton<ISystemPromptProvider>(
-        new FileSystemPromptProvider(paths));
+    var promptProvider = new FileSystemPromptProvider(paths);
+
+    // Set initial compressed tool index from first-party tools.
+    // MCP tools will be added by McpClientManager at startup, which updates
+    // the tool registry — but the prompt provider gets the index at construction
+    // time. For MCP tools to appear in the index, the ToolIndexUpdater hosted
+    // service refreshes it after MCP startup completes.
+    promptProvider.SetToolIndex(toolRegistry.GenerateCompressedIndex());
+    services.AddSingleton<ISystemPromptProvider>(promptProvider);
+    services.AddSingleton(promptProvider); // also register concrete type for ToolIndexUpdater
 
     var sqlitePath = string.IsNullOrWhiteSpace(persistence.Sqlite.Path)
         ? paths.SqliteDbPath

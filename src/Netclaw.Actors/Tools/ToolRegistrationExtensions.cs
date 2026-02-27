@@ -1,3 +1,5 @@
+using Microsoft.Extensions.AI;
+using ModelContextProtocol.Client;
 using Netclaw.Configuration;
 
 namespace Netclaw.Actors.Tools;
@@ -13,6 +15,25 @@ public static class ToolRegistrationExtensions
         registry.Register(new ShellTool(config));
         registry.Register(new FileReadTool(config));
         registry.Register(new FileWriteTool());
+
+        // Register search_tools meta-tool (always loaded, "builtin" grant)
+        registry.Register(new SearchToolsTool(registry));
+
+        return registry;
+    }
+
+    /// <summary>
+    /// Register MCP tools discovered from an MCP server into the tool registry.
+    /// Tools are wrapped as <see cref="McpToolAdapter"/> with namespaced names.
+    /// </summary>
+    public static ToolRegistry WithMcpTools(
+        this ToolRegistry registry,
+        string serverName,
+        IList<McpClientTool> tools,
+        string? grantCategory = null)
+    {
+        foreach (var tool in tools)
+            registry.Register(new McpToolAdapter(tool, serverName, tool.Name, grantCategory));
 
         return registry;
     }

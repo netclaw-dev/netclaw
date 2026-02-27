@@ -19,6 +19,7 @@
     <PackageReference Include="Akka.Persistence.Sql.Hosting" />
     <PackageReference Include="Anthropic" />
     <PackageReference Include="Microsoft.Data.Sqlite" />
+    <PackageReference Include="ModelContextProtocol.Core" />
     <PackageReference Include="Microsoft.Extensions.AI.OpenAI" />
     <PackageReference Include="OpenTelemetry" />
     <PackageReference Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" />

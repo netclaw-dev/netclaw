@@ -85,6 +85,37 @@
     "Models": {
       "type": "object",
       "additionalProperties": true
+    },
+    "McpServers": {
+      "type": "object",
+      "description": "MCP server profiles keyed by name.",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "Transport": {
+            "type": "string",
+            "enum": ["stdio", "sse", "http"],
+            "default": "stdio"
+          },
+          "Command": { "type": "string" },
+          "Arguments": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "Url": { "type": "string", "format": "uri" },
+          "EnvironmentVariables": {
+            "type": "object",
+            "additionalProperties": { "type": "string" }
+          },
+          "Headers": {
+            "type": "object",
+            "additionalProperties": { "type": "string" }
+          },
+          "Enabled": { "type": "boolean", "default": true },
+          "GrantCategory": { "type": ["string", "null"] }
+        },
+        "additionalProperties": false
+      }
     }
   },
   "additionalProperties": true

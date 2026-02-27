@@ -1,3 +1,4 @@
+using System.Text;
 using Microsoft.Extensions.AI;
 using Netclaw.Tools;
 
@@ -45,6 +46,82 @@ public sealed class ToolRegistry
         _tools.FirstOrDefault(t => t.Tool.Name == name)?.Tool;
 
     /// <summary>
+    /// Returns tools that should always be loaded into the LLM context.
+    /// All non-MCP tools are always loaded; MCP tools use dynamic discovery via search_tools.
+    /// </summary>
+    public IReadOnlyList<AITool> GetAlwaysLoadedTools() =>
+        _tools
+            .Where(t => t.Tool is not McpToolAdapter)
+            .Select(t => t.Tool.ToAITool())
+            .ToList();
+
+    /// <summary>
+    /// Returns all registered tool registrations (for search and dynamic loading).
+    /// </summary>
+    public IReadOnlyList<ToolRegistration> GetAllRegistrations() => _tools;
+
+    /// <summary>
+    /// Search tools by keyword, matching against name and description.
+    /// Returns up to <paramref name="maxResults"/> matching tools.
+    /// </summary>
+    public IReadOnlyList<INetclawTool> SearchTools(string query, string? serverFilter, int maxResults)
+    {
+        var queryLower = query.ToLowerInvariant();
+        var queryParts = queryLower.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+
+        return _tools
+            .Where(t =>
+            {
+                // Apply server filter if specified
+                if (serverFilter is not null && t.Tool is McpToolAdapter mcp)
+                {
+                    if (!string.Equals(mcp.ServerName, serverFilter, StringComparison.OrdinalIgnoreCase))
+                        return false;
+                }
+                else if (serverFilter is not null)
+                {
+                    return false; // non-MCP tools filtered out when server filter is set
+                }
+
+                var nameLower = t.Tool.Name.ToLowerInvariant();
+                var descLower = t.Tool.Description.ToLowerInvariant();
+
+                return queryParts.Any(p => nameLower.Contains(p) || descLower.Contains(p));
+            })
+            .Take(maxResults)
+            .Select(t => t.Tool)
+            .ToList();
+    }
+
+    /// <summary>
+    /// Generates a compressed tool index for the system prompt.
+    /// Groups tools by grant category for compact representation.
+    /// </summary>
+    public string GenerateCompressedIndex()
+    {
+        if (_tools.Count == 0)
+            return string.Empty;
+
+        var sb = new StringBuilder();
+        sb.AppendLine("[available tools — use search_tools to load full definitions]");
+
+        var grouped = _tools.GroupBy(t => t.GrantCategory);
+        foreach (var group in grouped)
+        {
+            var names = group.Select(t =>
+            {
+                if (t.Tool is McpToolAdapter mcp)
+                    return mcp.BareToolName;
+                return t.Tool.Name;
+            });
+            sb.AppendLine($"{group.Key}: {string.Join(", ", names)}");
+        }
+
+        sb.AppendLine("→ call search_tools(\"query\") to load any tool above before using it");
+        return sb.ToString();
+    }
+
+    /// <summary>
     /// Adapter to wrap bare <see cref="AITool"/> instances (e.g. test fakes) as <see cref="INetclawTool"/>.
     /// </summary>
     private sealed class AIToolAdapter : INetclawTool
@@ -55,8 +132,8 @@ public sealed class ToolRegistry
         {
             _tool = tool;
             GrantCategory = grantCategory;
-            Name = tool.GetType().Name;
-            Description = "";
+            Name = tool is AIFunction f ? f.Name : tool.GetType().Name;
+            Description = tool is AIFunction fn ? (fn.Description ?? "") : "";
             ParameterSchema = default;
         }
 

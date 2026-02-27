@@ -36,10 +36,7 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
     // Step 3: ACL
     private TextInputNode? _ownerIdentityInput;
 
-    // Step 4: MCP
-    private SelectionListNode<string>? _mcpList;
-
-    // Step 5: Exposure
+    // Step 4: Exposure
     private SelectionListNode<string>? _exposureList;
 
     // Track sub-step for provider (0=select, 1=auth, 2=credentials, 3=validate, 4=model)
@@ -116,7 +113,6 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
                     WizardStep.Provider => "LLM Provider",
                     WizardStep.ChatServices => "Chat Services",
                     WizardStep.Acl => "Access Control",
-                    WizardStep.Mcp => "MCP Servers",
                     WizardStep.Exposure => "Exposure Mode",
                     WizardStep.HealthCheck => "Health Check",
                     _ => ""
@@ -164,7 +160,6 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
                 WizardStep.Provider => BuildProviderStep(),
                 WizardStep.ChatServices => BuildChatServicesStep(),
                 WizardStep.Acl => BuildAclStep(),
-                WizardStep.Mcp => BuildMcpStep(),
                 WizardStep.Exposure => BuildExposureStep(),
                 _ => Layouts.Empty()
             };
@@ -198,8 +193,6 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
                     "  Socket Mode requires both tokens. See: https://api.slack.com/apis/socket-mode",
                 WizardStep.Acl =>
                     "  Your Slack user ID (e.g., U01234ABCDE) for admin access.",
-                WizardStep.Mcp =>
-                    "  MCP servers provide external tools. Memorizer adds persistent memory.",
                 WizardStep.Exposure =>
                     "  Local-only is recommended for homelab use.",
                 WizardStep.HealthCheck =>
@@ -689,34 +682,6 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
                 .Height(3));
     }
 
-    private ILayoutNode BuildMcpStep()
-    {
-        _mcpList = Layouts.SelectionList(
-                "Memorizer (recommended \u2014 persistent memory)",
-                "Custom MCP server (configure later)",
-                "Skip \u2014 no MCP servers")
-            .WithMode(SelectionMode.Single)
-            .WithHighlightColors(Color.Black, Color.Cyan);
-
-        _mcpList.OnFocused();
-        _lastFocusedList = _mcpList;
-
-        _mcpList.SelectionConfirmed
-            .Subscribe(selected =>
-            {
-                if (selected.Count > 0)
-                {
-                    ViewModel.McpSelection = selected[0];
-                    ViewModel.GoNext();
-                }
-            })
-            .DisposeWith(_stepSubs);
-
-        return Layouts.Vertical()
-            .WithChild(new TextNode("  MCP tool servers:").WithForeground(Color.White))
-            .WithChild(_mcpList);
-    }
-
     private ILayoutNode BuildExposureStep()
     {
         _exposureList = Layouts.SelectionList(
@@ -900,7 +865,6 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             WizardStep.Provider when _providerSubStep == 1 => _authMethodList,
             WizardStep.Provider when _providerSubStep == 4 && !_manualModelEntry => _modelList,
             WizardStep.ChatServices when _chatServicesSubStep == 0 => _slackEnabledList,
-            WizardStep.Mcp => _mcpList,
             WizardStep.Exposure => _exposureList,
             _ => null
         };

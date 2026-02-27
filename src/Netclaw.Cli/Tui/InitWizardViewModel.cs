@@ -15,19 +15,18 @@ public enum WizardStep
     Provider = 1,
     ChatServices = 2,
     Acl = 3,
-    Mcp = 4,
-    Exposure = 5,
-    HealthCheck = 6
+    Exposure = 4,
+    HealthCheck = 5
 }
 
 /// <summary>
 /// Reactive ViewModel for the <c>netclaw init</c> onboarding wizard.
-/// Drives a 6-step wizard state machine with back-navigation support.
+/// Drives a 5-step wizard state machine with back-navigation support.
 /// ACL step is conditionally skipped when no chat services are enabled.
 /// </summary>
 public partial class InitWizardViewModel : ReactiveViewModel
 {
-    public const int TotalSteps = 6;
+    public const int TotalSteps = 5;
 
     private readonly NetclawPaths _paths;
     private readonly IProviderProbe _probe;
@@ -75,13 +74,10 @@ public partial class InitWizardViewModel : ReactiveViewModel
     // ── Step 3: ACL ──
     public string? OwnerIdentity { get; set; }
 
-    // ── Step 4: MCP ──
-    public string? McpSelection { get; set; }
-
-    // ── Step 5: Exposure ──
+    // ── Step 4: Exposure ──
     public string? ExposureMode { get; set; }
 
-    // ── Step 6: Health Check ──
+    // ── Step 5: Health Check ──
     public List<HealthCheckItem> HealthCheckResults { get; } = [];
 
     /// <summary>

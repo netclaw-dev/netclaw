@@ -8,6 +8,7 @@ using Netclaw.Channels.Slack;
 using Netclaw.Cli;
 using Netclaw.Cli.Daemon;
 using Netclaw.Cli.Doctor;
+using Netclaw.Cli.Mcp;
 using Netclaw.Cli.Tui;
 using Netclaw.Configuration;
 using Termina.Diagnostics;
@@ -256,6 +257,15 @@ static async Task RunAsync(string[] args)
         }
     }
 
+    // ── MCP server management (offline) ──
+    if (mode is "mcp")
+    {
+        var paths = new NetclawPaths();
+        paths.EnsureDirectoriesExist();
+        Environment.ExitCode = await McpCommand.RunAsync(args, paths);
+        return;
+    }
+
     // ── Config management stubs ──
     if (mode is "config")
     {
@@ -353,6 +363,7 @@ static void WriteGeneralHelp()
     Console.WriteLine("  doctor                   Configuration diagnostics (offline)");
     Console.WriteLine("  status                   Runtime status from daemon health JSON endpoint");
     Console.WriteLine("  daemon <subcommand>      Manage daemon lifecycle");
+    Console.WriteLine("  mcp                      Manage MCP server profiles");
     Console.WriteLine("  init                     First-run setup wizard (planned)");
     Console.WriteLine("  config                   Configuration management (planned)");
     Console.WriteLine();

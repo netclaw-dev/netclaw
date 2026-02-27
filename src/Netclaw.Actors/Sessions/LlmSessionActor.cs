@@ -42,7 +42,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor
     // Transient state (not persisted)
     private readonly List<SendUserMessage> _buffer = new();
     private readonly Dictionary<IActorRef, OutputFilter> _subscribers = new();
-    private IReadOnlyList<AITool> _availableTools = [];
+    private readonly List<AITool> _availableTools = new();
+    private readonly ToolRegistry? _fullRegistry;
 
     // Last observed input token count from LLM response (for compaction trigger)
     private long _lastInputTokenCount;
@@ -85,10 +86,12 @@ public sealed class LlmSessionActor : ReceivePersistentActor
         // Enrich logger with session context — all log messages automatically include SessionId
         _log = Context.GetLogger().WithContext("SessionId", _sessionId.Value);
 
-        // Load available tools from registry (all tools for now; policy filtering comes in Task 1.5)
+        // Load all non-MCP tools for initial LLM calls.
+        // MCP tools are loaded dynamically via search_tools meta-tool.
+        _fullRegistry = toolRegistry;
         if (toolRegistry is not null)
         {
-            _availableTools = toolRegistry.GetAllTools();
+            _availableTools.AddRange(toolRegistry.GetAlwaysLoadedTools());
         }
 
         // ── Recovery handlers ──
@@ -200,6 +203,19 @@ public sealed class LlmSessionActor : ReceivePersistentActor
             foreach (var result in msg.ToolResults)
             {
                 _state = _state with { History = _state.History.Add(result) };
+            }
+
+            // Dynamic tool loading: if search_tools was called, load discovered tools
+            // into the available tools list so they can be called in subsequent turns
+            if (_fullRegistry is not null)
+            {
+                foreach (var result in msg.ToolResults)
+                {
+                    if (result.Name is "search_tools" && result.Content is not null)
+                    {
+                        LoadDiscoveredTools(result.Content);
+                    }
+                }
             }
 
             _toolIterationCount++;
@@ -840,6 +856,40 @@ public sealed class LlmSessionActor : ReceivePersistentActor
             ToolCallId = tc.CallId,
             Name = tc.Name
         };
+    }
+
+    /// <summary>
+    /// Parse tool names from search_tools output and add their AITool definitions
+    /// to <see cref="_availableTools"/> so the LLM can call them in subsequent iterations.
+    /// </summary>
+    private void LoadDiscoveredTools(string searchToolOutput)
+    {
+        if (_fullRegistry is null) return;
+
+        // Parse tool names from the search output format: "  server/toolname — description"
+        foreach (var line in searchToolOutput.Split('\n'))
+        {
+            var trimmed = line.TrimStart();
+            if (!trimmed.Contains(" — "))
+                continue;
+
+            var toolName = trimmed.Split(" — ")[0].Trim();
+            if (string.IsNullOrEmpty(toolName))
+                continue;
+
+            var tool = _fullRegistry.GetByName(toolName);
+            if (tool is null)
+                continue;
+
+            // Don't add duplicates
+            var aiTool = tool.ToAITool();
+            if (_availableTools.Any(existing =>
+                existing is AIFunction ef && aiTool is AIFunction nf && ef.Name == nf.Name))
+                continue;
+
+            _availableTools.Add(aiTool);
+            _log.Info("Dynamically loaded tool '{ToolName}' into session", toolName);
+        }
     }
 
     private void MaybeSnapshot()

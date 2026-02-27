@@ -40,23 +40,35 @@ public sealed class NullSystemPromptProvider : ISystemPromptProvider
 
 /// <summary>
 /// Loads system prompt layers from the filesystem under <see cref="NetclawPaths.SoulDirectory"/>.
-/// Missing files are silently skipped.
+/// Missing files are silently skipped. Optionally appends a compressed tool index.
 /// </summary>
 public sealed class FileSystemPromptProvider : ISystemPromptProvider
 {
     private readonly NetclawPaths _paths;
+    private string? _toolIndex;
 
     public FileSystemPromptProvider(NetclawPaths paths)
     {
         _paths = paths;
     }
 
+    /// <summary>
+    /// Set the compressed tool index to append to the system prompt.
+    /// Called once after tool registration is complete.
+    /// </summary>
+    public void SetToolIndex(string toolIndex)
+    {
+        _toolIndex = toolIndex;
+    }
+
     public string GetSystemPrompt()
     {
-        return SystemPromptAssembler.Assemble(
+        var prompt = SystemPromptAssembler.Assemble(
             personality: TryReadFile(_paths.PersonalityPath),
             instructions: TryReadFile(_paths.InstructionsPath),
             userPreferences: TryReadFile(_paths.UserPreferencesPath));
+
+        return AppendToolIndex(prompt);
     }
 
     /// <summary>
@@ -64,11 +76,23 @@ public sealed class FileSystemPromptProvider : ISystemPromptProvider
     /// </summary>
     public string GetSystemPrompt(string projectAgentsPath)
     {
-        return SystemPromptAssembler.Assemble(
+        var prompt = SystemPromptAssembler.Assemble(
             personality: TryReadFile(_paths.PersonalityPath),
             instructions: TryReadFile(_paths.InstructionsPath),
             userPreferences: TryReadFile(_paths.UserPreferencesPath),
             projectAgents: TryReadFile(projectAgentsPath));
+
+        return AppendToolIndex(prompt);
+    }
+
+    private string AppendToolIndex(string prompt)
+    {
+        if (string.IsNullOrWhiteSpace(_toolIndex))
+            return prompt;
+
+        return string.IsNullOrWhiteSpace(prompt)
+            ? _toolIndex
+            : $"{prompt}\n\n{_toolIndex}";
     }
 
     private static string? TryReadFile(string path)

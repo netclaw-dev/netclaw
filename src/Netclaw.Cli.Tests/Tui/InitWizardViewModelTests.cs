@@ -50,9 +50,6 @@ public sealed class InitWizardViewModelTests : IDisposable
         Assert.Equal(WizardStep.Acl, vm.CurrentStep.Value);
 
         vm.GoNext();
-        Assert.Equal(WizardStep.Mcp, vm.CurrentStep.Value);
-
-        vm.GoNext();
         Assert.Equal(WizardStep.Exposure, vm.CurrentStep.Value);
 
         vm.GoNext();
@@ -131,8 +128,8 @@ public sealed class InitWizardViewModelTests : IDisposable
         vm.GoNext(); // Provider → ChatServices
         Assert.Equal(WizardStep.ChatServices, vm.CurrentStep.Value);
 
-        vm.GoNext(); // ChatServices → should skip ACL → Mcp
-        Assert.Equal(WizardStep.Mcp, vm.CurrentStep.Value);
+        vm.GoNext(); // ChatServices → should skip ACL → Exposure
+        Assert.Equal(WizardStep.Exposure, vm.CurrentStep.Value);
     }
 
     [Fact]
@@ -142,8 +139,8 @@ public sealed class InitWizardViewModelTests : IDisposable
         vm.SlackEnabled = false;
 
         vm.GoNext(); // → ChatServices
-        vm.GoNext(); // → Mcp (ACL skipped)
-        Assert.Equal(WizardStep.Mcp, vm.CurrentStep.Value);
+        vm.GoNext(); // → Exposure (ACL skipped)
+        Assert.Equal(WizardStep.Exposure, vm.CurrentStep.Value);
 
         vm.GoBack(); // → ChatServices (ACL skipped going back)
         Assert.Equal(WizardStep.ChatServices, vm.CurrentStep.Value);
@@ -342,25 +339,25 @@ public sealed class InitWizardViewModelTests : IDisposable
     }
 
     [Fact]
-    public void TotalSteps_IsSix()
+    public void TotalSteps_IsFive()
     {
-        Assert.Equal(6, InitWizardViewModel.TotalSteps);
+        Assert.Equal(5, InitWizardViewModel.TotalSteps);
     }
 
     [Fact]
-    public void ActiveStepCount_IsFive_WhenNoChatServices()
+    public void ActiveStepCount_IsFour_WhenNoChatServices()
     {
         using var vm = CreateViewModel();
         vm.SlackEnabled = false;
-        Assert.Equal(5, vm.ActiveStepCount);
+        Assert.Equal(4, vm.ActiveStepCount);
     }
 
     [Fact]
-    public void ActiveStepCount_IsSix_WhenChatServicesEnabled()
+    public void ActiveStepCount_IsFive_WhenChatServicesEnabled()
     {
         using var vm = CreateViewModel();
         vm.SlackEnabled = true;
-        Assert.Equal(6, vm.ActiveStepCount);
+        Assert.Equal(5, vm.ActiveStepCount);
     }
 
     [Fact]
@@ -370,12 +367,11 @@ public sealed class InitWizardViewModelTests : IDisposable
         vm.SlackEnabled = false;
 
         // Provider = 1, ChatServices = 2, Acl would be 3 but skipped
-        // Mcp = 3 (adjusted from 4), Exposure = 4, HealthCheck = 5
+        // Exposure = 3 (adjusted from 4), HealthCheck = 4
         Assert.Equal(1, vm.GetDisplayStepNumber(WizardStep.Provider));
         Assert.Equal(2, vm.GetDisplayStepNumber(WizardStep.ChatServices));
-        Assert.Equal(3, vm.GetDisplayStepNumber(WizardStep.Mcp));
-        Assert.Equal(4, vm.GetDisplayStepNumber(WizardStep.Exposure));
-        Assert.Equal(5, vm.GetDisplayStepNumber(WizardStep.HealthCheck));
+        Assert.Equal(3, vm.GetDisplayStepNumber(WizardStep.Exposure));
+        Assert.Equal(4, vm.GetDisplayStepNumber(WizardStep.HealthCheck));
     }
 
     [Fact]
