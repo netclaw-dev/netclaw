@@ -88,10 +88,12 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             .WithSpacing(1)
             // Step indicator + progress
             .WithChild(BuildStepIndicator())
-            // Step content (rebuilds on Invalidate only)
+            // Step content (no Fill — only takes the height it needs)
             .WithChild(BuildStepContent())
-            // Help text (rebuilds on Invalidate only)
+            // Help text (immediately below step content)
             .WithChild(BuildHelpText())
+            // Spacer pushes status + key bindings to bottom
+            .WithChild(Layouts.Empty().Fill())
             // Status message
             .WithChild(BuildStatusBar())
             // Key bindings
@@ -167,7 +169,7 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             };
         });
 
-        return _stepContentNode.Fill();
+        return _stepContentNode;
     }
 
     private LayoutNode BuildHelpText()
@@ -201,7 +203,7 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
                     "  Validating your configuration...",
                 _ => ""
             };
-            return (ILayoutNode)new TextNode(text).WithForeground(Color.BrightBlack);
+            return (ILayoutNode)new TextNode(text).WithForeground(Color.Gray);
         });
 
         return _helpTextNode.Height(2);
