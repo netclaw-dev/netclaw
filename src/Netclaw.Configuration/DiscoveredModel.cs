@@ -1,21 +1,6 @@
 namespace Netclaw.Configuration;
 
 /// <summary>
-/// Discovers available models from a configured provider at runtime.
-/// Implementations query provider-specific APIs (e.g., Ollama /api/tags,
-/// OpenRouter /api/v1/models) to enumerate models and their metadata.
-/// </summary>
-public interface IProviderCatalog
-{
-    /// <summary>
-    /// Discover available models from the named provider.
-    /// Returns empty collection if discovery fails or provider is not found.
-    /// </summary>
-    Task<IReadOnlyList<DiscoveredModel>> DiscoverModelsAsync(
-        string providerName, CancellationToken ct = default);
-}
-
-/// <summary>
 /// Metadata about a model discovered from a provider at runtime.
 /// All fields except <see cref="ModelId"/> are optional — availability
 /// depends on what the provider's discovery API returns.

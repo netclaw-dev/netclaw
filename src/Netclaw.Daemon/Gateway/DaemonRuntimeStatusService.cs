@@ -13,35 +13,35 @@ public sealed class DaemonRuntimeStatusService(
     DaemonPersistenceOptions persistenceOptions,
     IOptions<TelemetryOptions> telemetryOptions)
 {
-    public async Task<DaemonRuntimeStatusResponse> GetStatusAsync(CancellationToken cancellationToken = default)
+    public async Task<DaemonRuntimeStatus.Response> GetStatusAsync(CancellationToken cancellationToken = default)
     {
         var process = Process.GetCurrentProcess();
         var startedAt = new DateTimeOffset(process.StartTime.ToUniversalTime(), TimeSpan.Zero);
         var now = timeProvider.GetUtcNow();
         var uptime = now - startedAt;
 
-        var connectors = new List<ConnectorStatus>
+        var connectors = new List<DaemonRuntimeStatus.Connector>
         {
             await BuildSlackStatusAsync(cancellationToken)
         };
 
         var overall = ResolveOverallStatus(connectors);
 
-        return new DaemonRuntimeStatusResponse
+        return new DaemonRuntimeStatus.Response
         {
             Overall = overall,
-            Process = new ProcessStatus
+            Process = new DaemonRuntimeStatus.Process
             {
                 Pid = process.Id,
                 StartedAtUtc = startedAt,
                 UptimeSeconds = (long)uptime.TotalSeconds
             },
             Connectors = connectors,
-            Persistence = new PersistenceStatus
+            Persistence = new DaemonRuntimeStatus.Persistence
             {
                 Provider = persistenceOptions.Provider.ToString()
             },
-            Telemetry = new TelemetryStatus
+            Telemetry = new DaemonRuntimeStatus.Telemetry
             {
                 Enabled = telemetryOptions.Value.Enabled,
                 OtlpEndpoint = telemetryOptions.Value.Otlp.Endpoint
@@ -49,11 +49,11 @@ public sealed class DaemonRuntimeStatusService(
         };
     }
 
-    private async Task<ConnectorStatus> BuildSlackStatusAsync(CancellationToken cancellationToken)
+    private async Task<DaemonRuntimeStatus.Connector> BuildSlackStatusAsync(CancellationToken cancellationToken)
     {
         if (!slackOptions.Enabled)
         {
-            return new ConnectorStatus
+            return new DaemonRuntimeStatus.Connector
             {
                 Key = "slack",
                 DisplayName = "Slack",
@@ -68,7 +68,7 @@ public sealed class DaemonRuntimeStatusService(
 
         if (slackChannel is null)
         {
-            return new ConnectorStatus
+            return new DaemonRuntimeStatus.Connector
             {
                 Key = "slack",
                 DisplayName = "Slack",
@@ -79,7 +79,7 @@ public sealed class DaemonRuntimeStatusService(
         }
 
         var health = await slackChannel.GetHealthAsync(cancellationToken);
-        return new ConnectorStatus
+        return new DaemonRuntimeStatus.Connector
         {
             Key = "slack",
             DisplayName = slackChannel.DisplayName,
@@ -95,7 +95,7 @@ public sealed class DaemonRuntimeStatusService(
         };
     }
 
-    private static string ResolveOverallStatus(IReadOnlyList<ConnectorStatus> connectors)
+    private static string ResolveOverallStatus(IReadOnlyList<DaemonRuntimeStatus.Connector> connectors)
     {
         if (connectors.Any(c => c.Enabled && c.Status is "disconnected"))
             return "degraded";
@@ -105,51 +105,4 @@ public sealed class DaemonRuntimeStatusService(
 
         return "healthy";
     }
-}
-
-public sealed class DaemonRuntimeStatusResponse
-{
-    public string Overall { get; init; } = "unknown";
-
-    public required ProcessStatus Process { get; init; }
-
-    public required List<ConnectorStatus> Connectors { get; init; }
-
-    public required PersistenceStatus Persistence { get; init; }
-
-    public required TelemetryStatus Telemetry { get; init; }
-}
-
-public sealed class ProcessStatus
-{
-    public int Pid { get; init; }
-
-    public DateTimeOffset StartedAtUtc { get; init; }
-
-    public long UptimeSeconds { get; init; }
-}
-
-public sealed class ConnectorStatus
-{
-    public required string Key { get; init; }
-
-    public required string DisplayName { get; init; }
-
-    public bool Enabled { get; init; }
-
-    public required string Status { get; init; }
-
-    public string? Message { get; init; }
-}
-
-public sealed class PersistenceStatus
-{
-    public required string Provider { get; init; }
-}
-
-public sealed class TelemetryStatus
-{
-    public bool Enabled { get; init; }
-
-    public string? OtlpEndpoint { get; init; }
 }

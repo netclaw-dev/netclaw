@@ -339,9 +339,10 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
 
         if (providerType == "ollama")
         {
+            var ollamaDefault = ProviderCapabilities.GetDefaultEndpoint("ollama");
             _endpointInput = new TextInputNode()
-                .WithPlaceholder("http://localhost:11434");
-            _endpointInput.Text = ViewModel.EndpointInput ?? "http://localhost:11434";
+                .WithPlaceholder(ollamaDefault);
+            _endpointInput.Text = ViewModel.EndpointInput ?? ollamaDefault;
 
             _endpointInput.OnFocused();
             _lastFocusedInput = _endpointInput;
@@ -349,7 +350,8 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             _endpointInput.Submitted
                 .Subscribe(text =>
                 {
-                    ViewModel.EndpointInput = string.IsNullOrWhiteSpace(text) ? "http://localhost:11434" : text;
+                    ViewModel.EndpointInput = string.IsNullOrWhiteSpace(text)
+                        ? ProviderCapabilities.GetDefaultEndpoint("ollama") : text;
                     // Start validation instead of advancing to next step
                     SetProviderSubStep(3);
                     ViewModel.StartProbe();

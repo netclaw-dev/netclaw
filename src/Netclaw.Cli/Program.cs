@@ -528,7 +528,7 @@ static async Task<int> RunStatusAsync(IServiceProvider services, IConfiguration 
         }
 
         var payload = await response.Content.ReadAsStreamAsync(timeoutCts.Token);
-        var status = await JsonSerializer.DeserializeAsync<DaemonRuntimeStatusDto>(
+        var status = await JsonSerializer.DeserializeAsync<DaemonRuntimeStatus.Response>(
             payload,
             new JsonSerializerOptions(JsonSerializerDefaults.Web),
             timeoutCts.Token);
@@ -566,7 +566,7 @@ static async Task<int> RunStatusAsync(IServiceProvider services, IConfiguration 
     }
 }
 
-static void WriteStatusResult(DaemonRuntimeStatusDto status, string endpoint)
+static void WriteStatusResult(DaemonRuntimeStatus.Response status, string endpoint)
 {
     Console.WriteLine($"overall: {status.Overall}");
     Console.WriteLine($"daemon: PID {status.Process.Pid}, uptime {FormatUptime(status.Process.UptimeSeconds)}, endpoint {endpoint}");

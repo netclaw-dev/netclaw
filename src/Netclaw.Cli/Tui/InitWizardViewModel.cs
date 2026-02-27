@@ -381,7 +381,7 @@ public partial class InitWizardViewModel : ReactiveViewModel
             if (!string.IsNullOrWhiteSpace(EndpointInput))
                 providerEntry["Endpoint"] = EndpointInput;
             else if (providerName == "ollama")
-                providerEntry["Endpoint"] = "http://localhost:11434";
+                providerEntry["Endpoint"] = ProviderCapabilities.GetDefaultEndpoint("ollama");
 
             providers[providerName] = providerEntry;
         }

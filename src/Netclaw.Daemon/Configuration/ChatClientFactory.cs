@@ -62,7 +62,7 @@ public sealed class ChatClientFactory
     {
         var apiKey = GetRequiredApiKey(provider, "openrouter");
         var endpoint = string.IsNullOrWhiteSpace(provider.Endpoint)
-            ? new Uri("https://openrouter.ai/api/v1")
+            ? new Uri(ProviderCapabilities.GetDefaultEndpoint("openrouter"))
             : new Uri(provider.Endpoint);
 
         var client = new OpenAIClient(

@@ -31,6 +31,34 @@ public static class ProviderCapabilities
             "ollama" or "openrouter" or "anthropic" or "openai";
 
     /// <summary>
+    /// Returns the default base URL for a given provider type.
+    /// Used as the fallback when no explicit endpoint is configured.
+    /// </summary>
+    public static string GetDefaultEndpoint(string providerType)
+        => providerType.ToLowerInvariant() switch
+        {
+            "ollama" => "http://localhost:11434",
+            "openrouter" => "https://openrouter.ai/api/v1",
+            "anthropic" => "https://api.anthropic.com",
+            "openai" => "https://api.openai.com",
+            _ => throw new ArgumentException($"Unknown provider type: {providerType}", nameof(providerType))
+        };
+
+    /// <summary>
+    /// Returns the relative path used to list models for a given provider type.
+    /// Append to the base endpoint to build the full model listing URL.
+    /// </summary>
+    public static string GetModelListingPath(string providerType)
+        => providerType.ToLowerInvariant() switch
+        {
+            "ollama" => "/api/tags",
+            "openrouter" => "/models",
+            "anthropic" => "/v1/models",
+            "openai" => "/v1/models",
+            _ => throw new ArgumentException($"Unknown provider type: {providerType}", nameof(providerType))
+        };
+
+    /// <summary>
     /// Known provider type identifiers. Used for validation and display.
     /// </summary>
     public static IReadOnlyList<string> KnownProviderTypes { get; } =

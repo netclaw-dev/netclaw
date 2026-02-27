@@ -1,4 +1,3 @@
-using Netclaw.Cli.Tui;
 using Netclaw.Configuration;
 
 namespace Netclaw.Cli.Tests.Tui;

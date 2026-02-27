@@ -115,7 +115,7 @@ public sealed class ConfigSchemaDoctorCheck(NetclawPaths paths) : IDoctorCheck
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
         while (directory is not null)
         {
-            var candidate = Path.Combine(directory.FullName, "src", "Netclaw.Cli", "Schemas", fileName);
+            var candidate = Path.Combine(directory.FullName, "src", "Netclaw.Configuration", "Schemas", fileName);
             if (File.Exists(candidate))
                 return candidate;
 

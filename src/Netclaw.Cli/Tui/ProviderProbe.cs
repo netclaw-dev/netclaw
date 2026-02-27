@@ -6,26 +6,6 @@ using Netclaw.Configuration;
 namespace Netclaw.Cli.Tui;
 
 /// <summary>
-/// Result of probing a provider's model listing API.
-/// Validates credentials and discovers available models in one call.
-/// </summary>
-public sealed record ProviderProbeResult(
-    bool Success,
-    string? ErrorMessage,
-    IReadOnlyList<DiscoveredModel> Models);
-
-/// <summary>
-/// Probes a provider's model listing API to validate credentials
-/// and discover available models.
-/// </summary>
-public interface IProviderProbe
-{
-    Task<ProviderProbeResult> ProbeAsync(
-        string providerType, string? endpoint, string? apiKey,
-        CancellationToken ct = default);
-}
-
-/// <summary>
 /// Production implementation of <see cref="IProviderProbe"/> that uses
 /// raw HttpClient calls to each provider's model listing API.
 /// </summary>
@@ -77,8 +57,10 @@ public sealed class ProviderProbe : IProviderProbe
 
     private async Task<ProviderProbeResult> ProbeOllamaAsync(string? endpoint, CancellationToken ct)
     {
-        var baseUrl = string.IsNullOrWhiteSpace(endpoint) ? "http://localhost:11434" : endpoint.TrimEnd('/');
-        var url = $"{baseUrl}/api/tags";
+        var baseUrl = string.IsNullOrWhiteSpace(endpoint)
+            ? ProviderCapabilities.GetDefaultEndpoint("ollama")
+            : endpoint.TrimEnd('/');
+        var url = $"{baseUrl}{ProviderCapabilities.GetModelListingPath("ollama")}";
 
         using var request = new HttpRequestMessage(HttpMethod.Get, url);
         using var response = await _httpClient.SendAsync(request, ct);
@@ -109,7 +91,8 @@ public sealed class ProviderProbe : IProviderProbe
         if (string.IsNullOrWhiteSpace(apiKey))
             return new ProviderProbeResult(false, "API key is required for OpenRouter.", []);
 
-        using var request = new HttpRequestMessage(HttpMethod.Get, "https://openrouter.ai/api/v1/models");
+        var url = $"{ProviderCapabilities.GetDefaultEndpoint("openrouter")}{ProviderCapabilities.GetModelListingPath("openrouter")}";
+        using var request = new HttpRequestMessage(HttpMethod.Get, url);
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
 
         using var response = await _httpClient.SendAsync(request, ct);
@@ -126,7 +109,8 @@ public sealed class ProviderProbe : IProviderProbe
         if (string.IsNullOrWhiteSpace(apiKey))
             return new ProviderProbeResult(false, "API key is required for Anthropic.", []);
 
-        using var request = new HttpRequestMessage(HttpMethod.Get, "https://api.anthropic.com/v1/models");
+        var url = $"{ProviderCapabilities.GetDefaultEndpoint("anthropic")}{ProviderCapabilities.GetModelListingPath("anthropic")}";
+        using var request = new HttpRequestMessage(HttpMethod.Get, url);
         request.Headers.Add("x-api-key", apiKey);
         request.Headers.Add("anthropic-version", "2023-06-01");
 
@@ -144,7 +128,8 @@ public sealed class ProviderProbe : IProviderProbe
         if (string.IsNullOrWhiteSpace(apiKey))
             return new ProviderProbeResult(false, "API key is required for OpenAI.", []);
 
-        using var request = new HttpRequestMessage(HttpMethod.Get, "https://api.openai.com/v1/models");
+        var url = $"{ProviderCapabilities.GetDefaultEndpoint("openai")}{ProviderCapabilities.GetModelListingPath("openai")}";
+        using var request = new HttpRequestMessage(HttpMethod.Get, url);
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
 
         using var response = await _httpClient.SendAsync(request, ct);
