@@ -137,6 +137,14 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             if (step == WizardStep.HealthCheck)
                 return BuildHealthCheckStep();
 
+            // Validation sub-step (provider step 3) is also stateless — just a spinner
+            // or error text. Skip clearing focus/subs so the spinner can tick without
+            // disposing interactive state from the previous sub-step. More importantly,
+            // this factory must NEVER call SetProviderSubStep() — that would re-entrantly
+            // invalidate _stepContentNode during its own evaluation, blanking the screen.
+            if (step == WizardStep.Provider && _providerSubStep == 3)
+                return BuildValidationSubStep();
+
             // Clear stale focus references BEFORE building new content.
             // The old components are about to be replaced/disposed by DynamicLayoutNode.
             // If we leave _lastFocused* pointing at disposed components, the next
@@ -387,6 +395,13 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
                 .Height(3));
     }
 
+    /// <summary>
+    /// Render-only: shows spinner while probing, success flash, or error message.
+    /// MUST NOT call SetProviderSubStep — that would re-entrantly invalidate
+    /// the DynamicLayoutNode during its own factory evaluation.
+    /// Auto-advance on success is handled by the ProbeResult subscription
+    /// in InitializeComponents.
+    /// </summary>
     private ILayoutNode BuildValidationSubStep()
     {
         var probeResult = ViewModel.ProbeResult.Value;
@@ -406,9 +421,12 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
 
         if (probeResult.Success)
         {
-            // Auto-advance to model selection on success
-            SetProviderSubStep(4);
-            return Layouts.Empty(); // will be replaced by model selection on next invalidation
+            // Brief success flash — the ProbeResult subscription will advance
+            // to sub-step 4 (model selection) on the next cycle.
+            var modelCount = probeResult.Models.Count;
+            return Layouts.Vertical()
+                .WithChild(new TextNode($"  \u2713 Connected! Found {modelCount} model{(modelCount == 1 ? "" : "s")}.")
+                    .WithForeground(Color.Green));
         }
 
         // Failure — show error and prompt to retry or go back
@@ -905,15 +923,22 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             })
             .DisposeWith(Subscriptions);
 
-        // Invalidate when probe result changes (validation sub-step transitions)
+        // Probe result changed — invalidate to show success/failure, then auto-advance
+        // on success after a brief flash. This runs OUTSIDE the DynamicLayoutNode factory,
+        // so SetProviderSubStep is safe here (no re-entrant invalidation).
         ViewModel.ProbeResult
-            .Subscribe(_ =>
+            .Subscribe(result =>
             {
-                if (ViewModel.CurrentStep.Value == WizardStep.Provider && _providerSubStep == 3)
-                {
-                    _stepContentNode?.Invalidate();
-                    _helpTextNode?.Invalidate();
-                }
+                if (ViewModel.CurrentStep.Value != WizardStep.Provider || _providerSubStep != 3)
+                    return;
+
+                // Always invalidate to render the new state (success flash or error)
+                _stepContentNode?.Invalidate();
+                _helpTextNode?.Invalidate();
+
+                // Auto-advance to model selection on success
+                if (result is { Success: true })
+                    SetProviderSubStep(4);
             })
             .DisposeWith(Subscriptions);
 
