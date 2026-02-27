@@ -34,6 +34,13 @@ public partial class InitWizardViewModel : ReactiveViewModel
     public ReactiveProperty<bool> IsHealthCheckRunning { get; } = new(false);
     public ReactiveProperty<bool> IsComplete { get; } = new(false);
 
+    /// <summary>
+    /// Monotonically increasing counter that ticks whenever health check results
+    /// change. The page subscribes to this to invalidate its DynamicLayoutNode,
+    /// since RequestRedraw alone won't trigger factory re-evaluation in Termina 0.7.1+.
+    /// </summary>
+    internal ReactiveProperty<int> HealthCheckResultVersion { get; } = new(0);
+
     // ── Step 1: Provider ──
     public string? SelectedProviderType { get; set; }
     public AuthMethod SelectedAuthMethod { get; set; } = AuthMethod.None;
@@ -146,22 +153,22 @@ public partial class InitWizardViewModel : ReactiveViewModel
     {
         IsHealthCheckRunning.Value = true;
         HealthCheckResults.Clear();
-        RequestRedraw();
+        NotifyHealthCheckChanged();
 
         // Provider check
         HealthCheckResults.Add(new HealthCheckItem("LLM provider configured", null));
-        RequestRedraw();
+        NotifyHealthCheckChanged();
         await Task.Delay(200); // simulate validation
 
         var providerOk = !string.IsNullOrWhiteSpace(SelectedProviderType);
         HealthCheckResults[^1] = new HealthCheckItem(
             $"LLM provider configured ({SelectedProviderType ?? "none"})",
             providerOk);
-        RequestRedraw();
+        NotifyHealthCheckChanged();
 
         // Slack check
         HealthCheckResults.Add(new HealthCheckItem("Slack configuration", null));
-        RequestRedraw();
+        NotifyHealthCheckChanged();
         await Task.Delay(200);
 
         var slackOk = !SlackEnabled ||
@@ -172,11 +179,11 @@ public partial class InitWizardViewModel : ReactiveViewModel
                 ? "Slack configuration (Socket Mode)"
                 : "Slack configuration (disabled)",
             slackOk);
-        RequestRedraw();
+        NotifyHealthCheckChanged();
 
         // Config write
         HealthCheckResults.Add(new HealthCheckItem("Writing configuration", null));
-        RequestRedraw();
+        NotifyHealthCheckChanged();
 
         try
         {
@@ -192,6 +199,17 @@ public partial class InitWizardViewModel : ReactiveViewModel
         IsHealthCheckRunning.Value = false;
         IsComplete.Value = true;
         StatusMessage.Value = "Setup complete! Run `netclaw daemon start` to begin.";
+        NotifyHealthCheckChanged();
+    }
+
+    /// <summary>
+    /// Bumps the health check version counter and requests a redraw.
+    /// The page subscribes to HealthCheckResultVersion to invalidate its
+    /// DynamicLayoutNode, which won't rebuild from RequestRedraw alone.
+    /// </summary>
+    private void NotifyHealthCheckChanged()
+    {
+        HealthCheckResultVersion.Value++;
         RequestRedraw();
     }
 
@@ -291,6 +309,7 @@ public partial class InitWizardViewModel : ReactiveViewModel
         StatusMessage.Dispose();
         IsHealthCheckRunning.Dispose();
         IsComplete.Dispose();
+        HealthCheckResultVersion.Dispose();
         base.Dispose();
     }
 }

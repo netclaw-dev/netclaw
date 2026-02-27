@@ -43,20 +43,10 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
     private IFocusable? _lastFocusedList;
     private TextInputNode? _lastFocusedInput;
 
-    // Dynamic layout node for step content — invalidated on sub-step changes
+    // Dynamic layout nodes — invalidation-driven (Termina 0.7.1+).
+    // Factory runs once on creation, then only on Invalidate().
     private DynamicLayoutNode? _stepContentNode;
     private DynamicLayoutNode? _helpTextNode;
-
-    // ═══════════════════════════════════════════════════════════════════
-    // Content caching — DynamicLayoutNode calls its factory on EVERY
-    // render cycle. Without caching, new component instances are created
-    // each frame, destroying highlight position, typed text, and focus.
-    // ═══════════════════════════════════════════════════════════════════
-    private record struct ContentCacheKey(WizardStep Step, int ProviderSub, int SlackSub);
-    private ContentCacheKey _contentKey;
-    private ILayoutNode? _cachedStepContent;
-    private ContentCacheKey _helpKey;
-    private ILayoutNode? _cachedHelpContent;
 
     // Step-specific subscriptions — cleared when step content is rebuilt
     // so old subscriptions on disposed components don't linger.
@@ -92,9 +82,9 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             .WithSpacing(1)
             // Step indicator + progress
             .WithChild(BuildStepIndicator())
-            // Step content (dynamic — rebuilds only on step/sub-step changes)
+            // Step content (rebuilds on Invalidate only)
             .WithChild(BuildStepContent())
-            // Help text (dynamic — rebuilds only on step/sub-step changes)
+            // Help text (rebuilds on Invalidate only)
             .WithChild(BuildHelpText())
             // Status message
             .WithChild(BuildStatusBar())
@@ -132,26 +122,18 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
 
     private LayoutNode BuildStepContent()
     {
-        // DynamicLayoutNode re-evaluates the factory on every render cycle.
-        // We cache the result and only rebuild when the step or sub-step
-        // actually changes, so components retain their state across frames.
         _stepContentNode = new DynamicLayoutNode(() =>
         {
             var step = ViewModel.CurrentStep.Value;
 
-            // Health check always rebuilds — results change during the check
+            // Health check has no stateful components — safe to rebuild on every invalidation
             if (step == WizardStep.HealthCheck)
                 return BuildHealthCheckStep();
 
-            var key = new ContentCacheKey(step, _providerSubStep, _slackSubStep);
-            if (key == _contentKey && _cachedStepContent != null)
-                return _cachedStepContent;
-
-            // New step/sub-step — clear subscriptions from previous content
+            // Clear subscriptions from previous step content before building new
             _stepSubs.Clear();
 
-            _contentKey = key;
-            _cachedStepContent = step switch
+            return step switch
             {
                 WizardStep.Provider => BuildProviderStep(),
                 WizardStep.Slack => BuildSlackStep(),
@@ -160,7 +142,6 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
                 WizardStep.Exposure => BuildExposureStep(),
                 _ => Layouts.Empty()
             };
-            return _cachedStepContent;
         });
 
         return _stepContentNode.Fill();
@@ -171,11 +152,6 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
         _helpTextNode = new DynamicLayoutNode(() =>
         {
             var step = ViewModel.CurrentStep.Value;
-            var key = new ContentCacheKey(step, _providerSubStep, _slackSubStep);
-            if (key == _helpKey && _cachedHelpContent != null)
-                return _cachedHelpContent;
-
-            _helpKey = key;
             var text = step switch
             {
                 WizardStep.Provider when _providerSubStep == 0 =>
@@ -198,8 +174,7 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
                     "  Validating your configuration...",
                 _ => ""
             };
-            _cachedHelpContent = (ILayoutNode)new TextNode(text).WithForeground(Color.BrightBlack);
-            return _cachedHelpContent;
+            return (ILayoutNode)new TextNode(text).WithForeground(Color.BrightBlack);
         });
 
         return _helpTextNode.Height(2);
@@ -749,6 +724,17 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
 
                 _stepContentNode?.Invalidate();
                 _helpTextNode?.Invalidate();
+            })
+            .DisposeWith(Subscriptions);
+
+        // Health check results change between Invalidate calls (via RequestRedraw).
+        // With invalidation-driven DynamicLayoutNode, we need explicit Invalidate
+        // when the ViewModel signals that health check results have updated.
+        ViewModel.HealthCheckResultVersion
+            .Subscribe(_ =>
+            {
+                if (ViewModel.CurrentStep.Value == WizardStep.HealthCheck)
+                    _stepContentNode?.Invalidate();
             })
             .DisposeWith(Subscriptions);
     }
