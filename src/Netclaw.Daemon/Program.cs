@@ -154,17 +154,13 @@ static void ConfigureDaemonServices(
     var models = configuration.GetSection("Models")
         .Get<ModelSelection>() ?? new ModelSelection();
 
-    // Session config from resolved models
-    var sessionSection = configuration.GetSection("Session");
-    services.AddSingleton(new SessionConfig
+    // Session config: bind defaults from config section, overlay model-derived values
+    var sessionConfig = configuration.GetSection("Session").Get<SessionConfig>() ?? new SessionConfig();
+    services.AddSingleton(sessionConfig with
     {
         ModelId = models.Main.ModelId,
         ContextWindowTokens = models.Main.ContextWindow ?? 32_768,
         CompactionModelId = models.Compaction?.ModelId,
-        CompactionThreshold = sessionSection.GetValue("CompactionThreshold", 0.75),
-        SnapshotInterval = sessionSection.GetValue("SnapshotInterval", 20),
-        KeepRecentToolResults = sessionSection.GetValue("KeepRecentToolResults", 3),
-        MaxToolIterationsPerTurn = sessionSection.GetValue("MaxToolIterationsPerTurn", 10),
         InputModalities = models.Main.InputModalities ?? ModelModality.Text,
         OutputModalities = models.Main.OutputModalities ?? ModelModality.Text,
     });

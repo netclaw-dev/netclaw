@@ -409,15 +409,27 @@ public sealed class LlmSessionActor : ReceivePersistentActor
         {
             var messagesBefore = _state.History.Count;
 
-            // Build compacted history: system prompt + summary as assistant message
-            var compactedMessages = new List<SerializableChatMessage>
+            // Build compacted history: User(context-summary) + preserved recent messages
+            var compactedMessages = new List<SerializableChatMessage>();
+
+            // 1. Summary as User message with context-summary tags
+            compactedMessages.Add(new SerializableChatMessage
             {
-                new()
-                {
-                    Role = Protocol.ChatRole.Assistant,
-                    Content = msg.Summary
-                }
-            };
+                Role = Protocol.ChatRole.User,
+                Content = $"<context-summary>\n{msg.Summary}\n</context-summary>"
+            });
+
+            // 2. Preserve last N non-system messages verbatim
+            var systemPromptOffset = _state.History.Count > 0
+                && _state.History[0].Role == Protocol.ChatRole.System ? 1 : 0;
+            var nonSystemCount = _state.History.Count - systemPromptOffset;
+            var keepCount = Math.Min(_config.KeepRecentMessages, nonSystemCount);
+            var startIndex = _state.History.Count - keepCount;
+
+            for (var i = startIndex; i < _state.History.Count; i++)
+            {
+                compactedMessages.Add(_state.History[i]);
+            }
 
             var compactedEvent = new SessionCompacted
             {
