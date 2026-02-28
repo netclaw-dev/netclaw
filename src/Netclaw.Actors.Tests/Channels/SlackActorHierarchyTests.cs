@@ -101,6 +101,63 @@ public sealed class SlackActorHierarchyTests(ITestOutputHelper output) : TestKit
     }
 
     [Fact]
+    public void Conversation_forwards_files_from_app_mention()
+    {
+        var sink = CreateTestProbe("files-mention-sink");
+        var deps = CreateDependencies(
+            threadPropsFactory: (_, _, _, _) => Props.Create(() => new ForwardActor(sink.Ref)));
+
+        var conversation = Sys.ActorOf(SlackConversationActor.CreateProps("C1", deps), "slack-conversation-test-files-1");
+
+        var files = new List<SlackFileReference>
+        {
+            new("F1", "image.png", "image/png", 2048, "https://files.slack.com/F1/image.png")
+        };
+
+        conversation.Tell(CreateAppMention(
+            eventId: "C1:500",
+            channelId: "C1",
+            eventTs: "500.1",
+            text: "<@UBOT> check this",
+            files: files));
+
+        var inbound = sink.ExpectMsg<SlackThreadInbound>();
+        Assert.Equal("check this", inbound.Text);
+        Assert.NotNull(inbound.Files);
+        Assert.Single(inbound.Files);
+        Assert.Equal("F1", inbound.Files[0].Id);
+    }
+
+    [Fact]
+    public void Conversation_forwards_files_when_normalized_text_empty()
+    {
+        var sink = CreateTestProbe("files-empty-text-sink");
+        var deps = CreateDependencies(
+            threadPropsFactory: (_, _, _, _) => Props.Create(() => new ForwardActor(sink.Ref)));
+
+        var conversation = Sys.ActorOf(SlackConversationActor.CreateProps("C1", deps), "slack-conversation-test-files-2");
+
+        var files = new List<SlackFileReference>
+        {
+            new("F2", "photo.jpg", "image/jpeg", 4096, "https://files.slack.com/F2/photo.jpg")
+        };
+
+        // AppMention with only the bot mention — normalized text will be empty but files exist
+        conversation.Tell(CreateAppMention(
+            eventId: "C1:600",
+            channelId: "C1",
+            eventTs: "600.1",
+            text: "<@UBOT>",
+            files: files));
+
+        var inbound = sink.ExpectMsg<SlackThreadInbound>();
+        Assert.Equal(string.Empty, inbound.Text);
+        Assert.NotNull(inbound.Files);
+        Assert.Single(inbound.Files);
+        Assert.Equal("F2", inbound.Files[0].Id);
+    }
+
+    [Fact]
     public void Conversation_ignores_bot_messages_to_prevent_feedback_loop()
     {
         var sink = CreateTestProbe("bot-loop-sink");
@@ -153,7 +210,8 @@ public sealed class SlackActorHierarchyTests(ITestOutputHelper output) : TestKit
         string eventTs,
         string text = "hello",
         string? threadTs = null,
-        bool isDirectMessage = false)
+        bool isDirectMessage = false,
+        IReadOnlyList<SlackFileReference>? files = null)
     {
         return new SlackInboundMessage(
             Kind: SlackInboundKind.Message,
@@ -166,14 +224,16 @@ public sealed class SlackActorHierarchyTests(ITestOutputHelper output) : TestKit
             Text: text,
             Subtype: null,
             Hidden: false,
-            IsDirectMessage: isDirectMessage);
+            IsDirectMessage: isDirectMessage,
+            Files: files);
     }
 
     private static SlackInboundMessage CreateAppMention(
         string eventId,
         string channelId,
         string eventTs,
-        string text)
+        string text,
+        IReadOnlyList<SlackFileReference>? files = null)
     {
         return new SlackInboundMessage(
             Kind: SlackInboundKind.AppMention,
@@ -186,7 +246,8 @@ public sealed class SlackActorHierarchyTests(ITestOutputHelper output) : TestKit
             Text: text,
             Subtype: null,
             Hidden: false,
-            IsDirectMessage: false);
+            IsDirectMessage: false,
+            Files: files);
     }
 
     private sealed class ForwardActor : ReceiveActor

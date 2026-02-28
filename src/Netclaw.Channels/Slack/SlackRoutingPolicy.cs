@@ -9,7 +9,9 @@ public static class SlackRoutingPolicy
         bool threadExists,
         bool containsBotMention)
     {
-        if (string.IsNullOrWhiteSpace(message.Text))
+        var hasContent = !string.IsNullOrWhiteSpace(message.Text)
+                        || message.Files is { Count: > 0 };
+        if (!hasContent)
             return SlackRoutingDecision.Ignore;
 
         if (message.Kind is SlackInboundKind.AppMention)

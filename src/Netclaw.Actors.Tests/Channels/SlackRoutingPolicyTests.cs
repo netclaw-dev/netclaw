@@ -97,7 +97,64 @@ public class SlackRoutingPolicyTests
         Assert.Equal(SlackRoutingDecision.Ignore, decision);
     }
 
-    private static SlackInboundMessage CreateMessage(string text, string? threadTs, bool isDirectMessage)
+    [Fact]
+    public void FileOnlyMessage_ContinuesExistingThread()
+    {
+        var files = new List<SlackFileReference>
+        {
+            new("F1", "image.png", "image/png", 1024, "https://files.slack.com/F1/image.png")
+        };
+        var message = CreateMessage(text: "", threadTs: "1740468105.120900", isDirectMessage: false, files: files);
+
+        var decision = SlackRoutingPolicy.Evaluate(
+            message,
+            mentionOnly: true,
+            allowDirectMessages: true,
+            threadExists: true,
+            containsBotMention: false);
+
+        Assert.Equal(SlackRoutingDecision.ContinueOnly, decision);
+    }
+
+    [Fact]
+    public void FileOnlyAppMention_StartsThread()
+    {
+        var files = new List<SlackFileReference>
+        {
+            new("F1", "image.png", "image/png", 1024, "https://files.slack.com/F1/image.png")
+        };
+        var message = CreateAppMention(text: "", threadTs: null, files: files);
+
+        var decision = SlackRoutingPolicy.Evaluate(
+            message,
+            mentionOnly: true,
+            allowDirectMessages: true,
+            threadExists: false,
+            containsBotMention: true);
+
+        Assert.Equal(SlackRoutingDecision.StartOrContinue, decision);
+    }
+
+    [Fact]
+    public void NoTextNoFiles_Ignored()
+    {
+        var message = CreateMessage(text: "", threadTs: null, isDirectMessage: false);
+
+        var decision = SlackRoutingPolicy.Evaluate(
+            message,
+            mentionOnly: false,
+            allowDirectMessages: false,
+            threadExists: false,
+            containsBotMention: false);
+
+        Assert.Equal(SlackRoutingDecision.Ignore, decision);
+    }
+
+    private static SlackInboundMessage CreateMessage(
+        string text,
+        string? threadTs,
+        bool isDirectMessage,
+        IReadOnlyList<SlackFileReference>? files = null)
     {
         return new SlackInboundMessage(
             Kind: SlackInboundKind.Message,
@@ -110,10 +167,14 @@ public class SlackRoutingPolicyTests
             Text: text,
             Subtype: null,
             Hidden: false,
-            IsDirectMessage: isDirectMessage);
+            IsDirectMessage: isDirectMessage,
+            Files: files);
     }
 
-    private static SlackInboundMessage CreateAppMention(string text, string? threadTs)
+    private static SlackInboundMessage CreateAppMention(
+        string text,
+        string? threadTs,
+        IReadOnlyList<SlackFileReference>? files = null)
     {
         return new SlackInboundMessage(
             Kind: SlackInboundKind.AppMention,
@@ -126,6 +187,7 @@ public class SlackRoutingPolicyTests
             Text: text,
             Subtype: null,
             Hidden: false,
-            IsDirectMessage: false);
+            IsDirectMessage: false,
+            Files: files);
     }
 }

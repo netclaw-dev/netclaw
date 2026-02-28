@@ -152,6 +152,8 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
 
     public Task Handle(AppMention slackEvent)
     {
+        var files = MapSlackFiles(slackEvent.Files);
+
         _gateway?.Tell(new SlackInboundMessage(
             Kind: SlackInboundKind.AppMention,
             EventId: BuildEventId(
@@ -168,7 +170,8 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
             Text: slackEvent.Text ?? string.Empty,
             Subtype: null,
             Hidden: false,
-            IsDirectMessage: IsDirectConversation(slackEvent.Channel)));
+            IsDirectMessage: IsDirectConversation(slackEvent.Channel),
+            Files: files));
 
         return Task.CompletedTask;
     }
@@ -181,7 +184,8 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
         var result = new List<SlackFileReference>(files.Count);
         foreach (var f in files)
         {
-            if (string.IsNullOrWhiteSpace(f.UrlPrivateDownload))
+            var downloadUrl = f.UrlPrivateDownload ?? f.UrlPrivate;
+            if (string.IsNullOrWhiteSpace(downloadUrl))
                 continue;
 
             result.Add(new SlackFileReference(
@@ -189,7 +193,7 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
                 Name: f.Name ?? "attachment",
                 MimeType: f.Mimetype ?? "application/octet-stream",
                 Size: f.Size,
-                UrlPrivateDownload: f.UrlPrivateDownload));
+                UrlPrivateDownload: downloadUrl));
         }
 
         return result.Count > 0 ? result : null;

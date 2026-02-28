@@ -81,9 +81,9 @@ public sealed class SlackConversationActor : ReceiveActor
                 : existingThread;
 
             var normalized = NormalizeInboundText(message.Text);
-            if (string.IsNullOrWhiteSpace(normalized))
+            if (string.IsNullOrWhiteSpace(normalized) && message.Files is not { Count: > 0 })
             {
-                _log.Debug("Ignoring Slack event {0}: normalized text is empty", message.EventId);
+                _log.Debug("Ignoring Slack event {0}: normalized text is empty and no files", message.EventId);
                 ChannelTelemetry.RecordSlackEventDropped("empty_text");
                 return;
             }
