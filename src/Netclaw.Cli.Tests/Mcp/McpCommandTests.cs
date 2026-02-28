@@ -9,6 +9,7 @@ public sealed class McpCommandTests : IDisposable
 {
     private readonly string _tempDir;
     private readonly NetclawPaths _paths;
+    private readonly StringWriter _output = new();
 
     public McpCommandTests()
     {
@@ -19,6 +20,7 @@ public sealed class McpCommandTests : IDisposable
 
     public void Dispose()
     {
+        _output.Dispose();
         if (Directory.Exists(_tempDir))
             Directory.Delete(_tempDir, true);
     }
@@ -27,7 +29,7 @@ public sealed class McpCommandTests : IDisposable
     public async Task Add_StdioServer_WritesConfig()
     {
         var args = new[] { "mcp", "add", "--transport", "stdio", "memorizer", "--", "npx", "-y", "@memorizer/mcp" };
-        var exitCode = await McpCommand.RunAsync(args, _paths);
+        var exitCode = await McpCommand.RunAsync(args, _paths, output: _output);
 
         Assert.Equal(0, exitCode);
 
@@ -42,7 +44,7 @@ public sealed class McpCommandTests : IDisposable
     public async Task Add_HttpServer_WritesConfig()
     {
         var args = new[] { "mcp", "add", "--transport", "http", "textforge", "https://textforge.net/mcp" };
-        var exitCode = await McpCommand.RunAsync(args, _paths);
+        var exitCode = await McpCommand.RunAsync(args, _paths, output: _output);
 
         Assert.Equal(0, exitCode);
 
@@ -57,7 +59,7 @@ public sealed class McpCommandTests : IDisposable
     public async Task Add_WithEnvVar_WritesSecretsFile()
     {
         var args = new[] { "mcp", "add", "--transport", "stdio", "--env", "API_KEY=secret123", "myserver", "--", "dotnet", "run" };
-        var exitCode = await McpCommand.RunAsync(args, _paths);
+        var exitCode = await McpCommand.RunAsync(args, _paths, output: _output);
 
         Assert.Equal(0, exitCode);
 
@@ -74,7 +76,7 @@ public sealed class McpCommandTests : IDisposable
     public async Task Add_WithHeader_WritesSecretsFile()
     {
         var args = new[] { "mcp", "add", "--transport", "http", "--header", "Authorization: Bearer tok-123", "myapi", "https://api.example.com/mcp" };
-        var exitCode = await McpCommand.RunAsync(args, _paths);
+        var exitCode = await McpCommand.RunAsync(args, _paths, output: _output);
 
         Assert.Equal(0, exitCode);
 
@@ -88,10 +90,9 @@ public sealed class McpCommandTests : IDisposable
     [Fact]
     public async Task List_NoServers_ShowsEmptyMessage()
     {
-        var output = CaptureConsoleOutput(async () =>
-            await McpCommand.RunAsync(new[] { "mcp", "list" }, _paths));
+        await McpCommand.RunAsync(new[] { "mcp", "list" }, _paths, output: _output);
 
-        Assert.Contains("No MCP servers configured", output);
+        Assert.Contains("No MCP servers configured", _output.ToString());
     }
 
     [Fact]
@@ -100,10 +101,11 @@ public sealed class McpCommandTests : IDisposable
         // Add a server first
         await McpCommand.RunAsync(
             new[] { "mcp", "add", "--transport", "stdio", "memorizer", "--", "npx", "-y", "@memorizer/mcp" },
-            _paths);
+            _paths, output: _output);
 
-        var output = CaptureConsoleOutput(async () =>
-            await McpCommand.RunAsync(new[] { "mcp", "list" }, _paths));
+        var listOutput = new StringWriter();
+        await McpCommand.RunAsync(new[] { "mcp", "list" }, _paths, output: listOutput);
+        var output = listOutput.ToString();
 
         Assert.Contains("memorizer", output);
         Assert.Contains("stdio", output);
@@ -116,12 +118,13 @@ public sealed class McpCommandTests : IDisposable
     {
         await McpCommand.RunAsync(
             new[] { "mcp", "add", "--transport", "stdio", "memorizer", "--", "npx", "-y", "@memorizer/mcp" },
-            _paths);
+            _paths, output: _output);
         await McpCommand.RunAsync(
-            new[] { "mcp", "disable", "memorizer" }, _paths);
+            new[] { "mcp", "disable", "memorizer" }, _paths, output: _output);
 
-        var output = CaptureConsoleOutput(async () =>
-            await McpCommand.RunAsync(new[] { "mcp", "list" }, _paths));
+        var listOutput = new StringWriter();
+        await McpCommand.RunAsync(new[] { "mcp", "list" }, _paths, output: listOutput);
+        var output = listOutput.ToString();
 
         Assert.Contains("memorizer", output);
         Assert.Contains("disabled", output);
@@ -132,10 +135,11 @@ public sealed class McpCommandTests : IDisposable
     {
         await McpCommand.RunAsync(
             new[] { "mcp", "add", "--transport", "stdio", "memorizer", "--", "npx", "-y", "@memorizer/mcp" },
-            _paths);
+            _paths, output: _output);
 
-        var output = CaptureConsoleOutput(async () =>
-            await McpCommand.RunAsync(new[] { "mcp", "get", "memorizer" }, _paths));
+        var getOutput = new StringWriter();
+        await McpCommand.RunAsync(new[] { "mcp", "get", "memorizer" }, _paths, output: getOutput);
+        var output = getOutput.ToString();
 
         Assert.Contains("Name:", output);
         Assert.Contains("memorizer", output);
@@ -147,7 +151,7 @@ public sealed class McpCommandTests : IDisposable
     public async Task Get_NotFound_ReturnsError()
     {
         var exitCode = await McpCommand.RunAsync(
-            new[] { "mcp", "get", "nonexistent" }, _paths);
+            new[] { "mcp", "get", "nonexistent" }, _paths, output: _output);
 
         Assert.Equal(1, exitCode);
     }
@@ -157,10 +161,10 @@ public sealed class McpCommandTests : IDisposable
     {
         await McpCommand.RunAsync(
             new[] { "mcp", "add", "--transport", "stdio", "memorizer", "--", "npx", "-y", "@memorizer/mcp" },
-            _paths);
+            _paths, output: _output);
 
         var exitCode = await McpCommand.RunAsync(
-            new[] { "mcp", "remove", "memorizer" }, _paths);
+            new[] { "mcp", "remove", "memorizer" }, _paths, output: _output);
 
         Assert.Equal(0, exitCode);
 
@@ -173,7 +177,7 @@ public sealed class McpCommandTests : IDisposable
     public async Task Remove_NotFound_ReturnsError()
     {
         var exitCode = await McpCommand.RunAsync(
-            new[] { "mcp", "remove", "nonexistent" }, _paths);
+            new[] { "mcp", "remove", "nonexistent" }, _paths, output: _output);
 
         Assert.Equal(1, exitCode);
     }
@@ -183,10 +187,10 @@ public sealed class McpCommandTests : IDisposable
     {
         await McpCommand.RunAsync(
             new[] { "mcp", "add", "--transport", "stdio", "memorizer", "--", "npx", "-y", "@memorizer/mcp" },
-            _paths);
+            _paths, output: _output);
 
         var exitCode = await McpCommand.RunAsync(
-            new[] { "mcp", "disable", "memorizer" }, _paths);
+            new[] { "mcp", "disable", "memorizer" }, _paths, output: _output);
 
         Assert.Equal(0, exitCode);
 
@@ -199,12 +203,12 @@ public sealed class McpCommandTests : IDisposable
     {
         await McpCommand.RunAsync(
             new[] { "mcp", "add", "--transport", "stdio", "memorizer", "--", "npx", "-y", "@memorizer/mcp" },
-            _paths);
+            _paths, output: _output);
         await McpCommand.RunAsync(
-            new[] { "mcp", "disable", "memorizer" }, _paths);
+            new[] { "mcp", "disable", "memorizer" }, _paths, output: _output);
 
         var exitCode = await McpCommand.RunAsync(
-            new[] { "mcp", "enable", "memorizer" }, _paths);
+            new[] { "mcp", "enable", "memorizer" }, _paths, output: _output);
 
         Assert.Equal(0, exitCode);
 
@@ -215,21 +219,5 @@ public sealed class McpCommandTests : IDisposable
     private static JsonDocument ReadConfigFile(string path)
     {
         return JsonDocument.Parse(File.ReadAllText(path));
-    }
-
-    private static string CaptureConsoleOutput(Func<Task> action)
-    {
-        var writer = new StringWriter();
-        var originalOut = Console.Out;
-        Console.SetOut(writer);
-        try
-        {
-            action().GetAwaiter().GetResult();
-            return writer.ToString();
-        }
-        finally
-        {
-            Console.SetOut(originalOut);
-        }
     }
 }

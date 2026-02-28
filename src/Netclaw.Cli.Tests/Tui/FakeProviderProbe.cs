@@ -9,7 +9,18 @@ namespace Netclaw.Cli.Tests.Tui;
 public sealed class FakeProviderProbe : IProviderProbe
 {
     /// <summary>
-    /// The result to return from the next <see cref="ProbeAsync"/> call.
+    /// Per-type results for concurrent probing scenarios.
+    /// When a type is found here, it takes priority over <see cref="NextResult"/>.
+    /// </summary>
+    public Dictionary<string, ProviderProbeResult> TypeResults { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Tracks which provider types were probed, in order.
+    /// </summary>
+    public List<string> ProbedTypes { get; } = [];
+
+    /// <summary>
+    /// The fallback result to return when no per-type result is configured.
     /// Defaults to a successful probe with two sample models.
     /// </summary>
     public ProviderProbeResult NextResult { get; set; } = new(
@@ -35,6 +46,12 @@ public sealed class FakeProviderProbe : IProviderProbe
     {
         ProbeCallCount++;
         LastProviderType = providerType;
-        return Task.FromResult(NextResult);
+        ProbedTypes.Add(providerType);
+
+        var result = TypeResults.TryGetValue(providerType, out var typeResult)
+            ? typeResult
+            : NextResult;
+
+        return Task.FromResult(result);
     }
 }

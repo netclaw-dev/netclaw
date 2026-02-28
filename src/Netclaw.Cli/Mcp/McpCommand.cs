@@ -1,6 +1,7 @@
 using System.Net.Sockets;
 using System.Text.Json;
 using ModelContextProtocol.Client;
+using Netclaw.Cli.Config;
 using Netclaw.Configuration;
 
 namespace Netclaw.Cli.Mcp;
@@ -25,26 +26,27 @@ internal readonly record struct McpProbeResult(
 /// </summary>
 internal static class McpCommand
 {
-    private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
+    private static JsonSerializerOptions JsonOptions => ConfigFileHelper.JsonOptions;
 
-    public static async Task<int> RunAsync(string[] args, NetclawPaths paths)
+    public static async Task<int> RunAsync(string[] args, NetclawPaths paths, TextWriter? output = null)
     {
+        var writer = output ?? Console.Out;
         var subcommand = args.Length > 1 ? args[1] : "help";
 
         return subcommand switch
         {
-            "add" => RunAdd(args, paths),
-            "list" => await RunListAsync(paths),
-            "get" => RunGet(args, paths),
-            "remove" => RunRemove(args, paths),
-            "enable" => RunToggle(args, paths, enabled: true),
-            "disable" => RunToggle(args, paths, enabled: false),
-            "help" or "-h" or "--help" => WriteHelp(),
-            _ => WriteHelp()
+            "add" => RunAdd(args, paths, writer),
+            "list" => await RunListAsync(paths, writer),
+            "get" => RunGet(args, paths, writer),
+            "remove" => RunRemove(args, paths, writer),
+            "enable" => RunToggle(args, paths, enabled: true, writer),
+            "disable" => RunToggle(args, paths, enabled: false, writer),
+            "help" or "-h" or "--help" => WriteHelp(writer),
+            _ => WriteHelp(writer)
         };
     }
 
-    private static int RunAdd(string[] args, NetclawPaths paths)
+    private static int RunAdd(string[] args, NetclawPaths paths, TextWriter writer)
     {
         // Parse: netclaw mcp add [--transport <type>] [--env KEY=VALUE]... [--header "Key: Value"]... <name> [command/url] [-- args...]
         string? transport = null;
@@ -101,7 +103,7 @@ internal static class McpCommand
 
         if (positional.Count < 1)
         {
-            Console.WriteLine("Usage: netclaw mcp add [--transport stdio|http|sse] [--env KEY=VALUE] <name> [command|url] [-- args...]");
+            writer.WriteLine("Usage: netclaw mcp add [--transport stdio|http|sse] [--env KEY=VALUE] <name> [command|url] [-- args...]");
             return 1;
         }
 
@@ -125,7 +127,7 @@ internal static class McpCommand
 
             if (string.IsNullOrWhiteSpace(commandOrUrl))
             {
-                Console.WriteLine("Error: stdio transport requires a command. Usage: netclaw mcp add --transport stdio <name> -- <command> [args...]");
+                writer.WriteLine("Error: stdio transport requires a command. Usage: netclaw mcp add --transport stdio <name> -- <command> [args...]");
                 return 1;
             }
         }
@@ -137,7 +139,7 @@ internal static class McpCommand
 
             if (string.IsNullOrWhiteSpace(commandOrUrl))
             {
-                Console.WriteLine($"Error: {transport} transport requires a URL. Usage: netclaw mcp add --transport {transport} <name> <url>");
+                writer.WriteLine($"Error: {transport} transport requires a URL. Usage: netclaw mcp add --transport {transport} <name> <url>");
                 return 1;
             }
         }
@@ -183,37 +185,37 @@ internal static class McpCommand
             WriteConfigFile(paths.SecretsPath, secrets);
         }
 
-        Console.WriteLine($"Added MCP server '{name}' ({transport})");
+        writer.WriteLine($"Added MCP server '{name}' ({transport})");
         return 0;
     }
 
-    private static async Task<int> RunListAsync(NetclawPaths paths)
+    private static async Task<int> RunListAsync(NetclawPaths paths, TextWriter writer)
     {
         var servers = LoadMcpServers(paths);
 
         if (servers.Count == 0)
         {
-            Console.WriteLine("No MCP servers configured.");
-            Console.WriteLine("Run `netclaw mcp add` to add one.");
+            writer.WriteLine("No MCP servers configured.");
+            writer.WriteLine("Run `netclaw mcp add` to add one.");
             return 0;
         }
 
-        Console.WriteLine($"{"Name",-20} {"Transport",-10} {"Enabled",-8} {"Status"}");
+        writer.WriteLine($"{"Name",-20} {"Transport",-10} {"Enabled",-8} {"Status"}");
         foreach (var (name, entry) in servers)
         {
             var enabled = entry.Enabled ? "yes" : "no";
             var probe = await ProbeServerAsync(name, entry);
-            Console.WriteLine($"{name,-20} {entry.Transport,-10} {enabled,-8} {probe.FormatStatus()}");
+            writer.WriteLine($"{name,-20} {entry.Transport,-10} {enabled,-8} {probe.FormatStatus()}");
         }
 
         return 0;
     }
 
-    private static int RunGet(string[] args, NetclawPaths paths)
+    private static int RunGet(string[] args, NetclawPaths paths, TextWriter writer)
     {
         if (args.Length < 3)
         {
-            Console.WriteLine("Usage: netclaw mcp get <name>");
+            writer.WriteLine("Usage: netclaw mcp get <name>");
             return 1;
         }
 
@@ -222,48 +224,48 @@ internal static class McpCommand
 
         if (!servers.TryGetValue(name, out var entry))
         {
-            Console.WriteLine($"MCP server '{name}' not found.");
+            writer.WriteLine($"MCP server '{name}' not found.");
             return 1;
         }
 
-        Console.WriteLine($"Name:       {name}");
-        Console.WriteLine($"Transport:  {entry.Transport}");
+        writer.WriteLine($"Name:       {name}");
+        writer.WriteLine($"Transport:  {entry.Transport}");
 
         if (entry.Command is not null)
         {
             var cmdLine = entry.Arguments is { Length: > 0 }
                 ? $"{entry.Command} {string.Join(' ', entry.Arguments)}"
                 : entry.Command;
-            Console.WriteLine($"Command:    {cmdLine}");
+            writer.WriteLine($"Command:    {cmdLine}");
         }
 
         if (entry.Url is not null)
-            Console.WriteLine($"URL:        {entry.Url}");
+            writer.WriteLine($"URL:        {entry.Url}");
 
-        Console.WriteLine($"Enabled:    {(entry.Enabled ? "yes" : "no")}");
+        writer.WriteLine($"Enabled:    {(entry.Enabled ? "yes" : "no")}");
 
         if (entry.EnvironmentVariables is { Count: > 0 })
         {
-            Console.WriteLine("Env vars:");
+            writer.WriteLine("Env vars:");
             foreach (var (k, _) in entry.EnvironmentVariables)
-                Console.WriteLine($"  {k}=***REDACTED***");
+                writer.WriteLine($"  {k}=***REDACTED***");
         }
 
         if (entry.Headers is { Count: > 0 })
         {
-            Console.WriteLine("Headers:");
+            writer.WriteLine("Headers:");
             foreach (var (k, _) in entry.Headers)
-                Console.WriteLine($"  {k}: ***REDACTED***");
+                writer.WriteLine($"  {k}: ***REDACTED***");
         }
 
         return 0;
     }
 
-    private static int RunRemove(string[] args, NetclawPaths paths)
+    private static int RunRemove(string[] args, NetclawPaths paths, TextWriter writer)
     {
         if (args.Length < 3)
         {
-            Console.WriteLine("Usage: netclaw mcp remove <name>");
+            writer.WriteLine("Usage: netclaw mcp remove <name>");
             return 1;
         }
 
@@ -287,19 +289,19 @@ internal static class McpCommand
 
         if (removed)
         {
-            Console.WriteLine($"Removed MCP server '{name}'");
+            writer.WriteLine($"Removed MCP server '{name}'");
             return 0;
         }
 
-        Console.WriteLine($"MCP server '{name}' not found.");
+        writer.WriteLine($"MCP server '{name}' not found.");
         return 1;
     }
 
-    private static int RunToggle(string[] args, NetclawPaths paths, bool enabled)
+    private static int RunToggle(string[] args, NetclawPaths paths, bool enabled, TextWriter writer)
     {
         if (args.Length < 3)
         {
-            Console.WriteLine($"Usage: netclaw mcp {(enabled ? "enable" : "disable")} <name>");
+            writer.WriteLine($"Usage: netclaw mcp {(enabled ? "enable" : "disable")} <name>");
             return 1;
         }
 
@@ -309,7 +311,7 @@ internal static class McpCommand
         var mcpServers = GetSectionOrNull(config, "McpServers");
         if (mcpServers is null || !mcpServers.ContainsKey(name))
         {
-            Console.WriteLine($"MCP server '{name}' not found.");
+            writer.WriteLine($"MCP server '{name}' not found.");
             return 1;
         }
 
@@ -320,7 +322,7 @@ internal static class McpCommand
         mcpServers[name] = SerializeEntry(entry);
 
         WriteConfigFile(paths.NetclawConfigPath, config);
-        Console.WriteLine($"{(enabled ? "Enabled" : "Disabled")} MCP server '{name}'");
+        writer.WriteLine($"{(enabled ? "Enabled" : "Disabled")} MCP server '{name}'");
         return 0;
     }
 
@@ -404,23 +406,19 @@ internal static class McpCommand
         });
     }
 
-    // ── Config file helpers ──
+    // ── Config file helpers (delegated to ConfigFileHelper) ──
 
-    private static (Dictionary<string, object> config, Dictionary<string, object> secrets) LoadConfigFiles(NetclawPaths paths)
-    {
-        var config = LoadJsonDict(paths.NetclawConfigPath);
-        var secrets = LoadJsonDict(paths.SecretsPath);
-        return (config, secrets);
-    }
+    private static (Dictionary<string, object> config, Dictionary<string, object> secrets)
+        LoadConfigFiles(NetclawPaths paths) => ConfigFileHelper.LoadConfigFiles(paths);
 
-    private static Dictionary<string, object> LoadJsonDict(string path)
-    {
-        if (!File.Exists(path))
-            return new Dictionary<string, object> { ["configVersion"] = 1 };
+    private static Dictionary<string, object> GetOrCreateSection(
+        Dictionary<string, object> dict, string key) => ConfigFileHelper.GetOrCreateSection(dict, key);
 
-        var text = File.ReadAllText(path);
-        return JsonSerializer.Deserialize<Dictionary<string, object>>(text) ?? new Dictionary<string, object> { ["configVersion"] = 1 };
-    }
+    private static Dictionary<string, object>? GetSectionOrNull(
+        Dictionary<string, object> dict, string key) => ConfigFileHelper.GetSectionOrNull(dict, key);
+
+    private static void WriteConfigFile(string path, Dictionary<string, object> data)
+        => ConfigFileHelper.WriteConfigFile(path, data);
 
     internal static Dictionary<string, McpServerEntry> LoadMcpServers(NetclawPaths paths)
     {
@@ -471,42 +469,6 @@ internal static class McpCommand
         return result;
     }
 
-    private static Dictionary<string, object> GetOrCreateSection(Dictionary<string, object> dict, string key)
-    {
-        if (dict.TryGetValue(key, out var existing))
-        {
-            if (existing is JsonElement je)
-            {
-                var parsed = JsonSerializer.Deserialize<Dictionary<string, object>>(je.GetRawText())
-                    ?? new Dictionary<string, object>();
-                dict[key] = parsed;
-                return parsed;
-            }
-
-            return (Dictionary<string, object>)existing;
-        }
-
-        var section = new Dictionary<string, object>();
-        dict[key] = section;
-        return section;
-    }
-
-    private static Dictionary<string, object>? GetSectionOrNull(Dictionary<string, object> dict, string key)
-    {
-        if (!dict.TryGetValue(key, out var existing))
-            return null;
-
-        if (existing is JsonElement je)
-        {
-            var parsed = JsonSerializer.Deserialize<Dictionary<string, object>>(je.GetRawText())
-                ?? new Dictionary<string, object>();
-            dict[key] = parsed;
-            return parsed;
-        }
-
-        return existing as Dictionary<string, object>;
-    }
-
     private static JsonElement SerializeEntry(McpServerEntry entry)
     {
         var json = JsonSerializer.Serialize(entry, JsonOptions);
@@ -514,30 +476,22 @@ internal static class McpCommand
         return doc.RootElement.Clone();
     }
 
-    private static void WriteConfigFile(string path, Dictionary<string, object> data)
+    private static int WriteHelp(TextWriter writer)
     {
-        var dir = Path.GetDirectoryName(path);
-        if (dir is not null)
-            Directory.CreateDirectory(dir);
-        File.WriteAllText(path, JsonSerializer.Serialize(data, JsonOptions));
-    }
-
-    private static int WriteHelp()
-    {
-        Console.WriteLine("Usage: netclaw mcp <subcommand>");
-        Console.WriteLine();
-        Console.WriteLine("Subcommands:");
-        Console.WriteLine("  add        Add an MCP server profile");
-        Console.WriteLine("  list       List configured MCP servers");
-        Console.WriteLine("  get        Show details for an MCP server");
-        Console.WriteLine("  remove     Remove an MCP server profile");
-        Console.WriteLine("  enable     Enable a disabled MCP server");
-        Console.WriteLine("  disable    Disable an MCP server without removing it");
-        Console.WriteLine();
-        Console.WriteLine("Examples:");
-        Console.WriteLine("  netclaw mcp add --transport stdio memorizer -- npx -y @memorizer/mcp-server");
-        Console.WriteLine("  netclaw mcp add --transport http --header \"Authorization: Bearer tok-...\" myapi https://api.example.com/mcp");
-        Console.WriteLine("  netclaw mcp list");
+        writer.WriteLine("Usage: netclaw mcp <subcommand>");
+        writer.WriteLine();
+        writer.WriteLine("Subcommands:");
+        writer.WriteLine("  add        Add an MCP server profile");
+        writer.WriteLine("  list       List configured MCP servers");
+        writer.WriteLine("  get        Show details for an MCP server");
+        writer.WriteLine("  remove     Remove an MCP server profile");
+        writer.WriteLine("  enable     Enable a disabled MCP server");
+        writer.WriteLine("  disable    Disable an MCP server without removing it");
+        writer.WriteLine();
+        writer.WriteLine("Examples:");
+        writer.WriteLine("  netclaw mcp add --transport stdio memorizer -- npx -y @memorizer/mcp-server");
+        writer.WriteLine("  netclaw mcp add --transport http --header \"Authorization: Bearer tok-...\" myapi https://api.example.com/mcp");
+        writer.WriteLine("  netclaw mcp list");
         return 0;
     }
 }

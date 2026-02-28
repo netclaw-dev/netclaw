@@ -69,13 +69,13 @@ public class CompactionIntegrationTests : TestKit
         var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
         var subscriber = CreateTestProbe("compact-sub");
 
-        sessionManager.Tell(new JoinSession
+        await sessionManager.Ask<SessionJoined>(new JoinSession
         {
             SessionId = sessionId,
             Subscriber = subscriber,
             Filter = OutputFilter.Full
-        });
-        subscriber.ExpectMsg<SessionJoined>();
+        }, TimeSpan.FromSeconds(3));
+        subscriber.ExpectMsg<SessionJoined>(); // Drain subscriber notification
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
@@ -113,13 +113,13 @@ public class CompactionIntegrationTests : TestKit
         var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
         var subscriber = CreateTestProbe("no-compact-sub");
 
-        sessionManager.Tell(new JoinSession
+        await sessionManager.Ask<SessionJoined>(new JoinSession
         {
             SessionId = sessionId,
             Subscriber = subscriber,
             Filter = OutputFilter.Full
-        });
-        subscriber.ExpectMsg<SessionJoined>();
+        }, TimeSpan.FromSeconds(3));
+        subscriber.ExpectMsg<SessionJoined>(); // Drain subscriber notification
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
@@ -152,13 +152,13 @@ public class CompactionIntegrationTests : TestKit
         var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
         var subscriber = CreateTestProbe("sys-sub");
 
-        sessionManager.Tell(new JoinSession
+        await sessionManager.Ask<SessionJoined>(new JoinSession
         {
             SessionId = sessionId,
             Subscriber = subscriber,
             Filter = OutputFilter.Full
-        });
-        subscriber.ExpectMsg<SessionJoined>();
+        }, TimeSpan.FromSeconds(3));
+        subscriber.ExpectMsg<SessionJoined>(); // Drain subscriber notification
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
@@ -208,13 +208,13 @@ public class CompactionIntegrationTests : TestKit
         var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
         var subscriber = CreateTestProbe("buffer-sub");
 
-        sessionManager.Tell(new JoinSession
+        await sessionManager.Ask<SessionJoined>(new JoinSession
         {
             SessionId = sessionId,
             Subscriber = subscriber,
             Filter = OutputFilter.Full
-        });
-        subscriber.ExpectMsg<SessionJoined>();
+        }, TimeSpan.FromSeconds(3));
+        subscriber.ExpectMsg<SessionJoined>(); // Drain subscriber notification
 
         // First message — triggers turn then compaction
         await sessionManager.Ask<CommandAck>(new SendUserMessage
@@ -267,13 +267,13 @@ public class CompactionIntegrationTests : TestKit
         var subscriber = CreateTestProbe("recover-sub");
 
         // Phase 1: Send message, trigger compaction
-        sessionManager.Tell(new JoinSession
+        await sessionManager.Ask<SessionJoined>(new JoinSession
         {
             SessionId = sessionId,
             Subscriber = subscriber,
             Filter = OutputFilter.Full
-        });
-        subscriber.ExpectMsg<SessionJoined>();
+        }, TimeSpan.FromSeconds(3));
+        subscriber.ExpectMsg<SessionJoined>(); // Drain subscriber notification
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
@@ -292,17 +292,17 @@ public class CompactionIntegrationTests : TestKit
         var child = await Sys.ActorSelection(childPath).ResolveOne(TimeSpan.FromSeconds(3));
         Watch(child);
         Sys.Stop(child);
-        ExpectTerminated(child);
+        await ExpectTerminatedAsync(child);
 
         // Phase 3: Recover — join again
         var recoverSub = CreateTestProbe("recover-sub-2");
-        sessionManager.Tell(new JoinSession
+        var recovered = await sessionManager.Ask<SessionJoined>(new JoinSession
         {
             SessionId = sessionId,
             Subscriber = recoverSub,
             Filter = OutputFilter.Full
-        });
-        var recovered = recoverSub.ExpectMsg<SessionJoined>(TimeSpan.FromSeconds(5));
+        }, TimeSpan.FromSeconds(3));
+        recoverSub.ExpectMsg<SessionJoined>(); // Drain subscriber notification
         Assert.Equal(sessionId, recovered.SessionId);
 
         // Phase 4: Verify session still works after recovery
