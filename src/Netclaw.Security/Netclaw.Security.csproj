@@ -7,18 +7,13 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <InternalsVisibleTo Include="Netclaw.Actors.Tests" />
-  </ItemGroup>
-
-  <ItemGroup>
+    <PackageReference Include="Mime-Detective" />
+    <PackageReference Include="Mime-Detective.Definitions.Condensed" />
     <PackageReference Include="Microsoft.Extensions.Hosting" />
-    <PackageReference Include="SlackNet" />
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\Netclaw.Actors\Netclaw.Actors.csproj" />
     <ProjectReference Include="..\Netclaw.Configuration\Netclaw.Configuration.csproj" />
-    <ProjectReference Include="..\Netclaw.Security\Netclaw.Security.csproj" />
   </ItemGroup>
 
 </Project>

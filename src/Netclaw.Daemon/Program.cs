@@ -15,6 +15,7 @@ using Netclaw.Daemon.Gateway;
 using Netclaw.Daemon.Mcp;
 using Netclaw.Daemon.Providers;
 using Netclaw.Daemon.Services;
+using Netclaw.Security;
 
 try
 {
@@ -242,6 +243,9 @@ static void ConfigureDaemonServices(
 
         akkaBuilder.WithNetclawActors();
     });
+
+    // Content security (no-op defaults, real scanning plugged in later)
+    services.AddContentSecurity();
 
     // Session pipeline (stream API for channels)
     services.AddSingleton<SessionPipeline>();

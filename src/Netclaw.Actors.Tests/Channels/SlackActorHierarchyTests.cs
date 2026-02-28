@@ -5,6 +5,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Netclaw.Actors.Protocol;
 using Netclaw.Channels.Slack;
+using Netclaw.Security;
 using Xunit;
 using Xunit.Abstractions;
 
@@ -141,6 +142,7 @@ public sealed class SlackActorHierarchyTests(ITestOutputHelper output) : TestKit
             BotUserId: "UBOT",
             DefaultChannelId: null,
             ReplyClient: new NoopReplyClient(),
+            ContentScanner: new NullContentScanner(),
             ConversationPropsFactory: conversationPropsFactory,
             ThreadPropsFactory: threadPropsFactory);
     }

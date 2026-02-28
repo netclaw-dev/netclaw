@@ -3,6 +3,7 @@ using Akka.Pattern;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Netclaw.Actors.Channels;
+using Netclaw.Security;
 using SlackNet;
 using SlackNet.Events;
 using SlackNet.WebApi;
@@ -16,6 +17,7 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
     private readonly ISlackApiClient _slack;
     private readonly ISlackSocketModeClient _socketModeClient;
     private readonly ISlackReplyClient _replyClient;
+    private readonly IContentScanner _contentScanner;
     private readonly TimeProvider _timeProvider;
     private readonly SlackChannelOptions _options;
     private readonly ILogger<SlackChannel> _logger;
@@ -31,6 +33,7 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
         ISlackApiClient slack,
         ISlackSocketModeClient socketModeClient,
         ISlackReplyClient replyClient,
+        IContentScanner contentScanner,
         TimeProvider timeProvider,
         SlackChannelOptions options,
         ILogger<SlackChannel> logger)
@@ -40,6 +43,7 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
         _slack = slack;
         _socketModeClient = socketModeClient;
         _replyClient = replyClient;
+        _contentScanner = contentScanner;
         _timeProvider = timeProvider;
         _options = options;
         _logger = logger;
@@ -83,7 +87,8 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
                 Options: _options,
                 BotUserId: _botUserId,
                 DefaultChannelId: _defaultChannelId,
-                ReplyClient: _replyClient)),
+                ReplyClient: _replyClient,
+                ContentScanner: _contentScanner)),
             "slack-gateway");
 
         await _socketModeClient.Connect(cancellationToken: cancellationToken);
