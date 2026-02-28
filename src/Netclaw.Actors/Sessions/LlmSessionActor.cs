@@ -638,12 +638,22 @@ public sealed class LlmSessionActor : ReceivePersistentActor
 
             _log.Info("{Subscriber} joined (filter={Filter})", cmd.Subscriber, cmd.Filter);
 
-            cmd.Subscriber.Tell(new SessionJoined
+            var joined = new SessionJoined
             {
                 SessionId = _sessionId,
                 Title = _state.Title,
                 TurnCount = _state.TurnCount
-            });
+            };
+
+            cmd.Subscriber.Tell(joined);
+
+            // Also reply to Sender so callers can use Ask<SessionJoined> for
+            // deterministic confirmation that the join was processed.
+            if (!Sender.IsNobody() && !Equals(Sender, Context.System.DeadLetters)
+                                   && !Equals(Sender, cmd.Subscriber))
+            {
+                Sender.Tell(joined);
+            }
         });
 
         Command<LeaveSession>(cmd =>
