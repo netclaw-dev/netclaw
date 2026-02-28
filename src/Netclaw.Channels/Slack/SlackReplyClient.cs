@@ -7,11 +7,14 @@ public sealed class SlackReplyClient(ISlackApiClient slackApiClient) : ISlackRep
 {
     public Task PostThreadReplyAsync(SlackPostMessage message, CancellationToken cancellationToken = default)
     {
+        var blocks = SlackBlockConverter.Convert(message.Text);
+
         return slackApiClient.Chat.PostMessage(new Message
         {
             Channel = message.ChannelId,
             ThreadTs = message.ThreadTs,
-            Text = message.Text
+            Text = message.Text, // fallback for notifications
+            Blocks = blocks
         });
     }
 }
