@@ -51,6 +51,14 @@ public sealed record SessionConfig
     public int MaxToolIterationsPerTurn { get; init; } = 10;
 
     /// <summary>
+    /// How long a session can be idle before passivating.
+    /// The actor saves a snapshot and stops itself; re-creation by
+    /// <c>GenericChildPerEntityParent</c> on next message recovers state from journal.
+    /// Default 30 minutes. Set to <see cref="TimeSpan.Zero"/> to disable.
+    /// </summary>
+    public TimeSpan IdleTimeout { get; init; } = TimeSpan.FromMinutes(30);
+
+    /// <summary>
     /// Effective token limit at which compaction fires.
     /// </summary>
     public int CompactionTokenLimit => (int)(ContextWindowTokens * CompactionThreshold);

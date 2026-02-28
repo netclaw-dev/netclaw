@@ -22,6 +22,7 @@ internal sealed class SlackThreadBindingActor : ReceiveActor
     private bool _sawTextDelta;
     private bool _postedThisTurn;
 
+    private ActorMaterializer? _materializer;
     private MaterializedSession? _session;
     private ISourceQueueWithComplete<ChannelInput>? _inputQueue;
 
@@ -43,6 +44,13 @@ internal sealed class SlackThreadBindingActor : ReceiveActor
 
         ReceiveAsync<SlackThreadInbound>(HandleInboundAsync);
         ReceiveAsync<ThreadOutput>(HandleOutputAsync);
+        Receive<ReceiveTimeout>(_ =>
+        {
+            _log.Info("Slack thread idle for 1 hour, passivating");
+            Context.Stop(Self);
+        });
+
+        Context.SetReceiveTimeout(TimeSpan.FromHours(1));
     }
 
     public static Props CreateProps(
@@ -56,6 +64,7 @@ internal sealed class SlackThreadBindingActor : ReceiveActor
     {
         _inputQueue?.Complete();
         _session?.DisposeAsync().AsTask().GetAwaiter().GetResult();
+        _materializer?.Dispose();
         base.PostStop();
     }
 
@@ -96,19 +105,23 @@ internal sealed class SlackThreadBindingActor : ReceiveActor
         _log.Info("Initializing Slack thread binding pipeline");
         var self = Self;
 
+        // Create a materializer scoped to this actor — all stream actors become
+        // children and are stopped automatically when this actor passivates.
+        _materializer = Context.Materializer(namePrefix: "slack-thread");
+
         var materialized = await _dependencies.Pipeline.CreateAsync(_sessionId, new SessionPipelineOptions
         {
             ChannelType = "slack",
             Filter = OutputFilter.Full
-        });
+        }, materializer: _materializer);
 
         var inputQueue = Source.Queue<ChannelInput>(32, OverflowStrategy.Backpressure)
             .ToMaterialized(materialized.Input, Keep.Left)
-            .Run(_dependencies.ActorSystem);
+            .Run(_materializer);
 
         materialized.Output
             .To(Sink.ForEach<SessionOutput>(output => self.Tell(new ThreadOutput(output))))
-            .Run(_dependencies.ActorSystem);
+            .Run(_materializer);
 
         _session = materialized;
         _inputQueue = inputQueue;

@@ -136,6 +136,19 @@ public sealed class LlmSessionActor : ReceivePersistentActor
         CommandSubscriptionMessages();
         CommandSnapshotMessages();
 
+        // Passivation: stop after idle timeout, snapshot first for fast recovery
+        if (_config.IdleTimeout > TimeSpan.Zero)
+        {
+            Context.SetReceiveTimeout(_config.IdleTimeout);
+        }
+
+        Command<ReceiveTimeout>(_ =>
+        {
+            _log.Info("Session idle, passivating (timeout={Timeout})", _config.IdleTimeout);
+            SaveSnapshot(_state.ToSnapshot());
+            Context.Stop(Self);
+        });
+
         Command<SendUserMessage>(cmd =>
         {
             _log.Info("Received user message");
@@ -155,6 +168,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor
 
     private void Processing()
     {
+        // Disable idle timeout while processing — re-enabled in Become(Ready)
+        Context.SetReceiveTimeout(null);
         CommandSubscriptionMessages();
         CommandSnapshotMessages();
 
@@ -310,6 +325,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor
 
     private void Compacting()
     {
+        // Disable idle timeout while compacting — re-enabled in Become(Ready)
+        Context.SetReceiveTimeout(null);
         CommandSubscriptionMessages();
         CommandSnapshotMessages();
 

@@ -1,6 +1,5 @@
 using Akka;
 using Akka.Actor;
-using Akka.Event;
 using Akka.Hosting;
 using Akka.Streams;
 using Akka.Streams.Dsl;
@@ -35,18 +34,15 @@ public sealed record SessionPipelineOptions
 public sealed class MaterializedSession : IAsyncDisposable
 {
     private readonly SharedKillSwitch _killSwitch;
-    private readonly Action? _onDispose;
 
     internal MaterializedSession(
         Sink<ChannelInput, NotUsed> input,
         Source<SessionOutput, NotUsed> output,
-        SharedKillSwitch killSwitch,
-        Action? onDispose = null)
+        SharedKillSwitch killSwitch)
     {
         Input = input;
         Output = output;
         _killSwitch = killSwitch;
-        _onDispose = onDispose;
     }
 
     /// <summary>
@@ -79,7 +75,6 @@ public sealed class MaterializedSession : IAsyncDisposable
     public ValueTask DisposeAsync()
     {
         _killSwitch.Shutdown();
-        _onDispose?.Invoke();
         return ValueTask.CompletedTask;
     }
 }
@@ -91,7 +86,7 @@ public sealed class MaterializedSession : IAsyncDisposable
 ///
 /// <para>
 /// Internally wires a subscriber actor (via <c>Source.PreMaterialize</c>)
-/// and a command sink (via <c>Sink.ActorRef</c>) to the session manager,
+/// and a <c>Sink.ForEach</c> command forwarder to the session manager,
 /// with a shared <see cref="SharedKillSwitch"/> for coordinated teardown.
 /// </para>
 /// </summary>
@@ -113,30 +108,36 @@ public sealed class SessionPipeline
     /// </summary>
     /// <param name="sessionId">Session identity (channel owns the naming scheme).</param>
     /// <param name="options">Pipeline configuration (channel type, output filter).</param>
+    /// <param name="materializer">Optional materializer for stream actors. When provided
+    /// (e.g. from an actor context), stream actors become children of the owning actor
+    /// and are stopped automatically on passivation. When null, uses the system-level
+    /// materializer.</param>
     /// <param name="cancellationToken">Cancellation token for session manager resolution.</param>
     /// <returns>A session handle with <see cref="MaterializedSession.Input"/> and
     /// <see cref="MaterializedSession.Output"/> streams.</returns>
     public async Task<MaterializedSession> CreateAsync(
         SessionId sessionId,
         SessionPipelineOptions options,
+        IMaterializer? materializer = null,
         CancellationToken cancellationToken = default)
     {
         var sessionManager = await _sessionManagerProvider.GetAsync(cancellationToken);
         var killSwitch = KillSwitches.Shared($"session-{sessionId.Value}");
-        var commandRelay = _system.ActorOf(
-            SessionCommandRelayActor.CreateProps(sessionManager, sessionId),
-            $"session-command-relay-{Uri.EscapeDataString(sessionId.Value)}-{Guid.NewGuid():N}");
 
-        // Pre-materialize subscriber to capture IActorRef before building streams
-        var (subscriber, responseSource) = Source.ActorRef<SessionOutput>(256, OverflowStrategy.DropHead)
-            .PreMaterialize(_system);
+        // Pre-materialize subscriber to capture IActorRef before building streams.
+        // When a materializer is provided, the subscriber actor is a child of the
+        // owning actor — stopped automatically on passivation.
+        var (subscriber, responseSource) = materializer is not null
+            ? Source.ActorRef<SessionOutput>(256, OverflowStrategy.DropHead)
+                .PreMaterialize(materializer)
+            : Source.ActorRef<SessionOutput>(256, OverflowStrategy.DropHead)
+                .PreMaterialize(_system);
 
-        // Inbound: ChannelInput → SendUserMessage → session manager
+        // Inbound: ChannelInput → SendUserMessage → session manager (direct Tell)
         var inputSink = Flow.Create<ChannelInput>()
             .Select(input => MapToCommand(input, sessionId, options))
             .Via(killSwitch.Flow<SendUserMessage>())
-            .To(Sink.ActorRef<SendUserMessage>(commandRelay, Done.Instance,
-                ex => new Status.Failure(ex)));
+            .To(Sink.ForEach<SendUserMessage>(cmd => sessionManager.Tell(cmd)));
 
         // Outbound: pre-materialized subscriber → kill switch → exposed Source
         var outputSource = responseSource
@@ -153,8 +154,7 @@ public sealed class SessionPipeline
         return new MaterializedSession(
             inputSink,
             outputSource,
-            killSwitch,
-            onDispose: () => _system.Stop(commandRelay));
+            killSwitch);
     }
 
     private SendUserMessage MapToCommand(
@@ -177,26 +177,4 @@ public sealed class SessionPipeline
             }
         };
     }
-}
-
-internal sealed class SessionCommandRelayActor : ReceiveActor
-{
-    private readonly IActorRef _sessionManager;
-    private readonly SessionId _sessionId;
-    private readonly ILoggingAdapter _log;
-
-    public SessionCommandRelayActor(IActorRef sessionManager, SessionId sessionId)
-    {
-        _sessionManager = sessionManager;
-        _sessionId = sessionId;
-        _log = Context.GetLogger().WithContext("SessionId", sessionId.Value);
-
-        Receive<SendUserMessage>(cmd => _sessionManager.Tell(cmd, Self));
-        Receive<CommandAck>(_ => { });
-        Receive<CommandNack>(nack =>
-            _log.Warning("Session command rejected: {0}", nack.Reason));
-    }
-
-    public static Props CreateProps(IActorRef sessionManager, SessionId sessionId) =>
-        Props.Create(() => new SessionCommandRelayActor(sessionManager, sessionId));
 }

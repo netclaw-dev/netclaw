@@ -19,6 +19,13 @@ public sealed class SlackConversationActor : ReceiveActor
             .WithContext("Adapter", "slack")
             .WithContext("SlackChannelId", _conversationId);
 
+        Context.SetReceiveTimeout(TimeSpan.FromHours(2));
+        Receive<ReceiveTimeout>(_ =>
+        {
+            _log.Info("Slack conversation idle for 2 hours, passivating");
+            Context.Stop(Self);
+        });
+
         Receive<SlackInboundMessage>(message =>
         {
             if (!IsAllowedConversation(message))
