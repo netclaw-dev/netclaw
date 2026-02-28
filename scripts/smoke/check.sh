@@ -139,4 +139,89 @@ if [[ "$stopped_output" == *"Daemon running"* ]]; then
   exit 1
 fi
 
+# ── Model & Provider CLI smoke tests ──
+# These tests exercise the provider/model CLI subcommands against a live
+# Ollama instance. We start fresh — the sandbox has env-var config for the
+# daemon, but the CLI config files are empty. We use the CLI commands
+# themselves to build up config, then verify switching works.
+
+SMOKE_MODEL="${SMOKE_OLLAMA_MODEL:-qwen2:0.5b}"
+ALT_MODEL="${SMOKE_OLLAMA_ALT_MODEL:-all-minilm:latest}"
+
+echo "Testing provider add (local-ollama)..."
+run_sandbox_timed "$STEP_TIMEOUT_SECONDS" netclaw provider add local-ollama ollama --endpoint http://ollama:11434
+
+echo "Testing provider list..."
+provider_list="$(run_sandbox_timed "$STEP_TIMEOUT_SECONDS" netclaw provider list)"
+echo "$provider_list"
+if [[ "$provider_list" != *"local-ollama"* ]]; then
+  echo "Expected provider list to include local-ollama."
+  exit 1
+fi
+
+echo "Testing model set (main to $SMOKE_MODEL)..."
+run_sandbox_timed "$STEP_TIMEOUT_SECONDS" netclaw model set main local-ollama "$SMOKE_MODEL"
+
+echo "Testing model list..."
+model_list="$(run_sandbox_timed "$STEP_TIMEOUT_SECONDS" netclaw model list)"
+echo "$model_list"
+if [[ "$model_list" != *"$SMOKE_MODEL"* ]]; then
+  echo "Expected model list to include $SMOKE_MODEL."
+  exit 1
+fi
+
+echo "Testing model discover..."
+discover_output="$(run_sandbox_timed "$STEP_TIMEOUT_SECONDS" netclaw model discover local-ollama)"
+echo "$discover_output"
+if [[ "$discover_output" != *"$SMOKE_MODEL"* ]]; then
+  echo "Expected discovered models to include $SMOKE_MODEL."
+  exit 1
+fi
+
+echo "Testing model switch to alternate model ($ALT_MODEL)..."
+run_sandbox_timed "$STEP_TIMEOUT_SECONDS" netclaw model set main local-ollama "$ALT_MODEL"
+switched_list="$(run_sandbox_timed "$STEP_TIMEOUT_SECONDS" netclaw model list)"
+echo "$switched_list"
+if [[ "$switched_list" != *"$ALT_MODEL"* ]]; then
+  echo "Expected model list to show $ALT_MODEL after switch."
+  exit 1
+fi
+
+echo "Testing model switch back to original ($SMOKE_MODEL)..."
+run_sandbox_timed "$STEP_TIMEOUT_SECONDS" netclaw model set main local-ollama "$SMOKE_MODEL"
+restored_list="$(run_sandbox_timed "$STEP_TIMEOUT_SECONDS" netclaw model list)"
+echo "$restored_list"
+if [[ "$restored_list" != *"$SMOKE_MODEL"* ]]; then
+  echo "Expected model list to show $SMOKE_MODEL after switch back."
+  exit 1
+fi
+
+echo "Testing provider add (second provider)..."
+run_sandbox_timed "$STEP_TIMEOUT_SECONDS" netclaw provider add test-ollama ollama --endpoint http://ollama:11434
+added_list="$(run_sandbox_timed "$STEP_TIMEOUT_SECONDS" netclaw provider list)"
+echo "$added_list"
+if [[ "$added_list" != *"test-ollama"* ]]; then
+  echo "Expected provider list to include test-ollama after add."
+  exit 1
+fi
+
+echo "Testing provider remove..."
+run_sandbox_timed "$STEP_TIMEOUT_SECONDS" netclaw provider remove test-ollama
+removed_list="$(run_sandbox_timed "$STEP_TIMEOUT_SECONDS" netclaw provider list)"
+echo "$removed_list"
+if [[ "$removed_list" == *"test-ollama"* ]]; then
+  echo "Expected test-ollama to be removed from provider list."
+  exit 1
+fi
+
+echo "Testing model set fallback then clear..."
+run_sandbox_timed "$STEP_TIMEOUT_SECONDS" netclaw model set fallback local-ollama "$ALT_MODEL"
+run_sandbox_timed "$STEP_TIMEOUT_SECONDS" netclaw model clear fallback
+cleared_list="$(run_sandbox_timed "$STEP_TIMEOUT_SECONDS" netclaw model list)"
+echo "$cleared_list"
+if [[ "$cleared_list" == *"$ALT_MODEL"* ]]; then
+  echo "Expected $ALT_MODEL to be cleared from fallback."
+  exit 1
+fi
+
 echo "Smoke sandbox checks passed."

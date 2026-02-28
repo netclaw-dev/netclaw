@@ -10,6 +10,7 @@ services:
     entrypoint: ["/bin/sh", "/usr/local/bin/ollama-init.sh"]
     environment:
       SMOKE_OLLAMA_MODEL: ${SMOKE_OLLAMA_MODEL:-qwen2:0.5b}
+      SMOKE_OLLAMA_ALT_MODEL: ${SMOKE_OLLAMA_ALT_MODEL:-all-minilm:latest}
     depends_on:
       - ollama
     volumes:

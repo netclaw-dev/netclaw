@@ -1,6 +1,7 @@
 using System.Net.Sockets;
 using System.Text.Json;
 using ModelContextProtocol.Client;
+using Netclaw.Cli.Config;
 using Netclaw.Configuration;
 
 namespace Netclaw.Cli.Mcp;
@@ -25,7 +26,7 @@ internal readonly record struct McpProbeResult(
 /// </summary>
 internal static class McpCommand
 {
-    private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
+    private static JsonSerializerOptions JsonOptions => ConfigFileHelper.JsonOptions;
 
     public static async Task<int> RunAsync(string[] args, NetclawPaths paths)
     {
@@ -404,23 +405,19 @@ internal static class McpCommand
         });
     }
 
-    // ── Config file helpers ──
+    // ── Config file helpers (delegated to ConfigFileHelper) ──
 
-    private static (Dictionary<string, object> config, Dictionary<string, object> secrets) LoadConfigFiles(NetclawPaths paths)
-    {
-        var config = LoadJsonDict(paths.NetclawConfigPath);
-        var secrets = LoadJsonDict(paths.SecretsPath);
-        return (config, secrets);
-    }
+    private static (Dictionary<string, object> config, Dictionary<string, object> secrets)
+        LoadConfigFiles(NetclawPaths paths) => ConfigFileHelper.LoadConfigFiles(paths);
 
-    private static Dictionary<string, object> LoadJsonDict(string path)
-    {
-        if (!File.Exists(path))
-            return new Dictionary<string, object> { ["configVersion"] = 1 };
+    private static Dictionary<string, object> GetOrCreateSection(
+        Dictionary<string, object> dict, string key) => ConfigFileHelper.GetOrCreateSection(dict, key);
 
-        var text = File.ReadAllText(path);
-        return JsonSerializer.Deserialize<Dictionary<string, object>>(text) ?? new Dictionary<string, object> { ["configVersion"] = 1 };
-    }
+    private static Dictionary<string, object>? GetSectionOrNull(
+        Dictionary<string, object> dict, string key) => ConfigFileHelper.GetSectionOrNull(dict, key);
+
+    private static void WriteConfigFile(string path, Dictionary<string, object> data)
+        => ConfigFileHelper.WriteConfigFile(path, data);
 
     internal static Dictionary<string, McpServerEntry> LoadMcpServers(NetclawPaths paths)
     {
@@ -471,55 +468,11 @@ internal static class McpCommand
         return result;
     }
 
-    private static Dictionary<string, object> GetOrCreateSection(Dictionary<string, object> dict, string key)
-    {
-        if (dict.TryGetValue(key, out var existing))
-        {
-            if (existing is JsonElement je)
-            {
-                var parsed = JsonSerializer.Deserialize<Dictionary<string, object>>(je.GetRawText())
-                    ?? new Dictionary<string, object>();
-                dict[key] = parsed;
-                return parsed;
-            }
-
-            return (Dictionary<string, object>)existing;
-        }
-
-        var section = new Dictionary<string, object>();
-        dict[key] = section;
-        return section;
-    }
-
-    private static Dictionary<string, object>? GetSectionOrNull(Dictionary<string, object> dict, string key)
-    {
-        if (!dict.TryGetValue(key, out var existing))
-            return null;
-
-        if (existing is JsonElement je)
-        {
-            var parsed = JsonSerializer.Deserialize<Dictionary<string, object>>(je.GetRawText())
-                ?? new Dictionary<string, object>();
-            dict[key] = parsed;
-            return parsed;
-        }
-
-        return existing as Dictionary<string, object>;
-    }
-
     private static JsonElement SerializeEntry(McpServerEntry entry)
     {
         var json = JsonSerializer.Serialize(entry, JsonOptions);
         using var doc = JsonDocument.Parse(json);
         return doc.RootElement.Clone();
-    }
-
-    private static void WriteConfigFile(string path, Dictionary<string, object> data)
-    {
-        var dir = Path.GetDirectoryName(path);
-        if (dir is not null)
-            Directory.CreateDirectory(dir);
-        File.WriteAllText(path, JsonSerializer.Serialize(data, JsonOptions));
     }
 
     private static int WriteHelp()

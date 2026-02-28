@@ -9,6 +9,8 @@ using Netclaw.Cli;
 using Netclaw.Cli.Daemon;
 using Netclaw.Cli.Doctor;
 using Netclaw.Cli.Mcp;
+using Netclaw.Cli.Model;
+using Netclaw.Cli.Provider;
 using Netclaw.Cli.Tui;
 using Netclaw.Configuration;
 using Termina.Diagnostics;
@@ -266,6 +268,64 @@ static async Task RunAsync(string[] args)
         return;
     }
 
+    // ── Provider management ──
+    if (mode is "provider")
+    {
+        var paths = new NetclawPaths();
+        paths.EnsureDirectoriesExist();
+
+        // Bare invocation → TUI; subcommands → plain CLI
+        if (args.Length == 1)
+        {
+            var builder = Host.CreateApplicationBuilder(args);
+            ConfigureConfigServices(builder.Services, builder.Configuration);
+            builder.Services.AddHttpClient<IProviderProbe, ProviderProbe>();
+            builder.Logging.ClearProviders();
+            builder.Logging.SetMinimumLevel(LogLevel.Warning);
+
+            var traceFile = Path.Combine(Path.GetTempPath(), "netclaw-provider-trace.log");
+            builder.Services.AddTerminaFileTracing(traceFile, TerminaTraceCategory.All, TerminaTraceLevel.Trace);
+
+            builder.Services.AddTermina("/provider", t =>
+                t.RegisterRoute<ProviderManagerPage, ProviderManagerViewModel>("/provider"));
+
+            await builder.Build().RunAsync();
+            return;
+        }
+
+        Environment.ExitCode = await ProviderCommand.RunAsync(args, paths);
+        return;
+    }
+
+    // ── Model management ──
+    if (mode is "model")
+    {
+        var paths = new NetclawPaths();
+        paths.EnsureDirectoriesExist();
+
+        // Bare invocation → TUI; subcommands → plain CLI
+        if (args.Length == 1)
+        {
+            var builder = Host.CreateApplicationBuilder(args);
+            ConfigureConfigServices(builder.Services, builder.Configuration);
+            builder.Services.AddHttpClient<IProviderProbe, ProviderProbe>();
+            builder.Logging.ClearProviders();
+            builder.Logging.SetMinimumLevel(LogLevel.Warning);
+
+            var traceFile = Path.Combine(Path.GetTempPath(), "netclaw-model-trace.log");
+            builder.Services.AddTerminaFileTracing(traceFile, TerminaTraceCategory.All, TerminaTraceLevel.Trace);
+
+            builder.Services.AddTermina("/model", t =>
+                t.RegisterRoute<ModelManagerPage, ModelManagerViewModel>("/model"));
+
+            await builder.Build().RunAsync();
+            return;
+        }
+
+        Environment.ExitCode = await ModelCommand.RunAsync(args, paths);
+        return;
+    }
+
     // ── Config management stubs ──
     if (mode is "config")
     {
@@ -364,10 +424,12 @@ static void WriteGeneralHelp()
     Console.WriteLine("  status                   Runtime status from daemon health JSON endpoint");
     Console.WriteLine("  daemon <subcommand>      Manage daemon lifecycle");
     Console.WriteLine("  mcp                      Manage MCP server profiles");
-    Console.WriteLine("  init                     First-run setup wizard (planned)");
+    Console.WriteLine("  provider                 Manage LLM providers (TUI) or use subcommands");
+    Console.WriteLine("  model                    Manage model assignments (TUI) or use subcommands");
+    Console.WriteLine("  init                     First-run setup wizard");
     Console.WriteLine("  config                   Configuration management (planned)");
     Console.WriteLine();
-    Console.WriteLine("Run `netclaw daemon --help`, `netclaw doctor --help`, or `netclaw status --help` for details.");
+    Console.WriteLine("Run `netclaw <command> --help` for details on any command.");
 }
 
 static void WriteDaemonHelp()
