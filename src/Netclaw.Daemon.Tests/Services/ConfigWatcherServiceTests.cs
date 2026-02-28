@@ -73,8 +73,8 @@ public sealed class ConfigWatcherServiceTests : IDisposable
     public void Dispose()
     {
         _sut.Dispose();
-        try { Directory.Delete(_tempDir, recursive: true); }
-        catch { /* best-effort cleanup */ }
+        if (Directory.Exists(_tempDir))
+            Directory.Delete(_tempDir, recursive: true);
     }
 
     private sealed class FakeApplicationLifetime : IHostApplicationLifetime
