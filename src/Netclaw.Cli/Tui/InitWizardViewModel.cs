@@ -477,9 +477,13 @@ public partial class InitWizardViewModel : ReactiveViewModel
                 if (response.IsSuccessStatusCode)
                     return true;
             }
-            catch
+            catch (HttpRequestException)
             {
-                // Expected while daemon is starting
+                // Connection refused / network error — expected while daemon is starting
+            }
+            catch (TaskCanceledException)
+            {
+                // Request timeout — expected while daemon is starting
             }
 
             await Task.Delay(1000);
