@@ -479,16 +479,16 @@ public partial class InitWizardViewModel : ReactiveViewModel
             }
             catch (HttpRequestException)
             {
-                // Connection refused / network error — expected while daemon is starting
+                HealthCheckResults[^1] = new HealthCheckItem($"Starting daemon ({i + 1}s)", null);
+                NotifyHealthCheckChanged();
             }
             catch (TaskCanceledException)
             {
-                // Request timeout — expected while daemon is starting
+                HealthCheckResults[^1] = new HealthCheckItem($"Starting daemon ({i + 1}s)", null);
+                NotifyHealthCheckChanged();
             }
 
             await Task.Delay(1000);
-            HealthCheckResults[^1] = new HealthCheckItem($"Starting daemon ({i + 1}s)", null);
-            NotifyHealthCheckChanged();
         }
 
         return false;
