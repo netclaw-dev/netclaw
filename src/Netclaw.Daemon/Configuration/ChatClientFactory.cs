@@ -1,7 +1,9 @@
 using System.ClientModel;
+using System.ClientModel.Primitives;
 using Anthropic;
 using Microsoft.Extensions.AI;
 using Netclaw.Configuration;
+using Netclaw.Daemon.Providers;
 using OllamaSharp;
 using OpenAI;
 
@@ -39,7 +41,12 @@ public sealed class ChatClientFactory
     }
 
     private static IChatClient CreateOllamaClient(ProviderEntry provider, ModelReference model)
-        => new OllamaApiClient(new Uri(provider.Endpoint), model.ModelId);
+    {
+        var endpoint = string.IsNullOrWhiteSpace(provider.Endpoint)
+            ? new Uri(ProviderCapabilities.GetDefaultEndpoint("ollama"))
+            : new Uri(provider.Endpoint);
+        return new OllamaApiClient(endpoint, model.ModelId);
+    }
 
     private static IChatClient CreateOpenAIClient(ProviderEntry provider, ModelReference model)
     {
@@ -65,9 +72,9 @@ public sealed class ChatClientFactory
             ? new Uri(ProviderCapabilities.GetDefaultEndpoint("openrouter"))
             : new Uri(provider.Endpoint);
 
-        var client = new OpenAIClient(
-            new ApiKeyCredential(apiKey),
-            new OpenAIClientOptions { Endpoint = endpoint });
+        var options = new OpenAIClientOptions { Endpoint = endpoint };
+        options.AddPolicy(new OpenRouterReasoningExcludePolicy(), PipelinePosition.PerCall);
+        var client = new OpenAIClient(new ApiKeyCredential(apiKey), options);
 
         return client.GetChatClient(model.ModelId).AsIChatClient();
     }

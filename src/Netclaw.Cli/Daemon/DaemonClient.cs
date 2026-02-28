@@ -369,7 +369,9 @@ public sealed class DaemonClient : IAsyncDisposable
             {
                 SessionId = sessionId,
                 TimestampMs = dto.TimestampMs,
-                Message = dto.ErrorMessage ?? "Unknown daemon error"
+                Message = dto.ErrorMessage ?? "Unknown daemon error",
+                Cause = dto.ErrorDetail is not null
+                    ? new Exception(dto.ErrorDetail) : null
             },
             "compaction" => new CompactionOutput
             {

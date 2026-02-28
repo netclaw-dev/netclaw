@@ -39,6 +39,7 @@ public sealed record SessionOutputDto
 
     // Error
     public string? ErrorMessage { get; init; }
+    public string? ErrorDetail { get; init; }
 
     // Compaction
     public int? MessagesBefore { get; init; }

@@ -95,7 +95,8 @@ public static class SessionOutputMapper
             Type = "error",
             SessionId = msg.SessionId.Value,
             TimestampMs = msg.TimestampMs,
-            ErrorMessage = msg.Message
+            ErrorMessage = msg.Message,
+            ErrorDetail = msg.Cause?.ToString()
         },
 
         CompactionOutput msg => new SessionOutputDto

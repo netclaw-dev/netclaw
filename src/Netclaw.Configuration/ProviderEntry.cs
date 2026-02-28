@@ -11,7 +11,7 @@ namespace Netclaw.Configuration;
 public sealed class ProviderEntry
 {
     public string Type { get; set; } = "ollama";
-    public string Endpoint { get; set; } = "http://localhost:11434";
+    public string Endpoint { get; set; } = "";
     public AuthMethod AuthMethod { get; set; } = AuthMethod.None;
     public SensitiveString? ApiKey { get; set; }
     public SensitiveString? OAuthAccessToken { get; set; }
