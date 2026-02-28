@@ -20,11 +20,12 @@ public sealed class OpenRouterStreamingSmokeTest
     public OpenRouterStreamingSmokeTest(ITestOutputHelper output)
         => _output = output;
 
-    [Fact(Skip = "Live integration test — run manually with OPENROUTER_API_KEY env var")]
+    [Fact]
     public async Task StreamingWorksWithReasoningExcludePolicy()
     {
-        var apiKey = Environment.GetEnvironmentVariable("OPENROUTER_API_KEY")
-                     ?? throw new InvalidOperationException("Set OPENROUTER_API_KEY");
+        var apiKey = Environment.GetEnvironmentVariable("OPENROUTER_API_KEY");
+        if (string.IsNullOrEmpty(apiKey))
+            return; // No API key — skip in CI
 
         var endpoint = new Uri("https://openrouter.ai/api/v1");
         var model = "qwen/qwen3.5-35b-a3b";
