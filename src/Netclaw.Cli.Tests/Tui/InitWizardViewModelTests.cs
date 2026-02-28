@@ -388,7 +388,7 @@ public sealed class InitWizardViewModelTests : IDisposable
         vm.SlackAppToken = "xapp-test-app-token";
 
         _fakeSlackProbe.NextResult = new Channels.Slack.SlackProbeResult(
-            true, null, "Acme Corp", "U99999");
+            true, null, "Acme Corp", new Channels.Slack.SlackUserId("U99999"));
 
         vm.CurrentStep.Value = WizardStep.HealthCheck;
         vm.GoNext();

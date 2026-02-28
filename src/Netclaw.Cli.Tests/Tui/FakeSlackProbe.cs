@@ -13,7 +13,7 @@ public sealed class FakeSlackProbe : ISlackProbe
     /// Defaults to a successful probe.
     /// </summary>
     public SlackProbeResult NextResult { get; set; } = new(
-        true, null, "Test Team", "U12345");
+        true, null, "Test Team", new SlackUserId("U12345"));
 
     /// <summary>
     /// Number of times <see cref="ProbeAsync"/> has been called.

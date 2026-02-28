@@ -158,11 +158,11 @@ public class SlackRoutingPolicyTests
     {
         return new SlackInboundMessage(
             Kind: SlackInboundKind.Message,
-            EventId: "C0:1",
-            ChannelId: isDirectMessage ? "D0" : "C0",
-            ThreadTs: threadTs,
-            EventTs: "1740468000.000001",
-            UserId: "U123",
+            EventId: new SlackEventId("C0:1"),
+            ChannelId: new SlackChannelId(isDirectMessage ? "D0" : "C0"),
+            ThreadTs: threadTs is not null ? new SlackThreadTs(threadTs) : null,
+            EventTs: new SlackEventTs("1740468000.000001"),
+            UserId: new SlackUserId("U123"),
             BotId: null,
             Text: text,
             Subtype: null,
@@ -178,11 +178,11 @@ public class SlackRoutingPolicyTests
     {
         return new SlackInboundMessage(
             Kind: SlackInboundKind.AppMention,
-            EventId: "C0:2",
-            ChannelId: "C0",
-            ThreadTs: threadTs,
-            EventTs: "1740468000.000002",
-            UserId: "U123",
+            EventId: new SlackEventId("C0:2"),
+            ChannelId: new SlackChannelId("C0"),
+            ThreadTs: threadTs is not null ? new SlackThreadTs(threadTs) : null,
+            EventTs: new SlackEventTs("1740468000.000002"),
+            UserId: new SlackUserId("U123"),
             BotId: null,
             Text: text,
             Subtype: null,

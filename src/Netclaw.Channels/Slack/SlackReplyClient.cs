@@ -11,16 +11,16 @@ public sealed class SlackReplyClient(ISlackApiClient slackApiClient) : ISlackRep
 
         return slackApiClient.Chat.PostMessage(new Message
         {
-            Channel = message.ChannelId,
-            ThreadTs = message.ThreadTs,
+            Channel = message.ChannelId.Value,
+            ThreadTs = message.ThreadTs.Value,
             Text = message.Text, // fallback for notifications
             Blocks = blocks
         });
     }
 
     public async Task UploadFileToThreadAsync(
-        string channelId,
-        string threadTs,
+        SlackChannelId channelId,
+        SlackThreadTs threadTs,
         string filePath,
         string? filename = null,
         CancellationToken cancellationToken = default)
@@ -31,8 +31,8 @@ public sealed class SlackReplyClient(ISlackApiClient slackApiClient) : ISlackRep
 
         await slackApiClient.Files.Upload(
             upload,
-            channelId,
-            threadTs,
+            channelId.Value,
+            threadTs.Value,
             initialComment: null,
             cancellationToken);
     }

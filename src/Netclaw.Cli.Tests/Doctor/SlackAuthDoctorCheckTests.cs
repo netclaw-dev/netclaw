@@ -50,7 +50,7 @@ public sealed class SlackAuthDoctorCheckTests
 
         var probe = new FakeSlackProbe
         {
-            NextResult = new SlackProbeResult(true, null, "Test Team", "U12345")
+            NextResult = new SlackProbeResult(true, null, "Test Team", new SlackUserId("U12345"))
         };
 
         var check = new SlackAuthDoctorCheck(paths, probe);
