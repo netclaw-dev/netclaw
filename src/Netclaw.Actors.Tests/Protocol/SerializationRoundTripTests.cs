@@ -152,6 +152,84 @@ public sealed class SerializationRoundTripTests
     }
 
     [Fact]
+    public void SerializableChatMessage_round_trips_with_media_references()
+    {
+        var original = new SerializableChatMessage
+        {
+            Role = ChatRole.User,
+            Content = "Check this image",
+            MediaReferences =
+            {
+                new SerializableMediaReference
+                {
+                    RelativePath = "abc123.png",
+                    MimeType = "image/png",
+                    Modality = (int)MediaModality.Image
+                },
+                new SerializableMediaReference
+                {
+                    RelativePath = "def456.jpg",
+                    MimeType = "image/jpeg",
+                    Modality = (int)MediaModality.Image
+                }
+            }
+        };
+
+        var result = RoundTrip(original);
+
+        Assert.Equal(ChatRole.User, result.Role);
+        Assert.Equal("Check this image", result.Content);
+        Assert.Equal(2, result.MediaReferences.Count);
+        Assert.Equal("abc123.png", result.MediaReferences[0].RelativePath);
+        Assert.Equal("image/png", result.MediaReferences[0].MimeType);
+        Assert.Equal((int)MediaModality.Image, result.MediaReferences[0].Modality);
+        Assert.Equal("def456.jpg", result.MediaReferences[1].RelativePath);
+        Assert.Equal("image/jpeg", result.MediaReferences[1].MimeType);
+    }
+
+    [Fact]
+    public void SendUserMessage_round_trips_with_media_references()
+    {
+        var original = new SendUserMessage
+        {
+            SessionId = new SessionId("C99999/1708531200.000100"),
+            Content = "Look at this",
+            MediaReferences =
+            {
+                new SerializableMediaReference
+                {
+                    RelativePath = "photo.png",
+                    MimeType = "image/png",
+                    Modality = (int)MediaModality.Image
+                }
+            }
+        };
+
+        var result = RoundTrip(original);
+
+        Assert.Equal(original.SessionId, result.SessionId);
+        Assert.Equal("Look at this", result.Content);
+        Assert.Single(result.MediaReferences);
+        Assert.Equal("photo.png", result.MediaReferences[0].RelativePath);
+    }
+
+    [Fact]
+    public void SerializableChatMessage_round_trips_without_media_references()
+    {
+        // Verify backward compatibility — messages without media still work
+        var original = new SerializableChatMessage
+        {
+            Role = ChatRole.User,
+            Content = "Just text"
+        };
+
+        var result = RoundTrip(original);
+
+        Assert.Equal("Just text", result.Content);
+        Assert.Empty(result.MediaReferences);
+    }
+
+    [Fact]
     public void CompactionBroadcast_round_trips()
     {
         var ts = new DateTimeOffset(2026, 2, 21, 11, 0, 1, TimeSpan.Zero);

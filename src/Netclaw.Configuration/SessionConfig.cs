@@ -62,4 +62,18 @@ public sealed record SessionConfig
     /// Effective token limit at which compaction fires.
     /// </summary>
     public int CompactionTokenLimit => (int)(ContextWindowTokens * CompactionThreshold);
+
+    /// <summary>
+    /// Content types the configured model accepts as input.
+    /// Defaults to <see cref="ModelModality.Text"/> when capabilities
+    /// have not been resolved.
+    /// </summary>
+    public ModelModality InputModalities { get; init; } = ModelModality.Text;
+
+    /// <summary>
+    /// Content types the configured model can produce as output.
+    /// Defaults to <see cref="ModelModality.Text"/> when capabilities
+    /// have not been resolved.
+    /// </summary>
+    public ModelModality OutputModalities { get; init; } = ModelModality.Text;
 }

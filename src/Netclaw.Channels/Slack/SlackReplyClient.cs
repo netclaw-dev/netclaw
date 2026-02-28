@@ -17,4 +17,23 @@ public sealed class SlackReplyClient(ISlackApiClient slackApiClient) : ISlackRep
             Blocks = blocks
         });
     }
+
+    public async Task UploadFileToThreadAsync(
+        string channelId,
+        string threadTs,
+        string filePath,
+        string? filename = null,
+        CancellationToken cancellationToken = default)
+    {
+        var resolvedFilename = filename ?? Path.GetFileName(filePath);
+        await using var stream = System.IO.File.OpenRead(filePath);
+        var upload = new FileUpload(resolvedFilename, stream);
+
+        await slackApiClient.Files.Upload(
+            upload,
+            channelId,
+            threadTs,
+            initialComment: null,
+            cancellationToken);
+    }
 }

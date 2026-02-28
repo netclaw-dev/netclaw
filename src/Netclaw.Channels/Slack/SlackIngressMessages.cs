@@ -8,6 +8,13 @@ public enum SlackInboundKind
     AppMention
 }
 
+public sealed record SlackFileReference(
+    string Id,
+    string Name,
+    string MimeType,
+    long Size,
+    string UrlPrivateDownload);
+
 public sealed record SlackInboundMessage(
     SlackInboundKind Kind,
     string EventId,
@@ -19,7 +26,8 @@ public sealed record SlackInboundMessage(
     string Text,
     string? Subtype,
     bool Hidden,
-    bool IsDirectMessage);
+    bool IsDirectMessage,
+    IReadOnlyList<SlackFileReference>? Files = null);
 
 public sealed record SlackThreadInbound(
     SessionId SessionId,
@@ -27,7 +35,8 @@ public sealed record SlackThreadInbound(
     string ThreadTs,
     string SenderId,
     string Text,
-    DateTimeOffset ReceivedAt);
+    DateTimeOffset ReceivedAt,
+    IReadOnlyList<SlackFileReference>? Files = null);
 
 public sealed record SlackPostMessage(
     string ChannelId,

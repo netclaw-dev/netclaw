@@ -5,6 +5,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Netclaw.Actors.Protocol;
 using Netclaw.Channels.Slack;
+using Netclaw.Security;
 using Xunit;
 using Xunit.Abstractions;
 
@@ -141,6 +142,7 @@ public sealed class SlackActorHierarchyTests(ITestOutputHelper output) : TestKit
             BotUserId: "UBOT",
             DefaultChannelId: null,
             ReplyClient: new NoopReplyClient(),
+            ContentScanner: new NullContentScanner(),
             ConversationPropsFactory: conversationPropsFactory,
             ThreadPropsFactory: threadPropsFactory);
     }
@@ -198,6 +200,9 @@ public sealed class SlackActorHierarchyTests(ITestOutputHelper output) : TestKit
     private sealed class NoopReplyClient : ISlackReplyClient
     {
         public Task PostThreadReplyAsync(SlackPostMessage message, CancellationToken cancellationToken = default)
+            => Task.CompletedTask;
+
+        public Task UploadFileToThreadAsync(string channelId, string threadTs, string filePath, string? filename = null, CancellationToken cancellationToken = default)
             => Task.CompletedTask;
     }
 }

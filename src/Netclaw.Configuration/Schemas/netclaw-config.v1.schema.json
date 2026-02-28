@@ -84,7 +84,13 @@
     },
     "Models": {
       "type": "object",
-      "additionalProperties": true
+      "description": "Model selection by role (Main, Fallback, Compaction).",
+      "properties": {
+        "Main": { "$ref": "#/$defs/ModelReference" },
+        "Fallback": { "$ref": "#/$defs/ModelReference" },
+        "Compaction": { "$ref": "#/$defs/ModelReference" }
+      },
+      "additionalProperties": false
     },
     "McpServers": {
       "type": "object",
@@ -118,5 +124,31 @@
       }
     }
   },
-  "additionalProperties": true
+  "additionalProperties": true,
+  "$defs": {
+    "ModelModality": {
+      "type": "string",
+      "enum": ["Text", "Image", "Audio", "Video"],
+      "description": "A single content modality."
+    },
+    "ModelReference": {
+      "type": "object",
+      "properties": {
+        "Provider": { "type": "string", "description": "Key into the Providers dictionary." },
+        "ModelId": { "type": "string", "description": "Model identifier for API calls." },
+        "ContextWindow": { "type": "integer", "description": "Max context window in tokens." },
+        "InputModalities": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/ModelModality" },
+          "description": "Manual override for input modalities. Bypasses automated detection."
+        },
+        "OutputModalities": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/ModelModality" },
+          "description": "Manual override for output modalities. Bypasses automated detection."
+        }
+      },
+      "additionalProperties": false
+    }
+  }
 }

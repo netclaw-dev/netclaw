@@ -39,6 +39,7 @@ public class McpStdioSmokeTests : IAsyncDisposable
         _client = await McpClient.CreateAsync(transport, new McpClientOptions
         {
             ClientInfo = new() { Name = "netclaw-smoke-test", Version = "0.1.0" },
+            InitializationTimeout = TimeSpan.FromMinutes(3),
         }, cancellationToken: CancellationToken.None);
 
         var tools = await _client.ListToolsAsync(cancellationToken: CancellationToken.None);
@@ -70,6 +71,7 @@ public class McpStdioSmokeTests : IAsyncDisposable
         _client = await McpClient.CreateAsync(transport, new McpClientOptions
         {
             ClientInfo = new() { Name = "netclaw-smoke-test", Version = "0.1.0" },
+            InitializationTimeout = TimeSpan.FromMinutes(3),
         }, cancellationToken: CancellationToken.None);
 
         var tools = await _client.ListToolsAsync(cancellationToken: CancellationToken.None);
@@ -115,6 +117,7 @@ public class McpStdioSmokeTests : IAsyncDisposable
         _client = await McpClient.CreateAsync(transport, new McpClientOptions
         {
             ClientInfo = new() { Name = "netclaw-smoke-test", Version = "0.1.0" },
+            InitializationTimeout = TimeSpan.FromMinutes(3),
         }, cancellationToken: CancellationToken.None);
 
         var tools = await _client.ListToolsAsync(cancellationToken: CancellationToken.None);

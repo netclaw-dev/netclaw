@@ -48,4 +48,9 @@ public sealed record SessionOutputDto
     // Session Joined
     public string? Title { get; init; }
     public int? TurnCount { get; init; }
+
+    // File Output
+    public string? FilePath { get; init; }
+    public string? FileName { get; init; }
+    public string? MimeType { get; init; }
 }

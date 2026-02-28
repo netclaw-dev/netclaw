@@ -49,6 +49,7 @@ public class MaxToolIterationTests : TestKit
             AIFunctionFactory.Create(() => "search result", "web_search"),
             "web_search");
         services.AddSingleton(registry);
+        services.AddSingleton<IModelCapabilityResolver>(new FakeCapabilityResolver());
     }
 
     protected override void ConfigureAkka(AkkaConfigurationBuilder builder, IServiceProvider provider)
@@ -75,13 +76,13 @@ public class MaxToolIterationTests : TestKit
         var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
         var subscriber = CreateTestProbe("max-iter-sub");
 
-        sessionManager.Tell(new JoinSession
+        await sessionManager.Ask<SessionJoined>(new JoinSession
         {
             SessionId = sessionId,
             Subscriber = subscriber,
             Filter = OutputFilter.Full
-        });
-        subscriber.ExpectMsg<SessionJoined>();
+        }, TimeSpan.FromSeconds(3));
+        subscriber.ExpectMsg<SessionJoined>(); // Drain subscriber notification
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
@@ -124,13 +125,13 @@ public class MaxToolIterationTests : TestKit
         var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
         var subscriber = CreateTestProbe("iter-reset-sub");
 
-        sessionManager.Tell(new JoinSession
+        await sessionManager.Ask<SessionJoined>(new JoinSession
         {
             SessionId = sessionId,
             Subscriber = subscriber,
             Filter = OutputFilter.Full
-        });
-        subscriber.ExpectMsg<SessionJoined>();
+        }, TimeSpan.FromSeconds(3));
+        subscriber.ExpectMsg<SessionJoined>(); // Drain subscriber notification
 
         // Turn 1: hits the limit at 3
         await sessionManager.Ask<CommandAck>(new SendUserMessage
@@ -178,13 +179,13 @@ public class MaxToolIterationTests : TestKit
         var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
         var subscriber = CreateTestProbe("normal-tool-sub");
 
-        sessionManager.Tell(new JoinSession
+        await sessionManager.Ask<SessionJoined>(new JoinSession
         {
             SessionId = sessionId,
             Subscriber = subscriber,
             Filter = OutputFilter.Full
-        });
-        subscriber.ExpectMsg<SessionJoined>();
+        }, TimeSpan.FromSeconds(3));
+        subscriber.ExpectMsg<SessionJoined>(); // Drain subscriber notification
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {

@@ -308,6 +308,13 @@ public sealed class ChatPage : ReactivePage<ChatViewModel>
                 _chatHistory.ScrollToBottom();
                 break;
 
+            case FileOutput msg:
+                _chatHistory.AppendLine(
+                    $"  [file] {msg.FileName} \u2192 {msg.FilePath}",
+                    Color.Cyan);
+                _chatHistory.ScrollToBottom();
+                break;
+
             case CompactionOutput msg:
                 _chatHistory.AppendLine(
                     $"  [compaction] {msg.MessagesBefore} \u2192 {msg.MessagesAfter} messages",

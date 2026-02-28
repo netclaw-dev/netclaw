@@ -99,6 +99,16 @@ public static class SessionOutputMapper
             ErrorDetail = msg.Cause?.ToString()
         },
 
+        FileOutput msg => new SessionOutputDto
+        {
+            Type = "file",
+            SessionId = msg.SessionId.Value,
+            TimestampMs = msg.TimestampMs,
+            FilePath = msg.FilePath,
+            FileName = msg.FileName,
+            MimeType = msg.MimeType
+        },
+
         CompactionOutput msg => new SessionOutputDto
         {
             Type = "compaction",

@@ -162,7 +162,44 @@ public sealed class LlmSessionActor : ReceivePersistentActor
             if (_availableTools.Count > _baseToolCount)
                 _availableTools.RemoveRange(_baseToolCount, _availableTools.Count - _baseToolCount);
 
-            _state = _state.AddUserMessage(cmd.Content);
+            // Modality gate: strip unsupported media references
+            var mediaRefs = cmd.MediaReferences;
+            if (mediaRefs.Count > 0 && !_config.InputModalities.HasFlag(Configuration.ModelModality.Image))
+            {
+                var imageRefs = mediaRefs.Where(r => r.Modality == (int)MediaModality.Image).ToList();
+                if (imageRefs.Count > 0)
+                {
+                    _log.Info("Stripping {Count} image reference(s) — model does not support vision", imageRefs.Count);
+                    mediaRefs = mediaRefs.Where(r => r.Modality != (int)MediaModality.Image).ToList();
+
+                    EmitOutput(new TextOutput
+                    {
+                        SessionId = _sessionId,
+                        Text = "[Images removed — the current model does not support vision input]"
+                    }, OutputFilter.Text);
+                }
+            }
+
+            // If ALL content is images (no text) and model doesn't support vision, skip entirely
+            if (string.IsNullOrWhiteSpace(cmd.Content) && mediaRefs.Count == 0
+                && cmd.MediaReferences.Count > 0)
+            {
+                _log.Info("Skipping LLM call — message contained only unsupported media");
+                EmitOutput(new TextOutput
+                {
+                    SessionId = _sessionId,
+                    Text = "Your message contained only images, but the current model doesn't support vision. Please send a text message instead."
+                }, OutputFilter.Text);
+                EmitOutput(new TurnCompleted
+                {
+                    SessionId = _sessionId,
+                    TurnNumber = _state.TurnCount
+                });
+                TryReplyAck();
+                return;
+            }
+
+            _state = _state.AddUserMessage(cmd.Content, mediaRefs.Count > 0 ? mediaRefs : null);
             TryReplyAck();
             FireLlmCall();
             Become(Processing);
@@ -431,7 +468,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor
             _log.Info("Post-compaction: draining {BufferCount} buffered message(s)", _buffer.Count);
             foreach (var buffered in _buffer)
             {
-                _state = _state.AddUserMessage(buffered.Content);
+                var refs = buffered.MediaReferences.Count > 0 ? buffered.MediaReferences : null;
+                _state = _state.AddUserMessage(buffered.Content, refs);
             }
             _buffer.Clear();
             FireLlmCall();
@@ -613,7 +651,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor
                 _log.Info("Draining {BufferCount} buffered message(s)", _buffer.Count);
                 foreach (var buffered in _buffer)
                 {
-                    _state = _state.AddUserMessage(buffered.Content);
+                    var refs = buffered.MediaReferences.Count > 0 ? buffered.MediaReferences : null;
+                    _state = _state.AddUserMessage(buffered.Content, refs);
                 }
                 _buffer.Clear();
                 FireLlmCall();
@@ -641,12 +680,22 @@ public sealed class LlmSessionActor : ReceivePersistentActor
 
             _log.Info("{Subscriber} joined (filter={Filter})", cmd.Subscriber, cmd.Filter);
 
-            cmd.Subscriber.Tell(new SessionJoined
+            var joined = new SessionJoined
             {
                 SessionId = _sessionId,
                 Title = _state.Title,
                 TurnCount = _state.TurnCount
-            });
+            };
+
+            cmd.Subscriber.Tell(joined);
+
+            // Also reply to Sender so callers can use Ask<SessionJoined> for
+            // deterministic confirmation that the join was processed.
+            if (!Sender.IsNobody() && !Equals(Sender, Context.System.DeadLetters)
+                                   && !Equals(Sender, cmd.Subscriber))
+            {
+                Sender.Tell(joined);
+            }
         });
 
         Command<LeaveSession>(cmd =>
@@ -711,12 +760,12 @@ public sealed class LlmSessionActor : ReceivePersistentActor
 
     private void FireLlmCall(bool forceNoTools = false)
     {
-        var messages = ChatMessageConverter.ToAiMessages(_state.History);
+        var sessionDir = SessionDirectoryHelper.GetSessionDirectory(_sessionId);
+        var messages = ChatMessageConverter.ToAiMessages(_state.History, sessionDir);
 
         // Inject dynamic context layers (e.g. tool index) as transient system messages.
         // These are NOT persisted — rebuilt on every call so rehydrated sessions stay fresh.
         InjectDynamicContextLayers(messages);
-
         var self = Self;
         var client = _chatClient;
 
@@ -1086,19 +1135,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor
 
     private static Netclaw.Tools.ToolExecutionContext CreateExecutionContext(SessionId sessionId)
     {
-        // Session directory under OS temp: /tmp/netclaw-sessions/{sanitized-session-id}/
-        var sanitized = SanitizeSessionId(sessionId.Value);
-        var sessionDir = Path.Combine(Path.GetTempPath(), "netclaw-sessions", sanitized);
+        var sessionDir = SessionDirectoryHelper.GetSessionDirectory(sessionId);
         return new Netclaw.Tools.ToolExecutionContext(sessionId.Value, sessionDir);
-    }
-
-    private static string SanitizeSessionId(string sessionId)
-    {
-        // Session IDs may contain slashes (e.g. "C123/1234567890.123456") — replace with underscores
-        Span<char> buf = stackalloc char[sessionId.Length];
-        for (var i = 0; i < sessionId.Length; i++)
-            buf[i] = char.IsLetterOrDigit(sessionId[i]) || sessionId[i] == '-' ? sessionId[i] : '_';
-        return new string(buf);
     }
 
     internal void SetTitle(string title)

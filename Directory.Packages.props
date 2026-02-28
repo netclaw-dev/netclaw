@@ -25,6 +25,7 @@
     <PackageVersion Include="Microsoft.Extensions.AI.OpenAI" Version="10.3.0" />
     <PackageVersion Include="Microsoft.Extensions.Configuration.Json" Version="10.0.2" />
     <PackageVersion Include="Microsoft.Extensions.Hosting" Version="10.0.2" />
+    <PackageVersion Include="Microsoft.Extensions.Http" Version="10.0.2" />
     <PackageVersion Include="JsonSchema.Net" Version="7.4.0" />
     <PackageVersion Include="OpenTelemetry" Version="$(OpenTelemetryVersion)" />
     <PackageVersion Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="$(OpenTelemetryVersion)" />
@@ -33,6 +34,8 @@
     <PackageVersion Include="SlackNet" Version="0.17.9" />
     <PackageVersion Include="SlackNet.Extensions.DependencyInjection" Version="0.17.9" />
     <PackageVersion Include="Termina" Version="0.7.1" />
+    <PackageVersion Include="Mime-Detective" Version="25.8.1" />
+    <PackageVersion Include="Mime-Detective.Definitions.Condensed" Version="25.8.1" />
   </ItemGroup>
   <!-- Serialization -->
   <ItemGroup>

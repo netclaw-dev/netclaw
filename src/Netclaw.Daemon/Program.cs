@@ -13,7 +13,9 @@ using Netclaw.Configuration;
 using Netclaw.Daemon.Configuration;
 using Netclaw.Daemon.Gateway;
 using Netclaw.Daemon.Mcp;
+using Netclaw.Daemon.Providers;
 using Netclaw.Daemon.Services;
+using Netclaw.Security;
 
 try
 {
@@ -155,6 +157,8 @@ static void ConfigureDaemonServices(
         SnapshotInterval = sessionSection.GetValue("SnapshotInterval", 20),
         KeepRecentToolResults = sessionSection.GetValue("KeepRecentToolResults", 3),
         MaxToolIterationsPerTurn = sessionSection.GetValue("MaxToolIterationsPerTurn", 10),
+        InputModalities = models.Main.InputModalities ?? ModelModality.Text,
+        OutputModalities = models.Main.OutputModalities ?? ModelModality.Text,
     });
 
     // Tools (auto-bound, no required properties)
@@ -205,6 +209,17 @@ static void ConfigureDaemonServices(
     services.AddSingleton<SchemaMigrationHostedService>();
     services.AddSingleton<IHostedService>(sp => sp.GetRequiredService<SchemaMigrationHostedService>());
 
+    // Model capability resolution chain: OpenRouter oracle → HuggingFace → text-only default
+    services.AddHttpClient<OpenRouterOracleResolver>();
+    services.AddHttpClient<HuggingFaceCapabilityResolver>();
+    services.AddSingleton<IModelCapabilityResolver>(sp =>
+        new CompositeCapabilityResolver(
+            [
+                sp.GetRequiredService<OpenRouterOracleResolver>(),
+                sp.GetRequiredService<HuggingFaceCapabilityResolver>(),
+            ],
+            sp.GetRequiredService<ILogger<CompositeCapabilityResolver>>()));
+
     // Akka.NET actor system
     services.AddAkka("netclaw", (akkaBuilder, sp) =>
     {
@@ -231,6 +246,9 @@ static void ConfigureDaemonServices(
 
         akkaBuilder.WithNetclawActors();
     });
+
+    // Content security (no-op defaults, real scanning plugged in later)
+    services.AddContentSecurity();
 
     // Session pipeline (stream API for channels)
     services.AddSingleton<SessionPipeline>();

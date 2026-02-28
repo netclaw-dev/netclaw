@@ -101,7 +101,8 @@ public sealed class SlackConversationActor : ReceiveActor
                 ThreadTs: threadTs,
                 SenderId: message.UserId ?? "slack-user",
                 Text: normalized,
-                ReceivedAt: _dependencies.TimeProvider.GetUtcNow()));
+                ReceivedAt: _dependencies.TimeProvider.GetUtcNow(),
+                Files: message.Files));
         });
     }
 

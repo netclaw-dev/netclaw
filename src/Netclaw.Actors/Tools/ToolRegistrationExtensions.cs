@@ -15,6 +15,7 @@ public static class ToolRegistrationExtensions
         registry.Register(new ShellTool(config));
         registry.Register(new FileReadTool(config));
         registry.Register(new FileWriteTool());
+        registry.Register(new AttachFileTool());
         registry.Register(new WebSearchTool(config));
         registry.Register(new WebFetchTool());
 

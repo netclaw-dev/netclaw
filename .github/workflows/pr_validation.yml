@@ -44,6 +44,12 @@ jobs:
       - name: "dotnet build"
         run: dotnet build -c Release
 
+      # Pre-warm the npm cache so MCP stdio smoke tests don't time out downloading
+      # @modelcontextprotocol/server-everything on the first npx invocation.
+      - name: "Warm npm cache for MCP smoke tests"
+        shell: bash
+        run: npx -y @modelcontextprotocol/server-everything --version || true
+
       # .NET Framework tests can't run reliably on Linux, so we only do .NET 8
 
       - name: "dotnet test"
