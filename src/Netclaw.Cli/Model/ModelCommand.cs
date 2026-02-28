@@ -15,64 +15,65 @@ internal static class ModelCommand
     {
         Converters = { new JsonStringEnumConverter() }
     };
-    public static async Task<int> RunAsync(string[] args, NetclawPaths paths, IProviderProbe? probe = null)
+    public static async Task<int> RunAsync(string[] args, NetclawPaths paths, IProviderProbe? probe = null, TextWriter? output = null)
     {
+        var writer = output ?? Console.Out;
         var subcommand = args.Length > 1 ? args[1] : "help";
 
         return subcommand switch
         {
-            "list" => RunList(paths),
-            "set" => RunSet(args, paths),
-            "discover" => await RunDiscoverAsync(args, paths, probe),
-            "clear" => RunClear(args, paths),
-            "help" or "-h" or "--help" => WriteHelp(),
-            _ => WriteHelp()
+            "list" => RunList(paths, writer),
+            "set" => RunSet(args, paths, writer),
+            "discover" => await RunDiscoverAsync(args, paths, probe, writer),
+            "clear" => RunClear(args, paths, writer),
+            "help" or "-h" or "--help" => WriteHelp(writer),
+            _ => WriteHelp(writer)
         };
     }
 
-    private static int RunList(NetclawPaths paths)
+    private static int RunList(NetclawPaths paths, TextWriter writer)
     {
         var models = LoadModelSelection(paths);
         if (models is null)
         {
-            Console.WriteLine("No models configured.");
-            Console.WriteLine("Run `netclaw model set` or `netclaw model` (TUI) to configure models.");
+            writer.WriteLine("No models configured.");
+            writer.WriteLine("Run `netclaw model set` or `netclaw model` (TUI) to configure models.");
             return 0;
         }
 
-        Console.WriteLine($"{"Role",-12} {"Provider",-20} {"Model ID",-30} {"Context Window"}");
+        writer.WriteLine($"{"Role",-12} {"Provider",-20} {"Model ID",-30} {"Context Window"}");
 
-        WriteModelRow("Main", models.Main);
+        WriteModelRow("Main", models.Main, writer);
 
         if (models.Fallback is not null)
-            WriteModelRow("Fallback", models.Fallback);
+            WriteModelRow("Fallback", models.Fallback, writer);
         else
-            Console.WriteLine($"{"Fallback",-12} {"(not set)",-20}");
+            writer.WriteLine($"{"Fallback",-12} {"(not set)",-20}");
 
         if (models.Compaction is not null)
-            WriteModelRow("Compaction", models.Compaction);
+            WriteModelRow("Compaction", models.Compaction, writer);
         else
-            Console.WriteLine($"{"Compaction",-12} {"(not set)",-20}");
+            writer.WriteLine($"{"Compaction",-12} {"(not set)",-20}");
 
         return 0;
     }
 
-    private static void WriteModelRow(string role, ModelReference model)
+    private static void WriteModelRow(string role, ModelReference model, TextWriter writer)
     {
         var ctxWindow = model.ContextWindow.HasValue
             ? $"{model.ContextWindow.Value:N0} tokens"
             : "(default)";
-        Console.WriteLine($"{role,-12} {model.Provider,-20} {model.ModelId,-30} {ctxWindow}");
+        writer.WriteLine($"{role,-12} {model.Provider,-20} {model.ModelId,-30} {ctxWindow}");
     }
 
-    private static int RunSet(string[] args, NetclawPaths paths)
+    private static int RunSet(string[] args, NetclawPaths paths, TextWriter writer)
     {
         // Parse: netclaw model set <role> <provider> <model-id> [--context-window <tokens>]
         if (args.Length < 5)
         {
-            Console.WriteLine("Usage: netclaw model set <role> <provider> <model-id> [--context-window <tokens>]");
-            Console.WriteLine();
-            Console.WriteLine("Roles: main, fallback, compaction");
+            writer.WriteLine("Usage: netclaw model set <role> <provider> <model-id> [--context-window <tokens>]");
+            writer.WriteLine();
+            writer.WriteLine("Roles: main, fallback, compaction");
             return 1;
         }
 
@@ -87,7 +88,7 @@ internal static class ModelCommand
             {
                 if (!int.TryParse(args[++i], out var cw) || cw <= 0)
                 {
-                    Console.WriteLine("Error: --context-window must be a positive integer.");
+                    writer.WriteLine("Error: --context-window must be a positive integer.");
                     return 1;
                 }
 
@@ -106,7 +107,7 @@ internal static class ModelCommand
 
         if (roleKey is null)
         {
-            Console.WriteLine($"Error: Unknown role '{role}'. Valid roles: main, fallback, compaction");
+            writer.WriteLine($"Error: Unknown role '{role}'. Valid roles: main, fallback, compaction");
             return 1;
         }
 
@@ -114,8 +115,8 @@ internal static class ModelCommand
         var providers = ProviderCommand.LoadProviders(paths);
         if (!providers.ContainsKey(providerName))
         {
-            Console.WriteLine($"Error: Provider '{providerName}' not found in configuration.");
-            Console.WriteLine("Configured providers: " +
+            writer.WriteLine($"Error: Provider '{providerName}' not found in configuration.");
+            writer.WriteLine("Configured providers: " +
                 (providers.Count > 0
                     ? string.Join(", ", providers.Keys)
                     : "(none — run `netclaw provider add` first)"));
@@ -128,8 +129,8 @@ internal static class ModelCommand
         {
             if (contextWindow.Value < currentModels.Main.ContextWindow.Value)
             {
-                Console.WriteLine($"Warning: Context window shrinking from {currentModels.Main.ContextWindow.Value:N0} to {contextWindow.Value:N0} tokens.");
-                Console.WriteLine("         Existing sessions with longer history may fail until compacted.");
+                writer.WriteLine($"Warning: Context window shrinking from {currentModels.Main.ContextWindow.Value:N0} to {contextWindow.Value:N0} tokens.");
+                writer.WriteLine("         Existing sessions with longer history may fail until compacted.");
             }
         }
 
@@ -150,16 +151,16 @@ internal static class ModelCommand
         modelsSection[roleKey] = modelEntry;
         ConfigFileHelper.WriteConfigFile(paths.NetclawConfigPath, config);
 
-        Console.WriteLine($"Set {role} model to {providerName}/{modelId}");
-        Console.WriteLine("Note: Restart the daemon for changes to take effect.");
+        writer.WriteLine($"Set {role} model to {providerName}/{modelId}");
+        writer.WriteLine("Note: Restart the daemon for changes to take effect.");
         return 0;
     }
 
-    private static async Task<int> RunDiscoverAsync(string[] args, NetclawPaths paths, IProviderProbe? probe)
+    private static async Task<int> RunDiscoverAsync(string[] args, NetclawPaths paths, IProviderProbe? probe, TextWriter writer)
     {
         if (args.Length < 3)
         {
-            Console.WriteLine("Usage: netclaw model discover <provider>");
+            writer.WriteLine("Usage: netclaw model discover <provider>");
             return 1;
         }
 
@@ -168,13 +169,13 @@ internal static class ModelCommand
 
         if (!providers.TryGetValue(providerName, out var entry))
         {
-            Console.WriteLine($"Error: Provider '{providerName}' not found in configuration.");
+            writer.WriteLine($"Error: Provider '{providerName}' not found in configuration.");
             return 1;
         }
 
         probe ??= CreateDefaultProbe();
 
-        Console.WriteLine($"Discovering models from '{providerName}' ({entry.Type})...");
+        writer.WriteLine($"Discovering models from '{providerName}' ({entry.Type})...");
 
         var result = await probe.ProbeAsync(
             entry.Type,
@@ -184,18 +185,18 @@ internal static class ModelCommand
 
         if (!result.Success)
         {
-            Console.WriteLine($"Error: {result.ErrorMessage}");
+            writer.WriteLine($"Error: {result.ErrorMessage}");
             return 1;
         }
 
         if (result.Models.Count == 0)
         {
-            Console.WriteLine("No models found.");
+            writer.WriteLine("No models found.");
             return 0;
         }
 
-        Console.WriteLine();
-        Console.WriteLine($"{"Model ID",-40} {"Context Window",-16} {"Cost (in/out per 1M)"}");
+        writer.WriteLine();
+        writer.WriteLine($"{"Model ID",-40} {"Context Window",-16} {"Cost (in/out per 1M)"}");
         foreach (var model in result.Models.OrderBy(m => m.ModelId, StringComparer.OrdinalIgnoreCase))
         {
             var ctx = model.ContextWindowTokens.HasValue
@@ -206,21 +207,21 @@ internal static class ModelCommand
                 (not null, not null) => $"${model.CostPerMillionInputTokens:F2} / ${model.CostPerMillionOutputTokens:F2}",
                 _ => "-"
             };
-            Console.WriteLine($"{model.ModelId,-40} {ctx,-16} {cost}");
+            writer.WriteLine($"{model.ModelId,-40} {ctx,-16} {cost}");
         }
 
-        Console.WriteLine();
-        Console.WriteLine($"{result.Models.Count} model(s) found.");
+        writer.WriteLine();
+        writer.WriteLine($"{result.Models.Count} model(s) found.");
         return 0;
     }
 
-    private static int RunClear(string[] args, NetclawPaths paths)
+    private static int RunClear(string[] args, NetclawPaths paths, TextWriter writer)
     {
         if (args.Length < 3)
         {
-            Console.WriteLine("Usage: netclaw model clear <role>");
-            Console.WriteLine();
-            Console.WriteLine("Roles: fallback, compaction (cannot clear main)");
+            writer.WriteLine("Usage: netclaw model clear <role>");
+            writer.WriteLine();
+            writer.WriteLine("Roles: fallback, compaction (cannot clear main)");
             return 1;
         }
 
@@ -228,7 +229,7 @@ internal static class ModelCommand
 
         if (role is "main")
         {
-            Console.WriteLine("Error: Cannot clear the main model role. Use `netclaw model set main` to change it instead.");
+            writer.WriteLine("Error: Cannot clear the main model role. Use `netclaw model set main` to change it instead.");
             return 1;
         }
 
@@ -241,7 +242,7 @@ internal static class ModelCommand
 
         if (roleKey is null)
         {
-            Console.WriteLine($"Error: Unknown role '{role}'. Valid roles for clear: fallback, compaction");
+            writer.WriteLine($"Error: Unknown role '{role}'. Valid roles for clear: fallback, compaction");
             return 1;
         }
 
@@ -250,15 +251,15 @@ internal static class ModelCommand
 
         if (modelsSection is null || !modelsSection.ContainsKey(roleKey))
         {
-            Console.WriteLine($"Role '{role}' is not configured.");
+            writer.WriteLine($"Role '{role}' is not configured.");
             return 0;
         }
 
         modelsSection.Remove(roleKey);
         ConfigFileHelper.WriteConfigFile(paths.NetclawConfigPath, config);
 
-        Console.WriteLine($"Cleared {role} model role.");
-        Console.WriteLine("Note: Restart the daemon for changes to take effect.");
+        writer.WriteLine($"Cleared {role} model role.");
+        writer.WriteLine("Note: Restart the daemon for changes to take effect.");
         return 0;
     }
 
@@ -282,28 +283,28 @@ internal static class ModelCommand
         return new Tui.ProviderProbe(new HttpClient());
     }
 
-    private static int WriteHelp()
+    private static int WriteHelp(TextWriter writer)
     {
-        Console.WriteLine("Usage: netclaw model <subcommand>");
-        Console.WriteLine();
-        Console.WriteLine("Subcommands:");
-        Console.WriteLine("  list                                     Show current model assignments");
-        Console.WriteLine("  set <role> <provider> <model-id>         Assign model to role");
-        Console.WriteLine("  discover <provider>                      List available models from provider");
-        Console.WriteLine("  clear <role>                             Clear fallback or compaction role");
-        Console.WriteLine();
-        Console.WriteLine("Run `netclaw model` (no subcommand) for interactive TUI management.");
-        Console.WriteLine();
-        Console.WriteLine("Roles: main, fallback, compaction");
-        Console.WriteLine();
-        Console.WriteLine("Options for 'set':");
-        Console.WriteLine("  --context-window <tokens>    Override context window size");
-        Console.WriteLine();
-        Console.WriteLine("Examples:");
-        Console.WriteLine("  netclaw model list");
-        Console.WriteLine("  netclaw model discover my-ollama");
-        Console.WriteLine("  netclaw model set main my-ollama qwen3:30b --context-window 32768");
-        Console.WriteLine("  netclaw model clear fallback");
+        writer.WriteLine("Usage: netclaw model <subcommand>");
+        writer.WriteLine();
+        writer.WriteLine("Subcommands:");
+        writer.WriteLine("  list                                     Show current model assignments");
+        writer.WriteLine("  set <role> <provider> <model-id>         Assign model to role");
+        writer.WriteLine("  discover <provider>                      List available models from provider");
+        writer.WriteLine("  clear <role>                             Clear fallback or compaction role");
+        writer.WriteLine();
+        writer.WriteLine("Run `netclaw model` (no subcommand) for interactive TUI management.");
+        writer.WriteLine();
+        writer.WriteLine("Roles: main, fallback, compaction");
+        writer.WriteLine();
+        writer.WriteLine("Options for 'set':");
+        writer.WriteLine("  --context-window <tokens>    Override context window size");
+        writer.WriteLine();
+        writer.WriteLine("Examples:");
+        writer.WriteLine("  netclaw model list");
+        writer.WriteLine("  netclaw model discover my-ollama");
+        writer.WriteLine("  netclaw model set main my-ollama qwen3:30b --context-window 32768");
+        writer.WriteLine("  netclaw model clear fallback");
         return 0;
     }
 }

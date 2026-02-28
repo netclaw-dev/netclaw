@@ -11,6 +11,7 @@ public sealed class ModelCommandTests : IDisposable
     private readonly string _tempDir;
     private readonly NetclawPaths _paths;
     private readonly FakeProviderProbe _fakeProbe = new();
+    private readonly StringWriter _output = new();
 
     public ModelCommandTests()
     {
@@ -21,6 +22,7 @@ public sealed class ModelCommandTests : IDisposable
 
     public void Dispose()
     {
+        _output.Dispose();
         if (Directory.Exists(_tempDir))
             Directory.Delete(_tempDir, true);
     }
@@ -28,10 +30,9 @@ public sealed class ModelCommandTests : IDisposable
     [Fact]
     public async Task List_NoConfig_ShowsEmptyMessage()
     {
-        var output = CaptureConsoleOutput(async () =>
-            await ModelCommand.RunAsync(["model", "list"], _paths));
+        await ModelCommand.RunAsync(["model", "list"], _paths, output: _output);
 
-        Assert.Contains("No models configured", output);
+        Assert.Contains("No models configured", _output.ToString());
     }
 
     [Fact]
@@ -50,8 +51,8 @@ public sealed class ModelCommandTests : IDisposable
             }
         });
 
-        var output = CaptureConsoleOutput(async () =>
-            await ModelCommand.RunAsync(["model", "list"], _paths));
+        await ModelCommand.RunAsync(["model", "list"], _paths, output: _output);
+        var output = _output.ToString();
 
         Assert.Contains("Main", output);
         Assert.Contains("my-ollama", output);
@@ -77,7 +78,7 @@ public sealed class ModelCommandTests : IDisposable
 
         var exitCode = await ModelCommand.RunAsync(
             ["model", "set", "main", "my-ollama", "qwen3:30b", "--context-window", "32768"],
-            _paths);
+            _paths, output: _output);
 
         Assert.Equal(0, exitCode);
 
@@ -107,7 +108,7 @@ public sealed class ModelCommandTests : IDisposable
 
         var exitCode = await ModelCommand.RunAsync(
             ["model", "set", "invalid-role", "my-ollama", "qwen3:30b"],
-            _paths);
+            _paths, output: _output);
 
         Assert.Equal(1, exitCode);
     }
@@ -117,7 +118,7 @@ public sealed class ModelCommandTests : IDisposable
     {
         var exitCode = await ModelCommand.RunAsync(
             ["model", "set", "main", "nonexistent", "qwen3:30b"],
-            _paths);
+            _paths, output: _output);
 
         Assert.Equal(1, exitCode);
     }
@@ -138,13 +139,12 @@ public sealed class ModelCommandTests : IDisposable
             }
         });
 
-        var output = CaptureConsoleOutput(async () =>
-        {
-            var exitCode = await ModelCommand.RunAsync(
-                ["model", "discover", "my-ollama"],
-                _paths, _fakeProbe);
-            Assert.Equal(0, exitCode);
-        });
+        var exitCode = await ModelCommand.RunAsync(
+            ["model", "discover", "my-ollama"],
+            _paths, _fakeProbe, output: _output);
+
+        Assert.Equal(0, exitCode);
+        var output = _output.ToString();
 
         Assert.Contains("model-a", output);
         Assert.Contains("model-b", output);
@@ -157,7 +157,7 @@ public sealed class ModelCommandTests : IDisposable
     {
         var exitCode = await ModelCommand.RunAsync(
             ["model", "discover", "nonexistent"],
-            _paths, _fakeProbe);
+            _paths, _fakeProbe, output: _output);
 
         Assert.Equal(1, exitCode);
     }
@@ -185,7 +185,7 @@ public sealed class ModelCommandTests : IDisposable
 
         var exitCode = await ModelCommand.RunAsync(
             ["model", "clear", "fallback"],
-            _paths);
+            _paths, output: _output);
 
         Assert.Equal(0, exitCode);
 
@@ -200,7 +200,7 @@ public sealed class ModelCommandTests : IDisposable
     {
         var exitCode = await ModelCommand.RunAsync(
             ["model", "clear", "main"],
-            _paths);
+            _paths, output: _output);
 
         Assert.Equal(1, exitCode);
     }
@@ -227,7 +227,7 @@ public sealed class ModelCommandTests : IDisposable
 
         var exitCode = await ModelCommand.RunAsync(
             ["model", "set", "fallback", "my-ollama", "qwen3:8b"],
-            _paths);
+            _paths, output: _output);
 
         Assert.Equal(0, exitCode);
 
@@ -247,21 +247,5 @@ public sealed class ModelCommandTests : IDisposable
     private static JsonDocument ReadConfigFile(string path)
     {
         return JsonDocument.Parse(File.ReadAllText(path));
-    }
-
-    private static string CaptureConsoleOutput(Func<Task> action)
-    {
-        var writer = new StringWriter();
-        var originalOut = Console.Out;
-        Console.SetOut(writer);
-        try
-        {
-            action().GetAwaiter().GetResult();
-            return writer.ToString();
-        }
-        finally
-        {
-            Console.SetOut(originalOut);
-        }
     }
 }

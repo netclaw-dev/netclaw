@@ -9,6 +9,7 @@ public sealed class ProviderCommandTests : IDisposable
 {
     private readonly string _tempDir;
     private readonly NetclawPaths _paths;
+    private readonly StringWriter _output = new();
 
     public ProviderCommandTests()
     {
@@ -19,6 +20,7 @@ public sealed class ProviderCommandTests : IDisposable
 
     public void Dispose()
     {
+        _output.Dispose();
         if (Directory.Exists(_tempDir))
             Directory.Delete(_tempDir, true);
     }
@@ -26,10 +28,9 @@ public sealed class ProviderCommandTests : IDisposable
     [Fact]
     public async Task List_NoProviders_ShowsEmptyMessage()
     {
-        var output = CaptureConsoleOutput(async () =>
-            await ProviderCommand.RunAsync(["provider", "list"], _paths));
+        await ProviderCommand.RunAsync(["provider", "list"], _paths, output: _output);
 
-        Assert.Contains("No providers configured", output);
+        Assert.Contains("No providers configured", _output.ToString());
     }
 
     [Fact]
@@ -50,8 +51,8 @@ public sealed class ProviderCommandTests : IDisposable
             }
         });
 
-        var output = CaptureConsoleOutput(async () =>
-            await ProviderCommand.RunAsync(["provider", "list"], _paths));
+        await ProviderCommand.RunAsync(["provider", "list"], _paths, output: _output);
+        var output = _output.ToString();
 
         Assert.Contains("my-ollama", output);
         Assert.Contains("ollama", output);
@@ -63,7 +64,7 @@ public sealed class ProviderCommandTests : IDisposable
     {
         var exitCode = await ProviderCommand.RunAsync(
             ["provider", "add", "my-ollama", "ollama", "--endpoint", "http://big-gpu:11434"],
-            _paths);
+            _paths, output: _output);
 
         Assert.Equal(0, exitCode);
 
@@ -79,7 +80,7 @@ public sealed class ProviderCommandTests : IDisposable
     {
         var exitCode = await ProviderCommand.RunAsync(
             ["provider", "add", "my-openrouter", "openrouter", "--api-key", "sk-or-test-123"],
-            _paths);
+            _paths, output: _output);
 
         Assert.Equal(0, exitCode);
 
@@ -102,7 +103,7 @@ public sealed class ProviderCommandTests : IDisposable
     {
         var exitCode = await ProviderCommand.RunAsync(
             ["provider", "add", "my-provider", "unknown-type"],
-            _paths);
+            _paths, output: _output);
 
         Assert.Equal(1, exitCode);
     }
@@ -113,12 +114,12 @@ public sealed class ProviderCommandTests : IDisposable
         // Arrange: add a provider
         await ProviderCommand.RunAsync(
             ["provider", "add", "my-ollama", "ollama", "--endpoint", "http://localhost:11434"],
-            _paths);
+            _paths, output: _output);
 
         // Act
         var exitCode = await ProviderCommand.RunAsync(
             ["provider", "remove", "my-ollama"],
-            _paths);
+            _paths, output: _output);
 
         Assert.Equal(0, exitCode);
 
@@ -133,7 +134,7 @@ public sealed class ProviderCommandTests : IDisposable
         // Arrange: add provider and assign it to main model role
         await ProviderCommand.RunAsync(
             ["provider", "add", "my-ollama", "ollama", "--endpoint", "http://localhost:11434"],
-            _paths);
+            _paths, output: _output);
 
         // Write a model reference pointing to this provider
         var config = JsonSerializer.Deserialize<Dictionary<string, object>>(
@@ -150,14 +151,12 @@ public sealed class ProviderCommandTests : IDisposable
             JsonSerializer.Serialize(config, new JsonSerializerOptions { WriteIndented = true }));
 
         // Act
-        var output = CaptureConsoleOutput(async () =>
-        {
-            var exitCode = await ProviderCommand.RunAsync(
-                ["provider", "remove", "my-ollama"],
-                _paths);
-            Assert.Equal(1, exitCode);
-        });
+        var exitCode = await ProviderCommand.RunAsync(
+            ["provider", "remove", "my-ollama"],
+            _paths, output: _output);
 
+        Assert.Equal(1, exitCode);
+        var output = _output.ToString();
         Assert.Contains("Cannot remove", output);
         Assert.Contains("Main", output);
     }
@@ -167,7 +166,7 @@ public sealed class ProviderCommandTests : IDisposable
     {
         var exitCode = await ProviderCommand.RunAsync(
             ["provider", "remove", "nonexistent"],
-            _paths);
+            _paths, output: _output);
 
         Assert.Equal(1, exitCode);
     }
@@ -224,21 +223,5 @@ public sealed class ProviderCommandTests : IDisposable
     private static JsonDocument ReadConfigFile(string path)
     {
         return JsonDocument.Parse(File.ReadAllText(path));
-    }
-
-    private static string CaptureConsoleOutput(Func<Task> action)
-    {
-        var writer = new StringWriter();
-        var originalOut = Console.Out;
-        Console.SetOut(writer);
-        try
-        {
-            action().GetAwaiter().GetResult();
-            return writer.ToString();
-        }
-        finally
-        {
-            Console.SetOut(originalOut);
-        }
     }
 }
