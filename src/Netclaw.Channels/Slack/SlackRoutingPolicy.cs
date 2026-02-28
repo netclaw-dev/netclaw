@@ -27,6 +27,15 @@ public static class SlackRoutingPolicy
         if (threadExists)
             return SlackRoutingDecision.ContinueOnly;
 
+        // Thread reply where the actor was lost (e.g. daemon restart):
+        // the message has a ThreadTs different from its EventTs, meaning
+        // Slack knows this is a reply in an existing thread. Re-create
+        // the thread actor and continue the persisted session.
+        var isThreadReply = !string.IsNullOrWhiteSpace(message.ThreadTs)
+            && !string.Equals(message.ThreadTs, message.EventTs, StringComparison.Ordinal);
+        if (isThreadReply)
+            return SlackRoutingDecision.StartOrContinue;
+
         if (!mentionOnly)
             return SlackRoutingDecision.StartOrContinue;
 

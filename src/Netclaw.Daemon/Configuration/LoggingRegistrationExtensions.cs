@@ -13,6 +13,14 @@ public static class LoggingRegistrationExtensions
         if (consoleEnabled)
             builder.Logging.AddSimpleConsole(options => options.SingleLine = true);
 
+        // Always write to a rolling log file in ~/.netclaw/logs/
+        var logsDir = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            ".netclaw", "logs");
+        Directory.CreateDirectory(logsDir);
+        var logFilePath = Path.Combine(logsDir, "daemon.log");
+        builder.Logging.AddProvider(new RollingFileLoggerProvider(logFilePath));
+
         builder.Logging.SetMinimumLevel(level);
         return level;
     }
@@ -23,6 +31,6 @@ public static class LoggingRegistrationExtensions
         if (Enum.TryParse<LogLevel>(configured, ignoreCase: true, out var level))
             return level;
 
-        return LogLevel.Warning;
+        return LogLevel.Information;
     }
 }

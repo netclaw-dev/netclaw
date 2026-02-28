@@ -219,10 +219,16 @@ public sealed class LlmSessionActor : ReceivePersistentActor
 
         Command<ToolExecutionCompleted>(msg =>
         {
-            // Add tool results to history
+            // Add tool results to history and log each result
             foreach (var result in msg.ToolResults)
             {
                 _state = _state with { History = _state.History.Add(result) };
+
+                var preview = result.Content is { Length: > 200 }
+                    ? result.Content[..200] + "..."
+                    : result.Content ?? "(null)";
+                _log.Info("Tool [{ToolName}] (call={CallId}) result: {Result}",
+                    result.Name ?? "unknown", result.ToolCallId ?? "?", preview);
             }
 
             // Dynamic tool loading: if search_tools was called, load discovered tools
@@ -518,7 +524,12 @@ public sealed class LlmSessionActor : ReceivePersistentActor
         }
 
         // Execute tools async — results come back as ToolExecutionCompleted
-        _log.Info("Executing {ToolCount} tool call(s)", toolCalls.Count);
+        foreach (var tc in toolCalls)
+        {
+            _log.Info("Invoking tool [{ToolName}] (call={CallId}) args={Args}",
+                tc.Name, tc.CallId,
+                tc.Arguments is not null ? JsonSerializer.Serialize(tc.Arguments) : "{}");
+        }
         var self = Self;
         var executor = _toolExecutor!;
         var sessionId = _sessionId;

@@ -51,6 +51,23 @@ public class SlackRoutingPolicyTests
     }
 
     [Fact]
+    public void ThreadReply_RehydratesSession_AfterDaemonRestart()
+    {
+        // ThreadTs differs from EventTs — this is a reply in an existing thread,
+        // but the thread actor was lost due to a daemon restart.
+        var message = CreateMessage(text: "follow up", threadTs: "1740468105.120900", isDirectMessage: false);
+
+        var decision = SlackRoutingPolicy.Evaluate(
+            message,
+            mentionOnly: true,
+            allowDirectMessages: true,
+            threadExists: false,
+            containsBotMention: false);
+
+        Assert.Equal(SlackRoutingDecision.StartOrContinue, decision);
+    }
+
+    [Fact]
     public void DirectMessage_ProcessesWithoutMention_WhenEnabled()
     {
         var message = CreateMessage(text: "hey", threadTs: null, isDirectMessage: true);
