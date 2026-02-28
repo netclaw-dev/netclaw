@@ -21,31 +21,35 @@ public sealed partial class WebSearchTool : NetclawTool<WebSearchTool.Params>
 
     private static readonly string[] UserAgents =
     [
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
-        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0",
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Safari/605.1.15",
-        "Mozilla/5.0 (X11; Linux x86_64; rv:121.0) Gecko/20100101 Firefox/121.0",
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36 Edg/121.0.0.0",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:133.0) Gecko/20100101 Firefox/133.0",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:132.0) Gecko/20100101 Firefox/132.0",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:133.0) Gecko/20100101 Firefox/133.0",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.1 Safari/605.1.15",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.6 Safari/605.1.15",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0",
     ];
 
     private static readonly string[] AcceptLanguages =
     [
         "en-US,en;q=0.9",
-        "en-GB,en;q=0.9",
         "en-US,en;q=0.9,es;q=0.8",
-        "en,en-US;q=0.9",
+        "en-GB,en;q=0.9,en-US;q=0.8",
         "en-US,en;q=0.5",
+        "en-CA,en;q=0.9,en-US;q=0.8",
     ];
 
     private readonly HttpClient _httpClient;
     private readonly ToolConfig _config;
     private readonly Random _random = new();
 
-    // Rate limiting: track last request time
-    private DateTimeOffset _lastRequestTime = DateTimeOffset.MinValue;
-    private static readonly TimeSpan MinRequestInterval = TimeSpan.FromMilliseconds(1000);
+    // Rate limiting: randomized delay between requests (500-2000ms)
+    private static readonly object _rateLimitLock = new();
+    private static DateTimeOffset _lastRequestTime = DateTimeOffset.MinValue;
 
     public record Params(
         [property: Description("The search query")] string Query,
@@ -64,17 +68,16 @@ public sealed partial class WebSearchTool : NetclawTool<WebSearchTool.Params>
 
         var maxResults = Math.Clamp(args.MaxResults ?? DefaultMaxResults, 1, 30);
 
-        // Rate limiting
-        var elapsed = DateTimeOffset.UtcNow - _lastRequestTime;
-        if (elapsed < MinRequestInterval)
-        {
-            await Task.Delay(MinRequestInterval - elapsed, ct);
-        }
+        // Randomized rate limiting (500-2000ms gap between requests)
+        await MaybeDelaySearchAsync(ct);
 
         try
         {
             var html = await FetchSearchResultsAsync(args.Query, ct);
-            _lastRequestTime = DateTimeOffset.UtcNow;
+
+            // Detect DuckDuckGo CAPTCHA / bot detection
+            if (html.Contains("anomaly-modal", StringComparison.OrdinalIgnoreCase))
+                return "Error: Search blocked by DuckDuckGo bot detection (CAPTCHA). Try again later or use a different search provider.";
 
             var results = ParseResults(html, maxResults);
 
@@ -95,18 +98,45 @@ public sealed partial class WebSearchTool : NetclawTool<WebSearchTool.Params>
 
     private async Task<string> FetchSearchResultsAsync(string query, CancellationToken ct)
     {
-        using var request = new HttpRequestMessage(HttpMethod.Post, DdgLiteUrl);
-        request.Content = new FormUrlEncodedContent(new Dictionary<string, string>
-        {
-            ["q"] = query
-        });
+        var url = $"{DdgLiteUrl}?q={Uri.EscapeDataString(query)}";
+        using var request = new HttpRequestMessage(HttpMethod.Get, url);
 
+        // Full browser header fingerprint to avoid bot detection
         request.Headers.UserAgent.ParseAdd(UserAgents[_random.Next(UserAgents.Length)]);
+        request.Headers.Accept.ParseAdd("text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
         request.Headers.AcceptLanguage.ParseAdd(AcceptLanguages[_random.Next(AcceptLanguages.Length)]);
+        request.Headers.TryAddWithoutValidation("Accept-Encoding", "identity");
+        request.Headers.Connection.Add("keep-alive");
+        request.Headers.TryAddWithoutValidation("Upgrade-Insecure-Requests", "1");
+        request.Headers.TryAddWithoutValidation("Sec-Fetch-Dest", "document");
+        request.Headers.TryAddWithoutValidation("Sec-Fetch-Mode", "navigate");
+        request.Headers.TryAddWithoutValidation("Sec-Fetch-Site", "none");
+        request.Headers.TryAddWithoutValidation("Sec-Fetch-User", "?1");
+        request.Headers.CacheControl = new System.Net.Http.Headers.CacheControlHeaderValue { MaxAge = TimeSpan.Zero };
+        if (_random.Next(2) == 0)
+            request.Headers.TryAddWithoutValidation("DNT", "1");
 
         using var response = await _httpClient.SendAsync(request, ct);
         response.EnsureSuccessStatusCode();
         return await response.Content.ReadAsStringAsync(ct);
+    }
+
+    private async Task MaybeDelaySearchAsync(CancellationToken ct)
+    {
+        TimeSpan delay;
+        lock (_rateLimitLock)
+        {
+            var minGap = TimeSpan.FromMilliseconds(500 + _random.Next(1500));
+            var elapsed = DateTimeOffset.UtcNow - _lastRequestTime;
+            if (elapsed >= minGap)
+            {
+                _lastRequestTime = DateTimeOffset.UtcNow;
+                return;
+            }
+            delay = minGap - elapsed;
+            _lastRequestTime = DateTimeOffset.UtcNow + delay;
+        }
+        await Task.Delay(delay, ct);
     }
 
     /// <summary>
@@ -130,7 +160,8 @@ public sealed partial class WebSearchTool : NetclawTool<WebSearchTool.Params>
             if (results.Count >= maxResults)
                 break;
 
-            var url = WebUtility.HtmlDecode(link.GetAttributeValue("href", ""));
+            var rawUrl = WebUtility.HtmlDecode(link.GetAttributeValue("href", ""));
+            var url = CleanDuckDuckGoUrl(rawUrl);
             var title = WebUtility.HtmlDecode(link.InnerText).Trim();
 
             if (string.IsNullOrEmpty(url) || string.IsNullOrEmpty(title))
@@ -172,6 +203,29 @@ public sealed partial class WebSearchTool : NetclawTool<WebSearchTool.Params>
         }
 
         return sb.ToString().TrimEnd();
+    }
+
+    /// <summary>
+    /// DDG Lite wraps result URLs in a redirect: //duckduckgo.com/l/?uddg=ENCODED_URL&amp;...
+    /// Extract the real destination URL.
+    /// </summary>
+    internal static string CleanDuckDuckGoUrl(string rawUrl)
+    {
+        if (rawUrl.Contains("duckduckgo.com/l/?uddg=", StringComparison.Ordinal))
+        {
+            var uddgIndex = rawUrl.IndexOf("uddg=", StringComparison.Ordinal);
+            if (uddgIndex >= 0)
+            {
+                var encoded = rawUrl[(uddgIndex + 5)..];
+                var ampIndex = encoded.IndexOf('&');
+                if (ampIndex >= 0)
+                    encoded = encoded[..ampIndex];
+                var decoded = Uri.UnescapeDataString(encoded);
+                if (!string.IsNullOrEmpty(decoded))
+                    return decoded;
+            }
+        }
+        return rawUrl;
     }
 
     internal record SearchResult(string Title, string Url, string Snippet);
