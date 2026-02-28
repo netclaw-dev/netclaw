@@ -50,20 +50,18 @@ public class LlmSessionIntegrationTests : TestKit
     }
 
     [Fact]
-    public void JoinSession_receives_SessionJoined_acknowledgement()
+    public async Task JoinSession_receives_SessionJoined_acknowledgement()
     {
         var sessionId = new SessionId("test-channel/join-test");
         var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
         var subscriber = CreateTestProbe("join-probe");
 
-        sessionManager.Tell(new JoinSession
+        var joined = await sessionManager.Ask<SessionJoined>(new JoinSession
         {
             SessionId = sessionId,
             Subscriber = subscriber,
             Filter = OutputFilter.TextOnly
-        });
-
-        var joined = subscriber.ExpectMsg<SessionJoined>(TimeSpan.FromSeconds(3));
+        }, TimeSpan.FromSeconds(3));
         Assert.Equal(sessionId, joined.SessionId);
         Assert.Equal(0, joined.TurnCount);
         Assert.Null(joined.Title);
@@ -76,13 +74,13 @@ public class LlmSessionIntegrationTests : TestKit
         var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
         var subscriber = CreateTestProbe("adapter-probe");
 
-        sessionManager.Tell(new JoinSession
+        await sessionManager.Ask<SessionJoined>(new JoinSession
         {
             SessionId = sessionId,
             Subscriber = subscriber,
             Filter = OutputFilter.TextOnly
-        });
-        subscriber.ExpectMsg<SessionJoined>();
+        }, TimeSpan.FromSeconds(3));
+        subscriber.ExpectMsg<SessionJoined>(); // Drain subscriber notification
 
         var ack = await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
@@ -111,28 +109,29 @@ public class LlmSessionIntegrationTests : TestKit
         var textAndUsageSub = CreateTestProbe("text-usage");
         var fullSub = CreateTestProbe("full");
 
-        // Three subscribers with different filter bitmasks
-        sessionManager.Tell(new JoinSession
+        // Three subscribers with different filter bitmasks — sequential Ask
+        // ensures each join is fully processed before the next
+        await sessionManager.Ask<SessionJoined>(new JoinSession
         {
             SessionId = sessionId,
             Subscriber = textOnlySub,
             Filter = OutputFilter.TextOnly
-        });
-        sessionManager.Tell(new JoinSession
+        }, TimeSpan.FromSeconds(3));
+        textOnlySub.ExpectMsg<SessionJoined>(); // Drain subscriber notification
+        await sessionManager.Ask<SessionJoined>(new JoinSession
         {
             SessionId = sessionId,
             Subscriber = textAndUsageSub,
             Filter = OutputFilter.TextAndUsage
-        });
-        sessionManager.Tell(new JoinSession
+        }, TimeSpan.FromSeconds(3));
+        textAndUsageSub.ExpectMsg<SessionJoined>(); // Drain subscriber notification
+        await sessionManager.Ask<SessionJoined>(new JoinSession
         {
             SessionId = sessionId,
             Subscriber = fullSub,
             Filter = OutputFilter.Full
-        });
-        textOnlySub.ExpectMsg<SessionJoined>();
-        textAndUsageSub.ExpectMsg<SessionJoined>();
-        fullSub.ExpectMsg<SessionJoined>();
+        }, TimeSpan.FromSeconds(3));
+        fullSub.ExpectMsg<SessionJoined>(); // Drain subscriber notification
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
@@ -171,20 +170,20 @@ public class LlmSessionIntegrationTests : TestKit
         var sub1 = CreateTestProbe("adapter-1");
         var sub2 = CreateTestProbe("adapter-2");
 
-        sessionManager.Tell(new JoinSession
+        await sessionManager.Ask<SessionJoined>(new JoinSession
         {
             SessionId = session1,
             Subscriber = sub1,
             Filter = OutputFilter.TextOnly
-        });
-        sessionManager.Tell(new JoinSession
+        }, TimeSpan.FromSeconds(3));
+        sub1.ExpectMsg<SessionJoined>(); // Drain subscriber notification
+        await sessionManager.Ask<SessionJoined>(new JoinSession
         {
             SessionId = session2,
             Subscriber = sub2,
             Filter = OutputFilter.TextOnly
-        });
-        sub1.ExpectMsg<SessionJoined>();
-        sub2.ExpectMsg<SessionJoined>();
+        }, TimeSpan.FromSeconds(3));
+        sub2.ExpectMsg<SessionJoined>(); // Drain subscriber notification
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
@@ -219,13 +218,13 @@ public class LlmSessionIntegrationTests : TestKit
         var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
         var subscriber = CreateTestProbe("adapter-batch");
 
-        sessionManager.Tell(new JoinSession
+        await sessionManager.Ask<SessionJoined>(new JoinSession
         {
             SessionId = sessionId,
             Subscriber = subscriber,
             Filter = OutputFilter.TextOnly
-        });
-        subscriber.ExpectMsg<SessionJoined>();
+        }, TimeSpan.FromSeconds(3));
+        subscriber.ExpectMsg<SessionJoined>(); // Drain subscriber notification
 
         // First message — actor enters Processing
         var ack1 = await sessionManager.Ask<CommandAck>(new SendUserMessage
@@ -269,13 +268,13 @@ public class LlmSessionIntegrationTests : TestKit
         var subscriber = CreateTestProbe("recovery-sub");
 
         // Phase 1: Build up state — two completed turns
-        sessionManager.Tell(new JoinSession
+        await sessionManager.Ask<SessionJoined>(new JoinSession
         {
             SessionId = sessionId,
             Subscriber = subscriber,
             Filter = OutputFilter.TextOnly
-        });
-        subscriber.ExpectMsg<SessionJoined>();
+        }, TimeSpan.FromSeconds(3));
+        subscriber.ExpectMsg<SessionJoined>(); // Drain subscriber notification
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
@@ -299,18 +298,18 @@ public class LlmSessionIntegrationTests : TestKit
         var child = await Sys.ActorSelection(childPath).ResolveOne(TimeSpan.FromSeconds(3));
         Watch(child);
         Sys.Stop(child);
-        ExpectTerminated(child);
+        await ExpectTerminatedAsync(child);
 
         // Phase 3: Recover — send JoinSession to the same session ID.
         // GenericChildPerEntityParent creates a new actor that recovers from journal.
         var recoverSub = CreateTestProbe("recovery-sub-2");
-        sessionManager.Tell(new JoinSession
+        var recovered = await sessionManager.Ask<SessionJoined>(new JoinSession
         {
             SessionId = sessionId,
             Subscriber = recoverSub,
             Filter = OutputFilter.TextOnly
-        });
-        var recovered = recoverSub.ExpectMsg<SessionJoined>(TimeSpan.FromSeconds(5));
+        }, TimeSpan.FromSeconds(5));
+        recoverSub.ExpectMsg<SessionJoined>(); // Drain subscriber notification
         Assert.Equal(sessionId, recovered.SessionId);
         Assert.Equal(2, recovered.TurnCount); // Both turns recovered
 

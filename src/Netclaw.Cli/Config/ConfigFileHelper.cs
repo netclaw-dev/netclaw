@@ -1,0 +1,93 @@
+using System.Text.Json;
+
+namespace Netclaw.Cli.Config;
+
+/// <summary>
+/// Shared helpers for reading and writing netclaw.json and secrets.json config files.
+/// Extracted from McpCommand for reuse by ProviderCommand, ModelCommand, and TUI flows.
+/// </summary>
+internal static class ConfigFileHelper
+{
+    internal static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
+
+    /// <summary>
+    /// Load both netclaw.json and secrets.json as mutable dictionaries.
+    /// Missing files get a default <c>{ "configVersion": 1 }</c> skeleton.
+    /// </summary>
+    internal static (Dictionary<string, object> config, Dictionary<string, object> secrets)
+        LoadConfigFiles(Configuration.NetclawPaths paths)
+    {
+        var config = LoadJsonDict(paths.NetclawConfigPath);
+        var secrets = LoadJsonDict(paths.SecretsPath);
+        return (config, secrets);
+    }
+
+    /// <summary>
+    /// Load a JSON file as a mutable dictionary. Returns a default skeleton if the file doesn't exist.
+    /// </summary>
+    internal static Dictionary<string, object> LoadJsonDict(string path)
+    {
+        if (!File.Exists(path))
+            return new Dictionary<string, object> { ["configVersion"] = 1 };
+
+        var text = File.ReadAllText(path);
+        return JsonSerializer.Deserialize<Dictionary<string, object>>(text)
+            ?? new Dictionary<string, object> { ["configVersion"] = 1 };
+    }
+
+    /// <summary>
+    /// Get or create a nested dictionary section. Handles JsonElement deserialization
+    /// when the section was loaded from a file.
+    /// </summary>
+    internal static Dictionary<string, object> GetOrCreateSection(
+        Dictionary<string, object> dict, string key)
+    {
+        if (dict.TryGetValue(key, out var existing))
+        {
+            if (existing is JsonElement je)
+            {
+                var parsed = JsonSerializer.Deserialize<Dictionary<string, object>>(je.GetRawText())
+                    ?? new Dictionary<string, object>();
+                dict[key] = parsed;
+                return parsed;
+            }
+
+            return (Dictionary<string, object>)existing;
+        }
+
+        var section = new Dictionary<string, object>();
+        dict[key] = section;
+        return section;
+    }
+
+    /// <summary>
+    /// Get an existing nested dictionary section, or null if it doesn't exist.
+    /// </summary>
+    internal static Dictionary<string, object>? GetSectionOrNull(
+        Dictionary<string, object> dict, string key)
+    {
+        if (!dict.TryGetValue(key, out var existing))
+            return null;
+
+        if (existing is JsonElement je)
+        {
+            var parsed = JsonSerializer.Deserialize<Dictionary<string, object>>(je.GetRawText())
+                ?? new Dictionary<string, object>();
+            dict[key] = parsed;
+            return parsed;
+        }
+
+        return existing as Dictionary<string, object>;
+    }
+
+    /// <summary>
+    /// Serialize a config dictionary and write it to disk, creating parent directories if needed.
+    /// </summary>
+    internal static void WriteConfigFile(string path, Dictionary<string, object> data)
+    {
+        var dir = Path.GetDirectoryName(path);
+        if (dir is not null)
+            Directory.CreateDirectory(dir);
+        File.WriteAllText(path, JsonSerializer.Serialize(data, JsonOptions));
+    }
+}
