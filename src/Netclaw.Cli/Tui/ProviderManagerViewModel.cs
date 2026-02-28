@@ -400,11 +400,9 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
     public void ConfirmAdd()
     {
         WriteProviderConfig();
-        RefreshDisplayProviders();
-        CurrentState.Value = ProviderManagerState.List;
         StatusMessage.Value = $"Added provider '{NewProviderName}'. Restart daemon for changes to take effect.";
         ClearAddState();
-        NotifyStateChanged();
+        RefreshAndProbeAll();
     }
 
     /// <summary>
@@ -446,12 +444,10 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
         if (secretProviders?.Remove(RemoveProviderName) == true)
             ConfigFileHelper.WriteConfigFile(_paths.SecretsPath, secrets);
 
-        RefreshDisplayProviders();
         StatusMessage.Value = $"Removed provider '{RemoveProviderName}'. Restart daemon for changes to take effect.";
         RemoveProviderName = null;
         DetailProvider = null;
-        CurrentState.Value = ProviderManagerState.List;
-        NotifyStateChanged();
+        RefreshAndProbeAll();
     }
 
     /// <summary>
@@ -556,6 +552,19 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
 
     // ── Probe ──
 
+    /// <summary>
+    /// Refresh the display list from config and re-probe all configured providers.
+    /// Transitions through Loading → List with health indicators.
+    /// Preserves <see cref="StatusMessage"/> so callers can set it before calling.
+    /// </summary>
+    internal void RefreshAndProbeAll()
+    {
+        RefreshDisplayProviders();
+        CurrentState.Value = ProviderManagerState.Loading;
+        NotifyStateChanged();
+        EagerProbeCompletion = ProbeAllConfiguredAsync();
+    }
+
     internal void StartProbe()
     {
         CancelProbe();
@@ -598,17 +607,10 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
         {
             if (IsFixFlow)
             {
-                // Fix flow: update the detail provider's health and return to list
-                if (DetailProvider is not null)
-                {
-                    DetailProvider.ProbeResult = result;
-                    DetailProvider.Health = ProviderHealthStatus.Healthy;
-                }
-
-                RefreshDisplayProviders();
+                // Fix flow: re-probe all providers so list shows fresh health
                 IsFixFlow = false;
-                CurrentState.Value = ProviderManagerState.List;
                 StatusMessage.Value = "Credentials updated successfully. Restart daemon for changes to take effect.";
+                RefreshAndProbeAll();
             }
             else
             {

@@ -331,7 +331,10 @@ public sealed class ProviderManagerViewModelTests : IDisposable
         vm.FixApiKey = "sk-new-key";
         vm.SubmitFixCredentials();
 
+        // Wait for the single-provider probe to complete
         await vm.ProbeCompletion!.WaitAsync(TimeSpan.FromSeconds(5));
+        // Fix flow triggers RefreshAndProbeAll — wait for the eager re-probe too
+        await vm.EagerProbeCompletion!.WaitAsync(TimeSpan.FromSeconds(5));
 
         Assert.Equal(ProviderManagerState.List, vm.CurrentState.Value);
         Assert.False(vm.IsFixFlow);
@@ -387,6 +390,9 @@ public sealed class ProviderManagerViewModelTests : IDisposable
         await vm.ProbeCompletion!.WaitAsync(TimeSpan.FromSeconds(5));
 
         vm.ConfirmAdd();
+
+        // ConfirmAdd triggers RefreshAndProbeAll — wait for re-probe
+        await vm.EagerProbeCompletion!.WaitAsync(TimeSpan.FromSeconds(5));
 
         Assert.Equal(ProviderManagerState.List, vm.CurrentState.Value);
 
