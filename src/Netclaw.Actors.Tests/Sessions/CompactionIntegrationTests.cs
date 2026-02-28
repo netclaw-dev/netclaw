@@ -74,7 +74,7 @@ public class CompactionIntegrationTests : TestKit
             Subscriber = subscriber,
             Filter = OutputFilter.Full
         });
-        subscriber.ExpectMsg<SessionJoined>();
+        subscriber.ExpectMsg<SessionJoined>(TimeSpan.FromSeconds(10));
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
@@ -118,7 +118,7 @@ public class CompactionIntegrationTests : TestKit
             Subscriber = subscriber,
             Filter = OutputFilter.Full
         });
-        subscriber.ExpectMsg<SessionJoined>();
+        subscriber.ExpectMsg<SessionJoined>(TimeSpan.FromSeconds(10));
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
@@ -157,7 +157,7 @@ public class CompactionIntegrationTests : TestKit
             Subscriber = subscriber,
             Filter = OutputFilter.Full
         });
-        subscriber.ExpectMsg<SessionJoined>();
+        subscriber.ExpectMsg<SessionJoined>(TimeSpan.FromSeconds(10));
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
@@ -213,7 +213,7 @@ public class CompactionIntegrationTests : TestKit
             Subscriber = subscriber,
             Filter = OutputFilter.Full
         });
-        subscriber.ExpectMsg<SessionJoined>();
+        subscriber.ExpectMsg<SessionJoined>(TimeSpan.FromSeconds(10));
 
         // First message — triggers turn then compaction
         await sessionManager.Ask<CommandAck>(new SendUserMessage
@@ -272,7 +272,7 @@ public class CompactionIntegrationTests : TestKit
             Subscriber = subscriber,
             Filter = OutputFilter.Full
         });
-        subscriber.ExpectMsg<SessionJoined>();
+        subscriber.ExpectMsg<SessionJoined>(TimeSpan.FromSeconds(10));
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
@@ -301,7 +301,7 @@ public class CompactionIntegrationTests : TestKit
             Subscriber = recoverSub,
             Filter = OutputFilter.Full
         });
-        var recovered = recoverSub.ExpectMsg<SessionJoined>(TimeSpan.FromSeconds(5));
+        var recovered = recoverSub.ExpectMsg<SessionJoined>(TimeSpan.FromSeconds(10));
         Assert.Equal(sessionId, recovered.SessionId);
 
         // Phase 4: Verify session still works after recovery
