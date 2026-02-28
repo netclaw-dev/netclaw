@@ -8,14 +8,16 @@ public sealed record SessionConfig
 {
     /// <summary>
     /// The model identifier (e.g., "qwen3:30b", "claude-sonnet-4-20250514").
+    /// Populated from <see cref="ModelSelection"/> at startup, not from the Session config section.
     /// </summary>
-    public required string ModelId { get; init; }
+    public string ModelId { get; init; } = string.Empty;
 
     /// <summary>
     /// Maximum context window size in tokens for the configured model.
     /// Used to determine when compaction should trigger.
+    /// Populated from <see cref="ModelSelection"/> at startup, not from the Session config section.
     /// </summary>
-    public required int ContextWindowTokens { get; init; }
+    public int ContextWindowTokens { get; init; } = 32_768;
 
     /// <summary>
     /// Percentage of context window usage (0.0–1.0) at which compaction triggers.
