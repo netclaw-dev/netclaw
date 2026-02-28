@@ -416,3 +416,6 @@ FodyWeavers.xsd
 
 # Local app settings (machine-specific config, not committed)
 **/appsettings.Local.json
+
+# Claude worktree management
+.claude-wt/worktrees
