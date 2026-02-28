@@ -373,6 +373,14 @@ public sealed class DaemonClient : IAsyncDisposable
                 Cause = dto.ErrorDetail is not null
                     ? new Exception(dto.ErrorDetail) : null
             },
+            "file" => new FileOutput
+            {
+                SessionId = sessionId,
+                TimestampMs = dto.TimestampMs,
+                FilePath = dto.FilePath ?? string.Empty,
+                FileName = dto.FileName ?? "file",
+                MimeType = dto.MimeType ?? "application/octet-stream"
+            },
             "compaction" => new CompactionOutput
             {
                 SessionId = sessionId,

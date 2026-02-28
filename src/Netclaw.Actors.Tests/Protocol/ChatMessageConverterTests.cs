@@ -205,4 +205,170 @@ public class ChatMessageConverterTests
         Assert.Single(msg.ToolCalls);
         Assert.Equal("web_search", msg.ToolCalls[0].Name);
     }
+
+    // ── Media / DataContent round-trip tests ──
+
+    [Fact]
+    public void FromAiMessage_writes_DataContent_to_session_dir_and_produces_media_reference()
+    {
+        using var tempDir = new TempSessionDir();
+        var imageBytes = new byte[] { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A }; // PNG header
+        var contents = new List<AIContent>
+        {
+            new TextContent("Check this image"),
+            new DataContent(imageBytes, "image/png")
+        };
+        var ai = new AiChatMessage(AiChatRole.User, contents);
+
+        var msg = ChatMessageConverter.FromAiMessage(ai, sessionDir: tempDir.Path);
+
+        Assert.Equal("Check this image", msg.Content);
+        Assert.Single(msg.MediaReferences);
+        Assert.Equal("image/png", msg.MediaReferences[0].MimeType);
+        Assert.Equal((int)MediaModality.Image, msg.MediaReferences[0].Modality);
+        Assert.EndsWith(".png", msg.MediaReferences[0].RelativePath);
+
+        // Verify file was written to disk
+        var filePath = Path.Combine(tempDir.Path, "media", msg.MediaReferences[0].RelativePath);
+        Assert.True(File.Exists(filePath));
+        Assert.Equal(imageBytes, File.ReadAllBytes(filePath));
+    }
+
+    [Fact]
+    public void ToAiMessage_reads_media_files_and_produces_DataContent()
+    {
+        using var tempDir = new TempSessionDir();
+        var imageBytes = new byte[] { 0xFF, 0xD8, 0xFF, 0xE0 }; // JPEG header
+        var mediaDir = Path.Combine(tempDir.Path, "media");
+        Directory.CreateDirectory(mediaDir);
+        File.WriteAllBytes(Path.Combine(mediaDir, "test.jpg"), imageBytes);
+
+        var msg = new SerializableChatMessage
+        {
+            Role = ChatRole.User,
+            Content = "Look at this",
+            MediaReferences =
+            {
+                new SerializableMediaReference
+                {
+                    RelativePath = "test.jpg",
+                    MimeType = "image/jpeg",
+                    Modality = (int)MediaModality.Image
+                }
+            }
+        };
+
+        var ai = ChatMessageConverter.ToAiMessage(msg, sessionDir: tempDir.Path);
+
+        Assert.Equal(AiChatRole.User, ai.Role);
+        var textContent = Assert.Single(ai.Contents.OfType<TextContent>());
+        Assert.Equal("Look at this", textContent.Text);
+        var dataContent = Assert.Single(ai.Contents.OfType<DataContent>());
+        Assert.Equal("image/jpeg", dataContent.MediaType);
+        Assert.Equal(imageBytes, dataContent.Data.ToArray());
+    }
+
+    [Fact]
+    public void Full_media_round_trip_through_converter()
+    {
+        using var tempDir = new TempSessionDir();
+        var imageBytes = new byte[] { 0x47, 0x49, 0x46, 0x38, 0x39, 0x61 }; // GIF89a header
+
+        // Step 1: AI message with DataContent → SerializableChatMessage
+        var originalAi = new AiChatMessage(AiChatRole.User, new List<AIContent>
+        {
+            new TextContent("Here is a gif"),
+            new DataContent(imageBytes, "image/gif")
+        });
+        var serializable = ChatMessageConverter.FromAiMessage(originalAi, sessionDir: tempDir.Path);
+        Assert.Single(serializable.MediaReferences);
+
+        // Step 2: SerializableChatMessage → AI message (reads file back)
+        var reconstructed = ChatMessageConverter.ToAiMessage(serializable, sessionDir: tempDir.Path);
+
+        var text = Assert.Single(reconstructed.Contents.OfType<TextContent>());
+        Assert.Equal("Here is a gif", text.Text);
+        var data = Assert.Single(reconstructed.Contents.OfType<DataContent>());
+        Assert.Equal("image/gif", data.MediaType);
+        Assert.Equal(imageBytes, data.Data.ToArray());
+    }
+
+    [Fact]
+    public void ToAiMessage_skips_missing_media_files_gracefully()
+    {
+        using var tempDir = new TempSessionDir();
+
+        var msg = new SerializableChatMessage
+        {
+            Role = ChatRole.User,
+            Content = "Image was deleted",
+            MediaReferences =
+            {
+                new SerializableMediaReference
+                {
+                    RelativePath = "nonexistent.png",
+                    MimeType = "image/png",
+                    Modality = (int)MediaModality.Image
+                }
+            }
+        };
+
+        var ai = ChatMessageConverter.ToAiMessage(msg, sessionDir: tempDir.Path);
+
+        // Text content should still be present, but no DataContent
+        Assert.Equal("Image was deleted", ai.Text);
+        Assert.Empty(ai.Contents.OfType<DataContent>());
+    }
+
+    [Fact]
+    public void FromAiMessage_ignores_empty_DataContent()
+    {
+        using var tempDir = new TempSessionDir();
+        var contents = new List<AIContent>
+        {
+            new TextContent("No actual data"),
+            new DataContent(Array.Empty<byte>(), "image/png")
+        };
+        var ai = new AiChatMessage(AiChatRole.User, contents);
+
+        var msg = ChatMessageConverter.FromAiMessage(ai, sessionDir: tempDir.Path);
+
+        Assert.Equal("No actual data", msg.Content);
+        Assert.Empty(msg.MediaReferences);
+    }
+
+    [Fact]
+    public void MimeToExtension_maps_common_types()
+    {
+        Assert.Equal(".png", ChatMessageConverter.MimeToExtension("image/png"));
+        Assert.Equal(".jpg", ChatMessageConverter.MimeToExtension("image/jpeg"));
+        Assert.Equal(".gif", ChatMessageConverter.MimeToExtension("image/gif"));
+        Assert.Equal(".webp", ChatMessageConverter.MimeToExtension("image/webp"));
+        Assert.Equal(".mp3", ChatMessageConverter.MimeToExtension("audio/mpeg"));
+        Assert.Equal(".bin", ChatMessageConverter.MimeToExtension("application/octet-stream"));
+    }
+
+    [Fact]
+    public void MimeToModality_classifies_correctly()
+    {
+        Assert.Equal(MediaModality.Image, ChatMessageConverter.MimeToModality("image/png"));
+        Assert.Equal(MediaModality.Image, ChatMessageConverter.MimeToModality("image/jpeg"));
+        Assert.Equal(MediaModality.Audio, ChatMessageConverter.MimeToModality("audio/mpeg"));
+        Assert.Equal(MediaModality.Video, ChatMessageConverter.MimeToModality("video/mp4"));
+    }
+
+    /// <summary>Disposable temp directory for session media tests.</summary>
+    private sealed class TempSessionDir : IDisposable
+    {
+        public string Path { get; } = System.IO.Path.Combine(
+            System.IO.Path.GetTempPath(), $"netclaw-test-{Guid.NewGuid():N}");
+
+        public TempSessionDir() => Directory.CreateDirectory(Path);
+
+        public void Dispose()
+        {
+            if (Directory.Exists(Path))
+                Directory.Delete(Path, recursive: true);
+        }
+    }
 }

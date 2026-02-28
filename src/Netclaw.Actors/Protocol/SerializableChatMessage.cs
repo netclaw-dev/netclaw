@@ -31,6 +31,43 @@ public sealed class SerializableChatMessage
     /// </summary>
     [ProtoMember(5)]
     public string? ToolCallId { get; set; }
+
+    /// <summary>
+    /// Media references (images, audio, etc.) attached to this message.
+    /// Stored as relative paths within the session media directory.
+    /// </summary>
+    [ProtoMember(6)]
+    public List<SerializableMediaReference> MediaReferences { get; set; } = new();
+}
+
+/// <summary>
+/// Persistence-safe reference to a media file stored in the session directory.
+/// </summary>
+[ProtoContract]
+public sealed class SerializableMediaReference
+{
+    /// <summary>Relative path within the session media directory.</summary>
+    [ProtoMember(1)]
+    public string RelativePath { get; set; } = string.Empty;
+
+    /// <summary>MIME type of the media (e.g. "image/png").</summary>
+    [ProtoMember(2)]
+    public string MimeType { get; set; } = string.Empty;
+
+    /// <summary>Content modality as integer for wire safety (maps to <see cref="MediaModality"/>).</summary>
+    [ProtoMember(3)]
+    public int Modality { get; set; }
+}
+
+/// <summary>
+/// Content modality for media references. Matches <see cref="Netclaw.Configuration.ModelModality"/>
+/// values but kept as a separate enum to avoid coupling persistence types to configuration.
+/// </summary>
+public enum MediaModality
+{
+    Image = 1,
+    Audio = 2,
+    Video = 3
 }
 
 /// <summary>

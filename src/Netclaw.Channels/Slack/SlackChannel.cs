@@ -18,6 +18,7 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
     private readonly ISlackSocketModeClient _socketModeClient;
     private readonly ISlackReplyClient _replyClient;
     private readonly IContentScanner _contentScanner;
+    private readonly IHttpClientFactory _httpClientFactory;
     private readonly TimeProvider _timeProvider;
     private readonly SlackChannelOptions _options;
     private readonly ILogger<SlackChannel> _logger;
@@ -34,6 +35,7 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
         ISlackSocketModeClient socketModeClient,
         ISlackReplyClient replyClient,
         IContentScanner contentScanner,
+        IHttpClientFactory httpClientFactory,
         TimeProvider timeProvider,
         SlackChannelOptions options,
         ILogger<SlackChannel> logger)
@@ -44,6 +46,7 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
         _socketModeClient = socketModeClient;
         _replyClient = replyClient;
         _contentScanner = contentScanner;
+        _httpClientFactory = httpClientFactory;
         _timeProvider = timeProvider;
         _options = options;
         _logger = logger;
@@ -79,6 +82,8 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
         _botUserId = auth.UserId;
         _defaultChannelId = await ResolveDefaultChannelIdAsync(cancellationToken);
 
+        var httpClient = _httpClientFactory.CreateClient("slack-files");
+
         _gateway = _system.ActorOf(
             SlackGatewayActor.CreateProps(new SlackGatewayDependencies(
                 Pipeline: _pipeline,
@@ -88,7 +93,8 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
                 BotUserId: _botUserId,
                 DefaultChannelId: _defaultChannelId,
                 ReplyClient: _replyClient,
-                ContentScanner: _contentScanner)),
+                ContentScanner: _contentScanner,
+                HttpClient: httpClient)),
             "slack-gateway");
 
         await _socketModeClient.Connect(cancellationToken: cancellationToken);
@@ -119,6 +125,9 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
 
     public Task Handle(MessageEvent slackEvent)
     {
+        // Map Slack file attachments to SlackFileReference
+        var files = MapSlackFiles(slackEvent.Files);
+
         _gateway?.Tell(new SlackInboundMessage(
             Kind: SlackInboundKind.Message,
             EventId: BuildEventId(
@@ -135,7 +144,8 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
             Text: slackEvent.Text ?? string.Empty,
             Subtype: slackEvent.Subtype,
             Hidden: slackEvent.Hidden,
-            IsDirectMessage: IsDirectConversation(slackEvent.Channel)));
+            IsDirectMessage: IsDirectConversation(slackEvent.Channel),
+            Files: files));
 
         return Task.CompletedTask;
     }
@@ -161,6 +171,28 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
             IsDirectMessage: IsDirectConversation(slackEvent.Channel)));
 
         return Task.CompletedTask;
+    }
+
+    private static IReadOnlyList<SlackFileReference>? MapSlackFiles(IList<SlackNet.File>? files)
+    {
+        if (files is null or { Count: 0 })
+            return null;
+
+        var result = new List<SlackFileReference>(files.Count);
+        foreach (var f in files)
+        {
+            if (string.IsNullOrWhiteSpace(f.UrlPrivateDownload))
+                continue;
+
+            result.Add(new SlackFileReference(
+                Id: f.Id ?? string.Empty,
+                Name: f.Name ?? "attachment",
+                MimeType: f.Mimetype ?? "application/octet-stream",
+                Size: f.Size,
+                UrlPrivateDownload: f.UrlPrivateDownload));
+        }
+
+        return result.Count > 0 ? result : null;
     }
 
     private static bool IsDirectConversation(string channelId)

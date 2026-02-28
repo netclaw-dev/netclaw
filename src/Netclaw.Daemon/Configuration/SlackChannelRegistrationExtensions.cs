@@ -23,6 +23,7 @@ public static class SlackChannelRegistrationExtensions
         if (slackOptions.SocketMode && (slackOptions.AppToken is null || string.IsNullOrWhiteSpace(slackOptions.AppToken.Value)))
             throw new InvalidOperationException("Slack Socket Mode is enabled but Slack:AppToken is not configured.");
 
+        services.AddHttpClient("slack-files");
         services.AddSingleton<ISlackReplyClient, SlackReplyClient>();
         services.AddKeyedSingleton<IChannel, SlackChannel>(SlackChannelKey);
         services.AddSingleton<IChannel>(sp =>

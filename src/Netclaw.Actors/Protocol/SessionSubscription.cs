@@ -25,6 +25,9 @@ public enum OutputFilter
     /// <summary><see cref="UsageOutput"/> — token counts and context window consumption.</summary>
     Usage = 1 << 3,
 
+    /// <summary><see cref="FileOutput"/> — file attachments produced by the LLM or tools.</summary>
+    Files = 1 << 4,
+
     // ── Convenience presets ──
 
     /// <summary>Text replies only — suitable for end-user adapters (Slack, TUI chat).</summary>
@@ -34,7 +37,7 @@ public enum OutputFilter
     TextAndUsage = Text | Usage,
 
     /// <summary>Everything — suitable for ops consoles, debugging, and observability.</summary>
-    Full = Text | Thinking | ToolCalls | Usage,
+    Full = Text | Thinking | ToolCalls | Usage | Files,
 }
 
 /// <summary>

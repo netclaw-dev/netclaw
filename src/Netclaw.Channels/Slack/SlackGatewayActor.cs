@@ -77,5 +77,6 @@ public sealed record SlackGatewayDependencies(
     string? DefaultChannelId,
     ISlackReplyClient ReplyClient,
     IContentScanner ContentScanner,
+    HttpClient? HttpClient = null,
     Func<string, SlackGatewayDependencies, Props>? ConversationPropsFactory = null,
     Func<SessionId, string, string, SlackGatewayDependencies, Props>? ThreadPropsFactory = null);

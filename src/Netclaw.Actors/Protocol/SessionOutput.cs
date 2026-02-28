@@ -150,6 +150,22 @@ public sealed record ErrorOutput : SessionOutput
 }
 
 /// <summary>
+/// A file produced by the LLM or a tool, ready for delivery to the user.
+/// Requires <see cref="OutputFilter.Files"/>.
+/// </summary>
+public sealed record FileOutput : SessionOutput
+{
+    /// <summary>Absolute path to the file on disk.</summary>
+    public required string FilePath { get; init; }
+
+    /// <summary>User-facing filename.</summary>
+    public required string FileName { get; init; }
+
+    /// <summary>MIME type of the file.</summary>
+    public required string MimeType { get; init; }
+}
+
+/// <summary>
 /// Session context was compacted to stay within the context window.
 /// Lifecycle — always delivered regardless of <see cref="OutputFilter"/>.
 /// </summary>

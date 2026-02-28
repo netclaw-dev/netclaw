@@ -201,5 +201,8 @@ public sealed class SlackActorHierarchyTests(ITestOutputHelper output) : TestKit
     {
         public Task PostThreadReplyAsync(SlackPostMessage message, CancellationToken cancellationToken = default)
             => Task.CompletedTask;
+
+        public Task UploadFileToThreadAsync(string channelId, string threadTs, string filePath, string? filename = null, CancellationToken cancellationToken = default)
+            => Task.CompletedTask;
     }
 }

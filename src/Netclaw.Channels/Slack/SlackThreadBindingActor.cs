@@ -72,11 +72,60 @@ internal sealed class SlackThreadBindingActor : ReceiveActor
     {
         await EnsureInitializedAsync();
 
+        // Build content list: text + downloaded file attachments
+        var contents = new List<AIContent>();
+        if (!string.IsNullOrEmpty(message.Text))
+            contents.Add(new TextContent(message.Text));
+
+        // Download and scan file attachments
+        if (message.Files is { Count: > 0 } && _dependencies.HttpClient is not null)
+        {
+            foreach (var file in message.Files)
+            {
+                // Only process image MIME types for now
+                if (!file.MimeType.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
+                {
+                    _log.Debug("Skipping non-image file attachment: {Name} ({MimeType})", file.Name, file.MimeType);
+                    continue;
+                }
+
+                try
+                {
+                    var bytes = await DownloadSlackFileAsync(file);
+                    if (bytes.Length == 0)
+                        continue;
+
+                    var scanResult = await _dependencies.ContentScanner.ScanAsync(
+                        bytes, file.Name, file.MimeType);
+
+                    if (!scanResult.IsAllowed)
+                    {
+                        _log.Warning("Content scan rejected file {Name}: {Message}",
+                            file.Name, scanResult.Message ?? scanResult.Error?.ToString());
+                        continue;
+                    }
+
+                    contents.Add(new DataContent(bytes.ToArray(), file.MimeType));
+                    _log.Info("Downloaded and scanned Slack file: {Name} ({Size} bytes)", file.Name, bytes.Length);
+                }
+                catch (Exception ex)
+                {
+                    _log.Warning(ex, "Failed to download Slack file {Name}, skipping", file.Name);
+                }
+            }
+        }
+
+        if (contents.Count == 0)
+        {
+            _log.Debug("No content to enqueue after file processing");
+            return;
+        }
+
         var result = await _inputQueue!.OfferAsync(new ChannelInput
         {
             SenderId = message.SenderId,
             ChannelId = _channelId,
-            Contents = [new TextContent(message.Text)],
+            Contents = contents,
             ReceivedAt = message.ReceivedAt
         });
 
@@ -95,6 +144,19 @@ internal sealed class SlackThreadBindingActor : ReceiveActor
 
         if (result is QueueOfferResult.Failure failure)
             _log.Error(failure.Cause, "Failed to enqueue Slack message for session {0}", _sessionId.Value);
+    }
+
+    private async Task<ReadOnlyMemory<byte>> DownloadSlackFileAsync(SlackFileReference file)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get, file.UrlPrivateDownload);
+        if (_dependencies.Options.BotToken is { Value: { Length: > 0 } token })
+            request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
+
+        using var response = await _dependencies.HttpClient!.SendAsync(request);
+        response.EnsureSuccessStatusCode();
+
+        var bytes = await response.Content.ReadAsByteArrayAsync();
+        return bytes;
     }
 
     private async Task EnsureInitializedAsync()
@@ -151,6 +213,10 @@ internal sealed class SlackThreadBindingActor : ReceiveActor
 
                 break;
 
+            case FileOutput file:
+                await SafeUploadFileAsync(file);
+                break;
+
             case ErrorOutput err:
                 await SafePostAsync($":warning: {err.Message}");
                 _buffer.Clear();
@@ -191,6 +257,30 @@ internal sealed class SlackThreadBindingActor : ReceiveActor
         {
             _log.Error(ex, "Failed posting Slack reply for session {0}", _sessionId.Value);
             ChannelTelemetry.RecordSlackReplyFailed(_dependencies.TimeProvider.GetElapsedTime(startedAt).TotalMilliseconds);
+        }
+    }
+
+    private async Task SafeUploadFileAsync(FileOutput file)
+    {
+        try
+        {
+            if (!File.Exists(file.FilePath))
+            {
+                _log.Warning("File not found for upload: {Path}", file.FilePath);
+                return;
+            }
+
+            await _dependencies.ReplyClient.UploadFileToThreadAsync(
+                _channelId,
+                _threadTs,
+                file.FilePath,
+                file.FileName);
+
+            _log.Info("Uploaded file to Slack thread: {FileName}", file.FileName);
+        }
+        catch (Exception ex)
+        {
+            _log.Error(ex, "Failed to upload file {FileName} to Slack thread", file.FileName);
         }
     }
 

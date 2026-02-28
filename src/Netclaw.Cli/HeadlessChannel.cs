@@ -199,6 +199,11 @@ public sealed class HeadlessChannel : IChannel
                 _receivedThinkingDeltaInCurrentTurn = false;
                 break;
 
+            case FileOutput msg:
+                Console.WriteLine($"[file] {msg.FileName} \u2192 {msg.FilePath}");
+                Log(log, $"FILE: name={msg.FileName} path={msg.FilePath} mime={msg.MimeType}");
+                break;
+
             case CompactionOutput msg:
                 Console.WriteLine($"[compaction] {msg.MessagesBefore} \u2192 {msg.MessagesAfter} messages");
                 Log(log, $"COMPACTION: before={msg.MessagesBefore} after={msg.MessagesAfter} tool_results_cleared={msg.ToolResultsCleared} summarized={msg.Summarized}");

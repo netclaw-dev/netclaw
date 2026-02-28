@@ -16,6 +16,12 @@ public sealed class SendUserMessage : IWithSessionId
     public string Content { get; set; } = string.Empty;
 
     /// <summary>
+    /// Media references (images, audio, etc.) attached to this message.
+    /// </summary>
+    [ProtoMember(3)]
+    public List<SerializableMediaReference> MediaReferences { get; set; } = new();
+
+    /// <summary>
     /// Ephemeral channel metadata for ACL/audit. Not persisted.
     /// </summary>
     [ProtoIgnore]
