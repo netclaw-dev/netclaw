@@ -92,7 +92,7 @@ static async Task RunAsync(string[] args)
             builder.Services.AddHttpClient<IProviderProbe, ProviderProbe>();
             builder.Services.AddHttpClient<ISlackProbe, SlackProbe>();
 
-            // Bootstrap page dependencies (daemon lifecycle + SignalR)
+            // Init wizard + chat page dependencies (daemon lifecycle + SignalR)
             var initPaths = new NetclawPaths();
             builder.Services.AddSingleton(initPaths);
             builder.Services.AddSingleton(TimeProvider.System);
@@ -101,12 +101,39 @@ static async Task RunAsync(string[] args)
             var daemonEndpoint =
                 Environment.GetEnvironmentVariable("NETCLAW_DAEMON_ENDPOINT")
                 ?? "http://127.0.0.1:5199";
-            builder.Services.AddSingleton(new BootstrapOptions(daemonEndpoint));
+
+            // Register DaemonClient and SessionConfig for ChatPage
+            // (uses freshly-written config from the wizard's WriteConfig)
+            builder.Services.AddSingleton(new DaemonClient(daemonEndpoint));
+            builder.Services.AddSingleton(sp =>
+            {
+                // Read the just-written config files for session settings
+                var configBuilder = new ConfigurationBuilder()
+                    .AddJsonFile(initPaths.NetclawConfigPath, optional: true, reloadOnChange: false)
+                    .AddJsonFile(initPaths.SecretsPath, optional: true, reloadOnChange: false)
+                    .AddEnvironmentVariables("NETCLAW_");
+                var initConfig = configBuilder.Build();
+
+                var models = initConfig.GetSection("Models")
+                    .Get<ModelSelection>() ?? new ModelSelection();
+
+                var sessionSection = initConfig.GetSection("Session");
+                return new SessionConfig
+                {
+                    ModelId = models.Main.ModelId,
+                    ContextWindowTokens = models.Main.ContextWindow ?? 32_768,
+                    CompactionModelId = models.Compaction?.ModelId,
+                    CompactionThreshold = sessionSection.GetValue("CompactionThreshold", 0.75),
+                    SnapshotInterval = sessionSection.GetValue("SnapshotInterval", 20),
+                    KeepRecentToolResults = sessionSection.GetValue("KeepRecentToolResults", 3),
+                    MaxToolIterationsPerTurn = sessionSection.GetValue("MaxToolIterationsPerTurn", 10),
+                };
+            });
 
             builder.Services.AddTermina("/init", termina =>
             {
                 termina.RegisterRoute<InitWizardPage, InitWizardViewModel>("/init");
-                termina.RegisterRoute<BootstrapPage, BootstrapViewModel>("/bootstrap");
+                termina.RegisterRoute<ChatPage, ChatViewModel>("/chat");
             });
 
             var initApp = builder.Build();

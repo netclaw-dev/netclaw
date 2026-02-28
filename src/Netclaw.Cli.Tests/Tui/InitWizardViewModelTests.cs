@@ -53,6 +53,9 @@ public sealed class InitWizardViewModelTests : IDisposable
         Assert.Equal(WizardStep.Exposure, vm.CurrentStep.Value);
 
         vm.GoNext();
+        Assert.Equal(WizardStep.Identity, vm.CurrentStep.Value);
+
+        vm.GoNext();
         Assert.Equal(WizardStep.HealthCheck, vm.CurrentStep.Value);
     }
 
@@ -339,25 +342,25 @@ public sealed class InitWizardViewModelTests : IDisposable
     }
 
     [Fact]
-    public void TotalSteps_IsFive()
+    public void TotalSteps_IsSix()
     {
-        Assert.Equal(5, InitWizardViewModel.TotalSteps);
+        Assert.Equal(6, InitWizardViewModel.TotalSteps);
     }
 
     [Fact]
-    public void ActiveStepCount_IsFour_WhenNoChatServices()
+    public void ActiveStepCount_IsFive_WhenNoChatServices()
     {
         using var vm = CreateViewModel();
         vm.SlackEnabled = false;
-        Assert.Equal(4, vm.ActiveStepCount);
+        Assert.Equal(5, vm.ActiveStepCount);
     }
 
     [Fact]
-    public void ActiveStepCount_IsFive_WhenChatServicesEnabled()
+    public void ActiveStepCount_IsSix_WhenChatServicesEnabled()
     {
         using var vm = CreateViewModel();
         vm.SlackEnabled = true;
-        Assert.Equal(5, vm.ActiveStepCount);
+        Assert.Equal(6, vm.ActiveStepCount);
     }
 
     [Fact]
@@ -367,11 +370,12 @@ public sealed class InitWizardViewModelTests : IDisposable
         vm.SlackEnabled = false;
 
         // Provider = 1, ChatServices = 2, Acl would be 3 but skipped
-        // Exposure = 3 (adjusted from 4), HealthCheck = 4
+        // Exposure = 3 (adjusted from 4), Identity = 4, HealthCheck = 5
         Assert.Equal(1, vm.GetDisplayStepNumber(WizardStep.Provider));
         Assert.Equal(2, vm.GetDisplayStepNumber(WizardStep.ChatServices));
         Assert.Equal(3, vm.GetDisplayStepNumber(WizardStep.Exposure));
-        Assert.Equal(4, vm.GetDisplayStepNumber(WizardStep.HealthCheck));
+        Assert.Equal(4, vm.GetDisplayStepNumber(WizardStep.Identity));
+        Assert.Equal(5, vm.GetDisplayStepNumber(WizardStep.HealthCheck));
     }
 
     [Fact]
@@ -572,6 +576,38 @@ public sealed class InitWizardViewModelTests : IDisposable
 
         Assert.True(vm.IsComplete.Value);
         Assert.Equal(0, _fakeSlackProbe.ResolveCallCount);
+    }
+
+    [Fact]
+    public void WriteIdentityFiles_GeneratesAllThreeFiles()
+    {
+        using var vm = CreateViewModel();
+        vm.AgentName = "Hal";
+        vm.CommunicationStyle = "Concise & casual";
+        vm.UserName = "Dave";
+        vm.UserTimezone = "America/Chicago";
+        vm.PrimaryUse = "Managing Kubernetes clusters";
+
+        vm.WriteIdentityFiles();
+
+        // SOUL.md
+        Assert.True(File.Exists(_paths.SoulPath));
+        var soul = File.ReadAllText(_paths.SoulPath);
+        Assert.Contains("# Hal", soul, StringComparison.Ordinal);
+        Assert.Contains("concise and casual", soul, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Dave", soul, StringComparison.Ordinal);
+        Assert.Contains("America/Chicago", soul, StringComparison.Ordinal);
+        Assert.Contains("Managing Kubernetes clusters", soul, StringComparison.Ordinal);
+
+        // AGENTS.md
+        Assert.True(File.Exists(_paths.AgentsPath));
+        var agents = File.ReadAllText(_paths.AgentsPath);
+        Assert.Contains("Operating Rules", agents, StringComparison.Ordinal);
+
+        // TOOLING.md
+        Assert.True(File.Exists(_paths.ToolingPath));
+        var tooling = File.ReadAllText(_paths.ToolingPath);
+        Assert.Contains("Environment Capabilities", tooling, StringComparison.Ordinal);
     }
 
     private InitWizardViewModel CreateViewModel()

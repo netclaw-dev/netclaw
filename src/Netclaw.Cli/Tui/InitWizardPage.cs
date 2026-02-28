@@ -39,9 +39,17 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
     // Step 4: Exposure
     private SelectionListNode<string>? _exposureList;
 
+    // Step 5: Identity
+    private TextInputNode? _agentNameInput;
+    private SelectionListNode<string>? _commStyleList;
+    private TextInputNode? _userNameInput;
+    private TextInputNode? _timezoneInput;
+    private TextInputNode? _primaryUseInput;
+
     // Track sub-step for provider (0=select, 1=auth, 2=credentials, 3=validate, 4=model)
     private int _providerSubStep;
     private int _chatServicesSubStep; // 0=enable?, 1=bot token, 2=app token, 3=channel names
+    private int _identitySubStep; // 0=agent name, 1=comm style, 2=user name, 3=timezone, 4=primary use
 
     // Focus tracking for selection lists (mirrors _lastFocusedInput for text inputs)
     private IFocusable? _lastFocusedList;
@@ -114,6 +122,7 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
                     WizardStep.ChatServices => "Chat Services",
                     WizardStep.Acl => "Access Control",
                     WizardStep.Exposure => "Exposure Mode",
+                    WizardStep.Identity => "Identity",
                     WizardStep.HealthCheck => "Health Check",
                     _ => ""
                 };
@@ -161,6 +170,7 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
                 WizardStep.ChatServices => BuildChatServicesStep(),
                 WizardStep.Acl => BuildAclStep(),
                 WizardStep.Exposure => BuildExposureStep(),
+                WizardStep.Identity => BuildIdentityStep(),
                 _ => Layouts.Empty()
             };
         });
@@ -195,6 +205,16 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
                     "  Your Slack user ID (e.g., U01234ABCDE) for admin access.",
                 WizardStep.Exposure =>
                     "  Local-only is recommended for homelab use.",
+                WizardStep.Identity when _identitySubStep == 0 =>
+                    "  Give your assistant a name, or keep the default.",
+                WizardStep.Identity when _identitySubStep == 1 =>
+                    "  How should your assistant communicate?",
+                WizardStep.Identity when _identitySubStep == 2 =>
+                    "  So your assistant knows what to call you.",
+                WizardStep.Identity when _identitySubStep == 3 =>
+                    "  Used for time-aware responses and scheduling.",
+                WizardStep.Identity when _identitySubStep == 4 =>
+                    "  What will you primarily use this assistant for?",
                 WizardStep.HealthCheck =>
                     "  Validating your configuration...",
                 _ => ""
@@ -710,6 +730,162 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             .WithChild(_exposureList);
     }
 
+    private ILayoutNode BuildIdentityStep()
+    {
+        return _identitySubStep switch
+        {
+            0 => BuildAgentNameSubStep(),
+            1 => BuildCommStyleSubStep(),
+            2 => BuildUserNameSubStep(),
+            3 => BuildTimezoneSubStep(),
+            4 => BuildPrimaryUseSubStep(),
+            _ => Layouts.Empty()
+        };
+    }
+
+    private ILayoutNode BuildAgentNameSubStep()
+    {
+        _agentNameInput = new TextInputNode()
+            .WithPlaceholder("Netclaw");
+        _agentNameInput.Text = ViewModel.AgentName;
+
+        _agentNameInput.OnFocused();
+        _lastFocusedInput = _agentNameInput;
+
+        _agentNameInput.Submitted
+            .Subscribe(text =>
+            {
+                ViewModel.AgentName = string.IsNullOrWhiteSpace(text) ? "Netclaw" : text;
+                SetIdentitySubStep(1);
+            })
+            .DisposeWith(_stepSubs);
+
+        return Layouts.Vertical()
+            .WithChild(new TextNode("  Agent name:").WithForeground(Color.White))
+            .WithChild(new PanelNode()
+                .WithTitle("Name")
+                .WithBorder(BorderStyle.Rounded)
+                .WithBorderColor(Color.Gray)
+                .WithContent(_agentNameInput)
+                .Height(3));
+    }
+
+    private ILayoutNode BuildCommStyleSubStep()
+    {
+        _commStyleList = Layouts.SelectionList(
+                "Concise & casual",
+                "Concise & formal",
+                "Detailed & casual",
+                "Detailed & formal")
+            .WithMode(SelectionMode.Single)
+            .WithHighlightColors(Color.Black, Color.Cyan);
+
+        _commStyleList.OnFocused();
+        _lastFocusedList = _commStyleList;
+
+        _commStyleList.SelectionConfirmed
+            .Subscribe(selected =>
+            {
+                if (selected.Count > 0)
+                {
+                    ViewModel.CommunicationStyle = selected[0];
+                    SetIdentitySubStep(2);
+                }
+            })
+            .DisposeWith(_stepSubs);
+
+        return Layouts.Vertical()
+            .WithChild(new TextNode("  Communication style:").WithForeground(Color.White))
+            .WithChild(_commStyleList);
+    }
+
+    private ILayoutNode BuildUserNameSubStep()
+    {
+        _userNameInput = new TextInputNode()
+            .WithPlaceholder("Your name");
+
+        if (!string.IsNullOrWhiteSpace(ViewModel.UserName))
+            _userNameInput.Text = ViewModel.UserName;
+
+        _userNameInput.OnFocused();
+        _lastFocusedInput = _userNameInput;
+
+        _userNameInput.Submitted
+            .Subscribe(text =>
+            {
+                ViewModel.UserName = string.IsNullOrWhiteSpace(text) ? null : text;
+                SetIdentitySubStep(3);
+            })
+            .DisposeWith(_stepSubs);
+
+        return Layouts.Vertical()
+            .WithChild(new TextNode("  Your name:").WithForeground(Color.White))
+            .WithChild(new PanelNode()
+                .WithTitle("Name")
+                .WithBorder(BorderStyle.Rounded)
+                .WithBorderColor(Color.Gray)
+                .WithContent(_userNameInput)
+                .Height(3));
+    }
+
+    private ILayoutNode BuildTimezoneSubStep()
+    {
+        _timezoneInput = new TextInputNode()
+            .WithPlaceholder(TimeZoneInfo.Local.Id);
+        _timezoneInput.Text = ViewModel.UserTimezone;
+
+        _timezoneInput.OnFocused();
+        _lastFocusedInput = _timezoneInput;
+
+        _timezoneInput.Submitted
+            .Subscribe(text =>
+            {
+                ViewModel.UserTimezone = string.IsNullOrWhiteSpace(text)
+                    ? TimeZoneInfo.Local.Id : text;
+                SetIdentitySubStep(4);
+            })
+            .DisposeWith(_stepSubs);
+
+        return Layouts.Vertical()
+            .WithChild(new TextNode("  Your timezone:").WithForeground(Color.White))
+            .WithChild(new PanelNode()
+                .WithTitle("Timezone")
+                .WithBorder(BorderStyle.Rounded)
+                .WithBorderColor(Color.Gray)
+                .WithContent(_timezoneInput)
+                .Height(3));
+    }
+
+    private ILayoutNode BuildPrimaryUseSubStep()
+    {
+        _primaryUseInput = new TextInputNode()
+            .WithPlaceholder("e.g., homelab management, dev environment, home automation");
+
+        if (!string.IsNullOrWhiteSpace(ViewModel.PrimaryUse))
+            _primaryUseInput.Text = ViewModel.PrimaryUse;
+
+        _primaryUseInput.OnFocused();
+        _lastFocusedInput = _primaryUseInput;
+
+        _primaryUseInput.Submitted
+            .Subscribe(text =>
+            {
+                ViewModel.PrimaryUse = string.IsNullOrWhiteSpace(text) ? null : text;
+                _identitySubStep = 0;
+                ViewModel.GoNext();
+            })
+            .DisposeWith(_stepSubs);
+
+        return Layouts.Vertical()
+            .WithChild(new TextNode("  What will you primarily use this for?").WithForeground(Color.White))
+            .WithChild(new PanelNode()
+                .WithTitle("Primary Use")
+                .WithBorder(BorderStyle.Rounded)
+                .WithBorderColor(Color.Gray)
+                .WithContent(_primaryUseInput)
+                .Height(3));
+    }
+
     private ILayoutNode BuildHealthCheckStep()
     {
         var items = ViewModel.HealthCheckResults;
@@ -783,6 +959,12 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
         if (ViewModel.CurrentStep.Value == WizardStep.ChatServices && _chatServicesSubStep > 0)
         {
             SetChatServicesSubStep(_chatServicesSubStep - 1);
+            return true;
+        }
+
+        if (ViewModel.CurrentStep.Value == WizardStep.Identity && _identitySubStep > 0)
+        {
+            SetIdentitySubStep(_identitySubStep - 1);
             return true;
         }
 
@@ -866,6 +1048,7 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             WizardStep.Provider when _providerSubStep == 4 && !_manualModelEntry => _modelList,
             WizardStep.ChatServices when _chatServicesSubStep == 0 => _slackEnabledList,
             WizardStep.Exposure => _exposureList,
+            WizardStep.Identity when _identitySubStep == 1 => _commStyleList,
             _ => null
         };
     }
@@ -881,6 +1064,10 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             WizardStep.ChatServices when _chatServicesSubStep == 2 => _slackAppTokenInput,
             WizardStep.ChatServices when _chatServicesSubStep == 3 => _slackChannelNamesInput,
             WizardStep.Acl => _ownerIdentityInput,
+            WizardStep.Identity when _identitySubStep == 0 => _agentNameInput,
+            WizardStep.Identity when _identitySubStep == 2 => _userNameInput,
+            WizardStep.Identity when _identitySubStep == 3 => _timezoneInput,
+            WizardStep.Identity when _identitySubStep == 4 => _primaryUseInput,
             _ => null
         };
     }
@@ -908,6 +1095,14 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
         ViewModel.RequestRedraw();
     }
 
+    private void SetIdentitySubStep(int step)
+    {
+        _identitySubStep = step;
+        _stepContentNode?.Invalidate();
+        _helpTextNode?.Invalidate();
+        ViewModel.RequestRedraw();
+    }
+
     private void InitializeComponents()
     {
         // Invalidate dynamic layouts when step changes so they re-evaluate their factories.
@@ -919,6 +1114,8 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
                     _providerSubStep = 0;
                 if (step == WizardStep.ChatServices)
                     _chatServicesSubStep = 0;
+                if (step == WizardStep.Identity)
+                    _identitySubStep = 0;
 
                 _stepContentNode?.Invalidate();
                 _helpTextNode?.Invalidate();
