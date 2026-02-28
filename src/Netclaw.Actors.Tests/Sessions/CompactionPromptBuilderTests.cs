@@ -10,15 +10,14 @@ namespace Netclaw.Actors.Tests.Sessions;
 public class CompactionPromptBuilderTests
 {
     [Fact]
-    public void BuildSummarizationSystemPrompt_contains_required_sections()
+    public void BuildSummarizationSystemPrompt_contains_key_sections()
     {
         var prompt = CompactionPromptBuilder.BuildSummarizationSystemPrompt();
 
-        Assert.Contains("Task Overview", prompt);
-        Assert.Contains("Current State", prompt);
-        Assert.Contains("Key Decisions", prompt);
-        Assert.Contains("Pending Actions", prompt);
-        Assert.Contains("Tool Usage Summary", prompt);
+        Assert.Contains("compaction agent", prompt);
+        Assert.Contains("Goal", prompt);
+        Assert.Contains("Key Facts", prompt);
+        Assert.Contains("past tense", prompt);
     }
 
     [Fact]
@@ -39,7 +38,7 @@ public class CompactionPromptBuilderTests
     }
 
     [Fact]
-    public void BuildSummarizationUserPrompt_includes_tool_call_names()
+    public void BuildSummarizationUserPrompt_includes_tool_call_arguments()
     {
         var history = new List<SerializableChatMessage>
         {
@@ -53,7 +52,7 @@ public class CompactionPromptBuilderTests
                     {
                         CallId = "call-1",
                         Name = "web_search",
-                        ArgumentsJson = "{}"
+                        ArgumentsJson = """{"query": "freshdesk ticket 579"}"""
                     }
                 }
             },
@@ -68,8 +67,35 @@ public class CompactionPromptBuilderTests
 
         var prompt = CompactionPromptBuilder.BuildSummarizationUserPrompt(history);
 
-        Assert.Contains("[Called tool: web_search]", prompt);
+        Assert.Contains("""[Called tool: web_search({"query": "freshdesk ticket 579"})]""", prompt);
         Assert.Contains("Found 3 results", prompt);
+    }
+
+    [Fact]
+    public void BuildSummarizationUserPrompt_tool_call_with_no_args_omits_parens()
+    {
+        var history = new List<SerializableChatMessage>
+        {
+            new()
+            {
+                Role = ChatRole.Assistant,
+                Content = string.Empty,
+                ToolCalls =
+                {
+                    new SerializableToolCall
+                    {
+                        CallId = "call-1",
+                        Name = "list_files",
+                        ArgumentsJson = ""
+                    }
+                }
+            }
+        };
+
+        var prompt = CompactionPromptBuilder.BuildSummarizationUserPrompt(history);
+
+        Assert.Contains("[Called tool: list_files]", prompt);
+        Assert.DoesNotContain("()", prompt);
     }
 
     [Fact]
@@ -83,20 +109,32 @@ public class CompactionPromptBuilderTests
     }
 
     [Fact]
-    public void BuildMemoryExtractionUserPrompt_includes_user_and_assistant_content()
+    public void BuildMemoryExtractionUserPrompt_includes_tool_call_arguments()
     {
         var history = new List<SerializableChatMessage>
         {
             new() { Role = ChatRole.System, Content = "System prompt" },
-            new() { Role = ChatRole.User, Content = "My name is Alice" },
-            new() { Role = ChatRole.Assistant, Content = "Nice to meet you, Alice!" }
+            new()
+            {
+                Role = ChatRole.Assistant,
+                Content = "Let me search",
+                ToolCalls =
+                {
+                    new SerializableToolCall
+                    {
+                        CallId = "call-1",
+                        Name = "web_search",
+                        ArgumentsJson = """{"query": "netclaw docs"}"""
+                    }
+                }
+            }
         };
 
         var prompt = CompactionPromptBuilder.BuildMemoryExtractionUserPrompt(history);
 
         Assert.DoesNotContain("System prompt", prompt);
-        Assert.Contains("My name is Alice", prompt);
-        Assert.Contains("Nice to meet you, Alice!", prompt);
+        Assert.Contains("""[Called tool: web_search({"query": "netclaw docs"})]""", prompt);
+        Assert.Contains("Let me search", prompt);
     }
 
     [Fact]

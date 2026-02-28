@@ -4,8 +4,8 @@ namespace Netclaw.Actors.Sessions;
 
 /// <summary>
 /// Builds structured prompts for the compaction summarization LLM call.
-/// Uses domain-specific sections rather than generic "summarize this" to
-/// improve retention of critical context (per Factory.ai evaluation findings).
+/// The compaction LLM produces a context summary; recent messages are preserved
+/// verbatim by the caller based on a fixed config value.
 /// </summary>
 public static class CompactionPromptBuilder
 {
@@ -15,36 +15,33 @@ public static class CompactionPromptBuilder
     public static string BuildSummarizationSystemPrompt()
     {
         return """
-            You are a conversation summarizer. Your job is to compress a conversation
-            history into a structured summary that preserves the most important context
-            for continuing the conversation.
+            You are a conversation compaction agent. Your job is to produce a context
+            summary of a conversation that will be injected as background context for
+            the assistant to continue working.
 
-            Produce your summary in the following sections. Omit any section that has
-            no relevant content.
+            Write the summary in past tense — this is historical context, not
+            instructions. Use phrases like "The user was working on..." or
+            "We investigated..." rather than imperatives like "Do X" or "Continue Y".
 
-            ## Task Overview
-            What is the user working on? What is the high-level goal?
+            Include these sections as relevant (omit empty ones):
 
-            ## Current State
-            Where did the conversation leave off? What has been accomplished so far?
+            **Goal**: What the user is working on — the high-level objective.
 
-            ## Key Decisions
-            What decisions were made during the conversation? Include rationale.
+            **Completed**: What has been accomplished so far.
 
-            ## Important Facts
-            Key facts, names, paths, URLs, configuration values, or other specifics
-            that would be needed to continue the work.
+            **Decisions**: Key decisions made during the conversation and their rationale.
 
-            ## Pending Actions
-            What remains to be done? Any open questions or next steps?
+            **Key Facts**: Names, file paths, URLs, configuration values, identifiers,
+            or other specifics needed to continue the work.
 
-            ## Tool Usage Summary
-            Summarize tools that were used and their key outcomes. Do not reproduce
-            full tool outputs — just the essential findings.
+            **Tool Findings**: Essential outcomes from tool calls — not full outputs,
+            just the conclusions that matter.
 
-            Keep the summary concise but complete. Prioritize information that would
-            be needed to continue the conversation without the user having to repeat
-            themselves.
+            **Open Items**: Pending questions, next steps, or unresolved issues.
+
+            Keep the summary concise but complete. Prioritize information that the
+            assistant would need to continue the conversation without the user having
+            to repeat themselves.
             """;
     }
 
@@ -55,7 +52,7 @@ public static class CompactionPromptBuilder
         IReadOnlyList<SerializableChatMessage> history)
     {
         var sb = new System.Text.StringBuilder();
-        sb.AppendLine("Summarize the following conversation history into the structured format described above.");
+        sb.AppendLine("Summarize the following conversation into the structured format described above.");
         sb.AppendLine();
         sb.AppendLine("---");
         sb.AppendLine();
@@ -80,7 +77,8 @@ public static class CompactionPromptBuilder
             {
                 foreach (var tc in msg.ToolCalls)
                 {
-                    sb.AppendLine($"[Called tool: {tc.Name}]");
+                    var args = !string.IsNullOrEmpty(tc.ArgumentsJson) ? $"({tc.ArgumentsJson})" : "";
+                    sb.AppendLine($"[Called tool: {tc.Name}{args}]");
                 }
             }
 
@@ -144,7 +142,21 @@ public static class CompactionPromptBuilder
                 _ => msg.Role.ToString()
             };
 
-            if (!string.IsNullOrEmpty(msg.Content))
+            if (msg.ToolCalls.Count > 0)
+            {
+                sb.AppendLine($"**{roleLabel}:**");
+                foreach (var tc in msg.ToolCalls)
+                {
+                    var args = !string.IsNullOrEmpty(tc.ArgumentsJson) ? $"({tc.ArgumentsJson})" : "";
+                    sb.AppendLine($"[Called tool: {tc.Name}{args}]");
+                }
+                if (!string.IsNullOrEmpty(msg.Content))
+                {
+                    sb.AppendLine(msg.Content);
+                }
+                sb.AppendLine();
+            }
+            else if (!string.IsNullOrEmpty(msg.Content))
             {
                 sb.AppendLine($"**{roleLabel}:** {msg.Content}");
             }

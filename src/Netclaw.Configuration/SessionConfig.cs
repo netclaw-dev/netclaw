@@ -8,14 +8,16 @@ public sealed record SessionConfig
 {
     /// <summary>
     /// The model identifier (e.g., "qwen3:30b", "claude-sonnet-4-20250514").
+    /// Populated from <see cref="ModelSelection"/> at startup, not from the Session config section.
     /// </summary>
-    public required string ModelId { get; init; }
+    public string ModelId { get; init; } = string.Empty;
 
     /// <summary>
     /// Maximum context window size in tokens for the configured model.
     /// Used to determine when compaction should trigger.
+    /// Populated from <see cref="ModelSelection"/> at startup, not from the Session config section.
     /// </summary>
-    public required int ContextWindowTokens { get; init; }
+    public int ContextWindowTokens { get; init; } = 32_768;
 
     /// <summary>
     /// Percentage of context window usage (0.0–1.0) at which compaction triggers.
@@ -49,6 +51,15 @@ public sealed record SessionConfig
     /// Prevents unbounded agentic loops from runaway tool chains.
     /// </summary>
     public int MaxToolIterationsPerTurn { get; init; } = 10;
+
+    /// <summary>
+    /// Number of recent non-system messages to preserve verbatim after compaction
+    /// summarization. These are appended after the summary message so the assistant
+    /// has immediate conversational context. Counts raw messages (not turn pairs)
+    /// to handle tool-call-heavy turns correctly.
+    /// Default 6 — roughly covers 2 turns with tool calls.
+    /// </summary>
+    public int KeepRecentMessages { get; init; } = 6;
 
     /// <summary>
     /// How long a session can be idle before passivating.

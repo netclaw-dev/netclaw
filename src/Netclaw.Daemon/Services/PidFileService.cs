@@ -11,11 +11,13 @@ namespace Netclaw.Daemon.Services;
 public sealed class PidFileService : IHostedService
 {
     private readonly NetclawPaths _paths;
+    private readonly DaemonRestartSignal _restartSignal;
     private readonly ILogger<PidFileService> _logger;
 
-    public PidFileService(NetclawPaths paths, ILogger<PidFileService> logger)
+    public PidFileService(NetclawPaths paths, DaemonRestartSignal restartSignal, ILogger<PidFileService> logger)
     {
         _paths = paths;
+        _restartSignal = restartSignal;
         _logger = logger;
     }
 
@@ -32,6 +34,12 @@ public sealed class PidFileService : IHostedService
 
     public Task StopAsync(CancellationToken cancellationToken)
     {
+        if (_restartSignal.RestartRequested)
+        {
+            _logger.LogDebug("Restart requested — keeping PID file (same process): {PidFilePath}", _paths.PidFilePath);
+            return Task.CompletedTask;
+        }
+
         try
         {
             if (File.Exists(_paths.PidFilePath))
