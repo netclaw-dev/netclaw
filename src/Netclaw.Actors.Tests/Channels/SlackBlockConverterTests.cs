@@ -258,6 +258,47 @@ public class SlackBlockConverterTests
     }
 
     [Fact]
+    public void BareUrl_ProducesRichTextLink()
+    {
+        var blocks = SlackBlockConverter.Convert("Check out https://github.com/foo/bar for details");
+
+        var rtb = Assert.Single(blocks.OfType<RichTextBlock>());
+        var section = Assert.Single(rtb.Elements.OfType<RichTextSection>());
+
+        var link = Assert.Single(section.Elements.OfType<RichTextLink>());
+        Assert.Equal("https://github.com/foo/bar", link.Url);
+        Assert.Null(link.Text);
+    }
+
+    [Fact]
+    public void BareUrl_InListItem_ProducesRichTextLink()
+    {
+        var input = "- See https://example.com/docs for more info";
+
+        var blocks = SlackBlockConverter.Convert(input);
+
+        var rtb = Assert.Single(blocks.OfType<RichTextBlock>());
+        var list = Assert.Single(rtb.Elements.OfType<RichTextList>());
+        var item = list.Elements[0];
+
+        var link = Assert.Single(item.Elements.OfType<RichTextLink>());
+        Assert.Equal("https://example.com/docs", link.Url);
+    }
+
+    [Fact]
+    public void MarkdownLink_TakesPriorityOverBareUrl()
+    {
+        var blocks = SlackBlockConverter.Convert("Visit [Google](https://google.com) today");
+
+        var rtb = Assert.Single(blocks.OfType<RichTextBlock>());
+        var section = Assert.Single(rtb.Elements.OfType<RichTextSection>());
+
+        var link = Assert.Single(section.Elements.OfType<RichTextLink>());
+        Assert.Equal("https://google.com", link.Url);
+        Assert.Equal("Google", link.Text);
+    }
+
+    [Fact]
     public void BoldAndItalicNested_HandledCorrectly()
     {
         var blocks = SlackBlockConverter.Convert("This is ***bold and italic*** text");

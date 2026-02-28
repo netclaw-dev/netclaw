@@ -239,6 +239,10 @@ public static partial class SlackBlockConverter
                 Url = m.Groups[2].Value
             });
 
+        // Bare URLs: https://example.com
+        TryMatch(BareUrlRegex(), text, ref best, (m) =>
+            new RichTextLink { Url = m.Value });
+
         if (best.Element is null)
             return (0, 0, null, null);
 
@@ -318,6 +322,10 @@ public static partial class SlackBlockConverter
     // Links: [text](url)
     [GeneratedRegex(@"\[([^\]]+)\]\(([^)]+)\)")]
     private static partial Regex LinkRegex();
+
+    // Bare URLs: https://example.com
+    [GeneratedRegex(@"https?://[^\s)\]>]+")]
+    private static partial Regex BareUrlRegex();
 
     // Ordered list prefix: 1. or 2. etc.
     [GeneratedRegex(@"^\d+\.\s")]
