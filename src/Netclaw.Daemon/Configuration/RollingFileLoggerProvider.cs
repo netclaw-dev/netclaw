@@ -47,9 +47,10 @@ internal sealed class RollingFileLoggerProvider : ILoggerProvider
                 _writer!.WriteLine(message);
                 _writer.Flush();
             }
-            catch
+            catch (Exception ex)
             {
-                // Best-effort logging — don't crash the daemon
+                // Last-resort: write to stderr to avoid silent swallow
+                Console.Error.WriteLine($"[NetclawLogWriter] Failed to write log: {ex.Message}");
             }
         }
     }
