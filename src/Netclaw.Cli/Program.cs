@@ -92,9 +92,21 @@ static async Task RunAsync(string[] args)
             builder.Services.AddHttpClient<IProviderProbe, ProviderProbe>();
             builder.Services.AddHttpClient<ISlackProbe, SlackProbe>();
 
+            // Bootstrap page dependencies (daemon lifecycle + SignalR)
+            var initPaths = new NetclawPaths();
+            builder.Services.AddSingleton(initPaths);
+            builder.Services.AddSingleton(TimeProvider.System);
+            builder.Services.AddSingleton<DaemonManager>();
+
+            var daemonEndpoint =
+                Environment.GetEnvironmentVariable("NETCLAW_DAEMON_ENDPOINT")
+                ?? "http://127.0.0.1:5199";
+            builder.Services.AddSingleton(new BootstrapOptions(daemonEndpoint));
+
             builder.Services.AddTermina("/init", termina =>
             {
                 termina.RegisterRoute<InitWizardPage, InitWizardViewModel>("/init");
+                termina.RegisterRoute<BootstrapPage, BootstrapViewModel>("/bootstrap");
             });
 
             var initApp = builder.Build();

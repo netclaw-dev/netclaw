@@ -8,6 +8,11 @@ using Termina.Reactive;
 namespace Netclaw.Cli.Tui;
 
 /// <summary>
+/// Configuration for the bootstrap page, resolved from DI.
+/// </summary>
+public sealed record BootstrapOptions(string DaemonEndpoint);
+
+/// <summary>
 /// ViewModel for the LLM-driven bootstrap conversation.
 /// Manages daemon startup, health polling, SignalR session, and message flow.
 /// The bootstrap session uses identity_write tools to author SOUL.md and AGENTS.md.
@@ -47,10 +52,10 @@ public sealed class BootstrapViewModel : ReactiveViewModel
         "Keep the conversation natural and friendly. When you've gathered enough info and " +
         "written all three files, tell the user setup is complete.";
 
-    public BootstrapViewModel(DaemonManager daemonManager, string daemonEndpoint)
+    public BootstrapViewModel(DaemonManager daemonManager, BootstrapOptions options)
     {
         _daemonManager = daemonManager;
-        _daemonEndpoint = daemonEndpoint;
+        _daemonEndpoint = options.DaemonEndpoint;
     }
 
     public override void OnActivated()
