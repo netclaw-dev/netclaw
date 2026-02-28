@@ -9,49 +9,47 @@ public class SystemPromptAssemblerTests
     public void Assemble_all_layers_present_concatenates_with_separator()
     {
         var result = SystemPromptAssembler.Assemble(
-            personality: "You are a helpful assistant.",
-            instructions: "Follow these rules.",
-            userPreferences: "Owner prefers concise answers.",
-            projectAgents: "This project uses C#.");
+            soul: "You are a helpful assistant.",
+            agents: "Follow these rules.",
+            tooling: "Docker is available.");
 
         Assert.Contains("You are a helpful assistant.", result);
         Assert.Contains("Follow these rules.", result);
-        Assert.Contains("Owner prefers concise answers.", result);
-        Assert.Contains("This project uses C#.", result);
+        Assert.Contains("Docker is available.", result);
     }
 
     [Fact]
-    public void Assemble_missing_personality_skips_layer()
+    public void Assemble_missing_soul_skips_layer()
     {
         var result = SystemPromptAssembler.Assemble(
-            personality: null,
-            instructions: "Follow these rules.",
-            userPreferences: "Owner prefers concise answers.");
+            soul: null,
+            agents: "Follow these rules.",
+            tooling: "Docker is available.");
 
-        Assert.DoesNotContain("personality", result, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("soul", result, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("Follow these rules.", result);
-        Assert.Contains("Owner prefers concise answers.", result);
+        Assert.Contains("Docker is available.", result);
     }
 
     [Fact]
-    public void Assemble_missing_instructions_skips_layer()
+    public void Assemble_missing_agents_skips_layer()
     {
         var result = SystemPromptAssembler.Assemble(
-            personality: "You are helpful.",
-            instructions: null,
-            userPreferences: "Owner likes detail.");
+            soul: "You are helpful.",
+            agents: null,
+            tooling: "kubectl available.");
 
         Assert.Contains("You are helpful.", result);
-        Assert.Contains("Owner likes detail.", result);
+        Assert.Contains("kubectl available.", result);
     }
 
     [Fact]
-    public void Assemble_missing_user_preferences_skips_layer()
+    public void Assemble_missing_tooling_skips_layer()
     {
         var result = SystemPromptAssembler.Assemble(
-            personality: "You are helpful.",
-            instructions: "Be concise.",
-            userPreferences: null);
+            soul: "You are helpful.",
+            agents: "Be concise.",
+            tooling: null);
 
         Assert.Contains("You are helpful.", result);
         Assert.Contains("Be concise.", result);
@@ -69,9 +67,9 @@ public class SystemPromptAssemblerTests
     public void Assemble_whitespace_only_layers_treated_as_missing()
     {
         var result = SystemPromptAssembler.Assemble(
-            personality: "   ",
-            instructions: "\n\t",
-            userPreferences: "");
+            soul: "   ",
+            agents: "\n\t",
+            tooling: "");
 
         Assert.Equal(string.Empty, result);
     }
@@ -80,31 +78,46 @@ public class SystemPromptAssemblerTests
     public void Assemble_trims_layer_content()
     {
         var result = SystemPromptAssembler.Assemble(
-            personality: "  You are helpful.  \n",
-            instructions: "\nBe concise.\n");
+            soul: "  You are helpful.  \n",
+            agents: "\nBe concise.\n");
 
         Assert.Equal("You are helpful.\n\nBe concise.", result);
     }
 
     [Fact]
-    public void Assemble_project_agents_overlay_appended_last()
+    public void Assemble_layers_in_correct_order()
     {
         var result = SystemPromptAssembler.Assemble(
-            personality: "Base personality.",
-            projectAgents: "Project overlay.");
+            soul: "Soul content.",
+            agents: "Agents content.",
+            tooling: "Tooling content.");
 
-        // Project overlay appears after personality
-        var personalityIndex = result.IndexOf("Base personality.", StringComparison.Ordinal);
-        var overlayIndex = result.IndexOf("Project overlay.", StringComparison.Ordinal);
-        Assert.True(overlayIndex > personalityIndex);
+        var soulIndex = result.IndexOf("Soul content.", StringComparison.Ordinal);
+        var agentsIndex = result.IndexOf("Agents content.", StringComparison.Ordinal);
+        var toolingIndex = result.IndexOf("Tooling content.", StringComparison.Ordinal);
+        Assert.True(soulIndex < agentsIndex);
+        Assert.True(agentsIndex < toolingIndex);
     }
 
     [Fact]
     public void Assemble_single_layer_returns_without_separator()
     {
-        var result = SystemPromptAssembler.Assemble(personality: "Just me.");
+        var result = SystemPromptAssembler.Assemble(soul: "Just me.");
 
         Assert.Equal("Just me.", result);
         Assert.DoesNotContain("\n\n", result);
+    }
+
+    [Fact]
+    public void AssembleLegacy_maps_old_names_to_new()
+    {
+        var result = SystemPromptAssembler.AssembleLegacy(
+            personality: "Old personality.",
+            instructions: "Old instructions.",
+            userPreferences: "Old prefs.");
+
+        Assert.Contains("Old personality.", result);
+        Assert.Contains("Old instructions.", result);
+        Assert.Contains("Old prefs.", result);
     }
 }

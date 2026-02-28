@@ -200,7 +200,7 @@ public sealed class InitWizardViewModelTests : IDisposable
         vm.GoNext(); // triggers health check
 
         await vm.HealthCheckCompletion!.WaitAsync(TimeSpan.FromSeconds(5));
-        Assert.True(vm.IsComplete.Value);
+        AssertHealthCheckFinished(vm);
 
         // Verify netclaw.json
         Assert.True(File.Exists(_paths.NetclawConfigPath));
@@ -234,7 +234,7 @@ public sealed class InitWizardViewModelTests : IDisposable
         vm.GoNext();
 
         await vm.HealthCheckCompletion!.WaitAsync(TimeSpan.FromSeconds(5));
-        Assert.True(vm.IsComplete.Value);
+        AssertHealthCheckFinished(vm);
 
         // secrets.json contains the API key
         Assert.True(File.Exists(_paths.SecretsPath));
@@ -261,7 +261,7 @@ public sealed class InitWizardViewModelTests : IDisposable
         vm.GoNext();
 
         await vm.HealthCheckCompletion!.WaitAsync(TimeSpan.FromSeconds(5));
-        Assert.True(vm.IsComplete.Value);
+        AssertHealthCheckFinished(vm);
 
         var secrets = JsonDocument.Parse(File.ReadAllText(_paths.SecretsPath));
         Assert.True(secrets.RootElement.TryGetProperty("Slack", out var slack));
@@ -289,7 +289,7 @@ public sealed class InitWizardViewModelTests : IDisposable
         vm.GoNext();
 
         await vm.HealthCheckCompletion!.WaitAsync(TimeSpan.FromSeconds(5));
-        Assert.True(vm.IsComplete.Value);
+        AssertHealthCheckFinished(vm);
 
         var config = JsonDocument.Parse(File.ReadAllText(_paths.NetclawConfigPath));
         Assert.True(config.RootElement.TryGetProperty("Models", out var models));
@@ -310,7 +310,7 @@ public sealed class InitWizardViewModelTests : IDisposable
         vm.GoNext();
 
         await vm.HealthCheckCompletion!.WaitAsync(TimeSpan.FromSeconds(5));
-        Assert.True(vm.IsComplete.Value);
+        AssertHealthCheckFinished(vm);
         Assert.NotEmpty(vm.HealthCheckResults);
 
         var providerCheck = vm.HealthCheckResults
@@ -339,25 +339,25 @@ public sealed class InitWizardViewModelTests : IDisposable
     }
 
     [Fact]
-    public void TotalSteps_IsFive()
+    public void TotalSteps_IsSix()
     {
-        Assert.Equal(5, InitWizardViewModel.TotalSteps);
+        Assert.Equal(6, InitWizardViewModel.TotalSteps);
     }
 
     [Fact]
-    public void ActiveStepCount_IsFour_WhenNoChatServices()
+    public void ActiveStepCount_IsFive_WhenNoChatServices()
     {
         using var vm = CreateViewModel();
         vm.SlackEnabled = false;
-        Assert.Equal(4, vm.ActiveStepCount);
+        Assert.Equal(5, vm.ActiveStepCount);
     }
 
     [Fact]
-    public void ActiveStepCount_IsFive_WhenChatServicesEnabled()
+    public void ActiveStepCount_IsSix_WhenChatServicesEnabled()
     {
         using var vm = CreateViewModel();
         vm.SlackEnabled = true;
-        Assert.Equal(5, vm.ActiveStepCount);
+        Assert.Equal(6, vm.ActiveStepCount);
     }
 
     [Fact]
@@ -367,11 +367,12 @@ public sealed class InitWizardViewModelTests : IDisposable
         vm.SlackEnabled = false;
 
         // Provider = 1, ChatServices = 2, Acl would be 3 but skipped
-        // Exposure = 3 (adjusted from 4), HealthCheck = 4
+        // Exposure = 3 (adjusted from 4), HealthCheck = 4, Bootstrap = 5
         Assert.Equal(1, vm.GetDisplayStepNumber(WizardStep.Provider));
         Assert.Equal(2, vm.GetDisplayStepNumber(WizardStep.ChatServices));
         Assert.Equal(3, vm.GetDisplayStepNumber(WizardStep.Exposure));
         Assert.Equal(4, vm.GetDisplayStepNumber(WizardStep.HealthCheck));
+        Assert.Equal(5, vm.GetDisplayStepNumber(WizardStep.Bootstrap));
     }
 
     [Fact]
@@ -446,7 +447,7 @@ public sealed class InitWizardViewModelTests : IDisposable
         vm.GoNext();
         await vm.HealthCheckCompletion!.WaitAsync(TimeSpan.FromSeconds(5));
 
-        Assert.True(vm.IsComplete.Value);
+        AssertHealthCheckFinished(vm);
         Assert.Equal(1, _fakeSlackProbe.ResolveCallCount);
 
         // Verify config file has channel IDs
@@ -474,7 +475,7 @@ public sealed class InitWizardViewModelTests : IDisposable
         vm.GoNext();
         await vm.HealthCheckCompletion!.WaitAsync(TimeSpan.FromSeconds(5));
 
-        Assert.True(vm.IsComplete.Value);
+        AssertHealthCheckFinished(vm);
         Assert.Equal(0, _fakeSlackProbe.ResolveCallCount);
 
         // Config should not have channel fields
@@ -572,6 +573,16 @@ public sealed class InitWizardViewModelTests : IDisposable
 
         Assert.True(vm.IsComplete.Value);
         Assert.Equal(0, _fakeSlackProbe.ResolveCallCount);
+    }
+
+    /// <summary>
+    /// Assert that the health check finished — either completed with warnings
+    /// (IsComplete) or transitioned to bootstrap (ShouldStartBootstrap).
+    /// </summary>
+    private static void AssertHealthCheckFinished(InitWizardViewModel vm)
+    {
+        Assert.True(vm.IsComplete.Value || vm.ShouldStartBootstrap.Value,
+            "Expected health check to finish (IsComplete or ShouldStartBootstrap)");
     }
 
     private InitWizardViewModel CreateViewModel()

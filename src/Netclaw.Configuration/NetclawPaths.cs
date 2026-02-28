@@ -8,11 +8,24 @@ public sealed class NetclawPaths
 {
     public string BasePath { get; }
 
+    // ── Identity files (system prompt layers) ──
+    public string IdentityDirectory => Path.Combine(BasePath, "identity");
+    public string SoulPath => Path.Combine(IdentityDirectory, "SOUL.md");
+    public string AgentsPath => Path.Combine(IdentityDirectory, "AGENTS.md");
+    public string ToolingPath => Path.Combine(IdentityDirectory, "TOOLING.md");
+
+    // Detail subdirectories for progressive disclosure
+    public string SoulDetailDirectory => Path.Combine(IdentityDirectory, "soul");
+    public string AgentsDetailDirectory => Path.Combine(IdentityDirectory, "agents");
+    public string ToolingDetailDirectory => Path.Combine(IdentityDirectory, "tooling");
+
+    // ── Legacy paths (kept for migration detection) ──
     public string SoulDirectory => Path.Combine(BasePath, "soul");
     public string PersonalityPath => Path.Combine(SoulDirectory, "PERSONALITY.md");
     public string InstructionsPath => Path.Combine(SoulDirectory, "INSTRUCTIONS.md");
     public string UserPreferencesPath => Path.Combine(SoulDirectory, "USER.md");
 
+    // ── Other standard directories ──
     public string ProjectsDirectory => Path.Combine(BasePath, "projects");
     public string EnvironmentDirectory => Path.Combine(BasePath, "environment");
     public string SchedulesDirectory => Path.Combine(BasePath, "schedules");
@@ -37,7 +50,10 @@ public sealed class NetclawPaths
     /// </summary>
     public void EnsureDirectoriesExist()
     {
-        Directory.CreateDirectory(SoulDirectory);
+        Directory.CreateDirectory(IdentityDirectory);
+        Directory.CreateDirectory(SoulDetailDirectory);
+        Directory.CreateDirectory(AgentsDetailDirectory);
+        Directory.CreateDirectory(ToolingDetailDirectory);
         Directory.CreateDirectory(ProjectsDirectory);
         Directory.CreateDirectory(EnvironmentDirectory);
         Directory.CreateDirectory(SchedulesDirectory);

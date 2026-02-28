@@ -14,6 +14,20 @@ public interface ISystemPromptProvider
 }
 
 /// <summary>
+/// Provides a dynamic context layer that is injected into LLM calls
+/// but NOT persisted as part of <c>SystemPromptSet</c>. This allows
+/// transient data (e.g. tool index) to be refreshed on every call
+/// without stale state in rehydrated sessions.
+/// </summary>
+public interface IContextLayerProvider
+{
+    /// <summary>
+    /// Returns the context layer content, or empty string if nothing to inject.
+    /// </summary>
+    string GetContextLayer();
+}
+
+/// <summary>
 /// Returns a fixed system prompt. Useful for testing.
 /// </summary>
 public sealed class StaticSystemPromptProvider : ISystemPromptProvider
@@ -39,60 +53,48 @@ public sealed class NullSystemPromptProvider : ISystemPromptProvider
 }
 
 /// <summary>
-/// Loads system prompt layers from the filesystem under <see cref="NetclawPaths.SoulDirectory"/>.
-/// Missing files are silently skipped. Optionally appends a compressed tool index.
+/// Dynamic context layer that provides the compressed tool index.
+/// Updated by <see cref="ToolIndexContextLayer.Update"/> after MCP discovery completes.
+/// Content is NOT persisted — rebuilt on every LLM call so rehydrated sessions
+/// always see the current tool set.
+/// </summary>
+public sealed class ToolIndexContextLayer : IContextLayerProvider
+{
+    private volatile string _index = string.Empty;
+
+    /// <summary>
+    /// Replace the tool index content. Thread-safe via volatile write.
+    /// </summary>
+    public void Update(string index) => _index = index;
+
+    public string GetContextLayer() => _index;
+}
+
+/// <summary>
+/// Loads system prompt layers from the filesystem under <see cref="NetclawPaths.IdentityDirectory"/>.
+/// Missing files are silently skipped. Falls back to legacy <c>soul/</c> paths if identity
+/// files don't exist yet.
 /// </summary>
 public sealed class FileSystemPromptProvider : ISystemPromptProvider
 {
     private readonly NetclawPaths _paths;
-    private string? _toolIndex;
 
     public FileSystemPromptProvider(NetclawPaths paths)
     {
         _paths = paths;
     }
 
-    /// <summary>
-    /// Set the compressed tool index to append to the system prompt.
-    /// Called once after tool registration is complete.
-    /// </summary>
-    public void SetToolIndex(string toolIndex)
-    {
-        _toolIndex = toolIndex;
-    }
-
     public string GetSystemPrompt()
     {
-        var prompt = SystemPromptAssembler.Assemble(
-            personality: TryReadFile(_paths.PersonalityPath),
-            instructions: TryReadFile(_paths.InstructionsPath),
-            userPreferences: TryReadFile(_paths.UserPreferencesPath));
+        // Try new identity paths first, fall back to legacy soul/ paths
+        var soul = TryReadFile(_paths.SoulPath) ?? TryReadFile(_paths.PersonalityPath);
+        var agents = TryReadFile(_paths.AgentsPath) ?? TryReadFile(_paths.InstructionsPath);
+        var tooling = TryReadFile(_paths.ToolingPath) ?? TryReadFile(_paths.UserPreferencesPath);
 
-        return AppendToolIndex(prompt);
-    }
-
-    /// <summary>
-    /// Load a project-specific AGENTS.md overlay and re-assemble the prompt with it.
-    /// </summary>
-    public string GetSystemPrompt(string projectAgentsPath)
-    {
-        var prompt = SystemPromptAssembler.Assemble(
-            personality: TryReadFile(_paths.PersonalityPath),
-            instructions: TryReadFile(_paths.InstructionsPath),
-            userPreferences: TryReadFile(_paths.UserPreferencesPath),
-            projectAgents: TryReadFile(projectAgentsPath));
-
-        return AppendToolIndex(prompt);
-    }
-
-    private string AppendToolIndex(string prompt)
-    {
-        if (string.IsNullOrWhiteSpace(_toolIndex))
-            return prompt;
-
-        return string.IsNullOrWhiteSpace(prompt)
-            ? _toolIndex
-            : $"{prompt}\n\n{_toolIndex}";
+        return SystemPromptAssembler.Assemble(
+            soul: soul,
+            agents: agents,
+            tooling: tooling);
     }
 
     private static string? TryReadFile(string path)

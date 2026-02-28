@@ -10,13 +10,21 @@ namespace Netclaw.Actors.Tools;
 /// </summary>
 public static class ToolRegistrationExtensions
 {
-    public static ToolRegistry WithFirstPartyTools(this ToolRegistry registry, ToolConfig config)
+    public static ToolRegistry WithFirstPartyTools(this ToolRegistry registry, ToolConfig config, NetclawPaths? paths = null)
     {
         registry.Register(new ShellTool(config));
         registry.Register(new FileReadTool(config));
         registry.Register(new FileWriteTool());
         registry.Register(new WebSearchTool(config));
         registry.Register(new WebFetchTool());
+
+        // Identity self-modification tools (always loaded, "identity" grant)
+        if (paths is not null)
+        {
+            registry.Register(new IdentityReadTool(paths));
+            registry.Register(new IdentityWriteTool(paths));
+            registry.Register(new IdentityListTool(paths));
+        }
 
         // Register search_tools meta-tool (always loaded, "builtin" grant)
         registry.Register(new SearchToolsTool(registry));

@@ -33,6 +33,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor
     private readonly IChatClient _compactionClient;
     private readonly SessionConfig _config;
     private readonly ISystemPromptProvider _promptProvider;
+    private readonly IReadOnlyList<IContextLayerProvider> _contextLayers;
     private readonly IToolExecutor? _toolExecutor;
     private readonly IToolAuditLogger? _auditLogger;
     private readonly IMemoryExtractor _memoryExtractor;
@@ -69,7 +70,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor
         IToolAuditLogger? auditLogger = null,
         ToolRegistry? toolRegistry = null,
         IMemoryExtractor? memoryExtractor = null,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        IReadOnlyList<IContextLayerProvider>? contextLayers = null)
     {
         _sessionId = new SessionId(entityId);
         _chatClient = clientProvider.GetClient(ModelRole.Main);
@@ -78,6 +80,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor
             : _chatClient;
         _config = config;
         _promptProvider = promptProvider;
+        _contextLayers = contextLayers ?? [];
         _toolExecutor = toolExecutor;
         _auditLogger = auditLogger;
         _memoryExtractor = memoryExtractor ?? NullMemoryExtractor.Instance;
@@ -709,6 +712,11 @@ public sealed class LlmSessionActor : ReceivePersistentActor
     private void FireLlmCall(bool forceNoTools = false)
     {
         var messages = ChatMessageConverter.ToAiMessages(_state.History);
+
+        // Inject dynamic context layers (e.g. tool index) as transient system messages.
+        // These are NOT persisted — rebuilt on every call so rehydrated sessions stay fresh.
+        InjectDynamicContextLayers(messages);
+
         var self = Self;
         var client = _chatClient;
 
@@ -722,6 +730,42 @@ public sealed class LlmSessionActor : ReceivePersistentActor
         }
 
         _ = InvokeLlmAsync(client, messages, options, self);
+    }
+
+    /// <summary>
+    /// Inject dynamic context layers as system messages after the persisted system prompt
+    /// but before user messages. This keeps context layers transient — they are regenerated
+    /// on every LLM call rather than being part of the persisted journal.
+    /// </summary>
+    private void InjectDynamicContextLayers(List<AiChatMessage> messages)
+    {
+        if (_contextLayers.Count == 0) return;
+
+        var parts = new List<string>();
+        foreach (var layer in _contextLayers)
+        {
+            var content = layer.GetContextLayer();
+            if (!string.IsNullOrWhiteSpace(content))
+                parts.Add(content.Trim());
+        }
+
+        if (parts.Count == 0) return;
+
+        var contextMessage = new AiChatMessage(
+            Microsoft.Extensions.AI.ChatRole.System,
+            string.Join("\n\n", parts));
+
+        // Insert after the last system message (the persisted prompt), before user messages
+        var insertIndex = 0;
+        for (var i = 0; i < messages.Count; i++)
+        {
+            if (messages[i].Role == Microsoft.Extensions.AI.ChatRole.System)
+                insertIndex = i + 1;
+            else
+                break;
+        }
+
+        messages.Insert(insertIndex, contextMessage);
     }
 
     private static async Task InvokeLlmAsync(

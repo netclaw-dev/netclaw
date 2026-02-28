@@ -6,21 +6,23 @@ using Netclaw.Configuration;
 namespace Netclaw.Daemon.Mcp;
 
 /// <summary>
-/// Refreshes the compressed tool index in the system prompt after MCP startup completes.
+/// Refreshes the dynamic tool index context layer after MCP startup completes.
 /// Runs after <see cref="McpClientManager"/> so MCP tools are included in the index.
+/// The tool index is NOT part of the persisted system prompt — it's injected
+/// dynamically into each LLM call so rehydrated sessions see fresh tool info.
 /// </summary>
 internal sealed class ToolIndexUpdater : IHostedService
 {
-    private readonly FileSystemPromptProvider _promptProvider;
+    private readonly ToolIndexContextLayer _contextLayer;
     private readonly ToolRegistry _toolRegistry;
     private readonly ILogger<ToolIndexUpdater> _logger;
 
     public ToolIndexUpdater(
-        FileSystemPromptProvider promptProvider,
+        ToolIndexContextLayer contextLayer,
         ToolRegistry toolRegistry,
         ILogger<ToolIndexUpdater> logger)
     {
-        _promptProvider = promptProvider;
+        _contextLayer = contextLayer;
         _toolRegistry = toolRegistry;
         _logger = logger;
     }
@@ -28,7 +30,7 @@ internal sealed class ToolIndexUpdater : IHostedService
     public Task StartAsync(CancellationToken cancellationToken)
     {
         var index = _toolRegistry.GenerateCompressedIndex();
-        _promptProvider.SetToolIndex(index);
+        _contextLayer.Update(index);
         _logger.LogInformation("Tool index updated ({ToolCount} registrations)", _toolRegistry.GetAllRegistrations().Count);
         return Task.CompletedTask;
     }

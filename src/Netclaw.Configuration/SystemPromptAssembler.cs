@@ -8,30 +8,38 @@ namespace Netclaw.Configuration;
 public static class SystemPromptAssembler
 {
     /// <summary>
-    /// Assemble a system prompt from layered content sources.
+    /// Assemble a system prompt from identity file layers.
     /// Each non-null, non-whitespace layer is included as a section.
     /// </summary>
-    /// <param name="personality">Agent character, tone, values, and boundaries (PERSONALITY.md).</param>
-    /// <param name="instructions">Operating rules and behavioral guidelines (INSTRUCTIONS.md).</param>
-    /// <param name="userPreferences">Owner preferences, timezone, communication style (USER.md).</param>
-    /// <param name="projectAgents">Project-specific instructions from AGENTS.md overlay.</param>
+    /// <param name="soul">Agent personality, tone, user's name, communication style (SOUL.md).</param>
+    /// <param name="agents">Agent purpose/mission, operating rules, meta-guidance (AGENTS.md).</param>
+    /// <param name="tooling">Host environment execution capabilities (TOOLING.md).</param>
     /// <returns>Assembled prompt or empty string if all layers are missing.</returns>
     public static string Assemble(
-        string? personality = null,
-        string? instructions = null,
-        string? userPreferences = null,
-        string? projectAgents = null)
+        string? soul = null,
+        string? agents = null,
+        string? tooling = null)
     {
-        var sections = new List<string>(4);
+        var sections = new List<string>(3);
 
-        AddSection(sections, personality);
-        AddSection(sections, instructions);
-        AddSection(sections, userPreferences);
-        AddSection(sections, projectAgents);
+        AddSection(sections, soul);
+        AddSection(sections, agents);
+        AddSection(sections, tooling);
 
         return sections.Count > 0
             ? string.Join("\n\n", sections)
             : string.Empty;
+    }
+
+    /// <summary>
+    /// Legacy overload for migration compatibility. Assembles from old-style parameter names.
+    /// </summary>
+    public static string AssembleLegacy(
+        string? personality = null,
+        string? instructions = null,
+        string? userPreferences = null)
+    {
+        return Assemble(soul: personality, agents: instructions, tooling: userPreferences);
     }
 
     private static void AddSection(List<string> sections, string? content)

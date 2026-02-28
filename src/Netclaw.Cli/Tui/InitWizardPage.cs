@@ -115,6 +115,7 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
                     WizardStep.Acl => "Access Control",
                     WizardStep.Exposure => "Exposure Mode",
                     WizardStep.HealthCheck => "Health Check",
+                    WizardStep.Bootstrap => "Personality Setup",
                     _ => ""
                 };
                 return (ILayoutNode)new TextNode(
@@ -161,6 +162,7 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
                 WizardStep.ChatServices => BuildChatServicesStep(),
                 WizardStep.Acl => BuildAclStep(),
                 WizardStep.Exposure => BuildExposureStep(),
+                WizardStep.Bootstrap => BuildBootstrapStep(),
                 _ => Layouts.Empty()
             };
         });
@@ -197,6 +199,8 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
                     "  Local-only is recommended for homelab use.",
                 WizardStep.HealthCheck =>
                     "  Validating your configuration...",
+                WizardStep.Bootstrap =>
+                    "  Netclaw will interview you to set up its personality. This step is optional — press Esc to skip.",
                 _ => ""
             };
             return (ILayoutNode)new TextNode(text).WithForeground(Color.Gray);
@@ -733,6 +737,18 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
         foreach (var line in lines)
             layout.WithChild(line);
         return layout;
+    }
+
+    private ILayoutNode BuildBootstrapStep()
+    {
+        // Bootstrap step shows a message indicating the personality setup will
+        // launch in a separate page. The actual BootstrapPage is launched by the
+        // host application when ShouldStartBootstrap becomes true.
+        return Layouts.Vertical()
+            .WithChild(new TextNode("  Launching personality setup conversation...").WithForeground(Color.Yellow))
+            .WithChild(new TextNode(""))
+            .WithChild(new TextNode("  Netclaw will start and interview you to establish its personality.").WithForeground(Color.White))
+            .WithChild(new TextNode("  This creates SOUL.md, AGENTS.md, and TOOLING.md in ~/.netclaw/identity/").WithForeground(Color.BrightBlack));
     }
 
     // ═══════════════════════════════════════════════════════════════════

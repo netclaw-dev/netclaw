@@ -16,7 +16,8 @@ public enum WizardStep
     ChatServices = 2,
     Acl = 3,
     Exposure = 4,
-    HealthCheck = 5
+    HealthCheck = 5,
+    Bootstrap = 6
 }
 
 /// <summary>
@@ -26,7 +27,7 @@ public enum WizardStep
 /// </summary>
 public partial class InitWizardViewModel : ReactiveViewModel
 {
-    public const int TotalSteps = 5;
+    public const int TotalSteps = 6;
 
     private readonly NetclawPaths _paths;
     private readonly IProviderProbe _probe;
@@ -37,6 +38,7 @@ public partial class InitWizardViewModel : ReactiveViewModel
     public ReactiveProperty<string> StatusMessage { get; } = new("");
     public ReactiveProperty<bool> IsHealthCheckRunning { get; } = new(false);
     public ReactiveProperty<bool> IsComplete { get; } = new(false);
+    public ReactiveProperty<bool> ShouldStartBootstrap { get; } = new(false);
     public ReactiveProperty<bool> IsProbing { get; } = new(false);
     public ReactiveProperty<ProviderProbeResult?> ProbeResult { get; } = new(null);
 
@@ -398,9 +400,23 @@ public partial class InitWizardViewModel : ReactiveViewModel
         }
 
         IsHealthCheckRunning.Value = false;
-        IsComplete.Value = true;
-        StatusMessage.Value = "Setup complete! Run `netclaw daemon start` to begin.";
-        NotifyHealthCheckChanged();
+
+        // Check if all health checks passed — if so, offer bootstrap
+        var allPassed = HealthCheckResults.All(h => h.Passed == true);
+        if (allPassed)
+        {
+            StatusMessage.Value = "Configuration written! Starting personality setup...";
+            NotifyHealthCheckChanged();
+            // Transition to bootstrap step
+            CurrentStep.Value = WizardStep.Bootstrap;
+            ShouldStartBootstrap.Value = true;
+        }
+        else
+        {
+            IsComplete.Value = true;
+            StatusMessage.Value = "Setup complete with warnings. Run `netclaw daemon start` to begin.";
+            NotifyHealthCheckChanged();
+        }
     }
 
     /// <summary>
@@ -528,6 +544,7 @@ public partial class InitWizardViewModel : ReactiveViewModel
         StatusMessage.Dispose();
         IsHealthCheckRunning.Dispose();
         IsComplete.Dispose();
+        ShouldStartBootstrap.Dispose();
         IsProbing.Dispose();
         ProbeResult.Dispose();
         ProbeElapsedSeconds.Dispose();
