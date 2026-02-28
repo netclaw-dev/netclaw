@@ -43,6 +43,7 @@ public class CompactionIntegrationTests : TestKit
         services.AddSingleton<ISystemPromptProvider>(new StaticSystemPromptProvider(
             "You are a test assistant."));
         services.AddSingleton<IMemoryExtractor>(_fakeMemoryExtractor);
+        services.AddSingleton<IModelCapabilityResolver>(new FakeCapabilityResolver());
     }
 
     protected override void ConfigureAkka(AkkaConfigurationBuilder builder, IServiceProvider provider)

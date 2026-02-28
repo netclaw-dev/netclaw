@@ -16,4 +16,16 @@ public sealed class ModelReference
     /// Null for models configured before provenance tracking was added.
     /// </summary>
     public ModelDiscoverySource? Provenance { get; set; }
+
+    /// <summary>
+    /// Manual override for input modalities. When set, bypasses all
+    /// automated capability detection for this model.
+    /// </summary>
+    public ModelModality? InputModalities { get; set; }
+
+    /// <summary>
+    /// Manual override for output modalities. When set, bypasses all
+    /// automated capability detection for this model.
+    /// </summary>
+    public ModelModality? OutputModalities { get; set; }
 }

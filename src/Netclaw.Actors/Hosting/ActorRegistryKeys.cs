@@ -5,3 +5,8 @@ namespace Netclaw.Actors.Hosting;
 /// (GenericChildPerEntityParent routing to LlmSessionActors).
 /// </summary>
 public sealed class SessionManagerActorKey;
+
+/// <summary>
+/// Marker type for ActorRegistry lookup of the model capability cache actor.
+/// </summary>
+public sealed class ModelCapabilityActorKey;

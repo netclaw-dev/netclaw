@@ -39,6 +39,7 @@ public class LlmSessionIntegrationTests : TestKit
         });
         services.AddSingleton<ISystemPromptProvider>(new StaticSystemPromptProvider(
             "You are a test assistant."));
+        services.AddSingleton<IModelCapabilityResolver>(new FakeCapabilityResolver());
     }
 
     protected override void ConfigureAkka(AkkaConfigurationBuilder builder, IServiceProvider provider)

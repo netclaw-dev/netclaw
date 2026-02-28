@@ -49,6 +49,7 @@ public class ToolExecutionIntegrationTests : TestKit
             AIFunctionFactory.Create(() => "search result", "web_search"),
             "web_search");
         services.AddSingleton(registry);
+        services.AddSingleton<IModelCapabilityResolver>(new FakeCapabilityResolver());
     }
 
     protected override void ConfigureAkka(AkkaConfigurationBuilder builder, IServiceProvider provider)

@@ -21,4 +21,10 @@ public sealed record DiscoveredModel
 
     /// <summary>Cost per million output tokens in USD, if known.</summary>
     public decimal? CostPerMillionOutputTokens { get; init; }
+
+    /// <summary>Content types the model accepts as input.</summary>
+    public ModelModality InputModalities { get; init; } = ModelModality.Text;
+
+    /// <summary>Content types the model can produce as output.</summary>
+    public ModelModality OutputModalities { get; init; } = ModelModality.Text;
 }
