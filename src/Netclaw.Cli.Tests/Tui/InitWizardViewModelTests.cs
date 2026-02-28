@@ -603,6 +603,8 @@ public sealed class InitWizardViewModelTests : IDisposable
         Assert.True(File.Exists(_paths.AgentsPath));
         var agents = File.ReadAllText(_paths.AgentsPath);
         Assert.Contains("Operating Rules", agents, StringComparison.Ordinal);
+        Assert.Contains(_paths.IdentityDirectory, agents, StringComparison.Ordinal);
+        Assert.Contains(_paths.SoulPath, agents, StringComparison.Ordinal);
 
         // TOOLING.md
         Assert.True(File.Exists(_paths.ToolingPath));

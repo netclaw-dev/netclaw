@@ -641,16 +641,34 @@ public partial class InitWizardViewModel : ReactiveViewModel
             """);
 
         File.WriteAllText(_paths.AgentsPath,
-            """
+            $"""
             # Operating Rules
 
             - Ask before making destructive changes to files or infrastructure
             - Prefer concise tool usage — avoid unnecessary search_tools calls
-            - When writing identity files, respect the scope boundaries:
-              - SOUL.md: personality, tone, user profile
-              - AGENTS.md: operating rules, meta-guidance
-              - TOOLING.md: host environment capabilities
-            - Use identity_write to update these files as you learn more
+
+            ## Identity Files
+
+            Identity configuration lives in `{_paths.IdentityDirectory}/`:
+
+            | File | Purpose |
+            |------|---------|
+            | `{_paths.SoulPath}` | Personality, tone, user profile |
+            | `{_paths.AgentsPath}` | Operating rules, meta-guidance (this file) |
+            | `{_paths.ToolingPath}` | Host environment capabilities |
+
+            Update these files directly as you learn more about the user and their environment.
+
+            ### Progressive Disclosure
+
+            Keep top-level files concise — a quick summary the system prompt can load every turn.
+            When a topic needs more depth, create a detail file in the matching subdirectory:
+
+            - `{_paths.SoulDetailDirectory}/` — e.g., `communication-preferences.md`, `work-context.md`
+            - `{_paths.AgentsDetailDirectory}/` — e.g., `tool-policies.md`, `safety-rules.md`
+            - `{_paths.ToolingDetailDirectory}/` — e.g., `docker.md`, `kubernetes.md`
+
+            The top-level file should reference detail files so they can be loaded on demand.
             """);
 
         File.WriteAllText(_paths.ToolingPath,
