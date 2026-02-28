@@ -19,7 +19,12 @@ using Netclaw.Security;
 
 try
 {
-    await RunAsync(args);
+    var restartSignal = new DaemonRestartSignal();
+    do
+    {
+        restartSignal.Reset();
+        await RunDaemonAsync(args, restartSignal);
+    } while (restartSignal.RestartRequested);
 }
 catch (Exception ex)
 {
@@ -27,12 +32,15 @@ catch (Exception ex)
     throw;
 }
 
-static async Task RunAsync(string[] args)
+static async Task RunDaemonAsync(string[] args, DaemonRestartSignal restartSignal)
 {
     var builder = WebApplication.CreateBuilder(args);
 
     // Use port 5199 to avoid conflicts with Aspire (5000) and other defaults
     builder.WebHost.UseUrls("http://127.0.0.1:5199");
+
+    // Register process-lifetime restart signal so services can trigger a restart
+    builder.Services.AddSingleton(restartSignal);
 
     var paths = ConfigureConfigServices(builder.Services, builder.Configuration);
     var daemonLogLevel = builder.ConfigureNetclawLogging();
@@ -223,6 +231,12 @@ static void ConfigureDaemonServices(
     // Akka.NET actor system
     services.AddAkka("netclaw", (akkaBuilder, sp) =>
     {
+        // Prevent coordinated shutdown from calling Environment.Exit(),
+        // which would kill the process before the restart loop can iterate.
+        akkaBuilder.AddHocon(
+            "akka.coordinated-shutdown.exit-clr = off",
+            HoconAddMode.Prepend);
+
         akkaBuilder = akkaBuilder.ConfigureLoggers(setup =>
         {
             setup.ClearLoggers();

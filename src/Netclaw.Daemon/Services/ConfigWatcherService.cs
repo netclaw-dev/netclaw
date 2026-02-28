@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Netclaw.Configuration;
@@ -20,6 +21,8 @@ public sealed class ConfigWatcherService : IHostedService, IDisposable
 {
     private readonly NetclawPaths _paths;
     private readonly TimeProvider _timeProvider;
+    private readonly IHostApplicationLifetime _appLifetime;
+    private readonly DaemonRestartSignal _restartSignal;
     private readonly ILogger<ConfigWatcherService> _logger;
 
     private FileSystemWatcher? _watcher;
@@ -29,10 +32,14 @@ public sealed class ConfigWatcherService : IHostedService, IDisposable
     public ConfigWatcherService(
         NetclawPaths paths,
         TimeProvider timeProvider,
+        IHostApplicationLifetime appLifetime,
+        DaemonRestartSignal restartSignal,
         ILogger<ConfigWatcherService> logger)
     {
         _paths = paths;
         _timeProvider = timeProvider;
+        _appLifetime = appLifetime;
+        _restartSignal = restartSignal;
         _logger = logger;
     }
 
@@ -106,22 +113,49 @@ public sealed class ConfigWatcherService : IHostedService, IDisposable
         }, CancellationToken.None);
     }
 
-    private void ApplyReload()
+    internal void ApplyReload()
     {
         try
         {
-            // TODO: Read and validate new configuration
-            // TODO: Rebuild IChatClientProvider on valid change
-            // TODO: Notify actor system of config changes via Akka pub/sub
-            // TODO: Log validation errors on invalid change, preserve previous config
-
             _logger.LogInformation(
-                "[{Timestamp:o}] Config reload triggered (validation not yet implemented)",
+                "[{Timestamp:o}] Config change detected, validating before restart...",
                 _timeProvider.GetUtcNow());
+
+            // Validate JSON structure of both config files before triggering restart.
+            // Full semantic validation happens during the next startup cycle.
+            if (!ValidateConfigJson(_paths.NetclawConfigPath) ||
+                !ValidateConfigJson(_paths.SecretsPath))
+            {
+                _logger.LogWarning("Config validation failed. Keeping current config — no restart.");
+                return;
+            }
+
+            _logger.LogInformation("Config valid. Requesting daemon restart.");
+            _restartSignal.RequestRestart();
+            _appLifetime.StopApplication();
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Config reload failed. Keeping previous config.");
+        }
+    }
+
+    private bool ValidateConfigJson(string path)
+    {
+        if (!File.Exists(path))
+            return true; // Missing files are OK — they're optional in the config chain
+
+        try
+        {
+            var bytes = File.ReadAllBytes(path);
+            var reader = new Utf8JsonReader(bytes);
+            while (reader.Read()) { } // Walk the entire document to catch syntax errors
+            return true;
+        }
+        catch (JsonException ex)
+        {
+            _logger.LogWarning("Invalid JSON in {ConfigFile}: {Error}", path, ex.Message);
+            return false;
         }
     }
 
