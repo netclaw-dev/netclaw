@@ -32,7 +32,7 @@ public class CompactionIntegrationTests : TestKit
     {
         services.AddSingleton<IChatClientProvider>(new SingleClientProvider(_fakeChatClient));
         // Small context window for easy threshold triggering in tests.
-        // KeepRecentTurnPairs=0 so minimal-history tests (1 turn) actually reduce message count.
+        // KeepRecentMessages=0 so minimal-history tests (1 turn) actually reduce message count.
         services.AddSingleton(new SessionConfig
         {
             ModelId = "fake-model",
@@ -40,7 +40,7 @@ public class CompactionIntegrationTests : TestKit
             CompactionThreshold = 0.75, // 750 tokens triggers compaction
             SnapshotInterval = 5,
             KeepRecentToolResults = 1,
-            KeepRecentTurnPairs = 0
+            KeepRecentMessages = 0
         });
         services.AddSingleton<ISystemPromptProvider>(new StaticSystemPromptProvider(
             "You are a test assistant."));
@@ -326,7 +326,7 @@ public class CompactionIntegrationTests : TestKit
     }
 
     [Fact]
-    public async Task Compaction_produces_user_role_summary_with_context_summary_tags()
+    public async Task Compaction_summary_uses_user_role_with_context_summary_tags()
     {
         _fakeChatClient.UsageOverride = new UsageDetails
         {
@@ -334,18 +334,6 @@ public class CompactionIntegrationTests : TestKit
             OutputTokenCount = 50,
             TotalTokenCount = 850
         };
-        // Return structured compaction output so ParseCompactionOutput can parse it
-        _fakeChatClient.CompactionResponseText = """
-            ## SUMMARY
-            The user was investigating a Freshdesk ticket.
-            We searched for ticket #579 and found it was a permissions issue.
-
-            **Goal**: Resolve ticket 579
-            **Key Facts**: Customer is Acme Corp, ticket relates to ACL
-
-            ## PRESERVE_FROM_INDEX
-            0
-            """;
 
         var sessionId = new SessionId("test-channel/summary-format");
         var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();

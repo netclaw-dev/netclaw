@@ -51,13 +51,13 @@ public sealed record SessionConfig
     public int MaxToolIterationsPerTurn { get; init; } = 10;
 
     /// <summary>
-    /// Minimum number of recent user/assistant turn pairs to preserve verbatim
-    /// after compaction summarization. Acts as a safety floor — even if the compaction
-    /// agent says "summarize everything", at least this many recent turns are kept.
-    /// Also used as the fallback when the compaction agent doesn't specify a
-    /// <c>PRESERVE_FROM_INDEX</c>.
+    /// Number of recent non-system messages to preserve verbatim after compaction
+    /// summarization. These are appended after the summary message so the assistant
+    /// has immediate conversational context. Counts raw messages (not turn pairs)
+    /// to handle tool-call-heavy turns correctly.
+    /// Default 6 — roughly covers 2 turns with tool calls.
     /// </summary>
-    public int KeepRecentTurnPairs { get; init; } = 2;
+    public int KeepRecentMessages { get; init; } = 6;
 
     /// <summary>
     /// How long a session can be idle before passivating.

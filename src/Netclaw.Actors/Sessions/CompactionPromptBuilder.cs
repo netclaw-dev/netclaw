@@ -1,85 +1,65 @@
-using System.Text.RegularExpressions;
 using Netclaw.Actors.Protocol;
 
 namespace Netclaw.Actors.Sessions;
 
 /// <summary>
 /// Builds structured prompts for the compaction summarization LLM call.
-/// The compaction LLM acts as an intelligent agent that analyzes the conversation,
-/// determines what matters, and decides what to preserve vs summarize.
+/// The compaction LLM produces a context summary; recent messages are preserved
+/// verbatim by the caller based on a fixed config value.
 /// </summary>
-public static partial class CompactionPromptBuilder
+public static class CompactionPromptBuilder
 {
     /// <summary>
     /// Builds the system prompt for the compaction summarization call.
-    /// The compaction agent produces a structured summary and declares which
-    /// recent messages to preserve verbatim.
     /// </summary>
     public static string BuildSummarizationSystemPrompt()
     {
         return """
-            You are a conversation compaction agent. Your job is to analyze a conversation
-            and produce a structured output that preserves critical context while reducing
-            message count.
+            You are a conversation compaction agent. Your job is to produce a context
+            summary of a conversation that will be injected as background context for
+            the assistant to continue working.
 
-            First, determine what type of conversation this is (e.g., debugging session,
-            feature planning, ticket investigation, code review, general Q&A) and what
-            information is critical to preserve.
+            Write the summary in past tense — this is historical context, not
+            instructions. Use phrases like "The user was working on..." or
+            "We investigated..." rather than imperatives like "Do X" or "Continue Y".
 
-            Then identify the "active thread" — the recent coherent exchange the user
-            expects to continue from. Everything before the active thread gets summarized;
-            messages from the active thread onward are preserved verbatim.
+            Include these sections as relevant (omit empty ones):
 
-            Produce your output in exactly this format:
+            **Goal**: What the user is working on — the high-level objective.
 
-            ## SUMMARY
-            Write a context summary in past tense covering everything before the active
-            thread. This is historical context, not instructions — use phrases like
-            "The user was working on..." or "We investigated..." rather than imperatives.
+            **Completed**: What has been accomplished so far.
 
-            Include these subsections as relevant (omit empty ones):
-            - **Goal**: What the user is working on
-            - **Completed**: What has been accomplished
-            - **Decisions**: Key decisions made and their rationale
-            - **Key Facts**: Names, paths, URLs, config values, identifiers
-            - **Tool Findings**: Essential outcomes from tool calls (not full outputs)
-            - **Open Items**: Pending questions or next steps
+            **Decisions**: Key decisions made during the conversation and their rationale.
 
-            ## PRESERVE_FROM_INDEX
-            <N>
+            **Key Facts**: Names, file paths, URLs, configuration values, identifiers,
+            or other specifics needed to continue the work.
 
-            Where N is the 0-based message index (counting from the start of the
-            conversation, excluding the system prompt) from which all messages should
-            be preserved verbatim. Choose this boundary so the active thread of
-            conversation remains intact.
+            **Tool Findings**: Essential outcomes from tool calls — not full outputs,
+            just the conclusions that matter.
 
-            Guidelines for choosing the preservation boundary:
-            - Preserve at least the last 2 user/assistant turn pairs
-            - If the user asked a question that hasn't been fully answered, preserve from that question
-            - If a multi-step task is in progress, preserve from the step that's currently active
-            - When in doubt, preserve more rather than less
+            **Open Items**: Pending questions, next steps, or unresolved issues.
+
+            Keep the summary concise but complete. Prioritize information that the
+            assistant would need to continue the conversation without the user having
+            to repeat themselves.
             """;
     }
 
     /// <summary>
     /// Builds the user prompt containing the conversation history to summarize.
-    /// Messages are numbered with 0-based indices (excluding system prompt) so the
-    /// compaction agent can reference them in PRESERVE_FROM_INDEX.
     /// </summary>
     public static string BuildSummarizationUserPrompt(
         IReadOnlyList<SerializableChatMessage> history)
     {
         var sb = new System.Text.StringBuilder();
-        sb.AppendLine("Analyze the following conversation and produce the structured compaction output described above.");
-        sb.AppendLine("Messages are numbered with 0-based indices for your PRESERVE_FROM_INDEX reference.");
+        sb.AppendLine("Summarize the following conversation into the structured format described above.");
         sb.AppendLine();
         sb.AppendLine("---");
         sb.AppendLine();
 
-        var index = 0;
         foreach (var msg in history)
         {
-            // Skip system prompt — it's preserved separately and not indexed
+            // Skip system prompt — it's preserved separately
             if (msg.Role == ChatRole.System)
                 continue;
 
@@ -91,7 +71,7 @@ public static partial class CompactionPromptBuilder
                 _ => msg.Role.ToString()
             };
 
-            sb.AppendLine($"[{index}] **{roleLabel}:**");
+            sb.AppendLine($"**{roleLabel}:**");
 
             if (msg.ToolCalls.Count > 0)
             {
@@ -108,51 +88,10 @@ public static partial class CompactionPromptBuilder
             }
 
             sb.AppendLine();
-            index++;
         }
 
         return sb.ToString();
     }
-
-    /// <summary>
-    /// Parses the compaction agent's structured output into a summary and preservation boundary.
-    /// </summary>
-    /// <param name="llmResponse">The raw LLM response text.</param>
-    /// <returns>
-    /// A tuple of (Summary, PreserveFromIndex). If parsing fails, returns the full response
-    /// as the summary and -1 to signal "use config default".
-    /// </returns>
-    public static (string Summary, int PreserveFromIndex) ParseCompactionOutput(string llmResponse)
-    {
-        if (string.IsNullOrWhiteSpace(llmResponse))
-            return (string.Empty, -1);
-
-        // Find ## SUMMARY section
-        var summaryMatch = SummarySection().Match(llmResponse);
-        if (!summaryMatch.Success)
-            return (llmResponse.Trim(), -1);
-
-        // Find ## PRESERVE_FROM_INDEX section
-        var preserveMatch = PreserveFromIndexSection().Match(llmResponse);
-
-        var summary = summaryMatch.Groups[1].Value.Trim();
-        var preserveFromIndex = -1;
-
-        if (preserveMatch.Success && int.TryParse(preserveMatch.Groups[1].Value.Trim(), out var parsed))
-        {
-            preserveFromIndex = parsed;
-        }
-
-        return (summary, preserveFromIndex);
-    }
-
-    // Matches ## SUMMARY followed by content up to ## PRESERVE_FROM_INDEX or end
-    [GeneratedRegex(@"##\s*SUMMARY\s*\n(.*?)(?=##\s*PRESERVE_FROM_INDEX|$)", RegexOptions.Singleline)]
-    private static partial Regex SummarySection();
-
-    // Matches ## PRESERVE_FROM_INDEX followed by a number (with optional angle brackets)
-    [GeneratedRegex(@"##\s*PRESERVE_FROM_INDEX\s*\n\s*<?(\d+)>?")]
-    private static partial Regex PreserveFromIndexSection();
 
     /// <summary>
     /// Builds the system prompt for pre-compaction memory extraction.

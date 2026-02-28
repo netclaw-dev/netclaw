@@ -419,32 +419,16 @@ public sealed class LlmSessionActor : ReceivePersistentActor
                 Content = $"<context-summary>\n{msg.Summary}\n</context-summary>"
             });
 
-            // 2. Determine preservation boundary
-            // Non-system messages start at index 0 in the compaction agent's numbering.
-            // Map that to _state.History indices (offset by 1 if system prompt is present).
+            // 2. Preserve last N non-system messages verbatim
             var systemPromptOffset = _state.History.Count > 0
                 && _state.History[0].Role == Protocol.ChatRole.System ? 1 : 0;
+            var nonSystemCount = _state.History.Count - systemPromptOffset;
+            var keepCount = Math.Min(_config.KeepRecentMessages, nonSystemCount);
+            var startIndex = _state.History.Count - keepCount;
 
-            // Get non-system messages for slicing
-            var nonSystemMessages = _state.History.Skip(systemPromptOffset).ToList();
-
-            int preserveFromNonSystem;
-            if (msg.PreserveFromIndex >= 0 && msg.PreserveFromIndex < nonSystemMessages.Count)
+            for (var i = startIndex; i < _state.History.Count; i++)
             {
-                // Agent specified a valid boundary
-                preserveFromNonSystem = msg.PreserveFromIndex;
-            }
-            else
-            {
-                // Fall back to config: keep last N turn pairs (each pair = user + assistant = 2 messages)
-                var messagesToKeep = _config.KeepRecentTurnPairs * 2;
-                preserveFromNonSystem = Math.Max(0, nonSystemMessages.Count - messagesToKeep);
-            }
-
-            // 3. Slice recent messages from the preservation boundary
-            for (var i = preserveFromNonSystem; i < nonSystemMessages.Count; i++)
-            {
-                compactedMessages.Add(nonSystemMessages[i]);
+                compactedMessages.Add(_state.History[i]);
             }
 
             var compactedEvent = new SessionCompacted
@@ -473,8 +457,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor
                     Summarized = true
                 });
 
-                _log.Info("Compaction complete (before={MessagesBefore}, after={MessagesAfter}, preservedFrom={PreserveFrom})",
-                    messagesBefore, _state.History.Count, preserveFromNonSystem);
+                _log.Info("Compaction complete (before={MessagesBefore}, after={MessagesAfter})",
+                    messagesBefore, _state.History.Count);
 
                 DrainBufferOrReady();
             });
@@ -558,12 +542,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor
             var summaryResponse = await client.GetResponseAsync(summaryMessages);
             var summaryText = summaryResponse.Messages[^1].Text ?? string.Empty;
 
-            var (summary, preserveFromIndex) = CompactionPromptBuilder.ParseCompactionOutput(summaryText);
-            self.Tell(new SummarizationCompleted
-            {
-                Summary = summary,
-                PreserveFromIndex = preserveFromIndex
-            });
+            self.Tell(new SummarizationCompleted { Summary = summaryText });
         }
         catch (Exception ex)
         {
