@@ -157,6 +157,7 @@ static void ConfigureDaemonServices(
         SnapshotInterval = sessionSection.GetValue("SnapshotInterval", 20),
         KeepRecentToolResults = sessionSection.GetValue("KeepRecentToolResults", 3),
         MaxToolIterationsPerTurn = sessionSection.GetValue("MaxToolIterationsPerTurn", 10),
+        KeepRecentTurnPairs = sessionSection.GetValue("KeepRecentTurnPairs", 2),
         InputModalities = models.Main.InputModalities ?? ModelModality.Text,
         OutputModalities = models.Main.OutputModalities ?? ModelModality.Text,
     });

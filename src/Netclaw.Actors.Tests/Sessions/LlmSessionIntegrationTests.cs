@@ -366,6 +366,13 @@ internal sealed class FakeChatClient : IChatClient
     /// </summary>
     public UsageDetails? UsageOverride { get; set; }
 
+    /// <summary>
+    /// When set, <see cref="GetResponseAsync"/> calls whose system prompt contains
+    /// "compaction agent" return this text instead of the default fake response.
+    /// Use to test structured compaction output parsing.
+    /// </summary>
+    public string? CompactionResponseText { get; set; }
+
     public async Task<ChatResponse> GetResponseAsync(
         IEnumerable<ChatMessage> messages,
         ChatOptions? options = null,
@@ -393,6 +400,20 @@ internal sealed class FakeChatClient : IChatClient
                 if (UsageOverride is not null)
                     toolResponse.Usage = UsageOverride;
                 return toolResponse;
+            }
+        }
+
+        // Return structured compaction response when configured and called for summarization
+        if (CompactionResponseText is not null)
+        {
+            var messagesList = messages.ToList();
+            var systemPrompt = messagesList.FirstOrDefault(m => m.Role == Microsoft.Extensions.AI.ChatRole.System);
+            if (systemPrompt?.Text?.Contains("compaction agent") == true)
+            {
+                var compactionMessage = new ChatMessage(
+                    Microsoft.Extensions.AI.ChatRole.Assistant,
+                    [new TextContent(CompactionResponseText)]);
+                return new ChatResponse(compactionMessage);
             }
         }
 

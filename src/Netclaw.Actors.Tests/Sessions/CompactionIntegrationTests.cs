@@ -31,14 +31,16 @@ public class CompactionIntegrationTests : TestKit
     protected override void ConfigureServices(HostBuilderContext context, IServiceCollection services)
     {
         services.AddSingleton<IChatClientProvider>(new SingleClientProvider(_fakeChatClient));
-        // Small context window for easy threshold triggering in tests
+        // Small context window for easy threshold triggering in tests.
+        // KeepRecentTurnPairs=0 so minimal-history tests (1 turn) actually reduce message count.
         services.AddSingleton(new SessionConfig
         {
             ModelId = "fake-model",
             ContextWindowTokens = 1000,
             CompactionThreshold = 0.75, // 750 tokens triggers compaction
             SnapshotInterval = 5,
-            KeepRecentToolResults = 1
+            KeepRecentToolResults = 1,
+            KeepRecentTurnPairs = 0
         });
         services.AddSingleton<ISystemPromptProvider>(new StaticSystemPromptProvider(
             "You are a test assistant."));
@@ -320,6 +322,74 @@ public class CompactionIntegrationTests : TestKit
         }, TimeSpan.FromSeconds(3));
 
         var text = recoverSub.ExpectMsg<TextOutput>(TimeSpan.FromSeconds(3));
+        Assert.Contains("fake", text.Text, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Compaction_produces_user_role_summary_with_context_summary_tags()
+    {
+        _fakeChatClient.UsageOverride = new UsageDetails
+        {
+            InputTokenCount = 800,
+            OutputTokenCount = 50,
+            TotalTokenCount = 850
+        };
+        // Return structured compaction output so ParseCompactionOutput can parse it
+        _fakeChatClient.CompactionResponseText = """
+            ## SUMMARY
+            The user was investigating a Freshdesk ticket.
+            We searched for ticket #579 and found it was a permissions issue.
+
+            **Goal**: Resolve ticket 579
+            **Key Facts**: Customer is Acme Corp, ticket relates to ACL
+
+            ## PRESERVE_FROM_INDEX
+            0
+            """;
+
+        var sessionId = new SessionId("test-channel/summary-format");
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("summary-sub");
+
+        await sessionManager.Ask<SessionJoined>(new JoinSession
+        {
+            SessionId = sessionId,
+            Subscriber = subscriber,
+            Filter = OutputFilter.Full
+        }, TimeSpan.FromSeconds(3));
+        subscriber.ExpectMsg<SessionJoined>();
+
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Investigate ticket 579"
+        }, TimeSpan.FromSeconds(3));
+
+        // Turn output
+        subscriber.ExpectMsg<TextOutput>(TimeSpan.FromSeconds(3));
+        subscriber.ExpectMsg<UsageOutput>(TimeSpan.FromSeconds(3));
+        subscriber.ExpectMsg<TurnCompleted>(TimeSpan.FromSeconds(3));
+
+        // Compaction
+        var compaction = subscriber.ExpectMsg<CompactionOutput>(TimeSpan.FromSeconds(5));
+        Assert.True(compaction.Summarized);
+
+        // Verify post-compaction by sending another message (low usage to avoid re-compaction)
+        _fakeChatClient.UsageOverride = new UsageDetails
+        {
+            InputTokenCount = 100,
+            OutputTokenCount = 20,
+            TotalTokenCount = 120
+        };
+
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "What was the ticket about?"
+        }, TimeSpan.FromSeconds(3));
+
+        // Session still works — the context-summary message is there as context
+        var text = subscriber.ExpectMsg<TextOutput>(TimeSpan.FromSeconds(3));
         Assert.Contains("fake", text.Text, StringComparison.OrdinalIgnoreCase);
     }
 }

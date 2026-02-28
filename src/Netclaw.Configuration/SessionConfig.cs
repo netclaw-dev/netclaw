@@ -51,6 +51,15 @@ public sealed record SessionConfig
     public int MaxToolIterationsPerTurn { get; init; } = 10;
 
     /// <summary>
+    /// Minimum number of recent user/assistant turn pairs to preserve verbatim
+    /// after compaction summarization. Acts as a safety floor — even if the compaction
+    /// agent says "summarize everything", at least this many recent turns are kept.
+    /// Also used as the fallback when the compaction agent doesn't specify a
+    /// <c>PRESERVE_FROM_INDEX</c>.
+    /// </summary>
+    public int KeepRecentTurnPairs { get; init; } = 2;
+
+    /// <summary>
     /// How long a session can be idle before passivating.
     /// The actor saves a snapshot and stops itself; re-creation by
     /// <c>GenericChildPerEntityParent</c> on next message recovers state from journal.

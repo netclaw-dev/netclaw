@@ -72,6 +72,13 @@ internal sealed record MemoryExtractionCompleted
 internal sealed record SummarizationCompleted
 {
     public required string Summary { get; init; }
+
+    /// <summary>
+    /// 0-based message index (excluding system prompt) from which to preserve
+    /// messages verbatim. -1 means the compaction agent didn't specify a boundary
+    /// and the handler should fall back to <see cref="Configuration.SessionConfig.KeepRecentTurnPairs"/>.
+    /// </summary>
+    public int PreserveFromIndex { get; init; } = -1;
 }
 
 /// <summary>
