@@ -11,14 +11,14 @@ namespace Netclaw.Cli.Tui;
 
 /// <summary>
 /// Termina page for the <c>netclaw provider</c> interactive TUI.
-/// Provides browsing, adding, and removing provider configurations.
+/// Shows all known provider types as a dashboard and provides
+/// context-sensitive actions based on provider state.
 /// </summary>
 public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
 {
     private static readonly string[] SpinnerFrames = ["\u280b", "\u2819", "\u2838", "\u2834", "\u2826", "\u2807"];
 
     private SelectionListNode<string>? _providerList;
-    private SelectionListNode<string>? _typeList;
     private SelectionListNode<string>? _authList;
     private TextInputNode? _apiKeyInput;
     private TextInputNode? _endpointInput;
@@ -70,12 +70,14 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
 
             return ViewModel.CurrentState.Value switch
             {
+                ProviderManagerState.Loading => BuildLoadingView(),
                 ProviderManagerState.List => BuildProviderListView(),
-                ProviderManagerState.AddSelectType => BuildAddTypeView(),
                 ProviderManagerState.AddSelectAuth => BuildAddAuthView(),
                 ProviderManagerState.AddCredentials => BuildCredentialsView(),
                 ProviderManagerState.AddValidating => BuildValidatingView(),
                 ProviderManagerState.AddComplete => BuildAddCompleteView(),
+                ProviderManagerState.Details => BuildDetailsView(),
+                ProviderManagerState.FixCredentials => BuildFixCredentialsView(),
                 ProviderManagerState.RemoveConfirm => BuildRemoveConfirmView(),
                 _ => Layouts.Empty()
             };
@@ -105,8 +107,12 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
             {
                 var text = state switch
                 {
+                    ProviderManagerState.Loading =>
+                        " Checking providers...  [Ctrl+Q] Quit",
                     ProviderManagerState.List =>
-                        " [\u2191/\u2193] Navigate  [A] Add  [R] Remove  [Esc] Quit  [Ctrl+Q] Quit",
+                        " [\u2191/\u2193] Navigate  [Enter] Select  [Esc] Quit  [Ctrl+Q] Quit",
+                    ProviderManagerState.Details =>
+                        " [K] Update key  [R] Remove  [V] Re-validate  [Esc] Back  [Ctrl+Q] Quit",
                     ProviderManagerState.RemoveConfirm =>
                         " [Enter] Confirm  [Esc] Cancel  [Ctrl+Q] Quit",
                     ProviderManagerState.AddComplete =>
@@ -124,20 +130,48 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
     // Content views
     // ═══════════════════════════════════════════════════════════════════
 
-    private ILayoutNode BuildProviderListView()
+    private ILayoutNode BuildLoadingView()
     {
-        if (ViewModel.Providers.Count == 0)
+        var elapsed = ViewModel.EagerProbeElapsedSeconds.Value;
+        var frame = SpinnerFrames[elapsed % SpinnerFrames.Length];
+
+        var children = Layouts.Vertical();
+        children.WithChild(new TextNode($"  {frame} Checking configured providers...")
+            .WithForeground(Color.Yellow));
+        children.WithChild(new TextNode("").Height(1));
+
+        foreach (var item in ViewModel.DisplayProviders)
         {
-            return Layouts.Vertical()
-                .WithChild(new TextNode("  No providers configured.").WithForeground(Color.Gray))
-                .WithChild(new TextNode("  Press [A] to add a provider.").WithForeground(Color.Gray));
+            if (!item.IsConfigured) continue;
+
+            var (statusChar, color) = item.Health switch
+            {
+                ProviderHealthStatus.Healthy => ("\u2713", Color.Green),
+                ProviderHealthStatus.Unhealthy => ("\u26a0", Color.Red),
+                _ => (SpinnerFrames[elapsed % SpinnerFrames.Length], Color.Yellow)
+            };
+
+            children.WithChild(new TextNode($"  {statusChar} {item.ProviderType}")
+                .WithForeground(color));
         }
 
-        var items = ViewModel.Providers
+        return children;
+    }
+
+    private ILayoutNode BuildProviderListView()
+    {
+        var items = ViewModel.DisplayProviders
             .Select(p =>
             {
-                var authStr = p.Entry.AuthMethod == AuthMethod.None ? "none" : p.Entry.AuthMethod.ToString();
-                return $"{p.Name,-18} {p.Entry.Type,-10} {authStr,-10} {p.Entry.Endpoint}";
+                var statusChar = p switch
+                {
+                    { IsConfigured: true, Health: ProviderHealthStatus.Healthy } => "\u2713",
+                    { IsConfigured: true, Health: ProviderHealthStatus.Unhealthy } => "\u26a0",
+                    { IsConfigured: true, Health: ProviderHealthStatus.Probing } => "\u2026",
+                    _ => " "
+                };
+
+                return $"{statusChar} {p.ProviderType,-16} {p.DisplayAuth,-12} {p.DisplayEndpoint}";
             })
             .ToList();
 
@@ -148,44 +182,25 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
         _providerList.OnFocused();
         _lastFocusedList = _providerList;
 
-        return Layouts.Vertical()
-            .WithChild(new TextNode($"  {"Name",-18} {"Type",-10} {"Auth",-10} Endpoint")
-                .WithForeground(Color.White).Bold())
-            .WithChild(_providerList);
-    }
-
-    private ILayoutNode BuildAddTypeView()
-    {
-        _typeList = Layouts.SelectionList(
-                ProviderCapabilities.KnownProviderTypes.ToList())
-            .WithMode(SelectionMode.Single)
-            .WithHighlightColors(Color.Black, Color.Cyan);
-
-        _typeList.OnFocused();
-        _lastFocusedList = _typeList;
-
-        _typeList.SelectionConfirmed
+        _providerList.SelectionConfirmed
             .Subscribe(selected =>
             {
                 if (selected.Count > 0)
-                    ViewModel.SelectProviderType(selected[0]);
+                {
+                    var idx = items.IndexOf(selected[0]);
+                    if (idx >= 0)
+                    {
+                        ViewModel.SelectedProviderIndex = idx;
+                        ViewModel.ActivateSelectedProvider();
+                    }
+                }
             })
             .DisposeWith(_stepSubs);
 
         return Layouts.Vertical()
-            .WithChild(new TextNode("  Select provider type:").WithForeground(Color.White))
-            .WithChild(_typeList)
-            .WithChild(BuildProviderTypeHelp());
-    }
-
-    private ILayoutNode BuildProviderTypeHelp()
-    {
-        return Layouts.Vertical()
-            .WithChild(new TextNode("").Height(1))
-            .WithChild(new TextNode("  Ollama     \u2014 local inference, no auth needed").WithForeground(Color.Gray))
-            .WithChild(new TextNode("  OpenRouter \u2014 model marketplace with unified API").WithForeground(Color.Gray))
-            .WithChild(new TextNode("  Anthropic  \u2014 Claude models (API key or OAuth)").WithForeground(Color.Gray))
-            .WithChild(new TextNode("  OpenAI     \u2014 GPT models (API key or OAuth)").WithForeground(Color.Gray));
+            .WithChild(new TextNode($"  {"",2}{"Type",-16} {"Auth",-12} Endpoint")
+                .WithForeground(Color.White).Bold())
+            .WithChild(_providerList);
     }
 
     private ILayoutNode BuildAddAuthView()
@@ -324,6 +339,13 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
 
         if (result is { Success: true })
         {
+            if (ViewModel.IsFixFlow)
+            {
+                return Layouts.Vertical()
+                    .WithChild(new TextNode($"  \u2714 Connection restored! ({result.Models.Count} models found)")
+                        .WithForeground(Color.Green));
+            }
+
             return Layouts.Vertical()
                 .WithChild(new TextNode($"  \u2714 Connection successful! ({result.Models.Count} models found)")
                     .WithForeground(Color.Green))
@@ -353,6 +375,130 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
             .WithChild(new TextNode("").Height(1))
             .WithChild(new TextNode("  Press [Enter] to save, [Esc] to cancel.")
                 .WithForeground(Color.Gray));
+    }
+
+    private ILayoutNode BuildDetailsView()
+    {
+        var item = ViewModel.DetailProvider;
+        if (item is null)
+            return Layouts.Empty();
+
+        var healthStr = item.Health switch
+        {
+            ProviderHealthStatus.Healthy => "\u2713 Healthy",
+            ProviderHealthStatus.Unhealthy => "\u26a0 Unhealthy",
+            ProviderHealthStatus.Probing => "\u2026 Checking...",
+            _ => "Unknown"
+        };
+
+        var healthColor = item.Health switch
+        {
+            ProviderHealthStatus.Healthy => Color.Green,
+            ProviderHealthStatus.Unhealthy => Color.Red,
+            _ => Color.Yellow
+        };
+
+        var modelCount = item.ProbeResult?.Models.Count ?? 0;
+
+        return Layouts.Vertical()
+            .WithChild(new TextNode($"  Provider: {item.ConfiguredName}").WithForeground(Color.White).Bold())
+            .WithChild(new TextNode("").Height(1))
+            .WithChild(new TextNode($"    Type:     {item.ProviderType}").WithForeground(Color.White))
+            .WithChild(new TextNode($"    Auth:     {item.DisplayAuth}").WithForeground(Color.White))
+            .WithChild(new TextNode($"    Endpoint: {item.DisplayEndpoint}").WithForeground(Color.White))
+            .WithChild(new TextNode($"    Status:   {healthStr}").WithForeground(healthColor))
+            .WithChild(new TextNode($"    Models:   {modelCount} discovered").WithForeground(Color.White));
+    }
+
+    private ILayoutNode BuildFixCredentialsView()
+    {
+        var item = ViewModel.DetailProvider;
+        if (item is null)
+            return Layouts.Empty();
+
+        var children = Layouts.Vertical();
+
+        children.WithChild(new TextNode($"  Fix credentials for: {item.ConfiguredName} ({item.ProviderType})")
+            .WithForeground(Color.White).Bold());
+
+        if (item.ProbeResult is { Success: false, ErrorMessage: not null })
+        {
+            children.WithChild(new TextNode("").Height(1));
+            children.WithChild(new TextNode($"  Error: {item.ProbeResult.ErrorMessage}")
+                .WithForeground(Color.Red));
+        }
+
+        var supportedAuth = ProviderCapabilities.GetSupportedAuthMethods(item.ProviderType);
+
+        if (item.ProviderType == "ollama")
+        {
+            children.WithChild(new TextNode("").Height(1));
+            children.WithChild(new TextNode("  Endpoint:").WithForeground(Color.White));
+
+            _endpointInput = new TextInputNode()
+                .WithPlaceholder(item.Entry?.Endpoint ?? ProviderCapabilities.GetDefaultEndpoint("ollama"));
+            _endpointInput.OnFocused();
+            _lastFocusedInput = _endpointInput;
+
+            _endpointInput.Submitted
+                .Subscribe(text =>
+                {
+                    ViewModel.FixEndpoint = string.IsNullOrWhiteSpace(text)
+                        ? item.Entry?.Endpoint
+                        : text;
+                    ViewModel.SubmitFixCredentials();
+                })
+                .DisposeWith(_stepSubs);
+
+            children.WithChild(new PanelNode()
+                .WithTitle("Endpoint")
+                .WithBorder(BorderStyle.Rounded)
+                .WithBorderColor(Color.Gray)
+                .WithContent(_endpointInput)
+                .Height(3));
+        }
+        else if (supportedAuth.Contains(AuthMethod.ApiKey))
+        {
+            children.WithChild(new TextNode("").Height(1));
+            children.WithChild(new TextNode("  New API Key:").WithForeground(Color.White));
+
+            _apiKeyInput = new TextInputNode()
+                .AsPassword()
+                .WithPlaceholder($"Enter new {item.ProviderType} API key...");
+            _apiKeyInput.OnFocused();
+            _lastFocusedInput = _apiKeyInput;
+
+            _apiKeyInput.Submitted
+                .Subscribe(text =>
+                {
+                    ViewModel.FixApiKey = text;
+                    ViewModel.SubmitFixCredentials();
+                })
+                .DisposeWith(_stepSubs);
+
+            children.WithChild(new PanelNode()
+                .WithTitle("API Key")
+                .WithBorder(BorderStyle.Rounded)
+                .WithBorderColor(Color.Gray)
+                .WithContent(_apiKeyInput)
+                .Height(3));
+
+            var guidance = item.ProviderType switch
+            {
+                "openrouter" => "  Get your API key at https://openrouter.ai/keys",
+                "anthropic" => "  Get your API key at https://console.anthropic.com/settings/keys",
+                "openai" => "  Get your API key at https://platform.openai.com/api-keys",
+                _ => null
+            };
+
+            if (guidance is not null)
+            {
+                children.WithChild(new TextNode("").Height(1));
+                children.WithChild(new TextNode(guidance).WithForeground(Color.Gray));
+            }
+        }
+
+        return children;
     }
 
     private ILayoutNode BuildRemoveConfirmView()
@@ -410,25 +556,32 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
             return;
         }
 
-        // List-state shortcuts
-        if (state == ProviderManagerState.List)
+        // Details state shortcuts
+        if (state == ProviderManagerState.Details)
         {
             switch (keyInfo.Key)
             {
-                case ConsoleKey.A:
-                    ViewModel.StartAdd();
+                case ConsoleKey.K:
+                    if (ViewModel.DetailProvider is not null)
+                        ViewModel.StartFixCredentials(ViewModel.DetailProvider);
                     return;
                 case ConsoleKey.R:
                     ViewModel.StartRemove();
                     return;
+                case ConsoleKey.V:
+                    ViewModel.RevalidateDetailProvider();
+                    return;
             }
         }
+
+        // List state: Enter is handled by SelectionConfirmed subscription,
+        // arrow keys are routed through RouteInputToActiveComponent
 
         // Enter in validating state
         if (state == ProviderManagerState.AddValidating && keyInfo.Key == ConsoleKey.Enter)
         {
             var result = ViewModel.ProbeResult.Value;
-            if (result is { Success: true })
+            if (result is { Success: true } && !ViewModel.IsFixFlow)
                 ViewModel.ConfirmAdd();
             else if (result is not null)
                 ViewModel.StartProbe(); // retry

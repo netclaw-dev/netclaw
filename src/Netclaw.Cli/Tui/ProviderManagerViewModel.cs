@@ -12,18 +12,48 @@ namespace Netclaw.Cli.Tui;
 /// </summary>
 public enum ProviderManagerState
 {
+    Loading,
     List,
-    AddSelectType,
     AddSelectAuth,
     AddCredentials,
     AddValidating,
     AddComplete,
+    Details,
+    FixCredentials,
     RemoveConfirm
 }
 
 /// <summary>
+/// Health status of a provider as determined by probing.
+/// </summary>
+public enum ProviderHealthStatus
+{
+    Unchecked,
+    Probing,
+    Healthy,
+    Unhealthy
+}
+
+/// <summary>
+/// Display model for a single row in the provider list.
+/// Mutable so probe results can update Health/ProbeResult in place.
+/// </summary>
+public sealed class ProviderDisplayItem
+{
+    public string ProviderType { get; init; } = "";
+    public bool IsConfigured { get; init; }
+    public string? ConfiguredName { get; init; }
+    public ProviderEntry? Entry { get; init; }
+    public ProviderHealthStatus Health { get; set; } = ProviderHealthStatus.Unchecked;
+    public ProviderProbeResult? ProbeResult { get; set; }
+    public string DisplayEndpoint { get; init; } = "";
+    public string DisplayAuth { get; init; } = "\u2014";
+}
+
+/// <summary>
 /// Reactive ViewModel for the <c>netclaw provider</c> interactive TUI.
-/// Manages browsing, adding, and removing provider configurations.
+/// Shows all known provider types as a dashboard with health status,
+/// and provides context-sensitive actions based on provider state.
 /// </summary>
 public sealed class ProviderManagerViewModel : ReactiveViewModel
 {
@@ -31,20 +61,32 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
     private readonly IProviderProbe _probe;
     private CancellationTokenSource? _probeCts;
 
-    public ReactiveProperty<ProviderManagerState> CurrentState { get; } = new(ProviderManagerState.List);
+    public ReactiveProperty<ProviderManagerState> CurrentState { get; } = new(ProviderManagerState.Loading);
     public ReactiveProperty<string> StatusMessage { get; } = new("");
     public ReactiveProperty<bool> IsProbing { get; } = new(false);
     public ReactiveProperty<ProviderProbeResult?> ProbeResult { get; } = new(null);
     public ReactiveProperty<int> ProbeElapsedSeconds { get; } = new(0);
+    public ReactiveProperty<bool> IsEagerProbing { get; } = new(false);
+    public ReactiveProperty<int> EagerProbeElapsedSeconds { get; } = new(0);
 
     /// <summary>
     /// Version counter for state changes that require DynamicLayoutNode invalidation.
     /// </summary>
     internal ReactiveProperty<int> StateVersion { get; } = new(0);
 
-    // ── Loaded providers ──
-    public List<(string Name, ProviderEntry Entry)> Providers { get; } = [];
+    // ── Display model ──
+    public List<ProviderDisplayItem> DisplayProviders { get; } = [];
     public int SelectedProviderIndex { get; set; }
+
+    /// <summary>
+    /// The provider currently being viewed in Details or FixCredentials state.
+    /// </summary>
+    public ProviderDisplayItem? DetailProvider { get; set; }
+
+    /// <summary>
+    /// When true, validation after fix-credentials returns to List (not AddComplete).
+    /// </summary>
+    public bool IsFixFlow { get; set; }
 
     // ── Add flow state ──
     public string? NewProviderName { get; set; }
@@ -52,6 +94,10 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
     public AuthMethod NewAuthMethod { get; set; } = AuthMethod.None;
     public string? NewApiKey { get; set; }
     public string? NewEndpoint { get; set; }
+
+    // ── Fix flow state ──
+    public string? FixApiKey { get; set; }
+    public string? FixEndpoint { get; set; }
 
     // ── Remove flow state ──
     public string? RemoveProviderName { get; set; }
@@ -62,6 +108,11 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
     /// </summary>
     internal Task? ProbeCompletion { get; private set; }
 
+    /// <summary>
+    /// Completes when the eager probe finishes. Used for testing.
+    /// </summary>
+    internal Task? EagerProbeCompletion { get; private set; }
+
     public ProviderManagerViewModel(NetclawPaths paths, IProviderProbe probe)
     {
         _paths = paths;
@@ -71,38 +122,166 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
     public override void OnActivated()
     {
         base.OnActivated();
-        RefreshProviders();
+        RefreshDisplayProviders();
 
         Input.OfType<IInputEvent, KeyPressed>()
             .Subscribe(HandleGlobalKey)
             .DisposeWith(Subscriptions);
-    }
 
-    public void RefreshProviders()
-    {
-        Providers.Clear();
-        var loaded = Provider.ProviderCommand.LoadProviders(_paths);
-        foreach (var (name, entry) in loaded.OrderBy(p => p.Key, StringComparer.OrdinalIgnoreCase))
-            Providers.Add((name, entry));
+        // Start eager probing of configured providers
+        EagerProbeCompletion = ProbeAllConfiguredAsync();
     }
 
     /// <summary>
-    /// Enter the add-provider flow.
+    /// Build DisplayProviders from known types merged with loaded config.
     /// </summary>
-    public void StartAdd()
+    public void RefreshDisplayProviders()
     {
-        ClearAddState();
-        CurrentState.Value = ProviderManagerState.AddSelectType;
+        DisplayProviders.Clear();
+        var loaded = Provider.ProviderCommand.LoadProviders(_paths);
+
+        foreach (var type in ProviderCapabilities.KnownProviderTypes)
+        {
+            // Find configured provider of this type
+            var configured = loaded
+                .FirstOrDefault(p => string.Equals(p.Value.Type, type, StringComparison.OrdinalIgnoreCase));
+
+            if (configured.Key is not null)
+            {
+                var authStr = configured.Value.AuthMethod == AuthMethod.None
+                    ? "\u2014"
+                    : configured.Value.AuthMethod.ToString();
+
+                DisplayProviders.Add(new ProviderDisplayItem
+                {
+                    ProviderType = type,
+                    IsConfigured = true,
+                    ConfiguredName = configured.Key,
+                    Entry = configured.Value,
+                    DisplayEndpoint = configured.Value.Endpoint,
+                    DisplayAuth = authStr
+                });
+            }
+            else
+            {
+                var defaultEndpoint = ProviderCapabilities.GetDefaultEndpoint(type);
+                DisplayProviders.Add(new ProviderDisplayItem
+                {
+                    ProviderType = type,
+                    IsConfigured = false,
+                    DisplayEndpoint = $"({defaultEndpoint})",
+                    DisplayAuth = "\u2014"
+                });
+            }
+        }
+    }
+
+    /// <summary>
+    /// Probe all configured providers concurrently on activation.
+    /// </summary>
+    internal async Task ProbeAllConfiguredAsync()
+    {
+        var configuredItems = DisplayProviders.Where(p => p.IsConfigured).ToList();
+        if (configuredItems.Count == 0)
+        {
+            CurrentState.Value = ProviderManagerState.List;
+            NotifyStateChanged();
+            return;
+        }
+
+        IsEagerProbing.Value = true;
+        EagerProbeElapsedSeconds.Value = 0;
+
+        foreach (var item in configuredItems)
+            item.Health = ProviderHealthStatus.Probing;
+
+        NotifyStateChanged();
+
+        using var timerCts = new CancellationTokenSource();
+        _ = RunEagerProbeTimerAsync(timerCts.Token);
+
+        var probeTasks = configuredItems.Select(async item =>
+        {
+            try
+            {
+                var result = await _probe.ProbeAsync(
+                    item.ProviderType,
+                    item.Entry?.Endpoint,
+                    item.Entry?.ApiKey?.Value,
+                    CancellationToken.None);
+
+                item.ProbeResult = result;
+                item.Health = result.Success
+                    ? ProviderHealthStatus.Healthy
+                    : ProviderHealthStatus.Unhealthy;
+            }
+            catch
+            {
+                item.Health = ProviderHealthStatus.Unhealthy;
+            }
+
+            NotifyStateChanged();
+        });
+
+        await Task.WhenAll(probeTasks);
+
+        timerCts.Cancel();
+        IsEagerProbing.Value = false;
+        CurrentState.Value = ProviderManagerState.List;
         NotifyStateChanged();
     }
 
-    /// <summary>
-    /// Select provider type and advance to auth selection (or credentials for auth-free providers).
-    /// </summary>
-    public void SelectProviderType(string type)
+    private async Task RunEagerProbeTimerAsync(CancellationToken ct)
     {
+        while (!ct.IsCancellationRequested)
+        {
+            try { await Task.Delay(1000, ct); }
+            catch (OperationCanceledException) { return; }
+
+            EagerProbeElapsedSeconds.Value++;
+            RequestRedraw();
+        }
+    }
+
+    /// <summary>
+    /// Activate the currently selected provider based on its state.
+    /// </summary>
+    public void ActivateSelectedProvider()
+    {
+        if (SelectedProviderIndex < 0 || SelectedProviderIndex >= DisplayProviders.Count)
+            return;
+
+        var item = DisplayProviders[SelectedProviderIndex];
+
+        if (!item.IsConfigured)
+        {
+            StartAddForType(item.ProviderType);
+            return;
+        }
+
+        switch (item.Health)
+        {
+            case ProviderHealthStatus.Healthy:
+                DetailProvider = item;
+                CurrentState.Value = ProviderManagerState.Details;
+                NotifyStateChanged();
+                break;
+
+            case ProviderHealthStatus.Unhealthy:
+                StartFixCredentials(item);
+                break;
+
+            // Probing or Unchecked — no-op
+        }
+    }
+
+    /// <summary>
+    /// Start the add flow for a specific provider type (skips type selection).
+    /// </summary>
+    public void StartAddForType(string type)
+    {
+        ClearAddState();
         NewProviderType = type;
-        // Auto-generate a default name
         NewProviderName = GenerateProviderName(type);
 
         var supportedAuth = ProviderCapabilities.GetSupportedAuthMethods(type);
@@ -116,6 +295,19 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
             CurrentState.Value = ProviderManagerState.AddSelectAuth;
         }
 
+        NotifyStateChanged();
+    }
+
+    /// <summary>
+    /// Start the fix-credentials flow for an unhealthy provider.
+    /// </summary>
+    public void StartFixCredentials(ProviderDisplayItem item)
+    {
+        DetailProvider = item;
+        FixApiKey = null;
+        FixEndpoint = item.Entry?.Endpoint;
+        IsFixFlow = true;
+        CurrentState.Value = ProviderManagerState.FixCredentials;
         NotifyStateChanged();
     }
 
@@ -147,12 +339,68 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
     }
 
     /// <summary>
+    /// Submit fixed credentials and start validation probe.
+    /// </summary>
+    public void SubmitFixCredentials()
+    {
+        if (DetailProvider is null) return;
+
+        var type = DetailProvider.ProviderType;
+        var supportedAuth = ProviderCapabilities.GetSupportedAuthMethods(type);
+
+        if (supportedAuth.Contains(AuthMethod.ApiKey) && string.IsNullOrWhiteSpace(FixApiKey))
+        {
+            StatusMessage.Value = "API key is required.";
+            RequestRedraw();
+            return;
+        }
+
+        // Write updated credentials
+        if (DetailProvider.ConfiguredName is not null)
+        {
+            if (!string.IsNullOrWhiteSpace(FixApiKey))
+            {
+                var (_, secrets) = ConfigFileHelper.LoadConfigFiles(_paths);
+                var secretProviders = ConfigFileHelper.GetOrCreateSection(secrets, "Providers");
+                secretProviders[DetailProvider.ConfiguredName] = new Dictionary<string, object>
+                {
+                    ["ApiKey"] = FixApiKey
+                };
+                ConfigFileHelper.WriteConfigFile(_paths.SecretsPath, secrets);
+            }
+
+            if (FixEndpoint is not null && DetailProvider.Entry is not null
+                && !string.Equals(FixEndpoint, DetailProvider.Entry.Endpoint, StringComparison.Ordinal))
+            {
+                var (config, _) = ConfigFileHelper.LoadConfigFiles(_paths);
+                var providers = ConfigFileHelper.GetOrCreateSection(config, "Providers");
+                if (providers.TryGetValue(DetailProvider.ConfiguredName, out var existing) &&
+                    existing is Dictionary<string, object> providerDict)
+                {
+                    providerDict["Endpoint"] = FixEndpoint;
+                    ConfigFileHelper.WriteConfigFile(_paths.NetclawConfigPath, config);
+                }
+            }
+        }
+
+        // Set up probe using fix credentials
+        NewProviderType = type;
+        NewEndpoint = FixEndpoint;
+        NewApiKey = FixApiKey ?? DetailProvider.Entry?.ApiKey?.Value;
+        IsFixFlow = true;
+
+        CurrentState.Value = ProviderManagerState.AddValidating;
+        NotifyStateChanged();
+        StartProbe();
+    }
+
+    /// <summary>
     /// Write the new provider to config files after successful validation.
     /// </summary>
     public void ConfirmAdd()
     {
         WriteProviderConfig();
-        RefreshProviders();
+        RefreshDisplayProviders();
         CurrentState.Value = ProviderManagerState.List;
         StatusMessage.Value = $"Added provider '{NewProviderName}'. Restart daemon for changes to take effect.";
         ClearAddState();
@@ -160,18 +408,17 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
     }
 
     /// <summary>
-    /// Start remove confirmation for the currently selected provider.
+    /// Start remove confirmation for the detail provider.
     /// </summary>
     public void StartRemove()
     {
-        if (Providers.Count == 0 || SelectedProviderIndex >= Providers.Count)
+        if (DetailProvider is not { IsConfigured: true, ConfiguredName: not null })
             return;
 
-        var (name, _) = Providers[SelectedProviderIndex];
-        RemoveProviderName = name;
+        RemoveProviderName = DetailProvider.ConfiguredName;
         RemoveBlockingRoles.Clear();
 
-        var roles = Provider.ProviderCommand.GetReferencingModelRoles(name, _paths);
+        var roles = Provider.ProviderCommand.GetReferencingModelRoles(RemoveProviderName, _paths);
         RemoveBlockingRoles.AddRange(roles);
 
         CurrentState.Value = ProviderManagerState.RemoveConfirm;
@@ -199,10 +446,48 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
         if (secretProviders?.Remove(RemoveProviderName) == true)
             ConfigFileHelper.WriteConfigFile(_paths.SecretsPath, secrets);
 
-        RefreshProviders();
+        RefreshDisplayProviders();
         StatusMessage.Value = $"Removed provider '{RemoveProviderName}'. Restart daemon for changes to take effect.";
         RemoveProviderName = null;
+        DetailProvider = null;
         CurrentState.Value = ProviderManagerState.List;
+        NotifyStateChanged();
+    }
+
+    /// <summary>
+    /// Re-probe the detail provider inline from the Details state.
+    /// </summary>
+    public void RevalidateDetailProvider()
+    {
+        if (DetailProvider is not { IsConfigured: true, Entry: not null })
+            return;
+
+        DetailProvider.Health = ProviderHealthStatus.Probing;
+        NotifyStateChanged();
+
+        _ = RevalidateAsync(DetailProvider);
+    }
+
+    private async Task RevalidateAsync(ProviderDisplayItem item)
+    {
+        try
+        {
+            var result = await _probe.ProbeAsync(
+                item.ProviderType,
+                item.Entry?.Endpoint,
+                item.Entry?.ApiKey?.Value,
+                CancellationToken.None);
+
+            item.ProbeResult = result;
+            item.Health = result.Success
+                ? ProviderHealthStatus.Healthy
+                : ProviderHealthStatus.Unhealthy;
+        }
+        catch
+        {
+            item.Health = ProviderHealthStatus.Unhealthy;
+        }
+
         NotifyStateChanged();
     }
 
@@ -210,6 +495,10 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
     {
         CancelProbe();
         ClearAddState();
+        DetailProvider = null;
+        IsFixFlow = false;
+        FixApiKey = null;
+        FixEndpoint = null;
         RemoveProviderName = null;
         RemoveBlockingRoles.Clear();
         StatusMessage.Value = "";
@@ -221,27 +510,34 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
     {
         switch (CurrentState.Value)
         {
-            case ProviderManagerState.AddSelectType:
-                GoBackToList();
-                break;
             case ProviderManagerState.AddSelectAuth:
-                CurrentState.Value = ProviderManagerState.AddSelectType;
-                NotifyStateChanged();
+                GoBackToList();
                 break;
             case ProviderManagerState.AddCredentials:
                 var supportedAuth = ProviderCapabilities.GetSupportedAuthMethods(NewProviderType ?? "");
                 if (supportedAuth is [AuthMethod.None])
-                    CurrentState.Value = ProviderManagerState.AddSelectType;
+                    GoBackToList();
                 else
                     CurrentState.Value = ProviderManagerState.AddSelectAuth;
                 NotifyStateChanged();
                 break;
             case ProviderManagerState.AddValidating:
                 CancelProbe();
-                CurrentState.Value = ProviderManagerState.AddCredentials;
+                if (IsFixFlow)
+                {
+                    CurrentState.Value = ProviderManagerState.FixCredentials;
+                }
+                else
+                {
+                    CurrentState.Value = ProviderManagerState.AddCredentials;
+                }
                 NotifyStateChanged();
                 break;
             case ProviderManagerState.AddComplete:
+                GoBackToList();
+                break;
+            case ProviderManagerState.Details:
+            case ProviderManagerState.FixCredentials:
                 GoBackToList();
                 break;
             case ProviderManagerState.RemoveConfirm:
@@ -300,7 +596,24 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
 
         if (result.Success)
         {
-            CurrentState.Value = ProviderManagerState.AddComplete;
+            if (IsFixFlow)
+            {
+                // Fix flow: update the detail provider's health and return to list
+                if (DetailProvider is not null)
+                {
+                    DetailProvider.ProbeResult = result;
+                    DetailProvider.Health = ProviderHealthStatus.Healthy;
+                }
+
+                RefreshDisplayProviders();
+                IsFixFlow = false;
+                CurrentState.Value = ProviderManagerState.List;
+                StatusMessage.Value = "Credentials updated successfully. Restart daemon for changes to take effect.";
+            }
+            else
+            {
+                CurrentState.Value = ProviderManagerState.AddComplete;
+            }
         }
 
         NotifyStateChanged();
@@ -360,13 +673,17 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
     private string GenerateProviderName(string type)
     {
         var baseName = $"my-{type}";
-        if (!Providers.Any(p => string.Equals(p.Name, baseName, StringComparison.OrdinalIgnoreCase)))
+        if (!DisplayProviders.Any(p =>
+            p.ConfiguredName is not null &&
+            string.Equals(p.ConfiguredName, baseName, StringComparison.OrdinalIgnoreCase)))
             return baseName;
 
         for (var i = 2; i < 100; i++)
         {
             var candidate = $"my-{type}-{i}";
-            if (!Providers.Any(p => string.Equals(p.Name, candidate, StringComparison.OrdinalIgnoreCase)))
+            if (!DisplayProviders.Any(p =>
+                p.ConfiguredName is not null &&
+                string.Equals(p.ConfiguredName, candidate, StringComparison.OrdinalIgnoreCase)))
                 return candidate;
         }
 
@@ -383,6 +700,7 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
         NewEndpoint = null;
         ProbeResult.Value = null;
         ProbeElapsedSeconds.Value = 0;
+        IsFixFlow = false;
     }
 
     private void NotifyStateChanged()
@@ -408,6 +726,8 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
         IsProbing.Dispose();
         ProbeResult.Dispose();
         ProbeElapsedSeconds.Dispose();
+        IsEagerProbing.Dispose();
+        EagerProbeElapsedSeconds.Dispose();
         StateVersion.Dispose();
         base.Dispose();
     }
