@@ -213,7 +213,7 @@ internal sealed class FakeToolExecutor : IToolExecutor
     /// <summary>Tool names that should throw on execution.</summary>
     public HashSet<string> FailForTools { get; } = new();
 
-    public Task<string> ExecuteAsync(FunctionCallContent toolCall, CancellationToken ct = default)
+    public Task<string> ExecuteAsync(FunctionCallContent toolCall, Netclaw.Tools.ToolExecutionContext? context = null, CancellationToken ct = default)
     {
         Interlocked.Increment(ref _callCount);
 

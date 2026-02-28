@@ -22,4 +22,8 @@
     <ProjectReference Include="../Netclaw.Configuration/Netclaw.Configuration.csproj"/>
   </ItemGroup>
 
+  <ItemGroup>
+    <EmbeddedResource Include="Tools/Fixtures/*.html" />
+  </ItemGroup>
+
 </Project>

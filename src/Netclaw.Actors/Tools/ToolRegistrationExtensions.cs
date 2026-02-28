@@ -15,6 +15,8 @@ public static class ToolRegistrationExtensions
         registry.Register(new ShellTool(config));
         registry.Register(new FileReadTool(config));
         registry.Register(new FileWriteTool());
+        registry.Register(new WebSearchTool(config));
+        registry.Register(new WebFetchTool());
 
         // Register search_tools meta-tool (always loaded, "builtin" grant)
         registry.Register(new SearchToolsTool(registry));

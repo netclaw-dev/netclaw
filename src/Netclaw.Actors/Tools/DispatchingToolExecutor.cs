@@ -1,4 +1,5 @@
 using Microsoft.Extensions.AI;
+using Netclaw.Tools;
 
 namespace Netclaw.Actors.Tools;
 
@@ -14,12 +15,14 @@ public sealed class DispatchingToolExecutor : IToolExecutor
         _registry = registry;
     }
 
-    public Task<string> ExecuteAsync(FunctionCallContent toolCall, CancellationToken ct = default)
+    public Task<string> ExecuteAsync(FunctionCallContent toolCall, ToolExecutionContext? context = null, CancellationToken ct = default)
     {
         var tool = _registry.GetByName(toolCall.Name);
         if (tool is null)
             return Task.FromResult($"Unknown tool: {toolCall.Name}");
 
-        return tool.ExecuteAsync(toolCall.Arguments, ct);
+        return context is not null
+            ? tool.ExecuteAsync(toolCall.Arguments, context, ct)
+            : tool.ExecuteAsync(toolCall.Arguments, ct);
     }
 }

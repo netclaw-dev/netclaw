@@ -29,4 +29,12 @@ public interface INetclawTool
     /// Execute the tool with raw arguments from the LLM provider.
     /// </summary>
     Task<string> ExecuteAsync(IDictionary<string, object?>? arguments, CancellationToken ct = default);
+
+    /// <summary>
+    /// Execute the tool with raw arguments and session execution context.
+    /// Default implementation ignores context and delegates to the simple overload.
+    /// Tools that need session-scoped state (e.g. temp directories) override this.
+    /// </summary>
+    Task<string> ExecuteAsync(IDictionary<string, object?>? arguments, ToolExecutionContext context, CancellationToken ct = default)
+        => ExecuteAsync(arguments, ct);
 }

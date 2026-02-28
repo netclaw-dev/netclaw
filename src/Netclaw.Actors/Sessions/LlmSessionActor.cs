@@ -840,7 +840,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor
         string resultText;
         try
         {
-            resultText = await executor.ExecuteAsync(tc);
+            var context = CreateExecutionContext(sessionId);
+            resultText = await executor.ExecuteAsync(tc, context);
             sw.Stop();
 
             auditLogger?.Log(new ToolAuditEntry
@@ -1009,6 +1010,23 @@ public sealed class LlmSessionActor : ReceivePersistentActor
             return;
 
         Sender.Tell(CommandAck.For(_sessionId));
+    }
+
+    private static Netclaw.Tools.ToolExecutionContext CreateExecutionContext(SessionId sessionId)
+    {
+        // Session directory under OS temp: /tmp/netclaw-sessions/{sanitized-session-id}/
+        var sanitized = SanitizeSessionId(sessionId.Value);
+        var sessionDir = Path.Combine(Path.GetTempPath(), "netclaw-sessions", sanitized);
+        return new Netclaw.Tools.ToolExecutionContext(sessionId.Value, sessionDir);
+    }
+
+    private static string SanitizeSessionId(string sessionId)
+    {
+        // Session IDs may contain slashes (e.g. "C123/1234567890.123456") — replace with underscores
+        Span<char> buf = stackalloc char[sessionId.Length];
+        for (var i = 0; i < sessionId.Length; i++)
+            buf[i] = char.IsLetterOrDigit(sessionId[i]) || sessionId[i] == '-' ? sessionId[i] : '_';
+        return new string(buf);
     }
 
     internal void SetTitle(string title)

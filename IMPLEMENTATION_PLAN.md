@@ -1,6 +1,6 @@
 # Netclaw Implementation Plan
 
-Last updated: 2026-02-26
+Last updated: 2026-02-27
 Mode: build
 
 This file is RALPH-consumable.
@@ -37,6 +37,10 @@ read/write (source-generated schemas via Roslyn).
 **Provider system:** Multi-provider config via `ChatClientFactory` with layered
 config chain (netclaw.json + secrets.json + env vars). Ollama and OpenRouter
 working. `NetclawChatClientProvider` resolves by model role.
+`OpenRouterReasoningExcludePolicy` prevents SDK deserialization failures from
+non-standard reasoning fields. Provider endpoint defaults resolved per provider
+type via `ProviderCapabilities` (fixes config-omitted endpoints hitting Ollama).
+Error detail now flows through `ErrorOutput` DTO for client-side diagnostics.
 
 **Slack adapter:** Socket Mode connection, event handling (`app_mention`,
 `message`), entity key extraction (`{channelId}/{threadTs}`), reply delivery to
@@ -96,12 +100,12 @@ rules, provider capability matrix, and headless testing guidance).
 **Verification:** L2
 
 Done when:
-- [ ] `AuthMethod` enum added (`None`, `ApiKey`, `OAuthDevice`).
-- [ ] `ModelDiscoverySource` enum added (`Live`, `Defaults`, `Manual`).
-- [ ] `ProviderEntry` extended with `AuthMethod` property (default `None`), OAuth token fields (`OAuthAccessToken`, `OAuthRefreshToken`, `OAuthTokenExpiry`).
-- [ ] `ModelReference` extended with `Provenance` property (`ModelDiscoverySource?`).
-- [ ] `ProviderCapabilities` static class mapping provider type → supported auth methods and model discovery support.
-- [ ] OAuth token fields bound from `secrets.json` overlay, not `netclaw.json`.
+- [x] `AuthMethod` enum added (`None`, `ApiKey`, `OAuthDevice`).
+- [x] `ModelDiscoverySource` enum added (`Live`, `Defaults`, `Manual`).
+- [x] `ProviderEntry` extended with `AuthMethod` property (default `None`), OAuth token fields (`OAuthAccessToken`, `OAuthRefreshToken`, `OAuthTokenExpiry`).
+- [x] `ModelReference` extended with `Provenance` property (`ModelDiscoverySource?`).
+- [x] `ProviderCapabilities` static class mapping provider type → supported auth methods and model discovery support.
+- [x] OAuth token fields bound from `secrets.json` overlay, not `netclaw.json`.
 
 #### Task M1.A2: ChatClientFactory cloud provider cases
 
@@ -112,9 +116,9 @@ Done when:
 **Verification:** L2
 
 Done when:
-- [ ] `ChatClientFactory.Create()` switch handles `openrouter`, `anthropic`, `openai` provider types.
-- [ ] Each provider creates appropriate `IChatClient` using MEAI-compatible SDK or HTTP client.
-- [ ] Tests with fake/mock HTTP backends verify client creation for each provider type.
+- [x] `ChatClientFactory.Create()` switch handles `openrouter`, `anthropic`, `openai` provider types.
+- [x] Each provider creates appropriate `IChatClient` using MEAI-compatible SDK or HTTP client.
+- [x] Tests with fake/mock HTTP backends verify client creation for each provider type.
 
 #### Task M1.A3: Init wizard scaffold (Termina)
 
@@ -126,14 +130,14 @@ Done when:
 **Wireframe:** `docs/ui/TUI-001-command-wireframes.md` (netclaw init)
 
 Done when:
-- [ ] `InitCommand.cs` launches Termina wizard (replaces stub).
-- [ ] `InitWizardPage.cs` with 6-step wizard layout (`PanelNode`, progress bar, step indicator).
-- [ ] `InitWizardViewModel.cs` with step state machine and back-navigation (Esc goes back, preserves prior input).
-- [ ] Step 1 (LLM provider) branches by provider type and auth method per design doc state machine.
-- [ ] Back-navigation clearing rules: provider change clears auth + model; auth method change clears artifacts.
-- [ ] Steps 2–5 (Slack, ACL, MCP, exposure) render with appropriate `TextInputNode`/`SelectionListNode` components.
-- [ ] Step 6 (health check) runs validation probes with `SpinnerNode` → result indicator.
-- [ ] Config written to `~/.netclaw/config/netclaw.json` and secrets to `~/.netclaw/config/secrets.json` on completion.
+- [x] `InitCommand.cs` launches Termina wizard (replaces stub).
+- [x] `InitWizardPage.cs` with 5-step wizard layout (`PanelNode`, progress bar, step indicator). *(Reduced from 6 steps — MCP moved to separate CLI config.)*
+- [x] `InitWizardViewModel.cs` with step state machine and back-navigation (Esc goes back, preserves prior input).
+- [x] Step 1 (LLM provider) branches by provider type and auth method per design doc state machine.
+- [x] Back-navigation clearing rules: provider change clears auth + model; auth method change clears artifacts.
+- [x] Steps 2–4 (Slack/ChatServices, ACL, exposure) render with appropriate `TextInputNode`/`SelectionListNode` components. *(MCP step deferred to CLI config.)*
+- [x] Step 5 (health check) runs validation probes with `SpinnerNode` → result indicator.
+- [x] Config written to `~/.netclaw/config/netclaw.json` and secrets to `~/.netclaw/config/secrets.json` on completion.
 
 #### Task M1.A4: Headless wizard tests (VirtualTerminal)
 
@@ -144,11 +148,11 @@ Done when:
 
 Done when:
 - [ ] Tests use Termina `VirtualTerminal` + `VirtualInputSource` for headless wizard testing.
-- [ ] Test: full wizard flow with Ollama (no auth) produces valid config file.
-- [ ] Test: provider selection → back-navigation clears downstream state.
-- [ ] Test: API key entry with masked input produces correct secrets.json.
-- [ ] Test: health check step reports validation results.
-- [ ] All tests use fake/mock provider backends (no live API calls).
+- [x] Test: full wizard flow with Ollama (no auth) produces valid config file. *(ViewModel-level test via `InitWizardViewModelTests`)*
+- [x] Test: provider selection → back-navigation clears downstream state.
+- [x] Test: API key entry with masked input produces correct secrets.json.
+- [x] Test: health check step reports validation results.
+- [x] All tests use fake/mock provider backends (no live API calls).
 
 #### Task M1.A5: Doctor config-shape checks
 
@@ -173,8 +177,8 @@ Done when:
 **Verification:** L2
 
 Done when:
-- [ ] Model discovery fallback order implemented: live catalog → curated defaults → manual entry.
-- [ ] `ModelDiscoverySource` provenance persisted with `ModelReference` in config.
+- [ ] Model discovery fallback order implemented: live catalog → curated defaults → manual entry. *(Live catalog + manual entry working; curated defaults not yet implemented.)*
+- [ ] `ModelDiscoverySource` provenance persisted with `ModelReference` in config. *(Property exists but not set during config write.)*
 - [ ] Tests with mocked discovery API verify fallback cascade and provenance tagging.
 
 #### Task M1.A7: Provider fallback model failover
@@ -265,8 +269,8 @@ Done when:
 **Verification:** L2
 
 Done when:
-- [ ] MCP server profiles (named, stdio/SSE transport, enable/disable) configurable in `netclaw.json`.
-- [ ] Tool discovery at startup: connect to enabled servers, list tools, register as MEAI definitions.
+- [x] MCP server profiles (named, stdio/SSE transport, enable/disable) configurable in `netclaw.json`.
+- [x] Tool discovery at startup: connect to enabled servers, list tools, register as MEAI definitions.
 
 ### Task M2.2: Graceful degradation and validation
 
@@ -277,9 +281,9 @@ Done when:
 **Verification:** L2
 
 Done when:
-- [ ] Graceful degradation: unavailable server returns error, agent continues, reconnect on next call.
-- [ ] MCP validation command (`netclaw mcp validate`).
-- [ ] Tests for connection, discovery, policy gating, degradation.
+- [x] Graceful degradation: unavailable server returns error, agent continues, reconnect on next call.
+- [x] MCP validation covered by `netclaw doctor` (`McpServersDoctorCheck`) and `netclaw mcp list` (live probe status). *(Standalone `mcp validate` command pruned — redundant surface area.)*
+- [x] Tests for connection, discovery, policy gating, degradation.
 
 ### Task M2.3: Memorizer integration
 

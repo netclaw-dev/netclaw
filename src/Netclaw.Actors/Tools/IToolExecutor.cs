@@ -1,4 +1,5 @@
 using Microsoft.Extensions.AI;
+using Netclaw.Tools;
 
 namespace Netclaw.Actors.Tools;
 
@@ -8,7 +9,7 @@ namespace Netclaw.Actors.Tools;
 /// </summary>
 public interface IToolExecutor
 {
-    Task<string> ExecuteAsync(FunctionCallContent toolCall, CancellationToken ct = default);
+    Task<string> ExecuteAsync(FunctionCallContent toolCall, ToolExecutionContext? context = null, CancellationToken ct = default);
 }
 
 /// <summary>
