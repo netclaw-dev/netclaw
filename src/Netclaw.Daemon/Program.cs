@@ -15,6 +15,7 @@ using Netclaw.Daemon.Gateway;
 using Netclaw.Daemon.Mcp;
 using Netclaw.Daemon.Providers;
 using Netclaw.Daemon.Services;
+using Netclaw.Search;
 using Netclaw.Security;
 
 try
@@ -170,8 +171,13 @@ static void ConfigureDaemonServices(
         .Get<ToolConfig>() ?? new ToolConfig();
     services.AddSingleton(toolConfig);
 
+    // Search backend selection
+    var searchConfig = configuration.GetSection("Search")
+        .Get<SearchConfig>() ?? new SearchConfig();
+    var searchBackend = CreateSearchBackend(searchConfig);
+
     var toolRegistry = new ToolRegistry();
-    toolRegistry.WithFirstPartyTools(toolConfig, paths);
+    toolRegistry.WithFirstPartyTools(toolConfig, searchBackend, paths);
     services.AddSingleton(toolRegistry);
     services.AddSingleton<IToolExecutor>(new DispatchingToolExecutor(toolRegistry));
 
@@ -276,6 +282,36 @@ static void ConfigureDaemonServices(
     // Active session cleanup during host shutdown
     services.AddSingleton<SessionRegistryShutdownService>();
     services.AddSingleton<IHostedService>(sp => sp.GetRequiredService<SessionRegistryShutdownService>());
+}
+
+static ISearchBackend? CreateSearchBackend(SearchConfig config)
+{
+    var backend = config.Backend.ToLowerInvariant();
+    switch (backend)
+    {
+        case "brave":
+            if (string.IsNullOrWhiteSpace(config.BraveApiKey))
+            {
+                Console.Error.WriteLine("warn: Brave Search configured but no API key provided (Search.BraveApiKey). Web search tool will not be registered.");
+                return null;
+            }
+            return new BraveSearchBackend(config.BraveApiKey);
+
+        case "searxng":
+            if (string.IsNullOrWhiteSpace(config.SearXngEndpoint))
+            {
+                Console.Error.WriteLine("warn: SearXNG configured but no endpoint provided (Search.SearXngEndpoint). Web search tool will not be registered.");
+                return null;
+            }
+            return new SearXngBackend(config.SearXngEndpoint);
+
+        case "duckduckgo":
+            return new DuckDuckGoBackend();
+
+        default:
+            Console.Error.WriteLine($"warn: Unknown search backend '{backend}'. Falling back to DuckDuckGo.");
+            return new DuckDuckGoBackend();
+    }
 }
 
 static Akka.Event.LogLevel ToAkkaLogLevel(LogLevel logLevel)

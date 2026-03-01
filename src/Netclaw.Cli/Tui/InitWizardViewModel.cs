@@ -16,9 +16,10 @@ public enum WizardStep
     Provider = 1,
     ChatServices = 2,
     Acl = 3,
-    Exposure = 4,
-    Identity = 5,
-    HealthCheck = 6
+    Search = 4,
+    Exposure = 5,
+    Identity = 6,
+    HealthCheck = 7
 }
 
 /// <summary>
@@ -28,7 +29,7 @@ public enum WizardStep
 /// </summary>
 public partial class InitWizardViewModel : ReactiveViewModel
 {
-    public const int TotalSteps = 6;
+    public const int TotalSteps = 7;
 
     private readonly NetclawPaths _paths;
     private readonly IProviderProbe _probe;
@@ -78,10 +79,15 @@ public partial class InitWizardViewModel : ReactiveViewModel
     // ── Step 3: ACL ──
     public string? OwnerIdentity { get; set; }
 
-    // ── Step 4: Exposure ──
+    // ── Step 4: Search ──
+    public string SelectedSearchBackend { get; set; } = "duckduckgo";
+    public string? BraveApiKeyInput { get; set; }
+    public string? SearXngEndpointInput { get; set; }
+
+    // ── Step 5: Exposure ──
     public string? ExposureMode { get; set; }
 
-    // ── Step 5: Identity ──
+    // ── Step 6: Identity ──
     public string AgentName { get; set; } = "Netclaw";
     public string? CommunicationStyle { get; set; }
     public string? UserName { get; set; }
@@ -575,6 +581,20 @@ public partial class InitWizardViewModel : ReactiveViewModel
             config["Slack"] = slackSection;
         }
 
+        // Search section
+        if (SelectedSearchBackend != "duckduckgo")
+        {
+            var searchSection = new Dictionary<string, object>
+            {
+                ["Backend"] = SelectedSearchBackend
+            };
+
+            if (SelectedSearchBackend == "searxng" && !string.IsNullOrWhiteSpace(SearXngEndpointInput))
+                searchSection["SearXngEndpoint"] = SearXngEndpointInput;
+
+            config["Search"] = searchSection;
+        }
+
         // Write identity files
         WriteIdentityFiles();
 
@@ -606,6 +626,14 @@ public partial class InitWizardViewModel : ReactiveViewModel
                 slackSecrets["AppToken"] = SlackAppToken;
             if (slackSecrets.Count > 0)
                 secrets["Slack"] = slackSecrets;
+        }
+
+        if (SelectedSearchBackend == "brave" && !string.IsNullOrWhiteSpace(BraveApiKeyInput))
+        {
+            secrets["Search"] = new Dictionary<string, object>
+            {
+                ["BraveApiKey"] = BraveApiKeyInput
+            };
         }
 
         if (secrets.Count > 0)

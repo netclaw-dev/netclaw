@@ -50,6 +50,9 @@ public sealed class InitWizardViewModelTests : IDisposable
         Assert.Equal(WizardStep.Acl, vm.CurrentStep.Value);
 
         vm.GoNext();
+        Assert.Equal(WizardStep.Search, vm.CurrentStep.Value);
+
+        vm.GoNext();
         Assert.Equal(WizardStep.Exposure, vm.CurrentStep.Value);
 
         vm.GoNext();
@@ -131,8 +134,8 @@ public sealed class InitWizardViewModelTests : IDisposable
         vm.GoNext(); // Provider → ChatServices
         Assert.Equal(WizardStep.ChatServices, vm.CurrentStep.Value);
 
-        vm.GoNext(); // ChatServices → should skip ACL → Exposure
-        Assert.Equal(WizardStep.Exposure, vm.CurrentStep.Value);
+        vm.GoNext(); // ChatServices → should skip ACL → Search
+        Assert.Equal(WizardStep.Search, vm.CurrentStep.Value);
     }
 
     [Fact]
@@ -142,8 +145,8 @@ public sealed class InitWizardViewModelTests : IDisposable
         vm.SlackEnabled = false;
 
         vm.GoNext(); // → ChatServices
-        vm.GoNext(); // → Exposure (ACL skipped)
-        Assert.Equal(WizardStep.Exposure, vm.CurrentStep.Value);
+        vm.GoNext(); // → Search (ACL skipped)
+        Assert.Equal(WizardStep.Search, vm.CurrentStep.Value);
 
         vm.GoBack(); // → ChatServices (ACL skipped going back)
         Assert.Equal(WizardStep.ChatServices, vm.CurrentStep.Value);
@@ -342,25 +345,25 @@ public sealed class InitWizardViewModelTests : IDisposable
     }
 
     [Fact]
-    public void TotalSteps_IsSix()
+    public void TotalSteps_IsSeven()
     {
-        Assert.Equal(6, InitWizardViewModel.TotalSteps);
+        Assert.Equal(7, InitWizardViewModel.TotalSteps);
     }
 
     [Fact]
-    public void ActiveStepCount_IsFive_WhenNoChatServices()
+    public void ActiveStepCount_IsSix_WhenNoChatServices()
     {
         using var vm = CreateViewModel();
         vm.SlackEnabled = false;
-        Assert.Equal(5, vm.ActiveStepCount);
+        Assert.Equal(6, vm.ActiveStepCount);
     }
 
     [Fact]
-    public void ActiveStepCount_IsSix_WhenChatServicesEnabled()
+    public void ActiveStepCount_IsSeven_WhenChatServicesEnabled()
     {
         using var vm = CreateViewModel();
         vm.SlackEnabled = true;
-        Assert.Equal(6, vm.ActiveStepCount);
+        Assert.Equal(7, vm.ActiveStepCount);
     }
 
     [Fact]
@@ -370,12 +373,13 @@ public sealed class InitWizardViewModelTests : IDisposable
         vm.SlackEnabled = false;
 
         // Provider = 1, ChatServices = 2, Acl would be 3 but skipped
-        // Exposure = 3 (adjusted from 4), Identity = 4, HealthCheck = 5
+        // Search = 3 (adjusted from 4), Exposure = 4 (adjusted from 5), Identity = 5, HealthCheck = 6
         Assert.Equal(1, vm.GetDisplayStepNumber(WizardStep.Provider));
         Assert.Equal(2, vm.GetDisplayStepNumber(WizardStep.ChatServices));
-        Assert.Equal(3, vm.GetDisplayStepNumber(WizardStep.Exposure));
-        Assert.Equal(4, vm.GetDisplayStepNumber(WizardStep.Identity));
-        Assert.Equal(5, vm.GetDisplayStepNumber(WizardStep.HealthCheck));
+        Assert.Equal(3, vm.GetDisplayStepNumber(WizardStep.Search));
+        Assert.Equal(4, vm.GetDisplayStepNumber(WizardStep.Exposure));
+        Assert.Equal(5, vm.GetDisplayStepNumber(WizardStep.Identity));
+        Assert.Equal(6, vm.GetDisplayStepNumber(WizardStep.HealthCheck));
     }
 
     [Fact]
@@ -576,6 +580,73 @@ public sealed class InitWizardViewModelTests : IDisposable
 
         Assert.True(vm.IsComplete.Value);
         Assert.Equal(0, _fakeSlackProbe.ResolveCallCount);
+    }
+
+    [Fact]
+    public async Task HealthCheck_WritesBraveSearchConfig()
+    {
+        using var vm = CreateViewModel();
+        vm.SelectedProviderType = "ollama";
+        vm.SlackEnabled = false;
+        vm.SelectedSearchBackend = "brave";
+        vm.BraveApiKeyInput = "BSA-test-key-123";
+
+        vm.CurrentStep.Value = WizardStep.HealthCheck;
+        vm.GoNext();
+        await vm.HealthCheckCompletion!.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.True(vm.IsComplete.Value);
+
+        // netclaw.json has Search.Backend = "brave"
+        var config = JsonDocument.Parse(File.ReadAllText(_paths.NetclawConfigPath));
+        Assert.True(config.RootElement.TryGetProperty("Search", out var search));
+        Assert.Equal("brave", search.GetProperty("Backend").GetString());
+
+        // secrets.json has Search.BraveApiKey
+        Assert.True(File.Exists(_paths.SecretsPath));
+        var secrets = JsonDocument.Parse(File.ReadAllText(_paths.SecretsPath));
+        Assert.True(secrets.RootElement.TryGetProperty("Search", out var searchSecrets));
+        Assert.Equal("BSA-test-key-123", searchSecrets.GetProperty("BraveApiKey").GetString());
+
+        // API key must NOT appear in netclaw.json
+        Assert.DoesNotContain("BSA-test-key", File.ReadAllText(_paths.NetclawConfigPath));
+    }
+
+    [Fact]
+    public async Task HealthCheck_WritesSearXngSearchConfig()
+    {
+        using var vm = CreateViewModel();
+        vm.SelectedProviderType = "ollama";
+        vm.SlackEnabled = false;
+        vm.SelectedSearchBackend = "searxng";
+        vm.SearXngEndpointInput = "http://searxng.local:8080";
+
+        vm.CurrentStep.Value = WizardStep.HealthCheck;
+        vm.GoNext();
+        await vm.HealthCheckCompletion!.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.True(vm.IsComplete.Value);
+
+        var config = JsonDocument.Parse(File.ReadAllText(_paths.NetclawConfigPath));
+        Assert.True(config.RootElement.TryGetProperty("Search", out var search));
+        Assert.Equal("searxng", search.GetProperty("Backend").GetString());
+        Assert.Equal("http://searxng.local:8080", search.GetProperty("SearXngEndpoint").GetString());
+    }
+
+    [Fact]
+    public async Task HealthCheck_DuckDuckGoDefault_OmitsSearchSection()
+    {
+        using var vm = CreateViewModel();
+        vm.SelectedProviderType = "ollama";
+        vm.SlackEnabled = false;
+        // SelectedSearchBackend defaults to "duckduckgo"
+
+        vm.CurrentStep.Value = WizardStep.HealthCheck;
+        vm.GoNext();
+        await vm.HealthCheckCompletion!.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.True(vm.IsComplete.Value);
+
+        // DDG is the default — no Search section needed in config
+        var config = JsonDocument.Parse(File.ReadAllText(_paths.NetclawConfigPath));
+        Assert.False(config.RootElement.TryGetProperty("Search", out _));
     }
 
     [Fact]

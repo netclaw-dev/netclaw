@@ -1,6 +1,7 @@
 using Microsoft.Extensions.AI;
 using ModelContextProtocol.Client;
 using Netclaw.Configuration;
+using Netclaw.Search;
 
 namespace Netclaw.Actors.Tools;
 
@@ -10,13 +11,14 @@ namespace Netclaw.Actors.Tools;
 /// </summary>
 public static class ToolRegistrationExtensions
 {
-    public static ToolRegistry WithFirstPartyTools(this ToolRegistry registry, ToolConfig config, NetclawPaths? paths = null)
+    public static ToolRegistry WithFirstPartyTools(this ToolRegistry registry, ToolConfig config, ISearchBackend? searchBackend = null, NetclawPaths? paths = null)
     {
         registry.Register(new ShellTool(config));
         registry.Register(new FileReadTool(config));
         registry.Register(new FileWriteTool());
         registry.Register(new AttachFileTool());
-        registry.Register(new WebSearchTool(config));
+        if (searchBackend is not null)
+            registry.Register(new WebSearchTool(searchBackend));
         registry.Register(new WebFetchTool());
 
         // Identity self-modification tools (always loaded, "identity" grant)
