@@ -13,12 +13,12 @@ namespace Netclaw.Cli.Tui;
 
 /// <summary>
 /// Termina page for the interactive chat UI (<c>netclaw chat</c>).
-/// Layout: scrollable chat history (fill) + fixed input panel (3 rows) + status bar.
+/// Layout: scrollable chat history (fill) + auto-sizing input panel + status bar.
 /// </summary>
 public sealed class ChatPage : ReactivePage<ChatViewModel>
 {
     private StreamingTextNode _chatHistory = null!;
-    private TextInputNode _promptInput = null!;
+    private TextAreaNode _promptInput = null!;
 
     private int _nextSegmentId = 1;
 
@@ -34,39 +34,28 @@ public sealed class ChatPage : ReactivePage<ChatViewModel>
     private SegmentId _assistantSegmentId;
     private readonly StringBuilder _assistantBuffer = new();
 
-    // Prompt history navigation
-    private readonly List<string> _promptHistory = [];
-    private int _historyIndex = -1;
-    private string _historyDraft = string.Empty;
-
     protected override void OnBound()
     {
         base.OnBound();
 
         _chatHistory = StreamingTextNode.Create().WithScrollbar();
-        _promptInput = new TextInputNode()
-            .WithPlaceholder("Type a message...");
+        _promptInput = new TextAreaNode()
+            .WithPlaceholder("Type a message...")
+            .WithMaxHeight(8)
+            .WithHistory(100);
 
-        // Handle prompt submission — Chunk coalesces rapid-fire submissions
-        // (e.g., pasting multi-line text where each CRLF triggers Submitted)
-        // into a single message. Normal typing produces one item per buffer window.
+        // Handle prompt submission
         _promptInput.Submitted
             .Where(text => !string.IsNullOrWhiteSpace(text))
-            .Chunk(TimeSpan.FromMilliseconds(100))
-            .Where(batch => batch.Length > 0)
-            .Subscribe(batch =>
+            .Subscribe(text =>
             {
                 _promptInput.Clear();
 
-                var combined = string.Join("\n", batch);
-
-                RememberPrompt(combined);
-
                 // Render user message
                 _chatHistory.AppendLine("");
-                _chatHistory.AppendLine($"You: {combined}", Color.Cyan);
+                _chatHistory.AppendLine($"You: {text}", Color.Cyan);
 
-                _ = ViewModel.SubmitAsync(combined);
+                _ = ViewModel.SubmitAsync(text);
             })
             .DisposeWith(Subscriptions);
 
@@ -102,14 +91,14 @@ public sealed class ChatPage : ReactivePage<ChatViewModel>
                     .WithBorderColor(Color.Gray)
                     .WithContent(_chatHistory.Fill())
                     .Fill())
-            // Input panel (fixed 3 rows)
+            // Input panel (grows with content, 3–10 rows)
             .WithChild(
                 new PanelNode()
                     .WithTitle("Input")
                     .WithBorder(BorderStyle.Rounded)
                     .WithBorderColor(Color.Cyan)
                     .WithContent(_promptInput)
-                    .Height(3))
+                    .HeightAuto(min: 3, max: 10))
             // Status bar
             .WithChild(
                 BuildStatusBar());
@@ -126,7 +115,7 @@ public sealed class ChatPage : ReactivePage<ChatViewModel>
                 {
                     var keys = isGenerating
                         ? "[Ctrl+Q] Quit"
-                        : "[Enter] Send  [Ctrl+Shift+V] Paste  [PgUp/PgDn/Wheel] Scroll  [Ctrl+Q] Quit";
+                        : "[Enter] Send  [Ctrl+Enter] Newline  [PgUp/PgDn/Wheel] Scroll  [Ctrl+Q] Quit";
 
                     var usagePart = usage is not null ? $"  |  {usage}" : "";
                     var text = $" {keys}  |  {status}  |  {ViewModel.ModelId}{usagePart}";
@@ -180,19 +169,7 @@ public sealed class ChatPage : ReactivePage<ChatViewModel>
         if (_chatHistory.HandleInput(keyInfo, viewportHeight: 20, viewportWidth: 80))
             return;
 
-        // Everything else goes to the text input
-        if (keyInfo.Key == ConsoleKey.UpArrow)
-        {
-            NavigateHistoryUp();
-            return;
-        }
-
-        if (keyInfo.Key == ConsoleKey.DownArrow)
-        {
-            NavigateHistoryDown();
-            return;
-        }
-
+        // Everything else goes to the text area
         _promptInput.HandleInput(keyInfo);
     }
 
@@ -369,52 +346,4 @@ public sealed class ChatPage : ReactivePage<ChatViewModel>
         _chatHistory.AppendLine("");
     }
 
-    private void RememberPrompt(string prompt)
-    {
-        if (string.IsNullOrWhiteSpace(prompt))
-            return;
-
-        if (_promptHistory.Count == 0 || !string.Equals(_promptHistory[^1], prompt, StringComparison.Ordinal))
-            _promptHistory.Add(prompt);
-
-        if (_promptHistory.Count > 100)
-            _promptHistory.RemoveAt(0);
-
-        _historyIndex = -1;
-        _historyDraft = string.Empty;
-    }
-
-    private void NavigateHistoryUp()
-    {
-        if (_promptHistory.Count == 0)
-            return;
-
-        if (_historyIndex < 0)
-        {
-            _historyDraft = _promptInput.Text;
-            _historyIndex = _promptHistory.Count - 1;
-        }
-        else if (_historyIndex > 0)
-        {
-            _historyIndex--;
-        }
-
-        _promptInput.Text = _promptHistory[_historyIndex];
-    }
-
-    private void NavigateHistoryDown()
-    {
-        if (_historyIndex < 0)
-            return;
-
-        if (_historyIndex < _promptHistory.Count - 1)
-        {
-            _historyIndex++;
-            _promptInput.Text = _promptHistory[_historyIndex];
-            return;
-        }
-
-        _historyIndex = -1;
-        _promptInput.Text = _historyDraft;
-    }
 }

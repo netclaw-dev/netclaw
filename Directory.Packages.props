@@ -33,7 +33,7 @@
     <PackageVersion Include="OllamaSharp" Version="5.4.16" />
     <PackageVersion Include="SlackNet" Version="0.17.9" />
     <PackageVersion Include="SlackNet.Extensions.DependencyInjection" Version="0.17.9" />
-    <PackageVersion Include="Termina" Version="0.7.1" />
+    <PackageVersion Include="Termina" Version="0.7.2" />
     <PackageVersion Include="Mime-Detective" Version="25.8.1" />
     <PackageVersion Include="Mime-Detective.Definitions.Condensed" Version="25.8.1" />
   </ItemGroup>
