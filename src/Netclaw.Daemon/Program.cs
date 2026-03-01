@@ -155,6 +155,21 @@ static void ConfigureDaemonServices(
     var models = configuration.GetSection("Models")
         .Get<ModelSelection>() ?? new ModelSelection();
 
+    // Auto-detect model capabilities when not manually specified in config.
+    // Uses the OpenRouter public catalog as an oracle — works for models from
+    // any provider since OpenRouter indexes most publicly available models.
+    var inputModalities = models.Main.InputModalities;
+    var outputModalities = models.Main.OutputModalities;
+    if (inputModalities is null || outputModalities is null)
+    {
+        var detected = ResolveStartupCapabilities(models.Main.ModelId);
+        if (detected is not null)
+        {
+            inputModalities ??= detected.InputModalities;
+            outputModalities ??= detected.OutputModalities;
+        }
+    }
+
     // Session config: bind defaults from config section, overlay model-derived values
     var sessionConfig = configuration.GetSection("Session").Get<SessionConfig>() ?? new SessionConfig();
     services.AddSingleton(sessionConfig with
@@ -162,8 +177,8 @@ static void ConfigureDaemonServices(
         ModelId = models.Main.ModelId,
         ContextWindowTokens = models.Main.ContextWindow ?? 32_768,
         CompactionModelId = models.Compaction?.ModelId,
-        InputModalities = models.Main.InputModalities ?? ModelModality.Text,
-        OutputModalities = models.Main.OutputModalities ?? ModelModality.Text,
+        InputModalities = inputModalities ?? ModelModality.Text,
+        OutputModalities = outputModalities ?? ModelModality.Text,
     });
 
     // Tools (auto-bound, no required properties)
@@ -311,6 +326,45 @@ static ISearchBackend? CreateSearchBackend(SearchConfig config)
         default:
             Console.Error.WriteLine($"warn: Unknown search backend '{backend}'. Falling back to DuckDuckGo.");
             return new DuckDuckGoBackend();
+    }
+}
+
+/// <summary>
+/// One-time capability detection at startup. Creates temporary HTTP resources
+/// to query the OpenRouter public catalog before the DI container is built.
+/// Returns null if detection fails (caller falls back to text-only).
+/// </summary>
+static ResolvedModelCapabilities? ResolveStartupCapabilities(string modelId)
+{
+    try
+    {
+        using var httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+        using var loggerFactory = LoggerFactory.Create(_ => { });
+        var resolver = new OpenRouterOracleResolver(
+            httpClient, loggerFactory.CreateLogger<OpenRouterOracleResolver>());
+
+        var result = resolver.ResolveAsync(modelId, CancellationToken.None)
+            .GetAwaiter().GetResult();
+
+        if (result is not null)
+        {
+            Console.Error.WriteLine(
+                $"info: Auto-detected model capabilities for {modelId}: " +
+                $"input={result.InputModalities}, output={result.OutputModalities}");
+        }
+        else
+        {
+            Console.Error.WriteLine(
+                $"info: Model {modelId} not found in OpenRouter catalog; defaulting to text-only");
+        }
+
+        return result;
+    }
+    catch (Exception ex)
+    {
+        Console.Error.WriteLine(
+            $"warn: Failed to auto-detect model capabilities for {modelId}: {ex.Message}");
+        return null;
     }
 }
 
