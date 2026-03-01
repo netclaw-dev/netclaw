@@ -27,6 +27,7 @@ public sealed class DaemonClient : IAsyncDisposable
     private readonly Subject<SessionOutput> _outputSubject = new();
     private readonly Subject<DaemonConnectionEvent> _connectionSubject = new();
     private readonly SemaphoreSlim _connectGate = new(1, 1);
+    private readonly SemaphoreSlim _sessionGate = new(1, 1);
     private readonly CancellationTokenSource _lifetimeCts = new();
 
     private string? _sessionId;
@@ -187,11 +188,23 @@ public sealed class DaemonClient : IAsyncDisposable
     {
         ArgumentNullException.ThrowIfNull(input);
 
-        await ConnectAsync(cancellationToken);
+        // Hold the session gate while reading _sessionId to prevent reading
+        // a stale value during a concurrent EnsureSessionInternalAsync call
+        // (e.g. from the Reconnected handler racing with an explicit EnsureSessionAsync).
+        string sessionId;
+        await _sessionGate.WaitAsync(cancellationToken);
+        try
+        {
+            await ConnectAsync(cancellationToken);
 
-        var sessionId = _sessionId;
-        if (string.IsNullOrWhiteSpace(sessionId))
-            throw new InvalidOperationException("Session not initialized. Call CreateSessionAsync first.");
+            sessionId = _sessionId
+                ?? throw new InvalidOperationException(
+                    "Session not initialized. Call CreateSessionAsync first.");
+        }
+        finally
+        {
+            _sessionGate.Release();
+        }
 
         var text = input.Contents.OfType<TextContent>().Select(x => x.Text).FirstOrDefault();
         if (string.IsNullOrWhiteSpace(text))
@@ -212,6 +225,7 @@ public sealed class DaemonClient : IAsyncDisposable
         _disposed = true;
         await _connection.DisposeAsync();
         _connectGate.Dispose();
+        _sessionGate.Dispose();
     }
 
     private async Task ReconnectLoopAsync()
@@ -235,6 +249,15 @@ public sealed class DaemonClient : IAsyncDisposable
                     0));
 
                 await ConnectAsync(_lifetimeCts.Token);
+
+                // Re-attach the session after manual reconnect.
+                // The built-in auto-reconnect fires the Reconnected event which
+                // calls EnsureSessionInternalAsync, but manual StartAsync from
+                // the Closed handler does not. Without this, the transport is up
+                // but the session is not attached on the new server.
+                if (!string.IsNullOrWhiteSpace(_channelType))
+                    await EnsureSessionInternalAsync(_channelType!, _lifetimeCts.Token);
+
                 return;
             }
             catch when (!_disposed && !_lifetimeCts.Token.IsCancellationRequested)
@@ -277,24 +300,32 @@ public sealed class DaemonClient : IAsyncDisposable
         string channelType,
         CancellationToken cancellationToken)
     {
-        await ConnectAsync(cancellationToken);
-
-        var result = await _connection.InvokeCoreAsync<SessionEnsureResultDto>(
-            "EnsureSession",
-            [_sessionId, channelType],
-            cancellationToken);
-
-        _sessionId = result.SessionId;
-
-        if (result.Created)
+        await _sessionGate.WaitAsync(cancellationToken);
+        try
         {
-            _connectionSubject.OnNext(new DaemonConnectionEvent(
-                DaemonConnectionState.Connected,
-                _daemonEndpoint,
-                $"Created a new daemon session at {_daemonEndpoint}."));
-        }
+            await ConnectAsync(cancellationToken);
 
-        return result.SessionId;
+            var result = await _connection.InvokeCoreAsync<SessionEnsureResultDto>(
+                "EnsureSession",
+                [_sessionId, channelType],
+                cancellationToken);
+
+            _sessionId = result.SessionId;
+
+            if (result.Created)
+            {
+                _connectionSubject.OnNext(new DaemonConnectionEvent(
+                    DaemonConnectionState.Connected,
+                    _daemonEndpoint,
+                    $"Created a new daemon session at {_daemonEndpoint}."));
+            }
+
+            return result.SessionId;
+        }
+        finally
+        {
+            _sessionGate.Release();
+        }
     }
 
     internal static SessionOutput FromDto(SessionOutputDto dto)
