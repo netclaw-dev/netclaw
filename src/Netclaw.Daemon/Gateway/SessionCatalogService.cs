@@ -10,6 +10,9 @@ namespace Netclaw.Daemon.Gateway;
 /// Singleton service maintaining the <c>sessions</c> table in the SQLite database.
 /// Implements <see cref="ISessionLifecycleObserver"/> so <see cref="SessionPipeline"/>
 /// automatically reports all session events regardless of channel type.
+///
+/// Per-session log file I/O is handled by <see cref="Netclaw.Actors.Sessions.SessionLogActor"/>
+/// (a child of each session actor), not this service.
 /// </summary>
 public sealed class SessionCatalogService : ISessionLifecycleObserver
 {
@@ -17,9 +20,6 @@ public sealed class SessionCatalogService : ISessionLifecycleObserver
     private readonly NetclawPaths _paths;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<SessionCatalogService> _logger;
-
-    // Per-session log writers (created on session start, flushed on each write)
-    private readonly Dictionary<string, StreamWriter> _logWriters = new();
 
     public SessionCatalogService(
         NetclawPaths paths,
@@ -44,36 +44,29 @@ public sealed class SessionCatalogService : ISessionLifecycleObserver
 
         try
         {
+            // Compute expected log path deterministically — the child SessionLogActor
+            // independently creates the file at this same path.
+            var sanitized = SessionDirectoryHelper.SanitizeSessionId(sessionId.Value);
+            var logPath = Path.Combine(_paths.SessionLogsDirectory, $"{sanitized}.log");
+
             using var conn = new SqliteConnection(_connectionString);
             conn.Open();
 
             using var cmd = conn.CreateCommand();
             cmd.CommandText =
                 """
-                INSERT INTO sessions (persistence_id, channel, created_at, last_activity, status, turn_count)
-                VALUES ($pid, $channel, $now, $now, 'active', 0)
+                INSERT INTO sessions (persistence_id, channel, created_at, last_activity, status, turn_count, log_path)
+                VALUES ($pid, $channel, $now, $now, 'active', 0, $path)
                 ON CONFLICT(persistence_id) DO UPDATE SET
                     status = 'active',
-                    last_activity = $now
+                    last_activity = $now,
+                    log_path = $path
                 """;
             cmd.Parameters.AddWithValue("$pid", persistenceId);
             cmd.Parameters.AddWithValue("$channel", channelType);
             cmd.Parameters.AddWithValue("$now", nowMs);
+            cmd.Parameters.AddWithValue("$path", logPath);
             cmd.ExecuteNonQuery();
-
-            // Set up per-session log file
-            var logPath = GetSessionLogPath(sessionId);
-            Directory.CreateDirectory(Path.GetDirectoryName(logPath)!);
-            var writer = new StreamWriter(logPath, append: true) { AutoFlush = true };
-            _logWriters[persistenceId] = writer;
-            writer.WriteLine($"[{_timeProvider.GetUtcNow():o}] Session created: {sessionId.Value} channel={channelType}");
-
-            // Update log_path in DB
-            using var updateCmd = conn.CreateCommand();
-            updateCmd.CommandText = "UPDATE sessions SET log_path = $path WHERE persistence_id = $pid";
-            updateCmd.Parameters.AddWithValue("$path", logPath);
-            updateCmd.Parameters.AddWithValue("$pid", persistenceId);
-            updateCmd.ExecuteNonQuery();
         }
         catch (Exception ex)
         {
@@ -90,7 +83,7 @@ public sealed class SessionCatalogService : ISessionLifecycleObserver
         {
             switch (output)
             {
-                case TurnCompleted tc:
+                case TurnCompleted:
                     UpdateSession(persistenceId, cmd =>
                     {
                         cmd.CommandText =
@@ -101,7 +94,6 @@ public sealed class SessionCatalogService : ISessionLifecycleObserver
                             WHERE persistence_id = $pid
                             """;
                     });
-                    LogToSession(persistenceId, $"Turn {tc.TurnNumber} completed");
                     break;
 
                 case UsageOutput usage when usage.InputTokens.HasValue:
@@ -130,31 +122,11 @@ public sealed class SessionCatalogService : ISessionLifecycleObserver
                             """;
                         cmd.Parameters.AddWithValue("$title", title.Title);
                     });
-                    LogToSession(persistenceId, $"Title set: {title.Title}");
                     break;
 
-                case CompactionOutput compaction:
-                    LogToSession(persistenceId,
-                        $"Compaction: {compaction.MessagesBefore} → {compaction.MessagesAfter} messages " +
-                        $"(keep={compaction.KeepCountUsed}, context={compaction.PreCompactionInputTokens}/{compaction.ContextWindowTokens} tokens)");
+                case CompactionOutput:
+                case ErrorOutput:
                     UpdateLastActivity(persistenceId);
-                    break;
-
-                case ErrorOutput error:
-                    LogToSession(persistenceId, $"Error: {error.Message}");
-                    UpdateLastActivity(persistenceId);
-                    break;
-
-                case TextOutput text:
-                    LogToSession(persistenceId, $"Assistant: {Truncate(text.Text, 200)}");
-                    break;
-
-                case ToolCallOutput toolCall:
-                    LogToSession(persistenceId, $"Tool call: {toolCall.ToolName} (call={toolCall.CallId})");
-                    break;
-
-                case ToolResultOutput toolResult:
-                    LogToSession(persistenceId, $"Tool result: {toolResult.ToolName} (call={toolResult.CallId}) → {Truncate(toolResult.Result, 200)}");
                     break;
             }
         }
@@ -213,18 +185,6 @@ public sealed class SessionCatalogService : ISessionLifecycleObserver
         return entries;
     }
 
-    /// <summary>
-    /// Flush and close all open session log writers.
-    /// </summary>
-    public void Dispose()
-    {
-        foreach (var writer in _logWriters.Values)
-        {
-            try { writer.Dispose(); } catch { /* best effort */ }
-        }
-        _logWriters.Clear();
-    }
-
     private void UpdateSession(string persistenceId, Action<SqliteCommand> configure)
     {
         var nowMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
@@ -246,23 +206,6 @@ public sealed class SessionCatalogService : ISessionLifecycleObserver
             cmd.CommandText = "UPDATE sessions SET last_activity = $now WHERE persistence_id = $pid";
         });
     }
-
-    private void LogToSession(string persistenceId, string message)
-    {
-        if (_logWriters.TryGetValue(persistenceId, out var writer))
-        {
-            writer.WriteLine($"[{_timeProvider.GetUtcNow():o}] {message}");
-        }
-    }
-
-    private string GetSessionLogPath(SessionId sessionId)
-    {
-        var sanitized = SessionDirectoryHelper.SanitizeSessionId(sessionId.Value);
-        return Path.Combine(_paths.SessionLogsDirectory, $"{sanitized}.log");
-    }
-
-    private static string Truncate(string text, int maxLength) =>
-        text.Length <= maxLength ? text : string.Concat(text.AsSpan(0, maxLength), "...");
 }
 
 /// <summary>

@@ -38,9 +38,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor
     private readonly IToolExecutor? _toolExecutor;
     private readonly IToolAuditLogger? _auditLogger;
     private readonly IMemoryExtractor _memoryExtractor;
-    private readonly IChatReducer _chatReducer;
     private readonly TimeProvider _timeProvider;
     private readonly string? _sessionsBasePath;
+    private readonly string? _sessionLogsBasePath;
     private readonly ILoggingAdapter _log;
 
     // Transient state (not persisted)
@@ -55,6 +55,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor
 
     // Tool iteration counter (reset per turn, incremented on each ToolExecutionCompleted)
     private int _toolIterationCount;
+
+    // Child actor for per-session log file (created when session logs directory is configured)
+    private IActorRef? _logActor;
 
     // Persistent state (immutable — replaced on each event)
     private SessionState _state = SessionState.Empty;
@@ -73,7 +76,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor
         IToolAuditLogger? auditLogger = null,
         ToolRegistry? toolRegistry = null,
         IMemoryExtractor? memoryExtractor = null,
-        IChatReducer? chatReducer = null,
         TimeProvider? timeProvider = null,
         IReadOnlyList<IContextLayerProvider>? contextLayers = null,
         NetclawPaths? paths = null)
@@ -89,9 +91,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor
         _toolExecutor = toolExecutor;
         _auditLogger = auditLogger;
         _memoryExtractor = memoryExtractor ?? NullMemoryExtractor.Instance;
-        _chatReducer = chatReducer ?? new ExtractiveSessionReducer(config.KeepRecentMessages);
         _timeProvider = timeProvider ?? TimeProvider.System;
         _sessionsBasePath = paths?.SessionsDirectory;
+        _sessionLogsBasePath = paths?.SessionLogsDirectory;
         PersistenceId = $"session-{entityId}";
 
         // Enrich logger with session context — all log messages automatically include SessionId
@@ -136,6 +138,13 @@ public sealed class LlmSessionActor : ReceivePersistentActor
             }
 
             Become(Ready);
+
+            if (_sessionLogsBasePath is not null)
+            {
+                _logActor = Context.ActorOf(
+                    SessionLogActor.CreateProps(_sessionId, _sessionLogsBasePath),
+                    "session-log");
+            }
         });
     }
 
@@ -587,9 +596,10 @@ public sealed class LlmSessionActor : ReceivePersistentActor
             var title = response.Messages[^1].Text ?? string.Empty;
             self.Tell(new TitleGenerationCompleted { Title = title });
         }
-        catch
+        catch (Exception ex)
         {
-            // Title generation is best-effort — don't disrupt the session
+            // Title generation is best-effort — log and move on
+            Trace.TraceWarning("Sidecar title generation failed: {0}", ex.Message);
         }
     }
 
@@ -872,7 +882,11 @@ public sealed class LlmSessionActor : ReceivePersistentActor
         if (systemPrompt is not null)
             totalChars += systemPrompt.Content?.Length ?? 0;
         foreach (var msg in messages)
+        {
             totalChars += msg.Content?.Length ?? 0;
+            foreach (var tc in msg.ToolCalls)
+                totalChars += tc.ArgumentsJson?.Length ?? 0;
+        }
         return totalChars / 4;
     }
 
@@ -1284,6 +1298,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor
                 subscriber.Tell(output);
             }
         }
+
+        _logActor?.Tell(output);
     }
 
     private void TryReplyAck()

@@ -189,8 +189,6 @@ static void ConfigureDaemonServices(
         OutputModalities = outputModalities ?? ModelModality.Text,
     };
     services.AddSingleton(resolvedSessionConfig);
-    services.AddSingleton<IChatReducer>(
-        new ExtractiveSessionReducer(resolvedSessionConfig.KeepRecentMessages));
 
     // Tools (auto-bound, no required properties)
     var toolConfig = configuration.GetSection("Tools")
