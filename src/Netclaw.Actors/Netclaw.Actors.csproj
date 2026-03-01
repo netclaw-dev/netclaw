@@ -14,7 +14,6 @@
     <PackageReference Include="Akka.Cluster.Sharding" />
     <PackageReference Include="Akka.Persistence" />
     <PackageReference Include="Aaron.Akka.Reminders" />
-    <PackageReference Include="HtmlAgilityPack" />
     <PackageReference Include="Microsoft.Extensions.AI.Abstractions" />
     <PackageReference Include="ModelContextProtocol.Core" />
     <PackageReference Include="protobuf-net" />
@@ -22,6 +21,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Netclaw.Configuration\Netclaw.Configuration.csproj" />
+    <ProjectReference Include="..\Netclaw.Search\Netclaw.Search.csproj" />
     <ProjectReference Include="..\Netclaw.Security\Netclaw.Security.csproj" />
     <ProjectReference Include="..\Netclaw.Tools.Abstractions\Netclaw.Tools.Abstractions.csproj" />
     <ProjectReference Include="..\Netclaw.Tools.Generators\Netclaw.Tools.Generators.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
