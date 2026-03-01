@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Netclaw.Configuration;
 using Netclaw.Configuration.Providers;
 using Netclaw.Configuration.Providers.Descriptors;
@@ -36,8 +37,22 @@ public static class LlmProviderServiceExtensions
         // Register the plugin factory and chat client provider
         services.AddSingleton(sp =>
             new ProviderPluginFactory(providers, sp.GetServices<ILlmProviderPlugin>()));
+
+        // Retry policy (TODO: make configurable via netclaw.json Resilience section)
+        services.AddSingleton(new RetryPolicy());
+
+        // Raw provider → Resilient decorator (Logging → Retry → Failover)
         services.AddSingleton<IChatClientProvider>(sp =>
-            new NetclawChatClientProvider(sp.GetRequiredService<ProviderPluginFactory>(), models));
+        {
+            var raw = new NetclawChatClientProvider(
+                sp.GetRequiredService<ProviderPluginFactory>(), models);
+            return new ResilientChatClientProviderDecorator(
+                raw,
+                sp.GetRequiredService<RetryPolicy>(),
+                models,
+                sp.GetRequiredService<ILoggerFactory>(),
+                sp.GetService<TimeProvider>());
+        });
 
         return services;
     }
