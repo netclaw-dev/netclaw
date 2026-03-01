@@ -53,13 +53,13 @@ public class ModalityGateTextOnlyTests : TestKit
         var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
         var subscriber = CreateTestProbe("modality-sub");
 
-        sessionManager.Tell(new JoinSession
+        await sessionManager.Ask<SessionJoined>(new JoinSession
         {
             SessionId = sessionId,
             Subscriber = subscriber,
             Filter = OutputFilter.Full
-        });
-        subscriber.ExpectMsg<SessionJoined>();
+        }, TimeSpan.FromSeconds(5));
+        await subscriber.ExpectMsgAsync<SessionJoined>(); // Drain subscriber notification
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
@@ -77,14 +77,14 @@ public class ModalityGateTextOnlyTests : TestKit
         }, TimeSpan.FromSeconds(5));
 
         // Should receive the "images removed" acknowledgement
-        var ack = subscriber.ExpectMsg<TextOutput>(TimeSpan.FromSeconds(3));
+        var ack = await subscriber.ExpectMsgAsync<TextOutput>();
         Assert.Contains("Images removed", ack.Text);
 
         // The LLM should still be called with the text content
-        var textOutput = subscriber.ExpectMsg<TextOutput>(TimeSpan.FromSeconds(3));
+        var textOutput = await subscriber.ExpectMsgAsync<TextOutput>();
         Assert.Contains("fake", textOutput.Text, StringComparison.OrdinalIgnoreCase);
 
-        subscriber.ExpectMsg<TurnCompleted>(TimeSpan.FromSeconds(3));
+        await subscriber.ExpectMsgAsync<TurnCompleted>();
 
         // LLM was called (text was sent through despite images being stripped)
         Assert.Equal(1, _fakeChatClient.CallCount);
@@ -97,13 +97,13 @@ public class ModalityGateTextOnlyTests : TestKit
         var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
         var subscriber = CreateTestProbe("modality-image-only-sub");
 
-        sessionManager.Tell(new JoinSession
+        await sessionManager.Ask<SessionJoined>(new JoinSession
         {
             SessionId = sessionId,
             Subscriber = subscriber,
             Filter = OutputFilter.Full
-        });
-        subscriber.ExpectMsg<SessionJoined>();
+        }, TimeSpan.FromSeconds(5));
+        await subscriber.ExpectMsgAsync<SessionJoined>(); // Drain subscriber notification
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
@@ -121,14 +121,14 @@ public class ModalityGateTextOnlyTests : TestKit
         }, TimeSpan.FromSeconds(5));
 
         // Should receive the "images removed" acknowledgement first
-        var stripped = subscriber.ExpectMsg<TextOutput>(TimeSpan.FromSeconds(3));
+        var stripped = await subscriber.ExpectMsgAsync<TextOutput>();
         Assert.Contains("Images removed", stripped.Text);
 
         // Then the "only images" explanation
-        var explanation = subscriber.ExpectMsg<TextOutput>(TimeSpan.FromSeconds(3));
+        var explanation = await subscriber.ExpectMsgAsync<TextOutput>();
         Assert.Contains("only images", explanation.Text, StringComparison.OrdinalIgnoreCase);
 
-        subscriber.ExpectMsg<TurnCompleted>(TimeSpan.FromSeconds(3));
+        await subscriber.ExpectMsgAsync<TurnCompleted>();
 
         // LLM was NOT called
         Assert.Equal(0, _fakeChatClient.CallCount);
@@ -173,13 +173,13 @@ public class ModalityGateVisionTests : TestKit
         var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
         var subscriber = CreateTestProbe("vision-sub");
 
-        sessionManager.Tell(new JoinSession
+        await sessionManager.Ask<SessionJoined>(new JoinSession
         {
             SessionId = sessionId,
             Subscriber = subscriber,
             Filter = OutputFilter.Full
-        });
-        subscriber.ExpectMsg<SessionJoined>();
+        }, TimeSpan.FromSeconds(5));
+        await subscriber.ExpectMsgAsync<SessionJoined>(); // Drain subscriber notification
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
@@ -197,11 +197,11 @@ public class ModalityGateVisionTests : TestKit
         }, TimeSpan.FromSeconds(5));
 
         // Should NOT receive an "images removed" acknowledgement — go straight to LLM response
-        var textOutput = subscriber.ExpectMsg<TextOutput>(TimeSpan.FromSeconds(3));
+        var textOutput = await subscriber.ExpectMsgAsync<TextOutput>();
         Assert.Contains("fake", textOutput.Text, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("Images removed", textOutput.Text);
 
-        subscriber.ExpectMsg<TurnCompleted>(TimeSpan.FromSeconds(3));
+        await subscriber.ExpectMsgAsync<TurnCompleted>();
 
         // LLM was called
         Assert.Equal(1, _fakeChatClient.CallCount);
