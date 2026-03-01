@@ -50,7 +50,8 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
             ContextWindowTokens = 128_000,
             SnapshotInterval = 5,
             InputModalities = ModelModality.Text | ModelModality.Image,
-            OutputModalities = ModelModality.Text
+            OutputModalities = ModelModality.Text,
+            TitleGenerationInterval = 0
         });
         services.AddSingleton<ISystemPromptProvider>(new StaticSystemPromptProvider(
             "You are a test assistant."));

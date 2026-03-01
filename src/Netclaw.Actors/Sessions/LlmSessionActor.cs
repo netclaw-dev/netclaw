@@ -549,6 +549,51 @@ public sealed class LlmSessionActor : ReceivePersistentActor
     }
 
     /// <summary>
+    /// Fire a sidecar LLM call to generate a short session title.
+    /// Best-effort — failures are silently ignored.
+    /// </summary>
+    private void MaybeGenerateTitle()
+    {
+        var interval = _config.TitleGenerationInterval;
+        if (interval <= 0)
+            return;
+
+        // Generate on turn 1, then refresh every N turns
+        var turn = _state.TurnCount;
+        if (turn != 1 && turn % interval != 0)
+            return;
+
+        var history = _state.History;
+        var self = Self;
+        var client = _compactionClient;
+
+        _ = GenerateTitleAsync(client, history, self);
+    }
+
+    private static async Task GenerateTitleAsync(
+        IChatClient client,
+        IReadOnlyList<SerializableChatMessage> history,
+        IActorRef self)
+    {
+        try
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            var messages = new List<AiChatMessage>
+            {
+                new(Microsoft.Extensions.AI.ChatRole.User,
+                    CompactionPromptBuilder.BuildTitleGenerationPrompt(history))
+            };
+            var response = await client.GetResponseAsync(messages, cancellationToken: cts.Token);
+            var title = response.Messages[^1].Text ?? string.Empty;
+            self.Tell(new TitleGenerationCompleted { Title = title });
+        }
+        catch
+        {
+            // Title generation is best-effort — don't disrupt the session
+        }
+    }
+
+    /// <summary>
     /// Fire an async memory extraction LLM call with a 30-second timeout.
     /// Results come back as <see cref="MemoryExtractionCompleted"/> or
     /// <see cref="CompactionFailed"/> if the call fails or times out.
@@ -686,6 +731,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor
 
             EmitResponseOutputs(lastMessage, usage, includeText: true, includeThinking: true);
             MaybeSnapshot();
+            MaybeGenerateTitle();
 
             // Check if compaction should trigger
             if (ShouldCompact())
@@ -723,6 +769,17 @@ public sealed class LlmSessionActor : ReceivePersistentActor
 
     private void CommandSubscriptionMessages()
     {
+        // Title generation result — can arrive in any behavior, always safe to apply
+        Command<TitleGenerationCompleted>(msg =>
+        {
+            var title = msg.Title.Trim();
+            if (!string.IsNullOrWhiteSpace(title))
+            {
+                _log.Info("Title generated: {Title}", title);
+                SetTitle(title);
+            }
+        });
+
         Command<JoinSession>(cmd =>
         {
             _subscribers[cmd.Subscriber] = cmd.Filter;

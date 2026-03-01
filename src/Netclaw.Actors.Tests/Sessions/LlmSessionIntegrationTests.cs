@@ -35,7 +35,8 @@ public class LlmSessionIntegrationTests : TestKit
         {
             ModelId = "fake-model",
             ContextWindowTokens = 128_000,
-            SnapshotInterval = 5
+            SnapshotInterval = 5,
+            TitleGenerationInterval = 0
         });
         services.AddSingleton<ISystemPromptProvider>(new StaticSystemPromptProvider(
             "You are a test assistant."));

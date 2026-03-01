@@ -74,3 +74,11 @@ internal sealed record CompactionFailed
 {
     public required Exception Cause { get; init; }
 }
+
+/// <summary>
+/// Internal message completing a sidecar title generation LLM call.
+/// </summary>
+internal sealed record TitleGenerationCompleted
+{
+    public required string Title { get; init; }
+}

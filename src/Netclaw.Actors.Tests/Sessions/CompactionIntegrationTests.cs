@@ -40,7 +40,8 @@ public class CompactionIntegrationTests : TestKit
             CompactionThreshold = 0.75, // 750 tokens triggers compaction
             SnapshotInterval = 5,
             KeepRecentToolResults = 1,
-            KeepRecentMessages = 0
+            KeepRecentMessages = 0,
+            TitleGenerationInterval = 0
         });
         services.AddSingleton<ISystemPromptProvider>(new StaticSystemPromptProvider(
             "You are a test assistant."));

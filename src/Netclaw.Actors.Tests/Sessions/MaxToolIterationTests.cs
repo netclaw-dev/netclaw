@@ -37,7 +37,8 @@ public class MaxToolIterationTests : TestKit
             ModelId = "fake-model",
             ContextWindowTokens = 128_000,
             SnapshotInterval = 5,
-            MaxToolIterationsPerTurn = 3 // Low limit for testing
+            MaxToolIterationsPerTurn = 3, // Low limit for testing
+            TitleGenerationInterval = 0
         });
         services.AddSingleton<ISystemPromptProvider>(new StaticSystemPromptProvider(
             "You are a test assistant with tools."));

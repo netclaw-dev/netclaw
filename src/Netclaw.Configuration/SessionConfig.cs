@@ -62,6 +62,12 @@ public sealed record SessionConfig
     public int KeepRecentMessages { get; init; } = 6;
 
     /// <summary>
+    /// Turn interval for sidecar title generation. Title is always generated
+    /// on turn 1, then refreshed every N turns. Set to 0 to disable.
+    /// </summary>
+    public int TitleGenerationInterval { get; init; } = 10;
+
+    /// <summary>
     /// How long a session can be idle before passivating.
     /// The actor saves a snapshot and stops itself; re-creation by
     /// <c>GenericChildPerEntityParent</c> on next message recovers state from journal.
