@@ -90,13 +90,13 @@ public class CompactionIntegrationTests : TestKit
         subscriber.ExpectMsg<UsageOutput>(TimeSpan.FromSeconds(3));
         subscriber.ExpectMsg<TurnCompleted>(TimeSpan.FromSeconds(3));
 
-        // Then: compaction output (summarization happened)
+        // Then: compaction output (extractive — no LLM summarization)
         var compaction = subscriber.ExpectMsg<CompactionOutput>(TimeSpan.FromSeconds(5));
-        Assert.True(compaction.Summarized);
+        Assert.False(compaction.Summarized);
         Assert.True(compaction.MessagesAfter < compaction.MessagesBefore);
 
-        // LLM was called: 1 for the turn + 2 for compaction (extraction + summarization)
-        // (Memory extraction may or may not fire depending on timing, but summarization always does)
+        // 2 LLM calls: 1 for the turn + 1 for memory extraction (no summarization call).
+        // Memory extraction fires because FakeMemoryExtractor is registered (not NullMemoryExtractor).
         Assert.True(_fakeChatClient.CallCount >= 2);
     }
 
@@ -358,9 +358,9 @@ public class CompactionIntegrationTests : TestKit
         subscriber.ExpectMsg<UsageOutput>(TimeSpan.FromSeconds(3));
         subscriber.ExpectMsg<TurnCompleted>(TimeSpan.FromSeconds(3));
 
-        // Compaction
+        // Compaction (extractive — no LLM summarization)
         var compaction = subscriber.ExpectMsg<CompactionOutput>(TimeSpan.FromSeconds(5));
-        Assert.True(compaction.Summarized);
+        Assert.False(compaction.Summarized);
 
         // Verify post-compaction by sending another message (low usage to avoid re-compaction)
         _fakeChatClient.UsageOverride = new UsageDetails

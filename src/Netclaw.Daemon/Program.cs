@@ -6,8 +6,10 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Microsoft.Extensions.AI;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Hosting;
+using Netclaw.Actors.Sessions;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 using Netclaw.Configuration.Providers;
@@ -172,14 +174,17 @@ static void ConfigureDaemonServices(
 
     // Session config: bind defaults from config section, overlay model-derived values
     var sessionConfig = configuration.GetSection("Session").Get<SessionConfig>() ?? new SessionConfig();
-    services.AddSingleton(sessionConfig with
+    var resolvedSessionConfig = sessionConfig with
     {
         ModelId = models.Main.ModelId,
         ContextWindowTokens = models.Main.ContextWindow ?? 32_768,
         CompactionModelId = models.Compaction?.ModelId,
         InputModalities = inputModalities ?? ModelModality.Text,
         OutputModalities = outputModalities ?? ModelModality.Text,
-    });
+    };
+    services.AddSingleton(resolvedSessionConfig);
+    services.AddSingleton<IChatReducer>(
+        new ExtractiveSessionReducer(resolvedSessionConfig.KeepRecentMessages));
 
     // Tools (auto-bound, no required properties)
     var toolConfig = configuration.GetSection("Tools")
@@ -339,7 +344,7 @@ static ResolvedModelCapabilities? ResolveStartupCapabilities(string modelId, Log
     try
     {
         using var httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
-        using var loggerFactory = LoggerFactory.Create(b => b.AddConsole().SetMinimumLevel(logLevel));
+        using var loggerFactory = LoggerFactory.Create(b => b.SetMinimumLevel(logLevel));
         var logger = loggerFactory.CreateLogger("Netclaw.Startup");
         // Build a minimal registry for the resolver (pre-DI bootstrap).
         // Only the OpenRouter descriptor is needed for capability detection.

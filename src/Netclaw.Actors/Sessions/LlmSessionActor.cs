@@ -38,6 +38,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor
     private readonly IToolExecutor? _toolExecutor;
     private readonly IToolAuditLogger? _auditLogger;
     private readonly IMemoryExtractor _memoryExtractor;
+    private readonly IChatReducer _chatReducer;
     private readonly TimeProvider _timeProvider;
     private readonly ILoggingAdapter _log;
 
@@ -71,6 +72,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor
         IToolAuditLogger? auditLogger = null,
         ToolRegistry? toolRegistry = null,
         IMemoryExtractor? memoryExtractor = null,
+        IChatReducer? chatReducer = null,
         TimeProvider? timeProvider = null,
         IReadOnlyList<IContextLayerProvider>? contextLayers = null)
     {
@@ -85,6 +87,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor
         _toolExecutor = toolExecutor;
         _auditLogger = auditLogger;
         _memoryExtractor = memoryExtractor ?? NullMemoryExtractor.Instance;
+        _chatReducer = chatReducer ?? new ExtractiveSessionReducer(config.KeepRecentMessages);
         _timeProvider = timeProvider ?? TimeProvider.System;
         PersistenceId = $"session-{entityId}";
 
@@ -392,7 +395,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor
             TryReplyAck();
         });
 
-        Command<CompactionTriggered>(msg =>
+        CommandAsync<CompactionTriggered>(async msg =>
         {
             var messagesBefore = _state.History.Count;
 
@@ -405,50 +408,40 @@ public sealed class LlmSessionActor : ReceivePersistentActor
                 _log.Info("Phase 1: Cleared {ClearedCount} old tool result(s)", clearedCount);
             }
 
-            // Phase 2: Fire memory extraction + summarization LLM calls
-            _log.Info("Phase 2: Starting summarization (history={HistoryCount} messages)", _state.History.Count);
-            FireMemoryExtractionCall(messagesBefore, clearedCount > 0);
-        });
+            // Phase 2: Extractive reduction via IChatReducer (no LLM call for the
+            // default ExtractiveSessionReducer, but async reducers are supported).
+            // Convert to MEAI ChatMessage without sessionDir (skip media file I/O —
+            // the reducer only needs message structure, not media bytes).
+            var meaiMessages = ChatMessageConverter.ToAiMessages(_state.History);
+            var reduced = await _chatReducer.ReduceAsync(meaiMessages, CancellationToken.None);
 
-        Command<MemoryExtractionCompleted>(msg =>
-        {
-            // Persist extracted memories externally
-            var self = Self;
-            var extractor = _memoryExtractor;
-            var sessionId = _sessionId.Value;
-            _ = PersistMemoriesAsync(extractor, sessionId, msg.ExtractedMemories, self);
-        });
+            // Map reduced result back to original SerializableChatMessage objects.
+            // The extractive reducer preserves order and only trims from the beginning,
+            // so we count non-system messages in the result and take that many from the
+            // tail of the original history. This avoids lossy ChatMessage→SerializableChatMessage
+            // round-trip conversion (which would lose media references).
+            var reducedList = reduced as IList<Microsoft.Extensions.AI.ChatMessage>
+                ?? reduced.ToList();
+            var keptNonSystemCount = reducedList
+                .Count(m => m.Role != Microsoft.Extensions.AI.ChatRole.System);
 
-        Command<SummarizationCompleted>(msg =>
-        {
-            var messagesBefore = _state.History.Count;
-
-            // Build compacted history: User(context-summary) + preserved recent messages
-            var compactedMessages = new List<SerializableChatMessage>();
-
-            // 1. Summary as User message with context-summary tags
-            compactedMessages.Add(new SerializableChatMessage
-            {
-                Role = Protocol.ChatRole.User,
-                Content = $"<context-summary>\n{msg.Summary}\n</context-summary>"
-            });
-
-            // 2. Preserve last N non-system messages verbatim
-            var systemPromptOffset = _state.History.Count > 0
+            var systemOffset = _state.History.Count > 0
                 && _state.History[0].Role == Protocol.ChatRole.System ? 1 : 0;
-            var nonSystemCount = _state.History.Count - systemPromptOffset;
-            var keepCount = Math.Min(_config.KeepRecentMessages, nonSystemCount);
-            var startIndex = _state.History.Count - keepCount;
+            var startIndex = _state.History.Count - keptNonSystemCount;
 
-            for (var i = startIndex; i < _state.History.Count; i++)
+            var compactedMessages = new List<SerializableChatMessage>();
+            for (var i = Math.Max(systemOffset, startIndex); i < _state.History.Count; i++)
             {
                 compactedMessages.Add(_state.History[i]);
             }
 
+            _log.Info("Phase 2: Extractive reduction (history={HistoryCount} → {KeptCount} messages)",
+                _state.History.Count, compactedMessages.Count + systemOffset);
+
             var compactedEvent = new SessionCompacted
             {
                 SessionId = _sessionId,
-                Summary = msg.Summary,
+                Summary = string.Empty, // Extractive — no LLM summary
                 CompactedMessages = compactedMessages,
                 TurnCountBefore = _state.TurnCount,
                 CompactedAtMs = NowMs()
@@ -467,22 +460,49 @@ public sealed class LlmSessionActor : ReceivePersistentActor
                     SessionId = _sessionId,
                     MessagesBefore = messagesBefore,
                     MessagesAfter = _state.History.Count,
-                    ToolResultsCleared = true,
-                    Summarized = true
+                    ToolResultsCleared = clearedCount > 0,
+                    Summarized = false // Extractive, not summarized
                 });
 
                 _log.Info("Compaction complete (before={MessagesBefore}, after={MessagesAfter})",
                     messagesBefore, _state.History.Count);
 
-                DrainBufferOrReady();
+                // Memory extraction is optional and best-effort.
+                // If no extractor is configured, skip the async LLM call and drain immediately.
+                if (_memoryExtractor is NullMemoryExtractor)
+                {
+                    DrainBufferOrReady();
+                }
+                else
+                {
+                    InvokeMemoryExtractionAsync();
+                }
             });
+        });
+
+        Command<MemoryExtractionCompleted>(msg =>
+        {
+            // Persist extracted memories externally (fire-and-forget)
+            var self = Self;
+            var extractor = _memoryExtractor;
+            var sessionId = _sessionId.Value;
+            _ = PersistMemoriesAsync(extractor, sessionId, msg.ExtractedMemories, self);
+
+            DrainBufferOrReady();
         });
 
         Command<CompactionFailed>(msg =>
         {
-            _log.Warning(msg.Cause, "Compaction failed, continuing without compaction");
+            _log.Warning(msg.Cause, "Compaction failed");
 
-            // Compaction is best-effort — if it fails, drain buffer and continue
+            EmitOutput(new ErrorOutput
+            {
+                SessionId = _sessionId,
+                Message = "Context compaction encountered an error. The session will continue.",
+                Cause = msg.Cause
+            });
+
+            // Compaction is best-effort — drain buffer and continue
             DrainBufferOrReady();
         });
     }
@@ -507,56 +527,39 @@ public sealed class LlmSessionActor : ReceivePersistentActor
         }
     }
 
-    private void FireMemoryExtractionCall(int messagesBefore, bool toolResultsCleared)
+    /// <summary>
+    /// Fire an async memory extraction LLM call with a 30-second timeout.
+    /// Results come back as <see cref="MemoryExtractionCompleted"/> or
+    /// <see cref="CompactionFailed"/> if the call fails or times out.
+    /// </summary>
+    private void InvokeMemoryExtractionAsync()
     {
         var history = _state.History;
         var self = Self;
         var client = _compactionClient;
 
-        _ = InvokeCompactionSequenceAsync(client, history, self, messagesBefore, toolResultsCleared);
+        _ = InvokeMemoryExtractionCoreAsync(client, history, self);
     }
 
-    private static async Task InvokeCompactionSequenceAsync(
+    private static async Task InvokeMemoryExtractionCoreAsync(
         IChatClient client,
         IReadOnlyList<SerializableChatMessage> history,
-        IActorRef self,
-        int messagesBefore,
-        bool toolResultsCleared)
+        IActorRef self)
     {
         try
         {
-            // Step 1: Memory extraction (optional — if it fails, we still summarize)
-            try
-            {
-                var extractionMessages = new List<AiChatMessage>
-                {
-                    new(Microsoft.Extensions.AI.ChatRole.System,
-                        CompactionPromptBuilder.BuildMemoryExtractionSystemPrompt()),
-                    new(Microsoft.Extensions.AI.ChatRole.User,
-                        CompactionPromptBuilder.BuildMemoryExtractionUserPrompt(history))
-                };
-                var extractionResponse = await client.GetResponseAsync(extractionMessages);
-                var extractedText = extractionResponse.Messages[^1].Text ?? string.Empty;
-                self.Tell(new MemoryExtractionCompleted { ExtractedMemories = extractedText });
-            }
-            catch (Exception ex)
-            {
-                // Memory extraction is best-effort — log and continue to summarization
-                Trace.TraceWarning("Memory extraction failed during compaction: {0}", ex.Message);
-            }
-
-            // Step 2: Summarization
-            var summaryMessages = new List<AiChatMessage>
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            var extractionMessages = new List<AiChatMessage>
             {
                 new(Microsoft.Extensions.AI.ChatRole.System,
-                    CompactionPromptBuilder.BuildSummarizationSystemPrompt()),
+                    CompactionPromptBuilder.BuildMemoryExtractionSystemPrompt()),
                 new(Microsoft.Extensions.AI.ChatRole.User,
-                    CompactionPromptBuilder.BuildSummarizationUserPrompt(history))
+                    CompactionPromptBuilder.BuildMemoryExtractionUserPrompt(history))
             };
-            var summaryResponse = await client.GetResponseAsync(summaryMessages);
-            var summaryText = summaryResponse.Messages[^1].Text ?? string.Empty;
-
-            self.Tell(new SummarizationCompleted { Summary = summaryText });
+            var extractionResponse = await client.GetResponseAsync(extractionMessages,
+                cancellationToken: cts.Token);
+            var extractedText = extractionResponse.Messages[^1].Text ?? string.Empty;
+            self.Tell(new MemoryExtractionCompleted { ExtractedMemories = extractedText });
         }
         catch (Exception ex)
         {

@@ -3,96 +3,12 @@ using Netclaw.Actors.Protocol;
 namespace Netclaw.Actors.Sessions;
 
 /// <summary>
-/// Builds structured prompts for the compaction summarization LLM call.
-/// The compaction LLM produces a context summary; recent messages are preserved
-/// verbatim by the caller based on a fixed config value.
+/// Builds structured prompts for pre-compaction memory extraction.
+/// Summarization prompts were removed when compaction switched from
+/// LLM-based abstractive summarization to deterministic extractive reduction.
 /// </summary>
 public static class CompactionPromptBuilder
 {
-    /// <summary>
-    /// Builds the system prompt for the compaction summarization call.
-    /// </summary>
-    public static string BuildSummarizationSystemPrompt()
-    {
-        return """
-            You are a conversation compaction agent. Your job is to produce a context
-            summary of a conversation that will be injected as background context for
-            the assistant to continue working.
-
-            Write the summary in past tense — this is historical context, not
-            instructions. Use phrases like "The user was working on..." or
-            "We investigated..." rather than imperatives like "Do X" or "Continue Y".
-
-            Include these sections as relevant (omit empty ones):
-
-            **Goal**: What the user is working on — the high-level objective.
-
-            **Completed**: What has been accomplished so far.
-
-            **Decisions**: Key decisions made during the conversation and their rationale.
-
-            **Key Facts**: Names, file paths, URLs, configuration values, identifiers,
-            or other specifics needed to continue the work.
-
-            **Tool Findings**: Essential outcomes from tool calls — not full outputs,
-            just the conclusions that matter.
-
-            **Open Items**: Pending questions, next steps, or unresolved issues.
-
-            Keep the summary concise but complete. Prioritize information that the
-            assistant would need to continue the conversation without the user having
-            to repeat themselves.
-            """;
-    }
-
-    /// <summary>
-    /// Builds the user prompt containing the conversation history to summarize.
-    /// </summary>
-    public static string BuildSummarizationUserPrompt(
-        IReadOnlyList<SerializableChatMessage> history)
-    {
-        var sb = new System.Text.StringBuilder();
-        sb.AppendLine("Summarize the following conversation into the structured format described above.");
-        sb.AppendLine();
-        sb.AppendLine("---");
-        sb.AppendLine();
-
-        foreach (var msg in history)
-        {
-            // Skip system prompt — it's preserved separately
-            if (msg.Role == ChatRole.System)
-                continue;
-
-            var roleLabel = msg.Role switch
-            {
-                ChatRole.User => "User",
-                ChatRole.Assistant => "Assistant",
-                ChatRole.Tool => $"Tool ({msg.Name ?? "unknown"})",
-                _ => msg.Role.ToString()
-            };
-
-            sb.AppendLine($"**{roleLabel}:**");
-
-            if (msg.ToolCalls.Count > 0)
-            {
-                foreach (var tc in msg.ToolCalls)
-                {
-                    var args = !string.IsNullOrEmpty(tc.ArgumentsJson) ? $"({tc.ArgumentsJson})" : "";
-                    sb.AppendLine($"[Called tool: {tc.Name}{args}]");
-                }
-            }
-
-            if (!string.IsNullOrEmpty(msg.Content))
-            {
-                sb.AppendLine(msg.Content);
-            }
-
-            sb.AppendLine();
-        }
-
-        return sb.ToString();
-    }
-
     /// <summary>
     /// Builds the system prompt for pre-compaction memory extraction.
     /// </summary>
