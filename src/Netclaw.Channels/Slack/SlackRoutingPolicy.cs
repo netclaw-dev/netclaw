@@ -20,8 +20,19 @@ public static class SlackRoutingPolicy
         if (message.Kind is not SlackInboundKind.Message)
             return SlackRoutingDecision.Ignore;
 
-        if (message.Hidden || !string.IsNullOrWhiteSpace(message.Subtype))
+        if (message.Hidden)
             return SlackRoutingDecision.Ignore;
+
+        // Allow file_share subtype through when files are attached — Slack sends
+        // user-uploaded files as messages with subtype "file_share". All other
+        // subtypes (bot_message, message_changed, channel_join, etc.) are dropped.
+        if (!string.IsNullOrWhiteSpace(message.Subtype))
+        {
+            var isFileShare = string.Equals(message.Subtype, "file_share", StringComparison.Ordinal)
+                && message.Files is { Count: > 0 };
+            if (!isFileShare)
+                return SlackRoutingDecision.Ignore;
+        }
 
         if (message.IsDirectMessage)
             return allowDirectMessages ? SlackRoutingDecision.StartOrContinue : SlackRoutingDecision.Ignore;

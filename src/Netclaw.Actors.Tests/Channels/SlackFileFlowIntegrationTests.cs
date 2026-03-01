@@ -211,39 +211,69 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
     }
 
     [Fact]
-    public void File_share_subtype_is_dropped_by_routing_policy()
+    public async Task File_share_subtype_with_text_flows_through_full_pipeline()
     {
-        // Slack file uploads can arrive as messages with subtype "file_share".
-        // The routing policy currently drops all messages with a non-null subtype.
-        // This test documents the current behavior — if we want to support
-        // file_share subtypes, the routing policy needs updating.
-        var message = new SlackInboundMessage(
+        // Slack file uploads arrive as messages with subtype "file_share".
+        // Both the text and the image must reach the LLM.
+        var pipeline = Host.Services.GetRequiredService<SessionPipeline>();
+        var httpClient = new HttpClient(_httpHandler);
+
+        var deps = new SlackGatewayDependencies(
+            Pipeline: pipeline,
+            ActorSystem: Sys,
+            TimeProvider: TimeProvider.System,
+            Options: new SlackChannelOptions
+            {
+                Enabled = true,
+                MentionOnly = false,
+                AllowDirectMessages = true,
+                BotToken = new SensitiveString("xoxb-fake-token")
+            },
+            BotUserId: new SlackUserId("UBOT"),
+            DefaultChannelId: null,
+            ReplyClient: _replyClient,
+            ContentScanner: new NullContentScanner(),
+            HttpClient: httpClient);
+
+        var gateway = Sys.ActorOf(SlackGatewayActor.CreateProps(deps), "slack-gw-fileshare-test");
+
+        var files = new List<SlackFileReference>
+        {
+            new("F789", "photo.jpg", "image/jpeg", FakePngBytes.Length,
+                "https://files.slack.com/F789/photo.jpg")
+        };
+
+        gateway.Tell(new SlackInboundMessage(
             Kind: SlackInboundKind.Message,
-            EventId: new SlackEventId("C0:3000"),
-            ChannelId: new SlackChannelId("C0"),
+            EventId: new SlackEventId("D2:3000"),
+            ChannelId: new SlackChannelId("D2"),
             ThreadTs: null,
             EventTs: new SlackEventTs("3000.1"),
-            UserId: new SlackUserId("U1"),
+            UserId: new SlackUserId("U_HUMAN"),
             BotId: null,
-            Text: "",
+            Text: "check this out",
             Subtype: "file_share",
             Hidden: false,
-            IsDirectMessage: false,
-            Files: new List<SlackFileReference>
-            {
-                new("F789", "photo.jpg", "image/jpeg", 4096,
-                    "https://files.slack.com/F789/photo.jpg")
-            });
+            IsDirectMessage: true,
+            Files: files));
 
-        var decision = SlackRoutingPolicy.Evaluate(
-            message,
-            mentionOnly: false,
-            allowDirectMessages: false,
-            threadExists: false,
-            containsBotMention: false);
+        await AwaitAssertAsync(() =>
+        {
+            Assert.True(_replyClient.PostedMessages.Count > 0,
+                "Expected at least one Slack reply to be posted");
+        }, duration: TimeSpan.FromSeconds(10));
 
-        // Documents current behavior: file_share subtype is silently dropped
-        Assert.Equal(SlackRoutingDecision.Ignore, decision);
+        Assert.True(_httpHandler.RequestCount > 0, "Expected file download request");
+        Assert.True(_chatClient.ReceivedImageContent,
+            "Expected LLM to receive image content from file_share message");
+
+        var sessionId = new SessionId("D2/3000.1");
+        var mediaDir = Path.Combine(
+            SessionDirectoryHelper.GetSessionDirectory(sessionId), "media");
+        Assert.True(Directory.Exists(mediaDir),
+            $"Expected session media directory: {mediaDir}");
+        Assert.True(Directory.GetFiles(mediaDir).Length > 0,
+            "Expected persisted media files");
     }
 
     /// <summary>

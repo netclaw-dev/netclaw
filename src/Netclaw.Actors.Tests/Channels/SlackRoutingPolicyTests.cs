@@ -136,6 +136,94 @@ public class SlackRoutingPolicyTests
     }
 
     [Fact]
+    public void FileShareSubtype_AllowedThrough_WhenFilesPresent()
+    {
+        var files = new List<SlackFileReference>
+        {
+            new("F1", "photo.jpg", "image/jpeg", 4096, "https://files.slack.com/F1/photo.jpg")
+        };
+        var message = CreateMessage(text: "", threadTs: null, isDirectMessage: false, files: files, subtype: "file_share");
+
+        var decision = SlackRoutingPolicy.Evaluate(
+            message,
+            mentionOnly: false,
+            allowDirectMessages: false,
+            threadExists: false,
+            containsBotMention: false);
+
+        Assert.Equal(SlackRoutingDecision.StartOrContinue, decision);
+    }
+
+    [Fact]
+    public void FileShareSubtype_WithText_AllowedThrough()
+    {
+        var files = new List<SlackFileReference>
+        {
+            new("F1", "photo.jpg", "image/jpeg", 4096, "https://files.slack.com/F1/photo.jpg")
+        };
+        var message = CreateMessage(text: "check this out", threadTs: null, isDirectMessage: false, files: files, subtype: "file_share");
+
+        var decision = SlackRoutingPolicy.Evaluate(
+            message,
+            mentionOnly: false,
+            allowDirectMessages: false,
+            threadExists: false,
+            containsBotMention: false);
+
+        Assert.Equal(SlackRoutingDecision.StartOrContinue, decision);
+    }
+
+    [Fact]
+    public void FileShareSubtype_ContinuesExistingThread()
+    {
+        var files = new List<SlackFileReference>
+        {
+            new("F1", "photo.jpg", "image/jpeg", 4096, "https://files.slack.com/F1/photo.jpg")
+        };
+        var message = CreateMessage(text: "", threadTs: "1740468105.120900", isDirectMessage: false, files: files, subtype: "file_share");
+
+        var decision = SlackRoutingPolicy.Evaluate(
+            message,
+            mentionOnly: true,
+            allowDirectMessages: true,
+            threadExists: true,
+            containsBotMention: false);
+
+        Assert.Equal(SlackRoutingDecision.ContinueOnly, decision);
+    }
+
+    [Fact]
+    public void FileShareSubtype_Ignored_WhenNoFilesActuallyPresent()
+    {
+        // file_share subtype but files list is empty — treat as non-content message
+        var message = CreateMessage(text: "", threadTs: null, isDirectMessage: false, files: null, subtype: "file_share");
+
+        var decision = SlackRoutingPolicy.Evaluate(
+            message,
+            mentionOnly: false,
+            allowDirectMessages: false,
+            threadExists: false,
+            containsBotMention: false);
+
+        Assert.Equal(SlackRoutingDecision.Ignore, decision);
+    }
+
+    [Fact]
+    public void BotMessageSubtype_StillIgnored()
+    {
+        var message = CreateMessage(text: "bot output", threadTs: null, isDirectMessage: false, subtype: "bot_message");
+
+        var decision = SlackRoutingPolicy.Evaluate(
+            message,
+            mentionOnly: false,
+            allowDirectMessages: false,
+            threadExists: false,
+            containsBotMention: false);
+
+        Assert.Equal(SlackRoutingDecision.Ignore, decision);
+    }
+
+    [Fact]
     public void NoTextNoFiles_Ignored()
     {
         var message = CreateMessage(text: "", threadTs: null, isDirectMessage: false);
@@ -154,7 +242,8 @@ public class SlackRoutingPolicyTests
         string text,
         string? threadTs,
         bool isDirectMessage,
-        IReadOnlyList<SlackFileReference>? files = null)
+        IReadOnlyList<SlackFileReference>? files = null,
+        string? subtype = null)
     {
         return new SlackInboundMessage(
             Kind: SlackInboundKind.Message,
@@ -165,7 +254,7 @@ public class SlackRoutingPolicyTests
             UserId: new SlackUserId("U123"),
             BotId: null,
             Text: text,
-            Subtype: null,
+            Subtype: subtype,
             Hidden: false,
             IsDirectMessage: isDirectMessage,
             Files: files);
