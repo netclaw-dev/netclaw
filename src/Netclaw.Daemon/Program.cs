@@ -166,13 +166,15 @@ static void ConfigureDaemonServices(
     // any provider since OpenRouter indexes most publicly available models.
     var inputModalities = models.Main.InputModalities;
     var outputModalities = models.Main.OutputModalities;
-    if (inputModalities is null || outputModalities is null)
+    int? contextWindow = models.Main.ContextWindow;
+    if (inputModalities is null || outputModalities is null || contextWindow is null)
     {
         var detected = ResolveStartupCapabilities(models.Main.ModelId, daemonLogLevel);
         if (detected is not null)
         {
             inputModalities ??= detected.InputModalities;
             outputModalities ??= detected.OutputModalities;
+            contextWindow ??= detected.ContextWindowTokens;
         }
     }
 
@@ -181,7 +183,7 @@ static void ConfigureDaemonServices(
     var resolvedSessionConfig = sessionConfig with
     {
         ModelId = models.Main.ModelId,
-        ContextWindowTokens = models.Main.ContextWindow ?? 32_768,
+        ContextWindowTokens = contextWindow ?? 32_768,
         CompactionModelId = models.Compaction?.ModelId,
         InputModalities = inputModalities ?? ModelModality.Text,
         OutputModalities = outputModalities ?? ModelModality.Text,
@@ -363,8 +365,9 @@ static ResolvedModelCapabilities? ResolveStartupCapabilities(string modelId, Log
         if (result is not null)
         {
             logger.LogInformation(
-                "Auto-detected model capabilities for {ModelId}: input={Input}, output={Output}",
-                modelId, result.InputModalities, result.OutputModalities);
+                "Auto-detected model capabilities for {ModelId}: input={Input}, output={Output}, context_window={ContextWindow}",
+                modelId, result.InputModalities, result.OutputModalities,
+                result.ContextWindowTokens?.ToString() ?? "unknown");
         }
         else
         {

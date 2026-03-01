@@ -81,6 +81,8 @@ public partial class InitWizardViewModel : ReactiveViewModel
     public string? SlackAppToken { get; set; }
     public bool SlackEnabled { get; set; }
     public string? SlackChannelNamesInput { get; set; }
+    public bool SlackAllowDirectMessages { get; set; }
+    public string? SlackAllowedUserIdsInput { get; set; }
     internal SlackChannelResolutionResult? LastChannelResolution { get; private set; }
 
     // ── Step 3: ACL ──
@@ -334,6 +336,13 @@ public partial class InitWizardViewModel : ReactiveViewModel
             : input.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
                 .Select(n => n.TrimStart('#').Trim())
                 .Where(n => !string.IsNullOrWhiteSpace(n))
+                .ToList();
+
+    private static IReadOnlyList<string> ParseUserIds(string? input)
+        => string.IsNullOrWhiteSpace(input)
+            ? []
+            : input.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Where(id => !string.IsNullOrWhiteSpace(id))
                 .ToList();
 
     private async Task RunHealthCheckAsync()
@@ -599,6 +608,17 @@ public partial class InitWizardViewModel : ReactiveViewModel
                 var ids = LastChannelResolution.Resolved.Select(r => r.Id).ToArray();
                 slackSection["AllowedChannelIds"] = ids;
                 slackSection["DefaultChannelId"] = ids[0];
+            }
+
+            if (SlackAllowDirectMessages)
+            {
+                slackSection["AllowDirectMessages"] = true;
+            }
+
+            var userIds = ParseUserIds(SlackAllowedUserIdsInput);
+            if (userIds.Count > 0)
+            {
+                slackSection["AllowedUserIds"] = userIds.ToArray();
             }
 
             config["Slack"] = slackSection;

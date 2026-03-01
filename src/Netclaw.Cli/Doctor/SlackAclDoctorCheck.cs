@@ -26,6 +26,17 @@ public sealed class SlackAclDoctorCheck(NetclawPaths paths) : IDoctorCheck
                 "Set `Slack:AllowedChannelIds` or `Slack:DefaultChannelId`/`Slack:DefaultChannelName`."));
         }
 
+        var allowDirectMessages = ReadBool(slack, "AllowDirectMessages");
+        var allowedUserIds = ReadStringArray(slack, "AllowedUserIds");
+
+        if (allowDirectMessages && allowedUserIds.Count == 0)
+        {
+            return Task.FromResult(DoctorCheckResult.Warning(
+                "Slack ACL",
+                "Slack DMs enabled with no user allowlist; any workspace member can DM the bot.",
+                "Set `Slack:AllowedUserIds` to restrict DM access."));
+        }
+
         return Task.FromResult(DoctorCheckResult.Pass("Slack ACL", "Slack channel policy has explicit channel scope."));
     }
 

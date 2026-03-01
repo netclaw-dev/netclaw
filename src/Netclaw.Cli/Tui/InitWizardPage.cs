@@ -33,6 +33,8 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
     private TextInputNode? _slackAppTokenInput;
     private TextInputNode? _slackChannelNamesInput;
     private SelectionListNode<string>? _slackEnabledList;
+    private SelectionListNode<string>? _slackDmEnabledList;
+    private TextInputNode? _slackAllowedUserIdsInput;
 
     // Step 3: ACL
     private TextInputNode? _ownerIdentityInput;
@@ -208,6 +210,10 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
                     "  Enable Slack to connect Netclaw as a Slack bot.",
                 WizardStep.ChatServices when _chatServicesSubStep == 3 =>
                     "  Channel names separated by commas. Bot needs channels:read scope to resolve.",
+                WizardStep.ChatServices when _chatServicesSubStep == 4 =>
+                    "  DMs create a private session per conversation. Each top-level DM starts a new session.",
+                WizardStep.ChatServices when _chatServicesSubStep == 5 =>
+                    "  Restrict DM access to specific Slack user IDs. Leave blank to allow all workspace members.",
                 WizardStep.ChatServices =>
                     "  Socket Mode requires both tokens. See: https://api.slack.com/apis/socket-mode",
                 WizardStep.Acl =>
@@ -568,6 +574,8 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             1 => BuildSlackBotTokenSubStep(),
             2 => BuildSlackAppTokenSubStep(),
             3 => BuildSlackChannelNamesSubStep(),
+            4 => BuildSlackDmEnabledSubStep(),
+            5 => BuildSlackAllowedUserIdsSubStep(),
             _ => Layouts.Empty()
         };
     }
@@ -676,8 +684,7 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             .Subscribe(text =>
             {
                 ViewModel.SlackChannelNamesInput = string.IsNullOrWhiteSpace(text) ? null : text;
-                _chatServicesSubStep = 0;
-                ViewModel.GoNext();
+                SetChatServicesSubStep(4);
             })
             .DisposeWith(_stepSubs);
 
@@ -688,6 +695,71 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
                 .WithBorder(BorderStyle.Rounded)
                 .WithBorderColor(Color.Gray)
                 .WithContent(_slackChannelNamesInput)
+                .Height(3));
+    }
+
+    private ILayoutNode BuildSlackDmEnabledSubStep()
+    {
+        _slackDmEnabledList = Layouts.SelectionList(
+                "Yes \u2014 allow approved users to DM the bot",
+                "No \u2014 channel messages only (default)")
+            .WithMode(SelectionMode.Single)
+            .WithHighlightColors(Color.Black, Color.Cyan);
+
+        _slackDmEnabledList.OnFocused();
+        _lastFocusedList = _slackDmEnabledList;
+
+        _slackDmEnabledList.SelectionConfirmed
+            .Subscribe(selected =>
+            {
+                if (selected.Count > 0)
+                {
+                    ViewModel.SlackAllowDirectMessages = selected[0].StartsWith("Yes", StringComparison.Ordinal);
+                    if (ViewModel.SlackAllowDirectMessages)
+                    {
+                        SetChatServicesSubStep(5);
+                    }
+                    else
+                    {
+                        _chatServicesSubStep = 0;
+                        ViewModel.GoNext();
+                    }
+                }
+            })
+            .DisposeWith(_stepSubs);
+
+        return Layouts.Vertical()
+            .WithChild(new TextNode("  Allow direct messages?").WithForeground(Color.White))
+            .WithChild(_slackDmEnabledList);
+    }
+
+    private ILayoutNode BuildSlackAllowedUserIdsSubStep()
+    {
+        _slackAllowedUserIdsInput = new TextInputNode()
+            .WithPlaceholder("U01ABC123, U02DEF456  (Slack user IDs, comma-separated)");
+
+        if (!string.IsNullOrWhiteSpace(ViewModel.SlackAllowedUserIdsInput))
+            _slackAllowedUserIdsInput.Text = ViewModel.SlackAllowedUserIdsInput;
+
+        _slackAllowedUserIdsInput.OnFocused();
+        _lastFocusedInput = _slackAllowedUserIdsInput;
+
+        _slackAllowedUserIdsInput.Submitted
+            .Subscribe(text =>
+            {
+                ViewModel.SlackAllowedUserIdsInput = string.IsNullOrWhiteSpace(text) ? null : text;
+                _chatServicesSubStep = 0;
+                ViewModel.GoNext();
+            })
+            .DisposeWith(_stepSubs);
+
+        return Layouts.Vertical()
+            .WithChild(new TextNode("  Allowed user IDs (press Enter to skip):").WithForeground(Color.White))
+            .WithChild(new PanelNode()
+                .WithTitle("Allowed User IDs")
+                .WithBorder(BorderStyle.Rounded)
+                .WithBorderColor(Color.Gray)
+                .WithContent(_slackAllowedUserIdsInput)
                 .Height(3));
     }
 
@@ -1188,6 +1260,7 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             WizardStep.Provider when _providerSubStep == 1 => _authMethodList,
             WizardStep.Provider when _providerSubStep == 4 && !_manualModelEntry => _modelList,
             WizardStep.ChatServices when _chatServicesSubStep == 0 => _slackEnabledList,
+            WizardStep.ChatServices when _chatServicesSubStep == 4 => _slackDmEnabledList,
             WizardStep.Search when _searchSubStep == 0 => _searchBackendList,
             WizardStep.Exposure => _exposureList,
             WizardStep.Identity when _identitySubStep == 1 => _commStyleList,
@@ -1205,6 +1278,7 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             WizardStep.ChatServices when _chatServicesSubStep == 1 => _slackBotTokenInput,
             WizardStep.ChatServices when _chatServicesSubStep == 2 => _slackAppTokenInput,
             WizardStep.ChatServices when _chatServicesSubStep == 3 => _slackChannelNamesInput,
+            WizardStep.ChatServices when _chatServicesSubStep == 5 => _slackAllowedUserIdsInput,
             WizardStep.Search when _searchSubStep == 1 && _braveApiKeyInput is not null => _braveApiKeyInput,
             WizardStep.Search when _searchSubStep == 1 => _searxngEndpointInput,
             WizardStep.Acl => _ownerIdentityInput,

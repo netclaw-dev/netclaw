@@ -100,6 +100,52 @@ public sealed class OpenRouterOracleResolverTests
     }
 
     [Fact]
+    public void ParseCatalog_ContextLength_Parsed()
+    {
+        const string json = """
+        {
+          "data": [
+            {
+              "id": "qwen/qwen3.5-35b-a3b",
+              "context_length": 262144,
+              "architecture": {
+                "input_modalities": ["text"],
+                "output_modalities": ["text"]
+              }
+            }
+          ]
+        }
+        """;
+
+        var catalog = OpenRouterOracleResolver.ParseCatalog(json);
+
+        var caps = catalog["qwen/qwen3.5-35b-a3b"];
+        Assert.Equal(262_144, caps.ContextWindowTokens);
+    }
+
+    [Fact]
+    public void ParseCatalog_NoContextLength_ReturnsNull()
+    {
+        const string json = """
+        {
+          "data": [
+            {
+              "id": "some/model",
+              "architecture": {
+                "input_modalities": ["text"],
+                "output_modalities": ["text"]
+              }
+            }
+          ]
+        }
+        """;
+
+        var catalog = OpenRouterOracleResolver.ParseCatalog(json);
+
+        Assert.Null(catalog["some/model"].ContextWindowTokens);
+    }
+
+    [Fact]
     public void ParseCatalog_EmptyData()
     {
         const string json = """{"data": []}""";

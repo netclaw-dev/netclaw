@@ -104,6 +104,7 @@ public sealed class OpenRouterOracleResolver : IModelCapabilityResolver
 
             var input = ModelModality.Text;
             var output = ModelModality.Text;
+            int? contextWindow = null;
 
             if (model.TryGetProperty("architecture", out var arch))
             {
@@ -113,7 +114,13 @@ public sealed class OpenRouterOracleResolver : IModelCapabilityResolver
                     output = ParseModalityArray(outputMods);
             }
 
-            result[id] = new ResolvedModelCapabilities(id, input, output);
+            if (model.TryGetProperty("context_length", out var ctxLen) &&
+                ctxLen.ValueKind == JsonValueKind.Number)
+            {
+                contextWindow = ctxLen.GetInt32();
+            }
+
+            result[id] = new ResolvedModelCapabilities(id, input, output, contextWindow);
         }
 
         return result;
