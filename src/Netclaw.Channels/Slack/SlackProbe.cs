@@ -10,7 +10,7 @@ public sealed record SlackProbeResult(
     bool Success,
     string? ErrorMessage,
     string? TeamName,
-    string? BotUserId);
+    SlackUserId? BotUserId);
 
 /// <summary>
 /// A Slack channel resolved from a user-provided name to its API ID.
@@ -78,7 +78,8 @@ public sealed class SlackProbe : ISlackProbe
             {
                 var team = root.TryGetProperty("team", out var teamProp) ? teamProp.GetString() : null;
                 var userId = root.TryGetProperty("user_id", out var userProp) ? userProp.GetString() : null;
-                return new SlackProbeResult(true, null, team, userId);
+                return new SlackProbeResult(true, null, team,
+                    userId is not null ? new SlackUserId(userId) : null);
             }
 
             var error = root.TryGetProperty("error", out var errProp) ? errProp.GetString() : "unknown_error";

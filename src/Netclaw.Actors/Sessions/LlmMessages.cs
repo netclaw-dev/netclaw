@@ -1,4 +1,5 @@
 using Microsoft.Extensions.AI;
+using Netclaw.Tools;
 
 namespace Netclaw.Actors.Sessions;
 
@@ -37,6 +38,7 @@ internal sealed record LlmCallFailed
 internal sealed record ToolExecutionCompleted
 {
     public required List<Protocol.SerializableChatMessage> ToolResults { get; init; }
+    public List<FileAttachmentInfo> FileAttachments { get; init; } = [];
 }
 
 /// <summary>

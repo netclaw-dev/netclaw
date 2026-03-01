@@ -9,7 +9,9 @@ public static class SlackRoutingPolicy
         bool threadExists,
         bool containsBotMention)
     {
-        if (string.IsNullOrWhiteSpace(message.Text))
+        var hasContent = !string.IsNullOrWhiteSpace(message.Text)
+                        || message.Files is { Count: > 0 };
+        if (!hasContent)
             return SlackRoutingDecision.Ignore;
 
         if (message.Kind is SlackInboundKind.AppMention)
@@ -18,8 +20,19 @@ public static class SlackRoutingPolicy
         if (message.Kind is not SlackInboundKind.Message)
             return SlackRoutingDecision.Ignore;
 
-        if (message.Hidden || !string.IsNullOrWhiteSpace(message.Subtype))
+        if (message.Hidden)
             return SlackRoutingDecision.Ignore;
+
+        // Allow file_share subtype through when files are attached — Slack sends
+        // user-uploaded files as messages with subtype "file_share". All other
+        // subtypes (bot_message, message_changed, channel_join, etc.) are dropped.
+        if (!string.IsNullOrWhiteSpace(message.Subtype))
+        {
+            var isFileShare = string.Equals(message.Subtype, "file_share", StringComparison.Ordinal)
+                && message.Files is { Count: > 0 };
+            if (!isFileShare)
+                return SlackRoutingDecision.Ignore;
+        }
 
         if (message.IsDirectMessage)
             return allowDirectMessages ? SlackRoutingDecision.StartOrContinue : SlackRoutingDecision.Ignore;
@@ -31,8 +44,8 @@ public static class SlackRoutingPolicy
         // the message has a ThreadTs different from its EventTs, meaning
         // Slack knows this is a reply in an existing thread. Re-create
         // the thread actor and continue the persisted session.
-        var isThreadReply = !string.IsNullOrWhiteSpace(message.ThreadTs)
-            && !string.Equals(message.ThreadTs, message.EventTs, StringComparison.Ordinal);
+        var isThreadReply = message.ThreadTs is { } threadTs
+            && !string.Equals(threadTs.Value, message.EventTs.Value, StringComparison.Ordinal);
         if (isThreadReply)
             return SlackRoutingDecision.StartOrContinue;
 

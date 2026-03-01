@@ -42,6 +42,7 @@ public sealed partial class AttachFileTool : NetclawTool<AttachFileTool.Params>
         var sanitizedFilename = FilenameSanitizer.Sanitize(rawFilename);
         var mimeType = GuessMimeType(filePath);
 
+        context.AddFileAttachment(filePath, sanitizedFilename, mimeType);
         return Task.FromResult($"File attached: {sanitizedFilename} ({mimeType}) at {filePath}");
     }
 

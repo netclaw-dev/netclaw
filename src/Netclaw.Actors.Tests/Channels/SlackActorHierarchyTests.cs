@@ -45,7 +45,7 @@ public sealed class SlackActorHierarchyTests(ITestOutputHelper output) : TestKit
         var deps = CreateDependencies(
             threadPropsFactory: (_, _, _, _) => Props.Create(() => new ForwardActor(sink.Ref)));
 
-        var conversation = Sys.ActorOf(SlackConversationActor.CreateProps("C1", deps), "slack-conversation-test-1");
+        var conversation = Sys.ActorOf(SlackConversationActor.CreateProps(new SlackChannelId("C1"), deps), "slack-conversation-test-1");
 
         conversation.Tell(CreateMessage(
             eventId: "C1:200",
@@ -85,7 +85,7 @@ public sealed class SlackActorHierarchyTests(ITestOutputHelper output) : TestKit
         var deps = CreateDependencies(
             threadPropsFactory: (_, _, _, _) => Props.Create(() => new ForwardActor(sink.Ref)));
 
-        var conversation = Sys.ActorOf(SlackConversationActor.CreateProps("D1", deps), "slack-conversation-test-2");
+        var conversation = Sys.ActorOf(SlackConversationActor.CreateProps(new SlackChannelId("D1"), deps), "slack-conversation-test-2");
 
         conversation.Tell(CreateMessage(
             eventId: "D1:300",
@@ -101,22 +101,79 @@ public sealed class SlackActorHierarchyTests(ITestOutputHelper output) : TestKit
     }
 
     [Fact]
+    public void Conversation_forwards_files_from_app_mention()
+    {
+        var sink = CreateTestProbe("files-mention-sink");
+        var deps = CreateDependencies(
+            threadPropsFactory: (_, _, _, _) => Props.Create(() => new ForwardActor(sink.Ref)));
+
+        var conversation = Sys.ActorOf(SlackConversationActor.CreateProps(new SlackChannelId("C1"), deps), "slack-conversation-test-files-1");
+
+        var files = new List<SlackFileReference>
+        {
+            new("F1", "image.png", "image/png", 2048, "https://files.slack.com/F1/image.png")
+        };
+
+        conversation.Tell(CreateAppMention(
+            eventId: "C1:500",
+            channelId: "C1",
+            eventTs: "500.1",
+            text: "<@UBOT> check this",
+            files: files));
+
+        var inbound = sink.ExpectMsg<SlackThreadInbound>();
+        Assert.Equal("check this", inbound.Text);
+        Assert.NotNull(inbound.Files);
+        Assert.Single(inbound.Files);
+        Assert.Equal("F1", inbound.Files[0].Id);
+    }
+
+    [Fact]
+    public void Conversation_forwards_files_when_normalized_text_empty()
+    {
+        var sink = CreateTestProbe("files-empty-text-sink");
+        var deps = CreateDependencies(
+            threadPropsFactory: (_, _, _, _) => Props.Create(() => new ForwardActor(sink.Ref)));
+
+        var conversation = Sys.ActorOf(SlackConversationActor.CreateProps(new SlackChannelId("C1"), deps), "slack-conversation-test-files-2");
+
+        var files = new List<SlackFileReference>
+        {
+            new("F2", "photo.jpg", "image/jpeg", 4096, "https://files.slack.com/F2/photo.jpg")
+        };
+
+        // AppMention with only the bot mention — normalized text will be empty but files exist
+        conversation.Tell(CreateAppMention(
+            eventId: "C1:600",
+            channelId: "C1",
+            eventTs: "600.1",
+            text: "<@UBOT>",
+            files: files));
+
+        var inbound = sink.ExpectMsg<SlackThreadInbound>();
+        Assert.Equal(string.Empty, inbound.Text);
+        Assert.NotNull(inbound.Files);
+        Assert.Single(inbound.Files);
+        Assert.Equal("F2", inbound.Files[0].Id);
+    }
+
+    [Fact]
     public void Conversation_ignores_bot_messages_to_prevent_feedback_loop()
     {
         var sink = CreateTestProbe("bot-loop-sink");
         var deps = CreateDependencies(
             threadPropsFactory: (_, _, _, _) => Props.Create(() => new ForwardActor(sink.Ref)));
 
-        var conversation = Sys.ActorOf(SlackConversationActor.CreateProps("C1", deps), "slack-conversation-test-3");
+        var conversation = Sys.ActorOf(SlackConversationActor.CreateProps(new SlackChannelId("C1"), deps), "slack-conversation-test-3");
 
         conversation.Tell(new SlackInboundMessage(
             Kind: SlackInboundKind.Message,
-            EventId: "C1:400",
-            ChannelId: "C1",
-            ThreadTs: "400.1",
-            EventTs: "400.2",
-            UserId: "UBOT",
-            BotId: "B1",
+            EventId: new SlackEventId("C1:400"),
+            ChannelId: new SlackChannelId("C1"),
+            ThreadTs: new SlackThreadTs("400.1"),
+            EventTs: new SlackEventTs("400.2"),
+            UserId: new SlackUserId("UBOT"),
+            BotId: new SlackBotId("B1"),
             Text: "bot output",
             Subtype: "bot_message",
             Hidden: false,
@@ -126,8 +183,8 @@ public sealed class SlackActorHierarchyTests(ITestOutputHelper output) : TestKit
     }
 
     private static SlackGatewayDependencies CreateDependencies(
-        Func<string, SlackGatewayDependencies, Props>? conversationPropsFactory = null,
-        Func<SessionId, string, string, SlackGatewayDependencies, Props>? threadPropsFactory = null)
+        Func<SlackChannelId, SlackGatewayDependencies, Props>? conversationPropsFactory = null,
+        Func<SessionId, SlackChannelId, SlackThreadTs, SlackGatewayDependencies, Props>? threadPropsFactory = null)
     {
         return new SlackGatewayDependencies(
             Pipeline: null!,
@@ -139,7 +196,7 @@ public sealed class SlackActorHierarchyTests(ITestOutputHelper output) : TestKit
                 AllowDirectMessages = true,
                 AllowedChannelIds = ["C1"]
             },
-            BotUserId: "UBOT",
+            BotUserId: new SlackUserId("UBOT"),
             DefaultChannelId: null,
             ReplyClient: new NoopReplyClient(),
             ContentScanner: new NullContentScanner(),
@@ -153,40 +210,44 @@ public sealed class SlackActorHierarchyTests(ITestOutputHelper output) : TestKit
         string eventTs,
         string text = "hello",
         string? threadTs = null,
-        bool isDirectMessage = false)
+        bool isDirectMessage = false,
+        IReadOnlyList<SlackFileReference>? files = null)
     {
         return new SlackInboundMessage(
             Kind: SlackInboundKind.Message,
-            EventId: eventId,
-            ChannelId: channelId,
-            ThreadTs: threadTs,
-            EventTs: eventTs,
-            UserId: "U1",
+            EventId: new SlackEventId(eventId),
+            ChannelId: new SlackChannelId(channelId),
+            ThreadTs: threadTs is not null ? new SlackThreadTs(threadTs) : null,
+            EventTs: new SlackEventTs(eventTs),
+            UserId: new SlackUserId("U1"),
             BotId: null,
             Text: text,
             Subtype: null,
             Hidden: false,
-            IsDirectMessage: isDirectMessage);
+            IsDirectMessage: isDirectMessage,
+            Files: files);
     }
 
     private static SlackInboundMessage CreateAppMention(
         string eventId,
         string channelId,
         string eventTs,
-        string text)
+        string text,
+        IReadOnlyList<SlackFileReference>? files = null)
     {
         return new SlackInboundMessage(
             Kind: SlackInboundKind.AppMention,
-            EventId: eventId,
-            ChannelId: channelId,
+            EventId: new SlackEventId(eventId),
+            ChannelId: new SlackChannelId(channelId),
             ThreadTs: null,
-            EventTs: eventTs,
-            UserId: "U1",
+            EventTs: new SlackEventTs(eventTs),
+            UserId: new SlackUserId("U1"),
             BotId: null,
             Text: text,
             Subtype: null,
             Hidden: false,
-            IsDirectMessage: false);
+            IsDirectMessage: false,
+            Files: files);
     }
 
     private sealed class ForwardActor : ReceiveActor
@@ -202,7 +263,7 @@ public sealed class SlackActorHierarchyTests(ITestOutputHelper output) : TestKit
         public Task PostThreadReplyAsync(SlackPostMessage message, CancellationToken cancellationToken = default)
             => Task.CompletedTask;
 
-        public Task UploadFileToThreadAsync(string channelId, string threadTs, string filePath, string? filename = null, CancellationToken cancellationToken = default)
+        public Task UploadFileToThreadAsync(SlackChannelId channelId, SlackThreadTs threadTs, string filePath, string? filename = null, CancellationToken cancellationToken = default)
             => Task.CompletedTask;
     }
 }

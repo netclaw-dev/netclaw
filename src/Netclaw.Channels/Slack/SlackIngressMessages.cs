@@ -17,12 +17,12 @@ public sealed record SlackFileReference(
 
 public sealed record SlackInboundMessage(
     SlackInboundKind Kind,
-    string EventId,
-    string ChannelId,
-    string? ThreadTs,
-    string EventTs,
-    string? UserId,
-    string? BotId,
+    SlackEventId EventId,
+    SlackChannelId ChannelId,
+    SlackThreadTs? ThreadTs,
+    SlackEventTs EventTs,
+    SlackUserId? UserId,
+    SlackBotId? BotId,
     string Text,
     string? Subtype,
     bool Hidden,
@@ -31,14 +31,14 @@ public sealed record SlackInboundMessage(
 
 public sealed record SlackThreadInbound(
     SessionId SessionId,
-    string ChannelId,
-    string ThreadTs,
+    SlackChannelId ChannelId,
+    SlackThreadTs ThreadTs,
     string SenderId,
     string Text,
     DateTimeOffset ReceivedAt,
     IReadOnlyList<SlackFileReference>? Files = null);
 
 public sealed record SlackPostMessage(
-    string ChannelId,
-    string ThreadTs,
+    SlackChannelId ChannelId,
+    SlackThreadTs ThreadTs,
     string Text);

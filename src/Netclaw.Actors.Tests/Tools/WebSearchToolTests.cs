@@ -1,4 +1,5 @@
 using Netclaw.Actors.Tools;
+using Netclaw.Search;
 using Xunit;
 
 namespace Netclaw.Actors.Tests.Tools;
@@ -6,96 +7,53 @@ namespace Netclaw.Actors.Tests.Tools;
 public class WebSearchToolTests
 {
     [Fact]
-    public void ParseResults_extracts_all_results_from_akka_fixture()
+    public async Task ExecuteAsync_returns_formatted_results_from_backend()
     {
-        var html = LoadFixture("ddg-lite-akka-dotnet.html");
-        var results = WebSearchTool.ParseResults(html, 30);
+        var backend = new FakeSearchBackend(new SearchBackendResult.Success(
+        [
+            new SearchResult("Akka.NET", "https://getakka.net", "Actor framework for .NET"),
+            new SearchResult("GitHub", "https://github.com/akkadotnet/akka.net", "Source code"),
+        ]));
 
-        Assert.Equal(10, results.Count);
+        var tool = new WebSearchTool(backend);
+        var result = await tool.ExecuteAsync(
+            new Dictionary<string, object?> { ["Query"] = "akka.net" });
+
+        Assert.Contains("Akka.NET", result);
+        Assert.Contains("https://getakka.net", result);
+        Assert.Contains("Actor framework", result);
     }
 
     [Fact]
-    public void ParseResults_extracts_titles_and_urls()
+    public async Task ExecuteAsync_returns_error_from_backend()
     {
-        var html = LoadFixture("ddg-lite-akka-dotnet.html");
-        var results = WebSearchTool.ParseResults(html, 30);
+        var backend = new FakeSearchBackend(
+            new SearchBackendResult.Error("Bot detection triggered"));
 
-        var first = results[0];
-        Assert.Contains("akka.net", first.Url);
-        Assert.Contains("GitHub", first.Title);
+        var tool = new WebSearchTool(backend);
+        var result = await tool.ExecuteAsync(
+            new Dictionary<string, object?> { ["Query"] = "test" });
+
+        Assert.Contains("Error:", result);
+        Assert.Contains("Bot detection triggered", result);
     }
 
     [Fact]
-    public void ParseResults_extracts_snippets()
+    public async Task ExecuteAsync_returns_no_results_message()
     {
-        var html = LoadFixture("ddg-lite-akka-dotnet.html");
-        var results = WebSearchTool.ParseResults(html, 30);
+        var backend = new FakeSearchBackend(
+            new SearchBackendResult.Success([]));
 
-        var first = results[0];
-        Assert.NotEmpty(first.Snippet);
-        Assert.Contains("actor", first.Snippet, StringComparison.OrdinalIgnoreCase);
+        var tool = new WebSearchTool(backend);
+        var result = await tool.ExecuteAsync(
+            new Dictionary<string, object?> { ["Query"] = "xyzzy" });
+
+        Assert.Contains("No results found", result);
     }
 
-    [Fact]
-    public void ParseResults_respects_max_results()
+    private sealed class FakeSearchBackend(SearchBackendResult result) : ISearchBackend
     {
-        var html = LoadFixture("ddg-lite-akka-dotnet.html");
-        var results = WebSearchTool.ParseResults(html, 3);
-
-        Assert.Equal(3, results.Count);
-    }
-
-    [Fact]
-    public void ParseResults_handles_pizza_recipe_fixture()
-    {
-        var html = LoadFixture("ddg-lite-pizza-recipe.html");
-        var results = WebSearchTool.ParseResults(html, 30);
-
-        Assert.NotEmpty(results);
-        // All results should have non-empty URLs
-        Assert.All(results, r => Assert.False(string.IsNullOrEmpty(r.Url)));
-        Assert.All(results, r => Assert.False(string.IsNullOrEmpty(r.Title)));
-    }
-
-    [Fact]
-    public void ParseResults_returns_empty_for_no_results()
-    {
-        var html = "<html><body><table></table></body></html>";
-        var results = WebSearchTool.ParseResults(html, 10);
-
-        Assert.Empty(results);
-    }
-
-    [Fact]
-    public void ParseResults_decodes_html_entities_in_snippets()
-    {
-        var html = LoadFixture("ddg-lite-akka-dotnet.html");
-        var results = WebSearchTool.ParseResults(html, 30);
-
-        // HTML entities like &amp; &#x27; should be decoded
-        Assert.All(results, r =>
-        {
-            Assert.DoesNotContain("&amp;", r.Snippet);
-            Assert.DoesNotContain("&#x27;", r.Snippet);
-        });
-    }
-
-    [Fact]
-    public void ParseResults_urls_are_absolute()
-    {
-        var html = LoadFixture("ddg-lite-akka-dotnet.html");
-        var results = WebSearchTool.ParseResults(html, 30);
-
-        Assert.All(results, r => Assert.StartsWith("http", r.Url));
-    }
-
-    private static string LoadFixture(string filename)
-    {
-        var assembly = typeof(WebSearchToolTests).Assembly;
-        var resourceName = $"Netclaw.Actors.Tests.Tools.Fixtures.{filename}";
-        using var stream = assembly.GetManifestResourceStream(resourceName)
-            ?? throw new FileNotFoundException($"Fixture not found: {resourceName}");
-        using var reader = new StreamReader(stream);
-        return reader.ReadToEnd();
+        public Task<SearchBackendResult> SearchAsync(string query, int maxResults, CancellationToken ct)
+            => Task.FromResult(result);
     }
 }

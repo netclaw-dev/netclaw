@@ -1,0 +1,36 @@
+{
+  "query": "akka.net dotnet",
+  "number_of_results": 3,
+  "results": [
+    {
+      "url": "https://github.com/akkadotnet/akka.net",
+      "title": "akkadotnet/akka.net: Akka.NET - concurrent, distributed systems",
+      "content": "Akka.NET is a .NET port of the popular Akka framework for building highly concurrent, distributed, and fault-tolerant event-driven applications.",
+      "engine": "google",
+      "parsed_url": ["https", "github.com", "/akkadotnet/akka.net", "", "", ""],
+      "positions": [1],
+      "score": 9.0,
+      "category": "general"
+    },
+    {
+      "url": "https://getakka.net/",
+      "title": "Akka.NET | Akka.NET",
+      "content": "Akka.NET is a professional-grade port of the popular Java/Scala framework Akka distributed actor framework to .NET.",
+      "engine": "duckduckgo",
+      "parsed_url": ["https", "getakka.net", "/", "", "", ""],
+      "positions": [2],
+      "score": 8.0,
+      "category": "general"
+    },
+    {
+      "url": "https://petabridge.com/blog/intro-to-akka-net/",
+      "title": "Introduction to Akka.NET | Petabridge",
+      "content": "Learn how to build concurrent and distributed applications using Akka.NET, the .NET implementation of the actor model.",
+      "engine": "google",
+      "parsed_url": ["https", "petabridge.com", "/blog/intro-to-akka-net/", "", "", ""],
+      "positions": [3],
+      "score": 7.0,
+      "category": "general"
+    }
+  ]
+}

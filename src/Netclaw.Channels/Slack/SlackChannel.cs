@@ -24,8 +24,8 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
     private readonly ILogger<SlackChannel> _logger;
 
     private IActorRef? _gateway;
-    private string? _botUserId;
-    private string? _defaultChannelId;
+    private SlackUserId? _botUserId;
+    private SlackChannelId? _defaultChannelId;
     private volatile bool _connected;
 
     public SlackChannel(
@@ -79,8 +79,9 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
             throw new InvalidOperationException("Slack channel currently supports Socket Mode only.");
 
         var auth = await _slack.Auth.Test(cancellationToken);
-        _botUserId = auth.UserId;
-        _defaultChannelId = await ResolveDefaultChannelIdAsync(cancellationToken);
+        _botUserId = !string.IsNullOrWhiteSpace(auth.UserId) ? new SlackUserId(auth.UserId) : null;
+        var resolvedChannelId = await ResolveDefaultChannelIdAsync(cancellationToken);
+        _defaultChannelId = resolvedChannelId is not null ? new SlackChannelId(resolvedChannelId) : null;
 
         var httpClient = _httpClientFactory.CreateClient("slack-files");
 
@@ -127,6 +128,7 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
     {
         // Map Slack file attachments to SlackFileReference
         var files = MapSlackFiles(slackEvent.Files);
+        var channelId = new SlackChannelId(slackEvent.Channel);
 
         _gateway?.Tell(new SlackInboundMessage(
             Kind: SlackInboundKind.Message,
@@ -136,15 +138,15 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
                 threadTs: slackEvent.ThreadTs,
                 userId: slackEvent.User,
                 text: slackEvent.Text),
-            ChannelId: slackEvent.Channel,
-            ThreadTs: slackEvent.ThreadTs,
-            EventTs: slackEvent.Ts,
-            UserId: slackEvent.User,
-            BotId: slackEvent.BotId,
+            ChannelId: channelId,
+            ThreadTs: !string.IsNullOrWhiteSpace(slackEvent.ThreadTs) ? new SlackThreadTs(slackEvent.ThreadTs) : null,
+            EventTs: new SlackEventTs(slackEvent.Ts),
+            UserId: !string.IsNullOrWhiteSpace(slackEvent.User) ? new SlackUserId(slackEvent.User) : null,
+            BotId: !string.IsNullOrWhiteSpace(slackEvent.BotId) ? new SlackBotId(slackEvent.BotId) : null,
             Text: slackEvent.Text ?? string.Empty,
             Subtype: slackEvent.Subtype,
             Hidden: slackEvent.Hidden,
-            IsDirectMessage: IsDirectConversation(slackEvent.Channel),
+            IsDirectMessage: IsDirectConversation(channelId),
             Files: files));
 
         return Task.CompletedTask;
@@ -152,6 +154,9 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
 
     public Task Handle(AppMention slackEvent)
     {
+        var files = MapSlackFiles(slackEvent.Files);
+        var channelId = new SlackChannelId(slackEvent.Channel);
+
         _gateway?.Tell(new SlackInboundMessage(
             Kind: SlackInboundKind.AppMention,
             EventId: BuildEventId(
@@ -160,15 +165,16 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
                 threadTs: slackEvent.ThreadTs,
                 userId: slackEvent.User,
                 text: slackEvent.Text),
-            ChannelId: slackEvent.Channel,
-            ThreadTs: slackEvent.ThreadTs,
-            EventTs: slackEvent.Ts,
-            UserId: slackEvent.User,
+            ChannelId: channelId,
+            ThreadTs: !string.IsNullOrWhiteSpace(slackEvent.ThreadTs) ? new SlackThreadTs(slackEvent.ThreadTs) : null,
+            EventTs: new SlackEventTs(slackEvent.Ts),
+            UserId: !string.IsNullOrWhiteSpace(slackEvent.User) ? new SlackUserId(slackEvent.User) : null,
             BotId: null,
             Text: slackEvent.Text ?? string.Empty,
             Subtype: null,
             Hidden: false,
-            IsDirectMessage: IsDirectConversation(slackEvent.Channel)));
+            IsDirectMessage: IsDirectConversation(channelId),
+            Files: files));
 
         return Task.CompletedTask;
     }
@@ -181,7 +187,8 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
         var result = new List<SlackFileReference>(files.Count);
         foreach (var f in files)
         {
-            if (string.IsNullOrWhiteSpace(f.UrlPrivateDownload))
+            var downloadUrl = f.UrlPrivateDownload ?? f.UrlPrivate;
+            if (string.IsNullOrWhiteSpace(downloadUrl))
                 continue;
 
             result.Add(new SlackFileReference(
@@ -189,21 +196,21 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
                 Name: f.Name ?? "attachment",
                 MimeType: f.Mimetype ?? "application/octet-stream",
                 Size: f.Size,
-                UrlPrivateDownload: f.UrlPrivateDownload));
+                UrlPrivateDownload: downloadUrl));
         }
 
         return result.Count > 0 ? result : null;
     }
 
-    private static bool IsDirectConversation(string channelId)
+    private static bool IsDirectConversation(SlackChannelId channelId)
     {
-        if (string.IsNullOrWhiteSpace(channelId))
+        if (string.IsNullOrWhiteSpace(channelId.Value))
             return false;
 
-        return channelId.StartsWith('D');
+        return channelId.Value.StartsWith('D');
     }
 
-    private static string BuildEventId(
+    private static SlackEventId BuildEventId(
         string? channelId,
         string? eventTs,
         string? threadTs,
@@ -211,7 +218,7 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
         string? text)
     {
         if (!string.IsNullOrWhiteSpace(channelId) && !string.IsNullOrWhiteSpace(eventTs))
-            return $"{channelId}:{eventTs}";
+            return new SlackEventId($"{channelId}:{eventTs}");
 
         var fallback = string.Join("|", [
             channelId ?? string.Empty,
@@ -221,7 +228,7 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
             text ?? string.Empty
         ]);
 
-        return fallback;
+        return new SlackEventId(fallback);
     }
 
     private async Task<string?> ResolveDefaultChannelIdAsync(CancellationToken cancellationToken)

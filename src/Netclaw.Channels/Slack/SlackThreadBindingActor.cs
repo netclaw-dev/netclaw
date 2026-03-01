@@ -13,8 +13,8 @@ namespace Netclaw.Channels.Slack;
 internal sealed class SlackThreadBindingActor : ReceiveActor
 {
     private readonly SessionId _sessionId;
-    private readonly string _channelId;
-    private readonly string _threadTs;
+    private readonly SlackChannelId _channelId;
+    private readonly SlackThreadTs _threadTs;
     private readonly SlackGatewayDependencies _dependencies;
     private readonly ILoggingAdapter _log;
 
@@ -28,8 +28,8 @@ internal sealed class SlackThreadBindingActor : ReceiveActor
 
     public SlackThreadBindingActor(
         SessionId sessionId,
-        string channelId,
-        string threadTs,
+        SlackChannelId channelId,
+        SlackThreadTs threadTs,
         SlackGatewayDependencies dependencies)
     {
         _sessionId = sessionId;
@@ -55,8 +55,8 @@ internal sealed class SlackThreadBindingActor : ReceiveActor
 
     public static Props CreateProps(
         SessionId sessionId,
-        string channelId,
-        string threadTs,
+        SlackChannelId channelId,
+        SlackThreadTs threadTs,
         SlackGatewayDependencies dependencies) =>
         Props.Create(() => new SlackThreadBindingActor(sessionId, channelId, threadTs, dependencies));
 
@@ -124,7 +124,7 @@ internal sealed class SlackThreadBindingActor : ReceiveActor
         var result = await _inputQueue!.OfferAsync(new ChannelInput
         {
             SenderId = message.SenderId,
-            ChannelId = _channelId,
+            ChannelId = _channelId.Value,
             Contents = contents,
             ReceivedAt = message.ReceivedAt
         });

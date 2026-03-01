@@ -8,6 +8,7 @@ using Microsoft.Extensions.AI;
 using Netclaw.Actors.Protocol;
 using Netclaw.Configuration;
 using Netclaw.Actors.Tools;
+using Netclaw.Tools;
 using AiChatMessage = Microsoft.Extensions.AI.ChatMessage;
 
 namespace Netclaw.Actors.Sessions;
@@ -297,6 +298,19 @@ public sealed class LlmSessionActor : ReceivePersistentActor
                         LoadDiscoveredTools(result.Content);
                     }
                 }
+            }
+
+            // Emit FileOutput for any file attachments registered by tools
+            foreach (var file in msg.FileAttachments)
+            {
+                EmitOutput(new FileOutput
+                {
+                    SessionId = _sessionId,
+                    TimestampMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
+                    FilePath = file.FilePath,
+                    FileName = file.FileName,
+                    MimeType = file.MimeType
+                }, OutputFilter.Files);
             }
 
             _toolIterationCount++;
@@ -940,6 +954,10 @@ public sealed class LlmSessionActor : ReceivePersistentActor
         };
     }
 
+    private sealed record ToolCallResult(
+        SerializableChatMessage Message,
+        IReadOnlyList<FileAttachmentInfo> FileAttachments);
+
     private static async Task ExecuteToolsAsync(
         IToolExecutor executor,
         List<FunctionCallContent> toolCalls,
@@ -954,7 +972,12 @@ public sealed class LlmSessionActor : ReceivePersistentActor
             var tasks = toolCalls.Select(tc => ExecuteSingleToolAsync(executor, tc, sessionId, auditLogger, timeProvider));
             var results = await Task.WhenAll(tasks);
 
-            self.Tell(new ToolExecutionCompleted { ToolResults = results.ToList() });
+            var fileAttachments = results.SelectMany(r => r.FileAttachments).ToList();
+            self.Tell(new ToolExecutionCompleted
+            {
+                ToolResults = results.Select(r => r.Message).ToList(),
+                FileAttachments = fileAttachments
+            });
         }
         catch (Exception ex)
         {
@@ -962,7 +985,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor
         }
     }
 
-    private static async Task<SerializableChatMessage> ExecuteSingleToolAsync(
+    private static async Task<ToolCallResult> ExecuteSingleToolAsync(
         IToolExecutor executor,
         FunctionCallContent tc,
         SessionId sessionId,
@@ -971,9 +994,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor
     {
         var sw = Stopwatch.StartNew();
         string resultText;
+        var context = CreateExecutionContext(sessionId);
         try
         {
-            var context = CreateExecutionContext(sessionId);
             resultText = await executor.ExecuteAsync(tc, context);
             sw.Stop();
 
@@ -1003,13 +1026,15 @@ public sealed class LlmSessionActor : ReceivePersistentActor
             });
         }
 
-        return new SerializableChatMessage
+        var message = new SerializableChatMessage
         {
             Role = Protocol.ChatRole.Tool,
             Content = resultText,
             ToolCallId = tc.CallId,
             Name = tc.Name
         };
+
+        return new ToolCallResult(message, context.FileAttachments);
     }
 
     /// <summary>

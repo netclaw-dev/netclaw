@@ -7,11 +7,11 @@ namespace Netclaw.Channels.Slack;
 
 public sealed class SlackConversationActor : ReceiveActor
 {
-    private readonly string _conversationId;
+    private readonly SlackChannelId _conversationId;
     private readonly SlackGatewayDependencies _dependencies;
     private readonly ILoggingAdapter _log;
 
-    public SlackConversationActor(string conversationId, SlackGatewayDependencies dependencies)
+    public SlackConversationActor(SlackChannelId conversationId, SlackGatewayDependencies dependencies)
     {
         _conversationId = conversationId;
         _dependencies = dependencies;
@@ -50,8 +50,8 @@ public sealed class SlackConversationActor : ReceiveActor
             }
 
             var containsMention = ContainsBotMention(message.Text);
-            var threadTs = string.IsNullOrWhiteSpace(message.ThreadTs) ? message.EventTs : message.ThreadTs!;
-            var threadActorName = Uri.EscapeDataString(threadTs);
+            var threadTs = message.ThreadTs ?? SlackThreadTs.FromEventTs(message.EventTs);
+            var threadActorName = Uri.EscapeDataString(threadTs.Value);
             var existingThread = Context.Child(threadActorName);
             var threadExists = !existingThread.IsNobody();
 
@@ -81,16 +81,16 @@ public sealed class SlackConversationActor : ReceiveActor
                 : existingThread;
 
             var normalized = NormalizeInboundText(message.Text);
-            if (string.IsNullOrWhiteSpace(normalized))
+            if (string.IsNullOrWhiteSpace(normalized) && message.Files is not { Count: > 0 })
             {
-                _log.Debug("Ignoring Slack event {0}: normalized text is empty", message.EventId);
+                _log.Debug("Ignoring Slack event {0}: normalized text is empty and no files", message.EventId);
                 ChannelTelemetry.RecordSlackEventDropped("empty_text");
                 return;
             }
 
-            var sessionId = new SessionId($"{_conversationId}/{threadTs}");
+            var sessionId = new SessionId($"{_conversationId.Value}/{threadTs.Value}");
             var log = _log
-                .WithContext("SlackThreadTs", threadTs)
+                .WithContext("SlackThreadTs", threadTs.Value)
                 .WithContext("SessionId", sessionId.Value);
 
             log.Debug("Routing Slack event {0} to session thread actor", message.EventId);
@@ -99,14 +99,14 @@ public sealed class SlackConversationActor : ReceiveActor
                 SessionId: sessionId,
                 ChannelId: message.ChannelId,
                 ThreadTs: threadTs,
-                SenderId: message.UserId ?? "slack-user",
+                SenderId: message.UserId?.Value ?? "slack-user",
                 Text: normalized,
                 ReceivedAt: _dependencies.TimeProvider.GetUtcNow(),
                 Files: message.Files));
         });
     }
 
-    public static Props CreateProps(string conversationId, SlackGatewayDependencies dependencies) =>
+    public static Props CreateProps(SlackChannelId conversationId, SlackGatewayDependencies dependencies) =>
         Props.Create(() => new SlackConversationActor(conversationId, dependencies));
 
     private bool IsAllowedConversation(SlackInboundMessage message)
@@ -114,22 +114,22 @@ public sealed class SlackConversationActor : ReceiveActor
         if (message.IsDirectMessage)
             return _dependencies.Options.AllowDirectMessages;
 
-        var matchesDefaultChannel = !string.IsNullOrWhiteSpace(_dependencies.DefaultChannelId)
-            && string.Equals(message.ChannelId, _dependencies.DefaultChannelId, StringComparison.Ordinal);
+        var matchesDefaultChannel = _dependencies.DefaultChannelId is not null
+            && message.ChannelId == _dependencies.DefaultChannelId.Value;
 
         var matchesAllowedChannel = _dependencies.Options.AllowedChannelIds
-            .Contains(message.ChannelId, StringComparer.Ordinal);
+            .Contains(message.ChannelId.Value, StringComparer.Ordinal);
 
         return matchesDefaultChannel || matchesAllowedChannel;
     }
 
     private bool IsBotMessage(SlackInboundMessage message)
     {
-        if (!string.IsNullOrWhiteSpace(message.BotId))
+        if (message.BotId is not null)
             return true;
 
-        if (!string.IsNullOrWhiteSpace(_dependencies.BotUserId)
-            && string.Equals(message.UserId, _dependencies.BotUserId, StringComparison.Ordinal))
+        if (_dependencies.BotUserId is not null
+            && message.UserId == _dependencies.BotUserId)
             return true;
 
         return false;
@@ -140,32 +140,32 @@ public sealed class SlackConversationActor : ReceiveActor
         if (_dependencies.Options.AllowedUserIds.Length == 0)
             return true;
 
-        if (string.IsNullOrWhiteSpace(message.UserId))
+        if (message.UserId is not { } userId)
             return false;
 
-        return _dependencies.Options.AllowedUserIds.Contains(message.UserId, StringComparer.Ordinal);
+        return _dependencies.Options.AllowedUserIds.Contains(userId.Value, StringComparer.Ordinal);
     }
 
     private bool ContainsBotMention(string text)
     {
-        if (string.IsNullOrWhiteSpace(_dependencies.BotUserId))
+        if (_dependencies.BotUserId is not { } botUserId)
             return false;
 
-        return text.Contains($"<@{_dependencies.BotUserId}>", StringComparison.Ordinal);
+        return text.Contains($"<@{botUserId.Value}>", StringComparison.Ordinal);
     }
 
     private string NormalizeInboundText(string text)
     {
-        if (string.IsNullOrWhiteSpace(_dependencies.BotUserId))
+        if (_dependencies.BotUserId is not { } botUserId)
             return text.Trim();
 
-        var mention = $"<@{_dependencies.BotUserId}>";
+        var mention = $"<@{botUserId.Value}>";
         return text.Replace(mention, string.Empty, StringComparison.Ordinal).Trim();
     }
 
-    private Props CreateThreadProps(string channelId, string threadTs)
+    private Props CreateThreadProps(SlackChannelId channelId, SlackThreadTs threadTs)
     {
-        var sessionId = new SessionId($"{_conversationId}/{threadTs}");
+        var sessionId = new SessionId($"{_conversationId.Value}/{threadTs.Value}");
 
         if (_dependencies.ThreadPropsFactory is not null)
             return _dependencies.ThreadPropsFactory(sessionId, channelId, threadTs, _dependencies);
