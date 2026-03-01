@@ -10,6 +10,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     turn_count      INTEGER NOT NULL DEFAULT 0,
     title           TEXT,
     description     TEXT,
+    last_input_tokens INTEGER,
     log_path        TEXT,
     metadata        TEXT
 );

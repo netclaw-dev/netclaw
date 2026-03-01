@@ -1,5 +1,6 @@
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging;
+using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
 using Netclaw.Configuration;
 
@@ -7,10 +8,10 @@ namespace Netclaw.Daemon.Gateway;
 
 /// <summary>
 /// Singleton service maintaining the <c>sessions</c> table in the SQLite database.
-/// Provides write methods called from <see cref="SessionRegistry"/> and output
-/// subscribers, plus read methods for the <c>GET /api/sessions</c> endpoint.
+/// Implements <see cref="ISessionLifecycleObserver"/> so <see cref="SessionPipeline"/>
+/// automatically reports all session events regardless of channel type.
 /// </summary>
-public sealed class SessionCatalogService
+public sealed class SessionCatalogService : ISessionLifecycleObserver
 {
     private readonly string _connectionString;
     private readonly NetclawPaths _paths;
@@ -35,10 +36,8 @@ public sealed class SessionCatalogService
         _logger = logger;
     }
 
-    /// <summary>
-    /// Record a new session in the catalog. Called when a session is created.
-    /// </summary>
-    public void RecordSessionCreated(SessionId sessionId, string channel)
+    /// <inheritdoc />
+    public void OnSessionCreated(SessionId sessionId, string channelType)
     {
         var nowMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
         var persistenceId = $"session-{sessionId.Value}";
@@ -58,7 +57,7 @@ public sealed class SessionCatalogService
                     last_activity = $now
                 """;
             cmd.Parameters.AddWithValue("$pid", persistenceId);
-            cmd.Parameters.AddWithValue("$channel", channel);
+            cmd.Parameters.AddWithValue("$channel", channelType);
             cmd.Parameters.AddWithValue("$now", nowMs);
             cmd.ExecuteNonQuery();
 
@@ -67,7 +66,7 @@ public sealed class SessionCatalogService
             Directory.CreateDirectory(Path.GetDirectoryName(logPath)!);
             var writer = new StreamWriter(logPath, append: true) { AutoFlush = true };
             _logWriters[persistenceId] = writer;
-            writer.WriteLine($"[{_timeProvider.GetUtcNow():o}] Session created: {sessionId.Value} channel={channel}");
+            writer.WriteLine($"[{_timeProvider.GetUtcNow():o}] Session created: {sessionId.Value} channel={channelType}");
 
             // Update log_path in DB
             using var updateCmd = conn.CreateCommand();
@@ -82,10 +81,8 @@ public sealed class SessionCatalogService
         }
     }
 
-    /// <summary>
-    /// Process a session output event — updates the catalog and writes to the session log.
-    /// </summary>
-    public void HandleOutput(SessionOutput output)
+    /// <inheritdoc />
+    public void OnOutput(SessionOutput output)
     {
         var persistenceId = $"session-{output.SessionId.Value}";
 
@@ -105,6 +102,20 @@ public sealed class SessionCatalogService
                             """;
                     });
                     LogToSession(persistenceId, $"Turn {tc.TurnNumber} completed");
+                    break;
+
+                case UsageOutput usage when usage.InputTokens.HasValue:
+                    UpdateSession(persistenceId, cmd =>
+                    {
+                        cmd.CommandText =
+                            """
+                            UPDATE sessions SET
+                                last_input_tokens = $tokens,
+                                last_activity = $now
+                            WHERE persistence_id = $pid
+                            """;
+                        cmd.Parameters.AddWithValue("$tokens", usage.InputTokens.Value);
+                    });
                     break;
 
                 case SessionTitleOutput title:
@@ -169,7 +180,7 @@ public sealed class SessionCatalogService
             cmd.CommandText =
                 """
                 SELECT persistence_id, channel, title, description, status, turn_count,
-                       created_at, last_activity, log_path
+                       created_at, last_activity, log_path, last_input_tokens
                 FROM sessions
                 ORDER BY last_activity DESC
                 LIMIT $limit
@@ -189,7 +200,8 @@ public sealed class SessionCatalogService
                     TurnCount = reader.GetInt32(5),
                     CreatedAt = reader.GetInt64(6),
                     LastActivity = reader.GetInt64(7),
-                    LogPath = reader.IsDBNull(8) ? null : reader.GetString(8)
+                    LogPath = reader.IsDBNull(8) ? null : reader.GetString(8),
+                    LastInputTokens = reader.IsDBNull(9) ? null : reader.GetInt64(9)
                 });
             }
         }
@@ -267,4 +279,5 @@ public sealed class SessionCatalogEntry
     public required long CreatedAt { get; init; }
     public required long LastActivity { get; init; }
     public string? LogPath { get; init; }
+    public long? LastInputTokens { get; init; }
 }

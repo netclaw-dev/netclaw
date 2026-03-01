@@ -22,7 +22,6 @@ public sealed class SessionRegistry
     private readonly ActorSystem _system;
     private readonly TimeProvider _timeProvider;
     private readonly IHubContext<SessionHub, ISessionHubClient> _hubContext;
-    private readonly SessionCatalogService _catalog;
     private readonly ILogger<SessionRegistry> _logger;
 
     // sessionId → session state
@@ -35,14 +34,12 @@ public sealed class SessionRegistry
         ActorSystem system,
         TimeProvider timeProvider,
         IHubContext<SessionHub, ISessionHubClient> hubContext,
-        SessionCatalogService catalog,
         ILogger<SessionRegistry> logger)
     {
         _pipeline = pipeline;
         _system = system;
         _timeProvider = timeProvider;
         _hubContext = hubContext;
-        _catalog = catalog;
         _logger = logger;
     }
 
@@ -57,7 +54,6 @@ public sealed class SessionRegistry
         var sessionId = new SessionId($"signalr/{Guid.NewGuid():N}");
 
         await MaterializeAndBindSessionAsync(sessionId, callerConnectionId, channelType);
-        _catalog.RecordSessionCreated(sessionId, channelType);
 
         return sessionId.Value;
     }
@@ -220,9 +216,6 @@ public sealed class SessionRegistry
 
     private void PublishOutput(SessionId sessionId, SessionOutput output)
     {
-        // Record to session catalog (log file + DB) regardless of connection state
-        _catalog.HandleOutput(output);
-
         if (!_sessions.ContainsKey(sessionId))
             return;
 

@@ -94,13 +94,16 @@ public sealed class SessionPipeline
 {
     private readonly ActorSystem _system;
     private readonly IRequiredActor<SessionManagerActorKey> _sessionManagerProvider;
+    private readonly ISessionLifecycleObserver? _lifecycleObserver;
 
     public SessionPipeline(
         ActorSystem system,
-        IRequiredActor<SessionManagerActorKey> sessionManagerProvider)
+        IRequiredActor<SessionManagerActorKey> sessionManagerProvider,
+        ISessionLifecycleObserver? lifecycleObserver = null)
     {
         _system = system;
         _sessionManagerProvider = sessionManagerProvider;
+        _lifecycleObserver = lifecycleObserver;
     }
 
     /// <summary>
@@ -140,8 +143,23 @@ public sealed class SessionPipeline
             .To(Sink.ForEach<SendUserMessage>(cmd => sessionManager.Tell(cmd)));
 
         // Outbound: pre-materialized subscriber → kill switch → exposed Source
+        // When a lifecycle observer is registered, tap the stream so every output
+        // is reported regardless of which channel materializes the session.
         var outputSource = responseSource
             .Via(killSwitch.Flow<SessionOutput>());
+
+        if (_lifecycleObserver is not null)
+        {
+            var observer = _lifecycleObserver;
+            outputSource = outputSource.Select(output =>
+            {
+                observer.OnOutput(output);
+                return output;
+            });
+        }
+
+        // Notify observer of session creation
+        _lifecycleObserver?.OnSessionCreated(sessionId, options.ChannelType);
 
         // Join the session — subscriber starts receiving output
         sessionManager.Tell(new JoinSession
