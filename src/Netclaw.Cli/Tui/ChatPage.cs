@@ -294,7 +294,7 @@ public sealed class ChatPage : ReactivePage<ChatViewModel>
 
             case CompactionOutput msg:
                 _chatHistory.AppendLine(
-                    $"  [compaction] {msg.MessagesBefore} \u2192 {msg.MessagesAfter} messages",
+                    $"  [compaction] {msg.MessagesBefore} \u2192 {msg.MessagesAfter} messages (keep={msg.KeepCountUsed}, {msg.PreCompactionInputTokens}/{msg.ContextWindowTokens} tokens)",
                     Color.Yellow);
                 break;
         }

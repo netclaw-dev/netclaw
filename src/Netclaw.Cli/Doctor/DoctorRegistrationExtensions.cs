@@ -14,5 +14,6 @@ public static class DoctorRegistrationExtensions
         services.AddSingleton<IDoctorCheck, SecretsJsonDoctorCheck>();
         services.AddSingleton<IDoctorCheck, SlackAuthDoctorCheck>();
         services.AddSingleton<IDoctorCheck, McpServersDoctorCheck>();
+        services.AddSingleton<IDoctorCheck, ContextWindowDoctorCheck>();
     }
 }

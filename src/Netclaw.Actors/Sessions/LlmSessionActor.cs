@@ -40,6 +40,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor
     private readonly IMemoryExtractor _memoryExtractor;
     private readonly IChatReducer _chatReducer;
     private readonly TimeProvider _timeProvider;
+    private readonly string? _sessionsBasePath;
     private readonly ILoggingAdapter _log;
 
     // Transient state (not persisted)
@@ -74,7 +75,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor
         IMemoryExtractor? memoryExtractor = null,
         IChatReducer? chatReducer = null,
         TimeProvider? timeProvider = null,
-        IReadOnlyList<IContextLayerProvider>? contextLayers = null)
+        IReadOnlyList<IContextLayerProvider>? contextLayers = null,
+        NetclawPaths? paths = null)
     {
         _sessionId = new SessionId(entityId);
         _chatClient = clientProvider.GetClient(ModelRole.Main);
@@ -89,6 +91,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor
         _memoryExtractor = memoryExtractor ?? NullMemoryExtractor.Instance;
         _chatReducer = chatReducer ?? new ExtractiveSessionReducer(config.KeepRecentMessages);
         _timeProvider = timeProvider ?? TimeProvider.System;
+        _sessionsBasePath = paths?.SessionsDirectory;
         PersistenceId = $"session-{entityId}";
 
         // Enrich logger with session context — all log messages automatically include SessionId
@@ -360,7 +363,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor
         {
             _log.Error(msg.Cause, "LLM call failed");
 
-            const string errorMessage = "I encountered an error processing your message. Please try again.";
+            var errorMessage = IsContextOverflowError(msg.Cause)
+                ? $"Context window exceeded after compaction — the session has too many tools or a large system prompt for the {_config.ModelId} context window ({_config.ContextWindowTokens} tokens). Try reducing tools or increasing the model's context window."
+                : "I encountered an error processing your message. Please try again.";
             _state = _state.AddErrorReply(errorMessage);
 
             EmitOutput(new ErrorOutput
@@ -398,6 +403,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor
         CommandAsync<CompactionTriggered>(async msg =>
         {
             var messagesBefore = _state.History.Count;
+            var preCompactionInputTokens = _lastInputTokenCount;
 
             // Phase 1: Clear old tool results
             var (newState, clearedCount) = _state.ClearOldToolResults(_config.KeepRecentToolResults);
@@ -408,35 +414,47 @@ public sealed class LlmSessionActor : ReceivePersistentActor
                 _log.Info("Phase 1: Cleared {ClearedCount} old tool result(s)", clearedCount);
             }
 
-            // Phase 2: Extractive reduction via IChatReducer (no LLM call for the
-            // default ExtractiveSessionReducer, but async reducers are supported).
-            // Convert to MEAI ChatMessage without sessionDir (skip media file I/O —
-            // the reducer only needs message structure, not media bytes).
-            var meaiMessages = ChatMessageConverter.ToAiMessages(_state.History);
-            var reduced = await _chatReducer.ReduceAsync(meaiMessages, CancellationToken.None);
-
-            // Map reduced result back to original SerializableChatMessage objects.
-            // The extractive reducer preserves order and only trims from the beginning,
-            // so we count non-system messages in the result and take that many from the
-            // tail of the original history. This avoids lossy ChatMessage→SerializableChatMessage
-            // round-trip conversion (which would lose media references).
-            var reducedList = reduced as IList<Microsoft.Extensions.AI.ChatMessage>
-                ?? reduced.ToList();
-            var keptNonSystemCount = reducedList
-                .Count(m => m.Role != Microsoft.Extensions.AI.ChatRole.System);
-
+            // Phase 2: Extractive reduction with adaptive keep count.
+            // Start with the configured keep count, then halve if estimated tokens
+            // still exceed 50% of the context window (minimum 2 messages).
             var systemOffset = _state.History.Count > 0
                 && _state.History[0].Role == Protocol.ChatRole.System ? 1 : 0;
-            var startIndex = _state.History.Count - keptNonSystemCount;
+            var effectiveKeepCount = _config.KeepRecentMessages;
+            List<SerializableChatMessage> compactedMessages;
 
-            var compactedMessages = new List<SerializableChatMessage>();
-            for (var i = Math.Max(systemOffset, startIndex); i < _state.History.Count; i++)
+            while (true)
             {
-                compactedMessages.Add(_state.History[i]);
+                var reducer = new ExtractiveSessionReducer(effectiveKeepCount);
+                var meaiMessages = ChatMessageConverter.ToAiMessages(_state.History);
+                var reduced = await reducer.ReduceAsync(meaiMessages, CancellationToken.None);
+
+                var reducedList = reduced as IList<Microsoft.Extensions.AI.ChatMessage>
+                    ?? reduced.ToList();
+                var keptNonSystemCount = reducedList
+                    .Count(m => m.Role != Microsoft.Extensions.AI.ChatRole.System);
+
+                var startIndex = _state.History.Count - keptNonSystemCount;
+                compactedMessages = new List<SerializableChatMessage>();
+                for (var i = Math.Max(systemOffset, startIndex); i < _state.History.Count; i++)
+                {
+                    compactedMessages.Add(_state.History[i]);
+                }
+
+                // Estimate remaining token cost (naive chars/4 heuristic)
+                var estimatedTokens = EstimateTokens(compactedMessages, systemOffset > 0 ? _state.History[0] : null);
+                var budgetHalf = _config.ContextWindowTokens / 2;
+
+                if (estimatedTokens <= budgetHalf || effectiveKeepCount <= 2)
+                    break;
+
+                var newKeepCount = Math.Max(2, effectiveKeepCount / 2);
+                _log.Info("Adaptive compaction: estimated {EstimatedTokens} tokens > {Budget} budget half, reducing keep count {OldKeep} → {NewKeep}",
+                    estimatedTokens, budgetHalf, effectiveKeepCount, newKeepCount);
+                effectiveKeepCount = newKeepCount;
             }
 
-            _log.Info("Phase 2: Extractive reduction (history={HistoryCount} → {KeptCount} messages)",
-                _state.History.Count, compactedMessages.Count + systemOffset);
+            _log.Info("Phase 2: Extractive reduction (history={HistoryCount} → {KeptCount} messages, keepCount={KeepCount})",
+                _state.History.Count, compactedMessages.Count + systemOffset, effectiveKeepCount);
 
             var compactedEvent = new SessionCompacted
             {
@@ -461,7 +479,10 @@ public sealed class LlmSessionActor : ReceivePersistentActor
                     MessagesBefore = messagesBefore,
                     MessagesAfter = _state.History.Count,
                     ToolResultsCleared = clearedCount > 0,
-                    Summarized = false // Extractive, not summarized
+                    Summarized = false, // Extractive, not summarized
+                    ContextWindowTokens = _config.ContextWindowTokens,
+                    PreCompactionInputTokens = preCompactionInputTokens,
+                    KeepCountUsed = effectiveKeepCount
                 });
 
                 _log.Info("Compaction complete (before={MessagesBefore}, after={MessagesAfter})",
@@ -622,7 +643,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor
         var sessionId = _sessionId;
         var auditLogger = _auditLogger;
         var tp = _timeProvider;
-        _ = ExecuteToolsAsync(executor, toolCalls, sessionId, auditLogger, tp, self);
+        var sessionDir = GetSessionDirectory();
+        _ = ExecuteToolsAsync(executor, toolCalls, sessionId, auditLogger, tp, sessionDir, self);
     }
 
     private void HandleTextResponse(
@@ -762,6 +784,46 @@ public sealed class LlmSessionActor : ReceivePersistentActor
 
     // ── Helpers ──
 
+    /// <summary>
+    /// Detect context-length overflow errors from LLM providers.
+    /// Ollama: "context length exceeded", OpenAI-compatible: "maximum context length".
+    /// </summary>
+    private static bool IsContextOverflowError(Exception? ex)
+    {
+        if (ex is null) return false;
+        var message = ex.Message;
+        // Walk inner exceptions too — provider SDKs often wrap
+        while (ex.InnerException is not null)
+        {
+            ex = ex.InnerException;
+            message = string.Concat(message, " ", ex.Message);
+        }
+        return message.Contains("context length", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("maximum context", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("context_length_exceeded", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Naive token estimation: total character count / 4.
+    /// Includes the system prompt (if present) plus all compacted messages.
+    /// </summary>
+    private static int EstimateTokens(
+        List<SerializableChatMessage> messages,
+        SerializableChatMessage? systemPrompt)
+    {
+        var totalChars = 0;
+        if (systemPrompt is not null)
+            totalChars += systemPrompt.Content?.Length ?? 0;
+        foreach (var msg in messages)
+            totalChars += msg.Content?.Length ?? 0;
+        return totalChars / 4;
+    }
+
+    private string GetSessionDirectory() =>
+        _sessionsBasePath is not null
+            ? SessionDirectoryHelper.GetSessionDirectory(_sessionId, _sessionsBasePath)
+            : SessionDirectoryHelper.GetSessionDirectory(_sessionId);
+
     private long NowMs() => _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
 
     private void SetSystemPrompt()
@@ -789,7 +851,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor
 
     private void FireLlmCall(bool forceNoTools = false)
     {
-        var sessionDir = SessionDirectoryHelper.GetSessionDirectory(_sessionId);
+        var sessionDir = GetSessionDirectory();
         var messages = ChatMessageConverter.ToAiMessages(_state.History, sessionDir);
 
         // Inject dynamic context layers (e.g. tool index) as transient system messages.
@@ -967,12 +1029,13 @@ public sealed class LlmSessionActor : ReceivePersistentActor
         SessionId sessionId,
         IToolAuditLogger? auditLogger,
         TimeProvider timeProvider,
+        string sessionDir,
         IActorRef self)
     {
         try
         {
             // Execute all tool calls in parallel — each is independent
-            var tasks = toolCalls.Select(tc => ExecuteSingleToolAsync(executor, tc, sessionId, auditLogger, timeProvider));
+            var tasks = toolCalls.Select(tc => ExecuteSingleToolAsync(executor, tc, sessionId, auditLogger, timeProvider, sessionDir));
             var results = await Task.WhenAll(tasks);
 
             var fileAttachments = results.SelectMany(r => r.FileAttachments).ToList();
@@ -993,11 +1056,12 @@ public sealed class LlmSessionActor : ReceivePersistentActor
         FunctionCallContent tc,
         SessionId sessionId,
         IToolAuditLogger? auditLogger,
-        TimeProvider timeProvider)
+        TimeProvider timeProvider,
+        string sessionDir)
     {
         var sw = Stopwatch.StartNew();
         string resultText;
-        var context = CreateExecutionContext(sessionId);
+        var context = new Netclaw.Tools.ToolExecutionContext(sessionId.Value, sessionDir);
         try
         {
             resultText = await executor.ExecuteAsync(tc, context);
@@ -1173,11 +1237,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor
         Sender.Tell(CommandAck.For(_sessionId));
     }
 
-    private static Netclaw.Tools.ToolExecutionContext CreateExecutionContext(SessionId sessionId)
-    {
-        var sessionDir = SessionDirectoryHelper.GetSessionDirectory(sessionId);
-        return new Netclaw.Tools.ToolExecutionContext(sessionId.Value, sessionDir);
-    }
+
 
     internal void SetTitle(string title)
     {

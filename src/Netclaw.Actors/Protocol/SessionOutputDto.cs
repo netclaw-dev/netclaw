@@ -44,6 +44,8 @@ public sealed record SessionOutputDto
     // Compaction
     public int? MessagesBefore { get; init; }
     public int? MessagesAfter { get; init; }
+    public long? PreCompactionInputTokens { get; init; }
+    public int? KeepCountUsed { get; init; }
 
     // Session Joined
     public string? Title { get; init; }

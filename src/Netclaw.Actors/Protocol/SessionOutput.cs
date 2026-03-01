@@ -182,4 +182,21 @@ public sealed record CompactionOutput : SessionOutput
 
     /// <summary>Whether summarization was applied (Phase 2).</summary>
     public bool Summarized { get; init; }
+
+    /// <summary>
+    /// The configured context window budget in tokens.
+    /// </summary>
+    public int ContextWindowTokens { get; init; }
+
+    /// <summary>
+    /// The input token count that triggered compaction (<see cref="Sessions.SessionConfig.CompactionTokenLimit"/>).
+    /// </summary>
+    public long PreCompactionInputTokens { get; init; }
+
+    /// <summary>
+    /// The effective keep count used after adaptive reduction.
+    /// May be less than the configured <see cref="Sessions.SessionConfig.KeepRecentMessages"/>
+    /// if the post-compaction estimate still exceeded the budget.
+    /// </summary>
+    public int KeepCountUsed { get; init; }
 }

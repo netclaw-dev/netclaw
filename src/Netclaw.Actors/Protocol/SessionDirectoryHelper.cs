@@ -8,11 +8,22 @@ public static class SessionDirectoryHelper
 {
     /// <summary>
     /// Computes the session directory path under the OS temp directory.
+    /// Prefer the overload that accepts a base path for daemon-mode sessions.
     /// </summary>
     public static string GetSessionDirectory(SessionId sessionId)
     {
         var sanitized = SanitizeSessionId(sessionId.Value);
         return Path.Combine(Path.GetTempPath(), "netclaw-sessions", sanitized);
+    }
+
+    /// <summary>
+    /// Computes the session directory path under the given base directory
+    /// (e.g. <c>~/.netclaw/sessions/</c>).
+    /// </summary>
+    public static string GetSessionDirectory(SessionId sessionId, string basePath)
+    {
+        var sanitized = SanitizeSessionId(sessionId.Value);
+        return Path.Combine(basePath, sanitized);
     }
 
     /// <summary>

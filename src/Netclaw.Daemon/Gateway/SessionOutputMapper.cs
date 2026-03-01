@@ -115,7 +115,10 @@ public static class SessionOutputMapper
             SessionId = msg.SessionId.Value,
             TimestampMs = msg.TimestampMs,
             MessagesBefore = msg.MessagesBefore,
-            MessagesAfter = msg.MessagesAfter
+            MessagesAfter = msg.MessagesAfter,
+            ContextWindowTokens = msg.ContextWindowTokens,
+            PreCompactionInputTokens = msg.PreCompactionInputTokens,
+            KeepCountUsed = msg.KeepCountUsed
         },
 
         SessionJoined msg => new SessionOutputDto

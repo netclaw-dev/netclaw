@@ -205,8 +205,8 @@ public sealed class HeadlessChannel : IChannel
                 break;
 
             case CompactionOutput msg:
-                Console.WriteLine($"[compaction] {msg.MessagesBefore} \u2192 {msg.MessagesAfter} messages");
-                Log(log, $"COMPACTION: before={msg.MessagesBefore} after={msg.MessagesAfter} tool_results_cleared={msg.ToolResultsCleared} summarized={msg.Summarized}");
+                Console.WriteLine($"[compaction] {msg.MessagesBefore} \u2192 {msg.MessagesAfter} messages (keep={msg.KeepCountUsed}, context={msg.PreCompactionInputTokens}/{msg.ContextWindowTokens} tokens)");
+                Log(log, $"COMPACTION: before={msg.MessagesBefore} after={msg.MessagesAfter} tool_results_cleared={msg.ToolResultsCleared} summarized={msg.Summarized} context_window={msg.ContextWindowTokens} input_tokens={msg.PreCompactionInputTokens} keep_count={msg.KeepCountUsed}");
                 break;
         }
     }

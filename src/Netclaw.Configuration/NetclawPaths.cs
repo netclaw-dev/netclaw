@@ -33,7 +33,9 @@ public sealed class NetclawPaths
     public string NetclawConfigPath => Path.Combine(ConfigDirectory, "netclaw.json");
     public string SecretsPath => Path.Combine(ConfigDirectory, "secrets.json");
     public string LogsDirectory => Path.Combine(BasePath, "logs");
+    public string SessionLogsDirectory => Path.Combine(LogsDirectory, "sessions");
     public string DaemonLogPath => Path.Combine(LogsDirectory, "daemon.log");
+    public string SessionsDirectory => Path.Combine(BasePath, "sessions");
     public string PidFilePath => Path.Combine(BasePath, "netclaw.pid");
     public string SqliteDbPath => Path.Combine(BasePath, "netclaw.db");
 
@@ -59,5 +61,7 @@ public sealed class NetclawPaths
         Directory.CreateDirectory(SchedulesDirectory);
         Directory.CreateDirectory(ConfigDirectory);
         Directory.CreateDirectory(LogsDirectory);
+        Directory.CreateDirectory(SessionLogsDirectory);
+        Directory.CreateDirectory(SessionsDirectory);
     }
 }
