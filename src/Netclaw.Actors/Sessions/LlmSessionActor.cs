@@ -171,6 +171,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor
         Command<SendUserMessage>(cmd =>
         {
             _log.Info("Received user message");
+            _logActor?.Tell(cmd);
 
             _toolIterationCount = 0;
 

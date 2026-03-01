@@ -26,6 +26,7 @@ public sealed class SessionLogActor : ReceiveActor
         _sessionId = sessionId;
         _logDirectory = logDirectory;
 
+        Receive<SendUserMessage>(OnUserMessage);
         Receive<SessionOutput>(OnOutput);
     }
 
@@ -54,6 +55,23 @@ public sealed class SessionLogActor : ReceiveActor
         catch (Exception ex)
         {
             _log.Debug(ex, "Failed to dispose session log writer for {SessionId}", _sessionId.Value);
+        }
+    }
+
+    private void OnUserMessage(SendUserMessage msg)
+    {
+        if (_writer is null) return;
+
+        try
+        {
+            var mediaNote = msg.MediaReferences.Count > 0
+                ? $" (+{msg.MediaReferences.Count} media)"
+                : string.Empty;
+            _writer.WriteLine($"[{DateTimeOffset.UtcNow:o}] User: {Truncate(msg.Content, 200)}{mediaNote}");
+        }
+        catch (Exception ex)
+        {
+            _log.Debug(ex, "Failed to write user message log entry for {SessionId}", _sessionId.Value);
         }
     }
 
