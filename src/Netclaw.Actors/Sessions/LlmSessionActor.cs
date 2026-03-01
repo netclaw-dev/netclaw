@@ -395,7 +395,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor
             TryReplyAck();
         });
 
-        Command<CompactionTriggered>(msg =>
+        CommandAsync<CompactionTriggered>(async msg =>
         {
             var messagesBefore = _state.History.Count;
 
@@ -408,15 +408,12 @@ public sealed class LlmSessionActor : ReceivePersistentActor
                 _log.Info("Phase 1: Cleared {ClearedCount} old tool result(s)", clearedCount);
             }
 
-            // Phase 2: Extractive reduction via IChatReducer (no LLM call).
+            // Phase 2: Extractive reduction via IChatReducer (no LLM call for the
+            // default ExtractiveSessionReducer, but async reducers are supported).
             // Convert to MEAI ChatMessage without sessionDir (skip media file I/O —
             // the reducer only needs message structure, not media bytes).
-            // GetAwaiter().GetResult() is safe: ExtractiveSessionReducer is synchronous
-            // and Akka actors have no SynchronizationContext. A future async reducer
-            // would need PipeTo instead.
             var meaiMessages = ChatMessageConverter.ToAiMessages(_state.History);
-            var reduced = _chatReducer.ReduceAsync(meaiMessages, CancellationToken.None)
-                .GetAwaiter().GetResult();
+            var reduced = await _chatReducer.ReduceAsync(meaiMessages, CancellationToken.None);
 
             // Map reduced result back to original SerializableChatMessage objects.
             // The extractive reducer preserves order and only trims from the beginning,

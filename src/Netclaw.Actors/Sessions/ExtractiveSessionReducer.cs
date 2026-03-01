@@ -9,8 +9,8 @@ namespace Netclaw.Actors.Sessions;
 /// <c>MessageCountingChatReducer</c> which drops them silently).
 ///
 /// This reducer is synchronous (<see cref="Task.FromResult{TResult}"/>) and
-/// cannot fail — safe to call with <c>.GetAwaiter().GetResult()</c> inside an
-/// Akka actor (no <c>SynchronizationContext</c>).
+/// cannot fail. The actor calls it via <c>await</c> inside a
+/// <c>CommandAsync</c> handler, so async reducers are also supported.
 /// </summary>
 public sealed class ExtractiveSessionReducer : IChatReducer
 {
