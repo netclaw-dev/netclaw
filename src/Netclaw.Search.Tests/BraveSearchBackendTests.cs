@@ -64,6 +64,21 @@ public class BraveSearchBackendTests
     }
 
     [Fact]
+    public void ParseResults_strips_html_tags_and_decodes_entities()
+    {
+        var json = LoadFixture("brave-search-akka-dotnet.json");
+        var results = BraveSearchBackend.ParseResults(json, 30);
+
+        var first = results[0];
+        // Fixture description contains "<strong>a .NET port...</strong>" and "&amp;"
+        Assert.DoesNotContain("<strong>", first.Snippet);
+        Assert.DoesNotContain("</strong>", first.Snippet);
+        Assert.DoesNotContain("&amp;", first.Snippet);
+        // Verify the decoded content is present
+        Assert.Contains("a .NET port", first.Snippet);
+    }
+
+    [Fact]
     public void ParseResults_skips_entries_missing_url()
     {
         var json = """

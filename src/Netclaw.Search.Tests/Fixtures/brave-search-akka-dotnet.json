@@ -20,7 +20,7 @@
         "url": "https://github.com/akkadotnet/akka.net",
         "is_source_local": false,
         "is_source_both": false,
-        "description": "Akka.NET is a .NET port of the popular Akka framework for building highly concurrent, distributed, and fault-tolerant event-driven applications.",
+        "description": "Akka.NET is <strong>a .NET port of the popular Akka framework</strong> for building highly concurrent, distributed, and fault-tolerant event-driven applications.",
         "language": "en",
         "family_friendly": true
       },
@@ -29,7 +29,7 @@
         "url": "https://getakka.net/",
         "is_source_local": false,
         "is_source_both": false,
-        "description": "Akka.NET is a professional-grade port of the popular Java/Scala framework Akka distributed actor framework to .NET.",
+        "description": "Akka.NET is a professional-grade port of the popular Java/Scala framework Akka distributed actor framework to .NET &amp; Mono.",
         "language": "en",
         "family_friendly": true
       },

@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Headers;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace Netclaw.Search;
 
@@ -8,7 +9,7 @@ namespace Netclaw.Search;
 /// Search backend using the Brave Search API.
 /// Authenticates via X-Subscription-Token header.
 /// </summary>
-public sealed class BraveSearchBackend : ISearchBackend
+public sealed partial class BraveSearchBackend : ISearchBackend
 {
     private const string BaseUrl = "https://api.search.brave.com/res/v1/web/search";
 
@@ -81,9 +82,28 @@ public sealed class BraveSearchBackend : ISearchBackend
             if (string.IsNullOrEmpty(url) || string.IsNullOrEmpty(title))
                 continue;
 
-            results.Add(new SearchResult(title, url, description));
+            results.Add(new SearchResult(
+                StripHtml(title),
+                url,
+                StripHtml(description)));
         }
 
         return results;
     }
+
+    /// <summary>
+    /// Brave Search API returns HTML markup (e.g. &lt;strong&gt;) and entities in
+    /// titles and descriptions. Strip tags and decode for clean LLM consumption.
+    /// </summary>
+    internal static string StripHtml(string input)
+    {
+        if (string.IsNullOrEmpty(input))
+            return input;
+
+        var noTags = HtmlTagRegex().Replace(input, "");
+        return WebUtility.HtmlDecode(noTags);
+    }
+
+    [GeneratedRegex("<[^>]+>")]
+    private static partial Regex HtmlTagRegex();
 }
