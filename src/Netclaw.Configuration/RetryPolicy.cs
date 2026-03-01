@@ -13,7 +13,8 @@ public sealed record RetryPolicy
 
     /// <summary>
     /// Determines whether the given exception is transient and should be retried.
-    /// Retries on: 429 (rate limit), 5xx (server error), timeouts, and network errors.
+    /// Retries on: status-less network failures, 408/429/5xx responses,
+    /// and timeout-style cancellations.
     /// </summary>
     public bool ShouldRetry(Exception ex, int attempt)
     {
@@ -22,13 +23,15 @@ public sealed record RetryPolicy
 
         return ex switch
         {
+            HttpRequestException { StatusCode: null } => true,
             HttpRequestException httpEx => httpEx.StatusCode is
+                HttpStatusCode.RequestTimeout or
                 HttpStatusCode.TooManyRequests or
                 HttpStatusCode.InternalServerError or
                 HttpStatusCode.BadGateway or
                 HttpStatusCode.ServiceUnavailable or
                 HttpStatusCode.GatewayTimeout,
-            TaskCanceledException { InnerException: TimeoutException } => true,
+            TaskCanceledException => true,
             TimeoutException => true,
             _ => false
         };

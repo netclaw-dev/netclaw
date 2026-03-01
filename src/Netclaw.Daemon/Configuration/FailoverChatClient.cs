@@ -56,25 +56,64 @@ public sealed class FailoverChatClient : IChatClient
         [System.Runtime.CompilerServices.EnumeratorCancellation]
         CancellationToken cancellationToken)
     {
-        // Try primary initiation — if it throws, fall back.
-        // Mid-stream failures are NOT caught here (C# limitation: no yield in try-catch).
-        // The retry decorator on the primary already handles transient errors.
+        // Try primary stream creation first.
         IAsyncEnumerable<ChatResponseUpdate> stream;
+        Exception? primaryInitiationFailure = null;
         try
         {
             stream = _primary.GetStreamingResponseAsync(messages, options, cancellationToken);
         }
         catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
         {
-            _logger.LogWarning(ex,
-                "Primary LLM streaming failed on initiation, failing over to fallback");
+            primaryInitiationFailure = ex;
             stream = _fallback.GetStreamingResponseAsync(messages, options, cancellationToken);
         }
 
-        await foreach (var update in stream)
+        if (primaryInitiationFailure is not null)
         {
+            _logger.LogWarning(primaryInitiationFailure,
+                "Primary LLM streaming failed on initiation, failing over to fallback");
+
+            await foreach (var fallbackUpdate in stream)
+                yield return fallbackUpdate;
+
+            yield break;
+        }
+
+        // Primary stream started. If the first MoveNextAsync fails, fail over.
+        // Once any primary chunk is emitted, failures propagate to avoid mixed-output artifacts.
+        await using var primaryEnumerator = stream.GetAsyncEnumerator(cancellationToken);
+        var yieldedPrimaryChunk = false;
+        Exception? primaryPreFirstChunkFailure = null;
+
+        while (true)
+        {
+            ChatResponseUpdate update;
+            try
+            {
+                if (!await primaryEnumerator.MoveNextAsync())
+                    break;
+
+                update = primaryEnumerator.Current;
+            }
+            catch (Exception ex) when (!cancellationToken.IsCancellationRequested && !yieldedPrimaryChunk)
+            {
+                primaryPreFirstChunkFailure = ex;
+                break;
+            }
+
+            yieldedPrimaryChunk = true;
             yield return update;
         }
+
+        if (primaryPreFirstChunkFailure is null)
+            yield break;
+
+        _logger.LogWarning(primaryPreFirstChunkFailure,
+            "Primary LLM streaming failed before first chunk, failing over to fallback");
+
+        await foreach (var fallbackUpdate in _fallback.GetStreamingResponseAsync(messages, options, cancellationToken))
+            yield return fallbackUpdate;
     }
 
     public object? GetService(Type serviceType, object? serviceKey = null)

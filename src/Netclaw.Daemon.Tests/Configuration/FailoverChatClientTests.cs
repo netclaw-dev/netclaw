@@ -86,4 +86,103 @@ public sealed class FailoverChatClientTests
         Assert.Single(updates);
         Assert.Equal("streamed", updates[0].Text);
     }
+
+    [Fact]
+    public async Task Streaming_FallsBack_WhenPrimaryFailsBeforeFirstChunk()
+    {
+        var fallbackStreamCalls = 0;
+
+        var primary = new FakeChatClient(streamHandler: (_, _, ct) =>
+            ThrowBeforeFirstChunkAsync(ct));
+        var fallback = new FakeChatClient(streamHandler: (_, _, ct) =>
+        {
+            fallbackStreamCalls++;
+            return SingleTextUpdateAsync("fallback", ct);
+        });
+
+        var client = new FailoverChatClient(primary, fallback, NullLogger.Instance);
+
+        var updates = new List<ChatResponseUpdate>();
+        await foreach (var u in client.GetStreamingResponseAsync(
+            [new ChatMessage(ChatRole.User, "hi")]))
+        {
+            updates.Add(u);
+        }
+
+        Assert.Single(updates);
+        Assert.Equal("fallback", updates[0].Text);
+        Assert.Equal(1, fallbackStreamCalls);
+    }
+
+    [Fact]
+    public async Task Streaming_DoesNotFallback_AfterPrimaryAlreadyYielded()
+    {
+        var fallbackStreamCalls = 0;
+
+        var primary = new FakeChatClient(streamHandler: (_, _, ct) =>
+            YieldThenThrowAsync(ct));
+        var fallback = new FakeChatClient(streamHandler: (_, _, ct) =>
+        {
+            fallbackStreamCalls++;
+            return SingleTextUpdateAsync("fallback", ct);
+        });
+
+        var client = new FailoverChatClient(primary, fallback, NullLogger.Instance);
+        var updates = new List<ChatResponseUpdate>();
+
+        var ex = await Assert.ThrowsAsync<HttpRequestException>(async () =>
+        {
+            await foreach (var u in client.GetStreamingResponseAsync(
+                [new ChatMessage(ChatRole.User, "hi")]))
+            {
+                updates.Add(u);
+            }
+        });
+
+        Assert.Contains("primary stream failed", ex.Message);
+        Assert.Single(updates);
+        Assert.Equal("primary", updates[0].Text);
+        Assert.Equal(0, fallbackStreamCalls);
+    }
+
+    private static async IAsyncEnumerable<ChatResponseUpdate> ThrowBeforeFirstChunkAsync(
+        [System.Runtime.CompilerServices.EnumeratorCancellation]
+        CancellationToken cancellationToken)
+    {
+        await Task.Yield();
+        cancellationToken.ThrowIfCancellationRequested();
+        throw new HttpRequestException("primary stream failed before first chunk");
+#pragma warning disable CS0162 // Unreachable code
+        yield break;
+#pragma warning restore CS0162 // Unreachable code
+    }
+
+    private static async IAsyncEnumerable<ChatResponseUpdate> YieldThenThrowAsync(
+        [System.Runtime.CompilerServices.EnumeratorCancellation]
+        CancellationToken cancellationToken)
+    {
+        await Task.Yield();
+        cancellationToken.ThrowIfCancellationRequested();
+        yield return new ChatResponseUpdate
+        {
+            Role = ChatRole.Assistant,
+            Contents = [new TextContent("primary")]
+        };
+
+        throw new HttpRequestException("primary stream failed after first chunk");
+    }
+
+    private static async IAsyncEnumerable<ChatResponseUpdate> SingleTextUpdateAsync(
+        string text,
+        [System.Runtime.CompilerServices.EnumeratorCancellation]
+        CancellationToken cancellationToken)
+    {
+        await Task.Yield();
+        cancellationToken.ThrowIfCancellationRequested();
+        yield return new ChatResponseUpdate
+        {
+            Role = ChatRole.Assistant,
+            Contents = [new TextContent(text)]
+        };
+    }
 }

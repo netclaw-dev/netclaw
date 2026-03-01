@@ -55,6 +55,44 @@ public sealed class RetryingChatClientTests
     }
 
     [Fact]
+    public async Task RetriesOnStatuslessHttpRequestException_ThenSucceeds()
+    {
+        var attempts = 0;
+        var fake = new FakeChatClient((_, _, _) =>
+        {
+            attempts++;
+            if (attempts < 2)
+                throw new HttpRequestException("connection reset");
+            return Task.FromResult(new ChatResponse([new ChatMessage(ChatRole.Assistant, "ok")]));
+        });
+
+        var client = new RetryingChatClient(fake, _policy, NullLogger.Instance);
+        var response = await client.GetResponseAsync([new ChatMessage(ChatRole.User, "hi")]);
+
+        Assert.Equal("ok", response.Messages[0].Text);
+        Assert.Equal(2, attempts);
+    }
+
+    [Fact]
+    public async Task RetriesOnTaskCanceledTimeout_ThenSucceeds()
+    {
+        var attempts = 0;
+        var fake = new FakeChatClient((_, _, _) =>
+        {
+            attempts++;
+            if (attempts < 2)
+                throw new TaskCanceledException("request timed out");
+            return Task.FromResult(new ChatResponse([new ChatMessage(ChatRole.Assistant, "ok")]));
+        });
+
+        var client = new RetryingChatClient(fake, _policy, NullLogger.Instance);
+        var response = await client.GetResponseAsync([new ChatMessage(ChatRole.User, "hi")]);
+
+        Assert.Equal("ok", response.Messages[0].Text);
+        Assert.Equal(2, attempts);
+    }
+
+    [Fact]
     public async Task StopsAfterMaxRetries()
     {
         var attempts = 0;
@@ -136,14 +174,16 @@ public sealed class RetryingChatClientTests
 internal sealed class FakeChatClient : IChatClient
 {
     private readonly Func<IEnumerable<ChatMessage>, ChatOptions?, CancellationToken, Task<ChatResponse>>? _handler;
-    private readonly bool _streaming;
+    private readonly Func<IEnumerable<ChatMessage>, ChatOptions?, CancellationToken, IAsyncEnumerable<ChatResponseUpdate>>? _streamHandler;
 
     public FakeChatClient(
         Func<IEnumerable<ChatMessage>, ChatOptions?, CancellationToken, Task<ChatResponse>>? handler = null,
-        bool streaming = false)
+        bool streaming = false,
+        Func<IEnumerable<ChatMessage>, ChatOptions?, CancellationToken, IAsyncEnumerable<ChatResponseUpdate>>? streamHandler = null)
     {
+        _ = streaming;
         _handler = handler;
-        _streaming = streaming;
+        _streamHandler = streamHandler;
     }
 
     public Task<ChatResponse> GetResponseAsync(
@@ -162,6 +202,9 @@ internal sealed class FakeChatClient : IChatClient
         ChatOptions? options = null,
         CancellationToken cancellationToken = default)
     {
+        if (_streamHandler is not null)
+            return _streamHandler(messages, options, cancellationToken);
+
         return StreamAsync();
     }
 
