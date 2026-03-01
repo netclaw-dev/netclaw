@@ -145,4 +145,39 @@ public class AttachFileToolTests : IDisposable
         // FilenameSanitizer will clean the display name
         Assert.Contains("My Custom Report.png", result);
     }
+
+    [Fact]
+    public async Task Successful_attach_populates_file_attachments_on_context()
+    {
+        var filePath = Path.Combine(_tempDir, "chart.png");
+        await File.WriteAllBytesAsync(filePath, new byte[] { 0x89, 0x50, 0x4E, 0x47 });
+
+        var context = new ToolExecutionContext("test-session", _tempDir);
+        var args = new Dictionary<string, object?>
+        {
+            ["Path"] = filePath
+        };
+
+        await _tool.ExecuteAsync(args, context, CancellationToken.None);
+
+        var attachment = Assert.Single(context.FileAttachments);
+        Assert.Equal(filePath, attachment.FilePath);
+        Assert.Equal("chart.png", attachment.FileName);
+        Assert.Equal("image/png", attachment.MimeType);
+    }
+
+    [Fact]
+    public async Task Failed_attach_does_not_populate_file_attachments()
+    {
+        var context = new ToolExecutionContext("test-session", _tempDir);
+        var args = new Dictionary<string, object?>
+        {
+            ["Path"] = Path.Combine(_tempDir, "nonexistent.png")
+        };
+
+        var result = await _tool.ExecuteAsync(args, context, CancellationToken.None);
+
+        Assert.Contains("Error", result);
+        Assert.Empty(context.FileAttachments);
+    }
 }
