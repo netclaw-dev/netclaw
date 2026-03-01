@@ -6,7 +6,8 @@ namespace Netclaw.Configuration;
 public sealed record ResolvedModelCapabilities(
     string ModelId,
     ModelModality InputModalities,
-    ModelModality OutputModalities);
+    ModelModality OutputModalities,
+    int? ContextWindowTokens = null);
 
 /// <summary>
 /// Resolves model capabilities from a specific source (OpenRouter oracle,
