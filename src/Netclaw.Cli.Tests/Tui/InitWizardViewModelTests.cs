@@ -653,6 +653,53 @@ public sealed class InitWizardViewModelTests : IDisposable
     }
 
     [Fact]
+    public async Task HealthCheck_WritesDmConfigToNetclawJson()
+    {
+        using var vm = CreateViewModel();
+        vm.SelectedProviderType = "ollama";
+        vm.SlackEnabled = true;
+        vm.SlackBotToken = "xoxb-test-bot-token";
+        vm.SlackAppToken = "xapp-test-app-token";
+        vm.SlackAllowDirectMessages = true;
+        vm.SlackAllowedUserIdsInput = "U001ABC, U002DEF";
+
+        vm.CurrentStep.Value = WizardStep.HealthCheck;
+        vm.GoNext();
+        await vm.HealthCheckCompletion!.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.True(vm.IsComplete.Value);
+
+        var config = JsonDocument.Parse(File.ReadAllText(_paths.NetclawConfigPath));
+        Assert.True(config.RootElement.TryGetProperty("Slack", out var slack));
+        Assert.True(slack.GetProperty("AllowDirectMessages").GetBoolean());
+
+        var allowedUsers = slack.GetProperty("AllowedUserIds");
+        Assert.Equal(2, allowedUsers.GetArrayLength());
+        Assert.Equal("U001ABC", allowedUsers[0].GetString());
+        Assert.Equal("U002DEF", allowedUsers[1].GetString());
+    }
+
+    [Fact]
+    public async Task HealthCheck_OmitsDmConfig_WhenDisabled()
+    {
+        using var vm = CreateViewModel();
+        vm.SelectedProviderType = "ollama";
+        vm.SlackEnabled = true;
+        vm.SlackBotToken = "xoxb-test-bot-token";
+        vm.SlackAppToken = "xapp-test-app-token";
+        vm.SlackAllowDirectMessages = false;
+
+        vm.CurrentStep.Value = WizardStep.HealthCheck;
+        vm.GoNext();
+        await vm.HealthCheckCompletion!.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.True(vm.IsComplete.Value);
+
+        var config = JsonDocument.Parse(File.ReadAllText(_paths.NetclawConfigPath));
+        Assert.True(config.RootElement.TryGetProperty("Slack", out var slack));
+        Assert.False(slack.TryGetProperty("AllowDirectMessages", out _));
+        Assert.False(slack.TryGetProperty("AllowedUserIds", out _));
+    }
+
+    [Fact]
     public void WriteIdentityFiles_GeneratesAllThreeFiles()
     {
         using var vm = CreateViewModel();
