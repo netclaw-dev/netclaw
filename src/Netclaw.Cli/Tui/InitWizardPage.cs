@@ -36,10 +36,16 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
     // Step 3: ACL
     private TextInputNode? _ownerIdentityInput;
 
-    // Step 4: Exposure
+    // Step 4: Search
+    private SelectionListNode<string>? _searchBackendList;
+    private TextInputNode? _braveApiKeyInput;
+    private TextInputNode? _searxngEndpointInput;
+    private int _searchSubStep; // 0=backend selection, 1=credentials (brave key or searxng endpoint)
+
+    // Step 5: Exposure
     private SelectionListNode<string>? _exposureList;
 
-    // Step 5: Identity
+    // Step 6: Identity
     private TextInputNode? _agentNameInput;
     private SelectionListNode<string>? _commStyleList;
     private TextInputNode? _userNameInput;
@@ -121,6 +127,7 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
                     WizardStep.Provider => "LLM Provider",
                     WizardStep.ChatServices => "Chat Services",
                     WizardStep.Acl => "Access Control",
+                    WizardStep.Search => "Web Search",
                     WizardStep.Exposure => "Exposure Mode",
                     WizardStep.Identity => "Identity",
                     WizardStep.HealthCheck => "Health Check",
@@ -169,6 +176,7 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
                 WizardStep.Provider => BuildProviderStep(),
                 WizardStep.ChatServices => BuildChatServicesStep(),
                 WizardStep.Acl => BuildAclStep(),
+                WizardStep.Search => BuildSearchStep(),
                 WizardStep.Exposure => BuildExposureStep(),
                 WizardStep.Identity => BuildIdentityStep(),
                 _ => Layouts.Empty()
@@ -203,6 +211,12 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
                     "  Socket Mode requires both tokens. See: https://api.slack.com/apis/socket-mode",
                 WizardStep.Acl =>
                     "  Your Slack user ID (e.g., U01234ABCDE) for admin access.",
+                WizardStep.Search when _searchSubStep == 0 =>
+                    "  DuckDuckGo works without config but may hit bot detection. Brave Search is more reliable.",
+                WizardStep.Search when _searchSubStep == 1 && ViewModel.SelectedSearchBackend == "brave" =>
+                    "  Get a free API key at https://brave.com/search/api/. Stored in secrets.json.",
+                WizardStep.Search when _searchSubStep == 1 && ViewModel.SelectedSearchBackend == "searxng" =>
+                    "  Enter the base URL of your SearXNG instance. JSON format must be enabled in settings.yml.",
                 WizardStep.Exposure =>
                     "  Local-only is recommended for homelab use.",
                 WizardStep.Identity when _identitySubStep == 0 =>
@@ -702,6 +716,123 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
                 .Height(3));
     }
 
+    private ILayoutNode BuildSearchStep()
+    {
+        return _searchSubStep switch
+        {
+            0 => BuildSearchBackendSelectionSubStep(),
+            1 => BuildSearchCredentialSubStep(),
+            _ => Layouts.Empty()
+        };
+    }
+
+    private ILayoutNode BuildSearchBackendSelectionSubStep()
+    {
+        _searchBackendList = Layouts.SelectionList(
+                "DuckDuckGo (default \u2014 no config needed, may hit bot detection)",
+                "Brave Search (API key required \u2014 reliable, fast)",
+                "SearXNG (self-hosted \u2014 endpoint required)")
+            .WithMode(SelectionMode.Single)
+            .WithHighlightColors(Color.Black, Color.Cyan);
+
+        _searchBackendList.OnFocused();
+        _lastFocusedList = _searchBackendList;
+
+        _searchBackendList.SelectionConfirmed
+            .Subscribe(selected =>
+            {
+                if (selected.Count > 0)
+                {
+                    var choice = selected[0];
+                    if (choice.StartsWith("DuckDuckGo", StringComparison.Ordinal))
+                    {
+                        ViewModel.SelectedSearchBackend = "duckduckgo";
+                        _searchSubStep = 0;
+                        ViewModel.GoNext();
+                    }
+                    else if (choice.StartsWith("Brave", StringComparison.Ordinal))
+                    {
+                        ViewModel.SelectedSearchBackend = "brave";
+                        SetSearchSubStep(1);
+                    }
+                    else if (choice.StartsWith("SearXNG", StringComparison.Ordinal))
+                    {
+                        ViewModel.SelectedSearchBackend = "searxng";
+                        SetSearchSubStep(1);
+                    }
+                }
+            })
+            .DisposeWith(_stepSubs);
+
+        return Layouts.Vertical()
+            .WithChild(new TextNode("  Choose your web search provider:").WithForeground(Color.White))
+            .WithChild(_searchBackendList);
+    }
+
+    private ILayoutNode BuildSearchCredentialSubStep()
+    {
+        if (ViewModel.SelectedSearchBackend == "brave")
+        {
+            _braveApiKeyInput = new TextInputNode()
+                .AsPassword()
+                .WithPlaceholder("Enter Brave Search API key...");
+
+            if (!string.IsNullOrWhiteSpace(ViewModel.BraveApiKeyInput))
+                _braveApiKeyInput.Text = ViewModel.BraveApiKeyInput;
+
+            _braveApiKeyInput.OnFocused();
+            _lastFocusedInput = _braveApiKeyInput;
+
+            _braveApiKeyInput.Submitted
+                .Where(text => !string.IsNullOrWhiteSpace(text))
+                .Subscribe(text =>
+                {
+                    ViewModel.BraveApiKeyInput = text;
+                    _searchSubStep = 0;
+                    ViewModel.GoNext();
+                })
+                .DisposeWith(_stepSubs);
+
+            return Layouts.Vertical()
+                .WithChild(new TextNode("  Brave Search API key:").WithForeground(Color.White))
+                .WithChild(new PanelNode()
+                    .WithTitle("API Key")
+                    .WithBorder(BorderStyle.Rounded)
+                    .WithBorderColor(Color.Gray)
+                    .WithContent(_braveApiKeyInput)
+                    .Height(3));
+        }
+
+        // SearXNG endpoint
+        _searxngEndpointInput = new TextInputNode()
+            .WithPlaceholder("http://searxng.local:8080");
+
+        if (!string.IsNullOrWhiteSpace(ViewModel.SearXngEndpointInput))
+            _searxngEndpointInput.Text = ViewModel.SearXngEndpointInput;
+
+        _searxngEndpointInput.OnFocused();
+        _lastFocusedInput = _searxngEndpointInput;
+
+        _searxngEndpointInput.Submitted
+            .Where(text => !string.IsNullOrWhiteSpace(text))
+            .Subscribe(text =>
+            {
+                ViewModel.SearXngEndpointInput = text;
+                _searchSubStep = 0;
+                ViewModel.GoNext();
+            })
+            .DisposeWith(_stepSubs);
+
+        return Layouts.Vertical()
+            .WithChild(new TextNode("  SearXNG endpoint URL:").WithForeground(Color.White))
+            .WithChild(new PanelNode()
+                .WithTitle("Endpoint")
+                .WithBorder(BorderStyle.Rounded)
+                .WithBorderColor(Color.Gray)
+                .WithContent(_searxngEndpointInput)
+                .Height(3));
+    }
+
     private ILayoutNode BuildExposureStep()
     {
         _exposureList = Layouts.SelectionList(
@@ -956,6 +1087,12 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             return true;
         }
 
+        if (ViewModel.CurrentStep.Value == WizardStep.Search && _searchSubStep > 0)
+        {
+            SetSearchSubStep(_searchSubStep - 1);
+            return true;
+        }
+
         if (ViewModel.CurrentStep.Value == WizardStep.ChatServices && _chatServicesSubStep > 0)
         {
             SetChatServicesSubStep(_chatServicesSubStep - 1);
@@ -1047,6 +1184,7 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             WizardStep.Provider when _providerSubStep == 1 => _authMethodList,
             WizardStep.Provider when _providerSubStep == 4 && !_manualModelEntry => _modelList,
             WizardStep.ChatServices when _chatServicesSubStep == 0 => _slackEnabledList,
+            WizardStep.Search when _searchSubStep == 0 => _searchBackendList,
             WizardStep.Exposure => _exposureList,
             WizardStep.Identity when _identitySubStep == 1 => _commStyleList,
             _ => null
@@ -1063,6 +1201,8 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             WizardStep.ChatServices when _chatServicesSubStep == 1 => _slackBotTokenInput,
             WizardStep.ChatServices when _chatServicesSubStep == 2 => _slackAppTokenInput,
             WizardStep.ChatServices when _chatServicesSubStep == 3 => _slackChannelNamesInput,
+            WizardStep.Search when _searchSubStep == 1 && _braveApiKeyInput is not null => _braveApiKeyInput,
+            WizardStep.Search when _searchSubStep == 1 => _searxngEndpointInput,
             WizardStep.Acl => _ownerIdentityInput,
             WizardStep.Identity when _identitySubStep == 0 => _agentNameInput,
             WizardStep.Identity when _identitySubStep == 2 => _userNameInput,
@@ -1095,6 +1235,14 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
         ViewModel.RequestRedraw();
     }
 
+    private void SetSearchSubStep(int step)
+    {
+        _searchSubStep = step;
+        _stepContentNode?.Invalidate();
+        _helpTextNode?.Invalidate();
+        ViewModel.RequestRedraw();
+    }
+
     private void SetIdentitySubStep(int step)
     {
         _identitySubStep = step;
@@ -1114,6 +1262,8 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
                     _providerSubStep = 0;
                 if (step == WizardStep.ChatServices)
                     _chatServicesSubStep = 0;
+                if (step == WizardStep.Search)
+                    _searchSubStep = 0;
                 if (step == WizardStep.Identity)
                     _identitySubStep = 0;
 
