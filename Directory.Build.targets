@@ -1,0 +1,17 @@
+<Project>
+  <!--
+    Capture the UTC build timestamp at evaluation time and embed it as an
+    AssemblyMetadata attribute. The git commit hash is already embedded by
+    Microsoft.SourceLink.GitHub in AssemblyInformationalVersion as
+    "{VersionPrefix}+{full-sha}", so no separate action is needed for it.
+  -->
+  <PropertyGroup>
+    <BuildTimestamp>$([System.DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ"))</BuildTimestamp>
+  </PropertyGroup>
+  <ItemGroup>
+    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+      <_Parameter1>BuildTimestamp</_Parameter1>
+      <_Parameter2>$(BuildTimestamp)</_Parameter2>
+    </AssemblyAttribute>
+  </ItemGroup>
+</Project>

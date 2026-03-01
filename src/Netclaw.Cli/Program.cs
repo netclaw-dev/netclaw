@@ -682,6 +682,7 @@ static async Task<int> RunStatusAsync(IServiceProvider services, IConfiguration 
 static void WriteStatusResult(DaemonRuntimeStatus.Response status, string endpoint)
 {
     Console.WriteLine($"overall: {status.Overall}");
+    Console.WriteLine($"version: {status.Build.Version} (commit {status.Build.CommitHash}, built {status.Build.BuildTimestamp})");
     Console.WriteLine($"daemon: PID {status.Process.Pid}, uptime {FormatUptime(status.Process.UptimeSeconds)}, endpoint {endpoint}");
     Console.WriteLine($"persistence: {status.Persistence.Provider}");
     Console.WriteLine($"telemetry: {(status.Telemetry.Enabled ? "enabled" : "disabled")}" +
