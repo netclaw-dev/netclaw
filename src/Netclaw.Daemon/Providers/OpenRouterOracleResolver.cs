@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using Netclaw.Configuration;
+using Netclaw.Configuration.Providers;
 
 namespace Netclaw.Daemon.Providers;
 
@@ -13,13 +14,18 @@ public sealed class OpenRouterOracleResolver : IModelCapabilityResolver
 {
     private readonly HttpClient _httpClient;
     private readonly ILogger<OpenRouterOracleResolver> _logger;
+    private readonly ProviderDescriptorRegistry _registry;
     private Dictionary<string, ResolvedModelCapabilities>? _cache;
     private readonly SemaphoreSlim _cacheLock = new(1, 1);
 
-    public OpenRouterOracleResolver(HttpClient httpClient, ILogger<OpenRouterOracleResolver> logger)
+    public OpenRouterOracleResolver(
+        HttpClient httpClient,
+        ILogger<OpenRouterOracleResolver> logger,
+        ProviderDescriptorRegistry registry)
     {
         _httpClient = httpClient;
         _logger = logger;
+        _registry = registry;
     }
 
     public async Task<ResolvedModelCapabilities?> ResolveAsync(
@@ -64,8 +70,8 @@ public sealed class OpenRouterOracleResolver : IModelCapabilityResolver
     private async Task<Dictionary<string, ResolvedModelCapabilities>?> FetchCatalogAsync(
         CancellationToken ct)
     {
-        var url = $"{ProviderCapabilities.GetDefaultEndpoint("openrouter")}" +
-                  $"{ProviderCapabilities.GetModelListingPath("openrouter")}";
+        var descriptor = _registry.Get("openrouter");
+        var url = $"{descriptor.DefaultEndpoint}{descriptor.ModelListingPath}";
 
         using var request = new HttpRequestMessage(HttpMethod.Get, url);
 

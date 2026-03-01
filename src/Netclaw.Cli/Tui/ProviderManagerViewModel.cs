@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Netclaw.Cli.Config;
 using Netclaw.Configuration;
+using Netclaw.Configuration.Providers;
 using R3;
 using Termina.Input;
 using Termina.Reactive;
@@ -58,6 +59,7 @@ public sealed class ProviderDisplayItem
 public sealed class ProviderManagerViewModel : ReactiveViewModel
 {
     private readonly NetclawPaths _paths;
+    private readonly ProviderDescriptorRegistry _registry;
     private readonly IProviderProbe _probe;
     private CancellationTokenSource? _probeCts;
 
@@ -113,9 +115,20 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
     /// </summary>
     internal Task? EagerProbeCompletion { get; private set; }
 
-    public ProviderManagerViewModel(NetclawPaths paths, IProviderProbe probe)
+    /// <summary>
+    /// The provider descriptor registry. Exposed for use by the page.
+    /// </summary>
+    public ProviderDescriptorRegistry Registry => _registry;
+
+    public ProviderManagerViewModel(NetclawPaths paths, ProviderDescriptorRegistry registry)
+        : this(paths, registry, registry)
+    {
+    }
+
+    public ProviderManagerViewModel(NetclawPaths paths, ProviderDescriptorRegistry registry, IProviderProbe probe)
     {
         _paths = paths;
+        _registry = registry;
         _probe = probe;
     }
 
@@ -140,11 +153,13 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
         DisplayProviders.Clear();
         var loaded = Provider.ProviderCommand.LoadProviders(_paths);
 
-        foreach (var type in ProviderCapabilities.KnownProviderTypes)
+        foreach (var typeKey in _registry.KnownTypeKeys)
         {
+            var descriptor = _registry.Get(typeKey);
+
             // Find configured provider of this type
             var configured = loaded
-                .FirstOrDefault(p => string.Equals(p.Value.Type, type, StringComparison.OrdinalIgnoreCase));
+                .FirstOrDefault(p => string.Equals(p.Value.Type, typeKey, StringComparison.OrdinalIgnoreCase));
 
             if (configured.Key is not null)
             {
@@ -154,7 +169,7 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
 
                 DisplayProviders.Add(new ProviderDisplayItem
                 {
-                    ProviderType = type,
+                    ProviderType = typeKey,
                     IsConfigured = true,
                     ConfiguredName = configured.Key,
                     Entry = configured.Value,
@@ -164,12 +179,11 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
             }
             else
             {
-                var defaultEndpoint = ProviderCapabilities.GetDefaultEndpoint(type);
                 DisplayProviders.Add(new ProviderDisplayItem
                 {
-                    ProviderType = type,
+                    ProviderType = typeKey,
                     IsConfigured = false,
-                    DisplayEndpoint = $"({defaultEndpoint})",
+                    DisplayEndpoint = $"({descriptor.DefaultEndpoint})",
                     DisplayAuth = "\u2014"
                 });
             }
@@ -284,8 +298,8 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
         NewProviderType = type;
         NewProviderName = GenerateProviderName(type);
 
-        var supportedAuth = ProviderCapabilities.GetSupportedAuthMethods(type);
-        if (supportedAuth is [AuthMethod.None])
+        var descriptor = _registry.Get(type);
+        if (descriptor.SupportedAuthMethods is [AuthMethod.None])
         {
             NewAuthMethod = AuthMethod.None;
             CurrentState.Value = ProviderManagerState.AddCredentials;
@@ -346,9 +360,9 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
         if (DetailProvider is null) return;
 
         var type = DetailProvider.ProviderType;
-        var supportedAuth = ProviderCapabilities.GetSupportedAuthMethods(type);
+        var descriptor = _registry.Get(type);
 
-        if (supportedAuth.Contains(AuthMethod.ApiKey) && string.IsNullOrWhiteSpace(FixApiKey))
+        if (descriptor.SupportedAuthMethods.Contains(AuthMethod.ApiKey) && string.IsNullOrWhiteSpace(FixApiKey))
         {
             StatusMessage.Value = "API key is required.";
             RequestRedraw();
@@ -510,8 +524,8 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
                 GoBackToList();
                 break;
             case ProviderManagerState.AddCredentials:
-                var supportedAuth = ProviderCapabilities.GetSupportedAuthMethods(NewProviderType ?? "");
-                if (supportedAuth is [AuthMethod.None])
+                var descriptor = _registry.Get(NewProviderType ?? "");
+                if (descriptor.SupportedAuthMethods is [AuthMethod.None])
                     GoBackToList();
                 else
                     CurrentState.Value = ProviderManagerState.AddSelectAuth;
@@ -651,9 +665,12 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
             providerEntry["AuthMethod"] = NewAuthMethod.ToString();
 
         var endpoint = NewEndpoint;
-        if (string.IsNullOrWhiteSpace(endpoint) && NewProviderType == "ollama")
-            endpoint = ProviderCapabilities.GetDefaultEndpoint("ollama");
-        endpoint ??= ProviderCapabilities.GetDefaultEndpoint(NewProviderType!);
+        if (string.IsNullOrWhiteSpace(endpoint) && NewProviderType is not null)
+        {
+            var descriptor = _registry.Get(NewProviderType);
+            endpoint = descriptor.DefaultEndpoint;
+        }
+        endpoint ??= "";
 
         providerEntry["Endpoint"] = endpoint;
         providers[NewProviderName!] = providerEntry;

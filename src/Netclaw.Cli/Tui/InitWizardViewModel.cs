@@ -2,6 +2,7 @@ using System.Text.Json;
 using Netclaw.Channels.Slack;
 using Netclaw.Cli.Daemon;
 using Netclaw.Configuration;
+using Netclaw.Configuration.Providers;
 using R3;
 using Termina.Input;
 using Termina.Reactive;
@@ -33,7 +34,13 @@ public partial class InitWizardViewModel : ReactiveViewModel
 
     private readonly NetclawPaths _paths;
     private readonly IProviderProbe _probe;
+    private readonly ProviderDescriptorRegistry _registry;
     private readonly ISlackProbe _slackProbe;
+
+    /// <summary>
+    /// The provider descriptor registry. Exposed for use by the page.
+    /// </summary>
+    public ProviderDescriptorRegistry Registry => _registry;
     private readonly DaemonManager? _daemonManager;
     private readonly string _daemonEndpoint;
     private CancellationTokenSource? _probeCts;
@@ -116,6 +123,8 @@ public partial class InitWizardViewModel : ReactiveViewModel
     {
         _paths = paths;
         _probe = probe;
+        _registry = probe as ProviderDescriptorRegistry
+            ?? Provider.ProviderCommand.CreateDefaultRegistry();
         _slackProbe = slackProbe;
         _daemonManager = daemonManager;
         _daemonEndpoint = daemonEndpoint ?? "http://127.0.0.1:5199";
@@ -536,8 +545,10 @@ public partial class InitWizardViewModel : ReactiveViewModel
 
             if (!string.IsNullOrWhiteSpace(EndpointInput))
                 providerEntry["Endpoint"] = EndpointInput;
-            else if (providerName == "ollama")
-                providerEntry["Endpoint"] = ProviderCapabilities.GetDefaultEndpoint("ollama");
+            else if (_probe is ProviderDescriptorRegistry reg
+                     && reg.TryGet(providerName, out var desc)
+                     && desc.CredentialMode == CredentialInputMode.EndpointOnly)
+                providerEntry["Endpoint"] = desc.DefaultEndpoint;
 
             providers[providerName] = providerEntry;
         }

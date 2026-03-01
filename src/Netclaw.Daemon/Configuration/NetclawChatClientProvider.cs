@@ -5,7 +5,7 @@ namespace Netclaw.Daemon.Configuration;
 
 /// <summary>
 /// Resolves <see cref="IChatClient"/> instances by <see cref="ModelRole"/>
-/// using a <see cref="ChatClientFactory"/> and <see cref="ModelSelection"/>.
+/// using a <see cref="ProviderPluginFactory"/> and <see cref="ModelSelection"/>.
 /// Clients are created once at construction and reused for all requests.
 /// </summary>
 public sealed class NetclawChatClientProvider : IChatClientProvider
@@ -14,7 +14,7 @@ public sealed class NetclawChatClientProvider : IChatClientProvider
     private readonly IChatClient? _fallback;
     private readonly IChatClient? _compaction;
 
-    public NetclawChatClientProvider(ChatClientFactory factory, ModelSelection models)
+    public NetclawChatClientProvider(ProviderPluginFactory factory, ModelSelection models)
     {
         _main = factory.Create(models.Main);
         _fallback = models.Fallback is not null

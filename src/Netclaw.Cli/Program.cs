@@ -13,6 +13,7 @@ using Netclaw.Cli.Model;
 using Netclaw.Cli.Provider;
 using Netclaw.Cli.Tui;
 using Netclaw.Configuration;
+using Netclaw.Configuration.Providers;
 using Termina.Diagnostics;
 using Termina.Hosting;
 
@@ -90,8 +91,8 @@ static async Task RunAsync(string[] args)
             builder.Services.AddTerminaFileTracing(traceFile, TerminaTraceCategory.All, TerminaTraceLevel.Trace);
             Console.Error.WriteLine($"Trace log: {traceFile}");
 
-            // Provider probe for credential validation + model discovery
-            builder.Services.AddHttpClient<IProviderProbe, ProviderProbe>();
+            // Provider descriptors (includes IProviderProbe via registry)
+            builder.Services.AddProviderDescriptors();
             builder.Services.AddHttpClient<ISlackProbe, SlackProbe>();
 
             // Init wizard + chat page dependencies (daemon lifecycle + SignalR)
@@ -314,7 +315,7 @@ static async Task RunAsync(string[] args)
         {
             var builder = Host.CreateApplicationBuilder(args);
             ConfigureConfigServices(builder.Services, builder.Configuration);
-            builder.Services.AddHttpClient<IProviderProbe, ProviderProbe>();
+            builder.Services.AddProviderDescriptors();
             builder.Logging.ClearProviders();
             builder.Logging.SetMinimumLevel(LogLevel.Warning);
 
@@ -343,7 +344,7 @@ static async Task RunAsync(string[] args)
         {
             var builder = Host.CreateApplicationBuilder(args);
             ConfigureConfigServices(builder.Services, builder.Configuration);
-            builder.Services.AddHttpClient<IProviderProbe, ProviderProbe>();
+            builder.Services.AddProviderDescriptors();
             builder.Logging.ClearProviders();
             builder.Logging.SetMinimumLevel(LogLevel.Warning);
 

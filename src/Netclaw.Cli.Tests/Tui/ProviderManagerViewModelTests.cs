@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Netclaw.Cli.Provider;
 using Netclaw.Cli.Tui;
 using Netclaw.Configuration;
 using Xunit;
@@ -47,8 +48,8 @@ public sealed class ProviderManagerViewModelTests : IDisposable
         using var vm = CreateViewModel();
         vm.RefreshDisplayProviders();
 
-        Assert.Equal(ProviderCapabilities.KnownProviderTypes.Count, vm.DisplayProviders.Count);
-        foreach (var type in ProviderCapabilities.KnownProviderTypes)
+        Assert.Equal(4, vm.DisplayProviders.Count);
+        foreach (var type in new[] { "ollama", "openai", "anthropic", "openrouter" })
         {
             Assert.Contains(vm.DisplayProviders, p => p.ProviderType == type);
         }
@@ -510,7 +511,7 @@ public sealed class ProviderManagerViewModelTests : IDisposable
 
     private ProviderManagerViewModel CreateViewModel()
     {
-        return new ProviderManagerViewModel(_paths, _fakeProbe);
+        return new ProviderManagerViewModel(_paths, ProviderCommand.CreateDefaultRegistry(), _fakeProbe);
     }
 
     private void WriteConfig(Dictionary<string, object> data)

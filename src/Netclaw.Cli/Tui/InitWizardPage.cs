@@ -1,4 +1,5 @@
 using Netclaw.Configuration;
+using Netclaw.Configuration.Providers;
 using R3;
 using Termina.Extensions;
 using Termina.Input;
@@ -69,6 +70,8 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
     // Step-specific subscriptions — cleared when step content is rebuilt
     // so old subscriptions on disposed components don't linger.
     private readonly CompositeDisposable _stepSubs = new();
+
+    private ProviderDescriptorRegistry GetRegistry() => ViewModel.Registry;
 
     protected override void OnBound()
     {
@@ -285,8 +288,9 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
 
     private ILayoutNode BuildProviderSelectionSubStep()
     {
+        var registry = GetRegistry();
         _providerList = Layouts.SelectionList(
-                ProviderCapabilities.KnownProviderTypes)
+                registry.KnownTypeKeys.ToList())
             .WithMode(SelectionMode.Single)
             .WithHighlightColors(Color.Black, Color.Cyan);
 
@@ -299,8 +303,8 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
                 if (selected.Count > 0)
                 {
                     ViewModel.SelectedProviderType = selected[0];
-                    var supportedAuth = ProviderCapabilities.GetSupportedAuthMethods(selected[0]);
-                    if (supportedAuth is [AuthMethod.None])
+                    var descriptor = registry.Get(selected[0]);
+                    if (descriptor.SupportedAuthMethods is [AuthMethod.None])
                     {
                         ViewModel.SelectedAuthMethod = AuthMethod.None;
                         SetProviderSubStep(2);
@@ -321,7 +325,8 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
     private ILayoutNode BuildAuthMethodSubStep()
     {
         var providerType = ViewModel.SelectedProviderType ?? "unknown";
-        var supportedMethods = ProviderCapabilities.GetSupportedAuthMethods(providerType)
+        var descriptor = GetRegistry().Get(providerType);
+        var supportedMethods = descriptor.SupportedAuthMethods
             .Where(m => m != AuthMethod.None)
             .Select(m => m switch
             {
@@ -367,12 +372,13 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
     {
         var providerType = ViewModel.SelectedProviderType ?? "unknown";
 
-        if (providerType == "ollama")
+        var credDescriptor = GetRegistry().Get(providerType);
+        if (credDescriptor.CredentialMode == CredentialInputMode.EndpointOnly)
         {
-            var ollamaDefault = ProviderCapabilities.GetDefaultEndpoint("ollama");
+            var defaultEndpoint = credDescriptor.DefaultEndpoint;
             _endpointInput = new TextInputNode()
-                .WithPlaceholder(ollamaDefault);
-            _endpointInput.Text = ViewModel.EndpointInput ?? ollamaDefault;
+                .WithPlaceholder(defaultEndpoint);
+            _endpointInput.Text = ViewModel.EndpointInput ?? defaultEndpoint;
 
             _endpointInput.OnFocused();
             _lastFocusedInput = _endpointInput;
@@ -381,7 +387,7 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
                 .Subscribe(text =>
                 {
                     ViewModel.EndpointInput = string.IsNullOrWhiteSpace(text)
-                        ? ProviderCapabilities.GetDefaultEndpoint("ollama") : text;
+                        ? defaultEndpoint : text;
                     // Start validation instead of advancing to next step
                     SetProviderSubStep(3);
                     ViewModel.StartProbe();

@@ -1,12 +1,24 @@
 using Microsoft.Extensions.AI;
 using Netclaw.Configuration;
+using Netclaw.Configuration.Providers.Descriptors;
 using Netclaw.Daemon.Configuration;
+using Netclaw.Daemon.Providers;
 using Xunit;
 
 namespace Netclaw.Daemon.Tests.Configuration;
 
-public sealed class ChatClientFactoryTests
+public sealed class ProviderPluginFactoryTests
 {
+    private static readonly HttpClient SharedHttp = new();
+
+    private static readonly ILlmProviderPlugin[] AllPlugins =
+    [
+        new OllamaProviderPlugin(new OllamaDescriptor(SharedHttp)),
+        new OpenAiProviderPlugin(new OpenAiDescriptor(SharedHttp)),
+        new AnthropicProviderPlugin(new AnthropicDescriptor(SharedHttp)),
+        new OpenRouterProviderPlugin(new OpenRouterDescriptor(SharedHttp)),
+    ];
+
     [Fact]
     public void CreatesOllamaClient()
     {
@@ -168,11 +180,11 @@ public sealed class ChatClientFactoryTests
         Assert.Contains("requires authentication", ex.Message);
     }
 
-    private static ChatClientFactory CreateFactory(params (string name, ProviderEntry entry)[] providers)
+    private static ProviderPluginFactory CreateFactory(params (string name, ProviderEntry entry)[] providers)
     {
         var dict = new Dictionary<string, ProviderEntry>();
         foreach (var (name, entry) in providers)
             dict[name] = entry;
-        return new ChatClientFactory(dict);
+        return new ProviderPluginFactory(dict, AllPlugins);
     }
 }
