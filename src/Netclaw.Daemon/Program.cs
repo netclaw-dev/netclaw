@@ -154,6 +154,7 @@ static void ConfigureDaemonServices(
     // Resolve models for session config
     var models = configuration.GetSection("Models")
         .Get<ModelSelection>() ?? new ModelSelection();
+    services.AddSingleton(models);
 
     // Auto-detect model capabilities when not manually specified in config.
     // Uses the OpenRouter public catalog as an oracle — works for models from
@@ -162,7 +163,7 @@ static void ConfigureDaemonServices(
     var outputModalities = models.Main.OutputModalities;
     if (inputModalities is null || outputModalities is null)
     {
-        var detected = ResolveStartupCapabilities(models.Main.ModelId);
+        var detected = ResolveStartupCapabilities(models.Main.ModelId, daemonLogLevel);
         if (detected is not null)
         {
             inputModalities ??= detected.InputModalities;
@@ -334,12 +335,13 @@ static ISearchBackend? CreateSearchBackend(SearchConfig config)
 /// to query the OpenRouter public catalog before the DI container is built.
 /// Returns null if detection fails (caller falls back to text-only).
 /// </summary>
-static ResolvedModelCapabilities? ResolveStartupCapabilities(string modelId)
+static ResolvedModelCapabilities? ResolveStartupCapabilities(string modelId, LogLevel logLevel)
 {
     try
     {
         using var httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
-        using var loggerFactory = LoggerFactory.Create(_ => { });
+        using var loggerFactory = LoggerFactory.Create(b => b.AddConsole().SetMinimumLevel(logLevel));
+        var logger = loggerFactory.CreateLogger("Netclaw.Startup");
         var resolver = new OpenRouterOracleResolver(
             httpClient, loggerFactory.CreateLogger<OpenRouterOracleResolver>());
 
@@ -348,22 +350,22 @@ static ResolvedModelCapabilities? ResolveStartupCapabilities(string modelId)
 
         if (result is not null)
         {
-            Console.Error.WriteLine(
-                $"info: Auto-detected model capabilities for {modelId}: " +
-                $"input={result.InputModalities}, output={result.OutputModalities}");
+            logger.LogInformation(
+                "Auto-detected model capabilities for {ModelId}: input={Input}, output={Output}",
+                modelId, result.InputModalities, result.OutputModalities);
         }
         else
         {
-            Console.Error.WriteLine(
-                $"info: Model {modelId} not found in OpenRouter catalog; defaulting to text-only");
+            logger.LogInformation(
+                "Model {ModelId} not found in OpenRouter catalog; defaulting to text-only",
+                modelId);
         }
 
         return result;
     }
-    catch (Exception ex)
+    catch
     {
-        Console.Error.WriteLine(
-            $"warn: Failed to auto-detect model capabilities for {modelId}: {ex.Message}");
+        // Startup capability detection is best-effort — don't crash the daemon
         return null;
     }
 }

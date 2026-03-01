@@ -21,6 +21,8 @@ public static class DaemonRuntimeStatus
         public required Persistence Persistence { get; init; }
 
         public required Telemetry Telemetry { get; init; }
+
+        public Model? Model { get; init; }
     }
 
     public sealed class Build : IWireType
@@ -64,5 +66,18 @@ public static class DaemonRuntimeStatus
         public bool Enabled { get; init; }
 
         public string? OtlpEndpoint { get; init; }
+    }
+
+    public sealed class Model : IWireType
+    {
+        public required string ModelId { get; init; }
+
+        public required string Provider { get; init; }
+
+        public required string InputModalities { get; init; }
+
+        public required string OutputModalities { get; init; }
+
+        public int ContextWindow { get; init; }
     }
 }

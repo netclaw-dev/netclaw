@@ -690,6 +690,13 @@ static void WriteStatusResult(DaemonRuntimeStatus.Response status, string endpoi
                           ? $" ({status.Telemetry.OtlpEndpoint})"
                           : string.Empty));
 
+    if (status.Model is { } model)
+    {
+        Console.WriteLine($"model: {model.ModelId} (provider: {model.Provider}, context: {model.ContextWindow:N0} tokens)");
+        Console.WriteLine($"  input: {model.InputModalities}");
+        Console.WriteLine($"  output: {model.OutputModalities}");
+    }
+
     Console.WriteLine("connectors:");
     foreach (var connector in status.Connectors.OrderBy(c => c.Key, StringComparer.OrdinalIgnoreCase))
     {

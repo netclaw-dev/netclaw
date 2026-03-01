@@ -2,6 +2,7 @@ using System.Diagnostics;
 using Microsoft.Extensions.Options;
 using Netclaw.Channels;
 using Netclaw.Channels.Slack;
+using Netclaw.Configuration;
 using Netclaw.Daemon.Configuration;
 
 namespace Netclaw.Daemon.Gateway;
@@ -11,7 +12,9 @@ public sealed class DaemonRuntimeStatusService(
     IEnumerable<IChannel> channels,
     SlackChannelOptions slackOptions,
     DaemonPersistenceOptions persistenceOptions,
-    IOptions<TelemetryOptions> telemetryOptions)
+    IOptions<TelemetryOptions> telemetryOptions,
+    SessionConfig sessionConfig,
+    ModelSelection modelSelection)
 {
     public async Task<DaemonRuntimeStatus.Response> GetStatusAsync(CancellationToken cancellationToken = default)
     {
@@ -51,6 +54,14 @@ public sealed class DaemonRuntimeStatusService(
             {
                 Enabled = telemetryOptions.Value.Enabled,
                 OtlpEndpoint = telemetryOptions.Value.Otlp.Endpoint
+            },
+            Model = new DaemonRuntimeStatus.Model
+            {
+                ModelId = sessionConfig.ModelId,
+                Provider = modelSelection.Main.Provider,
+                InputModalities = sessionConfig.InputModalities.ToString(),
+                OutputModalities = sessionConfig.OutputModalities.ToString(),
+                ContextWindow = sessionConfig.ContextWindowTokens
             }
         };
     }
