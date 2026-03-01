@@ -30,6 +30,12 @@ public sealed class DaemonRuntimeStatusService(
         return new DaemonRuntimeStatus.Response
         {
             Overall = overall,
+            Build = new DaemonRuntimeStatus.Build
+            {
+                Version = BuildInfo.Version,
+                CommitHash = BuildInfo.CommitHash,
+                BuildTimestamp = BuildInfo.BuildTimestamp
+            },
             Process = new DaemonRuntimeStatus.Process
             {
                 Pid = process.Id,

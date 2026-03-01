@@ -12,6 +12,8 @@ public static class DaemonRuntimeStatus
     {
         public string Overall { get; init; } = "unknown";
 
+        public required Build Build { get; init; }
+
         public required Process Process { get; init; }
 
         public required List<Connector> Connectors { get; init; }
@@ -19,6 +21,15 @@ public static class DaemonRuntimeStatus
         public required Persistence Persistence { get; init; }
 
         public required Telemetry Telemetry { get; init; }
+    }
+
+    public sealed class Build : IWireType
+    {
+        public required string Version { get; init; }
+
+        public required string CommitHash { get; init; }
+
+        public required string BuildTimestamp { get; init; }
     }
 
     public sealed class Process : IWireType
