@@ -37,7 +37,8 @@ public class ToolExecutionIntegrationTests : TestKit
             ModelId = "fake-model",
             ContextWindowTokens = 128_000,
             SnapshotInterval = 5,
-            TitleGenerationInterval = 0
+            TitleGenerationInterval = 0,
+            MaxInlineToolResultChars = 120
         });
         services.AddSingleton<ISystemPromptProvider>(new StaticSystemPromptProvider(
             "You are a test assistant with tools."));
@@ -197,6 +198,52 @@ public class ToolExecutionIntegrationTests : TestKit
 
         // Two LLM calls total
         Assert.Equal(2, _fakeChatClient.CallCount);
+    }
+
+    [Fact]
+    public async Task Oversized_tool_result_is_truncated_before_reentering_context_window()
+    {
+        _fakeChatClient.ToolCallsOnFirstCall =
+        [
+            new FunctionCallContent("call-long", "web_search",
+                new Dictionary<string, object?> { ["query"] = "huge" })
+        ];
+
+        _fakeToolExecutor.Results["web_search"] = new string('x', 800);
+
+        var sessionId = new SessionId("test-channel/tool-truncate-test");
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("truncate-sub");
+
+        await sessionManager.Ask<SessionJoined>(new JoinSession
+        {
+            SessionId = sessionId,
+            Subscriber = subscriber,
+            Filter = OutputFilter.Full
+        }, TimeSpan.FromSeconds(3));
+        subscriber.ExpectMsg<SessionJoined>();
+
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Run huge tool"
+        }, TimeSpan.FromSeconds(3));
+
+        subscriber.ExpectMsg<ToolCallOutput>(TimeSpan.FromSeconds(3));
+        subscriber.ExpectMsg<TextOutput>(TimeSpan.FromSeconds(5));
+        subscriber.ExpectMsg<TurnCompleted>(TimeSpan.FromSeconds(3));
+
+        Assert.Equal(2, _fakeChatClient.CallCount);
+        Assert.Equal(2, _fakeChatClient.ReceivedMessages.Count);
+
+        var secondCall = _fakeChatClient.ReceivedMessages[1];
+        var toolMessage = secondCall.FirstOrDefault(m => m.Role == Microsoft.Extensions.AI.ChatRole.Tool);
+        Assert.NotNull(toolMessage);
+
+        var result = toolMessage!.Contents.OfType<FunctionResultContent>().Single().Result?.ToString();
+        Assert.NotNull(result);
+        Assert.Contains("tool result truncated", result, StringComparison.OrdinalIgnoreCase);
+        Assert.True(result!.Length < 300);
     }
 }
 

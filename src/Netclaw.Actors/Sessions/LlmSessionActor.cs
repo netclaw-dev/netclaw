@@ -700,7 +700,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor
         var auditLogger = _auditLogger;
         var tp = _timeProvider;
         var sessionDir = GetSessionDirectory();
-        _ = ExecuteToolsAsync(executor, toolCalls, sessionId, auditLogger, tp, sessionDir, self);
+        var maxInlineToolResultChars = _config.MaxInlineToolResultChars;
+        _ = ExecuteToolsAsync(executor, toolCalls, sessionId, auditLogger, tp, sessionDir, maxInlineToolResultChars, self);
     }
 
     private void HandleTextResponse(
@@ -1102,12 +1103,20 @@ public sealed class LlmSessionActor : ReceivePersistentActor
         IToolAuditLogger? auditLogger,
         TimeProvider timeProvider,
         string sessionDir,
+        int maxInlineToolResultChars,
         IActorRef self)
     {
         try
         {
             // Execute all tool calls in parallel — each is independent
-            var tasks = toolCalls.Select(tc => ExecuteSingleToolAsync(executor, tc, sessionId, auditLogger, timeProvider, sessionDir));
+            var tasks = toolCalls.Select(tc => ExecuteSingleToolAsync(
+                executor,
+                tc,
+                sessionId,
+                auditLogger,
+                timeProvider,
+                sessionDir,
+                maxInlineToolResultChars));
             var results = await Task.WhenAll(tasks);
 
             var fileAttachments = results.SelectMany(r => r.FileAttachments).ToList();
@@ -1129,7 +1138,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor
         SessionId sessionId,
         IToolAuditLogger? auditLogger,
         TimeProvider timeProvider,
-        string sessionDir)
+        string sessionDir,
+        int maxInlineToolResultChars)
     {
         var sw = Stopwatch.StartNew();
         string resultText;
@@ -1165,6 +1175,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor
             });
         }
 
+        resultText = ClampToolResult(resultText, maxInlineToolResultChars);
+
         var message = new SerializableChatMessage
         {
             Role = Protocol.ChatRole.Tool,
@@ -1174,6 +1186,16 @@ public sealed class LlmSessionActor : ReceivePersistentActor
         };
 
         return new ToolCallResult(message, context.FileAttachments);
+    }
+
+    private static string ClampToolResult(string resultText, int maxInlineToolResultChars)
+    {
+        if (maxInlineToolResultChars <= 0 || resultText.Length <= maxInlineToolResultChars)
+            return resultText;
+
+        var omittedChars = resultText.Length - maxInlineToolResultChars;
+        return resultText[..maxInlineToolResultChars]
+               + $"\n[tool result truncated: omitted {omittedChars} chars to protect context window]";
     }
 
     /// <summary>

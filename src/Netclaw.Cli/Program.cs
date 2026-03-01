@@ -100,6 +100,7 @@ static async Task RunAsync(string[] args)
             builder.Services.AddSingleton(initPaths);
             builder.Services.AddSingleton(TimeProvider.System);
             builder.Services.AddSingleton<DaemonManager>();
+            builder.Services.AddSingleton<IBrowserAutomationBootstrapper, BrowserAutomationBootstrapper>();
 
             var daemonEndpoint =
                 Environment.GetEnvironmentVariable("NETCLAW_DAEMON_ENDPOINT")

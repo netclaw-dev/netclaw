@@ -53,6 +53,14 @@ public sealed record SessionConfig
     public int MaxToolIterationsPerTurn { get; init; } = 10;
 
     /// <summary>
+    /// Maximum number of characters from a single tool result that may be
+    /// inlined into conversation history. Oversized results are truncated to
+    /// protect the context window from verbose tool payloads (DOM dumps,
+    /// large JSON blobs, etc.).
+    /// </summary>
+    public int MaxInlineToolResultChars { get; init; } = 12_000;
+
+    /// <summary>
     /// Number of recent non-system messages to preserve verbatim after compaction
     /// summarization. These are appended after the summary message so the assistant
     /// has immediate conversational context. Counts raw messages (not turn pairs)

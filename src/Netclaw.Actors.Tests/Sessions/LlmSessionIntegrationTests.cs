@@ -339,6 +339,8 @@ internal sealed class FakeChatClient : IChatClient
 
     public int CallCount => _callCount;
 
+    public List<IReadOnlyList<ChatMessage>> ReceivedMessages { get; } = [];
+
     public TimeSpan Delay { get; set; } = TimeSpan.Zero;
 
     /// <summary>
@@ -372,6 +374,7 @@ internal sealed class FakeChatClient : IChatClient
         ChatOptions? options = null,
         CancellationToken cancellationToken = default)
     {
+        ReceivedMessages.Add(messages.ToList());
         Interlocked.Increment(ref _callCount);
 
         if (Delay > TimeSpan.Zero)
