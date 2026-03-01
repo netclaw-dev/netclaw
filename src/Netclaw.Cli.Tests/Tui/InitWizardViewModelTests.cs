@@ -1,6 +1,8 @@
 using System.Text.Json;
+using Netclaw.Cli.Provider;
 using Netclaw.Cli.Tui;
 using Netclaw.Configuration;
+using Netclaw.Configuration.Providers;
 using Xunit;
 
 namespace Netclaw.Cli.Tests.Tui;
@@ -15,6 +17,7 @@ public sealed class InitWizardViewModelTests : IDisposable
     private readonly NetclawPaths _paths;
     private readonly FakeProviderProbe _fakeProbe = new();
     private readonly FakeSlackProbe _fakeSlackProbe = new();
+    private readonly ProviderDescriptorRegistry _registry = ProviderCommand.CreateDefaultRegistry();
 
     public InitWizardViewModelTests()
     {
@@ -685,6 +688,6 @@ public sealed class InitWizardViewModelTests : IDisposable
 
     private InitWizardViewModel CreateViewModel()
     {
-        return new InitWizardViewModel(_paths, _fakeProbe, _fakeSlackProbe);
+        return new InitWizardViewModel(_paths, _registry, _fakeProbe, _fakeSlackProbe);
     }
 }

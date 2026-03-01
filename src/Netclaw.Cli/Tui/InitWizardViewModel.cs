@@ -116,6 +116,20 @@ public partial class InitWizardViewModel : ReactiveViewModel
 
     public InitWizardViewModel(
         NetclawPaths paths,
+        ProviderDescriptorRegistry registry,
+        ISlackProbe slackProbe,
+        DaemonManager? daemonManager = null,
+        string? daemonEndpoint = null)
+        : this(paths, registry, registry, slackProbe, daemonManager, daemonEndpoint)
+    {
+    }
+
+    /// <summary>
+    /// Test constructor allowing a separate probe implementation from the registry.
+    /// </summary>
+    internal InitWizardViewModel(
+        NetclawPaths paths,
+        ProviderDescriptorRegistry registry,
         IProviderProbe probe,
         ISlackProbe slackProbe,
         DaemonManager? daemonManager = null,
@@ -123,8 +137,7 @@ public partial class InitWizardViewModel : ReactiveViewModel
     {
         _paths = paths;
         _probe = probe;
-        _registry = probe as ProviderDescriptorRegistry
-            ?? Provider.ProviderCommand.CreateDefaultRegistry();
+        _registry = registry;
         _slackProbe = slackProbe;
         _daemonManager = daemonManager;
         _daemonEndpoint = daemonEndpoint ?? "http://127.0.0.1:5199";
@@ -545,8 +558,7 @@ public partial class InitWizardViewModel : ReactiveViewModel
 
             if (!string.IsNullOrWhiteSpace(EndpointInput))
                 providerEntry["Endpoint"] = EndpointInput;
-            else if (_probe is ProviderDescriptorRegistry reg
-                     && reg.TryGet(providerName, out var desc)
+            else if (_registry.TryGet(providerName, out var desc)
                      && desc.CredentialMode == CredentialInputMode.EndpointOnly)
                 providerEntry["Endpoint"] = desc.DefaultEndpoint;
 

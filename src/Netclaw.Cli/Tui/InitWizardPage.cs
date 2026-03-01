@@ -71,8 +71,6 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
     // so old subscriptions on disposed components don't linger.
     private readonly CompositeDisposable _stepSubs = new();
 
-    private ProviderDescriptorRegistry GetRegistry() => ViewModel.Registry;
-
     protected override void OnBound()
     {
         base.OnBound();
@@ -288,7 +286,7 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
 
     private ILayoutNode BuildProviderSelectionSubStep()
     {
-        var registry = GetRegistry();
+        var registry = ViewModel.Registry;
         _providerList = Layouts.SelectionList(
                 registry.KnownTypeKeys.ToList())
             .WithMode(SelectionMode.Single)
@@ -325,7 +323,7 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
     private ILayoutNode BuildAuthMethodSubStep()
     {
         var providerType = ViewModel.SelectedProviderType ?? "unknown";
-        var descriptor = GetRegistry().Get(providerType);
+        var descriptor = ViewModel.Registry.Get(providerType);
         var supportedMethods = descriptor.SupportedAuthMethods
             .Where(m => m != AuthMethod.None)
             .Select(m => m switch
@@ -372,7 +370,7 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
     {
         var providerType = ViewModel.SelectedProviderType ?? "unknown";
 
-        var credDescriptor = GetRegistry().Get(providerType);
+        var credDescriptor = ViewModel.Registry.Get(providerType);
         if (credDescriptor.CredentialMode == CredentialInputMode.EndpointOnly)
         {
             var defaultEndpoint = credDescriptor.DefaultEndpoint;

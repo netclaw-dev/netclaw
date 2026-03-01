@@ -8,16 +8,25 @@ namespace Netclaw.Configuration.Providers;
 /// </summary>
 public static class ProviderDescriptorServiceExtensions
 {
+    private const string HttpClientName = "ProviderProbe";
+
     /// <summary>
     /// Registers all provider descriptors and the registry.
-    /// Each descriptor gets its own typed <see cref="HttpClient"/> via <c>AddHttpClient</c>.
+    /// Uses a named HttpClient from the factory so descriptors are properly
+    /// singleton-scoped without captive dependency issues.
     /// </summary>
     public static IServiceCollection AddProviderDescriptors(this IServiceCollection services)
     {
-        services.AddHttpClient<OllamaDescriptor>();
-        services.AddHttpClient<OpenAiDescriptor>();
-        services.AddHttpClient<AnthropicDescriptor>();
-        services.AddHttpClient<OpenRouterDescriptor>();
+        services.AddHttpClient(HttpClientName);
+
+        services.AddSingleton<OllamaDescriptor>(sp =>
+            new OllamaDescriptor(sp.GetRequiredService<IHttpClientFactory>().CreateClient(HttpClientName)));
+        services.AddSingleton<OpenAiDescriptor>(sp =>
+            new OpenAiDescriptor(sp.GetRequiredService<IHttpClientFactory>().CreateClient(HttpClientName)));
+        services.AddSingleton<AnthropicDescriptor>(sp =>
+            new AnthropicDescriptor(sp.GetRequiredService<IHttpClientFactory>().CreateClient(HttpClientName)));
+        services.AddSingleton<OpenRouterDescriptor>(sp =>
+            new OpenRouterDescriptor(sp.GetRequiredService<IHttpClientFactory>().CreateClient(HttpClientName)));
 
         services.AddSingleton<IProviderDescriptor>(sp => sp.GetRequiredService<OllamaDescriptor>());
         services.AddSingleton<IProviderDescriptor>(sp => sp.GetRequiredService<OpenAiDescriptor>());

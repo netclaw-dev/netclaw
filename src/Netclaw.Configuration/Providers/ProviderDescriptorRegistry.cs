@@ -8,20 +8,23 @@ namespace Netclaw.Configuration.Providers;
 public sealed class ProviderDescriptorRegistry : IProviderProbe
 {
     private readonly Dictionary<string, IProviderDescriptor> _descriptors;
+    private readonly IReadOnlyList<string> _knownTypeKeys;
 
     public ProviderDescriptorRegistry(IEnumerable<IProviderDescriptor> descriptors)
     {
         _descriptors = new Dictionary<string, IProviderDescriptor>(StringComparer.OrdinalIgnoreCase);
         foreach (var d in descriptors)
             _descriptors[d.TypeKey] = d;
+        _knownTypeKeys = _descriptors.Keys
+            .OrderBy(k => k, StringComparer.OrdinalIgnoreCase)
+            .ToList();
     }
 
     /// <summary>
     /// All known provider type keys, in alphabetical order.
     /// Replaces <c>ProviderCapabilities.KnownProviderTypes</c>.
     /// </summary>
-    public IReadOnlyList<string> KnownTypeKeys =>
-        _descriptors.Keys.OrderBy(k => k, StringComparer.OrdinalIgnoreCase).ToList();
+    public IReadOnlyList<string> KnownTypeKeys => _knownTypeKeys;
 
     /// <summary>
     /// Get a descriptor by type key. Throws if not found.
