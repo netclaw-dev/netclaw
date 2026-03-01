@@ -340,7 +340,7 @@ static ResolvedModelCapabilities? ResolveStartupCapabilities(string modelId, Log
     try
     {
         using var httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
-        using var loggerFactory = LoggerFactory.Create(b => b.AddConsole().SetMinimumLevel(logLevel));
+        using var loggerFactory = LoggerFactory.Create(b => b.SetMinimumLevel(logLevel));
         var logger = loggerFactory.CreateLogger("Netclaw.Startup");
         var resolver = new OpenRouterOracleResolver(
             httpClient, loggerFactory.CreateLogger<OpenRouterOracleResolver>());
