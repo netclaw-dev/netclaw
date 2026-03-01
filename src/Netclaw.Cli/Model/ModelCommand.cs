@@ -3,6 +3,7 @@ using System.Text.Json.Serialization;
 using Netclaw.Cli.Config;
 using Netclaw.Cli.Provider;
 using Netclaw.Configuration;
+using Netclaw.Configuration.Providers;
 
 namespace Netclaw.Cli.Model;
 
@@ -15,7 +16,9 @@ internal static class ModelCommand
     {
         Converters = { new JsonStringEnumConverter() }
     };
-    public static async Task<int> RunAsync(string[] args, NetclawPaths paths, IProviderProbe? probe = null, TextWriter? output = null)
+    public static async Task<int> RunAsync(
+        string[] args, NetclawPaths paths,
+        IProviderProbe? probe = null, TextWriter? output = null)
     {
         var writer = output ?? Console.Out;
         var subcommand = args.Length > 1 ? args[1] : "help";
@@ -173,7 +176,8 @@ internal static class ModelCommand
             return 1;
         }
 
-        probe ??= CreateDefaultProbe();
+        // Use the registry as the probe (it implements IProviderProbe)
+        probe ??= ProviderCommand.CreateDefaultRegistry();
 
         writer.WriteLine($"Discovering models from '{providerName}' ({entry.Type})...");
 
@@ -276,11 +280,6 @@ internal static class ModelCommand
             return null;
 
         return JsonSerializer.Deserialize<ModelSelection>(modelsElement.GetRawText(), DeserializeOptions);
-    }
-
-    private static IProviderProbe CreateDefaultProbe()
-    {
-        return new Tui.ProviderProbe(new HttpClient());
     }
 
     private static int WriteHelp(TextWriter writer)

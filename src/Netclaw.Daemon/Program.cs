@@ -12,6 +12,7 @@ using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Sessions;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
+using Netclaw.Configuration.Providers;
 using Netclaw.Daemon.Configuration;
 using Netclaw.Daemon.Gateway;
 using Netclaw.Daemon.Mcp;
@@ -115,16 +116,14 @@ static NetclawPaths ConfigureConfigServices(IServiceCollection services, IConfig
     // TimeProvider (virtualized for testing)
     services.AddSingleton(TimeProvider.System);
 
-    // Providers and model resolution
+    // Providers and model resolution via plugin architecture
     var providers = configuration.GetSection("Providers")
         .Get<Dictionary<string, ProviderEntry>>()
         ?? new() { ["local-ollama"] = new ProviderEntry() };
     var models = configuration.GetSection("Models")
         .Get<ModelSelection>() ?? new ModelSelection();
 
-    var factory = new ChatClientFactory(providers);
-    var clientProvider = new NetclawChatClientProvider(factory, models);
-    services.AddSingleton<IChatClientProvider>(clientProvider);
+    services.AddLlmProviders(providers, models);
 
     return paths;
 }
@@ -347,8 +346,12 @@ static ResolvedModelCapabilities? ResolveStartupCapabilities(string modelId, Log
         using var httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
         using var loggerFactory = LoggerFactory.Create(b => b.SetMinimumLevel(logLevel));
         var logger = loggerFactory.CreateLogger("Netclaw.Startup");
+        // Build a minimal registry for the resolver (pre-DI bootstrap).
+        // Only the OpenRouter descriptor is needed for capability detection.
+        var openRouterDescriptor = new Netclaw.Configuration.Providers.Descriptors.OpenRouterDescriptor(httpClient);
+        var registry = new ProviderDescriptorRegistry([openRouterDescriptor]);
         var resolver = new OpenRouterOracleResolver(
-            httpClient, loggerFactory.CreateLogger<OpenRouterOracleResolver>());
+            httpClient, loggerFactory.CreateLogger<OpenRouterOracleResolver>(), registry);
 
         var result = resolver.ResolveAsync(modelId, CancellationToken.None)
             .GetAwaiter().GetResult();

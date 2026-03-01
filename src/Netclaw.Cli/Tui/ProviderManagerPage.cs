@@ -1,4 +1,5 @@
 using Netclaw.Configuration;
+using Netclaw.Configuration.Providers;
 using R3;
 using Termina.Extensions;
 using Termina.Input;
@@ -206,7 +207,8 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
     private ILayoutNode BuildAddAuthView()
     {
         var providerType = ViewModel.NewProviderType ?? "unknown";
-        var supportedMethods = ProviderCapabilities.GetSupportedAuthMethods(providerType)
+        var descriptor = ViewModel.Registry.Get(providerType);
+        var supportedMethods = descriptor.SupportedAuthMethods
             .Where(m => m != AuthMethod.None)
             .Select(m => m switch
             {
@@ -245,18 +247,20 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
     private ILayoutNode BuildCredentialsView()
     {
         var children = Layouts.Vertical();
+        var providerType = ViewModel.NewProviderType ?? "unknown";
+        var descriptor = ViewModel.Registry.Get(providerType);
 
-        children.WithChild(new TextNode($"  Provider: {ViewModel.NewProviderType} (name: {ViewModel.NewProviderName})")
+        children.WithChild(new TextNode($"  Provider: {providerType} (name: {ViewModel.NewProviderName})")
             .WithForeground(Color.White));
 
-        if (ViewModel.NewAuthMethod == AuthMethod.ApiKey)
+        if (descriptor.CredentialMode == CredentialInputMode.ApiKey)
         {
             children.WithChild(new TextNode("").Height(1));
             children.WithChild(new TextNode("  API Key:").WithForeground(Color.White));
 
             _apiKeyInput = new TextInputNode()
                 .AsPassword()
-                .WithPlaceholder($"Enter {ViewModel.NewProviderType} API key...");
+                .WithPlaceholder($"Enter {providerType} API key...");
             _apiKeyInput.OnFocused();
             _lastFocusedInput = _apiKeyInput;
 
@@ -275,29 +279,21 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
                 .WithContent(_apiKeyInput)
                 .Height(3));
 
-            var guidance = ViewModel.NewProviderType switch
-            {
-                "openrouter" => "  Get your API key at https://openrouter.ai/keys",
-                "anthropic" => "  Get your API key at https://console.anthropic.com/settings/keys",
-                "openai" => "  Get your API key at https://platform.openai.com/api-keys",
-                _ => null
-            };
-
-            if (guidance is not null)
+            if (descriptor.ApiKeyGuidanceUrl is { } guidanceUrl)
             {
                 children.WithChild(new TextNode("").Height(1));
-                children.WithChild(new TextNode(guidance).WithForeground(Color.Gray));
+                children.WithChild(new TextNode($"  Get your API key at {guidanceUrl}")
+                    .WithForeground(Color.Gray));
             }
         }
-        else if (ViewModel.NewProviderType == "ollama")
+        else if (descriptor.CredentialMode == CredentialInputMode.EndpointOnly)
         {
             children.WithChild(new TextNode("").Height(1));
-            children.WithChild(new TextNode("  Endpoint (default: http://localhost:11434):")
+            children.WithChild(new TextNode($"  Endpoint (default: {descriptor.DefaultEndpoint}):")
                 .WithForeground(Color.White));
 
-            var ollamaDefault = ProviderCapabilities.GetDefaultEndpoint("ollama");
             _endpointInput = new TextInputNode()
-                .WithPlaceholder(ollamaDefault);
+                .WithPlaceholder(descriptor.DefaultEndpoint);
             _endpointInput.OnFocused();
             _lastFocusedInput = _endpointInput;
 
@@ -317,7 +313,7 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
                 .Height(3));
 
             children.WithChild(new TextNode("").Height(1));
-            children.WithChild(new TextNode("  Ollama runs locally. No authentication required.")
+            children.WithChild(new TextNode($"  {descriptor.DisplayName} runs locally. No authentication required.")
                 .WithForeground(Color.Gray));
         }
 
@@ -416,6 +412,7 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
         if (item is null)
             return Layouts.Empty();
 
+        var descriptor = ViewModel.Registry.Get(item.ProviderType);
         var children = Layouts.Vertical();
 
         children.WithChild(new TextNode($"  Fix credentials for: {item.ConfiguredName} ({item.ProviderType})")
@@ -428,15 +425,13 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
                 .WithForeground(Color.Red));
         }
 
-        var supportedAuth = ProviderCapabilities.GetSupportedAuthMethods(item.ProviderType);
-
-        if (item.ProviderType == "ollama")
+        if (descriptor.CredentialMode == CredentialInputMode.EndpointOnly)
         {
             children.WithChild(new TextNode("").Height(1));
             children.WithChild(new TextNode("  Endpoint:").WithForeground(Color.White));
 
             _endpointInput = new TextInputNode()
-                .WithPlaceholder(item.Entry?.Endpoint ?? ProviderCapabilities.GetDefaultEndpoint("ollama"));
+                .WithPlaceholder(item.Entry?.Endpoint ?? descriptor.DefaultEndpoint);
             _endpointInput.OnFocused();
             _lastFocusedInput = _endpointInput;
 
@@ -457,7 +452,7 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
                 .WithContent(_endpointInput)
                 .Height(3));
         }
-        else if (supportedAuth.Contains(AuthMethod.ApiKey))
+        else if (descriptor.SupportedAuthMethods.Contains(AuthMethod.ApiKey))
         {
             children.WithChild(new TextNode("").Height(1));
             children.WithChild(new TextNode("  New API Key:").WithForeground(Color.White));
@@ -483,18 +478,11 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
                 .WithContent(_apiKeyInput)
                 .Height(3));
 
-            var guidance = item.ProviderType switch
-            {
-                "openrouter" => "  Get your API key at https://openrouter.ai/keys",
-                "anthropic" => "  Get your API key at https://console.anthropic.com/settings/keys",
-                "openai" => "  Get your API key at https://platform.openai.com/api-keys",
-                _ => null
-            };
-
-            if (guidance is not null)
+            if (descriptor.ApiKeyGuidanceUrl is { } guidanceUrl)
             {
                 children.WithChild(new TextNode("").Height(1));
-                children.WithChild(new TextNode(guidance).WithForeground(Color.Gray));
+                children.WithChild(new TextNode($"  Get your API key at {guidanceUrl}")
+                    .WithForeground(Color.Gray));
             }
         }
 

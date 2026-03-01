@@ -1,6 +1,8 @@
 using System.Text.Json;
 using Netclaw.Cli.Config;
 using Netclaw.Configuration;
+using Netclaw.Configuration.Providers;
+using Netclaw.Configuration.Providers.Descriptors;
 
 namespace Netclaw.Cli.Provider;
 
@@ -9,18 +11,22 @@ namespace Netclaw.Cli.Provider;
 /// </summary>
 internal static class ProviderCommand
 {
-    public static Task<int> RunAsync(string[] args, NetclawPaths paths, TextWriter? output = null)
+    public static Task<int> RunAsync(
+        string[] args, NetclawPaths paths,
+        ProviderDescriptorRegistry? registry = null,
+        TextWriter? output = null)
     {
+        registry ??= CreateDefaultRegistry();
         var writer = output ?? Console.Out;
         var subcommand = args.Length > 1 ? args[1] : "help";
 
         return subcommand switch
         {
             "list" => Task.FromResult(RunList(paths, writer)),
-            "add" => Task.FromResult(RunAdd(args, paths, writer)),
+            "add" => Task.FromResult(RunAdd(args, paths, registry, writer)),
             "remove" => Task.FromResult(RunRemove(args, paths, writer)),
-            "help" or "-h" or "--help" => Task.FromResult(WriteHelp(writer)),
-            _ => Task.FromResult(WriteHelp(writer))
+            "help" or "-h" or "--help" => Task.FromResult(WriteHelp(registry, writer)),
+            _ => Task.FromResult(WriteHelp(registry, writer))
         };
     }
 
@@ -44,24 +50,24 @@ internal static class ProviderCommand
         return 0;
     }
 
-    private static int RunAdd(string[] args, NetclawPaths paths, TextWriter writer)
+    private static int RunAdd(string[] args, NetclawPaths paths, ProviderDescriptorRegistry registry, TextWriter writer)
     {
         // Parse: netclaw provider add <name> <type> [--api-key <key>] [--endpoint <url>]
         if (args.Length < 4)
         {
             writer.WriteLine("Usage: netclaw provider add <name> <type> [--api-key <key>] [--endpoint <url>]");
             writer.WriteLine();
-            writer.WriteLine("Types: " + string.Join(", ", ProviderCapabilities.KnownProviderTypes));
+            writer.WriteLine("Types: " + string.Join(", ", registry.KnownTypeKeys));
             return 1;
         }
 
         var name = args[2];
         var type = args[3].ToLowerInvariant();
 
-        if (!ProviderCapabilities.KnownProviderTypes.Contains(type))
+        if (!registry.TryGet(type, out var descriptor))
         {
             writer.WriteLine($"Error: Unknown provider type '{type}'.");
-            writer.WriteLine("Known types: " + string.Join(", ", ProviderCapabilities.KnownProviderTypes));
+            writer.WriteLine("Known types: " + string.Join(", ", registry.KnownTypeKeys));
             return 1;
         }
 
@@ -83,7 +89,7 @@ internal static class ProviderCommand
             }
         }
 
-        var supportedAuth = ProviderCapabilities.GetSupportedAuthMethods(type);
+        var supportedAuth = descriptor.SupportedAuthMethods;
         var authMethod = AuthMethod.None;
 
         if (supportedAuth.Contains(AuthMethod.ApiKey) && apiKey is not null)
@@ -96,7 +102,7 @@ internal static class ProviderCommand
             // OAuth-capable providers without --api-key: guide user to TUI
             if (supportedAuth.Contains(AuthMethod.OAuthDevice))
             {
-                WriteProviderGuidance(type, writer);
+                WriteProviderGuidance(descriptor, writer);
                 writer.WriteLine();
                 writer.WriteLine("Tip: Use `netclaw provider` (TUI) for OAuth device flow setup,");
                 writer.WriteLine("     or pass --api-key to use an API key instead.");
@@ -115,7 +121,7 @@ internal static class ProviderCommand
             authMethod = AuthMethod.ApiKey;
         }
 
-        endpoint ??= ProviderCapabilities.GetDefaultEndpoint(type);
+        endpoint ??= descriptor.DefaultEndpoint;
 
         // Write to netclaw.json
         var (config, secrets) = ConfigFileHelper.LoadConfigFiles(paths);
@@ -142,7 +148,7 @@ internal static class ProviderCommand
         }
 
         writer.WriteLine($"Added provider '{name}' ({type})");
-        WriteProviderGuidance(type, writer);
+        WriteProviderGuidance(descriptor, writer);
         writer.WriteLine();
         writer.WriteLine("Note: Restart the daemon for changes to take effect.");
         return 0;
@@ -270,22 +276,24 @@ internal static class ProviderCommand
         return roles;
     }
 
-    private static void WriteProviderGuidance(string providerType, TextWriter writer)
+    private static void WriteProviderGuidance(IProviderDescriptor descriptor, TextWriter writer)
     {
-        var guidance = providerType switch
+        if (descriptor.CredentialMode == CredentialInputMode.EndpointOnly)
         {
-            "ollama" => "Ollama runs locally. No authentication required.",
-            "openrouter" => "Get your API key at https://openrouter.ai/keys",
-            "anthropic" => "Get your API key at https://console.anthropic.com/settings/keys or use `netclaw provider` for OAuth device flow",
-            "openai" => "Get your API key at https://platform.openai.com/api-keys or use `netclaw provider` for OAuth device flow",
-            _ => null
-        };
+            writer.WriteLine($"{descriptor.DisplayName} runs locally. No authentication required.");
+            return;
+        }
 
-        if (guidance is not null)
-            writer.WriteLine(guidance);
+        if (descriptor.ApiKeyGuidanceUrl is { } url)
+        {
+            var oauthNote = descriptor.SupportedAuthMethods.Contains(AuthMethod.OAuthDevice)
+                ? " or use `netclaw provider` for OAuth device flow"
+                : "";
+            writer.WriteLine($"Get your API key at {url}{oauthNote}");
+        }
     }
 
-    private static int WriteHelp(TextWriter writer)
+    private static int WriteHelp(ProviderDescriptorRegistry registry, TextWriter writer)
     {
         writer.WriteLine("Usage: netclaw provider <subcommand>");
         writer.WriteLine();
@@ -300,12 +308,26 @@ internal static class ProviderCommand
         writer.WriteLine("  --api-key <key>       API key (or prompted interactively)");
         writer.WriteLine("  --endpoint <url>      Custom endpoint URL");
         writer.WriteLine();
-        writer.WriteLine("Provider types: " + string.Join(", ", ProviderCapabilities.KnownProviderTypes));
+        writer.WriteLine("Provider types: " + string.Join(", ", registry.KnownTypeKeys));
         writer.WriteLine();
         writer.WriteLine("Examples:");
         writer.WriteLine("  netclaw provider add my-ollama ollama --endpoint http://big-gpu:11434");
         writer.WriteLine("  netclaw provider add my-anthropic anthropic --api-key sk-ant-...");
         writer.WriteLine("  netclaw provider remove my-ollama");
         return 0;
+    }
+
+    /// <summary>
+    /// Creates a default registry for use outside of DI (CLI subcommands).
+    /// </summary>
+    internal static ProviderDescriptorRegistry CreateDefaultRegistry()
+    {
+        var httpClient = new HttpClient();
+        return new ProviderDescriptorRegistry([
+            new OllamaDescriptor(httpClient),
+            new OpenAiDescriptor(httpClient),
+            new AnthropicDescriptor(httpClient),
+            new OpenRouterDescriptor(httpClient),
+        ]);
     }
 }
