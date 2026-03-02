@@ -42,15 +42,22 @@ budget without adding capability the agent didn't already have.
   └── user-created-skill.md     (user-created)
 
 Startup:
-  CopyBuiltInSkills() → SkillScanner.Scan() → SkillRegistry → SearchSkillsTool
+  CopyBuiltInSkills() → SkillScanner.Scan() → SkillRegistry → SkillIndexContextLayer
 
 System prompt injection:
-  SkillIndexContextLayer → "[skills] available: identity-management, ..."
+  SkillIndexContextLayer → "[skills — read with file_read for full instructions]
+    identity-management (/home/user/.netclaw/skills/identity-management.md)
+      How to read and update Netclaw identity files ...
+    memorizer-usage (/home/user/.netclaw/skills/memorizer-usage.md)
+      How to use the Memorizer MCP server ...
+    self-diagnostics (/home/user/.netclaw/skills/self-diagnostics.md)
+      How to check Netclaw configuration ..."
 ```
 
-Skills are `.md` files scanned at startup. The `search_skills` meta-tool returns
-**full file content** (not summaries) because skills are instructional text the
-LLM must read to follow. Max 3 results per search to bound token cost.
+Skills are `.md` files scanned at startup. The compressed index in the system
+prompt lists each skill's name, file path, and description. The agent uses
+`file_read` directly to load full skill content — no dedicated search tool
+needed.
 
 Built-in skills ship as embedded resources and are copied to `~/.netclaw/skills/`
 on first run. User edits are preserved (existing files are not overwritten).
@@ -140,20 +147,16 @@ Agent ──search_memories──→ SearchMemoriesTool ──→ ToolRegistry.G
 `search_memories` tool. It resolves the MCP tool at call time (not at startup)
 so it works regardless of whether Memorizer is connected.
 
-Three context layers provide the agent with memory awareness:
+Two context layers provide the agent with memory and skill awareness:
 
 | Layer | Content |
 |-------|---------|
-| `MemoryIndexContextLayer` | Shows Memorizer availability ("available" vs "NOT AVAILABLE") |
-| `MemoryTriageContextLayer` | Behavioral guidance on where to save different kinds of information |
-| `SkillIndexContextLayer` | Lists available skills for `search_skills` |
-
-The triage layer is **conditional** — when Memorizer is not connected, it omits
-Memorizer guidance and only mentions identity files and skill files.
+| `MemoryIndexContextLayer` | Behavioral triggers for proactive retrieve + save. When connected: RETRIEVE (search at conversation start, search before answering from scratch) and SAVE (store solutions, decisions, findings immediately with rich markdown). When disconnected: fallback guidance pointing to identity files and skills. |
+| `SkillIndexContextLayer` | Compressed index of available skills with file paths for `file_read` |
 
 There is no automatic pre-compaction memory flush. The agent saves proactively
-during conversation, guided by the triage context layer and the
-`identity-management` built-in skill.
+during conversation, guided by the behavioral triggers in `MemoryIndexContextLayer`
+and the `identity-management` built-in skill.
 
 ## Rationale
 
@@ -210,9 +213,9 @@ supported and clearly distinguish observations from fresh user input.
   Very long sessions may accumulate large observation blocks. The Reflector
   (deferred) would address this.
 - Three identity tools are removed, freeing context window budget.
-- The agent now has behavioral guidance (via context layers and built-in skills)
-  for where to save different kinds of information, reducing reliance on user
-  instructions.
+- The agent now has behavioral triggers (via `MemoryIndexContextLayer`) that
+  drive proactive retrieval and saving, reducing reliance on user instructions
+  to search or store knowledge.
 - Memorizer integration is gracefully optional — all other capabilities work
   without it.
 
