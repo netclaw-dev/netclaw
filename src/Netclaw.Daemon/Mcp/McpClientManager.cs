@@ -15,6 +15,7 @@ internal sealed class McpClientManager : IHostedService, IDisposable
 {
     private readonly Dictionary<string, McpServerEntry> _serverEntries;
     private readonly ToolRegistry _toolRegistry;
+    private readonly McpOAuthService _oauthService;
     private readonly ILogger<McpClientManager> _logger;
     private readonly Dictionary<string, McpClient> _clients = new();
     private readonly Dictionary<string, McpServerStatus> _statuses = new();
@@ -22,10 +23,12 @@ internal sealed class McpClientManager : IHostedService, IDisposable
     public McpClientManager(
         Dictionary<string, McpServerEntry> serverEntries,
         ToolRegistry toolRegistry,
+        McpOAuthService oauthService,
         ILogger<McpClientManager> logger)
     {
         _serverEntries = serverEntries;
         _toolRegistry = toolRegistry;
+        _oauthService = oauthService;
         _logger = logger;
     }
 
@@ -89,6 +92,25 @@ internal sealed class McpClientManager : IHostedService, IDisposable
     {
         try
         {
+            // Resolve OAuth token for OAuthPkce servers before connecting
+            Dictionary<string, string>? headers = entry.Headers is { Count: > 0 }
+                ? new Dictionary<string, string>(entry.Headers) : null;
+
+            if (entry.Transport is not "stdio" && entry.AuthMethod is Netclaw.Configuration.AuthMethod.OAuthPkce)
+            {
+                var token = await _oauthService.GetValidTokenAsync(name, entry, ct);
+                if (token is null)
+                {
+                    _statuses[name] = new McpServerStatus(name, McpConnectionState.AwaitingAuth, 0,
+                        "OAuth token not available. Run: netclaw mcp auth " + name);
+                    _logger.LogWarning("MCP server '{Name}' awaiting OAuth authorization", name);
+                    return false;
+                }
+
+                headers ??= new Dictionary<string, string>();
+                headers["Authorization"] = $"Bearer {token}";
+            }
+
             IClientTransport transport;
 
             if (entry.Transport is "stdio")
@@ -110,9 +132,7 @@ internal sealed class McpClientManager : IHostedService, IDisposable
                 {
                     Endpoint = new Uri(entry.Url!),
                     Name = name,
-                    AdditionalHeaders = entry.Headers is { Count: > 0 }
-                        ? new Dictionary<string, string>(entry.Headers)
-                        : null,
+                    AdditionalHeaders = headers,
                     TransportMode = entry.Transport is "sse"
                         ? HttpTransportMode.Sse : HttpTransportMode.AutoDetect,
                 });
@@ -154,7 +174,8 @@ internal enum McpConnectionState
 {
     Disabled,
     Connected,
-    Error
+    Error,
+    AwaitingAuth,
 }
 
 internal sealed record McpServerStatus(

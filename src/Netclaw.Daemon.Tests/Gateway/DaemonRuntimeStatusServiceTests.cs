@@ -104,9 +104,15 @@ public sealed class DaemonRuntimeStatusServiceTests
             }
         };
 
+        var oauthService = new McpOAuthService(
+            new HttpClient(),
+            new NetclawPaths(Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString())),
+            TimeProvider.System,
+            NullLogger<McpOAuthService>.Instance);
         var manager = new McpClientManager(
             mcpServers,
             new ToolRegistry(),
+            oauthService,
             NullLogger<McpClientManager>.Instance);
 
         await manager.StartAsync(CancellationToken.None);

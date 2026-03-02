@@ -12,5 +12,8 @@ public enum AuthMethod
     ApiKey,
 
     /// <summary>OAuth 2.0 device authorization grant (RFC 8628).</summary>
-    OAuthDevice
+    OAuthDevice,
+
+    /// <summary>OAuth 2.1 Authorization Code + PKCE (for MCP servers).</summary>
+    OAuthPkce
 }
