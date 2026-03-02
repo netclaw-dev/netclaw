@@ -276,7 +276,9 @@ static void ConfigureDaemonServices(
 
     if (memoryConfig.Provider.Equals("memorizer", StringComparison.OrdinalIgnoreCase))
     {
-        // Memorizer path: no builtin memory tools — MCP discovery handles everything
+        // Memorizer path: subagent-backed memory tools (store_memory, search_memories) are
+        // registered later by ToolIndexUpdater after MCP discovery completes and Memorizer
+        // connectivity is confirmed. The compaction extractor still uses direct MCP delegation.
         services.AddSingleton<IMemoryExtractor>(sp =>
             new MemorizerMemoryExtractor(sp.GetRequiredService<ToolRegistry>()));
     }

@@ -1,5 +1,7 @@
+using Akka.Actor;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Netclaw.Actors.Memory;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 
@@ -11,6 +13,10 @@ namespace Netclaw.Daemon.Mcp;
 /// The tool index is written to system-managed shadow files and injected dynamically
 /// into each LLM call via file-backed context layers. Also updates memory context layers
 /// based on config provider + Memorizer connectivity.
+///
+/// When Memorizer is configured and connected, registers subagent-backed memory tools
+/// (<see cref="MemorizerStoreMemoryTool"/> and <see cref="MemorizerSearchMemoriesTool"/>)
+/// that delegate to curation subagents.
 /// </summary>
 internal sealed class ToolIndexUpdater : IHostedService
 {
@@ -18,6 +24,8 @@ internal sealed class ToolIndexUpdater : IHostedService
     private readonly ToolRegistry _toolRegistry;
     private readonly MemoryIndexContextLayer _memoryIndexLayer;
     private readonly MemoryConfig _memoryConfig;
+    private readonly ActorSystem _actorSystem;
+    private readonly IChatClientProvider _clientProvider;
     private readonly ILogger<ToolIndexUpdater> _logger;
 
     public ToolIndexUpdater(
@@ -25,21 +33,39 @@ internal sealed class ToolIndexUpdater : IHostedService
         ToolRegistry toolRegistry,
         MemoryIndexContextLayer memoryIndexLayer,
         MemoryConfig memoryConfig,
+        ActorSystem actorSystem,
+        IChatClientProvider clientProvider,
         ILogger<ToolIndexUpdater> logger)
     {
         _shadowCatalogWriter = shadowCatalogWriter;
         _toolRegistry = toolRegistry;
         _memoryIndexLayer = memoryIndexLayer;
         _memoryConfig = memoryConfig;
+        _actorSystem = actorSystem;
+        _clientProvider = clientProvider;
         _logger = logger;
     }
 
     public Task StartAsync(CancellationToken cancellationToken)
     {
+        var state = ResolveMemoryState();
+
+        // When Memorizer is connected, register subagent-backed memory tools.
+        // These must be registered after MCP discovery so the curation subagent
+        // can resolve Memorizer tools from the registry at execution time.
+        if (state == MemoryContextState.MemorizerConnected)
+        {
+            _toolRegistry.Register(new MemorizerStoreMemoryTool(
+                _actorSystem, _clientProvider, _toolRegistry));
+            _toolRegistry.Register(new MemorizerSearchMemoriesTool(
+                _actorSystem, _clientProvider, _toolRegistry));
+            _logger.LogInformation("Registered subagent-backed memory tools (store_memory, search_memories)");
+        }
+
+        // Write catalogs after all tools are registered (including Memorizer tools above)
         _shadowCatalogWriter.WriteCatalogs();
         _logger.LogInformation("Tool index updated ({ToolCount} registrations)", _toolRegistry.GetAllRegistrations().Count);
 
-        var state = ResolveMemoryState();
         _memoryIndexLayer.Update(state);
         _logger.LogInformation("Memory context layer updated (state: {State})", state);
 
