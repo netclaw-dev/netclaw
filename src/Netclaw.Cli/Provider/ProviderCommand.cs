@@ -2,7 +2,6 @@ using System.Text.Json;
 using Netclaw.Cli.Config;
 using Netclaw.Configuration;
 using Netclaw.Configuration.Providers;
-using Netclaw.Configuration.Providers.Descriptors;
 
 namespace Netclaw.Cli.Provider;
 
@@ -321,11 +320,7 @@ internal static class ProviderCommand
     internal static ProviderDescriptorRegistry CreateDefaultRegistry()
     {
         var httpClient = new HttpClient();
-        return new ProviderDescriptorRegistry([
-            new OllamaDescriptor(httpClient),
-            new OpenAiDescriptor(httpClient),
-            new AnthropicDescriptor(httpClient),
-            new OpenRouterDescriptor(httpClient),
-        ]);
+        var catalog = ProviderDescriptorCatalog.Create(httpClient);
+        return new ProviderDescriptorRegistry(catalog.All);
     }
 }

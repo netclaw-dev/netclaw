@@ -130,57 +130,69 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
 
     public Task Handle(MessageEvent slackEvent)
     {
-        // Map Slack file attachments to SlackFileReference
-        var files = MapSlackFiles(slackEvent.Files);
-        var channelId = new SlackChannelId(slackEvent.Channel);
-
-        _gateway?.Tell(new SlackInboundMessage(
-            Kind: SlackInboundKind.Message,
-            EventId: BuildEventId(
-                channelId: slackEvent.Channel,
-                eventTs: slackEvent.Ts,
-                threadTs: slackEvent.ThreadTs,
-                userId: slackEvent.User,
-                text: slackEvent.Text),
-            ChannelId: channelId,
-            ThreadTs: !string.IsNullOrWhiteSpace(slackEvent.ThreadTs) ? new SlackThreadTs(slackEvent.ThreadTs) : null,
-            EventTs: new SlackEventTs(slackEvent.Ts),
-            UserId: !string.IsNullOrWhiteSpace(slackEvent.User) ? new SlackUserId(slackEvent.User) : null,
-            BotId: !string.IsNullOrWhiteSpace(slackEvent.BotId) ? new SlackBotId(slackEvent.BotId) : null,
-            Text: slackEvent.Text ?? string.Empty,
-            Subtype: slackEvent.Subtype,
-            Hidden: slackEvent.Hidden,
-            IsDirectMessage: IsDirectConversation(channelId),
-            Files: files));
-
+        ForwardInboundMessage(
+            kind: SlackInboundKind.Message,
+            channel: slackEvent.Channel,
+            eventTs: slackEvent.Ts,
+            threadTs: slackEvent.ThreadTs,
+            userId: slackEvent.User,
+            botId: slackEvent.BotId,
+            text: slackEvent.Text,
+            subtype: slackEvent.Subtype,
+            hidden: slackEvent.Hidden,
+            files: slackEvent.Files);
         return Task.CompletedTask;
     }
 
     public Task Handle(AppMention slackEvent)
     {
-        var files = MapSlackFiles(slackEvent.Files);
-        var channelId = new SlackChannelId(slackEvent.Channel);
+        ForwardInboundMessage(
+            kind: SlackInboundKind.AppMention,
+            channel: slackEvent.Channel,
+            eventTs: slackEvent.Ts,
+            threadTs: slackEvent.ThreadTs,
+            userId: slackEvent.User,
+            botId: null,
+            text: slackEvent.Text,
+            subtype: null,
+            hidden: false,
+            files: slackEvent.Files);
+        return Task.CompletedTask;
+    }
+
+    private void ForwardInboundMessage(
+        SlackInboundKind kind,
+        string channel,
+        string eventTs,
+        string? threadTs,
+        string? userId,
+        string? botId,
+        string? text,
+        string? subtype,
+        bool hidden,
+        IList<SlackNet.File>? files)
+    {
+        var mappedFiles = MapSlackFiles(files);
+        var channelId = new SlackChannelId(channel);
 
         _gateway?.Tell(new SlackInboundMessage(
-            Kind: SlackInboundKind.AppMention,
+            Kind: kind,
             EventId: BuildEventId(
-                channelId: slackEvent.Channel,
-                eventTs: slackEvent.Ts,
-                threadTs: slackEvent.ThreadTs,
-                userId: slackEvent.User,
-                text: slackEvent.Text),
+                channelId: channel,
+                eventTs: eventTs,
+                threadTs: threadTs,
+                userId: userId,
+                text: text),
             ChannelId: channelId,
-            ThreadTs: !string.IsNullOrWhiteSpace(slackEvent.ThreadTs) ? new SlackThreadTs(slackEvent.ThreadTs) : null,
-            EventTs: new SlackEventTs(slackEvent.Ts),
-            UserId: !string.IsNullOrWhiteSpace(slackEvent.User) ? new SlackUserId(slackEvent.User) : null,
-            BotId: null,
-            Text: slackEvent.Text ?? string.Empty,
-            Subtype: null,
-            Hidden: false,
+            ThreadTs: !string.IsNullOrWhiteSpace(threadTs) ? new SlackThreadTs(threadTs) : null,
+            EventTs: new SlackEventTs(eventTs),
+            UserId: !string.IsNullOrWhiteSpace(userId) ? new SlackUserId(userId) : null,
+            BotId: !string.IsNullOrWhiteSpace(botId) ? new SlackBotId(botId) : null,
+            Text: text ?? string.Empty,
+            Subtype: subtype,
+            Hidden: hidden,
             IsDirectMessage: IsDirectConversation(channelId),
-            Files: files));
-
-        return Task.CompletedTask;
+            Files: mappedFiles));
     }
 
     private static IReadOnlyList<SlackFileReference>? MapSlackFiles(IList<SlackNet.File>? files)

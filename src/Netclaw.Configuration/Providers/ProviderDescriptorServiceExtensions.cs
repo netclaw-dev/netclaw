@@ -1,5 +1,4 @@
 using Microsoft.Extensions.DependencyInjection;
-using Netclaw.Configuration.Providers.Descriptors;
 
 namespace Netclaw.Configuration.Providers;
 
@@ -19,21 +18,22 @@ public static class ProviderDescriptorServiceExtensions
     {
         services.AddHttpClient(HttpClientName);
 
-        services.AddSingleton<OllamaDescriptor>(sp =>
-            new OllamaDescriptor(sp.GetRequiredService<IHttpClientFactory>().CreateClient(HttpClientName)));
-        services.AddSingleton<OpenAiDescriptor>(sp =>
-            new OpenAiDescriptor(sp.GetRequiredService<IHttpClientFactory>().CreateClient(HttpClientName)));
-        services.AddSingleton<AnthropicDescriptor>(sp =>
-            new AnthropicDescriptor(sp.GetRequiredService<IHttpClientFactory>().CreateClient(HttpClientName)));
-        services.AddSingleton<OpenRouterDescriptor>(sp =>
-            new OpenRouterDescriptor(sp.GetRequiredService<IHttpClientFactory>().CreateClient(HttpClientName)));
+        services.AddSingleton(sp =>
+            ProviderDescriptorCatalog.Create(
+                sp.GetRequiredService<IHttpClientFactory>().CreateClient(HttpClientName)));
 
-        services.AddSingleton<IProviderDescriptor>(sp => sp.GetRequiredService<OllamaDescriptor>());
-        services.AddSingleton<IProviderDescriptor>(sp => sp.GetRequiredService<OpenAiDescriptor>());
-        services.AddSingleton<IProviderDescriptor>(sp => sp.GetRequiredService<AnthropicDescriptor>());
-        services.AddSingleton<IProviderDescriptor>(sp => sp.GetRequiredService<OpenRouterDescriptor>());
+        services.AddSingleton(sp => sp.GetRequiredService<ProviderDescriptorCatalog>().Ollama);
+        services.AddSingleton(sp => sp.GetRequiredService<ProviderDescriptorCatalog>().OpenAi);
+        services.AddSingleton(sp => sp.GetRequiredService<ProviderDescriptorCatalog>().Anthropic);
+        services.AddSingleton(sp => sp.GetRequiredService<ProviderDescriptorCatalog>().OpenRouter);
 
-        services.AddSingleton<ProviderDescriptorRegistry>();
+        services.AddSingleton<IProviderDescriptor>(sp => sp.GetRequiredService<ProviderDescriptorCatalog>().Ollama);
+        services.AddSingleton<IProviderDescriptor>(sp => sp.GetRequiredService<ProviderDescriptorCatalog>().OpenAi);
+        services.AddSingleton<IProviderDescriptor>(sp => sp.GetRequiredService<ProviderDescriptorCatalog>().Anthropic);
+        services.AddSingleton<IProviderDescriptor>(sp => sp.GetRequiredService<ProviderDescriptorCatalog>().OpenRouter);
+
+        services.AddSingleton(sp =>
+            new ProviderDescriptorRegistry(sp.GetRequiredService<ProviderDescriptorCatalog>().All));
         services.AddSingleton<IProviderProbe>(sp => sp.GetRequiredService<ProviderDescriptorRegistry>());
 
         return services;
