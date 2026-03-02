@@ -161,7 +161,10 @@ public sealed partial class DaemonManager
                     Message: "Daemon is not running (PID file pointed to a different process).");
             }
 
-            var uptime = _timeProvider.GetUtcNow() - new DateTimeOffset(process.StartTime.ToUniversalTime(), TimeSpan.Zero);
+            // Prefer PID file timestamp (reflects soft restarts), fall back to process start time
+            TryReadPidFile(out _, out var pidFileStartedAt);
+            var startedAt = pidFileStartedAt ?? new DateTimeOffset(process.StartTime.ToUniversalTime(), TimeSpan.Zero);
+            var uptime = _timeProvider.GetUtcNow() - startedAt;
             return new DaemonStatus(IsRunning: true, Pid: pid,
                 Message: $"Daemon running (PID {pid}, uptime {FormatUptime(uptime)}).");
         }
@@ -396,12 +399,24 @@ public sealed partial class DaemonManager
 
     private bool TryReadPid(out int pid)
     {
+        return TryReadPidFile(out pid, out _);
+    }
+
+    private bool TryReadPidFile(out int pid, out DateTimeOffset? startedAt)
+    {
         pid = 0;
+        startedAt = null;
         if (!File.Exists(_paths.PidFilePath))
             return false;
 
-        var content = File.ReadAllText(_paths.PidFilePath).Trim();
-        return int.TryParse(content, out pid);
+        var lines = File.ReadAllLines(_paths.PidFilePath);
+        if (lines.Length == 0 || !int.TryParse(lines[0].Trim(), out pid))
+            return false;
+
+        if (lines.Length > 1 && DateTimeOffset.TryParse(lines[1].Trim(), System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.RoundtripKind, out var ts))
+            startedAt = ts;
+
+        return true;
     }
 
     private void CleanupPidFile()
