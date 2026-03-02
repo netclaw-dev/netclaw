@@ -32,10 +32,38 @@ public sealed partial class SearchToolsTool : NetclawTool<SearchToolsTool.Params
     protected override Task<string> ExecuteAsync(Params args, CancellationToken ct)
     {
         var query = args.Query.Trim();
-        var results = _registry.SearchTools(query, args.Server, MaxResults);
+        var serverFilter = NormalizeServerFilter(args.Server);
+        var results = _registry.SearchTools(query, serverFilter, MaxResults);
 
         if (results.Count == 0)
-            return Task.FromResult($"No tools found matching '{query}'.");
+        {
+            var suggestions = _registry.SuggestTools(query, serverFilter, MaxResults);
+            if (suggestions.Count == 0)
+                return Task.FromResult($"No tools found matching '{query}'.");
+
+            var suggestionBuilder = new StringBuilder();
+            suggestionBuilder.AppendLine($"No exact tools found matching '{query}'.");
+            suggestionBuilder.AppendLine();
+            suggestionBuilder.AppendLine("Did you mean:");
+            suggestionBuilder.AppendLine();
+
+            foreach (var tool in suggestions)
+            {
+                var desc = tool.Description.Length > 80
+                    ? tool.Description[..77] + "..."
+                    : tool.Description;
+                var parameterHint = GetParameterHint(tool);
+
+                // NOTE: Keep suggestions in a distinct format so LlmSessionActor doesn't
+                // auto-load them as discovered tools. Auto-loading is only for exact matches.
+                suggestionBuilder.AppendLine($"  ? {tool.Name} :: {desc}{parameterHint}");
+            }
+
+            suggestionBuilder.AppendLine();
+            suggestionBuilder.AppendLine(
+                "Suggestions are not loaded yet. Call search_tools again with one of the exact tool names above.");
+            return Task.FromResult(suggestionBuilder.ToString());
+        }
 
         var sb = new StringBuilder();
         sb.AppendLine($"Found {results.Count} tool(s):");
@@ -53,6 +81,26 @@ public sealed partial class SearchToolsTool : NetclawTool<SearchToolsTool.Params
         sb.AppendLine();
         sb.AppendLine("Call any tool above by its full name. Tools are now loaded and available.");
         return Task.FromResult(sb.ToString());
+    }
+
+    private static string? NormalizeServerFilter(string? server)
+    {
+        if (string.IsNullOrWhiteSpace(server))
+            return null;
+
+        var value = server.Trim();
+        if (value.Equals("default", StringComparison.OrdinalIgnoreCase)
+            || value.Equals("all", StringComparison.OrdinalIgnoreCase)
+            || value.Equals("any", StringComparison.OrdinalIgnoreCase)
+            || value == "*")
+        {
+            return null;
+        }
+
+        if (value.StartsWith("mcp:", StringComparison.OrdinalIgnoreCase))
+            value = value[4..];
+
+        return value;
     }
 
     private static string GetParameterHint(INetclawTool tool)

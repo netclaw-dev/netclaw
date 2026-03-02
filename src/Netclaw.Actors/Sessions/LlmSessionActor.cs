@@ -49,6 +49,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor
     private readonly List<AITool> _availableTools = new();
     private readonly ToolRegistry? _fullRegistry;
     private int _baseToolCount; // count of always-loaded tools; dynamic tools appended after this
+    private readonly List<string> _discoveredToolOrder = new();
+    private readonly Dictionary<string, int> _discoveredToolLeases = new(StringComparer.Ordinal);
 
     // Last observed input token count from LLM response (for compaction trigger)
     private long _lastInputTokenCount;
@@ -100,7 +102,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor
         _log = Context.GetLogger().WithContext("SessionId", _sessionId.Value);
 
         // Load all non-MCP tools for initial LLM calls.
-        // MCP tools are loaded dynamically via search_tools meta-tool and reset each turn.
+        // MCP tools are loaded dynamically via search_tools and can be retained for a
+        // small number of future turns (configurable lease) to reduce rediscovery churn.
         _fullRegistry = toolRegistry;
         if (toolRegistry is not null)
         {
@@ -174,10 +177,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor
             _logActor?.Tell(cmd);
 
             _toolIterationCount = 0;
-
-            // Reset dynamically-loaded MCP tools — the LLM can re-discover via search_tools
-            if (_availableTools.Count > _baseToolCount)
-                _availableTools.RemoveRange(_baseToolCount, _availableTools.Count - _baseToolCount);
+            PrepareDiscoveredToolsForNewTurn();
 
             // Modality gate: strip unsupported media references
             var mediaRefs = cmd.MediaReferences;
@@ -1221,15 +1221,113 @@ public sealed class LlmSessionActor : ReceivePersistentActor
             if (tool is null)
                 continue;
 
-            // Don't add duplicates
-            var aiTool = tool.ToAITool();
-            if (_availableTools.Any(existing =>
-                existing is AIFunction ef && aiTool is AIFunction nf && ef.Name == nf.Name))
+            RememberDiscoveredTool(toolName, tool);
+            AddAvailableToolIfMissing(toolName, tool.ToAITool());
+        }
+    }
+
+    private void PrepareDiscoveredToolsForNewTurn()
+    {
+        if (_fullRegistry is null)
+            return;
+
+        if (_config.DiscoveredToolRetentionTurns <= 0 || _config.DiscoveredToolMaxCount <= 0)
+        {
+            _discoveredToolLeases.Clear();
+            _discoveredToolOrder.Clear();
+            TrimAvailableToolsToBase();
+            return;
+        }
+
+        if (_discoveredToolLeases.Count == 0)
+        {
+            TrimAvailableToolsToBase();
+            return;
+        }
+
+        var expired = _discoveredToolLeases
+            .Where(x => x.Value <= 0)
+            .Select(x => x.Key)
+            .ToList();
+
+        if (expired.Count > 0)
+        {
+            foreach (var name in expired)
+            {
+                _discoveredToolLeases.Remove(name);
+            }
+
+            _discoveredToolOrder.RemoveAll(name => !_discoveredToolLeases.ContainsKey(name));
+        }
+
+        RebuildAvailableToolsFromDiscoveredCache();
+
+        // Lease countdown happens after this turn's tool set is prepared,
+        // so a lease value of N keeps tools available for N future turns.
+        foreach (var name in _discoveredToolLeases.Keys.ToList())
+        {
+            _discoveredToolLeases[name]--;
+        }
+    }
+
+    private void RememberDiscoveredTool(string toolName, INetclawTool tool)
+    {
+        if (tool is not McpToolAdapter)
+            return;
+
+        if (_config.DiscoveredToolRetentionTurns <= 0 || _config.DiscoveredToolMaxCount <= 0)
+            return;
+
+        var lease = Math.Max(1, _config.DiscoveredToolRetentionTurns);
+        _discoveredToolLeases[toolName] = lease;
+
+        if (!_discoveredToolOrder.Contains(toolName))
+        {
+            _discoveredToolOrder.Add(toolName);
+        }
+
+        while (_discoveredToolOrder.Count > _config.DiscoveredToolMaxCount)
+        {
+            var evicted = _discoveredToolOrder[0];
+            _discoveredToolOrder.RemoveAt(0);
+            _discoveredToolLeases.Remove(evicted);
+        }
+    }
+
+    private void RebuildAvailableToolsFromDiscoveredCache()
+    {
+        if (_fullRegistry is null)
+            return;
+
+        TrimAvailableToolsToBase();
+
+        foreach (var toolName in _discoveredToolOrder)
+        {
+            if (!_discoveredToolLeases.TryGetValue(toolName, out var lease) || lease <= 0)
                 continue;
 
-            _availableTools.Add(aiTool);
-            _log.Info("Dynamically loaded tool '{ToolName}' into session", toolName);
+            var tool = _fullRegistry.GetByName(toolName);
+            if (tool is null)
+                continue;
+
+            AddAvailableToolIfMissing(toolName, tool.ToAITool());
         }
+    }
+
+    private void TrimAvailableToolsToBase()
+    {
+        if (_availableTools.Count > _baseToolCount)
+            _availableTools.RemoveRange(_baseToolCount, _availableTools.Count - _baseToolCount);
+    }
+
+    private void AddAvailableToolIfMissing(string toolName, AITool aiTool)
+    {
+        if (_availableTools.Any(existing =>
+            existing is AIFunction ef && aiTool is AIFunction nf && ef.Name == nf.Name))
+            return;
+
+        _availableTools.Add(aiTool);
+        _log.Info("Dynamically loaded tool '{ToolName}' into session", toolName);
     }
 
     private void MaybeSnapshot()

@@ -68,6 +68,23 @@ public class SearchToolsToolTests
     }
 
     [Fact]
+    public async Task Search_ServerDefault_IsTreatedAsNoFilter()
+    {
+        var registry = CreateRegistryWithMcpTools();
+        var tool = new SearchToolsTool(registry);
+
+        var result = await tool.ExecuteAsync(
+            new Dictionary<string, object?>
+            {
+                ["Query"] = "store",
+                ["Server"] = "default"
+            },
+            CancellationToken.None);
+
+        Assert.Contains("memorizer/store", result);
+    }
+
+    [Fact]
     public async Task Search_IncludesNonMcpToolsWithoutServerFilter()
     {
         var registry = new ToolRegistry();
@@ -108,6 +125,28 @@ public class SearchToolsToolTests
             CancellationToken.None);
 
         Assert.Contains("params: url", result);
+    }
+
+    [Fact]
+    public async Task Search_NoExactMatch_ReturnsSuggestionsWithoutAutoLoadFormat()
+    {
+        var registry = new ToolRegistry();
+        registry.Register(new McpToolAdapter(
+            CreateFakeAIFunction("navigate_page", "Navigate the current page"),
+            "browser_chrome_devtools",
+            "navigate_page"));
+
+        var tool = new SearchToolsTool(registry);
+
+        var result = await tool.ExecuteAsync(
+            new Dictionary<string, object?> { ["Query"] = "navgite pg" },
+            CancellationToken.None);
+
+        Assert.Contains("No exact tools found", result);
+        Assert.Contains("Did you mean", result);
+        Assert.Contains("browser_chrome_devtools/navigate_page", result);
+        Assert.Contains("Suggestions are not loaded yet", result);
+        Assert.DoesNotContain("browser_chrome_devtools/navigate_page —", result);
     }
 
     private static ToolRegistry CreateRegistryWithMcpTools()
