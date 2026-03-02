@@ -207,12 +207,13 @@ DI integration.
 ### Requirement: TUI command classification
 
 Commands SHALL be classified as either TUI-interactive (rendered via Termina)
-or plain-CLI (standard console output). Only `netclaw init` and `netclaw chat`
-SHALL use Termina TUI. All other commands SHALL use plain console output.
+or plain-CLI (standard console output). `netclaw init`, `netclaw chat`, and
+`netclaw sessions` SHALL use Termina TUI. All other commands SHALL use plain
+console output.
 
 #### Scenario: TUI command launches Termina
 
-- **WHEN** operator runs `netclaw chat` or `netclaw init`
+- **WHEN** operator runs `netclaw chat`, `netclaw init`, or `netclaw sessions`
 - **THEN** the command handler launches Termina as a hosted service
 - **AND** the TUI renders interactive components
 
@@ -224,22 +225,23 @@ SHALL use Termina TUI. All other commands SHALL use plain console output.
 
 ### Requirement: Interactive chat command
 
-The CLI SHALL provide `netclaw chat` as an interactive agent prompt that hosts
-the full actor system in-process. The chat command SHALL use the TUI adapter
-to produce `SendUserMessage` commands with entity key `tui/{sessionId}`.
+The CLI SHALL provide `netclaw chat` as an interactive agent prompt that
+connects to the daemon via SignalR. The chat command SHALL support an optional
+`--resume <session-id>` flag to attach to an existing session instead of
+creating a new one.
 
 #### Scenario: Start chat session
 
 - **WHEN** operator runs `netclaw chat`
-- **THEN** the actor system starts in-process
+- **THEN** a SignalR connection is established to the daemon
 - **AND** a TUI chat interface is rendered with input panel and message history
-- **AND** a new session with entity key `tui/{uuid}` is created
+- **AND** a new session is created via `EnsureSession`
 
 #### Scenario: Send message in chat
 
 - **GIVEN** a chat session is active
 - **WHEN** operator types a message and presses Enter
-- **THEN** a `SendUserMessage` command is dispatched to the session parent
+- **THEN** a `SendMessage` call is dispatched via SignalR
 - **AND** the response streams into the chat history via StreamingTextNode
 
 #### Scenario: Tool activity displayed inline
@@ -259,6 +261,25 @@ to produce `SendUserMessage` commands with entity key `tui/{sessionId}`.
 - **AND** green indicates all servers connected
 - **AND** yellow indicates degraded connectivity
 - **AND** red indicates servers unreachable
+
+#### Scenario: Resume existing session via flag
+
+- **WHEN** operator runs `netclaw chat --resume <session-id>`
+- **THEN** a SignalR connection is established to the daemon
+- **AND** the chat page attaches to the specified session via `EnsureSession`
+- **AND** a "Resumed" indicator is shown
+
+### Requirement: Session browser command
+
+The CLI SHALL provide `netclaw sessions` as a TUI command that displays recent
+sessions and allows the user to select one to resume.
+
+#### Scenario: Launch session browser
+
+- **WHEN** operator runs `netclaw sessions`
+- **THEN** the TUI displays a list of recent sessions from the daemon catalog
+- **AND** daemon connectivity is required (fails with helpful error if daemon
+  is not running)
 
 ### Requirement: Daemon entry point
 

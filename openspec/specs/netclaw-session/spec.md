@@ -27,6 +27,11 @@ subscribers. Subscriber delivery SHALL use a direct subscription model with
 receive (Text, Thinking, ToolCalls, Usage). Lifecycle events (TurnCompleted,
 ErrorOutput, SessionTitleOutput) SHALL always be delivered regardless of filter.
 
+Multiple subscribers from different channels (e.g., Slack and TUI) SHALL
+coexist on the same session actor. Each subscriber receives its own filtered
+copy of output independently. Adding or removing a subscriber SHALL NOT affect
+other active subscribers.
+
 #### Scenario: Persist and emit assistant reply
 
 - **WHEN** the assistant produces a response
@@ -39,6 +44,15 @@ ErrorOutput, SessionTitleOutput) SHALL always be delivered regardless of filter.
 - **WHEN** a turn completes with text, thinking, and usage data
 - **THEN** each subscriber receives only the output categories matching their filter
 - **AND** all subscribers receive lifecycle events regardless of filter
+
+#### Scenario: Cross-channel multi-subscriber
+
+- **GIVEN** a session originally created by the Slack channel with an active
+  Slack subscriber
+- **WHEN** a TUI client joins the same session via `JoinSession`
+- **THEN** both Slack and TUI subscribers receive output from subsequent turns
+- **AND** either subscriber disconnecting does NOT affect the other
+- **AND** the session continues processing input from any attached channel
 
 ### Requirement: Context window usage transparency
 

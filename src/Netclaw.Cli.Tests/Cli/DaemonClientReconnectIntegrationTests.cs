@@ -152,14 +152,7 @@ public sealed class DaemonClientReconnectIntegrationTests
         return app;
     }
 
-    private static int GetFreeTcpPort()
-    {
-        var listener = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
-        listener.Start();
-        var port = ((System.Net.IPEndPoint)listener.LocalEndpoint).Port;
-        listener.Stop();
-        return port;
-    }
+    private static int GetFreeTcpPort() => TestNetworkHelpers.GetFreeTcpPort();
 
     private sealed class FakeHubState
     {

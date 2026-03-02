@@ -224,4 +224,46 @@ if [[ "$cleared_list" == *"$ALT_MODEL"* ]]; then
   exit 1
 fi
 
+# ── Session browsing smoke tests ──
+# These tests verify the session catalog API and help text for session
+# resume functionality. Requires daemon + provider + model to be configured
+# (done by the provider/model tests above).
+
+echo "Restarting daemon for session tests..."
+start_daemon_with_timeout
+
+echo "Checking health before session tests..."
+health_output="$(run_sandbox_timed "$STEP_TIMEOUT_SECONDS" curl -fsS http://127.0.0.1:5199/api/health/ready)"
+if [[ "$health_output" != "healthy" && "$health_output" != '"healthy"' ]]; then
+  echo "Expected /api/health/ready to return healthy, got: $health_output"
+  exit 1
+fi
+
+echo "Sending a headless prompt to create a session..."
+run_sandbox_timed "$STEP_TIMEOUT_SECONDS" netclaw -p "Say hello in one word" || true
+
+echo "Checking session catalog via REST API..."
+sessions_output="$(run_sandbox_timed "$STEP_TIMEOUT_SECONDS" curl -fsS http://127.0.0.1:5199/api/sessions)"
+echo "$sessions_output"
+if [[ "$sessions_output" != *"persistenceId"* ]]; then
+  echo "Expected /api/sessions to return at least one session entry."
+  exit 1
+fi
+
+echo "Verifying help text includes sessions command..."
+help_output="$(run_sandbox_timed "$STEP_TIMEOUT_SECONDS" netclaw --help)"
+echo "$help_output"
+if [[ "$help_output" != *"sessions"* ]]; then
+  echo "Expected help text to include sessions command."
+  exit 1
+fi
+
+echo "Verifying chat --resume help..."
+resume_help="$(run_sandbox_timed "$STEP_TIMEOUT_SECONDS" netclaw chat --help)"
+echo "$resume_help"
+if [[ "$resume_help" != *"--resume"* ]]; then
+  echo "Expected chat help to include --resume flag."
+  exit 1
+fi
+
 echo "Smoke sandbox checks passed."

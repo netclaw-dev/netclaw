@@ -1,3 +1,4 @@
+using System.Net.Http.Json;
 using Microsoft.AspNetCore.SignalR.Client;
 using R3;
 using Microsoft.Extensions.AI;
@@ -13,6 +14,8 @@ namespace Netclaw.Cli.Daemon;
 /// </summary>
 public sealed class DaemonClient : IAsyncDisposable
 {
+    public const string TuiChannelType = "tui";
+
     private static readonly TimeSpan[] ReconnectDelays =
     [
         TimeSpan.Zero,
@@ -26,6 +29,7 @@ public sealed class DaemonClient : IAsyncDisposable
     private readonly string _hubUrl;
     private readonly Subject<SessionOutput> _outputSubject = new();
     private readonly Subject<DaemonConnectionEvent> _connectionSubject = new();
+    private readonly HttpClient _httpClient = new();
     private readonly SemaphoreSlim _connectGate = new(1, 1);
     private readonly SemaphoreSlim _sessionGate = new(1, 1);
     private readonly CancellationTokenSource _lifetimeCts = new();
@@ -184,6 +188,39 @@ public sealed class DaemonClient : IAsyncDisposable
         return await EnsureSessionInternalAsync(channelType, cancellationToken);
     }
 
+    /// <summary>
+    /// Queries the daemon REST API for recent sessions.
+    /// Returns an empty list if the daemon is unreachable.
+    /// </summary>
+    public async Task<List<SessionCatalogEntryDto>> ListSessionsAsync(
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var url = $"{_daemonEndpoint}/api/sessions";
+            var result = await _httpClient.GetFromJsonAsync<List<SessionCatalogEntryDto>>(
+                url, cancellationToken);
+            return result ?? [];
+        }
+        catch
+        {
+            return [];
+        }
+    }
+
+    /// <summary>
+    /// Sets the session ID for subsequent calls so that <c>EnsureSession</c>
+    /// attaches to (or rehydrates) an existing session instead of creating a new one.
+    /// </summary>
+    public async Task<string> ResumeSessionAsync(
+        string sessionId,
+        CancellationToken cancellationToken = default)
+    {
+        _channelType = TuiChannelType;
+        _sessionId = sessionId;
+        return await EnsureSessionInternalAsync(TuiChannelType, cancellationToken);
+    }
+
     public async Task SendAsync(ChannelInput input, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(input);
@@ -224,6 +261,7 @@ public sealed class DaemonClient : IAsyncDisposable
         _lifetimeCts.Dispose();
         _disposed = true;
         await _connection.DisposeAsync();
+        _httpClient.Dispose();
         _connectGate.Dispose();
         _sessionGate.Dispose();
     }
