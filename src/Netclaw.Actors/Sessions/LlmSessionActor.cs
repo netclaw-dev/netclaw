@@ -433,6 +433,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor
                 && _state.History[0].Role == Protocol.ChatRole.System ? 1 : 0;
             var effectiveKeepCount = _config.KeepRecentMessages;
             List<SerializableChatMessage> compactedMessages;
+            int discardStartIndex;
 
             while (true)
             {
@@ -446,6 +447,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor
                     .Count(m => m.Role != Microsoft.Extensions.AI.ChatRole.System);
 
                 var startIndex = _state.History.Count - keptNonSystemCount;
+                discardStartIndex = startIndex;
                 compactedMessages = new List<SerializableChatMessage>();
                 for (var i = Math.Max(systemOffset, startIndex); i < _state.History.Count; i++)
                 {
@@ -468,10 +470,25 @@ public sealed class LlmSessionActor : ReceivePersistentActor
             _log.Info("Phase 2: Extractive reduction (history={HistoryCount} → {KeptCount} messages, keepCount={KeepCount})",
                 _state.History.Count, compactedMessages.Count + systemOffset, effectiveKeepCount);
 
+            // Phase 2b: Observer — compress discarded messages into observations.
+            // Observations are prepended to the kept messages so context is preserved.
+            var observationText = await GenerateObservationsAsync(systemOffset, discardStartIndex);
+            if (!string.IsNullOrWhiteSpace(observationText))
+            {
+                var observationMsg = new SerializableChatMessage
+                {
+                    Role = Protocol.ChatRole.User,
+                    Content = ObservationPromptBuilder.WrapObservations(observationText)
+                };
+                compactedMessages.Insert(0, observationMsg);
+                _log.Info("Observer: generated {ObsLength} chars of observations from {DiscardedCount} discarded messages",
+                    observationText.Length, Math.Max(0, discardStartIndex - systemOffset));
+            }
+
             var compactedEvent = new SessionCompacted
             {
                 SessionId = _sessionId,
-                Summary = string.Empty, // Extractive — no LLM summary
+                Summary = observationText ?? string.Empty,
                 CompactedMessages = compactedMessages,
                 TurnCountBefore = _state.TurnCount,
                 CompactedAtMs = NowMs()
@@ -491,7 +508,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor
                     MessagesBefore = messagesBefore,
                     MessagesAfter = _state.History.Count,
                     ToolResultsCleared = clearedCount > 0,
-                    Summarized = false, // Extractive, not summarized
+                    Summarized = !string.IsNullOrWhiteSpace(observationText),
                     ContextWindowTokens = _config.ContextWindowTokens,
                     PreCompactionInputTokens = preCompactionInputTokens,
                     KeepCountUsed = effectiveKeepCount
@@ -603,6 +620,53 @@ public sealed class LlmSessionActor : ReceivePersistentActor
         {
             // Title generation is best-effort — log and move on
             Trace.TraceWarning("Sidecar title generation failed: {0}", ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// Observer phase: compress discarded messages into observation notes via LLM call.
+    /// Returns null if no messages to compress or if the LLM call fails (graceful degradation).
+    /// </summary>
+    private async Task<string?> GenerateObservationsAsync(int systemOffset, int keepStartIndex)
+    {
+        // Collect messages that will be discarded
+        var discardedMessages = new List<SerializableChatMessage>();
+        for (var i = systemOffset; i < keepStartIndex && i < _state.History.Count; i++)
+        {
+            discardedMessages.Add(_state.History[i]);
+        }
+
+        if (discardedMessages.Count == 0)
+            return null;
+
+        try
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            var observerMessages = new List<AiChatMessage>
+            {
+                new(Microsoft.Extensions.AI.ChatRole.System,
+                    ObservationPromptBuilder.BuildObservationSystemPrompt()),
+                new(Microsoft.Extensions.AI.ChatRole.User,
+                    ObservationPromptBuilder.BuildObservationUserPrompt(discardedMessages))
+            };
+
+            var response = await _compactionClient.GetResponseAsync(
+                observerMessages, cancellationToken: cts.Token);
+            var text = response.Messages[^1].Text;
+
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                _log.Warning("Observer returned empty observation text — falling back to extractive-only");
+                return null;
+            }
+
+            return text;
+        }
+        catch (Exception ex)
+        {
+            // Graceful degradation: if Observer fails, proceed with extractive-only compaction
+            _log.Warning(ex, "Observer LLM call failed — falling back to extractive-only compaction");
+            return null;
         }
     }
 

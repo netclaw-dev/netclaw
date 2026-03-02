@@ -800,7 +800,7 @@ public partial class InitWizardViewModel : ReactiveViewModel
             | `{_paths.AgentsPath}` | Operating rules, meta-guidance (this file) |
             | `{_paths.ToolingPath}` | Host environment capabilities |
 
-            Update these files directly as you learn more about the user and their environment.
+            To update these files, use `file_read` to check current content first, then `file_write` to update.
 
             ### Progressive Disclosure
 
@@ -813,6 +813,28 @@ public partial class InitWizardViewModel : ReactiveViewModel
             - `{_paths.McpShadowDirectory}/` — system-generated MCP shadow catalogs (do not edit)
 
             The top-level file should reference detail files so they can be loaded on demand.
+
+            ## Memory Triage — Where to Save What You Learn
+
+            | Information Type | Destination |
+            |-----------------|-------------|
+            | Personal facts (name, family, preferences) | `SOUL.md` |
+            | Operating rules, workflow preferences | `AGENTS.md` |
+            | Environment capabilities, tool configs | `TOOLING.md` |
+            | World knowledge, project details, solutions | Memorizer (`search_memories`) |
+            | Procedures, reusable workflows | Skill files in `{_paths.SkillsDirectory}/` |
+
+            ## Skills
+
+            Procedural knowledge (how-tos, workflows) is available via `search_skills`.
+            Check for relevant skills before starting unfamiliar tasks.
+            If you develop a reusable procedure, write a skill file to `{_paths.SkillsDirectory}/`.
+
+            ## Cross-Session Memory
+
+            Use `search_memories` to recall information from prior sessions, saved knowledge,
+            or project context. Save important findings proactively — don't wait for the
+            session to end.
             """);
 
         File.WriteAllText(_paths.ToolingPath,

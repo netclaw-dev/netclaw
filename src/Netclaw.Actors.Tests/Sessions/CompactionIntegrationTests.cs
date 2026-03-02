@@ -77,23 +77,22 @@ public class CompactionIntegrationTests : TestKit
             SessionId = sessionId,
             Subscriber = subscriber,
             Filter = OutputFilter.Full
-        }, TimeSpan.FromSeconds(3));
-        subscriber.ExpectMsg<SessionJoined>(); // Drain subscriber notification
+        });
+        await subscriber.ExpectMsgAsync<SessionJoined>();
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = sessionId,
             Content = "Hello, this should trigger compaction"
-        }, TimeSpan.FromSeconds(3));
+        });
 
         // First: normal text response from the turn
-        subscriber.ExpectMsg<TextOutput>(TimeSpan.FromSeconds(3));
-        subscriber.ExpectMsg<UsageOutput>(TimeSpan.FromSeconds(3));
-        subscriber.ExpectMsg<TurnCompleted>(TimeSpan.FromSeconds(3));
+        await subscriber.ExpectMsgAsync<TextOutput>();
+        await subscriber.ExpectMsgAsync<UsageOutput>();
+        await subscriber.ExpectMsgAsync<TurnCompleted>();
 
-        // Then: compaction output (extractive — no LLM summarization)
-        var compaction = subscriber.ExpectMsg<CompactionOutput>(TimeSpan.FromSeconds(5));
-        Assert.False(compaction.Summarized);
+        // Then: compaction output (with observations from Observer)
+        var compaction = await subscriber.ExpectMsgAsync<CompactionOutput>();
         Assert.True(compaction.MessagesAfter < compaction.MessagesBefore);
 
         // At least one LLM call should have happened for the turn itself.
@@ -121,21 +120,21 @@ public class CompactionIntegrationTests : TestKit
             SessionId = sessionId,
             Subscriber = subscriber,
             Filter = OutputFilter.Full
-        }, TimeSpan.FromSeconds(3));
-        subscriber.ExpectMsg<SessionJoined>(); // Drain subscriber notification
+        });
+        await subscriber.ExpectMsgAsync<SessionJoined>();
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = sessionId,
             Content = "Hello, this should NOT trigger compaction"
-        }, TimeSpan.FromSeconds(3));
+        });
 
-        subscriber.ExpectMsg<TextOutput>(TimeSpan.FromSeconds(3));
-        subscriber.ExpectMsg<UsageOutput>(TimeSpan.FromSeconds(3));
-        subscriber.ExpectMsg<TurnCompleted>(TimeSpan.FromSeconds(3));
+        await subscriber.ExpectMsgAsync<TextOutput>();
+        await subscriber.ExpectMsgAsync<UsageOutput>();
+        await subscriber.ExpectMsgAsync<TurnCompleted>();
 
         // No compaction output should appear
-        subscriber.ExpectNoMsg(TimeSpan.FromMilliseconds(500));
+        await subscriber.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(500));
 
         // Only 1 LLM call — no compaction
         Assert.Equal(1, _fakeChatClient.CallCount);
@@ -160,20 +159,20 @@ public class CompactionIntegrationTests : TestKit
             SessionId = sessionId,
             Subscriber = subscriber,
             Filter = OutputFilter.Full
-        }, TimeSpan.FromSeconds(3));
-        subscriber.ExpectMsg<SessionJoined>(); // Drain subscriber notification
+        });
+        await subscriber.ExpectMsgAsync<SessionJoined>();
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = sessionId,
             Content = "Trigger compaction"
-        }, TimeSpan.FromSeconds(3));
+        });
 
         // Wait for turn + compaction
-        subscriber.ExpectMsg<TextOutput>(TimeSpan.FromSeconds(3));
-        subscriber.ExpectMsg<UsageOutput>(TimeSpan.FromSeconds(3));
-        subscriber.ExpectMsg<TurnCompleted>(TimeSpan.FromSeconds(3));
-        subscriber.ExpectMsg<CompactionOutput>(TimeSpan.FromSeconds(5));
+        await subscriber.ExpectMsgAsync<TextOutput>();
+        await subscriber.ExpectMsgAsync<UsageOutput>();
+        await subscriber.ExpectMsgAsync<TurnCompleted>();
+        await subscriber.ExpectMsgAsync<CompactionOutput>();
 
         // After compaction, disable the high usage so next call doesn't trigger again
         _fakeChatClient.UsageOverride = new UsageDetails
@@ -188,12 +187,12 @@ public class CompactionIntegrationTests : TestKit
         {
             SessionId = sessionId,
             Content = "Post-compaction message"
-        }, TimeSpan.FromSeconds(3));
+        });
 
-        var text = subscriber.ExpectMsg<TextOutput>(TimeSpan.FromSeconds(3));
+        var text = await subscriber.ExpectMsgAsync<TextOutput>();
         Assert.Contains("fake", text.Text, StringComparison.OrdinalIgnoreCase);
-        subscriber.ExpectMsg<UsageOutput>(TimeSpan.FromSeconds(3));
-        subscriber.ExpectMsg<TurnCompleted>(TimeSpan.FromSeconds(3));
+        await subscriber.ExpectMsgAsync<UsageOutput>();
+        await subscriber.ExpectMsgAsync<TurnCompleted>();
     }
 
     [Fact]
@@ -216,30 +215,30 @@ public class CompactionIntegrationTests : TestKit
             SessionId = sessionId,
             Subscriber = subscriber,
             Filter = OutputFilter.Full
-        }, TimeSpan.FromSeconds(3));
-        subscriber.ExpectMsg<SessionJoined>(); // Drain subscriber notification
+        });
+        await subscriber.ExpectMsgAsync<SessionJoined>();
 
         // First message — triggers turn then compaction
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = sessionId,
             Content = "First message"
-        }, TimeSpan.FromSeconds(3));
+        });
 
         // Buffer a second message during processing/compaction
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = sessionId,
             Content = "Second message (buffered)"
-        }, TimeSpan.FromSeconds(3));
+        });
 
         // Wait for turn 1 output
-        subscriber.ExpectMsg<TextOutput>(TimeSpan.FromSeconds(3));
-        subscriber.ExpectMsg<UsageOutput>(TimeSpan.FromSeconds(3));
-        subscriber.ExpectMsg<TurnCompleted>(TimeSpan.FromSeconds(3));
+        await subscriber.ExpectMsgAsync<TextOutput>();
+        await subscriber.ExpectMsgAsync<UsageOutput>();
+        await subscriber.ExpectMsgAsync<TurnCompleted>();
 
         // Wait for compaction
-        subscriber.ExpectMsg<CompactionOutput>(TimeSpan.FromSeconds(5));
+        await subscriber.ExpectMsgAsync<CompactionOutput>();
 
         // After compaction, lower the usage so the buffered message doesn't trigger again
         _fakeChatClient.UsageOverride = new UsageDetails
@@ -250,9 +249,9 @@ public class CompactionIntegrationTests : TestKit
         };
 
         // Buffered message should be drained and produce output
-        subscriber.ExpectMsg<TextOutput>(TimeSpan.FromSeconds(5));
-        subscriber.ExpectMsg<UsageOutput>(TimeSpan.FromSeconds(3));
-        subscriber.ExpectMsg<TurnCompleted>(TimeSpan.FromSeconds(3));
+        await subscriber.ExpectMsgAsync<TextOutput>();
+        await subscriber.ExpectMsgAsync<UsageOutput>();
+        await subscriber.ExpectMsgAsync<TurnCompleted>();
     }
 
     [Fact]
@@ -275,19 +274,19 @@ public class CompactionIntegrationTests : TestKit
             SessionId = sessionId,
             Subscriber = subscriber,
             Filter = OutputFilter.Full
-        }, TimeSpan.FromSeconds(3));
-        subscriber.ExpectMsg<SessionJoined>(); // Drain subscriber notification
+        });
+        await subscriber.ExpectMsgAsync<SessionJoined>();
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = sessionId,
             Content = "Message before compaction"
-        }, TimeSpan.FromSeconds(3));
+        });
 
-        subscriber.ExpectMsg<TextOutput>(TimeSpan.FromSeconds(3));
-        subscriber.ExpectMsg<UsageOutput>(TimeSpan.FromSeconds(3));
-        subscriber.ExpectMsg<TurnCompleted>(TimeSpan.FromSeconds(3));
-        subscriber.ExpectMsg<CompactionOutput>(TimeSpan.FromSeconds(5));
+        await subscriber.ExpectMsgAsync<TextOutput>();
+        await subscriber.ExpectMsgAsync<UsageOutput>();
+        await subscriber.ExpectMsgAsync<TurnCompleted>();
+        await subscriber.ExpectMsgAsync<CompactionOutput>();
 
         // Phase 2: Kill the session actor
         var escapedId = Uri.EscapeDataString(sessionId.Value);
@@ -304,8 +303,8 @@ public class CompactionIntegrationTests : TestKit
             SessionId = sessionId,
             Subscriber = recoverSub,
             Filter = OutputFilter.Full
-        }, TimeSpan.FromSeconds(3));
-        recoverSub.ExpectMsg<SessionJoined>(); // Drain subscriber notification
+        });
+        await recoverSub.ExpectMsgAsync<SessionJoined>();
         Assert.Equal(sessionId, recovered.SessionId);
 
         // Phase 4: Verify session still works after recovery
@@ -320,9 +319,9 @@ public class CompactionIntegrationTests : TestKit
         {
             SessionId = sessionId,
             Content = "Post-recovery message"
-        }, TimeSpan.FromSeconds(3));
+        });
 
-        var text = recoverSub.ExpectMsg<TextOutput>(TimeSpan.FromSeconds(3));
+        var text = await recoverSub.ExpectMsgAsync<TextOutput>();
         Assert.Contains("fake", text.Text, StringComparison.OrdinalIgnoreCase);
     }
 
@@ -345,23 +344,22 @@ public class CompactionIntegrationTests : TestKit
             SessionId = sessionId,
             Subscriber = subscriber,
             Filter = OutputFilter.Full
-        }, TimeSpan.FromSeconds(3));
-        subscriber.ExpectMsg<SessionJoined>();
+        });
+        await subscriber.ExpectMsgAsync<SessionJoined>();
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = sessionId,
             Content = "Investigate ticket 579"
-        }, TimeSpan.FromSeconds(3));
+        });
 
         // Turn output
-        subscriber.ExpectMsg<TextOutput>(TimeSpan.FromSeconds(3));
-        subscriber.ExpectMsg<UsageOutput>(TimeSpan.FromSeconds(3));
-        subscriber.ExpectMsg<TurnCompleted>(TimeSpan.FromSeconds(3));
+        await subscriber.ExpectMsgAsync<TextOutput>();
+        await subscriber.ExpectMsgAsync<UsageOutput>();
+        await subscriber.ExpectMsgAsync<TurnCompleted>();
 
-        // Compaction (extractive — no LLM summarization)
-        var compaction = subscriber.ExpectMsg<CompactionOutput>(TimeSpan.FromSeconds(5));
-        Assert.False(compaction.Summarized);
+        // Compaction (with observations from Observer)
+        await subscriber.ExpectMsgAsync<CompactionOutput>();
 
         // Verify post-compaction by sending another message (low usage to avoid re-compaction)
         _fakeChatClient.UsageOverride = new UsageDetails
@@ -375,10 +373,10 @@ public class CompactionIntegrationTests : TestKit
         {
             SessionId = sessionId,
             Content = "What was the ticket about?"
-        }, TimeSpan.FromSeconds(3));
+        });
 
         // Session still works — the context-summary message is there as context
-        var text = subscriber.ExpectMsg<TextOutput>(TimeSpan.FromSeconds(3));
+        var text = await subscriber.ExpectMsgAsync<TextOutput>();
         Assert.Contains("fake", text.Text, StringComparison.OrdinalIgnoreCase);
     }
 }

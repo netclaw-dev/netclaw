@@ -28,6 +28,9 @@ public sealed class NetclawPaths
     public string InstructionsPath => Path.Combine(SoulDirectory, "INSTRUCTIONS.md");
     public string UserPreferencesPath => Path.Combine(SoulDirectory, "USER.md");
 
+    // ── Skills directory (procedural context) ──
+    public string SkillsDirectory => Path.Combine(BasePath, "skills");
+
     // ── Other standard directories ──
     public string ProjectsDirectory => Path.Combine(BasePath, "projects");
     public string EnvironmentDirectory => Path.Combine(BasePath, "environment");
@@ -61,6 +64,7 @@ public sealed class NetclawPaths
         Directory.CreateDirectory(ToolingDetailDirectory);
         Directory.CreateDirectory(ToolingShadowDirectory);
         Directory.CreateDirectory(McpShadowDirectory);
+        Directory.CreateDirectory(SkillsDirectory);
         Directory.CreateDirectory(ProjectsDirectory);
         Directory.CreateDirectory(EnvironmentDirectory);
         Directory.CreateDirectory(SchedulesDirectory);
