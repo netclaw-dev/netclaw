@@ -207,14 +207,27 @@ static void ConfigureDaemonServices(
     services.AddSingleton(models);
 
     // Auto-detect model capabilities when not manually specified in config.
-    // Uses the OpenRouter public catalog as an oracle — works for models from
-    // any provider since OpenRouter indexes most publicly available models.
+    // Provider-first resolution: query the hosting provider (e.g. Ollama /api/show)
+    // before falling back to external oracles (OpenRouter, HuggingFace).
+    var providers = configuration.GetSection("Providers")
+        .Get<Dictionary<string, ProviderEntry>>()
+        ?? new() { ["local-ollama"] = new ProviderEntry() };
+    var mainProviderType = providers.TryGetValue(models.Main.Provider, out var mainProvider)
+        ? mainProvider.Type
+        : null;
+    var ollamaEndpoint = mainProviderType?.Equals("ollama", StringComparison.OrdinalIgnoreCase) == true
+        ? (string.IsNullOrWhiteSpace(mainProvider!.Endpoint)
+            ? Netclaw.Configuration.Providers.Descriptors.OllamaDescriptor.DefaultEndpointValue
+            : mainProvider.Endpoint)
+        : null;
+
     var inputModalities = models.Main.InputModalities;
     var outputModalities = models.Main.OutputModalities;
     int? contextWindow = models.Main.ContextWindow;
     if (inputModalities is null || outputModalities is null || contextWindow is null)
     {
-        var detected = ResolveStartupCapabilities(models.Main.ModelId, daemonLogLevel);
+        var detected = ResolveStartupCapabilities(
+            models.Main.ModelId, daemonLogLevel, mainProviderType, ollamaEndpoint);
         if (detected is not null)
         {
             inputModalities ??= detected.InputModalities;
@@ -329,16 +342,32 @@ static void ConfigureDaemonServices(
     services.AddSingleton<SchemaMigrationHostedService>();
     services.AddSingleton<IHostedService>(sp => sp.GetRequiredService<SchemaMigrationHostedService>());
 
-    // Model capability resolution chain: OpenRouter oracle → HuggingFace → text-only default
+    // Model capability resolution chain: [Ollama →] OpenRouter oracle → HuggingFace → text-only default
+    // When the main provider is Ollama, query it first — it knows the true context window
+    // for locally hosted models that may not be indexed by external oracles.
     services.AddHttpClient<OpenRouterOracleResolver>();
     services.AddHttpClient<HuggingFaceCapabilityResolver>();
+    if (ollamaEndpoint is not null)
+    {
+        services.AddHttpClient(nameof(OllamaCapabilityResolver));
+        services.AddSingleton(sp =>
+            new OllamaCapabilityResolver(
+                sp.GetRequiredService<IHttpClientFactory>().CreateClient(nameof(OllamaCapabilityResolver)),
+                sp.GetRequiredService<ILogger<OllamaCapabilityResolver>>(),
+                ollamaEndpoint));
+    }
     services.AddSingleton<IModelCapabilityResolver>(sp =>
-        new CompositeCapabilityResolver(
-            [
-                sp.GetRequiredService<OpenRouterOracleResolver>(),
-                sp.GetRequiredService<HuggingFaceCapabilityResolver>(),
-            ],
-            sp.GetRequiredService<ILogger<CompositeCapabilityResolver>>()));
+    {
+        var resolvers = new List<IModelCapabilityResolver>();
+        if (ollamaEndpoint is not null)
+            resolvers.Add(sp.GetRequiredService<OllamaCapabilityResolver>());
+        resolvers.Add(sp.GetRequiredService<OpenRouterOracleResolver>());
+        resolvers.Add(sp.GetRequiredService<HuggingFaceCapabilityResolver>());
+
+        return new CompositeCapabilityResolver(
+            resolvers,
+            sp.GetRequiredService<ILogger<CompositeCapabilityResolver>>());
+    });
 
     // Akka.NET actor system
     services.AddAkka("netclaw", (akkaBuilder, sp) =>
@@ -426,18 +455,39 @@ static ISearchBackend? CreateSearchBackend(SearchConfig config)
 
 /// <summary>
 /// One-time capability detection at startup. Creates temporary HTTP resources
-/// to query the OpenRouter public catalog before the DI container is built.
+/// to query the hosting provider (Ollama) or OpenRouter public catalog before
+/// the DI container is built.
 /// Returns null if detection fails (caller falls back to text-only).
 /// </summary>
-static ResolvedModelCapabilities? ResolveStartupCapabilities(string modelId, LogLevel logLevel)
+static ResolvedModelCapabilities? ResolveStartupCapabilities(
+    string modelId, LogLevel logLevel, string? providerType, string? ollamaEndpoint)
 {
     try
     {
         using var httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
         using var loggerFactory = LoggerFactory.Create(b => b.SetMinimumLevel(logLevel));
         var logger = loggerFactory.CreateLogger("Netclaw.Startup");
-        // Build a minimal registry for the resolver (pre-DI bootstrap).
-        // Only the OpenRouter descriptor is needed for capability detection.
+
+        // Provider-first: try Ollama /api/show when running against an Ollama backend
+        if (providerType?.Equals("ollama", StringComparison.OrdinalIgnoreCase) == true
+            && ollamaEndpoint is not null)
+        {
+            var ollamaResolver = new OllamaCapabilityResolver(
+                httpClient, loggerFactory.CreateLogger<OllamaCapabilityResolver>(), ollamaEndpoint);
+            var ollamaResult = ollamaResolver.ResolveAsync(modelId, CancellationToken.None)
+                .GetAwaiter().GetResult();
+
+            if (ollamaResult is not null)
+            {
+                logger.LogInformation(
+                    "Auto-detected model capabilities for {ModelId}: input={Input}, output={Output}, context_window={ContextWindow}",
+                    modelId, ollamaResult.InputModalities, ollamaResult.OutputModalities,
+                    ollamaResult.ContextWindowTokens?.ToString() ?? "unknown");
+                return ollamaResult;
+            }
+        }
+
+        // Fallback: OpenRouter public catalog (works for models from any provider)
         var openRouterDescriptor = new Netclaw.Configuration.Providers.Descriptors.OpenRouterDescriptor(httpClient);
         var registry = new ProviderDescriptorRegistry([openRouterDescriptor]);
         var resolver = new OpenRouterOracleResolver(
@@ -456,7 +506,7 @@ static ResolvedModelCapabilities? ResolveStartupCapabilities(string modelId, Log
         else
         {
             logger.LogInformation(
-                "Model {ModelId} not found in OpenRouter catalog; defaulting to text-only",
+                "Model {ModelId} not found in capability oracles; defaulting to text-only",
                 modelId);
         }
 

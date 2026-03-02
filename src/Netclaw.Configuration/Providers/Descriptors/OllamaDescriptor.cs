@@ -8,6 +8,8 @@ namespace Netclaw.Configuration.Providers.Descriptors;
 /// </summary>
 public sealed class OllamaDescriptor : IProviderDescriptor
 {
+    public const string DefaultEndpointValue = "http://localhost:11434";
+
     private readonly HttpClient _httpClient;
 
     public OllamaDescriptor(HttpClient httpClient)
@@ -18,7 +20,7 @@ public sealed class OllamaDescriptor : IProviderDescriptor
     public string TypeKey => "ollama";
     public string DisplayName => "Ollama";
     public IReadOnlyList<AuthMethod> SupportedAuthMethods => [AuthMethod.None];
-    public string DefaultEndpoint => "http://localhost:11434";
+    public string DefaultEndpoint => DefaultEndpointValue;
     public string ModelListingPath => "/api/tags";
     public CredentialInputMode CredentialMode => CredentialInputMode.EndpointOnly;
     public string? ApiKeyGuidanceUrl => null;
