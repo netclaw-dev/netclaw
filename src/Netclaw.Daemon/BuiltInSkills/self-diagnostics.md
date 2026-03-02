@@ -30,8 +30,8 @@ curl http://127.0.0.1:5199/api/health/status
 
 ## Logs
 
-- Daemon log: `~/.netclaw/logs/daemon.log`
-- Session logs: `~/.netclaw/logs/sessions/`
+- Daemon log: `~/.netclaw/logs/daemon-{yyyy-MM-dd}.log` (rotated daily)
+- Session logs: `~/.netclaw/logs/sessions/{yyyyMMdd-HHmmss}_{session-id}.log` (sorted newest-first by name)
 - Crash logs: `~/.netclaw/logs/crash-*.log`
 
 Use `file_read` to inspect log files when debugging issues.
