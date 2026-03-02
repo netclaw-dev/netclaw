@@ -6,6 +6,26 @@ namespace Netclaw.Cli.Tests.Cli;
 
 public sealed class DaemonClientMappingTests
 {
+    [Theory]
+    [InlineData("session-signalr/abc123", "signalr/abc123")]
+    [InlineData("session-C07ABC/1234567890.123456", "C07ABC/1234567890.123456")]
+    [InlineData("signalr/no-prefix", "signalr/no-prefix")]
+    public void SessionCatalogEntryDto_SessionId_strips_persistence_prefix(
+        string persistenceId, string expectedSessionId)
+    {
+        var dto = new SessionCatalogEntryDto
+        {
+            PersistenceId = persistenceId,
+            Channel = "tui",
+            Status = "active",
+            TurnCount = 0,
+            CreatedAt = 0,
+            LastActivity = 0
+        };
+
+        Assert.Equal(expectedSessionId, dto.SessionId);
+    }
+
     [Fact]
     public void FromDto_maps_text_delta_output()
     {
