@@ -16,12 +16,13 @@ public sealed class DaemonRuntimeStatusService(
     SessionConfig sessionConfig,
     ModelSelection modelSelection)
 {
+    private readonly DateTimeOffset _startedAt = timeProvider.GetUtcNow();
+
     public async Task<DaemonRuntimeStatus.Response> GetStatusAsync(CancellationToken cancellationToken = default)
     {
         var process = Process.GetCurrentProcess();
-        var startedAt = new DateTimeOffset(process.StartTime.ToUniversalTime(), TimeSpan.Zero);
         var now = timeProvider.GetUtcNow();
-        var uptime = now - startedAt;
+        var uptime = now - _startedAt;
 
         var connectors = new List<DaemonRuntimeStatus.Connector>
         {
@@ -42,7 +43,7 @@ public sealed class DaemonRuntimeStatusService(
             Process = new DaemonRuntimeStatus.Process
             {
                 Pid = process.Id,
-                StartedAtUtc = startedAt,
+                StartedAtUtc = _startedAt,
                 UptimeSeconds = (long)uptime.TotalSeconds
             },
             Connectors = connectors,
