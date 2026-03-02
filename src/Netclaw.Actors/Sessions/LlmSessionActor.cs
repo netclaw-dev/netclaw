@@ -993,8 +993,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor
                 continue;
 
             // Skip system nudges injected as user messages
-            if (msg.Role == Protocol.ChatRole.User
-                && msg.Content.StartsWith("[system:", StringComparison.Ordinal))
+            if (SessionState.IsSystemNudge(msg))
                 continue;
 
             var content = msg.Content;

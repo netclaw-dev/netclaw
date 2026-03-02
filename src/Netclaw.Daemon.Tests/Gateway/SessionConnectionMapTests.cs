@@ -19,6 +19,8 @@ public sealed class SessionConnectionMapTests
         Assert.True(map.IsAttached(connectionId, sessionId));
         Assert.True(map.TryGetConnectionForSession(sessionId, out var mappedConnection));
         Assert.Equal(connectionId, mappedConnection);
+        Assert.True(map.TryGetSessionForConnection(connectionId, out var mappedSession));
+        Assert.Equal(sessionId, mappedSession);
     }
 
     [Fact]
@@ -69,5 +71,6 @@ public sealed class SessionConnectionMapTests
 
         Assert.False(map.IsAttached(connectionId, sessionId));
         Assert.False(map.TryGetConnectionForSession(sessionId, out _));
+        Assert.False(map.TryGetSessionForConnection(connectionId, out _));
     }
 }

@@ -131,28 +131,7 @@ static async Task RunDaemonAsync(string[] args, DaemonRestartSignal restartSigna
 
 static void WriteCrashLog(Exception ex)
 {
-    try
-    {
-        var logsDir = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-            ".netclaw", "logs");
-        Directory.CreateDirectory(logsDir);
-
-        var crashPath = Path.Combine(logsDir,
-            $"crash-{DateTime.UtcNow:yyyyMMdd-HHmmss}.log");
-        File.WriteAllText(crashPath,
-            $"""
-            Netclaw daemon crash at {DateTime.UtcNow:O}
-
-            {ex}
-            """);
-
-        Console.Error.WriteLine($"Fatal error — crash log written to {crashPath}");
-    }
-    catch
-    {
-        Console.Error.WriteLine($"Fatal error (could not write crash log): {ex}");
-    }
+    CrashLogWriter.Write(ex, "daemon");
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -369,7 +348,7 @@ static void ConfigureDaemonServices(
         akkaBuilder.WithNetclawActors();
     });
 
-    // Content security (no-op defaults, real scanning plugged in later)
+    // Content security (magic-byte file scanning + prompt-injection detector)
     services.AddContentSecurity();
 
     // Session pipeline (stream API for channels)

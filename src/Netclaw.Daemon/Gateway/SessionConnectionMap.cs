@@ -75,6 +75,21 @@ internal sealed class SessionConnectionMap
         }
     }
 
+    public bool TryGetSessionForConnection(SignalRConnectionId connectionId, out SessionId sessionId)
+    {
+        lock (_gate)
+        {
+            if (_connectionToSession.TryGetValue(connectionId, out var foundSessionId))
+            {
+                sessionId = foundSessionId;
+                return true;
+            }
+
+            sessionId = default;
+            return false;
+        }
+    }
+
     public void Disconnect(SignalRConnectionId connectionId)
     {
         lock (_gate)

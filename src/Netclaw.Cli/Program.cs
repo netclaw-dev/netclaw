@@ -461,28 +461,7 @@ static async Task RunAsync(string[] args)
 
 static void WriteCrashLog(Exception ex)
 {
-    try
-    {
-        var logsDir = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-            ".netclaw", "logs");
-        Directory.CreateDirectory(logsDir);
-
-        var crashPath = Path.Combine(logsDir,
-            $"crash-{DateTime.UtcNow:yyyyMMdd-HHmmss}.log");
-        File.WriteAllText(crashPath,
-            $"""
-            Netclaw CLI crash at {DateTime.UtcNow:O}
-
-            {ex}
-            """);
-
-        Console.Error.WriteLine($"Fatal error — crash log written to {crashPath}");
-    }
-    catch
-    {
-        Console.Error.WriteLine($"Fatal error (could not write crash log): {ex}");
-    }
+    CrashLogWriter.Write(ex, "CLI");
 }
 
 static void WriteDaemonResult(DaemonResult result)

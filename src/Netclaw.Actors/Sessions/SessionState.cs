@@ -15,6 +15,7 @@ namespace Netclaw.Actors.Sessions;
 public sealed record SessionState
 {
     public static readonly SessionState Empty = new();
+    internal const string SystemNudgePrefix = "[system:";
 
     public ImmutableList<SerializableChatMessage> History { get; init; } =
         ImmutableList<SerializableChatMessage>.Empty;
@@ -116,7 +117,7 @@ public sealed record SessionState
             History = History.Add(new SerializableChatMessage
             {
                 Role = ChatRole.User,
-                Content = $"[system: {nudge}]"
+                Content = $"{SystemNudgePrefix} {nudge}]"
             })
         };
     }
@@ -128,11 +129,23 @@ public sealed record SessionState
     {
         for (var i = History.Count - 1; i >= 0; i--)
         {
-            if (History[i].Role == ChatRole.User)
-                return History[i];
+            var message = History[i];
+            if (message.Role != ChatRole.User)
+                continue;
+
+            if (IsSystemNudge(message))
+                continue;
+
+            return message;
         }
 
         return null;
+    }
+
+    internal static bool IsSystemNudge(SerializableChatMessage message)
+    {
+        return message.Role == ChatRole.User
+            && message.Content.StartsWith(SystemNudgePrefix, StringComparison.Ordinal);
     }
 
     // ── Compaction helpers ──

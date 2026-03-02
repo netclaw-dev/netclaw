@@ -26,6 +26,7 @@ public sealed class SessionRegistry
 
     // sessionId → session state
     private readonly ConcurrentDictionary<SessionId, HubSessionState> _sessions = new();
+    private readonly SemaphoreSlim _sessionMutationGate = new(1, 1);
 
     private readonly SessionConnectionMap _connections = new();
 
@@ -51,10 +52,24 @@ public sealed class SessionRegistry
     public async Task<string> CreateSessionAsync(string connectionId, string channelType)
     {
         var callerConnectionId = ParseConnectionId(connectionId);
+
+        await _sessionMutationGate.WaitAsync();
+        try
+        {
+            return await CreateSessionCoreAsync(callerConnectionId, channelType);
+        }
+        finally
+        {
+            _sessionMutationGate.Release();
+        }
+    }
+
+    private async Task<string> CreateSessionCoreAsync(
+        SignalRConnectionId callerConnectionId,
+        string channelType)
+    {
         var sessionId = new SessionId($"signalr/{Guid.NewGuid():N}");
-
         await MaterializeAndBindSessionAsync(sessionId, callerConnectionId, channelType);
-
         return sessionId.Value;
     }
 
@@ -104,12 +119,23 @@ public sealed class SessionRegistry
     {
         var callerConnectionId = ParseConnectionId(connectionId);
 
-        if (!string.IsNullOrWhiteSpace(sessionId))
+        await _sessionMutationGate.WaitAsync();
+        try
         {
-            var requestedSessionId = ParseSessionId(sessionId);
-            if (_sessions.ContainsKey(requestedSessionId))
+            if (!string.IsNullOrWhiteSpace(sessionId))
             {
-                _connections.AttachSession(requestedSessionId, callerConnectionId);
+                var requestedSessionId = ParseSessionId(sessionId);
+                if (_sessions.TryGetValue(requestedSessionId, out _))
+                {
+                    _connections.AttachSession(requestedSessionId, callerConnectionId);
+                    return new SessionEnsureResultDto
+                    {
+                        SessionId = requestedSessionId.Value,
+                        Created = false
+                    };
+                }
+
+                await MaterializeAndBindSessionAsync(requestedSessionId, callerConnectionId, channelType);
                 return new SessionEnsureResultDto
                 {
                     SessionId = requestedSessionId.Value,
@@ -117,37 +143,40 @@ public sealed class SessionRegistry
                 };
             }
 
-            await MaterializeAndBindSessionAsync(requestedSessionId, callerConnectionId, channelType);
+            var createdSessionId = await CreateSessionCoreAsync(callerConnectionId, channelType);
             return new SessionEnsureResultDto
             {
-                SessionId = requestedSessionId.Value,
-                Created = false
+                SessionId = createdSessionId,
+                Created = true
             };
         }
-
-        var createdSessionId = await CreateSessionAsync(connectionId, channelType);
-        return new SessionEnsureResultDto
+        finally
         {
-            SessionId = createdSessionId,
-            Created = true
-        };
+            _sessionMutationGate.Release();
+        }
     }
 
     /// <summary>
     /// Attaches the current SignalR connection to an existing session.
     /// Supports reconnect flows where connection IDs rotate.
     /// </summary>
-    public Task AttachSessionAsync(string connectionId, string sessionId)
+    public async Task AttachSessionAsync(string connectionId, string sessionId)
     {
         var callerConnectionId = ParseConnectionId(connectionId);
         var requestedSessionId = ParseSessionId(sessionId);
 
-        if (!_sessions.TryGetValue(requestedSessionId, out _))
-            throw new HubException($"Session '{sessionId}' not found.");
+        await _sessionMutationGate.WaitAsync();
+        try
+        {
+            if (!_sessions.TryGetValue(requestedSessionId, out _))
+                throw new HubException($"Session '{sessionId}' not found.");
 
-        _connections.AttachSession(requestedSessionId, callerConnectionId);
-
-        return Task.CompletedTask;
+            _connections.AttachSession(requestedSessionId, callerConnectionId);
+        }
+        finally
+        {
+            _sessionMutationGate.Release();
+        }
     }
 
     /// <summary>
@@ -158,12 +187,17 @@ public sealed class SessionRegistry
         var callerConnectionId = ParseConnectionId(connectionId);
         var requestedSessionId = ParseSessionId(sessionId);
 
-        if (!_connections.IsAttached(callerConnectionId, requestedSessionId))
+        if (!_connections.TryGetSessionForConnection(callerConnectionId, out var attachedSessionId))
         {
             throw new HubException($"Session '{sessionId}' is not attached to this connection.");
         }
 
-        if (!_sessions.TryGetValue(requestedSessionId, out var hubSession))
+        if (!attachedSessionId.Equals(requestedSessionId))
+        {
+            throw new HubException($"Session '{sessionId}' is not attached to this connection.");
+        }
+
+        if (!_sessions.TryGetValue(attachedSessionId, out var hubSession))
             throw new HubException($"Session '{sessionId}' not found.");
 
         var result = await hubSession.InputQueue.OfferAsync(new ChannelInput
@@ -193,24 +227,32 @@ public sealed class SessionRegistry
 
     public async Task ShutdownAsync(CancellationToken cancellationToken)
     {
-        var sessions = _sessions.ToArray();
-        _sessions.Clear();
-        _connections.Clear();
-
-        var disposeTasks = sessions
-            .Select(x => x.Value.Session.DisposeAsync().AsTask())
-            .ToArray();
-
-        if (disposeTasks.Length == 0)
-            return;
-
+        await _sessionMutationGate.WaitAsync(cancellationToken);
         try
         {
-            await Task.WhenAll(disposeTasks).WaitAsync(cancellationToken);
+            var sessions = _sessions.ToArray();
+            _sessions.Clear();
+            _connections.Clear();
+
+            var disposeTasks = sessions
+                .Select(x => x.Value.Session.DisposeAsync().AsTask())
+                .ToArray();
+
+            if (disposeTasks.Length == 0)
+                return;
+
+            try
+            {
+                await Task.WhenAll(disposeTasks).WaitAsync(cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                _logger.LogWarning("Timed out while disposing {Count} active session(s) during shutdown.", disposeTasks.Length);
+            }
         }
-        catch (OperationCanceledException)
+        finally
         {
-            _logger.LogWarning("Timed out while disposing {Count} active session(s) during shutdown.", disposeTasks.Length);
+            _sessionMutationGate.Release();
         }
     }
 

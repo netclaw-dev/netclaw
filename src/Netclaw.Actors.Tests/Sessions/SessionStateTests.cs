@@ -235,6 +235,19 @@ public class SessionStateTests
     }
 
     [Fact]
+    public void FindLastUserMessage_skips_transient_system_nudges()
+    {
+        var state = SessionState.Empty
+            .AddUserMessage("Real user message")
+            .AddSystemNudge("You produced an empty response.");
+
+        var lastUser = state.FindLastUserMessage();
+
+        Assert.NotNull(lastUser);
+        Assert.Equal("Real user message", lastUser.Content);
+    }
+
+    [Fact]
     public void FindLastUserMessage_returns_null_when_no_user_messages()
     {
         var state = SessionState.Empty
