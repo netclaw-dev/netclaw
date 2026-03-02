@@ -52,9 +52,8 @@ internal static class McpCommand
 
     private static int RunAdd(string[] args, NetclawPaths paths, TextWriter writer)
     {
-        // Parse: netclaw mcp add [--transport <type>] [--auth-method <method>] [--client-id <id>] [--env KEY=VALUE]... [--header "Key: Value"]... <name> [command/url] [-- args...]
+        // Parse: netclaw mcp add [--transport <type>] [--client-id <id>] [--scope <scopes>] [--env KEY=VALUE]... [--header "Key: Value"]... <name> [command/url] [-- args...]
         string? transport = null;
-        string? authMethodStr = null;
         string? oauthClientId = null;
         string? oauthScope = null;
         var envVars = new Dictionary<string, string>();
@@ -84,12 +83,6 @@ internal static class McpCommand
             if (args[i] is "--transport" or "-t" && i + 1 < args.Length)
             {
                 transport = args[++i];
-                continue;
-            }
-
-            if (args[i] == "--auth-method" && i + 1 < args.Length)
-            {
-                authMethodStr = args[++i];
                 continue;
             }
 
@@ -169,21 +162,11 @@ internal static class McpCommand
             }
         }
 
-        // Parse auth method if provided
-        var authMethod = AuthMethod.None;
-        if (authMethodStr is not null
-            && !Enum.TryParse<AuthMethod>(authMethodStr, ignoreCase: true, out authMethod))
-        {
-            writer.WriteLine($"Error: Unknown auth method '{authMethodStr}'. Valid values: {string.Join(", ", Enum.GetNames<AuthMethod>())}");
-            return 1;
-        }
-
         // Build entry for netclaw.json (non-secret parts)
         var entry = new McpServerEntry
         {
             Transport = transport,
             Enabled = true,
-            AuthMethod = authMethod,
             OAuthClientId = oauthClientId,
             OAuthScope = oauthScope,
         };
@@ -243,10 +226,9 @@ internal static class McpCommand
             return 1;
         }
 
-        if (entry.AuthMethod is not AuthMethod.OAuthPkce)
+        if (entry.Transport is "stdio" || string.IsNullOrWhiteSpace(entry.Url))
         {
-            writer.WriteLine($"MCP server '{name}' is not configured for OAuth (AuthMethod={entry.AuthMethod}).");
-            writer.WriteLine("To enable OAuth, re-add with: netclaw mcp add --auth-method OAuthPkce ...");
+            writer.WriteLine($"MCP server '{name}' uses stdio transport. OAuth is only for HTTP/SSE servers.");
             return 1;
         }
 
@@ -392,14 +374,10 @@ internal static class McpCommand
 
         writer.WriteLine($"Enabled:    {(entry.Enabled ? "yes" : "no")}");
 
-        if (entry.AuthMethod is not AuthMethod.None)
-        {
-            writer.WriteLine($"Auth:       {entry.AuthMethod}");
-            if (entry.OAuthClientId is not null)
-                writer.WriteLine($"Client ID:  {entry.OAuthClientId}");
-            if (entry.OAuthScope is not null)
-                writer.WriteLine($"Scope:      {entry.OAuthScope}");
-        }
+        if (entry.OAuthClientId is not null)
+            writer.WriteLine($"Client ID:  {entry.OAuthClientId}");
+        if (entry.OAuthScope is not null)
+            writer.WriteLine($"Scope:      {entry.OAuthScope}");
 
         if (entry.EnvironmentVariables is { Count: > 0 })
         {
@@ -649,7 +627,7 @@ internal static class McpCommand
         writer.WriteLine("Examples:");
         writer.WriteLine("  netclaw mcp add --transport stdio memorizer -- npx -y @memorizer/mcp-server");
         writer.WriteLine("  netclaw mcp add --transport http --header \"Authorization: Bearer tok-...\" myapi https://api.example.com/mcp");
-        writer.WriteLine("  netclaw mcp add --transport http --auth-method OAuthPkce --client-id myapp forge https://forge.example.com/mcp");
+        writer.WriteLine("  netclaw mcp add --transport http textforge https://textforge.net/mcp");
         writer.WriteLine("  netclaw mcp auth forge");
         writer.WriteLine("  netclaw mcp list");
         return 0;

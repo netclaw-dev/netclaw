@@ -50,14 +50,13 @@ internal sealed class McpOAuthService
     // ── Discovery ──────────────────────────────────────────────────────
 
     /// <summary>
-    /// Discover OAuth authorization server metadata for an MCP server.
-    /// Follows the MCP spec: probe the server URL for a 401, then resolve
-    /// the protected resource metadata, then the auth server metadata.
+    /// Auto-detect whether an MCP server requires OAuth by probing its
+    /// well-known metadata endpoints. Returns null if no OAuth is needed.
     /// </summary>
-    public async Task<McpOAuthServerMetadata> DiscoverMetadataAsync(
-        string serverName, McpServerEntry entry, CancellationToken ct)
+    public async Task<McpOAuthServerMetadata?> TryDiscoverMetadataAsync(
+        string serverName, string serverUrl, CancellationToken ct)
     {
-        var serverUrl = entry.Url!.TrimEnd('/');
+        serverUrl = serverUrl.TrimEnd('/');
 
         // Check cache (1-hour TTL)
         if (_metadata.TryGetValue(serverName, out var cached)
@@ -66,8 +65,7 @@ internal sealed class McpOAuthService
             return cached;
         }
 
-        // 1. GET the MCP server URL → expect 401 with WWW-Authenticate header
-        //    containing resource_metadata URI
+        // 1. Probe the MCP server URL for a 401 with WWW-Authenticate
         string? resourceMetadataUri = null;
         try
         {
@@ -81,7 +79,6 @@ internal sealed class McpOAuthService
                 {
                     if (auth.Parameter is not null && auth.Parameter.Contains("resource_metadata"))
                     {
-                        // Parse resource_metadata="<uri>" from the parameter string
                         resourceMetadataUri = ExtractQuotedParam(auth.Parameter, "resource_metadata");
                     }
                 }
@@ -92,7 +89,7 @@ internal sealed class McpOAuthService
             _logger.LogDebug(ex, "Probe of {ServerUrl} failed (expected for OAuth servers)", serverUrl);
         }
 
-        // 2. GET protected resource metadata
+        // 2. Resolve protected resource metadata
         string? authServerUrl;
         string? resourceIndicator = null;
 
@@ -117,17 +114,15 @@ internal sealed class McpOAuthService
             }
             catch
             {
-                throw new InvalidOperationException(
-                    $"Could not discover OAuth metadata for MCP server '{serverName}' at {serverUrl}. " +
-                    "The server did not return a WWW-Authenticate header with resource_metadata, " +
-                    "and no /.well-known/oauth-protected-resource was found.");
+                // No OAuth metadata found — server doesn't require OAuth
+                return null;
             }
         }
 
         if (string.IsNullOrEmpty(authServerUrl))
-            throw new InvalidOperationException($"No authorization server found for MCP server '{serverName}'");
+            return null;
 
-        // 3. GET auth server metadata
+        // 3. Resolve auth server metadata
         var authMetaUrl = $"{authServerUrl.TrimEnd('/')}/.well-known/oauth-authorization-server";
         var authMeta = await _httpClient.GetFromJsonAsync<JsonElement>(authMetaUrl, ct);
 
@@ -211,7 +206,10 @@ internal sealed class McpOAuthService
     public async Task<(string AuthorizationUrl, string State)> StartAuthorizationFlowAsync(
         string serverName, McpServerEntry entry, CancellationToken ct)
     {
-        var metadata = await DiscoverMetadataAsync(serverName, entry, ct);
+        var metadata = await TryDiscoverMetadataAsync(serverName, entry.Url!, ct)
+            ?? throw new InvalidOperationException(
+                $"MCP server '{serverName}' does not advertise OAuth metadata. " +
+                "No /.well-known/oauth-protected-resource was found.");
         var clientId = await EnsureClientRegisteredAsync(serverName, entry, metadata, ct);
 
         // PKCE: generate code_verifier and code_challenge

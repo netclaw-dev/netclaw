@@ -92,23 +92,33 @@ internal sealed class McpClientManager : IHostedService, IDisposable
     {
         try
         {
-            // Resolve OAuth token for OAuthPkce servers before connecting
+            // For HTTP/SSE servers, check if we already have an OAuth token
+            // (from a previous `netclaw mcp auth` run). If so, inject it.
+            // If the server requires OAuth but we have no token, auto-detect
+            // via well-known metadata and set AwaitingAuth.
             Dictionary<string, string>? headers = entry.Headers is { Count: > 0 }
                 ? new Dictionary<string, string>(entry.Headers) : null;
 
-            if (entry.Transport is not "stdio" && entry.AuthMethod is Netclaw.Configuration.AuthMethod.OAuthPkce)
+            if (entry.Transport is not "stdio")
             {
                 var token = await _oauthService.GetValidTokenAsync(name, entry, ct);
-                if (token is null)
+                if (token is not null)
                 {
-                    _statuses[name] = new McpServerStatus(name, McpConnectionState.AwaitingAuth, 0,
-                        "OAuth token not available. Run: netclaw mcp auth " + name);
-                    _logger.LogWarning("MCP server '{Name}' awaiting OAuth authorization", name);
-                    return false;
+                    headers ??= new Dictionary<string, string>();
+                    headers["Authorization"] = $"Bearer {token}";
                 }
-
-                headers ??= new Dictionary<string, string>();
-                headers["Authorization"] = $"Bearer {token}";
+                else if (entry.Url is not null)
+                {
+                    // No token — check if this server requires OAuth
+                    var metadata = await _oauthService.TryDiscoverMetadataAsync(name, entry.Url, ct);
+                    if (metadata is not null)
+                    {
+                        _statuses[name] = new McpServerStatus(name, McpConnectionState.AwaitingAuth, 0,
+                            "OAuth required. Run: netclaw mcp auth " + name);
+                        _logger.LogWarning("MCP server '{Name}' requires OAuth authorization", name);
+                        return false;
+                    }
+                }
             }
 
             IClientTransport transport;

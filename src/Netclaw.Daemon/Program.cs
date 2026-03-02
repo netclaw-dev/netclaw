@@ -78,8 +78,8 @@ static async Task RunDaemonAsync(string[] args, DaemonRestartSignal restartSigna
         if (!mcpServers.TryGetValue(name, out var entry))
             return Results.NotFound(new { error = $"MCP server '{name}' not found" });
 
-        if (entry.AuthMethod is not AuthMethod.OAuthPkce)
-            return Results.BadRequest(new { error = $"MCP server '{name}' is not configured for OAuth" });
+        if (string.IsNullOrWhiteSpace(entry.Url))
+            return Results.BadRequest(new { error = $"MCP server '{name}' has no URL (OAuth requires HTTP transport)" });
 
         var (authUrl, state) = await oauthService.StartAuthorizationFlowAsync(name, entry, ct);
         return Results.Ok(new { authorizationUrl = authUrl, state });
