@@ -68,17 +68,22 @@ public class SkillRegistryTests
     }
 
     [Fact]
-    public void GenerateCompressedIndex_lists_all_skills()
+    public void GenerateCompressedIndex_lists_skills_with_paths_and_descriptions()
     {
         var registry = new SkillRegistry();
-        registry.Register(MakeEntry("identity-management"));
-        registry.Register(MakeEntry("self-diagnostics"));
+        registry.Register(MakeEntry("identity-management", "How to edit identity files"));
+        registry.Register(MakeEntry("self-diagnostics", "Check Netclaw configuration"));
 
         var index = registry.GenerateCompressedIndex();
 
         Assert.Contains("identity-management", index);
+        Assert.Contains("/skills/identity-management.md", index);
+        Assert.Contains("How to edit identity files", index);
         Assert.Contains("self-diagnostics", index);
-        Assert.Contains("search_skills", index);
+        Assert.Contains("/skills/self-diagnostics.md", index);
+        Assert.Contains("Check Netclaw configuration", index);
+        Assert.Contains("file_read", index);
+        Assert.DoesNotContain("search_skills", index);
     }
 
     [Fact]

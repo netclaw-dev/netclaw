@@ -42,8 +42,8 @@ When you learn something important, save it to the right place immediately:
 | Personal facts (name, family, relationships, preferences) | `SOUL.md` | Always loaded. Enables you to know what to search for elsewhere. |
 | Behavioral rules, workflow preferences | `AGENTS.md` | Always loaded. Guides your operating behavior. |
 | Environment capabilities, tool configs | `TOOLING.md` | Always loaded. Tells you what you can do. |
-| World knowledge, project details, solutions | **Memorizer** (via `search_memories`) | Cross-session, searchable. Not always loaded. |
-| Procedures, reusable workflows | **Skill files** in `~/.netclaw/skills/` | Loaded on demand via `search_skills`. |
+| World knowledge, project details, solutions | **Memorizer** (via `search_memories`) | Cross-session. Organize into workspaces and projects. See memorizer-usage skill. |
+| Procedures, reusable workflows | **Skill files** in `~/.netclaw/skills/` | Loaded on demand via `file_read`. |
 
 ## SOUL.md Guidelines
 

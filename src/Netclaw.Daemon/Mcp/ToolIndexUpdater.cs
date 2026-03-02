@@ -17,20 +17,17 @@ internal sealed class ToolIndexUpdater : IHostedService
     private readonly McpShadowCatalogWriter _shadowCatalogWriter;
     private readonly ToolRegistry _toolRegistry;
     private readonly MemoryIndexContextLayer _memoryIndexLayer;
-    private readonly MemoryTriageContextLayer _memoryTriageLayer;
     private readonly ILogger<ToolIndexUpdater> _logger;
 
     public ToolIndexUpdater(
         McpShadowCatalogWriter shadowCatalogWriter,
         ToolRegistry toolRegistry,
         MemoryIndexContextLayer memoryIndexLayer,
-        MemoryTriageContextLayer memoryTriageLayer,
         ILogger<ToolIndexUpdater> logger)
     {
         _shadowCatalogWriter = shadowCatalogWriter;
         _toolRegistry = toolRegistry;
         _memoryIndexLayer = memoryIndexLayer;
-        _memoryTriageLayer = memoryTriageLayer;
         _logger = logger;
     }
 
@@ -45,8 +42,7 @@ internal sealed class ToolIndexUpdater : IHostedService
             || _toolRegistry.GetByName("memorizer/search") is not null;
 
         _memoryIndexLayer.Update(memorizerConnected);
-        _memoryTriageLayer.Update(memorizerConnected);
-        _logger.LogInformation("Memory context layers updated (Memorizer connected: {Connected})", memorizerConnected);
+        _logger.LogInformation("Memory context layer updated (Memorizer connected: {Connected})", memorizerConnected);
 
         return Task.CompletedTask;
     }

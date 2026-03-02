@@ -59,7 +59,7 @@ public class SearchMemoriesToolTests
     }
 
     [Fact]
-    public void MemoryIndexContextLayer_connected_shows_available()
+    public void MemoryIndexContextLayer_connected_shows_organizational_model()
     {
         var layer = new MemoryIndexContextLayer();
         layer.Update(connected: true);
@@ -67,6 +67,9 @@ public class SearchMemoriesToolTests
         var content = layer.GetContextLayer();
 
         Assert.Contains("search_memories", content);
+        Assert.Contains("workspaces", content);
+        Assert.Contains("projects", content);
+        Assert.Contains("memorizer-usage", content);
         Assert.DoesNotContain("NOT AVAILABLE", content);
     }
 
@@ -79,30 +82,8 @@ public class SearchMemoriesToolTests
         var content = layer.GetContextLayer();
 
         Assert.Contains("NOT AVAILABLE", content);
-    }
-
-    [Fact]
-    public void MemoryTriageContextLayer_connected_includes_memorizer_guidance()
-    {
-        var layer = new MemoryTriageContextLayer();
-        layer.Update(memorizerConnected: true);
-
-        var content = layer.GetContextLayer();
-
-        Assert.Contains("MEMORIZER", content);
-        Assert.Contains("search_memories", content);
-    }
-
-    [Fact]
-    public void MemoryTriageContextLayer_disconnected_omits_memorizer_guidance()
-    {
-        var layer = new MemoryTriageContextLayer();
-        layer.Update(memorizerConnected: false);
-
-        var content = layer.GetContextLayer();
-
-        Assert.Contains("not connected", content, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("IDENTITY FILES", content);
+        Assert.Contains("identity", content, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("skill", content, StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>

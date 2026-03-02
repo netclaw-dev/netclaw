@@ -16,11 +16,17 @@ public sealed class MemoryIndexContextLayer : IContextLayerProvider
     {
         _status = connected
             ? """
-              [memories — use search_memories to recall prior knowledge]
-              Memory store available via Memorizer. Use search_memories when you need to
-              recall information from prior sessions, saved knowledge, or project context.
+              [memories — cross-session knowledge via Memorizer]
+              Use search_memories to recall prior knowledge. Memorizer organizes knowledge in
+              workspaces (domains) → projects (goals) → memories (documents or records).
+              Assign memories to the right workspace/project when saving.
+              For full guidance: file_read ~/.netclaw/skills/memorizer-usage.md
               """
-            : "[memories — NOT AVAILABLE: Memorizer MCP server not connected]";
+            : """
+              [memories — NOT AVAILABLE: Memorizer MCP server not connected]
+              Cross-session memory is unavailable. Save important knowledge to identity
+              files or skill files instead.
+              """;
     }
 
     public string GetContextLayer() => _status;

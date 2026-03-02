@@ -205,13 +205,12 @@ static void ConfigureDaemonServices(
     var toolRegistry = new ToolRegistry();
     toolRegistry.WithFirstPartyTools(toolConfig, searchBackend);
 
-    // Skills system: copy built-in skills, scan, register search_skills tool
+    // Skills system: copy built-in skills, scan, expose via file-based index
     CopyBuiltInSkills(paths.SkillsDirectory);
     var skillRegistry = new SkillRegistry();
     foreach (var skill in SkillScanner.Scan(paths.SkillsDirectory))
         skillRegistry.Register(skill);
     services.AddSingleton(skillRegistry);
-    toolRegistry.Register(new SearchSkillsTool(skillRegistry));
 
     // Cross-session memory: search_memories wraps Memorizer MCP tool
     toolRegistry.Register(new SearchMemoriesTool(toolRegistry));
@@ -240,14 +239,10 @@ static void ConfigureDaemonServices(
     services.AddSingleton(skillIndexLayer);
     services.AddSingleton<IContextLayerProvider>(skillIndexLayer);
 
-    // Memory context layers — status is updated by ToolIndexUpdater after MCP discovery
+    // Memory context layer — status is updated by ToolIndexUpdater after MCP discovery
     var memoryIndexLayer = new MemoryIndexContextLayer();
     services.AddSingleton(memoryIndexLayer);
     services.AddSingleton<IContextLayerProvider>(memoryIndexLayer);
-
-    var memoryTriageLayer = new MemoryTriageContextLayer();
-    services.AddSingleton(memoryTriageLayer);
-    services.AddSingleton<IContextLayerProvider>(memoryTriageLayer);
 
     // Expose all context layers as IReadOnlyList for actor DI resolution
     services.AddSingleton<IReadOnlyList<IContextLayerProvider>>(sp =>

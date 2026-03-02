@@ -39,6 +39,8 @@ public sealed class SkillRegistry
 
     /// <summary>
     /// Produces a compressed index for the system prompt context layer.
+    /// Lists each skill with its file path and description so the agent
+    /// can use <c>file_read</c> directly — no search tool required.
     /// </summary>
     public string GenerateCompressedIndex()
     {
@@ -46,9 +48,13 @@ public sealed class SkillRegistry
             return string.Empty;
 
         var sb = new StringBuilder();
-        sb.AppendLine("[skills — use search_skills to load full text]");
-        sb.Append("available: ");
-        sb.AppendLine(string.Join(", ", _skills.Select(s => s.Name)));
+        sb.AppendLine("[skills — read with file_read for full instructions]");
+        foreach (var skill in _skills)
+        {
+            sb.AppendLine($"{skill.Name} ({skill.FilePath})");
+            sb.AppendLine($"  {skill.Description}");
+        }
+
         return sb.ToString();
     }
 }
