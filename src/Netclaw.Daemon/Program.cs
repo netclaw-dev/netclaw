@@ -267,8 +267,25 @@ static void ConfigureDaemonServices(
         skillRegistry.Register(skill);
     services.AddSingleton(skillRegistry);
 
-    // Cross-session memory: search_memories wraps Memorizer MCP tool
-    toolRegistry.Register(new SearchMemoriesTool(toolRegistry));
+    // Cross-session memory: provider-based wiring
+    var memoryConfig = configuration.GetSection("Memory")
+        .Get<MemoryConfig>() ?? new MemoryConfig();
+    services.AddSingleton(memoryConfig);
+
+    if (memoryConfig.Provider.Equals("memorizer", StringComparison.OrdinalIgnoreCase))
+    {
+        // Memorizer path: no builtin memory tools — MCP discovery handles everything
+        services.AddSingleton<IMemoryExtractor>(sp =>
+            new MemorizerMemoryExtractor(sp.GetRequiredService<ToolRegistry>()));
+    }
+    else
+    {
+        // File path: register builtin memory tools backed by local markdown files
+        var fileStore = new FileMemoryStore(paths.MemoriesDirectory, TimeProvider.System);
+        toolRegistry.Register(new SearchMemoriesTool(fileStore));
+        toolRegistry.Register(new StoreMemoryTool(fileStore));
+        services.AddSingleton<IMemoryExtractor>(new FileMemoryExtractor(fileStore));
+    }
 
     services.AddSingleton(toolRegistry);
     services.AddSingleton<IToolExecutor>(sp =>
