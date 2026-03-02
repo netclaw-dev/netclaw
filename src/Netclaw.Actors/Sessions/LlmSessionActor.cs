@@ -59,6 +59,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor
     // Tool iteration counter (reset per turn, incremented on each ToolExecutionCompleted)
     private int _toolIterationCount;
 
+    // Whether we already sent a post-tool empty-response nudge in this tool chain
+    private bool _postToolNudgeSent;
+
     // Child actor for per-session log file (created when session logs directory is configured)
     private IActorRef? _logActor;
 
@@ -178,6 +181,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor
             _logActor?.Tell(cmd);
 
             _toolIterationCount = 0;
+            _postToolNudgeSent = false;
             PrepareDiscoveredToolsForNewTurn();
 
             // Modality gate: strip unsupported media references
@@ -261,6 +265,20 @@ public sealed class LlmSessionActor : ReceivePersistentActor
                     "Your previous response was empty. If you need MCP capabilities, call search_tools(\"servers\") to pick a server "
                     + "(for example browser, memory, or email), then call search_tools(\"<intent>\", server: \"<server_name>\") to load tools. "
                     + "MCP tools are not directly callable until loaded via search_tools.");
+                FireLlmCall();
+                return;
+            }
+
+            // Guard: if the LLM did tool work but produced an empty final response, nudge it
+            // to continue working or answer the user.
+            if (!hasText && _toolIterationCount > 0 && !_postToolNudgeSent)
+            {
+                _log.Debug("LLM produced empty response after {ToolIterations} tool iteration(s) — nudging",
+                    _toolIterationCount);
+                _postToolNudgeSent = true;
+                _state = _state.AddSystemNudge(
+                    "You received tool results but did not respond. "
+                    + "Continue working or answer the user's question.");
                 FireLlmCall();
                 return;
             }
@@ -728,6 +746,10 @@ public sealed class LlmSessionActor : ReceivePersistentActor
         List<FunctionCallContent> toolCalls,
         UsageDetails? usage)
     {
+        // Model produced tool calls — reset post-tool nudge so it can fire again
+        // if the model stalls later in the chain.
+        _postToolNudgeSent = false;
+
         // Add assistant message (with tool calls) to history
         var assistantMsg = ChatMessageConverter.FromAiMessage(lastMessage);
         _state = _state with { History = _state.History.Add(assistantMsg) };
