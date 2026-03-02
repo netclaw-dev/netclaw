@@ -288,9 +288,9 @@ internal static class McpCommand
         {
             Process.Start(new ProcessStartInfo(authUrl) { UseShellExecute = true });
         }
-        catch
+        catch (Exception ex)
         {
-            // Browser open is best-effort; URL is printed above
+            writer.WriteLine($"Could not open browser automatically: {ex.Message}");
         }
 
         // 3. Poll for completion
@@ -326,9 +326,9 @@ internal static class McpCommand
                     return 1;
                 }
             }
-            catch
+            catch (Exception ex)
             {
-                // Polling error — keep trying
+                writer.Write($"(poll error: {ex.Message})");
             }
         }
 
