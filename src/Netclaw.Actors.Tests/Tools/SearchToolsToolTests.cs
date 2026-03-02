@@ -92,6 +92,24 @@ public class SearchToolsToolTests
         Assert.Equal("builtin", tool.GrantCategory);
     }
 
+    [Fact]
+    public async Task Search_IncludesParameterHint_WhenSchemaHasProperties()
+    {
+        static string Navigate(string url, int timeout) => "ok";
+
+        var registry = new ToolRegistry();
+        registry.Register(new McpToolAdapter(
+            AIFunctionFactory.Create((Func<string, int, string>)Navigate, "navigate_page", "Navigate page"),
+            "browser", "navigate_page"));
+
+        var tool = new SearchToolsTool(registry);
+        var result = await tool.ExecuteAsync(
+            new Dictionary<string, object?> { ["Query"] = "navigate" },
+            CancellationToken.None);
+
+        Assert.Contains("params: url", result);
+    }
+
     private static ToolRegistry CreateRegistryWithMcpTools()
     {
         var registry = new ToolRegistry();

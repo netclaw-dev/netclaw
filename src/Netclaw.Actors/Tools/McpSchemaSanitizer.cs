@@ -44,6 +44,49 @@ public static class McpSchemaSanitizer
         return coerced;
     }
 
+    /// <summary>
+    /// Normalizes argument keys against schema property names using
+    /// case-insensitive matching (e.g. Url -&gt; url).
+    /// </summary>
+    public static IDictionary<string, object?>? NormalizeArgumentKeys(
+        IDictionary<string, object?>? arguments,
+        JsonElement parameterSchema)
+    {
+        if (arguments is null)
+            return null;
+
+        if (parameterSchema.ValueKind != JsonValueKind.Object
+            || !parameterSchema.TryGetProperty("properties", out var properties)
+            || properties.ValueKind != JsonValueKind.Object)
+        {
+            return arguments;
+        }
+
+        var canonicalKeys = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var property in properties.EnumerateObject())
+        {
+            canonicalKeys[property.Name] = property.Name;
+        }
+
+        if (canonicalKeys.Count == 0)
+            return arguments;
+
+        var normalized = new Dictionary<string, object?>(arguments.Count);
+        foreach (var (key, value) in arguments)
+        {
+            if (canonicalKeys.TryGetValue(key, out var canonical))
+            {
+                normalized[canonical] = value;
+            }
+            else
+            {
+                normalized[key] = value;
+            }
+        }
+
+        return normalized;
+    }
+
     // ── Schema sanitization ──
 
     private static JsonElement SanitizeElement(JsonElement element)

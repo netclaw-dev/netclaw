@@ -686,7 +686,7 @@ public sealed class InitWizardViewModelTests : IDisposable
 
         var args = browserEntry.GetProperty("Arguments");
         Assert.Contains(args.EnumerateArray().Select(a => a.GetString()), a => a == "chrome-devtools-mcp@latest");
-        Assert.Contains(args.EnumerateArray().Select(a => a.GetString()), a => a == "--slim");
+        Assert.DoesNotContain(args.EnumerateArray().Select(a => a.GetString()), a => a == "--slim");
         Assert.Contains(args.EnumerateArray().Select(a => a.GetString()), a => a == "--headless=true");
     }
 

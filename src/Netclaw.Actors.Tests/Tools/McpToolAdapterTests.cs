@@ -102,6 +102,19 @@ public class McpToolAdapterTests
 
         Assert.Equal("limit=10", result);
     }
+
+    [Fact]
+    public async Task ExecuteAsync_NormalizesArgumentKeys_CaseInsensitive()
+    {
+        string EchoUrl(string url) => url;
+        var fakeTool = AIFunctionFactory.Create(EchoUrl, "navigate_page");
+        var adapter = new McpToolAdapter(fakeTool, "browser", "navigate_page");
+
+        var args = new Dictionary<string, object?> { ["Url"] = "https://example.com" };
+        var result = await adapter.ExecuteAsync(args, CancellationToken.None);
+
+        Assert.Equal("https://example.com", result);
+    }
 }
 
 public class McpSchemaSanitizerTests
@@ -168,5 +181,32 @@ public class McpSchemaSanitizerTests
     public void CoerceArguments_ReturnsNullForNull()
     {
         Assert.Null(McpSchemaSanitizer.CoerceArguments(null));
+    }
+
+    [Fact]
+    public void NormalizeArgumentKeys_UsesSchemaPropertyCasing()
+    {
+        var schema = JsonDocument.Parse("""
+            {
+                "type": "object",
+                "properties": {
+                    "url": { "type": "string" },
+                    "timeout": { "type": "integer" }
+                }
+            }
+            """).RootElement;
+
+        var args = new Dictionary<string, object?>
+        {
+            ["Url"] = "https://example.com",
+            ["Timeout"] = "1000"
+        };
+
+        var normalized = McpSchemaSanitizer.NormalizeArgumentKeys(args, schema)!;
+
+        Assert.True(normalized.ContainsKey("url"));
+        Assert.True(normalized.ContainsKey("timeout"));
+        Assert.False(normalized.ContainsKey("Url"));
+        Assert.False(normalized.ContainsKey("Timeout"));
     }
 }

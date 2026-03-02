@@ -235,7 +235,7 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
                 WizardStep.BrowserAutomation when _browserAutomationSubStep == 0 =>
                     "  Optional. Enable this to let the agent delegate browser steering via MCP tools.",
                 WizardStep.BrowserAutomation when _browserAutomationSubStep == 1 =>
-                    "  Chrome DevTools MCP is lean by default. Playwright MCP supports broader automation with stricter output flags.",
+                    "  Chrome DevTools MCP enables full browser automation. Playwright MCP supports broader cross-browser workflows with stricter output flags.",
                 WizardStep.Exposure =>
                     "  Local-only is recommended for homelab use.",
                 WizardStep.Identity when _identitySubStep == 0 =>

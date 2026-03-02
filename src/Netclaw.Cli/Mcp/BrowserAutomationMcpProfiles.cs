@@ -39,7 +39,6 @@ internal static class BrowserAutomationMcpProfiles
                 [
                     "-y",
                     "chrome-devtools-mcp@latest",
-                    "--slim",
                     "--headless=true",
                     "--no-usage-statistics"
                 ]

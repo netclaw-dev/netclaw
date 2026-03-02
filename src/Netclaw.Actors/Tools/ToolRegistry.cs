@@ -130,6 +130,7 @@ public sealed class ToolRegistry
                 sb.AppendLine($"{group.Key}: {string.Join(", ", names)}");
             }
             sb.AppendLine("→ REQUIRED: call search_tools(\"query\") first to load MCP tools, then call them");
+            sb.AppendLine("→ Use exact parameter names from each tool schema (MCP tools usually use lowercase/camelCase)");
         }
 
         return sb.ToString();

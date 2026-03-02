@@ -46,11 +46,35 @@ public sealed partial class SearchToolsTool : NetclawTool<SearchToolsTool.Params
             var desc = tool.Description.Length > 80
                 ? tool.Description[..77] + "..."
                 : tool.Description;
-            sb.AppendLine($"  {tool.Name} — {desc}");
+            var parameterHint = GetParameterHint(tool);
+            sb.AppendLine($"  {tool.Name} — {desc}{parameterHint}");
         }
 
         sb.AppendLine();
         sb.AppendLine("Call any tool above by its full name. Tools are now loaded and available.");
         return Task.FromResult(sb.ToString());
+    }
+
+    private static string GetParameterHint(INetclawTool tool)
+    {
+        if (tool.ParameterSchema.ValueKind != System.Text.Json.JsonValueKind.Object
+            || !tool.ParameterSchema.TryGetProperty("properties", out var properties)
+            || properties.ValueKind != System.Text.Json.JsonValueKind.Object)
+        {
+            return string.Empty;
+        }
+
+        var names = properties.EnumerateObject().Select(p => p.Name).ToList();
+        if (names.Count == 0)
+            return string.Empty;
+
+        const int maxShown = 4;
+        var shown = names.Take(maxShown).ToList();
+        if (names.Count > maxShown)
+        {
+            shown.Add($"+{names.Count - maxShown} more");
+        }
+
+        return $" (params: {string.Join(", ", shown)})";
     }
 }
