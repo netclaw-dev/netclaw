@@ -22,8 +22,8 @@
 
 - [x] 4.1 Accept optional resume session ID in `ChatViewModel` — when provided, call `ResumeSessionAsync(id)` instead of `CreateSessionAsync(channelType)`
 - [x] 4.2 Show "Resumed: {title} (N turns)" indicator in chat history when session is resumed rather than freshly created
-- [ ] 4.3 Verify `EnsureSession` flow works for passivated sessions — the session actor rehydrates from journal and accepts new `SendUserMessage` commands after resume
+- [x] 4.3 Verify `EnsureSession` flow works for passivated sessions — the session actor rehydrates from journal and accepts new `SendUserMessage` commands after resume
 
 ## 5. Spec Updates
 
-- [ ] 5.1 Sync delta specs to main specs via `/opsx-sync` after implementation is verified
+- [x] 5.1 Sync delta specs to main specs via `/opsx-sync` after implementation is verified
