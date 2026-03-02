@@ -105,8 +105,9 @@ static async Task RunAsync(string[] args)
                 Environment.GetEnvironmentVariable("NETCLAW_DAEMON_ENDPOINT")
                 ?? "http://127.0.0.1:5199";
 
-            // Register DaemonClient and SessionConfig for ChatPage
+            // Register DaemonClient, ChatNavigationState, and SessionConfig for ChatPage
             // (uses freshly-written config from the wizard's WriteConfig)
+            builder.Services.AddSingleton(new ChatNavigationState());
             builder.Services.AddSingleton(new DaemonClient(daemonEndpoint));
             builder.Services.AddSingleton(sp =>
             {
@@ -369,12 +370,50 @@ static async Task RunAsync(string[] args)
         return;
     }
 
+    // ── Parse --resume flag for chat mode ──
+    string? resumeSessionId = null;
+    if (mode is "chat")
+    {
+        for (var i = 1; i < args.Length; i++)
+        {
+            if (args[i] is "--resume" or "-r")
+            {
+                if (i + 1 >= args.Length)
+                {
+                    Console.WriteLine("[FAIL] chat options: Missing session ID after --resume.");
+                    WriteChatHelp();
+                    Environment.ExitCode = 1;
+                    return;
+                }
+
+                resumeSessionId = args[++i];
+                continue;
+            }
+
+            if (args[i].StartsWith("--resume=", StringComparison.Ordinal))
+            {
+                resumeSessionId = args[i]["--resume=".Length..];
+                continue;
+            }
+
+            if (IsHelpToken(args[i]))
+            {
+                WriteChatHelp();
+                return;
+            }
+        }
+    }
+
     // ── Interactive / headless modes (daemon-backed via SignalR) ──
     var webBuilder = WebApplication.CreateBuilder(args);
     webBuilder.WebHost.UseUrls("http://127.0.0.1:0");
 
     var sharedPaths = ConfigureConfigServices(webBuilder.Services, webBuilder.Configuration);
     ConfigureCliChatServices(webBuilder.Services, webBuilder.Configuration);
+
+    // Shared navigation state for passing resume session ID to ChatViewModel
+    var navState = new ChatNavigationState { ResumeSessionId = resumeSessionId };
+    webBuilder.Services.AddSingleton(navState);
 
     // Suppress framework console logging — console is reserved for the chat UI
     webBuilder.Logging.ClearProviders();
@@ -386,6 +425,14 @@ static async Task RunAsync(string[] args)
         case "chat":
             webBuilder.Services.AddTermina("/chat", termina =>
             {
+                termina.RegisterRoute<ChatPage, ChatViewModel>("/chat");
+            });
+            break;
+
+        case "sessions":
+            webBuilder.Services.AddTermina("/sessions", termina =>
+            {
+                termina.RegisterRoute<SessionsPage, SessionsViewModel>("/sessions");
                 termina.RegisterRoute<ChatPage, ChatViewModel>("/chat");
             });
             break;
@@ -455,6 +502,8 @@ static void WriteGeneralHelp()
     Console.WriteLine();
     Console.WriteLine("Commands:");
     Console.WriteLine("  chat                     Interactive TUI chat (default)");
+    Console.WriteLine("  chat --resume <id>       Resume an existing session by ID");
+    Console.WriteLine("  sessions                 Browse and resume recent sessions (TUI)");
     Console.WriteLine("  -p, --prompt <text>      Headless single-prompt mode");
     Console.WriteLine("  doctor                   Configuration diagnostics (offline)");
     Console.WriteLine("  status                   Runtime status from daemon health JSON endpoint");
@@ -498,6 +547,17 @@ static void WriteDoctorHelp()
     Console.WriteLine("  0  all checks passed");
     Console.WriteLine("  1  one or more checks failed");
     Console.WriteLine("  2  warnings only");
+}
+
+static void WriteChatHelp()
+{
+    Console.WriteLine("Usage: netclaw chat [options]");
+    Console.WriteLine();
+    Console.WriteLine("Start an interactive TUI chat session with the daemon.");
+    Console.WriteLine();
+    Console.WriteLine("Options:");
+    Console.WriteLine("  --resume, -r <id>   Resume an existing session by its catalog ID");
+    Console.WriteLine("                      Use `netclaw sessions` to browse available sessions");
 }
 
 static void WriteStatusHelp()

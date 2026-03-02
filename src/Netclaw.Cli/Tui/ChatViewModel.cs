@@ -17,6 +17,7 @@ public partial class ChatViewModel : ReactiveViewModel
     private readonly DaemonClient _daemonClient;
     private readonly TimeProvider _timeProvider;
     private readonly SessionConfig _sessionConfig;
+    private readonly string? _resumeSessionId;
 
     private readonly Subject<SessionOutput> _outputSubject = new();
     private readonly Queue<string> _pendingMessages = new();
@@ -47,11 +48,13 @@ public partial class ChatViewModel : ReactiveViewModel
     public ChatViewModel(
         DaemonClient daemonClient,
         TimeProvider timeProvider,
-        SessionConfig sessionConfig)
+        SessionConfig sessionConfig,
+        ChatNavigationState navigationState)
     {
         _daemonClient = daemonClient;
         _timeProvider = timeProvider;
         _sessionConfig = sessionConfig;
+        _resumeSessionId = navigationState.TakeResumeSessionId();
     }
 
     public override void OnActivated()
@@ -200,7 +203,9 @@ public partial class ChatViewModel : ReactiveViewModel
 
     private async Task EnsureSessionAndFlushAsync()
     {
-        var sessionId = await _daemonClient.EnsureSessionAsync("tui");
+        var sessionId = _resumeSessionId is not null
+            ? await _daemonClient.ResumeSessionAsync(_resumeSessionId)
+            : await _daemonClient.EnsureSessionAsync("tui");
         SessionIdDisplay.Value = sessionId;
         _sessionReady = true;
         IsInputEnabled.Value = true;
