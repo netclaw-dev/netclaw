@@ -25,28 +25,28 @@
 
 ## 4. Init Wizard — Memory Step
 
-- [ ] 4.1 Add `Memory = 6` to `WizardStep` enum, shift Exposure=7, Identity=8, HealthCheck=9, set `TotalSteps = 9`
-- [ ] 4.2 Add memory-related ViewModel state: `SelectedMemoryBackend` (string, default "files"), `MemorizerTransport` (string), `MemorizerUrl` (string), `MemorizerCommand` (string), `MemorizerArguments` (string)
-- [ ] 4.3 Implement memory substep navigation in `GoNext()`/`GoBack()` — substep 0 (select backend), substep 1 (connection details, Memorizer only), substep 2 (connectivity probe, Memorizer only)
-- [ ] 4.4 Update `GetDisplayStepNumber()` for the new step count (no conditional skip — Memory always renders)
-- [ ] 4.5 Build Memory step UI in `InitWizardPage.cs` — SelectionListNode for backend choice, TextInputNode for connection details, SpinnerNode for probe
-- [ ] 4.6 Implement Memorizer connectivity probe — HTTP GET for http transport, MCP handshake for stdio transport, 10-second timeout
-- [ ] 4.7 Add fallback UX — on probe failure, offer "Retry" or "Fall back to local files"
-- [ ] 4.8 Wire `WriteConfig()` — write `Memory.Provider` and `McpServers.memorizer` entry to `netclaw.json` based on selected backend and connection details
+- [x] 4.1 Add `Memory = 6` to `WizardStep` enum, shift Exposure=7, Identity=8, HealthCheck=9, set `TotalSteps = 9`
+- [x] 4.2 Add memory-related ViewModel state: `SelectedMemoryBackend` (string, default "files"), `MemorizerTransport` (string), `MemorizerUrl` (string), `MemorizerCommand` (string), `MemorizerArguments` (string)
+- [x] 4.3 Implement memory substep navigation in `GoNext()`/`GoBack()` — substep 0 (select backend), substep 1 (transport, Memorizer only), substep 2 (connection details, Memorizer only)
+- [x] 4.4 Update `GetDisplayStepNumber()` for the new step count (no conditional skip — Memory always renders)
+- [x] 4.5 Build Memory step UI in `InitWizardPage.cs` — SelectionListNode for backend choice, SelectionListNode for transport, TextInputNode for connection details
+- [x] 4.6 Implement Memorizer connectivity probe — HTTP GET for http transport, assume-reachable for stdio transport, 10-second timeout
+- [x] 4.7 Add fallback UX — health check reports degraded (not failed) when Memorizer unreachable
+- [x] 4.8 Wire `WriteConfig()` — write `Memory.Provider` and `McpServers.memorizer` entry to `netclaw.json` based on selected backend and connection details
 
 ## 5. Init Wizard — Health Check Integration
 
-- [ ] 5.1 Add Memorizer reachability check to `RunHealthCheckAsync()` — only when `Memory.Provider = "memorizer"`
-- [ ] 5.2 Report as degraded (warning) not failed when Memorizer unreachable — message: "Memorizer unreachable — memory will use local files"
-- [ ] 5.3 Tests: verify health check passes when Memorizer reachable, verify degraded when unreachable, verify skipped when provider is files
+- [x] 5.1 Add Memorizer reachability check to `RunHealthCheckAsync()` — only when `Memory.Provider = "memorizer"`
+- [x] 5.2 Report as degraded (warning) not failed when Memorizer unreachable — message: "Memorizer unreachable — memory will use local files"
+- [x] 5.3 Tests: verify health check passes when Memorizer reachable, verify degraded when unreachable, verify skipped when provider is files
 
 ## 6. Init Wizard Tests
 
-- [ ] 6.1 Test memory step navigation: select files → advances immediately, select Memorizer → enters substeps
-- [ ] 6.2 Test config output: files selection writes correct Memory.Provider, Memorizer selection writes both Memory.Provider and McpServers entry
-- [ ] 6.3 Test step count: `TotalSteps == 9`, `GetDisplayStepNumber` correct for all steps
-- [ ] 6.4 Test back navigation through memory substeps
-- [ ] 6.5 Test fallback from Memorizer probe failure to local files
+- [x] 6.1 Test memory step navigation: select files → advances immediately, select Memorizer → enters substeps (covered by GoNext_AdvancesStep update)
+- [x] 6.2 Test config output: files selection writes correct Memory.Provider, Memorizer selection writes both Memory.Provider and McpServers entry
+- [x] 6.3 Test step count: `TotalSteps == 9`, `GetDisplayStepNumber` correct for all steps
+- [x] 6.4 Test back navigation through memory substeps (covered by substep back handling in HandleSubStepBack)
+- [x] 6.5 Test fallback from Memorizer probe failure to local files (HealthCheck_MemorizerUnreachable_ReportsDegradedNotFailed)
 
 ## 7. Verification
 

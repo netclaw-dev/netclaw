@@ -51,10 +51,18 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
     private SelectionListNode<string>? _browserAutomationBackendList;
     private int _browserAutomationSubStep; // 0=enable/disable, 1=backend selection
 
-    // Step 6: Exposure
+    // Step 6: Memory
+    private SelectionListNode<string>? _memoryBackendList;
+    private SelectionListNode<string>? _memorizerTransportList;
+    private TextInputNode? _memorizerUrlInput;
+    private TextInputNode? _memorizerCommandInput;
+    private TextInputNode? _memorizerArgumentsInput;
+    private int _memorySubStep; // 0=backend, 1=transport (memorizer only), 2=connection details (memorizer only)
+
+    // Step 7: Exposure
     private SelectionListNode<string>? _exposureList;
 
-    // Step 7: Identity
+    // Step 8: Identity
     private TextInputNode? _agentNameInput;
     private SelectionListNode<string>? _commStyleList;
     private TextInputNode? _userNameInput;
@@ -138,6 +146,7 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
                     WizardStep.Acl => "Access Control",
                     WizardStep.Search => "Web Search",
                     WizardStep.BrowserAutomation => "Browser Automation",
+                    WizardStep.Memory => "Memory Backend",
                     WizardStep.Exposure => "Exposure Mode",
                     WizardStep.Identity => "Identity",
                     WizardStep.HealthCheck => "Health Check",
@@ -188,6 +197,7 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
                 WizardStep.Acl => BuildAclStep(),
                 WizardStep.Search => BuildSearchStep(),
                 WizardStep.BrowserAutomation => BuildBrowserAutomationStep(),
+                WizardStep.Memory => BuildMemoryStep(),
                 WizardStep.Exposure => BuildExposureStep(),
                 WizardStep.Identity => BuildIdentityStep(),
                 _ => Layouts.Empty()
@@ -236,6 +246,14 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
                     "  Optional. Enable this to let the agent delegate browser steering via MCP tools.",
                 WizardStep.BrowserAutomation when _browserAutomationSubStep == 1 =>
                     "  Chrome DevTools MCP enables full browser automation. Playwright MCP supports broader cross-browser workflows with stricter output flags.",
+                WizardStep.Memory when _memorySubStep == 0 =>
+                    "  Cross-session memory lets the agent retain knowledge between conversations.",
+                WizardStep.Memory when _memorySubStep == 1 =>
+                    "  Select how to connect to the Memorizer MCP server.",
+                WizardStep.Memory when _memorySubStep == 2 && ViewModel.MemorizerTransport == "http" =>
+                    "  Enter the URL of your Memorizer MCP server (e.g. http://localhost:5012/mcp).",
+                WizardStep.Memory when _memorySubStep == 2 =>
+                    "  Enter the command and arguments to launch the Memorizer process.",
                 WizardStep.Exposure =>
                     "  Local-only is recommended for homelab use.",
                 WizardStep.Identity when _identitySubStep == 0 =>
@@ -999,6 +1017,168 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             .WithChild(_browserAutomationBackendList);
     }
 
+    private ILayoutNode BuildMemoryStep()
+    {
+        return _memorySubStep switch
+        {
+            0 => BuildMemoryBackendSubStep(),
+            1 => BuildMemorizerTransportSubStep(),
+            2 => BuildMemorizerConnectionSubStep(),
+            _ => Layouts.Empty()
+        };
+    }
+
+    private ILayoutNode BuildMemoryBackendSubStep()
+    {
+        _memoryBackendList = Layouts.SelectionList(
+                "Local files (default)",
+                "Memorizer (MCP server)")
+            .WithMode(SelectionMode.Single)
+            .WithHighlightColors(Color.Black, Color.Cyan);
+
+        _memoryBackendList.OnFocused();
+        _lastFocusedList = _memoryBackendList;
+
+        _memoryBackendList.SelectionConfirmed
+            .Subscribe(selected =>
+            {
+                if (selected.Count == 0)
+                    return;
+
+                if (selected[0].StartsWith("Memorizer", StringComparison.Ordinal))
+                {
+                    ViewModel.SelectedMemoryBackend = "memorizer";
+                    SetMemorySubStep(1);
+                }
+                else
+                {
+                    ViewModel.SelectedMemoryBackend = "files";
+                    _memorySubStep = 0;
+                    ViewModel.GoNext();
+                }
+            })
+            .DisposeWith(_stepSubs);
+
+        return Layouts.Vertical()
+            .WithChild(new TextNode("  Choose memory backend:").WithForeground(Color.White))
+            .WithChild(_memoryBackendList);
+    }
+
+    private ILayoutNode BuildMemorizerTransportSubStep()
+    {
+        _memorizerTransportList = Layouts.SelectionList(
+                "HTTP (remote server)",
+                "stdio (local process)")
+            .WithMode(SelectionMode.Single)
+            .WithHighlightColors(Color.Black, Color.Cyan);
+
+        _memorizerTransportList.OnFocused();
+        _lastFocusedList = _memorizerTransportList;
+
+        _memorizerTransportList.SelectionConfirmed
+            .Subscribe(selected =>
+            {
+                if (selected.Count == 0)
+                    return;
+
+                ViewModel.MemorizerTransport = selected[0].StartsWith("stdio", StringComparison.Ordinal)
+                    ? "stdio"
+                    : "http";
+                SetMemorySubStep(2);
+            })
+            .DisposeWith(_stepSubs);
+
+        return Layouts.Vertical()
+            .WithChild(new TextNode("  Memorizer transport:").WithForeground(Color.White))
+            .WithChild(_memorizerTransportList);
+    }
+
+    private ILayoutNode BuildMemorizerConnectionSubStep()
+    {
+        if (ViewModel.MemorizerTransport == "http")
+        {
+            _memorizerUrlInput = new TextInputNode()
+                .WithPlaceholder("http://localhost:5012/mcp");
+
+            if (!string.IsNullOrWhiteSpace(ViewModel.MemorizerUrl))
+                _memorizerUrlInput.Text = ViewModel.MemorizerUrl;
+
+            _memorizerUrlInput.OnFocused();
+            _lastFocusedInput = _memorizerUrlInput;
+
+            _memorizerUrlInput.Submitted
+                .Where(text => !string.IsNullOrWhiteSpace(text))
+                .Subscribe(text =>
+                {
+                    ViewModel.MemorizerUrl = text;
+                    _memorySubStep = 0;
+                    ViewModel.GoNext();
+                })
+                .DisposeWith(_stepSubs);
+
+            return Layouts.Vertical()
+                .WithChild(new TextNode("  Memorizer URL:").WithForeground(Color.White))
+                .WithChild(new PanelNode()
+                    .WithTitle("URL")
+                    .WithBorder(BorderStyle.Rounded)
+                    .WithBorderColor(Color.Gray)
+                    .WithContent(_memorizerUrlInput)
+                    .Height(3));
+        }
+
+        // stdio transport — command + arguments
+        _memorizerCommandInput = new TextInputNode()
+            .WithPlaceholder("e.g., npx, dotnet, python");
+
+        if (!string.IsNullOrWhiteSpace(ViewModel.MemorizerCommand))
+            _memorizerCommandInput.Text = ViewModel.MemorizerCommand;
+
+        _memorizerCommandInput.OnFocused();
+        _lastFocusedInput = _memorizerCommandInput;
+
+        _memorizerCommandInput.Submitted
+            .Where(text => !string.IsNullOrWhiteSpace(text))
+            .Subscribe(text =>
+            {
+                ViewModel.MemorizerCommand = text;
+                // Move focus to arguments input
+                _memorizerArgumentsInput?.OnFocused();
+                _lastFocusedInput = _memorizerArgumentsInput;
+            })
+            .DisposeWith(_stepSubs);
+
+        _memorizerArgumentsInput = new TextInputNode()
+            .WithPlaceholder("e.g., -y @anthropic/memorizer-mcp");
+
+        if (!string.IsNullOrWhiteSpace(ViewModel.MemorizerArguments))
+            _memorizerArgumentsInput.Text = ViewModel.MemorizerArguments;
+
+        _memorizerArgumentsInput.Submitted
+            .Subscribe(text =>
+            {
+                ViewModel.MemorizerArguments = string.IsNullOrWhiteSpace(text) ? null : text;
+                _memorySubStep = 0;
+                ViewModel.GoNext();
+            })
+            .DisposeWith(_stepSubs);
+
+        return Layouts.Vertical()
+            .WithChild(new TextNode("  Memorizer command:").WithForeground(Color.White))
+            .WithChild(new PanelNode()
+                .WithTitle("Command")
+                .WithBorder(BorderStyle.Rounded)
+                .WithBorderColor(Color.Gray)
+                .WithContent(_memorizerCommandInput)
+                .Height(3))
+            .WithChild(new TextNode("  Arguments:").WithForeground(Color.White))
+            .WithChild(new PanelNode()
+                .WithTitle("Arguments")
+                .WithBorder(BorderStyle.Rounded)
+                .WithBorderColor(Color.Gray)
+                .WithContent(_memorizerArgumentsInput)
+                .Height(3));
+    }
+
     private ILayoutNode BuildExposureStep()
     {
         _exposureList = Layouts.SelectionList(
@@ -1265,6 +1445,12 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             return true;
         }
 
+        if (ViewModel.CurrentStep.Value == WizardStep.Memory && _memorySubStep > 0)
+        {
+            SetMemorySubStep(_memorySubStep - 1);
+            return true;
+        }
+
         if (ViewModel.CurrentStep.Value == WizardStep.ChatServices && _chatServicesSubStep > 0)
         {
             SetChatServicesSubStep(_chatServicesSubStep - 1);
@@ -1360,6 +1546,8 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             WizardStep.Search when _searchSubStep == 0 => _searchBackendList,
             WizardStep.BrowserAutomation when _browserAutomationSubStep == 0 => _browserAutomationEnabledList,
             WizardStep.BrowserAutomation when _browserAutomationSubStep == 1 => _browserAutomationBackendList,
+            WizardStep.Memory when _memorySubStep == 0 => _memoryBackendList,
+            WizardStep.Memory when _memorySubStep == 1 => _memorizerTransportList,
             WizardStep.Exposure => _exposureList,
             WizardStep.Identity when _identitySubStep == 1 => _commStyleList,
             _ => null
@@ -1379,6 +1567,10 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             WizardStep.ChatServices when _chatServicesSubStep == 5 => _slackAllowedUserIdsInput,
             WizardStep.Search when _searchSubStep == 1 && _braveApiKeyInput is not null => _braveApiKeyInput,
             WizardStep.Search when _searchSubStep == 1 => _searxngEndpointInput,
+            WizardStep.Memory when _memorySubStep == 2 && _memorizerUrlInput is not null => _memorizerUrlInput,
+            WizardStep.Memory when _memorySubStep == 2 && _memorizerArgumentsInput is not null
+                && !string.IsNullOrWhiteSpace(ViewModel.MemorizerCommand) => _memorizerArgumentsInput,
+            WizardStep.Memory when _memorySubStep == 2 => _memorizerCommandInput,
             WizardStep.Acl => _ownerIdentityInput,
             WizardStep.Identity when _identitySubStep == 0 => _agentNameInput,
             WizardStep.Identity when _identitySubStep == 2 => _userNameInput,
@@ -1427,6 +1619,14 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
         ViewModel.RequestRedraw();
     }
 
+    private void SetMemorySubStep(int step)
+    {
+        _memorySubStep = step;
+        _stepContentNode?.Invalidate();
+        _helpTextNode?.Invalidate();
+        ViewModel.RequestRedraw();
+    }
+
     private void SetIdentitySubStep(int step)
     {
         _identitySubStep = step;
@@ -1450,6 +1650,8 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
                     _searchSubStep = 0;
                 if (step == WizardStep.BrowserAutomation)
                     _browserAutomationSubStep = 0;
+                if (step == WizardStep.Memory)
+                    _memorySubStep = 0;
                 if (step == WizardStep.Identity)
                     _identitySubStep = 0;
 

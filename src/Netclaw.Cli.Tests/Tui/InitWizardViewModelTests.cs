@@ -60,6 +60,9 @@ public sealed class InitWizardViewModelTests : IDisposable
         Assert.Equal(WizardStep.BrowserAutomation, vm.CurrentStep.Value);
 
         vm.GoNext();
+        Assert.Equal(WizardStep.Memory, vm.CurrentStep.Value);
+
+        vm.GoNext();
         Assert.Equal(WizardStep.Exposure, vm.CurrentStep.Value);
 
         vm.GoNext();
@@ -352,25 +355,25 @@ public sealed class InitWizardViewModelTests : IDisposable
     }
 
     [Fact]
-    public void TotalSteps_IsEight()
+    public void TotalSteps_IsNine()
     {
-        Assert.Equal(8, InitWizardViewModel.TotalSteps);
+        Assert.Equal(9, InitWizardViewModel.TotalSteps);
     }
 
     [Fact]
-    public void ActiveStepCount_IsSeven_WhenNoChatServices()
+    public void ActiveStepCount_IsEight_WhenNoChatServices()
     {
         using var vm = CreateViewModel();
         vm.SlackEnabled = false;
-        Assert.Equal(7, vm.ActiveStepCount);
+        Assert.Equal(8, vm.ActiveStepCount);
     }
 
     [Fact]
-    public void ActiveStepCount_IsEight_WhenChatServicesEnabled()
+    public void ActiveStepCount_IsNine_WhenChatServicesEnabled()
     {
         using var vm = CreateViewModel();
         vm.SlackEnabled = true;
-        Assert.Equal(8, vm.ActiveStepCount);
+        Assert.Equal(9, vm.ActiveStepCount);
     }
 
     [Fact]
@@ -381,14 +384,16 @@ public sealed class InitWizardViewModelTests : IDisposable
 
         // Provider = 1, ChatServices = 2, Acl would be 3 but skipped
         // Search = 3 (adjusted from 4), BrowserAutomation = 4 (adjusted from 5),
-        // Exposure = 5 (adjusted from 6), Identity = 6, HealthCheck = 7
+        // Memory = 5 (adjusted from 6), Exposure = 6 (adjusted from 7),
+        // Identity = 7, HealthCheck = 8
         Assert.Equal(1, vm.GetDisplayStepNumber(WizardStep.Provider));
         Assert.Equal(2, vm.GetDisplayStepNumber(WizardStep.ChatServices));
         Assert.Equal(3, vm.GetDisplayStepNumber(WizardStep.Search));
         Assert.Equal(4, vm.GetDisplayStepNumber(WizardStep.BrowserAutomation));
-        Assert.Equal(5, vm.GetDisplayStepNumber(WizardStep.Exposure));
-        Assert.Equal(6, vm.GetDisplayStepNumber(WizardStep.Identity));
-        Assert.Equal(7, vm.GetDisplayStepNumber(WizardStep.HealthCheck));
+        Assert.Equal(5, vm.GetDisplayStepNumber(WizardStep.Memory));
+        Assert.Equal(6, vm.GetDisplayStepNumber(WizardStep.Exposure));
+        Assert.Equal(7, vm.GetDisplayStepNumber(WizardStep.Identity));
+        Assert.Equal(8, vm.GetDisplayStepNumber(WizardStep.HealthCheck));
     }
 
     [Fact]
@@ -825,6 +830,106 @@ public sealed class InitWizardViewModelTests : IDisposable
         var allowedUsers = slack.GetProperty("AllowedUserIds");
         Assert.Equal(1, allowedUsers.GetArrayLength());
         Assert.Equal("U001ABC", allowedUsers[0].GetString());
+    }
+
+    [Fact]
+    public async Task HealthCheck_FilesMemoryBackend_WritesMemoryProvider()
+    {
+        using var vm = CreateViewModel();
+        vm.SelectedProviderType = "ollama";
+        vm.SlackEnabled = false;
+        vm.SelectedMemoryBackend = "files";
+
+        vm.CurrentStep.Value = WizardStep.HealthCheck;
+        vm.GoNext();
+        await vm.HealthCheckCompletion!.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.True(vm.IsComplete.Value);
+
+        var config = JsonDocument.Parse(File.ReadAllText(_paths.NetclawConfigPath));
+        Assert.True(config.RootElement.TryGetProperty("Memory", out var memory));
+        Assert.Equal("files", memory.GetProperty("Provider").GetString());
+
+        // No McpServers.memorizer when using file backend
+        if (config.RootElement.TryGetProperty("McpServers", out var mcpServers))
+            Assert.False(mcpServers.TryGetProperty("memorizer", out _));
+    }
+
+    [Fact]
+    public async Task HealthCheck_MemorizerBackendHttp_WritesMemoryAndMcpServer()
+    {
+        using var vm = CreateViewModel();
+        vm.SelectedProviderType = "ollama";
+        vm.SlackEnabled = false;
+        vm.SelectedMemoryBackend = "memorizer";
+        vm.MemorizerTransport = "http";
+        vm.MemorizerUrl = "http://localhost:5012/mcp";
+
+        vm.CurrentStep.Value = WizardStep.HealthCheck;
+        vm.GoNext();
+        await vm.HealthCheckCompletion!.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.True(vm.IsComplete.Value);
+
+        var config = JsonDocument.Parse(File.ReadAllText(_paths.NetclawConfigPath));
+        Assert.True(config.RootElement.TryGetProperty("Memory", out var memory));
+        Assert.Equal("memorizer", memory.GetProperty("Provider").GetString());
+
+        Assert.True(config.RootElement.TryGetProperty("McpServers", out var mcpServers));
+        Assert.True(mcpServers.TryGetProperty("memorizer", out var memorizer));
+        Assert.Equal("http", memorizer.GetProperty("Transport").GetString());
+        Assert.Equal("http://localhost:5012/mcp", memorizer.GetProperty("Url").GetString());
+        Assert.True(memorizer.GetProperty("Enabled").GetBoolean());
+    }
+
+    [Fact]
+    public async Task HealthCheck_MemorizerBackendStdio_WritesCommandAndArguments()
+    {
+        using var vm = CreateViewModel();
+        vm.SelectedProviderType = "ollama";
+        vm.SlackEnabled = false;
+        vm.SelectedMemoryBackend = "memorizer";
+        vm.MemorizerTransport = "stdio";
+        vm.MemorizerCommand = "npx";
+        vm.MemorizerArguments = "-y @anthropic/memorizer-mcp";
+
+        vm.CurrentStep.Value = WizardStep.HealthCheck;
+        vm.GoNext();
+        await vm.HealthCheckCompletion!.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.True(vm.IsComplete.Value);
+
+        var config = JsonDocument.Parse(File.ReadAllText(_paths.NetclawConfigPath));
+        Assert.True(config.RootElement.TryGetProperty("McpServers", out var mcpServers));
+        Assert.True(mcpServers.TryGetProperty("memorizer", out var memorizer));
+        Assert.Equal("stdio", memorizer.GetProperty("Transport").GetString());
+        Assert.Equal("npx", memorizer.GetProperty("Command").GetString());
+
+        var args = memorizer.GetProperty("Arguments");
+        Assert.Equal(2, args.GetArrayLength());
+        Assert.Equal("-y", args[0].GetString());
+        Assert.Equal("@anthropic/memorizer-mcp", args[1].GetString());
+    }
+
+    [Fact]
+    public async Task HealthCheck_MemorizerUnreachable_ReportsDegradedNotFailed()
+    {
+        using var vm = CreateViewModel();
+        vm.SelectedProviderType = "ollama";
+        vm.SlackEnabled = false;
+        vm.SelectedMemoryBackend = "memorizer";
+        vm.MemorizerTransport = "http";
+        vm.MemorizerUrl = "http://unreachable-host:9999/mcp";
+
+        vm.CurrentStep.Value = WizardStep.HealthCheck;
+        vm.GoNext();
+        await vm.HealthCheckCompletion!.WaitAsync(TimeSpan.FromSeconds(15));
+        Assert.True(vm.IsComplete.Value);
+
+        var memoryCheck = vm.HealthCheckResults
+            .FirstOrDefault(h => h.Label.Contains("Memorizer", StringComparison.OrdinalIgnoreCase)
+                || h.Label.Contains("Memory", StringComparison.OrdinalIgnoreCase));
+        Assert.NotNull(memoryCheck);
+        // Degraded = Passed is true (warning), not false (failure)
+        Assert.True(memoryCheck.Passed);
+        Assert.Contains("local files", memoryCheck.Label, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

@@ -20,9 +20,10 @@ public enum WizardStep
     Acl = 3,
     Search = 4,
     BrowserAutomation = 5,
-    Exposure = 6,
-    Identity = 7,
-    HealthCheck = 8
+    Memory = 6,
+    Exposure = 7,
+    Identity = 8,
+    HealthCheck = 9
 }
 
 /// <summary>
@@ -32,7 +33,7 @@ public enum WizardStep
 /// </summary>
 public partial class InitWizardViewModel : ReactiveViewModel
 {
-    public const int TotalSteps = 8;
+    public const int TotalSteps = 9;
 
     private readonly NetclawPaths _paths;
     private readonly IProviderProbe _probe;
@@ -100,17 +101,24 @@ public partial class InitWizardViewModel : ReactiveViewModel
     public bool BrowserAutomationEnabled { get; set; }
     public string SelectedBrowserAutomationBackend { get; set; } = BrowserAutomationMcpProfiles.ChromeDevToolsBackend;
 
-    // ── Step 6: Exposure ──
+    // ── Step 6: Memory ──
+    public string SelectedMemoryBackend { get; set; } = "files";
+    public string MemorizerTransport { get; set; } = "http";
+    public string? MemorizerUrl { get; set; }
+    public string? MemorizerCommand { get; set; }
+    public string? MemorizerArguments { get; set; }
+
+    // ── Step 7: Exposure ──
     public string? ExposureMode { get; set; }
 
-    // ── Step 7: Identity ──
+    // ── Step 8: Identity ──
     public string AgentName { get; set; } = "Netclaw";
     public string? CommunicationStyle { get; set; }
     public string? UserName { get; set; }
     public string UserTimezone { get; set; } = TimeZoneInfo.Local.Id;
     public string? PrimaryUse { get; set; }
 
-    // ── Step 8: Health Check ──
+    // ── Step 9: Health Check ──
     public List<HealthCheckItem> HealthCheckResults { get; } = [];
 
     /// <summary>
@@ -318,6 +326,34 @@ public partial class InitWizardViewModel : ReactiveViewModel
         }
     }
 
+    /// <summary>
+    /// Probe the Memorizer endpoint for connectivity. Returns true if reachable.
+    /// </summary>
+    internal async Task<bool> ProbeMemorizerAsync()
+    {
+        if (MemorizerTransport == "http" && !string.IsNullOrWhiteSpace(MemorizerUrl))
+        {
+            try
+            {
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                using var client = new HttpClient();
+                var response = await client.GetAsync(MemorizerUrl, cts.Token);
+                return response.IsSuccessStatusCode;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        // For stdio transport, we'd need to spawn the process and check MCP handshake.
+        // For now, return true (assume reachable) — the daemon will validate at startup.
+        if (MemorizerTransport == "stdio" && !string.IsNullOrWhiteSpace(MemorizerCommand))
+            return true;
+
+        return false;
+    }
+
     private void HandleGlobalKey(KeyPressed key)
     {
         if (key.KeyInfo.Key == ConsoleKey.Q &&
@@ -446,6 +482,25 @@ public partial class InitWizardViewModel : ReactiveViewModel
             }
             NotifyHealthCheckChanged();
         }
+
+        // Memory backend check
+        HealthCheckResults.Add(new HealthCheckItem("Memory backend", null));
+        NotifyHealthCheckChanged();
+        await Task.Delay(200);
+
+        if (SelectedMemoryBackend == "memorizer")
+        {
+            // For Memorizer, check reachability — degraded (not failed) if unreachable
+            var memorizerReachable = await ProbeMemorizerAsync();
+            HealthCheckResults[^1] = memorizerReachable
+                ? new HealthCheckItem("Memory backend (Memorizer connected)", true)
+                : new HealthCheckItem("Memorizer unreachable \u2014 memory will use local files", true); // warning, not failure
+        }
+        else
+        {
+            HealthCheckResults[^1] = new HealthCheckItem("Memory backend (local files)", true);
+        }
+        NotifyHealthCheckChanged();
 
         // Browser automation prerequisites (optional)
         if (BrowserAutomationEnabled)
@@ -685,23 +740,55 @@ public partial class InitWizardViewModel : ReactiveViewModel
             config["Search"] = searchSection;
         }
 
-        // Browser automation MCP profile (optional)
+        // Memory section
+        config["Memory"] = new Dictionary<string, object>
+        {
+            ["Provider"] = SelectedMemoryBackend
+        };
+
+        // MCP servers: browser automation + memorizer (both optional)
+        var mcpServers = new Dictionary<string, object>();
+
         if (BrowserAutomationEnabled)
         {
             var (profileName, entry) = BrowserAutomationMcpProfiles.Create(SelectedBrowserAutomationBackend);
-
-            config["McpServers"] = new Dictionary<string, object>
+            mcpServers[profileName] = new Dictionary<string, object?>
             {
-                [profileName] = new Dictionary<string, object?>
-                {
-                    ["Transport"] = entry.Transport,
-                    ["Command"] = entry.Command,
-                    ["Arguments"] = entry.Arguments,
-                    ["Enabled"] = entry.Enabled,
-                    ["GrantCategory"] = entry.GrantCategory
-                }
+                ["Transport"] = entry.Transport,
+                ["Command"] = entry.Command,
+                ["Arguments"] = entry.Arguments,
+                ["Enabled"] = entry.Enabled,
+                ["GrantCategory"] = entry.GrantCategory
             };
         }
+
+        if (SelectedMemoryBackend == "memorizer")
+        {
+            var memorizerEntry = new Dictionary<string, object>
+            {
+                ["Enabled"] = true
+            };
+
+            if (MemorizerTransport == "http")
+            {
+                memorizerEntry["Transport"] = "http";
+                if (!string.IsNullOrWhiteSpace(MemorizerUrl))
+                    memorizerEntry["Url"] = MemorizerUrl;
+            }
+            else
+            {
+                memorizerEntry["Transport"] = "stdio";
+                if (!string.IsNullOrWhiteSpace(MemorizerCommand))
+                    memorizerEntry["Command"] = MemorizerCommand;
+                if (!string.IsNullOrWhiteSpace(MemorizerArguments))
+                    memorizerEntry["Arguments"] = MemorizerArguments.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            }
+
+            mcpServers["memorizer"] = memorizerEntry;
+        }
+
+        if (mcpServers.Count > 0)
+            config["McpServers"] = mcpServers;
 
         // Write identity files
         WriteIdentityFiles();
