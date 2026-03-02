@@ -44,6 +44,7 @@ public sealed class NetclawPaths
     public string SessionsDirectory => Path.Combine(BasePath, "sessions");
     public string PidFilePath => Path.Combine(BasePath, "netclaw.pid");
     public string SqliteDbPath => Path.Combine(BasePath, "netclaw.db");
+    public string McpOAuthMetadataPath => Path.Combine(ConfigDirectory, "mcp-oauth-metadata.json");
 
     public NetclawPaths(string? basePath = null)
     {

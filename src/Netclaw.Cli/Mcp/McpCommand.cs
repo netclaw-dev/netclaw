@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using System.Net.Http.Json;
 using System.Net.Sockets;
 using System.Text.Json;
 using ModelContextProtocol.Client;
@@ -6,7 +8,7 @@ using Netclaw.Configuration;
 
 namespace Netclaw.Cli.Mcp;
 
-internal enum McpProbeStatus { Connected, AuthFailed, Unreachable, Disabled }
+internal enum McpProbeStatus { Connected, AuthFailed, Unreachable, Disabled, AwaitingAuth }
 
 internal readonly record struct McpProbeResult(
     McpProbeStatus Status, int ToolCount, string? ErrorMessage)
@@ -17,6 +19,7 @@ internal readonly record struct McpProbeResult(
         McpProbeStatus.AuthFailed => $"auth failed ({ErrorMessage})",
         McpProbeStatus.Unreachable => $"unreachable — {ErrorMessage}",
         McpProbeStatus.Disabled => "disabled",
+        McpProbeStatus.AwaitingAuth => "awaiting auth — run: netclaw mcp auth <name>",
         _ => "unknown"
     };
 }
@@ -36,6 +39,7 @@ internal static class McpCommand
         return subcommand switch
         {
             "add" => RunAdd(args, paths, writer),
+            "auth" => await RunAuthAsync(args, paths, writer),
             "list" => await RunListAsync(paths, writer),
             "get" => RunGet(args, paths, writer),
             "remove" => RunRemove(args, paths, writer),
@@ -48,8 +52,10 @@ internal static class McpCommand
 
     private static int RunAdd(string[] args, NetclawPaths paths, TextWriter writer)
     {
-        // Parse: netclaw mcp add [--transport <type>] [--env KEY=VALUE]... [--header "Key: Value"]... <name> [command/url] [-- args...]
+        // Parse: netclaw mcp add [--transport <type>] [--client-id <id>] [--scope <scopes>] [--env KEY=VALUE]... [--header "Key: Value"]... <name> [command/url] [-- args...]
         string? transport = null;
+        string? oauthClientId = null;
+        string? oauthScope = null;
         var envVars = new Dictionary<string, string>();
         var headers = new Dictionary<string, string>();
         string? name = null;
@@ -77,6 +83,18 @@ internal static class McpCommand
             if (args[i] is "--transport" or "-t" && i + 1 < args.Length)
             {
                 transport = args[++i];
+                continue;
+            }
+
+            if (args[i] == "--client-id" && i + 1 < args.Length)
+            {
+                oauthClientId = args[++i];
+                continue;
+            }
+
+            if (args[i] == "--scope" && i + 1 < args.Length)
+            {
+                oauthScope = args[++i];
                 continue;
             }
 
@@ -148,7 +166,9 @@ internal static class McpCommand
         var entry = new McpServerEntry
         {
             Transport = transport,
-            Enabled = true
+            Enabled = true,
+            OAuthClientId = oauthClientId,
+            OAuthScope = oauthScope,
         };
 
         if (transport is "stdio")
@@ -187,6 +207,116 @@ internal static class McpCommand
 
         writer.WriteLine($"Added MCP server '{name}' ({transport})");
         return 0;
+    }
+
+    private static async Task<int> RunAuthAsync(string[] args, NetclawPaths paths, TextWriter writer)
+    {
+        if (args.Length < 3)
+        {
+            writer.WriteLine("Usage: netclaw mcp auth <name>");
+            return 1;
+        }
+
+        var name = args[2];
+        var servers = LoadMcpServers(paths);
+
+        if (!servers.TryGetValue(name, out var entry))
+        {
+            writer.WriteLine($"MCP server '{name}' not found.");
+            return 1;
+        }
+
+        if (entry.Transport is "stdio" || string.IsNullOrWhiteSpace(entry.Url))
+        {
+            writer.WriteLine($"MCP server '{name}' uses stdio transport. OAuth is only for HTTP/SSE servers.");
+            return 1;
+        }
+
+        const string daemonEndpoint = "http://127.0.0.1:5199";
+        using var httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+
+        // 1. Start the OAuth flow via daemon
+        writer.WriteLine($"Starting OAuth authorization for '{name}'...");
+
+        HttpResponseMessage startResponse;
+        try
+        {
+            startResponse = await httpClient.PostAsync(
+                $"{daemonEndpoint}/api/mcp/oauth/start/{Uri.EscapeDataString(name)}", null);
+        }
+        catch (HttpRequestException)
+        {
+            writer.WriteLine("Error: Could not reach the daemon. Is it running? (netclaw run)");
+            return 1;
+        }
+
+        if (!startResponse.IsSuccessStatusCode)
+        {
+            var errorBody = await startResponse.Content.ReadAsStringAsync();
+            writer.WriteLine($"Error: {errorBody}");
+            return 1;
+        }
+
+        var startResult = await startResponse.Content.ReadFromJsonAsync<JsonElement>();
+        var authUrl = startResult.GetProperty("authorizationUrl").GetString()!;
+
+        // 2. Open browser (best-effort)
+        writer.WriteLine();
+        writer.WriteLine("Opening browser for authorization...");
+        writer.WriteLine($"If it doesn't open, visit: {authUrl}");
+        writer.WriteLine();
+
+        try
+        {
+            Process.Start(new ProcessStartInfo(authUrl) { UseShellExecute = true });
+        }
+        catch (Exception ex)
+        {
+            writer.WriteLine($"Could not open browser automatically: {ex.Message}");
+        }
+
+        // 3. Poll for completion
+        writer.Write("Waiting for authorization");
+        var pollTimeout = TimeSpan.FromMinutes(5);
+        var pollInterval = TimeSpan.FromSeconds(2);
+        var elapsed = TimeSpan.Zero;
+
+        while (elapsed < pollTimeout)
+        {
+            await Task.Delay(pollInterval);
+            elapsed += pollInterval;
+            writer.Write(".");
+
+            try
+            {
+                var statusResponse = await httpClient.GetFromJsonAsync<JsonElement>(
+                    $"{daemonEndpoint}/api/mcp/oauth/status/{Uri.EscapeDataString(name)}");
+
+                var status = statusResponse.GetProperty("status").GetString();
+                if (status is "Completed")
+                {
+                    writer.WriteLine();
+                    writer.WriteLine($"Authorization complete for '{name}'.");
+                    writer.WriteLine("Run: netclaw daemon restart");
+                    return 0;
+                }
+
+                if (status is "Failed")
+                {
+                    writer.WriteLine();
+                    writer.WriteLine($"Authorization failed for '{name}'.");
+                    return 1;
+                }
+            }
+            catch (Exception ex)
+            {
+                writer.Write($"(poll error: {ex.Message})");
+            }
+        }
+
+        writer.WriteLine();
+        writer.WriteLine("Timed out waiting for authorization. Try again with: netclaw mcp auth " + name);
+        return 1;
     }
 
     private static async Task<int> RunListAsync(NetclawPaths paths, TextWriter writer)
@@ -243,6 +373,11 @@ internal static class McpCommand
             writer.WriteLine($"URL:        {entry.Url}");
 
         writer.WriteLine($"Enabled:    {(entry.Enabled ? "yes" : "no")}");
+
+        if (entry.OAuthClientId is not null)
+            writer.WriteLine($"Client ID:  {entry.OAuthClientId}");
+        if (entry.OAuthScope is not null)
+            writer.WriteLine($"Scope:      {entry.OAuthScope}");
 
         if (entry.EnvironmentVariables is { Count: > 0 })
         {
@@ -482,6 +617,7 @@ internal static class McpCommand
         writer.WriteLine();
         writer.WriteLine("Subcommands:");
         writer.WriteLine("  add        Add an MCP server profile");
+        writer.WriteLine("  auth       Authorize an OAuth-enabled MCP server");
         writer.WriteLine("  list       List configured MCP servers");
         writer.WriteLine("  get        Show details for an MCP server");
         writer.WriteLine("  remove     Remove an MCP server profile");
@@ -491,6 +627,8 @@ internal static class McpCommand
         writer.WriteLine("Examples:");
         writer.WriteLine("  netclaw mcp add --transport stdio memorizer -- npx -y @memorizer/mcp-server");
         writer.WriteLine("  netclaw mcp add --transport http --header \"Authorization: Bearer tok-...\" myapi https://api.example.com/mcp");
+        writer.WriteLine("  netclaw mcp add --transport http textforge https://textforge.net/mcp");
+        writer.WriteLine("  netclaw mcp auth forge");
         writer.WriteLine("  netclaw mcp list");
         return 0;
     }

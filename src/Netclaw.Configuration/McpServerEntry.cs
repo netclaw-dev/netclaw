@@ -29,4 +29,10 @@ public sealed class McpServerEntry
 
     /// <summary>ACL grant category. Defaults to "mcp:{name}" when null.</summary>
     public string? GrantCategory { get; set; }
+
+    /// <summary>Static OAuth client ID for servers that don't support dynamic client registration.</summary>
+    public string? OAuthClientId { get; set; }
+
+    /// <summary>Space-separated OAuth scopes to request (optional override).</summary>
+    public string? OAuthScope { get; set; }
 }

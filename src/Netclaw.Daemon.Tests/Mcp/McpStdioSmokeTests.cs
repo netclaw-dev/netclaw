@@ -151,7 +151,12 @@ public class McpStdioSmokeTests : IAsyncDisposable
 
         var registry = new ToolRegistry();
         var logger = NullLogger<McpClientManager>.Instance;
-        var manager = new McpClientManager(serverEntries, registry, logger);
+        var oauthService = new McpOAuthService(
+            new HttpClient(),
+            new NetclawPaths(Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString())),
+            TimeProvider.System,
+            NullLogger<McpOAuthService>.Instance);
+        var manager = new McpClientManager(serverEntries, registry, oauthService, logger);
 
         try
         {
