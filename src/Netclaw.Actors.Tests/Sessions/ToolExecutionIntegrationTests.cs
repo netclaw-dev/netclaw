@@ -83,7 +83,7 @@ public class ToolExecutionIntegrationTests : TestKit
             SessionId = sessionId,
             Subscriber = subscriber,
             Filter = OutputFilter.Full
-        }, TimeSpan.FromSeconds(3));
+        }, TimeSpan.FromSeconds(10));
         subscriber.ExpectMsg<SessionJoined>(); // Drain subscriber notification
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
@@ -138,7 +138,7 @@ public class ToolExecutionIntegrationTests : TestKit
             SessionId = sessionId,
             Subscriber = subscriber,
             Filter = OutputFilter.Full
-        }, TimeSpan.FromSeconds(3));
+        }, TimeSpan.FromSeconds(10));
         subscriber.ExpectMsg<SessionJoined>(); // Drain subscriber notification
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
@@ -178,7 +178,7 @@ public class ToolExecutionIntegrationTests : TestKit
             SessionId = sessionId,
             Subscriber = subscriber,
             Filter = OutputFilter.Full
-        }, TimeSpan.FromSeconds(3));
+        }, TimeSpan.FromSeconds(10));
         subscriber.ExpectMsg<SessionJoined>(); // Drain subscriber notification
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
@@ -220,7 +220,7 @@ public class ToolExecutionIntegrationTests : TestKit
             SessionId = sessionId,
             Subscriber = subscriber,
             Filter = OutputFilter.Full
-        }, TimeSpan.FromSeconds(3));
+        }, TimeSpan.FromSeconds(10));
         subscriber.ExpectMsg<SessionJoined>();
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage

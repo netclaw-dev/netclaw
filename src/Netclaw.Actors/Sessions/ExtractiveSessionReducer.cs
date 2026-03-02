@@ -35,7 +35,7 @@ public sealed class ExtractiveSessionReducer : IChatReducer
         // Nothing to reduce — return as-is
         if (keepCount >= nonSystemCount)
         {
-            return Task.FromResult(messages);
+            return Task.FromResult<IEnumerable<ChatMessage>>(list);
         }
 
         var result = new List<ChatMessage>(keepCount + systemOffset);

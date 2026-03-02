@@ -15,16 +15,18 @@ public sealed class SessionLogActor : ReceiveActor
 {
     private readonly SessionId _sessionId;
     private readonly string _logDirectory;
+    private readonly TimeProvider _timeProvider;
     private readonly ILoggingAdapter _log = Context.GetLogger();
     private StreamWriter? _writer;
 
-    public static Props CreateProps(SessionId sessionId, string logDirectory) =>
-        Props.Create(() => new SessionLogActor(sessionId, logDirectory));
+    public static Props CreateProps(SessionId sessionId, string logDirectory, TimeProvider timeProvider) =>
+        Props.Create(() => new SessionLogActor(sessionId, logDirectory, timeProvider));
 
-    public SessionLogActor(SessionId sessionId, string logDirectory)
+    public SessionLogActor(SessionId sessionId, string logDirectory, TimeProvider timeProvider)
     {
         _sessionId = sessionId;
         _logDirectory = logDirectory;
+        _timeProvider = timeProvider;
 
         Receive<SendUserMessage>(OnUserMessage);
         Receive<SessionOutput>(OnOutput);
@@ -34,11 +36,12 @@ public sealed class SessionLogActor : ReceiveActor
     {
         try
         {
+            var now = _timeProvider.GetUtcNow();
             var sanitized = SessionDirectoryHelper.SanitizeSessionId(_sessionId.Value);
-            var logPath = Path.Combine(_logDirectory, $"{sanitized}.log");
+            var logPath = Path.Combine(_logDirectory, $"{now:yyyyMMdd-HHmmss}_{sanitized}.log");
             Directory.CreateDirectory(_logDirectory);
             _writer = new StreamWriter(logPath, append: true) { AutoFlush = true };
-            _writer.WriteLine($"[{DateTimeOffset.UtcNow:o}] Session log started: {_sessionId.Value}");
+            _writer.WriteLine($"[{now:o}] Session log started: {_sessionId.Value}");
         }
         catch (Exception ex)
         {
@@ -67,7 +70,7 @@ public sealed class SessionLogActor : ReceiveActor
             var mediaNote = msg.MediaReferences.Count > 0
                 ? $" (+{msg.MediaReferences.Count} media)"
                 : string.Empty;
-            _writer.WriteLine($"[{DateTimeOffset.UtcNow:o}] User: {Truncate(msg.Content, 200)}{mediaNote}");
+            _writer.WriteLine($"[{_timeProvider.GetUtcNow():o}] User: {Truncate(msg.Content, 1000)}{mediaNote}");
         }
         catch (Exception ex)
         {
@@ -83,9 +86,11 @@ public sealed class SessionLogActor : ReceiveActor
         {
             var line = output switch
             {
-                TextOutput text => $"Assistant: {Truncate(text.Text, 200)}",
-                ToolCallOutput toolCall => $"Tool call: {toolCall.ToolName} (call={toolCall.CallId})",
-                ToolResultOutput toolResult => $"Tool result: {toolResult.ToolName} (call={toolResult.CallId}) → {Truncate(toolResult.Result, 200)}",
+                TextOutput text => $"Assistant: {Truncate(text.Text, 1000)}",
+                ToolCallOutput toolCall => FormatToolCall(toolCall),
+                ToolResultOutput toolResult => $"Tool result: {toolResult.ToolName} (call={toolResult.CallId}) → {Truncate(toolResult.Result, 1000)}",
+                ThinkingOutput thinking => $"Thinking: {Truncate(thinking.Text, 1000)}",
+                UsageOutput usage => $"Usage: in={usage.InputTokens} out={usage.OutputTokens} cached={usage.CachedInputTokens} reasoning={usage.ReasoningTokens} context={usage.UsagePercent:P0}",
                 TurnCompleted tc => $"Turn {tc.TurnNumber} completed",
                 SessionTitleOutput title => $"Title set: {title.Title}",
                 CompactionOutput compaction =>
@@ -98,13 +103,21 @@ public sealed class SessionLogActor : ReceiveActor
 
             if (line is not null)
             {
-                _writer.WriteLine($"[{DateTimeOffset.UtcNow:o}] {line}");
+                _writer.WriteLine($"[{_timeProvider.GetUtcNow():o}] {line}");
             }
         }
         catch (Exception ex)
         {
             _log.Debug(ex, "Failed to write session log entry for {SessionId}", _sessionId.Value);
         }
+    }
+
+    private static string FormatToolCall(ToolCallOutput toolCall)
+    {
+        var args = toolCall.ArgumentsJson is not null
+            ? $" args={Truncate(toolCall.ArgumentsJson, 1000)}"
+            : string.Empty;
+        return $"Tool call: {toolCall.ToolName} (call={toolCall.CallId}){args}";
     }
 
     private static string Truncate(string text, int maxLength) =>
