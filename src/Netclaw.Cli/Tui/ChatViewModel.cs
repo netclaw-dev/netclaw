@@ -17,7 +17,7 @@ public partial class ChatViewModel : ReactiveViewModel
     private readonly DaemonClient _daemonClient;
     private readonly TimeProvider _timeProvider;
     private readonly SessionConfig _sessionConfig;
-    private readonly string? _resumeSessionId;
+    private string? _resumeSessionId;
 
     private readonly Subject<SessionOutput> _outputSubject = new();
     private readonly Queue<string> _pendingMessages = new();
@@ -132,7 +132,7 @@ public partial class ChatViewModel : ReactiveViewModel
 
         try
         {
-            await _daemonClient.EnsureSessionAsync("tui");
+            await _daemonClient.EnsureSessionAsync(DaemonClient.TuiChannelType);
 
             await _daemonClient.SendAsync(new ChannelInput
             {
@@ -203,9 +203,14 @@ public partial class ChatViewModel : ReactiveViewModel
 
     private async Task EnsureSessionAndFlushAsync()
     {
-        var sessionId = _resumeSessionId is not null
-            ? await _daemonClient.ResumeSessionAsync(_resumeSessionId)
-            : await _daemonClient.EnsureSessionAsync("tui");
+        // On the first call, use ResumeSessionAsync if a resume ID was provided.
+        // After that, DaemonClient has the session ID cached, so use EnsureSessionAsync
+        // to avoid redundant resume calls on reconnect.
+        var resumeId = _resumeSessionId;
+        _resumeSessionId = null;
+        var sessionId = resumeId is not null
+            ? await _daemonClient.ResumeSessionAsync(resumeId)
+            : await _daemonClient.EnsureSessionAsync(DaemonClient.TuiChannelType);
         SessionIdDisplay.Value = sessionId;
         _sessionReady = true;
         IsInputEnabled.Value = true;

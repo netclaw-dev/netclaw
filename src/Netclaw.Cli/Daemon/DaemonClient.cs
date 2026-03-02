@@ -14,6 +14,8 @@ namespace Netclaw.Cli.Daemon;
 /// </summary>
 public sealed class DaemonClient : IAsyncDisposable
 {
+    public const string TuiChannelType = "tui";
+
     private static readonly TimeSpan[] ReconnectDelays =
     [
         TimeSpan.Zero,
@@ -214,9 +216,9 @@ public sealed class DaemonClient : IAsyncDisposable
         string sessionId,
         CancellationToken cancellationToken = default)
     {
-        _channelType = "tui";
+        _channelType = TuiChannelType;
         _sessionId = sessionId;
-        return await EnsureSessionInternalAsync("tui", cancellationToken);
+        return await EnsureSessionInternalAsync(TuiChannelType, cancellationToken);
     }
 
     public async Task SendAsync(ChannelInput input, CancellationToken cancellationToken = default)

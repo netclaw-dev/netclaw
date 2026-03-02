@@ -14,11 +14,6 @@ namespace Netclaw.Cli.Tui;
 /// </summary>
 public sealed class SessionsPage : ReactivePage<SessionsViewModel>
 {
-    protected override void OnBound()
-    {
-        base.OnBound();
-    }
-
     public override ILayoutNode BuildLayout()
     {
         return Observable.CombineLatest(
