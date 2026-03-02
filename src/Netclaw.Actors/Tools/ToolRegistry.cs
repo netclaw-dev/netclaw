@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.RegularExpressions;
 using Microsoft.Extensions.AI;
 using Netclaw.Tools;
 
@@ -66,8 +67,10 @@ public sealed class ToolRegistry
     /// </summary>
     public IReadOnlyList<INetclawTool> SearchTools(string query, string? serverFilter, int maxResults)
     {
-        var queryLower = query.ToLowerInvariant();
-        var queryParts = queryLower.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        var queryParts = TokenizeQuery(query);
+
+        if (queryParts.Count == 0)
+            return [];
 
         return _tools
             .Where(t =>
@@ -91,6 +94,36 @@ public sealed class ToolRegistry
             .Take(maxResults)
             .Select(t => t.Tool)
             .ToList();
+    }
+
+    /// <summary>
+    /// Returns fuzzy suggestions when direct keyword matching returns no tools.
+    /// </summary>
+    public IReadOnlyList<INetclawTool> SuggestTools(string query, string? serverFilter, int maxResults)
+    {
+        var normalizedQuery = NormalizeSearchText(query);
+        if (string.IsNullOrWhiteSpace(normalizedQuery))
+            return [];
+
+        var candidates = _tools
+            .Where(t => PassesServerFilter(t.Tool, serverFilter))
+            .Select(t => t.Tool)
+            .ToList();
+
+        var suggestions = candidates
+            .Select(tool => new
+            {
+                Tool = tool,
+                Score = ComputeSuggestionScore(normalizedQuery, tool)
+            })
+            .Where(x => x.Score >= 0.40)
+            .OrderByDescending(x => x.Score)
+            .ThenBy(x => x.Tool.Name, StringComparer.Ordinal)
+            .Take(maxResults)
+            .Select(x => x.Tool)
+            .ToList();
+
+        return suggestions;
     }
 
     /// <summary>
@@ -130,9 +163,109 @@ public sealed class ToolRegistry
                 sb.AppendLine($"{group.Key}: {string.Join(", ", names)}");
             }
             sb.AppendLine("→ REQUIRED: call search_tools(\"query\") first to load MCP tools, then call them");
+            sb.AppendLine("→ Use exact parameter names from each tool schema (MCP tools usually use lowercase/camelCase)");
+
+            var hasBrowserTools = mcpTools.Any(t =>
+                t.Tool.Name.Contains("/browser_", StringComparison.OrdinalIgnoreCase)
+                || t.Tool.Name.Contains("browser_", StringComparison.OrdinalIgnoreCase));
+
+            if (hasBrowserTools)
+            {
+                sb.AppendLine("→ For interactive web tasks (click/type/forms), use browser MCP tools; do not rely on web_fetch/file_read/shell_execute");
+                sb.AppendLine("→ Browser workflow: search_tools(\"browser ...\") -> browser_navigate(url) -> browser_snapshot() -> browser_click/type/fill_form");
+            }
         }
 
         return sb.ToString();
+    }
+
+    private static IReadOnlyList<string> TokenizeQuery(string query)
+    {
+        var normalized = NormalizeSearchText(query);
+        if (string.IsNullOrWhiteSpace(normalized))
+            return [];
+
+        return normalized
+            .Split(' ', StringSplitOptions.RemoveEmptyEntries)
+            .ToList();
+    }
+
+    private static bool PassesServerFilter(INetclawTool tool, string? serverFilter)
+    {
+        if (serverFilter is null)
+            return true;
+
+        if (tool is not McpToolAdapter mcp)
+            return false;
+
+        return string.Equals(mcp.ServerName, serverFilter, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string NormalizeSearchText(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return string.Empty;
+
+        var value = text.Trim().ToLowerInvariant();
+        value = value.Replace("mcp:", string.Empty, StringComparison.OrdinalIgnoreCase);
+        value = Regex.Replace(value, "[^a-z0-9_]+", " ");
+        return Regex.Replace(value, "\\s+", " ").Trim();
+    }
+
+    private static double Similarity(string source, string target)
+    {
+        if (source.Length == 0 || target.Length == 0)
+            return 0;
+
+        if (string.Equals(source, target, StringComparison.Ordinal))
+            return 1.0;
+
+        var distance = LevenshteinDistance(source, target);
+        var maxLen = Math.Max(source.Length, target.Length);
+        return 1.0 - (double)distance / maxLen;
+    }
+
+    private static double ComputeSuggestionScore(string normalizedQuery, INetclawTool tool)
+    {
+        var fullName = NormalizeSearchText(tool.Name);
+
+        var shortName = fullName;
+        var slashIndex = tool.Name.LastIndexOf('/');
+        if (slashIndex >= 0 && slashIndex + 1 < tool.Name.Length)
+        {
+            shortName = NormalizeSearchText(tool.Name[(slashIndex + 1)..]);
+        }
+
+        var description = NormalizeSearchText(tool.Description);
+
+        return Math.Max(
+            Similarity(normalizedQuery, fullName),
+            Math.Max(
+                Similarity(normalizedQuery, shortName),
+                Similarity(normalizedQuery, description)));
+    }
+
+    private static int LevenshteinDistance(string source, string target)
+    {
+        var rows = source.Length + 1;
+        var cols = target.Length + 1;
+        var d = new int[rows, cols];
+
+        for (var i = 0; i < rows; i++) d[i, 0] = i;
+        for (var j = 0; j < cols; j++) d[0, j] = j;
+
+        for (var i = 1; i < rows; i++)
+        {
+            for (var j = 1; j < cols; j++)
+            {
+                var cost = source[i - 1] == target[j - 1] ? 0 : 1;
+                d[i, j] = Math.Min(
+                    Math.Min(d[i - 1, j] + 1, d[i, j - 1] + 1),
+                    d[i - 1, j - 1] + cost);
+            }
+        }
+
+        return d[rows - 1, cols - 1];
     }
 
     /// <summary>

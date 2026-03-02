@@ -9,6 +9,7 @@ using Netclaw.Configuration;
 using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Sessions;
+using Netclaw.Actors.Tools;
 using Xunit;
 using Xunit.Abstractions;
 
@@ -23,6 +24,7 @@ namespace Netclaw.Actors.Tests.Sessions;
 public class LlmSessionIntegrationTests : TestKit
 {
     private readonly FakeChatClient _fakeChatClient = new();
+    private readonly FakeToolExecutor _fakeToolExecutor = new();
 
     public LlmSessionIntegrationTests(ITestOutputHelper output) : base(output: output)
     {
@@ -36,10 +38,22 @@ public class LlmSessionIntegrationTests : TestKit
             ModelId = "fake-model",
             ContextWindowTokens = 128_000,
             SnapshotInterval = 5,
-            TitleGenerationInterval = 0
+            TitleGenerationInterval = 0,
+            DiscoveredToolRetentionTurns = 3,
+            DiscoveredToolMaxCount = 12
         });
         services.AddSingleton<ISystemPromptProvider>(new StaticSystemPromptProvider(
             "You are a test assistant."));
+
+        var registry = new ToolRegistry();
+        registry.Register(new McpToolAdapter(
+            AIFunctionFactory.Create((string url) => "ok", "navigate_page", "Navigate to URL"),
+            "browser_chrome_devtools",
+            "navigate_page"));
+        registry.Register(new SearchToolsTool(registry));
+
+        services.AddSingleton(registry);
+        services.AddSingleton<IToolExecutor>(_fakeToolExecutor);
         services.AddSingleton<IModelCapabilityResolver>(new FakeCapabilityResolver());
     }
 
@@ -249,17 +263,73 @@ public class LlmSessionIntegrationTests : TestKit
         }, TimeSpan.FromSeconds(3));
 
         // First turn output
-        subscriber.ExpectMsg<TextOutput>(TimeSpan.FromSeconds(3));
-        subscriber.ExpectMsg<TurnCompleted>(TimeSpan.FromSeconds(3));
+        subscriber.ExpectMsg<TextOutput>(TimeSpan.FromSeconds(6));
+        subscriber.ExpectMsg<TurnCompleted>(TimeSpan.FromSeconds(6));
 
         // Second turn output (batched follow-up)
-        subscriber.ExpectMsg<TextOutput>(TimeSpan.FromSeconds(3));
-        subscriber.ExpectMsg<TurnCompleted>(TimeSpan.FromSeconds(3));
+        subscriber.ExpectMsg<TextOutput>(TimeSpan.FromSeconds(6));
+        subscriber.ExpectMsg<TurnCompleted>(TimeSpan.FromSeconds(6));
 
         // Only two LLM calls total
         Assert.Equal(2, _fakeChatClient.CallCount);
 
         subscriber.ExpectNoMsg(TimeSpan.FromMilliseconds(300));
+    }
+
+    [Fact]
+    public async Task Discovered_tools_are_retained_then_expire_after_lease_window()
+    {
+        _fakeChatClient.ToolCallsOnFirstCall =
+        [
+            new FunctionCallContent("call-search", "search_tools",
+                new Dictionary<string, object?> { ["Query"] = "browser_chrome_devtools" })
+        ];
+
+        _fakeToolExecutor.Results["search_tools"] =
+            "Found 1 tool(s):\n\n"
+            + "  browser_chrome_devtools/navigate_page — Navigate to URL (params: url)\n\n"
+            + "Call any tool above by its full name. Tools are now loaded and available.";
+
+        var sessionId = new SessionId("channel-discovery/thread-retention");
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("discovery-retention-sub");
+
+        await sessionManager.Ask<SessionJoined>(new JoinSession
+        {
+            SessionId = sessionId,
+            Subscriber = subscriber,
+            Filter = OutputFilter.Full
+        }, TimeSpan.FromSeconds(3));
+        subscriber.ExpectMsg<SessionJoined>();
+
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Find browser tools"
+        }, TimeSpan.FromSeconds(3));
+
+        subscriber.ExpectMsg<ToolCallOutput>(TimeSpan.FromSeconds(3));
+        subscriber.ExpectMsg<TextOutput>(TimeSpan.FromSeconds(6));
+        subscriber.ExpectMsg<TurnCompleted>(TimeSpan.FromSeconds(6));
+
+        for (var i = 0; i < 4; i++)
+        {
+            await sessionManager.Ask<CommandAck>(new SendUserMessage
+            {
+                SessionId = sessionId,
+                Content = $"Follow-up turn {i + 1}"
+            }, TimeSpan.FromSeconds(3));
+
+            subscriber.ExpectMsg<TextOutput>(TimeSpan.FromSeconds(6));
+            subscriber.ExpectMsg<TurnCompleted>(TimeSpan.FromSeconds(6));
+        }
+
+        Assert.True(_fakeChatClient.ReceivedToolNames.Count >= 6);
+
+        Assert.Contains("browser_chrome_devtools/navigate_page", _fakeChatClient.ReceivedToolNames[2]);
+        Assert.Contains("browser_chrome_devtools/navigate_page", _fakeChatClient.ReceivedToolNames[3]);
+        Assert.Contains("browser_chrome_devtools/navigate_page", _fakeChatClient.ReceivedToolNames[4]);
+        Assert.DoesNotContain("browser_chrome_devtools/navigate_page", _fakeChatClient.ReceivedToolNames[5]);
     }
 
     [Fact]
@@ -339,6 +409,9 @@ internal sealed class FakeChatClient : IChatClient
 
     public int CallCount => _callCount;
 
+    public List<IReadOnlyList<ChatMessage>> ReceivedMessages { get; } = [];
+    public List<IReadOnlyList<string>> ReceivedToolNames { get; } = [];
+
     public TimeSpan Delay { get; set; } = TimeSpan.Zero;
 
     /// <summary>
@@ -372,6 +445,11 @@ internal sealed class FakeChatClient : IChatClient
         ChatOptions? options = null,
         CancellationToken cancellationToken = default)
     {
+        ReceivedMessages.Add(messages.ToList());
+        ReceivedToolNames.Add(options?.Tools?
+            .Select(t => t is AIFunction f ? f.Name : t.GetType().Name)
+            .ToList()
+            ?? []);
         Interlocked.Increment(ref _callCount);
 
         if (Delay > TimeSpan.Zero)

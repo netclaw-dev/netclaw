@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Netclaw.Cli.Mcp;
 using Netclaw.Cli.Provider;
 using Netclaw.Cli.Tui;
 using Netclaw.Configuration;
@@ -54,6 +55,9 @@ public sealed class InitWizardViewModelTests : IDisposable
 
         vm.GoNext();
         Assert.Equal(WizardStep.Search, vm.CurrentStep.Value);
+
+        vm.GoNext();
+        Assert.Equal(WizardStep.BrowserAutomation, vm.CurrentStep.Value);
 
         vm.GoNext();
         Assert.Equal(WizardStep.Exposure, vm.CurrentStep.Value);
@@ -348,25 +352,25 @@ public sealed class InitWizardViewModelTests : IDisposable
     }
 
     [Fact]
-    public void TotalSteps_IsSeven()
+    public void TotalSteps_IsEight()
     {
-        Assert.Equal(7, InitWizardViewModel.TotalSteps);
+        Assert.Equal(8, InitWizardViewModel.TotalSteps);
     }
 
     [Fact]
-    public void ActiveStepCount_IsSix_WhenNoChatServices()
+    public void ActiveStepCount_IsSeven_WhenNoChatServices()
     {
         using var vm = CreateViewModel();
         vm.SlackEnabled = false;
-        Assert.Equal(6, vm.ActiveStepCount);
+        Assert.Equal(7, vm.ActiveStepCount);
     }
 
     [Fact]
-    public void ActiveStepCount_IsSeven_WhenChatServicesEnabled()
+    public void ActiveStepCount_IsEight_WhenChatServicesEnabled()
     {
         using var vm = CreateViewModel();
         vm.SlackEnabled = true;
-        Assert.Equal(7, vm.ActiveStepCount);
+        Assert.Equal(8, vm.ActiveStepCount);
     }
 
     [Fact]
@@ -376,13 +380,15 @@ public sealed class InitWizardViewModelTests : IDisposable
         vm.SlackEnabled = false;
 
         // Provider = 1, ChatServices = 2, Acl would be 3 but skipped
-        // Search = 3 (adjusted from 4), Exposure = 4 (adjusted from 5), Identity = 5, HealthCheck = 6
+        // Search = 3 (adjusted from 4), BrowserAutomation = 4 (adjusted from 5),
+        // Exposure = 5 (adjusted from 6), Identity = 6, HealthCheck = 7
         Assert.Equal(1, vm.GetDisplayStepNumber(WizardStep.Provider));
         Assert.Equal(2, vm.GetDisplayStepNumber(WizardStep.ChatServices));
         Assert.Equal(3, vm.GetDisplayStepNumber(WizardStep.Search));
-        Assert.Equal(4, vm.GetDisplayStepNumber(WizardStep.Exposure));
-        Assert.Equal(5, vm.GetDisplayStepNumber(WizardStep.Identity));
-        Assert.Equal(6, vm.GetDisplayStepNumber(WizardStep.HealthCheck));
+        Assert.Equal(4, vm.GetDisplayStepNumber(WizardStep.BrowserAutomation));
+        Assert.Equal(5, vm.GetDisplayStepNumber(WizardStep.Exposure));
+        Assert.Equal(6, vm.GetDisplayStepNumber(WizardStep.Identity));
+        Assert.Equal(7, vm.GetDisplayStepNumber(WizardStep.HealthCheck));
     }
 
     [Fact]
@@ -653,6 +659,103 @@ public sealed class InitWizardViewModelTests : IDisposable
     }
 
     [Fact]
+    public async Task HealthCheck_BrowserAutomationChrome_WritesMcpProfile()
+    {
+        var browserBootstrapper = new FakeBrowserAutomationBootstrapper
+        {
+            NextResult = new BrowserAutomationBootstrapResult(true, false, "ready")
+        };
+        using var vm = CreateViewModel(browserBootstrapper);
+
+        vm.SelectedProviderType = "ollama";
+        vm.SlackEnabled = false;
+        vm.BrowserAutomationEnabled = true;
+        vm.SelectedBrowserAutomationBackend = BrowserAutomationMcpProfiles.ChromeDevToolsBackend;
+
+        vm.CurrentStep.Value = WizardStep.HealthCheck;
+        vm.GoNext();
+        await vm.HealthCheckCompletion!.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.True(vm.IsComplete.Value);
+
+        var config = JsonDocument.Parse(File.ReadAllText(_paths.NetclawConfigPath));
+        Assert.True(config.RootElement.TryGetProperty("McpServers", out var mcpServers));
+        Assert.True(mcpServers.TryGetProperty("browser_chrome_devtools", out var browserEntry));
+        Assert.Equal("stdio", browserEntry.GetProperty("Transport").GetString());
+        Assert.Equal("npx", browserEntry.GetProperty("Command").GetString());
+
+        var args = browserEntry.GetProperty("Arguments");
+        Assert.Contains(args.EnumerateArray().Select(a => a.GetString()), a => a == "chrome-devtools-mcp@latest");
+        Assert.DoesNotContain(args.EnumerateArray().Select(a => a.GetString()), a => a == "--slim");
+        Assert.Contains(args.EnumerateArray().Select(a => a.GetString()), a => a == "--headless=true");
+    }
+
+    [Fact]
+    public async Task HealthCheck_BrowserAutomationPlaywright_WritesMcpProfileWithContextSafeFlags()
+    {
+        var browserBootstrapper = new FakeBrowserAutomationBootstrapper
+        {
+            NextResult = new BrowserAutomationBootstrapResult(true, false, "ready")
+        };
+        using var vm = CreateViewModel(browserBootstrapper);
+
+        vm.SelectedProviderType = "ollama";
+        vm.SlackEnabled = false;
+        vm.BrowserAutomationEnabled = true;
+        vm.SelectedBrowserAutomationBackend = BrowserAutomationMcpProfiles.PlaywrightBackend;
+
+        vm.CurrentStep.Value = WizardStep.HealthCheck;
+        vm.GoNext();
+        await vm.HealthCheckCompletion!.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.True(vm.IsComplete.Value);
+
+        var config = JsonDocument.Parse(File.ReadAllText(_paths.NetclawConfigPath));
+        var args = config.RootElement
+            .GetProperty("McpServers")
+            .GetProperty("browser_playwright")
+            .GetProperty("Arguments")
+            .EnumerateArray()
+            .Select(a => a.GetString())
+            .ToArray();
+
+        Assert.Contains("@playwright/mcp@latest", args);
+        Assert.Contains("--image-responses", args);
+        Assert.Contains("omit", args);
+        Assert.Contains("--snapshot-mode", args);
+        Assert.Contains("none", args);
+    }
+
+    [Fact]
+    public async Task HealthCheck_BrowserAutomation_NodeMissing_PausesAndRequestsRetry()
+    {
+        var browserBootstrapper = new FakeBrowserAutomationBootstrapper
+        {
+            NextResult = new BrowserAutomationBootstrapResult(
+                false,
+                true,
+                "Node.js is not installed.",
+                "brew install node@20")
+        };
+        using var vm = CreateViewModel(browserBootstrapper);
+
+        vm.SelectedProviderType = "ollama";
+        vm.SlackEnabled = false;
+        vm.BrowserAutomationEnabled = true;
+
+        vm.CurrentStep.Value = WizardStep.HealthCheck;
+        vm.GoNext();
+        await vm.HealthCheckCompletion!.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.False(vm.IsComplete.Value);
+        Assert.False(vm.IsHealthCheckRunning.Value);
+        Assert.Contains("press Enter to retry", vm.StatusMessage.Value, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(1, browserBootstrapper.CallCount);
+        Assert.False(File.Exists(_paths.NetclawConfigPath) &&
+                     File.ReadAllText(_paths.NetclawConfigPath).Contains("McpServers", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task HealthCheck_WritesDmConfigToNetclawJson()
     {
         using var vm = CreateViewModel();
@@ -733,8 +836,22 @@ public sealed class InitWizardViewModelTests : IDisposable
         Assert.Contains("Environment Capabilities", tooling, StringComparison.Ordinal);
     }
 
-    private InitWizardViewModel CreateViewModel()
+    private InitWizardViewModel CreateViewModel(IBrowserAutomationBootstrapper? browserBootstrapper = null)
     {
-        return new InitWizardViewModel(_paths, _registry, _fakeProbe, _fakeSlackProbe);
+        return new InitWizardViewModel(_paths, _registry, _fakeProbe, _fakeSlackProbe, browserBootstrapper);
+    }
+}
+
+internal sealed class FakeBrowserAutomationBootstrapper : IBrowserAutomationBootstrapper
+{
+    public int CallCount { get; private set; }
+
+    public BrowserAutomationBootstrapResult NextResult { get; set; } =
+        new(true, false, "ready");
+
+    public Task<BrowserAutomationBootstrapResult> EnsureReadyAsync(string backend, CancellationToken ct = default)
+    {
+        CallCount++;
+        return Task.FromResult(NextResult);
     }
 }

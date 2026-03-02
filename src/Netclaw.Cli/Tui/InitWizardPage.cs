@@ -1,5 +1,6 @@
 using Netclaw.Configuration;
 using Netclaw.Configuration.Providers;
+using Netclaw.Cli.Mcp;
 using R3;
 using Termina.Extensions;
 using Termina.Input;
@@ -45,10 +46,15 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
     private TextInputNode? _searxngEndpointInput;
     private int _searchSubStep; // 0=backend selection, 1=credentials (brave key or searxng endpoint)
 
-    // Step 5: Exposure
+    // Step 5: Browser automation
+    private SelectionListNode<string>? _browserAutomationEnabledList;
+    private SelectionListNode<string>? _browserAutomationBackendList;
+    private int _browserAutomationSubStep; // 0=enable/disable, 1=backend selection
+
+    // Step 6: Exposure
     private SelectionListNode<string>? _exposureList;
 
-    // Step 6: Identity
+    // Step 7: Identity
     private TextInputNode? _agentNameInput;
     private SelectionListNode<string>? _commStyleList;
     private TextInputNode? _userNameInput;
@@ -131,6 +137,7 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
                     WizardStep.ChatServices => "Chat Services",
                     WizardStep.Acl => "Access Control",
                     WizardStep.Search => "Web Search",
+                    WizardStep.BrowserAutomation => "Browser Automation",
                     WizardStep.Exposure => "Exposure Mode",
                     WizardStep.Identity => "Identity",
                     WizardStep.HealthCheck => "Health Check",
@@ -180,6 +187,7 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
                 WizardStep.ChatServices => BuildChatServicesStep(),
                 WizardStep.Acl => BuildAclStep(),
                 WizardStep.Search => BuildSearchStep(),
+                WizardStep.BrowserAutomation => BuildBrowserAutomationStep(),
                 WizardStep.Exposure => BuildExposureStep(),
                 WizardStep.Identity => BuildIdentityStep(),
                 _ => Layouts.Empty()
@@ -224,6 +232,10 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
                     "  Get a free API key at https://brave.com/search/api/. Stored in secrets.json.",
                 WizardStep.Search when _searchSubStep == 1 && ViewModel.SelectedSearchBackend == "searxng" =>
                     "  Enter the base URL of your SearXNG instance. JSON format must be enabled in settings.yml.",
+                WizardStep.BrowserAutomation when _browserAutomationSubStep == 0 =>
+                    "  Optional. Enable this to let the agent delegate browser steering via MCP tools.",
+                WizardStep.BrowserAutomation when _browserAutomationSubStep == 1 =>
+                    "  Chrome DevTools MCP enables full browser automation. Playwright MCP supports broader cross-browser workflows with stricter output flags.",
                 WizardStep.Exposure =>
                     "  Local-only is recommended for homelab use.",
                 WizardStep.Identity when _identitySubStep == 0 =>
@@ -909,6 +921,84 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
                 .Height(3));
     }
 
+    private ILayoutNode BuildBrowserAutomationStep()
+    {
+        return _browserAutomationSubStep switch
+        {
+            0 => BuildBrowserAutomationEnableSubStep(),
+            1 => BuildBrowserAutomationBackendSubStep(),
+            _ => Layouts.Empty()
+        };
+    }
+
+    private ILayoutNode BuildBrowserAutomationEnableSubStep()
+    {
+        _browserAutomationEnabledList = Layouts.SelectionList(
+                "No — skip browser automation for now",
+                "Yes — configure browser MCP tools")
+            .WithMode(SelectionMode.Single)
+            .WithHighlightColors(Color.Black, Color.Cyan);
+
+        _browserAutomationEnabledList.OnFocused();
+        _lastFocusedList = _browserAutomationEnabledList;
+
+        _browserAutomationEnabledList.SelectionConfirmed
+            .Subscribe(selected =>
+            {
+                if (selected.Count == 0)
+                    return;
+
+                if (selected[0].StartsWith("Yes", StringComparison.Ordinal))
+                {
+                    ViewModel.BrowserAutomationEnabled = true;
+                    SetBrowserAutomationSubStep(1);
+                }
+                else
+                {
+                    ViewModel.BrowserAutomationEnabled = false;
+                    _browserAutomationSubStep = 0;
+                    ViewModel.GoNext();
+                }
+            })
+            .DisposeWith(_stepSubs);
+
+        return Layouts.Vertical()
+            .WithChild(new TextNode("  Enable browser automation MCP tools?").WithForeground(Color.White))
+            .WithChild(_browserAutomationEnabledList);
+    }
+
+    private ILayoutNode BuildBrowserAutomationBackendSubStep()
+    {
+        _browserAutomationBackendList = Layouts.SelectionList(
+                "Chrome DevTools MCP (recommended)",
+                "Playwright MCP")
+            .WithMode(SelectionMode.Single)
+            .WithHighlightColors(Color.Black, Color.Cyan);
+
+        _browserAutomationBackendList.OnFocused();
+        _lastFocusedList = _browserAutomationBackendList;
+
+        _browserAutomationBackendList.SelectionConfirmed
+            .Subscribe(selected =>
+            {
+                if (selected.Count == 0)
+                    return;
+
+                ViewModel.SelectedBrowserAutomationBackend =
+                    selected[0].StartsWith("Playwright", StringComparison.Ordinal)
+                        ? BrowserAutomationMcpProfiles.PlaywrightBackend
+                        : BrowserAutomationMcpProfiles.ChromeDevToolsBackend;
+
+                _browserAutomationSubStep = 0;
+                ViewModel.GoNext();
+            })
+            .DisposeWith(_stepSubs);
+
+        return Layouts.Vertical()
+            .WithChild(new TextNode("  Choose browser MCP backend:").WithForeground(Color.White))
+            .WithChild(_browserAutomationBackendList);
+    }
+
     private ILayoutNode BuildExposureStep()
     {
         _exposureList = Layouts.SelectionList(
@@ -1169,6 +1259,12 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             return true;
         }
 
+        if (ViewModel.CurrentStep.Value == WizardStep.BrowserAutomation && _browserAutomationSubStep > 0)
+        {
+            SetBrowserAutomationSubStep(_browserAutomationSubStep - 1);
+            return true;
+        }
+
         if (ViewModel.CurrentStep.Value == WizardStep.ChatServices && _chatServicesSubStep > 0)
         {
             SetChatServicesSubStep(_chatServicesSubStep - 1);
@@ -1262,6 +1358,8 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             WizardStep.ChatServices when _chatServicesSubStep == 0 => _slackEnabledList,
             WizardStep.ChatServices when _chatServicesSubStep == 4 => _slackDmEnabledList,
             WizardStep.Search when _searchSubStep == 0 => _searchBackendList,
+            WizardStep.BrowserAutomation when _browserAutomationSubStep == 0 => _browserAutomationEnabledList,
+            WizardStep.BrowserAutomation when _browserAutomationSubStep == 1 => _browserAutomationBackendList,
             WizardStep.Exposure => _exposureList,
             WizardStep.Identity when _identitySubStep == 1 => _commStyleList,
             _ => null
@@ -1321,6 +1419,14 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
         ViewModel.RequestRedraw();
     }
 
+    private void SetBrowserAutomationSubStep(int step)
+    {
+        _browserAutomationSubStep = step;
+        _stepContentNode?.Invalidate();
+        _helpTextNode?.Invalidate();
+        ViewModel.RequestRedraw();
+    }
+
     private void SetIdentitySubStep(int step)
     {
         _identitySubStep = step;
@@ -1342,6 +1448,8 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
                     _chatServicesSubStep = 0;
                 if (step == WizardStep.Search)
                     _searchSubStep = 0;
+                if (step == WizardStep.BrowserAutomation)
+                    _browserAutomationSubStep = 0;
                 if (step == WizardStep.Identity)
                     _identitySubStep = 0;
 

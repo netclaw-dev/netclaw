@@ -72,6 +72,47 @@ public sealed class LoggingChatClientTests
         Assert.Contains(logs, l => l.Contains("LLM streaming call completed"));
     }
 
+    [Fact]
+    public async Task LogsPromptSummaryInDebugMode()
+    {
+        var logs = new List<string>();
+        var logger = new CapturingLogger(logs);
+        var fake = new FakeChatClient();
+
+        var client = new LoggingChatClient(fake, logger);
+        await client.GetResponseAsync(
+            [
+                new ChatMessage(ChatRole.System, "sys"),
+                new ChatMessage(ChatRole.User, "hello")
+            ],
+            new ChatOptions
+            {
+                Tools =
+                [
+                    AIFunctionFactory.Create((string query) => query, "search_tools"),
+                    AIFunctionFactory.Create((string url) => url, "browser_playwright/browser_navigate")
+                ]
+            });
+
+        Assert.Contains(logs, l => l.Contains("LLM prompt summary"));
+        Assert.Contains(logs, l => l.Contains("promptSha256="));
+        Assert.Contains(logs, l => l.Contains("browserToolOptions=1"));
+    }
+
+    [Fact]
+    public async Task LogsPromptDumpWhenTraceEnabled()
+    {
+        var logs = new List<string>();
+        var logger = new CapturingLogger(logs);
+        var fake = new FakeChatClient();
+
+        var client = new LoggingChatClient(fake, logger);
+        await client.GetResponseAsync([new ChatMessage(ChatRole.User, "hello")]);
+
+        Assert.Contains(logs, l => l.Contains("LLM prompt dump:"));
+        Assert.Contains(logs, l => l.Contains("role=user"));
+    }
+
     /// <summary>
     /// Minimal logger that captures formatted messages for assertion.
     /// </summary>

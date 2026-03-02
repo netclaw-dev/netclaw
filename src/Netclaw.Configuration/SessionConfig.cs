@@ -53,6 +53,27 @@ public sealed record SessionConfig
     public int MaxToolIterationsPerTurn { get; init; } = 10;
 
     /// <summary>
+    /// Maximum number of characters from a single tool result that may be
+    /// inlined into conversation history. Oversized results are truncated to
+    /// protect the context window from verbose tool payloads (DOM dumps,
+    /// large JSON blobs, etc.).
+    /// </summary>
+    public int MaxInlineToolResultChars { get; init; } = 12_000;
+
+    /// <summary>
+    /// Number of future user turns that dynamically discovered MCP tools remain
+    /// available without re-running <c>search_tools</c>. Set to 0 to require
+    /// discovery on every user turn.
+    /// </summary>
+    public int DiscoveredToolRetentionTurns { get; init; } = 3;
+
+    /// <summary>
+    /// Maximum number of discovered MCP tools retained across turns.
+    /// Oldest discovered tools are evicted first when the cap is exceeded.
+    /// </summary>
+    public int DiscoveredToolMaxCount { get; init; } = 12;
+
+    /// <summary>
     /// Number of recent non-system messages to preserve verbatim after compaction
     /// summarization. These are appended after the summary message so the assistant
     /// has immediate conversational context. Counts raw messages (not turn pairs)

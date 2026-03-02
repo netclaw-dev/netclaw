@@ -82,4 +82,57 @@ public sealed class DaemonClientMappingTests
         Assert.Contains("Unknown output type", error.Message);
         Assert.Equal("signalr/test", error.SessionId.Value);
     }
+
+    [Fact]
+    public void FromDto_maps_session_joined_with_recent_messages()
+    {
+        var dto = new SessionOutputDto
+        {
+            Type = "session_joined",
+            SessionId = "signalr/test",
+            TimestampMs = 100,
+            Title = "Test Chat",
+            TurnCount = 3,
+            RecentMessages =
+            [
+                new ChatMessageDto { Role = "user", Content = "Hello" },
+                new ChatMessageDto { Role = "assistant", Content = "Hi there!" }
+            ]
+        };
+
+        var output = DaemonClient.FromDto(dto);
+
+        var joined = Assert.IsType<SessionJoined>(output);
+        Assert.Equal("signalr/test", joined.SessionId.Value);
+        Assert.Equal("Test Chat", joined.Title);
+        Assert.Equal(3, joined.TurnCount);
+        Assert.NotNull(joined.RecentMessages);
+        Assert.Equal(2, joined.RecentMessages.Count);
+        Assert.Equal("user", joined.RecentMessages[0].Role);
+        Assert.Equal("Hello", joined.RecentMessages[0].Content);
+        Assert.Equal("assistant", joined.RecentMessages[1].Role);
+        Assert.Equal("Hi there!", joined.RecentMessages[1].Content);
+    }
+
+    [Fact]
+    public void FromDto_maps_session_joined_without_recent_messages()
+    {
+        var dto = new SessionOutputDto
+        {
+            Type = "session_joined",
+            SessionId = "signalr/test",
+            TimestampMs = 100,
+            Title = null,
+            TurnCount = 0,
+            RecentMessages = null
+        };
+
+        var output = DaemonClient.FromDto(dto);
+
+        var joined = Assert.IsType<SessionJoined>(output);
+        Assert.Equal("signalr/test", joined.SessionId.Value);
+        Assert.Null(joined.Title);
+        Assert.Equal(0, joined.TurnCount);
+        Assert.Null(joined.RecentMessages);
+    }
 }

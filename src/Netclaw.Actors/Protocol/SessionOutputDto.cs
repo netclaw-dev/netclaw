@@ -1,6 +1,16 @@
 namespace Netclaw.Actors.Protocol;
 
 /// <summary>
+/// Lightweight DTO for a chat message carried on the wire (role + content only).
+/// Used to replay recent history when resuming a session.
+/// </summary>
+public sealed record ChatMessageDto
+{
+    public required string Role { get; init; }
+    public required string Content { get; init; }
+}
+
+/// <summary>
 /// Wire-safe DTO for session output. Flattens the discriminated union
 /// (<see cref="SessionOutput"/>) into a single serializable type for
 /// SignalR transport.
@@ -50,6 +60,7 @@ public sealed record SessionOutputDto
     // Session Joined
     public string? Title { get; init; }
     public int? TurnCount { get; init; }
+    public List<ChatMessageDto>? RecentMessages { get; init; }
 
     // File Output
     public string? FilePath { get; init; }

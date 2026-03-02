@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
@@ -49,6 +50,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor
     private readonly List<AITool> _availableTools = new();
     private readonly ToolRegistry? _fullRegistry;
     private int _baseToolCount; // count of always-loaded tools; dynamic tools appended after this
+    private readonly List<string> _discoveredToolOrder = new();
+    private readonly Dictionary<string, int> _discoveredToolLeases = new(StringComparer.Ordinal);
 
     // Last observed input token count from LLM response (for compaction trigger)
     private long _lastInputTokenCount;
@@ -100,7 +103,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor
         _log = Context.GetLogger().WithContext("SessionId", _sessionId.Value);
 
         // Load all non-MCP tools for initial LLM calls.
-        // MCP tools are loaded dynamically via search_tools meta-tool and reset each turn.
+        // MCP tools are loaded dynamically via search_tools and can be retained for a
+        // small number of future turns (configurable lease) to reduce rediscovery churn.
         _fullRegistry = toolRegistry;
         if (toolRegistry is not null)
         {
@@ -174,10 +178,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor
             _logActor?.Tell(cmd);
 
             _toolIterationCount = 0;
-
-            // Reset dynamically-loaded MCP tools — the LLM can re-discover via search_tools
-            if (_availableTools.Count > _baseToolCount)
-                _availableTools.RemoveRange(_baseToolCount, _availableTools.Count - _baseToolCount);
+            PrepareDiscoveredToolsForNewTurn();
 
             // Modality gate: strip unsupported media references
             var mediaRefs = cmd.MediaReferences;
@@ -700,7 +701,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor
         var auditLogger = _auditLogger;
         var tp = _timeProvider;
         var sessionDir = GetSessionDirectory();
-        _ = ExecuteToolsAsync(executor, toolCalls, sessionId, auditLogger, tp, sessionDir, self);
+        var maxInlineToolResultChars = _config.MaxInlineToolResultChars;
+        _ = ExecuteToolsAsync(executor, toolCalls, sessionId, auditLogger, tp, sessionDir, maxInlineToolResultChars, self);
     }
 
     private void HandleTextResponse(
@@ -803,7 +805,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor
             {
                 SessionId = _sessionId,
                 Title = _state.Title,
-                TurnCount = _state.TurnCount
+                TurnCount = _state.TurnCount,
+                RecentMessages = ExtractRecentMessages(_state.History)
             };
 
             cmd.Subscriber.Tell(joined);
@@ -875,6 +878,60 @@ public sealed class LlmSessionActor : ReceivePersistentActor
     /// Naive token estimation: total character count / 4.
     /// Includes the system prompt (if present) plus all compacted messages.
     /// </summary>
+    /// <summary>
+    /// Extracts the last N user/assistant text messages for session resume display.
+    /// Skips system prompts, tool messages, and assistant messages that are tool-call-only
+    /// (no visible text). Truncates long content to keep the DTO payload reasonable.
+    /// </summary>
+    private static IReadOnlyList<ChatMessageDto>? ExtractRecentMessages(
+        ImmutableList<SerializableChatMessage> history, int maxMessages = 20)
+    {
+        if (history.Count == 0)
+            return null;
+
+        const int maxContentLength = 2000;
+
+        var candidates = new List<ChatMessageDto>();
+        for (var i = 0; i < history.Count; i++)
+        {
+            var msg = history[i];
+
+            // Only include user and assistant messages
+            if (msg.Role is not (Protocol.ChatRole.User or Protocol.ChatRole.Assistant))
+                continue;
+
+            // Skip assistant messages that are tool-call-only (no visible text)
+            if (msg.Role == Protocol.ChatRole.Assistant
+                && string.IsNullOrWhiteSpace(msg.Content)
+                && msg.ToolCalls.Count > 0)
+                continue;
+
+            // Skip system nudges injected as user messages
+            if (msg.Role == Protocol.ChatRole.User
+                && msg.Content.StartsWith("[system:", StringComparison.Ordinal))
+                continue;
+
+            var content = msg.Content;
+            if (content.Length > maxContentLength)
+                content = string.Concat(content.AsSpan(0, maxContentLength - 3), "...");
+
+            candidates.Add(new ChatMessageDto
+            {
+                Role = msg.Role == Protocol.ChatRole.User ? "user" : "assistant",
+                Content = content
+            });
+        }
+
+        if (candidates.Count == 0)
+            return null;
+
+        // Take the last N messages
+        if (candidates.Count > maxMessages)
+            candidates = candidates.GetRange(candidates.Count - maxMessages, maxMessages);
+
+        return candidates;
+    }
+
     private static int EstimateTokens(
         List<SerializableChatMessage> messages,
         SerializableChatMessage? systemPrompt)
@@ -1102,12 +1159,20 @@ public sealed class LlmSessionActor : ReceivePersistentActor
         IToolAuditLogger? auditLogger,
         TimeProvider timeProvider,
         string sessionDir,
+        int maxInlineToolResultChars,
         IActorRef self)
     {
         try
         {
             // Execute all tool calls in parallel — each is independent
-            var tasks = toolCalls.Select(tc => ExecuteSingleToolAsync(executor, tc, sessionId, auditLogger, timeProvider, sessionDir));
+            var tasks = toolCalls.Select(tc => ExecuteSingleToolAsync(
+                executor,
+                tc,
+                sessionId,
+                auditLogger,
+                timeProvider,
+                sessionDir,
+                maxInlineToolResultChars));
             var results = await Task.WhenAll(tasks);
 
             var fileAttachments = results.SelectMany(r => r.FileAttachments).ToList();
@@ -1129,7 +1194,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor
         SessionId sessionId,
         IToolAuditLogger? auditLogger,
         TimeProvider timeProvider,
-        string sessionDir)
+        string sessionDir,
+        int maxInlineToolResultChars)
     {
         var sw = Stopwatch.StartNew();
         string resultText;
@@ -1165,6 +1231,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor
             });
         }
 
+        resultText = ClampToolResult(resultText, maxInlineToolResultChars);
+
         var message = new SerializableChatMessage
         {
             Role = Protocol.ChatRole.Tool,
@@ -1174,6 +1242,16 @@ public sealed class LlmSessionActor : ReceivePersistentActor
         };
 
         return new ToolCallResult(message, context.FileAttachments);
+    }
+
+    private static string ClampToolResult(string resultText, int maxInlineToolResultChars)
+    {
+        if (maxInlineToolResultChars <= 0 || resultText.Length <= maxInlineToolResultChars)
+            return resultText;
+
+        var omittedChars = resultText.Length - maxInlineToolResultChars;
+        return resultText[..maxInlineToolResultChars]
+               + $"\n[tool result truncated: omitted {omittedChars} chars to protect context window]";
     }
 
     /// <summary>
@@ -1199,15 +1277,113 @@ public sealed class LlmSessionActor : ReceivePersistentActor
             if (tool is null)
                 continue;
 
-            // Don't add duplicates
-            var aiTool = tool.ToAITool();
-            if (_availableTools.Any(existing =>
-                existing is AIFunction ef && aiTool is AIFunction nf && ef.Name == nf.Name))
+            RememberDiscoveredTool(toolName, tool);
+            AddAvailableToolIfMissing(toolName, tool.ToAITool());
+        }
+    }
+
+    private void PrepareDiscoveredToolsForNewTurn()
+    {
+        if (_fullRegistry is null)
+            return;
+
+        if (_config.DiscoveredToolRetentionTurns <= 0 || _config.DiscoveredToolMaxCount <= 0)
+        {
+            _discoveredToolLeases.Clear();
+            _discoveredToolOrder.Clear();
+            TrimAvailableToolsToBase();
+            return;
+        }
+
+        if (_discoveredToolLeases.Count == 0)
+        {
+            TrimAvailableToolsToBase();
+            return;
+        }
+
+        var expired = _discoveredToolLeases
+            .Where(x => x.Value <= 0)
+            .Select(x => x.Key)
+            .ToList();
+
+        if (expired.Count > 0)
+        {
+            foreach (var name in expired)
+            {
+                _discoveredToolLeases.Remove(name);
+            }
+
+            _discoveredToolOrder.RemoveAll(name => !_discoveredToolLeases.ContainsKey(name));
+        }
+
+        RebuildAvailableToolsFromDiscoveredCache();
+
+        // Lease countdown happens after this turn's tool set is prepared,
+        // so a lease value of N keeps tools available for N future turns.
+        foreach (var name in _discoveredToolLeases.Keys.ToList())
+        {
+            _discoveredToolLeases[name]--;
+        }
+    }
+
+    private void RememberDiscoveredTool(string toolName, INetclawTool tool)
+    {
+        if (tool is not McpToolAdapter)
+            return;
+
+        if (_config.DiscoveredToolRetentionTurns <= 0 || _config.DiscoveredToolMaxCount <= 0)
+            return;
+
+        var lease = Math.Max(1, _config.DiscoveredToolRetentionTurns);
+        _discoveredToolLeases[toolName] = lease;
+
+        if (!_discoveredToolOrder.Contains(toolName))
+        {
+            _discoveredToolOrder.Add(toolName);
+        }
+
+        while (_discoveredToolOrder.Count > _config.DiscoveredToolMaxCount)
+        {
+            var evicted = _discoveredToolOrder[0];
+            _discoveredToolOrder.RemoveAt(0);
+            _discoveredToolLeases.Remove(evicted);
+        }
+    }
+
+    private void RebuildAvailableToolsFromDiscoveredCache()
+    {
+        if (_fullRegistry is null)
+            return;
+
+        TrimAvailableToolsToBase();
+
+        foreach (var toolName in _discoveredToolOrder)
+        {
+            if (!_discoveredToolLeases.TryGetValue(toolName, out var lease) || lease <= 0)
                 continue;
 
-            _availableTools.Add(aiTool);
-            _log.Info("Dynamically loaded tool '{ToolName}' into session", toolName);
+            var tool = _fullRegistry.GetByName(toolName);
+            if (tool is null)
+                continue;
+
+            AddAvailableToolIfMissing(toolName, tool.ToAITool());
         }
+    }
+
+    private void TrimAvailableToolsToBase()
+    {
+        if (_availableTools.Count > _baseToolCount)
+            _availableTools.RemoveRange(_baseToolCount, _availableTools.Count - _baseToolCount);
+    }
+
+    private void AddAvailableToolIfMissing(string toolName, AITool aiTool)
+    {
+        if (_availableTools.Any(existing =>
+            existing is AIFunction ef && aiTool is AIFunction nf && ef.Name == nf.Name))
+            return;
+
+        _availableTools.Add(aiTool);
+        _log.Info("Dynamically loaded tool '{ToolName}' into session", toolName);
     }
 
     private void MaybeSnapshot()

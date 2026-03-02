@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Netclaw.Channels.Slack;
 using Netclaw.Cli.Daemon;
+using Netclaw.Cli.Mcp;
 using Netclaw.Configuration;
 using Netclaw.Configuration.Providers;
 using R3;
@@ -18,24 +19,26 @@ public enum WizardStep
     ChatServices = 2,
     Acl = 3,
     Search = 4,
-    Exposure = 5,
-    Identity = 6,
-    HealthCheck = 7
+    BrowserAutomation = 5,
+    Exposure = 6,
+    Identity = 7,
+    HealthCheck = 8
 }
 
 /// <summary>
 /// Reactive ViewModel for the <c>netclaw init</c> onboarding wizard.
-/// Drives a 6-step wizard state machine with back-navigation support.
+/// Drives an onboarding wizard state machine with back-navigation support.
 /// ACL step is conditionally skipped when no chat services are enabled.
 /// </summary>
 public partial class InitWizardViewModel : ReactiveViewModel
 {
-    public const int TotalSteps = 7;
+    public const int TotalSteps = 8;
 
     private readonly NetclawPaths _paths;
     private readonly IProviderProbe _probe;
     private readonly ProviderDescriptorRegistry _registry;
     private readonly ISlackProbe _slackProbe;
+    private readonly IBrowserAutomationBootstrapper _browserBootstrapper;
 
     /// <summary>
     /// The provider descriptor registry. Exposed for use by the page.
@@ -93,17 +96,21 @@ public partial class InitWizardViewModel : ReactiveViewModel
     public string? BraveApiKeyInput { get; set; }
     public string? SearXngEndpointInput { get; set; }
 
-    // ── Step 5: Exposure ──
+    // ── Step 5: Browser automation ──
+    public bool BrowserAutomationEnabled { get; set; }
+    public string SelectedBrowserAutomationBackend { get; set; } = BrowserAutomationMcpProfiles.ChromeDevToolsBackend;
+
+    // ── Step 6: Exposure ──
     public string? ExposureMode { get; set; }
 
-    // ── Step 6: Identity ──
+    // ── Step 7: Identity ──
     public string AgentName { get; set; } = "Netclaw";
     public string? CommunicationStyle { get; set; }
     public string? UserName { get; set; }
     public string UserTimezone { get; set; } = TimeZoneInfo.Local.Id;
     public string? PrimaryUse { get; set; }
 
-    // ── Step 6: Health Check ──
+    // ── Step 8: Health Check ──
     public List<HealthCheckItem> HealthCheckResults { get; } = [];
 
     /// <summary>
@@ -122,7 +129,7 @@ public partial class InitWizardViewModel : ReactiveViewModel
         ISlackProbe slackProbe,
         DaemonManager? daemonManager = null,
         string? daemonEndpoint = null)
-        : this(paths, registry, registry, slackProbe, daemonManager, daemonEndpoint)
+        : this(paths, registry, registry, slackProbe, null, daemonManager, daemonEndpoint)
     {
     }
 
@@ -134,6 +141,7 @@ public partial class InitWizardViewModel : ReactiveViewModel
         ProviderDescriptorRegistry registry,
         IProviderProbe probe,
         ISlackProbe slackProbe,
+        IBrowserAutomationBootstrapper? browserBootstrapper = null,
         DaemonManager? daemonManager = null,
         string? daemonEndpoint = null)
     {
@@ -141,6 +149,7 @@ public partial class InitWizardViewModel : ReactiveViewModel
         _probe = probe;
         _registry = registry;
         _slackProbe = slackProbe;
+        _browserBootstrapper = browserBootstrapper ?? new BrowserAutomationBootstrapper();
         _daemonManager = daemonManager;
         _daemonEndpoint = daemonEndpoint ?? "http://127.0.0.1:5199";
     }
@@ -348,6 +357,7 @@ public partial class InitWizardViewModel : ReactiveViewModel
     private async Task RunHealthCheckAsync()
     {
         IsHealthCheckRunning.Value = true;
+        IsComplete.Value = false;
         HealthCheckResults.Clear();
         NotifyHealthCheckChanged();
 
@@ -435,6 +445,43 @@ public partial class InitWizardViewModel : ReactiveViewModel
                     $"Slack channels resolved ({LastChannelResolution.Resolved.Count})", true);
             }
             NotifyHealthCheckChanged();
+        }
+
+        // Browser automation prerequisites (optional)
+        if (BrowserAutomationEnabled)
+        {
+            HealthCheckResults.Add(new HealthCheckItem("Browser automation prerequisites", null));
+            NotifyHealthCheckChanged();
+
+            var bootstrap = await _browserBootstrapper.EnsureReadyAsync(SelectedBrowserAutomationBackend);
+            if (bootstrap.Success)
+            {
+                var backendName = SelectedBrowserAutomationBackend == BrowserAutomationMcpProfiles.PlaywrightBackend
+                    ? "Playwright MCP"
+                    : "Chrome DevTools MCP";
+                HealthCheckResults[^1] = new HealthCheckItem(
+                    $"Browser automation ready ({backendName})", true);
+                NotifyHealthCheckChanged();
+            }
+            else
+            {
+                var suffix = string.IsNullOrWhiteSpace(bootstrap.ManualCommand)
+                    ? string.Empty
+                    : $" Command: {bootstrap.ManualCommand}";
+
+                HealthCheckResults[^1] = new HealthCheckItem(
+                    $"Browser automation setup blocked: {bootstrap.Message}{suffix}", false);
+                NotifyHealthCheckChanged();
+
+                if (bootstrap.NeedsManualAction)
+                {
+                    IsHealthCheckRunning.Value = false;
+                    StatusMessage.Value = string.IsNullOrWhiteSpace(bootstrap.ManualCommand)
+                        ? $"{bootstrap.Message} Press Enter to retry."
+                        : $"{bootstrap.Message} Run `{bootstrap.ManualCommand}`, then press Enter to retry.";
+                    return;
+                }
+            }
         }
 
         // Config write
@@ -638,6 +685,24 @@ public partial class InitWizardViewModel : ReactiveViewModel
             config["Search"] = searchSection;
         }
 
+        // Browser automation MCP profile (optional)
+        if (BrowserAutomationEnabled)
+        {
+            var (profileName, entry) = BrowserAutomationMcpProfiles.Create(SelectedBrowserAutomationBackend);
+
+            config["McpServers"] = new Dictionary<string, object>
+            {
+                [profileName] = new Dictionary<string, object?>
+                {
+                    ["Transport"] = entry.Transport,
+                    ["Command"] = entry.Command,
+                    ["Arguments"] = entry.Arguments,
+                    ["Enabled"] = entry.Enabled,
+                    ["GrantCategory"] = entry.GrantCategory
+                }
+            };
+        }
+
         // Write identity files
         WriteIdentityFiles();
 
@@ -721,6 +786,9 @@ public partial class InitWizardViewModel : ReactiveViewModel
 
             - Ask before making destructive changes to files or infrastructure
             - Prefer concise tool usage — avoid unnecessary search_tools calls
+            - For interactive web tasks (clicking, typing, form filling), use browser MCP tools; do not substitute web_fetch/file_read/shell_execute for browser interaction
+            - Browser workflow: search_tools("browser ...") -> browser_navigate(url) -> browser_snapshot() -> browser_click/type/fill_form
+            - For browser automation, prefer file outputs over inline page dumps; avoid returning full DOM snapshots unless explicitly requested
 
             ## Identity Files
 

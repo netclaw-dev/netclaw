@@ -115,6 +115,34 @@ public class ToolRegistryTests
     }
 
     [Fact]
+    public void SuggestTools_returns_fuzzy_matches_by_name()
+    {
+        var registry = new ToolRegistry();
+        registry.Register(new McpToolAdapter(
+            CreateFakeTool("navigate_page"), "browser_chrome_devtools", "navigate_page"));
+
+        var results = registry.SuggestTools("navgite pg", null, 10);
+
+        Assert.NotEmpty(results);
+        Assert.Equal("browser_chrome_devtools/navigate_page", results[0].Name);
+    }
+
+    [Fact]
+    public void SuggestTools_respects_server_filter()
+    {
+        var registry = new ToolRegistry();
+        registry.Register(new McpToolAdapter(
+            CreateFakeTool("navigate_page"), "browser_chrome_devtools", "navigate_page"));
+        registry.Register(new McpToolAdapter(
+            CreateFakeTool("navigate_page"), "playwright", "navigate_page"));
+
+        var results = registry.SuggestTools("navgite pg", "playwright", 10);
+
+        Assert.NotEmpty(results);
+        Assert.All(results, r => Assert.StartsWith("playwright/", r.Name, StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void GenerateCompressedIndex_groups_by_category()
     {
         var registry = new ToolRegistry();

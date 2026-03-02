@@ -62,7 +62,8 @@ public sealed class McpToolAdapter : INetclawTool
         try
         {
             // Coerce arguments — some LLMs send numbers as strings
-            var coerced = McpSchemaSanitizer.CoerceArguments(arguments);
+            var normalized = McpSchemaSanitizer.NormalizeArgumentKeys(arguments, ParameterSchema);
+            var coerced = McpSchemaSanitizer.CoerceArguments(normalized);
             var aiArgs = coerced is not null
                 ? new AIFunctionArguments(coerced)
                 : null;
@@ -102,7 +103,8 @@ public sealed class McpToolAdapter : INetclawTool
             AIFunctionArguments arguments, CancellationToken cancellationToken)
         {
             // Coerce arguments before forwarding to the MCP client
-            var coerced = McpSchemaSanitizer.CoerceArguments(arguments);
+            var normalized = McpSchemaSanitizer.NormalizeArgumentKeys(arguments, _sanitizedSchema);
+            var coerced = McpSchemaSanitizer.CoerceArguments(normalized);
             var coercedArgs = coerced is not null
                 ? new AIFunctionArguments(coerced)
                 : arguments;
