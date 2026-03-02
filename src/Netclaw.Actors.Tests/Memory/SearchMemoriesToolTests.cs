@@ -59,14 +59,20 @@ public class SearchMemoriesToolTests
     }
 
     [Fact]
-    public void MemoryIndexContextLayer_connected_shows_organizational_model()
+    public void MemoryIndexContextLayer_connected_shows_behavioral_triggers()
     {
         var layer = new MemoryIndexContextLayer();
         layer.Update(connected: true);
 
         var content = layer.GetContextLayer();
 
+        // Behavioral triggers — retrieve and save rules
+        Assert.Contains("RETRIEVE:", content);
+        Assert.Contains("SAVE:", content);
         Assert.Contains("search_memories", content);
+        Assert.Contains("memorizer/store", content);
+
+        // Organization guidance still present
         Assert.Contains("workspaces", content);
         Assert.Contains("projects", content);
         Assert.Contains("memorizer-usage", content);
@@ -74,7 +80,7 @@ public class SearchMemoriesToolTests
     }
 
     [Fact]
-    public void MemoryIndexContextLayer_disconnected_shows_unavailable()
+    public void MemoryIndexContextLayer_disconnected_shows_unavailable_with_fallback()
     {
         var layer = new MemoryIndexContextLayer();
         layer.Update(connected: false);
@@ -82,7 +88,9 @@ public class SearchMemoriesToolTests
         var content = layer.GetContextLayer();
 
         Assert.Contains("NOT AVAILABLE", content);
-        Assert.Contains("identity", content, StringComparison.OrdinalIgnoreCase);
+        // Fallback guidance — save to identity/skill files instead
+        Assert.Contains("SOUL.md", content);
+        Assert.Contains("identity-management", content);
         Assert.Contains("skill", content, StringComparison.OrdinalIgnoreCase);
     }
 

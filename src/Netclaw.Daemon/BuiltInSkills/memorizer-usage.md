@@ -133,6 +133,26 @@ Save to Memorizer **proactively** during conversation when you encounter:
 - Use `memorizer/get` with `includeVersionHistory=true` to see edit history
 - Use `memorizer/revert_to_version` to undo unwanted changes
 
+## Memory Quality
+
+Write memories that are **self-contained and richly detailed**. A future agent
+(or your future self) should be able to understand them without the original
+conversation.
+
+**Good memory:**
+- Title: "Kubernetes pod restart loop fix — OOM on metrics sidecar"
+- Type: troubleshooting
+- Tags: [troubleshooting, kubernetes, homelab]
+- Content: Full markdown with the problem description, investigation steps,
+  root cause, solution (with config snippets), and verification commands.
+
+**Bad memory:**
+- Title: "K8s fix"
+- Content: "Fixed the pod restart issue by increasing memory limits."
+
+Include: code blocks, configuration snippets, command output, links, tables,
+step-by-step instructions. The more context, the more useful on retrieval.
+
 ## Example Workflow
 
 1. User describes a deployment problem with their K8s cluster

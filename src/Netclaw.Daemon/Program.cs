@@ -414,7 +414,7 @@ static ResolvedModelCapabilities? ResolveStartupCapabilities(string modelId, Log
 static void CopyBuiltInSkills(string skillsDirectory)
 {
     var assembly = typeof(Program).Assembly;
-    var prefix = "netclawd.BuiltInSkills.";
+    var prefix = "Netclaw.Daemon.BuiltInSkills.";
 
     foreach (var resourceName in assembly.GetManifestResourceNames())
     {
