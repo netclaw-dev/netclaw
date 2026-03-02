@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
@@ -803,7 +804,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor
             {
                 SessionId = _sessionId,
                 Title = _state.Title,
-                TurnCount = _state.TurnCount
+                TurnCount = _state.TurnCount,
+                RecentMessages = ExtractRecentMessages(_state.History)
             };
 
             cmd.Subscriber.Tell(joined);
@@ -875,6 +877,60 @@ public sealed class LlmSessionActor : ReceivePersistentActor
     /// Naive token estimation: total character count / 4.
     /// Includes the system prompt (if present) plus all compacted messages.
     /// </summary>
+    /// <summary>
+    /// Extracts the last N user/assistant text messages for session resume display.
+    /// Skips system prompts, tool messages, and assistant messages that are tool-call-only
+    /// (no visible text). Truncates long content to keep the DTO payload reasonable.
+    /// </summary>
+    private static IReadOnlyList<ChatMessageDto>? ExtractRecentMessages(
+        ImmutableList<SerializableChatMessage> history, int maxMessages = 20)
+    {
+        if (history.Count == 0)
+            return null;
+
+        const int maxContentLength = 2000;
+
+        var candidates = new List<ChatMessageDto>();
+        for (var i = 0; i < history.Count; i++)
+        {
+            var msg = history[i];
+
+            // Only include user and assistant messages
+            if (msg.Role is not (Protocol.ChatRole.User or Protocol.ChatRole.Assistant))
+                continue;
+
+            // Skip assistant messages that are tool-call-only (no visible text)
+            if (msg.Role == Protocol.ChatRole.Assistant
+                && string.IsNullOrWhiteSpace(msg.Content)
+                && msg.ToolCalls.Count > 0)
+                continue;
+
+            // Skip system nudges injected as user messages
+            if (msg.Role == Protocol.ChatRole.User
+                && msg.Content.StartsWith("[system:", StringComparison.Ordinal))
+                continue;
+
+            var content = msg.Content;
+            if (content.Length > maxContentLength)
+                content = string.Concat(content.AsSpan(0, maxContentLength - 3), "...");
+
+            candidates.Add(new ChatMessageDto
+            {
+                Role = msg.Role == Protocol.ChatRole.User ? "user" : "assistant",
+                Content = content
+            });
+        }
+
+        if (candidates.Count == 0)
+            return null;
+
+        // Take the last N messages
+        if (candidates.Count > maxMessages)
+            candidates = candidates.GetRange(candidates.Count - maxMessages, maxMessages);
+
+        return candidates;
+    }
+
     private static int EstimateTokens(
         List<SerializableChatMessage> messages,
         SerializableChatMessage? systemPrompt)

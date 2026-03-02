@@ -89,4 +89,10 @@ public sealed record SessionJoined : SessionOutput
     /// Number of turns completed so far.
     /// </summary>
     public int TurnCount { get; init; }
+
+    /// <summary>
+    /// Recent user/assistant messages for display on resume.
+    /// Null for brand-new sessions. Populated from persisted history.
+    /// </summary>
+    public IReadOnlyList<ChatMessageDto>? RecentMessages { get; init; }
 }

@@ -191,7 +191,22 @@ public sealed class ChatPage : ReactivePage<ChatViewModel>
                 _chatHistory.AppendLine(
                     $"System: Session started. {(msg.Title is not null ? $"Title: {msg.Title}" : sessionState)}",
                     Color.BrightBlack);
+
+                // Replay recent conversation history so the user has context
+                if (msg.RecentMessages is { Count: > 0 })
+                {
+                    _chatHistory.AppendLine("");
+                    _chatHistory.AppendLine("--- Previous conversation ---", Color.BrightBlack);
+                    foreach (var historic in msg.RecentMessages)
+                    {
+                        var label = historic.Role == "user" ? "You" : "Netclaw";
+                        _chatHistory.AppendLine($"{label}: {historic.Content}", Color.BrightBlack);
+                    }
+                    _chatHistory.AppendLine("--- End of history ---", Color.BrightBlack);
+                }
+
                 _chatHistory.AppendLine("");
+                _chatHistory.ScrollToBottom();
                 break;
 
             case TextOutput msg:

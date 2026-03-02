@@ -127,7 +127,12 @@ public static class SessionOutputMapper
             SessionId = msg.SessionId.Value,
             TimestampMs = msg.TimestampMs,
             Title = msg.Title,
-            TurnCount = msg.TurnCount
+            TurnCount = msg.TurnCount,
+            RecentMessages = msg.RecentMessages?.Select(m => new ChatMessageDto
+            {
+                Role = m.Role,
+                Content = m.Content
+            }).ToList()
         },
 
         _ => new SessionOutputDto

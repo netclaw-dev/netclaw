@@ -465,7 +465,8 @@ public sealed class DaemonClient : IAsyncDisposable
                 SessionId = sessionId,
                 TimestampMs = dto.TimestampMs,
                 Title = dto.Title,
-                TurnCount = dto.TurnCount ?? 0
+                TurnCount = dto.TurnCount ?? 0,
+                RecentMessages = dto.RecentMessages
             },
             _ => new ErrorOutput
             {
