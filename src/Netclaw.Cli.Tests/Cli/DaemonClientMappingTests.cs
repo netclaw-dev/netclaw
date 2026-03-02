@@ -1,4 +1,5 @@
 using Netclaw.Actors.Protocol;
+using Netclaw.Actors.SubAgents;
 using Netclaw.Cli.Daemon;
 using Xunit;
 
@@ -134,5 +135,56 @@ public sealed class DaemonClientMappingTests
         Assert.Null(joined.Title);
         Assert.Equal(0, joined.TurnCount);
         Assert.Null(joined.RecentMessages);
+    }
+
+    [Fact]
+    public void SubAgentOutput_roundtrips_through_dto_started()
+    {
+        var original = new SubAgentOutput
+        {
+            SessionId = new SessionId("signalr/test"),
+            TimestampMs = 500,
+            AgentName = "memory-curator",
+            Phase = SubAgentPhase.Started,
+            ToolCount = 5
+        };
+
+        var dto = SessionOutputDtoMapper.ToDto(original);
+        Assert.Equal("subagent", dto.Type);
+        Assert.Equal("memory-curator", dto.AgentName);
+        Assert.Equal("started", dto.Phase);
+        Assert.Equal(5, dto.ToolCountSub);
+
+        var roundTripped = DaemonClient.FromDto(dto);
+        var result = Assert.IsType<SubAgentOutput>(roundTripped);
+        Assert.Equal("memory-curator", result.AgentName);
+        Assert.Equal(SubAgentPhase.Started, result.Phase);
+        Assert.Equal(5, result.ToolCount);
+    }
+
+    [Fact]
+    public void SubAgentOutput_roundtrips_through_dto_completed()
+    {
+        var original = new SubAgentOutput
+        {
+            SessionId = new SessionId("signalr/test"),
+            TimestampMs = 600,
+            AgentName = "memory-retriever",
+            Phase = SubAgentPhase.Completed,
+            Success = true,
+            Duration = TimeSpan.FromSeconds(12.3)
+        };
+
+        var dto = SessionOutputDtoMapper.ToDto(original);
+        Assert.Equal("subagent", dto.Type);
+        Assert.Equal("completed", dto.Phase);
+        Assert.True(dto.SubAgentSuccess);
+
+        var roundTripped = DaemonClient.FromDto(dto);
+        var result = Assert.IsType<SubAgentOutput>(roundTripped);
+        Assert.Equal("memory-retriever", result.AgentName);
+        Assert.Equal(SubAgentPhase.Completed, result.Phase);
+        Assert.True(result.Success);
+        Assert.Equal(12300, result.Duration.TotalMilliseconds, 1);
     }
 }

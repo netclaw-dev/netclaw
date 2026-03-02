@@ -204,6 +204,20 @@ public sealed class HeadlessChannel : IChannel
                 Log(log, $"FILE: name={msg.FileName} path={msg.FilePath} mime={msg.MimeType}");
                 break;
 
+            case SubAgentOutput msg:
+                if (msg.Phase == Netclaw.Actors.SubAgents.SubAgentPhase.Started)
+                {
+                    Console.WriteLine($"[subagent:start] {msg.AgentName} ({msg.ToolCount} tools)");
+                    Log(log, $"SUBAGENT_START: name={msg.AgentName} tools={msg.ToolCount}");
+                }
+                else
+                {
+                    var status = msg.Success ? "success" : "failed";
+                    Console.WriteLine($"[subagent:done] {msg.AgentName} ({status}, {msg.Duration.TotalSeconds:F1}s)");
+                    Log(log, $"SUBAGENT_DONE: name={msg.AgentName} success={msg.Success} duration={msg.Duration.TotalSeconds:F1}s");
+                }
+                break;
+
             case CompactionOutput msg:
                 Console.WriteLine($"[compaction] {msg.MessagesBefore} \u2192 {msg.MessagesAfter} messages (keep={msg.KeepCountUsed}, context={msg.PreCompactionInputTokens}/{msg.ContextWindowTokens} tokens)");
                 Log(log, $"COMPACTION: before={msg.MessagesBefore} after={msg.MessagesAfter} tool_results_cleared={msg.ToolResultsCleared} summarized={msg.Summarized} context_window={msg.ContextWindowTokens} input_tokens={msg.PreCompactionInputTokens} keep_count={msg.KeepCountUsed}");

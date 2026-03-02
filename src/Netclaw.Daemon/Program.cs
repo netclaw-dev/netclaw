@@ -269,6 +269,11 @@ static void ConfigureDaemonServices(
         skillRegistry.Register(skill);
     services.AddSingleton(skillRegistry);
 
+    // Subagent timeout configuration
+    var subAgentConfig = configuration.GetSection("SubAgents")
+        .Get<SubAgentConfig>() ?? new SubAgentConfig();
+    services.AddSingleton(subAgentConfig);
+
     // Cross-session memory: provider-based wiring
     var memoryConfig = configuration.GetSection("Memory")
         .Get<MemoryConfig>() ?? new MemoryConfig();

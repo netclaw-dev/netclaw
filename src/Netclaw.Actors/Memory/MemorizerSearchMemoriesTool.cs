@@ -27,6 +27,7 @@ public sealed partial class MemorizerSearchMemoriesTool : NetclawTool<MemorizerS
     private readonly ActorSystem _actorSystem;
     private readonly IChatClientProvider _clientProvider;
     private readonly ToolRegistry _toolRegistry;
+    private readonly SubAgentConfig _subAgentConfig;
     private readonly ILogger _logger;
 
     /// <summary>
@@ -69,15 +70,20 @@ public sealed partial class MemorizerSearchMemoriesTool : NetclawTool<MemorizerS
         ActorSystem actorSystem,
         IChatClientProvider clientProvider,
         ToolRegistry toolRegistry,
+        SubAgentConfig? subAgentConfig = null,
         ILogger<MemorizerSearchMemoriesTool>? logger = null)
     {
         _actorSystem = actorSystem;
         _clientProvider = clientProvider;
         _toolRegistry = toolRegistry;
+        _subAgentConfig = subAgentConfig ?? new SubAgentConfig();
         _logger = logger ?? (ILogger)NullLogger.Instance;
     }
 
     protected override async Task<string> ExecuteAsync(Params args, CancellationToken ct)
+        => await ExecuteAsync(args, ToolExecutionContext.Empty, ct);
+
+    protected override async Task<string> ExecuteAsync(Params args, ToolExecutionContext context, CancellationToken ct)
     {
         var tools = ResolveRetrievalTools();
         if (tools.Count == 0)
@@ -94,6 +100,14 @@ public sealed partial class MemorizerSearchMemoriesTool : NetclawTool<MemorizerS
             ModelRole = ModelRole.Compaction
         };
 
+        // Notify session that subagent is starting
+        context.OnSubAgentActivity?.Invoke(new SubAgentNotificationInfo
+        {
+            AgentName = definition.Name,
+            IsStarted = true,
+            ToolCount = tools.Count
+        });
+
         var task = $"Search for memories related to: {args.Query}";
         if (args.Limit is > 0)
             task += $"\nReturn at most {args.Limit} results.";
@@ -103,16 +117,29 @@ public sealed partial class MemorizerSearchMemoriesTool : NetclawTool<MemorizerS
         var subAgent = _actorSystem.ActorOf(
             SubAgentActor.CreateProps(definition, chatClient));
 
+        var sw = System.Diagnostics.Stopwatch.StartNew();
         try
         {
+            var subAgentTimeout = TimeSpan.FromSeconds(_subAgentConfig.SearchMemoriesTimeoutSeconds);
             var result = await subAgent.Ask<SubAgentResult>(
                 new RunSubAgent
                 {
                     Task = task,
-                    Timeout = TimeSpan.FromSeconds(30)
+                    Timeout = subAgentTimeout
                 },
-                timeout: TimeSpan.FromSeconds(35),
+                timeout: subAgentTimeout.Add(TimeSpan.FromSeconds(5)),
                 cancellationToken: ct);
+
+            sw.Stop();
+
+            // Notify session that subagent completed
+            context.OnSubAgentActivity?.Invoke(new SubAgentNotificationInfo
+            {
+                AgentName = definition.Name,
+                IsStarted = false,
+                Success = result.Success,
+                Duration = sw.Elapsed
+            });
 
             if (result.Success)
             {
@@ -129,6 +156,16 @@ public sealed partial class MemorizerSearchMemoriesTool : NetclawTool<MemorizerS
         }
         catch (Exception ex)
         {
+            sw.Stop();
+
+            context.OnSubAgentActivity?.Invoke(new SubAgentNotificationInfo
+            {
+                AgentName = definition.Name,
+                IsStarted = false,
+                Success = false,
+                Duration = sw.Elapsed
+            });
+
             _logger.LogError(ex, "Memory retrieval error: query='{Query}'", args.Query);
             return $"Error searching memories: {ex.Message}";
         }

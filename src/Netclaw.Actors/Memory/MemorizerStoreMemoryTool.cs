@@ -27,6 +27,7 @@ public sealed partial class MemorizerStoreMemoryTool : NetclawTool<MemorizerStor
     private readonly ActorSystem _actorSystem;
     private readonly IChatClientProvider _clientProvider;
     private readonly ToolRegistry _toolRegistry;
+    private readonly SubAgentConfig _subAgentConfig;
     private readonly ILogger _logger;
 
     /// <summary>
@@ -81,15 +82,20 @@ public sealed partial class MemorizerStoreMemoryTool : NetclawTool<MemorizerStor
         ActorSystem actorSystem,
         IChatClientProvider clientProvider,
         ToolRegistry toolRegistry,
+        SubAgentConfig? subAgentConfig = null,
         ILogger<MemorizerStoreMemoryTool>? logger = null)
     {
         _actorSystem = actorSystem;
         _clientProvider = clientProvider;
         _toolRegistry = toolRegistry;
+        _subAgentConfig = subAgentConfig ?? new SubAgentConfig();
         _logger = logger ?? (ILogger)NullLogger.Instance;
     }
 
     protected override async Task<string> ExecuteAsync(Params args, CancellationToken ct)
+        => await ExecuteAsync(args, ToolExecutionContext.Empty, ct);
+
+    protected override async Task<string> ExecuteAsync(Params args, ToolExecutionContext context, CancellationToken ct)
     {
         var tools = ResolveCurationTools();
         if (tools.Count == 0)
@@ -106,6 +112,14 @@ public sealed partial class MemorizerStoreMemoryTool : NetclawTool<MemorizerStor
             ModelRole = ModelRole.Compaction
         };
 
+        // Notify session that subagent is starting
+        context.OnSubAgentActivity?.Invoke(new SubAgentNotificationInfo
+        {
+            AgentName = definition.Name,
+            IsStarted = true,
+            ToolCount = tools.Count
+        });
+
         var task = FormatTask(args);
         var chatClient = _clientProvider.GetClient(definition.ModelRole);
 
@@ -113,16 +127,29 @@ public sealed partial class MemorizerStoreMemoryTool : NetclawTool<MemorizerStor
         var subAgent = _actorSystem.ActorOf(
             SubAgentActor.CreateProps(definition, chatClient));
 
+        var sw = System.Diagnostics.Stopwatch.StartNew();
         try
         {
+            var subAgentTimeout = TimeSpan.FromSeconds(_subAgentConfig.StoreMemoryTimeoutSeconds);
             var result = await subAgent.Ask<SubAgentResult>(
                 new RunSubAgent
                 {
                     Task = task,
-                    Timeout = TimeSpan.FromMinutes(3)
+                    Timeout = subAgentTimeout
                 },
-                timeout: TimeSpan.FromMinutes(4), // slightly longer than subagent timeout
+                timeout: subAgentTimeout.Add(TimeSpan.FromSeconds(5)), // slightly longer than subagent timeout
                 cancellationToken: ct);
+
+            sw.Stop();
+
+            // Notify session that subagent completed
+            context.OnSubAgentActivity?.Invoke(new SubAgentNotificationInfo
+            {
+                AgentName = definition.Name,
+                IsStarted = false,
+                Success = result.Success,
+                Duration = sw.Elapsed
+            });
 
             if (result.Success)
             {
@@ -138,6 +165,16 @@ public sealed partial class MemorizerStoreMemoryTool : NetclawTool<MemorizerStor
         }
         catch (Exception ex)
         {
+            sw.Stop();
+
+            context.OnSubAgentActivity?.Invoke(new SubAgentNotificationInfo
+            {
+                AgentName = definition.Name,
+                IsStarted = false,
+                Success = false,
+                Duration = sw.Elapsed
+            });
+
             _logger.LogError(ex, "Memory curation error: title='{Title}'", args.Title);
             return $"Error saving memory: {ex.Message}";
         }

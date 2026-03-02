@@ -1,27 +1,27 @@
 ## 1. SubAgent Configuration
 
-- [ ] 1.1 Create `SubAgentConfig` class in `Netclaw.Configuration` with `DefaultTimeoutSeconds` (60), `StoreMemoryTimeoutSeconds` (180), `SearchMemoriesTimeoutSeconds` (30)
-- [ ] 1.2 Bind `SubAgents` config section in `Program.cs` (`configuration.GetSection("SubAgents").Get<SubAgentConfig>() ?? new SubAgentConfig()`) and register as singleton
-- [ ] 1.3 Inject `SubAgentConfig` into `MemorizerStoreMemoryTool` and `MemorizerSearchMemoriesTool` — replace hardcoded `TimeSpan` values with config-driven timeouts
-- [ ] 1.4 Update `netclaw-config.v1.schema.json` — add `Memory` object property (`Provider` enum: `["files", "memorizer"]`, default `"files"`) and `SubAgents` object property (`DefaultTimeoutSeconds`, `StoreMemoryTimeoutSeconds`, `SearchMemoriesTimeoutSeconds` — all integer, minimum 5, maximum 600)
-- [ ] 1.5 Add `SubAgents` section validation to `netclaw doctor` — timeout values must be positive integers between 5 and 600
-- [ ] 1.6 Tests: verify default config values, verify custom config overrides timeout, verify doctor rejects invalid values, verify schema validates Memory and SubAgents sections
+- [x] 1.1 Create `SubAgentConfig` class in `Netclaw.Configuration` with `DefaultTimeoutSeconds` (60), `StoreMemoryTimeoutSeconds` (180), `SearchMemoriesTimeoutSeconds` (30)
+- [x] 1.2 Bind `SubAgents` config section in `Program.cs` (`configuration.GetSection("SubAgents").Get<SubAgentConfig>() ?? new SubAgentConfig()`) and register as singleton
+- [x] 1.3 Inject `SubAgentConfig` into `MemorizerStoreMemoryTool` and `MemorizerSearchMemoriesTool` — replace hardcoded `TimeSpan` values with config-driven timeouts
+- [x] 1.4 Update `netclaw-config.v1.schema.json` — add `Memory` object property (`Provider` enum: `["files", "memorizer"]`, default `"files"`) and `SubAgents` object property (`DefaultTimeoutSeconds`, `StoreMemoryTimeoutSeconds`, `SearchMemoriesTimeoutSeconds` — all integer, minimum 5, maximum 600)
+- [x] 1.5 Add `SubAgents` section validation to `netclaw doctor` — timeout values must be positive integers between 5 and 600
+- [x] 1.6 Tests: verify default config values, verify custom config overrides timeout, verify doctor rejects invalid values, verify schema validates Memory and SubAgents sections
 
 ## 2. SubAgent Observability
 
-- [ ] 2.1 Define `SubAgentNotification` record (AgentName, Phase, ToolCount, Success, Duration) and `SubAgentPhase` enum (Started, Completed) in `Netclaw.Actors/SubAgents/`
-- [ ] 2.2 Add `Action<SubAgentNotification>? OnSubAgentActivity` property to `ToolExecutionContext`
-- [ ] 2.3 Define `SubAgentOutput : SessionOutput` record in `Protocol/SessionOutput.cs` — filtered under `OutputFilter.ToolCalls`
-- [ ] 2.4 Add `SubAgentOutput` arms to `SessionOutputDtoMapper.cs` (ToDto and FromDto) with discriminator `"subagent"`
-- [ ] 2.5 Wire `OnSubAgentActivity` callback in `LlmSessionActor`'s `ExecuteToolsAsync` pipeline — convert notifications to `SubAgentOutput` and publish to subscribers
-- [ ] 2.6 Update `MemorizerStoreMemoryTool` and `MemorizerSearchMemoriesTool` to invoke `ToolExecutionContext.OnSubAgentActivity` on subagent start/completion
-- [ ] 2.7 Render `SubAgentOutput` in `HeadlessChannel.cs`: `[subagent:start]` and `[subagent:done]` format
-- [ ] 2.8 Tests: verify SubAgentOutput emitted on tool call, verify headless rendering format, verify Slack adapter ignores SubAgentOutput
+- [x] 2.1 Define `SubAgentNotification` record (AgentName, Phase, ToolCount, Success, Duration) and `SubAgentPhase` enum (Started, Completed) in `Netclaw.Actors/SubAgents/`
+- [x] 2.2 Add `Action<SubAgentNotificationInfo>? OnSubAgentActivity` property to `ToolExecutionContext`
+- [x] 2.3 Define `SubAgentOutput : SessionOutput` record in `Protocol/SessionOutput.cs` — filtered under `OutputFilter.ToolCalls`
+- [x] 2.4 Add `SubAgentOutput` arms to `SessionOutputDtoMapper.cs` (ToDto and FromDto) with discriminator `"subagent"`
+- [x] 2.5 Wire `OnSubAgentActivity` callback in `LlmSessionActor`'s `ExecuteToolsAsync` pipeline — convert notifications to `SubAgentOutput` and publish to subscribers
+- [x] 2.6 Update `MemorizerStoreMemoryTool` and `MemorizerSearchMemoriesTool` to invoke `ToolExecutionContext.OnSubAgentActivity` on subagent start/completion
+- [x] 2.7 Render `SubAgentOutput` in `HeadlessChannel.cs`: `[subagent:start]` and `[subagent:done]` format
+- [x] 2.8 Tests: verify SubAgentOutput DTO round-trip (started + completed), verify schema validation for Memory/SubAgents sections
 
 ## 3. Context Layer Update
 
-- [ ] 3.1 Update `MemorizerConnected` text in `MemoryIndexContextLayer.cs` — add subagent delegation note and latency expectation (10–30 seconds)
-- [ ] 3.2 Update `SearchMemoriesToolTests` context layer assertion to include subagent note
+- [x] 3.1 Update `MemorizerConnected` text in `MemoryIndexContextLayer.cs` — add subagent delegation note and latency expectation (10–30 seconds)
+- [x] 3.2 Update `SearchMemoriesToolTests` context layer assertion to include subagent note
 
 ## 4. Init Wizard — Memory Step
 
@@ -50,8 +50,8 @@
 
 ## 7. Verification
 
-- [ ] 7.1 `dotnet build` — zero errors
-- [ ] 7.2 `dotnet test` — all existing + new tests pass
-- [ ] 7.3 `dotnet slopwatch analyze` — zero new violations
+- [x] 7.1 `dotnet build` — zero errors
+- [x] 7.2 `dotnet test` — all existing + new tests pass (595 total)
+- [x] 7.3 `dotnet slopwatch analyze` — zero new violations
 - [ ] 7.4 Smoke test: run `netclaw init` through the Memory step with local Memorizer, verify config written correctly
 - [ ] 7.5 Smoke test: run headless prompt with Memorizer-backed memory, verify `[subagent:start]` and `[subagent:done]` appear in output

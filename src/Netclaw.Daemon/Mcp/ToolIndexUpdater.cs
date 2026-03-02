@@ -24,6 +24,7 @@ internal sealed class ToolIndexUpdater : IHostedService
     private readonly ToolRegistry _toolRegistry;
     private readonly MemoryIndexContextLayer _memoryIndexLayer;
     private readonly MemoryConfig _memoryConfig;
+    private readonly SubAgentConfig _subAgentConfig;
     private readonly ActorSystem _actorSystem;
     private readonly IChatClientProvider _clientProvider;
     private readonly ILogger<ToolIndexUpdater> _logger;
@@ -33,6 +34,7 @@ internal sealed class ToolIndexUpdater : IHostedService
         ToolRegistry toolRegistry,
         MemoryIndexContextLayer memoryIndexLayer,
         MemoryConfig memoryConfig,
+        SubAgentConfig subAgentConfig,
         ActorSystem actorSystem,
         IChatClientProvider clientProvider,
         ILogger<ToolIndexUpdater> logger)
@@ -41,6 +43,7 @@ internal sealed class ToolIndexUpdater : IHostedService
         _toolRegistry = toolRegistry;
         _memoryIndexLayer = memoryIndexLayer;
         _memoryConfig = memoryConfig;
+        _subAgentConfig = subAgentConfig;
         _actorSystem = actorSystem;
         _clientProvider = clientProvider;
         _logger = logger;
@@ -56,9 +59,9 @@ internal sealed class ToolIndexUpdater : IHostedService
         if (state == MemoryContextState.MemorizerConnected)
         {
             _toolRegistry.Register(new MemorizerStoreMemoryTool(
-                _actorSystem, _clientProvider, _toolRegistry));
+                _actorSystem, _clientProvider, _toolRegistry, _subAgentConfig));
             _toolRegistry.Register(new MemorizerSearchMemoriesTool(
-                _actorSystem, _clientProvider, _toolRegistry));
+                _actorSystem, _clientProvider, _toolRegistry, _subAgentConfig));
             _logger.LogInformation("Registered subagent-backed memory tools (store_memory, search_memories)");
         }
 

@@ -788,7 +788,24 @@ public sealed class LlmSessionActor : ReceivePersistentActor
         var tp = _timeProvider;
         var sessionDir = GetSessionDirectory();
         var maxInlineToolResultChars = _config.MaxInlineToolResultChars;
-        _ = ExecuteToolsAsync(executor, toolCalls, sessionId, auditLogger, tp, sessionDir, maxInlineToolResultChars, self);
+
+        // Capture subscriber snapshot for subagent activity notifications.
+        // These are emitted directly from the tool execution thread via Tell(),
+        // which is thread-safe. The snapshot ensures we don't read _subscribers
+        // from a non-actor thread.
+        var subscriberSnapshot = _subscribers.ToList();
+        var logActor = _logActor;
+        Action<SubAgentOutput> emitSubAgentOutput = output =>
+        {
+            foreach (var (subscriber, filter) in subscriberSnapshot)
+            {
+                if (filter.HasFlag(OutputFilter.ToolCalls))
+                    subscriber.Tell(output);
+            }
+            logActor?.Tell(output);
+        };
+
+        _ = ExecuteToolsAsync(executor, toolCalls, sessionId, auditLogger, tp, sessionDir, maxInlineToolResultChars, self, emitSubAgentOutput);
     }
 
     private void HandleTextResponse(
@@ -1245,7 +1262,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor
         TimeProvider timeProvider,
         string sessionDir,
         int maxInlineToolResultChars,
-        IActorRef self)
+        IActorRef self,
+        Action<SubAgentOutput> emitSubAgentOutput)
     {
         try
         {
@@ -1257,7 +1275,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor
                 auditLogger,
                 timeProvider,
                 sessionDir,
-                maxInlineToolResultChars));
+                maxInlineToolResultChars,
+                emitSubAgentOutput));
             var results = await Task.WhenAll(tasks);
 
             var fileAttachments = results.SelectMany(r => r.FileAttachments).ToList();
@@ -1280,11 +1299,30 @@ public sealed class LlmSessionActor : ReceivePersistentActor
         IToolAuditLogger? auditLogger,
         TimeProvider timeProvider,
         string sessionDir,
-        int maxInlineToolResultChars)
+        int maxInlineToolResultChars,
+        Action<SubAgentOutput> emitSubAgentOutput)
     {
         var sw = Stopwatch.StartNew();
         string resultText;
-        var context = new Netclaw.Tools.ToolExecutionContext(sessionId.Value, sessionDir);
+        var context = new Netclaw.Tools.ToolExecutionContext(sessionId.Value, sessionDir)
+        {
+            OnSubAgentActivity = info =>
+            {
+                var output = new SubAgentOutput
+                {
+                    SessionId = sessionId,
+                    TimestampMs = timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
+                    AgentName = info.AgentName,
+                    Phase = info.IsStarted
+                        ? Netclaw.Actors.SubAgents.SubAgentPhase.Started
+                        : Netclaw.Actors.SubAgents.SubAgentPhase.Completed,
+                    ToolCount = info.ToolCount,
+                    Success = info.Success,
+                    Duration = info.Duration
+                };
+                emitSubAgentOutput(output);
+            }
+        };
         try
         {
             resultText = await executor.ExecuteAsync(tc, context);

@@ -107,6 +107,18 @@ public static class SessionOutputDtoMapper
             MimeType = msg.MimeType
         },
 
+        SubAgentOutput msg => new SessionOutputDto
+        {
+            Type = "subagent",
+            SessionId = msg.SessionId.Value,
+            TimestampMs = msg.TimestampMs,
+            AgentName = msg.AgentName,
+            Phase = msg.Phase.ToString().ToLowerInvariant(),
+            ToolCountSub = msg.ToolCount,
+            SubAgentSuccess = msg.Success,
+            DurationMs = msg.Duration.TotalMilliseconds
+        },
+
         CompactionOutput msg => new SessionOutputDto
         {
             Type = "compaction",
@@ -224,6 +236,18 @@ public static class SessionOutputDtoMapper
                 FilePath = dto.FilePath ?? string.Empty,
                 FileName = dto.FileName ?? "file",
                 MimeType = dto.MimeType ?? "application/octet-stream"
+            },
+            "subagent" => new SubAgentOutput
+            {
+                SessionId = sessionId,
+                TimestampMs = dto.TimestampMs,
+                AgentName = dto.AgentName ?? "unknown",
+                Phase = dto.Phase?.Equals("completed", StringComparison.OrdinalIgnoreCase) == true
+                    ? SubAgents.SubAgentPhase.Completed
+                    : SubAgents.SubAgentPhase.Started,
+                ToolCount = dto.ToolCountSub ?? 0,
+                Success = dto.SubAgentSuccess ?? false,
+                Duration = TimeSpan.FromMilliseconds(dto.DurationMs ?? 0)
             },
             "compaction" => new CompactionOutput
             {

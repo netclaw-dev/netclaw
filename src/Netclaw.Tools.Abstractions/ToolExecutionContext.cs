@@ -6,6 +6,20 @@ namespace Netclaw.Tools;
 public sealed record FileAttachmentInfo(string FilePath, string FileName, string MimeType);
 
 /// <summary>
+/// Lightweight subagent activity notification for the tools abstraction layer.
+/// Tools emit these via <see cref="ToolExecutionContext.OnSubAgentActivity"/>;
+/// the session actor converts them to output events.
+/// </summary>
+public sealed record SubAgentNotificationInfo
+{
+    public required string AgentName { get; init; }
+    public required bool IsStarted { get; init; }
+    public int ToolCount { get; init; }
+    public bool Success { get; init; }
+    public TimeSpan Duration { get; init; }
+}
+
+/// <summary>
 /// Per-call execution context passed from the session actor to tools.
 /// Provides session-scoped state like working directories for file output.
 /// </summary>
@@ -20,6 +34,12 @@ public sealed class ToolExecutionContext
         SessionId = sessionId;
         SessionDirectory = sessionDirectory;
     }
+
+    /// <summary>
+    /// Optional callback for tools that spawn subagents.
+    /// The session wires this to relay notifications as <c>SubAgentOutput</c> events.
+    /// </summary>
+    public Action<SubAgentNotificationInfo>? OnSubAgentActivity { get; set; }
 
     /// <summary>The session that initiated this tool call.</summary>
     public string? SessionId { get; }

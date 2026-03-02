@@ -93,6 +93,47 @@
       },
       "additionalProperties": false
     },
+    "Memory": {
+      "type": "object",
+      "description": "Cross-session memory backend configuration.",
+      "properties": {
+        "Provider": {
+          "type": "string",
+          "enum": ["files", "memorizer"],
+          "default": "files",
+          "description": "Memory backend: 'files' for local markdown, 'memorizer' for Memorizer MCP server."
+        }
+      },
+      "additionalProperties": false
+    },
+    "SubAgents": {
+      "type": "object",
+      "description": "Timeout configuration for subagent execution (seconds).",
+      "properties": {
+        "DefaultTimeoutSeconds": {
+          "type": "integer",
+          "minimum": 5,
+          "maximum": 600,
+          "default": 60,
+          "description": "Default subagent timeout when no tool-specific override exists."
+        },
+        "StoreMemoryTimeoutSeconds": {
+          "type": "integer",
+          "minimum": 5,
+          "maximum": 600,
+          "default": 180,
+          "description": "Timeout for the store_memory curation subagent."
+        },
+        "SearchMemoriesTimeoutSeconds": {
+          "type": "integer",
+          "minimum": 5,
+          "maximum": 600,
+          "default": 30,
+          "description": "Timeout for the search_memories retrieval subagent."
+        }
+      },
+      "additionalProperties": false
+    },
     "McpServers": {
       "type": "object",
       "description": "MCP server profiles keyed by name.",

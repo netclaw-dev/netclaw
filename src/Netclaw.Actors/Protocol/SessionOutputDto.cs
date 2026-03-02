@@ -62,6 +62,13 @@ public sealed record SessionOutputDto
     public int? TurnCount { get; init; }
     public List<ChatMessageDto>? RecentMessages { get; init; }
 
+    // SubAgent
+    public string? AgentName { get; init; }
+    public string? Phase { get; init; }
+    public int? ToolCountSub { get; init; }
+    public bool? SubAgentSuccess { get; init; }
+    public double? DurationMs { get; init; }
+
     // File Output
     public string? FilePath { get; init; }
     public string? FileName { get; init; }

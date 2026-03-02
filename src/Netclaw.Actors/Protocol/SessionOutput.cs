@@ -166,6 +166,25 @@ public sealed record FileOutput : SessionOutput
 }
 
 /// <summary>
+/// A subagent started or completed execution within a tool call.
+/// Requires <see cref="OutputFilter.ToolCalls"/>.
+/// </summary>
+public sealed record SubAgentOutput : SessionOutput
+{
+    public required string AgentName { get; init; }
+    public required SubAgents.SubAgentPhase Phase { get; init; }
+
+    /// <summary>Number of tools available to the subagent (on Started).</summary>
+    public int ToolCount { get; init; }
+
+    /// <summary>Whether the subagent completed successfully (on Completed).</summary>
+    public bool Success { get; init; }
+
+    /// <summary>Wall-clock duration (on Completed).</summary>
+    public TimeSpan Duration { get; init; }
+}
+
+/// <summary>
 /// Session context was compacted to stay within the context window.
 /// Lifecycle — always delivered regardless of <see cref="OutputFilter"/>.
 /// </summary>
