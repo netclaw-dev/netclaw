@@ -1,7 +1,7 @@
 {
   "version": 1,
   "createdAt": "2026-02-21T18:55:14.1378608+00:00",
-  "updatedAt": "2026-02-21T22:36:38.7490146+00:00",
+  "updatedAt": "2026-03-02T20:00:17.1880024+00:00",
   "description": "Initial baseline created by 'slopwatch init' on 2026-02-21 18:55:14 UTC",
   "entries": [
     {
@@ -21,6 +21,15 @@
       "codeSnippet": "Task.Delay(Delay, cancellationToken)",
       "message": "Test uses Task.Delay(Delay) which may indicate a timing-dependent test",
       "baselinedAt": "2026-02-21T22:36:38.7489679+00:00"
+    },
+    {
+      "hash": "c00fb5b6beafab8b",
+      "ruleId": "SW004",
+      "filePath": "src/Netclaw.Actors.Tests/SubAgents/SubAgentActorTests.cs",
+      "lineNumber": 205,
+      "codeSnippet": "Task.Delay(Delay, cancellationToken)",
+      "message": "Test uses Task.Delay(Delay) which may indicate a timing-dependent test",
+      "baselinedAt": "2026-03-02T20:00:17.1879824+00:00"
     }
   ]
 }

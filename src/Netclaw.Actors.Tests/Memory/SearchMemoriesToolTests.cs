@@ -82,6 +82,7 @@ public class SearchMemoriesToolTests : IDisposable
         Assert.Contains("Memorizer connected", content);
         Assert.Contains("RETRIEVE", content);
         Assert.Contains("SAVE", content);
+        Assert.Contains("curation subagents", content);
         Assert.Contains("memory-usage", content);
         Assert.Contains("memorizer-usage", content);
         Assert.DoesNotContain("NOT AVAILABLE", content);

@@ -51,31 +51,36 @@ public class MemorizerMemoryExtractorTests
         Assert.False(fakeTool.WasCalled);
     }
 
-    private sealed class FakeNetclawTool : INetclawTool
+}
+
+/// <summary>
+/// Reusable fake <see cref="INetclawTool"/> for tests that need tools in a <see cref="ToolRegistry"/>.
+/// </summary>
+internal sealed class FakeNetclawTool : INetclawTool
+{
+    private readonly string _result;
+
+    public FakeNetclawTool(string name, string result, string grantCategory = "mcp:memorizer")
     {
-        private readonly string _result;
+        Name = name;
+        _result = result;
+        GrantCategory = grantCategory;
+    }
 
-        public FakeNetclawTool(string name, string result)
-        {
-            Name = name;
-            _result = result;
-        }
+    public string Name { get; }
+    public string Description => "Fake tool";
+    public string GrantCategory { get; }
+    public System.Text.Json.JsonElement ParameterSchema => default;
 
-        public string Name { get; }
-        public string Description => "Fake tool";
-        public string GrantCategory => "mcp:memorizer";
-        public System.Text.Json.JsonElement ParameterSchema => default;
+    public bool WasCalled { get; private set; }
+    public IDictionary<string, object?>? LastArguments { get; private set; }
 
-        public bool WasCalled { get; private set; }
-        public IDictionary<string, object?>? LastArguments { get; private set; }
+    public AITool ToAITool() => AIFunctionFactory.Create(() => _result, name: Name, description: Description);
 
-        public AITool ToAITool() => AIFunctionFactory.Create(() => _result, name: Name, description: Description);
-
-        public Task<string> ExecuteAsync(IDictionary<string, object?>? arguments, CancellationToken ct = default)
-        {
-            WasCalled = true;
-            LastArguments = arguments;
-            return Task.FromResult(_result);
-        }
+    public Task<string> ExecuteAsync(IDictionary<string, object?>? arguments, CancellationToken ct = default)
+    {
+        WasCalled = true;
+        LastArguments = arguments;
+        return Task.FromResult(_result);
     }
 }

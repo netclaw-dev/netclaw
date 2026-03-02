@@ -1,0 +1,235 @@
+using Akka.Actor;
+using Akka.Hosting;
+using Akka.Hosting.TestKit;
+using Microsoft.Extensions.AI;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+using Netclaw.Actors.SubAgents;
+using Netclaw.Actors.Tests.Memory;
+using Netclaw.Tools;
+using Xunit;
+using Xunit.Abstractions;
+
+namespace Netclaw.Actors.Tests.SubAgents;
+
+public class SubAgentActorTests : TestKit
+{
+    public SubAgentActorTests(ITestOutputHelper output) : base(output: output) { }
+
+    protected override void ConfigureAkka(AkkaConfigurationBuilder builder, IServiceProvider provider)
+    {
+        // No persistence or hosting needed — SubAgentActor is standalone
+    }
+
+    private static SubAgentDefinition CreateDefinition(IReadOnlyList<INetclawTool>? tools = null)
+    {
+        return new SubAgentDefinition
+        {
+            Name = "test-agent",
+            SystemPrompt = "You are a test agent.",
+            Tools = tools ?? []
+        };
+    }
+
+    [Fact]
+    public async Task Text_response_returns_success_result()
+    {
+        var fakeClient = new FakeChatClient();
+        var definition = CreateDefinition();
+        var agent = Sys.ActorOf(SubAgentActor.CreateProps(definition, fakeClient));
+
+        var result = await agent.Ask<SubAgentResult>(
+            new RunSubAgent { Task = "Say hello", Timeout = TimeSpan.FromSeconds(5) },
+            TimeSpan.FromSeconds(5));
+
+        Assert.True(result.Success);
+        Assert.Contains("Response #1", result.Output);
+        Assert.Equal("test-agent", result.AgentName);
+    }
+
+    [Fact]
+    public async Task Tool_call_executes_and_continues()
+    {
+        var fakeTool = new FakeNetclawTool("greet", "Hello from tool!");
+        var fakeClient = new FakeChatClient
+        {
+            ToolCallsOnFirstCall =
+            [
+                new FunctionCallContent("call-1", "greet",
+                    new Dictionary<string, object?> { ["name"] = "World" })
+            ]
+        };
+
+        var definition = CreateDefinition([fakeTool]);
+        var agent = Sys.ActorOf(SubAgentActor.CreateProps(definition, fakeClient));
+
+        var result = await agent.Ask<SubAgentResult>(
+            new RunSubAgent { Task = "Greet the user", Timeout = TimeSpan.FromSeconds(5) },
+            TimeSpan.FromSeconds(5));
+
+        Assert.True(result.Success);
+        Assert.True(fakeTool.WasCalled);
+        // Second LLM call returns text (tool calls only on first call)
+        Assert.Contains("Response #2", result.Output);
+    }
+
+    [Fact]
+    public async Task Max_iterations_forces_text_response()
+    {
+        var fakeTool = new FakeNetclawTool("looper", "loop result");
+        var fakeClient = new FakeChatClient
+        {
+            ToolCallsOnFirstCall =
+            [
+                new FunctionCallContent("call-loop", "looper")
+            ],
+            AlwaysReturnToolCalls = true
+        };
+
+        var definition = CreateDefinition([fakeTool]);
+        var agent = Sys.ActorOf(SubAgentActor.CreateProps(definition, fakeClient));
+
+        var result = await agent.Ask<SubAgentResult>(
+            new RunSubAgent { Task = "Loop forever", Timeout = TimeSpan.FromSeconds(10) },
+            TimeSpan.FromSeconds(10));
+
+        // After 10 tool iterations, forces a no-tools call which returns text
+        Assert.True(result.Success);
+        // Should have made multiple calls: 10 tool calls + 1 initial + 1 forced text
+        Assert.True(fakeClient.CallCount >= 11);
+    }
+
+    [Fact]
+    public async Task Timeout_returns_failure()
+    {
+        var fakeClient = new FakeChatClient
+        {
+            Delay = TimeSpan.FromSeconds(30) // Much longer than timeout
+        };
+        var definition = CreateDefinition();
+        var agent = Sys.ActorOf(SubAgentActor.CreateProps(definition, fakeClient));
+
+        var result = await agent.Ask<SubAgentResult>(
+            new RunSubAgent { Task = "Slow task", Timeout = TimeSpan.FromMilliseconds(500) },
+            TimeSpan.FromSeconds(5));
+
+        Assert.False(result.Success);
+        Assert.Contains("timed out", result.Output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task LLM_failure_returns_failure()
+    {
+        var throwingClient = new ThrowingChatClient();
+        var definition = CreateDefinition();
+        var agent = Sys.ActorOf(SubAgentActor.CreateProps(definition, throwingClient));
+
+        var result = await agent.Ask<SubAgentResult>(
+            new RunSubAgent { Task = "Fail", Timeout = TimeSpan.FromSeconds(5) },
+            TimeSpan.FromSeconds(5));
+
+        Assert.False(result.Success);
+        Assert.Contains("LLM call failed", result.Output);
+    }
+
+    [Fact]
+    public async Task Actor_stops_after_completion()
+    {
+        var fakeClient = new FakeChatClient();
+        var definition = CreateDefinition();
+        var agent = Sys.ActorOf(SubAgentActor.CreateProps(definition, fakeClient));
+        Watch(agent);
+
+        agent.Tell(new RunSubAgent { Task = "Done", Timeout = TimeSpan.FromSeconds(5) });
+
+        // SubAgentResult arrives before Terminated — drain it first
+        await ExpectMsgAsync<SubAgentResult>();
+        await ExpectTerminatedAsync(agent, TimeSpan.FromSeconds(5));
+    }
+
+    /// <summary>
+    /// IChatClient that always throws on GetResponseAsync.
+    /// </summary>
+    private sealed class ThrowingChatClient : IChatClient
+    {
+        public Task<ChatResponse> GetResponseAsync(
+            IEnumerable<ChatMessage> messages,
+            ChatOptions? options = null,
+            CancellationToken cancellationToken = default)
+            => throw new InvalidOperationException("LLM connection failed");
+
+        public IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
+            IEnumerable<ChatMessage> messages,
+            ChatOptions? options = null,
+            CancellationToken cancellationToken = default)
+            => throw new InvalidOperationException("LLM connection failed");
+
+        public object? GetService(Type serviceType, object? serviceKey = null) => null;
+        public void Dispose() { }
+    }
+}
+
+/// <summary>
+/// Fake IChatClient for SubAgentActor tests (and other test files that need it).
+/// Copied from LlmSessionIntegrationTests — kept internal for cross-file reuse.
+/// </summary>
+internal sealed class FakeChatClient : IChatClient
+{
+    private int _callCount;
+
+    public int CallCount => _callCount;
+
+    public TimeSpan Delay { get; set; } = TimeSpan.Zero;
+
+    /// <summary>
+    /// When set, the first response returns these tool calls instead of text.
+    /// Subsequent calls return normal text (simulating the LLM completing after tool results).
+    /// When <see cref="AlwaysReturnToolCalls"/> is true, every call returns tool calls
+    /// as long as tools are available in options.
+    /// </summary>
+    public List<FunctionCallContent>? ToolCallsOnFirstCall { get; set; }
+
+    /// <summary>
+    /// When true, every call returns tool calls as long as options.Tools is non-empty.
+    /// </summary>
+    public bool AlwaysReturnToolCalls { get; set; }
+
+    public async Task<ChatResponse> GetResponseAsync(
+        IEnumerable<ChatMessage> messages,
+        ChatOptions? options = null,
+        CancellationToken cancellationToken = default)
+    {
+        Interlocked.Increment(ref _callCount);
+
+        if (Delay > TimeSpan.Zero)
+            await Task.Delay(Delay, cancellationToken);
+
+        if (ToolCallsOnFirstCall is not null)
+        {
+            var returnToolCalls = AlwaysReturnToolCalls
+                ? options?.Tools?.Count > 0
+                : _callCount == 1;
+
+            if (returnToolCalls)
+            {
+                var toolCallContents = new List<AIContent>(ToolCallsOnFirstCall);
+                var toolCallMessage = new ChatMessage(
+                    ChatRole.Assistant, toolCallContents);
+                return new ChatResponse(toolCallMessage);
+            }
+        }
+
+        var responseMessage = new ChatMessage(
+            ChatRole.Assistant, [new TextContent($"[fake] Response #{_callCount}")]);
+        return new ChatResponse(responseMessage);
+    }
+
+    public IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
+        IEnumerable<ChatMessage> messages,
+        ChatOptions? options = null,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("SubAgentActor does not use streaming");
+
+    public object? GetService(Type serviceType, object? serviceKey = null) => null;
+    public void Dispose() { }
+}

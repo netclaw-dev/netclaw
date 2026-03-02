@@ -48,6 +48,7 @@ public sealed class MemoryIndexContextLayer : IContextLayerProvider
             MemoryContextState.MemorizerConnected => """
                 [memories — Memorizer connected, search_memories and store_memory available]
                 RETRIEVE at conversation start. SAVE immediately when learning something durable.
+                Memory tools delegate to curation subagents (10–30s latency is normal).
                 For full guidance: file_read on the memory-usage and memorizer-usage skills.
                 """,
 
