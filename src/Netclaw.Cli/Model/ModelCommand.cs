@@ -155,7 +155,6 @@ internal static class ModelCommand
         ConfigFileHelper.WriteConfigFile(paths.NetclawConfigPath, config);
 
         writer.WriteLine($"Set {role} model to {providerName}/{modelId}");
-        writer.WriteLine("Note: Restart the daemon for changes to take effect.");
         return 0;
     }
 
@@ -263,7 +262,6 @@ internal static class ModelCommand
         ConfigFileHelper.WriteConfigFile(paths.NetclawConfigPath, config);
 
         writer.WriteLine($"Cleared {role} model role.");
-        writer.WriteLine("Note: Restart the daemon for changes to take effect.");
         return 0;
     }
 

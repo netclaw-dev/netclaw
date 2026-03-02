@@ -213,12 +213,11 @@ static void ConfigureDaemonServices(
     services.AddHostedService(sp => sp.GetRequiredService<McpClientManager>());
 
     // Dynamic tool index context layer — NOT part of the persisted system prompt.
-    // Updated by ToolIndexUpdater after MCP discovery completes. Injected into
-    // every LLM call so rehydrated sessions always see the current tool set.
-    var toolIndexLayer = new ToolIndexContextLayer();
-    toolIndexLayer.Update(toolRegistry.GenerateCompressedIndex());
-    services.AddSingleton(toolIndexLayer);
-    services.AddSingleton<IContextLayerProvider>(toolIndexLayer);
+    // Backed by system-managed shadow files on disk so tool metadata remains
+    // discoverable and inspectable across daemon restarts.
+    services.AddSingleton<McpShadowCatalogWriter>();
+    services.AddSingleton<IContextLayerProvider>(_ =>
+        new FileContextLayerProvider(paths.ToolIndexShadowPath));
 
     // Expose all context layers as IReadOnlyList for actor DI resolution
     services.AddSingleton<IReadOnlyList<IContextLayerProvider>>(sp =>

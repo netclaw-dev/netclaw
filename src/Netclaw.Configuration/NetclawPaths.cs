@@ -18,6 +18,9 @@ public sealed class NetclawPaths
     public string SoulDetailDirectory => Path.Combine(IdentityDirectory, "soul");
     public string AgentsDetailDirectory => Path.Combine(IdentityDirectory, "agents");
     public string ToolingDetailDirectory => Path.Combine(IdentityDirectory, "tooling");
+    public string ToolingShadowDirectory => Path.Combine(ToolingDetailDirectory, "shadow");
+    public string ToolIndexShadowPath => Path.Combine(ToolingShadowDirectory, "tool-index.md");
+    public string McpShadowDirectory => Path.Combine(ToolingShadowDirectory, "mcp");
 
     // ── Legacy paths (kept for migration detection) ──
     public string SoulDirectory => Path.Combine(BasePath, "soul");
@@ -56,6 +59,8 @@ public sealed class NetclawPaths
         Directory.CreateDirectory(SoulDetailDirectory);
         Directory.CreateDirectory(AgentsDetailDirectory);
         Directory.CreateDirectory(ToolingDetailDirectory);
+        Directory.CreateDirectory(ToolingShadowDirectory);
+        Directory.CreateDirectory(McpShadowDirectory);
         Directory.CreateDirectory(ProjectsDirectory);
         Directory.CreateDirectory(EnvironmentDirectory);
         Directory.CreateDirectory(SchedulesDirectory);

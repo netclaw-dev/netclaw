@@ -786,8 +786,8 @@ public partial class InitWizardViewModel : ReactiveViewModel
 
             - Ask before making destructive changes to files or infrastructure
             - Prefer concise tool usage — avoid unnecessary search_tools calls
+            - For MCP capabilities, use progressive discovery: search_tools("servers") -> search_tools("<intent>", server: "<server_name>")
             - For interactive web tasks (clicking, typing, form filling), use browser MCP tools; do not substitute web_fetch/file_read/shell_execute for browser interaction
-            - Browser workflow: search_tools("browser ...") -> browser_navigate(url) -> browser_snapshot() -> browser_click/type/fill_form
             - For browser automation, prefer file outputs over inline page dumps; avoid returning full DOM snapshots unless explicitly requested
 
             ## Identity Files
@@ -810,6 +810,7 @@ public partial class InitWizardViewModel : ReactiveViewModel
             - `{_paths.SoulDetailDirectory}/` — e.g., `communication-preferences.md`, `work-context.md`
             - `{_paths.AgentsDetailDirectory}/` — e.g., `tool-policies.md`, `safety-rules.md`
             - `{_paths.ToolingDetailDirectory}/` — e.g., `docker.md`, `kubernetes.md`
+            - `{_paths.McpShadowDirectory}/` — system-generated MCP shadow catalogs (do not edit)
 
             The top-level file should reference detail files so they can be loaded on demand.
             """);

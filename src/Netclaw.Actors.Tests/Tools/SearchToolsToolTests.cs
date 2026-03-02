@@ -149,6 +149,54 @@ public class SearchToolsToolTests
         Assert.DoesNotContain("browser_chrome_devtools/navigate_page —", result);
     }
 
+    [Fact]
+    public async Task Search_ServersQuery_ReturnsServerCatalog()
+    {
+        var registry = CreateRegistryWithMcpTools();
+        var tool = new SearchToolsTool(registry);
+
+        var result = await tool.ExecuteAsync(
+            new Dictionary<string, object?> { ["Query"] = "servers" },
+            CancellationToken.None);
+
+        Assert.Contains("Available MCP servers", result);
+        Assert.Contains("memorizer (2 tools)", result);
+        Assert.Contains("github (1 tools)", result);
+    }
+
+    [Fact]
+    public async Task Search_AllWithServerFilter_ListsServerTools()
+    {
+        var registry = CreateRegistryWithMcpTools();
+        var tool = new SearchToolsTool(registry);
+
+        var result = await tool.ExecuteAsync(
+            new Dictionary<string, object?>
+            {
+                ["Query"] = "all",
+                ["Server"] = "memorizer"
+            },
+            CancellationToken.None);
+
+        Assert.Contains("Found 2 tool(s) in server 'memorizer'", result);
+        Assert.Contains("memorizer/store", result);
+        Assert.Contains("memorizer/search", result);
+    }
+
+    [Fact]
+    public async Task Search_AllWithoutServerFilter_ReturnsServerCatalogHint()
+    {
+        var registry = CreateRegistryWithMcpTools();
+        var tool = new SearchToolsTool(registry);
+
+        var result = await tool.ExecuteAsync(
+            new Dictionary<string, object?> { ["Query"] = "all" },
+            CancellationToken.None);
+
+        Assert.Contains("Available MCP servers", result);
+        Assert.Contains("call search_tools(query: \"all\", server: \"<server_name>\")", result);
+    }
+
     private static ToolRegistry CreateRegistryWithMcpTools()
     {
         var registry = new ToolRegistry();

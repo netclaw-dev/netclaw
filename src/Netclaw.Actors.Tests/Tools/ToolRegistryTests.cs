@@ -143,7 +143,7 @@ public class ToolRegistryTests
     }
 
     [Fact]
-    public void GenerateCompressedIndex_groups_by_category()
+    public void GenerateCompressedIndex_uses_mcp_server_progressive_disclosure()
     {
         var registry = new ToolRegistry();
         registry.Register(new McpToolAdapter(
@@ -154,9 +154,29 @@ public class ToolRegistryTests
 
         var index = registry.GenerateCompressedIndex();
 
-        Assert.Contains("mcp:memorizer: store, search", index);
+        Assert.Contains("[MCP capability servers - discover tools with search_tools]", index);
+        Assert.Contains("memorizer (2 tools)", index);
+        Assert.Contains("search_tools(query: \"all\", server: \"<server_name>\")", index);
         Assert.Contains("shell: shell_execute", index);
         Assert.Contains("search_tools", index);
+        Assert.DoesNotContain("mcp:memorizer: store, search", index);
+    }
+
+    [Fact]
+    public void GetMcpServerSummaries_includes_capability_descriptions()
+    {
+        var registry = new ToolRegistry();
+        registry.Register(new McpToolAdapter(
+            CreateFakeTool("navigate_page"), "browser_playwright", "navigate_page"));
+        registry.Register(new McpToolAdapter(
+            CreateFakeTool("snapshot"), "browser_playwright", "snapshot"));
+
+        var summaries = registry.GetMcpServerSummaries();
+
+        var browser = Assert.Single(summaries);
+        Assert.Equal("browser_playwright", browser.ServerName);
+        Assert.Equal(2, browser.ToolCount);
+        Assert.Contains("browser automation", browser.Description, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

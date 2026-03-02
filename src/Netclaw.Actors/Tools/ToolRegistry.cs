@@ -11,6 +11,11 @@ namespace Netclaw.Actors.Tools;
 public sealed record ToolRegistration(INetclawTool Tool, string GrantCategory);
 
 /// <summary>
+/// Summary metadata for an MCP server used in progressive-disclosure routing.
+/// </summary>
+public sealed record McpServerSummary(string ServerName, string Description, int ToolCount);
+
+/// <summary>
 /// Registers <see cref="INetclawTool"/> definitions with grant categories for policy filtering.
 /// Sessions receive only tools whose grant category is in the session's allowed set.
 /// </summary>
@@ -60,6 +65,43 @@ public sealed class ToolRegistry
     /// Returns all registered tool registrations (for search and dynamic loading).
     /// </summary>
     public IReadOnlyList<ToolRegistration> GetAllRegistrations() => _tools;
+
+    /// <summary>
+    /// Returns tools discovered from one MCP server.
+    /// </summary>
+    public IReadOnlyList<INetclawTool> GetToolsForServer(string serverName, int maxResults)
+    {
+        if (string.IsNullOrWhiteSpace(serverName) || maxResults <= 0)
+            return [];
+
+        return _tools
+            .Where(t => t.Tool is McpToolAdapter mcp
+                        && string.Equals(mcp.ServerName, serverName, StringComparison.OrdinalIgnoreCase))
+            .Select(t => t.Tool)
+            .OrderBy(t => t.Name, StringComparer.Ordinal)
+            .Take(maxResults)
+            .ToList();
+    }
+
+    /// <summary>
+    /// Returns MCP server summaries for progressive-disclosure discovery.
+    /// </summary>
+    public IReadOnlyList<McpServerSummary> GetMcpServerSummaries()
+    {
+        return _tools
+            .Select(t => t.Tool)
+            .OfType<McpToolAdapter>()
+            .GroupBy(t => t.ServerName, StringComparer.OrdinalIgnoreCase)
+            .Select(group =>
+            {
+                var tools = group.ToList();
+                var serverName = tools[0].ServerName;
+                var description = DescribeServerCapability(serverName, tools);
+                return new McpServerSummary(serverName, description, tools.Count);
+            })
+            .OrderBy(x => x.ServerName, StringComparer.Ordinal)
+            .ToList();
+    }
 
     /// <summary>
     /// Search tools by keyword, matching against name and description.
@@ -128,7 +170,8 @@ public sealed class ToolRegistry
 
     /// <summary>
     /// Generates a compressed tool index for the system prompt.
-    /// Groups tools by grant category for compact representation.
+    /// Uses progressive disclosure: list directly-callable tools and MCP servers,
+    /// then route detailed discovery through search_tools.
     /// </summary>
     public string GenerateCompressedIndex()
     {
@@ -155,28 +198,53 @@ public sealed class ToolRegistry
         if (mcpTools.Count > 0)
         {
             sb.AppendLine();
-            sb.AppendLine("[MCP tools — NOT directly callable, must load first via search_tools]");
-            var mcpGrouped = mcpTools.GroupBy(t => t.GrantCategory);
-            foreach (var group in mcpGrouped)
-            {
-                var names = group.Select(t => ((McpToolAdapter)t.Tool).BareToolName);
-                sb.AppendLine($"{group.Key}: {string.Join(", ", names)}");
-            }
-            sb.AppendLine("→ REQUIRED: call search_tools(\"query\") first to load MCP tools, then call them");
-            sb.AppendLine("→ Use exact parameter names from each tool schema (MCP tools usually use lowercase/camelCase)");
+            sb.AppendLine("[MCP capability servers - discover tools with search_tools]");
 
-            var hasBrowserTools = mcpTools.Any(t =>
-                t.Tool.Name.Contains("/browser_", StringComparison.OrdinalIgnoreCase)
-                || t.Tool.Name.Contains("browser_", StringComparison.OrdinalIgnoreCase));
-
-            if (hasBrowserTools)
+            foreach (var summary in GetMcpServerSummaries())
             {
-                sb.AppendLine("→ For interactive web tasks (click/type/forms), use browser MCP tools; do not rely on web_fetch/file_read/shell_execute");
-                sb.AppendLine("→ Browser workflow: search_tools(\"browser ...\") -> browser_navigate(url) -> browser_snapshot() -> browser_click/type/fill_form");
+                sb.AppendLine($"{summary.ServerName} ({summary.ToolCount} tools): {summary.Description}");
             }
+
+            sb.AppendLine("- Choose a server by need (browser, memory, email, etc.).");
+            sb.AppendLine("- Then call search_tools(query: \"<intent>\", server: \"<server_name>\").");
+            sb.AppendLine("- To browse one server, call search_tools(query: \"all\", server: \"<server_name>\").");
+            sb.AppendLine("- MCP tools are not directly callable until loaded via search_tools.");
         }
 
         return sb.ToString();
+    }
+
+    private static string DescribeServerCapability(string serverName, IReadOnlyList<McpToolAdapter> tools)
+    {
+        var normalized = serverName.Trim().ToLowerInvariant();
+
+        if (normalized.Contains("browser", StringComparison.Ordinal))
+            return "Interactive browser automation for navigation, clicking, typing, and page snapshots.";
+
+        if (normalized.Contains("memorizer", StringComparison.Ordinal)
+            || normalized.Contains("memory", StringComparison.Ordinal))
+            return "Persistent memory storage and retrieval across sessions.";
+
+        if (normalized.Contains("email", StringComparison.Ordinal)
+            || normalized.Contains("mail", StringComparison.Ordinal))
+            return "Email operations for sending, reading, and inbox workflows.";
+
+        if (normalized.Contains("github", StringComparison.Ordinal)
+            || normalized.Contains("git", StringComparison.Ordinal))
+            return "GitHub operations for repositories, issues, and pull requests.";
+
+        if (normalized.Contains("search", StringComparison.Ordinal))
+            return "Search and retrieval capabilities.";
+
+        var fallback = tools
+            .Select(t => t.Description)
+            .FirstOrDefault(d => !string.IsNullOrWhiteSpace(d));
+
+        if (string.IsNullOrWhiteSpace(fallback))
+            return "General MCP capability server.";
+
+        var singleLine = Regex.Replace(fallback.Trim(), "\\s+", " ");
+        return singleLine.Length <= 96 ? singleLine : singleLine[..93] + "...";
     }
 
     private static IReadOnlyList<string> TokenizeQuery(string query)

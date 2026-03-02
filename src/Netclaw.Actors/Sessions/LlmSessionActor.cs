@@ -258,8 +258,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor
             {
                 _log.Warning("LLM produced empty response (no text, no tool calls) — retrying with nudge");
                 _state = _state.AddSystemNudge(
-                    "Your previous response was empty. If you need MCP tools, call search_tools(\"query\") first to load them. "
-                    + "MCP tools listed in the index are NOT directly callable — you must use search_tools to load them before calling.");
+                    "Your previous response was empty. If you need MCP capabilities, call search_tools(\"servers\") to pick a server "
+                    + "(for example browser, memory, or email), then call search_tools(\"<intent>\", server: \"<server_name>\") to load tools. "
+                    + "MCP tools are not directly callable until loaded via search_tools.");
                 FireLlmCall();
                 return;
             }

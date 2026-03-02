@@ -150,7 +150,6 @@ internal static class ProviderCommand
         writer.WriteLine($"Added provider '{name}' ({type})");
         WriteProviderGuidance(descriptor, writer);
         writer.WriteLine();
-        writer.WriteLine("Note: Restart the daemon for changes to take effect.");
         return 0;
     }
 
@@ -193,7 +192,6 @@ internal static class ProviderCommand
         if (removed)
         {
             writer.WriteLine($"Removed provider '{name}'");
-            writer.WriteLine("Note: Restart the daemon for changes to take effect.");
             return 0;
         }
 

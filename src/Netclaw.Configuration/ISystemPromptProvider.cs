@@ -71,6 +71,32 @@ public sealed class ToolIndexContextLayer : IContextLayerProvider
 }
 
 /// <summary>
+/// Context layer provider backed by a file on disk.
+/// Returns empty content when the file is missing or unreadable.
+/// </summary>
+public sealed class FileContextLayerProvider : IContextLayerProvider
+{
+    private readonly string _filePath;
+
+    public FileContextLayerProvider(string filePath)
+    {
+        _filePath = filePath;
+    }
+
+    public string GetContextLayer()
+    {
+        try
+        {
+            return File.Exists(_filePath) ? File.ReadAllText(_filePath) : string.Empty;
+        }
+        catch (IOException)
+        {
+            return string.Empty;
+        }
+    }
+}
+
+/// <summary>
 /// Loads system prompt layers from the filesystem under <see cref="NetclawPaths.IdentityDirectory"/>.
 /// Missing files are silently skipped. Falls back to legacy <c>soul/</c> paths if identity
 /// files don't exist yet.

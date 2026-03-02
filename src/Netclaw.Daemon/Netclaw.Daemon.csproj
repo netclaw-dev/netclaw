@@ -39,6 +39,7 @@
     <ProjectReference Include="..\Netclaw.Configuration\Netclaw.Configuration.csproj" />
     <ProjectReference Include="..\Netclaw.Channels\Netclaw.Channels.csproj" />
     <ProjectReference Include="..\Netclaw.Search\Netclaw.Search.csproj" />
+    <ProjectReference Include="..\Netclaw.Tools.Abstractions\Netclaw.Tools.Abstractions.csproj" />
   </ItemGroup>
 
 </Project>
