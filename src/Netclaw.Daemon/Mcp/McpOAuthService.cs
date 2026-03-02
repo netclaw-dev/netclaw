@@ -475,15 +475,24 @@ internal sealed class McpOAuthService
     }
 
     // ── Persistence ────────────────────────────────────────────────────
+    // Tokens go into secrets.json under "McpOAuthTokens".
+    // Metadata stays in its own file (non-secret, cache only).
+
+    private const string TokensSectionKey = "McpOAuthTokens";
 
     private void LoadTokensFromDisk()
     {
-        if (!File.Exists(_paths.McpOAuthTokensPath)) return;
+        if (!File.Exists(_paths.SecretsPath)) return;
 
         try
         {
-            var json = File.ReadAllText(_paths.McpOAuthTokensPath);
-            var tokens = JsonSerializer.Deserialize<Dictionary<string, McpOAuthTokenSet>>(json, JsonOptions);
+            var json = File.ReadAllText(_paths.SecretsPath);
+            using var doc = JsonDocument.Parse(json);
+            if (!doc.RootElement.TryGetProperty(TokensSectionKey, out var section))
+                return;
+
+            var tokens = JsonSerializer.Deserialize<Dictionary<string, McpOAuthTokenSet>>(
+                section.GetRawText(), JsonOptions);
             if (tokens is not null)
             {
                 foreach (var (key, value) in tokens)
@@ -492,7 +501,7 @@ internal sealed class McpOAuthService
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Failed to load OAuth tokens from {Path}", _paths.McpOAuthTokensPath);
+            _logger.LogWarning(ex, "Failed to load OAuth tokens from {Path}", _paths.SecretsPath);
         }
     }
 
@@ -520,13 +529,31 @@ internal sealed class McpOAuthService
     {
         try
         {
-            var json = JsonSerializer.Serialize(
+            // Read existing secrets.json, merge in our tokens section, write back
+            Dictionary<string, object> secrets;
+            if (File.Exists(_paths.SecretsPath))
+            {
+                var existing = File.ReadAllText(_paths.SecretsPath);
+                secrets = JsonSerializer.Deserialize<Dictionary<string, object>>(existing, JsonOptions)
+                    ?? new Dictionary<string, object>();
+            }
+            else
+            {
+                secrets = new Dictionary<string, object>();
+            }
+
+            secrets[TokensSectionKey] = JsonSerializer.SerializeToElement(
                 new Dictionary<string, McpOAuthTokenSet>(_tokens), JsonOptions);
-            File.WriteAllText(_paths.McpOAuthTokensPath, json);
+
+            var json = JsonSerializer.Serialize(secrets, JsonOptions);
+            var dir = Path.GetDirectoryName(_paths.SecretsPath);
+            if (dir is not null)
+                Directory.CreateDirectory(dir);
+            File.WriteAllText(_paths.SecretsPath, json);
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Failed to persist OAuth tokens to {Path}", _paths.McpOAuthTokensPath);
+            _logger.LogWarning(ex, "Failed to persist OAuth tokens to {Path}", _paths.SecretsPath);
         }
     }
 
