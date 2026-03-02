@@ -12,15 +12,17 @@ internal sealed class RollingFileLoggerProvider : ILoggerProvider
 {
     private const long MaxFileSizeBytes = 10 * 1024 * 1024; // 10MB per file
     private readonly string _basePath;
+    private readonly TimeProvider _timeProvider;
     private readonly ConcurrentDictionary<string, RollingFileLogger> _loggers = new();
     private readonly BlockingCollection<string> _queue = new(1024);
     private readonly Thread _writerThread;
     private StreamWriter? _writer;
     private string _currentDate = "";
 
-    public RollingFileLoggerProvider(string basePath)
+    public RollingFileLoggerProvider(string basePath, TimeProvider? timeProvider = null)
     {
         _basePath = basePath;
+        _timeProvider = timeProvider ?? TimeProvider.System;
         _writerThread = new Thread(ProcessQueue)
         {
             IsBackground = true,
@@ -57,7 +59,7 @@ internal sealed class RollingFileLoggerProvider : ILoggerProvider
 
     private void EnsureWriter()
     {
-        var today = DateTime.UtcNow.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        var today = _timeProvider.GetUtcNow().ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
         if (_writer is not null && _currentDate == today)
         {
             // Roll if file exceeds size limit
@@ -81,6 +83,11 @@ internal sealed class RollingFileLoggerProvider : ILoggerProvider
         var path = Path.Combine(dir, $"{name}-{today}{ext}");
 
         _writer = new StreamWriter(path, append: true) { AutoFlush = false };
+    }
+
+    internal string GetTimestamp()
+    {
+        return _timeProvider.GetUtcNow().ToString("HH:mm:ss.fff", CultureInfo.InvariantCulture);
     }
 
     public void Dispose()
@@ -111,7 +118,7 @@ internal sealed class RollingFileLogger : ILogger
         if (!IsEnabled(logLevel))
             return;
 
-        var timestamp = DateTime.UtcNow.ToString("HH:mm:ss.fff", CultureInfo.InvariantCulture);
+        var timestamp = _provider.GetTimestamp();
         var level = logLevel switch
         {
             LogLevel.Information => "INF",

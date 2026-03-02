@@ -29,16 +29,18 @@ public sealed partial class WebFetchTool : NetclawTool<WebFetchTool.Params>
 
     private readonly HttpClient _httpClient;
     private readonly string _fetchDirectory;
+    private readonly TimeProvider _timeProvider;
     private readonly Random _random = new();
 
     public record Params(
         [property: Description("The URL to fetch")] string Url);
 
-    public WebFetchTool(HttpClient? httpClient = null, string? fetchDirectory = null)
+    public WebFetchTool(HttpClient? httpClient = null, string? fetchDirectory = null, TimeProvider? timeProvider = null)
     {
         _httpClient = httpClient ?? new HttpClient();
         _fetchDirectory = fetchDirectory
             ?? Path.Combine(Path.GetTempPath(), "netclaw-fetch");
+        _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     protected override Task<string> ExecuteAsync(Params args, CancellationToken ct)
@@ -109,13 +111,13 @@ public sealed partial class WebFetchTool : NetclawTool<WebFetchTool.Params>
         return Encoding.UTF8.GetString(bytes);
     }
 
-    private static string SaveToFile(string text, Uri uri, string directory)
+    private string SaveToFile(string text, Uri uri, string directory)
     {
         Directory.CreateDirectory(directory);
 
         // Generate a filename from the URL host + path + timestamp
         var sanitized = SanitizeForFilename(uri);
-        var filename = $"{sanitized}-{DateTimeOffset.UtcNow.ToUnixTimeSeconds()}.txt";
+        var filename = $"{sanitized}-{_timeProvider.GetUtcNow().ToUnixTimeSeconds()}.txt";
         var filePath = Path.Combine(directory, filename);
 
         File.WriteAllText(filePath, text, Encoding.UTF8);

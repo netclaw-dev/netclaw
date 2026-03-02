@@ -30,6 +30,7 @@ public sealed class DaemonClient : IAsyncDisposable
     private readonly Subject<SessionOutput> _outputSubject = new();
     private readonly Subject<DaemonConnectionEvent> _connectionSubject = new();
     private readonly HttpClient _httpClient = new();
+    private readonly TimeProvider _timeProvider;
     private readonly SemaphoreSlim _connectGate = new(1, 1);
     private readonly SemaphoreSlim _sessionGate = new(1, 1);
     private readonly CancellationTokenSource _lifetimeCts = new();
@@ -39,13 +40,14 @@ public sealed class DaemonClient : IAsyncDisposable
     private bool _hasConnected;
     private bool _disposed;
 
-    public DaemonClient(string daemonEndpoint)
+    public DaemonClient(string daemonEndpoint, TimeProvider? timeProvider = null)
     {
         if (string.IsNullOrWhiteSpace(daemonEndpoint))
             throw new ArgumentException("Daemon endpoint cannot be empty.", nameof(daemonEndpoint));
 
         _daemonEndpoint = daemonEndpoint.TrimEnd('/');
         _hubUrl = BuildHubUrl(_daemonEndpoint);
+        _timeProvider = timeProvider ?? TimeProvider.System;
 
         _connection = new HubConnectionBuilder()
             .WithUrl(_hubUrl)
@@ -158,8 +160,8 @@ public sealed class DaemonClient : IAsyncDisposable
 
     private async Task WaitForStableConnectionStateAsync(CancellationToken cancellationToken)
     {
-        var deadline = DateTimeOffset.UtcNow.AddSeconds(15);
-        while (DateTimeOffset.UtcNow < deadline)
+        var deadline = _timeProvider.GetUtcNow().AddSeconds(15);
+        while (_timeProvider.GetUtcNow() < deadline)
         {
             if (_connection.State is HubConnectionState.Connected or HubConnectionState.Disconnected)
                 return;

@@ -36,14 +36,16 @@ public sealed class DuckDuckGoBackend : ISearchBackend
     ];
 
     private readonly HttpClient _httpClient;
+    private readonly TimeProvider _timeProvider;
     private readonly Random _random = new();
 
     private static readonly object RateLimitLock = new();
     private static DateTimeOffset _lastRequestTime = DateTimeOffset.MinValue;
 
-    public DuckDuckGoBackend(HttpClient? httpClient = null)
+    public DuckDuckGoBackend(HttpClient? httpClient = null, TimeProvider? timeProvider = null)
     {
         _httpClient = httpClient ?? new HttpClient();
+        _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     public async Task<SearchBackendResult> SearchAsync(string query, int maxResults, CancellationToken ct)
@@ -102,14 +104,15 @@ public sealed class DuckDuckGoBackend : ISearchBackend
         lock (RateLimitLock)
         {
             var minGap = TimeSpan.FromMilliseconds(500 + _random.Next(1500));
-            var elapsed = DateTimeOffset.UtcNow - _lastRequestTime;
+            var now = _timeProvider.GetUtcNow();
+            var elapsed = now - _lastRequestTime;
             if (elapsed >= minGap)
             {
-                _lastRequestTime = DateTimeOffset.UtcNow;
+                _lastRequestTime = now;
                 return;
             }
             delay = minGap - elapsed;
-            _lastRequestTime = DateTimeOffset.UtcNow + delay;
+            _lastRequestTime = now + delay;
         }
         await Task.Delay(delay, ct);
     }

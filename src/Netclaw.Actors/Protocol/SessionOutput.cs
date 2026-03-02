@@ -14,7 +14,7 @@ public abstract record SessionOutput
 {
     public required SessionId SessionId { get; init; }
 
-    public long TimestampMs { get; init; } = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+    public long TimestampMs { get; init; } = TimeProvider.System.GetUtcNow().ToUnixTimeMilliseconds();
 
     public DateTimeOffset Timestamp => DateTimeOffset.FromUnixTimeMilliseconds(TimestampMs);
 }
