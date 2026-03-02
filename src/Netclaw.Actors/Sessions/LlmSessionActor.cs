@@ -146,7 +146,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor
             if (_sessionLogsBasePath is not null)
             {
                 _logActor = Context.ActorOf(
-                    SessionLogActor.CreateProps(_sessionId, _sessionLogsBasePath),
+                    SessionLogActor.CreateProps(_sessionId, _sessionLogsBasePath, _timeProvider),
                     "session-log");
             }
         });
