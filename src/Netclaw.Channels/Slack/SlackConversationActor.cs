@@ -59,6 +59,7 @@ public sealed class SlackConversationActor : ReceiveActor
                 message,
                 _dependencies.Options.MentionOnly,
                 _dependencies.Options.AllowDirectMessages,
+                _dependencies.Options.MentionRequiredInDm,
                 threadExists,
                 containsMention);
 

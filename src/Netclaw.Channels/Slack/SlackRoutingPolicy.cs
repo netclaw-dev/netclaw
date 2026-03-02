@@ -6,6 +6,7 @@ public static class SlackRoutingPolicy
         SlackInboundMessage message,
         bool mentionOnly,
         bool allowDirectMessages,
+        bool mentionRequiredInDm,
         bool threadExists,
         bool containsBotMention)
     {
@@ -35,7 +36,13 @@ public static class SlackRoutingPolicy
         }
 
         if (message.IsDirectMessage)
-            return allowDirectMessages ? SlackRoutingDecision.StartOrContinue : SlackRoutingDecision.Ignore;
+        {
+            if (!allowDirectMessages)
+                return SlackRoutingDecision.Ignore;
+            if (mentionRequiredInDm && !containsBotMention)
+                return SlackRoutingDecision.Ignore;
+            return SlackRoutingDecision.StartOrContinue;
+        }
 
         if (threadExists)
             return SlackRoutingDecision.ContinueOnly;

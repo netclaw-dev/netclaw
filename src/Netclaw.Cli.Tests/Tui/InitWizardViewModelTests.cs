@@ -803,6 +803,31 @@ public sealed class InitWizardViewModelTests : IDisposable
     }
 
     [Fact]
+    public async Task HealthCheck_AutoEnablesDm_WhenUserIdsProvided()
+    {
+        using var vm = CreateViewModel();
+        vm.SelectedProviderType = "ollama";
+        vm.SlackEnabled = true;
+        vm.SlackBotToken = "xoxb-test-bot-token";
+        vm.SlackAppToken = "xapp-test-app-token";
+        vm.SlackAllowDirectMessages = false; // not explicitly enabled
+        vm.SlackAllowedUserIdsInput = "U001ABC";
+
+        vm.CurrentStep.Value = WizardStep.HealthCheck;
+        vm.GoNext();
+        await vm.HealthCheckCompletion!.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.True(vm.IsComplete.Value);
+
+        var config = JsonDocument.Parse(File.ReadAllText(_paths.NetclawConfigPath));
+        Assert.True(config.RootElement.TryGetProperty("Slack", out var slack));
+        Assert.True(slack.GetProperty("AllowDirectMessages").GetBoolean());
+
+        var allowedUsers = slack.GetProperty("AllowedUserIds");
+        Assert.Equal(1, allowedUsers.GetArrayLength());
+        Assert.Equal("U001ABC", allowedUsers[0].GetString());
+    }
+
+    [Fact]
     public void WriteIdentityFiles_GeneratesAllThreeFiles()
     {
         using var vm = CreateViewModel();
