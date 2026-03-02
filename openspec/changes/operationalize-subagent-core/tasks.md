@@ -51,7 +51,7 @@
 ## 7. Verification
 
 - [x] 7.1 `dotnet build` — zero errors
-- [x] 7.2 `dotnet test` — all existing + new tests pass (595 total)
+- [x] 7.2 `dotnet test` — all existing + new tests pass (544 total)
 - [x] 7.3 `dotnet slopwatch analyze` — zero new violations
 - [ ] 7.4 Smoke test: run `netclaw init` through the Memory step with local Memorizer, verify config written correctly
 - [ ] 7.5 Smoke test: run headless prompt with Memorizer-backed memory, verify `[subagent:start]` and `[subagent:done]` appear in output
