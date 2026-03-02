@@ -41,6 +41,14 @@ catch (Exception ex)
 
 static async Task RunDaemonAsync(string[] args, DaemonRestartSignal restartSignal)
 {
+    // Anchor process CWD to a user-owned temp directory.
+    // Without this, the daemon runs from its install location (e.g. /usr/local/bin),
+    // which means shell commands, relative file paths, and stdio MCP child processes
+    // (Playwright screenshots, etc.) all default to a potentially privileged directory.
+    var netclawTempDir = Path.Combine(Path.GetTempPath(), "netclaw");
+    Directory.CreateDirectory(netclawTempDir);
+    Environment.CurrentDirectory = netclawTempDir;
+
     var builder = WebApplication.CreateBuilder(args);
 
     // Use port 5199 to avoid conflicts with Aspire (5000) and other defaults
@@ -247,8 +255,25 @@ static void ConfigureDaemonServices(
         skillRegistry.Register(skill);
     services.AddSingleton(skillRegistry);
 
-    // Cross-session memory: search_memories wraps Memorizer MCP tool
-    toolRegistry.Register(new SearchMemoriesTool(toolRegistry));
+    // Cross-session memory: provider-based wiring
+    var memoryConfig = configuration.GetSection("Memory")
+        .Get<MemoryConfig>() ?? new MemoryConfig();
+    services.AddSingleton(memoryConfig);
+
+    if (memoryConfig.Provider.Equals("memorizer", StringComparison.OrdinalIgnoreCase))
+    {
+        // Memorizer path: no builtin memory tools — MCP discovery handles everything
+        services.AddSingleton<IMemoryExtractor>(sp =>
+            new MemorizerMemoryExtractor(sp.GetRequiredService<ToolRegistry>()));
+    }
+    else
+    {
+        // File path: register builtin memory tools backed by local markdown files
+        var fileStore = new FileMemoryStore(paths.MemoriesDirectory, TimeProvider.System);
+        toolRegistry.Register(new SearchMemoriesTool(fileStore));
+        toolRegistry.Register(new StoreMemoryTool(fileStore));
+        services.AddSingleton<IMemoryExtractor>(new FileMemoryExtractor(fileStore));
+    }
 
     services.AddSingleton(toolRegistry);
     services.AddSingleton<IToolExecutor>(sp =>

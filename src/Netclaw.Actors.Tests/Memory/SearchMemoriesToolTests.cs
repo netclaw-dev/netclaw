@@ -1,78 +1,89 @@
-using Microsoft.Extensions.AI;
 using Netclaw.Actors.Memory;
-using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 using Xunit;
 
 namespace Netclaw.Actors.Tests.Memory;
 
-public class SearchMemoriesToolTests
+public class SearchMemoriesToolTests : IDisposable
 {
-    [Fact]
-    public async Task Returns_unavailable_message_when_memorizer_not_connected()
+    private readonly string _tempDir;
+    private readonly FileMemoryStore _store;
+
+    public SearchMemoriesToolTests()
     {
-        var registry = new ToolRegistry();
-        // No MCP tools registered — Memorizer is not connected
-        var tool = new SearchMemoriesTool(registry);
+        _tempDir = Path.Combine(Path.GetTempPath(), $"netclaw-test-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(_tempDir);
+        _store = new FileMemoryStore(_tempDir, TimeProvider.System);
+    }
+
+    public void Dispose()
+    {
+        if (Directory.Exists(_tempDir))
+            Directory.Delete(_tempDir, recursive: true);
+    }
+
+    [Fact]
+    public async Task Returns_no_memories_when_store_is_empty()
+    {
+        var tool = new SearchMemoriesTool(_store);
 
         var result = await tool.ExecuteAsync(
             new Dictionary<string, object?> { ["Query"] = "test query" },
             CancellationToken.None);
 
-        Assert.Contains("not available", result, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("not connected", result, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal("No memories found.", result);
     }
 
     [Fact]
     public void Grant_category_is_builtin()
     {
-        var registry = new ToolRegistry();
-        var tool = new SearchMemoriesTool(registry);
-
+        var tool = new SearchMemoriesTool(_store);
         Assert.Equal("builtin", tool.GrantCategory);
     }
 
     [Fact]
-    public async Task Delegates_to_memorizer_mcp_tool_when_available()
+    public async Task Returns_matching_memories_after_store()
     {
-        var registry = new ToolRegistry();
+        await _store.StoreAsync("Akka.NET clustering guide", "Use cluster sharding for entity distribution.", ["reference", "akka"], CancellationToken.None);
 
-        // Register a fake MCP tool under the expected name
-        var fakeResult = "Found 1 memory: test memory content";
-        var fakeTool = AIFunctionFactory.Create((string query) => fakeResult,
-            name: "search_memories",
-            description: "Search memories");
-        registry.Register(fakeTool, "mcp:memorizer");
-
-        // Re-register with the expected namespaced name
-        var registry2 = new ToolRegistry();
-        var fakeMemorizerTool = new FakeNetclawTool("memorizer/search_memories", fakeResult);
-        registry2.Register(fakeMemorizerTool);
-
-        var tool = new SearchMemoriesTool(registry2);
+        var tool = new SearchMemoriesTool(_store);
 
         var result = await tool.ExecuteAsync(
-            new Dictionary<string, object?> { ["Query"] = "test" },
+            new Dictionary<string, object?> { ["Query"] = "akka clustering" },
             CancellationToken.None);
 
-        Assert.Contains("test memory content", result);
+        Assert.Contains("Akka.NET clustering guide", result);
+        Assert.Contains("cluster sharding", result);
     }
 
     [Fact]
-    public void MemoryIndexContextLayer_connected_shows_behavioral_triggers()
+    public void MemoryIndexContextLayer_file_backed_shows_store_memory_guidance()
     {
         var layer = new MemoryIndexContextLayer();
-        layer.Update(connected: true);
+        layer.Update(MemoryContextState.FileBacked);
 
         var content = layer.GetContextLayer();
 
-        // Behavioral triggers — retrieve and save rules
         Assert.Contains("RETRIEVE:", content);
         Assert.Contains("SAVE:", content);
         Assert.Contains("search_memories", content);
-        Assert.Contains("memorizer/store", content);
+        Assert.Contains("store_memory", content);
+        Assert.Contains("memory.md", content);
+        Assert.DoesNotContain("memorizer/store", content);
+        Assert.DoesNotContain("NOT AVAILABLE", content);
+    }
 
-        // Organization guidance still present
+    [Fact]
+    public void MemoryIndexContextLayer_memorizer_connected_shows_memorizer_guidance()
+    {
+        var layer = new MemoryIndexContextLayer();
+        layer.Update(MemoryContextState.MemorizerConnected);
+
+        var content = layer.GetContextLayer();
+
+        Assert.Contains("RETRIEVE:", content);
+        Assert.Contains("SAVE:", content);
+        Assert.Contains("memorizer/store", content);
         Assert.Contains("workspaces", content);
         Assert.Contains("projects", content);
         Assert.Contains("memorizer-usage", content);
@@ -80,39 +91,16 @@ public class SearchMemoriesToolTests
     }
 
     [Fact]
-    public void MemoryIndexContextLayer_disconnected_shows_unavailable_with_fallback()
+    public void MemoryIndexContextLayer_memorizer_disconnected_shows_troubleshooting()
     {
         var layer = new MemoryIndexContextLayer();
-        layer.Update(connected: false);
+        layer.Update(MemoryContextState.MemorizerDisconnected);
 
         var content = layer.GetContextLayer();
 
         Assert.Contains("NOT AVAILABLE", content);
-        // Fallback guidance — save to identity/skill files instead
+        Assert.Contains("not connected", content);
+        Assert.Contains("McpServers", content);
         Assert.Contains("SOUL.md", content);
-        Assert.Contains("identity-management", content);
-        Assert.Contains("skill", content, StringComparison.OrdinalIgnoreCase);
-    }
-
-    /// <summary>
-    /// Minimal INetclawTool fake for testing SearchMemoriesTool delegation.
-    /// </summary>
-    private sealed class FakeNetclawTool : Netclaw.Tools.INetclawTool
-    {
-        private readonly string _result;
-
-        public FakeNetclawTool(string name, string result)
-        {
-            Name = name;
-            _result = result;
-        }
-
-        public string Name { get; }
-        public string Description => "Fake tool";
-        public string GrantCategory => "mcp:memorizer";
-        public System.Text.Json.JsonElement ParameterSchema => default;
-        public AITool ToAITool() => AIFunctionFactory.Create(() => _result, name: Name, description: Description);
-        public Task<string> ExecuteAsync(IDictionary<string, object?>? arguments, CancellationToken ct = default)
-            => Task.FromResult(_result);
     }
 }

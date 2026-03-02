@@ -31,6 +31,10 @@ public sealed class NetclawPaths
     // ── Skills directory (procedural context) ──
     public string SkillsDirectory => Path.Combine(BasePath, "skills");
 
+    // ── Memory directory (file-backed cross-session memory) ──
+    public string MemoriesDirectory => Path.Combine(BasePath, "memories");
+    public string MemoryIndexPath => Path.Combine(MemoriesDirectory, "memory.md");
+
     // ── Other standard directories ──
     public string ProjectsDirectory => Path.Combine(BasePath, "projects");
     public string EnvironmentDirectory => Path.Combine(BasePath, "environment");
@@ -72,6 +76,7 @@ public sealed class NetclawPaths
         Directory.CreateDirectory(ConfigDirectory);
         Directory.CreateDirectory(LogsDirectory);
         Directory.CreateDirectory(SessionLogsDirectory);
+        Directory.CreateDirectory(MemoriesDirectory);
         Directory.CreateDirectory(SessionsDirectory);
     }
 }
