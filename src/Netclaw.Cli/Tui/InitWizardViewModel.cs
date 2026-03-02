@@ -786,6 +786,8 @@ public partial class InitWizardViewModel : ReactiveViewModel
 
             - Ask before making destructive changes to files or infrastructure
             - Prefer concise tool usage — avoid unnecessary search_tools calls
+            - For interactive web tasks (clicking, typing, form filling), use browser MCP tools; do not substitute web_fetch/file_read/shell_execute for browser interaction
+            - Browser workflow: search_tools("browser ...") -> browser_navigate(url) -> browser_snapshot() -> browser_click/type/fill_form
             - For browser automation, prefer file outputs over inline page dumps; avoid returning full DOM snapshots unless explicitly requested
 
             ## Identity Files

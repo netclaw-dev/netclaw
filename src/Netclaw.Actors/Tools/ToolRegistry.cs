@@ -164,6 +164,16 @@ public sealed class ToolRegistry
             }
             sb.AppendLine("→ REQUIRED: call search_tools(\"query\") first to load MCP tools, then call them");
             sb.AppendLine("→ Use exact parameter names from each tool schema (MCP tools usually use lowercase/camelCase)");
+
+            var hasBrowserTools = mcpTools.Any(t =>
+                t.Tool.Name.Contains("/browser_", StringComparison.OrdinalIgnoreCase)
+                || t.Tool.Name.Contains("browser_", StringComparison.OrdinalIgnoreCase));
+
+            if (hasBrowserTools)
+            {
+                sb.AppendLine("→ For interactive web tasks (click/type/forms), use browser MCP tools; do not rely on web_fetch/file_read/shell_execute");
+                sb.AppendLine("→ Browser workflow: search_tools(\"browser ...\") -> browser_navigate(url) -> browser_snapshot() -> browser_click/type/fill_form");
+            }
         }
 
         return sb.ToString();
