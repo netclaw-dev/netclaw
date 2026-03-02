@@ -4,17 +4,19 @@ using Netclaw.Channels;
 using Netclaw.Channels.Slack;
 using Netclaw.Configuration;
 using Netclaw.Daemon.Configuration;
+using Netclaw.Daemon.Mcp;
 
 namespace Netclaw.Daemon.Gateway;
 
-public sealed class DaemonRuntimeStatusService(
+internal sealed class DaemonRuntimeStatusService(
     TimeProvider timeProvider,
     IEnumerable<IChannel> channels,
     SlackChannelOptions slackOptions,
     DaemonPersistenceOptions persistenceOptions,
     IOptions<TelemetryOptions> telemetryOptions,
     SessionConfig sessionConfig,
-    ModelSelection modelSelection)
+    ModelSelection modelSelection,
+    McpClientManager? mcpClientManager = null)
 {
     public async Task<DaemonRuntimeStatus.Response> GetStatusAsync(CancellationToken cancellationToken = default)
     {
@@ -27,6 +29,8 @@ public sealed class DaemonRuntimeStatusService(
         {
             await BuildSlackStatusAsync(cancellationToken)
         };
+
+        connectors.AddRange(BuildMcpStatuses());
 
         var overall = ResolveOverallStatus(connectors);
 
@@ -109,6 +113,65 @@ public sealed class DaemonRuntimeStatusService(
                 _ => "unknown"
             },
             Message = health.Detail
+        };
+    }
+
+    private IReadOnlyList<DaemonRuntimeStatus.Connector> BuildMcpStatuses()
+    {
+        if (mcpClientManager is null)
+            return [];
+
+        return mcpClientManager
+            .GetServerStatuses()
+            .OrderBy(x => x.Key, StringComparer.OrdinalIgnoreCase)
+            .Select(x => ToConnector(x.Key, x.Value))
+            .ToList();
+    }
+
+    private static DaemonRuntimeStatus.Connector ToConnector(string name, McpServerStatus status)
+    {
+        var key = $"mcp:{name}";
+        var displayName = $"MCP/{name}";
+
+        return status.State switch
+        {
+            McpConnectionState.Disabled => new DaemonRuntimeStatus.Connector
+            {
+                Key = key,
+                DisplayName = displayName,
+                Enabled = false,
+                Status = "disabled",
+                Message = "MCP server is disabled in configuration."
+            },
+
+            McpConnectionState.Connected when status.ToolCount > 0 => new DaemonRuntimeStatus.Connector
+            {
+                Key = key,
+                DisplayName = displayName,
+                Enabled = true,
+                Status = "healthy",
+                Message = $"Connected ({status.ToolCount} tools discovered)."
+            },
+
+            McpConnectionState.Connected => new DaemonRuntimeStatus.Connector
+            {
+                Key = key,
+                DisplayName = displayName,
+                Enabled = true,
+                Status = "degraded",
+                Message = "Connected but no tools were discovered."
+            },
+
+            _ => new DaemonRuntimeStatus.Connector
+            {
+                Key = key,
+                DisplayName = displayName,
+                Enabled = true,
+                Status = "disconnected",
+                Message = string.IsNullOrWhiteSpace(status.ErrorMessage)
+                    ? "Failed to connect to MCP server."
+                    : status.ErrorMessage
+            }
         };
     }
 
