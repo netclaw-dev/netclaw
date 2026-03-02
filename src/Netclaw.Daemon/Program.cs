@@ -217,7 +217,8 @@ static void ConfigureDaemonServices(
     toolRegistry.Register(new SearchMemoriesTool(toolRegistry));
 
     services.AddSingleton(toolRegistry);
-    services.AddSingleton<IToolExecutor>(new DispatchingToolExecutor(toolRegistry));
+    services.AddSingleton<IToolExecutor>(sp =>
+        new DispatchingToolExecutor(toolRegistry, sp.GetRequiredService<ILogger<DispatchingToolExecutor>>()));
 
     // MCP server lifecycle management
     var mcpServers = configuration.GetSection("McpServers")

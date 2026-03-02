@@ -1,6 +1,8 @@
 using System.ComponentModel;
 using System.Text;
 using System.Text.Json;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Netclaw.Actors.Tools;
 using Netclaw.Tools;
 
@@ -18,6 +20,7 @@ namespace Netclaw.Actors.Memory;
 public sealed partial class SearchMemoriesTool : NetclawTool<SearchMemoriesTool.Params>
 {
     private readonly ToolRegistry _toolRegistry;
+    private readonly ILogger _logger;
 
     /// <summary>
     /// Known MCP tool names for Memorizer's search. Checked in order.
@@ -34,9 +37,10 @@ public sealed partial class SearchMemoriesTool : NetclawTool<SearchMemoriesTool.
         [property: Description("Maximum number of results to return (default 5)")]
         int? Limit = null);
 
-    public SearchMemoriesTool(ToolRegistry toolRegistry)
+    public SearchMemoriesTool(ToolRegistry toolRegistry, ILogger<SearchMemoriesTool>? logger = null)
     {
         _toolRegistry = toolRegistry;
+        _logger = logger ?? (ILogger)NullLogger.Instance;
     }
 
     protected override async Task<string> ExecuteAsync(Params args, CancellationToken ct)
@@ -44,6 +48,7 @@ public sealed partial class SearchMemoriesTool : NetclawTool<SearchMemoriesTool.
         var mcpTool = FindMemorizerTool();
         if (mcpTool is null)
         {
+            _logger.LogWarning("Memory search requested but Memorizer MCP is not connected");
             return "Memory store is not available. Memorizer MCP server is not connected. "
                    + "Check McpServers configuration in netclaw.json.";
         }
@@ -59,10 +64,17 @@ public sealed partial class SearchMemoriesTool : NetclawTool<SearchMemoriesTool.
         try
         {
             var result = await mcpTool.ExecuteAsync(arguments, ct);
-            return FormatResult(result);
+            var formatted = FormatResult(result);
+
+            _logger.LogInformation(
+                "Memory search: query='{Query}', result={ResultLength} chars",
+                args.Query, formatted.Length);
+
+            return formatted;
         }
         catch (Exception ex)
         {
+            _logger.LogError(ex, "Memory search failed: query='{Query}'", args.Query);
             return $"Error searching memories: {ex.Message}";
         }
     }

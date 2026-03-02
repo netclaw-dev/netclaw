@@ -1,5 +1,7 @@
 using System.ComponentModel;
 using System.Text;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Netclaw.Tools;
 
 namespace Netclaw.Actors.Skills;
@@ -16,15 +18,17 @@ namespace Netclaw.Actors.Skills;
 public sealed partial class SearchSkillsTool : NetclawTool<SearchSkillsTool.Params>
 {
     private readonly SkillRegistry _registry;
+    private readonly ILogger _logger;
     private const int MaxResults = 3;
 
     public record Params(
         [property: Description("Search query to match against skill names and descriptions")]
         string Query);
 
-    public SearchSkillsTool(SkillRegistry registry)
+    public SearchSkillsTool(SkillRegistry registry, ILogger<SearchSkillsTool>? logger = null)
     {
         _registry = registry;
+        _logger = logger ?? (ILogger)NullLogger.Instance;
     }
 
     protected override Task<string> ExecuteAsync(Params args, CancellationToken ct)
@@ -33,7 +37,14 @@ public sealed partial class SearchSkillsTool : NetclawTool<SearchSkillsTool.Para
         var results = _registry.Search(query, MaxResults);
 
         if (results.Count == 0)
+        {
+            _logger.LogDebug("Skill search: no results for query '{Query}'", query);
             return Task.FromResult($"No skills found matching '{query}'.");
+        }
+
+        _logger.LogInformation(
+            "Skill search: query='{Query}', loaded {Count} skill(s): {Skills}",
+            query, results.Count, string.Join(", ", results.Select(s => s.Name)));
 
         var sb = new StringBuilder();
         sb.AppendLine($"Found {results.Count} skill(s):");

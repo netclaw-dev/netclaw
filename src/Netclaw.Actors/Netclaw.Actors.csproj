@@ -15,6 +15,7 @@
     <PackageReference Include="Akka.Persistence" />
     <PackageReference Include="Aaron.Akka.Reminders" />
     <PackageReference Include="Microsoft.Extensions.AI.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
     <PackageReference Include="ModelContextProtocol.Core" />
     <PackageReference Include="protobuf-net" />
   </ItemGroup>
