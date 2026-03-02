@@ -22,6 +22,7 @@ using Netclaw.Daemon.Providers;
 using Netclaw.Daemon.Services;
 using Netclaw.Search;
 using Netclaw.Security;
+using static Microsoft.Extensions.Logging.LogLevel;
 
 try
 {
@@ -471,7 +472,7 @@ static ResolvedModelCapabilities? ResolveStartupCapabilities(string modelId, Log
 static void CopyBuiltInSkills(string skillsDirectory)
 {
     var assembly = typeof(Program).Assembly;
-    var prefix = "Netclaw.Daemon.BuiltInSkills.";
+    const string prefix = "Netclaw.Daemon.BuiltInSkills.";
 
     foreach (var resourceName in assembly.GetManifestResourceNames())
     {
@@ -497,13 +498,10 @@ static Akka.Event.LogLevel ToAkkaLogLevel(LogLevel logLevel)
 {
     return logLevel switch
     {
-        LogLevel.Trace => Akka.Event.LogLevel.DebugLevel,
-        LogLevel.Debug => Akka.Event.LogLevel.DebugLevel,
-        LogLevel.Information => Akka.Event.LogLevel.InfoLevel,
-        LogLevel.Warning => Akka.Event.LogLevel.WarningLevel,
-        LogLevel.Error => Akka.Event.LogLevel.ErrorLevel,
-        LogLevel.Critical => Akka.Event.LogLevel.ErrorLevel,
-        LogLevel.None => Akka.Event.LogLevel.ErrorLevel,
+        Trace or Debug => Akka.Event.LogLevel.DebugLevel,
+        Information => Akka.Event.LogLevel.InfoLevel,
+        Warning => Akka.Event.LogLevel.WarningLevel,
+        Error or Critical or None => Akka.Event.LogLevel.ErrorLevel,
         _ => Akka.Event.LogLevel.WarningLevel
     };
 }
