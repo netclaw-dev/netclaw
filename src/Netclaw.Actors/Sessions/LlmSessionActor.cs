@@ -448,7 +448,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor
 
                 var startIndex = _state.History.Count - keptNonSystemCount;
                 discardStartIndex = startIndex;
-                compactedMessages = new List<SerializableChatMessage>();
+                compactedMessages = [];
                 for (var i = Math.Max(systemOffset, startIndex); i < _state.History.Count; i++)
                 {
                     compactedMessages.Add(_state.History[i]);
@@ -534,9 +534,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor
         {
             // Persist extracted memories externally (fire-and-forget)
             var self = Self;
-            var extractor = _memoryExtractor;
             var sessionId = _sessionId.Value;
-            _ = PersistMemoriesAsync(extractor, sessionId, msg.ExtractedMemories, self);
+            _ = PersistMemoriesAsync(_memoryExtractor, sessionId, msg.ExtractedMemories, self);
 
             DrainBufferOrReady();
         });
