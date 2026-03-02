@@ -7,6 +7,7 @@ using Microsoft.Extensions.AI;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
 using Netclaw.Channels.Telemetry;
+using Netclaw.Security;
 
 namespace Netclaw.Channels.Slack;
 
@@ -16,6 +17,7 @@ internal sealed class SlackThreadBindingActor : ReceiveActor
     private readonly SlackChannelId _channelId;
     private readonly SlackThreadTs _threadTs;
     private readonly SlackGatewayDependencies _dependencies;
+    private readonly IPromptInjectionDetector _promptInjectionDetector;
     private readonly ILoggingAdapter _log;
 
     private readonly StringBuilder _buffer = new();
@@ -36,6 +38,7 @@ internal sealed class SlackThreadBindingActor : ReceiveActor
         _channelId = channelId;
         _threadTs = threadTs;
         _dependencies = dependencies;
+        _promptInjectionDetector = dependencies.PromptInjectionDetector ?? new NullPromptInjectionDetector();
         _log = Context.GetLogger()
             .WithContext("Adapter", "slack")
             .WithContext("SessionId", _sessionId.Value)
@@ -70,6 +73,22 @@ internal sealed class SlackThreadBindingActor : ReceiveActor
 
     private async Task HandleInboundAsync(SlackThreadInbound message)
     {
+        if (!string.IsNullOrWhiteSpace(message.Text))
+        {
+            var detection = await _promptInjectionDetector.DetectAsync(message.Text, "slack");
+            if (detection.Risk == PromptInjectionRisk.High)
+            {
+                var reason = string.IsNullOrWhiteSpace(detection.Message)
+                    ? "High-risk prompt injection pattern detected"
+                    : detection.Message;
+
+                _log.Warning("Blocked Slack message due to prompt injection risk: {Reason}", reason);
+                ChannelTelemetry.RecordSlackEventDropped("prompt_injection_high");
+                await SafePostAsync(":warning: Message blocked by prompt-injection policy.");
+                return;
+            }
+        }
+
         await EnsureInitializedAsync();
 
         // Build content list: text + downloaded file attachments

@@ -264,7 +264,7 @@ public sealed class SessionRegistry
         if (!_connections.TryGetConnectionForSession(sessionId, out var connectionId))
             return;
 
-        var dto = SessionOutputMapper.ToDto(output);
+        var dto = SessionOutputDtoMapper.ToDto(output);
         _hubContext.Clients.Client(connectionId.Value).ReceiveOutput(dto)
             .ContinueWith(t =>
             {

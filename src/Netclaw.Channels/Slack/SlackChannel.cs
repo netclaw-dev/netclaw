@@ -18,6 +18,7 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
     private readonly ISlackSocketModeClient _socketModeClient;
     private readonly ISlackReplyClient _replyClient;
     private readonly IContentScanner _contentScanner;
+    private readonly IPromptInjectionDetector _promptInjectionDetector;
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly TimeProvider _timeProvider;
     private readonly SlackChannelOptions _options;
@@ -35,6 +36,7 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
         ISlackSocketModeClient socketModeClient,
         ISlackReplyClient replyClient,
         IContentScanner contentScanner,
+        IPromptInjectionDetector? promptInjectionDetector,
         IHttpClientFactory httpClientFactory,
         TimeProvider timeProvider,
         SlackChannelOptions options,
@@ -46,6 +48,7 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
         _socketModeClient = socketModeClient;
         _replyClient = replyClient;
         _contentScanner = contentScanner;
+        _promptInjectionDetector = promptInjectionDetector ?? new NullPromptInjectionDetector();
         _httpClientFactory = httpClientFactory;
         _timeProvider = timeProvider;
         _options = options;
@@ -95,7 +98,8 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
                 DefaultChannelId: _defaultChannelId,
                 ReplyClient: _replyClient,
                 ContentScanner: _contentScanner,
-                HttpClient: httpClient)),
+                HttpClient: httpClient,
+                PromptInjectionDetector: _promptInjectionDetector)),
             "slack-gateway");
 
         await _socketModeClient.Connect(cancellationToken: cancellationToken);

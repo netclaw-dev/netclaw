@@ -1,10 +1,8 @@
-using Netclaw.Configuration;
-
-namespace Netclaw.Cli.Daemon;
+namespace Netclaw.Configuration;
 
 /// <summary>
-/// Wire types for deserializing the daemon runtime status endpoint response.
-/// Nested types mirror the JSON shape returned by the daemon status API.
+/// Wire types for the daemon runtime status endpoint.
+/// Nested types represent the JSON shape returned by the status API.
 /// </summary>
 public static class DaemonRuntimeStatus
 {

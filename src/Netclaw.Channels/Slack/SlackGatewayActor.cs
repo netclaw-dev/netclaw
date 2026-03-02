@@ -79,4 +79,5 @@ public sealed record SlackGatewayDependencies(
     IContentScanner ContentScanner,
     HttpClient? HttpClient = null,
     Func<SlackChannelId, SlackGatewayDependencies, Props>? ConversationPropsFactory = null,
-    Func<SessionId, SlackChannelId, SlackThreadTs, SlackGatewayDependencies, Props>? ThreadPropsFactory = null);
+    Func<SessionId, SlackChannelId, SlackThreadTs, SlackGatewayDependencies, Props>? ThreadPropsFactory = null,
+    IPromptInjectionDetector? PromptInjectionDetector = null);

@@ -78,11 +78,12 @@ public sealed class DaemonRuntimeStatusServiceTests
 
         var status = await service.GetStatusAsync();
 
-        Assert.Equal("test-model", status.Model.ModelId);
-        Assert.Equal("test-provider", status.Model.Provider);
-        Assert.Equal("Text, Image", status.Model.InputModalities);
-        Assert.Equal("Text", status.Model.OutputModalities);
-        Assert.Equal(32_768, status.Model.ContextWindow);
+        var model = Assert.IsType<Netclaw.Configuration.DaemonRuntimeStatus.Model>(status.Model);
+        Assert.Equal("test-model", model.ModelId);
+        Assert.Equal("test-provider", model.Provider);
+        Assert.Equal("Text, Image", model.InputModalities);
+        Assert.Equal("Text", model.OutputModalities);
+        Assert.Equal(32_768, model.ContextWindow);
     }
 
     [Fact]
