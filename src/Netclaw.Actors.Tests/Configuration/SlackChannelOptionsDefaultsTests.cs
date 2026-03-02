@@ -19,6 +19,7 @@ public sealed class SlackChannelOptionsDefaultsTests
         Assert.True(options.SocketMode);
         Assert.True(options.MentionOnly);
         Assert.False(options.AllowDirectMessages);
+        Assert.False(options.MentionRequiredInDm);
         Assert.Empty(options.AllowedChannelIds);
         Assert.Empty(options.AllowedUserIds);
     }
@@ -42,6 +43,7 @@ public sealed class SlackChannelOptionsDefaultsTests
         Assert.Equal("openclaw", options.DefaultChannelName);
         Assert.True(options.MentionOnly);
         Assert.False(options.AllowDirectMessages);
+        Assert.False(options.MentionRequiredInDm);
         Assert.Empty(options.AllowedChannelIds);
         Assert.Empty(options.AllowedUserIds);
     }

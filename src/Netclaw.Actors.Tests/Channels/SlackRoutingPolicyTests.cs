@@ -14,6 +14,7 @@ public class SlackRoutingPolicyTests
             message,
             mentionOnly: true,
             allowDirectMessages: true,
+            mentionRequiredInDm: false,
             threadExists: false,
             containsBotMention: false);
 
@@ -29,6 +30,7 @@ public class SlackRoutingPolicyTests
             message,
             mentionOnly: true,
             allowDirectMessages: true,
+            mentionRequiredInDm: false,
             threadExists: false,
             containsBotMention: true);
 
@@ -44,6 +46,7 @@ public class SlackRoutingPolicyTests
             message,
             mentionOnly: true,
             allowDirectMessages: true,
+            mentionRequiredInDm: false,
             threadExists: true,
             containsBotMention: false);
 
@@ -61,6 +64,7 @@ public class SlackRoutingPolicyTests
             message,
             mentionOnly: true,
             allowDirectMessages: true,
+            mentionRequiredInDm: false,
             threadExists: false,
             containsBotMention: false);
 
@@ -76,6 +80,7 @@ public class SlackRoutingPolicyTests
             message,
             mentionOnly: true,
             allowDirectMessages: true,
+            mentionRequiredInDm: false,
             threadExists: false,
             containsBotMention: false);
 
@@ -91,10 +96,43 @@ public class SlackRoutingPolicyTests
             message,
             mentionOnly: true,
             allowDirectMessages: false,
+            mentionRequiredInDm: false,
             threadExists: false,
             containsBotMention: false);
 
         Assert.Equal(SlackRoutingDecision.Ignore, decision);
+    }
+
+    [Fact]
+    public void DirectMessage_Ignored_WhenMentionRequired_AndNoMention()
+    {
+        var message = CreateMessage(text: "hey", threadTs: null, isDirectMessage: true);
+
+        var decision = SlackRoutingPolicy.Evaluate(
+            message,
+            mentionOnly: true,
+            allowDirectMessages: true,
+            mentionRequiredInDm: true,
+            threadExists: false,
+            containsBotMention: false);
+
+        Assert.Equal(SlackRoutingDecision.Ignore, decision);
+    }
+
+    [Fact]
+    public void DirectMessage_Processed_WhenMentionRequired_AndMentionPresent()
+    {
+        var message = CreateMessage(text: "<@U1> hey", threadTs: null, isDirectMessage: true);
+
+        var decision = SlackRoutingPolicy.Evaluate(
+            message,
+            mentionOnly: true,
+            allowDirectMessages: true,
+            mentionRequiredInDm: true,
+            threadExists: false,
+            containsBotMention: true);
+
+        Assert.Equal(SlackRoutingDecision.StartOrContinue, decision);
     }
 
     [Fact]
@@ -110,6 +148,7 @@ public class SlackRoutingPolicyTests
             message,
             mentionOnly: true,
             allowDirectMessages: true,
+            mentionRequiredInDm: false,
             threadExists: true,
             containsBotMention: false);
 
@@ -129,6 +168,7 @@ public class SlackRoutingPolicyTests
             message,
             mentionOnly: true,
             allowDirectMessages: true,
+            mentionRequiredInDm: false,
             threadExists: false,
             containsBotMention: true);
 
@@ -148,6 +188,7 @@ public class SlackRoutingPolicyTests
             message,
             mentionOnly: false,
             allowDirectMessages: false,
+            mentionRequiredInDm: false,
             threadExists: false,
             containsBotMention: false);
 
@@ -167,6 +208,7 @@ public class SlackRoutingPolicyTests
             message,
             mentionOnly: false,
             allowDirectMessages: false,
+            mentionRequiredInDm: false,
             threadExists: false,
             containsBotMention: false);
 
@@ -186,6 +228,7 @@ public class SlackRoutingPolicyTests
             message,
             mentionOnly: true,
             allowDirectMessages: true,
+            mentionRequiredInDm: false,
             threadExists: true,
             containsBotMention: false);
 
@@ -202,6 +245,7 @@ public class SlackRoutingPolicyTests
             message,
             mentionOnly: false,
             allowDirectMessages: false,
+            mentionRequiredInDm: false,
             threadExists: false,
             containsBotMention: false);
 
@@ -217,6 +261,7 @@ public class SlackRoutingPolicyTests
             message,
             mentionOnly: false,
             allowDirectMessages: false,
+            mentionRequiredInDm: false,
             threadExists: false,
             containsBotMention: false);
 
@@ -232,6 +277,7 @@ public class SlackRoutingPolicyTests
             message,
             mentionOnly: false,
             allowDirectMessages: false,
+            mentionRequiredInDm: false,
             threadExists: false,
             containsBotMention: false);
 

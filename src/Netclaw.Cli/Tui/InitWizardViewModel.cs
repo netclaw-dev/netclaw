@@ -657,12 +657,12 @@ public partial class InitWizardViewModel : ReactiveViewModel
                 slackSection["DefaultChannelId"] = ids[0];
             }
 
-            if (SlackAllowDirectMessages)
+            var userIds = ParseUserIds(SlackAllowedUserIdsInput);
+            if (SlackAllowDirectMessages || userIds.Count > 0)
             {
                 slackSection["AllowDirectMessages"] = true;
             }
 
-            var userIds = ParseUserIds(SlackAllowedUserIdsInput);
             if (userIds.Count > 0)
             {
                 slackSection["AllowedUserIds"] = userIds.ToArray();

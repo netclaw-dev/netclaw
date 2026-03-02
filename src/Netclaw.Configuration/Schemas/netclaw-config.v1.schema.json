@@ -18,6 +18,7 @@
         "DefaultChannelName": { "type": ["string", "null"] },
         "MentionOnly": { "type": "boolean" },
         "AllowDirectMessages": { "type": "boolean" },
+        "MentionRequiredInDm": { "type": "boolean" },
         "AllowedChannelIds": {
           "type": "array",
           "items": { "type": "string" }
