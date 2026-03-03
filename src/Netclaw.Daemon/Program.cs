@@ -343,9 +343,8 @@ static void ConfigureDaemonServices(
 
     // Binary update check — logs a warning at startup if a newer version is available.
     // Never blocks startup, never downloads anything.
-    // The UpdateCheckCache singleton holds the result so DaemonRuntimeStatusService
-    // can include update info in the status API response.
-    services.AddSingleton<UpdateCheckCache>();
+    // Result is cached in UpdateCheckService for 1 hour; DaemonRuntimeStatusService
+    // reads it via the static cache when building the status API response.
     services.AddHttpClient<BinaryUpdateCheckService>(client =>
         client.Timeout = FeedConstants.BinaryFeedHttpTimeout);
     services.AddHostedService<BinaryUpdateCheckService>();

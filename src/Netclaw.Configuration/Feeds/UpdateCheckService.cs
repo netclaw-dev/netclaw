@@ -19,11 +19,22 @@ public sealed class UpdateCheckResult
 /// Checks the binary feed manifest for available updates.
 /// Shared between CLI (update command + startup check) and daemon (startup notification).
 /// Modeled after <see cref="SystemSkillSyncService"/> manifest fetch pattern.
+/// Results are cached for 1 hour to avoid hammering the CDN.
 /// </summary>
 public static class UpdateCheckService
 {
+    private static UpdateCheckResult? s_cachedResult;
+    private static DateTimeOffset s_cachedAt;
+    private static readonly TimeSpan CacheDuration = TimeSpan.FromHours(1);
+
+    /// <summary>
+    /// Returns the most recent cached result, or null if no check has been performed yet.
+    /// </summary>
+    public static UpdateCheckResult? GetLastResult() => s_cachedResult;
+
     /// <summary>
     /// Fetches the binary manifest and compares the latest version against the current version.
+    /// Returns a cached result if one exists and is less than 1 hour old.
     /// Never throws — returns a "no update" result on any failure.
     /// </summary>
     public static async Task<UpdateCheckResult> CheckForUpdateAsync(
@@ -31,6 +42,11 @@ public static class UpdateCheckService
         string currentVersion,
         CancellationToken cancellationToken = default)
     {
+        // Return cached result if fresh
+        var cached = s_cachedResult;
+        if (cached is not null && DateTimeOffset.UtcNow - s_cachedAt < CacheDuration)
+            return cached;
+
         var noUpdate = new UpdateCheckResult
         {
             IsUpdateAvailable = false,
@@ -42,14 +58,35 @@ public static class UpdateCheckService
         {
             var manifest = await FetchManifestAsync(httpClient, cancellationToken);
             if (manifest is null)
+            {
+                CacheResult(noUpdate);
                 return noUpdate;
+            }
 
-            return EvaluateManifest(manifest, currentVersion);
+            var result = EvaluateManifest(manifest, currentVersion);
+            CacheResult(result);
+            return result;
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
+            CacheResult(noUpdate);
             return noUpdate;
         }
+    }
+
+    private static void CacheResult(UpdateCheckResult result)
+    {
+        s_cachedResult = result;
+        s_cachedAt = DateTimeOffset.UtcNow;
+    }
+
+    /// <summary>
+    /// Clears the cached result. Used by tests to avoid cross-test interference.
+    /// </summary>
+    public static void ResetCache()
+    {
+        s_cachedResult = null;
+        s_cachedAt = default;
     }
 
     /// <summary>

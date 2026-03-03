@@ -3,9 +3,9 @@ using Microsoft.Extensions.Options;
 using Netclaw.Channels;
 using Netclaw.Channels.Slack;
 using Netclaw.Configuration;
+using Netclaw.Configuration.Feeds;
 using Netclaw.Daemon.Configuration;
 using Netclaw.Daemon.Mcp;
-using Netclaw.Daemon.Services;
 
 namespace Netclaw.Daemon.Gateway;
 
@@ -17,8 +17,7 @@ internal sealed class DaemonRuntimeStatusService(
     IOptions<TelemetryOptions> telemetryOptions,
     SessionConfig sessionConfig,
     ModelSelection modelSelection,
-    McpClientManager? mcpClientManager = null,
-    UpdateCheckCache? updateCheckCache = null)
+    McpClientManager? mcpClientManager = null)
 {
     private readonly DateTimeOffset _startedAt = timeProvider.GetUtcNow();
 
@@ -179,9 +178,9 @@ internal sealed class DaemonRuntimeStatusService(
         };
     }
 
-    private DaemonRuntimeStatus.Update? BuildUpdateStatus()
+    private static DaemonRuntimeStatus.Update? BuildUpdateStatus()
     {
-        var result = updateCheckCache?.LastResult;
+        var result = UpdateCheckService.GetLastResult();
         if (result is null)
             return null;
 

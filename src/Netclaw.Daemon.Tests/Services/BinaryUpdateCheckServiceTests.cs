@@ -18,6 +18,9 @@ public sealed class BinaryUpdateCheckServiceTests : IDisposable
         _tempDir = Path.Combine(Path.GetTempPath(), $"netclaw-test-{Guid.NewGuid():N}");
         _paths = new NetclawPaths(_tempDir);
         _paths.EnsureDirectoriesExist();
+
+        // Clear static cache between tests to avoid cross-test interference
+        UpdateCheckService.ResetCache();
     }
 
     // ═══════════════════════════════════════════════════════════════
@@ -31,12 +34,13 @@ public sealed class BinaryUpdateCheckServiceTests : IDisposable
         var handler = new FakeHttpHandler();
         handler.AddJsonResponse(FeedConstants.BinaryManifestUrl, manifest);
 
-        var (sut, cache) = CreateDaemonService(handler, currentVersion: "0.1.0");
+        var sut = CreateDaemonService(handler, currentVersion: "0.1.0");
         await sut.StartAsync(CancellationToken.None);
 
-        // Cache should be populated
-        Assert.NotNull(cache.LastResult);
-        Assert.True(cache.LastResult!.IsUpdateAvailable);
+        // Static cache should be populated
+        var cached = UpdateCheckService.GetLastResult();
+        Assert.NotNull(cached);
+        Assert.True(cached!.IsUpdateAvailable);
     }
 
     [Fact]
@@ -45,13 +49,13 @@ public sealed class BinaryUpdateCheckServiceTests : IDisposable
         var handler = new FakeHttpHandler();
         handler.AddErrorResponse(FeedConstants.BinaryManifestUrl, HttpStatusCode.ServiceUnavailable);
 
-        var (sut, cache) = CreateDaemonService(handler, currentVersion: "0.1.0");
+        var sut = CreateDaemonService(handler, currentVersion: "0.1.0");
         await sut.StartAsync(CancellationToken.None);
 
         // UpdateCheckService never throws — returns "no update" on failure.
-        // Cache gets a fallback result with IsUpdateAvailable=false.
-        Assert.NotNull(cache.LastResult);
-        Assert.False(cache.LastResult!.IsUpdateAvailable);
+        var cached = UpdateCheckService.GetLastResult();
+        Assert.NotNull(cached);
+        Assert.False(cached!.IsUpdateAvailable);
     }
 
     [Fact]
@@ -60,7 +64,7 @@ public sealed class BinaryUpdateCheckServiceTests : IDisposable
         var handler = new FakeHttpHandler();
         // No response configured → 404, which triggers HttpRequestException
 
-        var (sut, _) = CreateDaemonService(handler, currentVersion: "0.1.0");
+        var sut = CreateDaemonService(handler, currentVersion: "0.1.0");
         await sut.StartAsync(CancellationToken.None);
     }
 
@@ -281,6 +285,7 @@ public sealed class BinaryUpdateCheckServiceTests : IDisposable
 
     public void Dispose()
     {
+        UpdateCheckService.ResetCache();
         if (Directory.Exists(_tempDir))
             Directory.Delete(_tempDir, recursive: true);
     }
@@ -289,17 +294,14 @@ public sealed class BinaryUpdateCheckServiceTests : IDisposable
     // Helpers
     // ═══════════════════════════════════════════════════════════════
 
-    private (BinaryUpdateCheckService Service, UpdateCheckCache Cache) CreateDaemonService(
+    private static BinaryUpdateCheckService CreateDaemonService(
         FakeHttpHandler handler, string currentVersion = "0.1.0")
     {
         var httpClient = new HttpClient(handler);
-        var cache = new UpdateCheckCache();
-        var service = new BinaryUpdateCheckService(
+        return new BinaryUpdateCheckService(
             httpClient,
-            cache,
             NullLogger<BinaryUpdateCheckService>.Instance,
             currentVersion);
-        return (service, cache);
     }
 
     private static BinaryFeedManifest CreateManifest(string version, string rid)
