@@ -1,6 +1,7 @@
 using Akka.Actor;
 using Akka.Event;
 using Netclaw.Actors.Protocol;
+using Netclaw.Actors.SubAgents;
 
 namespace Netclaw.Actors.Sessions;
 
@@ -96,6 +97,10 @@ public sealed class SessionLogActor : ReceiveActor
                 CompactionOutput compaction =>
                     $"Compaction: {compaction.MessagesBefore} → {compaction.MessagesAfter} messages " +
                     $"(keep={compaction.KeepCountUsed}, context={compaction.PreCompactionInputTokens}/{compaction.ContextWindowTokens} tokens)",
+                SubAgentOutput sa when sa.Phase == SubAgentPhase.Started =>
+                    $"SubAgent started: {sa.AgentName} (tools={sa.ToolCount})",
+                SubAgentOutput sa =>
+                    $"SubAgent completed: {sa.AgentName} (success={sa.Success}, duration={sa.Duration.TotalSeconds:F1}s)",
                 ErrorOutput error => $"Error: {error.Message}",
                 FileOutput file => $"File: {file.FileName} ({file.MimeType})",
                 _ => null
