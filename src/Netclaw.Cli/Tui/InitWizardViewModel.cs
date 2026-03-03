@@ -374,7 +374,7 @@ public partial class InitWizardViewModel : ReactiveViewModel
             var baseUri = new Uri(MemorizerUrl);
             var port = baseUri.Port > 0 ? baseUri.Port : (baseUri.Scheme == "https" ? 443 : 80);
 
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
             using var tcp = new TcpClient();
             await tcp.ConnectAsync(baseUri.Host, port, cts.Token);
             reachable = true;
