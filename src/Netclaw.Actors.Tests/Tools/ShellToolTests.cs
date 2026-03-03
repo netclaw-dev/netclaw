@@ -135,4 +135,15 @@ public class ShellToolTests
         Assert.Contains("protected file path", result);
         Assert.Contains("Access denied", result);
     }
+
+    [Fact]
+    public async Task Execute_redacts_secret_like_output()
+    {
+        var args = new Dictionary<string, object?> { ["Command"] = "echo API_KEY=secret123" };
+
+        var result = await _tool.ExecuteAsync(args, CancellationToken.None);
+
+        Assert.Contains("API_KEY=***REDACTED***", result);
+        Assert.DoesNotContain("secret123", result);
+    }
 }

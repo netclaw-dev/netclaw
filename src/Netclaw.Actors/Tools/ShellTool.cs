@@ -116,7 +116,8 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
                 result.Append(errorBuilder);
             }
 
-            var output = TruncateOutput(result.ToString(), _config.MaxOutputChars);
+            var sanitized = SecretOutputRedactor.Redact(result.ToString());
+            var output = TruncateOutput(sanitized, _config.MaxOutputChars);
             return $"Exit code: {process.ExitCode}{Environment.NewLine}{output}";
         }
     }
