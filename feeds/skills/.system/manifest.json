@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "feedType": "system",
-  "updatedAt": "2026-03-03T01:31:24Z",
+  "updatedAt": "2026-03-03T01:56:35Z",
   "skills": [
     {
       "name": "identity-management",
@@ -15,13 +15,13 @@
     },
     {
       "name": "memorizer-usage",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "minimumDaemonVersion": "0.1.0",
-      "sha256": "d89cb6c3979747515d0bece3f61ce1c9bab97b20b938ad538dff83e598065ecd",
-      "sizeBytes": 6453,
-      "url": "https://feeds.netclaw.dev/skills/.system/files/memorizer-usage/1.0.0.md",
+      "sha256": "b7d3e78ac5080624a3f104b89909baeef92e563fd20a5e8db247093340f2d855",
+      "sizeBytes": 5526,
+      "url": "https://feeds.netclaw.dev/skills/.system/files/memorizer-usage/1.1.0.md",
       "category": null,
-      "description": "How to use the Memorizer MCP server for cross-session knowledge management"
+      "description": "Advanced Memorizer capabilities — workspaces, projects, relationships, confidence"
     },
     {
       "name": "memory-usage",
