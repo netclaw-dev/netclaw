@@ -34,11 +34,13 @@ public sealed class DaemonClient : IAsyncDisposable
     private readonly SemaphoreSlim _connectGate = new(1, 1);
     private readonly SemaphoreSlim _sessionGate = new(1, 1);
     private readonly CancellationTokenSource _lifetimeCts = new();
+    private readonly object _reconnectCtsLock = new();
 
     private string? _sessionId;
     private string? _channelType;
     private bool _hasConnected;
     private bool _disposed;
+    private CancellationTokenSource? _reconnectCts;
 
     public DaemonClient(string daemonEndpoint, TimeProvider? timeProvider = null)
     {
@@ -106,14 +108,19 @@ public sealed class DaemonClient : IAsyncDisposable
         if (IsConnected)
             return;
 
+        // Cancel any in-flight background reconnect loop so it doesn't race
+        // with this explicit connect attempt.
+        CancelReconnectLoop();
+
         await _connectGate.WaitAsync(cancellationToken);
         try
         {
             if (IsConnected)
                 return;
 
-            // Another reconnect/start sequence may already be in-flight.
-            if (_connection.State is HubConnectionState.Connecting or HubConnectionState.Reconnecting)
+            // Another reconnect/start sequence may already be in-flight
+            // (e.g. the built-in auto-reconnect). Wait for it to settle.
+            if (_connection.State is not HubConnectionState.Disconnected)
             {
                 await WaitForStableConnectionStateAsync(cancellationToken);
                 if (IsConnected)
@@ -133,6 +140,19 @@ public sealed class DaemonClient : IAsyncDisposable
 
                 try
                 {
+                    // Re-check state immediately before StartAsync. The auto-reconnect
+                    // or a concurrent reconnect attempt may have changed the state since
+                    // we last checked. StartAsync requires Disconnected state.
+                    if (_connection.State is not HubConnectionState.Disconnected)
+                    {
+                        await WaitForStableConnectionStateAsync(cancellationToken);
+                        if (IsConnected)
+                        {
+                            _hasConnected = true;
+                            return;
+                        }
+                    }
+
                     await _connection.StartAsync(cancellationToken);
 
                     _connectionSubject.OnNext(new DaemonConnectionEvent(
@@ -143,6 +163,21 @@ public sealed class DaemonClient : IAsyncDisposable
                             : $"Connected to daemon at {_daemonEndpoint}."));
                     _hasConnected = true;
                     return;
+                }
+                catch (InvalidOperationException ex) when (
+                    ex.Message.Contains("is not in the Disconnected state", StringComparison.Ordinal))
+                {
+                    // The HubConnection state changed between our check and the
+                    // StartAsync call (e.g. auto-reconnect kicked in concurrently).
+                    // Wait for the state to settle and check if it connected.
+                    await WaitForStableConnectionStateAsync(cancellationToken);
+                    if (IsConnected)
+                    {
+                        _hasConnected = true;
+                        return;
+                    }
+
+                    lastError = ex;
                 }
                 catch (Exception ex)
                 {
@@ -257,15 +292,34 @@ public sealed class DaemonClient : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
+        _disposed = true;
         _outputSubject.Dispose();
         _connectionSubject.Dispose();
+        CancelReconnectLoop();
         _lifetimeCts.Cancel();
         _lifetimeCts.Dispose();
-        _disposed = true;
         await _connection.DisposeAsync();
         _httpClient.Dispose();
         _connectGate.Dispose();
         _sessionGate.Dispose();
+    }
+
+    /// <summary>
+    /// Cancels any active reconnect loop. Called by <see cref="ConnectAsync"/>
+    /// so an explicit caller supersedes background reconnect attempts and avoids
+    /// two concurrent paths racing to call <c>StartAsync</c>.
+    /// </summary>
+    private void CancelReconnectLoop()
+    {
+        lock (_reconnectCtsLock)
+        {
+            if (_reconnectCts is { IsCancellationRequested: false } cts)
+            {
+                cts.Cancel();
+                cts.Dispose();
+                _reconnectCts = null;
+            }
+        }
     }
 
     private async Task ReconnectLoopAsync()
@@ -273,9 +327,25 @@ public sealed class DaemonClient : IAsyncDisposable
         if (_disposed)
             return;
 
+        CancellationTokenSource loopCts;
+        lock (_reconnectCtsLock)
+        {
+            // If a previous reconnect loop is still alive, cancel it.
+            if (_reconnectCts is { IsCancellationRequested: false } existing)
+            {
+                existing.Cancel();
+                existing.Dispose();
+            }
+
+            loopCts = CancellationTokenSource.CreateLinkedTokenSource(_lifetimeCts.Token);
+            _reconnectCts = loopCts;
+        }
+
+        var token = loopCts.Token;
+
         const int maxAttempts = 20;
         var attempts = 0;
-        while (!_disposed && !_lifetimeCts.Token.IsCancellationRequested)
+        while (!_disposed && !token.IsCancellationRequested)
         {
             attempts++;
             try
@@ -288,7 +358,7 @@ public sealed class DaemonClient : IAsyncDisposable
                     maxAttempts,
                     0));
 
-                await ConnectAsync(_lifetimeCts.Token);
+                await ReconnectConnectAsync(token);
 
                 // Re-attach the session after manual reconnect.
                 // The built-in auto-reconnect fires the Reconnected event which
@@ -296,11 +366,17 @@ public sealed class DaemonClient : IAsyncDisposable
                 // the Closed handler does not. Without this, the transport is up
                 // but the session is not attached on the new server.
                 if (!string.IsNullOrWhiteSpace(_channelType))
-                    await EnsureSessionInternalAsync(_channelType!, _lifetimeCts.Token);
+                    await EnsureSessionInternalAsync(_channelType!, token);
 
                 return;
             }
-            catch when (!_disposed && !_lifetimeCts.Token.IsCancellationRequested)
+            catch (OperationCanceledException) when (token.IsCancellationRequested)
+            {
+                // The reconnect loop was superseded by an explicit ConnectAsync call
+                // or the client is being disposed. Exit gracefully.
+                return;
+            }
+            catch when (!_disposed && !token.IsCancellationRequested)
             {
                 if (attempts >= maxAttempts)
                 {
@@ -324,9 +400,85 @@ public sealed class DaemonClient : IAsyncDisposable
                         maxAttempts,
                         countdown));
 
-                    await Task.Delay(TimeSpan.FromSeconds(1), _lifetimeCts.Token);
+                    await Task.Delay(TimeSpan.FromSeconds(1), token);
                 }
             }
+        }
+    }
+
+    /// <summary>
+    /// Internal connect path used by the reconnect loop. Unlike the public
+    /// <see cref="ConnectAsync"/>, this does NOT call <see cref="CancelReconnectLoop"/>
+    /// (which would cancel itself) and uses the semaphore normally.
+    /// </summary>
+    private async Task ReconnectConnectAsync(CancellationToken cancellationToken)
+    {
+        if (IsConnected)
+            return;
+
+        await _connectGate.WaitAsync(cancellationToken);
+        try
+        {
+            if (IsConnected)
+                return;
+
+            if (_connection.State is not HubConnectionState.Disconnected)
+            {
+                await WaitForStableConnectionStateAsync(cancellationToken);
+                if (IsConnected)
+                    return;
+            }
+
+            Exception? lastError = null;
+            foreach (var delay in ReconnectDelays)
+            {
+                if (delay > TimeSpan.Zero)
+                    await Task.Delay(delay, cancellationToken);
+
+                try
+                {
+                    if (_connection.State is not HubConnectionState.Disconnected)
+                    {
+                        await WaitForStableConnectionStateAsync(cancellationToken);
+                        if (IsConnected)
+                        {
+                            _hasConnected = true;
+                            return;
+                        }
+                    }
+
+                    await _connection.StartAsync(cancellationToken);
+                    _hasConnected = true;
+
+                    _connectionSubject.OnNext(new DaemonConnectionEvent(
+                        DaemonConnectionState.Connected,
+                        _daemonEndpoint,
+                        $"Reconnected to daemon at {_daemonEndpoint}."));
+                    return;
+                }
+                catch (InvalidOperationException ex) when (
+                    ex.Message.Contains("is not in the Disconnected state", StringComparison.Ordinal))
+                {
+                    await WaitForStableConnectionStateAsync(cancellationToken);
+                    if (IsConnected)
+                    {
+                        _hasConnected = true;
+                        return;
+                    }
+
+                    lastError = ex;
+                }
+                catch (Exception ex)
+                {
+                    lastError = ex;
+                }
+            }
+
+            throw new InvalidOperationException("Failed to connect to daemon SignalR hub.", lastError);
+        }
+        finally
+        {
+            _connectGate.Release();
         }
     }
 
