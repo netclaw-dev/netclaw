@@ -54,7 +54,7 @@ public sealed class SecretsJsonDoctorCheck(NetclawPaths paths) : IDoctorCheck
             return Task.FromResult(DoctorCheckResult.Warning(
                 "Secrets JSON",
                 $"secrets.json has {plaintext} unencrypted value(s) ({encrypted} encrypted).",
-                "netclaw secrets encrypt"));
+                "Re-set secrets via `netclaw secrets set <key> <value>` to encrypt them."));
         }
 
         var encryptionNote = encrypted > 0

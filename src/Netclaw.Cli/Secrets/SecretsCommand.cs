@@ -1,16 +1,18 @@
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using Netclaw.Configuration;
 using Netclaw.Configuration.Secrets;
 
 namespace Netclaw.Cli.Secrets;
 
 /// <summary>
-/// Handles <c>netclaw secrets</c> CLI subcommands: encrypt, status.
-/// No decrypt command exists by design — secrets are only decryptable
-/// through internal authorized code paths (config binding), never
-/// reversible to plaintext on disk.
+/// Handles <c>netclaw secrets set &lt;key&gt; &lt;value&gt;</c>.
+/// Values are encrypted on write — no plaintext ever touches disk.
 /// </summary>
 internal static class SecretsCommand
 {
+    private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
+
     public static int Run(string[] args, NetclawPaths paths, TextWriter? output = null)
     {
         var writer = output ?? Console.Out;
@@ -18,56 +20,71 @@ internal static class SecretsCommand
 
         return subcommand switch
         {
-            "encrypt" => RunEncrypt(paths, writer),
-            "status" => RunStatus(paths, writer),
+            "set" => RunSet(args, paths, writer),
             _ => RunHelp(writer),
         };
     }
 
-    private static int RunEncrypt(NetclawPaths paths, TextWriter writer)
+    /// <summary>
+    /// <c>netclaw secrets set Slack.BotToken xoxb-...</c>
+    /// Accepts a dotted key path (e.g. <c>Providers.ollama.ApiKey</c>),
+    /// upserts the value into secrets.json, encrypts all leaves, and
+    /// writes with hardened permissions.
+    /// </summary>
+    private static int RunSet(string[] args, NetclawPaths paths, TextWriter writer)
     {
-        if (!File.Exists(paths.SecretsPath))
+        if (args.Length < 4)
         {
-            writer.WriteLine("No secrets.json found. Nothing to encrypt.");
+            writer.WriteLine("Usage: netclaw secrets set <key> <value>");
+            writer.WriteLine();
+            writer.WriteLine("Examples:");
+            writer.WriteLine("  netclaw secrets set Slack.BotToken xoxb-...");
+            writer.WriteLine("  netclaw secrets set Providers.ollama.ApiKey sk-...");
+            writer.WriteLine("  netclaw secrets set Search.BraveApiKey BSAL...");
             return 1;
         }
 
-        var protector = SecretsProtection.CreateProtector(paths);
-        var json = File.ReadAllText(paths.SecretsPath);
+        var keyPath = args[2];
+        var value = args[3];
 
-        var (alreadyEncrypted, plaintext) = SecretsFileWriter.CountEncryptionStatus(json);
-        if (plaintext == 0)
+        // Load existing secrets or start fresh
+        JsonObject root;
+        if (File.Exists(paths.SecretsPath))
         {
-            writer.WriteLine($"All {alreadyEncrypted} secret value(s) are already encrypted. Nothing to do.");
-            return 0;
+            var existing = File.ReadAllText(paths.SecretsPath);
+            root = JsonNode.Parse(existing)?.AsObject() ?? new JsonObject();
+        }
+        else
+        {
+            root = new JsonObject();
         }
 
+        // Navigate/create the dotted key path and set the value
+        var segments = keyPath.Split('.');
+        JsonObject current = root;
+        for (var i = 0; i < segments.Length - 1; i++)
+        {
+            var seg = segments[i];
+            if (current[seg] is JsonObject child)
+            {
+                current = child;
+            }
+            else
+            {
+                var newObj = new JsonObject();
+                current[seg] = newObj;
+                current = newObj;
+            }
+        }
+
+        current[segments[^1]] = value;
+
+        // Write with encryption — the protector encrypts all plaintext leaves
+        var protector = SecretsProtection.CreateProtector(paths);
+        var json = root.ToJsonString(JsonOptions);
         SecretsFileWriter.Write(paths.SecretsPath, json, protector);
 
-        writer.WriteLine($"Encrypted {plaintext} plaintext value(s) in-place ({alreadyEncrypted} were already encrypted).");
-        return 0;
-    }
-
-    private static int RunStatus(NetclawPaths paths, TextWriter writer)
-    {
-        if (!File.Exists(paths.SecretsPath))
-        {
-            writer.WriteLine("No secrets.json found.");
-            return 1;
-        }
-
-        var json = File.ReadAllText(paths.SecretsPath);
-        var (encrypted, plaintext) = SecretsFileWriter.CountEncryptionStatus(json);
-
-        writer.WriteLine($"Encrypted: {encrypted}");
-        writer.WriteLine($"Plaintext: {plaintext}");
-
-        if (plaintext > 0)
-        {
-            writer.WriteLine();
-            writer.WriteLine("Run `netclaw secrets encrypt` to encrypt plaintext values.");
-        }
-
+        writer.WriteLine($"Set {keyPath} (encrypted).");
         return 0;
     }
 
@@ -76,8 +93,7 @@ internal static class SecretsCommand
         writer.WriteLine("Usage: netclaw secrets <subcommand>");
         writer.WriteLine();
         writer.WriteLine("Subcommands:");
-        writer.WriteLine("  encrypt   Encrypt plaintext values in secrets.json in-place");
-        writer.WriteLine("  status    Report encrypted vs plaintext value count");
+        writer.WriteLine("  set <key> <value>   Store an encrypted secret (e.g. Slack.BotToken xoxb-...)");
         return 0;
     }
 }

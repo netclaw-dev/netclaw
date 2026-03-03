@@ -502,7 +502,7 @@ static void WriteGeneralHelp()
     Console.WriteLine("  mcp                      Manage MCP server profiles");
     Console.WriteLine("  provider                 Manage LLM providers (TUI) or use subcommands");
     Console.WriteLine("  model                    Manage model assignments (TUI) or use subcommands");
-    Console.WriteLine("  secrets                  Manage secrets encryption (encrypt/decrypt/status)");
+    Console.WriteLine("  secrets                  Manage encrypted secrets (set key/value pairs)");
     Console.WriteLine("  init                     First-run setup wizard");
     Console.WriteLine("  config                   Configuration management (planned)");
     Console.WriteLine();
