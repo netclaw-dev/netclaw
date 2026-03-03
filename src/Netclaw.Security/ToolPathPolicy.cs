@@ -8,6 +8,12 @@ public sealed class ToolPathPolicy
 {
     private readonly HashSet<string> _deniedPaths;
     private readonly HashSet<string> _commandIndicators;
+    private static readonly HashSet<string> HighRiskVerbs = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "cat", "less", "more", "head", "tail", "grep", "rg", "find", "jq", "awk", "sed", "strings", "xxd", "hexdump",
+        "cp", "mv", "tar", "zip", "unzip", "scp", "rsync", "curl", "wget", "nc", "ncat",
+        "python", "python3", "node", "ruby", "perl", "php"
+    };
 
     public ToolPathPolicy(IEnumerable<string> deniedPaths)
     {
@@ -58,6 +64,7 @@ public sealed class ToolPathPolicy
         if (string.IsNullOrWhiteSpace(command))
             return false;
 
+        var tokens = Tokenize(command).ToList();
         var slashCommand = command.Replace('\\', '/');
         foreach (var indicator in _commandIndicators)
         {
@@ -65,7 +72,7 @@ public sealed class ToolPathPolicy
                 return true;
         }
 
-        foreach (var token in Tokenize(command))
+        foreach (var token in tokens)
         {
             if (!LooksLikePath(token))
                 continue;
@@ -85,7 +92,34 @@ public sealed class ToolPathPolicy
             }
         }
 
+        if (ContainsProtectedPathHint(slashCommand) && ContainsHighRiskVerb(tokens))
+            return true;
+
         return false;
+    }
+
+    private static bool ContainsProtectedPathHint(string slashCommand)
+    {
+        return slashCommand.Contains(".netclaw/config", StringComparison.OrdinalIgnoreCase)
+            || slashCommand.Contains(".netclaw/keys", StringComparison.OrdinalIgnoreCase)
+            || slashCommand.Contains("secrets.json", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool ContainsHighRiskVerb(IEnumerable<string> tokens)
+    {
+        foreach (var token in tokens)
+        {
+            var verb = TrimShellPunctuation(token);
+            if (HighRiskVerbs.Contains(verb))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static string TrimShellPunctuation(string token)
+    {
+        return token.Trim().TrimStart(';', '|', '&').TrimEnd(';', '|', '&');
     }
 
     private bool IsDeniedNormalized(string candidate)

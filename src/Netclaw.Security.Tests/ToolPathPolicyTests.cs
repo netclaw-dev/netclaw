@@ -108,4 +108,21 @@ public sealed class ToolPathPolicyTests
         Assert.True(policy.CommandReferencesDeniedPath("ls ~/.netclaw/keys"));
         Assert.True(policy.CommandReferencesDeniedPath("tar czf /tmp/k.tgz ~/.netclaw/keys"));
     }
+
+    [Fact]
+    public void CommandReferencesDeniedPath_detects_high_risk_glob_in_config_directory()
+    {
+        var policy = new ToolPathPolicy(["/home/user/.netclaw/config/secrets.json"]);
+
+        Assert.True(policy.CommandReferencesDeniedPath("cat ~/.netclaw/config/*.json"));
+        Assert.True(policy.CommandReferencesDeniedPath("jq . ~/.netclaw/config/*.json"));
+    }
+
+    [Fact]
+    public void CommandReferencesDeniedPath_detects_high_risk_archive_of_config_directory()
+    {
+        var policy = new ToolPathPolicy(["/home/user/.netclaw/config/secrets.json"]);
+
+        Assert.True(policy.CommandReferencesDeniedPath("tar czf /tmp/netclaw-config.tgz ~/.netclaw/config"));
+    }
 }
