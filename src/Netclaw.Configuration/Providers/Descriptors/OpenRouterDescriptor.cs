@@ -21,6 +21,9 @@ public sealed class OpenRouterDescriptor : IProviderDescriptor
     public string ModelListingPath => "/models";
     public CredentialInputMode CredentialMode => CredentialInputMode.ApiKey;
     public string? ApiKeyGuidanceUrl => "https://openrouter.ai/keys";
+    public string? OAuthDeviceEndpoint => null;
+    public string? OAuthTokenEndpoint => null;
+    public string? OAuthDefaultClientId => null;
 
     public Task<ProviderProbeResult> ProbeAsync(
         ProviderEntry entry, CancellationToken ct = default)

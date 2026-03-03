@@ -1,5 +1,6 @@
 using Netclaw.Configuration;
 using Netclaw.Configuration.Providers;
+using Netclaw.Configuration.Providers.OAuth;
 using R3;
 using Termina.Extensions;
 using Termina.Input;
@@ -75,6 +76,7 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
                 ProviderManagerState.List => BuildProviderListView(),
                 ProviderManagerState.AddSelectAuth => BuildAddAuthView(),
                 ProviderManagerState.AddCredentials => BuildCredentialsView(),
+                ProviderManagerState.AddOAuthDeviceFlow => BuildOAuthDeviceFlowView(),
                 ProviderManagerState.AddValidating => BuildValidatingView(),
                 ProviderManagerState.AddComplete => BuildAddCompleteView(),
                 ProviderManagerState.Details => BuildDetailsView(),
@@ -118,6 +120,8 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
                         " [Enter] Confirm  [Esc] Cancel  [Ctrl+Q] Quit",
                     ProviderManagerState.AddComplete =>
                         " [Enter] Save  [Esc] Cancel  [Ctrl+Q] Quit",
+                    ProviderManagerState.AddOAuthDeviceFlow =>
+                        " [Esc] Cancel  [Ctrl+Q] Quit",
                     _ =>
                         " [\u2191/\u2193] Navigate  [Enter] Next  [Esc] Back  [Ctrl+Q] Quit"
                 };
@@ -213,7 +217,7 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
             .Select(m => m switch
             {
                 AuthMethod.ApiKey => "API Key",
-                AuthMethod.OAuthDevice => "OAuth Device Flow (coming soon)",
+                AuthMethod.OAuthDevice => "OAuth Device Flow (recommended)",
                 _ => m.ToString()
             })
             .ToList();
@@ -315,6 +319,72 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
             children.WithChild(new TextNode("").Height(1));
             children.WithChild(new TextNode($"  {descriptor.DisplayName} runs locally. No authentication required.")
                 .WithForeground(Color.Gray));
+        }
+
+        return children;
+    }
+
+    private ILayoutNode BuildOAuthDeviceFlowView()
+    {
+        var children = Layouts.Vertical();
+        var providerType = ViewModel.NewProviderType ?? "unknown";
+        var flowState = ViewModel.OAuthFlowState.Value;
+
+        children.WithChild(new TextNode($"  OAuth Device Flow for {providerType}")
+            .WithForeground(Color.White).Bold());
+        children.WithChild(new TextNode("").Height(1));
+
+        switch (flowState)
+        {
+            case DeviceFlowState.NotStarted:
+                children.WithChild(new TextNode("  Starting device authorization...")
+                    .WithForeground(Color.Yellow));
+                break;
+
+            case DeviceFlowState.WaitingForUser:
+            case DeviceFlowState.Polling:
+            {
+                var elapsed = ViewModel.ProbeElapsedSeconds.Value;
+                var frame = SpinnerFrames[elapsed % SpinnerFrames.Length];
+
+                if (ViewModel.OAuthVerificationUri is not null)
+                {
+                    children.WithChild(new TextNode($"  Visit: {ViewModel.OAuthVerificationUri}")
+                        .WithForeground(Color.Cyan));
+                    children.WithChild(new TextNode("").Height(1));
+                }
+
+                if (ViewModel.OAuthUserCode is not null)
+                {
+                    children.WithChild(new TextNode($"  Enter code: {ViewModel.OAuthUserCode}")
+                        .WithForeground(Color.White).Bold());
+                    children.WithChild(new TextNode("").Height(1));
+                }
+
+                children.WithChild(new TextNode($"  {frame} Waiting for authorization...")
+                    .WithForeground(Color.Yellow));
+                break;
+            }
+
+            case DeviceFlowState.Succeeded:
+                children.WithChild(new TextNode("  \u2714 Authorization successful!")
+                    .WithForeground(Color.Green));
+                break;
+
+            case DeviceFlowState.Denied:
+            case DeviceFlowState.Expired:
+            case DeviceFlowState.Error:
+                children.WithChild(new TextNode($"  \u2718 {ViewModel.OAuthErrorMessage ?? "Authorization failed."}")
+                    .WithForeground(Color.Red));
+                children.WithChild(new TextNode("").Height(1));
+                children.WithChild(new TextNode("  Press [Esc] to go back and try again.")
+                    .WithForeground(Color.Gray));
+                break;
+
+            case DeviceFlowState.Cancelled:
+                children.WithChild(new TextNode("  Authorization cancelled.")
+                    .WithForeground(Color.Yellow));
+                break;
         }
 
         return children;

@@ -24,6 +24,9 @@ public sealed class OllamaDescriptor : IProviderDescriptor
     public string ModelListingPath => "/api/tags";
     public CredentialInputMode CredentialMode => CredentialInputMode.EndpointOnly;
     public string? ApiKeyGuidanceUrl => null;
+    public string? OAuthDeviceEndpoint => null;
+    public string? OAuthTokenEndpoint => null;
+    public string? OAuthDefaultClientId => null;
 
     public Task<ProviderProbeResult> ProbeAsync(
         ProviderEntry entry, CancellationToken ct = default)

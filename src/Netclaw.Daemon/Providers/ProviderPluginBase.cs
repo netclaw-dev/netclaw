@@ -26,6 +26,9 @@ public abstract class ProviderPluginBase<TDescriptor> : ILlmProviderPlugin
     public string ModelListingPath => Descriptor.ModelListingPath;
     public CredentialInputMode CredentialMode => Descriptor.CredentialMode;
     public string? ApiKeyGuidanceUrl => Descriptor.ApiKeyGuidanceUrl;
+    public string? OAuthDeviceEndpoint => Descriptor.OAuthDeviceEndpoint;
+    public string? OAuthTokenEndpoint => Descriptor.OAuthTokenEndpoint;
+    public string? OAuthDefaultClientId => Descriptor.OAuthDefaultClientId;
 
     public Task<ProviderProbeResult> ProbeAsync(ProviderEntry entry, CancellationToken ct = default)
         => Descriptor.ProbeAsync(entry, ct);

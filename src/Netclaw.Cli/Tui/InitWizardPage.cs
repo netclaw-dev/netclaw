@@ -1,5 +1,6 @@
 using Netclaw.Configuration;
 using Netclaw.Configuration.Providers;
+using Netclaw.Configuration.Providers.OAuth;
 using Netclaw.Cli.Mcp;
 using R3;
 using Termina.Extensions;
@@ -176,6 +177,8 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             // evaluation, blanking the screen.
             if (step == WizardStep.Provider && _providerSubStep == 3)
                 return BuildValidationSubStep();
+            if (step == WizardStep.Provider && _providerSubStep == 5)
+                return BuildOAuthDeviceFlowSubStep();
             if (step == WizardStep.Memory && _memorySubStep == 2)
                 return BuildMemorizerValidationSubStep();
 
@@ -224,6 +227,8 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
                     "  Validating connection and discovering available models...",
                 WizardStep.Provider when _providerSubStep == 4 =>
                     "  Select the model to use for conversations.",
+                WizardStep.Provider when _providerSubStep == 5 =>
+                    "  Complete the authorization in your browser.",
                 WizardStep.ChatServices when _chatServicesSubStep == 0 =>
                     "  Enable Slack to connect Netclaw as a Slack bot.",
                 WizardStep.ChatServices when _chatServicesSubStep == 3 =>
@@ -314,6 +319,7 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             2 => BuildCredentialInputSubStep(),
             3 => BuildValidationSubStep(),
             4 => BuildModelSelectionSubStep(),
+            5 => BuildOAuthDeviceFlowSubStep(),
             _ => Layouts.Empty()
         };
     }
@@ -363,7 +369,7 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             .Select(m => m switch
             {
                 AuthMethod.ApiKey => "API Key",
-                AuthMethod.OAuthDevice => "OAuth Device Flow (coming soon)",
+                AuthMethod.OAuthDevice => "OAuth Device Flow (recommended)",
                 _ => m.ToString()
             })
             .ToList();
@@ -380,10 +386,20 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             {
                 if (selected.Count > 0)
                 {
-                    ViewModel.SelectedAuthMethod = selected[0].StartsWith("API", StringComparison.Ordinal)
+                    var method = selected[0].StartsWith("API", StringComparison.Ordinal)
                         ? AuthMethod.ApiKey
                         : AuthMethod.OAuthDevice;
-                    SetProviderSubStep(2);
+                    ViewModel.SelectedAuthMethod = method;
+
+                    if (method == AuthMethod.OAuthDevice)
+                    {
+                        SetProviderSubStep(5);
+                        ViewModel.StartOAuthFlow();
+                    }
+                    else
+                    {
+                        SetProviderSubStep(2);
+                    }
                 }
             })
             .DisposeWith(_stepSubs);
@@ -592,6 +608,72 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
                 .WithBorderColor(Color.Gray)
                 .WithContent(_manualModelInput)
                 .Height(3));
+    }
+
+    private ILayoutNode BuildOAuthDeviceFlowSubStep()
+    {
+        var children = Layouts.Vertical();
+        var providerType = ViewModel.SelectedProviderType ?? "unknown";
+        var flowState = ViewModel.OAuthFlowState.Value;
+
+        children.WithChild(new TextNode($"  OAuth Device Flow for {providerType}")
+            .WithForeground(Color.White).Bold());
+        children.WithChild(new TextNode("").Height(1));
+
+        switch (flowState)
+        {
+            case DeviceFlowState.NotStarted:
+                children.WithChild(new TextNode("  Starting device authorization...")
+                    .WithForeground(Color.Yellow));
+                break;
+
+            case DeviceFlowState.WaitingForUser:
+            case DeviceFlowState.Polling:
+            {
+                var elapsed = ViewModel.ProbeElapsedSeconds.Value;
+                var frame = SpinnerFrames[elapsed % SpinnerFrames.Length];
+
+                if (ViewModel.OAuthVerificationUri is not null)
+                {
+                    children.WithChild(new TextNode($"  Visit: {ViewModel.OAuthVerificationUri}")
+                        .WithForeground(Color.Cyan));
+                    children.WithChild(new TextNode("").Height(1));
+                }
+
+                if (ViewModel.OAuthUserCode is not null)
+                {
+                    children.WithChild(new TextNode($"  Enter code: {ViewModel.OAuthUserCode}")
+                        .WithForeground(Color.White).Bold());
+                    children.WithChild(new TextNode("").Height(1));
+                }
+
+                children.WithChild(new TextNode($"  {frame} Waiting for authorization...")
+                    .WithForeground(Color.Yellow));
+                break;
+            }
+
+            case DeviceFlowState.Succeeded:
+                children.WithChild(new TextNode("  \u2713 Authorization successful!")
+                    .WithForeground(Color.Green));
+                break;
+
+            case DeviceFlowState.Denied:
+            case DeviceFlowState.Expired:
+            case DeviceFlowState.Error:
+                children.WithChild(new TextNode($"  \u2717 {ViewModel.OAuthErrorMessage ?? "Authorization failed."}")
+                    .WithForeground(Color.Red));
+                children.WithChild(new TextNode("").Height(1));
+                children.WithChild(new TextNode("  Press [Esc] to go back and try again.")
+                    .WithForeground(Color.BrightBlack));
+                break;
+
+            case DeviceFlowState.Cancelled:
+                children.WithChild(new TextNode("  Authorization cancelled.")
+                    .WithForeground(Color.Yellow));
+                break;
+        }
+
+        return children;
     }
 
     private ILayoutNode BuildChatServicesStep()
@@ -1363,6 +1445,13 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
         {
             if (_providerSubStep == 2)
                 ViewModel.ClearFromProvider();
+            if (_providerSubStep == 5)
+            {
+                // Going back from OAuth device flow — cancel flow and go to auth selection
+                ViewModel.CancelOAuthFlow();
+                SetProviderSubStep(1);
+                return true;
+            }
             if (_providerSubStep == 4)
             {
                 // Going back from model selection to validation — re-probe or skip to credentials
@@ -1636,12 +1725,32 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             })
             .DisposeWith(Subscriptions);
 
-        // Animate spinner on validation sub-step every second
+        // Animate spinner on validation sub-step and OAuth device flow sub-step every second
         ViewModel.ProbeElapsedSeconds
             .Subscribe(_ =>
             {
-                if (ViewModel.CurrentStep.Value == WizardStep.Provider && _providerSubStep == 3)
+                if (ViewModel.CurrentStep.Value == WizardStep.Provider
+                    && (_providerSubStep == 3 || _providerSubStep == 5))
                     _stepContentNode?.Invalidate();
+            })
+            .DisposeWith(Subscriptions);
+
+        // OAuth device flow state changed — invalidate to show progress, auto-advance on success
+        ViewModel.OAuthFlowState
+            .Subscribe(state =>
+            {
+                if (ViewModel.CurrentStep.Value != WizardStep.Provider || _providerSubStep != 5)
+                    return;
+
+                _stepContentNode?.Invalidate();
+                _helpTextNode?.Invalidate();
+
+                // Auto-advance to validation sub-step on success
+                if (state == DeviceFlowState.Succeeded)
+                {
+                    SetProviderSubStep(3);
+                    ViewModel.StartProbe();
+                }
             })
             .DisposeWith(Subscriptions);
 

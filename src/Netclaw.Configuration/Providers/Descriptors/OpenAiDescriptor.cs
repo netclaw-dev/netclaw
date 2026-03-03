@@ -21,13 +21,16 @@ public sealed class OpenAiDescriptor : IProviderDescriptor
     public string ModelListingPath => "/v1/models";
     public CredentialInputMode CredentialMode => CredentialInputMode.ApiKey;
     public string? ApiKeyGuidanceUrl => "https://platform.openai.com/api-keys";
+    public string? OAuthDeviceEndpoint => "https://auth.openai.com/codex/device";
+    public string? OAuthTokenEndpoint => "https://auth.openai.com/oauth/token";
+    public string? OAuthDefaultClientId => "app_EMoamEEZ73f0CkXaXp7hrann";
 
     public Task<ProviderProbeResult> ProbeAsync(
         ProviderEntry entry, CancellationToken ct = default)
     {
-        var apiKey = entry.ApiKey?.Value;
-        if (string.IsNullOrWhiteSpace(apiKey))
-            return Task.FromResult(new ProviderProbeResult(false, "API key is required for OpenAI.", []));
+        var bearerToken = entry.ApiKey?.Value ?? entry.OAuthAccessToken?.Value;
+        if (string.IsNullOrWhiteSpace(bearerToken))
+            return Task.FromResult(new ProviderProbeResult(false, "API key or OAuth token is required for OpenAI.", []));
 
         return ProbeHelpers.ExecuteProbeAsync(
             _httpClient,
@@ -35,7 +38,7 @@ public sealed class OpenAiDescriptor : IProviderDescriptor
             DefaultEndpoint,
             ModelListingPath,
             entry.Endpoint,
-            request => request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey),
+            request => request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", bearerToken),
             ProbeHelpers.ParseOpenAiStyleModels,
             ct);
     }

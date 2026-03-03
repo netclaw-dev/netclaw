@@ -19,6 +19,9 @@ public sealed class AnthropicDescriptor : IProviderDescriptor
     public string ModelListingPath => "/v1/models";
     public CredentialInputMode CredentialMode => CredentialInputMode.ApiKey;
     public string? ApiKeyGuidanceUrl => "https://console.anthropic.com/settings/keys";
+    public string? OAuthDeviceEndpoint => null;
+    public string? OAuthTokenEndpoint => null;
+    public string? OAuthDefaultClientId => null;
 
     public Task<ProviderProbeResult> ProbeAsync(
         ProviderEntry entry, CancellationToken ct = default)

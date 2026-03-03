@@ -2,6 +2,8 @@ using System.Text.Json;
 using Netclaw.Cli.Config;
 using Netclaw.Configuration;
 using Netclaw.Configuration.Providers;
+using Netclaw.Configuration.Providers.OAuth;
+using Netclaw.Configuration.Secrets;
 
 namespace Netclaw.Cli.Provider;
 
@@ -51,12 +53,13 @@ internal static class ProviderCommand
 
     private static int RunAdd(string[] args, NetclawPaths paths, ProviderDescriptorRegistry registry, TextWriter writer)
     {
-        // Parse: netclaw provider add <name> <type> [--api-key <key>] [--endpoint <url>]
+        // Parse: netclaw provider add <name> <type> [--api-key <key>] [--endpoint <url>] [--auth <method>]
         if (args.Length < 4)
         {
-            writer.WriteLine("Usage: netclaw provider add <name> <type> [--api-key <key>] [--endpoint <url>]");
+            writer.WriteLine("Usage: netclaw provider add <name> <type> [--api-key <key>] [--endpoint <url>] [--auth <method>]");
             writer.WriteLine();
             writer.WriteLine("Types: " + string.Join(", ", registry.KnownTypeKeys));
+            writer.WriteLine("Auth methods: api-key, oauth-device");
             return 1;
         }
 
@@ -72,6 +75,7 @@ internal static class ProviderCommand
 
         string? apiKey = null;
         string? endpoint = null;
+        string? authFlag = null;
 
         for (var i = 4; i < args.Length; i++)
         {
@@ -86,6 +90,24 @@ internal static class ProviderCommand
                 endpoint = args[++i];
                 continue;
             }
+
+            if (args[i] is "--auth" && i + 1 < args.Length)
+            {
+                authFlag = args[++i];
+                continue;
+            }
+        }
+
+        // Handle --auth oauth-device explicitly
+        if (string.Equals(authFlag, "oauth-device", StringComparison.OrdinalIgnoreCase))
+        {
+            if (!descriptor.SupportedAuthMethods.Contains(AuthMethod.OAuthDevice))
+            {
+                writer.WriteLine($"Error: Provider '{type}' does not support OAuth device flow.");
+                return 1;
+            }
+
+            return RunOAuthDeviceFlow(name, type, endpoint, descriptor, paths, writer);
         }
 
         var supportedAuth = descriptor.SupportedAuthMethods;
@@ -98,12 +120,13 @@ internal static class ProviderCommand
         else if (supportedAuth.Contains(AuthMethod.ApiKey) && apiKey is null
             && !supportedAuth.Contains(AuthMethod.None))
         {
-            // OAuth-capable providers without --api-key: guide user to TUI
+            // OAuth-capable providers without --api-key: guide user to TUI or --auth
             if (supportedAuth.Contains(AuthMethod.OAuthDevice))
             {
                 WriteProviderGuidance(descriptor, writer);
                 writer.WriteLine();
-                writer.WriteLine("Tip: Use `netclaw provider` (TUI) for OAuth device flow setup,");
+                writer.WriteLine("Tip: Use `netclaw provider` (TUI) for interactive OAuth setup,");
+                writer.WriteLine("     or pass --auth oauth-device for CLI device flow,");
                 writer.WriteLine("     or pass --api-key to use an API key instead.");
                 return 1;
             }
@@ -135,7 +158,7 @@ internal static class ProviderCommand
         providers[name] = providerEntry;
         ConfigFileHelper.WriteConfigFile(paths.NetclawConfigPath, config);
 
-        // Write secret to secrets.json
+        // Write secret to secrets.json via SecretsFileWriter for encryption-at-rest
         if (!string.IsNullOrWhiteSpace(apiKey))
         {
             var secretProviders = ConfigFileHelper.GetOrCreateSection(secrets, "Providers");
@@ -150,6 +173,87 @@ internal static class ProviderCommand
         WriteProviderGuidance(descriptor, writer);
         writer.WriteLine();
         return 0;
+    }
+
+    private static int RunOAuthDeviceFlow(
+        string name, string type, string? endpoint,
+        IProviderDescriptor descriptor, NetclawPaths paths, TextWriter writer)
+    {
+        if (descriptor.OAuthDeviceEndpoint is null || descriptor.OAuthTokenEndpoint is null
+            || descriptor.OAuthDefaultClientId is null)
+        {
+            writer.WriteLine($"Error: Provider '{type}' missing OAuth endpoint configuration.");
+            return 1;
+        }
+
+        endpoint ??= descriptor.DefaultEndpoint;
+
+        var config = new OAuthDeviceFlowConfig(
+            descriptor.OAuthDeviceEndpoint,
+            descriptor.OAuthTokenEndpoint,
+            descriptor.OAuthDefaultClientId);
+
+        using var httpClient = new HttpClient();
+        var service = new OAuthDeviceFlowService(httpClient);
+
+        try
+        {
+            // Start device authorization
+            writer.WriteLine("Starting OAuth device authorization...");
+            var deviceAuth = service.StartDeviceAuthorizationAsync(config).GetAwaiter().GetResult();
+
+            writer.WriteLine();
+            writer.WriteLine($"  Visit:      {deviceAuth.VerificationUri}");
+            writer.WriteLine($"  Enter code: {deviceAuth.UserCode}");
+            writer.WriteLine();
+            writer.Write("Waiting for authorization...");
+
+            // Poll for token
+            var result = service.PollForTokenAsync(config, deviceAuth,
+                state =>
+                {
+                    if (state == DeviceFlowState.Polling)
+                        writer.Write(".");
+                }).GetAwaiter().GetResult();
+
+            writer.WriteLine();
+            writer.WriteLine("Authorization successful!");
+
+            // Write config to netclaw.json
+            var (configDict, _) = ConfigFileHelper.LoadConfigFiles(paths);
+            var providers = ConfigFileHelper.GetOrCreateSection(configDict, "Providers");
+            providers[name] = new Dictionary<string, object>
+            {
+                ["Type"] = type,
+                ["Endpoint"] = endpoint,
+                ["AuthMethod"] = AuthMethod.OAuthDevice.ToString()
+            };
+            ConfigFileHelper.WriteConfigFile(paths.NetclawConfigPath, configDict);
+
+            // Persist tokens to secrets.json with encryption
+            OAuthTokenPersistence.PersistTokens(paths, name, result, SecretsProtection.CreateProtector(paths));
+
+            writer.WriteLine($"Added provider '{name}' ({type}) with OAuth authentication.");
+            return 0;
+        }
+        catch (OAuthDeviceFlowDeniedException)
+        {
+            writer.WriteLine();
+            writer.WriteLine("Error: Authorization was denied.");
+            return 1;
+        }
+        catch (OAuthDeviceFlowExpiredException)
+        {
+            writer.WriteLine();
+            writer.WriteLine("Error: Authorization code expired. Please try again.");
+            return 1;
+        }
+        catch (Exception ex)
+        {
+            writer.WriteLine();
+            writer.WriteLine($"Error: {ex.Message}");
+            return 1;
+        }
     }
 
     private static int RunRemove(string[] args, NetclawPaths paths, TextWriter writer)
@@ -244,6 +348,25 @@ internal static class ProviderCommand
                     var decrypted = ConfigFileHelper.DecryptIfEncrypted(paths, apiKey.GetString());
                     entry.ApiKey = new SensitiveString(decrypted);
                 }
+
+                if (prop.Value.TryGetProperty("OAuthAccessToken", out var oauthToken))
+                {
+                    var decrypted = ConfigFileHelper.DecryptIfEncrypted(paths, oauthToken.GetString());
+                    entry.OAuthAccessToken = new SensitiveString(decrypted);
+                }
+
+                if (prop.Value.TryGetProperty("OAuthRefreshToken", out var refreshToken))
+                {
+                    var decrypted = ConfigFileHelper.DecryptIfEncrypted(paths, refreshToken.GetString());
+                    entry.OAuthRefreshToken = new SensitiveString(decrypted);
+                }
+
+                if (prop.Value.TryGetProperty("OAuthTokenExpiry", out var tokenExpiry))
+                {
+                    var expiryStr = tokenExpiry.GetString();
+                    if (expiryStr is not null && DateTimeOffset.TryParse(expiryStr, out var parsed))
+                        entry.OAuthTokenExpiry = parsed;
+                }
             }
         }
 
@@ -307,12 +430,14 @@ internal static class ProviderCommand
         writer.WriteLine("Options for 'add':");
         writer.WriteLine("  --api-key <key>       API key (or prompted interactively)");
         writer.WriteLine("  --endpoint <url>      Custom endpoint URL");
+        writer.WriteLine("  --auth <method>       Auth method: api-key, oauth-device");
         writer.WriteLine();
         writer.WriteLine("Provider types: " + string.Join(", ", registry.KnownTypeKeys));
         writer.WriteLine();
         writer.WriteLine("Examples:");
         writer.WriteLine("  netclaw provider add my-ollama ollama --endpoint http://big-gpu:11434");
         writer.WriteLine("  netclaw provider add my-anthropic anthropic --api-key sk-ant-...");
+        writer.WriteLine("  netclaw provider add my-openai openai --auth oauth-device");
         writer.WriteLine("  netclaw provider remove my-ollama");
         return 0;
     }

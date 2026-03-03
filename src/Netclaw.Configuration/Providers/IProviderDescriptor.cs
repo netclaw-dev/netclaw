@@ -35,6 +35,24 @@ public interface IProviderDescriptor
     string? ApiKeyGuidanceUrl { get; }
 
     /// <summary>
+    /// RFC 8628 device authorization endpoint URL.
+    /// Null for providers that don't support OAuth device flow.
+    /// </summary>
+    string? OAuthDeviceEndpoint { get; }
+
+    /// <summary>
+    /// OAuth token endpoint URL (for token exchange and refresh).
+    /// Null for providers that don't support OAuth.
+    /// </summary>
+    string? OAuthTokenEndpoint { get; }
+
+    /// <summary>
+    /// Default OAuth client_id for this provider. Operators can override in config.
+    /// Null for providers that don't support OAuth.
+    /// </summary>
+    string? OAuthDefaultClientId { get; }
+
+    /// <summary>
     /// Validate credentials and discover available models.
     /// </summary>
     Task<ProviderProbeResult> ProbeAsync(

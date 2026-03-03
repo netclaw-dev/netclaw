@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging;
 using Netclaw.Configuration;
 using Netclaw.Configuration.Providers;
 using Netclaw.Configuration.Providers.Descriptors;
+using Netclaw.Configuration.Providers.OAuth;
 using Netclaw.Daemon.Configuration;
 
 namespace Netclaw.Daemon.Providers;
@@ -22,6 +23,13 @@ public static class LlmProviderServiceExtensions
     {
         // Register descriptors (shared with CLI)
         services.AddProviderDescriptors();
+
+        // OAuth device flow service (for future auto-refresh)
+        services.AddHttpClient("OAuthDeviceFlow");
+        services.AddSingleton(sp =>
+            new OAuthDeviceFlowService(
+                sp.GetRequiredService<IHttpClientFactory>().CreateClient("OAuthDeviceFlow"),
+                sp.GetService<TimeProvider>()));
 
         // Register daemon-specific plugins
         services.AddSingleton<OllamaProviderPlugin>();
