@@ -341,6 +341,12 @@ static void ConfigureDaemonServices(
         client.Timeout = FeedConstants.FeedHttpTimeout);
     services.AddHostedService<SystemSkillSyncService>();
 
+    // Binary update check — logs a warning at startup if a newer version is available.
+    // Never blocks startup, never downloads anything.
+    services.AddHttpClient<BinaryUpdateCheckService>(client =>
+        client.Timeout = FeedConstants.BinaryFeedHttpTimeout);
+    services.AddHostedService<BinaryUpdateCheckService>();
+
     // System prompt (file-based, with first-run seed)
     // Seed minimal SOUL.md if neither new nor legacy personality file exists
     if (!File.Exists(paths.SoulPath) && !File.Exists(paths.PersonalityPath))

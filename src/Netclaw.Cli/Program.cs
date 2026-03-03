@@ -12,6 +12,7 @@ using Netclaw.Cli.Mcp;
 using Netclaw.Cli.Model;
 using Netclaw.Cli.Provider;
 using Netclaw.Cli.Tui;
+using Netclaw.Cli.Update;
 using Netclaw.Configuration;
 using Netclaw.Configuration.Providers;
 using Termina.Diagnostics;
@@ -371,6 +372,15 @@ static async Task RunAsync(string[] args)
         return;
     }
 
+    // ── Self-update ──
+    if (mode is "update")
+    {
+        var paths = new NetclawPaths();
+        paths.EnsureDirectoriesExist();
+        Environment.ExitCode = await UpdateCommand.RunAsync(args, paths);
+        return;
+    }
+
     // ── Parse --resume flag for chat mode ──
     string? resumeSessionId = null;
     if (mode is "chat")
@@ -456,6 +466,10 @@ static async Task RunAsync(string[] args)
 
     var app = webBuilder.Build();
 
+    // Fire-and-forget update check for interactive modes
+    if (mode is "chat" or "sessions")
+        _ = UpdateCommand.BackgroundUpdateCheckAsync();
+
     await app.RunAsync();
 }
 
@@ -492,6 +506,7 @@ static void WriteGeneralHelp()
     Console.WriteLine("  provider                 Manage LLM providers (TUI) or use subcommands");
     Console.WriteLine("  model                    Manage model assignments (TUI) or use subcommands");
     Console.WriteLine("  init                     First-run setup wizard");
+    Console.WriteLine("  update                   Check for and install updates");
     Console.WriteLine("  config                   Configuration management (planned)");
     Console.WriteLine();
     Console.WriteLine("Run `netclaw <command> --help` for details on any command.");

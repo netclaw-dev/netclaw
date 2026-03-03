@@ -3,11 +3,8 @@ using System.Reflection;
 namespace Netclaw.Daemon;
 
 /// <summary>
-/// Exposes build-time information embedded at compile time.
-/// The commit hash comes from <see cref="AssemblyInformationalVersionAttribute"/>
-/// which Microsoft.SourceLink.GitHub populates as "{version}+{full-sha}".
-/// The build timestamp comes from an <see cref="AssemblyMetadataAttribute"/> written
-/// by Directory.Build.targets at evaluation time.
+/// Daemon-specific <see cref="Configuration.BuildInfo"/> facade.
+/// Reads from the daemon assembly and delegates to the shared implementation.
 /// </summary>
 internal static class BuildInfo
 {
@@ -17,7 +14,7 @@ internal static class BuildInfo
     /// Semver version prefix from Directory.Build.props (e.g. "0.1.0").
     /// </summary>
     public static string Version { get; } =
-        Assembly.GetName().Version?.ToString(3) ?? "0.0.0";
+        Netclaw.Configuration.BuildInfo.GetVersion(Assembly);
 
     /// <summary>
     /// Short git commit hash (first 7 chars of the SHA embedded by SourceLink),

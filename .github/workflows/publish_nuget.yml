@@ -1,4 +1,4 @@
-name: Publish NuGet
+name: Release
 
 on:
   push:
@@ -9,56 +9,258 @@ permissions:
    contents: write
 
 jobs:
-  publish-nuget:
-
-    name: publish-nuget
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
-    strategy:
-      matrix:
-        os: [ubuntu-latest]
-
+  # ────────────────────────────────────────────────────────────────────
+  # Job 1: Create the GitHub Release
+  # ────────────────────────────────────────────────────────────────────
+  create-release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      version: ${{ github.ref_name }}
     steps:
-    - name: "Checkout"
+    - name: Checkout
       uses: actions/checkout@v6
       with:
         lfs: true
         fetch-depth: 0
-        
-    - name: "Install .NET SDK"
-      uses: actions/setup-dotnet@v5.1.0
-      with:
-        global-json-file: "./global.json"
 
-    - name: "Restore .NET tools"
-      run: dotnet tool restore
-
-    - name: "Update release notes"
-      shell: pwsh
-      run: |
-        ./build.ps1
-
-    - name: Create Packages
-      run:  dotnet pack /p:PackageVersion=${{ github.ref_name }} -c Release -o ./output
-
-    - name: Push Packages
-      run: dotnet nuget push "output/*.nupkg" -k ${{ secrets.NUGET_KEY }} -s https://api.nuget.org/v3/index.json
-
-    - name: release
+    - name: Create Release
       uses: actions/create-release@v1
       id: create_release
       with:
         draft: false
         prerelease: false
-        release_name: 'Akka.Hosting ${{ github.ref_name }}'
+        release_name: 'Netclaw ${{ github.ref_name }}'
         tag_name: ${{ github.ref }}
         body_path: RELEASE_NOTES.md
       env:
         GITHUB_TOKEN: ${{ github.token }}
 
-    - name: Upload Release Asset
+  # ────────────────────────────────────────────────────────────────────
+  # Job 2: Build and publish NuGet packages
+  # ────────────────────────────────────────────────────────────────────
+  publish-nuget:
+    name: Publish NuGet
+    needs: create-release
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v6
+      with:
+        lfs: true
+        fetch-depth: 0
+
+    - name: Install .NET SDK
+      uses: actions/setup-dotnet@v5.1.0
+      with:
+        global-json-file: "./global.json"
+
+    - name: Restore .NET tools
+      run: dotnet tool restore
+
+    - name: Update release notes
+      shell: pwsh
+      run: ./build.ps1
+
+    - name: Create Packages
+      run: dotnet pack /p:PackageVersion=${{ github.ref_name }} -c Release -o ./output
+
+    - name: Push Packages
+      run: dotnet nuget push "output/*.nupkg" -k ${{ secrets.NUGET_KEY }} -s https://api.nuget.org/v3/index.json
+
+    - name: Upload NuGet to Release
       uses: AButler/upload-release-assets@v3.0
       with:
           repo-token: ${{ github.token }}
           release-tag: ${{ github.ref_name }}
           files: 'output/*.nupkg'
+
+  # ────────────────────────────────────────────────────────────────────
+  # Job 3: Build self-contained binaries (matrix: linux-x64, linux-arm64, win-x64)
+  # ────────────────────────────────────────────────────────────────────
+  publish-binaries:
+    name: Build ${{ matrix.rid }}
+    needs: create-release
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            rid: linux-x64
+            archive_ext: tar.gz
+          - os: ubuntu-24.04-arm
+            rid: linux-arm64
+            archive_ext: tar.gz
+          - os: windows-latest
+            rid: win-x64
+            archive_ext: zip
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v6
+      with:
+        lfs: true
+        fetch-depth: 0
+
+    - name: Install .NET SDK
+      uses: actions/setup-dotnet@v5.1.0
+      with:
+        global-json-file: "./global.json"
+
+    - name: Publish CLI
+      run: >
+        dotnet publish src/Netclaw.Cli/Netclaw.Cli.csproj
+        -c Release
+        -r ${{ matrix.rid }}
+        --self-contained true
+        /p:PublishSingleFile=true
+        /p:EnableCompressionInSingleFile=true
+        /p:Version=${{ github.ref_name }}
+        -o ./publish/cli
+
+    - name: Publish Daemon
+      run: >
+        dotnet publish src/Netclaw.Daemon/Netclaw.Daemon.csproj
+        -c Release
+        -r ${{ matrix.rid }}
+        --self-contained true
+        /p:PublishSingleFile=true
+        /p:EnableCompressionInSingleFile=true
+        /p:Version=${{ github.ref_name }}
+        -o ./publish/daemon
+
+    - name: Package archives (Linux)
+      if: runner.os == 'Linux'
+      run: |
+        VERSION="${{ github.ref_name }}"
+        RID="${{ matrix.rid }}"
+        mkdir -p ./archives
+
+        # CLI archive
+        tar czf "./archives/netclaw-${VERSION}-${RID}.tar.gz" \
+          -C ./publish/cli netclaw
+
+        # Daemon archive
+        tar czf "./archives/netclawd-${VERSION}-${RID}.tar.gz" \
+          -C ./publish/daemon netclawd
+
+    - name: Package archives (Windows)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        $VERSION = "${{ github.ref_name }}"
+        $RID = "${{ matrix.rid }}"
+        New-Item -ItemType Directory -Path ./archives -Force
+
+        # CLI archive
+        Compress-Archive -Path ./publish/cli/netclaw.exe `
+          -DestinationPath "./archives/netclaw-${VERSION}-${RID}.zip"
+
+        # Daemon archive
+        Compress-Archive -Path ./publish/daemon/netclawd.exe `
+          -DestinationPath "./archives/netclawd-${VERSION}-${RID}.zip"
+
+    - name: Compute checksums
+      shell: bash
+      run: |
+        VERSION="${{ github.ref_name }}"
+        RID="${{ matrix.rid }}"
+        mkdir -p ./checksums
+
+        for archive in ./archives/*; do
+          filename=$(basename "$archive")
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256=$(sha256sum "$archive" | cut -d' ' -f1)
+          else
+            sha256=$(shasum -a 256 "$archive" | cut -d' ' -f1)
+          fi
+          size=$(stat -c%s "$archive" 2>/dev/null || stat -f%z "$archive" 2>/dev/null)
+          echo "$sha256  $filename  $size" >> "./checksums/checksums-${RID}.txt"
+        done
+
+    - name: Upload archives to GitHub Release
+      uses: AButler/upload-release-assets@v3.0
+      with:
+        repo-token: ${{ github.token }}
+        release-tag: ${{ github.ref_name }}
+        files: 'archives/*'
+
+    - name: Upload archives to R2
+      uses: cloudflare/wrangler-action@v3
+      with:
+        apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        command: |
+          r2 object put netclaw-releases/${{ github.ref_name }}/ --pipe < /dev/null
+      # Upload each archive individually
+    - name: Upload CLI archive to R2
+      uses: cloudflare/wrangler-action@v3
+      with:
+        apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        command: >
+          r2 object put
+          netclaw-releases/${{ github.ref_name }}/netclaw-${{ github.ref_name }}-${{ matrix.rid }}.${{ matrix.archive_ext }}
+          --file=./archives/netclaw-${{ github.ref_name }}-${{ matrix.rid }}.${{ matrix.archive_ext }}
+          --content-type=application/octet-stream
+
+    - name: Upload Daemon archive to R2
+      uses: cloudflare/wrangler-action@v3
+      with:
+        apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        command: >
+          r2 object put
+          netclaw-releases/${{ github.ref_name }}/netclawd-${{ github.ref_name }}-${{ matrix.rid }}.${{ matrix.archive_ext }}
+          --file=./archives/netclawd-${{ github.ref_name }}-${{ matrix.rid }}.${{ matrix.archive_ext }}
+          --content-type=application/octet-stream
+
+    - name: Upload checksum artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: checksums-${{ matrix.rid }}
+        path: ./checksums/
+
+  # ────────────────────────────────────────────────────────────────────
+  # Job 4: Generate binary manifest and deploy to Cloudflare Pages
+  # ────────────────────────────────────────────────────────────────────
+  publish-binary-manifest:
+    name: Publish Binary Manifest
+    needs: publish-binaries
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v6
+      with:
+        lfs: true
+        fetch-depth: 0
+
+    - name: Download all checksum artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: ./checksums
+        pattern: checksums-*
+        merge-multiple: true
+
+    - name: Generate release manifest
+      run: |
+        chmod +x ./feeds/scripts/generate-release-manifest.sh
+        ./feeds/scripts/generate-release-manifest.sh \
+          "${{ github.ref_name }}" \
+          ./checksums \
+          "https://releases.netclaw.dev"
+
+    - name: Copy install scripts to feeds
+      run: |
+        cp scripts/install.sh feeds/install.sh
+        cp scripts/install.ps1 feeds/install.ps1
+
+    - name: Deploy feeds to Cloudflare Pages
+      uses: cloudflare/wrangler-action@v3
+      with:
+        apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        command: pages deploy feeds --project-name=netclaw-feeds

@@ -37,6 +37,10 @@ public sealed class NetclawPaths
     public string MemoriesDirectory => Path.Combine(BasePath, "memories");
     public string MemoryIndexPath => Path.Combine(MemoriesDirectory, "memory.md");
 
+    // ── Binary directory (install location for self-contained binaries) ──
+    public string BinDirectory => Path.Combine(BasePath, "bin");
+    public string BinarySyncStatePath => Path.Combine(BinDirectory, ".sync-state.json");
+
     // ── Other standard directories ──
     public string ProjectsDirectory => Path.Combine(BasePath, "projects");
     public string EnvironmentDirectory => Path.Combine(BasePath, "environment");
@@ -81,5 +85,6 @@ public sealed class NetclawPaths
         Directory.CreateDirectory(SessionLogsDirectory);
         Directory.CreateDirectory(MemoriesDirectory);
         Directory.CreateDirectory(SessionsDirectory);
+        Directory.CreateDirectory(BinDirectory);
     }
 }

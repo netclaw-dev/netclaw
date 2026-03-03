@@ -19,10 +19,22 @@ public static class FeedConstants
         $"{FeedBaseUrl}/skills/.system/manifest.json";
 
     /// <summary>
+    /// URL for the binary releases manifest.
+    /// </summary>
+    public const string BinaryManifestUrl =
+        $"{FeedBaseUrl}/releases/manifest.json";
+
+    /// <summary>
     /// HTTP timeout for feed manifest and skill downloads.
     /// Short timeout ensures startup is never blocked by network issues.
     /// </summary>
     public static readonly TimeSpan FeedHttpTimeout = TimeSpan.FromSeconds(3);
+
+    /// <summary>
+    /// HTTP timeout for binary feed manifest fetches.
+    /// Slightly longer than skill feed since binary manifests may be larger.
+    /// </summary>
+    public static readonly TimeSpan BinaryFeedHttpTimeout = TimeSpan.FromSeconds(10);
 
     /// <summary>
     /// Name of the sync state file written inside the system skills directory.
