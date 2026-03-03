@@ -82,20 +82,31 @@ public sealed class DaemonClientReconnectIntegrationTests
         var port = GetFreeTcpPort();
         var host1 = await StartFakeHubAsync(port);
 
-        await using var client = new DaemonClient($"http://127.0.0.1:{port}");
+        // Fast reconnect delays exhaust auto-reconnect in ~50ms instead of ~17s,
+        // so the Disconnected event fires quickly and the test budget is not wasted
+        // waiting for built-in retries to time out.
+        await using var client = new DaemonClient(
+            $"http://127.0.0.1:{port}",
+            reconnectDelays: [TimeSpan.Zero, TimeSpan.FromMilliseconds(50)]);
+
         var outputs = new List<SessionOutput>();
         var firstResponseReceived = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var secondResponseReceived = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var clientDisconnected = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var reconnectedAfterRestart = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        // Track when the client has re-established a connection after the server
-        // restart. This is the synchronization signal the test needs: only after
-        // the client is Connected again is it safe to call EnsureSessionAsync
-        // without racing the auto-reconnect or the Closed handler's reconnect loop.
-        bool serverStopped = false;
+        // Wait for Disconnected (auto-reconnect exhausted, Closed handler fired)
+        // before starting host2. This ensures host1's port is fully released
+        // before host2 binds, and that the client is not mid-reconnect when
+        // host2 starts. Using Task.IsCompleted as the guard is safe: the
+        // Disconnected event always fires before any subsequent Connected event
+        // from ReconnectLoopAsync.
         using var connectionSub = client.ConnectionEvents.Subscribe(evt =>
         {
-            if (evt.State is DaemonConnectionState.Connected && Volatile.Read(ref serverStopped))
+            if (evt.State is DaemonConnectionState.Disconnected)
+                clientDisconnected.TrySetResult();
+
+            if (evt.State is DaemonConnectionState.Connected && clientDisconnected.Task.IsCompleted)
                 reconnectedAfterRestart.TrySetResult();
         });
 
@@ -122,19 +133,19 @@ public sealed class DaemonClientReconnectIntegrationTests
 
         await host1.StopAsync();
         host1.Dispose();
-        Volatile.Write(ref serverStopped, true);
 
-        // Start the replacement server. The client's built-in auto-reconnect
-        // (or the Closed handler's reconnect loop) will eventually connect to
-        // it. We wait for the Connected event rather than calling ConnectAsync
-        // directly, which avoids racing with the background reconnect paths.
+        // Wait for the client to observe Disconnected (auto-reconnect exhausted,
+        // Closed handler fired). With short reconnect delays this takes ~50ms.
+        // This ensures host1's port is fully released before host2 tries to bind,
+        // avoiding Windows TIME_WAIT conflicts.
+        await WaitFor(clientDisconnected.Task, TimeSpan.FromSeconds(10));
+
+        // Start the replacement server. ReconnectLoopAsync is already running at
+        // this point; it will connect to host2, re-attach the session, then emit
+        // Connected — which sets reconnectedAfterRestart.
         using var host2 = await StartFakeHubAsync(port);
 
-        // Wait for the client to reconnect to host2 via auto-reconnect or the
-        // Closed handler's reconnect loop. The auto-reconnect delays sum to
-        // 17s, plus the Closed handler's reconnect loop has its own delays,
-        // so we allow up to 30s for this to complete.
-        await WaitFor(reconnectedAfterRestart.Task, TimeSpan.FromSeconds(30));
+        await WaitFor(reconnectedAfterRestart.Task, TimeSpan.FromSeconds(15));
 
         await client.EnsureSessionAsync("tui");
         await client.SendAsync(new ChannelInput
