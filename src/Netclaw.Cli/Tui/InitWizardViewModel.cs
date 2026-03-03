@@ -1,3 +1,4 @@
+using System.Net.Sockets;
 using System.Text.Json;
 using Netclaw.Channels.Slack;
 using Netclaw.Cli.Daemon;
@@ -64,6 +65,21 @@ public partial class InitWizardViewModel : ReactiveViewModel
     public ReactiveProperty<int> ProbeElapsedSeconds { get; } = new(0);
 
     /// <summary>
+    /// True while the Memorizer connectivity probe is running.
+    /// </summary>
+    public ReactiveProperty<bool> IsMemorizerProbing { get; } = new(false);
+
+    /// <summary>
+    /// Result of the Memorizer connectivity probe. Null before first probe.
+    /// </summary>
+    public ReactiveProperty<bool?> MemorizerProbeResult { get; } = new(null);
+
+    /// <summary>
+    /// Completes when the Memorizer probe finishes. Used for testing without polling.
+    /// </summary>
+    internal Task? MemorizerProbeCompletion { get; private set; }
+
+    /// <summary>
     /// Monotonically increasing counter that ticks whenever health check results
     /// change. The page subscribes to this to invalidate its DynamicLayoutNode,
     /// since RequestRedraw alone won't trigger factory re-evaluation in Termina 0.7.1+.
@@ -103,10 +119,7 @@ public partial class InitWizardViewModel : ReactiveViewModel
 
     // ── Step 6: Memory ──
     public string SelectedMemoryBackend { get; set; } = "files";
-    public string MemorizerTransport { get; set; } = "http";
     public string? MemorizerUrl { get; set; }
-    public string? MemorizerCommand { get; set; }
-    public string? MemorizerArguments { get; set; }
 
     // ── Step 7: Exposure ──
     public string? ExposureMode { get; set; }
@@ -327,31 +340,54 @@ public partial class InitWizardViewModel : ReactiveViewModel
     }
 
     /// <summary>
+    /// Start the Memorizer connectivity probe. Updates reactive properties
+    /// so the page can show a spinner and auto-advance on success.
+    /// </summary>
+    public void StartMemorizerProbe()
+    {
+        MemorizerProbeCompletion = ProbeMemorizerAsync();
+    }
+
+    /// <summary>
     /// Probe the Memorizer endpoint for connectivity. Returns true if reachable.
     /// </summary>
     internal async Task<bool> ProbeMemorizerAsync()
     {
-        if (MemorizerTransport == "http" && !string.IsNullOrWhiteSpace(MemorizerUrl))
+        if (string.IsNullOrWhiteSpace(MemorizerUrl))
         {
-            try
-            {
-                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-                using var client = new HttpClient();
-                var response = await client.GetAsync(MemorizerUrl, cts.Token);
-                return response.IsSuccessStatusCode;
-            }
-            catch
-            {
-                return false;
-            }
+            MemorizerProbeResult.Value = false;
+            IsMemorizerProbing.Value = false;
+            RequestRedraw();
+            return false;
         }
 
-        // For stdio transport, we'd need to spawn the process and check MCP handshake.
-        // For now, return true (assume reachable) — the daemon will validate at startup.
-        if (MemorizerTransport == "stdio" && !string.IsNullOrWhiteSpace(MemorizerCommand))
-            return true;
+        IsMemorizerProbing.Value = true;
+        MemorizerProbeResult.Value = null;
+        RequestRedraw();
 
-        return false;
+        bool reachable;
+        try
+        {
+            // TCP connect to verify the server is alive. MCP endpoints only accept
+            // POST, so an HTTP GET would return 405. A simple TCP handshake is the
+            // most reliable liveness check.
+            var baseUri = new Uri(MemorizerUrl);
+            var port = baseUri.Port > 0 ? baseUri.Port : (baseUri.Scheme == "https" ? 443 : 80);
+
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            using var tcp = new TcpClient();
+            await tcp.ConnectAsync(baseUri.Host, port, cts.Token);
+            reachable = true;
+        }
+        catch
+        {
+            reachable = false;
+        }
+
+        MemorizerProbeResult.Value = reachable;
+        IsMemorizerProbing.Value = false;
+        RequestRedraw();
+        return reachable;
     }
 
     private void HandleGlobalKey(KeyPressed key)
@@ -766,23 +802,12 @@ public partial class InitWizardViewModel : ReactiveViewModel
         {
             var memorizerEntry = new Dictionary<string, object>
             {
-                ["Enabled"] = true
+                ["Enabled"] = true,
+                ["Transport"] = "http"
             };
 
-            if (MemorizerTransport == "http")
-            {
-                memorizerEntry["Transport"] = "http";
-                if (!string.IsNullOrWhiteSpace(MemorizerUrl))
-                    memorizerEntry["Url"] = MemorizerUrl;
-            }
-            else
-            {
-                memorizerEntry["Transport"] = "stdio";
-                if (!string.IsNullOrWhiteSpace(MemorizerCommand))
-                    memorizerEntry["Command"] = MemorizerCommand;
-                if (!string.IsNullOrWhiteSpace(MemorizerArguments))
-                    memorizerEntry["Arguments"] = MemorizerArguments.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-            }
+            if (!string.IsNullOrWhiteSpace(MemorizerUrl))
+                memorizerEntry["Url"] = MemorizerUrl;
 
             mcpServers["memorizer"] = memorizerEntry;
         }
@@ -942,6 +967,8 @@ public partial class InitWizardViewModel : ReactiveViewModel
         IsProbing.Dispose();
         ProbeResult.Dispose();
         ProbeElapsedSeconds.Dispose();
+        IsMemorizerProbing.Dispose();
+        MemorizerProbeResult.Dispose();
         HealthCheckResultVersion.Dispose();
         base.Dispose();
     }

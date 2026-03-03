@@ -53,11 +53,8 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
 
     // Step 6: Memory
     private SelectionListNode<string>? _memoryBackendList;
-    private SelectionListNode<string>? _memorizerTransportList;
     private TextInputNode? _memorizerUrlInput;
-    private TextInputNode? _memorizerCommandInput;
-    private TextInputNode? _memorizerArgumentsInput;
-    private int _memorySubStep; // 0=backend, 1=transport (memorizer only), 2=connection details (memorizer only)
+    private int _memorySubStep; // 0=backend, 1=URL input (memorizer only), 2=validation (memorizer only)
 
     // Step 7: Exposure
     private SelectionListNode<string>? _exposureList;
@@ -171,13 +168,16 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             if (step == WizardStep.HealthCheck)
                 return BuildHealthCheckStep();
 
-            // Validation sub-step (provider step 3) is also stateless — just a spinner
-            // or error text. Skip clearing focus/subs so the spinner can tick without
-            // disposing interactive state from the previous sub-step. More importantly,
-            // this factory must NEVER call SetProviderSubStep() — that would re-entrantly
-            // invalidate _stepContentNode during its own evaluation, blanking the screen.
+            // Validation sub-steps are stateless — just a spinner or error text.
+            // Skip clearing focus/subs so the spinner can tick without disposing
+            // interactive state from the previous sub-step. More importantly,
+            // this factory must NEVER call SetProviderSubStep/SetMemorySubStep —
+            // that would re-entrantly invalidate _stepContentNode during its own
+            // evaluation, blanking the screen.
             if (step == WizardStep.Provider && _providerSubStep == 3)
                 return BuildValidationSubStep();
+            if (step == WizardStep.Memory && _memorySubStep == 2)
+                return BuildMemorizerValidationSubStep();
 
             // Clear stale focus references BEFORE building new content.
             // The old components are about to be replaced/disposed by DynamicLayoutNode.
@@ -249,11 +249,9 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
                 WizardStep.Memory when _memorySubStep == 0 =>
                     "  Cross-session memory lets the agent retain knowledge between conversations.",
                 WizardStep.Memory when _memorySubStep == 1 =>
-                    "  Select how to connect to the Memorizer MCP server.",
-                WizardStep.Memory when _memorySubStep == 2 && ViewModel.MemorizerTransport == "http" =>
-                    "  Enter the URL of your Memorizer MCP server (e.g. http://localhost:5012/mcp).",
+                    "  Enter the URL of your Memorizer MCP server. Default: http://localhost:5012/mcp",
                 WizardStep.Memory when _memorySubStep == 2 =>
-                    "  Enter the command and arguments to launch the Memorizer process.",
+                    "  Checking connectivity to the Memorizer server...",
                 WizardStep.Exposure =>
                     "  Local-only is recommended for homelab use.",
                 WizardStep.Identity when _identitySubStep == 0 =>
@@ -1022,8 +1020,8 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
         return _memorySubStep switch
         {
             0 => BuildMemoryBackendSubStep(),
-            1 => BuildMemorizerTransportSubStep(),
-            2 => BuildMemorizerConnectionSubStep(),
+            1 => BuildMemorizerUrlSubStep(),
+            2 => BuildMemorizerValidationSubStep(),
             _ => Layouts.Empty()
         };
     }
@@ -1064,119 +1062,69 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             .WithChild(_memoryBackendList);
     }
 
-    private ILayoutNode BuildMemorizerTransportSubStep()
+    private ILayoutNode BuildMemorizerUrlSubStep()
     {
-        _memorizerTransportList = Layouts.SelectionList(
-                "HTTP (remote server)",
-                "stdio (local process)")
-            .WithMode(SelectionMode.Single)
-            .WithHighlightColors(Color.Black, Color.Cyan);
+        _memorizerUrlInput = new TextInputNode()
+            .WithPlaceholder("http://localhost:5012/mcp");
 
-        _memorizerTransportList.OnFocused();
-        _lastFocusedList = _memorizerTransportList;
+        // Pre-fill with default or previously entered URL
+        _memorizerUrlInput.Text = ViewModel.MemorizerUrl ?? "http://localhost:5012/mcp";
 
-        _memorizerTransportList.SelectionConfirmed
-            .Subscribe(selected =>
+        _memorizerUrlInput.OnFocused();
+        _lastFocusedInput = _memorizerUrlInput;
+
+        _memorizerUrlInput.Submitted
+            .Where(text => !string.IsNullOrWhiteSpace(text))
+            .Subscribe(text =>
             {
-                if (selected.Count == 0)
-                    return;
-
-                ViewModel.MemorizerTransport = selected[0].StartsWith("stdio", StringComparison.Ordinal)
-                    ? "stdio"
-                    : "http";
+                ViewModel.MemorizerUrl = text;
+                // Advance to validation substep and start probe
+                ViewModel.StartMemorizerProbe();
                 SetMemorySubStep(2);
             })
             .DisposeWith(_stepSubs);
 
         return Layouts.Vertical()
-            .WithChild(new TextNode("  Memorizer transport:").WithForeground(Color.White))
-            .WithChild(_memorizerTransportList);
+            .WithChild(new TextNode("  Memorizer URL:").WithForeground(Color.White))
+            .WithChild(new PanelNode()
+                .WithTitle("URL")
+                .WithBorder(BorderStyle.Rounded)
+                .WithBorderColor(Color.Gray)
+                .WithContent(_memorizerUrlInput)
+                .Height(3));
     }
 
-    private ILayoutNode BuildMemorizerConnectionSubStep()
+    /// <summary>
+    /// Stateless validation spinner for the Memorizer probe.
+    /// Follows the same pattern as <see cref="BuildValidationSubStep"/>:
+    /// state-driven from ViewModel reactive properties, auto-advances on success
+    /// via the MemorizerProbeResult subscription in InitializeComponents.
+    /// </summary>
+    private ILayoutNode BuildMemorizerValidationSubStep()
     {
-        if (ViewModel.MemorizerTransport == "http")
+        var probeResult = ViewModel.MemorizerProbeResult.Value;
+
+        if (ViewModel.IsMemorizerProbing.Value || probeResult is null)
         {
-            _memorizerUrlInput = new TextInputNode()
-                .WithPlaceholder("http://localhost:5012/mcp");
-
-            if (!string.IsNullOrWhiteSpace(ViewModel.MemorizerUrl))
-                _memorizerUrlInput.Text = ViewModel.MemorizerUrl;
-
-            _memorizerUrlInput.OnFocused();
-            _lastFocusedInput = _memorizerUrlInput;
-
-            _memorizerUrlInput.Submitted
-                .Where(text => !string.IsNullOrWhiteSpace(text))
-                .Subscribe(text =>
-                {
-                    ViewModel.MemorizerUrl = text;
-                    _memorySubStep = 0;
-                    ViewModel.GoNext();
-                })
-                .DisposeWith(_stepSubs);
-
+            var frame = SpinnerFrames[DateTime.UtcNow.Second % SpinnerFrames.Length];
             return Layouts.Vertical()
-                .WithChild(new TextNode("  Memorizer URL:").WithForeground(Color.White))
-                .WithChild(new PanelNode()
-                    .WithTitle("URL")
-                    .WithBorder(BorderStyle.Rounded)
-                    .WithBorderColor(Color.Gray)
-                    .WithContent(_memorizerUrlInput)
-                    .Height(3));
+                .WithChild(new TextNode($"  {frame} Checking Memorizer connectivity...")
+                    .WithForeground(Color.Yellow));
         }
 
-        // stdio transport — command + arguments
-        _memorizerCommandInput = new TextInputNode()
-            .WithPlaceholder("e.g., npx, dotnet, python");
+        if (probeResult == true)
+        {
+            // Brief success flash — MemorizerProbeResult subscription will auto-advance
+            return Layouts.Vertical()
+                .WithChild(new TextNode("  \u2713 Memorizer is reachable!")
+                    .WithForeground(Color.Green));
+        }
 
-        if (!string.IsNullOrWhiteSpace(ViewModel.MemorizerCommand))
-            _memorizerCommandInput.Text = ViewModel.MemorizerCommand;
-
-        _memorizerCommandInput.OnFocused();
-        _lastFocusedInput = _memorizerCommandInput;
-
-        _memorizerCommandInput.Submitted
-            .Where(text => !string.IsNullOrWhiteSpace(text))
-            .Subscribe(text =>
-            {
-                ViewModel.MemorizerCommand = text;
-                // Move focus to arguments input
-                _memorizerArgumentsInput?.OnFocused();
-                _lastFocusedInput = _memorizerArgumentsInput;
-            })
-            .DisposeWith(_stepSubs);
-
-        _memorizerArgumentsInput = new TextInputNode()
-            .WithPlaceholder("e.g., -y @anthropic/memorizer-mcp");
-
-        if (!string.IsNullOrWhiteSpace(ViewModel.MemorizerArguments))
-            _memorizerArgumentsInput.Text = ViewModel.MemorizerArguments;
-
-        _memorizerArgumentsInput.Submitted
-            .Subscribe(text =>
-            {
-                ViewModel.MemorizerArguments = string.IsNullOrWhiteSpace(text) ? null : text;
-                _memorySubStep = 0;
-                ViewModel.GoNext();
-            })
-            .DisposeWith(_stepSubs);
-
+        // Failure — prompt retry or back
         return Layouts.Vertical()
-            .WithChild(new TextNode("  Memorizer command:").WithForeground(Color.White))
-            .WithChild(new PanelNode()
-                .WithTitle("Command")
-                .WithBorder(BorderStyle.Rounded)
-                .WithBorderColor(Color.Gray)
-                .WithContent(_memorizerCommandInput)
-                .Height(3))
-            .WithChild(new TextNode("  Arguments:").WithForeground(Color.White))
-            .WithChild(new PanelNode()
-                .WithTitle("Arguments")
-                .WithBorder(BorderStyle.Rounded)
-                .WithBorderColor(Color.Gray)
-                .WithContent(_memorizerArgumentsInput)
-                .Height(3));
+            .WithChild(new TextNode("  \u2717 Could not reach Memorizer server.").WithForeground(Color.Red))
+            .WithChild(new TextNode(""))
+            .WithChild(new TextNode("  Press Enter to retry, or Esc to go back.").WithForeground(Color.BrightBlack));
     }
 
     private ILayoutNode BuildExposureStep()
@@ -1524,6 +1472,19 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             return;
         }
 
+        // Memorizer validation sub-step — Enter retries on failure
+        if (ViewModel.CurrentStep.Value == WizardStep.Memory
+            && _memorySubStep == 2
+            && keyInfo.Key == ConsoleKey.Enter
+            && ViewModel.MemorizerProbeResult.Value == false)
+        {
+            ViewModel.StartMemorizerProbe();
+            _stepContentNode?.Invalidate();
+            _helpTextNode?.Invalidate();
+            ViewModel.RequestRedraw();
+            return;
+        }
+
         // On health check step, Enter triggers the check
         if (ViewModel.CurrentStep.Value == WizardStep.HealthCheck && keyInfo.Key == ConsoleKey.Enter)
         {
@@ -1547,7 +1508,6 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             WizardStep.BrowserAutomation when _browserAutomationSubStep == 0 => _browserAutomationEnabledList,
             WizardStep.BrowserAutomation when _browserAutomationSubStep == 1 => _browserAutomationBackendList,
             WizardStep.Memory when _memorySubStep == 0 => _memoryBackendList,
-            WizardStep.Memory when _memorySubStep == 1 => _memorizerTransportList,
             WizardStep.Exposure => _exposureList,
             WizardStep.Identity when _identitySubStep == 1 => _commStyleList,
             _ => null
@@ -1567,10 +1527,7 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             WizardStep.ChatServices when _chatServicesSubStep == 5 => _slackAllowedUserIdsInput,
             WizardStep.Search when _searchSubStep == 1 && _braveApiKeyInput is not null => _braveApiKeyInput,
             WizardStep.Search when _searchSubStep == 1 => _searxngEndpointInput,
-            WizardStep.Memory when _memorySubStep == 2 && _memorizerUrlInput is not null => _memorizerUrlInput,
-            WizardStep.Memory when _memorySubStep == 2 && _memorizerArgumentsInput is not null
-                && !string.IsNullOrWhiteSpace(ViewModel.MemorizerCommand) => _memorizerArgumentsInput,
-            WizardStep.Memory when _memorySubStep == 2 => _memorizerCommandInput,
+            WizardStep.Memory when _memorySubStep == 1 => _memorizerUrlInput,
             WizardStep.Acl => _ownerIdentityInput,
             WizardStep.Identity when _identitySubStep == 0 => _agentNameInput,
             WizardStep.Identity when _identitySubStep == 2 => _userNameInput,
@@ -1684,6 +1641,35 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             .Subscribe(_ =>
             {
                 if (ViewModel.CurrentStep.Value == WizardStep.Provider && _providerSubStep == 3)
+                    _stepContentNode?.Invalidate();
+            })
+            .DisposeWith(Subscriptions);
+
+        // Memorizer probe result changed — invalidate to show success/failure,
+        // then auto-advance on success. Same pattern as provider probe.
+        ViewModel.MemorizerProbeResult
+            .Subscribe(result =>
+            {
+                if (ViewModel.CurrentStep.Value != WizardStep.Memory || _memorySubStep != 2)
+                    return;
+
+                _stepContentNode?.Invalidate();
+                _helpTextNode?.Invalidate();
+
+                // Auto-advance to next wizard step on success
+                if (result == true)
+                {
+                    _memorySubStep = 0;
+                    ViewModel.GoNext();
+                }
+            })
+            .DisposeWith(Subscriptions);
+
+        // Invalidate spinner while Memorizer probe is running
+        ViewModel.IsMemorizerProbing
+            .Subscribe(_ =>
+            {
+                if (ViewModel.CurrentStep.Value == WizardStep.Memory && _memorySubStep == 2)
                     _stepContentNode?.Invalidate();
             })
             .DisposeWith(Subscriptions);

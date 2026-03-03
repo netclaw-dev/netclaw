@@ -855,13 +855,12 @@ public sealed class InitWizardViewModelTests : IDisposable
     }
 
     [Fact]
-    public async Task HealthCheck_MemorizerBackendHttp_WritesMemoryAndMcpServer()
+    public async Task HealthCheck_MemorizerBackend_WritesMemoryAndMcpServer()
     {
         using var vm = CreateViewModel();
         vm.SelectedProviderType = "ollama";
         vm.SlackEnabled = false;
         vm.SelectedMemoryBackend = "memorizer";
-        vm.MemorizerTransport = "http";
         vm.MemorizerUrl = "http://localhost:5012/mcp";
 
         vm.CurrentStep.Value = WizardStep.HealthCheck;
@@ -881,41 +880,12 @@ public sealed class InitWizardViewModelTests : IDisposable
     }
 
     [Fact]
-    public async Task HealthCheck_MemorizerBackendStdio_WritesCommandAndArguments()
-    {
-        using var vm = CreateViewModel();
-        vm.SelectedProviderType = "ollama";
-        vm.SlackEnabled = false;
-        vm.SelectedMemoryBackend = "memorizer";
-        vm.MemorizerTransport = "stdio";
-        vm.MemorizerCommand = "npx";
-        vm.MemorizerArguments = "-y @anthropic/memorizer-mcp";
-
-        vm.CurrentStep.Value = WizardStep.HealthCheck;
-        vm.GoNext();
-        await vm.HealthCheckCompletion!.WaitAsync(TimeSpan.FromSeconds(5));
-        Assert.True(vm.IsComplete.Value);
-
-        var config = JsonDocument.Parse(File.ReadAllText(_paths.NetclawConfigPath));
-        Assert.True(config.RootElement.TryGetProperty("McpServers", out var mcpServers));
-        Assert.True(mcpServers.TryGetProperty("memorizer", out var memorizer));
-        Assert.Equal("stdio", memorizer.GetProperty("Transport").GetString());
-        Assert.Equal("npx", memorizer.GetProperty("Command").GetString());
-
-        var args = memorizer.GetProperty("Arguments");
-        Assert.Equal(2, args.GetArrayLength());
-        Assert.Equal("-y", args[0].GetString());
-        Assert.Equal("@anthropic/memorizer-mcp", args[1].GetString());
-    }
-
-    [Fact]
     public async Task HealthCheck_MemorizerUnreachable_ReportsDegradedNotFailed()
     {
         using var vm = CreateViewModel();
         vm.SelectedProviderType = "ollama";
         vm.SlackEnabled = false;
         vm.SelectedMemoryBackend = "memorizer";
-        vm.MemorizerTransport = "http";
         vm.MemorizerUrl = "http://unreachable-host:9999/mcp";
 
         vm.CurrentStep.Value = WizardStep.HealthCheck;
