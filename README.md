@@ -16,11 +16,108 @@ Netclaw uses a **daemon + thin client** architecture:
 
 ## Quick Start
 
+### Prerequisites
+
+- [.NET 10 SDK](https://dotnet.microsoft.com/download) (pinned at `10.0.102`
+  via `global.json`, `rollForward: major`)
+- A local [Ollama](https://ollama.com/) instance (default provider), or an
+  OpenRouter API key
+
+### 1. Build and publish
+
 ```bash
 # Build everything
 dotnet build Netclaw.slnx
 
-# Start the daemon
+# Publish both binaries to a shared output folder
+dotnet publish src/Netclaw.Daemon/Netclaw.Daemon.csproj -c Release -o ./out
+dotnet publish src/Netclaw.Cli/Netclaw.Cli.csproj -c Release -o ./out
+```
+
+### 2. Make the CLI available
+
+Either add the output folder to your PATH:
+
+```bash
+export PATH="$PWD/out:$PATH"
+```
+
+Or point the CLI at the daemon binary explicitly:
+
+```bash
+export NETCLAW_DAEMON_PATH="$PWD/out/netclawd"
+alias netclaw="$PWD/out/netclaw"
+```
+
+### 3. Configure an LLM provider
+
+Run the guided setup wizard:
+
+```bash
+netclaw init
+```
+
+Or create the config manually. The daemon reads layered config from
+`~/.netclaw/config/`:
+
+```bash
+mkdir -p ~/.netclaw/config
+```
+
+**`~/.netclaw/config/netclaw.json`** — base settings (minimal Ollama example):
+
+```json
+{
+  "configVersion": 1,
+  "Providers": {
+    "local-ollama": {
+      "Type": "ollama",
+      "Endpoint": "http://localhost:11434"
+    }
+  },
+  "Models": {
+    "Main": { "Provider": "local-ollama", "ModelId": "qwen3:30b" }
+  }
+}
+```
+
+**`~/.netclaw/config/secrets.json`** — credentials (Slack tokens, API keys):
+
+```json
+{
+  "Providers": {
+    "openrouter": { "ApiKey": "sk-or-v1-..." }
+  },
+  "Slack": {
+    "BotToken": "xoxb-...",
+    "AppToken": "xapp-..."
+  }
+}
+```
+
+```bash
+chmod 600 ~/.netclaw/config/secrets.json
+```
+
+All settings can also be overridden via environment variables using the
+`NETCLAW_` prefix with double-underscore separators for nested keys:
+
+```bash
+export NETCLAW_Providers__local-ollama__Endpoint=http://localhost:11434
+export NETCLAW_Models__Main__ModelId=qwen3:8b
+```
+
+### 4. Validate configuration
+
+```bash
+netclaw doctor          # Check config schema, provider connectivity, secrets
+netclaw doctor --fix    # Auto-apply safe fixes
+```
+
+### 5. Run
+
+```bash
+# Start the daemon (background process)
 netclaw daemon start
 
 # Check daemon status
@@ -93,10 +190,41 @@ STEP_TIMEOUT_SECONDS=120 scripts/smoke/check.sh
 - Slack Socket Mode setup: `docs/integrations/slack-socket-mode.md`
 - Slack ACL policy model: `docs/integrations/slack-acl-policy.md`
 
-## Persistence Config
+## Configuration
 
-Daemon persistence config belongs in `~/.netclaw/config/netclaw.json` (not
-`secrets.json`). SQLite path is local file state, not a secret.
+Configuration is layered — later sources override earlier ones:
+
+1. `~/.netclaw/config/netclaw.json` — base settings
+2. `~/.netclaw/config/secrets.json` — credential overlay (`chmod 600`)
+3. `NETCLAW_*` environment variables — highest priority
+
+Directories are created automatically on first run.
+
+### `~/.netclaw/` Directory Layout
+
+```
+~/.netclaw/
+├── netclaw.pid                # daemon PID file
+├── netclaw.db                 # SQLite persistence (default)
+├── config/
+│   ├── netclaw.json           # base settings
+│   └── secrets.json           # credentials (chmod 600)
+├── identity/                  # system prompt layers
+│   ├── SOUL.md
+│   ├── AGENTS.md
+│   └── TOOLING.md
+├── skills/                    # system and user skills
+├── memories/                  # file-backed cross-session memory
+├── sessions/
+└── logs/
+    ├── daemon.log
+    └── sessions/
+```
+
+### Persistence
+
+Persistence config belongs in `netclaw.json` (not `secrets.json`). SQLite path
+is local file state, not a secret.
 
 ```json
 {
@@ -110,6 +238,16 @@ Daemon persistence config belongs in `~/.netclaw/config/netclaw.json` (not
 }
 ```
 
+### Defaults (No Config Files)
+
+When no config files exist, the daemon defaults to:
+
+- **Provider:** `local-ollama` at `http://localhost:11434`
+- **Main model:** `qwen3:30b` (32K context)
+- **Persistence:** SQLite at `~/.netclaw/netclaw.db`
+- **Search:** DuckDuckGo (no API key required)
+- **Slack:** disabled
+
 ## CLI Reference
 
 ```
@@ -122,8 +260,9 @@ netclaw daemon install        Install as systemd user service (Linux)
 netclaw daemon uninstall      Remove systemd user service (Linux)
 netclaw status                Runtime status from daemon health JSON endpoint
 netclaw config                Configuration management (planned)
-netclaw init                  First-run setup wizard (planned)
+netclaw init                  First-run setup wizard (interactive TUI)
 netclaw doctor                Configuration diagnostics (schema + secrets syntax)
+netclaw doctor --fix          Auto-apply safe configuration fixes
 ```
 
 ### Daemon Binary Discovery
