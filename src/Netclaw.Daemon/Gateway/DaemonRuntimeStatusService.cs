@@ -5,6 +5,7 @@ using Netclaw.Channels.Slack;
 using Netclaw.Configuration;
 using Netclaw.Daemon.Configuration;
 using Netclaw.Daemon.Mcp;
+using Netclaw.Daemon.Services;
 
 namespace Netclaw.Daemon.Gateway;
 
@@ -16,7 +17,8 @@ internal sealed class DaemonRuntimeStatusService(
     IOptions<TelemetryOptions> telemetryOptions,
     SessionConfig sessionConfig,
     ModelSelection modelSelection,
-    McpClientManager? mcpClientManager = null)
+    McpClientManager? mcpClientManager = null,
+    UpdateCheckCache? updateCheckCache = null)
 {
     private readonly DateTimeOffset _startedAt = timeProvider.GetUtcNow();
 
@@ -67,7 +69,8 @@ internal sealed class DaemonRuntimeStatusService(
                 InputModalities = sessionConfig.InputModalities.ToString(),
                 OutputModalities = sessionConfig.OutputModalities.ToString(),
                 ContextWindow = sessionConfig.ContextWindowTokens
-            }
+            },
+            Update = BuildUpdateStatus()
         };
     }
 
@@ -173,6 +176,21 @@ internal sealed class DaemonRuntimeStatusService(
                     ? "Failed to connect to MCP server."
                     : status.ErrorMessage
             }
+        };
+    }
+
+    private DaemonRuntimeStatus.Update? BuildUpdateStatus()
+    {
+        var result = updateCheckCache?.LastResult;
+        if (result is null)
+            return null;
+
+        return new DaemonRuntimeStatus.Update
+        {
+            Available = result.IsUpdateAvailable,
+            CurrentVersion = result.CurrentVersion,
+            LatestVersion = result.IsUpdateAvailable ? result.LatestVersion : null,
+            ReleaseNotesUrl = result.IsUpdateAvailable ? result.ReleaseNotesUrl : null,
         };
     }
 

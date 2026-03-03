@@ -21,6 +21,8 @@ public static class DaemonRuntimeStatus
         public required Telemetry Telemetry { get; init; }
 
         public Model? Model { get; init; }
+
+        public Update? Update { get; init; }
     }
 
     public sealed class Build : IWireType
@@ -77,5 +79,16 @@ public static class DaemonRuntimeStatus
         public required string OutputModalities { get; init; }
 
         public int ContextWindow { get; init; }
+    }
+
+    public sealed class Update : IWireType
+    {
+        public bool Available { get; init; }
+
+        public required string CurrentVersion { get; init; }
+
+        public string? LatestVersion { get; init; }
+
+        public string? ReleaseNotesUrl { get; init; }
     }
 }

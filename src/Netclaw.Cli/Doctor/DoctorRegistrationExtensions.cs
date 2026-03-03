@@ -15,5 +15,6 @@ public static class DoctorRegistrationExtensions
         services.AddSingleton<IDoctorCheck, SlackAuthDoctorCheck>();
         services.AddSingleton<IDoctorCheck, McpServersDoctorCheck>();
         services.AddSingleton<IDoctorCheck, ContextWindowDoctorCheck>();
+        services.AddSingleton<IDoctorCheck, UpdateAvailableDoctorCheck>();
     }
 }

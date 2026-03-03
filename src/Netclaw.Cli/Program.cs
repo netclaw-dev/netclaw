@@ -761,6 +761,15 @@ static void WriteStatusResult(DaemonRuntimeStatus.Response status, string endpoi
         if (!string.IsNullOrWhiteSpace(connector.Message))
             Console.WriteLine($"    {connector.Message}");
     }
+
+    if (status.Update is { Available: true } update)
+    {
+        Console.WriteLine();
+        Console.WriteLine($"UPDATE AVAILABLE: v{update.CurrentVersion} → v{update.LatestVersion}");
+        Console.WriteLine("  Run: netclaw update");
+        if (update.ReleaseNotesUrl is not null)
+            Console.WriteLine($"  Release notes: {update.ReleaseNotesUrl}");
+    }
 }
 
 static string FormatUptime(long uptimeSeconds)

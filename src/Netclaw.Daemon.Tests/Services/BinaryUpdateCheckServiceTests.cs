@@ -31,9 +31,12 @@ public sealed class BinaryUpdateCheckServiceTests : IDisposable
         var handler = new FakeHttpHandler();
         handler.AddJsonResponse(FeedConstants.BinaryManifestUrl, manifest);
 
-        var sut = CreateDaemonService(handler, currentVersion: "0.1.0");
-        // Should not throw
+        var (sut, cache) = CreateDaemonService(handler, currentVersion: "0.1.0");
         await sut.StartAsync(CancellationToken.None);
+
+        // Cache should be populated
+        Assert.NotNull(cache.LastResult);
+        Assert.True(cache.LastResult!.IsUpdateAvailable);
     }
 
     [Fact]
@@ -42,9 +45,13 @@ public sealed class BinaryUpdateCheckServiceTests : IDisposable
         var handler = new FakeHttpHandler();
         handler.AddErrorResponse(FeedConstants.BinaryManifestUrl, HttpStatusCode.ServiceUnavailable);
 
-        var sut = CreateDaemonService(handler, currentVersion: "0.1.0");
-        // Should not throw
+        var (sut, cache) = CreateDaemonService(handler, currentVersion: "0.1.0");
         await sut.StartAsync(CancellationToken.None);
+
+        // UpdateCheckService never throws — returns "no update" on failure.
+        // Cache gets a fallback result with IsUpdateAvailable=false.
+        Assert.NotNull(cache.LastResult);
+        Assert.False(cache.LastResult!.IsUpdateAvailable);
     }
 
     [Fact]
@@ -52,9 +59,8 @@ public sealed class BinaryUpdateCheckServiceTests : IDisposable
     {
         var handler = new FakeHttpHandler();
         // No response configured → 404, which triggers HttpRequestException
-        // The service should handle this gracefully
 
-        var sut = CreateDaemonService(handler, currentVersion: "0.1.0");
+        var (sut, _) = CreateDaemonService(handler, currentVersion: "0.1.0");
         await sut.StartAsync(CancellationToken.None);
     }
 
@@ -283,14 +289,17 @@ public sealed class BinaryUpdateCheckServiceTests : IDisposable
     // Helpers
     // ═══════════════════════════════════════════════════════════════
 
-    private BinaryUpdateCheckService CreateDaemonService(
+    private (BinaryUpdateCheckService Service, UpdateCheckCache Cache) CreateDaemonService(
         FakeHttpHandler handler, string currentVersion = "0.1.0")
     {
         var httpClient = new HttpClient(handler);
-        return new BinaryUpdateCheckService(
+        var cache = new UpdateCheckCache();
+        var service = new BinaryUpdateCheckService(
             httpClient,
+            cache,
             NullLogger<BinaryUpdateCheckService>.Instance,
             currentVersion);
+        return (service, cache);
     }
 
     private static BinaryFeedManifest CreateManifest(string version, string rid)
