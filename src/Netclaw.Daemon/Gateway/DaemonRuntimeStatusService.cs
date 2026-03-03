@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using Microsoft.Extensions.Options;
+using Netclaw.Actors.Memory;
 using Netclaw.Channels;
 using Netclaw.Channels.Slack;
 using Netclaw.Configuration;
@@ -16,7 +17,10 @@ internal sealed class DaemonRuntimeStatusService(
     IOptions<TelemetryOptions> telemetryOptions,
     SessionConfig sessionConfig,
     ModelSelection modelSelection,
-    McpClientManager? mcpClientManager = null)
+    MemoryConfig memoryConfig,
+    NetclawPaths paths,
+    McpClientManager? mcpClientManager = null,
+    FileMemoryStore? fileMemoryStore = null)
 {
     private readonly DateTimeOffset _startedAt = timeProvider.GetUtcNow();
 
@@ -67,7 +71,8 @@ internal sealed class DaemonRuntimeStatusService(
                 InputModalities = sessionConfig.InputModalities.ToString(),
                 OutputModalities = sessionConfig.OutputModalities.ToString(),
                 ContextWindow = sessionConfig.ContextWindowTokens
-            }
+            },
+            Memory = await BuildMemoryStatusAsync(cancellationToken)
         };
     }
 
@@ -173,6 +178,67 @@ internal sealed class DaemonRuntimeStatusService(
                     ? "Failed to connect to MCP server."
                     : status.ErrorMessage
             }
+        };
+    }
+
+    private async Task<DaemonRuntimeStatus.Memory> BuildMemoryStatusAsync(CancellationToken ct)
+    {
+        if (memoryConfig.Provider.Equals("memorizer", StringComparison.OrdinalIgnoreCase))
+        {
+            if (mcpClientManager is null)
+            {
+                return new DaemonRuntimeStatus.Memory
+                {
+                    Provider = "memorizer",
+                    Status = "unavailable"
+                };
+            }
+
+            var statuses = mcpClientManager.GetServerStatuses();
+            if (statuses.TryGetValue("memorizer", out var memorizer))
+            {
+                return memorizer.State switch
+                {
+                    McpConnectionState.Connected => new DaemonRuntimeStatus.Memory
+                    {
+                        Provider = "memorizer",
+                        Status = "healthy",
+                        ToolCount = memorizer.ToolCount
+                    },
+                    _ => new DaemonRuntimeStatus.Memory
+                    {
+                        Provider = "memorizer",
+                        Status = "degraded"
+                    }
+                };
+            }
+
+            return new DaemonRuntimeStatus.Memory
+            {
+                Provider = "memorizer",
+                Status = "unavailable"
+            };
+        }
+
+        // File backend
+        if (fileMemoryStore is not null)
+        {
+            var entries = await fileMemoryStore.GetEntriesAsync(ct);
+            return new DaemonRuntimeStatus.Memory
+            {
+                Provider = "files",
+                Status = "healthy",
+                MemoryCount = entries.Count,
+                IndexPath = paths.MemoryIndexPath
+            };
+        }
+
+        return new DaemonRuntimeStatus.Memory
+        {
+            Provider = "files",
+            Status = "healthy",
+            MemoryCount = 0,
+            IndexPath = paths.MemoryIndexPath
         };
     }
 

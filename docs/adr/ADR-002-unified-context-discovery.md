@@ -135,28 +135,49 @@ Key properties:
 - **30-second timeout.** Observer failure (timeout, model error, empty response)
   degrades gracefully to extractive-only. No crash, no data loss.
 
-### Cross-Session Memory (Memorizer Integration)
+### Cross-Session Memory (Unified Memory Provider)
 
 ```
-Agent ──search_memories──→ SearchMemoriesTool ──→ ToolRegistry.GetByName("memorizer/search_memories")
-                                                       │
-                                                       └──→ McpToolAdapter ──→ Memorizer MCP server
+Agent ──find_memories──→ FileFindMemoriesTool ──→ FileMemoryStore (local .md files)
+       get_memories───→ FileGetMemoriesTool ──→ FileMemoryStore
+       store_memory───→ StoreMemoryTool ────→ FileMemoryStore
+       update_memory──→ FileUpdateMemoryTool → FileMemoryStore
+
+Agent ──find_memories──→ MemorizerFindMemoriesTool ──→ memorizer/search_memories (MCP)
+       get_memories───→ MemorizerGetMemoriesTool ───→ memorizer/get_many (MCP)
+       store_memory───→ MemorizerStoreMemoryTool ──→ memory-curator SubAgentActor (8 MCP tools)
+       update_memory──→ MemorizerUpdateMemoryTool ─→ memorizer/edit | memorizer/archive_memory (MCP)
 ```
 
-`search_memories` is a built-in meta-tool that wraps the Memorizer MCP server's
-`search_memories` tool. It resolves the MCP tool at call time (not at startup)
-so it works regardless of whether Memorizer is connected.
+Two pluggable backends behind a unified 4-tool surface (`find_memories`,
+`get_memories`, `store_memory`, `update_memory`). No shared `IMemoryProvider`
+abstraction — each backend has 4 dedicated tool classes. Backend selection via
+`Memory.Provider` in `netclaw.json` (`"files"` default, `"memorizer"` upgrade).
 
-Two context layers provide the agent with memory and skill awareness:
+- **File backend:** `FileMemoryStore` manages `~/.netclaw/memories/` with
+  individual `.md` files, YAML front matter, and `memory.md` index. Tools are
+  always-loaded builtins registered at startup.
+- **Memorizer backend:** `store_memory` spawns a `memory-curator` subagent via
+  `SubAgentActor` for dedup/routing/linking. `find_memories`, `get_memories`,
+  `update_memory` are direct MCP pass-throughs. Tools resolve MCP at call time.
 
-| Layer | Content |
-|-------|---------|
-| `MemoryIndexContextLayer` | Behavioral triggers for proactive retrieve + save. When connected: RETRIEVE (search at conversation start, search before answering from scratch) and SAVE (store solutions, decisions, findings immediately with rich markdown). When disconnected: fallback guidance pointing to identity files and skills. |
-| `SkillIndexContextLayer` | Compressed index of available skills with file paths for `file_read` |
+Two-phase retrieval: `find_memories` returns lightweight results (ID, title,
+score, snippet), then `get_memories` loads full content for selected IDs.
 
-There is no automatic pre-compaction memory flush. The agent saves proactively
-during conversation, guided by the behavioral triggers in `MemoryIndexContextLayer`
-and the `identity-management` built-in skill.
+Three context layers provide the agent with memory, skill, and tool awareness:
+
+| Layer | States | Content |
+|-------|--------|---------|
+| `MemoryIndexContextLayer` | `FileBacked` | 4-tool guidance, two-phase retrieval, quality bar for store, update/delete instructions |
+| | `MemorizerConnected` | Same + subagent delegation note, latency warning for store |
+| | `MemorizerDisconnected` | Troubleshooting guidance, fallback to identity files |
+| `SkillIndexContextLayer` | — | Compressed index of available skills with file paths for `file_read` |
+
+Pre-compaction memory flush is handled by `IMemoryExtractor` implementations:
+`FileMemoryExtractor` saves to `FileMemoryStore` with `["extraction", "compaction"]`
+tags; `MemorizerMemoryExtractor` saves via `memorizer/store` MCP (graceful no-op
+when disconnected). The agent also saves proactively during conversation, guided
+by the behavioral triggers in `MemoryIndexContextLayer`.
 
 ## Rationale
 
@@ -223,8 +244,6 @@ supported and clearly distinguish observations from fresh user input.
 
 - **Reflector phase** — intelligently merging accumulated observations. For MVP,
   observations-of-observations via the Observer is sufficient.
-- **Auto-RAG pre-turn retrieval** — agent uses `search_memories` explicitly.
+- **Auto-RAG pre-turn retrieval** — agent uses `find_memories` explicitly.
   Sub-agent retrieval may be added if the agent proves bad at searching.
 - **Episodic context** — querying session logs for "what happened before."
-- **Pre-compaction memory flush** — the agent saves proactively via tools
-  instead.

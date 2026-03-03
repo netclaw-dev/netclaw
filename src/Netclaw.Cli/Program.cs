@@ -726,6 +726,20 @@ static void WriteStatusResult(DaemonRuntimeStatus.Response status, string endpoi
     Console.WriteLine($"version: {status.Build.Version} (commit {status.Build.CommitHash}, built {status.Build.BuildTimestamp})");
     Console.WriteLine($"daemon: PID {status.Process.Pid}, uptime {FormatUptime(status.Process.UptimeSeconds)}, endpoint {endpoint}");
     Console.WriteLine($"persistence: {status.Persistence.Provider}");
+
+    if (status.Memory is { } memory)
+    {
+        var memoryDetail = memory.Provider switch
+        {
+            "files" => $"files ({memory.Status}, {memory.MemoryCount ?? 0} memories, index: {memory.IndexPath})",
+            "memorizer" when memory.Status is "healthy" =>
+                $"memorizer ({memory.Status}{(memory.ToolCount is > 0 ? $", {memory.ToolCount} tools" : "")})",
+            "memorizer" => $"memorizer ({memory.Status})",
+            _ => $"{memory.Provider} ({memory.Status})"
+        };
+        Console.WriteLine($"memory: {memoryDetail}");
+    }
+
     Console.WriteLine($"telemetry: {(status.Telemetry.Enabled ? "enabled" : "disabled")}" +
                       (status.Telemetry.Enabled && !string.IsNullOrWhiteSpace(status.Telemetry.OtlpEndpoint)
                           ? $" ({status.Telemetry.OtlpEndpoint})"

@@ -167,7 +167,7 @@ public sealed partial class FileMemoryStore
     /// <summary>
     /// Get all indexed entries, rebuilding from disk on first access.
     /// </summary>
-    internal async Task<IReadOnlyList<MemoryEntry>> GetEntriesAsync(CancellationToken ct = default)
+    public async Task<IReadOnlyList<MemoryEntry>> GetEntriesAsync(CancellationToken ct = default)
     {
         if (_cachedEntries is not null)
             return _cachedEntries;

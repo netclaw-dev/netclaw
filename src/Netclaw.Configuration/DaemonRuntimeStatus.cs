@@ -21,6 +21,8 @@ public static class DaemonRuntimeStatus
         public required Telemetry Telemetry { get; init; }
 
         public Model? Model { get; init; }
+
+        public Memory? Memory { get; init; }
     }
 
     public sealed class Build : IWireType
@@ -77,5 +79,20 @@ public static class DaemonRuntimeStatus
         public required string OutputModalities { get; init; }
 
         public int ContextWindow { get; init; }
+    }
+
+    public sealed class Memory : IWireType
+    {
+        public required string Provider { get; init; }
+
+        public required string Status { get; init; }
+
+        public int? MemoryCount { get; init; }
+
+        public string? IndexPath { get; init; }
+
+        public string? Endpoint { get; init; }
+
+        public int? ToolCount { get; init; }
     }
 }

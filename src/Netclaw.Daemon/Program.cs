@@ -291,6 +291,7 @@ static void ConfigureDaemonServices(
     {
         // File path: register builtin memory tools backed by local markdown files
         var fileStore = new FileMemoryStore(paths.MemoriesDirectory, TimeProvider.System);
+        services.AddSingleton(fileStore);
         toolRegistry.Register(new FileFindMemoriesTool(fileStore));
         toolRegistry.Register(new FileGetMemoriesTool(fileStore));
         toolRegistry.Register(new StoreMemoryTool(fileStore));
