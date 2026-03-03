@@ -35,8 +35,8 @@ for skill_dir in "$FILES_DIR"/*/; do
     sha256=$(sha256sum "$latest_file" | cut -d' ' -f1)
     size_bytes=$(stat -c%s "$latest_file" 2>/dev/null || stat -f%z "$latest_file" 2>/dev/null)
 
-    # Extract description from <!-- description: ... --> comment
-    description=$(grep -oP '<!--\s*description:\s*\K.+?(?=\s*-->)' "$latest_file" 2>/dev/null || echo "System skill: $skill_name")
+    # Extract description from first <!-- description: ... --> comment only
+    description=$(grep -m 1 -oP '<!--\s*description:\s*\K.+?(?=\s*-->)' "$latest_file" 2>/dev/null || echo "System skill: $skill_name")
 
     # Build the relative URL for CDN
     url="https://feeds.netclaw.dev/skills/.system/files/$skill_name/$version.md"

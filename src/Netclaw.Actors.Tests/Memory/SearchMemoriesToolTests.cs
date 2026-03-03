@@ -57,35 +57,32 @@ public class SearchMemoriesToolTests : IDisposable
     }
 
     [Fact]
-    public void MemoryIndexContextLayer_file_backed_shows_store_memory_guidance()
+    public void MemoryIndexContextLayer_file_backed_references_skill()
     {
         var layer = new MemoryIndexContextLayer();
         layer.Update(MemoryContextState.FileBacked);
 
         var content = layer.GetContextLayer();
 
-        Assert.Contains("RETRIEVE:", content);
-        Assert.Contains("SAVE:", content);
-        Assert.Contains("search_memories", content);
-        Assert.Contains("store_memory", content);
-        Assert.Contains("memory.md", content);
-        Assert.DoesNotContain("memorizer/store", content);
+        Assert.Contains("file-backed", content);
+        Assert.Contains("RETRIEVE", content);
+        Assert.Contains("SAVE", content);
+        Assert.Contains("memory-usage", content);
         Assert.DoesNotContain("NOT AVAILABLE", content);
     }
 
     [Fact]
-    public void MemoryIndexContextLayer_memorizer_connected_shows_memorizer_guidance()
+    public void MemoryIndexContextLayer_memorizer_connected_references_skills()
     {
         var layer = new MemoryIndexContextLayer();
         layer.Update(MemoryContextState.MemorizerConnected);
 
         var content = layer.GetContextLayer();
 
-        Assert.Contains("RETRIEVE:", content);
-        Assert.Contains("SAVE:", content);
-        Assert.Contains("memorizer/store", content);
-        Assert.Contains("workspaces", content);
-        Assert.Contains("projects", content);
+        Assert.Contains("Memorizer connected", content);
+        Assert.Contains("RETRIEVE", content);
+        Assert.Contains("SAVE", content);
+        Assert.Contains("memory-usage", content);
         Assert.Contains("memorizer-usage", content);
         Assert.DoesNotContain("NOT AVAILABLE", content);
     }
@@ -101,6 +98,6 @@ public class SearchMemoriesToolTests : IDisposable
         Assert.Contains("NOT AVAILABLE", content);
         Assert.Contains("not connected", content);
         Assert.Contains("McpServers", content);
-        Assert.Contains("SOUL.md", content);
+        Assert.Contains("identity-management", content);
     }
 }
