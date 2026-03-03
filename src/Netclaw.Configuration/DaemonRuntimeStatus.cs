@@ -23,6 +23,8 @@ public static class DaemonRuntimeStatus
         public Model? Model { get; init; }
 
         public Update? Update { get; init; }
+
+        public Memory? Memory { get; init; }
     }
 
     public sealed class Build : IWireType
@@ -90,5 +92,20 @@ public static class DaemonRuntimeStatus
         public string? LatestVersion { get; init; }
 
         public string? ReleaseNotesUrl { get; init; }
+    }
+
+    public sealed class Memory : IWireType
+    {
+        public required string Provider { get; init; }
+
+        public required string Status { get; init; }
+
+        public int? MemoryCount { get; init; }
+
+        public string? IndexPath { get; init; }
+
+        public string? Endpoint { get; init; }
+
+        public int? ToolCount { get; init; }
     }
 }
