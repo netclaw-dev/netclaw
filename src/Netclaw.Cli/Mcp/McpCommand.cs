@@ -202,7 +202,7 @@ internal static class McpCommand
                 serverSecrets["Headers"] = headers;
 
             secretMcp[name] = JsonSerializer.SerializeToElement(serverSecrets);
-            WriteConfigFile(paths.SecretsPath, secrets);
+            WriteSecretsFile(paths, secrets);
         }
 
         writer.WriteLine($"Added MCP server '{name}' ({transport})");
@@ -418,7 +418,7 @@ internal static class McpCommand
         var secretMcp = GetSectionOrNull(secrets, "McpServers");
         if (secretMcp?.Remove(name) == true)
         {
-            WriteConfigFile(paths.SecretsPath, secrets);
+            WriteSecretsFile(paths, secrets);
             removed = true;
         }
 
@@ -555,6 +555,9 @@ internal static class McpCommand
     private static void WriteConfigFile(string path, Dictionary<string, object> data)
         => ConfigFileHelper.WriteConfigFile(path, data);
 
+    private static void WriteSecretsFile(NetclawPaths paths, Dictionary<string, object> data)
+        => ConfigFileHelper.WriteSecretsFile(paths, data);
+
     internal static Dictionary<string, McpServerEntry> LoadMcpServers(NetclawPaths paths)
     {
         // Merge netclaw.json and secrets.json McpServers sections
@@ -589,14 +592,20 @@ internal static class McpCommand
                 {
                     entry.EnvironmentVariables ??= new Dictionary<string, string>();
                     foreach (var ev in envVars.EnumerateObject())
-                        entry.EnvironmentVariables[ev.Name] = ev.Value.GetString() ?? "";
+                    {
+                        var decrypted = ConfigFileHelper.DecryptIfEncrypted(paths, ev.Value.GetString());
+                        entry.EnvironmentVariables[ev.Name] = decrypted;
+                    }
                 }
 
                 if (prop.Value.TryGetProperty("Headers", out var hdrs))
                 {
                     entry.Headers ??= new Dictionary<string, string>();
                     foreach (var h in hdrs.EnumerateObject())
-                        entry.Headers[h.Name] = h.Value.GetString() ?? "";
+                    {
+                        var decrypted = ConfigFileHelper.DecryptIfEncrypted(paths, h.Value.GetString());
+                        entry.Headers[h.Name] = decrypted;
+                    }
                 }
             }
         }

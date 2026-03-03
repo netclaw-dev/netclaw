@@ -1,4 +1,6 @@
 using System.Text.Json;
+using Netclaw.Configuration;
+using Netclaw.Configuration.Secrets;
 
 namespace Netclaw.Cli.Config;
 
@@ -89,5 +91,23 @@ internal static class ConfigFileHelper
         if (dir is not null)
             Directory.CreateDirectory(dir);
         File.WriteAllText(path, JsonSerializer.Serialize(data, JsonOptions));
+    }
+
+    /// <summary>
+    /// Serialize and write secrets.json using hardened permissions and encryption-at-rest.
+    /// </summary>
+    internal static void WriteSecretsFile(Configuration.NetclawPaths paths, Dictionary<string, object> data)
+    {
+        var protector = SecretsProtection.CreateProtector(paths);
+        SecretsFileWriter.Write(paths.SecretsPath, data, options: JsonOptions, protector: protector);
+    }
+
+    internal static string DecryptIfEncrypted(Configuration.NetclawPaths paths, string? value)
+    {
+        if (string.IsNullOrEmpty(value) || !ISecretsProtector.IsEncrypted(value))
+            return value ?? string.Empty;
+
+        var protector = SecretsProtection.CreateProtector(paths);
+        return protector.Unprotect(value);
     }
 }

@@ -143,7 +143,7 @@ internal static class ProviderCommand
             {
                 ["ApiKey"] = apiKey
             };
-            ConfigFileHelper.WriteConfigFile(paths.SecretsPath, secrets);
+            ConfigFileHelper.WriteSecretsFile(paths, secrets);
         }
 
         writer.WriteLine($"Added provider '{name}' ({type})");
@@ -184,7 +184,7 @@ internal static class ProviderCommand
         var secretProviders = ConfigFileHelper.GetSectionOrNull(secrets, "Providers");
         if (secretProviders?.Remove(name) == true)
         {
-            ConfigFileHelper.WriteConfigFile(paths.SecretsPath, secrets);
+            ConfigFileHelper.WriteSecretsFile(paths, secrets);
             removed = true;
         }
 
@@ -240,7 +240,10 @@ internal static class ProviderCommand
                     continue;
 
                 if (prop.Value.TryGetProperty("ApiKey", out var apiKey))
-                    entry.ApiKey = new SensitiveString(apiKey.GetString() ?? "");
+                {
+                    var decrypted = ConfigFileHelper.DecryptIfEncrypted(paths, apiKey.GetString());
+                    entry.ApiKey = new SensitiveString(decrypted);
+                }
             }
         }
 
