@@ -192,7 +192,7 @@ internal static class UpdateCommand
         {
             // Clean up temp directory
             try { Directory.Delete(tempDir, recursive: true); }
-            catch { /* best effort */ }
+            catch (Exception ex) { Console.Error.WriteLine($"warn: temp cleanup failed: {ex.Message}"); }
         }
     }
 
@@ -297,9 +297,9 @@ internal static class UpdateCommand
                 CreateNoWindow = true,
             })?.WaitForExit();
         }
-        catch
+        catch (Exception ex)
         {
-            // Best effort — may already be executable from tar extraction
+            Console.Error.WriteLine($"warn: chmod +x failed for {path}: {ex.Message}");
         }
     }
 
@@ -333,9 +333,9 @@ internal static class UpdateCommand
                     $"Update available: v{result.CurrentVersion} → v{result.LatestVersion} — run 'netclaw update'");
             }
         }
-        catch
+        catch (Exception ex)
         {
-            // Silent — never disrupt the CLI experience
+            Console.Error.WriteLine($"warn: background update check failed: {ex.Message}");
         }
     }
 }
