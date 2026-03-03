@@ -16,7 +16,7 @@ public sealed class DaemonClient : IAsyncDisposable
 {
     public const string TuiChannelType = "tui";
 
-    private static readonly TimeSpan[] ReconnectDelays =
+    internal static readonly TimeSpan[] DefaultReconnectDelays =
     [
         TimeSpan.Zero,
         TimeSpan.FromSeconds(2),
@@ -24,6 +24,7 @@ public sealed class DaemonClient : IAsyncDisposable
         TimeSpan.FromSeconds(10)
     ];
 
+    private readonly TimeSpan[] _reconnectDelays;
     private readonly HubConnection _connection;
     private readonly string _daemonEndpoint;
     private readonly string _hubUrl;
@@ -42,7 +43,10 @@ public sealed class DaemonClient : IAsyncDisposable
     private bool _disposed;
     private CancellationTokenSource? _reconnectCts;
 
-    public DaemonClient(string daemonEndpoint, TimeProvider? timeProvider = null)
+    public DaemonClient(
+        string daemonEndpoint,
+        TimeProvider? timeProvider = null,
+        TimeSpan[]? reconnectDelays = null)
     {
         if (string.IsNullOrWhiteSpace(daemonEndpoint))
             throw new ArgumentException("Daemon endpoint cannot be empty.", nameof(daemonEndpoint));
@@ -50,10 +54,11 @@ public sealed class DaemonClient : IAsyncDisposable
         _daemonEndpoint = daemonEndpoint.TrimEnd('/');
         _hubUrl = BuildHubUrl(_daemonEndpoint);
         _timeProvider = timeProvider ?? TimeProvider.System;
+        _reconnectDelays = reconnectDelays ?? DefaultReconnectDelays;
 
         _connection = new HubConnectionBuilder()
             .WithUrl(_hubUrl)
-            .WithAutomaticReconnect(ReconnectDelays)
+            .WithAutomaticReconnect(_reconnectDelays)
             .Build();
 
         _connection.On<SessionOutputDto>("ReceiveOutput", dto =>
@@ -133,7 +138,7 @@ public sealed class DaemonClient : IAsyncDisposable
                 $"Connecting to daemon at {_daemonEndpoint}..."));
 
             Exception? lastError = null;
-            foreach (var delay in ReconnectDelays)
+            foreach (var delay in _reconnectDelays)
             {
                 if (delay > TimeSpan.Zero)
                     await Task.Delay(delay, cancellationToken);
@@ -360,13 +365,18 @@ public sealed class DaemonClient : IAsyncDisposable
 
                 await ReconnectConnectAsync(token);
 
-                // Re-attach the session after manual reconnect.
-                // The built-in auto-reconnect fires the Reconnected event which
-                // calls EnsureSessionInternalAsync, but manual StartAsync from
-                // the Closed handler does not. Without this, the transport is up
-                // but the session is not attached on the new server.
+                // Re-attach the session before publishing Connected. The
+                // Reconnected handler already follows this order; mirroring it
+                // here eliminates the race window where a test (or other caller)
+                // observes Connected and calls EnsureSessionAsync concurrently
+                // with this still-running EnsureSessionInternalAsync call.
                 if (!string.IsNullOrWhiteSpace(_channelType))
                     await EnsureSessionInternalAsync(_channelType!, token);
+
+                _connectionSubject.OnNext(new DaemonConnectionEvent(
+                    DaemonConnectionState.Connected,
+                    _daemonEndpoint,
+                    $"Reconnected to daemon at {_daemonEndpoint}."));
 
                 return;
             }
@@ -430,7 +440,7 @@ public sealed class DaemonClient : IAsyncDisposable
             }
 
             Exception? lastError = null;
-            foreach (var delay in ReconnectDelays)
+            foreach (var delay in _reconnectDelays)
             {
                 if (delay > TimeSpan.Zero)
                     await Task.Delay(delay, cancellationToken);
@@ -449,11 +459,6 @@ public sealed class DaemonClient : IAsyncDisposable
 
                     await _connection.StartAsync(cancellationToken);
                     _hasConnected = true;
-
-                    _connectionSubject.OnNext(new DaemonConnectionEvent(
-                        DaemonConnectionState.Connected,
-                        _daemonEndpoint,
-                        $"Reconnected to daemon at {_daemonEndpoint}."));
                     return;
                 }
                 catch (InvalidOperationException ex) when (
