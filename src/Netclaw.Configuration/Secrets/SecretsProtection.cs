@@ -1,5 +1,4 @@
 using Microsoft.AspNetCore.DataProtection;
-using Microsoft.Extensions.DependencyInjection;
 
 namespace Netclaw.Configuration.Secrets;
 
@@ -17,13 +16,10 @@ public static class SecretsProtection
     /// </summary>
     public static DataProtectionSecretsProtector CreateProtector(NetclawPaths paths)
     {
-        var services = new ServiceCollection();
-        services.AddDataProtection()
-            .SetApplicationName("Netclaw")
-            .PersistKeysToFileSystem(new DirectoryInfo(paths.KeysDirectory));
+        var provider = DataProtectionProvider.Create(
+            new DirectoryInfo(paths.KeysDirectory),
+            config => config.SetApplicationName("Netclaw"));
 
-        var sp = services.BuildServiceProvider();
-        var provider = sp.GetRequiredService<IDataProtectionProvider>();
         return new DataProtectionSecretsProtector(provider);
     }
 }
