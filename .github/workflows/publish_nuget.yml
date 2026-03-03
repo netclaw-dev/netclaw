@@ -13,6 +13,7 @@ jobs:
 
     name: publish-nuget
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
     strategy:
       matrix:
         os: [ubuntu-latest]
