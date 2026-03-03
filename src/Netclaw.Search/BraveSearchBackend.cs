@@ -12,50 +12,88 @@ namespace Netclaw.Search;
 public sealed partial class BraveSearchBackend : ISearchBackend
 {
     private const string BaseUrl = "https://api.search.brave.com/res/v1/web/search";
+    private const int MaxRetries = 3;
 
     private readonly HttpClient _httpClient;
     private readonly string _apiKey;
+    private readonly TimeProvider _timeProvider;
 
-    public BraveSearchBackend(string apiKey, HttpClient? httpClient = null)
+    public BraveSearchBackend(string apiKey, HttpClient? httpClient = null, TimeProvider? timeProvider = null)
     {
         _apiKey = apiKey;
         _httpClient = httpClient ?? new HttpClient();
+        _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     public async Task<SearchBackendResult> SearchAsync(string query, int maxResults, CancellationToken ct)
     {
-        try
+        for (var attempt = 0; attempt < MaxRetries; attempt++)
         {
-            var url = $"{BaseUrl}?q={Uri.EscapeDataString(query)}&count={maxResults}";
-            using var request = new HttpRequestMessage(HttpMethod.Get, url);
-            request.Headers.TryAddWithoutValidation("X-Subscription-Token", _apiKey);
-            request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
-            request.Headers.AcceptEncoding.Add(new StringWithQualityHeaderValue("gzip"));
+            try
+            {
+                var url = $"{BaseUrl}?q={Uri.EscapeDataString(query)}&count={maxResults}";
+                using var request = new HttpRequestMessage(HttpMethod.Get, url);
+                request.Headers.TryAddWithoutValidation("X-Subscription-Token", _apiKey);
+                request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+                request.Headers.AcceptEncoding.Add(new StringWithQualityHeaderValue("gzip"));
 
-            using var response = await _httpClient.SendAsync(request, ct);
+                using var response = await _httpClient.SendAsync(request, ct);
 
-            if (response.StatusCode == HttpStatusCode.Unauthorized)
-                return new SearchBackendResult.Error(
-                    "Brave Search API authentication failed. Check your API key in secrets.json (Search.BraveApiKey).");
+                if (response.StatusCode == HttpStatusCode.Unauthorized)
+                    return new SearchBackendResult.Error(
+                        "Brave Search API authentication failed. Check your API key in secrets.json (Search.BraveApiKey).");
 
-            if (response.StatusCode == (HttpStatusCode)429)
-                return new SearchBackendResult.Error(
-                    "Brave Search API rate limit exceeded. Wait before retrying or upgrade your plan.");
+                if (response.StatusCode == HttpStatusCode.TooManyRequests)
+                {
+                    if (attempt == MaxRetries - 1)
+                        break;
 
-            response.EnsureSuccessStatusCode();
+                    var delay = ParseRetryAfter(response.Headers.RetryAfter, attempt, _timeProvider);
+                    await Task.Delay(delay, ct);
+                    continue;
+                }
 
-            var json = await response.Content.ReadAsStringAsync(ct);
-            var results = ParseResults(json, maxResults);
-            return new SearchBackendResult.Success(results);
+                response.EnsureSuccessStatusCode();
+
+                var json = await response.Content.ReadAsStringAsync(ct);
+                var results = ParseResults(json, maxResults);
+                return new SearchBackendResult.Success(results);
+            }
+            catch (HttpRequestException ex)
+            {
+                return new SearchBackendResult.Error($"Brave Search request failed: {ex.Message}");
+            }
+            catch (TaskCanceledException) when (!ct.IsCancellationRequested)
+            {
+                return new SearchBackendResult.Error("Brave Search request timed out.");
+            }
         }
-        catch (HttpRequestException ex)
+
+        return new SearchBackendResult.Error(
+            "Brave Search API rate limit exceeded. Wait before retrying or upgrade your plan.");
+    }
+
+    /// <summary>
+    /// Parses the Retry-After response header into a wait duration.
+    /// Falls back to exponential backoff (5s, 10s, 20s) when the header is absent or in the past.
+    /// </summary>
+    internal static TimeSpan ParseRetryAfter(RetryConditionHeaderValue? retryAfter, int attempt, TimeProvider timeProvider)
+    {
+        if (retryAfter is not null)
         {
-            return new SearchBackendResult.Error($"Brave Search request failed: {ex.Message}");
+            if (retryAfter.Delta.HasValue)
+                return retryAfter.Delta.Value;
+
+            if (retryAfter.Date.HasValue)
+            {
+                var remaining = retryAfter.Date.Value - timeProvider.GetUtcNow();
+                if (remaining > TimeSpan.Zero)
+                    return remaining;
+            }
         }
-        catch (TaskCanceledException) when (!ct.IsCancellationRequested)
-        {
-            return new SearchBackendResult.Error("Brave Search request timed out.");
-        }
+
+        // Exponential backoff: 5s, 10s, 20s
+        return TimeSpan.FromSeconds(5 * Math.Pow(2, attempt));
     }
 
     internal static List<SearchResult> ParseResults(string json, int maxResults)

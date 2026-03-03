@@ -13,13 +13,14 @@ jobs:
 
     name: publish-nuget
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
     strategy:
       matrix:
         os: [ubuntu-latest]
 
     steps:
     - name: "Checkout"
-      uses: actions/checkout@v6.0.2
+      uses: actions/checkout@v6
       with:
         lfs: true
         fetch-depth: 0

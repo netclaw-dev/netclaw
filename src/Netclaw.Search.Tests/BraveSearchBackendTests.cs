@@ -1,3 +1,5 @@
+using System.Net;
+using System.Net.Http.Headers;
 using Netclaw.Search;
 using Xunit;
 
@@ -97,6 +99,81 @@ public class BraveSearchBackendTests
         Assert.Equal("https://example.com", results[0].Url);
     }
 
+    [Fact]
+    public async Task SearchAsync_retries_on_429_then_succeeds()
+    {
+        var handler = new FakeHttpMessageHandler();
+        var rateLimitResponse = new HttpResponseMessage(HttpStatusCode.TooManyRequests);
+        rateLimitResponse.Headers.RetryAfter = new RetryConditionHeaderValue(TimeSpan.Zero);
+        handler.Enqueue(rateLimitResponse);
+        handler.Enqueue(CreateSuccessResponse());
+
+        var backend = new BraveSearchBackend("test-key", new HttpClient(handler));
+        var result = await backend.SearchAsync("test", 10, CancellationToken.None);
+
+        Assert.IsType<SearchBackendResult.Success>(result);
+        Assert.Equal(2, handler.RequestCount);
+    }
+
+    [Fact]
+    public async Task SearchAsync_returns_error_after_max_retries_on_429()
+    {
+        var handler = new FakeHttpMessageHandler();
+        for (var i = 0; i < 3; i++)
+        {
+            var r = new HttpResponseMessage(HttpStatusCode.TooManyRequests);
+            r.Headers.RetryAfter = new RetryConditionHeaderValue(TimeSpan.Zero);
+            handler.Enqueue(r);
+        }
+
+        var backend = new BraveSearchBackend("test-key", new HttpClient(handler));
+        var result = await backend.SearchAsync("test", 10, CancellationToken.None);
+
+        var error = Assert.IsType<SearchBackendResult.Error>(result);
+        Assert.Contains("rate limit", error.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(3, handler.RequestCount);
+    }
+
+    [Fact]
+    public void ParseRetryAfter_returns_delta_from_header()
+    {
+        var header = new RetryConditionHeaderValue(TimeSpan.FromSeconds(30));
+        var delay = BraveSearchBackend.ParseRetryAfter(header, 0, TimeProvider.System);
+        Assert.Equal(TimeSpan.FromSeconds(30), delay);
+    }
+
+    [Fact]
+    public void ParseRetryAfter_returns_remaining_time_from_date_header()
+    {
+        var now = new DateTimeOffset(2024, 6, 1, 12, 0, 0, TimeSpan.Zero);
+        var future = now.AddSeconds(45);
+        var header = new RetryConditionHeaderValue(future);
+        var fakeTime = new FixedTimeProvider(now);
+
+        var delay = BraveSearchBackend.ParseRetryAfter(header, 0, fakeTime);
+
+        Assert.Equal(TimeSpan.FromSeconds(45), delay);
+    }
+
+    [Theory]
+    [InlineData(0, 5)]
+    [InlineData(1, 10)]
+    [InlineData(2, 20)]
+    public void ParseRetryAfter_falls_back_to_exponential_backoff_when_header_absent(int attempt, int expectedSeconds)
+    {
+        var delay = BraveSearchBackend.ParseRetryAfter(null, attempt, TimeProvider.System);
+        Assert.Equal(TimeSpan.FromSeconds(expectedSeconds), delay);
+    }
+
+    private static HttpResponseMessage CreateSuccessResponse()
+    {
+        const string json = """{"web":{"results":[{"title":"Test Result","url":"https://example.com","description":"A test result"}]}}""";
+        return new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(json, System.Text.Encoding.UTF8, "application/json")
+        };
+    }
+
     private static string LoadFixture(string filename)
     {
         var assembly = typeof(BraveSearchBackendTests).Assembly;
@@ -105,5 +182,26 @@ public class BraveSearchBackendTests
             ?? throw new FileNotFoundException($"Fixture not found: {resourceName}");
         using var reader = new StreamReader(stream);
         return reader.ReadToEnd();
+    }
+
+    private sealed class FakeHttpMessageHandler : HttpMessageHandler
+    {
+        private readonly Queue<HttpResponseMessage> _responses = new();
+        public int RequestCount { get; private set; }
+
+        public void Enqueue(HttpResponseMessage response) => _responses.Enqueue(response);
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            RequestCount++;
+            if (_responses.Count == 0)
+                throw new InvalidOperationException("No more responses queued.");
+            return Task.FromResult(_responses.Dequeue());
+        }
+    }
+
+    private sealed class FixedTimeProvider(DateTimeOffset utcNow) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => utcNow;
     }
 }

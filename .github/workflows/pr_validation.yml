@@ -16,6 +16,7 @@ jobs:
   test:
     name: Test-${{matrix.os}}
     runs-on: ${{matrix.os}}
+    timeout-minutes: 30
 
     strategy:
       matrix:
@@ -23,7 +24,7 @@ jobs:
 
     steps:
       - name: "Checkout"
-        uses: actions/checkout@v6.0.2
+        uses: actions/checkout@v6
         with:
           lfs: true
           fetch-depth: 0
@@ -62,10 +63,11 @@ jobs:
   slopwatch:
     name: Slopwatch
     runs-on: ubuntu-latest
+    timeout-minutes: 10
 
     steps:
       - name: "Checkout"
-        uses: actions/checkout@v6.0.2
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
