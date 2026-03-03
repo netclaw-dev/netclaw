@@ -46,7 +46,8 @@ public sealed class MemoryIndexContextLayer : IContextLayerProvider
                 Search EACH distinct topic, project, or proper noun separately — one find_memories
                 call per entity. Example: "use claude-wt on the geeked-in repo" →
                 find_memories("claude-wt") AND find_memories("geeked-in") in parallel.
-                SAVE immediately when learning something durable.
+                SAVE immediately when the user shares durable facts — their environment,
+                hardware, projects, preferences, decisions, or solutions. When in doubt, save it.
 
                 ## Two-Phase Retrieval
                 1. find_memories("query") → lightweight results: IDs, titles, scores, snippets
@@ -63,6 +64,7 @@ public sealed class MemoryIndexContextLayer : IContextLayerProvider
                 update_memory(id, delete="true") — remove duplicates or obsolete entries.
 
                 For full guidance: file_read on the memory-usage skill.
+                On errors, timeouts, or missing tools → file_read the self-diagnostics skill.
                 """,
 
             MemoryContextState.MemorizerConnected => """
@@ -72,7 +74,8 @@ public sealed class MemoryIndexContextLayer : IContextLayerProvider
                 Search EACH distinct topic, project, or proper noun separately — one find_memories
                 call per entity. Example: "use claude-wt on the geeked-in repo" →
                 find_memories("claude-wt") AND find_memories("geeked-in") in parallel.
-                SAVE immediately when learning something durable.
+                SAVE immediately when the user shares durable facts — their environment,
+                hardware, projects, preferences, decisions, or solutions. When in doubt, save it.
 
                 ## Two-Phase Retrieval
                 1. find_memories("query") → lightweight results: IDs, titles, similarity scores
@@ -90,11 +93,12 @@ public sealed class MemoryIndexContextLayer : IContextLayerProvider
                 update_memory(id, delete="true") — archive duplicates or obsolete entries.
 
                 For full guidance: file_read on the memory-usage and memorizer-usage skills.
+                On errors, timeouts, or missing tools → file_read the self-diagnostics skill.
                 """,
 
             MemoryContextState.MemorizerDisconnected => """
                 [memories — NOT AVAILABLE: Memorizer MCP server not connected]
-                Troubleshoot: check McpServers in netclaw.json, verify server running, check daemon logs.
+                file_read the self-diagnostics skill — run netclaw mcp list, check daemon logs, verify McpServers config.
                 Save important knowledge to identity files instead. See identity-management skill.
                 """,
 
