@@ -303,6 +303,7 @@ static void ConfigureDaemonServices(
     {
         // File path: register builtin memory tools backed by local markdown files
         var fileStore = new FileMemoryStore(paths.MemoriesDirectory, TimeProvider.System);
+        services.AddSingleton(fileStore);
         toolRegistry.Register(new FileFindMemoriesTool(fileStore));
         toolRegistry.Register(new FileGetMemoriesTool(fileStore));
         toolRegistry.Register(new StoreMemoryTool(fileStore));
@@ -358,7 +359,8 @@ static void ConfigureDaemonServices(
     if (!File.Exists(paths.SoulPath) && !File.Exists(paths.PersonalityPath))
         File.WriteAllText(paths.SoulPath,
             "You are Netclaw, a helpful homelab operations assistant. "
-            + "Be concise and direct.");
+            + "Be concise and direct. Act autonomously — use your tools to do things "
+            + "rather than telling the user how.");
     var promptProvider = new FileSystemPromptProvider(paths);
     services.AddSingleton<ISystemPromptProvider>(promptProvider);
 

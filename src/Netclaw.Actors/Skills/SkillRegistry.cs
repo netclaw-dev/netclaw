@@ -41,7 +41,8 @@ public sealed class SkillRegistry
             .Where(s =>
                 s.Name.Contains(queryLower, StringComparison.OrdinalIgnoreCase)
                 || s.DisplayName.Contains(queryLower, StringComparison.OrdinalIgnoreCase)
-                || s.Description.Contains(queryLower, StringComparison.OrdinalIgnoreCase))
+                || s.Description.Contains(queryLower, StringComparison.OrdinalIgnoreCase)
+                || (s.Triggers is not null && s.Triggers.Contains(queryLower, StringComparison.OrdinalIgnoreCase)))
             .Take(maxResults)
             .ToList();
     }
@@ -57,11 +58,13 @@ public sealed class SkillRegistry
             return string.Empty;
 
         var sb = new StringBuilder();
-        sb.AppendLine("[skills — read with file_read for full instructions]");
+        sb.AppendLine("[skills — LOAD these with file_read when your current situation matches a trigger]");
         foreach (var skill in _skills)
         {
             sb.AppendLine($"{skill.Name} ({skill.FilePath})");
             sb.AppendLine($"  {skill.Description}");
+            if (skill.Triggers is not null)
+                sb.AppendLine($"  LOAD WHEN: {skill.Triggers}");
         }
 
         return sb.ToString();

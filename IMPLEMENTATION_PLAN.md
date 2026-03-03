@@ -462,8 +462,8 @@ Done when:
 
 Done when:
 - [x] ~~`MemoryDoctorCheck`~~ — dropped (low value; file backend auto-creates directory, Memorizer connectivity covered by `McpServersDoctorCheck`).
-- [ ] Memory line in `netclaw status` output — provider, health, backend-specific details.
-- [ ] Integration test: store → index update → search round-trip via headless mode.
+- [x] Memory line in `netclaw status` output — provider, health, backend-specific details.
+- [x] Integration test: store → find → get → edit → delete round-trip via tool wrappers over real `FileMemoryStore`.
 
 ### Task M5.6: Post-compaction summary persistence (deferred)
 

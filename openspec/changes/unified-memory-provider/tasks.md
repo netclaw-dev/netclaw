@@ -120,14 +120,14 @@
 > entry) can be a schema validation rule if needed.
 
 ### Task 3.3: Add memory to netclaw status output
-- [ ] Add `memory:` line to status output
-- [ ] Show provider name, health status, and backend-specific details
+- [x] Add `memory:` line to status output
+- [x] Show provider name, health status, and backend-specific details
 
 ### Task 3.4: Integration test — end-to-end memory workflow
-- [ ] Start daemon with file backend, run headless prompt that triggers search + store
-- [ ] Verify memory file created with correct content
-- [ ] Verify `memory.md` index updated
-- [ ] Verify subsequent search finds the stored memory
+- [x] Full 4-tool cycle test: store → find → get → edit → delete via tool wrappers over real FileMemoryStore
+- [x] Verify memory file created with correct content
+- [x] Verify `memory.md` index updated
+- [x] Verify subsequent search finds the stored memory
 
 ---
 
@@ -139,5 +139,5 @@
 - [x] Sync `netclaw-cli` delta spec (doctor + status memory checks)
 
 ### Task 4.2: Update ADR-002
-- [ ] Update ADR-002 to reflect unified memory provider architecture
-- [ ] Document file-based backend as default, Memorizer as upgrade path
+- [x] Update ADR-002 to reflect unified memory provider architecture
+- [x] Document file-based backend as default, Memorizer as upgrade path

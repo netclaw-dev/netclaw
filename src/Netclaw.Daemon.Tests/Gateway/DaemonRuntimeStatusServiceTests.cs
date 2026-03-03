@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Logging.Abstractions;
+using Netclaw.Actors.Memory;
 using Netclaw.Actors.Tools;
 using Netclaw.Channels;
 using Netclaw.Channels.Slack;
@@ -11,7 +12,7 @@ using Xunit;
 
 namespace Netclaw.Daemon.Tests.Gateway;
 
-public sealed class DaemonRuntimeStatusServiceTests
+public sealed class DaemonRuntimeStatusServiceTests : IDisposable
 {
     private static readonly SessionConfig DefaultSessionConfig = new()
     {
@@ -26,6 +27,18 @@ public sealed class DaemonRuntimeStatusServiceTests
         Main = new ModelReference { Provider = "test-provider", ModelId = "test-model" }
     };
 
+    private static readonly MemoryConfig DefaultMemoryConfig = new();
+
+    private readonly string _tempBase = Path.Combine(Path.GetTempPath(), $"netclaw-status-test-{Guid.NewGuid():N}");
+
+    private NetclawPaths CreatePaths() => new(_tempBase);
+
+    public void Dispose()
+    {
+        if (Directory.Exists(_tempBase))
+            Directory.Delete(_tempBase, recursive: true);
+    }
+
     [Fact]
     public async Task IncludesSlackConnectorAsDisabled_WhenNotEnabled()
     {
@@ -36,7 +49,9 @@ public sealed class DaemonRuntimeStatusServiceTests
             persistenceOptions: new DaemonPersistenceOptions(),
             telemetryOptions: Options.Create(new TelemetryOptions()),
             sessionConfig: DefaultSessionConfig,
-            modelSelection: DefaultModelSelection);
+            modelSelection: DefaultModelSelection,
+            memoryConfig: DefaultMemoryConfig,
+            paths: CreatePaths());
 
         var status = await service.GetStatusAsync();
         var slack = status.Connectors.Single(c => c.Key == "slack");
@@ -55,7 +70,9 @@ public sealed class DaemonRuntimeStatusServiceTests
             persistenceOptions: new DaemonPersistenceOptions(),
             telemetryOptions: Options.Create(new TelemetryOptions()),
             sessionConfig: DefaultSessionConfig,
-            modelSelection: DefaultModelSelection);
+            modelSelection: DefaultModelSelection,
+            memoryConfig: DefaultMemoryConfig,
+            paths: CreatePaths());
 
         var status = await service.GetStatusAsync();
         var slack = status.Connectors.Single(c => c.Key == "slack");
@@ -74,7 +91,9 @@ public sealed class DaemonRuntimeStatusServiceTests
             persistenceOptions: new DaemonPersistenceOptions(),
             telemetryOptions: Options.Create(new TelemetryOptions()),
             sessionConfig: DefaultSessionConfig,
-            modelSelection: DefaultModelSelection);
+            modelSelection: DefaultModelSelection,
+            memoryConfig: DefaultMemoryConfig,
+            paths: CreatePaths());
 
         var status = await service.GetStatusAsync();
 
@@ -127,6 +146,8 @@ public sealed class DaemonRuntimeStatusServiceTests
                 telemetryOptions: Options.Create(new TelemetryOptions()),
                 sessionConfig: DefaultSessionConfig,
                 modelSelection: DefaultModelSelection,
+                memoryConfig: DefaultMemoryConfig,
+                paths: CreatePaths(),
                 mcpClientManager: manager);
 
             var status = await service.GetStatusAsync();
@@ -144,5 +165,57 @@ public sealed class DaemonRuntimeStatusServiceTests
         {
             await manager.StopAsync(CancellationToken.None);
         }
+    }
+
+    [Fact]
+    public async Task StatusIncludesMemory_FileBackend()
+    {
+        var paths = CreatePaths();
+        paths.EnsureDirectoriesExist();
+        var fileStore = new FileMemoryStore(paths.MemoriesDirectory, TimeProvider.System);
+
+        await fileStore.StoreAsync("First Memory", "Content one.");
+        await fileStore.StoreAsync("Second Memory", "Content two.");
+
+        var service = new DaemonRuntimeStatusService(
+            TimeProvider.System,
+            channels: Array.Empty<IChannel>(),
+            slackOptions: new SlackChannelOptions { Enabled = false },
+            persistenceOptions: new DaemonPersistenceOptions(),
+            telemetryOptions: Options.Create(new TelemetryOptions()),
+            sessionConfig: DefaultSessionConfig,
+            modelSelection: DefaultModelSelection,
+            memoryConfig: new MemoryConfig { Provider = "files" },
+            paths: paths,
+            fileMemoryStore: fileStore);
+
+        var status = await service.GetStatusAsync();
+
+        Assert.NotNull(status.Memory);
+        Assert.Equal("files", status.Memory.Provider);
+        Assert.Equal("healthy", status.Memory.Status);
+        Assert.Equal(2, status.Memory.MemoryCount);
+        Assert.Equal(paths.MemoryIndexPath, status.Memory.IndexPath);
+    }
+
+    [Fact]
+    public async Task StatusIncludesMemory_MemorizerNotConnected()
+    {
+        var service = new DaemonRuntimeStatusService(
+            TimeProvider.System,
+            channels: Array.Empty<IChannel>(),
+            slackOptions: new SlackChannelOptions { Enabled = false },
+            persistenceOptions: new DaemonPersistenceOptions(),
+            telemetryOptions: Options.Create(new TelemetryOptions()),
+            sessionConfig: DefaultSessionConfig,
+            modelSelection: DefaultModelSelection,
+            memoryConfig: new MemoryConfig { Provider = "memorizer" },
+            paths: CreatePaths());
+
+        var status = await service.GetStatusAsync();
+
+        Assert.NotNull(status.Memory);
+        Assert.Equal("memorizer", status.Memory.Provider);
+        Assert.Equal("unavailable", status.Memory.Status);
     }
 }
