@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "feedType": "system",
-  "updatedAt": "2026-03-03T01:56:35Z",
+  "updatedAt": "2026-03-03T13:17:58Z",
   "skills": [
     {
       "name": "identity-management",
@@ -25,11 +25,11 @@
     },
     {
       "name": "memory-usage",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "minimumDaemonVersion": "0.1.0",
-      "sha256": "52cdd2720040dff2c2e0216dc5aa92c8e711fa4a4da0393f303a0c43d320c584",
-      "sizeBytes": 4106,
-      "url": "https://feeds.netclaw.dev/skills/.system/files/memory-usage/1.0.0.md",
+      "sha256": "d48733b04e4657f746449a89c4506f6ff919051aecf37987a038e2e757547bd9",
+      "sizeBytes": 5574,
+      "url": "https://feeds.netclaw.dev/skills/.system/files/memory-usage/1.1.0.md",
       "category": null,
       "description": "How to use cross-session memory (file-backed or Memorizer)"
     },

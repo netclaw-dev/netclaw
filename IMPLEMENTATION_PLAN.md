@@ -1,6 +1,6 @@
 # Netclaw Implementation Plan
 
-Last updated: 2026-02-27
+Last updated: 2026-03-03
 Mode: build
 
 This file is RALPH-consumable.
@@ -26,8 +26,9 @@ Session parent with `GenericChildPerEntityParent` routing via
 `SessionCompacted`, etc.) with protobuf-net serialization.
 
 **System prompt and personality:** Layered prompt assembly from `~/.netclaw/`
-soul files (PERSONALITY.md, INSTRUCTIONS.md, USER.md) with project overlay
-injection. `FileSystemPromptProvider` and `StaticSystemPromptProvider`.
+identity files (SOUL.md, AGENTS.md, TOOLING.md) with dynamic context layers
+(tool index, skill index, memory index). `FileSystemPromptProvider` and
+`StaticSystemPromptProvider`.
 
 **Tool framework:** `ToolRegistry` with MEAI `AITool` definitions, policy-filtered
 loading, audit logging, agentic execution loop with parallel tool calls and
@@ -256,7 +257,7 @@ Done when:
 ## Milestone 2: MCP Support
 
 **OpenSpec Changes:**
-- `openspec/changes/expand-mvp-for-autonomous-agent-vision/` (MCP tasks, group 8)
+- `openspec/changes/archive/2026-03-03-expand-mvp-for-autonomous-agent-vision/` (MCP tasks, archived)
 
 **Goal:** Connect to MCP tool servers, discover tools, gate by policy.
 
@@ -293,41 +294,40 @@ Done when:
 **Verification:** L2
 
 Done when:
-- [ ] Memorizer store/search/get cycle works through session via MCP.
+- [x] Memorizer store/search/get cycle works through session via MCP. *(4-tool surface: `find_memories`, `get_memories`, `store_memory`, `update_memory`. `store_memory` via subagent delegation, others via direct MCP pass-through.)*
 - [ ] MCP status indicator in TUI status bar (green/yellow/red).
 
 ---
 
 ## Milestone 3: Web Tools
 
-**OpenSpec Changes:** TBD (may need new change)
+**OpenSpec Changes:**
+- `openspec/changes/archive/2026-03-01-search-provider-abstraction/`
 
 **Goal:** Web search and web browsing capabilities.
 
 ### Task M3.1: Web search tool
 
 **PRD:** `docs/prd/PRD-001-netclaw-mvp.md`
-**OpenSpec:** `openspec/specs/netclaw-tools/spec.md`
-**OpenSpec Tasks:** expand-mvp 7.1–7.3
-**Surface area:** tools
+**OpenSpec:** `openspec/specs/netclaw-tools/spec.md`, `openspec/specs/netclaw-search/spec.md`
+**Surface area:** tools (`Netclaw.Search` project)
 **Verification:** L2
 
 Done when:
-- [ ] Web search tool implemented (evaluate: Brave Search API, SearXNG, Tavily).
-- [ ] Configurable search backend selection via `config/netclaw.json`.
-- [ ] Tests with mocked HTTP dependencies.
+- [x] Web search tool implemented with 3 backends: Brave Search API, SearXNG, DuckDuckGo. *(Implemented as `WebSearchTool` with `SearchConfig` provider abstraction in `Netclaw.Search` project.)*
+- [x] Configurable search backend selection via `config/netclaw.json` (`Search.Provider` setting).
+- [x] Tests with mocked HTTP dependencies.
 
 ### Task M3.2: Web fetch/browse tool
 
 **PRD:** `docs/prd/PRD-001-netclaw-mvp.md`
 **OpenSpec:** `openspec/specs/netclaw-tools/spec.md`
-**OpenSpec Tasks:** expand-mvp 7.4
 **Surface area:** tools
 **Verification:** L2
 
 Done when:
-- [ ] Web fetch tool (URL retrieval, HTML-to-text extraction, output truncation).
-- [ ] Tests with mocked HTTP dependencies.
+- [x] Web fetch tool (URL retrieval, HTML-to-text extraction, output truncation). *(Implemented as `WebFetchTool`.)*
+- [x] Tests with mocked HTTP dependencies.
 
 ---
 
@@ -369,41 +369,102 @@ Done when:
 ## Milestone 5: Agent Memory System
 
 **OpenSpec Changes:**
-- `openspec/changes/expand-mvp-for-autonomous-agent-vision/` (memory tasks, group 9)
-- Potentially new change for `IMemoryStore` interface
+- `openspec/changes/unified-memory-provider/` (tasks 3.2–3.4 remaining)
+- `openspec/changes/archive/2026-03-03-operationalize-subagent-core/` (complete)
 
-**Goal:** Persistent agent memory for cross-session knowledge retention.
+**Goal:** Persistent agent memory for cross-session knowledge retention with
+pluggable backends (file-based and Memorizer).
 
-**Design sketch — Four-Type Memory Framework:**
+**Architecture (implemented):**
 
-1. **Snapshot Memory** (MEMORY.md per agent) — curated current-state summary.
-   Guaranteed retrieval. Written by `IMemoryExtractor` during pre-compaction
-   flush (hook already exists, currently `NullMemoryExtractor`). High
-   decision-density content promoted from session context before compaction
-   clears it.
+Two memory backends behind a unified 4-tool surface (`find_memories`,
+`get_memories`, `store_memory`, `update_memory`). No shared `IMemoryProvider`
+abstraction — each backend has dedicated tool implementations. Backend
+selection via `Memory.Provider` in `netclaw.json` (`"files"` default,
+`"memorizer"` optional).
 
-2. **Temporal Memory** (session logs via Akka.Persistence journal) — rolling
-   window of recent events. Already exists. Enhancement: make post-compaction
-   session summaries queryable, not just raw journal.
+- **File backend:** `FileMemoryStore` manages `~/.netclaw/memories/` with
+  individual `.md` files, YAML front matter, `memory.md` index. Thread-safe
+  via `SemaphoreSlim` with in-memory cache. Multi-level scoring for search.
+- **Memorizer backend:** `store_memory` spawns `memory-curator` subagent via
+  `SubAgentActor` (10–30s, handles dedup/routing/linking). `find_memories`,
+  `get_memories`, `update_memory` are fast MCP pass-throughs.
+- **Context layer:** `MemoryIndexContextLayer` with 3 states (FileBacked,
+  MemorizerConnected, MemorizerDisconnected). Teaches two-phase retrieval.
+- **Extractors:** `FileMemoryExtractor` and `MemorizerMemoryExtractor`
+  implement `IMemoryExtractor` for pre-compaction memory flush.
+- **Wiring:** `ToolIndexUpdater` determines backend after MCP discovery,
+  registers tools, updates context layer.
 
-3. **Relational Memory** (identity/soul files) — hierarchical structure of who
-   the agent is. Already exists in `~/.netclaw/soul/` (PERSONALITY.md,
-   INSTRUCTIONS.md, USER.md). Expand with project AGENTS.md files and
-   environment inventory. Guaranteed retrieval — load file, get file.
+### Task M5.1: File-backed memory store and 4-tool surface
 
-4. **Contextual Memory** (pluggable `IMemoryStore`) — probabilistic similarity
-   retrieval for cross-session knowledge. Interface: store, search, get.
-   First implementation: Memorizer via MCP (depends on Milestone 2).
-   Future option: local SQLite+vector store to reduce external deps.
+**PRD:** `docs/prd/PRD-007-agent-personality-and-local-memory.md`
+**OpenSpec:** `openspec/specs/netclaw-agent-memory/spec.md`
+**Surface area:** `Netclaw.Actors.Memory`
+**Verification:** L2
 
-Key integration point: `IMemoryExtractor` fires during compaction and decides
-what goes where — snapshot entries to MEMORY.md (guaranteed), contextual
-entries to whatever `IMemoryStore` is configured.
+Done when:
+- [x] `FileMemoryStore` with CRUD: `StoreAsync`, `SearchAsync` (multi-level scoring), `GetByIdsAsync`, `EditAsync`, `DeleteAsync`.
+- [x] File-backed tools: `FileFindMemoriesTool`, `FileGetMemoriesTool`, `StoreMemoryTool`, `FileUpdateMemoryTool`.
+- [x] `memory.md` auto-generated index table, updated on every write.
+- [x] `MemoryConfig` with `Provider` selection (`"files"` / `"memorizer"`).
+- [x] Tests for all store operations and tool behaviors.
 
-Dependency chain: MCP support (M2) → Memorizer as first IMemoryStore →
-memory extraction during compaction becomes real.
+### Task M5.2: Memorizer backend with subagent delegation
 
-### Task M5.1: Replace NullMemoryExtractor with real implementation
+**PRD:** `docs/prd/PRD-007-agent-personality-and-local-memory.md`
+**OpenSpec:** `openspec/specs/netclaw-agent-memory/spec.md`, `openspec/specs/netclaw-subagents/spec.md`
+**Surface area:** `Netclaw.Actors.Memory`, `Netclaw.Actors.SubAgents`
+**Verification:** L2
+
+Done when:
+- [x] `MemorizerStoreMemoryTool` spawns `memory-curator` subagent with 8 Memorizer MCP tools.
+- [x] `MemorizerFindMemoriesTool`, `MemorizerGetMemoriesTool`, `MemorizerUpdateMemoryTool` as MCP pass-throughs.
+- [x] `SubAgentActor` — ephemeral actor with autonomous tool loop, max 10 iterations, wall-clock timeout.
+- [x] `SubAgentConfig` with configurable timeouts (store=180s, search=30s, default=60s).
+- [x] `SubAgentOutput` observability events via `ToolExecutionContext.OnSubAgentActivity`.
+- [x] Tests for subagent lifecycle, MCP delegation, timeout, disconnected fallback.
+
+### Task M5.3: Memory extractors and context layer
+
+**PRD:** `docs/prd/PRD-007-agent-personality-and-local-memory.md`
+**OpenSpec:** `openspec/specs/netclaw-agent-memory/spec.md`
+**Surface area:** `Netclaw.Actors.Memory`, `Netclaw.Configuration`
+**Verification:** L2
+
+Done when:
+- [x] `FileMemoryExtractor` implements `IMemoryExtractor` — saves to `FileMemoryStore` with `["extraction", "compaction"]` tags.
+- [x] `MemorizerMemoryExtractor` implements `IMemoryExtractor` — saves via `memorizer/store` MCP, graceful no-op when disconnected.
+- [x] `MemoryIndexContextLayer` with 3-state content (FileBacked, MemorizerConnected, MemorizerDisconnected).
+- [x] `ToolIndexUpdater` wires correct backend tools after MCP discovery.
+- [x] Init wizard memory step (step 6 of 9), connectivity probe, fallback to files.
+
+### Task M5.4: System skills for memory guidance
+
+**OpenSpec:** `openspec/specs/netclaw-agent-memory/spec.md`
+**Surface area:** system skills
+**Verification:** L1
+
+Done when:
+- [x] `memory-usage/1.1.0.md` — 4-tool surface, two-phase retrieval, update/delete, backend notes.
+- [x] `memorizer-usage/1.1.0.md` — subagent delegation, two-tier model, advanced ops.
+- [x] Embedded copies in `src/Netclaw.Daemon/BuiltInSkills/` in sync.
+- [x] Manifest regenerated.
+
+### Task M5.5: Diagnostics and integration (remaining)
+
+**PRD:** `docs/prd/PRD-004-cli-onboarding-and-config.md`
+**OpenSpec:** `openspec/specs/netclaw-cli/spec.md`
+**OpenSpec Tasks:** unified-memory-provider 3.2–3.4
+**Surface area:** CLI diagnostics
+**Verification:** L2
+
+Done when:
+- [ ] `MemoryDoctorCheck` in `Netclaw.Cli/Doctor/` — file: directory writable; Memorizer: MCP configured + connected.
+- [ ] Memory line in `netclaw status` output — provider, health, backend-specific details.
+- [ ] Integration test: store → index update → search round-trip via headless mode.
+
+### Task M5.6: Post-compaction summary persistence (deferred)
 
 **PRD:** `docs/prd/PRD-007-agent-personality-and-local-memory.md`
 **OpenSpec:** `openspec/specs/netclaw-agent-memory/spec.md`
@@ -411,31 +472,7 @@ memory extraction during compaction becomes real.
 **Verification:** L2
 
 Done when:
-- [ ] `NullMemoryExtractor` replaced with implementation that writes MEMORY.md.
-- [ ] Pre-compaction memory flush produces durable snapshot entries.
-- [ ] Tests verify extraction and file write.
-
-### Task M5.2: IMemoryStore interface and Memorizer adapter
-
-**PRD:** `docs/prd/PRD-007-agent-personality-and-local-memory.md`
-**OpenSpec:** `openspec/specs/netclaw-agent-memory/spec.md`
-**Surface area:** agent memory
-**Verification:** L2
-
-Done when:
-- [ ] `IMemoryStore` interface defined (store, search, get).
-- [ ] Memorizer MCP adapter implemented as first `IMemoryStore` backend.
-- [ ] Memory retrieval wired into session context injection.
-
-### Task M5.3: Post-compaction summary persistence
-
-**PRD:** `docs/prd/PRD-007-agent-personality-and-local-memory.md`
-**OpenSpec:** `openspec/specs/netclaw-agent-memory/spec.md`
-**Surface area:** agent memory
-**Verification:** L2
-
-Done when:
-- [ ] Post-compaction session summaries persisted for temporal memory queries.
+- [ ] Post-compaction session summaries queryable (not just raw journal).
 - [ ] Tests verify summary persistence and retrieval.
 
 ---
@@ -447,24 +484,44 @@ be promoted to milestones in future planning sessions.
 
 - **ACL/security enforcement** — tool grant limits, sender allowlists, default
   deny evaluation. Required before multi-user but not for single-user local.
-  (OpenSpec: expand-mvp group 5)
 - **Additional messaging channels** — Telegram, WhatsApp, Discord, webhooks.
 - **Web UI / ops console** — PRD-003, deferred to post-MVP.
 - **Config hot-reload** — `ConfigWatcherService` with `FileSystemWatcher`,
-  debounce, validate-before-apply. (OpenSpec: add-tui-adapter section 5)
+  debounce, validate-before-apply.
 - **Scheduling system** — `ScheduleManagerActor`, cron/interval tasks, isolated
-  execution. (OpenSpec: expand-mvp group 11)
+  execution.
 - **Self-configuration through conversation** — agent modifies personality,
-  project registry, environment via conversation. (OpenSpec: expand-mvp group 10)
+  project registry, environment via conversation.
 - **CloudFlare/Tailscale tunnels** — external access for webhooks.
 - **Multi-key entity routing** — full multi-pattern support and routing tests.
-  (OpenSpec: expand-mvp group 3)
 - **Local memory subsystem** — project registry, environment inventory,
-  capability self-discovery. (OpenSpec: expand-mvp group 9)
+  capability self-discovery.
 - **SignalR thin client** — replace in-process `SessionPipeline` with SignalR
-  client in CLI. (Task 1.28 from previous plan)
+  client in CLI.
 - **Daemon-required CLI commands** — session/tools/mcp/schedule/memory/acl
-  queries via SignalR. (Task 1.30 from previous plan)
+  queries via SignalR.
+
+### Subagent Roadmap (from PR #102)
+
+These items build on the `SubAgentActor` infrastructure landed in PR #102.
+
+- **Disk-based subagent definitions** — `~/.netclaw/agents/{name}.json` with
+  system prompt, tool allowlist, model role, timeout. Near-term post-MVP.
+  Prerequisite for `spawn_agent` tool and subagent discovery context layer.
+- **`spawn_agent` tool** — User-facing delegation tool. Operator or frontline
+  model can spawn named subagents for specialized tasks. Prerequisite:
+  disk-based subagent definitions. Natural entry when Phase 3 (delegated
+  coding) begins.
+- **Subagent discovery context layer** — General specialist catalog in context
+  layer (extends MCP shadow catalog pattern to subagents). Lists available
+  subagent definitions with capabilities. Pairs with disk-based definitions.
+- **Memory storage quality gate** — Pre-store validation for thin/hallucinated
+  memories before `store_memory` persists. Options: curator prompt enrichment,
+  confidence scoring, source citation requirement. Applies to both file and
+  Memorizer backends.
+- **Multi-turn subagent sessions** — Phase 3 (delegated coding). Current
+  `SubAgentActor` is single-loop; multi-turn needed for spawning Claude Code
+  or OpenCode as coding subagents with back-and-forth conversation.
 
 ---
 
@@ -493,8 +550,9 @@ the linked research documents.
 
 ### Long-Term
 
-- **Sub-agent isolation** — Child task actors with independent context
-  windows. Architecture already supports it (`SessionState` is decoupled).
+- **Sub-agent isolation (Phase 1 complete)** — `SubAgentActor` provides
+  ephemeral single-loop subagents with independent tool registries.
+  Next: multi-turn sessions, disk-based definitions, `spawn_agent` tool.
   See: `docs/research/actor-llm-optimization-patterns.md` §6
 
 ### Research Documents

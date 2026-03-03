@@ -1,4 +1,12 @@
-## ADDED Requirements
+# netclaw-subagents Specification
+
+## Purpose
+
+Define subagent execution contract, timeout enforcement, observability events,
+model role conventions, and context layer awareness for ephemeral autonomous
+LLM actors.
+
+## Requirements
 
 ### Requirement: Subagent execution contract
 
@@ -133,13 +141,14 @@ configured compaction model (cheaper/faster) rather than the main model. The
 ### Requirement: Context layer subagent awareness
 
 The `MemorizerConnected` context layer SHALL inform the frontline model that
-`store_memory` and `search_memories` delegate to curation subagents. The text
-SHALL set expectations about latency (10–30 seconds) so the model does not
-retry or apologize for tool call duration.
+`store_memory` delegates to a curation subagent. The text SHALL set
+expectations about latency (10–30 seconds for `store_memory`) so the model does
+not retry or apologize for tool call duration. `find_memories`, `get_memories`,
+and `update_memory` are direct MCP pass-throughs and do not use subagents.
 
 #### Scenario: Context layer mentions subagent delegation
 
 - **GIVEN** the memory provider is `memorizer` and Memorizer is connected
 - **WHEN** the context layer is assembled for a session
-- **THEN** the context includes a note about subagent delegation
-- **AND** mentions expected latency of 10–30 seconds
+- **THEN** the context includes a note about `store_memory` subagent delegation
+- **AND** mentions expected latency of 10–30 seconds for store operations

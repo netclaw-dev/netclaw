@@ -57,84 +57,83 @@ _Reconciliation: renamed `soul/` to `identity/`, added `skills/` and
 
 ## NEW Requirements
 
-### Requirement: Unified memory provider abstraction
+### Requirement: Unified memory backend with 4-tool surface
 
-The system SHALL support pluggable memory backends through a provider
-abstraction. Two providers SHALL be supported:
+The system SHALL support pluggable memory backends through per-backend tool
+implementations (no shared `IMemoryProvider` abstraction). Two backends SHALL
+be supported:
 
-- **`files`** (default): File-based memory store at `~/.netclaw/memories/`
+- **`files`** (default): `FileMemoryStore` at `~/.netclaw/memories/`
   with a `memory.md` progressive-discovery index.
-- **`memorizer`**: Delegates to the Memorizer MCP server for full workspace,
-  project, and relationship capabilities.
+- **`memorizer`**: Per-tool delegation to the Memorizer MCP server — direct
+  MCP pass-through for `find_memories`, `get_memories`, `update_memory`; and
+  subagent-backed curation for `store_memory`.
 
-The active provider SHALL be configured in `netclaw.json` under a `Memory`
-section. Default is `files` when no configuration exists.
+Both backends expose the same 4-tool interface: `find_memories`, `get_memories`,
+`store_memory`, and `update_memory`. The active backend SHALL be configured in
+`netclaw.json` under a `Memory` section. Default is `files`.
 
 #### Scenario: File-based memory is default
 
 - **GIVEN** no `Memory` section exists in `netclaw.json`
 - **WHEN** the daemon starts
-- **THEN** the file-based memory provider is active
-- **AND** `search_memories` and `store_memory` use the file backend
+- **THEN** the file-based memory backend is active
+- **AND** all 4 file-backed tools are registered as always-loaded builtins
 
-#### Scenario: Memorizer provider configured
+#### Scenario: Memorizer backend configured and connected
 
 - **GIVEN** `Memory.Provider` is set to `"memorizer"` in `netclaw.json`
 - **AND** the Memorizer MCP server is configured and connected
-- **WHEN** the daemon starts
-- **THEN** `search_memories` delegates to `memorizer/search_memories`
-- **AND** `store_memory` delegates to `memorizer/store`
-- **AND** the memory context layer explains the two-step discovery process
-  for advanced operations (workspaces, projects, relationships)
+- **WHEN** the daemon starts and MCP discovery completes
+- **THEN** `ToolIndexUpdater` registers 4 Memorizer-backed tools
+- **AND** `store_memory` spawns a `memory-curator` subagent for curation
+- **AND** `find_memories`, `get_memories`, `update_memory` delegate directly
+  to MCP tools
 
 #### Scenario: Memorizer configured but disconnected
 
 - **GIVEN** `Memory.Provider` is set to `"memorizer"`
 - **AND** the Memorizer MCP server is not connected
-- **WHEN** the agent calls `search_memories` or `store_memory`
-- **THEN** the tools return a clear error indicating Memorizer is unavailable
-- **AND** the memory context layer suggests checking MCP configuration
+- **WHEN** the daemon starts
+- **THEN** no memory tools are registered
+- **AND** the memory context layer shows a disconnected warning with
+  troubleshooting guidance
 
-### Requirement: Always-available memory tools
+### Requirement: Two-phase memory retrieval
 
-The system SHALL provide `search_memories` and `store_memory` as always-loaded
-builtin tools regardless of which memory provider is active. These tools SHALL
-be in `ChatOptions.Tools` on every LLM call — no discovery step required.
+Memory retrieval SHALL use a two-phase pattern to reduce token cost:
+`find_memories` returns lightweight results (ID, title, relevance score, tags,
+150-character snippet) and `get_memories` fetches full content by ID(s).
 
-#### Scenario: search_memories always available
+#### Scenario: Two-phase retrieval flow
 
-- **WHEN** any session starts
-- **THEN** `search_memories` is in the tool list sent to the LLM
-- **AND** the tool works against whichever backend is configured
-
-#### Scenario: store_memory always available
-
-- **WHEN** any session starts
-- **THEN** `store_memory` is in the tool list sent to the LLM
-- **AND** the agent can save memories without first calling `search_tools`
+- **WHEN** the frontline model calls `find_memories` with a query
+- **THEN** it receives lightweight results with IDs and snippets
+- **AND** can call `get_memories` with selected IDs to fetch full content
 
 ### Requirement: File-based memory store
 
-The file-based memory provider SHALL store memories as individual Markdown
-files in `~/.netclaw/memories/` with a `memory.md` index file that lists all
-memories with their titles, tags, and file paths. The index SHALL be updated
-on every store operation.
+The file-based memory backend SHALL store memories as individual Markdown
+files in `~/.netclaw/memories/` with a `memory.md` index file. The index
+SHALL be updated on every store operation. `FileMemoryStore` SHALL be
+thread-safe via `SemaphoreSlim` with an in-memory cache.
 
 #### Scenario: Store memory creates file and updates index
 
-- **GIVEN** the file-based memory provider is active
+- **GIVEN** the file-based memory backend is active
 - **WHEN** the agent calls `store_memory` with title, content, and tags
-- **THEN** a new `.md` file is created in `~/.netclaw/memories/`
+- **THEN** a new `.md` file is created with YAML front matter
 - **AND** the `memory.md` index is updated with the new entry
-- **AND** the memory is retrievable via `search_memories`
+- **AND** the memory is retrievable via `find_memories`
 
-#### Scenario: Search memories uses substring matching
+#### Scenario: Search uses multi-level scoring
 
 - **GIVEN** memories exist in `~/.netclaw/memories/`
-- **WHEN** the agent calls `search_memories` with a query
-- **THEN** the tool searches the `memory.md` index and file contents
-- **AND** returns matching memories ranked by relevance (title match > tag
-  match > content match)
+- **WHEN** the agent calls `find_memories` with a query
+- **THEN** title matches score 3 points per term
+- **AND** tag matches score 2 points per term
+- **AND** content matches score 1 point per term
+- **AND** results are returned sorted by normalized score
 
 #### Scenario: Memory index is progressive-discovery catalog
 
@@ -143,55 +142,57 @@ on every store operation.
 - **THEN** the file lists all memories with title, tags, and file path
 - **AND** the agent can `file_read` individual memory files for full content
 
+#### Scenario: Update memory via edit or delete
+
+- **GIVEN** the file-based memory backend is active
+- **WHEN** the agent calls `update_memory` with edit parameters
+- **THEN** `FileMemoryStore.EditAsync` performs find-and-replace in the file
+- **OR** `FileMemoryStore.DeleteAsync` removes the file and updates the index
+
 ### Requirement: Memorizer discovery guidance
 
-When the Memorizer provider is active, the memory context layer SHALL explain
-the two-step discovery process for advanced operations. The always-on layer
-SHALL reference the `memorizer-usage` skill file for full guidance on
-workspaces, projects, and relationships.
+When the Memorizer backend is active, the memory context layer SHALL explain
+that `store_memory` delegates to a curation subagent (10–30s latency) while
+`find_memories`, `get_memories`, and `update_memory` are fast MCP
+pass-throughs. The always-on layer SHALL reference the `memorizer-usage` skill
+file for full guidance on workspaces, projects, and relationships.
 
-#### Scenario: Context layer explains two-step discovery
+#### Scenario: Context layer explains delegation model
 
-- **GIVEN** the Memorizer provider is active and connected
+- **GIVEN** the Memorizer backend is active and connected
 - **WHEN** the session system prompt is assembled
 - **THEN** the memory context layer includes:
-  - `search_memories` and `store_memory` are directly available
-  - Advanced operations (workspaces, projects, relationships) require
-    calling `search_tools(Server="memorizer")` first to discover tools
-  - Reference to `memorizer-usage` skill for full workflow guidance
-
-#### Scenario: Agent traverses memory graph
-
-- **GIVEN** the agent finds a memory with a `projectId`
-- **WHEN** the agent wants to understand the project context
-- **THEN** the agent calls `search_tools(Server="memorizer")` to discover
-  project tools
-- **AND** calls `memorizer/get_project_context` to explore the project
-- **AND** discovers related memories through project membership
+  - All 4 tools are available
+  - `store_memory` uses subagent curation (10–30s expected)
+  - Other tools are fast MCP pass-throughs
+  - Reference to `memorizer-usage` skill for advanced operations
 
 ### Requirement: Pre-compaction memory extraction
 
 The system SHALL fire a memory extraction LLM call after compaction to
 identify durable knowledge worth saving. Extracted memories SHALL be persisted
-through the active memory provider. When no provider is configured, extraction
-SHALL be skipped gracefully.
+through the active memory backend via `IMemoryExtractor`. `FileMemoryExtractor`
+persists to `FileMemoryStore`; `MemorizerMemoryExtractor` persists via
+Memorizer MCP.
 
 #### Scenario: Extraction persists to file backend
 
-- **GIVEN** the file-based memory provider is active
+- **GIVEN** the file-based memory backend is active
 - **WHEN** compaction completes and memory extraction runs
-- **THEN** extracted memories are saved as files in `~/.netclaw/memories/`
+- **THEN** `FileMemoryExtractor` saves extracted memories as files
+- **AND** tags them as `["extraction", "compaction"]`
 - **AND** the `memory.md` index is updated
 
 #### Scenario: Extraction persists to Memorizer
 
-- **GIVEN** the Memorizer provider is active and connected
+- **GIVEN** the Memorizer backend is active and connected
 - **WHEN** compaction completes and memory extraction runs
-- **THEN** extracted memories are saved via `memorizer/store`
+- **THEN** `MemorizerMemoryExtractor` saves via `memorizer/store` MCP tool
+- **AND** tags as `["extraction", "compaction"]`
 
-#### Scenario: Extraction skipped when no provider
+#### Scenario: Extraction graceful no-op when disconnected
 
-- **GIVEN** no memory provider is configured
+- **GIVEN** the Memorizer backend is configured but disconnected
 - **WHEN** compaction completes
-- **THEN** memory extraction is skipped (NullMemoryExtractor)
-- **AND** compaction proceeds without delay
+- **THEN** `MemorizerMemoryExtractor` skips extraction without error
+- **AND** compaction proceeds normally

@@ -26,6 +26,8 @@ subscribers. Subscriber delivery SHALL use a direct subscription model with
 `OutputFilter` bitmask so that subscribers control which output categories they
 receive (Text, Thinking, ToolCalls, Usage). Lifecycle events (TurnCompleted,
 ErrorOutput, SessionTitleOutput) SHALL always be delivered regardless of filter.
+`SubAgentOutput` events (Started/Completed phases) SHALL be filtered under the
+`ToolCalls` category.
 
 Multiple subscribers from different channels (e.g., Slack and TUI) SHALL
 coexist on the same session actor. Each subscriber receives its own filtered
