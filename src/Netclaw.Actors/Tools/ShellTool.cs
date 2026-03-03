@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.Text;
 using Netclaw.Configuration;
+using Netclaw.Security;
 using Netclaw.Tools;
 
 namespace Netclaw.Actors.Tools;
@@ -16,20 +17,25 @@ namespace Netclaw.Actors.Tools;
 public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
 {
     private readonly ToolConfig _config;
+    private readonly ToolPathPolicy? _pathPolicy;
 
     public record Params(
         [property: Description("The shell command to execute")] string Command,
         [property: Description("Working directory to run the command in (optional)")] string? WorkingDirectory = null);
 
-    public ShellTool(ToolConfig config)
+    public ShellTool(ToolConfig config, ToolPathPolicy? pathPolicy = null)
     {
         _config = config;
+        _pathPolicy = pathPolicy;
     }
 
     protected override async Task<string> ExecuteAsync(Params args, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(args.Command))
             return "Error: 'command' parameter is required.";
+
+        if (_pathPolicy?.CommandReferencesDeniedPath(args.Command) == true)
+            return "Error: Command references a protected file path. Access denied by security policy.";
 
         var isWindows = OperatingSystem.IsWindows();
         var psi = new ProcessStartInfo

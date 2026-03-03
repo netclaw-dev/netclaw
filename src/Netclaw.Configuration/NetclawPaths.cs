@@ -55,6 +55,7 @@ public sealed class NetclawPaths
     public string PidFilePath => Path.Combine(BasePath, "netclaw.pid");
     public string SqliteDbPath => Path.Combine(BasePath, "netclaw.db");
     public string McpOAuthMetadataPath => Path.Combine(ConfigDirectory, "mcp-oauth-metadata.json");
+    public string KeysDirectory => Path.Combine(BasePath, "keys");
 
     public NetclawPaths(string? basePath = null)
     {
@@ -86,5 +87,6 @@ public sealed class NetclawPaths
         Directory.CreateDirectory(MemoriesDirectory);
         Directory.CreateDirectory(SessionsDirectory);
         Directory.CreateDirectory(BinDirectory);
+        Directory.CreateDirectory(KeysDirectory);
     }
 }

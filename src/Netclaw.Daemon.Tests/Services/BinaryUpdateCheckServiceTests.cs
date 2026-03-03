@@ -30,7 +30,7 @@ public sealed class BinaryUpdateCheckServiceTests : IDisposable
     [Fact]
     public async Task StartAsync_LogsWarningWhenUpdateAvailable()
     {
-        var manifest = CreateManifest("0.2.0", "linux-x64");
+        var manifest = CreateManifest("0.2.0", UpdateCheckService.GetCurrentRid());
         var handler = new FakeHttpHandler();
         handler.AddJsonResponse(FeedConstants.BinaryManifestUrl, manifest);
 
@@ -75,7 +75,7 @@ public sealed class BinaryUpdateCheckServiceTests : IDisposable
     [Fact]
     public async Task CheckForUpdateAsync_ReturnsUpdateWhenNewerVersionAvailable()
     {
-        var manifest = CreateManifest("0.2.0", "linux-x64");
+        var manifest = CreateManifest("0.2.0", UpdateCheckService.GetCurrentRid());
         var handler = new FakeHttpHandler();
         handler.AddJsonResponse(FeedConstants.BinaryManifestUrl, manifest);
 

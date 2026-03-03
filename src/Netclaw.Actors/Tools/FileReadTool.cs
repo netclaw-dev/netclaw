@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Text;
 using Netclaw.Configuration;
+using Netclaw.Security;
 using Netclaw.Tools;
 
 namespace Netclaw.Actors.Tools;
@@ -14,21 +15,26 @@ namespace Netclaw.Actors.Tools;
 public sealed partial class FileReadTool : NetclawTool<FileReadTool.Params>
 {
     private readonly ToolConfig _config;
+    private readonly ToolPathPolicy? _pathPolicy;
 
     public record Params(
         [property: Description("Absolute path to the file to read")] string Path,
         [property: Description("Line number to start reading from (1-based, optional)")] int? Offset = null,
         [property: Description("Maximum number of lines to read (optional)")] int? Limit = null);
 
-    public FileReadTool(ToolConfig config)
+    public FileReadTool(ToolConfig config, ToolPathPolicy? pathPolicy = null)
     {
         _config = config;
+        _pathPolicy = pathPolicy;
     }
 
     protected override async Task<string> ExecuteAsync(Params args, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(args.Path))
             return "Error: 'path' parameter is required.";
+
+        if (_pathPolicy?.IsDenied(args.Path) == true)
+            return "Error: Access denied — this file is protected by security policy.";
 
         if (!File.Exists(args.Path))
             return $"Error: File not found: {args.Path}";

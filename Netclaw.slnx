@@ -9,6 +9,7 @@
   <Folder Name="/src/">
     <Project Path="src/Netclaw.Actors/Netclaw.Actors.csproj" />
     <Project Path="src/Netclaw.Channels/Netclaw.Channels.csproj" />
+    <Project Path="src/Netclaw.Configuration.Tests/Netclaw.Configuration.Tests.csproj" />
     <Project Path="src/Netclaw.Configuration/Netclaw.Configuration.csproj" />
     <Project Path="src/Netclaw.Daemon.Tests/Netclaw.Daemon.Tests.csproj" />
     <Project Path="src/Netclaw.Daemon/Netclaw.Daemon.csproj" />

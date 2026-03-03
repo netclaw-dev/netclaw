@@ -1,5 +1,6 @@
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
+using Netclaw.Security;
 using Xunit;
 
 namespace Netclaw.Actors.Tests.Tools;
@@ -94,5 +95,21 @@ public class FileReadToolTests : IDisposable
     {
         var result = await _tool.ExecuteAsync(null, CancellationToken.None);
         Assert.Contains("No arguments provided", result);
+    }
+
+    [Fact]
+    public async Task Read_denied_path_returns_access_denied()
+    {
+        var filePath = Path.Combine(_tempDir, "secrets.json");
+        await File.WriteAllTextAsync(filePath, """{"secret": "value"}""");
+
+        var policy = new ToolPathPolicy([filePath]);
+        var tool = new FileReadTool(new ToolConfig(), policy);
+        var args = new Dictionary<string, object?> { ["Path"] = filePath };
+
+        var result = await tool.ExecuteAsync(args, CancellationToken.None);
+
+        Assert.Contains("Access denied", result);
+        Assert.DoesNotContain("value", result);
     }
 }

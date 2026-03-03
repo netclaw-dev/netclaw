@@ -6,6 +6,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.Logging;
 using Netclaw.Configuration;
+using Netclaw.Configuration.Secrets;
 
 namespace Netclaw.Daemon.Mcp;
 
@@ -26,6 +27,7 @@ internal sealed class McpOAuthService
     private readonly NetclawPaths _paths;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<McpOAuthService> _logger;
+    private readonly ISecretsProtector? _protector;
 
     // In-memory caches, loaded from disk at construction
     private readonly ConcurrentDictionary<string, McpOAuthTokenSet> _tokens = new();
@@ -36,12 +38,14 @@ internal sealed class McpOAuthService
         HttpClient httpClient,
         NetclawPaths paths,
         TimeProvider timeProvider,
-        ILogger<McpOAuthService> logger)
+        ILogger<McpOAuthService> logger,
+        ISecretsProtector? protector = null)
     {
         _httpClient = httpClient;
         _paths = paths;
         _timeProvider = timeProvider;
         _logger = logger;
+        _protector = protector;
 
         LoadTokensFromDisk();
         LoadMetadataFromDisk();
@@ -545,11 +549,8 @@ internal sealed class McpOAuthService
             secrets[TokensSectionKey] = JsonSerializer.SerializeToElement(
                 new Dictionary<string, McpOAuthTokenSet>(_tokens), JsonOptions);
 
-            var json = JsonSerializer.Serialize(secrets, JsonOptions);
-            var dir = Path.GetDirectoryName(_paths.SecretsPath);
-            if (dir is not null)
-                Directory.CreateDirectory(dir);
-            File.WriteAllText(_paths.SecretsPath, json);
+            SecretsFileWriter.Write(_paths.SecretsPath, secrets,
+                options: JsonOptions, protector: _protector);
         }
         catch (Exception ex)
         {

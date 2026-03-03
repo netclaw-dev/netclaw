@@ -9,12 +9,14 @@ using Netclaw.Cli;
 using Netclaw.Cli.Daemon;
 using Netclaw.Cli.Doctor;
 using Netclaw.Cli.Mcp;
+using Netclaw.Cli.Secrets;
 using Netclaw.Cli.Model;
 using Netclaw.Cli.Provider;
 using Netclaw.Cli.Tui;
 using Netclaw.Cli.Update;
 using Netclaw.Configuration;
 using Netclaw.Configuration.Providers;
+using Netclaw.Configuration.Secrets;
 using Termina.Diagnostics;
 using Termina.Hosting;
 
@@ -365,6 +367,15 @@ static async Task RunAsync(string[] args)
         return;
     }
 
+    // ── Secrets management ──
+    if (mode is "secrets")
+    {
+        var secretsPaths = new NetclawPaths();
+        secretsPaths.EnsureDirectoriesExist();
+        Environment.ExitCode = SecretsCommand.Run(args, secretsPaths);
+        return;
+    }
+
     // ── Config management stubs ──
     if (mode is "config")
     {
@@ -505,6 +516,7 @@ static void WriteGeneralHelp()
     Console.WriteLine("  mcp                      Manage MCP server profiles");
     Console.WriteLine("  provider                 Manage LLM providers (TUI) or use subcommands");
     Console.WriteLine("  model                    Manage model assignments (TUI) or use subcommands");
+    Console.WriteLine("  secrets                  Manage encrypted secrets (set key/value pairs)");
     Console.WriteLine("  init                     First-run setup wizard");
     Console.WriteLine("  update                   Check for and install updates");
     Console.WriteLine("  config                   Configuration management (planned)");
@@ -808,6 +820,13 @@ static NetclawPaths ConfigureConfigServices(IServiceCollection services, IConfig
     var paths = new NetclawPaths();
     paths.EnsureDirectoriesExist();
     services.AddSingleton(paths);
+
+    // Initialize Data Protection for secrets encryption/decryption.
+    // Must happen before config binding so SensitiveStringTypeConverter
+    // can transparently decrypt ENC: values.
+    var protector = SecretsProtection.CreateProtector(paths);
+    services.AddSingleton<ISecretsProtector>(protector);
+    SensitiveStringTypeConverter.Protector = protector;
 
     // Layered configuration chain:
     // 1. netclaw.json (base config, optional)
