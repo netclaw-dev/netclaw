@@ -112,11 +112,12 @@
 - [x] Health check reports degraded (not failed) when Memorizer unreachable
 - [x] `TotalSteps = 9`
 
-### Task 3.2: Add memory doctor check
-- [ ] Add `MemoryDoctorCheck` to `Netclaw.Cli/Doctor/`
-- [ ] File backend: verify `~/.netclaw/memories/` exists and is writable
-- [ ] Memorizer backend: verify MCP server entry exists in config, verify connected
-- [ ] Report pass/fail with remediation guidance
+### ~~Task 3.2: Add memory doctor check~~ (dropped — low value)
+
+> Dropped: file backend auto-creates its directory, and Memorizer connectivity
+> is already covered by `McpServersDoctorCheck`. The only gap (config
+> consistency: `Memory.Provider=memorizer` without a `McpServers.memorizer`
+> entry) can be a schema validation rule if needed.
 
 ### Task 3.3: Add memory to netclaw status output
 - [ ] Add `memory:` line to status output

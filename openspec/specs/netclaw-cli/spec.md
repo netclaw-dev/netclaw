@@ -323,26 +323,10 @@ exit with code 0 (all pass), 1 (errors), or 2 (warnings only).
 - **THEN** output shows the failure with a remediation command
 - **AND** exit code is 1
 
-### Requirement: Diagnostic commands include memory health
+### Requirement: Memory provider in status output
 
-The `netclaw doctor` command SHALL include a memory provider health check.
 The `netclaw status` command SHALL display the active memory provider and
 its health status.
-
-#### Scenario: Doctor validates file-based memory
-
-- **GIVEN** the memory provider is `files`
-- **WHEN** the operator runs `netclaw doctor`
-- **THEN** doctor checks that `~/.netclaw/memories/` exists and is writable
-- **AND** reports pass/fail for the memory provider check
-
-#### Scenario: Doctor validates Memorizer
-
-- **GIVEN** the memory provider is `memorizer`
-- **WHEN** the operator runs `netclaw doctor`
-- **THEN** doctor checks that the Memorizer MCP server is configured
-- **AND** checks that the MCP server is reachable
-- **AND** reports pass/fail with remediation guidance if unhealthy
 
 #### Scenario: Status shows memory provider
 

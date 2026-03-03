@@ -334,24 +334,25 @@ Done when:
 ## Milestone 4: System Prompts + Personality
 
 **OpenSpec Changes:**
-- `openspec/changes/expand-mvp-for-autonomous-agent-vision/` (personality tasks, group 15)
-- `openspec/changes/add-tui-adapter-and-config-hot-reload/` (bootstrap, section 6)
+- `openspec/changes/archive/2026-03-03-expand-mvp-for-autonomous-agent-vision/` (archived)
 
-**Goal:** Onboarding-driven soul file creation, proper injection into sessions.
+**Goal:** Onboarding-driven identity file creation, proper injection into sessions.
 
-### Task M4.1: Conversational personality bootstrap
+### Task M4.1: Wizard-based personality bootstrap
 
 **PRD:** `docs/prd/PRD-007-agent-personality-and-local-memory.md`
 **OpenSpec:** `openspec/specs/netclaw-agent-memory/spec.md`, `openspec/specs/netclaw-onboarding/spec.md`
-**OpenSpec Tasks:** expand-mvp 15.1–15.3, add-tui-adapter 6.1–6.4
 **Surface area:** onboarding
 **Verification:** L2
 
 Done when:
-- [ ] First-run detection: trigger bootstrap when soul files don't exist on first `netclaw chat`.
-- [ ] Bootstrap conversation: introduce, learn preferences, scan environment, write soul files, confirm.
-- [ ] PERSONALITY.md, INSTRUCTIONS.md, USER.md written to config directory.
-- [ ] Test: bootstrap triggers when files missing, skips when files exist.
+- [x] Init wizard Identity step (step 8 of 9) collects agent name and communication style.
+- [x] `WriteIdentityFiles()` writes `SOUL.md`, `AGENTS.md`, `TOOLING.md` to `~/.netclaw/identity/`.
+- [x] `identity-management` system skill provides triage guidance for identity file content.
+
+> _Design note: conversational bootstrap was replaced with wizard-based bootstrap.
+> The agent refines personality through conversation using `file_write` on identity
+> files, guided by the `identity-management` skill._
 
 ### Task M4.2: System prompt assembly verification
 
@@ -361,8 +362,8 @@ Done when:
 **Verification:** L2
 
 Done when:
-- [ ] Soul file CRUD through onboarding verified end-to-end.
-- [ ] System prompt injection from soul files verified in session context.
+- [x] Layered prompt assembly from identity files with dynamic context layers (tool index, skill index, memory index).
+- [x] `FileSystemPromptProvider` loads identity files at session start.
 
 ---
 
@@ -460,7 +461,7 @@ Done when:
 **Verification:** L2
 
 Done when:
-- [ ] `MemoryDoctorCheck` in `Netclaw.Cli/Doctor/` — file: directory writable; Memorizer: MCP configured + connected.
+- [x] ~~`MemoryDoctorCheck`~~ — dropped (low value; file backend auto-creates directory, Memorizer connectivity covered by `McpServersDoctorCheck`).
 - [ ] Memory line in `netclaw status` output — provider, health, backend-specific details.
 - [ ] Integration test: store → index update → search round-trip via headless mode.
 
