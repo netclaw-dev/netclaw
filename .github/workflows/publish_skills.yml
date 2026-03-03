@@ -1,0 +1,27 @@
+name: Publish Skills Feed
+
+on:
+  push:
+    branches: [dev, main]
+    paths:
+      - 'feeds/skills/.system/files/**'
+      - 'feeds/scripts/generate-skill-manifest.sh'
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Generate manifest
+        run: ./feeds/scripts/generate-skill-manifest.sh
+
+      - name: Deploy to Cloudflare Pages
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deploy feeds/ --project-name=netclaw-feeds

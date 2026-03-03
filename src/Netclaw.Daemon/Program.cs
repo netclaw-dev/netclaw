@@ -15,6 +15,7 @@ using Netclaw.Actors.Skills;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 using Netclaw.Configuration.Providers;
+using Netclaw.Configuration.Feeds;
 using Netclaw.Daemon.Configuration;
 using Netclaw.Daemon.Gateway;
 using Netclaw.Daemon.Mcp;
@@ -261,8 +262,8 @@ static void ConfigureDaemonServices(
     var toolRegistry = new ToolRegistry();
     toolRegistry.WithFirstPartyTools(toolConfig, searchBackend);
 
-    // Skills system: copy built-in skills, scan, expose via file-based index
-    CopyBuiltInSkills(paths.SkillsDirectory);
+    // Skills system: seed built-in skills to .system/, register sync service
+    CopyBuiltInSkills(paths.SystemSkillsDirectory);
     var skillRegistry = new SkillRegistry();
     foreach (var skill in SkillScanner.Scan(paths.SkillsDirectory))
         skillRegistry.Register(skill);
@@ -323,6 +324,13 @@ static void ConfigureDaemonServices(
     services.AddSingleton<IReadOnlyList<IContextLayerProvider>>(sp =>
         sp.GetServices<IContextLayerProvider>().ToList());
     services.AddHostedService<ToolIndexUpdater>();
+
+    // System skills feed sync — checks CDN for updated skills at startup.
+    // Runs after initial skill scan; re-scans and updates the index if any skills changed.
+    // Never blocks startup on network failures.
+    services.AddHttpClient<SystemSkillSyncService>(client =>
+        client.Timeout = FeedConstants.FeedHttpTimeout);
+    services.AddHostedService<SystemSkillSyncService>();
 
     // System prompt (file-based, with first-run seed)
     // Seed minimal SOUL.md if neither new nor legacy personality file exists

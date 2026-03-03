@@ -16,6 +16,15 @@ public sealed class SkillRegistry
         _skills.Add(skill);
     }
 
+    /// <summary>
+    /// Remove all registered skills so the registry can be re-populated
+    /// (e.g. after a feed sync updates on-disk skill files).
+    /// </summary>
+    public void Clear()
+    {
+        _skills.Clear();
+    }
+
     public IReadOnlyList<SkillEntry> GetAll() => _skills;
 
     /// <summary>

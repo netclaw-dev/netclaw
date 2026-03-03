@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "feedType": "system",
+  "updatedAt": "2026-03-03T00:30:31Z",
+  "skills": [
+    {
+      "name": "identity-management",
+      "version": "1.0.0",
+      "minimumDaemonVersion": "0.1.0",
+      "sha256": "f5f0288a505f8dbf2efb60a7e302900c410b4588a0fa4ec0c56ccb0d5e7387c0",
+      "sizeBytes": 2939,
+      "url": "https://feeds.netclaw.dev/skills/.system/files/identity-management/1.0.0.md",
+      "category": null,
+      "description": "How to read and update Netclaw identity files (SOUL.md, AGENTS.md, TOOLING.md)"
+    },
+    {
+      "name": "memorizer-usage",
+      "version": "1.0.0",
+      "minimumDaemonVersion": "0.1.0",
+      "sha256": "d89cb6c3979747515d0bece3f61ce1c9bab97b20b938ad538dff83e598065ecd",
+      "sizeBytes": 6453,
+      "url": "https://feeds.netclaw.dev/skills/.system/files/memorizer-usage/1.0.0.md",
+      "category": null,
+      "description": "How to use the Memorizer MCP server for cross-session knowledge management"
+    },
+    {
+      "name": "self-diagnostics",
+      "version": "1.0.0",
+      "minimumDaemonVersion": "0.1.0",
+      "sha256": "0633082957cbb99dfe863cad0bf506b5c07ea64814f6e4c5b7ed0edd0555ef2b",
+      "sizeBytes": 1981,
+      "url": "https://feeds.netclaw.dev/skills/.system/files/self-diagnostics/1.0.0.md",
+      "category": null,
+      "description": "How to check Netclaw configuration, validate connectivity, check logs, and report bugs"
+    }
+  ]
+}

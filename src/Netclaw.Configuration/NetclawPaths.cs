@@ -30,6 +30,8 @@ public sealed class NetclawPaths
 
     // ── Skills directory (procedural context) ──
     public string SkillsDirectory => Path.Combine(BasePath, "skills");
+    public string SystemSkillsDirectory => Path.Combine(SkillsDirectory, ".system");
+    public string SkillSyncStatePath => Path.Combine(SystemSkillsDirectory, ".sync-state.json");
 
     // ── Memory directory (file-backed cross-session memory) ──
     public string MemoriesDirectory => Path.Combine(BasePath, "memories");
@@ -70,6 +72,7 @@ public sealed class NetclawPaths
         Directory.CreateDirectory(ToolingShadowDirectory);
         Directory.CreateDirectory(McpShadowDirectory);
         Directory.CreateDirectory(SkillsDirectory);
+        Directory.CreateDirectory(SystemSkillsDirectory);
         Directory.CreateDirectory(ProjectsDirectory);
         Directory.CreateDirectory(EnvironmentDirectory);
         Directory.CreateDirectory(SchedulesDirectory);

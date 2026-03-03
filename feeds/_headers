@@ -1,0 +1,12 @@
+# CORS — allow daemon to fetch from any origin (localhost, tailscale hostnames)
+/*
+  Access-Control-Allow-Origin: *
+
+# JSON manifests — short TTL so skill updates propagate quickly
+/skills/.system/manifest.json
+  Cache-Control: public, max-age=300
+  Content-Type: application/json
+
+# Skill files — immutable (versioned URLs never change content)
+/skills/.system/files/*
+  Cache-Control: public, max-age=31536000, immutable

@@ -145,6 +145,29 @@ blocks, hardcoded values, TODO-as-done comments. Baseline is in
 `.slopwatch/baseline.json` — existing entries are accepted, new violations
 must be fixed or explicitly baselined with justification.
 
+## System Skills Sync Rule
+
+System skills in `feeds/skills/.system/files/` are the agent's operational
+guidance — they tell the running agent how to use features. When you change a
+feature area, the corresponding skill **must** be updated in the same PR.
+
+| Feature area changed | Skill to update |
+|----------------------|-----------------|
+| Identity files, SOUL/AGENTS/TOOLING paths, progressive disclosure | `identity-management` |
+| Memory system, Memorizer MCP, file-backed memory, memory tools | `memorizer-usage` |
+| Config format, daemon health, logs, MCP wiring, diagnostics CLI | `self-diagnostics` |
+
+**Workflow:**
+1. Edit the skill source at `feeds/skills/.system/files/{name}/{version}.md`
+2. Bump the version (new file, e.g. `1.1.0.md`) — do not overwrite old versions
+3. Run `./feeds/scripts/generate-skill-manifest.sh` to rebuild `manifest.json`
+4. Update the embedded copy in `src/Netclaw.Daemon/BuiltInSkills/` to match
+   (this is the offline bootstrap — must stay in sync with the latest feed version)
+5. Include all four changes (skill file, manifest, embedded copy) in the same commit
+
+If a new feature area needs agent guidance, create a new skill file and add a
+row to this table.
+
 ## Definition of Done
 
 Done means all of the following are true:
@@ -154,6 +177,7 @@ Done means all of the following are true:
 - `dotnet slopwatch analyze` passes (no new violations)
 - operational impact is documented (runbooks or CLI help)
 - OpenSpec artifacts are updated or archived appropriately
+- system skills updated if a mapped feature area was changed (see table above)
 
 ## Agent Guidance: dotnet-skills
 

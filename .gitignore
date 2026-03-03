@@ -419,3 +419,6 @@ FodyWeavers.xsd
 
 # Claude worktree management
 .claude-wt/worktrees
+
+# Wrangler (Cloudflare CLI local state)
+.wrangler/
