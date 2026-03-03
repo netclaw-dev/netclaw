@@ -15,6 +15,7 @@ using Netclaw.Actors.Skills;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 using Netclaw.Configuration.Providers;
+using Netclaw.Configuration.Secrets;
 using Netclaw.Configuration.Feeds;
 using Netclaw.Daemon.Configuration;
 using Netclaw.Daemon.Gateway;
@@ -154,6 +155,13 @@ static NetclawPaths ConfigureConfigServices(IServiceCollection services, IConfig
     paths.EnsureDirectoriesExist();
     services.AddSingleton(paths);
 
+    // Initialize Data Protection for secrets encryption/decryption.
+    // Must happen before config binding so SensitiveStringTypeConverter
+    // can transparently decrypt ENC: values.
+    var protector = SecretsProtection.CreateProtector(paths);
+    services.AddSingleton<ISecretsProtector>(protector);
+    SensitiveStringTypeConverter.Protector = protector;
+
     // Layered configuration chain:
     // 1. netclaw.json (base config, optional)
     // 2. secrets.json (credentials overlay, optional)
@@ -259,8 +267,12 @@ static void ConfigureDaemonServices(
         .Get<SearchConfig>() ?? new SearchConfig();
     var searchBackend = CreateSearchBackend(searchConfig);
 
+    // Tool path deny-list: prevent agent tools from accessing secrets
+    var toolPathPolicy = new ToolPathPolicy([paths.SecretsPath]);
+    services.AddSingleton(toolPathPolicy);
+
     var toolRegistry = new ToolRegistry();
-    toolRegistry.WithFirstPartyTools(toolConfig, searchBackend);
+    toolRegistry.WithFirstPartyTools(toolConfig, searchBackend, toolPathPolicy);
 
     // Skills system: seed built-in skills to .system/, register sync service
     CopyBuiltInSkills(paths.SystemSkillsDirectory);
@@ -446,12 +458,12 @@ static ISearchBackend? CreateSearchBackend(SearchConfig config)
     switch (backend)
     {
         case "brave":
-            if (string.IsNullOrWhiteSpace(config.BraveApiKey))
+            if (config.BraveApiKey is null || string.IsNullOrWhiteSpace(config.BraveApiKey.Value))
             {
                 Console.Error.WriteLine("warn: Brave Search configured but no API key provided (Search.BraveApiKey). Web search tool will not be registered.");
                 return null;
             }
-            return new BraveSearchBackend(config.BraveApiKey);
+            return new BraveSearchBackend(config.BraveApiKey.Value);
 
         case "searxng":
             if (string.IsNullOrWhiteSpace(config.SearXngEndpoint))

@@ -1,4 +1,5 @@
 using Netclaw.Actors.Tools;
+using Netclaw.Security;
 using Xunit;
 
 namespace Netclaw.Actors.Tests.Tools;
@@ -96,5 +97,24 @@ public class FileWriteToolTests : IDisposable
     {
         var result = await _tool.ExecuteAsync(null, CancellationToken.None);
         Assert.Contains("No arguments provided", result);
+    }
+
+    [Fact]
+    public async Task Write_denied_path_returns_access_denied()
+    {
+        var filePath = Path.Combine(_tempDir, "secrets.json");
+        var policy = new ToolPathPolicy([filePath]);
+        var tool = new FileWriteTool(policy);
+
+        var args = new Dictionary<string, object?>
+        {
+            ["Path"] = filePath,
+            ["Content"] = "malicious content"
+        };
+
+        var result = await tool.ExecuteAsync(args, CancellationToken.None);
+
+        Assert.Contains("Access denied", result);
+        Assert.False(File.Exists(filePath));
     }
 }

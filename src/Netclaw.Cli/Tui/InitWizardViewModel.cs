@@ -858,8 +858,8 @@ public partial class InitWizardViewModel : ReactiveViewModel
 
         if (secrets.Count > 0)
         {
-            File.WriteAllText(_paths.SecretsPath,
-                JsonSerializer.Serialize(secrets, jsonOptions));
+            SecretsFileWriter.Write(_paths.SecretsPath, secrets,
+                options: jsonOptions, protector: SensitiveStringTypeConverter.Protector);
         }
     }
 

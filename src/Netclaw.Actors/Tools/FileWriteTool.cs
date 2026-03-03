@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Text;
+using Netclaw.Security;
 using Netclaw.Tools;
 
 namespace Netclaw.Actors.Tools;
@@ -12,14 +13,24 @@ namespace Netclaw.Actors.Tools;
     Grant = "file")]
 public sealed partial class FileWriteTool : NetclawTool<FileWriteTool.Params>
 {
+    private readonly ToolPathPolicy? _pathPolicy;
+
     public record Params(
         [property: Description("Absolute path to the file to write")] string Path,
         [property: Description("Content to write to the file")] string Content);
+
+    public FileWriteTool(ToolPathPolicy? pathPolicy = null)
+    {
+        _pathPolicy = pathPolicy;
+    }
 
     protected override async Task<string> ExecuteAsync(Params args, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(args.Path))
             return "Error: 'path' parameter is required.";
+
+        if (_pathPolicy?.IsDenied(args.Path) == true)
+            return "Error: Access denied — this file is protected by security policy.";
 
         try
         {

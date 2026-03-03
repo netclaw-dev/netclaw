@@ -2,6 +2,7 @@ using Microsoft.Extensions.AI;
 using ModelContextProtocol.Client;
 using Netclaw.Configuration;
 using Netclaw.Search;
+using Netclaw.Security;
 
 namespace Netclaw.Actors.Tools;
 
@@ -11,11 +12,15 @@ namespace Netclaw.Actors.Tools;
 /// </summary>
 public static class ToolRegistrationExtensions
 {
-    public static ToolRegistry WithFirstPartyTools(this ToolRegistry registry, ToolConfig config, ISearchBackend? searchBackend = null)
+    public static ToolRegistry WithFirstPartyTools(
+        this ToolRegistry registry,
+        ToolConfig config,
+        ISearchBackend? searchBackend = null,
+        ToolPathPolicy? pathPolicy = null)
     {
-        registry.Register(new ShellTool(config));
-        registry.Register(new FileReadTool(config));
-        registry.Register(new FileWriteTool());
+        registry.Register(new ShellTool(config, pathPolicy));
+        registry.Register(new FileReadTool(config, pathPolicy));
+        registry.Register(new FileWriteTool(pathPolicy));
         registry.Register(new AttachFileTool());
         if (searchBackend is not null)
             registry.Register(new WebSearchTool(searchBackend));

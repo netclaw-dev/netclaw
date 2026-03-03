@@ -15,7 +15,7 @@ public sealed class SearchConfig
     /// Brave Search API subscription token. Required when Backend is "brave".
     /// Stored in secrets.json under Search.BraveApiKey.
     /// </summary>
-    public string? BraveApiKey { get; set; }
+    public SensitiveString? BraveApiKey { get; set; }
 
     /// <summary>
     /// SearXNG instance base URL (e.g., "http://searxng.local:8080").

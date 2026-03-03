@@ -1,5 +1,6 @@
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
+using Netclaw.Security;
 using Xunit;
 
 namespace Netclaw.Actors.Tests.Tools;
@@ -115,5 +116,23 @@ public class ShellToolTests
 
         Assert.StartsWith(new string('x', 50), result);
         Assert.EndsWith("[output truncated]", result);
+    }
+
+    [Fact]
+    public async Task Command_referencing_denied_path_returns_access_denied()
+    {
+        var secretsPath = "/home/user/.netclaw/config/secrets.json";
+        var policy = new ToolPathPolicy([secretsPath]);
+        var tool = new ShellTool(new ToolConfig(), policy);
+
+        var args = new Dictionary<string, object?>
+        {
+            ["Command"] = $"cat {secretsPath}"
+        };
+
+        var result = await tool.ExecuteAsync(args, CancellationToken.None);
+
+        Assert.Contains("protected file path", result);
+        Assert.Contains("Access denied", result);
     }
 }
