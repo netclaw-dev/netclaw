@@ -1,57 +1,57 @@
 {
   "schemaVersion": 1,
   "feedType": "system",
-  "updatedAt": "2026-03-03T01:56:35Z",
+  "updatedAt": "2026-03-03T13:22:51Z",
   "skills": [
     {
       "name": "identity-management",
-      "version": "1.0.1",
+      "version": "1.0.2",
       "minimumDaemonVersion": "0.1.0",
-      "sha256": "92a53bf1015983090110020d0920cb0597f5f8ee38c070509eabc199d0462b8b",
-      "sizeBytes": 4157,
-      "url": "https://feeds.netclaw.dev/skills/.system/files/identity-management/1.0.1.md",
+      "sha256": "4044f192f5a200188510387bd0d3c5b1f244075b1fcfec1412431b7ab5c6404d",
+      "sizeBytes": 4211,
+      "url": "https://feeds.netclaw.dev/skills/.system/files/identity-management/1.0.2.md",
       "category": null,
-      "description": "How to read and update Netclaw identity files (SOUL.md, AGENTS.md, TOOLING.md)"
+      "description": "Update SOUL.md/AGENTS.md/TOOLING.md when learning durable user preferences or environment facts. Read for file structure and triage."
     },
     {
       "name": "memorizer-usage",
-      "version": "1.1.0",
+      "version": "1.1.1",
       "minimumDaemonVersion": "0.1.0",
-      "sha256": "b7d3e78ac5080624a3f104b89909baeef92e563fd20a5e8db247093340f2d855",
-      "sizeBytes": 5526,
-      "url": "https://feeds.netclaw.dev/skills/.system/files/memorizer-usage/1.1.0.md",
+      "sha256": "ab18d9f777e750d7ab8883e862e2946299ce956bceec1cb989885292ca0a3d96",
+      "sizeBytes": 5573,
+      "url": "https://feeds.netclaw.dev/skills/.system/files/memorizer-usage/1.1.1.md",
       "category": null,
-      "description": "Advanced Memorizer capabilities — workspaces, projects, relationships, confidence"
+      "description": "Advanced Memorizer capabilities — workspaces, projects, relationships, confidence. Read when organizing memories across domains."
     },
     {
       "name": "memory-usage",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "minimumDaemonVersion": "0.1.0",
-      "sha256": "52cdd2720040dff2c2e0216dc5aa92c8e711fa4a4da0393f303a0c43d320c584",
-      "sizeBytes": 4106,
-      "url": "https://feeds.netclaw.dev/skills/.system/files/memory-usage/1.0.0.md",
+      "sha256": "a8ec72982b36980e524aae8ace7adcc08648feca455aa7ffa610814730b00015",
+      "sizeBytes": 4683,
+      "url": "https://feeds.netclaw.dev/skills/.system/files/memory-usage/1.0.1.md",
       "category": null,
-      "description": "How to use cross-session memory (file-backed or Memorizer)"
+      "description": "SAVE user facts, decisions, and solutions to memory. RETRIEVE at conversation start before answering from scratch."
     },
     {
       "name": "self-diagnostics",
-      "version": "1.0.1",
+      "version": "1.0.2",
       "minimumDaemonVersion": "0.1.0",
-      "sha256": "b68c8433ee316ee9bc802a08eee8540b707d6f5745a4aa4729e2cd7be5335e8a",
-      "sizeBytes": 4630,
-      "url": "https://feeds.netclaw.dev/skills/.system/files/self-diagnostics/1.0.1.md",
+      "sha256": "cce60ac03240c6e843b04eca76a243ddbec191bd89cc06fc319ab3aab69cb710",
+      "sizeBytes": 5399,
+      "url": "https://feeds.netclaw.dev/skills/.system/files/self-diagnostics/1.0.2.md",
       "category": null,
-      "description": "How to check Netclaw configuration, validate connectivity, inspect logs, and troubleshoot issues"
+      "description": "Read when sessions timeout, connections fail, tools are missing, or the user reports errors. Covers netclaw doctor, logs, MCP status."
     },
     {
       "name": "skill-authoring",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "minimumDaemonVersion": "0.1.0",
-      "sha256": "9d1551c39445f5a67563b2d9bdc5b594570525e31eef63b6f008354108ca3752",
-      "sizeBytes": 6202,
-      "url": "https://feeds.netclaw.dev/skills/.system/files/skill-authoring/1.0.0.md",
+      "sha256": "04b3480a0ed3dd53080e811f08fa4357dce303e3022465a05b67739558781e44",
+      "sizeBytes": 6237,
+      "url": "https://feeds.netclaw.dev/skills/.system/files/skill-authoring/1.0.1.md",
       "category": null,
-      "description": "How to create and maintain skill files for reusable procedural knowledge"
+      "description": "Create a skill when a repeatable workflow emerges. Read for file format, naming, and discovery conventions."
     }
   ]
 }
