@@ -65,7 +65,43 @@ public sealed partial class MemorizerStoreMemoryTool : NetclawTool<MemorizerStor
         Example memorizer/store call:
         {"title": "My Title", "text": "The content goes here", "type": "reference", "source": "LLM", "tags": ["tag1", "tag2"]}
 
-        Guidelines:
+        ## Title Quality
+
+        Titles should be descriptive and searchable — they are the primary way
+        memories are discovered later.
+
+        BAD: "DB fix", "config issue", "deployment notes"
+        GOOD: "PostgreSQL connection pooling fix for Npgsql 8.x",
+              "Kubernetes pod eviction caused by memory limits on worker nodes",
+              "Akka.NET cluster sharding rebalance strategy for 50+ entity types"
+
+        ## Content Quality
+
+        Include WHY, not just WHAT. Rich memories with context are the only useful
+        kind. Thin memories ("use X instead of Y") waste storage and confuse future
+        retrieval.
+
+        BAD:
+        "Fixed the DB connection issue by increasing pool size."
+
+        GOOD:
+        "## Problem\nProduction DB connections exhausted under load.\n\n## Root Cause\n
+        Npgsql 8.x defaults to poolSize=100. Our worker service opens connections per
+        actor, and with 200 sharded entities we exceed the pool.\n\n## Solution\n
+        Increased `MaxPoolSize` to 300 in connection string. Also added
+        `Connection Idle Lifetime=60` to reclaim idle connections faster.\n\n## Links\n
+        - PR: https://github.com/org/repo/pull/42\n
+        - Npgsql docs: https://www.npgsql.org/doc/connection-string-parameters.html"
+
+        ## Formatting Rules
+
+        - Use markdown: headers (##), code blocks (```), bullet lists, bold for emphasis.
+        - Include hyperlinks to repos, PRs, docs, Stack Overflow answers, or any
+          external resources that provide context.
+        - Code samples should be in fenced code blocks with language tags.
+
+        ## Guidelines
+
         - If a near-duplicate exists, skip storing and mention the existing memory.
         - Keep your responses brief — just confirm what you stored.
         """;

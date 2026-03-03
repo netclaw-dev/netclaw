@@ -65,23 +65,31 @@ public sealed partial class FileMemoryStore
     /// Search memories by substring match against title, tags, and content.
     /// Scores: title match > tag match > content match.
     /// </summary>
-    public async Task<IReadOnlyList<MemorySearchResult>> SearchAsync(string query, int maxResults = 5, CancellationToken ct = default)
+    public async Task<IReadOnlyList<MemorySearchResult>> SearchAsync(string query, int maxResults = 5, string[]? filterTags = null, CancellationToken ct = default)
     {
         var entries = await GetEntriesAsync(ct);
         if (entries.Count == 0 || string.IsNullOrWhiteSpace(query))
             return [];
+
+        // Pre-filter by tags if specified
+        IEnumerable<MemoryEntry> candidates = entries;
+        if (filterTags is { Length: > 0 })
+        {
+            var filterSet = new HashSet<string>(filterTags, StringComparer.OrdinalIgnoreCase);
+            candidates = entries.Where(e => e.Tags.Any(t => filterSet.Contains(t)));
+        }
 
         var queryLower = query.ToLowerInvariant();
         var queryTerms = queryLower.Split(' ', StringSplitOptions.RemoveEmptyEntries);
 
         var scored = new List<MemorySearchResult>();
 
-        foreach (var entry in entries)
+        foreach (var entry in candidates)
         {
             var score = ScoreEntry(entry, queryTerms);
             if (score > 0)
             {
-                scored.Add(new MemorySearchResult(entry.Title, entry.Tags, entry.Content, entry.FilePath, score));
+                scored.Add(new MemorySearchResult(entry.Id, entry.Title, entry.Tags, entry.Content, entry.FilePath, score));
             }
         }
 
@@ -89,6 +97,71 @@ public sealed partial class FileMemoryStore
             .OrderByDescending(r => r.Score)
             .Take(maxResults)
             .ToList();
+    }
+
+    /// <summary>
+    /// Load full memory entries by their IDs.
+    /// </summary>
+    public async Task<IReadOnlyList<MemoryEntry>> GetByIdsAsync(IReadOnlyList<string> ids, CancellationToken ct = default)
+    {
+        var entries = await GetEntriesAsync(ct);
+        var idSet = new HashSet<string>(ids, StringComparer.OrdinalIgnoreCase);
+        return entries.Where(e => idSet.Contains(e.Id)).ToList();
+    }
+
+    /// <summary>
+    /// Find-and-replace edit on a memory file's content.
+    /// Returns true if the replacement was made; false if the old text was not found.
+    /// </summary>
+    public async Task<bool> EditAsync(string id, string oldText, string newText, CancellationToken ct = default)
+    {
+        await _writeLock.WaitAsync(ct);
+        try
+        {
+            var entry = FindEntryById(id);
+            if (entry is null)
+                return false;
+
+            var fileContent = await File.ReadAllTextAsync(entry.FilePath, ct);
+            if (!fileContent.Contains(oldText, StringComparison.Ordinal))
+                return false;
+
+            var updated = fileContent.Replace(oldText, newText, StringComparison.Ordinal);
+            await File.WriteAllTextAsync(entry.FilePath, updated, ct);
+
+            _cachedEntries = null;
+            await RebuildIndexAsync(ct);
+            return true;
+        }
+        finally
+        {
+            _writeLock.Release();
+        }
+    }
+
+    /// <summary>
+    /// Delete a memory file by its ID.
+    /// Returns true if the file was found and deleted; false otherwise.
+    /// </summary>
+    public async Task<bool> DeleteAsync(string id, CancellationToken ct = default)
+    {
+        await _writeLock.WaitAsync(ct);
+        try
+        {
+            var entry = FindEntryById(id);
+            if (entry is null)
+                return false;
+
+            File.Delete(entry.FilePath);
+
+            _cachedEntries = null;
+            await RebuildIndexAsync(ct);
+            return true;
+        }
+        finally
+        {
+            _writeLock.Release();
+        }
     }
 
     /// <summary>
@@ -186,7 +259,8 @@ public sealed partial class FileMemoryStore
             }
         }
 
-        return new MemoryEntry(title, tags, content, filePath, created);
+        var id = Path.GetFileNameWithoutExtension(filePath);
+        return new MemoryEntry(id, title, tags, content, filePath, created);
     }
 
     private static double ScoreEntry(MemoryEntry entry, string[] queryTerms)
@@ -261,6 +335,13 @@ public sealed partial class FileMemoryStore
 
     private static string EscapeMarkdownPipe(string value) => value.Replace("|", "\\|");
 
+    private MemoryEntry? FindEntryById(string id)
+    {
+        // Must be called under _writeLock or after GetEntriesAsync
+        var entries = _cachedEntries ?? ScanMemoryFiles();
+        return entries.FirstOrDefault(e => string.Equals(e.Id, id, StringComparison.OrdinalIgnoreCase));
+    }
+
     [GeneratedRegex(@"[^a-z0-9]+")]
     private static partial Regex KebabCaseRegex();
 
@@ -272,6 +353,7 @@ public sealed partial class FileMemoryStore
 /// Parsed memory file entry with front matter metadata.
 /// </summary>
 public sealed record MemoryEntry(
+    string Id,
     string Title,
     string[] Tags,
     string Content,
@@ -282,6 +364,7 @@ public sealed record MemoryEntry(
 /// Search result with relevance score.
 /// </summary>
 public sealed record MemorySearchResult(
+    string Id,
     string Title,
     string[] Tags,
     string Content,

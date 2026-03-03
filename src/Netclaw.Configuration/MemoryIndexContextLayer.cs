@@ -40,15 +40,55 @@ public sealed class MemoryIndexContextLayer : IContextLayerProvider
         _status = state switch
         {
             MemoryContextState.FileBacked => """
-                [memories — file-backed, search_memories and store_memory always available]
-                RETRIEVE at conversation start. SAVE immediately when learning something durable.
+                [memories — file-backed, 4 tools always available]
+                Tools: find_memories, get_memories, store_memory, update_memory
+                ALWAYS call find_memories at conversation start to check for relevant prior knowledge.
+                Search EACH distinct topic, project, or proper noun separately — one find_memories
+                call per entity. Example: "use claude-wt on the geeked-in repo" →
+                find_memories("claude-wt") AND find_memories("geeked-in") in parallel.
+                SAVE immediately when learning something durable.
+
+                ## Two-Phase Retrieval
+                1. find_memories("query") → lightweight results: IDs, titles, scores, snippets
+                2. Pick the IDs you need → get_memories("id1, id2") → full content
+
+                ## Storing Memories — Quality Bar
+                BAD title: "DB fix" → GOOD: "PostgreSQL connection pooling fix for Npgsql 8.x"
+                BAD content: one-liner → GOOD: markdown with ## Problem, ## Solution, code blocks, links
+                Use markdown formatting. Include links to repos, PRs, docs.
+                Include WHY, not just WHAT. Rich memories with context are the only useful kind.
+
+                ## Updating Memories
+                update_memory(id, old_text, new_text) — fix mistakes, update stale info.
+                update_memory(id, delete="true") — remove duplicates or obsolete entries.
+
                 For full guidance: file_read on the memory-usage skill.
                 """,
 
             MemoryContextState.MemorizerConnected => """
-                [memories — Memorizer connected, search_memories and store_memory available]
-                RETRIEVE at conversation start. SAVE immediately when learning something durable.
-                Memory tools delegate to curation subagents (10–30s latency is normal).
+                [memories — Memorizer connected, 4 tools available]
+                Tools: find_memories, get_memories, store_memory, update_memory
+                ALWAYS call find_memories at conversation start to check for relevant prior knowledge.
+                Search EACH distinct topic, project, or proper noun separately — one find_memories
+                call per entity. Example: "use claude-wt on the geeked-in repo" →
+                find_memories("claude-wt") AND find_memories("geeked-in") in parallel.
+                SAVE immediately when learning something durable.
+
+                ## Two-Phase Retrieval
+                1. find_memories("query") → lightweight results: IDs, titles, similarity scores
+                2. Pick the IDs you need → get_memories("id1, id2") → full content
+
+                ## Storing Memories — Quality Bar
+                BAD title: "DB fix" → GOOD: "PostgreSQL connection pooling fix for Npgsql 8.x"
+                BAD content: one-liner → GOOD: markdown with ## Problem, ## Solution, code blocks, links
+                Use markdown formatting. Include links to repos, PRs, docs.
+                Include WHY, not just WHAT. Rich memories with context are the only useful kind.
+                Note: store_memory delegates to a curation subagent (10–30s latency is normal).
+
+                ## Updating Memories
+                update_memory(id, old_text, new_text) — fix mistakes, update stale info.
+                update_memory(id, delete="true") — archive duplicates or obsolete entries.
+
                 For full guidance: file_read on the memory-usage and memorizer-usage skills.
                 """,
 

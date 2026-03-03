@@ -14,9 +14,10 @@ namespace Netclaw.Daemon.Mcp;
 /// into each LLM call via file-backed context layers. Also updates memory context layers
 /// based on config provider + Memorizer connectivity.
 ///
-/// When Memorizer is configured and connected, registers subagent-backed memory tools
-/// (<see cref="MemorizerStoreMemoryTool"/> and <see cref="MemorizerSearchMemoriesTool"/>)
-/// that delegate to curation subagents.
+/// When Memorizer is configured and connected, registers memory tools
+/// (<see cref="MemorizerFindMemoriesTool"/>, <see cref="MemorizerGetMemoriesTool"/>,
+/// <see cref="MemorizerStoreMemoryTool"/>, <see cref="MemorizerUpdateMemoryTool"/>)
+/// that delegate to Memorizer MCP or curation subagents.
 /// </summary>
 internal sealed class ToolIndexUpdater : IHostedService
 {
@@ -58,11 +59,12 @@ internal sealed class ToolIndexUpdater : IHostedService
         // can resolve Memorizer tools from the registry at execution time.
         if (state == MemoryContextState.MemorizerConnected)
         {
+            _toolRegistry.Register(new MemorizerFindMemoriesTool(_toolRegistry));
+            _toolRegistry.Register(new MemorizerGetMemoriesTool(_toolRegistry));
             _toolRegistry.Register(new MemorizerStoreMemoryTool(
                 _actorSystem, _clientProvider, _toolRegistry, _subAgentConfig));
-            _toolRegistry.Register(new MemorizerSearchMemoriesTool(
-                _actorSystem, _clientProvider, _toolRegistry, _subAgentConfig));
-            _logger.LogInformation("Registered subagent-backed memory tools (store_memory, search_memories)");
+            _toolRegistry.Register(new MemorizerUpdateMemoryTool(_toolRegistry));
+            _logger.LogInformation("Registered Memorizer-backed memory tools (find, get, store, update)");
         }
 
         // Write catalogs after all tools are registered (including Memorizer tools above)

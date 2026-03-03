@@ -11,7 +11,9 @@ namespace Netclaw.Actors.Memory;
 /// </summary>
 [NetclawTool("store_memory",
     "Save knowledge to cross-session memory for future retrieval. "
-    + "Use for solutions, decisions, research findings, and project context.",
+    + "Use for solutions, decisions, research findings, and project context. "
+    + "Write descriptive titles (not 'DB fix' — say 'PostgreSQL connection pooling fix for Npgsql 8.x'). "
+    + "Include WHY not just WHAT. Use markdown formatting, code blocks, and links to PRs/docs.",
     Grant = "builtin")]
 public sealed partial class StoreMemoryTool : NetclawTool<StoreMemoryTool.Params>
 {

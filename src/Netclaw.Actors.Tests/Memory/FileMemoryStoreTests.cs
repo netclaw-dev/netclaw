@@ -180,6 +180,91 @@ public class FileMemoryStoreTests : IDisposable
         Assert.True(fileName.Length <= 80); // date prefix + 60 char slug + .md
     }
 
+    [Fact]
+    public async Task Entries_have_id_from_filename()
+    {
+        await _store.StoreAsync("My Test Entry", "Content here.");
+
+        var entries = await _store.GetEntriesAsync();
+        Assert.Single(entries);
+        Assert.Equal("2026-03-02-my-test-entry", entries[0].Id);
+    }
+
+    [Fact]
+    public async Task GetByIds_returns_matching_ignores_unknown()
+    {
+        await _store.StoreAsync("Alpha", "Content alpha.");
+        _timeProvider.Advance(TimeSpan.FromSeconds(1));
+        await _store.StoreAsync("Beta", "Content beta.");
+
+        var entries = await _store.GetEntriesAsync();
+        var alphaId = entries.First(e => e.Title == "Alpha").Id;
+
+        var results = await _store.GetByIdsAsync([alphaId, "nonexistent-id"]);
+
+        Assert.Single(results);
+        Assert.Equal("Alpha", results[0].Title);
+    }
+
+    [Fact]
+    public async Task Edit_replaces_text_and_search_finds_updated_content()
+    {
+        await _store.StoreAsync("Edit Target", "The old value is here.");
+
+        var entries = await _store.GetEntriesAsync();
+        var id = entries[0].Id;
+
+        var edited = await _store.EditAsync(id, "old value", "new value");
+
+        Assert.True(edited);
+
+        var results = await _store.SearchAsync("new value");
+        Assert.Single(results);
+        Assert.Equal("Edit Target", results[0].Title);
+    }
+
+    [Fact]
+    public async Task Edit_returns_false_when_old_text_not_found()
+    {
+        await _store.StoreAsync("Edit Target", "Some content.");
+
+        var entries = await _store.GetEntriesAsync();
+        var id = entries[0].Id;
+
+        var edited = await _store.EditAsync(id, "nonexistent text", "replacement");
+
+        Assert.False(edited);
+    }
+
+    [Fact]
+    public async Task Delete_removes_file_and_search_no_longer_finds_it()
+    {
+        await _store.StoreAsync("Delete Target", "Content to delete.");
+
+        var entries = await _store.GetEntriesAsync();
+        var id = entries[0].Id;
+
+        var deleted = await _store.DeleteAsync(id);
+
+        Assert.True(deleted);
+
+        var results = await _store.SearchAsync("delete");
+        Assert.Empty(results);
+
+        // File should be gone
+        var memoryFiles = Directory.GetFiles(_tempDir, "*.md")
+            .Where(f => !Path.GetFileName(f).Equals("memory.md", StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+        Assert.Empty(memoryFiles);
+    }
+
+    [Fact]
+    public async Task Delete_returns_false_for_unknown_id()
+    {
+        var deleted = await _store.DeleteAsync("nonexistent-id");
+        Assert.False(deleted);
+    }
+
     private sealed class FakeTimeProvider : TimeProvider
     {
         private DateTimeOffset _utcNow;

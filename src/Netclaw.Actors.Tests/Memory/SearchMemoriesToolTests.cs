@@ -1,63 +1,16 @@
-using Netclaw.Actors.Memory;
 using Netclaw.Configuration;
 using Xunit;
 
 namespace Netclaw.Actors.Tests.Memory;
 
-public class SearchMemoriesToolTests : IDisposable
+/// <summary>
+/// Tests for <see cref="MemoryIndexContextLayer"/> — the dynamic context layer
+/// that tells the LLM about available memory tools and usage patterns.
+/// </summary>
+public class MemoryIndexContextLayerTests
 {
-    private readonly string _tempDir;
-    private readonly FileMemoryStore _store;
-
-    public SearchMemoriesToolTests()
-    {
-        _tempDir = Path.Combine(Path.GetTempPath(), $"netclaw-test-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(_tempDir);
-        _store = new FileMemoryStore(_tempDir, TimeProvider.System);
-    }
-
-    public void Dispose()
-    {
-        if (Directory.Exists(_tempDir))
-            Directory.Delete(_tempDir, recursive: true);
-    }
-
     [Fact]
-    public async Task Returns_no_memories_when_store_is_empty()
-    {
-        var tool = new SearchMemoriesTool(_store);
-
-        var result = await tool.ExecuteAsync(
-            new Dictionary<string, object?> { ["Query"] = "test query" },
-            CancellationToken.None);
-
-        Assert.Equal("No memories found.", result);
-    }
-
-    [Fact]
-    public void Grant_category_is_builtin()
-    {
-        var tool = new SearchMemoriesTool(_store);
-        Assert.Equal("builtin", tool.GrantCategory);
-    }
-
-    [Fact]
-    public async Task Returns_matching_memories_after_store()
-    {
-        await _store.StoreAsync("Akka.NET clustering guide", "Use cluster sharding for entity distribution.", ["reference", "akka"], CancellationToken.None);
-
-        var tool = new SearchMemoriesTool(_store);
-
-        var result = await tool.ExecuteAsync(
-            new Dictionary<string, object?> { ["Query"] = "akka clustering" },
-            CancellationToken.None);
-
-        Assert.Contains("Akka.NET clustering guide", result);
-        Assert.Contains("cluster sharding", result);
-    }
-
-    [Fact]
-    public void MemoryIndexContextLayer_file_backed_references_skill()
+    public void FileBacked_references_four_tools_and_two_phase_pattern()
     {
         var layer = new MemoryIndexContextLayer();
         layer.Update(MemoryContextState.FileBacked);
@@ -65,14 +18,32 @@ public class SearchMemoriesToolTests : IDisposable
         var content = layer.GetContextLayer();
 
         Assert.Contains("file-backed", content);
-        Assert.Contains("RETRIEVE", content);
-        Assert.Contains("SAVE", content);
+        Assert.Contains("find_memories", content);
+        Assert.Contains("get_memories", content);
+        Assert.Contains("store_memory", content);
+        Assert.Contains("update_memory", content);
+        Assert.Contains("Two-Phase Retrieval", content);
         Assert.Contains("memory-usage", content);
         Assert.DoesNotContain("NOT AVAILABLE", content);
     }
 
     [Fact]
-    public void MemoryIndexContextLayer_memorizer_connected_references_skills()
+    public void FileBacked_includes_quality_guidance()
+    {
+        var layer = new MemoryIndexContextLayer();
+        layer.Update(MemoryContextState.FileBacked);
+
+        var content = layer.GetContextLayer();
+
+        // Quality bar examples
+        Assert.Contains("BAD title", content);
+        Assert.Contains("GOOD", content);
+        Assert.Contains("WHY", content);
+        Assert.Contains("markdown", content);
+    }
+
+    [Fact]
+    public void MemorizerConnected_references_four_tools_and_subagent_latency()
     {
         var layer = new MemoryIndexContextLayer();
         layer.Update(MemoryContextState.MemorizerConnected);
@@ -80,16 +51,32 @@ public class SearchMemoriesToolTests : IDisposable
         var content = layer.GetContextLayer();
 
         Assert.Contains("Memorizer connected", content);
-        Assert.Contains("RETRIEVE", content);
-        Assert.Contains("SAVE", content);
-        Assert.Contains("curation subagents", content);
+        Assert.Contains("find_memories", content);
+        Assert.Contains("get_memories", content);
+        Assert.Contains("store_memory", content);
+        Assert.Contains("update_memory", content);
+        Assert.Contains("Two-Phase Retrieval", content);
+        Assert.Contains("curation subagent", content);
         Assert.Contains("memory-usage", content);
         Assert.Contains("memorizer-usage", content);
         Assert.DoesNotContain("NOT AVAILABLE", content);
     }
 
     [Fact]
-    public void MemoryIndexContextLayer_memorizer_disconnected_shows_troubleshooting()
+    public void MemorizerConnected_includes_quality_guidance()
+    {
+        var layer = new MemoryIndexContextLayer();
+        layer.Update(MemoryContextState.MemorizerConnected);
+
+        var content = layer.GetContextLayer();
+
+        Assert.Contains("BAD title", content);
+        Assert.Contains("GOOD", content);
+        Assert.Contains("WHY", content);
+    }
+
+    [Fact]
+    public void MemorizerDisconnected_shows_troubleshooting()
     {
         var layer = new MemoryIndexContextLayer();
         layer.Update(MemoryContextState.MemorizerDisconnected);
