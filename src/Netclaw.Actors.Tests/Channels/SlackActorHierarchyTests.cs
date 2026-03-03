@@ -1,4 +1,5 @@
 using Akka.Actor;
+using Akka.Configuration;
 using Akka.Hosting;
 using Akka.Hosting.TestKit;
 using Microsoft.Extensions.DependencyInjection;
@@ -13,6 +14,11 @@ namespace Netclaw.Actors.Tests.Channels;
 
 public sealed class SlackActorHierarchyTests(ITestOutputHelper output) : TestKit(output: output)
 {
+    // Windows CI runners (2 vCPU) can starve the thread pool when multiple
+    // TestKit hosts run in parallel, causing the default 3s timeout to flake.
+    protected override Config? Config =>
+        ConfigurationFactory.ParseString("akka.test.default-timeout = 5s");
+
     protected override void ConfigureServices(HostBuilderContext context, IServiceCollection services)
     {
     }
