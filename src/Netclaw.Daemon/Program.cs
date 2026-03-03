@@ -346,7 +346,8 @@ static void ConfigureDaemonServices(
     if (!File.Exists(paths.SoulPath) && !File.Exists(paths.PersonalityPath))
         File.WriteAllText(paths.SoulPath,
             "You are Netclaw, a helpful homelab operations assistant. "
-            + "Be concise and direct.");
+            + "Be concise and direct. Act autonomously — use your tools to do things "
+            + "rather than telling the user how.");
     var promptProvider = new FileSystemPromptProvider(paths);
     services.AddSingleton<ISystemPromptProvider>(promptProvider);
 

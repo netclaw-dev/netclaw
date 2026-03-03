@@ -11,12 +11,16 @@ public static partial class SkillScanner
 {
     private const int MaxMetadataLines = 20;
     private const int MaxDescriptionLength = 200;
+    private const int MaxTriggersLength = 300;
 
     [GeneratedRegex(@"^#\s+(.+)$")]
     private static partial Regex HeadingRegex();
 
     [GeneratedRegex(@"<!--\s*description:\s*(.+?)\s*-->")]
     private static partial Regex DescriptionCommentRegex();
+
+    [GeneratedRegex(@"<!--\s*triggers:\s*(.+?)\s*-->")]
+    private static partial Regex TriggersCommentRegex();
 
     /// <summary>
     /// Scan the skills directory and return metadata for each <c>.md</c> file found.
@@ -53,6 +57,7 @@ public static partial class SkillScanner
 
         string? displayName = null;
         string? description = null;
+        string? triggers = null;
 
         try
         {
@@ -73,6 +78,17 @@ public static partial class SkillScanner
                     if (descMatch.Success)
                     {
                         description = Truncate(descMatch.Groups[1].Value, MaxDescriptionLength);
+                        continue;
+                    }
+                }
+
+                // Check for <!-- triggers: ... --> comment
+                if (triggers is null)
+                {
+                    var trigMatch = TriggersCommentRegex().Match(trimmed);
+                    if (trigMatch.Success)
+                    {
+                        triggers = Truncate(trigMatch.Groups[1].Value, MaxTriggersLength);
                         continue;
                     }
                 }
@@ -126,7 +142,10 @@ public static partial class SkillScanner
             DisplayName: displayName,
             Description: description,
             FilePath: filePath,
-            Category: category);
+            Category: category)
+        {
+            Triggers = triggers
+        };
     }
 
     private static string TitleCase(string kebabName)

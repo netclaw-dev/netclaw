@@ -113,4 +113,40 @@ public class SkillScannerTests : IDisposable
         Assert.Single(result);
         Assert.Equal("My Cool Tool", result[0].DisplayName);
     }
+
+    [Fact]
+    public void Extracts_triggers_comment()
+    {
+        File.WriteAllText(Path.Combine(_skillsDir, "diagnostics.md"),
+            """
+            # Diagnostics
+            <!-- description: Check system health -->
+            <!-- triggers: connection failure | session timeout | missing tools -->
+
+            ## Details
+            Run diagnostics when things break.
+            """);
+
+        var result = SkillScanner.Scan(_skillsDir);
+
+        Assert.Single(result);
+        Assert.Equal("connection failure | session timeout | missing tools", result[0].Triggers);
+    }
+
+    [Fact]
+    public void Triggers_is_null_when_no_triggers_comment()
+    {
+        File.WriteAllText(Path.Combine(_skillsDir, "simple.md"),
+            """
+            # Simple Skill
+            <!-- description: A skill without triggers -->
+
+            Just a plain skill.
+            """);
+
+        var result = SkillScanner.Scan(_skillsDir);
+
+        Assert.Single(result);
+        Assert.Null(result[0].Triggers);
+    }
 }
