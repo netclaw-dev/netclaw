@@ -1,3 +1,13 @@
+#### 0.1.3 2026-03-04 ####
+
+Netclaw v0.1.3 — OpenAI OAuth, CLI, Diagnostics, and Reliability Fixes
+
+* Added OpenAI OAuth device flow authentication (RFC 8628) — operators can now authenticate with OpenAI interactively via browser instead of managing API keys manually. Available in the Provider Manager TUI, Init Wizard, and via `netclaw provider add <name> openai --auth oauth-device` from the CLI. OAuth tokens are stored encrypted at rest.
+* Added `netclaw --version`, `netclaw version`, and `netclaw -V` commands to print the CLI binary version without a running daemon.
+* Fixed false-positive doctor errors caused by stale crash logs when the daemon has since been restarted — `SqliteProvisioningDoctorCheck` now compares crash log timestamps against the PID file before reporting an error.
+* Fixed session title generation failures with thinking models (e.g. `qwen3.5:9b`) by increasing the generation timeout from 10s to 30s and routing failures through the daemon log instead of silently discarding them. ([#84](https://github.com/Aaronontheweb/netclaw/issues/84))
+* Fixed auto-update checks producing false "up to date" results by pointing the binary update manifest at `https://releases.netclaw.dev/manifest.json`.
+
 #### 0.1.2 2026-03-04 ####
 
 Netclaw v0.1.2 — Daemon Startup and Diagnostics Hardening
