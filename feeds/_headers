@@ -16,6 +16,15 @@
   Cache-Control: public, max-age=300
   Content-Type: application/json
 
+# Binary manifest signature and public key
+/releases/manifest.json.sig
+  Cache-Control: public, max-age=300
+  Content-Type: text/plain
+
+/releases/manifest.pub
+  Cache-Control: public, max-age=300
+  Content-Type: text/plain
+
 # Install scripts — short TTL to pick up script improvements
 /install.sh
   Cache-Control: public, max-age=300

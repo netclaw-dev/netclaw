@@ -245,6 +245,21 @@ jobs:
         pattern: checksums-*
         merge-multiple: true
 
+    - name: Fetch existing manifest
+      run: |
+        mkdir -p ./feeds/releases
+        status=$(curl -sSL -o ./feeds/releases/manifest.json -w "%{http_code}" https://feeds.netclaw.dev/releases/manifest.json || true)
+
+        if [ "$status" = "200" ]; then
+          echo "Fetched existing manifest from feeds.netclaw.dev"
+        elif [ "$status" = "404" ]; then
+          echo "No existing manifest published yet (first release)"
+          rm -f ./feeds/releases/manifest.json
+        else
+          echo "Failed to fetch existing manifest (HTTP $status)" >&2
+          exit 1
+        fi
+
     - name: Generate release manifest
       run: |
         chmod +x ./feeds/scripts/generate-release-manifest.sh
@@ -252,6 +267,39 @@ jobs:
           "${{ github.ref_name }}" \
           ./checksums \
           "https://releases.netclaw.dev"
+
+    - name: Install minisign
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y minisign
+
+    - name: Restore manifest signing key
+      env:
+        MANIFEST_SIGNING_KEY_B64: ${{ secrets.MANIFEST_SIGNING_KEY_B64 }}
+      run: |
+        if [ -z "$MANIFEST_SIGNING_KEY_B64" ]; then
+          echo "MANIFEST_SIGNING_KEY_B64 secret is not set" >&2
+          exit 1
+        fi
+
+        umask 077
+        echo "$MANIFEST_SIGNING_KEY_B64" | base64 -d > /tmp/netclaw-manifest.key
+        chmod 600 /tmp/netclaw-manifest.key
+
+    - name: Sign manifest
+      run: |
+        minisign -S \
+          -s /tmp/netclaw-manifest.key \
+          -m ./feeds/releases/manifest.json \
+          -x ./feeds/releases/manifest.json.sig \
+          -t "netclaw release ${{ github.ref_name }}"
+
+    - name: Verify manifest signature
+      run: |
+        minisign -V \
+          -p ./feeds/releases/manifest.pub \
+          -m ./feeds/releases/manifest.json \
+          -x ./feeds/releases/manifest.json.sig
 
     - name: Copy install scripts to feeds
       run: |
@@ -264,3 +312,7 @@ jobs:
         apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         command: pages deploy feeds --project-name=netclaw-feeds
+
+    - name: Cleanup signing key
+      if: always()
+      run: rm -f /tmp/netclaw-manifest.key
