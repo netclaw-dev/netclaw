@@ -8,7 +8,7 @@
     <Nullable>enable</Nullable>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <VersionPrefix>0.1.0</VersionPrefix>
-    <PackageReleaseNotes>See RELEASE_NOTES.md</PackageReleaseNotes>
+    <PackageReleaseNotes>Netclaw v0.1.0 — Initial Release. Actor-based session engine on Slack Socket Mode with SQLite persistence, extractive context compaction, MCP tool integration with OAuth 2.1, multi-provider LLM support (OpenRouter/Ollama), file-based memory, binary distribution feed with auto-update, secrets protection with encryption at rest, and a full init wizard and doctor CLI.</PackageReleaseNotes>
   </PropertyGroup>
   <PropertyGroup>
     <NetCoreTestVersion>net10.0</NetCoreTestVersion>
