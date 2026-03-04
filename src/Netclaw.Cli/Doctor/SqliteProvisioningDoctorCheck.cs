@@ -45,6 +45,14 @@ public sealed class SqliteProvisioningDoctorCheck(NetclawPaths paths) : IDoctorC
                 "No SQLite provisioning failure found in the latest daemon crash log."));
         }
 
+        // If the daemon was restarted after the crash, the crash log is stale.
+        if (IsCrashLogStale(latestCrash, paths.PidFilePath))
+        {
+            return Task.FromResult(DoctorCheckResult.Pass(
+                CheckName,
+                $"SQLite crash detected ({latestCrash.Name}) but daemon has been restarted since."));
+        }
+
         var occurredAt = TryParseCrashTimestamp(latestCrash.Name)
             ?.ToString("u", CultureInfo.InvariantCulture)
             ?? latestCrash.LastWriteTimeUtc.ToString("u", CultureInfo.InvariantCulture);
@@ -90,6 +98,16 @@ public sealed class SqliteProvisioningDoctorCheck(NetclawPaths paths) : IDoctorC
             || crashText.Contains("SQLitePCL", StringComparison.Ordinal)
             || crashText.Contains("e_sqlite3", StringComparison.Ordinal)
             || crashText.Contains("SchemaMigrator.MigrateAsync", StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Returns true if the PID file was written after the crash log, meaning the daemon
+    /// was restarted since the crash and the crash log is stale.
+    /// </summary>
+    private static bool IsCrashLogStale(FileInfo crashLog, string pidFilePath)
+    {
+        var pidFile = new FileInfo(pidFilePath);
+        return pidFile.Exists && pidFile.LastWriteTimeUtc > crashLog.LastWriteTimeUtc;
     }
 
     private static DateTimeOffset? TryParseCrashTimestamp(string fileName)
