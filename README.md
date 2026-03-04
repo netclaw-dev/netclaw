@@ -23,7 +23,43 @@ Netclaw uses a **daemon + thin client** architecture:
 - A local [Ollama](https://ollama.com/) instance (default provider), or an
   OpenRouter API key
 
-### 1. Build and publish
+### 1. Install prebuilt binaries (release feed)
+
+Linux (installs CLI + daemon to `~/.netclaw/bin` by default):
+
+```bash
+curl -sSL https://feeds.netclaw.dev/install.sh | bash
+```
+
+Common Linux variants:
+
+```bash
+# Install only the CLI
+curl -sSL https://feeds.netclaw.dev/install.sh | bash -s -- cli
+
+# Install only the daemon
+curl -sSL https://feeds.netclaw.dev/install.sh | bash -s -- daemon
+
+# Pin a specific version
+NETCLAW_VERSION=0.1.0 curl -sSL https://feeds.netclaw.dev/install.sh | bash
+```
+
+Windows (installs to `%LOCALAPPDATA%\Programs\netclaw` by default):
+
+```powershell
+iwr -useb https://feeds.netclaw.dev/install.ps1 | iex
+```
+
+To pass `-Component`, `-InstallDir`, or `-Version` on Windows, save and run
+the script locally:
+
+```powershell
+$script = Join-Path $env:TEMP "netclaw-install.ps1"
+iwr -useb https://feeds.netclaw.dev/install.ps1 -OutFile $script
+& $script -Component all -Version 0.1.0
+```
+
+### 2. Build and publish (from source)
 
 ```bash
 # Build everything
@@ -34,7 +70,7 @@ dotnet publish src/Netclaw.Daemon/Netclaw.Daemon.csproj -c Release -o ./out
 dotnet publish src/Netclaw.Cli/Netclaw.Cli.csproj -c Release -o ./out
 ```
 
-### 2. Make the CLI available
+### 3. Make the CLI available
 
 Either add the output folder to your PATH:
 
@@ -49,7 +85,7 @@ export NETCLAW_DAEMON_PATH="$PWD/out/netclawd"
 alias netclaw="$PWD/out/netclaw"
 ```
 
-### 3. Configure an LLM provider
+### 4. Configure an LLM provider
 
 Run the guided setup wizard:
 
@@ -107,14 +143,14 @@ export NETCLAW_Providers__local-ollama__Endpoint=http://localhost:11434
 export NETCLAW_Models__Main__ModelId=qwen3:8b
 ```
 
-### 4. Validate configuration
+### 5. Validate configuration
 
 ```bash
 netclaw doctor          # Check config schema, provider connectivity, secrets
 netclaw doctor --fix    # Auto-apply safe fixes
 ```
 
-### 5. Run
+### 6. Run
 
 ```bash
 # Start the daemon (background process)
