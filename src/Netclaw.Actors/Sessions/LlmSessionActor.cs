@@ -612,18 +612,20 @@ public sealed class LlmSessionActor : ReceivePersistentActor
         var history = _state.History;
         var self = Self;
         var client = _compactionClient;
+        var log = _log;
 
-        _ = GenerateTitleAsync(client, history, self);
+        _ = GenerateTitleAsync(client, history, self, log);
     }
 
     private static async Task GenerateTitleAsync(
         IChatClient client,
         IReadOnlyList<SerializableChatMessage> history,
-        IActorRef self)
+        IActorRef self,
+        ILoggingAdapter log)
     {
         try
         {
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
             var messages = new List<AiChatMessage>
             {
                 new(Microsoft.Extensions.AI.ChatRole.User,
@@ -631,12 +633,19 @@ public sealed class LlmSessionActor : ReceivePersistentActor
             };
             var response = await client.GetResponseAsync(messages, cancellationToken: cts.Token);
             var title = response.Messages[^1].Text ?? string.Empty;
+
+            if (string.IsNullOrWhiteSpace(title))
+            {
+                log.Warning("Sidecar title generation returned null/whitespace text");
+                return;
+            }
+
             self.Tell(new TitleGenerationCompleted { Title = title });
         }
         catch (Exception ex)
         {
             // Title generation is best-effort — log and move on
-            Trace.TraceWarning("Sidecar title generation failed: {0}", ex.Message);
+            log.Warning("Sidecar title generation failed: {0}", ex.Message);
         }
     }
 
