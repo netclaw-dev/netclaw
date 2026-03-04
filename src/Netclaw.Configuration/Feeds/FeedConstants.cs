@@ -2,13 +2,12 @@ namespace Netclaw.Configuration.Feeds;
 
 /// <summary>
 /// Compile-time constants for the Netclaw feed infrastructure.
-/// Feed URLs are not user-configurable in MVP — they point to the
-/// project-owned CDN at feeds.netclaw.dev.
+/// Feed URLs are not user-configurable in MVP.
 /// </summary>
 public static class FeedConstants
 {
     /// <summary>
-    /// Base URL for the Netclaw feeds CDN (Cloudflare Pages).
+    /// Base URL for the system skills feed (Cloudflare Pages).
     /// </summary>
     public const string FeedBaseUrl = "https://feeds.netclaw.dev";
 
@@ -20,9 +19,9 @@ public static class FeedConstants
 
     /// <summary>
     /// URL for the binary releases manifest.
+    /// Binary assets are hosted on the dedicated releases domain, not the skills feed domain.
     /// </summary>
-    public const string BinaryManifestUrl =
-        $"{FeedBaseUrl}/releases/manifest.json";
+    public const string BinaryManifestUrl = "https://releases.netclaw.dev/manifest.json";
 
     /// <summary>
     /// HTTP timeout for feed manifest and skill downloads.
