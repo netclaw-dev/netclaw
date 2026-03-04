@@ -23,8 +23,8 @@ public class BraveSearchBackendTests
         var results = BraveSearchBackend.ParseResults(json, 30);
 
         var first = results[0];
-        Assert.Contains("akka.net", first.Url);
-        Assert.Contains("akkadotnet", first.Title.ToLowerInvariant());
+        Assert.Contains("akka.net", first.Url, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("akkadotnet", first.Title, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -73,11 +73,11 @@ public class BraveSearchBackendTests
 
         var first = results[0];
         // Fixture description contains "<strong>a .NET port...</strong>" and "&amp;"
-        Assert.DoesNotContain("<strong>", first.Snippet);
-        Assert.DoesNotContain("</strong>", first.Snippet);
-        Assert.DoesNotContain("&amp;", first.Snippet);
+        Assert.DoesNotContain("<strong>", first.Snippet, StringComparison.Ordinal);
+        Assert.DoesNotContain("</strong>", first.Snippet, StringComparison.Ordinal);
+        Assert.DoesNotContain("&amp;", first.Snippet, StringComparison.Ordinal);
         // Verify the decoded content is present
-        Assert.Contains("a .NET port", first.Snippet);
+        Assert.Contains("a .NET port", first.Snippet, StringComparison.Ordinal);
     }
 
     [Fact]

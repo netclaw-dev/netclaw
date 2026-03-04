@@ -331,9 +331,11 @@ public sealed partial class FileMemoryStore
         return $"{date:yyyy-MM-dd}-{kebab}.md";
     }
 
-    private static string EscapeYamlString(string value) => value.Replace("\"", "\\\"");
+    private static string EscapeYamlString(string value)
+        => value.Replace("\"", "\\\"", StringComparison.Ordinal);
 
-    private static string EscapeMarkdownPipe(string value) => value.Replace("|", "\\|");
+    private static string EscapeMarkdownPipe(string value)
+        => value.Replace("|", "\\|", StringComparison.Ordinal);
 
     private MemoryEntry? FindEntryById(string id)
     {

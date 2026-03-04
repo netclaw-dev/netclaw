@@ -131,7 +131,9 @@ public sealed class ToolRegistry
                 var nameLower = t.Tool.Name.ToLowerInvariant();
                 var descLower = t.Tool.Description.ToLowerInvariant();
 
-                return queryParts.Any(p => nameLower.Contains(p) || descLower.Contains(p));
+                return queryParts.Any(p =>
+                    nameLower.Contains(p, StringComparison.Ordinal)
+                    || descLower.Contains(p, StringComparison.Ordinal));
             })
             .Take(maxResults)
             .Select(t => t.Tool)

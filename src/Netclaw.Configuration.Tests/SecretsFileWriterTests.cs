@@ -29,7 +29,7 @@ public sealed class SecretsFileWriterTests : IDisposable
         SecretsFileWriter.Write(_secretsPath, json);
 
         Assert.True(File.Exists(_secretsPath));
-        Assert.Contains("key", File.ReadAllText(_secretsPath));
+        Assert.Contains("key", File.ReadAllText(_secretsPath), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -64,9 +64,9 @@ public sealed class SecretsFileWriterTests : IDisposable
         SecretsFileWriter.Write(_secretsPath, json, protector);
 
         var result = File.ReadAllText(_secretsPath);
-        Assert.DoesNotContain("sk-secret123", result);
-        Assert.DoesNotContain("tok-abc", result);
-        Assert.Contains("ENC:", result);
+        Assert.DoesNotContain("sk-secret123", result, StringComparison.Ordinal);
+        Assert.DoesNotContain("tok-abc", result, StringComparison.Ordinal);
+        Assert.Contains("ENC:", result, StringComparison.Ordinal);
     }
 
     [Fact]

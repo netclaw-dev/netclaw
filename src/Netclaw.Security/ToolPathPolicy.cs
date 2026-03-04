@@ -246,11 +246,11 @@ public sealed class ToolPathPolicy
         if (token.StartsWith("-", StringComparison.Ordinal))
             return false;
 
-        return token.Contains('/')
-            || token.Contains('\\')
+        return token.Contains('/', StringComparison.Ordinal)
+            || token.Contains('\\', StringComparison.Ordinal)
             || token.StartsWith(".", StringComparison.Ordinal)
             || token.StartsWith("~", StringComparison.Ordinal)
-            || token.Contains(':')
+            || token.Contains(':', StringComparison.Ordinal)
             || token.EndsWith(".json", StringComparison.OrdinalIgnoreCase);
     }
 

@@ -26,7 +26,7 @@ public sealed class DataProtectionSecretsProtectorTests : IDisposable
     public void Protect_returns_ENC_prefixed_value()
     {
         var result = _protector.Protect("my-secret");
-        Assert.StartsWith("ENC:", result);
+        Assert.StartsWith("ENC:", result, StringComparison.Ordinal);
     }
 
     [Fact]

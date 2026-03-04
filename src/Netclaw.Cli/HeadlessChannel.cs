@@ -75,7 +75,7 @@ public sealed class HeadlessChannel : IChannel
 
             // Set up session log file
             _paths.EnsureDirectoriesExist();
-            var logFileName = $"{sessionId.Value.Replace("/", "-")}.log";
+            var logFileName = $"{sessionId.Value.Replace("/", "-", StringComparison.Ordinal)}.log";
             var logPath = Path.Combine(_paths.LogsDirectory, logFileName);
             await using var logWriter = new StreamWriter(logPath, append: false) { AutoFlush = true };
 

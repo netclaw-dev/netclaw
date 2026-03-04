@@ -81,7 +81,8 @@ internal sealed class McpOAuthService
             {
                 foreach (var auth in probeResponse.Headers.WwwAuthenticate)
                 {
-                    if (auth.Parameter is not null && auth.Parameter.Contains("resource_metadata"))
+                    if (auth.Parameter is not null
+                        && auth.Parameter.Contains("resource_metadata", StringComparison.Ordinal))
                     {
                         resourceMetadataUri = ExtractQuotedParam(auth.Parameter, "resource_metadata");
                     }
@@ -346,7 +347,7 @@ internal sealed class McpOAuthService
             if (!response.IsSuccessStatusCode)
             {
                 var errorBody = await response.Content.ReadAsStringAsync(ct);
-                if (errorBody.Contains("invalid_grant"))
+                if (errorBody.Contains("invalid_grant", StringComparison.Ordinal))
                 {
                     _logger.LogWarning("Refresh token rejected for MCP server '{Name}' (invalid_grant). Re-authorization required.", serverName);
                     _tokens.TryRemove(serverName, out _);

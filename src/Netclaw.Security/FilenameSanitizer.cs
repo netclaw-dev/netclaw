@@ -30,7 +30,7 @@ public static partial class FilenameSanitizer
         sanitized = PlatformProblemCharRegex().Replace(sanitized, "_");
 
         // Remove path traversal sequences
-        sanitized = sanitized.Replace("..", "_");
+        sanitized = sanitized.Replace("..", "_", StringComparison.Ordinal);
 
         // Trim whitespace and dots from ends
         sanitized = sanitized.Trim().Trim('.');

@@ -40,7 +40,7 @@ public static partial class ModelIdNormalizer
         var working = modelId;
 
         // Strip Ollama tag suffixes (:latest, :7b, :q4_0, etc.)
-        var colonIndex = working.IndexOf(':');
+        var colonIndex = working.IndexOf(':', StringComparison.Ordinal);
         if (colonIndex > 0)
         {
             var stripped = working[..colonIndex];
@@ -57,7 +57,7 @@ public static partial class ModelIdNormalizer
         }
 
         // If no slash (not already prefixed), try adding known provider prefixes
-        if (!working.Contains('/'))
+        if (!working.Contains('/', StringComparison.Ordinal))
         {
             foreach (var (prefix, provider) in KnownPrefixes)
             {

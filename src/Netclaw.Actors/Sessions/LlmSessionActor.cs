@@ -1398,10 +1398,11 @@ public sealed class LlmSessionActor : ReceivePersistentActor
         foreach (var line in searchToolOutput.Split('\n'))
         {
             var trimmed = line.TrimStart();
-            if (!trimmed.Contains(" — "))
+            var separatorIndex = trimmed.IndexOf(" — ", StringComparison.Ordinal);
+            if (separatorIndex < 0)
                 continue;
 
-            var toolName = trimmed.Split(" — ")[0].Trim();
+            var toolName = trimmed[..separatorIndex].Trim();
             if (string.IsNullOrEmpty(toolName))
                 continue;
 

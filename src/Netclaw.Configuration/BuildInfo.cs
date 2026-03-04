@@ -58,7 +58,7 @@ public static class BuildInfo
         if (informational is null)
             return "unknown";
 
-        var plusIndex = informational.IndexOf('+');
+        var plusIndex = informational.IndexOf('+', StringComparison.Ordinal);
         if (plusIndex < 0 || plusIndex + 1 >= informational.Length)
             return "unknown";
 

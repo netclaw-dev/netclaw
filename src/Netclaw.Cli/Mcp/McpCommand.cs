@@ -101,7 +101,7 @@ internal static class McpCommand
             if (args[i] == "--env" && i + 1 < args.Length)
             {
                 var kv = args[++i];
-                var eqIdx = kv.IndexOf('=');
+                var eqIdx = kv.IndexOf('=', StringComparison.Ordinal);
                 if (eqIdx > 0)
                     envVars[kv[..eqIdx]] = kv[(eqIdx + 1)..];
                 continue;
@@ -110,7 +110,7 @@ internal static class McpCommand
             if (args[i] == "--header" && i + 1 < args.Length)
             {
                 var hv = args[++i];
-                var colonIdx = hv.IndexOf(':');
+                var colonIdx = hv.IndexOf(':', StringComparison.Ordinal);
                 if (colonIdx > 0)
                     headers[hv[..colonIdx].Trim()] = hv[(colonIdx + 1)..].Trim();
                 continue;

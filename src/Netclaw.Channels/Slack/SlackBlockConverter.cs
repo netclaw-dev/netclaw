@@ -50,12 +50,12 @@ public static partial class SlackBlockConverter
             }
 
             // Code block: ```
-            if (trimmed.StartsWith("```"))
+            if (trimmed.StartsWith("```", StringComparison.Ordinal))
             {
                 FlushRichText(blocks, currentRichTextElements);
                 i++; // skip opening ```
                 var codeLines = new List<string>();
-                while (i < lines.Length && !lines[i].TrimStart().StartsWith("```"))
+                while (i < lines.Length && !lines[i].TrimStart().StartsWith("```", StringComparison.Ordinal))
                 {
                     codeLines.Add(lines[i]);
                     i++;
@@ -72,7 +72,7 @@ public static partial class SlackBlockConverter
             }
 
             // Blockquote: > text
-            if (trimmed.StartsWith("> "))
+            if (trimmed.StartsWith("> ", StringComparison.Ordinal))
             {
                 FlushRichText(blocks, currentRichTextElements);
                 var quoteText = trimmed[2..];
@@ -269,14 +269,15 @@ public static partial class SlackBlockConverter
 
     private static bool IsBulletListItem(string trimmed)
     {
-        return (trimmed.StartsWith("- ") || trimmed.StartsWith("* "))
-            && !trimmed.StartsWith("**"); // Don't match bold markers
+        return (trimmed.StartsWith("- ", StringComparison.Ordinal)
+                || trimmed.StartsWith("* ", StringComparison.Ordinal))
+            && !trimmed.StartsWith("**", StringComparison.Ordinal); // Don't match bold markers
     }
 
     private static string StripBulletPrefix(string trimmed)
     {
-        if (trimmed.StartsWith("- ")) return trimmed[2..];
-        if (trimmed.StartsWith("* ")) return trimmed[2..];
+        if (trimmed.StartsWith("- ", StringComparison.Ordinal)) return trimmed[2..];
+        if (trimmed.StartsWith("* ", StringComparison.Ordinal)) return trimmed[2..];
         return trimmed;
     }
 

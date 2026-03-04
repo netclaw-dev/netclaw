@@ -21,8 +21,8 @@ public class SearXngBackendTests
         var results = SearXngBackend.ParseResults(json, 30);
 
         var first = results[0];
-        Assert.Contains("akka.net", first.Url);
-        Assert.Contains("akkadotnet", first.Title.ToLowerInvariant());
+        Assert.Contains("akka.net", first.Url, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("akkadotnet", first.Title, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
