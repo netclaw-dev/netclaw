@@ -1,7 +1,7 @@
 # Netclaw Windows install script
 #
 # Usage:
-#   iwr -useb https://feeds.netclaw.dev/install.ps1 | iex
+#   iwr -useb https://releases.netclaw.dev/install.ps1 | iex
 #   .\install.ps1 -Component cli
 #   .\install.ps1 -Component daemon
 #   .\install.ps1 -InstallDir C:\tools\netclaw
@@ -17,7 +17,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$ManifestUrl = "https://feeds.netclaw.dev/releases/manifest.json"
+$ManifestUrl = "https://releases.netclaw.dev/manifest.json"
 $DefaultInstallDir = Join-Path $env:LOCALAPPDATA "Programs\netclaw"
 
 if (-not $InstallDir) {

@@ -2,10 +2,10 @@
 # Netclaw install script
 #
 # Usage:
-#   curl -sSL https://feeds.netclaw.dev/install.sh | bash
-#   curl -sSL https://feeds.netclaw.dev/install.sh | bash -s -- cli      # CLI only
-#   curl -sSL https://feeds.netclaw.dev/install.sh | bash -s -- daemon   # Daemon only
-#   INSTALL_DIR=/opt/netclaw curl -sSL https://feeds.netclaw.dev/install.sh | bash
+#   curl -sSL https://releases.netclaw.dev/install.sh | bash
+#   curl -sSL https://releases.netclaw.dev/install.sh | bash -s -- cli      # CLI only
+#   curl -sSL https://releases.netclaw.dev/install.sh | bash -s -- daemon   # Daemon only
+#   INSTALL_DIR=/opt/netclaw curl -sSL https://releases.netclaw.dev/install.sh | bash
 #
 # Environment variables:
 #   INSTALL_DIR   — Install directory (default: ~/.netclaw/bin)
@@ -13,7 +13,7 @@
 
 set -euo pipefail
 
-MANIFEST_URL="https://feeds.netclaw.dev/releases/manifest.json"
+MANIFEST_URL="https://releases.netclaw.dev/manifest.json"
 
 # ── Argument parsing ──
 COMPONENT="${1:-all}"  # "all", "cli", or "daemon"

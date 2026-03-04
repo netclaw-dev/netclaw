@@ -28,26 +28,26 @@ Netclaw uses a **daemon + thin client** architecture:
 Linux (installs CLI + daemon to `~/.netclaw/bin` by default):
 
 ```bash
-curl -sSL https://feeds.netclaw.dev/install.sh | bash
+curl -sSL https://releases.netclaw.dev/install.sh | bash
 ```
 
 Common Linux variants:
 
 ```bash
 # Install only the CLI
-curl -sSL https://feeds.netclaw.dev/install.sh | bash -s -- cli
+curl -sSL https://releases.netclaw.dev/install.sh | bash -s -- cli
 
 # Install only the daemon
-curl -sSL https://feeds.netclaw.dev/install.sh | bash -s -- daemon
+curl -sSL https://releases.netclaw.dev/install.sh | bash -s -- daemon
 
 # Pin a specific version
-NETCLAW_VERSION=0.1.0 curl -sSL https://feeds.netclaw.dev/install.sh | bash
+NETCLAW_VERSION=0.1.0 curl -sSL https://releases.netclaw.dev/install.sh | bash
 ```
 
 Windows (installs to `%LOCALAPPDATA%\Programs\netclaw` by default):
 
 ```powershell
-iwr -useb https://feeds.netclaw.dev/install.ps1 | iex
+iwr -useb https://releases.netclaw.dev/install.ps1 | iex
 ```
 
 To pass `-Component`, `-InstallDir`, or `-Version` on Windows, save and run
@@ -55,7 +55,7 @@ the script locally:
 
 ```powershell
 $script = Join-Path $env:TEMP "netclaw-install.ps1"
-iwr -useb https://feeds.netclaw.dev/install.ps1 -OutFile $script
+iwr -useb https://releases.netclaw.dev/install.ps1 -OutFile $script
 & $script -Component all -Version 0.1.0
 ```
 
