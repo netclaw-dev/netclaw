@@ -7,8 +7,8 @@
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
-    <VersionPrefix>0.1.2</VersionPrefix>
-    <PackageReleaseNotes>Netclaw v0.1.2 — Daemon startup and diagnostics hardening. Includes SQLite native library self-extract for single-file daemon builds and improved doctor handling for encrypted or corrupted Slack secrets.</PackageReleaseNotes>
+    <VersionPrefix>0.1.3</VersionPrefix>
+    <PackageReleaseNotes>Netclaw v0.1.3 — CLI, diagnostics, and reliability fixes. Adds --version CLI command, fixes stale crash log false positives in doctor, fixes session title generation timeouts with thinking models, and corrects the binary update manifest endpoint.</PackageReleaseNotes>
   </PropertyGroup>
   <PropertyGroup>
     <NetCoreTestVersion>net10.0</NetCoreTestVersion>
