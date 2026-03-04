@@ -98,10 +98,31 @@ internal static class ProviderCommand
             }
         }
 
-        // Handle --auth oauth-device explicitly
-        if (string.Equals(authFlag, "oauth-device", StringComparison.OrdinalIgnoreCase))
+        AuthMethod? requestedAuthMethod = null;
+        if (authFlag is not null)
         {
-            if (!descriptor.SupportedAuthMethods.Contains(AuthMethod.OAuthDevice))
+            if (string.Equals(authFlag, "oauth-device", StringComparison.OrdinalIgnoreCase))
+            {
+                requestedAuthMethod = AuthMethod.OAuthDevice;
+            }
+            else if (string.Equals(authFlag, "api-key", StringComparison.OrdinalIgnoreCase))
+            {
+                requestedAuthMethod = AuthMethod.ApiKey;
+            }
+            else
+            {
+                writer.WriteLine($"Error: Unknown auth method '{authFlag}'.");
+                writer.WriteLine("Auth methods: api-key, oauth-device");
+                return 1;
+            }
+        }
+
+        var supportedAuth = descriptor.SupportedAuthMethods;
+
+        // Handle --auth oauth-device explicitly
+        if (requestedAuthMethod == AuthMethod.OAuthDevice)
+        {
+            if (!supportedAuth.Contains(AuthMethod.OAuthDevice))
             {
                 writer.WriteLine($"Error: Provider '{type}' does not support OAuth device flow.");
                 return 1;
@@ -110,7 +131,13 @@ internal static class ProviderCommand
             return RunOAuthDeviceFlow(name, type, endpoint, descriptor, paths, writer);
         }
 
-        var supportedAuth = descriptor.SupportedAuthMethods;
+        if (requestedAuthMethod == AuthMethod.ApiKey && !supportedAuth.Contains(AuthMethod.ApiKey))
+        {
+            writer.WriteLine($"Error: Provider '{type}' does not support API key auth.");
+            return 1;
+        }
+
+        var forceApiKey = requestedAuthMethod == AuthMethod.ApiKey;
         var authMethod = AuthMethod.None;
 
         if (supportedAuth.Contains(AuthMethod.ApiKey) && apiKey is not null)
@@ -121,7 +148,7 @@ internal static class ProviderCommand
             && !supportedAuth.Contains(AuthMethod.None))
         {
             // OAuth-capable providers without --api-key: guide user to TUI or --auth
-            if (supportedAuth.Contains(AuthMethod.OAuthDevice))
+            if (supportedAuth.Contains(AuthMethod.OAuthDevice) && !forceApiKey)
             {
                 WriteProviderGuidance(descriptor, writer);
                 writer.WriteLine();
@@ -363,8 +390,8 @@ internal static class ProviderCommand
 
                 if (prop.Value.TryGetProperty("OAuthTokenExpiry", out var tokenExpiry))
                 {
-                    var expiryStr = tokenExpiry.GetString();
-                    if (expiryStr is not null && DateTimeOffset.TryParse(expiryStr, out var parsed))
+                    var expiryStr = ConfigFileHelper.DecryptIfEncrypted(paths, tokenExpiry.GetString());
+                    if (!string.IsNullOrWhiteSpace(expiryStr) && DateTimeOffset.TryParse(expiryStr, out var parsed))
                         entry.OAuthTokenExpiry = parsed;
                 }
             }

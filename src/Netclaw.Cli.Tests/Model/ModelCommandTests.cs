@@ -153,6 +153,42 @@ public sealed class ModelCommandTests : IDisposable
     }
 
     [Fact]
+    public async Task Discover_OAuthProvider_UsesOAuthAccessToken()
+    {
+        WriteConfig(new Dictionary<string, object>
+        {
+            ["configVersion"] = 1,
+            ["Providers"] = new Dictionary<string, object>
+            {
+                ["my-openai"] = new Dictionary<string, object>
+                {
+                    ["Type"] = "openai",
+                    ["Endpoint"] = "https://api.openai.com",
+                    ["AuthMethod"] = "OAuthDevice"
+                }
+            }
+        });
+
+        WriteSecrets(new Dictionary<string, object>
+        {
+            ["Providers"] = new Dictionary<string, object>
+            {
+                ["my-openai"] = new Dictionary<string, object>
+                {
+                    ["OAuthAccessToken"] = "oauth-access-token"
+                }
+            }
+        });
+
+        var exitCode = await ModelCommand.RunAsync(
+            ["model", "discover", "my-openai"],
+            _paths, _fakeProbe, output: _output);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal("oauth-access-token", _fakeProbe.LastApiKey);
+    }
+
+    [Fact]
     public async Task Discover_NonexistentProvider_ReturnsError()
     {
         var exitCode = await ModelCommand.RunAsync(
@@ -241,6 +277,12 @@ public sealed class ModelCommandTests : IDisposable
     private void WriteConfig(Dictionary<string, object> data)
     {
         File.WriteAllText(_paths.NetclawConfigPath,
+            JsonSerializer.Serialize(data, new JsonSerializerOptions { WriteIndented = true }));
+    }
+
+    private void WriteSecrets(Dictionary<string, object> data)
+    {
+        File.WriteAllText(_paths.SecretsPath,
             JsonSerializer.Serialize(data, new JsonSerializerOptions { WriteIndented = true }));
     }
 

@@ -292,7 +292,7 @@ public sealed class ModelManagerViewModel : ReactiveViewModel
         var result = await _probe.ProbeAsync(
             provider.Entry.Type,
             string.IsNullOrWhiteSpace(provider.Entry.Endpoint) ? null : provider.Entry.Endpoint,
-            provider.Entry.ApiKey?.Value,
+            provider.Entry.ApiKey?.Value ?? provider.Entry.OAuthAccessToken?.Value,
             ct);
 
         CancelProbe();

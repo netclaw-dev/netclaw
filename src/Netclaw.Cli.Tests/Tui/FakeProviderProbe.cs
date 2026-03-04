@@ -40,12 +40,18 @@ public sealed class FakeProviderProbe : IProviderProbe
     /// </summary>
     public string? LastProviderType { get; private set; }
 
+    /// <summary>
+    /// The credential value passed in the last call.
+    /// </summary>
+    public string? LastApiKey { get; private set; }
+
     public Task<ProviderProbeResult> ProbeAsync(
         string providerType, string? endpoint, string? apiKey,
         CancellationToken ct = default)
     {
         ProbeCallCount++;
         LastProviderType = providerType;
+        LastApiKey = apiKey;
         ProbedTypes.Add(providerType);
 
         var result = TypeResults.TryGetValue(providerType, out var typeResult)

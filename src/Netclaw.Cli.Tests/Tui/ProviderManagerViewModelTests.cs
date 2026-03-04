@@ -2,6 +2,7 @@ using System.Text.Json;
 using Netclaw.Cli.Provider;
 using Netclaw.Cli.Tui;
 using Netclaw.Configuration;
+using Netclaw.Configuration.Providers.OAuth;
 using Xunit;
 
 namespace Netclaw.Cli.Tests.Tui;
@@ -134,6 +135,41 @@ public sealed class ProviderManagerViewModelTests : IDisposable
         Assert.Contains("openrouter", _fakeProbe.ProbedTypes);
         Assert.Contains("ollama", _fakeProbe.ProbedTypes);
         Assert.Equal(2, _fakeProbe.ProbeCallCount);
+    }
+
+    [Fact]
+    public async Task EagerProbe_UsesOAuthAccessTokenWhenApiKeyMissing()
+    {
+        WriteConfig(new Dictionary<string, object>
+        {
+            ["configVersion"] = 1,
+            ["Providers"] = new Dictionary<string, object>
+            {
+                ["my-openai"] = new Dictionary<string, object>
+                {
+                    ["Type"] = "openai",
+                    ["Endpoint"] = "https://api.openai.com",
+                    ["AuthMethod"] = "OAuthDevice"
+                }
+            }
+        });
+
+        WriteSecrets(new Dictionary<string, object>
+        {
+            ["Providers"] = new Dictionary<string, object>
+            {
+                ["my-openai"] = new Dictionary<string, object>
+                {
+                    ["OAuthAccessToken"] = "oauth-access-token"
+                }
+            }
+        });
+
+        using var vm = CreateViewModel();
+        await ActivateAndProbeAsync(vm);
+
+        Assert.Equal("openai", _fakeProbe.LastProviderType);
+        Assert.Equal("oauth-access-token", _fakeProbe.LastApiKey);
     }
 
     [Fact]
@@ -410,6 +446,35 @@ public sealed class ProviderManagerViewModelTests : IDisposable
     }
 
     [Fact]
+    public async Task ConfirmAdd_OAuth_TokensPersistOnlyOnSave()
+    {
+        using var vm = CreateViewModel();
+        vm.NewProviderName = "my-openai";
+        vm.NewProviderType = "openai";
+        vm.NewAuthMethod = AuthMethod.OAuthDevice;
+        vm.NewEndpoint = "https://api.openai.com";
+        vm.OAuthResult = new OAuthDeviceFlowResult(
+            new SensitiveString("oauth-access-token"),
+            new SensitiveString("oauth-refresh-token"),
+            DateTimeOffset.UtcNow.AddHours(1));
+
+        Assert.False(File.Exists(_paths.SecretsPath));
+
+        vm.ConfirmAdd();
+        await vm.EagerProbeCompletion!.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.True(File.Exists(_paths.SecretsPath));
+
+        var secrets = JsonDocument.Parse(File.ReadAllText(_paths.SecretsPath));
+        var provider = secrets.RootElement
+            .GetProperty("Providers")
+            .GetProperty("my-openai");
+
+        Assert.StartsWith("ENC:", provider.GetProperty("OAuthAccessToken").GetString());
+        Assert.StartsWith("ENC:", provider.GetProperty("OAuthRefreshToken").GetString());
+    }
+
+    [Fact]
     public async Task RemoveProvider_ReferencedByModelRole_IsRejected()
     {
         WriteConfig(new Dictionary<string, object>
@@ -517,6 +582,12 @@ public sealed class ProviderManagerViewModelTests : IDisposable
     private void WriteConfig(Dictionary<string, object> data)
     {
         File.WriteAllText(_paths.NetclawConfigPath,
+            JsonSerializer.Serialize(data, new JsonSerializerOptions { WriteIndented = true }));
+    }
+
+    private void WriteSecrets(Dictionary<string, object> data)
+    {
+        File.WriteAllText(_paths.SecretsPath,
             JsonSerializer.Serialize(data, new JsonSerializerOptions { WriteIndented = true }));
     }
 }

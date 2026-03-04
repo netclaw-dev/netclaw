@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Netclaw.Cli.Provider;
 using Netclaw.Configuration;
+using Netclaw.Configuration.Secrets;
 using Xunit;
 
 namespace Netclaw.Cli.Tests.Provider;
@@ -101,6 +102,31 @@ public sealed class ProviderCommandTests : IDisposable
         // Verify provider loader decrypts back to usable plaintext
         var loaded = ProviderCommand.LoadProviders(_paths);
         Assert.Equal("sk-or-test-123", loaded["my-openrouter"].ApiKey?.Value);
+    }
+
+    [Fact]
+    public async Task Add_WithAuthApiKeyFlag_SucceedsForApiKeyProvider()
+    {
+        var exitCode = await ProviderCommand.RunAsync(
+            ["provider", "add", "my-openai", "openai", "--auth", "api-key", "--api-key", "sk-openai-test-123"],
+            _paths, output: _output);
+
+        Assert.Equal(0, exitCode);
+
+        var config = ReadConfigFile(_paths.NetclawConfigPath);
+        var provider = config.RootElement.GetProperty("Providers").GetProperty("my-openai");
+        Assert.Equal("ApiKey", provider.GetProperty("AuthMethod").GetString());
+    }
+
+    [Fact]
+    public async Task Add_WithUnknownAuthMethod_ReturnsError()
+    {
+        var exitCode = await ProviderCommand.RunAsync(
+            ["provider", "add", "my-openai", "openai", "--auth", "bogus-auth"],
+            _paths, output: _output);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("Unknown auth method", _output.ToString());
     }
 
     [Fact]
@@ -211,6 +237,45 @@ public sealed class ProviderCommandTests : IDisposable
         Assert.True(providers.ContainsKey("my-anthropic"));
         Assert.Equal("anthropic", providers["my-anthropic"].Type);
         Assert.Equal("sk-ant-test", providers["my-anthropic"].ApiKey?.Value);
+    }
+
+    [Fact]
+    public void LoadProviders_DecryptsEncryptedOAuthTokenExpiry()
+    {
+        WriteConfig(new Dictionary<string, object>
+        {
+            ["configVersion"] = 1,
+            ["Providers"] = new Dictionary<string, object>
+            {
+                ["my-openai"] = new Dictionary<string, object>
+                {
+                    ["Type"] = "openai",
+                    ["Endpoint"] = "https://api.openai.com",
+                    ["AuthMethod"] = "OAuthDevice"
+                }
+            }
+        });
+
+        var protector = SecretsProtection.CreateProtector(_paths);
+        var expiry = DateTimeOffset.Parse("2026-03-05T00:00:00+00:00").ToString("o");
+
+        WriteSecrets(new Dictionary<string, object>
+        {
+            ["Providers"] = new Dictionary<string, object>
+            {
+                ["my-openai"] = new Dictionary<string, object>
+                {
+                    ["OAuthAccessToken"] = protector.Protect("oauth-access-token"),
+                    ["OAuthTokenExpiry"] = protector.Protect(expiry)
+                }
+            }
+        });
+
+        var providers = ProviderCommand.LoadProviders(_paths);
+
+        Assert.True(providers.ContainsKey("my-openai"));
+        Assert.NotNull(providers["my-openai"].OAuthTokenExpiry);
+        Assert.Equal(DateTimeOffset.Parse(expiry), providers["my-openai"].OAuthTokenExpiry!.Value);
     }
 
     private void WriteConfig(Dictionary<string, object> data)

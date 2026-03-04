@@ -90,6 +90,9 @@ public static class OAuthTokenPersistence
         if (provider.TryGetProperty("OAuthTokenExpiry", out var expiryProp))
         {
             var expiryStr = expiryProp.GetString();
+            if (protector is not null && expiryStr is not null && ISecretsProtector.IsEncrypted(expiryStr))
+                expiryStr = protector.Unprotect(expiryStr);
+
             if (expiryStr is not null && DateTimeOffset.TryParse(expiryStr, out var parsed))
                 expiresAt = parsed;
         }

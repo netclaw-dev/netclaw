@@ -16,6 +16,7 @@ using Netclaw.Cli.Tui;
 using Netclaw.Cli.Update;
 using Netclaw.Configuration;
 using Netclaw.Configuration.Providers;
+using Netclaw.Configuration.Providers.OAuth;
 using Netclaw.Configuration.Secrets;
 using Termina.Diagnostics;
 using Termina.Hosting;
@@ -96,6 +97,11 @@ static async Task RunAsync(string[] args)
 
             // Provider descriptors (includes IProviderProbe via registry)
             builder.Services.AddProviderDescriptors();
+            builder.Services.AddHttpClient("OAuthDeviceFlow");
+            builder.Services.AddSingleton(sp =>
+                new OAuthDeviceFlowService(
+                    sp.GetRequiredService<IHttpClientFactory>().CreateClient("OAuthDeviceFlow"),
+                    sp.GetService<TimeProvider>()));
             builder.Services.AddHttpClient<ISlackProbe, SlackProbe>();
 
             // Init wizard + chat page dependencies (daemon lifecycle + SignalR)
@@ -321,6 +327,11 @@ static async Task RunAsync(string[] args)
             var builder = Host.CreateApplicationBuilder(args);
             ConfigureConfigServices(builder.Services, builder.Configuration);
             builder.Services.AddProviderDescriptors();
+            builder.Services.AddHttpClient("OAuthDeviceFlow");
+            builder.Services.AddSingleton(sp =>
+                new OAuthDeviceFlowService(
+                    sp.GetRequiredService<IHttpClientFactory>().CreateClient("OAuthDeviceFlow"),
+                    sp.GetService<TimeProvider>()));
             builder.Logging.ClearProviders();
             builder.Logging.SetMinimumLevel(LogLevel.Warning);
 

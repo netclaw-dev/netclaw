@@ -183,7 +183,7 @@ internal static class ModelCommand
         var result = await probe.ProbeAsync(
             entry.Type,
             string.IsNullOrWhiteSpace(entry.Endpoint) ? null : entry.Endpoint,
-            entry.ApiKey?.Value,
+            entry.ApiKey?.Value ?? entry.OAuthAccessToken?.Value,
             CancellationToken.None);
 
         if (!result.Success)

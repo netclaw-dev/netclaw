@@ -69,6 +69,43 @@ public sealed class ModelManagerViewModelTests : IDisposable
     }
 
     [Fact]
+    public async Task StartAssignment_OAuthProvider_UsesOAuthAccessTokenForDiscovery()
+    {
+        WriteConfig(new Dictionary<string, object>
+        {
+            ["configVersion"] = 1,
+            ["Providers"] = new Dictionary<string, object>
+            {
+                ["my-openai"] = new Dictionary<string, object>
+                {
+                    ["Type"] = "openai",
+                    ["Endpoint"] = "https://api.openai.com",
+                    ["AuthMethod"] = "OAuthDevice"
+                }
+            }
+        });
+
+        WriteSecrets(new Dictionary<string, object>
+        {
+            ["Providers"] = new Dictionary<string, object>
+            {
+                ["my-openai"] = new Dictionary<string, object>
+                {
+                    ["OAuthAccessToken"] = "oauth-access-token"
+                }
+            }
+        });
+
+        using var vm = CreateViewModel();
+        vm.Refresh();
+
+        vm.StartAssignment("Main");
+        await vm.ProbeCompletion!.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal("oauth-access-token", _fakeProbe.LastApiKey);
+    }
+
+    [Fact]
     public void StartAssignment_MultipleProviders_GoesToSelectProvider()
     {
         WriteConfig(new Dictionary<string, object>
@@ -194,6 +231,12 @@ public sealed class ModelManagerViewModelTests : IDisposable
     private void WriteConfig(Dictionary<string, object> data)
     {
         File.WriteAllText(_paths.NetclawConfigPath,
+            JsonSerializer.Serialize(data, new JsonSerializerOptions { WriteIndented = true }));
+    }
+
+    private void WriteSecrets(Dictionary<string, object> data)
+    {
+        File.WriteAllText(_paths.SecretsPath,
             JsonSerializer.Serialize(data, new JsonSerializerOptions { WriteIndented = true }));
     }
 }

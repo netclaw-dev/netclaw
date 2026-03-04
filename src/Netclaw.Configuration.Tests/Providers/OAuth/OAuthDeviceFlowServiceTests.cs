@@ -63,7 +63,7 @@ public class OAuthDeviceFlowServiceTests
             UserCode: "UC-TEST",
             VerificationUri: "https://auth.example.com/verify",
             ExpiresIn: 30,
-            Interval: 1); // minimum interval per RFC is 5, but our code clamps to max(interval, 5)
+            Interval: 1); // test-friendly interval; code clamps to max(interval, 1)
 
         var states = new List<DeviceFlowState>();
         var result = await service.PollForTokenAsync(TestConfig, deviceAuth, s => states.Add(s));

@@ -241,7 +241,7 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
                 var result = await _probe.ProbeAsync(
                     item.ProviderType,
                     item.Entry?.Endpoint,
-                    item.Entry?.ApiKey?.Value,
+                    GetProbeCredential(item.Entry),
                     CancellationToken.None);
 
                 item.ProbeResult = result;
@@ -429,7 +429,9 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
         // Set up probe using fix credentials
         NewProviderType = type;
         NewEndpoint = FixEndpoint;
-        NewApiKey = FixApiKey ?? DetailProvider.Entry?.ApiKey?.Value;
+        NewApiKey = FixApiKey
+            ?? DetailProvider.Entry?.ApiKey?.Value
+            ?? DetailProvider.Entry?.OAuthAccessToken?.Value;
         IsFixFlow = true;
 
         CurrentState.Value = ProviderManagerState.AddValidating;
@@ -514,7 +516,7 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
             var result = await _probe.ProbeAsync(
                 item.ProviderType,
                 item.Entry?.Endpoint,
-                item.Entry?.ApiKey?.Value,
+                GetProbeCredential(item.Entry),
                 CancellationToken.None);
 
             item.ProbeResult = result;
@@ -579,9 +581,8 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
                     NotifyStateChanged();
                 }, ct);
 
-            // Step 3: Persist tokens
+            // Step 3: Keep tokens in-memory until provider is confirmed
             OAuthResult = result;
-            OAuthTokenPersistence.PersistTokens(_paths, NewProviderName!, result, SecretsProtection.CreateProtector(_paths));
 
             // Step 4: Transition to probe validation using the OAuth token
             NewApiKey = result.AccessToken.Value;
@@ -797,8 +798,12 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
         // Write secrets via SecretsFileWriter for encryption-at-rest
         if (OAuthResult is not null)
         {
-            // OAuth flow: tokens already persisted by StartOAuthDeviceFlowAsync
-            // Just ensure AuthMethod is recorded correctly
+            // OAuth flow: persist tokens only after user confirms add
+            OAuthTokenPersistence.PersistTokens(
+                _paths,
+                NewProviderName!,
+                OAuthResult,
+                SecretsProtection.CreateProtector(_paths));
         }
         else if (!string.IsNullOrWhiteSpace(NewApiKey))
         {
@@ -812,6 +817,9 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
     }
 
     // ── Helpers ──
+
+    private static string? GetProbeCredential(ProviderEntry? entry)
+        => entry?.ApiKey?.Value ?? entry?.OAuthAccessToken?.Value;
 
     private string GenerateProviderName(string type)
     {
