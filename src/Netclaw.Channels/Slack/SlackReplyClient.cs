@@ -15,7 +15,7 @@ public sealed class SlackReplyClient(ISlackApiClient slackApiClient) : ISlackRep
             ThreadTs = message.ThreadTs.Value,
             Text = message.Text, // fallback for notifications
             Blocks = blocks
-        });
+        }, cancellationToken);
     }
 
     public async Task UploadFileToThreadAsync(
