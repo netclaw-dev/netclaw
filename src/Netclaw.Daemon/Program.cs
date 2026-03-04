@@ -268,7 +268,7 @@ static void ConfigureDaemonServices(
     var searchBackend = CreateSearchBackend(searchConfig);
 
     // Tool path deny-list: prevent agent tools from accessing secrets
-    var toolPathPolicy = new ToolPathPolicy([paths.SecretsPath]);
+    var toolPathPolicy = new ToolPathPolicy([paths.SecretsPath, paths.KeysDirectory]);
     services.AddSingleton(toolPathPolicy);
 
     var toolRegistry = new ToolRegistry();

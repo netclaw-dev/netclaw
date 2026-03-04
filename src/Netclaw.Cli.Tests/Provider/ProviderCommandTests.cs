@@ -95,7 +95,12 @@ public sealed class ProviderCommandTests : IDisposable
         var secrets = ReadConfigFile(_paths.SecretsPath);
         Assert.True(secrets.RootElement.TryGetProperty("Providers", out var secretProviders));
         Assert.True(secretProviders.TryGetProperty("my-openrouter", out var secretEntry));
-        Assert.Equal("sk-or-test-123", secretEntry.GetProperty("ApiKey").GetString());
+        var encrypted = secretEntry.GetProperty("ApiKey").GetString();
+        Assert.StartsWith("ENC:", encrypted);
+
+        // Verify provider loader decrypts back to usable plaintext
+        var loaded = ProviderCommand.LoadProviders(_paths);
+        Assert.Equal("sk-or-test-123", loaded["my-openrouter"].ApiKey?.Value);
     }
 
     [Fact]

@@ -380,7 +380,7 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
                 {
                     ["ApiKey"] = FixApiKey
                 };
-                ConfigFileHelper.WriteConfigFile(_paths.SecretsPath, secrets);
+                ConfigFileHelper.WriteSecretsFile(_paths, secrets);
             }
 
             if (FixEndpoint is not null && DetailProvider.Entry is not null
@@ -456,7 +456,7 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
 
         var secretProviders = ConfigFileHelper.GetSectionOrNull(secrets, "Providers");
         if (secretProviders?.Remove(RemoveProviderName) == true)
-            ConfigFileHelper.WriteConfigFile(_paths.SecretsPath, secrets);
+            ConfigFileHelper.WriteSecretsFile(_paths, secrets);
 
         StatusMessage.Value = $"Removed provider '{RemoveProviderName}'. Restart daemon for changes to take effect.";
         RemoveProviderName = null;
@@ -683,7 +683,7 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
             {
                 ["ApiKey"] = NewApiKey
             };
-            ConfigFileHelper.WriteConfigFile(_paths.SecretsPath, secrets);
+            ConfigFileHelper.WriteSecretsFile(_paths, secrets);
         }
     }
 

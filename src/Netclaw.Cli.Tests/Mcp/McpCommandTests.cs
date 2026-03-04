@@ -69,7 +69,12 @@ public sealed class McpCommandTests : IDisposable
         Assert.True(secrets.RootElement.TryGetProperty("McpServers", out var mcpSecrets));
         Assert.True(mcpSecrets.TryGetProperty("myserver", out var serverSecrets));
         Assert.True(serverSecrets.TryGetProperty("EnvironmentVariables", out var envVars));
-        Assert.Equal("secret123", envVars.GetProperty("API_KEY").GetString());
+        var encrypted = envVars.GetProperty("API_KEY").GetString();
+        Assert.StartsWith("ENC:", encrypted);
+
+        // Loader should transparently decrypt encrypted values
+        var loaded = McpCommand.LoadMcpServers(_paths);
+        Assert.Equal("secret123", loaded["myserver"].EnvironmentVariables?["API_KEY"]);
     }
 
     [Fact]
@@ -84,7 +89,12 @@ public sealed class McpCommandTests : IDisposable
         Assert.True(secrets.RootElement.TryGetProperty("McpServers", out var mcpSecrets));
         Assert.True(mcpSecrets.TryGetProperty("myapi", out var serverSecrets));
         Assert.True(serverSecrets.TryGetProperty("Headers", out var headers));
-        Assert.Equal("Bearer tok-123", headers.GetProperty("Authorization").GetString());
+        var encrypted = headers.GetProperty("Authorization").GetString();
+        Assert.StartsWith("ENC:", encrypted);
+
+        // Loader should transparently decrypt encrypted values
+        var loaded = McpCommand.LoadMcpServers(_paths);
+        Assert.Equal("Bearer tok-123", loaded["myapi"].Headers?["Authorization"]);
     }
 
     [Fact]

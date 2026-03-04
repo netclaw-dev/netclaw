@@ -75,4 +75,54 @@ public sealed class ToolPathPolicyTests
         Assert.True(policy.IsDenied("/path/b"));
         Assert.False(policy.IsDenied("/path/c"));
     }
+
+    [Fact]
+    public void IsDenied_blocks_children_of_denied_directory()
+    {
+        var policy = new ToolPathPolicy(["/home/user/.netclaw/keys"]);
+        Assert.True(policy.IsDenied("/home/user/.netclaw/keys/keyring.xml"));
+    }
+
+    [Fact]
+    public void IsDenied_does_not_match_prefix_without_path_boundary()
+    {
+        var policy = new ToolPathPolicy(["/home/user/.netclaw/keys"]);
+        Assert.False(policy.IsDenied("/home/user/.netclaw/keys-backup/data.txt"));
+    }
+
+    [Fact]
+    public void CommandReferencesDeniedPath_detects_home_shorthand()
+    {
+        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        var policy = new ToolPathPolicy([Path.Combine(home, ".netclaw", "config", "secrets.json")]);
+
+        Assert.True(policy.CommandReferencesDeniedPath("cat ~/.netclaw/config/secrets.json"));
+        Assert.True(policy.CommandReferencesDeniedPath("cat $HOME/.netclaw/config/secrets.json"));
+    }
+
+    [Fact]
+    public void CommandReferencesDeniedPath_detects_keys_directory_access()
+    {
+        var policy = new ToolPathPolicy(["/home/user/.netclaw/keys"]);
+
+        Assert.True(policy.CommandReferencesDeniedPath("ls ~/.netclaw/keys"));
+        Assert.True(policy.CommandReferencesDeniedPath("tar czf /tmp/k.tgz ~/.netclaw/keys"));
+    }
+
+    [Fact]
+    public void CommandReferencesDeniedPath_detects_high_risk_glob_in_config_directory()
+    {
+        var policy = new ToolPathPolicy(["/home/user/.netclaw/config/secrets.json"]);
+
+        Assert.True(policy.CommandReferencesDeniedPath("cat ~/.netclaw/config/*.json"));
+        Assert.True(policy.CommandReferencesDeniedPath("jq . ~/.netclaw/config/*.json"));
+    }
+
+    [Fact]
+    public void CommandReferencesDeniedPath_detects_high_risk_archive_of_config_directory()
+    {
+        var policy = new ToolPathPolicy(["/home/user/.netclaw/config/secrets.json"]);
+
+        Assert.True(policy.CommandReferencesDeniedPath("tar czf /tmp/netclaw-config.tgz ~/.netclaw/config"));
+    }
 }

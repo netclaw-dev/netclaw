@@ -135,4 +135,33 @@ public class ShellToolTests
         Assert.Contains("protected file path", result);
         Assert.Contains("Access denied", result);
     }
+
+    [Fact]
+    public async Task Execute_redacts_secret_like_output()
+    {
+        var args = new Dictionary<string, object?> { ["Command"] = "echo API_KEY=secret123" };
+
+        var result = await _tool.ExecuteAsync(args, CancellationToken.None);
+
+        Assert.Contains("API_KEY=***REDACTED***", result);
+        Assert.DoesNotContain("secret123", result);
+    }
+
+    [Fact]
+    public async Task High_risk_glob_on_netclaw_config_is_blocked()
+    {
+        var secretsPath = "/home/user/.netclaw/config/secrets.json";
+        var policy = new ToolPathPolicy([secretsPath]);
+        var tool = new ShellTool(new ToolConfig(), policy);
+
+        var args = new Dictionary<string, object?>
+        {
+            ["Command"] = "cat ~/.netclaw/config/*.json"
+        };
+
+        var result = await tool.ExecuteAsync(args, CancellationToken.None);
+
+        Assert.Contains("protected file path", result);
+        Assert.Contains("Access denied", result);
+    }
 }

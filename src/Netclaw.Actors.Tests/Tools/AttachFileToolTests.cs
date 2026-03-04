@@ -180,4 +180,62 @@ public class AttachFileToolTests : IDisposable
         Assert.Contains("Error", result);
         Assert.Empty(context.FileAttachments);
     }
+
+    [Fact]
+    public async Task Prefix_collision_path_is_rejected()
+    {
+        var outsideDir = _tempDir + "-outside";
+        Directory.CreateDirectory(outsideDir);
+        var outsideFile = Path.Combine(outsideDir, "secret.txt");
+        await File.WriteAllTextAsync(outsideFile, "sensitive");
+
+        var context = new ToolExecutionContext("test-session", _tempDir);
+        var args = new Dictionary<string, object?>
+        {
+            ["Path"] = outsideFile
+        };
+
+        var result = await _tool.ExecuteAsync(args, context, CancellationToken.None);
+
+        Assert.Contains("Error", result);
+        Assert.Contains("session directory", result, StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(context.FileAttachments);
+    }
+
+    [Fact]
+    public async Task Symlink_to_outside_file_is_rejected()
+    {
+        var outsideFile = Path.Combine(Path.GetTempPath(), $"netclaw-outside-{Guid.NewGuid():N}.txt");
+        var symlinkPath = Path.Combine(_tempDir, "linked.txt");
+
+        await File.WriteAllTextAsync(outsideFile, "sensitive data");
+
+        try
+        {
+            File.CreateSymbolicLink(symlinkPath, outsideFile);
+
+            var context = new ToolExecutionContext("test-session", _tempDir);
+            var args = new Dictionary<string, object?>
+            {
+                ["Path"] = symlinkPath
+            };
+
+            var result = await _tool.ExecuteAsync(args, context, CancellationToken.None);
+
+            Assert.Contains("Error", result);
+            Assert.Contains("session directory", result, StringComparison.OrdinalIgnoreCase);
+            Assert.Empty(context.FileAttachments);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return;
+        }
+        finally
+        {
+            if (File.Exists(symlinkPath))
+                File.Delete(symlinkPath);
+            if (File.Exists(outsideFile))
+                File.Delete(outsideFile);
+        }
+    }
 }

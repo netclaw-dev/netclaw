@@ -34,7 +34,7 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
         if (string.IsNullOrWhiteSpace(args.Command))
             return "Error: 'command' parameter is required.";
 
-        if (_pathPolicy?.CommandReferencesDeniedPath(args.Command) == true)
+        if (_pathPolicy?.CommandReferencesDeniedPath(args.Command, args.WorkingDirectory) == true)
             return "Error: Command references a protected file path. Access denied by security policy.";
 
         var isWindows = OperatingSystem.IsWindows();
@@ -116,7 +116,8 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
                 result.Append(errorBuilder);
             }
 
-            var output = TruncateOutput(result.ToString(), _config.MaxOutputChars);
+            var sanitized = SecretOutputRedactor.Redact(result.ToString());
+            var output = TruncateOutput(sanitized, _config.MaxOutputChars);
             return $"Exit code: {process.ExitCode}{Environment.NewLine}{output}";
         }
     }
