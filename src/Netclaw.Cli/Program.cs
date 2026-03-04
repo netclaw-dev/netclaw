@@ -42,6 +42,12 @@ static async Task RunAsync(string[] args)
         return;
     }
 
+    if (mode is "version" or "--version" or "-V")
+    {
+        Console.WriteLine($"netclaw {BuildInfo.Version} (commit {BuildInfo.CommitHash}, built {BuildInfo.BuildTimestamp})");
+        return;
+    }
+
     if (mode is "-p" or "--prompt")
     {
         headlessPrompt = args.Length > 1
@@ -519,6 +525,7 @@ static void WriteGeneralHelp()
     Console.WriteLine("  secrets                  Manage encrypted secrets (set key/value pairs)");
     Console.WriteLine("  init                     First-run setup wizard");
     Console.WriteLine("  update                   Check for and install updates");
+    Console.WriteLine("  version, --version       Show CLI version");
     Console.WriteLine("  config                   Configuration management (planned)");
     Console.WriteLine();
     Console.WriteLine("Run `netclaw <command> --help` for details on any command.");
