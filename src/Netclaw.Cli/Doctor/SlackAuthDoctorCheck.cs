@@ -2,6 +2,7 @@ using System.Text.Json.Nodes;
 using Netclaw.Channels.Slack;
 using Netclaw.Cli.Config;
 using Netclaw.Configuration;
+using Netclaw.Configuration.Secrets;
 
 namespace Netclaw.Cli.Doctor;
 
@@ -19,7 +20,14 @@ public sealed class SlackAuthDoctorCheck(NetclawPaths paths, ISlackProbe slackPr
             return DoctorCheckResult.Pass(CheckName, "Slack is disabled.");
 
         // Read bot token from secrets.json
-        var botToken = ReadBotToken(paths);
+        var (botToken, tokenReadError) = ReadBotToken(paths);
+        if (!string.IsNullOrWhiteSpace(tokenReadError))
+        {
+            return DoctorCheckResult.Error(CheckName,
+                tokenReadError,
+                "Ensure ~/.netclaw/keys exists for this user, then re-enter Slack tokens via `netclaw init`.");
+        }
+
         if (string.IsNullOrWhiteSpace(botToken))
         {
             return DoctorCheckResult.Error(CheckName,
@@ -35,23 +43,34 @@ public sealed class SlackAuthDoctorCheck(NetclawPaths paths, ISlackProbe slackPr
             "Check your Slack app's Bot User OAuth Token and scopes.");
     }
 
-    private static string? ReadBotToken(NetclawPaths paths)
+    private static (string? Token, string? Error) ReadBotToken(NetclawPaths paths)
     {
         if (!File.Exists(paths.SecretsPath))
-            return null;
+            return (null, null);
 
         try
         {
             var secrets = JsonNode.Parse(File.ReadAllText(paths.SecretsPath)) as JsonObject;
             var raw = secrets?["Slack"]?["BotToken"]?.GetValue<string>();
             if (string.IsNullOrWhiteSpace(raw))
-                return null;
+                return (null, null);
 
-            return ConfigFileHelper.DecryptIfEncrypted(paths, raw);
+            if (!ISecretsProtector.IsEncrypted(raw))
+                return (raw, null);
+
+            try
+            {
+                return (ConfigFileHelper.DecryptIfEncrypted(paths, raw), null);
+            }
+            catch (Exception ex)
+            {
+                return (null,
+                    $"Slack bot token is present but could not be decrypted: {ex.Message}");
+            }
         }
-        catch
+        catch (Exception ex)
         {
-            return null;
+            return (null, $"Failed reading Slack bot token from secrets.json: {ex.Message}");
         }
     }
 

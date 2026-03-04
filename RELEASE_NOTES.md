@@ -1,3 +1,12 @@
+#### 0.1.2 2026-03-04 ####
+
+Netclaw v0.1.2 — Daemon Startup and Diagnostics Hardening
+
+* Fixed Linux single-file daemon SQLite startup failures by enabling native library self-extract for `netclawd` publishes.
+* Added a dedicated `SQLite Provisioning` doctor check to surface daemon crash-log evidence when SQLite initialization fails.
+* Improved Slack doctor token handling to decrypt encrypted secrets before probe and report corrupted encrypted token errors clearly.
+* Added regression coverage for SQLite provisioning diagnostics and encrypted Slack token failure handling.
+
 #### 0.1.1 2026-03-04 ####
 
 Netclaw v0.1.1 — Release Feed and Installer Fixes

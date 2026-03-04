@@ -7,8 +7,8 @@
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
-    <VersionPrefix>0.1.1</VersionPrefix>
-    <PackageReleaseNotes>Netclaw v0.1.1 — Release feed hardening and installer fixes. Removes NuGet publish from release automation, aligns installers to releases.netclaw.dev, and publishes signed manifest/install artifacts directly to the release host.</PackageReleaseNotes>
+    <VersionPrefix>0.1.2</VersionPrefix>
+    <PackageReleaseNotes>Netclaw v0.1.2 — Daemon startup and diagnostics hardening. Includes SQLite native library self-extract for single-file daemon builds and improved doctor handling for encrypted or corrupted Slack secrets.</PackageReleaseNotes>
   </PropertyGroup>
   <PropertyGroup>
     <NetCoreTestVersion>net10.0</NetCoreTestVersion>

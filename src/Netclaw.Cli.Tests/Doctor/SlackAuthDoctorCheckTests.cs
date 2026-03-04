@@ -115,6 +115,33 @@ public sealed class SlackAuthDoctorCheckTests
         Assert.Equal("xoxb-valid-token", probe.LastBotToken);
     }
 
+    [Fact]
+    public async Task ReturnsError_WhenEncryptedBotTokenCannotBeDecrypted()
+    {
+        var (paths, _) = CreateTempPaths();
+        WriteConfig(paths, slackEnabled: true);
+
+        var secrets = new Dictionary<string, object>
+        {
+            ["Slack"] = new Dictionary<string, object>
+            {
+                ["BotToken"] = "ENC:corrupted-token"
+            }
+        };
+
+        File.WriteAllText(paths.SecretsPath,
+            JsonSerializer.Serialize(secrets, new JsonSerializerOptions { WriteIndented = true }));
+
+        var probe = new FakeSlackProbe();
+        var check = new SlackAuthDoctorCheck(paths, probe);
+        var result = await check.RunAsync();
+
+        Assert.Equal(DoctorSeverity.Error, result.Severity);
+        Assert.Contains("could not be decrypted", result.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.NotNull(result.Remediation);
+        Assert.Equal(0, probe.ProbeCallCount);
+    }
+
     private static (NetclawPaths paths, string basePath) CreateTempPaths()
     {
         var basePath = Path.Combine(Path.GetTempPath(), "netclaw-tests", Guid.NewGuid().ToString("N"));
