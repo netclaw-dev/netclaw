@@ -132,6 +132,21 @@ public sealed class BinaryUpdateCheckServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task CheckForUpdateAsync_UsesDedicatedReleasesManifestEndpoint()
+    {
+        var manifest = CreateManifest("0.2.0", UpdateCheckService.GetCurrentRid());
+        var handler = new FakeHttpHandler();
+        handler.AddJsonResponse("https://releases.netclaw.dev/manifest.json", manifest);
+
+        using var httpClient = new HttpClient(handler);
+        var result = await UpdateCheckService.CheckForUpdateAsync(
+            httpClient, "0.1.0");
+
+        Assert.True(result.IsUpdateAvailable);
+        Assert.Equal("0.2.0", result.LatestVersion);
+    }
+
+    [Fact]
     public void EvaluateManifest_MatchesAssetsByRid()
     {
         var manifest = new BinaryFeedManifest
