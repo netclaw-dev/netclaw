@@ -1,4 +1,6 @@
 using System.Text;
+using System.Threading.Channels;
+using System.Threading.Tasks;
 using Akka.Actor;
 using Akka.Event;
 using Akka.Streams;
@@ -11,7 +13,7 @@ using Netclaw.Security;
 
 namespace Netclaw.Channels.Slack;
 
-internal sealed class SlackThreadBindingActor : ReceiveActor
+internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStash, IWithTimers
 {
     private readonly SessionId _sessionId;
     private readonly SlackChannelId _channelId;
@@ -26,7 +28,18 @@ internal sealed class SlackThreadBindingActor : ReceiveActor
 
     private ActorMaterializer? _materializer;
     private MaterializedSession? _session;
-    private ISourceQueueWithComplete<ChannelInput>? _inputQueue;
+    private ChannelWriter<ChannelInput>? _inputQueue;
+    private int _pipelineGeneration;
+    private bool _isReinitializing;
+    private static readonly object ReinitializeTimerKey = new();
+    private static readonly TimeSpan InboundProcessingTimeout = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan QueueWriteTimeout = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan FileDownloadTimeout = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan ContentScanTimeout = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan PipelineInitTimeout = TimeSpan.FromSeconds(15);
+
+    public IStash Stash { get; set; } = null!;
+    public ITimerScheduler Timers { get; set; } = null!;
 
     public SlackThreadBindingActor(
         SessionId sessionId,
@@ -45,14 +58,7 @@ internal sealed class SlackThreadBindingActor : ReceiveActor
             .WithContext("SlackChannelId", _channelId)
             .WithContext("SlackThreadTs", _threadTs);
 
-        ReceiveAsync<SlackThreadInbound>(HandleInboundAsync);
-        ReceiveAsync<StartProactiveThread>(HandleProactiveThreadAsync);
-        ReceiveAsync<ThreadOutput>(HandleOutputAsync);
-        Receive<ReceiveTimeout>(_ =>
-        {
-            _log.Info("Slack thread idle for 1 hour, passivating");
-            Context.Stop(Self);
-        });
+        Initializing();
 
         Context.SetReceiveTimeout(TimeSpan.FromHours(1));
     }
@@ -64,127 +70,221 @@ internal sealed class SlackThreadBindingActor : ReceiveActor
         SlackGatewayDependencies dependencies) =>
         Props.Create(() => new SlackThreadBindingActor(sessionId, channelId, threadTs, dependencies));
 
+    protected override void PreStart()
+    {
+        Self.Tell(InitializePipeline.Instance);
+        base.PreStart();
+    }
+
     protected override void PostStop()
     {
-        _inputQueue?.Complete();
+        _inputQueue?.TryComplete();
         _session?.DisposeAsync().AsTask().GetAwaiter().GetResult();
         _materializer?.Dispose();
         base.PostStop();
+    }
+
+    private void Initializing()
+    {
+        ReceiveAsync<InitializePipeline>(async _ =>
+        {
+            try
+            {
+                await EnsureInitializedAsync();
+                Become(Active);
+                Stash.UnstashAll();
+            }
+            catch (Exception ex)
+            {
+                _log.Error(ex, "Failed to initialize Slack thread pipeline; stopping actor");
+                Context.Stop(Self);
+            }
+        });
+
+        ReceiveAny(msg =>
+        {
+            if (msg is not InitializePipeline)
+                Stash.Stash();
+        });
+    }
+
+    private void Active()
+    {
+        ReceiveAsync<SlackThreadInbound>(HandleInboundAsync);
+        ReceiveAsync<StartProactiveThread>(HandleProactiveThreadAsync);
+        ReceiveAsync<ThreadOutput>(HandleOutputAsync);
+        Receive<OutputStreamTerminated>(msg =>
+        {
+            if (msg.Generation != _pipelineGeneration)
+                return;
+
+            var reason = msg.Cause is null
+                ? "completed"
+                : $"faulted: {msg.Cause.Message}";
+
+            _log.Warning("Slack output stream terminated ({Reason}); reinitializing pipeline", reason);
+            Self.Tell(new ReinitializePipeline(reason));
+        });
+        ReceiveAsync<ReinitializePipeline>(async msg => await ReinitializePipelineAsync(msg.Reason));
+        Receive<ReceiveTimeout>(_ =>
+        {
+            _log.Info("Slack thread idle for 1 hour, passivating");
+            Context.Stop(Self);
+        });
     }
 
     private async Task HandleProactiveThreadAsync(StartProactiveThread message)
     {
         _log.Info("Initializing proactive thread pipeline for session {0}", message.SessionId.Value);
         await EnsureInitializedAsync();
-        // No inbound message to enqueue — the initial message was already posted to Slack.
-        // The session pipeline is now live and ready for user replies.
         Sender.Tell(new ProactiveThreadAck(message.SessionId));
     }
 
     private async Task HandleInboundAsync(SlackThreadInbound message)
     {
-        if (!string.IsNullOrWhiteSpace(message.Text))
+        using var inboundCts = new CancellationTokenSource(InboundProcessingTimeout);
+
+        try
         {
-            var detection = await _promptInjectionDetector.DetectAsync(message.Text, "slack");
-            if (detection.Risk == PromptInjectionRisk.High)
+            if (!string.IsNullOrWhiteSpace(message.Text))
             {
-                var reason = string.IsNullOrWhiteSpace(detection.Message)
-                    ? "High-risk prompt injection pattern detected"
-                    : detection.Message;
-
-                _log.Warning("Blocked Slack message due to prompt injection risk: {Reason}", reason);
-                ChannelTelemetry.RecordSlackEventDropped("prompt_injection_high");
-                await SafePostAsync(":warning: Message blocked by prompt-injection policy.");
-                return;
-            }
-        }
-
-        await EnsureInitializedAsync();
-
-        // Build content list: text + downloaded file attachments
-        var contents = new List<AIContent>();
-        if (!string.IsNullOrEmpty(message.Text))
-            contents.Add(new TextContent(message.Text));
-
-        // Download and scan file attachments
-        if (message.Files is { Count: > 0 } && _dependencies.HttpClient is not null)
-        {
-            foreach (var file in message.Files)
-            {
-                // Only process image MIME types for now
-                if (!file.MimeType.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
-                {
-                    _log.Debug("Skipping non-image file attachment: {Name} ({MimeType})", file.Name, file.MimeType);
-                    continue;
-                }
-
+                PromptInjectionResult detection;
                 try
                 {
-                    var bytes = await DownloadSlackFileAsync(file);
-                    if (bytes.Length == 0)
-                        continue;
-
-                    var scanResult = await _dependencies.ContentScanner.ScanAsync(
-                        bytes, file.Name, file.MimeType);
-
-                    if (!scanResult.IsAllowed)
-                    {
-                        _log.Warning("Content scan rejected file {Name}: {Message}",
-                            file.Name, scanResult.Message ?? scanResult.Error?.ToString());
-                        continue;
-                    }
-
-                    contents.Add(new DataContent(bytes.ToArray(), file.MimeType));
-                    _log.Info("Downloaded and scanned Slack file: {Name} ({Size} bytes)", file.Name, bytes.Length);
+                    detection = await _promptInjectionDetector.DetectAsync(message.Text, "slack", inboundCts.Token);
                 }
                 catch (Exception ex)
                 {
-                    _log.Warning(ex, "Failed to download Slack file {Name}, skipping", file.Name);
+                    _log.Warning(ex, "Prompt injection detector failed; allowing message through");
+                    detection = PromptInjectionResult.Safe();
+                }
+
+                if (detection.Risk == PromptInjectionRisk.High)
+                {
+                    var reason = string.IsNullOrWhiteSpace(detection.Message)
+                        ? "High-risk prompt injection pattern detected"
+                        : detection.Message;
+
+                    _log.Warning("Blocked Slack message due to prompt injection risk: {Reason}", reason);
+                    ChannelTelemetry.RecordSlackEventDropped("prompt_injection_high");
+                    await SafePostAsync(":warning: Message blocked by prompt-injection policy.");
+                    return;
                 }
             }
-        }
 
-        if (contents.Count == 0)
-        {
-            _log.Debug("No content to enqueue after file processing");
-            return;
-        }
+            // Build content list: text + downloaded file attachments
+            var contents = new List<AIContent>();
+            if (!string.IsNullOrEmpty(message.Text))
+                contents.Add(new TextContent(message.Text));
 
-        var result = await _inputQueue!.OfferAsync(new ChannelInput
-        {
-            SenderId = message.SenderId,
-            ChannelId = _channelId.Value,
-            Contents = contents,
-            ReceivedAt = message.ReceivedAt
-        });
+            // Download and scan file attachments
+            if (message.Files is { Count: > 0 } && _dependencies.HttpClient is not null)
+            {
+                foreach (var file in message.Files)
+                {
+                    // Only process image MIME types for now
+                    if (!file.MimeType.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
+                    {
+                        _log.Debug("Skipping non-image file attachment: {Name} ({MimeType})", file.Name, file.MimeType);
+                        continue;
+                    }
 
-        if (result is QueueOfferResult.QueueClosed)
-        {
-            _log.Warning("Slack thread queue closed for session {0}", _sessionId.Value);
-            Context.Stop(Self);
-            return;
-        }
+                    try
+                    {
+                        using var downloadCts = CancellationTokenSource.CreateLinkedTokenSource(inboundCts.Token);
+                        downloadCts.CancelAfter(FileDownloadTimeout);
+                        var bytes = await DownloadSlackFileAsync(file, downloadCts.Token);
+                        if (bytes.Length == 0)
+                            continue;
 
-        if (result is QueueOfferResult.Enqueued)
-        {
+                        using var scanCts = CancellationTokenSource.CreateLinkedTokenSource(inboundCts.Token);
+                        scanCts.CancelAfter(ContentScanTimeout);
+                        var scanResult = await _dependencies.ContentScanner.ScanAsync(
+                            bytes, file.Name, file.MimeType, scanCts.Token);
+
+                        if (!scanResult.IsAllowed)
+                        {
+                            _log.Warning("Content scan rejected file {Name}: {Message}",
+                                file.Name, scanResult.Message ?? scanResult.Error?.ToString());
+                            continue;
+                        }
+
+                        contents.Add(new DataContent(bytes.ToArray(), file.MimeType));
+                        _log.Info("Downloaded and scanned Slack file: {Name} ({Size} bytes)", file.Name, bytes.Length);
+                    }
+                    catch (OperationCanceledException ex)
+                    {
+                        _log.Warning(ex, "Timed out while processing Slack file {Name}, skipping", file.Name);
+                    }
+                    catch (Exception ex)
+                    {
+                        _log.Warning(ex, "Failed to download Slack file {Name}, skipping", file.Name);
+                    }
+                }
+            }
+
+            if (contents.Count == 0)
+            {
+                _log.Debug("No content to enqueue after file processing");
+                return;
+            }
+
+            var writer = _inputQueue;
+            if (writer is null)
+            {
+                _log.Warning("Slack thread input queue is not initialized; dropping inbound message");
+                return;
+            }
+
+            try
+            {
+                using var queueWriteCts = CancellationTokenSource.CreateLinkedTokenSource(inboundCts.Token);
+                queueWriteCts.CancelAfter(QueueWriteTimeout);
+
+                await writer.WriteAsync(new ChannelInput
+                {
+                    SenderId = message.SenderId,
+                    ChannelId = _channelId.Value,
+                    Contents = contents,
+                    ReceivedAt = message.ReceivedAt
+                }, queueWriteCts.Token);
+            }
+            catch (OperationCanceledException ex)
+            {
+                _log.Warning(ex, "Timed out enqueueing Slack message for session {0}", _sessionId.Value);
+                Self.Tell(new ReinitializePipeline("input queue write timeout"));
+                return;
+            }
+            catch (ChannelClosedException ex)
+            {
+                _log.Warning(ex, "Slack thread input queue closed for session {0}", _sessionId.Value);
+                Self.Tell(new ReinitializePipeline("input queue write failed"));
+                return;
+            }
+
             _log.Debug("Accepted inbound Slack message for session queue");
             ChannelTelemetry.RecordSlackMessageEnqueued();
         }
-
-        if (result is QueueOfferResult.Failure failure)
-            _log.Error(failure.Cause, "Failed to enqueue Slack message for session {0}", _sessionId.Value);
+        catch (OperationCanceledException ex)
+        {
+            _log.Warning(ex, "Inbound Slack processing timed out for session {0}", _sessionId.Value);
+        }
+        catch (Exception ex)
+        {
+            _log.Error(ex, "Failed to enqueue Slack message for session {0}", _sessionId.Value);
+        }
     }
 
-    private async Task<ReadOnlyMemory<byte>> DownloadSlackFileAsync(SlackFileReference file)
+    private async Task<ReadOnlyMemory<byte>> DownloadSlackFileAsync(SlackFileReference file, CancellationToken ct)
     {
         using var request = new HttpRequestMessage(HttpMethod.Get, file.UrlPrivateDownload);
         if (_dependencies.Options.BotToken is { Value: { Length: > 0 } token })
             request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
 
-        using var response = await _dependencies.HttpClient!.SendAsync(request);
+        using var response = await _dependencies.HttpClient!.SendAsync(request, ct);
         response.EnsureSuccessStatusCode();
 
-        var bytes = await response.Content.ReadAsByteArrayAsync();
+        var bytes = await response.Content.ReadAsByteArrayAsync(ct);
         return bytes;
     }
 
@@ -200,24 +300,79 @@ internal sealed class SlackThreadBindingActor : ReceiveActor
         // children and are stopped automatically when this actor passivates.
         _materializer = Context.Materializer(namePrefix: "slack-thread");
 
-        var materialized = await _dependencies.Pipeline.CreateAsync(_sessionId, new SessionPipelineOptions
-        {
-            ChannelType = "slack",
-            Filter = OutputFilter.Full
-        }, materializer: _materializer);
+        using var initCts = new CancellationTokenSource(PipelineInitTimeout);
+        var materialized = await _dependencies.Pipeline.CreateAsync(
+            _sessionId,
+            new SessionPipelineOptions
+            {
+                ChannelType = "slack",
+                Filter = OutputFilter.Text | OutputFilter.Files
+            },
+            materializer: _materializer,
+            cancellationToken: initCts.Token);
 
-        var inputQueue = Source.Queue<ChannelInput>(32, OverflowStrategy.Backpressure)
+        var inputQueue = Source.Channel<ChannelInput>(512, true)
             .ToMaterialized(materialized.Input, Keep.Left)
             .Run(_materializer);
 
-        materialized.Output
-            .To(Sink.ForEach<SessionOutput>(output => self.Tell(new ThreadOutput(output))))
+        var generation = ++_pipelineGeneration;
+        var outputCompletion = materialized.Output
+            .ToMaterialized(
+                Sink.ForEach<SessionOutput>(output => self.Tell(new ThreadOutput(output))),
+                Keep.Right)
             .Run(_materializer);
+
+        _ = outputCompletion.ContinueWith(t =>
+            {
+                var cause = t.IsFaulted ? t.Exception?.GetBaseException() : null;
+                self.Tell(new OutputStreamTerminated(generation, cause));
+            },
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
 
         _session = materialized;
         _inputQueue = inputQueue;
 
         _log.Info("Slack thread binding pipeline initialized");
+    }
+
+    private async Task ReinitializePipelineAsync(string reason)
+    {
+        if (_isReinitializing)
+            return;
+
+        _isReinitializing = true;
+        try
+        {
+            _log.Warning("Reinitializing Slack thread pipeline: {Reason}", reason);
+
+            _inputQueue?.TryComplete();
+            _inputQueue = null;
+
+            if (_session is not null)
+            {
+                await _session.DisposeAsync();
+                _session = null;
+            }
+
+            _materializer?.Dispose();
+            _materializer = null;
+
+            await EnsureInitializedAsync();
+        }
+        catch (Exception ex)
+        {
+            _log.Error(ex, "Slack thread pipeline reinitialization failed; scheduling retry");
+            Timers.StartSingleTimer(
+                ReinitializeTimerKey,
+                new ReinitializePipeline("retry after failed reinit"),
+                TimeSpan.FromSeconds(2));
+        }
+        finally
+        {
+            _isReinitializing = false;
+        }
     }
 
     private async Task HandleOutputAsync(ThreadOutput threadOutput)
@@ -314,4 +469,10 @@ internal sealed class SlackThreadBindingActor : ReceiveActor
     }
 
     private sealed record ThreadOutput(SessionOutput Output);
+    private sealed record OutputStreamTerminated(int Generation, Exception? Cause);
+    private sealed record ReinitializePipeline(string Reason);
+    private sealed record InitializePipeline
+    {
+        public static InitializePipeline Instance { get; } = new();
+    }
 }

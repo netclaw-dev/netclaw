@@ -9,6 +9,9 @@ internal static class BrowserAutomationMcpProfiles
 
     public static (string Name, McpServerEntry Entry) Create(string backend)
     {
+        var npxCommand = BrowserAutomationRuntimeDetector.GetPreferredNpxCommand();
+        var env = BrowserAutomationRuntimeDetector.BuildMcpEnvironmentOverlay(npxCommand);
+
         return backend switch
         {
             PlaywrightBackend => ("browser_playwright", new McpServerEntry
@@ -16,7 +19,8 @@ internal static class BrowserAutomationMcpProfiles
                 Transport = "stdio",
                 Enabled = true,
                 GrantCategory = "browser_automation",
-                Command = "npx",
+                Command = npxCommand,
+                EnvironmentVariables = env,
                 Arguments =
                 [
                     "-y",
@@ -34,7 +38,8 @@ internal static class BrowserAutomationMcpProfiles
                 Transport = "stdio",
                 Enabled = true,
                 GrantCategory = "browser_automation",
-                Command = "npx",
+                Command = npxCommand,
+                EnvironmentVariables = env,
                 Arguments =
                 [
                     "-y",

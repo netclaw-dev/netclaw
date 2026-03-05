@@ -89,6 +89,27 @@ public sealed record SessionConfig
     public int TitleGenerationInterval { get; init; } = 10;
 
     /// <summary>
+    /// Timeout in seconds for sidecar LLM calls (title generation, observer
+    /// summaries, and memory extraction). Increase this when running slower
+    /// models to reduce false timeout failures during background tasks.
+    /// </summary>
+    public int SidecarLlmTimeoutSeconds { get; init; } = 90;
+
+    /// <summary>
+    /// Timeout in seconds for the primary per-turn LLM streaming call.
+    /// Prevents sessions from remaining stuck in Processing forever when a
+    /// provider stream stalls under network/backpressure failure modes.
+    /// </summary>
+    public int TurnLlmTimeoutSeconds { get; init; } = 180;
+
+    /// <summary>
+    /// Timeout in seconds for one tool-execution batch (all tool calls emitted
+    /// by a single assistant response). Prevents indefinite hangs when one or
+    /// more tools block forever.
+    /// </summary>
+    public int ToolExecutionTimeoutSeconds { get; init; } = 90;
+
+    /// <summary>
     /// How long a session can be idle before passivating.
     /// The actor saves a snapshot and stops itself; re-creation by
     /// <c>GenericChildPerEntityParent</c> on next message recovers state from journal.

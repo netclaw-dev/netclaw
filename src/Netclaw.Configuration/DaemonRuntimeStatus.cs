@@ -68,6 +68,23 @@ public static class DaemonRuntimeStatus
         public bool Enabled { get; init; }
 
         public string? OtlpEndpoint { get; init; }
+
+        public SlackCounters? SlackCounters { get; init; }
+    }
+
+    public sealed class SlackCounters : IWireType
+    {
+        public long EventsReceived { get; init; }
+
+        public long EventsDropped { get; init; }
+
+        public long EventsRouted { get; init; }
+
+        public long MessagesEnqueued { get; init; }
+
+        public long RepliesPosted { get; init; }
+
+        public long RepliesFailed { get; init; }
     }
 
     public sealed class Model : IWireType

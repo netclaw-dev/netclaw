@@ -6,6 +6,7 @@ using Akka.Streams.Dsl;
 using Microsoft.Extensions.AI;
 using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Protocol;
+using Netclaw.Configuration;
 
 namespace Netclaw.Actors.Channels;
 
@@ -92,18 +93,23 @@ public sealed class MaterializedSession : IAsyncDisposable
 /// </summary>
 public sealed class SessionPipeline
 {
+    private const int SessionOutputBufferSize = 2048;
+
     private readonly ActorSystem _system;
     private readonly IRequiredActor<SessionManagerActorKey> _sessionManagerProvider;
     private readonly ISessionLifecycleObserver? _lifecycleObserver;
+    private readonly NetclawPaths? _paths;
 
     public SessionPipeline(
         ActorSystem system,
         IRequiredActor<SessionManagerActorKey> sessionManagerProvider,
-        ISessionLifecycleObserver? lifecycleObserver = null)
+        ISessionLifecycleObserver? lifecycleObserver = null,
+        NetclawPaths? paths = null)
     {
         _system = system;
         _sessionManagerProvider = sessionManagerProvider;
         _lifecycleObserver = lifecycleObserver;
+        _paths = paths;
     }
 
     /// <summary>
@@ -131,16 +137,16 @@ public sealed class SessionPipeline
         // When a materializer is provided, the subscriber actor is a child of the
         // owning actor — stopped automatically on passivation.
         var (subscriber, responseSource) = materializer is not null
-            ? Source.ActorRef<SessionOutput>(256, OverflowStrategy.DropHead)
+            ? Source.ActorRef<SessionOutput>(SessionOutputBufferSize, OverflowStrategy.DropHead)
                 .PreMaterialize(materializer)
-            : Source.ActorRef<SessionOutput>(256, OverflowStrategy.DropHead)
+            : Source.ActorRef<SessionOutput>(SessionOutputBufferSize, OverflowStrategy.DropHead)
                 .PreMaterialize(_system);
 
         // Inbound: ChannelInput → SendUserMessage → session manager (direct Tell)
         var inputSink = Flow.Create<ChannelInput>()
-            .Select(input => MapToCommand(input, sessionId, options))
+            .Select(input => MapToCommand(input, sessionId, options, _paths))
             .Via(killSwitch.Flow<SendUserMessage>())
-            .To(Sink.ForEach<SendUserMessage>(cmd => sessionManager.Tell(cmd)));
+            .To(Sink.ForEach<SendUserMessage>(cmd => sessionManager.Tell(cmd, ActorRefs.NoSender)));
 
         // Outbound: pre-materialized subscriber → kill switch → exposed Source
         // When a lifecycle observer is registered, tap the stream so every output
@@ -167,7 +173,7 @@ public sealed class SessionPipeline
             SessionId = sessionId,
             Subscriber = subscriber,
             Filter = options.Filter
-        });
+        }, ActorRefs.NoSender);
 
         return new MaterializedSession(
             inputSink,
@@ -176,7 +182,10 @@ public sealed class SessionPipeline
     }
 
     private static SendUserMessage MapToCommand(
-        ChannelInput input, SessionId sessionId, SessionPipelineOptions options)
+        ChannelInput input,
+        SessionId sessionId,
+        SessionPipelineOptions options,
+        NetclawPaths? paths)
     {
         var textParts = input.Contents.OfType<TextContent>().Select(t => t.Text);
         var content = string.Join("\n", textParts);
@@ -186,7 +195,9 @@ public sealed class SessionPipeline
         var dataContents = input.Contents.OfType<DataContent>().ToList();
         if (dataContents.Count > 0)
         {
-            var sessionDir = SessionDirectoryHelper.GetSessionDirectory(sessionId);
+            var sessionDir = paths is not null
+                ? SessionDirectoryHelper.GetSessionDirectory(sessionId, paths.SessionsDirectory)
+                : SessionDirectoryHelper.GetSessionDirectory(sessionId);
             var mediaDir = Path.Combine(sessionDir, "media");
             Directory.CreateDirectory(mediaDir);
 

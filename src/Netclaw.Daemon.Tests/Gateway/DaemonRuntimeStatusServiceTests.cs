@@ -4,6 +4,7 @@ using Netclaw.Actors.Memory;
 using Netclaw.Actors.Tools;
 using Netclaw.Channels;
 using Netclaw.Channels.Slack;
+using Netclaw.Channels.Telemetry;
 using Netclaw.Configuration;
 using Netclaw.Daemon.Configuration;
 using Netclaw.Daemon.Gateway;
@@ -217,5 +218,39 @@ public sealed class DaemonRuntimeStatusServiceTests : IDisposable
         Assert.NotNull(status.Memory);
         Assert.Equal("memorizer", status.Memory.Provider);
         Assert.Equal("unavailable", status.Memory.Status);
+    }
+
+    [Fact]
+    public async Task StatusIncludesSlackCountersSnapshot()
+    {
+        var before = ChannelTelemetry.GetSnapshot();
+
+        ChannelTelemetry.RecordSlackEventReceived("message");
+        ChannelTelemetry.RecordSlackEventDropped("channel_not_allowed");
+        ChannelTelemetry.RecordSlackEventRouted("message");
+        ChannelTelemetry.RecordSlackMessageEnqueued();
+        ChannelTelemetry.RecordSlackReplyPosted(42);
+        ChannelTelemetry.RecordSlackReplyFailed(77);
+
+        var service = new DaemonRuntimeStatusService(
+            TimeProvider.System,
+            channels: Array.Empty<IChannel>(),
+            slackOptions: new SlackChannelOptions { Enabled = false },
+            persistenceOptions: new DaemonPersistenceOptions(),
+            telemetryOptions: Options.Create(new TelemetryOptions()),
+            sessionConfig: DefaultSessionConfig,
+            modelSelection: DefaultModelSelection,
+            memoryConfig: DefaultMemoryConfig,
+            paths: CreatePaths());
+
+        var status = await service.GetStatusAsync();
+
+        Assert.NotNull(status.Telemetry.SlackCounters);
+        Assert.True(status.Telemetry.SlackCounters!.EventsReceived >= before.SlackEventsReceived + 1);
+        Assert.True(status.Telemetry.SlackCounters.EventsDropped >= before.SlackEventsDropped + 1);
+        Assert.True(status.Telemetry.SlackCounters.EventsRouted >= before.SlackEventsRouted + 1);
+        Assert.True(status.Telemetry.SlackCounters.MessagesEnqueued >= before.SlackMessagesEnqueued + 1);
+        Assert.True(status.Telemetry.SlackCounters.RepliesPosted >= before.SlackRepliesPosted + 1);
+        Assert.True(status.Telemetry.SlackCounters.RepliesFailed >= before.SlackRepliesFailed + 1);
     }
 }

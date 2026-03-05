@@ -790,6 +790,12 @@ static void WriteStatusResult(DaemonRuntimeStatus.Response status, string endpoi
                           ? $" ({status.Telemetry.OtlpEndpoint})"
                           : string.Empty));
 
+    if (status.Telemetry.SlackCounters is { } counters)
+    {
+        Console.WriteLine(
+            $"slack counters: recv={counters.EventsReceived} routed={counters.EventsRouted} dropped={counters.EventsDropped} enqueued={counters.MessagesEnqueued} replied={counters.RepliesPosted} reply_failed={counters.RepliesFailed}");
+    }
+
     if (status.Model is { } model)
     {
         Console.WriteLine($"model: {model.ModelId} (provider: {model.Provider}, context: {model.ContextWindow:N0} tokens)");

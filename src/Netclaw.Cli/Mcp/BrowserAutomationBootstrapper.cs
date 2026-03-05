@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text.RegularExpressions;
 
 namespace Netclaw.Cli.Mcp;
 
@@ -27,6 +28,18 @@ internal sealed class BrowserAutomationBootstrapper : IBrowserAutomationBootstra
 
         if (await HasNodeRuntimeAsync(ct))
         {
+            if (backend == BrowserAutomationMcpProfiles.ChromeDevToolsBackend)
+            {
+                var chrome = BrowserAutomationRuntimeDetector.DetectChrome();
+                if (!chrome.IsInstalled)
+                {
+                    return new BrowserAutomationBootstrapResult(
+                        Success: false,
+                        NeedsManualAction: false,
+                        Message: "Chrome DevTools MCP requires a local Chrome executable, but none was found.");
+                }
+            }
+
             return new BrowserAutomationBootstrapResult(
                 Success: true,
                 NeedsManualAction: false,
@@ -36,6 +49,18 @@ internal sealed class BrowserAutomationBootstrapper : IBrowserAutomationBootstra
         var install = await TryInstallNodeJsAsync(ct);
         if (install.Succeeded && await HasNodeRuntimeAsync(ct))
         {
+            if (backend == BrowserAutomationMcpProfiles.ChromeDevToolsBackend)
+            {
+                var chrome = BrowserAutomationRuntimeDetector.DetectChrome();
+                if (!chrome.IsInstalled)
+                {
+                    return new BrowserAutomationBootstrapResult(
+                        Success: false,
+                        NeedsManualAction: false,
+                        Message: "Node.js installed, but Chrome DevTools MCP still needs a local Chrome executable.");
+                }
+            }
+
             return new BrowserAutomationBootstrapResult(
                 Success: true,
                 NeedsManualAction: false,
@@ -63,6 +88,9 @@ internal sealed class BrowserAutomationBootstrapper : IBrowserAutomationBootstra
 
     private static async Task<bool> HasNodeRuntimeAsync(CancellationToken ct)
     {
+        if (BrowserAutomationRuntimeDetector.HasNodeRuntime())
+            return true;
+
         var hasNode = await CommandExistsAsync("node", ct);
         var hasNpx = await CommandExistsAsync("npx", ct);
         return hasNode && hasNpx;
@@ -106,7 +134,74 @@ internal sealed class BrowserAutomationBootstrapper : IBrowserAutomationBootstra
             return (true, ok, command);
         }
 
+        var userSpace = await TryInstallNodeJsUserSpaceAsync(ct);
+        if (userSpace.Attempted)
+            return userSpace;
+
         return (false, false, GetDefaultManualInstallCommand());
+    }
+
+    private static async Task<(bool Attempted, bool Succeeded, string? ManualCommand)> TryInstallNodeJsUserSpaceAsync(CancellationToken ct)
+    {
+        if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS())
+            return (false, false, null);
+
+        var platformToken = BrowserAutomationRuntimeDetector.GetNodeArchivePlatformToken();
+        var toolsRoot = BrowserAutomationRuntimeDetector.GetUserToolsRoot();
+        var installRoot = Path.Combine(toolsRoot, "node");
+        var downloadsRoot = Path.Combine(toolsRoot, "downloads");
+
+        Directory.CreateDirectory(toolsRoot);
+        Directory.CreateDirectory(downloadsRoot);
+
+        const string latestBaseUrl = "https://nodejs.org/dist/latest-v20.x/";
+        var archivePattern = $"node-v[0-9]+\\.[0-9]+\\.[0-9]+-{Regex.Escape(platformToken)}\\.tar\\.xz";
+
+        try
+        {
+            using var http = new HttpClient { Timeout = TimeSpan.FromMinutes(2) };
+            var listing = await http.GetStringAsync(latestBaseUrl, ct);
+            var match = Regex.Match(listing, archivePattern, RegexOptions.IgnoreCase);
+            if (!match.Success)
+            {
+                return (true, false,
+                    "Could not resolve a Node.js archive for this platform from https://nodejs.org/dist/latest-v20.x/");
+            }
+
+            var archiveName = match.Value;
+            var archivePath = Path.Combine(downloadsRoot, archiveName);
+
+            await using (var remote = await http.GetStreamAsync(latestBaseUrl + archiveName, ct))
+            await using (var local = File.Create(archivePath))
+            {
+                await remote.CopyToAsync(local, ct);
+            }
+
+            if (Directory.Exists(installRoot))
+                Directory.Delete(installRoot, recursive: true);
+
+            var extractedRootName = archiveName.Replace(".tar.xz", string.Empty, StringComparison.OrdinalIgnoreCase);
+            var extractedPath = Path.Combine(toolsRoot, extractedRootName);
+            if (Directory.Exists(extractedPath))
+                Directory.Delete(extractedPath, recursive: true);
+
+            var extracted = await RunCommandAsync(
+                "tar",
+                $"-xJf \"{archivePath}\" -C \"{toolsRoot}\"",
+                TimeSpan.FromMinutes(2),
+                ct);
+
+            if (!extracted || !Directory.Exists(extractedPath))
+                return (true, false, "tar -xJf <node-archive>.tar.xz -C ~/.netclaw/tools");
+
+            Directory.Move(extractedPath, installRoot);
+            return (true, true, null);
+        }
+        catch
+        {
+            return (true, false,
+                "Install Node.js LTS in user space from https://nodejs.org/dist/latest-v20.x/ and ensure node+npx are available");
+        }
     }
 
     private static string GetDefaultManualInstallCommand()
