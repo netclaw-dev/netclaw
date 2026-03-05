@@ -20,6 +20,7 @@
     <PackageVersion Include="Microsoft.AspNetCore.DataProtection.Extensions" Version="10.0.3" />
     <PackageVersion Include="Microsoft.Extensions.AI.Abstractions" Version="10.3.0" />
     <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.3" />
+    <PackageVersion Include="Microsoft.Extensions.TimeProvider.Testing" Version="10.3.0" />
     <PackageVersion Include="ModelContextProtocol.Core" Version="1.0.0" />
     <PackageVersion Include="Microsoft.AspNetCore.SignalR.Client" Version="10.0.2" />
     <PackageVersion Include="Microsoft.AspNetCore.DataProtection" Version="10.0.3" />

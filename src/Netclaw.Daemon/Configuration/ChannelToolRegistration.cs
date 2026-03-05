@@ -1,13 +1,14 @@
 using Microsoft.Extensions.DependencyInjection;
 using Netclaw.Actors.Tools;
-using Netclaw.Channels.Slack.Tools;
+using Netclaw.Tools;
 
 namespace Netclaw.Daemon.Configuration;
 
 /// <summary>
 /// Registers channel-specific LLM tools with the <see cref="ToolRegistry"/>
-/// after the DI container is built. Channel tools are only present in DI
-/// when their channel adapter is enabled.
+/// after the DI container is built. Channel tools are discovered dynamically
+/// via the <see cref="IChannelTool"/> marker interface — only tools whose
+/// channel adapter is enabled will be present in DI.
 /// </summary>
 internal static class ChannelToolRegistration
 {
@@ -15,13 +16,9 @@ internal static class ChannelToolRegistration
     {
         var registry = services.GetRequiredService<ToolRegistry>();
 
-        // Slack tools — only present when Slack adapter is enabled
-        var sendTool = services.GetService<SendSlackMessageTool>();
-        if (sendTool is not null)
-            registry.Register(sendTool);
-
-        var lookupTool = services.GetService<LookupSlackUserTool>();
-        if (lookupTool is not null)
-            registry.Register(lookupTool);
+        foreach (var tool in services.GetServices<IChannelTool>())
+        {
+            registry.Register(tool);
+        }
     }
 }

@@ -52,3 +52,9 @@ public sealed record StartProactiveThread(
     SlackChannelId ChannelId,
     SlackThreadTs ThreadTs,
     SessionId SessionId);
+
+/// <summary>
+/// Acknowledgement that the proactive thread's session pipeline was initialized.
+/// Returned by <see cref="SlackThreadBindingActor"/> in response to <see cref="StartProactiveThread"/>.
+/// </summary>
+public sealed record ProactiveThreadAck(SessionId SessionId);

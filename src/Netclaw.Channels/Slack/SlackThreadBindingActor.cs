@@ -78,6 +78,7 @@ internal sealed class SlackThreadBindingActor : ReceiveActor
         await EnsureInitializedAsync();
         // No inbound message to enqueue — the initial message was already posted to Slack.
         // The session pipeline is now live and ready for user replies.
+        Sender.Tell(new ProactiveThreadAck(message.SessionId));
     }
 
     private async Task HandleInboundAsync(SlackThreadInbound message)
