@@ -31,25 +31,34 @@ public sealed partial class AttachFileTool : NetclawTool<AttachFileTool.Params>
             return Task.FromResult("Error: No session directory available.");
 
         var sessionDir = NormalizeDirectoryPath(context.SessionDirectory);
+        var sessionRoot = TryGetSessionRootDirectory(sessionDir);
         var requestedPath = Path.GetFullPath(args.Path);
+
+        var requestedInCurrentSession = IsPathWithinDirectory(requestedPath, sessionDir);
+        var requestedInSessionRoot = sessionRoot is not null && IsPathWithinDirectory(requestedPath, sessionRoot);
+
+        if (!requestedInCurrentSession && !requestedInSessionRoot)
+        {
+            return Task.FromResult(
+                $"Error: File path must be within the current session directory ({sessionDir}) or another Netclaw session under {sessionRoot ?? "<unknown>"}.");
+        }
 
         if (!File.Exists(requestedPath))
             return Task.FromResult($"Error: File not found: {requestedPath}");
 
         var resolvedPath = ResolveFinalPath(requestedPath);
-        var attachPath = resolvedPath;
+        var resolvedInCurrentSession = IsPathWithinDirectory(resolvedPath, sessionDir);
+        var resolvedInSessionRoot = sessionRoot is not null && IsPathWithinDirectory(resolvedPath, sessionRoot);
 
-        if (!IsPathWithinDirectory(resolvedPath, sessionDir))
+        if (!resolvedInCurrentSession && !resolvedInSessionRoot)
         {
-            var sessionRoot = TryGetSessionRootDirectory(sessionDir);
-            if (sessionRoot is null || !IsPathWithinDirectory(resolvedPath, sessionRoot))
-            {
-                return Task.FromResult(
-                    $"Error: File path must be within the current session directory ({sessionDir}) or another Netclaw session under {sessionRoot ?? "<unknown>"}.");
-            }
-
-            attachPath = CopyIntoCurrentSession(resolvedPath, sessionDir);
+            return Task.FromResult(
+                $"Error: File path must be within the current session directory ({sessionDir}) or another Netclaw session under {sessionRoot ?? "<unknown>"}.");
         }
+
+        var attachPath = resolvedInCurrentSession
+            ? resolvedPath
+            : CopyIntoCurrentSession(resolvedPath, sessionDir);
 
         if (!IsPathWithinDirectory(attachPath, sessionDir))
             return Task.FromResult($"Error: Attach path escaped the session directory ({sessionDir}).");
