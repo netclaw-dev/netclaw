@@ -46,6 +46,7 @@ internal sealed class SlackThreadBindingActor : ReceiveActor
             .WithContext("SlackThreadTs", _threadTs);
 
         ReceiveAsync<SlackThreadInbound>(HandleInboundAsync);
+        ReceiveAsync<StartProactiveThread>(HandleProactiveThreadAsync);
         ReceiveAsync<ThreadOutput>(HandleOutputAsync);
         Receive<ReceiveTimeout>(_ =>
         {
@@ -69,6 +70,14 @@ internal sealed class SlackThreadBindingActor : ReceiveActor
         _session?.DisposeAsync().AsTask().GetAwaiter().GetResult();
         _materializer?.Dispose();
         base.PostStop();
+    }
+
+    private async Task HandleProactiveThreadAsync(StartProactiveThread message)
+    {
+        _log.Info("Initializing proactive thread pipeline for session {0}", message.SessionId.Value);
+        await EnsureInitializedAsync();
+        // No inbound message to enqueue — the initial message was already posted to Slack.
+        // The session pipeline is now live and ready for user replies.
     }
 
     private async Task HandleInboundAsync(SlackThreadInbound message)

@@ -105,6 +105,19 @@ public sealed class SlackConversationActor : ReceiveActor
                 ReceivedAt: _dependencies.TimeProvider.GetUtcNow(),
                 Files: message.Files));
         });
+
+        Receive<StartProactiveThread>(message =>
+        {
+            var threadActorName = Uri.EscapeDataString(message.ThreadTs.Value);
+            var existingThread = Context.Child(threadActorName);
+
+            var thread = existingThread.IsNobody()
+                ? Context.ActorOf(CreateThreadProps(message.ChannelId, message.ThreadTs), threadActorName)
+                : existingThread;
+
+            _log.Debug("Routing proactive thread setup to thread actor {0}", message.ThreadTs);
+            thread.Forward(message);
+        });
     }
 
     public static Props CreateProps(SlackChannelId conversationId, SlackGatewayDependencies dependencies) =>

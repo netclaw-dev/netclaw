@@ -59,6 +59,12 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
 
     public string DisplayName => "Slack";
 
+    /// <summary>
+    /// The gateway actor ref, exposed so that proactive tools can send
+    /// <see cref="StartProactiveThread"/> messages to wire up the actor hierarchy.
+    /// </summary>
+    internal IActorRef? Gateway => _gateway;
+
     public ValueTask<ChannelHealth> GetHealthAsync(CancellationToken cancellationToken = default)
     {
         if (!_options.Enabled)

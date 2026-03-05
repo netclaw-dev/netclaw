@@ -1,5 +1,6 @@
 using Netclaw.Channels;
 using Netclaw.Channels.Slack;
+using Netclaw.Channels.Slack.Tools;
 using SlackNet.Events;
 using SlackNet.Extensions.DependencyInjection;
 
@@ -25,6 +26,7 @@ public static class SlackChannelRegistrationExtensions
 
         services.AddHttpClient("slack-files");
         services.AddSingleton<ISlackReplyClient, SlackReplyClient>();
+        services.AddSingleton<ISlackOutboundClient, SlackOutboundClient>();
         services.AddKeyedSingleton<IChannel, SlackChannel>(SlackChannelKey);
         services.AddSingleton<IChannel>(sp =>
             sp.GetRequiredKeyedService<IChannel>(SlackChannelKey));
@@ -42,7 +44,36 @@ public static class SlackChannelRegistrationExtensions
             c.RegisterEventHandler<AppMention, SlackChannel>();
         });
 
+        // Channel-specific LLM tools: registered as INetclawTool singletons.
+        // The gateway actor ref is resolved lazily via SlackChannel since it's
+        // not available until StartAsync completes.
+        services.AddSingleton<SendSlackMessageTool>(sp =>
+        {
+            var outbound = sp.GetRequiredService<ISlackOutboundClient>();
+            var channel = sp.GetRequiredService<SlackChannel>();
+            return new SendSlackMessageTool(
+                outbound,
+                slackOptions,
+                ResolveDefaultChannelId(slackOptions),
+                () => channel.Gateway);
+        });
+
+        services.AddSingleton<LookupSlackUserTool>(sp =>
+        {
+            var slackApi = sp.GetRequiredService<SlackNet.ISlackApiClient>();
+            return new LookupSlackUserTool(slackApi, slackOptions);
+        });
+
         services.AddSingleton<IHostedService>(sp =>
             (IHostedService)sp.GetRequiredKeyedService<IChannel>(SlackChannelKey));
+    }
+
+    private static SlackChannelId? ResolveDefaultChannelId(SlackChannelOptions options)
+    {
+        if (!string.IsNullOrWhiteSpace(options.DefaultChannelId))
+            return new SlackChannelId(options.DefaultChannelId);
+        // Channel name resolution happens at runtime in SlackChannel.StartAsync;
+        // for tool ACL we only use the configured ID.
+        return null;
     }
 }
