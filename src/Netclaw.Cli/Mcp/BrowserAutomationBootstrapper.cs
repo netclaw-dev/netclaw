@@ -92,28 +92,46 @@ internal sealed class BrowserAutomationBootstrapper : IBrowserAutomationBootstra
 
         if (backend == BrowserAutomationMcpProfiles.PlaywrightBackend)
         {
-            if (BrowserAutomationRuntimeDetector.HasPlaywrightFirefoxBrowserInstalled())
+            var browser = BrowserAutomationRuntimeDetector.GetPreferredPlaywrightBrowser();
+            if (BrowserAutomationRuntimeDetector.HasPlaywrightBrowserRuntime(browser))
             {
                 return new BrowserAutomationBootstrapResult(
                     Success: true,
                     NeedsManualAction: false,
-                    Message: "Playwright Firefox browser runtime detected.");
+                    Message: $"Playwright {browser} browser runtime detected.");
             }
 
-            var install = await TryInstallPlaywrightFirefoxBrowserAsync(ct);
-            if (install.Succeeded && BrowserAutomationRuntimeDetector.HasPlaywrightFirefoxBrowserInstalled())
+            if (string.Equals(browser, "firefox", StringComparison.OrdinalIgnoreCase))
+            {
+                var install = await TryInstallPlaywrightBrowserAsync(browser, ct);
+                if (install.Succeeded && BrowserAutomationRuntimeDetector.HasPlaywrightBrowserRuntime(browser))
+                {
+                    return new BrowserAutomationBootstrapResult(
+                        Success: true,
+                        NeedsManualAction: false,
+                        Message: "Installed Playwright firefox browser runtime automatically.");
+                }
+
+                return new BrowserAutomationBootstrapResult(
+                    Success: false,
+                    NeedsManualAction: true,
+                    Message: "Playwright browser runtime is not installed. Install Firefox runtime in user space, then press Enter to retry setup.",
+                    ManualCommand: install.ManualCommand ?? BuildPlaywrightInstallCommand(browser));
+            }
+
+            if (string.Equals(browser, "chrome", StringComparison.OrdinalIgnoreCase))
             {
                 return new BrowserAutomationBootstrapResult(
-                    Success: true,
+                    Success: false,
                     NeedsManualAction: false,
-                    Message: "Installed Playwright Firefox browser runtime automatically.");
+                    Message: "Playwright is configured for Chrome, but no local Chrome executable was found. Install Chrome or set NETCLAW_PLAYWRIGHT_BROWSER=firefox.");
             }
 
             return new BrowserAutomationBootstrapResult(
                 Success: false,
                 NeedsManualAction: true,
-                Message: "Playwright browser runtime is not installed. Install Firefox runtime in user space, then press Enter to retry setup.",
-                ManualCommand: install.ManualCommand ?? BuildPlaywrightInstallCommand());
+                Message: $"Playwright browser runtime '{browser}' is not installed. Install it in user space, then press Enter to retry setup.",
+                ManualCommand: BuildPlaywrightInstallCommand(browser));
         }
 
         return new BrowserAutomationBootstrapResult(
@@ -240,7 +258,9 @@ internal sealed class BrowserAutomationBootstrapper : IBrowserAutomationBootstra
         }
     }
 
-    private static async Task<(bool Attempted, bool Succeeded, string? ManualCommand)> TryInstallPlaywrightFirefoxBrowserAsync(CancellationToken ct)
+    private static async Task<(bool Attempted, bool Succeeded, string? ManualCommand)> TryInstallPlaywrightBrowserAsync(
+        string browser,
+        CancellationToken ct)
     {
         try
         {
@@ -250,20 +270,20 @@ internal sealed class BrowserAutomationBootstrapper : IBrowserAutomationBootstra
             var env = BrowserAutomationRuntimeDetector.BuildPlaywrightEnvironmentOverlay(npxCommand);
             var succeeded = await RunCommandAsync(
                 npxCommand,
-                "-y playwright@latest install firefox",
+                $"-y playwright@latest install {browser}",
                 TimeSpan.FromMinutes(5),
                 ct,
                 env);
 
-            return (true, succeeded, BuildPlaywrightInstallCommand());
+            return (true, succeeded, BuildPlaywrightInstallCommand(browser));
         }
         catch
         {
-            return (true, false, BuildPlaywrightInstallCommand());
+            return (true, false, BuildPlaywrightInstallCommand(browser));
         }
     }
 
-    private static string BuildPlaywrightInstallCommand()
+    private static string BuildPlaywrightInstallCommand(string browser)
     {
         var npxCommand = BrowserAutomationRuntimeDetector.GetPreferredNpxCommand();
         var browsersPath = BrowserAutomationRuntimeDetector.GetPlaywrightBrowsersPath();
@@ -272,10 +292,10 @@ internal sealed class BrowserAutomationBootstrapper : IBrowserAutomationBootstra
         {
             var commandDir = Path.GetDirectoryName(npxCommand);
             if (!string.IsNullOrWhiteSpace(commandDir))
-                return $"PATH=\"{commandDir}:$PATH\" PLAYWRIGHT_BROWSERS_PATH=\"{browsersPath}\" \"{npxCommand}\" -y playwright@latest install firefox";
+                return $"PATH=\"{commandDir}:$PATH\" PLAYWRIGHT_BROWSERS_PATH=\"{browsersPath}\" \"{npxCommand}\" -y playwright@latest install {browser}";
         }
 
-        return $"PLAYWRIGHT_BROWSERS_PATH=\"{browsersPath}\" {npxCommand} -y playwright@latest install firefox";
+        return $"PLAYWRIGHT_BROWSERS_PATH=\"{browsersPath}\" {npxCommand} -y playwright@latest install {browser}";
     }
 
     private static string GetDefaultManualInstallCommand()

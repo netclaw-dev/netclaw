@@ -12,6 +12,7 @@ internal static class BrowserAutomationMcpProfiles
         var npxCommand = BrowserAutomationRuntimeDetector.GetPreferredNpxCommand();
         var env = BrowserAutomationRuntimeDetector.BuildMcpEnvironmentOverlay(npxCommand);
         var playwrightEnv = BrowserAutomationRuntimeDetector.BuildPlaywrightEnvironmentOverlay(npxCommand);
+        var playwrightBrowser = BrowserAutomationRuntimeDetector.GetPreferredPlaywrightBrowser();
 
         return backend switch
         {
@@ -32,7 +33,7 @@ internal static class BrowserAutomationMcpProfiles
                     "--snapshot-mode",
                     "none",
                     "--browser",
-                    "firefox"
+                    playwrightBrowser
                 ]
             }),
 

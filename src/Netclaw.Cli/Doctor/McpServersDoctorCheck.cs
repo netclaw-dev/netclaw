@@ -112,11 +112,12 @@ public sealed class McpServersDoctorCheck(NetclawPaths paths) : IDoctorCheck
                     continue;
                 }
 
-                if (!BrowserAutomationRuntimeDetector.HasPlaywrightFirefoxBrowserInstalled())
+                var browser = BrowserAutomationRuntimeDetector.GetPlaywrightBrowserFromArguments(entry.Arguments);
+                if (!BrowserAutomationRuntimeDetector.HasPlaywrightBrowserRuntime(browser))
                 {
                     enabledCount++;
                     failedCount++;
-                    statusMessages.Add($"{name}: unreachable — Playwright Firefox runtime not installed");
+                    statusMessages.Add($"{name}: unreachable — Playwright {browser} runtime not installed");
                     continue;
                 }
             }

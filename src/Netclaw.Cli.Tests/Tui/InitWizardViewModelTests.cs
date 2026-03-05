@@ -739,7 +739,7 @@ public sealed class InitWizardViewModelTests : IDisposable
         Assert.Contains("--snapshot-mode", args);
         Assert.Contains("none", args);
         Assert.Contains("--browser", args);
-        Assert.Contains("firefox", args);
+        Assert.Contains(BrowserAutomationRuntimeDetector.GetPreferredPlaywrightBrowser(), args);
 
         var envVars = config.RootElement
             .GetProperty("McpServers")
