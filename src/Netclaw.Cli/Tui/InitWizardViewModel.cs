@@ -870,7 +870,7 @@ public partial class InitWizardViewModel : ReactiveViewModel
             }
 
             var userIds = ParseUserIds(SlackAllowedUserIdsInput);
-            if (SlackAllowDirectMessages || userIds.Count > 0)
+            if (SlackAllowDirectMessages)
             {
                 slackSection["AllowDirectMessages"] = true;
             }

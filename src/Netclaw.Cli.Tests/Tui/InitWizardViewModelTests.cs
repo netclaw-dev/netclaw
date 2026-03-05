@@ -827,7 +827,7 @@ public sealed class InitWizardViewModelTests : IDisposable
     }
 
     [Fact]
-    public async Task HealthCheck_AutoEnablesDm_WhenUserIdsProvided()
+    public async Task HealthCheck_WritesAllowedUsers_WithoutAutoEnablingDm()
     {
         using var vm = CreateViewModel();
         vm.SelectedProviderType = "ollama";
@@ -844,7 +844,7 @@ public sealed class InitWizardViewModelTests : IDisposable
 
         var config = JsonDocument.Parse(File.ReadAllText(_paths.NetclawConfigPath));
         Assert.True(config.RootElement.TryGetProperty("Slack", out var slack));
-        Assert.True(slack.GetProperty("AllowDirectMessages").GetBoolean());
+        Assert.False(slack.TryGetProperty("AllowDirectMessages", out _));
 
         var allowedUsers = slack.GetProperty("AllowedUserIds");
         Assert.Equal(1, allowedUsers.GetArrayLength());

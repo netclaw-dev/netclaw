@@ -236,7 +236,7 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
                 WizardStep.ChatServices when _chatServicesSubStep == 4 =>
                     "  DMs create a private session per conversation. Each top-level DM starts a new session.",
                 WizardStep.ChatServices when _chatServicesSubStep == 5 =>
-                    "  Restrict DM access to specific Slack user IDs. Leave blank to allow all workspace members.",
+                    "  Restrict Slack access to specific user IDs for both channels and DMs. Leave blank to allow all workspace members.",
                 WizardStep.ChatServices =>
                     "  Socket Mode requires both tokens. See: https://api.slack.com/apis/socket-mode",
                 WizardStep.Acl =>
@@ -825,15 +825,7 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
                 if (selected.Count > 0)
                 {
                     ViewModel.SlackAllowDirectMessages = selected[0].StartsWith("Yes", StringComparison.Ordinal);
-                    if (ViewModel.SlackAllowDirectMessages)
-                    {
-                        SetChatServicesSubStep(5);
-                    }
-                    else
-                    {
-                        _chatServicesSubStep = 0;
-                        ViewModel.GoNext();
-                    }
+                    SetChatServicesSubStep(5);
                 }
             })
             .DisposeWith(_stepSubs);
