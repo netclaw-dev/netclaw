@@ -102,6 +102,26 @@ public sealed class McpServersDoctorCheck(NetclawPaths paths) : IDoctorCheck
                 }
             }
 
+            if (entry.Enabled && name.Equals("browser_playwright", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!BrowserAutomationRuntimeDetector.HasNodeRuntime())
+                {
+                    enabledCount++;
+                    failedCount++;
+                    statusMessages.Add($"{name}: unreachable — Node.js runtime (node+npx) not found");
+                    continue;
+                }
+
+                var browser = BrowserAutomationRuntimeDetector.GetPlaywrightBrowserFromArguments(entry.Arguments);
+                if (!BrowserAutomationRuntimeDetector.HasPlaywrightBrowserRuntime(browser))
+                {
+                    enabledCount++;
+                    failedCount++;
+                    statusMessages.Add($"{name}: unreachable — Playwright {browser} runtime not installed");
+                    continue;
+                }
+            }
+
             // Use full entry (with secrets merged) if available
             var probeEntry = fullServers.TryGetValue(name, out var full) ? full : entry;
             var probe = await McpCommand.ProbeServerAsync(name, probeEntry, cancellationToken);
