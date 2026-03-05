@@ -29,7 +29,8 @@ public class OpenAiDeviceFlowServiceTests
             {
                 device_auth_id = "daid-123",
                 user_code = "ABCD-1234",
-                interval = 5
+                interval = 5,
+                expires_in = 1200
             });
         });
 
@@ -46,7 +47,25 @@ public class OpenAiDeviceFlowServiceTests
         Assert.Equal("daid-123", result.DeviceCode); // device_auth_id -> DeviceCode
         Assert.Equal("ABCD-1234", result.UserCode);
         Assert.Equal("https://auth.openai.com/codex/device", result.VerificationUri);
+        Assert.Equal(1200, result.ExpiresIn);
         Assert.Equal(5, result.Interval);
+    }
+
+    [Fact]
+    public async Task StartDeviceAuthorization_MissingExpiresIn_UsesDefaultExpiry()
+    {
+        var handler = new FakeHttpMessageHandler(_ =>
+            JsonResponse(new
+            {
+                device_auth_id = "daid-123",
+                user_code = "ABCD-1234",
+                interval = 5
+            }));
+
+        var service = new OpenAiDeviceFlowService(new HttpClient(handler));
+        var result = await service.StartDeviceAuthorizationAsync(TestConfig);
+
+        Assert.Equal(900, result.ExpiresIn);
     }
 
     [Fact]
@@ -183,6 +202,25 @@ public class OpenAiDeviceFlowServiceTests
     }
 
     [Fact]
+    public async Task PollForToken_404_FailsFastWithConfigurationGuidance()
+    {
+        var handler = new FakeHttpMessageHandler(_ =>
+            new HttpResponseMessage(HttpStatusCode.NotFound));
+
+        var timeProvider = new FakeTimeProvider();
+        var service = new OpenAiDeviceFlowService(new HttpClient(handler), timeProvider);
+        var deviceAuth = new DeviceAuthorizationResponse(
+            "daid", "UC", "https://auth.openai.com/codex/device", 30, 1);
+
+        var pollTask = service.PollForTokenAsync(TestConfig, deviceAuth);
+        timeProvider.Advance(TimeSpan.FromSeconds(1));
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => pollTask);
+        Assert.Contains("endpoint", ex.Message);
+        Assert.Contains("404", ex.Message);
+    }
+
+    [Fact]
     public async Task PollForToken_PkceExchangeFailure_Propagates()
     {
         var handler = new FakeHttpMessageHandler(request =>
@@ -280,5 +318,26 @@ public class OpenAiDeviceFlowServiceTests
             new SensitiveString("expired-refresh-token"));
 
         Assert.Null(result);
+    }
+
+    [Fact]
+    public async Task RefreshToken_StringOverload_RemainsSupported()
+    {
+        var handler = new FakeHttpMessageHandler(_ =>
+            JsonResponse(new
+            {
+                access_token = "new-at",
+                expires_in = 3600
+            }));
+
+        var service = new OpenAiDeviceFlowService(new HttpClient(handler));
+
+        var result = await service.RefreshTokenAsync(
+            "https://auth.openai.com/oauth/token",
+            "client-id",
+            "old-refresh-token");
+
+        Assert.NotNull(result);
+        Assert.Equal("new-at", result!.AccessToken.Value);
     }
 }

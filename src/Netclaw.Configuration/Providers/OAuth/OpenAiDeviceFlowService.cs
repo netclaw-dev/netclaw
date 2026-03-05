@@ -64,11 +64,13 @@ public sealed class OpenAiDeviceFlowService : IDeviceFlowService
             throw new InvalidOperationException("Empty device authorization response from OpenAI.");
 
         // Map OpenAI's response to the shared DeviceAuthorizationResponse
+        var expiresIn = result.ExpiresIn is > 0 ? result.ExpiresIn.Value : DefaultExpiresIn;
+
         return new DeviceAuthorizationResponse(
             DeviceCode: result.DeviceAuthId,
             UserCode: result.UserCode,
             VerificationUri: VerificationUri,
-            ExpiresIn: DefaultExpiresIn,
+            ExpiresIn: expiresIn,
             Interval: Math.Max(result.Interval, 1));
     }
 
@@ -114,9 +116,16 @@ public sealed class OpenAiDeviceFlowService : IDeviceFlowService
                     ex);
             }
 
-            // 403/404 = authorization pending, keep polling
-            if (response.StatusCode is HttpStatusCode.Forbidden or HttpStatusCode.NotFound)
+            // 403 = authorization pending, keep polling
+            if (response.StatusCode == HttpStatusCode.Forbidden)
                 continue;
+
+            if (response.StatusCode == HttpStatusCode.NotFound)
+            {
+                onStateChanged?.Invoke(DeviceFlowState.Error);
+                throw new InvalidOperationException(
+                    "OpenAI device polling endpoint was not found (HTTP 404). Check provider OAuth endpoint configuration and try again.");
+            }
 
             // 5xx = transient server error, keep polling (momentary 502/503 shouldn't kill the flow)
             if ((int)response.StatusCode >= 500)
@@ -190,6 +199,13 @@ public sealed class OpenAiDeviceFlowService : IDeviceFlowService
         return ParseTokenResponse(doc.RootElement);
     }
 
+    public Task<OAuthDeviceFlowResult?> RefreshTokenAsync(
+        string tokenEndpoint,
+        string clientId,
+        string refreshToken,
+        CancellationToken ct = default) =>
+        RefreshTokenAsync(tokenEndpoint, clientId, new SensitiveString(refreshToken), ct);
+
     /// <summary>
     /// Step 4: Exchange the authorization code for access/refresh tokens using PKCE.
     /// </summary>
@@ -243,7 +259,8 @@ public sealed class OpenAiDeviceFlowService : IDeviceFlowService
     private sealed record OpenAiUserCodeResponse(
         [property: JsonPropertyName("device_auth_id")] string DeviceAuthId,
         [property: JsonPropertyName("user_code")] string UserCode,
-        [property: JsonPropertyName("interval")] int Interval);
+        [property: JsonPropertyName("interval")] int Interval,
+        [property: JsonPropertyName("expires_in")] int? ExpiresIn);
 
     private sealed record OpenAiAuthCodeResponse(
         [property: JsonPropertyName("authorization_code")] string AuthorizationCode,

@@ -30,4 +30,14 @@ public interface IDeviceFlowService
         string clientId,
         SensitiveString refreshToken,
         CancellationToken ct = default);
+
+    /// <summary>
+    /// Backward-compatible overload that accepts a raw refresh token string.
+    /// </summary>
+    Task<OAuthDeviceFlowResult?> RefreshTokenAsync(
+        string tokenEndpoint,
+        string clientId,
+        string refreshToken,
+        CancellationToken ct = default) =>
+        RefreshTokenAsync(tokenEndpoint, clientId, new SensitiveString(refreshToken), ct);
 }

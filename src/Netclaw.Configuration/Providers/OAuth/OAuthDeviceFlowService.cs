@@ -222,6 +222,13 @@ public sealed class OAuthDeviceFlowService : IDeviceFlowService
         return ParseTokenResponse(doc.RootElement);
     }
 
+    public Task<OAuthDeviceFlowResult?> RefreshTokenAsync(
+        string tokenEndpoint,
+        string clientId,
+        string refreshToken,
+        CancellationToken ct = default) =>
+        RefreshTokenAsync(tokenEndpoint, clientId, new SensitiveString(refreshToken), ct);
+
     private OAuthDeviceFlowResult ParseTokenResponse(JsonElement root)
     {
         var accessToken = root.GetProperty("access_token").GetString()

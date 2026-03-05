@@ -204,4 +204,25 @@ public class OAuthDeviceFlowServiceTests
 
         Assert.Null(result);
     }
+
+    [Fact]
+    public async Task RefreshToken_StringOverload_RemainsSupported()
+    {
+        var handler = new FakeHttpMessageHandler(_ =>
+            JsonResponse(new
+            {
+                access_token = "new-at",
+                expires_in = 3600
+            }));
+
+        var service = new OAuthDeviceFlowService(new HttpClient(handler));
+
+        var result = await service.RefreshTokenAsync(
+            "https://auth.example.com/token",
+            "client-id",
+            "old-refresh-token");
+
+        Assert.NotNull(result);
+        Assert.Equal("new-at", result!.AccessToken.Value);
+    }
 }
