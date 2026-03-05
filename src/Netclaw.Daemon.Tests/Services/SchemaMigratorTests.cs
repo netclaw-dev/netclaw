@@ -131,7 +131,26 @@ public sealed class SchemaMigratorTests : IDisposable
 
     public void Dispose()
     {
+        SqliteConnection.ClearAllPools();
+
         if (Directory.Exists(_tempDir))
-            Directory.Delete(_tempDir, recursive: true);
+        {
+            for (var attempt = 1; attempt <= 5; attempt++)
+            {
+                try
+                {
+                    Directory.Delete(_tempDir, recursive: true);
+                    break;
+                }
+                catch (IOException) when (attempt < 5)
+                {
+                    Thread.Sleep(50);
+                }
+                catch (UnauthorizedAccessException) when (attempt < 5)
+                {
+                    Thread.Sleep(50);
+                }
+            }
+        }
     }
 }
