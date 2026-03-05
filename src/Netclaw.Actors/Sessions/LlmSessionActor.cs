@@ -802,6 +802,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor
         var tp = _timeProvider;
         var sessionDir = GetSessionDirectory();
         var maxInlineToolResultChars = _config.MaxInlineToolResultChars;
+        var toolExecutionTimeout = TimeSpan.FromSeconds(Math.Max(1, _config.ToolExecutionTimeoutSeconds));
 
         // Capture subscriber snapshot for subagent activity notifications.
         // These are emitted directly from the tool execution thread via Tell(),
@@ -819,7 +820,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor
             logActor?.Tell(output);
         };
 
-        _ = ExecuteToolsAsync(executor, toolCalls, sessionId, auditLogger, tp, sessionDir, maxInlineToolResultChars, self, emitSubAgentOutput);
+        _ = ExecuteToolsAsync(executor, toolCalls, sessionId, auditLogger, tp, sessionDir, maxInlineToolResultChars, toolExecutionTimeout, self, emitSubAgentOutput);
     }
 
     private void HandleTextResponse(
@@ -1104,6 +1105,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor
         InjectDynamicContextLayers(messages);
         var self = Self;
         var client = _chatClient;
+        var timeout = TimeSpan.FromSeconds(Math.Max(1, _config.TurnLlmTimeoutSeconds));
 
         ChatOptions? options = null;
         if (!forceNoTools && _availableTools.Count > 0)
@@ -1114,7 +1116,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor
             };
         }
 
-        _ = InvokeLlmAsync(client, messages, options, self);
+        _ = InvokeLlmAsync(client, messages, options, self, timeout);
     }
 
     /// <summary>
@@ -1154,12 +1156,26 @@ public sealed class LlmSessionActor : ReceivePersistentActor
     }
 
     private static async Task InvokeLlmAsync(
-        IChatClient client, List<AiChatMessage> messages, ChatOptions? options, IActorRef self)
+        IChatClient client,
+        List<AiChatMessage> messages,
+        ChatOptions? options,
+        IActorRef self,
+        TimeSpan timeout)
     {
         try
         {
-            var response = await InvokeStreamingResponseAsync(client, messages, options, self);
+            using var cts = new CancellationTokenSource(timeout);
+            var response = await InvokeStreamingResponseAsync(client, messages, options, self, cts.Token);
             self.Tell(response);
+        }
+        catch (OperationCanceledException ex)
+        {
+            self.Tell(new LlmCallFailed
+            {
+                Cause = new TimeoutException(
+                    $"LLM call exceeded timeout of {timeout.TotalSeconds:F0}s",
+                    ex)
+            });
         }
         catch (Exception ex)
         {
@@ -1171,7 +1187,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor
         IChatClient client,
         List<AiChatMessage> messages,
         ChatOptions? options,
-        IActorRef self)
+        IActorRef self,
+        CancellationToken cancellationToken)
     {
         var contents = new List<AIContent>();
         var updates = new List<ChatResponseUpdate>();
@@ -1182,7 +1199,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor
         var textDeltaCount = 0;
         var thinkingDeltaCount = 0;
 
-        await foreach (var update in client.GetStreamingResponseAsync(messages, options))
+        await foreach (var update in client.GetStreamingResponseAsync(messages, options, cancellationToken))
         {
             updates.Add(update);
 
@@ -1276,11 +1293,14 @@ public sealed class LlmSessionActor : ReceivePersistentActor
         TimeProvider timeProvider,
         string sessionDir,
         int maxInlineToolResultChars,
+        TimeSpan timeout,
         IActorRef self,
         Action<SubAgentOutput> emitSubAgentOutput)
     {
         try
         {
+            using var cts = new CancellationTokenSource(timeout);
+
             // Execute all tool calls in parallel — each is independent
             var tasks = toolCalls.Select(tc => ExecuteSingleToolAsync(
                 executor,
@@ -1290,7 +1310,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor
                 timeProvider,
                 sessionDir,
                 maxInlineToolResultChars,
-                emitSubAgentOutput));
+                emitSubAgentOutput,
+                cts.Token));
             var results = await Task.WhenAll(tasks);
 
             var fileAttachments = results.SelectMany(r => r.FileAttachments).ToList();
@@ -1298,6 +1319,15 @@ public sealed class LlmSessionActor : ReceivePersistentActor
             {
                 ToolResults = results.Select(r => r.Message).ToList(),
                 FileAttachments = fileAttachments
+            });
+        }
+        catch (OperationCanceledException ex)
+        {
+            self.Tell(new ToolExecutionFailed
+            {
+                Cause = new TimeoutException(
+                    $"Tool execution exceeded timeout of {timeout.TotalSeconds:F0}s",
+                    ex)
             });
         }
         catch (Exception ex)
@@ -1314,7 +1344,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor
         TimeProvider timeProvider,
         string sessionDir,
         int maxInlineToolResultChars,
-        Action<SubAgentOutput> emitSubAgentOutput)
+        Action<SubAgentOutput> emitSubAgentOutput,
+        CancellationToken ct)
     {
         var sw = Stopwatch.StartNew();
         string resultText;
@@ -1339,7 +1370,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor
         };
         try
         {
-            resultText = await executor.ExecuteAsync(tc, context);
+            resultText = await executor.ExecuteAsync(tc, context, ct);
             sw.Stop();
 
             auditLogger?.Log(new ToolAuditEntry

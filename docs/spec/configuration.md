@@ -135,7 +135,9 @@ Tuning parameters for LLM session behavior.
     "SnapshotInterval": 20,
     "KeepRecentToolResults": 3,
     "MaxToolIterationsPerTurn": 10,
-    "SidecarLlmTimeoutSeconds": 90
+    "SidecarLlmTimeoutSeconds": 90,
+    "TurnLlmTimeoutSeconds": 180,
+    "ToolExecutionTimeoutSeconds": 90
   }
 }
 ```
@@ -147,6 +149,8 @@ Tuning parameters for LLM session behavior.
 | `KeepRecentToolResults` | int | `3` | Recent tool call/result pairs kept in full during compaction. |
 | `MaxToolIterationsPerTurn` | int | `10` | Max tool execution rounds per turn before forcing a text response. |
 | `SidecarLlmTimeoutSeconds` | int | `90` | Timeout for sidecar LLM calls (title generation, observer summaries, memory extraction). |
+| `TurnLlmTimeoutSeconds` | int | `180` | Timeout for the primary per-turn LLM streaming call before forcing an error/recovery path. |
+| `ToolExecutionTimeoutSeconds` | int | `90` | Timeout for one tool-execution batch before failing the turn safely. |
 
 ### Tools
 
@@ -316,7 +320,9 @@ export NETCLAW_Session__MaxToolIterationsPerTurn="5"
     "CompactionThreshold": 0.75,
     "SnapshotInterval": 20,
     "KeepRecentToolResults": 3,
-    "MaxToolIterationsPerTurn": 10
+    "MaxToolIterationsPerTurn": 10,
+    "TurnLlmTimeoutSeconds": 180,
+    "ToolExecutionTimeoutSeconds": 90
   },
   "Tools": {
     "ShellTimeoutSeconds": 60,
