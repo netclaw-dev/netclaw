@@ -1,5 +1,7 @@
+using Akka.Actor;
 using Microsoft.Extensions.AI;
 using ModelContextProtocol.Client;
+using Netclaw.Actors.Reminders;
 using Netclaw.Configuration;
 using Netclaw.Search;
 using Netclaw.Security;
@@ -29,6 +31,21 @@ public static class ToolRegistrationExtensions
         // Register search_tools meta-tool (always loaded, "builtin" grant)
         registry.Register(new SearchToolsTool(registry));
 
+        return registry;
+    }
+
+    /// <summary>
+    /// Registers reminder tools (set, cancel, list) that communicate with the
+    /// <see cref="ReminderManagerActor"/> via Ask.
+    /// </summary>
+    public static ToolRegistry WithReminderTools(
+        this ToolRegistry registry,
+        IActorRef reminderManager,
+        TimeProvider timeProvider)
+    {
+        registry.Register(new SetReminderTool(reminderManager, timeProvider));
+        registry.Register(new CancelReminderTool(reminderManager));
+        registry.Register(new ListRemindersTool(reminderManager));
         return registry;
     }
 

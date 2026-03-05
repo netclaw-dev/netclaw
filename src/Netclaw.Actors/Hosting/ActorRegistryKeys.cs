@@ -10,3 +10,8 @@ public sealed class SessionManagerActorKey;
 /// Marker type for ActorRegistry lookup of the model capability cache actor.
 /// </summary>
 public sealed class ModelCapabilityActorKey;
+
+/// <summary>
+/// Marker type for ActorRegistry lookup of the reminder manager actor.
+/// </summary>
+public sealed class ReminderManagerActorKey;

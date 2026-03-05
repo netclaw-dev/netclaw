@@ -1,6 +1,9 @@
 using Akka.Actor;
 using Akka.DependencyInjection;
 using Akka.Hosting;
+using Akka.Reminders;
+using Akka.Reminders.Sharding;
+using Netclaw.Actors.Reminders;
 using Netclaw.Actors.Routing;
 using Netclaw.Actors.Sessions;
 
@@ -45,6 +48,38 @@ public static class NetclawAkkaHostingExtensions
     }
 
     /// <summary>
+    /// Registers the reminder manager as a singleton actor and wires
+    /// the local akka-reminders scheduler to deliver payloads to it.
+    /// Uses in-memory storage (reminders do not survive daemon restarts).
+    /// </summary>
+    public static AkkaConfigurationBuilder WithReminderManager(
+        this AkkaConfigurationBuilder builder)
+    {
+        // Shared resolver: created at configuration time, populated at actor startup.
+        // The scheduler starts first with an empty resolver; by the time any reminder
+        // actually fires, the ReminderManagerActor is registered as the shard region.
+        var sharedResolver = new TestShardRegionResolver();
+
+        return builder
+            .WithLocalReminders(reminders =>
+            {
+                reminders.WithInMemoryStorage();
+                reminders.WithResolver(_ => sharedResolver);
+            })
+            .StartActors((system, registry, resolver) =>
+            {
+                var reminderManager = system.ActorOf(
+                    resolver.Props<ReminderManagerActor>(),
+                    "reminder-manager");
+                registry.Register<ReminderManagerActorKey>(reminderManager);
+
+                // Register so akka-reminders delivers fired payloads to our manager
+                sharedResolver.RegisterShardRegion(
+                    ReminderManagerActor.ShardRegionName, reminderManager);
+            });
+    }
+
+    /// <summary>
     /// Convenience method that registers all Netclaw actor infrastructure.
     /// Requires <see cref="SessionConfig"/> and <see cref="Microsoft.Extensions.AI.IChatClient"/>
     /// to be registered in DI.
@@ -54,6 +89,7 @@ public static class NetclawAkkaHostingExtensions
     {
         return builder
             .WithModelCapabilityCache()
-            .WithSessionManager();
+            .WithSessionManager()
+            .WithReminderManager();
     }
 }

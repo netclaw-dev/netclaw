@@ -9,6 +9,7 @@ using Netclaw.Cli;
 using Netclaw.Cli.Daemon;
 using Netclaw.Cli.Doctor;
 using Netclaw.Cli.Mcp;
+using Netclaw.Cli.Reminder;
 using Netclaw.Cli.Secrets;
 using Netclaw.Cli.Model;
 using Netclaw.Cli.Provider;
@@ -384,6 +385,13 @@ static async Task RunAsync(string[] args)
         return;
     }
 
+    // ── Reminder management ──
+    if (mode is "reminder")
+    {
+        Environment.ExitCode = await ReminderCommand.RunAsync(args);
+        return;
+    }
+
     // ── Secrets management ──
     if (mode is "secrets")
     {
@@ -533,6 +541,7 @@ static void WriteGeneralHelp()
     Console.WriteLine("  mcp                      Manage MCP server profiles");
     Console.WriteLine("  provider                 Manage LLM providers (TUI) or use subcommands");
     Console.WriteLine("  model                    Manage model assignments (TUI) or use subcommands");
+    Console.WriteLine("  reminder                 Manage scheduled reminders (daemon-required)");
     Console.WriteLine("  secrets                  Manage encrypted secrets (set key/value pairs)");
     Console.WriteLine("  init                     First-run setup wizard");
     Console.WriteLine("  update                   Check for and install updates");
