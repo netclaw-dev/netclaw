@@ -1,8 +1,9 @@
 using System.Net;
-using System.Text;
 using System.Text.Json;
+using Microsoft.Extensions.Time.Testing;
 using Netclaw.Configuration.Providers.OAuth;
 using Xunit;
+using static Netclaw.Configuration.Tests.Providers.OAuth.OAuthTestHelpers;
 
 namespace Netclaw.Configuration.Tests.Providers.OAuth;
 
@@ -42,7 +43,7 @@ public class OpenAiDeviceFlowServiceTests
         Assert.Equal("test-client-id", doc.RootElement.GetProperty("client_id").GetString());
 
         // Verify response mapping
-        Assert.Equal("daid-123", result.DeviceCode); // device_auth_id → DeviceCode
+        Assert.Equal("daid-123", result.DeviceCode); // device_auth_id -> DeviceCode
         Assert.Equal("ABCD-1234", result.UserCode);
         Assert.Equal("https://auth.openai.com/codex/device", result.VerificationUri);
         Assert.Equal(5, result.Interval);
@@ -82,7 +83,6 @@ public class OpenAiDeviceFlowServiceTests
                 return JsonResponse(new
                 {
                     authorization_code = "auth-code-123",
-                    code_challenge = "challenge-abc",
                     code_verifier = "verifier-xyz"
                 });
             }
@@ -101,7 +101,8 @@ public class OpenAiDeviceFlowServiceTests
             return new HttpResponseMessage(HttpStatusCode.InternalServerError);
         });
 
-        var service = new OpenAiDeviceFlowService(new HttpClient(handler));
+        var timeProvider = new FakeTimeProvider();
+        var service = new OpenAiDeviceFlowService(new HttpClient(handler), timeProvider);
         var deviceAuth = new DeviceAuthorizationResponse(
             DeviceCode: "daid-test",
             UserCode: "UC-TEST",
@@ -110,7 +111,13 @@ public class OpenAiDeviceFlowServiceTests
             Interval: 1);
 
         var states = new List<DeviceFlowState>();
-        var result = await service.PollForTokenAsync(TestConfig, deviceAuth, s => states.Add(s));
+        var pollTask = service.PollForTokenAsync(TestConfig, deviceAuth, s => states.Add(s));
+
+        // Advance time to trigger each poll interval
+        for (var i = 0; i < 3; i++)
+            timeProvider.Advance(TimeSpan.FromSeconds(1));
+
+        var result = await pollTask;
 
         Assert.Equal("at-secret", result.AccessToken.Value);
         Assert.NotNull(result.RefreshToken);
@@ -123,19 +130,112 @@ public class OpenAiDeviceFlowServiceTests
     }
 
     [Fact]
+    public async Task PollForToken_5xxTransient_KeepsPolling()
+    {
+        var callCount = 0;
+        var handler = new FakeHttpMessageHandler(request =>
+        {
+            callCount++;
+            var url = request.RequestUri!.ToString();
+
+            if (url.Contains("deviceauth/token"))
+            {
+                // First call returns 502 (transient)
+                if (callCount == 1)
+                    return new HttpResponseMessage(HttpStatusCode.BadGateway);
+
+                // Second call returns auth code
+                return JsonResponse(new
+                {
+                    authorization_code = "auth-code-123",
+                    code_verifier = "verifier-xyz"
+                });
+            }
+
+            // Token exchange
+            if (url.Contains("oauth/token"))
+            {
+                return JsonResponse(new
+                {
+                    access_token = "at-secret",
+                    expires_in = 3600
+                });
+            }
+
+            return new HttpResponseMessage(HttpStatusCode.InternalServerError);
+        });
+
+        var timeProvider = new FakeTimeProvider();
+        var service = new OpenAiDeviceFlowService(new HttpClient(handler), timeProvider);
+        var deviceAuth = new DeviceAuthorizationResponse(
+            "daid", "UC", "https://auth.openai.com/codex/device", 30, 1);
+
+        var pollTask = service.PollForTokenAsync(TestConfig, deviceAuth);
+
+        timeProvider.Advance(TimeSpan.FromSeconds(1));
+        timeProvider.Advance(TimeSpan.FromSeconds(1));
+
+        var result = await pollTask;
+
+        Assert.Equal("at-secret", result.AccessToken.Value);
+        // 1 transient 502 + 1 success poll + 1 token exchange = 3 calls
+        Assert.Equal(3, callCount);
+    }
+
+    [Fact]
+    public async Task PollForToken_PkceExchangeFailure_ThrowsWithContext()
+    {
+        var handler = new FakeHttpMessageHandler(request =>
+        {
+            var url = request.RequestUri!.ToString();
+
+            // Poll returns auth code immediately
+            if (url.Contains("deviceauth/token"))
+            {
+                return JsonResponse(new
+                {
+                    authorization_code = "auth-code-123",
+                    code_verifier = "verifier-xyz"
+                });
+            }
+
+            // PKCE exchange fails
+            if (url.Contains("oauth/token"))
+                return new HttpResponseMessage(HttpStatusCode.BadRequest);
+
+            return new HttpResponseMessage(HttpStatusCode.InternalServerError);
+        });
+
+        var timeProvider = new FakeTimeProvider();
+        var service = new OpenAiDeviceFlowService(new HttpClient(handler), timeProvider);
+        var deviceAuth = new DeviceAuthorizationResponse(
+            "daid", "UC", "https://auth.openai.com/codex/device", 30, 1);
+
+        var pollTask = service.PollForTokenAsync(TestConfig, deviceAuth);
+        timeProvider.Advance(TimeSpan.FromSeconds(1));
+
+        // PKCE exchange failure should propagate as HttpRequestException
+        await Assert.ThrowsAsync<HttpRequestException>(() => pollTask);
+    }
+
+    [Fact]
     public async Task PollForToken_Cancellation_ThrowsOperationCanceled()
     {
         var handler = new FakeHttpMessageHandler(_ =>
             new HttpResponseMessage(HttpStatusCode.Forbidden));
 
-        var service = new OpenAiDeviceFlowService(new HttpClient(handler));
+        var timeProvider = new FakeTimeProvider();
+        var service = new OpenAiDeviceFlowService(new HttpClient(handler), timeProvider);
         var deviceAuth = new DeviceAuthorizationResponse(
             "daid", "UC", "https://auth.openai.com/codex/device", 60, 1);
 
-        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
+        using var cts = new CancellationTokenSource();
+        var pollTask = service.PollForTokenAsync(TestConfig, deviceAuth, ct: cts.Token);
 
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(
-            () => service.PollForTokenAsync(TestConfig, deviceAuth, ct: cts.Token));
+        cts.Cancel();
+        timeProvider.Advance(TimeSpan.FromSeconds(1));
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => pollTask);
     }
 
     [Fact]
@@ -154,7 +254,7 @@ public class OpenAiDeviceFlowServiceTests
         var result = await service.RefreshTokenAsync(
             "https://auth.openai.com/oauth/token",
             "client-id",
-            "old-refresh-token");
+            new SensitiveString("old-refresh-token"));
 
         Assert.NotNull(result);
         Assert.Equal("new-at", result!.AccessToken.Value);
@@ -173,36 +273,8 @@ public class OpenAiDeviceFlowServiceTests
         var result = await service.RefreshTokenAsync(
             "https://auth.openai.com/oauth/token",
             "client-id",
-            "expired-refresh-token");
+            new SensitiveString("expired-refresh-token"));
 
         Assert.Null(result);
-    }
-
-    // ── Helpers ──
-
-    private static HttpResponseMessage JsonResponse(object body, HttpStatusCode status = HttpStatusCode.OK)
-    {
-        var json = JsonSerializer.Serialize(body);
-        return new HttpResponseMessage(status)
-        {
-            Content = new StringContent(json, Encoding.UTF8, "application/json")
-        };
-    }
-
-    private sealed class FakeHttpMessageHandler : HttpMessageHandler
-    {
-        private readonly Func<HttpRequestMessage, HttpResponseMessage> _handler;
-
-        public FakeHttpMessageHandler(Func<HttpRequestMessage, HttpResponseMessage> handler)
-        {
-            _handler = handler;
-        }
-
-        protected override Task<HttpResponseMessage> SendAsync(
-            HttpRequestMessage request, CancellationToken cancellationToken)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            return Task.FromResult(_handler(request));
-        }
     }
 }

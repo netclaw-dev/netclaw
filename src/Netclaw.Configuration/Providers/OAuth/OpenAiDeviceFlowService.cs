@@ -118,6 +118,10 @@ public sealed class OpenAiDeviceFlowService : IDeviceFlowService
             if (response.StatusCode is HttpStatusCode.Forbidden or HttpStatusCode.NotFound)
                 continue;
 
+            // 5xx = transient server error, keep polling (momentary 502/503 shouldn't kill the flow)
+            if ((int)response.StatusCode >= 500)
+                continue;
+
             if (!response.IsSuccessStatusCode)
             {
                 onStateChanged?.Invoke(DeviceFlowState.Error);
@@ -153,14 +157,14 @@ public sealed class OpenAiDeviceFlowService : IDeviceFlowService
     public async Task<OAuthDeviceFlowResult?> RefreshTokenAsync(
         string tokenEndpoint,
         string clientId,
-        string refreshToken,
+        SensitiveString refreshToken,
         CancellationToken ct = default)
     {
         var tokenParams = new Dictionary<string, string>
         {
             ["grant_type"] = "refresh_token",
             ["client_id"] = clientId,
-            ["refresh_token"] = refreshToken
+            ["refresh_token"] = refreshToken.Value
         };
 
         var response = await _httpClient.PostAsync(
@@ -243,6 +247,5 @@ public sealed class OpenAiDeviceFlowService : IDeviceFlowService
 
     private sealed record OpenAiAuthCodeResponse(
         [property: JsonPropertyName("authorization_code")] string AuthorizationCode,
-        [property: JsonPropertyName("code_challenge")] string CodeChallenge,
         [property: JsonPropertyName("code_verifier")] string CodeVerifier);
 }

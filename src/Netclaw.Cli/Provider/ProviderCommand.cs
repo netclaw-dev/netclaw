@@ -24,7 +24,7 @@ internal static class ProviderCommand
         return subcommand switch
         {
             "list" => Task.FromResult(RunList(paths, writer)),
-            "add" => Task.FromResult(RunAdd(args, paths, registry, writer)),
+            "add" => RunAddAsync(args, paths, registry, writer),
             "remove" => Task.FromResult(RunRemove(args, paths, writer)),
             "help" or "-h" or "--help" => Task.FromResult(WriteHelp(registry, writer)),
             _ => Task.FromResult(WriteHelp(registry, writer))
@@ -51,7 +51,7 @@ internal static class ProviderCommand
         return 0;
     }
 
-    private static int RunAdd(string[] args, NetclawPaths paths, ProviderDescriptorRegistry registry, TextWriter writer)
+    private static async Task<int> RunAddAsync(string[] args, NetclawPaths paths, ProviderDescriptorRegistry registry, TextWriter writer)
     {
         // Parse: netclaw provider add <name> <type> [--api-key <key>] [--endpoint <url>] [--auth <method>]
         if (args.Length < 4)
@@ -128,7 +128,7 @@ internal static class ProviderCommand
                 return 1;
             }
 
-            return RunOAuthDeviceFlow(name, type, endpoint, descriptor, paths, writer);
+            return await RunOAuthDeviceFlowAsync(name, type, endpoint, descriptor, paths, writer);
         }
 
         if (requestedAuthMethod == AuthMethod.ApiKey && !supportedAuth.Contains(AuthMethod.ApiKey))
@@ -202,7 +202,7 @@ internal static class ProviderCommand
         return 0;
     }
 
-    private static int RunOAuthDeviceFlow(
+    private static async Task<int> RunOAuthDeviceFlowAsync(
         string name, string type, string? endpoint,
         IProviderDescriptor descriptor, NetclawPaths paths, TextWriter writer)
     {
@@ -215,12 +215,7 @@ internal static class ProviderCommand
 
         endpoint ??= descriptor.DefaultEndpoint;
 
-        var config = new OAuthDeviceFlowConfig(
-            descriptor.OAuthDeviceEndpoint,
-            descriptor.OAuthPollingEndpoint ?? descriptor.OAuthTokenEndpoint,
-            descriptor.OAuthDefaultClientId,
-            PkceExchangeEndpoint: descriptor.UseProprietaryDeviceFlow
-                ? descriptor.OAuthTokenEndpoint : null);
+        var config = OAuthDeviceFlowConfig.FromDescriptor(descriptor);
 
         using var httpClient = new HttpClient();
         IDeviceFlowService service = descriptor.UseProprietaryDeviceFlow
@@ -231,7 +226,7 @@ internal static class ProviderCommand
         {
             // Start device authorization
             writer.WriteLine("Starting OAuth device authorization...");
-            var deviceAuth = service.StartDeviceAuthorizationAsync(config).GetAwaiter().GetResult();
+            var deviceAuth = await service.StartDeviceAuthorizationAsync(config);
 
             writer.WriteLine();
             writer.WriteLine($"  Visit:      {deviceAuth.VerificationUri}");
@@ -240,12 +235,12 @@ internal static class ProviderCommand
             writer.Write("Waiting for authorization...");
 
             // Poll for token
-            var result = service.PollForTokenAsync(config, deviceAuth,
+            var result = await service.PollForTokenAsync(config, deviceAuth,
                 state =>
                 {
                     if (state == DeviceFlowState.Polling)
                         writer.Write(".");
-                }).GetAwaiter().GetResult();
+                });
 
             writer.WriteLine();
             writer.WriteLine("Authorization successful!");

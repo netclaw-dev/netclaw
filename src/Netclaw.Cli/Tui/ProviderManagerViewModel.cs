@@ -560,12 +560,7 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
         var ct = _oauthCts.Token;
 
         var service = _oauthFactory.GetFor(descriptor);
-        var config = new OAuthDeviceFlowConfig(
-            descriptor.OAuthDeviceEndpoint,
-            descriptor.OAuthPollingEndpoint ?? descriptor.OAuthTokenEndpoint,
-            descriptor.OAuthDefaultClientId,
-            PkceExchangeEndpoint: descriptor.UseProprietaryDeviceFlow
-                ? descriptor.OAuthTokenEndpoint : null);
+        var config = OAuthDeviceFlowConfig.FromDescriptor(descriptor);
 
         try
         {
@@ -841,7 +836,7 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
                 return candidate;
         }
 
-        return $"my-{type}-{Guid.NewGuid():N[..6]}";
+        return $"my-{type}-{Guid.NewGuid().ToString("N")[..6]}";
     }
 
     private void ClearAddState()

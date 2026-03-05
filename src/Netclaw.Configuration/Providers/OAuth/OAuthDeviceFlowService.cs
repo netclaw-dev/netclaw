@@ -17,7 +17,22 @@ public sealed record OAuthDeviceFlowConfig(
     string TokenEndpoint,
     string ClientId,
     string? Scope = null,
-    string? PkceExchangeEndpoint = null);
+    string? PkceExchangeEndpoint = null)
+{
+    /// <summary>
+    /// Build a config from a provider descriptor's OAuth endpoint properties.
+    /// </summary>
+    public static OAuthDeviceFlowConfig FromDescriptor(IProviderDescriptor descriptor) =>
+        new(
+            descriptor.OAuthDeviceEndpoint
+                ?? throw new ArgumentException("Descriptor missing OAuthDeviceEndpoint", nameof(descriptor)),
+            descriptor.OAuthPollingEndpoint ?? descriptor.OAuthTokenEndpoint
+                ?? throw new ArgumentException("Descriptor missing OAuthTokenEndpoint", nameof(descriptor)),
+            descriptor.OAuthDefaultClientId
+                ?? throw new ArgumentException("Descriptor missing OAuthDefaultClientId", nameof(descriptor)),
+            PkceExchangeEndpoint: descriptor.UseProprietaryDeviceFlow
+                ? descriptor.OAuthTokenEndpoint : null);
+}
 
 /// <summary>
 /// Response from the device authorization endpoint (RFC 8628 §3.2).
@@ -168,14 +183,14 @@ public sealed class OAuthDeviceFlowService : IDeviceFlowService
     public async Task<OAuthDeviceFlowResult?> RefreshTokenAsync(
         string tokenEndpoint,
         string clientId,
-        string refreshToken,
+        SensitiveString refreshToken,
         CancellationToken ct = default)
     {
         var tokenParams = new Dictionary<string, string>
         {
             ["grant_type"] = "refresh_token",
             ["client_id"] = clientId,
-            ["refresh_token"] = refreshToken
+            ["refresh_token"] = refreshToken.Value
         };
 
         var response = await _httpClient.PostAsync(

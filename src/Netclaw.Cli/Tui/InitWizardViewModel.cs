@@ -457,12 +457,7 @@ public partial class InitWizardViewModel : ReactiveViewModel
         var ct = _oauthCts.Token;
 
         var service = _oauthFactory.GetFor(descriptor);
-        var config = new OAuthDeviceFlowConfig(
-            descriptor.OAuthDeviceEndpoint,
-            descriptor.OAuthPollingEndpoint ?? descriptor.OAuthTokenEndpoint,
-            descriptor.OAuthDefaultClientId,
-            PkceExchangeEndpoint: descriptor.UseProprietaryDeviceFlow
-                ? descriptor.OAuthTokenEndpoint : null);
+        var config = OAuthDeviceFlowConfig.FromDescriptor(descriptor);
 
         try
         {

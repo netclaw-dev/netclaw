@@ -28,6 +28,6 @@ public interface IDeviceFlowService
     Task<OAuthDeviceFlowResult?> RefreshTokenAsync(
         string tokenEndpoint,
         string clientId,
-        string refreshToken,
+        SensitiveString refreshToken,
         CancellationToken ct = default);
 }
