@@ -664,6 +664,13 @@ public sealed class InitWizardViewModelTests : IDisposable
     }
 
     [Fact]
+    public void BrowserAutomation_DefaultBackend_IsPlaywright()
+    {
+        using var vm = CreateViewModel();
+        Assert.Equal(BrowserAutomationMcpProfiles.PlaywrightBackend, vm.SelectedBrowserAutomationBackend);
+    }
+
+    [Fact]
     public async Task HealthCheck_BrowserAutomationChrome_WritesMcpProfile()
     {
         var browserBootstrapper = new FakeBrowserAutomationBootstrapper

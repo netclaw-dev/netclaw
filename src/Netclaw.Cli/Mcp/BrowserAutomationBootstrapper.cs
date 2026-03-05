@@ -27,6 +27,18 @@ internal sealed class BrowserAutomationBootstrapper : IBrowserAutomationBootstra
 
         if (await HasNodeRuntimeAsync(ct))
         {
+            if (backend == BrowserAutomationMcpProfiles.ChromeDevToolsBackend)
+            {
+                var chrome = BrowserAutomationRuntimeDetector.DetectChrome();
+                if (!chrome.IsInstalled)
+                {
+                    return new BrowserAutomationBootstrapResult(
+                        Success: false,
+                        NeedsManualAction: false,
+                        Message: "Chrome DevTools MCP requires a local Chrome executable, but none was found.");
+                }
+            }
+
             return new BrowserAutomationBootstrapResult(
                 Success: true,
                 NeedsManualAction: false,
@@ -36,6 +48,18 @@ internal sealed class BrowserAutomationBootstrapper : IBrowserAutomationBootstra
         var install = await TryInstallNodeJsAsync(ct);
         if (install.Succeeded && await HasNodeRuntimeAsync(ct))
         {
+            if (backend == BrowserAutomationMcpProfiles.ChromeDevToolsBackend)
+            {
+                var chrome = BrowserAutomationRuntimeDetector.DetectChrome();
+                if (!chrome.IsInstalled)
+                {
+                    return new BrowserAutomationBootstrapResult(
+                        Success: false,
+                        NeedsManualAction: false,
+                        Message: "Node.js installed, but Chrome DevTools MCP still needs a local Chrome executable.");
+                }
+            }
+
             return new BrowserAutomationBootstrapResult(
                 Success: true,
                 NeedsManualAction: false,

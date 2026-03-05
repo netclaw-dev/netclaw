@@ -82,6 +82,26 @@ public sealed class McpServersDoctorCheck(NetclawPaths paths) : IDoctorCheck
 
         foreach (var (name, entry) in validServers)
         {
+            if (entry.Enabled && name.Equals("browser_chrome_devtools", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!BrowserAutomationRuntimeDetector.HasNodeRuntime())
+                {
+                    enabledCount++;
+                    failedCount++;
+                    statusMessages.Add($"{name}: unreachable — Node.js runtime (node+npx) not found");
+                    continue;
+                }
+
+                var chrome = BrowserAutomationRuntimeDetector.DetectChrome();
+                if (!chrome.IsInstalled)
+                {
+                    enabledCount++;
+                    failedCount++;
+                    statusMessages.Add($"{name}: unreachable — local Chrome executable not found");
+                    continue;
+                }
+            }
+
             // Use full entry (with secrets merged) if available
             var probeEntry = fullServers.TryGetValue(name, out var full) ? full : entry;
             var probe = await McpCommand.ProbeServerAsync(name, probeEntry, cancellationToken);

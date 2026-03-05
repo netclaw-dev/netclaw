@@ -127,7 +127,9 @@ public partial class InitWizardViewModel : ReactiveViewModel
 
     // ── Step 5: Browser automation ──
     public bool BrowserAutomationEnabled { get; set; }
-    public string SelectedBrowserAutomationBackend { get; set; } = BrowserAutomationMcpProfiles.ChromeDevToolsBackend;
+    public string SelectedBrowserAutomationBackend { get; set; } = BrowserAutomationMcpProfiles.PlaywrightBackend;
+    public bool IsChromeDevToolsAvailable { get; }
+    public string ChromeDevToolsUnavailableReason { get; }
 
     // ── Step 6: Memory ──
     public string SelectedMemoryBackend { get; set; } = "files";
@@ -188,6 +190,11 @@ public partial class InitWizardViewModel : ReactiveViewModel
         _oauthService = oauthService;
         _daemonManager = daemonManager;
         _daemonEndpoint = daemonEndpoint ?? "http://127.0.0.1:5199";
+
+        var chromeDetection = BrowserAutomationRuntimeDetector.DetectChrome();
+        IsChromeDevToolsAvailable = chromeDetection.IsInstalled;
+        ChromeDevToolsUnavailableReason =
+            chromeDetection.Reason ?? "local Chrome executable not found";
     }
 
     public override void OnActivated()
