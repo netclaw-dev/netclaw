@@ -128,8 +128,8 @@ public sealed class ChatPage : ReactivePage<ChatViewModel>
                         _ when status.StartsWith("Connected", StringComparison.Ordinal) => Color.Green,
                         _ when status.StartsWith("Reconnected", StringComparison.Ordinal) => Color.Green,
                         _ when status.StartsWith("Disconnected", StringComparison.Ordinal) => Color.Red,
-                        _ when status.StartsWith("Generating") => Color.Yellow,
-                        _ when status.StartsWith("Connection failed") => Color.Red,
+                        _ when status.StartsWith("Generating", StringComparison.Ordinal) => Color.Yellow,
+                        _ when status.StartsWith("Connection failed", StringComparison.Ordinal) => Color.Red,
                         _ => Color.BrightBlack
                     };
 

@@ -11,9 +11,9 @@ public sealed class SecretOutputRedactorTests
 
         var redacted = SecretOutputRedactor.Redact(input);
 
-        Assert.Contains("\"apiKey\": \"***REDACTED***\"", redacted);
-        Assert.Contains("\"safe\": \"ok\"", redacted);
-        Assert.DoesNotContain("sk-or-test-123", redacted);
+        Assert.Contains("\"apiKey\": \"***REDACTED***\"", redacted, StringComparison.Ordinal);
+        Assert.Contains("\"safe\": \"ok\"", redacted, StringComparison.Ordinal);
+        Assert.DoesNotContain("sk-or-test-123", redacted, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -23,9 +23,9 @@ public sealed class SecretOutputRedactorTests
 
         var redacted = SecretOutputRedactor.Redact(input);
 
-        Assert.Contains("API_KEY=***REDACTED***", redacted);
-        Assert.Contains("NORMAL=value", redacted);
-        Assert.DoesNotContain("secret123", redacted);
+        Assert.Contains("API_KEY=***REDACTED***", redacted, StringComparison.Ordinal);
+        Assert.Contains("NORMAL=value", redacted, StringComparison.Ordinal);
+        Assert.DoesNotContain("secret123", redacted, StringComparison.Ordinal);
     }
 
     [Fact]

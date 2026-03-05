@@ -9,17 +9,18 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Akka.Hosting.TestKit"/>
-    <PackageReference Include="Akka.Persistence.Hosting"/>
-    <PackageReference Include="Microsoft.NET.Test.Sdk"/>
-    <PackageReference Include="xunit"/>
-    <PackageReference Include="xunit.runner.visualstudio"/>
+    <PackageReference Include="Akka.Hosting.TestKit" />
+    <PackageReference Include="Akka.Persistence.Hosting" />
+    <PackageReference Include="Microsoft.Extensions.TimeProvider.Testing" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" />
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="../Netclaw.Actors/Netclaw.Actors.csproj"/>
+    <ProjectReference Include="../Netclaw.Actors/Netclaw.Actors.csproj" />
     <ProjectReference Include="../Netclaw.Channels/Netclaw.Channels.csproj" />
-    <ProjectReference Include="../Netclaw.Configuration/Netclaw.Configuration.csproj"/>
+    <ProjectReference Include="../Netclaw.Configuration/Netclaw.Configuration.csproj" />
   </ItemGroup>
 
   <ItemGroup>

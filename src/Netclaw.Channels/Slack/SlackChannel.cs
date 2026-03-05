@@ -59,6 +59,18 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
 
     public string DisplayName => "Slack";
 
+    /// <summary>
+    /// The gateway actor ref, exposed so that proactive tools can send
+    /// <see cref="StartProactiveThread"/> messages to wire up the actor hierarchy.
+    /// </summary>
+    internal IActorRef? Gateway => _gateway;
+
+    /// <summary>
+    /// The resolved default channel ID, available after <see cref="StartAsync"/> completes.
+    /// Exposed for proactive tools that need runtime-resolved channel IDs for ACL checks.
+    /// </summary>
+    internal SlackChannelId? DefaultChannelId => _defaultChannelId;
+
     public ValueTask<ChannelHealth> GetHealthAsync(CancellationToken cancellationToken = default)
     {
         if (!_options.Enabled)

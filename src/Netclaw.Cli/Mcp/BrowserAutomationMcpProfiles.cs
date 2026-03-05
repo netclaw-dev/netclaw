@@ -9,6 +9,11 @@ internal static class BrowserAutomationMcpProfiles
 
     public static (string Name, McpServerEntry Entry) Create(string backend)
     {
+        var npxCommand = BrowserAutomationRuntimeDetector.GetPreferredNpxCommand();
+        var env = BrowserAutomationRuntimeDetector.BuildMcpEnvironmentOverlay(npxCommand);
+        var playwrightEnv = BrowserAutomationRuntimeDetector.BuildPlaywrightEnvironmentOverlay(npxCommand);
+        var playwrightBrowser = BrowserAutomationRuntimeDetector.GetPreferredPlaywrightBrowser();
+
         return backend switch
         {
             PlaywrightBackend => ("browser_playwright", new McpServerEntry
@@ -16,7 +21,8 @@ internal static class BrowserAutomationMcpProfiles
                 Transport = "stdio",
                 Enabled = true,
                 GrantCategory = "browser_automation",
-                Command = "npx",
+                Command = npxCommand,
+                EnvironmentVariables = playwrightEnv,
                 Arguments =
                 [
                     "-y",
@@ -25,7 +31,9 @@ internal static class BrowserAutomationMcpProfiles
                     "--image-responses",
                     "omit",
                     "--snapshot-mode",
-                    "none"
+                    "none",
+                    "--browser",
+                    playwrightBrowser
                 ]
             }),
 
@@ -34,7 +42,8 @@ internal static class BrowserAutomationMcpProfiles
                 Transport = "stdio",
                 Enabled = true,
                 GrantCategory = "browser_automation",
-                Command = "npx",
+                Command = npxCommand,
+                EnvironmentVariables = env,
                 Arguments =
                 [
                     "-y",

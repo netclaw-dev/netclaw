@@ -3,6 +3,7 @@ using Microsoft.Extensions.Options;
 using Netclaw.Actors.Memory;
 using Netclaw.Channels;
 using Netclaw.Channels.Slack;
+using Netclaw.Channels.Telemetry;
 using Netclaw.Configuration;
 using Netclaw.Configuration.Feeds;
 using Netclaw.Daemon.Configuration;
@@ -63,7 +64,8 @@ internal sealed class DaemonRuntimeStatusService(
             Telemetry = new DaemonRuntimeStatus.Telemetry
             {
                 Enabled = telemetryOptions.Value.Enabled,
-                OtlpEndpoint = telemetryOptions.Value.Otlp.Endpoint
+                OtlpEndpoint = telemetryOptions.Value.Otlp.Endpoint,
+                SlackCounters = BuildSlackCounters()
             },
             Model = new DaemonRuntimeStatus.Model
             {
@@ -75,6 +77,20 @@ internal sealed class DaemonRuntimeStatusService(
             },
             Update = BuildUpdateStatus(),
             Memory = await BuildMemoryStatusAsync(cancellationToken)
+        };
+    }
+
+    private static DaemonRuntimeStatus.SlackCounters BuildSlackCounters()
+    {
+        var snapshot = ChannelTelemetry.GetSnapshot();
+        return new DaemonRuntimeStatus.SlackCounters
+        {
+            EventsReceived = snapshot.SlackEventsReceived,
+            EventsDropped = snapshot.SlackEventsDropped,
+            EventsRouted = snapshot.SlackEventsRouted,
+            MessagesEnqueued = snapshot.SlackMessagesEnqueued,
+            RepliesPosted = snapshot.SlackRepliesPosted,
+            RepliesFailed = snapshot.SlackRepliesFailed
         };
     }
 

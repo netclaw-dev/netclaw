@@ -30,7 +30,7 @@ public sealed class HuggingFaceCapabilityResolver : IModelCapabilityResolver
         var hfId = modelId;
 
         // Strip Ollama tags
-        var colonIdx = hfId.IndexOf(':');
+        var colonIdx = hfId.IndexOf(':', StringComparison.Ordinal);
         if (colonIdx > 0)
             hfId = hfId[..colonIdx];
 

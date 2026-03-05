@@ -50,6 +50,17 @@ internal sealed record ToolExecutionFailed
 }
 
 /// <summary>
+/// Internal watchdog timeout used to force stuck Processing operations to fail
+/// and return the session actor to Ready state.
+/// </summary>
+internal sealed record ProcessingWatchdogExpired
+{
+    public required long OperationId { get; init; }
+
+    public required string OperationName { get; init; }
+}
+
+/// <summary>
 /// Internal trigger to begin the compaction sequence.
 /// Sent to self after a turn completes when usage exceeds the threshold.
 /// </summary>

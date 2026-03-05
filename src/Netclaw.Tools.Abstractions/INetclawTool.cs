@@ -4,6 +4,12 @@ using Microsoft.Extensions.AI;
 namespace Netclaw.Tools;
 
 /// <summary>
+/// Marker interface for tools provided by a channel adapter (e.g. Slack, Teams).
+/// Channel tools are discovered and registered dynamically at startup.
+/// </summary>
+public interface IChannelTool : INetclawTool;
+
+/// <summary>
 /// A self-contained tool definition: schema, metadata, and execution in one type.
 /// </summary>
 public interface INetclawTool

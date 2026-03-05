@@ -1,3 +1,13 @@
+#### 0.1.4 2026-03-04 ####
+
+Netclaw v0.1.4 — Upgrade Safety and Browser Automation Reliability
+
+* Fixed a `netclaw sessions` regression on upgraded deployments by adding legacy sessions-table compatibility migration logic and resilient catalog reads for pre-0.1.4 schemas.
+* Fixed SQLite migration discovery in published single-file daemon binaries by embedding migration SQL assets and falling back to embedded resources when filesystem migrations are absent.
+* Added regression tests covering legacy sessions schema upgrade and session catalog compatibility behavior.
+* Changed browser automation onboarding defaults to Playwright MCP and disabled Chrome DevTools selection when a local Chrome executable is not detected.
+* Improved MCP doctor diagnostics to report explicit browser runtime prerequisites (Node.js runtime and Chrome executable) for `browser_chrome_devtools`.
+
 #### 0.1.3 2026-03-04 ####
 
 Netclaw v0.1.3 — OpenAI OAuth, CLI, Diagnostics, and Reliability Fixes

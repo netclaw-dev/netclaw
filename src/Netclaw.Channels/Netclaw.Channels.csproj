@@ -8,6 +8,7 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="Netclaw.Actors.Tests" />
+    <InternalsVisibleTo Include="netclawd" />
   </ItemGroup>
 
   <ItemGroup>
@@ -20,6 +21,7 @@
     <ProjectReference Include="..\Netclaw.Actors\Netclaw.Actors.csproj" />
     <ProjectReference Include="..\Netclaw.Configuration\Netclaw.Configuration.csproj" />
     <ProjectReference Include="..\Netclaw.Security\Netclaw.Security.csproj" />
+    <ProjectReference Include="..\Netclaw.Tools.Generators\Netclaw.Tools.Generators.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
   </ItemGroup>
 
 </Project>

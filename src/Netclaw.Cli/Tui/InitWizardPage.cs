@@ -250,7 +250,7 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
                 WizardStep.BrowserAutomation when _browserAutomationSubStep == 0 =>
                     "  Optional. Enable this to let the agent delegate browser steering via MCP tools.",
                 WizardStep.BrowserAutomation when _browserAutomationSubStep == 1 =>
-                    "  Chrome DevTools MCP enables full browser automation. Playwright MCP supports broader cross-browser workflows with stricter output flags.",
+                    "  Playwright MCP is the default no-sudo path. Chrome DevTools is enabled only when a local Chrome executable is detected.",
                 WizardStep.Memory when _memorySubStep == 0 =>
                     "  Cross-session memory lets the agent retain knowledge between conversations.",
                 WizardStep.Memory when _memorySubStep == 1 =>
@@ -1067,8 +1067,12 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
 
     private ILayoutNode BuildBrowserAutomationBackendSubStep()
     {
+        var chromeLabel = ViewModel.IsChromeDevToolsAvailable
+            ? "Chrome DevTools MCP"
+            : $"Chrome DevTools MCP (disabled - {ViewModel.ChromeDevToolsUnavailableReason})";
+
         _browserAutomationBackendList = Layouts.SelectionList(
-                "Chrome DevTools MCP (recommended)",
+                chromeLabel,
                 "Playwright MCP")
             .WithMode(SelectionMode.Single)
             .WithHighlightColors(Color.Black, Color.Cyan);
@@ -1081,6 +1085,14 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             {
                 if (selected.Count == 0)
                     return;
+
+                if (selected[0].StartsWith("Chrome DevTools", StringComparison.Ordinal)
+                    && !ViewModel.IsChromeDevToolsAvailable)
+                {
+                    ViewModel.StatusMessage.Value =
+                        "Chrome DevTools is disabled: local Chrome executable not found. Choose Playwright MCP.";
+                    return;
+                }
 
                 ViewModel.SelectedBrowserAutomationBackend =
                     selected[0].StartsWith("Playwright", StringComparison.Ordinal)

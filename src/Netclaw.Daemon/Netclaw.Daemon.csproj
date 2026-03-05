@@ -33,6 +33,7 @@
     <None Update="migrations\sqlite\**\*.sql">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
+    <EmbeddedResource Include="migrations\sqlite\**\*.sql" />
   </ItemGroup>
 
   <ItemGroup>

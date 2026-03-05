@@ -7,8 +7,8 @@
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
-    <VersionPrefix>0.1.3</VersionPrefix>
-    <PackageReleaseNotes>Netclaw v0.1.3 — CLI, diagnostics, and reliability fixes. Adds --version CLI command, fixes stale crash log false positives in doctor, fixes session title generation timeouts with thinking models, and corrects the binary update manifest endpoint.</PackageReleaseNotes>
+    <VersionPrefix>0.1.4</VersionPrefix>
+    <PackageReleaseNotes>Netclaw v0.1.4 — upgrade and browser reliability hardening. Fixes legacy sessions schema migration regressions in published single-file daemon binaries, preserves historical sessions on upgrade, and disables Chrome DevTools onboarding when Chrome is missing while improving browser MCP diagnostics.</PackageReleaseNotes>
   </PropertyGroup>
   <PropertyGroup>
     <NetCoreTestVersion>net10.0</NetCoreTestVersion>

@@ -53,7 +53,7 @@ public sealed class FilenameSanitizerTests
         var result = FilenameSanitizer.Sanitize(longName);
 
         Assert.True(result.Length <= 255);
-        Assert.EndsWith(".png", result);
+        Assert.EndsWith(".png", result, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

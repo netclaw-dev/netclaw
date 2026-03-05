@@ -21,8 +21,8 @@ public class DuckDuckGoBackendTests
         var results = DuckDuckGoBackend.ParseResults(html, 30);
 
         var first = results[0];
-        Assert.Contains("akka.net", first.Url);
-        Assert.Contains("GitHub", first.Title);
+        Assert.Contains("akka.net", first.Url, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("GitHub", first.Title, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -73,8 +73,8 @@ public class DuckDuckGoBackendTests
 
         Assert.All(results, r =>
         {
-            Assert.DoesNotContain("&amp;", r.Snippet);
-            Assert.DoesNotContain("&#x27;", r.Snippet);
+            Assert.DoesNotContain("&amp;", r.Snippet, StringComparison.Ordinal);
+            Assert.DoesNotContain("&#x27;", r.Snippet, StringComparison.Ordinal);
         });
     }
 
@@ -84,7 +84,7 @@ public class DuckDuckGoBackendTests
         var html = LoadFixture("ddg-lite-akka-dotnet.html");
         var results = DuckDuckGoBackend.ParseResults(html, 30);
 
-        Assert.All(results, r => Assert.StartsWith("http", r.Url));
+        Assert.All(results, r => Assert.StartsWith("http", r.Url, StringComparison.OrdinalIgnoreCase));
     }
 
     private static string LoadFixture(string filename)

@@ -1,4 +1,5 @@
 using System.Diagnostics.Metrics;
+using System.Threading;
 
 namespace Netclaw.Channels.Telemetry;
 
@@ -29,27 +30,75 @@ public static class ChannelTelemetry
     private static readonly Histogram<double> SlackReplyDurationMs =
         Meter.CreateHistogram<double>("netclaw.slack.reply.duration.ms", unit: "ms");
 
+    private static long _slackEventsReceivedTotal;
+    private static long _slackEventsDroppedTotal;
+    private static long _slackEventsRoutedTotal;
+    private static long _slackMessagesEnqueuedTotal;
+    private static long _slackRepliesPostedTotal;
+    private static long _slackRepliesFailedTotal;
+
+    public sealed record Snapshot(
+        long SlackEventsReceived,
+        long SlackEventsDropped,
+        long SlackEventsRouted,
+        long SlackMessagesEnqueued,
+        long SlackRepliesPosted,
+        long SlackRepliesFailed);
+
     public static void RecordSlackEventReceived(string kind)
-        => SlackEventsReceived.Add(1, new KeyValuePair<string, object?>("kind", kind));
+    {
+        Interlocked.Increment(ref _slackEventsReceivedTotal);
+        SlackEventsReceived.Add(1, new KeyValuePair<string, object?>("kind", kind));
+    }
 
     public static void RecordSlackEventDropped(string reason)
-        => SlackEventsDropped.Add(1, new KeyValuePair<string, object?>("reason", reason));
+    {
+        Interlocked.Increment(ref _slackEventsDroppedTotal);
+        SlackEventsDropped.Add(1, new KeyValuePair<string, object?>("reason", reason));
+    }
 
     public static void RecordSlackEventRouted(string kind)
-        => SlackEventsRouted.Add(1, new KeyValuePair<string, object?>("kind", kind));
+    {
+        Interlocked.Increment(ref _slackEventsRoutedTotal);
+        SlackEventsRouted.Add(1, new KeyValuePair<string, object?>("kind", kind));
+    }
 
     public static void RecordSlackMessageEnqueued()
-        => SlackMessagesEnqueued.Add(1);
+    {
+        Interlocked.Increment(ref _slackMessagesEnqueuedTotal);
+        SlackMessagesEnqueued.Add(1);
+    }
 
     public static void RecordSlackReplyPosted(double durationMs)
     {
+        Interlocked.Increment(ref _slackRepliesPostedTotal);
         SlackRepliesPosted.Add(1);
         SlackReplyDurationMs.Record(durationMs);
     }
 
     public static void RecordSlackReplyFailed(double durationMs)
     {
+        Interlocked.Increment(ref _slackRepliesFailedTotal);
         SlackRepliesFailed.Add(1);
         SlackReplyDurationMs.Record(durationMs);
+    }
+
+    public static Snapshot GetSnapshot()
+        => new(
+            SlackEventsReceived: Interlocked.Read(ref _slackEventsReceivedTotal),
+            SlackEventsDropped: Interlocked.Read(ref _slackEventsDroppedTotal),
+            SlackEventsRouted: Interlocked.Read(ref _slackEventsRoutedTotal),
+            SlackMessagesEnqueued: Interlocked.Read(ref _slackMessagesEnqueuedTotal),
+            SlackRepliesPosted: Interlocked.Read(ref _slackRepliesPostedTotal),
+            SlackRepliesFailed: Interlocked.Read(ref _slackRepliesFailedTotal));
+
+    internal static void ResetForTests()
+    {
+        Interlocked.Exchange(ref _slackEventsReceivedTotal, 0);
+        Interlocked.Exchange(ref _slackEventsDroppedTotal, 0);
+        Interlocked.Exchange(ref _slackEventsRoutedTotal, 0);
+        Interlocked.Exchange(ref _slackMessagesEnqueuedTotal, 0);
+        Interlocked.Exchange(ref _slackRepliesPostedTotal, 0);
+        Interlocked.Exchange(ref _slackRepliesFailedTotal, 0);
     }
 }

@@ -172,7 +172,7 @@ public sealed class DuckDuckGoBackend : ISearchBackend
             if (uddgIndex >= 0)
             {
                 var encoded = rawUrl[(uddgIndex + 5)..];
-                var ampIndex = encoded.IndexOf('&');
+                var ampIndex = encoded.IndexOf('&', StringComparison.Ordinal);
                 if (ampIndex >= 0)
                     encoded = encoded[..ampIndex];
                 var decoded = Uri.UnescapeDataString(encoded);

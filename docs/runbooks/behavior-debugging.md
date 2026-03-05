@@ -104,7 +104,28 @@ Current instrumentation emits:
 
 Export target can be LocalTelemetry (or any OTLP collector).
 
+If exporting to Seq through `otlphttp`, use Seq's OTLP ingest path as the
+exporter endpoint base:
+
+```yaml
+exporters:
+  otlphttp/seq:
+    endpoint: https://<seq-host>/ingest/otlp
+```
+
+Using the root URL (for example `https://<seq-host>/`) causes 404s when the
+collector appends `/v1/logs` or `/v1/traces`.
+
 This gives per-turn causality and timing without heavy log spelunking.
+
+You can also inspect the daemon's in-memory Slack flow counters directly:
+
+```bash
+netclaw status
+```
+
+Look for `slack counters:` and compare `recv/routed/enqueued/replied` to detect
+where messages are being dropped.
 
 ## OTLP Query Cheat Sheet
 
