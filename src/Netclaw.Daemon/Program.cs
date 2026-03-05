@@ -454,7 +454,8 @@ static void ConfigureDaemonServices(
         {
             var reminderManager = registry.Get<Netclaw.Actors.Hosting.ReminderManagerActorKey>();
             var tp = sp.GetRequiredService<TimeProvider>();
-            toolRegistry.WithReminderTools(reminderManager, tp);
+            var rc = sp.GetRequiredService<ReminderConfig>();
+            toolRegistry.WithReminderTools(reminderManager, tp, rc);
         });
     });
 
@@ -621,15 +622,15 @@ static void MapReminderEndpoints(WebApplication app)
     });
 
     app.MapPost("/api/reminders", async (
-        Netclaw.Actors.Reminders.CreateReminderRequest request,
+        CreateReminderRequest request,
         Akka.Hosting.IRequiredActor<Netclaw.Actors.Hosting.ReminderManagerActorKey> actor,
         TimeProvider timeProvider,
+        ReminderConfig reminderConfig,
         CancellationToken ct) =>
     {
         var manager = await actor.GetAsync(ct);
-        var now = timeProvider.GetUtcNow();
 
-        var tool = new Netclaw.Actors.Reminders.SetReminderTool(manager, timeProvider);
+        var tool = new Netclaw.Actors.Reminders.SetReminderTool(manager, timeProvider, reminderConfig);
         var result = await tool.ExecuteAsync(
             new Dictionary<string, object?>
             {
@@ -666,11 +667,11 @@ static void MapReminderEndpoints(WebApplication app)
         CancellationToken ct) =>
     {
         var manager = await actor.GetAsync(ct);
-        var response = await manager.Ask<Netclaw.Actors.Reminders.ReminderListResponse>(
-            new Netclaw.Actors.Reminders.ListRemindersCommand(), TimeSpan.FromSeconds(10), ct);
+        var response = await manager.Ask<Netclaw.Actors.Reminders.GetReminderResponse>(
+            new Netclaw.Actors.Reminders.GetReminderCommand(new Netclaw.Actors.Reminders.ReminderId(id)),
+            TimeSpan.FromSeconds(10), ct);
 
-        var match = response.Reminders.FirstOrDefault(r => r.Id.Value == id);
-        return match is not null ? Results.Ok(match) : Results.NotFound(new { error = $"Reminder '{id}' not found." });
+        return response.Reminder is not null ? Results.Ok(response.Reminder) : Results.NotFound(new { error = $"Reminder '{id}' not found." });
     });
 }
 
@@ -684,4 +685,16 @@ static Akka.Event.LogLevel ToAkkaLogLevel(LogLevel logLevel)
         Error or Critical or None => Akka.Event.LogLevel.ErrorLevel,
         _ => Akka.Event.LogLevel.WarningLevel
     };
+}
+
+/// <summary>
+/// REST API request body for creating a reminder.
+/// </summary>
+sealed record CreateReminderRequest
+{
+    public required string Name { get; init; }
+    public required string Prompt { get; init; }
+    public required string ScheduleType { get; init; }
+    public required string Schedule { get; init; }
+    public string? ReportToChannel { get; init; }
 }

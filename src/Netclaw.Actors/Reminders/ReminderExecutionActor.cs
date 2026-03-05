@@ -19,6 +19,7 @@ internal sealed class ReminderExecutionActor : ReceiveActor
 {
     private readonly ReminderPayload _payload;
     private readonly SessionPipeline _pipeline;
+    private readonly TimeProvider _timeProvider;
     private readonly ILoggingAdapter _log;
 
     private readonly StringBuilder _buffer = new();
@@ -33,15 +34,17 @@ internal sealed class ReminderExecutionActor : ReceiveActor
         SessionPipeline pipeline,
         ReminderConfig config,
         TimeProvider timeProvider) =>
-        Props.Create(() => new ReminderExecutionActor(payload, pipeline, config));
+        Props.Create(() => new ReminderExecutionActor(payload, pipeline, config, timeProvider));
 
     private ReminderExecutionActor(
         ReminderPayload payload,
         SessionPipeline pipeline,
-        ReminderConfig config)
+        ReminderConfig config,
+        TimeProvider timeProvider)
     {
         _payload = payload;
         _pipeline = pipeline;
+        _timeProvider = timeProvider;
         _log = Context.GetLogger();
 
         // Set execution timeout
@@ -68,7 +71,7 @@ internal sealed class ReminderExecutionActor : ReceiveActor
         {
             // Determine session ID
             var sessionId = _payload.OriginatingSessionId
-                ?? new SessionId($"reminder/{_payload.Id.Value}/{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}");
+                ?? new SessionId($"reminder/{_payload.Id.Value}/{_timeProvider.GetUtcNow().ToUnixTimeMilliseconds()}");
 
             _log.Info("Starting reminder execution for '{0}' with session '{1}'",
                 _payload.Name, sessionId.Value);
@@ -101,7 +104,7 @@ internal sealed class ReminderExecutionActor : ReceiveActor
                 SenderId = "reminder-system",
                 ChannelId = _payload.ReportToChannel,
                 Contents = [new TextContent(_payload.Prompt)],
-                ReceivedAt = DateTimeOffset.UtcNow
+                ReceivedAt = _timeProvider.GetUtcNow()
             });
 
             // Complete the input — single prompt, one turn
@@ -163,9 +166,15 @@ internal sealed class ReminderExecutionActor : ReceiveActor
 
     protected override void PostStop()
     {
-        _session?.DisposeAsync().AsTask().GetAwaiter().GetResult();
-        _materializer?.Dispose();
-        base.PostStop();
+        try
+        {
+            _session?.DisposeAsync().AsTask().GetAwaiter().GetResult();
+            _materializer?.Dispose();
+        }
+        catch (Exception ex)
+        {
+            _log.Debug(ex, "Failed to dispose reminder execution resources for '{0}'", _payload.Name);
+        }
     }
 
     private sealed record ExecutionStarted;

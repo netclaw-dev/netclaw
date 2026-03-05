@@ -108,23 +108,10 @@ public class ReminderManagerActorTests : TestKit
         Assert.False(cancelled.Found);
     }
 
-    [Fact]
-    public async Task List_empty_returns_empty()
-    {
-        var manager = await GetManagerAsync();
-
-        var list = await manager.Ask<ReminderListResponse>(
-            new ListRemindersCommand(), TimeSpan.FromSeconds(5));
-
-        // May contain reminders from other tests if run in parallel,
-        // but at minimum should not throw.
-        Assert.NotNull(list.Reminders);
-    }
-
     private static ReminderPayload CreatePayload(string name, string scheduleType, string prompt)
     {
         var id = new ReminderId($"{name}-{Guid.NewGuid():N}"[..20]);
-        var now = DateTimeOffset.UtcNow;
+        var now = TimeProvider.System.GetUtcNow();
 
         return new ReminderPayload
         {

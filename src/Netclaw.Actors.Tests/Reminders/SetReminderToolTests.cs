@@ -3,6 +3,7 @@ using Akka.Hosting;
 using Akka.Hosting.TestKit;
 using Akka.Persistence.Hosting;
 using Netclaw.Actors.Reminders;
+using Netclaw.Configuration;
 using Netclaw.Tools;
 using Xunit;
 using Xunit.Abstractions;
@@ -27,7 +28,7 @@ public class SetReminderToolTests : TestKit
     public async Task Schedule_oneshot_relative_time_30m()
     {
         var probe = CreateTestProbe();
-        var tool = new SetReminderTool(probe, _timeProvider);
+        var tool = new SetReminderTool(probe, _timeProvider, new ReminderConfig());
 
         _ = Task.Run(async () =>
         {
@@ -57,7 +58,7 @@ public class SetReminderToolTests : TestKit
     public async Task Schedule_interval_2h()
     {
         var probe = CreateTestProbe();
-        var tool = new SetReminderTool(probe, _timeProvider);
+        var tool = new SetReminderTool(probe, _timeProvider, new ReminderConfig());
 
         _ = Task.Run(async () =>
         {
@@ -83,7 +84,7 @@ public class SetReminderToolTests : TestKit
     public async Task Schedule_cron_every_6_hours()
     {
         var probe = CreateTestProbe();
-        var tool = new SetReminderTool(probe, _timeProvider);
+        var tool = new SetReminderTool(probe, _timeProvider, new ReminderConfig());
 
         _ = Task.Run(async () =>
         {
@@ -109,7 +110,7 @@ public class SetReminderToolTests : TestKit
     public async Task Rejects_invalid_cron_expression()
     {
         var probe = CreateTestProbe();
-        var tool = new SetReminderTool(probe, _timeProvider);
+        var tool = new SetReminderTool(probe, _timeProvider, new ReminderConfig());
 
         var result = await tool.ExecuteAsync(new Dictionary<string, object?>
         {
@@ -128,7 +129,7 @@ public class SetReminderToolTests : TestKit
     public async Task Rejects_unknown_schedule_type()
     {
         var probe = CreateTestProbe();
-        var tool = new SetReminderTool(probe, _timeProvider);
+        var tool = new SetReminderTool(probe, _timeProvider, new ReminderConfig());
 
         var result = await tool.ExecuteAsync(new Dictionary<string, object?>
         {
@@ -146,7 +147,7 @@ public class SetReminderToolTests : TestKit
     public async Task Rejects_interval_under_60_seconds()
     {
         var probe = CreateTestProbe();
-        var tool = new SetReminderTool(probe, _timeProvider);
+        var tool = new SetReminderTool(probe, _timeProvider, new ReminderConfig());
 
         var result = await tool.ExecuteAsync(new Dictionary<string, object?>
         {
@@ -164,7 +165,7 @@ public class SetReminderToolTests : TestKit
     public async Task Self_targeting_captures_session_id()
     {
         var probe = CreateTestProbe();
-        var tool = new SetReminderTool(probe, _timeProvider);
+        var tool = new SetReminderTool(probe, _timeProvider, new ReminderConfig());
         var context = new ToolExecutionContext("C0123ABC/1234567890.123456", null);
 
         _ = Task.Run(async () =>

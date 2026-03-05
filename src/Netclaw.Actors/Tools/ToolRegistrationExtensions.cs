@@ -41,9 +41,10 @@ public static class ToolRegistrationExtensions
     public static ToolRegistry WithReminderTools(
         this ToolRegistry registry,
         IActorRef reminderManager,
-        TimeProvider timeProvider)
+        TimeProvider timeProvider,
+        ReminderConfig config)
     {
-        registry.Register(new SetReminderTool(reminderManager, timeProvider));
+        registry.Register(new SetReminderTool(reminderManager, timeProvider, config));
         registry.Register(new CancelReminderTool(reminderManager));
         registry.Register(new ListRemindersTool(reminderManager));
         return registry;

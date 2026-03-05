@@ -44,6 +44,7 @@ public sealed class ReminderManagerActor : ReceiveActor
         ReceiveAsync<ScheduleReminderCommand>(HandleScheduleAsync);
         ReceiveAsync<CancelReminderCommand>(HandleCancelAsync);
         ReceiveAsync<ListRemindersCommand>(HandleListAsync);
+        ReceiveAsync<GetReminderCommand>(HandleGetAsync);
         ReceiveAsync<ReminderPayload>(HandleReminderFiredAsync);
         Receive<ReminderExecutionCompleted>(HandleExecutionCompleted);
     }
@@ -161,6 +162,40 @@ public sealed class ReminderManagerActor : ReceiveActor
         {
             _log.Error(ex, "Error listing reminders");
             Sender.Tell(new ReminderListResponse([]));
+        }
+    }
+
+    private async Task HandleGetAsync(GetReminderCommand cmd)
+    {
+        try
+        {
+            var result = await _client!.ListRemindersAsync();
+            ReminderInfo? match = null;
+
+            if (result.ResponseCode == FetchRemindersResponseCode.Success)
+            {
+                foreach (var scheduled in result.Reminders)
+                {
+                    if (scheduled.Message is ReminderPayload payload && payload.Id.Value == cmd.Id.Value)
+                    {
+                        match = new ReminderInfo(
+                            payload.Id,
+                            payload.Name,
+                            payload.Prompt,
+                            payload.Schedule,
+                            scheduled.When,
+                            payload.ReportToChannel);
+                        break;
+                    }
+                }
+            }
+
+            Sender.Tell(new GetReminderResponse(match));
+        }
+        catch (Exception ex)
+        {
+            _log.Error(ex, "Error getting reminder '{0}'", cmd.Id.Value);
+            Sender.Tell(new GetReminderResponse(null));
         }
     }
 

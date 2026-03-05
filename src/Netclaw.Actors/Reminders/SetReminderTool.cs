@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Text.RegularExpressions;
 using Akka.Actor;
 using Netclaw.Actors.Protocol;
+using Netclaw.Configuration;
 using Netclaw.Tools;
 
 namespace Netclaw.Actors.Reminders;
@@ -23,6 +24,7 @@ public sealed partial class SetReminderTool : NetclawTool<SetReminderTool.Params
 
     private readonly IActorRef _reminderManager;
     private readonly TimeProvider _timeProvider;
+    private readonly ReminderConfig _config;
 
     public record Params(
         [property: Description("A short name for this reminder (e.g. 'daily-standup', 'check-backups')")]
@@ -36,10 +38,11 @@ public sealed partial class SetReminderTool : NetclawTool<SetReminderTool.Params
         [property: Description("Optional Slack channel ID to post results to. Omit for self-targeting (posts back to current thread).")]
         string? ReportToChannel = null);
 
-    public SetReminderTool(IActorRef reminderManager, TimeProvider timeProvider)
+    public SetReminderTool(IActorRef reminderManager, TimeProvider timeProvider, ReminderConfig config)
     {
         _reminderManager = reminderManager;
         _timeProvider = timeProvider;
+        _config = config;
     }
 
     protected override Task<string> ExecuteAsync(Params args, CancellationToken ct)
@@ -138,8 +141,8 @@ public sealed partial class SetReminderTool : NetclawTool<SetReminderTool.Params
                 var interval = ParseDuration(scheduleValue);
                 if (interval is null)
                     return (null, $"Cannot parse interval '{scheduleValue}'. Use format like '30m', '2h', '1d'.");
-                if (interval.Value.TotalSeconds < 60)
-                    return (null, "Minimum interval is 60 seconds.");
+                if (interval.Value.TotalSeconds < _config.MinIntervalSeconds)
+                    return (null, $"Minimum interval is {_config.MinIntervalSeconds} seconds.");
                 var firstFire = _timeProvider.GetUtcNow().Add(interval.Value);
                 return (new ReminderSchedule
                 {
