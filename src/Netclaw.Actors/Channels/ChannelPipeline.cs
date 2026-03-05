@@ -6,6 +6,7 @@ using Akka.Streams.Dsl;
 using Microsoft.Extensions.AI;
 using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Protocol;
+using Netclaw.Configuration;
 
 namespace Netclaw.Actors.Channels;
 
@@ -97,15 +98,18 @@ public sealed class SessionPipeline
     private readonly ActorSystem _system;
     private readonly IRequiredActor<SessionManagerActorKey> _sessionManagerProvider;
     private readonly ISessionLifecycleObserver? _lifecycleObserver;
+    private readonly NetclawPaths? _paths;
 
     public SessionPipeline(
         ActorSystem system,
         IRequiredActor<SessionManagerActorKey> sessionManagerProvider,
-        ISessionLifecycleObserver? lifecycleObserver = null)
+        ISessionLifecycleObserver? lifecycleObserver = null,
+        NetclawPaths? paths = null)
     {
         _system = system;
         _sessionManagerProvider = sessionManagerProvider;
         _lifecycleObserver = lifecycleObserver;
+        _paths = paths;
     }
 
     /// <summary>
@@ -140,7 +144,7 @@ public sealed class SessionPipeline
 
         // Inbound: ChannelInput → SendUserMessage → session manager (direct Tell)
         var inputSink = Flow.Create<ChannelInput>()
-            .Select(input => MapToCommand(input, sessionId, options))
+            .Select(input => MapToCommand(input, sessionId, options, _paths))
             .Via(killSwitch.Flow<SendUserMessage>())
             .To(Sink.ForEach<SendUserMessage>(cmd => sessionManager.Tell(cmd, ActorRefs.NoSender)));
 
@@ -178,7 +182,10 @@ public sealed class SessionPipeline
     }
 
     private static SendUserMessage MapToCommand(
-        ChannelInput input, SessionId sessionId, SessionPipelineOptions options)
+        ChannelInput input,
+        SessionId sessionId,
+        SessionPipelineOptions options,
+        NetclawPaths? paths)
     {
         var textParts = input.Contents.OfType<TextContent>().Select(t => t.Text);
         var content = string.Join("\n", textParts);
@@ -188,7 +195,9 @@ public sealed class SessionPipeline
         var dataContents = input.Contents.OfType<DataContent>().ToList();
         if (dataContents.Count > 0)
         {
-            var sessionDir = SessionDirectoryHelper.GetSessionDirectory(sessionId);
+            var sessionDir = paths is not null
+                ? SessionDirectoryHelper.GetSessionDirectory(sessionId, paths.SessionsDirectory)
+                : SessionDirectoryHelper.GetSessionDirectory(sessionId);
             var mediaDir = Path.Combine(sessionDir, "media");
             Directory.CreateDirectory(mediaDir);
 
