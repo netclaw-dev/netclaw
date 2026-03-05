@@ -238,4 +238,75 @@ public class AttachFileToolTests : IDisposable
                 File.Delete(outsideFile);
         }
     }
+
+    [Fact]
+    public async Task File_from_sibling_session_directory_is_copied_and_attached()
+    {
+        var sessionsRoot = Path.Combine(_tempDir, "sessions");
+        var currentSessionDir = Path.Combine(sessionsRoot, "current");
+        var siblingSessionDir = Path.Combine(sessionsRoot, "sibling");
+        Directory.CreateDirectory(currentSessionDir);
+        Directory.CreateDirectory(siblingSessionDir);
+
+        var sourcePath = Path.Combine(siblingSessionDir, "report.png");
+        await File.WriteAllBytesAsync(sourcePath, [0x89, 0x50, 0x4E, 0x47]);
+
+        var context = new ToolExecutionContext("test-session", currentSessionDir);
+        var args = new Dictionary<string, object?>
+        {
+            ["Path"] = sourcePath,
+            ["DisplayName"] = "Copied Report.png"
+        };
+
+        var result = await _tool.ExecuteAsync(args, context, CancellationToken.None);
+
+        Assert.Contains("File attached", result);
+        Assert.Contains("copied into current session", result, StringComparison.OrdinalIgnoreCase);
+
+        var attachment = Assert.Single(context.FileAttachments);
+        Assert.StartsWith(Path.Combine(currentSessionDir, "attachments"), attachment.FilePath, StringComparison.OrdinalIgnoreCase);
+        Assert.True(File.Exists(attachment.FilePath));
+        Assert.Equal("Copied Report.png", attachment.FileName);
+        Assert.Equal("image/png", attachment.MimeType);
+    }
+
+    [Fact]
+    public async Task Symlink_from_sibling_session_to_outside_root_is_rejected()
+    {
+        var sessionsRoot = Path.Combine(_tempDir, "sessions");
+        var currentSessionDir = Path.Combine(sessionsRoot, "current");
+        var siblingSessionDir = Path.Combine(sessionsRoot, "sibling");
+        Directory.CreateDirectory(currentSessionDir);
+        Directory.CreateDirectory(siblingSessionDir);
+
+        var outsidePath = Path.Combine(_tempDir, "outside.txt");
+        await File.WriteAllTextAsync(outsidePath, "secret");
+
+        var symlinkPath = Path.Combine(siblingSessionDir, "linked.txt");
+        try
+        {
+            File.CreateSymbolicLink(symlinkPath, outsidePath);
+
+            var context = new ToolExecutionContext("test-session", currentSessionDir);
+            var args = new Dictionary<string, object?>
+            {
+                ["Path"] = symlinkPath
+            };
+
+            var result = await _tool.ExecuteAsync(args, context, CancellationToken.None);
+
+            Assert.Contains("Error", result);
+            Assert.Contains("session", result, StringComparison.OrdinalIgnoreCase);
+            Assert.Empty(context.FileAttachments);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return;
+        }
+        finally
+        {
+            if (File.Exists(symlinkPath))
+                File.Delete(symlinkPath);
+        }
+    }
 }
