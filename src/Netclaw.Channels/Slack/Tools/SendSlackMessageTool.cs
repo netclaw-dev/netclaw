@@ -18,7 +18,6 @@ namespace Netclaw.Channels.Slack.Tools;
 public sealed partial class SendSlackMessageTool : NetclawTool<SendSlackMessageTool.Params>, IChannelTool
 {
     private readonly ISlackOutboundClient _outboundClient;
-    private readonly ISlackReplyClient _replyClient;
     private readonly SlackChannelOptions _options;
     private readonly Func<SlackChannelId?> _defaultChannelIdAccessor;
     private readonly Func<IActorRef?> _gatewayAccessor;
@@ -29,28 +28,21 @@ public sealed partial class SendSlackMessageTool : NetclawTool<SendSlackMessageT
         [property: Description("Slack channel ID (C...) to post to. Mutually exclusive with user_id.")]
         string? ChannelId = null,
         [property: Description("Slack user ID (U...) to DM. Mutually exclusive with channel_id.")]
-        string? UserId = null,
-        [property: Description("Comma-separated absolute file paths to attach to the thread. Files must be within the session directory.")]
-        string? FilePaths = null);
+        string? UserId = null);
 
     public SendSlackMessageTool(
         ISlackOutboundClient outboundClient,
-        ISlackReplyClient replyClient,
         SlackChannelOptions options,
         Func<SlackChannelId?> defaultChannelIdAccessor,
         Func<IActorRef?> gatewayAccessor)
     {
         _outboundClient = outboundClient;
-        _replyClient = replyClient;
         _options = options;
         _defaultChannelIdAccessor = defaultChannelIdAccessor;
         _gatewayAccessor = gatewayAccessor;
     }
 
-    protected override Task<string> ExecuteAsync(Params args, CancellationToken ct)
-        => ExecuteAsync(args, ToolExecutionContext.Empty, ct);
-
-    protected override async Task<string> ExecuteAsync(Params args, ToolExecutionContext context, CancellationToken ct)
+    protected override async Task<string> ExecuteAsync(Params args, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(args.Message))
             return "Error: 'message' parameter is required.";
@@ -74,7 +66,7 @@ public sealed partial class SendSlackMessageTool : NetclawTool<SendSlackMessageT
 
             var userId = new SlackUserId(args.UserId!);
 
-            if (!IsAllowedUser(userId))
+            if (!SlackAclPolicy.IsAllowedUser(userId, _options))
                 return $"Error: User {userId.Value} is not in the allowed users list.";
 
             try
@@ -90,7 +82,7 @@ public sealed partial class SendSlackMessageTool : NetclawTool<SendSlackMessageT
         {
             targetChannelId = new SlackChannelId(args.ChannelId!);
 
-            if (!IsAllowedChannel(targetChannelId))
+            if (!SlackAclPolicy.IsAllowedChannel(targetChannelId, _options, _defaultChannelIdAccessor()))
                 return $"Error: Channel {targetChannelId.Value} is not in the allowed channels list.";
         }
 
@@ -110,7 +102,7 @@ public sealed partial class SendSlackMessageTool : NetclawTool<SendSlackMessageT
         {
             await gateway.Ask<ProactiveThreadAck>(
                 new StartProactiveThread(result.ChannelId, result.ThreadTs, sessionId),
-                TimeSpan.FromSeconds(10),
+                TimeSpan.FromSeconds(30),
                 ct);
         }
         catch (Exception)
@@ -121,97 +113,7 @@ public sealed partial class SendSlackMessageTool : NetclawTool<SendSlackMessageT
                    $"Thread: {result.ChannelId.Value}/{result.ThreadTs.Value}";
         }
 
-        // Upload file attachments after the thread is established
-        var fileErrors = await UploadFilesAsync(args.FilePaths, context, result.ChannelId, result.ThreadTs, ct);
-
         var successTarget = hasUser ? $"user {args.UserId}" : $"channel {args.ChannelId}";
-        var response = $"Message sent to {successTarget}. Thread: {result.ChannelId.Value}/{result.ThreadTs.Value}";
-
-        if (fileErrors.Count > 0)
-            response += $" File upload errors: {string.Join("; ", fileErrors)}";
-
-        return response;
-    }
-
-    private async Task<List<string>> UploadFilesAsync(
-        string? filePathsCsv,
-        ToolExecutionContext context,
-        SlackChannelId channelId,
-        SlackThreadTs threadTs,
-        CancellationToken ct)
-    {
-        var errors = new List<string>();
-
-        if (string.IsNullOrWhiteSpace(filePathsCsv))
-            return errors;
-
-        var sessionDir = context.SessionDirectory;
-        var paths = filePathsCsv.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-
-        foreach (var rawPath in paths)
-        {
-            var fullPath = Path.GetFullPath(rawPath);
-
-            // Validate file is within session directory (if available)
-            if (!string.IsNullOrWhiteSpace(sessionDir) && !IsPathWithinDirectory(fullPath, sessionDir))
-            {
-                errors.Add($"{rawPath}: path must be within the session directory");
-                continue;
-            }
-
-            if (!File.Exists(fullPath))
-            {
-                errors.Add($"{rawPath}: file not found");
-                continue;
-            }
-
-            try
-            {
-                await _replyClient.UploadFileToThreadAsync(channelId, threadTs, fullPath, Path.GetFileName(fullPath), ct);
-            }
-            catch (Exception ex)
-            {
-                errors.Add($"{rawPath}: {ex.Message}");
-            }
-        }
-
-        return errors;
-    }
-
-    private static bool IsPathWithinDirectory(string path, string directory)
-    {
-        var fullPath = Path.GetFullPath(path)
-            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        var normalizedDir = Path.GetFullPath(directory)
-            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-
-        if (!fullPath.StartsWith(normalizedDir, StringComparison.OrdinalIgnoreCase))
-            return false;
-
-        if (fullPath.Length == normalizedDir.Length)
-            return true;
-
-        var boundary = fullPath[normalizedDir.Length];
-        return boundary == Path.DirectorySeparatorChar || boundary == Path.AltDirectorySeparatorChar;
-    }
-
-    private bool IsAllowedUser(SlackUserId userId)
-    {
-        if (_options.AllowedUserIds.Length == 0)
-            return true;
-
-        return _options.AllowedUserIds.Contains(userId.Value, StringComparer.Ordinal);
-    }
-
-    private bool IsAllowedChannel(SlackChannelId channelId)
-    {
-        var defaultChannelId = _defaultChannelIdAccessor();
-        var matchesDefault = defaultChannelId is not null
-            && channelId == defaultChannelId.Value;
-
-        var matchesAllowed = _options.AllowedChannelIds
-            .Contains(channelId.Value, StringComparer.Ordinal);
-
-        return matchesDefault || matchesAllowed;
+        return $"Message sent to {successTarget}. Thread: {result.ChannelId.Value}/{result.ThreadTs.Value}";
     }
 }

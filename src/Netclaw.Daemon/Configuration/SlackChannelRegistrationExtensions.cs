@@ -51,11 +51,9 @@ public static class SlackChannelRegistrationExtensions
         services.AddSingleton<SendSlackMessageTool>(sp =>
         {
             var outbound = sp.GetRequiredService<ISlackOutboundClient>();
-            var replyClient = sp.GetRequiredService<ISlackReplyClient>();
             var channel = sp.GetRequiredService<SlackChannel>();
             return new SendSlackMessageTool(
                 outbound,
-                replyClient,
                 slackOptions,
                 () => channel.DefaultChannelId,
                 () => channel.Gateway);

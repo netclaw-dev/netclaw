@@ -6,6 +6,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Time.Testing;
 using Netclaw.Actors.Protocol;
+using Netclaw.Actors.Tests.Channels.TestHelpers;
 using Netclaw.Channels.Slack;
 using Netclaw.Channels.Slack.Tools;
 using Netclaw.Security;
@@ -161,19 +162,9 @@ public sealed class SendSlackMessageToolTests
     {
         return new SendSlackMessageTool(
             outbound ?? new FakeSlackOutboundClient(),
-            new NoopReplyClient(),
             options ?? DefaultOptions,
             defaultChannelIdAccessor ?? (() => null),
             gatewayAccessor ?? (() => new FakeGatewayActor()));
-    }
-
-    private sealed class NoopReplyClient : ISlackReplyClient
-    {
-        public Task PostThreadReplyAsync(SlackPostMessage message, CancellationToken cancellationToken = default)
-            => Task.CompletedTask;
-
-        public Task UploadFileToThreadAsync(SlackChannelId channelId, SlackThreadTs threadTs, string filePath, string? filename = null, CancellationToken cancellationToken = default)
-            => Task.CompletedTask;
     }
 
     private sealed class FakeSlackOutboundClient : ISlackOutboundClient
@@ -255,6 +246,21 @@ public sealed class LookupSlackUserToolTests
     {
         var tool = CreateTool(CreateUsers());
         var result = await ExecuteAsync(tool, "nonexistent");
+        Assert.Contains("No matching users found", result);
+    }
+
+    [Fact]
+    public async Task Filters_deleted_users()
+    {
+        var users = CreateUsers();
+        users.Add(new User
+        {
+            Id = "UDEL", Name = "deleted", RealName = "Deleted Person", Deleted = true,
+            Profile = new UserProfile { DisplayName = "deleted" }
+        });
+
+        var tool = CreateTool(users);
+        var result = await ExecuteAsync(tool, "Deleted");
         Assert.Contains("No matching users found", result);
     }
 
@@ -437,6 +443,48 @@ public sealed class SlackProactiveThreadActorTests(ITestOutputHelper output) : T
     }
 
     [Fact]
+    public void StartProactiveThread_rejected_for_disallowed_channel()
+    {
+        var sink = CreateTestProbe("disallowed-channel-sink");
+        var deps = CreateDependencies(
+            threadPropsFactory: (_, _, _, _) => Props.Create(() => new ForwardActor(sink.Ref)));
+
+        var conversation = Sys.ActorOf(
+            SlackConversationActor.CreateProps(new SlackChannelId("CBAD"), deps),
+            "proactive-disallowed-test");
+
+        conversation.Tell(new StartProactiveThread(
+            new SlackChannelId("CBAD"),
+            new SlackThreadTs("400.1"),
+            new SessionId("CBAD/400.1")));
+
+        // Message should be silently dropped — no thread actor created
+        sink.ExpectNoMsg(TimeSpan.FromMilliseconds(250));
+    }
+
+    [Fact]
+    public void StartProactiveThread_allows_dm_channel_not_in_allow_list()
+    {
+        var sink = CreateTestProbe("dm-bypass-sink");
+        // AllowedChannelIds = ["C1"] — "DU1" is NOT in the list
+        var deps = CreateDependencies(
+            threadPropsFactory: (_, _, _, _) => Props.Create(() => new ForwardActor(sink.Ref)));
+
+        var conversation = Sys.ActorOf(
+            SlackConversationActor.CreateProps(new SlackChannelId("DU1"), deps),
+            "proactive-dm-bypass-test");
+
+        conversation.Tell(new StartProactiveThread(
+            new SlackChannelId("DU1"),
+            new SlackThreadTs("500.1"),
+            new SessionId("DU1/500.1")));
+
+        // DM channels bypass the channel ACL check — should be forwarded
+        sink.ExpectMsg<StartProactiveThread>(msg =>
+            Assert.Equal("DU1/500.1", msg.SessionId.Value));
+    }
+
+    [Fact]
     public void ProactiveThreadAck_flows_back_through_gateway()
     {
         var deps = CreateDependencies(
@@ -518,14 +566,6 @@ public sealed class SlackProactiveThreadActorTests(ITestOutputHelper output) : T
         }
     }
 
-    private sealed class NoopReplyClient : ISlackReplyClient
-    {
-        public Task PostThreadReplyAsync(SlackPostMessage message, CancellationToken cancellationToken = default)
-            => Task.CompletedTask;
-
-        public Task UploadFileToThreadAsync(SlackChannelId channelId, SlackThreadTs threadTs, string filePath, string? filename = null, CancellationToken cancellationToken = default)
-            => Task.CompletedTask;
-    }
 }
 
 #endregion
