@@ -613,19 +613,21 @@ public sealed class LlmSessionActor : ReceivePersistentActor
         var self = Self;
         var client = _compactionClient;
         var log = _log;
+        var timeout = TimeSpan.FromSeconds(Math.Max(1, _config.SidecarLlmTimeoutSeconds));
 
-        _ = GenerateTitleAsync(client, history, self, log);
+        _ = GenerateTitleAsync(client, history, self, log, timeout);
     }
 
     private static async Task GenerateTitleAsync(
         IChatClient client,
         IReadOnlyList<SerializableChatMessage> history,
         IActorRef self,
-        ILoggingAdapter log)
+        ILoggingAdapter log,
+        TimeSpan timeout)
     {
         try
         {
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            using var cts = new CancellationTokenSource(timeout);
             var messages = new List<AiChatMessage>
             {
                 new(Microsoft.Extensions.AI.ChatRole.User,
@@ -667,7 +669,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor
 
         try
         {
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            var timeout = TimeSpan.FromSeconds(Math.Max(1, _config.SidecarLlmTimeoutSeconds));
+            using var cts = new CancellationTokenSource(timeout);
             var observerMessages = new List<AiChatMessage>
             {
                 new(Microsoft.Extensions.AI.ChatRole.System,
@@ -706,18 +709,20 @@ public sealed class LlmSessionActor : ReceivePersistentActor
         var history = _state.History;
         var self = Self;
         var client = _compactionClient;
+        var timeout = TimeSpan.FromSeconds(Math.Max(1, _config.SidecarLlmTimeoutSeconds));
 
-        _ = InvokeMemoryExtractionCoreAsync(client, history, self);
+        _ = InvokeMemoryExtractionCoreAsync(client, history, self, timeout);
     }
 
     private static async Task InvokeMemoryExtractionCoreAsync(
         IChatClient client,
         IReadOnlyList<SerializableChatMessage> history,
-        IActorRef self)
+        IActorRef self,
+        TimeSpan timeout)
     {
         try
         {
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            using var cts = new CancellationTokenSource(timeout);
             var extractionMessages = new List<AiChatMessage>
             {
                 new(Microsoft.Extensions.AI.ChatRole.System,

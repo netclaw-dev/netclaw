@@ -144,11 +144,11 @@ public sealed class SchemaMigratorTests : IDisposable
                 }
                 catch (IOException) when (attempt < 5)
                 {
-                    Thread.Sleep(50);
+                    SqliteConnection.ClearAllPools();
                 }
                 catch (UnauthorizedAccessException) when (attempt < 5)
                 {
-                    Thread.Sleep(50);
+                    SqliteConnection.ClearAllPools();
                 }
             }
         }

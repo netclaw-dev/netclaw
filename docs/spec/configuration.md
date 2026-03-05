@@ -134,7 +134,8 @@ Tuning parameters for LLM session behavior.
     "CompactionThreshold": 0.75,
     "SnapshotInterval": 20,
     "KeepRecentToolResults": 3,
-    "MaxToolIterationsPerTurn": 10
+    "MaxToolIterationsPerTurn": 10,
+    "SidecarLlmTimeoutSeconds": 90
   }
 }
 ```
@@ -145,6 +146,7 @@ Tuning parameters for LLM session behavior.
 | `SnapshotInterval` | int | `20` | Number of turns between persistence snapshots. |
 | `KeepRecentToolResults` | int | `3` | Recent tool call/result pairs kept in full during compaction. |
 | `MaxToolIterationsPerTurn` | int | `10` | Max tool execution rounds per turn before forcing a text response. |
+| `SidecarLlmTimeoutSeconds` | int | `90` | Timeout for sidecar LLM calls (title generation, observer summaries, memory extraction). |
 
 ### Tools
 
