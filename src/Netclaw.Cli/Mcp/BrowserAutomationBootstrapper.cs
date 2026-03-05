@@ -26,64 +26,100 @@ internal sealed class BrowserAutomationBootstrapper : IBrowserAutomationBootstra
                 Message: "Browser automation backend was not selected.");
         }
 
-        if (await HasNodeRuntimeAsync(ct))
+        var installedNode = false;
+        if (!await HasNodeRuntimeAsync(ct))
         {
-            if (backend == BrowserAutomationMcpProfiles.ChromeDevToolsBackend)
+            var install = await TryInstallNodeJsAsync(ct);
+            if (install.Succeeded && await HasNodeRuntimeAsync(ct))
             {
-                var chrome = BrowserAutomationRuntimeDetector.DetectChrome();
-                if (!chrome.IsInstalled)
-                {
-                    return new BrowserAutomationBootstrapResult(
-                        Success: false,
-                        NeedsManualAction: false,
-                        Message: "Chrome DevTools MCP requires a local Chrome executable, but none was found.");
-                }
+                installedNode = true;
+            }
+            else
+            {
+                var backendLabel = backend == BrowserAutomationMcpProfiles.PlaywrightBackend
+                    ? "Playwright MCP"
+                    : "Chrome DevTools MCP";
+
+                var manualCommand = install.ManualCommand ?? GetDefaultManualInstallCommand();
+                var baseMessage = install.Attempted
+                    ? "Automatic Node.js install failed."
+                    : "Node.js is not installed.";
+
+                var message =
+                    $"{baseMessage} {backendLabel} requires Node.js (20+ recommended). Install it, then press Enter to retry setup.";
+
+                return new BrowserAutomationBootstrapResult(
+                    Success: false,
+                    NeedsManualAction: true,
+                    Message: message,
+                    ManualCommand: manualCommand);
+            }
+        }
+
+        var backendReady = await EnsureBackendRuntimeAsync(backend, ct);
+        if (!backendReady.Success)
+            return backendReady;
+
+        if (installedNode)
+        {
+            return new BrowserAutomationBootstrapResult(
+                Success: true,
+                NeedsManualAction: false,
+                Message: $"Installed Node.js runtime automatically. {backendReady.Message}");
+        }
+
+        return backendReady;
+    }
+
+    private static async Task<BrowserAutomationBootstrapResult> EnsureBackendRuntimeAsync(string backend, CancellationToken ct)
+    {
+        if (backend == BrowserAutomationMcpProfiles.ChromeDevToolsBackend)
+        {
+            var chrome = BrowserAutomationRuntimeDetector.DetectChrome();
+            if (!chrome.IsInstalled)
+            {
+                return new BrowserAutomationBootstrapResult(
+                    Success: false,
+                    NeedsManualAction: false,
+                    Message: "Chrome DevTools MCP requires a local Chrome executable, but none was found.");
             }
 
             return new BrowserAutomationBootstrapResult(
                 Success: true,
                 NeedsManualAction: false,
-                Message: "Node.js runtime detected.");
+                Message: "Node.js runtime and Chrome executable detected.");
         }
 
-        var install = await TryInstallNodeJsAsync(ct);
-        if (install.Succeeded && await HasNodeRuntimeAsync(ct))
+        if (backend == BrowserAutomationMcpProfiles.PlaywrightBackend)
         {
-            if (backend == BrowserAutomationMcpProfiles.ChromeDevToolsBackend)
+            if (BrowserAutomationRuntimeDetector.HasPlaywrightFirefoxBrowserInstalled())
             {
-                var chrome = BrowserAutomationRuntimeDetector.DetectChrome();
-                if (!chrome.IsInstalled)
-                {
-                    return new BrowserAutomationBootstrapResult(
-                        Success: false,
-                        NeedsManualAction: false,
-                        Message: "Node.js installed, but Chrome DevTools MCP still needs a local Chrome executable.");
-                }
+                return new BrowserAutomationBootstrapResult(
+                    Success: true,
+                    NeedsManualAction: false,
+                    Message: "Playwright Firefox browser runtime detected.");
+            }
+
+            var install = await TryInstallPlaywrightFirefoxBrowserAsync(ct);
+            if (install.Succeeded && BrowserAutomationRuntimeDetector.HasPlaywrightFirefoxBrowserInstalled())
+            {
+                return new BrowserAutomationBootstrapResult(
+                    Success: true,
+                    NeedsManualAction: false,
+                    Message: "Installed Playwright Firefox browser runtime automatically.");
             }
 
             return new BrowserAutomationBootstrapResult(
-                Success: true,
-                NeedsManualAction: false,
-                Message: "Installed Node.js runtime automatically.");
+                Success: false,
+                NeedsManualAction: true,
+                Message: "Playwright browser runtime is not installed. Install Firefox runtime in user space, then press Enter to retry setup.",
+                ManualCommand: install.ManualCommand ?? BuildPlaywrightInstallCommand());
         }
-
-        var backendLabel = backend == BrowserAutomationMcpProfiles.PlaywrightBackend
-            ? "Playwright MCP"
-            : "Chrome DevTools MCP";
-
-        var manualCommand = install.ManualCommand ?? GetDefaultManualInstallCommand();
-        var baseMessage = install.Attempted
-            ? "Automatic Node.js install failed."
-            : "Node.js is not installed.";
-
-        var message =
-            $"{baseMessage} {backendLabel} requires Node.js (20+ recommended). Install it, then press Enter to retry setup.";
 
         return new BrowserAutomationBootstrapResult(
-            Success: false,
-            NeedsManualAction: true,
-            Message: message,
-            ManualCommand: manualCommand);
+            Success: true,
+            NeedsManualAction: false,
+            Message: "Node.js runtime detected.");
     }
 
     private static async Task<bool> HasNodeRuntimeAsync(CancellationToken ct)
@@ -204,6 +240,44 @@ internal sealed class BrowserAutomationBootstrapper : IBrowserAutomationBootstra
         }
     }
 
+    private static async Task<(bool Attempted, bool Succeeded, string? ManualCommand)> TryInstallPlaywrightFirefoxBrowserAsync(CancellationToken ct)
+    {
+        try
+        {
+            Directory.CreateDirectory(BrowserAutomationRuntimeDetector.GetPlaywrightBrowsersPath());
+
+            var npxCommand = BrowserAutomationRuntimeDetector.GetPreferredNpxCommand();
+            var env = BrowserAutomationRuntimeDetector.BuildPlaywrightEnvironmentOverlay(npxCommand);
+            var succeeded = await RunCommandAsync(
+                npxCommand,
+                "-y playwright@latest install firefox",
+                TimeSpan.FromMinutes(5),
+                ct,
+                env);
+
+            return (true, succeeded, BuildPlaywrightInstallCommand());
+        }
+        catch
+        {
+            return (true, false, BuildPlaywrightInstallCommand());
+        }
+    }
+
+    private static string BuildPlaywrightInstallCommand()
+    {
+        var npxCommand = BrowserAutomationRuntimeDetector.GetPreferredNpxCommand();
+        var browsersPath = BrowserAutomationRuntimeDetector.GetPlaywrightBrowsersPath();
+
+        if (Path.IsPathRooted(npxCommand))
+        {
+            var commandDir = Path.GetDirectoryName(npxCommand);
+            if (!string.IsNullOrWhiteSpace(commandDir))
+                return $"PATH=\"{commandDir}:$PATH\" PLAYWRIGHT_BROWSERS_PATH=\"{browsersPath}\" \"{npxCommand}\" -y playwright@latest install firefox";
+        }
+
+        return $"PLAYWRIGHT_BROWSERS_PATH=\"{browsersPath}\" {npxCommand} -y playwright@latest install firefox";
+    }
+
     private static string GetDefaultManualInstallCommand()
     {
         if (OperatingSystem.IsWindows())
@@ -223,7 +297,12 @@ internal sealed class BrowserAutomationBootstrapper : IBrowserAutomationBootstra
         return await RunCommandAsync("which", command, TimeSpan.FromSeconds(10), ct);
     }
 
-    private static async Task<bool> RunCommandAsync(string command, string arguments, TimeSpan timeout, CancellationToken ct)
+    private static async Task<bool> RunCommandAsync(
+        string command,
+        string arguments,
+        TimeSpan timeout,
+        CancellationToken ct,
+        IReadOnlyDictionary<string, string>? environmentVariables = null)
     {
         try
         {
@@ -236,6 +315,12 @@ internal sealed class BrowserAutomationBootstrapper : IBrowserAutomationBootstra
                 RedirectStandardError = true,
                 CreateNoWindow = true
             };
+
+            if (environmentVariables is not null)
+            {
+                foreach (var (key, value) in environmentVariables)
+                    psi.Environment[key] = value;
+            }
 
             using var proc = Process.Start(psi);
             if (proc is null)

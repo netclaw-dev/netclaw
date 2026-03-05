@@ -10,6 +10,7 @@ internal sealed record ChromeDetectionResult(
 internal static class BrowserAutomationRuntimeDetector
 {
     private const string ToolsDirectoryName = ".netclaw/tools";
+    private const string PlaywrightBrowsersDirectoryName = "playwright-browsers";
 
     private static readonly string[] ChromeCommandCandidates =
     [
@@ -110,10 +111,31 @@ internal static class BrowserAutomationRuntimeDetector
         };
     }
 
+    public static Dictionary<string, string>? BuildPlaywrightEnvironmentOverlay(string commandPath)
+    {
+        var env = BuildMcpEnvironmentOverlay(commandPath)
+            ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        env["PLAYWRIGHT_BROWSERS_PATH"] = GetPlaywrightBrowsersPath();
+        return env;
+    }
+
     public static string GetUserToolsRoot()
     {
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         return Path.Combine(home, ToolsDirectoryName);
+    }
+
+    public static string GetPlaywrightBrowsersPath()
+        => Path.Combine(GetUserToolsRoot(), PlaywrightBrowsersDirectoryName);
+
+    public static bool HasPlaywrightFirefoxBrowserInstalled()
+    {
+        var browsersPath = GetPlaywrightBrowsersPath();
+        if (!Directory.Exists(browsersPath))
+            return false;
+
+        return Directory.EnumerateDirectories(browsersPath, "firefox-*", SearchOption.TopDirectoryOnly)
+            .Any();
     }
 
     public static string? GetBundledNodeBinDirectory()
