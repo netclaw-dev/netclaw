@@ -388,6 +388,27 @@ static async Task RunAsync(string[] args)
     // ── Reminder management ──
     if (mode is "reminder")
     {
+        if (args.Length == 1)
+        {
+            var builder = Host.CreateApplicationBuilder(args);
+            ConfigureConfigServices(builder.Services, builder.Configuration);
+            builder.Logging.ClearProviders();
+            builder.Logging.SetMinimumLevel(LogLevel.Warning);
+            builder.Services.AddHttpClient("ReminderApi", client =>
+            {
+                client.Timeout = TimeSpan.FromSeconds(10);
+            });
+
+            var traceFile = Path.Combine(Path.GetTempPath(), "netclaw-reminder-trace.log");
+            builder.Services.AddTerminaFileTracing(traceFile, TerminaTraceCategory.All, TerminaTraceLevel.Trace);
+
+            builder.Services.AddTermina("/reminder", t =>
+                t.RegisterRoute<ReminderCreatePage, ReminderCreateViewModel>("/reminder"));
+
+            await builder.Build().RunAsync();
+            return;
+        }
+
         Environment.ExitCode = await ReminderCommand.RunAsync(args);
         return;
     }

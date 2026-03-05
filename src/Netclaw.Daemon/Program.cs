@@ -649,7 +649,8 @@ static void MapReminderEndpoints(WebApplication app)
                 ["Prompt"] = request.Prompt,
                 ["ScheduleType"] = request.ScheduleType,
                 ["Schedule"] = request.Schedule,
-                ["ReportToChannel"] = request.ReportToChannel
+                ["ReportToChannel"] = request.ReportToChannel,
+                ["NotifyInstructions"] = request.NotifyInstructions
             }, ct);
 
         return result.StartsWith("Error", StringComparison.Ordinal)
@@ -810,6 +811,7 @@ sealed record CreateReminderRequest
     public required string ScheduleType { get; init; }
     public required string Schedule { get; init; }
     public string? ReportToChannel { get; init; }
+    public string? NotifyInstructions { get; init; }
 }
 
 sealed record ImportReminderRequest
