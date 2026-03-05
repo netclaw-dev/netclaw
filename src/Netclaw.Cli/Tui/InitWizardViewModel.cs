@@ -916,6 +916,7 @@ public partial class InitWizardViewModel : ReactiveViewModel
                 ["Transport"] = entry.Transport,
                 ["Command"] = entry.Command,
                 ["Arguments"] = entry.Arguments,
+                ["EnvironmentVariables"] = entry.EnvironmentVariables,
                 ["Enabled"] = entry.Enabled,
                 ["GrantCategory"] = entry.GrantCategory
             };

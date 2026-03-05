@@ -694,7 +694,9 @@ public sealed class InitWizardViewModelTests : IDisposable
         Assert.True(config.RootElement.TryGetProperty("McpServers", out var mcpServers));
         Assert.True(mcpServers.TryGetProperty("browser_chrome_devtools", out var browserEntry));
         Assert.Equal("stdio", browserEntry.GetProperty("Transport").GetString());
-        Assert.Equal("npx", browserEntry.GetProperty("Command").GetString());
+        var command = browserEntry.GetProperty("Command").GetString();
+        Assert.False(string.IsNullOrWhiteSpace(command));
+        Assert.EndsWith("npx", command, StringComparison.OrdinalIgnoreCase);
 
         var args = browserEntry.GetProperty("Arguments");
         Assert.Contains(args.EnumerateArray().Select(a => a.GetString()), a => a == "chrome-devtools-mcp@latest");

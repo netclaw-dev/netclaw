@@ -1,3 +1,5 @@
+using System.Runtime.InteropServices;
+
 namespace Netclaw.Cli.Mcp;
 
 internal sealed record ChromeDetectionResult(
@@ -7,6 +9,8 @@ internal sealed record ChromeDetectionResult(
 
 internal static class BrowserAutomationRuntimeDetector
 {
+    private const string ToolsDirectoryName = ".netclaw/tools";
+
     private static readonly string[] ChromeCommandCandidates =
     [
         "google-chrome",
@@ -60,7 +64,83 @@ internal static class BrowserAutomationRuntimeDetector
     }
 
     public static bool HasNodeRuntime()
-        => ResolveCommandPath("node") is not null && ResolveCommandPath("npx") is not null;
+    {
+        var bundled = GetBundledNodeBinDirectory();
+        if (bundled is not null
+            && File.Exists(Path.Combine(bundled, "node"))
+            && File.Exists(Path.Combine(bundled, "npx")))
+        {
+            return true;
+        }
+
+        return ResolveCommandPath("node") is not null && ResolveCommandPath("npx") is not null;
+    }
+
+    public static string GetPreferredNpxCommand()
+    {
+        var bundled = GetBundledNodeBinDirectory();
+        if (bundled is not null)
+        {
+            var candidate = Path.Combine(bundled, "npx");
+            if (File.Exists(candidate))
+                return candidate;
+        }
+
+        return ResolveCommandPath("npx") ?? "npx";
+    }
+
+    public static Dictionary<string, string>? BuildMcpEnvironmentOverlay(string commandPath)
+    {
+        if (!Path.IsPathRooted(commandPath))
+            return null;
+
+        var commandDir = Path.GetDirectoryName(commandPath);
+        if (string.IsNullOrWhiteSpace(commandDir))
+            return null;
+
+        var existingPath = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
+        var separator = OperatingSystem.IsWindows() ? ';' : ':';
+        var combinedPath = string.IsNullOrWhiteSpace(existingPath)
+            ? commandDir
+            : $"{commandDir}{separator}{existingPath}";
+
+        return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["PATH"] = combinedPath
+        };
+    }
+
+    public static string GetUserToolsRoot()
+    {
+        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        return Path.Combine(home, ToolsDirectoryName);
+    }
+
+    public static string? GetBundledNodeBinDirectory()
+    {
+        var toolsRoot = GetUserToolsRoot();
+        var nodeRoot = Path.Combine(toolsRoot, "node");
+        if (!Directory.Exists(nodeRoot))
+            return null;
+
+        var bin = OperatingSystem.IsWindows()
+            ? Path.Combine(nodeRoot)
+            : Path.Combine(nodeRoot, "bin");
+
+        return Directory.Exists(bin) ? bin : null;
+    }
+
+    public static string GetNodeArchivePlatformToken()
+    {
+        var os = OperatingSystem.IsMacOS() ? "darwin" : "linux";
+        var arch = RuntimeInformation.OSArchitecture switch
+        {
+            Architecture.Arm64 => "arm64",
+            _ => "x64"
+        };
+
+        return $"{os}-{arch}";
+    }
 
     private static string? ResolveCommandPath(string command)
     {
