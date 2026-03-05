@@ -458,7 +458,32 @@ public sealed class SlackProactiveThreadActorTests(ITestOutputHelper output) : T
             new SlackThreadTs("400.1"),
             new SessionId("CBAD/400.1")));
 
-        // Message should be silently dropped — no thread actor created
+        ExpectMsg<Status.Failure>(failure =>
+            Assert.Contains("allowed channels", failure.Cause.Message, StringComparison.OrdinalIgnoreCase));
+
+        // Message should be rejected before thread actor creation.
+        sink.ExpectNoMsg(TimeSpan.FromMilliseconds(250));
+    }
+
+    [Fact]
+    public void StartProactiveThread_rejected_when_dm_disabled()
+    {
+        var sink = CreateTestProbe("dm-disabled-sink");
+        var deps = CreateDependencies(
+            allowDirectMessages: false,
+            threadPropsFactory: (_, _, _, _) => Props.Create(() => new ForwardActor(sink.Ref)));
+
+        var conversation = Sys.ActorOf(
+            SlackConversationActor.CreateProps(new SlackChannelId("DU1"), deps),
+            "proactive-dm-disabled-test");
+
+        conversation.Tell(new StartProactiveThread(
+            new SlackChannelId("DU1"),
+            new SlackThreadTs("510.1"),
+            new SessionId("DU1/510.1")));
+
+        ExpectMsg<Status.Failure>(failure =>
+            Assert.Contains("Direct messages are disabled", failure.Cause.Message, StringComparison.OrdinalIgnoreCase));
         sink.ExpectNoMsg(TimeSpan.FromMilliseconds(250));
     }
 
@@ -505,6 +530,7 @@ public sealed class SlackProactiveThreadActorTests(ITestOutputHelper output) : T
     }
 
     private static SlackGatewayDependencies CreateDependencies(
+        bool allowDirectMessages = true,
         Func<SlackChannelId, SlackGatewayDependencies, Props>? conversationPropsFactory = null,
         Func<SessionId, SlackChannelId, SlackThreadTs, SlackGatewayDependencies, Props>? threadPropsFactory = null)
     {
@@ -515,7 +541,7 @@ public sealed class SlackProactiveThreadActorTests(ITestOutputHelper output) : T
             Options: new SlackChannelOptions
             {
                 MentionOnly = true,
-                AllowDirectMessages = true,
+                AllowDirectMessages = allowDirectMessages,
                 AllowedChannelIds = ["C1"]
             },
             BotUserId: new SlackUserId("UBOT"),

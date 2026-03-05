@@ -111,10 +111,20 @@ public sealed class SlackConversationActor : ReceiveActor
             // Defense-in-depth: validate channel ACL even though the tool already checked.
             // DM channels (D-prefixed) skip this — they were validated via user ACL + AllowDirectMessages.
             var isDmChannel = message.ChannelId.Value.StartsWith("D", StringComparison.Ordinal);
+            if (isDmChannel && !_dependencies.Options.AllowDirectMessages)
+            {
+                var reason = "Direct messages are disabled by Slack channel configuration.";
+                _log.Warning("Rejected proactive DM thread for channel {0}: {1}", message.ChannelId, reason);
+                Sender.Tell(new Status.Failure(new InvalidOperationException(reason)));
+                return;
+            }
+
             if (!isDmChannel && !SlackAclPolicy.IsAllowedChannel(
                     message.ChannelId, _dependencies.Options, _dependencies.DefaultChannelId))
             {
                 _log.Warning("Rejected proactive thread for disallowed channel {0}", message.ChannelId);
+                Sender.Tell(new Status.Failure(new InvalidOperationException(
+                    $"Channel {message.ChannelId.Value} is not in the allowed channels list.")));
                 return;
             }
 
