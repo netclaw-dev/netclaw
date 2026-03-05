@@ -158,6 +158,9 @@ public sealed partial class MemorizerStoreMemoryTool : NetclawTool<MemorizerStor
 
         var task = FormatTask(args);
         var chatClient = _clientProvider.GetClient(definition.ModelRole);
+        var subAgentScopeId = !string.IsNullOrWhiteSpace(context.SessionId)
+            ? $"{context.SessionId}/subagent/{definition.Name}/{System.Guid.NewGuid():N}"
+            : $"subagent/{definition.Name}/{System.Guid.NewGuid():N}";
 
         // Spawn subagent as a top-level actor (not tied to a session)
         var subAgent = _actorSystem.ActorOf(
@@ -171,7 +174,8 @@ public sealed partial class MemorizerStoreMemoryTool : NetclawTool<MemorizerStor
                 new RunSubAgent
                 {
                     Task = task,
-                    Timeout = subAgentTimeout
+                    Timeout = subAgentTimeout,
+                    SessionScopeId = subAgentScopeId
                 },
                 timeout: subAgentTimeout.Add(TimeSpan.FromSeconds(5)), // slightly longer than subagent timeout
                 cancellationToken: ct);

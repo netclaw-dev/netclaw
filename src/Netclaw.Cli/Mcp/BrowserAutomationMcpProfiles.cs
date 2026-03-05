@@ -27,6 +27,7 @@ internal static class BrowserAutomationMcpProfiles
                 [
                     "-y",
                     "@playwright/mcp@latest",
+                    "--isolated",
                     "--headless",
                     "--image-responses",
                     "omit",

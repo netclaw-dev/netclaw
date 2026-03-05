@@ -58,10 +58,11 @@ public static class ToolRegistrationExtensions
         this ToolRegistry registry,
         string serverName,
         IList<McpClientTool> tools,
-        string? grantCategory = null)
+        string? grantCategory = null,
+        IMcpToolInvoker? invoker = null)
     {
         foreach (var tool in tools)
-            registry.Register(new McpToolAdapter(tool, serverName, tool.Name, grantCategory));
+            registry.Register(new McpToolAdapter(tool, serverName, tool.Name, grantCategory, invoker));
 
         return registry;
     }

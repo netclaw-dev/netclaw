@@ -134,6 +134,7 @@ public sealed class DaemonRuntimeStatusServiceTests : IDisposable
             mcpServers,
             new ToolRegistry(),
             oauthService,
+            TimeProvider.System,
             NullLogger<McpClientManager>.Instance);
 
         await manager.StartAsync(CancellationToken.None);

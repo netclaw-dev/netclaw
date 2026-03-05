@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Microsoft.Extensions.AI;
 using Netclaw.Actors.Tools;
+using Netclaw.Tools;
 using Xunit;
 
 namespace Netclaw.Actors.Tests.Tools;
@@ -114,6 +115,69 @@ public class McpToolAdapterTests
         var result = await adapter.ExecuteAsync(args, CancellationToken.None);
 
         Assert.Equal("https://example.com", result);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WithContext_UsesInvokerWhenConfigured()
+    {
+        string ThrowingFunc() => throw new InvalidOperationException("should not run");
+        var fakeTool = AIFunctionFactory.Create((Func<string>)ThrowingFunc, "navigate_page");
+        var invoker = new RecordingMcpToolInvoker("scoped-result");
+        var adapter = new McpToolAdapter(fakeTool, "browser_playwright", "navigate_page", invoker: invoker);
+
+        var context = new ToolExecutionContext("chan/thread", null);
+        var args = new Dictionary<string, object?> { ["Url"] = "https://example.com" };
+
+        var result = await adapter.ExecuteAsync(args, context, CancellationToken.None);
+
+        Assert.Equal("scoped-result", result);
+        Assert.Equal("browser_playwright", invoker.ServerName);
+        Assert.Equal("navigate_page", invoker.ToolName);
+        Assert.Equal("chan/thread", invoker.SessionId);
+        Assert.Contains(invoker.Arguments!, kvp => Equals(kvp.Value, "https://example.com"));
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WithContext_InvokerFailure_ReturnsError()
+    {
+        var fakeTool = AIFunctionFactory.Create(() => "unused", "navigate_page");
+        var invoker = new RecordingMcpToolInvoker("ignored")
+        {
+            Failure = new InvalidOperationException("session transport failed")
+        };
+        var adapter = new McpToolAdapter(fakeTool, "browser_playwright", "navigate_page", invoker: invoker);
+
+        var context = new ToolExecutionContext("chan/thread", null);
+        var result = await adapter.ExecuteAsync(new Dictionary<string, object?>(), context, CancellationToken.None);
+
+        Assert.StartsWith("Error:", result);
+        Assert.Contains("session transport failed", result);
+    }
+}
+
+internal sealed class RecordingMcpToolInvoker(string result) : IMcpToolInvoker
+{
+    public string? ServerName { get; private set; }
+    public string? ToolName { get; private set; }
+    public IDictionary<string, object?>? Arguments { get; private set; }
+    public string? SessionId { get; private set; }
+    public Exception? Failure { get; init; }
+
+    public Task<string> InvokeAsync(
+        string serverName,
+        string toolName,
+        IDictionary<string, object?>? arguments,
+        ToolExecutionContext? context,
+        CancellationToken ct = default)
+    {
+        if (Failure is not null)
+            throw Failure;
+
+        ServerName = serverName;
+        ToolName = toolName;
+        Arguments = arguments;
+        SessionId = context?.SessionId;
+        return Task.FromResult(result);
     }
 }
 

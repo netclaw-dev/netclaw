@@ -15,11 +15,18 @@ public sealed class McpToolAdapter : INetclawTool
     private readonly AITool _mcpTool;
     private readonly AITool _sanitizedTool;
     private readonly string _toolName;
+    private readonly IMcpToolInvoker? _invoker;
 
-    public McpToolAdapter(AITool mcpTool, string serverName, string toolName, string? grantCategory = null)
+    public McpToolAdapter(
+        AITool mcpTool,
+        string serverName,
+        string toolName,
+        string? grantCategory = null,
+        IMcpToolInvoker? invoker = null)
     {
         _mcpTool = mcpTool;
         _toolName = toolName;
+        _invoker = invoker;
         ServerName = serverName;
         Name = $"{serverName}/{toolName}";
         GrantCategory = grantCategory ?? $"mcp:{serverName}";
@@ -54,7 +61,30 @@ public sealed class McpToolAdapter : INetclawTool
     /// </summary>
     public AITool ToAITool() => _sanitizedTool;
 
+    public async Task<string> ExecuteAsync(
+        IDictionary<string, object?>? arguments,
+        ToolExecutionContext context,
+        CancellationToken ct = default)
+    {
+        if (_invoker is null)
+            return await ExecuteViaBoundToolAsync(arguments, ct);
+
+        try
+        {
+            var normalized = McpSchemaSanitizer.NormalizeArgumentKeys(arguments, ParameterSchema);
+            var coerced = McpSchemaSanitizer.CoerceArguments(normalized);
+            return await _invoker.InvokeAsync(ServerName, _toolName, coerced, context, ct);
+        }
+        catch (Exception ex)
+        {
+            return $"Error: MCP tool '{Name}' failed: {ex.Message}";
+        }
+    }
+
     public async Task<string> ExecuteAsync(IDictionary<string, object?>? arguments, CancellationToken ct = default)
+        => await ExecuteViaBoundToolAsync(arguments, ct);
+
+    private async Task<string> ExecuteViaBoundToolAsync(IDictionary<string, object?>? arguments, CancellationToken ct)
     {
         if (_mcpTool is not AIFunction func)
             return "Error: MCP tool is not invocable.";

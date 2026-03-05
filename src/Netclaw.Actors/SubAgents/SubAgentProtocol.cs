@@ -35,6 +35,12 @@ public sealed record RunSubAgent
 
     /// <summary>Wall-clock timeout set by the caller.</summary>
     public required TimeSpan Timeout { get; init; }
+
+    /// <summary>
+    /// Optional execution scope ID used for session-scoped tool routing.
+    /// When omitted, the subagent runtime assigns a unique transient scope.
+    /// </summary>
+    public string? SessionScopeId { get; init; }
 }
 
 /// <summary>

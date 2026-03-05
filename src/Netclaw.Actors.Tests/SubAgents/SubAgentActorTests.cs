@@ -5,6 +5,7 @@ using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Netclaw.Actors.SubAgents;
+using Netclaw.Actors.Tools;
 using Netclaw.Actors.Tests.Memory;
 using Netclaw.Tools;
 using Xunit;
@@ -147,6 +148,45 @@ public class SubAgentActorTests : TestKit
         await ExpectTerminatedAsync(agent, TimeSpan.FromSeconds(5));
     }
 
+    [Fact]
+    public async Task Tool_execution_uses_session_scope_for_mcp_invocation()
+    {
+        var invoker = new RecordingMcpToolInvoker("ok");
+        var fakePlaywrightTool = new McpToolAdapter(
+            AIFunctionFactory.Create((string url) => url, "navigate_page"),
+            "browser_playwright",
+            "navigate_page",
+            invoker: invoker);
+
+        var fakeClient = new FakeChatClient
+        {
+            ToolCallsOnFirstCall =
+            [
+                new FunctionCallContent(
+                    "call-1",
+                    "browser_playwright/navigate_page",
+                    new Dictionary<string, object?> { ["url"] = "https://example.com" })
+            ]
+        };
+
+        var definition = CreateDefinition([fakePlaywrightTool]);
+        var agent = Sys.ActorOf(SubAgentActor.CreateProps(definition, fakeClient));
+
+        var result = await agent.Ask<SubAgentResult>(
+            new RunSubAgent
+            {
+                Task = "Open example.com",
+                Timeout = TimeSpan.FromSeconds(5),
+                SessionScopeId = "session/subagent-scope"
+            },
+            TimeSpan.FromSeconds(5));
+
+        Assert.True(result.Success);
+        Assert.Equal("session/subagent-scope", invoker.SessionId);
+        Assert.Equal("browser_playwright", invoker.ServerName);
+        Assert.Equal("navigate_page", invoker.ToolName);
+    }
+
     /// <summary>
     /// IChatClient that always throws on GetResponseAsync.
     /// </summary>
@@ -232,4 +272,24 @@ internal sealed class FakeChatClient : IChatClient
 
     public object? GetService(Type serviceType, object? serviceKey = null) => null;
     public void Dispose() { }
+}
+
+internal sealed class RecordingMcpToolInvoker(string result) : IMcpToolInvoker
+{
+    public string? ServerName { get; private set; }
+    public string? ToolName { get; private set; }
+    public string? SessionId { get; private set; }
+
+    public Task<string> InvokeAsync(
+        string serverName,
+        string toolName,
+        IDictionary<string, object?>? arguments,
+        ToolExecutionContext? context,
+        CancellationToken ct = default)
+    {
+        ServerName = serverName;
+        ToolName = toolName;
+        SessionId = context?.SessionId;
+        return Task.FromResult(result);
+    }
 }

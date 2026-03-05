@@ -34,6 +34,7 @@ public sealed class SubAgentActor : ReceiveActor
     private int _toolIterationCount;
     private IActorRef _replyTo = ActorRefs.Nobody;
     private ICancelable? _timeoutSchedule;
+    private ToolExecutionContext _toolExecutionContext = ToolExecutionContext.Empty;
 
     public SubAgentActor(
         SubAgentDefinition definition,
@@ -65,6 +66,11 @@ public sealed class SubAgentActor : ReceiveActor
         Receive<RunSubAgent>(msg =>
         {
             _replyTo = Sender;
+
+            var scopeId = !string.IsNullOrWhiteSpace(msg.SessionScopeId)
+                ? msg.SessionScopeId!
+                : $"subagent/{_definition.Name}/{Guid.NewGuid():N}";
+            _toolExecutionContext = new ToolExecutionContext(scopeId, null);
 
             // Schedule wall-clock timeout
             _timeoutSchedule = Context.System.Scheduler.ScheduleTellOnceCancelable(
@@ -161,7 +167,7 @@ public sealed class SubAgentActor : ReceiveActor
         var self = Self;
         var executor = new DispatchingToolExecutor(_toolRegistry);
 
-        _ = ExecuteToolsAsync(executor, toolCalls, self);
+        _ = ExecuteToolsAsync(executor, toolCalls, _toolExecutionContext, self);
     }
 
     private void FireLlmCall(bool forceNoTools = false)
@@ -232,7 +238,10 @@ public sealed class SubAgentActor : ReceiveActor
     }
 
     private static async Task ExecuteToolsAsync(
-        IToolExecutor executor, List<FunctionCallContent> toolCalls, IActorRef self)
+        IToolExecutor executor,
+        List<FunctionCallContent> toolCalls,
+        ToolExecutionContext executionContext,
+        IActorRef self)
     {
         try
         {
@@ -240,7 +249,7 @@ public sealed class SubAgentActor : ReceiveActor
             {
                 try
                 {
-                    var result = await executor.ExecuteAsync(tc);
+                    var result = await executor.ExecuteAsync(tc, executionContext);
                     return new SerializableChatMessage
                     {
                         Role = Protocol.ChatRole.Tool,

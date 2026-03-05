@@ -734,6 +734,7 @@ public sealed class InitWizardViewModelTests : IDisposable
             .ToArray();
 
         Assert.Contains("@playwright/mcp@latest", args);
+        Assert.Contains("--isolated", args);
         Assert.Contains("--image-responses", args);
         Assert.Contains("omit", args);
         Assert.Contains("--snapshot-mode", args);
