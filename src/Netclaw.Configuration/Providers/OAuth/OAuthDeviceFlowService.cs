@@ -5,13 +5,19 @@ using System.Text.Json.Serialization;
 namespace Netclaw.Configuration.Providers.OAuth;
 
 /// <summary>
-/// Configuration for an RFC 8628 device authorization grant flow.
+/// Configuration for a device authorization grant flow.
+/// For RFC 8628, <see cref="DeviceAuthorizationEndpoint"/> is the device auth endpoint
+/// and <see cref="TokenEndpoint"/> is the token endpoint.
+/// For OpenAI's proprietary flow, <see cref="DeviceAuthorizationEndpoint"/> is the
+/// user-code endpoint, <see cref="TokenEndpoint"/> is the polling endpoint, and
+/// <see cref="PkceExchangeEndpoint"/> is the final token exchange endpoint.
 /// </summary>
 public sealed record OAuthDeviceFlowConfig(
     string DeviceAuthorizationEndpoint,
     string TokenEndpoint,
     string ClientId,
-    string? Scope = null);
+    string? Scope = null,
+    string? PkceExchangeEndpoint = null);
 
 /// <summary>
 /// Response from the device authorization endpoint (RFC 8628 §3.2).
@@ -50,7 +56,7 @@ public enum DeviceFlowState
 /// Generic RFC 8628 device authorization grant implementation.
 /// Parameterized by provider endpoints so it can be reused across providers.
 /// </summary>
-public sealed class OAuthDeviceFlowService
+public sealed class OAuthDeviceFlowService : IDeviceFlowService
 {
     private readonly HttpClient _httpClient;
     private readonly TimeProvider _timeProvider;

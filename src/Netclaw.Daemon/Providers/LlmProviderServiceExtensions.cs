@@ -24,12 +24,17 @@ public static class LlmProviderServiceExtensions
         // Register descriptors (shared with CLI)
         services.AddProviderDescriptors();
 
-        // OAuth device flow service (for future auto-refresh)
+        // OAuth device flow services (for future auto-refresh)
         services.AddHttpClient("OAuthDeviceFlow");
         services.AddSingleton(sp =>
             new OAuthDeviceFlowService(
                 sp.GetRequiredService<IHttpClientFactory>().CreateClient("OAuthDeviceFlow"),
                 sp.GetService<TimeProvider>()));
+        services.AddSingleton(sp =>
+            new OpenAiDeviceFlowService(
+                sp.GetRequiredService<IHttpClientFactory>().CreateClient("OAuthDeviceFlow"),
+                sp.GetService<TimeProvider>()));
+        services.AddSingleton<DeviceFlowServiceFactory>();
 
         // Register daemon-specific plugins
         services.AddSingleton<OllamaProviderPlugin>();

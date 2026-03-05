@@ -108,6 +108,11 @@ static async Task RunAsync(string[] args)
                 new OAuthDeviceFlowService(
                     sp.GetRequiredService<IHttpClientFactory>().CreateClient("OAuthDeviceFlow"),
                     sp.GetService<TimeProvider>()));
+            builder.Services.AddSingleton(sp =>
+                new OpenAiDeviceFlowService(
+                    sp.GetRequiredService<IHttpClientFactory>().CreateClient("OAuthDeviceFlow"),
+                    sp.GetService<TimeProvider>()));
+            builder.Services.AddSingleton<DeviceFlowServiceFactory>();
             builder.Services.AddHttpClient<ISlackProbe, SlackProbe>();
 
             // Init wizard + chat page dependencies (daemon lifecycle + SignalR)
@@ -338,6 +343,11 @@ static async Task RunAsync(string[] args)
                 new OAuthDeviceFlowService(
                     sp.GetRequiredService<IHttpClientFactory>().CreateClient("OAuthDeviceFlow"),
                     sp.GetService<TimeProvider>()));
+            builder.Services.AddSingleton(sp =>
+                new OpenAiDeviceFlowService(
+                    sp.GetRequiredService<IHttpClientFactory>().CreateClient("OAuthDeviceFlow"),
+                    sp.GetService<TimeProvider>()));
+            builder.Services.AddSingleton<DeviceFlowServiceFactory>();
             builder.Logging.ClearProviders();
             builder.Logging.SetMinimumLevel(LogLevel.Warning);
 

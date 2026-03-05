@@ -21,9 +21,11 @@ public sealed class OpenAiDescriptor : IProviderDescriptor
     public string ModelListingPath => "/v1/models";
     public CredentialInputMode CredentialMode => CredentialInputMode.ApiKey;
     public string? ApiKeyGuidanceUrl => "https://platform.openai.com/api-keys";
-    public string? OAuthDeviceEndpoint => "https://auth.openai.com/codex/device";
+    public string? OAuthDeviceEndpoint => "https://auth.openai.com/api/accounts/deviceauth/usercode";
     public string? OAuthTokenEndpoint => "https://auth.openai.com/oauth/token";
     public string? OAuthDefaultClientId => "app_EMoamEEZ73f0CkXaXp7hrann";
+    public string? OAuthPollingEndpoint => "https://auth.openai.com/api/accounts/deviceauth/token";
+    public bool UseProprietaryDeviceFlow => true;
 
     public Task<ProviderProbeResult> ProbeAsync(
         ProviderEntry entry, CancellationToken ct = default)

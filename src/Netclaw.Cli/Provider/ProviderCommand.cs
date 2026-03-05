@@ -217,11 +217,15 @@ internal static class ProviderCommand
 
         var config = new OAuthDeviceFlowConfig(
             descriptor.OAuthDeviceEndpoint,
-            descriptor.OAuthTokenEndpoint,
-            descriptor.OAuthDefaultClientId);
+            descriptor.OAuthPollingEndpoint ?? descriptor.OAuthTokenEndpoint,
+            descriptor.OAuthDefaultClientId,
+            PkceExchangeEndpoint: descriptor.UseProprietaryDeviceFlow
+                ? descriptor.OAuthTokenEndpoint : null);
 
         using var httpClient = new HttpClient();
-        var service = new OAuthDeviceFlowService(httpClient);
+        IDeviceFlowService service = descriptor.UseProprietaryDeviceFlow
+            ? new OpenAiDeviceFlowService(httpClient)
+            : new OAuthDeviceFlowService(httpClient);
 
         try
         {
