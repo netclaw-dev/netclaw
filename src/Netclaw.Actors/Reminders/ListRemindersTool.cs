@@ -6,17 +6,17 @@ using Netclaw.Tools;
 namespace Netclaw.Actors.Reminders;
 
 /// <summary>
-/// LLM tool for listing all active reminders.
+/// LLM tool for listing reminder definitions.
 /// </summary>
 [NetclawTool("list_reminders",
-    "List all scheduled reminders with their IDs, names, schedules, and next fire times.",
+    "List reminder definitions with IDs, schedules, status, and next fire times.",
     Grant = "scheduling")]
 public sealed partial class ListRemindersTool : NetclawTool<ListRemindersTool.Params>
 {
     private readonly IActorRef _reminderManager;
 
     public record Params(
-        [property: Description("Optional filter: 'active' (default) or 'all'")]
+        [property: Description("Optional filter: 'active' (default) or 'all'.")]
         string? Filter = null);
 
     public ListRemindersTool(IActorRef reminderManager)
@@ -26,34 +26,34 @@ public sealed partial class ListRemindersTool : NetclawTool<ListRemindersTool.Pa
 
     protected override async Task<string> ExecuteAsync(Params args, CancellationToken ct)
     {
+        var includeDisabled = string.Equals(args.Filter, "all", StringComparison.OrdinalIgnoreCase);
+
         var response = await _reminderManager.Ask<ReminderListResponse>(
-            new ListRemindersCommand(), TimeSpan.FromSeconds(10), ct);
+            new ListRemindersCommand(includeDisabled), TimeSpan.FromSeconds(10), ct);
 
         if (response.Reminders.Count == 0)
-            return "No active reminders.";
+            return includeDisabled ? "No reminders found." : "No active reminders.";
 
         var sb = new StringBuilder();
-        sb.AppendLine($"Active reminders ({response.Reminders.Count}):");
+        sb.AppendLine($"Reminders ({response.Reminders.Count}):");
         sb.AppendLine();
 
         foreach (var r in response.Reminders)
         {
             var scheduleDesc = r.Schedule.Type switch
             {
-                ReminderScheduleType.OneShot => $"once at {r.NextFire:u}",
+                ReminderScheduleType.OneShot => $"once at {r.Schedule.FireAt:u}",
                 ReminderScheduleType.Interval => $"every {r.Schedule.Interval!.Value.TotalMinutes:F0}m",
                 ReminderScheduleType.Cron => $"cron '{r.Schedule.CronExpression}'",
                 _ => r.Schedule.OriginalExpression ?? "unknown"
             };
 
             sb.AppendLine($"  ID: {r.Id.Value}");
-            sb.AppendLine($"  Name: {r.Name}");
+            sb.AppendLine($"  Title: {r.Title}");
+            sb.AppendLine($"  Status: {(r.Enabled ? "active" : "disabled")}");
             sb.AppendLine($"  Schedule: {scheduleDesc}");
             if (r.NextFire is not null)
                 sb.AppendLine($"  Next fire: {r.NextFire:u}");
-            if (r.ReportToChannel is not null)
-                sb.AppendLine($"  Report to: {r.ReportToChannel}");
-            sb.AppendLine($"  Prompt: {(r.Prompt.Length > 100 ? r.Prompt[..100] + "..." : r.Prompt)}");
             sb.AppendLine();
         }
 

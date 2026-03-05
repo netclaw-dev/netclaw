@@ -3,6 +3,8 @@ using Akka.DependencyInjection;
 using Akka.Hosting;
 using Akka.Reminders;
 using Akka.Reminders.Sharding;
+using Akka.Reminders.Sqlite;
+using Akka.Reminders.Sqlite.Configuration;
 using Netclaw.Actors.Reminders;
 using Netclaw.Actors.Routing;
 using Netclaw.Actors.Sessions;
@@ -11,6 +13,13 @@ namespace Netclaw.Actors.Hosting;
 
 public static class NetclawAkkaHostingExtensions
 {
+    public sealed record ReminderStorageOptions
+    {
+        public string? SqliteConnectionString { get; init; }
+        public string TableName { get; init; } = "scheduled_reminders";
+        public bool AutoInitialize { get; init; } = true;
+    }
+
     /// <summary>
     /// Registers the session manager as a <see cref="GenericChildPerEntityParent"/>
     /// that routes <see cref="Protocol.IWithSessionId"/> messages to per-session
@@ -49,11 +58,11 @@ public static class NetclawAkkaHostingExtensions
 
     /// <summary>
     /// Registers the reminder manager as a singleton actor and wires
-    /// the local akka-reminders scheduler to deliver payloads to it.
-    /// Uses in-memory storage (reminders do not survive daemon restarts).
+    /// the local Akka.Reminders scheduler to deliver payloads to it.
     /// </summary>
     public static AkkaConfigurationBuilder WithReminderManager(
-        this AkkaConfigurationBuilder builder)
+        this AkkaConfigurationBuilder builder,
+        ReminderStorageOptions? storageOptions = null)
     {
         // Shared resolver: created at configuration time, populated at actor startup.
         // The scheduler starts first with an empty resolver; by the time any reminder
@@ -63,7 +72,21 @@ public static class NetclawAkkaHostingExtensions
         return builder
             .WithLocalReminders(reminders =>
             {
-                reminders.WithInMemoryStorage();
+                if (!string.IsNullOrWhiteSpace(storageOptions?.SqliteConnectionString))
+                {
+                    reminders.WithStorage(system =>
+                        new SqliteReminderStorage(
+                            SqliteReminderStorageSettings.Create(
+                                connectionString: storageOptions.SqliteConnectionString,
+                                tableName: storageOptions.TableName,
+                                autoInitialize: storageOptions.AutoInitialize),
+                            system));
+                }
+                else
+                {
+                    reminders.WithInMemoryStorage();
+                }
+
                 reminders.WithResolver(_ => sharedResolver);
             })
             .StartActors((system, registry, resolver) =>
@@ -85,11 +108,12 @@ public static class NetclawAkkaHostingExtensions
     /// to be registered in DI.
     /// </summary>
     public static AkkaConfigurationBuilder WithNetclawActors(
-        this AkkaConfigurationBuilder builder)
+        this AkkaConfigurationBuilder builder,
+        ReminderStorageOptions? reminderStorageOptions = null)
     {
         return builder
             .WithModelCapabilityCache()
             .WithSessionManager()
-            .WithReminderManager();
+            .WithReminderManager(reminderStorageOptions);
     }
 }

@@ -12,12 +12,13 @@ namespace Netclaw.Actors.Reminders;
 
 /// <summary>
 /// Short-lived child actor handling a single reminder execution.
-/// Creates a session pipeline, sends the prompt, collects output,
-/// and reports success/failure to parent <see cref="ReminderManagerActor"/>.
+/// Creates a session pipeline, sends reminder instructions, collects output,
+/// and reports success/failure to <see cref="ReminderManagerActor"/>.
 /// </summary>
 internal sealed class ReminderExecutionActor : ReceiveActor
 {
-    private readonly ReminderPayload _payload;
+    private readonly Guid _executionId;
+    private readonly ReminderDefinition _definition;
     private readonly SessionPipeline _pipeline;
     private readonly TimeProvider _timeProvider;
     private readonly ILoggingAdapter _log;
@@ -30,31 +31,33 @@ internal sealed class ReminderExecutionActor : ReceiveActor
     private MaterializedSession? _session;
 
     public static Props CreateProps(
-        ReminderPayload payload,
+        Guid executionId,
+        ReminderDefinition definition,
         SessionPipeline pipeline,
         ReminderConfig config,
         TimeProvider timeProvider) =>
-        Props.Create(() => new ReminderExecutionActor(payload, pipeline, config, timeProvider));
+        Props.Create(() => new ReminderExecutionActor(executionId, definition, pipeline, config, timeProvider));
 
     private ReminderExecutionActor(
-        ReminderPayload payload,
+        Guid executionId,
+        ReminderDefinition definition,
         SessionPipeline pipeline,
         ReminderConfig config,
         TimeProvider timeProvider)
     {
-        _payload = payload;
+        _executionId = executionId;
+        _definition = definition;
         _pipeline = pipeline;
         _timeProvider = timeProvider;
         _log = Context.GetLogger();
 
-        // Set execution timeout
         Context.SetReceiveTimeout(TimeSpan.FromSeconds(config.ExecutionTimeoutSeconds));
 
         Receive<ExecutionOutput>(HandleOutput);
-        Receive<ExecutionStarted>(_ => { }); // ack
+        Receive<ExecutionStarted>(_ => { });
         Receive<ReceiveTimeout>(_ =>
         {
-            _log.Warning("Reminder execution timed out: '{0}'", _payload.Name);
+            _log.Warning("Reminder execution timed out: '{0}'", _definition.Title);
             ReportAndStop(false, "Execution timed out");
         });
     }
@@ -69,12 +72,12 @@ internal sealed class ReminderExecutionActor : ReceiveActor
     {
         try
         {
-            // Determine session ID
-            var sessionId = _payload.OriginatingSessionId
-                ?? new SessionId($"reminder/{_payload.Id.Value}/{_timeProvider.GetUtcNow().ToUnixTimeMilliseconds()}");
+            var sessionId = !string.IsNullOrWhiteSpace(_definition.SessionId)
+                ? new SessionId(_definition.SessionId)
+                : new SessionId($"reminder/{_definition.Id}/{_timeProvider.GetUtcNow().ToUnixTimeMilliseconds()}");
 
             _log.Info("Starting reminder execution for '{0}' with session '{1}'",
-                _payload.Name, sessionId.Value);
+                _definition.Title, sessionId.Value);
 
             _materializer = Context.Materializer(namePrefix: "reminder-exec");
 
@@ -86,35 +89,41 @@ internal sealed class ReminderExecutionActor : ReceiveActor
 
             var self = Self;
 
-            // Wire input queue
             var inputQueue = Source.Queue<ChannelInput>(8, OverflowStrategy.Backpressure)
                 .ToMaterialized(materialized.Input, Keep.Left)
                 .Run(_materializer);
 
-            // Wire output sink
             materialized.Output
                 .To(Sink.ForEach<SessionOutput>(output => self.Tell(new ExecutionOutput(output))))
                 .Run(_materializer);
 
             _session = materialized;
 
-            // Send the prompt
+            var prompt = BuildPrompt(_definition);
+
             await inputQueue.OfferAsync(new ChannelInput
             {
                 SenderId = "reminder-system",
-                ChannelId = _payload.ReportToChannel,
-                Contents = [new TextContent(_payload.Prompt)],
+                ChannelId = _definition.ReportToChannel,
+                Contents = [new TextContent(prompt)],
                 ReceivedAt = _timeProvider.GetUtcNow()
             });
 
-            // Complete the input — single prompt, one turn
             inputQueue.Complete();
         }
         catch (Exception ex)
         {
-            _log.Error(ex, "Failed to initialize reminder execution for '{0}'", _payload.Name);
+            _log.Error(ex, "Failed to initialize reminder execution for '{0}'", _definition.Title);
             ReportAndStop(false, ex.Message);
         }
+    }
+
+    private static string BuildPrompt(ReminderDefinition definition)
+    {
+        return
+            $"{definition.Instructions}\n\n" +
+            "Notification instructions:\n" +
+            definition.NotifyInstructions;
     }
 
     private void HandleOutput(ExecutionOutput wrapper)
@@ -134,21 +143,19 @@ internal sealed class ReminderExecutionActor : ReceiveActor
             case TurnCompleted:
                 var result = _buffer.ToString().Trim();
                 _log.Info("Reminder '{0}' execution completed, output length: {1}",
-                    _payload.Name, result.Length);
+                    _definition.Title, result.Length);
 
                 if (string.IsNullOrWhiteSpace(result))
-                    result = $"(Reminder '{_payload.Name}' executed but produced no output)";
+                    result = $"(Reminder '{_definition.Title}' executed but produced no output)";
 
-                // Log the result; Slack posting would be handled by the session
-                // if the session targets a Slack channel
                 _log.Info("Reminder output for '{0}': {1}",
-                    _payload.Name, result.Length > 200 ? result[..200] + "..." : result);
+                    _definition.Title, result.Length > 200 ? result[..200] + "..." : result);
 
                 ReportAndStop(true);
                 break;
 
             case ErrorOutput err:
-                _log.Warning("Reminder '{0}' error output: {1}", _payload.Name, err.Message);
+                _log.Warning("Reminder '{0}' error output: {1}", _definition.Title, err.Message);
                 ReportAndStop(false, err.Message);
                 break;
         }
@@ -160,7 +167,11 @@ internal sealed class ReminderExecutionActor : ReceiveActor
             return;
 
         _completed = true;
-        Context.Parent.Tell(new ReminderExecutionCompleted(_payload.Id, success, errorMessage));
+        Context.Parent.Tell(new ReminderExecutionCompleted(
+            _executionId,
+            new ReminderId(_definition.Id),
+            success,
+            errorMessage));
         Context.Stop(Self);
     }
 
@@ -173,7 +184,7 @@ internal sealed class ReminderExecutionActor : ReceiveActor
         }
         catch (Exception ex)
         {
-            _log.Debug(ex, "Failed to dispose reminder execution resources for '{0}'", _payload.Name);
+            _log.Debug(ex, "Failed to dispose reminder execution resources for '{0}'", _definition.Title);
         }
     }
 

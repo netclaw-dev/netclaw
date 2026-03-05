@@ -1,17 +1,20 @@
 using System.Net.Http.Json;
 using System.Text.Json;
+using System.Text.Json.Serialization;
+using Netclaw.Actors.Reminders;
 
 namespace Netclaw.Cli.Reminder;
 
 /// <summary>
-/// Handles <c>netclaw reminder</c> CLI subcommands: list, create, cancel, show.
+/// Handles <c>netclaw reminder</c> CLI subcommands.
 /// All commands require the daemon to be running (HTTP to REST API).
 /// </summary>
 internal static class ReminderCommand
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
-        WriteIndented = true
+        WriteIndented = true,
+        Converters = { new JsonStringEnumConverter() }
     };
 
     public static async Task<int> RunAsync(string[] args)
@@ -33,7 +36,11 @@ internal static class ReminderCommand
         {
             "list" => await RunListAsync(client, baseUrl),
             "create" => await RunCreateAsync(client, baseUrl, args),
-            "cancel" => await RunCancelAsync(client, baseUrl, args),
+            "cancel" or "delete" => await RunDeleteAsync(client, baseUrl, args),
+            "disable" => await RunDisableAsync(client, baseUrl, args),
+            "enable" => await RunEnableAsync(client, baseUrl, args),
+            "import" => await RunImportAsync(client, baseUrl, args),
+            "validate" => RunValidate(args),
             "show" => await RunShowAsync(client, baseUrl, args),
             _ => WriteHelp()
         };
@@ -133,11 +140,11 @@ internal static class ReminderCommand
         }
     }
 
-    private static async Task<int> RunCancelAsync(HttpClient client, string baseUrl, string[] args)
+    private static async Task<int> RunDeleteAsync(HttpClient client, string baseUrl, string[] args)
     {
         if (args.Length < 3)
         {
-            Console.Error.WriteLine("Usage: netclaw reminder cancel <id>");
+            Console.Error.WriteLine("Usage: netclaw reminder delete <id>");
             return 1;
         }
 
@@ -167,6 +174,208 @@ internal static class ReminderCommand
         {
             Console.Error.WriteLine($"[FAIL] unable to reach daemon: {ex.Message}");
             return 1;
+        }
+    }
+
+    private static async Task<int> RunDisableAsync(HttpClient client, string baseUrl, string[] args)
+    {
+        if (args.Length < 3)
+        {
+            Console.Error.WriteLine("Usage: netclaw reminder disable <id>");
+            return 1;
+        }
+
+        return await RunSimplePostByIdAsync(client, baseUrl, args[2], "disable");
+    }
+
+    private static async Task<int> RunEnableAsync(HttpClient client, string baseUrl, string[] args)
+    {
+        if (args.Length < 3)
+        {
+            Console.Error.WriteLine("Usage: netclaw reminder enable <id>");
+            return 1;
+        }
+
+        return await RunSimplePostByIdAsync(client, baseUrl, args[2], "enable");
+    }
+
+    private static async Task<int> RunSimplePostByIdAsync(HttpClient client, string baseUrl, string id, string action)
+    {
+        try
+        {
+            var response = await client.PostAsync($"{baseUrl}/{id}/{action}", content: null);
+            var json = await response.Content.ReadAsStringAsync();
+            var result = JsonSerializer.Deserialize<JsonElement>(json);
+
+            if (response.IsSuccessStatusCode)
+            {
+                if (result.TryGetProperty("message", out var msg))
+                    Console.WriteLine(msg.GetString());
+                else
+                    Console.WriteLine(json);
+                return 0;
+            }
+
+            if (result.TryGetProperty("error", out var err))
+                Console.Error.WriteLine($"[FAIL] {err.GetString()}");
+            else
+                Console.Error.WriteLine($"[FAIL] {json}");
+            return 1;
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[FAIL] unable to reach daemon: {ex.Message}");
+            return 1;
+        }
+    }
+
+    private static async Task<int> RunImportAsync(HttpClient client, string baseUrl, string[] args)
+    {
+        if (args.Length < 3)
+        {
+            Console.Error.WriteLine("Usage: netclaw reminder import <file> [--replace|--upsert]");
+            return 1;
+        }
+
+        var filePath = args[2];
+        if (!File.Exists(filePath))
+        {
+            Console.Error.WriteLine($"[FAIL] file not found: {filePath}");
+            return 1;
+        }
+
+        var mode = "create";
+        for (var i = 3; i < args.Length; i++)
+        {
+            if (args[i] == "--replace") mode = "replace";
+            if (args[i] == "--upsert") mode = "upsert";
+        }
+
+        ReminderDefinition? definition;
+        try
+        {
+            var json = File.ReadAllText(filePath);
+            definition = JsonSerializer.Deserialize<ReminderDefinition>(json, JsonOptions);
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[FAIL] invalid JSON: {ex.Message}");
+            return 1;
+        }
+
+        if (definition is null)
+        {
+            Console.Error.WriteLine("[FAIL] file does not contain a reminder definition.");
+            return 1;
+        }
+
+        var validation = ValidateDefinition(definition);
+        if (validation is not null)
+        {
+            Console.Error.WriteLine($"[FAIL] {validation}");
+            return 1;
+        }
+
+        try
+        {
+            var response = await client.PostAsJsonAsync($"{baseUrl}/import", new
+            {
+                definition,
+                writeMode = mode
+            }, JsonOptions);
+
+            var body = await response.Content.ReadAsStringAsync();
+            var result = JsonSerializer.Deserialize<JsonElement>(body);
+
+            if (response.IsSuccessStatusCode)
+            {
+                if (result.TryGetProperty("message", out var msg))
+                    Console.WriteLine(msg.GetString());
+                else
+                    Console.WriteLine(body);
+                return 0;
+            }
+
+            if (result.TryGetProperty("error", out var err))
+                Console.Error.WriteLine($"[FAIL] {err.GetString()}");
+            else
+                Console.Error.WriteLine($"[FAIL] {body}");
+            return 1;
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[FAIL] unable to reach daemon: {ex.Message}");
+            return 1;
+        }
+    }
+
+    private static int RunValidate(string[] args)
+    {
+        if (args.Length < 3)
+        {
+            Console.Error.WriteLine("Usage: netclaw reminder validate <file>");
+            return 1;
+        }
+
+        var filePath = args[2];
+        if (!File.Exists(filePath))
+        {
+            Console.Error.WriteLine($"[FAIL] file not found: {filePath}");
+            return 1;
+        }
+
+        try
+        {
+            var json = File.ReadAllText(filePath);
+            var definition = JsonSerializer.Deserialize<ReminderDefinition>(json, JsonOptions);
+            if (definition is null)
+            {
+                Console.Error.WriteLine("[FAIL] file does not contain a reminder definition.");
+                return 1;
+            }
+
+            var validationError = ValidateDefinition(definition);
+            if (validationError is not null)
+            {
+                Console.Error.WriteLine($"[FAIL] {validationError}");
+                return 1;
+            }
+
+            Console.WriteLine($"Reminder definition is valid: {definition.Id}");
+            return 0;
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[FAIL] invalid JSON: {ex.Message}");
+            return 1;
+        }
+    }
+
+    private static string? ValidateDefinition(ReminderDefinition definition)
+    {
+        if (string.IsNullOrWhiteSpace(definition.Id))
+            return "Reminder id is required.";
+        if (string.IsNullOrWhiteSpace(definition.Title))
+            return "Reminder title is required.";
+        if (string.IsNullOrWhiteSpace(definition.Instructions))
+            return "Reminder instructions are required.";
+        if (string.IsNullOrWhiteSpace(definition.NotifyInstructions))
+            return "Reminder notifyInstructions is required.";
+        if (definition.Schedule is null)
+            return "Reminder schedule is required.";
+
+        switch (definition.Schedule.Type)
+        {
+            case ReminderScheduleType.OneShot when definition.Schedule.FireAt is null:
+                return "One-shot reminders require schedule.fireAtMs.";
+            case ReminderScheduleType.Interval when definition.Schedule.IntervalTicks is null:
+                return "Interval reminders require schedule.intervalTicks.";
+            case ReminderScheduleType.Cron when string.IsNullOrWhiteSpace(definition.Schedule.CronExpression):
+                return "Cron reminders require schedule.cronExpression.";
+            case ReminderScheduleType.Cron when !CronScheduleHelper.TryParse(definition.Schedule.CronExpression!):
+                return "Cron expression is invalid.";
+            default:
+                return null;
         }
     }
 
@@ -212,7 +421,11 @@ internal static class ReminderCommand
         Console.WriteLine("Subcommands:");
         Console.WriteLine("  list                                          List all active reminders");
         Console.WriteLine("  create <name> <type> <schedule> \"<prompt>\"    Create a reminder");
-        Console.WriteLine("  cancel <id>                                   Cancel a reminder");
+        Console.WriteLine("  delete <id>                                   Delete a reminder");
+        Console.WriteLine("  disable <id>                                  Disable a reminder");
+        Console.WriteLine("  enable <id>                                   Enable a reminder");
+        Console.WriteLine("  import <file> [--replace|--upsert]            Import one reminder file");
+        Console.WriteLine("  validate <file>                               Validate reminder file");
         Console.WriteLine("  show <id>                                     Show reminder details");
         Console.WriteLine();
         Console.WriteLine("Schedule types: once, interval, cron");

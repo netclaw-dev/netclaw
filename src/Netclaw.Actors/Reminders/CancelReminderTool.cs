@@ -5,10 +5,10 @@ using Netclaw.Tools;
 namespace Netclaw.Actors.Reminders;
 
 /// <summary>
-/// LLM tool for cancelling a scheduled reminder by its ID.
+/// LLM tool for deleting a reminder by ID.
 /// </summary>
 [NetclawTool("cancel_reminder",
-    "Cancel a scheduled reminder by its ID. Use list_reminders to find reminder IDs.",
+    "Delete a reminder by its ID. Use list_reminders to find reminder IDs.",
     Grant = "scheduling")]
 public sealed partial class CancelReminderTool : NetclawTool<CancelReminderTool.Params>
 {
@@ -33,7 +33,7 @@ public sealed partial class CancelReminderTool : NetclawTool<CancelReminderTool.
             new CancelReminderCommand(id), TimeSpan.FromSeconds(10), ct);
 
         return response.Found
-            ? $"Reminder '{args.ReminderId}' cancelled."
+            ? $"Reminder '{args.ReminderId}' deleted."
             : $"Reminder '{args.ReminderId}' not found.";
     }
 }

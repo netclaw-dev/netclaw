@@ -30,7 +30,7 @@ public class SetReminderToolTests : TestKit
         var probe = CreateTestProbe();
         var tool = new SetReminderTool(probe, _timeProvider, new ReminderConfig());
 
-        _ = Task.Run(async () =>
+        var execution = Task.Run(async () =>
         {
             var result = await tool.ExecuteAsync(new Dictionary<string, object?>
             {
@@ -42,16 +42,22 @@ public class SetReminderToolTests : TestKit
             return result;
         });
 
-        var cmd = probe.ExpectMsg<ScheduleReminderCommand>(TimeSpan.FromSeconds(5));
-        Assert.Equal("Check the server", cmd.Payload.Prompt);
-        Assert.Equal(ReminderScheduleType.OneShot, cmd.Payload.Schedule.Type);
+        var cmd = probe.ExpectMsg<SaveReminderCommand>(TimeSpan.FromSeconds(5));
+        Assert.Equal("Check the server", cmd.Definition.Instructions);
+        Assert.Equal(ReminderScheduleType.OneShot, cmd.Definition.Schedule.Type);
 
         var expectedFire = _timeProvider.GetUtcNow().AddMinutes(30);
-        Assert.NotNull(cmd.Payload.Schedule.FireAt);
-        Assert.Equal(expectedFire, cmd.Payload.Schedule.FireAt.Value, TimeSpan.FromSeconds(1));
+        Assert.NotNull(cmd.Definition.Schedule.FireAt);
+        Assert.Equal(expectedFire, cmd.Definition.Schedule.FireAt.Value, TimeSpan.FromSeconds(1));
 
         // Reply
-        probe.Reply(new ReminderScheduledResponse(cmd.Payload.Id, cmd.Payload.Name, expectedFire));
+        probe.Reply(new ReminderSavedResponse(
+            new ReminderId(cmd.Definition.Id),
+            cmd.Definition.Title,
+            Success: true,
+            NextFire: expectedFire));
+
+        await execution;
     }
 
     [Fact]
@@ -60,7 +66,7 @@ public class SetReminderToolTests : TestKit
         var probe = CreateTestProbe();
         var tool = new SetReminderTool(probe, _timeProvider, new ReminderConfig());
 
-        _ = Task.Run(async () =>
+        var execution = Task.Run(async () =>
         {
             var result = await tool.ExecuteAsync(new Dictionary<string, object?>
             {
@@ -72,12 +78,17 @@ public class SetReminderToolTests : TestKit
             return result;
         });
 
-        var cmd = probe.ExpectMsg<ScheduleReminderCommand>(TimeSpan.FromSeconds(5));
-        Assert.Equal(ReminderScheduleType.Interval, cmd.Payload.Schedule.Type);
-        Assert.Equal(TimeSpan.FromHours(2), cmd.Payload.Schedule.Interval);
+        var cmd = probe.ExpectMsg<SaveReminderCommand>(TimeSpan.FromSeconds(5));
+        Assert.Equal(ReminderScheduleType.Interval, cmd.Definition.Schedule.Type);
+        Assert.Equal(TimeSpan.FromHours(2), cmd.Definition.Schedule.Interval);
 
-        probe.Reply(new ReminderScheduledResponse(cmd.Payload.Id, cmd.Payload.Name,
-            _timeProvider.GetUtcNow().AddHours(2)));
+        probe.Reply(new ReminderSavedResponse(
+            new ReminderId(cmd.Definition.Id),
+            cmd.Definition.Title,
+            Success: true,
+            NextFire: _timeProvider.GetUtcNow().AddHours(2)));
+
+        await execution;
     }
 
     [Fact]
@@ -86,7 +97,7 @@ public class SetReminderToolTests : TestKit
         var probe = CreateTestProbe();
         var tool = new SetReminderTool(probe, _timeProvider, new ReminderConfig());
 
-        _ = Task.Run(async () =>
+        var execution = Task.Run(async () =>
         {
             var result = await tool.ExecuteAsync(new Dictionary<string, object?>
             {
@@ -98,12 +109,17 @@ public class SetReminderToolTests : TestKit
             return result;
         });
 
-        var cmd = probe.ExpectMsg<ScheduleReminderCommand>(TimeSpan.FromSeconds(5));
-        Assert.Equal(ReminderScheduleType.Cron, cmd.Payload.Schedule.Type);
-        Assert.Equal("0 */6 * * *", cmd.Payload.Schedule.CronExpression);
+        var cmd = probe.ExpectMsg<SaveReminderCommand>(TimeSpan.FromSeconds(5));
+        Assert.Equal(ReminderScheduleType.Cron, cmd.Definition.Schedule.Type);
+        Assert.Equal("0 */6 * * *", cmd.Definition.Schedule.CronExpression);
 
-        probe.Reply(new ReminderScheduledResponse(cmd.Payload.Id, cmd.Payload.Name,
-            new DateTimeOffset(2026, 3, 5, 18, 0, 0, TimeSpan.Zero)));
+        probe.Reply(new ReminderSavedResponse(
+            new ReminderId(cmd.Definition.Id),
+            cmd.Definition.Title,
+            Success: true,
+            NextFire: new DateTimeOffset(2026, 3, 5, 18, 0, 0, TimeSpan.Zero)));
+
+        await execution;
     }
 
     [Fact]
@@ -168,7 +184,7 @@ public class SetReminderToolTests : TestKit
         var tool = new SetReminderTool(probe, _timeProvider, new ReminderConfig());
         var context = new ToolExecutionContext("C0123ABC/1234567890.123456", null);
 
-        _ = Task.Run(async () =>
+        var execution = Task.Run(async () =>
         {
             var result = await tool.ExecuteAsync(new Dictionary<string, object?>
             {
@@ -180,14 +196,18 @@ public class SetReminderToolTests : TestKit
             return result;
         });
 
-        var cmd = probe.ExpectMsg<ScheduleReminderCommand>(TimeSpan.FromSeconds(5));
-        Assert.Equal("C0123ABC", cmd.Payload.ReportToChannel);
-        Assert.Equal("1234567890.123456", cmd.Payload.ReportToThreadTs);
-        Assert.NotNull(cmd.Payload.OriginatingSessionId);
-        Assert.Equal("C0123ABC/1234567890.123456", cmd.Payload.OriginatingSessionId.Value.Value);
+        var cmd = probe.ExpectMsg<SaveReminderCommand>(TimeSpan.FromSeconds(5));
+        Assert.Equal("C0123ABC", cmd.Definition.ReportToChannel);
+        Assert.Equal("1234567890.123456", cmd.Definition.ReportToThreadTs);
+        Assert.Equal("C0123ABC/1234567890.123456", cmd.Definition.SessionId);
 
-        probe.Reply(new ReminderScheduledResponse(cmd.Payload.Id, cmd.Payload.Name,
-            _timeProvider.GetUtcNow().AddMinutes(5)));
+        probe.Reply(new ReminderSavedResponse(
+            new ReminderId(cmd.Definition.Id),
+            cmd.Definition.Title,
+            Success: true,
+            NextFire: _timeProvider.GetUtcNow().AddMinutes(5)));
+
+        await execution;
     }
 
     private sealed class FakeTimeProvider(DateTimeOffset utcNow) : TimeProvider

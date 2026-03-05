@@ -45,6 +45,7 @@ public sealed class NetclawPaths
     public string ProjectsDirectory => Path.Combine(BasePath, "projects");
     public string EnvironmentDirectory => Path.Combine(BasePath, "environment");
     public string SchedulesDirectory => Path.Combine(BasePath, "schedules");
+    public string RemindersDirectory => Path.Combine(SchedulesDirectory, "reminders");
     public string ConfigDirectory => Path.Combine(BasePath, "config");
     public string NetclawConfigPath => Path.Combine(ConfigDirectory, "netclaw.json");
     public string SecretsPath => Path.Combine(ConfigDirectory, "secrets.json");
@@ -81,6 +82,7 @@ public sealed class NetclawPaths
         Directory.CreateDirectory(ProjectsDirectory);
         Directory.CreateDirectory(EnvironmentDirectory);
         Directory.CreateDirectory(SchedulesDirectory);
+        Directory.CreateDirectory(RemindersDirectory);
         Directory.CreateDirectory(ConfigDirectory);
         Directory.CreateDirectory(LogsDirectory);
         Directory.CreateDirectory(SessionLogsDirectory);

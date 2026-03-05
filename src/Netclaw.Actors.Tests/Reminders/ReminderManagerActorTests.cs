@@ -15,6 +15,8 @@ namespace Netclaw.Actors.Tests.Reminders;
 
 public class ReminderManagerActorTests : TestKit
 {
+    private readonly string _basePath = Path.Combine(Path.GetTempPath(), $"netclaw-reminder-tests-{Guid.NewGuid():N}");
+
     public ReminderManagerActorTests(ITestOutputHelper output) : base(output: output) { }
 
     protected override void ConfigureAkka(AkkaConfigurationBuilder builder, IServiceProvider provider)
@@ -22,6 +24,10 @@ public class ReminderManagerActorTests : TestKit
         builder
             .WithInMemoryJournal()
             .WithInMemorySnapshotStore();
+
+        var paths = new NetclawPaths(_basePath);
+        paths.EnsureDirectoriesExist();
+        var definitionStore = new ReminderDefinitionStore(paths);
 
         // Wire local reminders with in-memory storage
         var sharedResolver = new TestShardRegionResolver();
@@ -45,7 +51,8 @@ public class ReminderManagerActorTests : TestKit
                 Props.Create(() => new ReminderManagerActor(
                     new ReminderConfig(),
                     pipeline,
-                    TimeProvider.System)),
+                    TimeProvider.System,
+                    definitionStore)),
                 "reminder-manager-test");
 
             registry.Register<ReminderManagerActorKey>(reminderManager);
@@ -64,20 +71,20 @@ public class ReminderManagerActorTests : TestKit
     {
         var manager = await GetManagerAsync();
 
-        var payload = CreatePayload("test-list", "once", "Check status");
+        var definition = CreateDefinition("test-list", "Check status");
 
-        var scheduled = await manager.Ask<ReminderScheduledResponse>(
-            new ScheduleReminderCommand(payload), TimeSpan.FromSeconds(5));
+        var scheduled = await manager.Ask<ReminderSavedResponse>(
+            new SaveReminderCommand(definition), TimeSpan.FromSeconds(5));
 
-        Assert.Equal("test-list", scheduled.Name);
+        Assert.Equal("test-list", scheduled.Title);
         Assert.NotNull(scheduled.NextFire);
 
         var list = await manager.Ask<ReminderListResponse>(
             new ListRemindersCommand(), TimeSpan.FromSeconds(5));
 
         Assert.Single(list.Reminders);
-        Assert.Equal("test-list", list.Reminders[0].Name);
-        Assert.Equal("Check status", list.Reminders[0].Prompt);
+        Assert.Equal("test-list", list.Reminders[0].Title);
+        Assert.Equal("Check status", list.Reminders[0].Instructions);
     }
 
     [Fact]
@@ -85,13 +92,13 @@ public class ReminderManagerActorTests : TestKit
     {
         var manager = await GetManagerAsync();
 
-        var payload = CreatePayload("test-cancel", "once", "Check it");
+        var definition = CreateDefinition("test-cancel", "Check it");
 
-        await manager.Ask<ReminderScheduledResponse>(
-            new ScheduleReminderCommand(payload), TimeSpan.FromSeconds(5));
+        await manager.Ask<ReminderSavedResponse>(
+            new SaveReminderCommand(definition), TimeSpan.FromSeconds(5));
 
         var cancelled = await manager.Ask<ReminderCancelledResponse>(
-            new CancelReminderCommand(payload.Id), TimeSpan.FromSeconds(5));
+            new CancelReminderCommand(new ReminderId(definition.Id)), TimeSpan.FromSeconds(5));
 
         Assert.True(cancelled.Found);
     }
@@ -108,22 +115,26 @@ public class ReminderManagerActorTests : TestKit
         Assert.False(cancelled.Found);
     }
 
-    private static ReminderPayload CreatePayload(string name, string scheduleType, string prompt)
+    private static ReminderDefinition CreateDefinition(string name, string instructions)
     {
         var id = new ReminderId($"{name}-{Guid.NewGuid():N}"[..20]);
         var now = TimeProvider.System.GetUtcNow();
 
-        return new ReminderPayload
+        return new ReminderDefinition
         {
-            Id = id,
-            Name = name,
-            Prompt = prompt,
+            Id = id.Value,
+            Title = name,
+            Instructions = instructions,
+            NotifyInstructions = "Reply in-thread with concise status.",
             Schedule = new ReminderSchedule
             {
                 Type = ReminderScheduleType.OneShot,
                 FireAt = now.AddHours(1)
             },
-            CreatedAt = now
+            Enabled = true,
+            CreatedBy = "test",
+            CreatedAt = now,
+            UpdatedAt = now
         };
     }
 }

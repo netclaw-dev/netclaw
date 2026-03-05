@@ -1,4 +1,4 @@
-using Netclaw.Actors.Protocol;
+using System.Text.Json.Serialization;
 using ProtoBuf;
 
 namespace Netclaw.Actors.Reminders;
@@ -35,8 +35,8 @@ public sealed class ReminderSchedule
 
     /// <summary>
     /// For OneShot: the absolute fire time.
-    /// For Interval/Cron: the first fire time.
-    /// Stored as milliseconds since Unix epoch for serialization.
+    /// For Interval: optional explicit first fire.
+    /// For Cron: not used.
     /// </summary>
     [ProtoMember(2)]
     public long? FireAtMs { get; set; }
@@ -49,8 +49,7 @@ public sealed class ReminderSchedule
     }
 
     /// <summary>
-    /// For Interval schedules: the repeat interval.
-    /// Stored as ticks for serialization.
+    /// For Interval schedules: repeat interval.
     /// </summary>
     [ProtoMember(3)]
     public long? IntervalTicks { get; set; }
@@ -63,94 +62,147 @@ public sealed class ReminderSchedule
     }
 
     /// <summary>
-    /// For Cron schedules: the cron expression.
+    /// For Cron schedules: cron expression.
     /// </summary>
     [ProtoMember(4)]
     public string? CronExpression { get; set; }
 
     /// <summary>
-    /// Original schedule string as provided by the user (e.g. "6h", "0 */6 * * *").
+    /// Original expression as entered by user (e.g. "6h", "0 */6 * * *").
     /// </summary>
     [ProtoMember(5)]
     public string? OriginalExpression { get; set; }
 }
 
 /// <summary>
-/// Payload stored with a reminder and delivered when it fires.
-/// This is the <c>message</c> object passed to akka-reminders.
+/// Canonical reminder definition persisted to disk.
+/// </summary>
+public sealed record ReminderDefinition
+{
+    public required string Id { get; init; }
+    public required string Title { get; init; }
+    public required ReminderSchedule Schedule { get; init; }
+    public required string Instructions { get; init; }
+    public required string NotifyInstructions { get; init; }
+    public bool Enabled { get; set; } = true;
+
+    /// <summary>
+    /// Optional session to resume when running this reminder.
+    /// Useful for routing responses back to the originating Slack thread.
+    /// </summary>
+    public string? SessionId { get; init; }
+
+    public string? ReportToChannel { get; init; }
+    public string? ReportToThreadTs { get; init; }
+
+    /// <summary>
+    /// Deferred shadow field for selecting specialized agent behavior.
+    /// Tracked by issue #147.
+    /// </summary>
+    public string? AgentDefinitionId { get; init; }
+
+    public string CreatedBy { get; init; } = "system";
+    public long CreatedAtMs { get; set; }
+    public long UpdatedAtMs { get; set; }
+
+    [JsonIgnore]
+    public DateTimeOffset CreatedAt
+    {
+        get => DateTimeOffset.FromUnixTimeMilliseconds(CreatedAtMs);
+        set => CreatedAtMs = value.ToUnixTimeMilliseconds();
+    }
+
+    [JsonIgnore]
+    public DateTimeOffset UpdatedAt
+    {
+        get => DateTimeOffset.FromUnixTimeMilliseconds(UpdatedAtMs);
+        set => UpdatedAtMs = value.ToUnixTimeMilliseconds();
+    }
+}
+
+/// <summary>
+/// Message persisted inside Akka.Reminders. Intentionally lightweight: pointer to disk definition.
 /// </summary>
 [ProtoContract]
 public sealed class ReminderPayload
 {
     [ProtoMember(1)]
     public ReminderId Id { get; set; }
+}
 
-    [ProtoMember(2)]
-    public string Name { get; set; } = string.Empty;
+public enum ReminderWriteMode
+{
+    CreateOnly,
+    Replace,
+    Upsert
+}
 
-    [ProtoMember(3)]
-    public string Prompt { get; set; } = string.Empty;
-
-    [ProtoMember(4)]
-    public ReminderSchedule Schedule { get; set; } = new();
-
-    /// <summary>
-    /// Slack channel to post results to. Null = log-only for autonomous reminders.
-    /// </summary>
-    [ProtoMember(5)]
-    public string? ReportToChannel { get; set; }
-
-    /// <summary>
-    /// Slack thread TS for self-targeting reminders. Null = create new thread.
-    /// </summary>
-    [ProtoMember(6)]
-    public string? ReportToThreadTs { get; set; }
-
-    /// <summary>
-    /// The session ID that created this reminder (for self-targeting).
-    /// </summary>
-    [ProtoMember(7)]
-    public SessionId? OriginatingSessionId { get; set; }
-
-    [ProtoMember(8)]
-    public string CreatedBy { get; set; } = "system";
-
-    [ProtoMember(9)]
-    public long CreatedAtMs { get; set; }
-
-    [ProtoIgnore]
-    public DateTimeOffset CreatedAt
-    {
-        get => DateTimeOffset.FromUnixTimeMilliseconds(CreatedAtMs);
-        set => CreatedAtMs = value.ToUnixTimeMilliseconds();
-    }
+public enum ReminderSaveError
+{
+    None,
+    Conflict,
+    NotFound,
+    Validation,
+    Internal
 }
 
 // ── Commands ──
 
-public sealed record ScheduleReminderCommand(ReminderPayload Payload);
+public sealed record SaveReminderCommand(
+    ReminderDefinition Definition,
+    ReminderWriteMode WriteMode = ReminderWriteMode.CreateOnly);
+
+/// <summary>
+/// Permanently deletes a reminder definition and cancels any active schedule.
+/// </summary>
 public sealed record CancelReminderCommand(ReminderId Id);
-public sealed record ListRemindersCommand;
+public sealed record DisableReminderCommand(ReminderId Id);
+public sealed record EnableReminderCommand(ReminderId Id);
+public sealed record ListRemindersCommand(bool IncludeDisabled = true);
 public sealed record GetReminderCommand(ReminderId Id);
 
 // ── Responses ──
 
-public sealed record ReminderScheduledResponse(ReminderId Id, string Name, DateTimeOffset? NextFire);
+public sealed record ReminderSavedResponse(
+    ReminderId Id,
+    string Title,
+    bool Success,
+    DateTimeOffset? NextFire,
+    ReminderSaveError Error = ReminderSaveError.None,
+    string? ErrorMessage = null);
+
 public sealed record ReminderCancelledResponse(ReminderId Id, bool Found);
+
+public sealed record ReminderStateResponse(
+    ReminderId Id,
+    bool Found,
+    bool Enabled,
+    DateTimeOffset? NextFire = null,
+    string? ErrorMessage = null);
+
 public sealed record ReminderListResponse(IReadOnlyList<ReminderInfo> Reminders);
 public sealed record GetReminderResponse(ReminderInfo? Reminder);
 
 public sealed record ReminderInfo(
     ReminderId Id,
-    string Name,
-    string Prompt,
+    string Title,
+    string Instructions,
+    string NotifyInstructions,
     ReminderSchedule Schedule,
     DateTimeOffset? NextFire,
-    string? ReportToChannel);
+    bool Enabled,
+    string? SessionId,
+    string? ReportToChannel,
+    string? ReportToThreadTs,
+    string? AgentDefinitionId);
 
 // ── Internal messages ──
 
 /// <summary>
 /// Sent by <see cref="ReminderExecutionActor"/> to parent when execution completes.
 /// </summary>
-internal sealed record ReminderExecutionCompleted(ReminderId Id, bool Success, string? ErrorMessage = null);
+internal sealed record ReminderExecutionCompleted(
+    Guid ExecutionId,
+    ReminderId Id,
+    bool Success,
+    string? ErrorMessage = null);
