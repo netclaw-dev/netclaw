@@ -22,16 +22,22 @@ public sealed record OAuthDeviceFlowConfig(
     /// <summary>
     /// Build a config from a provider descriptor's OAuth endpoint properties.
     /// </summary>
-    public static OAuthDeviceFlowConfig FromDescriptor(IProviderDescriptor descriptor) =>
-        new(
-            descriptor.OAuthDeviceEndpoint
-                ?? throw new ArgumentException("Descriptor missing OAuthDeviceEndpoint", nameof(descriptor)),
-            descriptor.OAuthPollingEndpoint ?? descriptor.OAuthTokenEndpoint
-                ?? throw new ArgumentException("Descriptor missing OAuthTokenEndpoint", nameof(descriptor)),
-            descriptor.OAuthDefaultClientId
-                ?? throw new ArgumentException("Descriptor missing OAuthDefaultClientId", nameof(descriptor)),
+    public static OAuthDeviceFlowConfig FromDescriptor(IProviderDescriptor descriptor)
+    {
+        var deviceEndpoint = descriptor.OAuthDeviceEndpoint
+            ?? throw new ArgumentException("Descriptor missing OAuthDeviceEndpoint", nameof(descriptor));
+        var tokenEndpoint = descriptor.OAuthTokenEndpoint
+            ?? throw new ArgumentException("Descriptor missing OAuthTokenEndpoint", nameof(descriptor));
+        var clientId = descriptor.OAuthDefaultClientId
+            ?? throw new ArgumentException("Descriptor missing OAuthDefaultClientId", nameof(descriptor));
+
+        return new(
+            deviceEndpoint,
+            descriptor.OAuthPollingEndpoint ?? tokenEndpoint,
+            clientId,
             PkceExchangeEndpoint: descriptor.UseProprietaryDeviceFlow
-                ? descriptor.OAuthTokenEndpoint : null);
+                ? tokenEndpoint : null);
+    }
 }
 
 /// <summary>

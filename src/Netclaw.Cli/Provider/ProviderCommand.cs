@@ -206,16 +206,18 @@ internal static class ProviderCommand
         string name, string type, string? endpoint,
         IProviderDescriptor descriptor, NetclawPaths paths, TextWriter writer)
     {
-        if (descriptor.OAuthDeviceEndpoint is null || descriptor.OAuthTokenEndpoint is null
-            || descriptor.OAuthDefaultClientId is null)
+        endpoint ??= descriptor.DefaultEndpoint;
+
+        OAuthDeviceFlowConfig config;
+        try
+        {
+            config = OAuthDeviceFlowConfig.FromDescriptor(descriptor);
+        }
+        catch (ArgumentException)
         {
             writer.WriteLine($"Error: Provider '{type}' missing OAuth endpoint configuration.");
             return 1;
         }
-
-        endpoint ??= descriptor.DefaultEndpoint;
-
-        var config = OAuthDeviceFlowConfig.FromDescriptor(descriptor);
 
         using var httpClient = new HttpClient();
         IDeviceFlowService service = descriptor.UseProprietaryDeviceFlow

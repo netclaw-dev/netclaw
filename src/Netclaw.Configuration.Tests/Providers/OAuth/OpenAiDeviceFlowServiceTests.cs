@@ -183,7 +183,7 @@ public class OpenAiDeviceFlowServiceTests
     }
 
     [Fact]
-    public async Task PollForToken_PkceExchangeFailure_ThrowsWithContext()
+    public async Task PollForToken_PkceExchangeFailure_Propagates()
     {
         var handler = new FakeHttpMessageHandler(request =>
         {
@@ -199,9 +199,13 @@ public class OpenAiDeviceFlowServiceTests
                 });
             }
 
-            // PKCE exchange fails
+            // PKCE exchange fails with 400
             if (url.Contains("oauth/token"))
-                return new HttpResponseMessage(HttpStatusCode.BadRequest);
+            {
+                return JsonResponse(
+                    new { error = "invalid_grant", error_description = "code_verifier mismatch" },
+                    HttpStatusCode.BadRequest);
+            }
 
             return new HttpResponseMessage(HttpStatusCode.InternalServerError);
         });
@@ -214,8 +218,8 @@ public class OpenAiDeviceFlowServiceTests
         var pollTask = service.PollForTokenAsync(TestConfig, deviceAuth);
         timeProvider.Advance(TimeSpan.FromSeconds(1));
 
-        // PKCE exchange failure should propagate as HttpRequestException
-        await Assert.ThrowsAsync<HttpRequestException>(() => pollTask);
+        var ex = await Assert.ThrowsAsync<HttpRequestException>(() => pollTask);
+        Assert.Contains("400", ex.Message);
     }
 
     [Fact]
