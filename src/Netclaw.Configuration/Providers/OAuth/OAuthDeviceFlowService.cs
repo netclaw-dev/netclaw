@@ -5,13 +5,40 @@ using System.Text.Json.Serialization;
 namespace Netclaw.Configuration.Providers.OAuth;
 
 /// <summary>
-/// Configuration for an RFC 8628 device authorization grant flow.
+/// Configuration for a device authorization grant flow.
+/// For RFC 8628, <see cref="DeviceAuthorizationEndpoint"/> is the device auth endpoint
+/// and <see cref="TokenEndpoint"/> is the token endpoint.
+/// For OpenAI's proprietary flow, <see cref="DeviceAuthorizationEndpoint"/> is the
+/// user-code endpoint, <see cref="TokenEndpoint"/> is the polling endpoint, and
+/// <see cref="PkceExchangeEndpoint"/> is the final token exchange endpoint.
 /// </summary>
 public sealed record OAuthDeviceFlowConfig(
     string DeviceAuthorizationEndpoint,
     string TokenEndpoint,
     string ClientId,
-    string? Scope = null);
+    string? Scope = null,
+    string? PkceExchangeEndpoint = null)
+{
+    /// <summary>
+    /// Build a config from a provider descriptor's OAuth endpoint properties.
+    /// </summary>
+    public static OAuthDeviceFlowConfig FromDescriptor(IProviderDescriptor descriptor)
+    {
+        var deviceEndpoint = descriptor.OAuthDeviceEndpoint
+            ?? throw new ArgumentException("Descriptor missing OAuthDeviceEndpoint", nameof(descriptor));
+        var tokenEndpoint = descriptor.OAuthTokenEndpoint
+            ?? throw new ArgumentException("Descriptor missing OAuthTokenEndpoint", nameof(descriptor));
+        var clientId = descriptor.OAuthDefaultClientId
+            ?? throw new ArgumentException("Descriptor missing OAuthDefaultClientId", nameof(descriptor));
+
+        return new(
+            deviceEndpoint,
+            descriptor.OAuthPollingEndpoint ?? tokenEndpoint,
+            clientId,
+            PkceExchangeEndpoint: descriptor.UseProprietaryDeviceFlow
+                ? tokenEndpoint : null);
+    }
+}
 
 /// <summary>
 /// Response from the device authorization endpoint (RFC 8628 §3.2).
@@ -50,7 +77,7 @@ public enum DeviceFlowState
 /// Generic RFC 8628 device authorization grant implementation.
 /// Parameterized by provider endpoints so it can be reused across providers.
 /// </summary>
-public sealed class OAuthDeviceFlowService
+public sealed class OAuthDeviceFlowService : IDeviceFlowService
 {
     private readonly HttpClient _httpClient;
     private readonly TimeProvider _timeProvider;
@@ -162,14 +189,14 @@ public sealed class OAuthDeviceFlowService
     public async Task<OAuthDeviceFlowResult?> RefreshTokenAsync(
         string tokenEndpoint,
         string clientId,
-        string refreshToken,
+        SensitiveString refreshToken,
         CancellationToken ct = default)
     {
         var tokenParams = new Dictionary<string, string>
         {
             ["grant_type"] = "refresh_token",
             ["client_id"] = clientId,
-            ["refresh_token"] = refreshToken
+            ["refresh_token"] = refreshToken.Value
         };
 
         var response = await _httpClient.PostAsync(
@@ -194,6 +221,13 @@ public sealed class OAuthDeviceFlowService
         using var doc = JsonDocument.Parse(json);
         return ParseTokenResponse(doc.RootElement);
     }
+
+    public Task<OAuthDeviceFlowResult?> RefreshTokenAsync(
+        string tokenEndpoint,
+        string clientId,
+        string refreshToken,
+        CancellationToken ct = default) =>
+        RefreshTokenAsync(tokenEndpoint, clientId, new SensitiveString(refreshToken), ct);
 
     private OAuthDeviceFlowResult ParseTokenResponse(JsonElement root)
     {

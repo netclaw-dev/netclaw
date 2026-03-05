@@ -5,6 +5,7 @@ using Akka.Hosting.TestKit;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Netclaw.Actors.Protocol;
+using Netclaw.Actors.Tests.Channels.TestHelpers;
 using Netclaw.Channels.Slack;
 using Netclaw.Security;
 using Xunit;
@@ -264,12 +265,4 @@ public sealed class SlackActorHierarchyTests(ITestOutputHelper output) : TestKit
         }
     }
 
-    private sealed class NoopReplyClient : ISlackReplyClient
-    {
-        public Task PostThreadReplyAsync(SlackPostMessage message, CancellationToken cancellationToken = default)
-            => Task.CompletedTask;
-
-        public Task UploadFileToThreadAsync(SlackChannelId channelId, SlackThreadTs threadTs, string filePath, string? filename = null, CancellationToken cancellationToken = default)
-            => Task.CompletedTask;
-    }
 }

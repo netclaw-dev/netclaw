@@ -738,6 +738,15 @@ public sealed class InitWizardViewModelTests : IDisposable
         Assert.Contains("omit", args);
         Assert.Contains("--snapshot-mode", args);
         Assert.Contains("none", args);
+        Assert.Contains("--browser", args);
+        Assert.Contains(BrowserAutomationRuntimeDetector.GetPreferredPlaywrightBrowser(), args);
+
+        var envVars = config.RootElement
+            .GetProperty("McpServers")
+            .GetProperty("browser_playwright")
+            .GetProperty("EnvironmentVariables");
+        Assert.True(envVars.TryGetProperty("PLAYWRIGHT_BROWSERS_PATH", out var browsersPath));
+        Assert.False(string.IsNullOrWhiteSpace(browsersPath.GetString()));
     }
 
     [Fact]

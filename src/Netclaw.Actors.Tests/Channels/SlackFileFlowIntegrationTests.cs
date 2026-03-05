@@ -36,14 +36,19 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
     private readonly ImageCapturingChatClient _chatClient = new();
     private readonly RecordingReplyClient _replyClient = new();
     private readonly FakeSlackFileHandler _httpHandler = new();
+    private readonly NetclawPaths _paths = new(Path.Combine(
+        Path.GetTempPath(),
+        $"netclaw-slack-file-tests-{Guid.NewGuid():N}"));
 
     public SlackFileFlowIntegrationTests(ITestOutputHelper output) : base(output: output)
     {
+        _paths.EnsureDirectoriesExist();
     }
 
     protected override void ConfigureServices(HostBuilderContext context, IServiceCollection services)
     {
         services.AddSingleton<IChatClientProvider>(new SingleClientProvider(_chatClient));
+        services.AddSingleton(_paths);
         services.AddSingleton(new SessionConfig
         {
             ModelId = "fake-model",
@@ -131,7 +136,7 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
 
         // Verify: file was persisted to session media directory
         var sessionId = new SessionId("D1/1000.1");
-        var sessionDir = SessionDirectoryHelper.GetSessionDirectory(sessionId);
+        var sessionDir = SessionDirectoryHelper.GetSessionDirectory(sessionId, _paths.SessionsDirectory);
         var mediaDir = Path.Combine(sessionDir, "media");
         Assert.True(Directory.Exists(mediaDir),
             $"Expected session media directory to exist: {mediaDir}");
@@ -204,7 +209,7 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
 
         var sessionId = new SessionId("C_TEST/2000.1");
         var mediaDir = Path.Combine(
-            SessionDirectoryHelper.GetSessionDirectory(sessionId), "media");
+            SessionDirectoryHelper.GetSessionDirectory(sessionId, _paths.SessionsDirectory), "media");
         Assert.True(Directory.Exists(mediaDir),
             $"Expected session media directory: {mediaDir}");
         Assert.True(Directory.GetFiles(mediaDir).Length > 0,
@@ -270,7 +275,7 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
 
         var sessionId = new SessionId("D2/3000.1");
         var mediaDir = Path.Combine(
-            SessionDirectoryHelper.GetSessionDirectory(sessionId), "media");
+            SessionDirectoryHelper.GetSessionDirectory(sessionId, _paths.SessionsDirectory), "media");
         Assert.True(Directory.Exists(mediaDir),
             $"Expected session media directory: {mediaDir}");
         Assert.True(Directory.GetFiles(mediaDir).Length > 0,

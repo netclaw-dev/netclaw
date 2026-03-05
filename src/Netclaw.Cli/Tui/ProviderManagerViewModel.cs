@@ -64,7 +64,7 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
     private readonly NetclawPaths _paths;
     private readonly ProviderDescriptorRegistry _registry;
     private readonly IProviderProbe _probe;
-    private readonly OAuthDeviceFlowService? _oauthService;
+    private readonly DeviceFlowServiceFactory? _oauthFactory;
     private CancellationTokenSource? _probeCts;
     private CancellationTokenSource? _oauthCts;
 
@@ -138,18 +138,18 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
     public ProviderDescriptorRegistry Registry => _registry;
 
     public ProviderManagerViewModel(NetclawPaths paths, ProviderDescriptorRegistry registry,
-        OAuthDeviceFlowService? oauthService = null)
-        : this(paths, registry, registry, oauthService)
+        DeviceFlowServiceFactory? oauthFactory = null)
+        : this(paths, registry, registry, oauthFactory)
     {
     }
 
     public ProviderManagerViewModel(NetclawPaths paths, ProviderDescriptorRegistry registry, IProviderProbe probe,
-        OAuthDeviceFlowService? oauthService = null)
+        DeviceFlowServiceFactory? oauthFactory = null)
     {
         _paths = paths;
         _registry = registry;
         _probe = probe;
-        _oauthService = oauthService;
+        _oauthFactory = oauthFactory;
     }
 
     public override void OnActivated()
@@ -538,7 +538,7 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
     /// </summary>
     internal async Task StartOAuthDeviceFlowAsync()
     {
-        if (_oauthService is null || NewProviderType is null)
+        if (_oauthFactory is null || NewProviderType is null)
         {
             OAuthErrorMessage = "OAuth service not available.";
             OAuthFlowState.Value = DeviceFlowState.Error;
@@ -559,22 +559,20 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
         _oauthCts = new CancellationTokenSource();
         var ct = _oauthCts.Token;
 
-        var config = new OAuthDeviceFlowConfig(
-            descriptor.OAuthDeviceEndpoint,
-            descriptor.OAuthTokenEndpoint,
-            descriptor.OAuthDefaultClientId);
+        var service = _oauthFactory.GetFor(descriptor);
+        var config = OAuthDeviceFlowConfig.FromDescriptor(descriptor);
 
         try
         {
             // Step 1: Start device authorization
-            var deviceAuth = await _oauthService.StartDeviceAuthorizationAsync(config, ct);
+            var deviceAuth = await service.StartDeviceAuthorizationAsync(config, ct);
             OAuthUserCode = deviceAuth.UserCode;
             OAuthVerificationUri = deviceAuth.VerificationUri;
             OAuthFlowState.Value = DeviceFlowState.WaitingForUser;
             NotifyStateChanged();
 
             // Step 2: Poll for token
-            var result = await _oauthService.PollForTokenAsync(config, deviceAuth,
+            var result = await service.PollForTokenAsync(config, deviceAuth,
                 state =>
                 {
                     OAuthFlowState.Value = state;
@@ -838,7 +836,7 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
                 return candidate;
         }
 
-        return $"my-{type}-{Guid.NewGuid():N[..6]}";
+        return $"my-{type}-{Guid.NewGuid().ToString("N")[..6]}";
     }
 
     private void ClearAddState()

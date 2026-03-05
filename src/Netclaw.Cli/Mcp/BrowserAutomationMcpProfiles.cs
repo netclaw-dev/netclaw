@@ -11,6 +11,8 @@ internal static class BrowserAutomationMcpProfiles
     {
         var npxCommand = BrowserAutomationRuntimeDetector.GetPreferredNpxCommand();
         var env = BrowserAutomationRuntimeDetector.BuildMcpEnvironmentOverlay(npxCommand);
+        var playwrightEnv = BrowserAutomationRuntimeDetector.BuildPlaywrightEnvironmentOverlay(npxCommand);
+        var playwrightBrowser = BrowserAutomationRuntimeDetector.GetPreferredPlaywrightBrowser();
 
         return backend switch
         {
@@ -20,7 +22,7 @@ internal static class BrowserAutomationMcpProfiles
                 Enabled = true,
                 GrantCategory = "browser_automation",
                 Command = npxCommand,
-                EnvironmentVariables = env,
+                EnvironmentVariables = playwrightEnv,
                 Arguments =
                 [
                     "-y",
@@ -29,7 +31,9 @@ internal static class BrowserAutomationMcpProfiles
                     "--image-responses",
                     "omit",
                     "--snapshot-mode",
-                    "none"
+                    "none",
+                    "--browser",
+                    playwrightBrowser
                 ]
             }),
 

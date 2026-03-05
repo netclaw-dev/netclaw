@@ -43,7 +43,7 @@ public partial class InitWizardViewModel : ReactiveViewModel
     private readonly ProviderDescriptorRegistry _registry;
     private readonly ISlackProbe _slackProbe;
     private readonly IBrowserAutomationBootstrapper _browserBootstrapper;
-    private readonly OAuthDeviceFlowService? _oauthService;
+    private readonly DeviceFlowServiceFactory? _oauthFactory;
     private CancellationTokenSource? _oauthCts;
 
     /// <summary>
@@ -162,10 +162,10 @@ public partial class InitWizardViewModel : ReactiveViewModel
         NetclawPaths paths,
         ProviderDescriptorRegistry registry,
         ISlackProbe slackProbe,
-        OAuthDeviceFlowService? oauthService = null,
+        DeviceFlowServiceFactory? oauthFactory = null,
         DaemonManager? daemonManager = null,
         string? daemonEndpoint = null)
-        : this(paths, registry, registry, slackProbe, null, oauthService, daemonManager, daemonEndpoint)
+        : this(paths, registry, registry, slackProbe, null, oauthFactory, daemonManager, daemonEndpoint)
     {
     }
 
@@ -178,7 +178,7 @@ public partial class InitWizardViewModel : ReactiveViewModel
         IProviderProbe probe,
         ISlackProbe slackProbe,
         IBrowserAutomationBootstrapper? browserBootstrapper = null,
-        OAuthDeviceFlowService? oauthService = null,
+        DeviceFlowServiceFactory? oauthFactory = null,
         DaemonManager? daemonManager = null,
         string? daemonEndpoint = null)
     {
@@ -187,7 +187,7 @@ public partial class InitWizardViewModel : ReactiveViewModel
         _registry = registry;
         _slackProbe = slackProbe;
         _browserBootstrapper = browserBootstrapper ?? new BrowserAutomationBootstrapper();
-        _oauthService = oauthService;
+        _oauthFactory = oauthFactory;
         _daemonManager = daemonManager;
         _daemonEndpoint = daemonEndpoint ?? "http://127.0.0.1:5199";
 
@@ -435,7 +435,7 @@ public partial class InitWizardViewModel : ReactiveViewModel
     /// </summary>
     internal async Task StartOAuthDeviceFlowAsync()
     {
-        if (_oauthService is null || SelectedProviderType is null)
+        if (_oauthFactory is null || SelectedProviderType is null)
         {
             OAuthErrorMessage = "OAuth service not available.";
             OAuthFlowState.Value = DeviceFlowState.Error;
@@ -456,20 +456,18 @@ public partial class InitWizardViewModel : ReactiveViewModel
         _oauthCts = new CancellationTokenSource();
         var ct = _oauthCts.Token;
 
-        var config = new OAuthDeviceFlowConfig(
-            descriptor.OAuthDeviceEndpoint,
-            descriptor.OAuthTokenEndpoint,
-            descriptor.OAuthDefaultClientId);
+        var service = _oauthFactory.GetFor(descriptor);
+        var config = OAuthDeviceFlowConfig.FromDescriptor(descriptor);
 
         try
         {
-            var deviceAuth = await _oauthService.StartDeviceAuthorizationAsync(config, ct);
+            var deviceAuth = await service.StartDeviceAuthorizationAsync(config, ct);
             OAuthUserCode = deviceAuth.UserCode;
             OAuthVerificationUri = deviceAuth.VerificationUri;
             OAuthFlowState.Value = DeviceFlowState.WaitingForUser;
             RequestRedraw();
 
-            var result = await _oauthService.PollForTokenAsync(config, deviceAuth,
+            var result = await service.PollForTokenAsync(config, deviceAuth,
                 state =>
                 {
                     OAuthFlowState.Value = state;

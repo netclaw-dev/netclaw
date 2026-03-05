@@ -35,7 +35,9 @@ public interface IProviderDescriptor
     string? ApiKeyGuidanceUrl { get; }
 
     /// <summary>
-    /// RFC 8628 device authorization endpoint URL.
+    /// Device authorization endpoint URL (user-code request).
+    /// For RFC 8628: the standard device authorization endpoint.
+    /// For OpenAI: the <c>/api/accounts/deviceauth/usercode</c> endpoint.
     /// Null for providers that don't support OAuth device flow.
     /// </summary>
     string? OAuthDeviceEndpoint { get; }
@@ -51,6 +53,20 @@ public interface IProviderDescriptor
     /// Null for providers that don't support OAuth.
     /// </summary>
     string? OAuthDefaultClientId { get; }
+
+    /// <summary>
+    /// Polling endpoint for proprietary device flows (e.g. OpenAI's
+    /// <c>/api/accounts/deviceauth/token</c>). Null for standard RFC 8628 flows
+    /// where polling goes to <see cref="OAuthTokenEndpoint"/>.
+    /// </summary>
+    string? OAuthPollingEndpoint => null;
+
+    /// <summary>
+    /// Whether this provider uses a proprietary device flow instead of RFC 8628.
+    /// When true, the system uses <see cref="OAuthPollingEndpoint"/> for poll requests
+    /// and performs a PKCE exchange at <see cref="OAuthTokenEndpoint"/> after polling succeeds.
+    /// </summary>
+    bool UseProprietaryDeviceFlow => false;
 
     /// <summary>
     /// Validate credentials and discover available models.

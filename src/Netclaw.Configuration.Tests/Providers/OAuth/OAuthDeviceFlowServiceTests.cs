@@ -1,8 +1,8 @@
 using System.Net;
-using System.Text;
-using System.Text.Json;
+using Microsoft.Extensions.Time.Testing;
 using Netclaw.Configuration.Providers.OAuth;
 using Xunit;
+using static Netclaw.Configuration.Tests.Providers.OAuth.OAuthTestHelpers;
 
 namespace Netclaw.Configuration.Tests.Providers.OAuth;
 
@@ -55,18 +55,24 @@ public class OAuthDeviceFlowServiceTests
             });
         });
 
-        var service = new OAuthDeviceFlowService(new HttpClient(handler));
+        var timeProvider = new FakeTimeProvider();
+        var service = new OAuthDeviceFlowService(new HttpClient(handler), timeProvider);
 
-        // Use a very short interval device auth to keep the test fast
         var deviceAuth = new DeviceAuthorizationResponse(
             DeviceCode: "dc-test",
             UserCode: "UC-TEST",
             VerificationUri: "https://auth.example.com/verify",
             ExpiresIn: 30,
-            Interval: 1); // test-friendly interval; code clamps to max(interval, 1)
+            Interval: 1);
 
         var states = new List<DeviceFlowState>();
-        var result = await service.PollForTokenAsync(TestConfig, deviceAuth, s => states.Add(s));
+        var pollTask = service.PollForTokenAsync(TestConfig, deviceAuth, s => states.Add(s));
+
+        // Advance time to trigger each poll interval
+        for (var i = 0; i < 3; i++)
+            timeProvider.Advance(TimeSpan.FromSeconds(1));
+
+        var result = await pollTask;
 
         Assert.Equal("at-secret", result.AccessToken.Value);
         Assert.NotNull(result.RefreshToken);
@@ -90,10 +96,18 @@ public class OAuthDeviceFlowServiceTests
             return JsonResponse(new { access_token = "token", expires_in = 3600 });
         });
 
-        var service = new OAuthDeviceFlowService(new HttpClient(handler));
+        var timeProvider = new FakeTimeProvider();
+        var service = new OAuthDeviceFlowService(new HttpClient(handler), timeProvider);
         var deviceAuth = new DeviceAuthorizationResponse("dc", "UC", "https://x.com/v", 60, 1);
 
-        var result = await service.PollForTokenAsync(TestConfig, deviceAuth);
+        var pollTask = service.PollForTokenAsync(TestConfig, deviceAuth);
+
+        // First poll at 1s interval
+        timeProvider.Advance(TimeSpan.FromSeconds(1));
+        // After slow_down, interval increases to 6s (1+5)
+        timeProvider.Advance(TimeSpan.FromSeconds(6));
+
+        var result = await pollTask;
 
         Assert.Equal("token", result.AccessToken.Value);
         Assert.True(callCount >= 2);
@@ -105,11 +119,14 @@ public class OAuthDeviceFlowServiceTests
         var handler = new FakeHttpMessageHandler(_ =>
             JsonResponse(new { error = "access_denied" }, HttpStatusCode.BadRequest));
 
-        var service = new OAuthDeviceFlowService(new HttpClient(handler));
+        var timeProvider = new FakeTimeProvider();
+        var service = new OAuthDeviceFlowService(new HttpClient(handler), timeProvider);
         var deviceAuth = new DeviceAuthorizationResponse("dc", "UC", "https://x.com/v", 60, 1);
 
-        await Assert.ThrowsAsync<OAuthDeviceFlowDeniedException>(
-            () => service.PollForTokenAsync(TestConfig, deviceAuth));
+        var pollTask = service.PollForTokenAsync(TestConfig, deviceAuth);
+        timeProvider.Advance(TimeSpan.FromSeconds(1));
+
+        await Assert.ThrowsAsync<OAuthDeviceFlowDeniedException>(() => pollTask);
     }
 
     [Fact]
@@ -118,11 +135,14 @@ public class OAuthDeviceFlowServiceTests
         var handler = new FakeHttpMessageHandler(_ =>
             JsonResponse(new { error = "expired_token" }, HttpStatusCode.BadRequest));
 
-        var service = new OAuthDeviceFlowService(new HttpClient(handler));
+        var timeProvider = new FakeTimeProvider();
+        var service = new OAuthDeviceFlowService(new HttpClient(handler), timeProvider);
         var deviceAuth = new DeviceAuthorizationResponse("dc", "UC", "https://x.com/v", 60, 1);
 
-        await Assert.ThrowsAsync<OAuthDeviceFlowExpiredException>(
-            () => service.PollForTokenAsync(TestConfig, deviceAuth));
+        var pollTask = service.PollForTokenAsync(TestConfig, deviceAuth);
+        timeProvider.Advance(TimeSpan.FromSeconds(1));
+
+        await Assert.ThrowsAsync<OAuthDeviceFlowExpiredException>(() => pollTask);
     }
 
     [Fact]
@@ -131,13 +151,18 @@ public class OAuthDeviceFlowServiceTests
         var handler = new FakeHttpMessageHandler(_ =>
             JsonResponse(new { error = "authorization_pending" }, HttpStatusCode.BadRequest));
 
-        var service = new OAuthDeviceFlowService(new HttpClient(handler));
+        var timeProvider = new FakeTimeProvider();
+        var service = new OAuthDeviceFlowService(new HttpClient(handler), timeProvider);
         var deviceAuth = new DeviceAuthorizationResponse("dc", "UC", "https://x.com/v", 60, 1);
 
-        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
+        using var cts = new CancellationTokenSource();
+        var pollTask = service.PollForTokenAsync(TestConfig, deviceAuth, ct: cts.Token);
 
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(
-            () => service.PollForTokenAsync(TestConfig, deviceAuth, ct: cts.Token));
+        // Cancel before advancing time
+        cts.Cancel();
+        timeProvider.Advance(TimeSpan.FromSeconds(1));
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => pollTask);
     }
 
     [Fact]
@@ -156,7 +181,7 @@ public class OAuthDeviceFlowServiceTests
         var result = await service.RefreshTokenAsync(
             "https://auth.example.com/token",
             "client-id",
-            "old-refresh-token");
+            new SensitiveString("old-refresh-token"));
 
         Assert.NotNull(result);
         Assert.Equal("new-at", result!.AccessToken.Value);
@@ -175,36 +200,29 @@ public class OAuthDeviceFlowServiceTests
         var result = await service.RefreshTokenAsync(
             "https://auth.example.com/token",
             "client-id",
-            "expired-refresh-token");
+            new SensitiveString("expired-refresh-token"));
 
         Assert.Null(result);
     }
 
-    // ── Helpers ──
-
-    private static HttpResponseMessage JsonResponse(object body, HttpStatusCode status = HttpStatusCode.OK)
+    [Fact]
+    public async Task RefreshToken_StringOverload_RemainsSupported()
     {
-        var json = JsonSerializer.Serialize(body);
-        return new HttpResponseMessage(status)
-        {
-            Content = new StringContent(json, Encoding.UTF8, "application/json")
-        };
-    }
+        var handler = new FakeHttpMessageHandler(_ =>
+            JsonResponse(new
+            {
+                access_token = "new-at",
+                expires_in = 3600
+            }));
 
-    private sealed class FakeHttpMessageHandler : HttpMessageHandler
-    {
-        private readonly Func<HttpRequestMessage, HttpResponseMessage> _handler;
+        var service = new OAuthDeviceFlowService(new HttpClient(handler));
 
-        public FakeHttpMessageHandler(Func<HttpRequestMessage, HttpResponseMessage> handler)
-        {
-            _handler = handler;
-        }
+        var result = await service.RefreshTokenAsync(
+            "https://auth.example.com/token",
+            "client-id",
+            "old-refresh-token");
 
-        protected override Task<HttpResponseMessage> SendAsync(
-            HttpRequestMessage request, CancellationToken cancellationToken)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            return Task.FromResult(_handler(request));
-        }
+        Assert.NotNull(result);
+        Assert.Equal("new-at", result!.AccessToken.Value);
     }
 }

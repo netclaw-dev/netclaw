@@ -138,6 +138,9 @@ static async Task RunDaemonAsync(string[] args, DaemonRestartSignal restartSigna
         return Results.Ok(new { status = status.ToString() });
     });
 
+    // Register channel-specific tools after DI is built (tools need resolved services).
+    ChannelToolRegistration.RegisterChannelTools(app.Services);
+
     // Reminder REST API
     MapReminderEndpoints(app);
 

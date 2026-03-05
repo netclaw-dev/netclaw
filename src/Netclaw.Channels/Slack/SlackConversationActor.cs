@@ -105,6 +105,39 @@ public sealed class SlackConversationActor : ReceiveActor
                 ReceivedAt: _dependencies.TimeProvider.GetUtcNow(),
                 Files: message.Files));
         });
+
+        Receive<StartProactiveThread>(message =>
+        {
+            // Defense-in-depth: validate channel ACL even though the tool already checked.
+            // DM channels (D-prefixed) skip this — they were validated via user ACL + AllowDirectMessages.
+            var isDmChannel = message.ChannelId.Value.StartsWith("D", StringComparison.Ordinal);
+            if (isDmChannel && !_dependencies.Options.AllowDirectMessages)
+            {
+                var reason = "Direct messages are disabled by Slack channel configuration.";
+                _log.Warning("Rejected proactive DM thread for channel {0}: {1}", message.ChannelId, reason);
+                Sender.Tell(new Status.Failure(new InvalidOperationException(reason)));
+                return;
+            }
+
+            if (!isDmChannel && !SlackAclPolicy.IsAllowedChannel(
+                    message.ChannelId, _dependencies.Options, _dependencies.DefaultChannelId))
+            {
+                _log.Warning("Rejected proactive thread for disallowed channel {0}", message.ChannelId);
+                Sender.Tell(new Status.Failure(new InvalidOperationException(
+                    $"Channel {message.ChannelId.Value} is not in the allowed channels list.")));
+                return;
+            }
+
+            var threadActorName = Uri.EscapeDataString(message.ThreadTs.Value);
+            var existingThread = Context.Child(threadActorName);
+
+            var thread = existingThread.IsNobody()
+                ? Context.ActorOf(CreateThreadProps(message.ChannelId, message.ThreadTs), threadActorName)
+                : existingThread;
+
+            _log.Debug("Routing proactive thread setup to thread actor {0}", message.ThreadTs);
+            thread.Forward(message);
+        });
     }
 
     public static Props CreateProps(SlackChannelId conversationId, SlackGatewayDependencies dependencies) =>
@@ -115,13 +148,8 @@ public sealed class SlackConversationActor : ReceiveActor
         if (message.IsDirectMessage)
             return _dependencies.Options.AllowDirectMessages;
 
-        var matchesDefaultChannel = _dependencies.DefaultChannelId is not null
-            && message.ChannelId == _dependencies.DefaultChannelId.Value;
-
-        var matchesAllowedChannel = _dependencies.Options.AllowedChannelIds
-            .Contains(message.ChannelId.Value, StringComparer.Ordinal);
-
-        return matchesDefaultChannel || matchesAllowedChannel;
+        return SlackAclPolicy.IsAllowedChannel(
+            message.ChannelId, _dependencies.Options, _dependencies.DefaultChannelId);
     }
 
     private bool IsBotMessage(SlackInboundMessage message)
@@ -138,13 +166,10 @@ public sealed class SlackConversationActor : ReceiveActor
 
     private bool IsAllowedUser(SlackInboundMessage message)
     {
-        if (_dependencies.Options.AllowedUserIds.Length == 0)
-            return true;
-
         if (message.UserId is not { } userId)
             return false;
 
-        return _dependencies.Options.AllowedUserIds.Contains(userId.Value, StringComparer.Ordinal);
+        return SlackAclPolicy.IsAllowedUser(userId, _dependencies.Options);
     }
 
     private bool ContainsBotMention(string text)

@@ -42,3 +42,19 @@ public sealed record SlackPostMessage(
     SlackChannelId ChannelId,
     SlackThreadTs ThreadTs,
     string Text);
+
+/// <summary>
+/// Sent to the gateway to wire up the actor hierarchy for a proactively-created thread.
+/// The Slack message has already been posted; this creates the session pipeline so
+/// user replies route back to a live session.
+/// </summary>
+public sealed record StartProactiveThread(
+    SlackChannelId ChannelId,
+    SlackThreadTs ThreadTs,
+    SessionId SessionId);
+
+/// <summary>
+/// Acknowledgement that the proactive thread's session pipeline was initialized.
+/// Returned by <see cref="SlackThreadBindingActor"/> in response to <see cref="StartProactiveThread"/>.
+/// </summary>
+public sealed record ProactiveThreadAck(SessionId SessionId);
