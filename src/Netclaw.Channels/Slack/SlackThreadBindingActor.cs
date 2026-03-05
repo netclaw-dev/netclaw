@@ -32,6 +32,11 @@ internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStas
     private int _pipelineGeneration;
     private bool _isReinitializing;
     private static readonly object ReinitializeTimerKey = new();
+    private static readonly TimeSpan InboundProcessingTimeout = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan QueueWriteTimeout = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan FileDownloadTimeout = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan ContentScanTimeout = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan PipelineInitTimeout = TimeSpan.FromSeconds(15);
 
     public IStash Stash { get; set; } = null!;
     public ITimerScheduler Timers { get; set; } = null!;
@@ -129,6 +134,8 @@ internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStas
 
     private async Task HandleInboundAsync(SlackThreadInbound message)
     {
+        using var inboundCts = new CancellationTokenSource(InboundProcessingTimeout);
+
         try
         {
             if (!string.IsNullOrWhiteSpace(message.Text))
@@ -136,7 +143,7 @@ internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStas
                 PromptInjectionResult detection;
                 try
                 {
-                    detection = await _promptInjectionDetector.DetectAsync(message.Text, "slack");
+                    detection = await _promptInjectionDetector.DetectAsync(message.Text, "slack", inboundCts.Token);
                 }
                 catch (Exception ex)
                 {
@@ -176,12 +183,16 @@ internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStas
 
                     try
                     {
-                        var bytes = await DownloadSlackFileAsync(file);
+                        using var downloadCts = CancellationTokenSource.CreateLinkedTokenSource(inboundCts.Token);
+                        downloadCts.CancelAfter(FileDownloadTimeout);
+                        var bytes = await DownloadSlackFileAsync(file, downloadCts.Token);
                         if (bytes.Length == 0)
                             continue;
 
+                        using var scanCts = CancellationTokenSource.CreateLinkedTokenSource(inboundCts.Token);
+                        scanCts.CancelAfter(ContentScanTimeout);
                         var scanResult = await _dependencies.ContentScanner.ScanAsync(
-                            bytes, file.Name, file.MimeType);
+                            bytes, file.Name, file.MimeType, scanCts.Token);
 
                         if (!scanResult.IsAllowed)
                         {
@@ -192,6 +203,10 @@ internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStas
 
                         contents.Add(new DataContent(bytes.ToArray(), file.MimeType));
                         _log.Info("Downloaded and scanned Slack file: {Name} ({Size} bytes)", file.Name, bytes.Length);
+                    }
+                    catch (OperationCanceledException ex)
+                    {
+                        _log.Warning(ex, "Timed out while processing Slack file {Name}, skipping", file.Name);
                     }
                     catch (Exception ex)
                     {
@@ -206,7 +221,6 @@ internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStas
                 return;
             }
 
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
             var writer = _inputQueue;
             if (writer is null)
             {
@@ -214,36 +228,55 @@ internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStas
                 return;
             }
 
-            await writer.WriteAsync(new ChannelInput
+            try
             {
-                SenderId = message.SenderId,
-                ChannelId = _channelId.Value,
-                Contents = contents,
-                ReceivedAt = message.ReceivedAt
-            }, cts.Token);
+                using var queueWriteCts = CancellationTokenSource.CreateLinkedTokenSource(inboundCts.Token);
+                queueWriteCts.CancelAfter(QueueWriteTimeout);
+
+                await writer.WriteAsync(new ChannelInput
+                {
+                    SenderId = message.SenderId,
+                    ChannelId = _channelId.Value,
+                    Contents = contents,
+                    ReceivedAt = message.ReceivedAt
+                }, queueWriteCts.Token);
+            }
+            catch (OperationCanceledException ex)
+            {
+                _log.Warning(ex, "Timed out enqueueing Slack message for session {0}", _sessionId.Value);
+                Self.Tell(new ReinitializePipeline("input queue write timeout"));
+                return;
+            }
+            catch (ChannelClosedException ex)
+            {
+                _log.Warning(ex, "Slack thread input queue closed for session {0}", _sessionId.Value);
+                Self.Tell(new ReinitializePipeline("input queue write failed"));
+                return;
+            }
 
             _log.Debug("Accepted inbound Slack message for session queue");
             ChannelTelemetry.RecordSlackMessageEnqueued();
         }
+        catch (OperationCanceledException ex)
+        {
+            _log.Warning(ex, "Inbound Slack processing timed out for session {0}", _sessionId.Value);
+        }
         catch (Exception ex)
         {
             _log.Error(ex, "Failed to enqueue Slack message for session {0}", _sessionId.Value);
-
-            if (ex is ChannelClosedException or OperationCanceledException)
-                Self.Tell(new ReinitializePipeline("input queue write failed"));
         }
     }
 
-    private async Task<ReadOnlyMemory<byte>> DownloadSlackFileAsync(SlackFileReference file)
+    private async Task<ReadOnlyMemory<byte>> DownloadSlackFileAsync(SlackFileReference file, CancellationToken ct)
     {
         using var request = new HttpRequestMessage(HttpMethod.Get, file.UrlPrivateDownload);
         if (_dependencies.Options.BotToken is { Value: { Length: > 0 } token })
             request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
 
-        using var response = await _dependencies.HttpClient!.SendAsync(request);
+        using var response = await _dependencies.HttpClient!.SendAsync(request, ct);
         response.EnsureSuccessStatusCode();
 
-        var bytes = await response.Content.ReadAsByteArrayAsync();
+        var bytes = await response.Content.ReadAsByteArrayAsync(ct);
         return bytes;
     }
 
@@ -259,11 +292,16 @@ internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStas
         // children and are stopped automatically when this actor passivates.
         _materializer = Context.Materializer(namePrefix: "slack-thread");
 
-        var materialized = await _dependencies.Pipeline.CreateAsync(_sessionId, new SessionPipelineOptions
-        {
-            ChannelType = "slack",
-            Filter = OutputFilter.Text | OutputFilter.Files
-        }, materializer: _materializer);
+        using var initCts = new CancellationTokenSource(PipelineInitTimeout);
+        var materialized = await _dependencies.Pipeline.CreateAsync(
+            _sessionId,
+            new SessionPipelineOptions
+            {
+                ChannelType = "slack",
+                Filter = OutputFilter.Text | OutputFilter.Files
+            },
+            materializer: _materializer,
+            cancellationToken: initCts.Token);
 
         var inputQueue = Source.Channel<ChannelInput>(512, true)
             .ToMaterialized(materialized.Input, Keep.Left)

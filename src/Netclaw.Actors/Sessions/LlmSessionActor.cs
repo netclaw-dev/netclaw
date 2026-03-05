@@ -28,7 +28,7 @@ namespace Netclaw.Actors.Sessions;
 /// - Processing: buffers incoming messages while LLM call is in flight
 /// - Compacting: runs tiered context compaction when usage exceeds threshold
 /// </summary>
-public sealed class LlmSessionActor : ReceivePersistentActor
+public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 {
     private readonly SessionId _sessionId;
     private readonly IChatClient _chatClient;
@@ -65,6 +65,11 @@ public sealed class LlmSessionActor : ReceivePersistentActor
     // Child actor for per-session log file (created when session logs directory is configured)
     private IActorRef? _logActor;
 
+    // Processing watchdog state (non-persistent)
+    private static readonly object ProcessingWatchdogTimerKey = new();
+    private long _processingOperationId;
+    private string? _processingOperationName;
+
     // Persistent state (immutable — replaced on each event)
     private SessionState _state = SessionState.Empty;
 
@@ -72,6 +77,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor
     private bool _systemPromptRecovered;
 
     public override string PersistenceId { get; }
+    public ITimerScheduler Timers { get; set; } = null!;
 
     public LlmSessionActor(
         string entityId,
@@ -175,6 +181,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor
             Context.Stop(Self);
         });
 
+        Command<ProcessingWatchdogExpired>(_ => { });
+
         Command<SendUserMessage>(cmd =>
         {
             _log.Info("Received user message");
@@ -244,6 +252,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor
 
         Command<LlmResponseReceived>(msg =>
         {
+            StopProcessingWatchdog();
+
             var response = msg.Response;
             var lastMessage = response.Messages[^1];
 
@@ -289,6 +299,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor
 
         Command<LlmResponseDeltaReceived>(msg =>
         {
+            RefreshProcessingWatchdogIfActive();
+
             switch (msg.Content)
             {
                 case TextContent text when !string.IsNullOrEmpty(text.Text):
@@ -311,6 +323,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor
 
         Command<ToolExecutionCompleted>(msg =>
         {
+            StopProcessingWatchdog();
+
             // Add tool results to history and log each result
             foreach (var result in msg.ToolResults)
             {
@@ -368,50 +382,41 @@ public sealed class LlmSessionActor : ReceivePersistentActor
 
         Command<ToolExecutionFailed>(msg =>
         {
+            StopProcessingWatchdog();
             _log.Error(msg.Cause, "Tool execution failed");
 
             const string errorMessage = "I encountered an error executing a tool. Please try again.";
-            _state = _state.AddErrorReply(errorMessage);
-
-            EmitOutput(new ErrorOutput
-            {
-                SessionId = _sessionId,
-                Message = errorMessage,
-                Cause = msg.Cause
-            });
-            EmitOutput(new TurnCompleted
-            {
-                SessionId = _sessionId,
-                TurnNumber = _state.TurnCount
-            });
-
-            _buffer.Clear();
-            Become(Ready);
+            FailCurrentTurn(errorMessage, msg.Cause);
         });
 
         Command<LlmCallFailed>(msg =>
         {
+            StopProcessingWatchdog();
             _log.Error(msg.Cause, "LLM call failed");
 
             var errorMessage = IsContextOverflowError(msg.Cause)
                 ? $"Context window exceeded after compaction — the session has too many tools or a large system prompt for the {_config.ModelId} context window ({_config.ContextWindowTokens} tokens). Try reducing tools or increasing the model's context window."
                 : "I encountered an error processing your message. Please try again.";
-            _state = _state.AddErrorReply(errorMessage);
+            FailCurrentTurn(errorMessage, msg.Cause);
+        });
 
-            EmitOutput(new ErrorOutput
-            {
-                SessionId = _sessionId,
-                Message = errorMessage,
-                Cause = msg.Cause
-            });
-            EmitOutput(new TurnCompleted
-            {
-                SessionId = _sessionId,
-                TurnNumber = _state.TurnCount
-            });
+        Command<ProcessingWatchdogExpired>(msg =>
+        {
+            if (!IsCurrentWatchdog(msg))
+                return;
 
-            _buffer.Clear();
-            Become(Ready);
+            _log.Error("Processing watchdog expired for operation {OperationName} (opId={OperationId})",
+                msg.OperationName, msg.OperationId);
+
+            var timeout = msg.OperationName is "tool-execution"
+                ? TimeSpan.FromSeconds(Math.Max(1, _config.ToolExecutionTimeoutSeconds))
+                : TimeSpan.FromSeconds(Math.Max(1, _config.TurnLlmTimeoutSeconds));
+
+            var timeoutCause = new TimeoutException(
+                $"Session processing operation '{msg.OperationName}' exceeded watchdog timeout of {timeout.TotalSeconds:F0}s");
+
+            StopProcessingWatchdog();
+            FailCurrentTurn("I encountered a timeout while processing your message. Please try again.", timeoutCause);
         });
     }
 
@@ -429,6 +434,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor
             _buffer.Add(cmd);
             TryReplyAck();
         });
+
+        Command<ProcessingWatchdogExpired>(_ => { });
 
         CommandAsync<CompactionTriggered>(async msg =>
         {
@@ -804,6 +811,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor
         var maxInlineToolResultChars = _config.MaxInlineToolResultChars;
         var toolExecutionTimeout = TimeSpan.FromSeconds(Math.Max(1, _config.ToolExecutionTimeoutSeconds));
 
+        StartProcessingWatchdog("tool-execution", toolExecutionTimeout);
+
         // Capture subscriber snapshot for subagent activity notifications.
         // These are emitted directly from the tool execution thread via Tell(),
         // which is thread-safe. The snapshot ensures we don't read _subscribers
@@ -1115,6 +1124,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor
                 Tools = _availableTools.ToList()
             };
         }
+
+        StartProcessingWatchdog("llm-call", timeout);
 
         _ = InvokeLlmAsync(client, messages, options, self, timeout);
     }
@@ -1633,6 +1644,67 @@ public sealed class LlmSessionActor : ReceivePersistentActor
             ContextWindowTokens = contextWindow,
             UsagePercent = usagePercent
         }, OutputFilter.Usage);
+    }
+
+    private void StartProcessingWatchdog(string operationName, TimeSpan timeout)
+    {
+        _processingOperationId++;
+        _processingOperationName = operationName;
+
+        Timers.StartSingleTimer(
+            ProcessingWatchdogTimerKey,
+            new ProcessingWatchdogExpired
+            {
+                OperationId = _processingOperationId,
+                OperationName = operationName
+            },
+            timeout);
+    }
+
+    private void RefreshProcessingWatchdogIfActive()
+    {
+        if (_processingOperationName is not "llm-call")
+            return;
+
+        var timeout = TimeSpan.FromSeconds(Math.Max(1, _config.TurnLlmTimeoutSeconds));
+        Timers.StartSingleTimer(
+            ProcessingWatchdogTimerKey,
+            new ProcessingWatchdogExpired
+            {
+                OperationId = _processingOperationId,
+                OperationName = _processingOperationName
+            },
+            timeout);
+    }
+
+    private bool IsCurrentWatchdog(ProcessingWatchdogExpired msg)
+        => msg.OperationId == _processingOperationId
+           && string.Equals(msg.OperationName, _processingOperationName, StringComparison.Ordinal);
+
+    private void StopProcessingWatchdog()
+    {
+        Timers.Cancel(ProcessingWatchdogTimerKey);
+        _processingOperationName = null;
+    }
+
+    private void FailCurrentTurn(string errorMessage, Exception cause)
+    {
+        _state = _state.AddErrorReply(errorMessage);
+
+        EmitOutput(new ErrorOutput
+        {
+            SessionId = _sessionId,
+            Message = errorMessage,
+            Cause = cause
+        });
+        EmitOutput(new TurnCompleted
+        {
+            SessionId = _sessionId,
+            TurnNumber = _state.TurnCount
+        });
+
+        _buffer.Clear();
+        Become(Ready);
     }
 
     private void EmitOutput(SessionOutput output, OutputFilter requiredFlag = OutputFilter.None)
