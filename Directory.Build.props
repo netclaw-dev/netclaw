@@ -7,8 +7,8 @@
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
-    <VersionPrefix>0.1.4</VersionPrefix>
-    <PackageReleaseNotes>Netclaw v0.1.4 — upgrade and browser reliability hardening. Fixes legacy sessions schema migration regressions in published single-file daemon binaries, preserves historical sessions on upgrade, and disables Chrome DevTools onboarding when Chrome is missing while improving browser MCP diagnostics.</PackageReleaseNotes>
+    <VersionPrefix>0.2.0</VersionPrefix>
+    <PackageReleaseNotes>Netclaw v0.2.0 — scheduled reminders (one-shot, interval, cron), proactive Slack messaging, fixed OpenAI OAuth device flow, browser automation reliability improvements, cross-session file handoff, and Slack session recovery hardening.</PackageReleaseNotes>
   </PropertyGroup>
   <PropertyGroup>
     <NetCoreTestVersion>net10.0</NetCoreTestVersion>

@@ -1,12 +1,51 @@
-#### 0.1.4 2026-03-04 ####
+#### 0.2.0 2026-03-05 ####
 
-Netclaw v0.1.4 — Upgrade Safety and Browser Automation Reliability
+Netclaw v0.2.0 — Scheduled Reminders, Proactive Slack Messaging, and Reliability
 
-* Fixed a `netclaw sessions` regression on upgraded deployments by adding legacy sessions-table compatibility migration logic and resilient catalog reads for pre-0.1.4 schemas.
-* Fixed SQLite migration discovery in published single-file daemon binaries by embedding migration SQL assets and falling back to embedded resources when filesystem migrations are absent.
-* Added regression tests covering legacy sessions schema upgrade and session catalog compatibility behavior.
-* Changed browser automation onboarding defaults to Playwright MCP and disabled Chrome DevTools selection when a local Chrome executable is not detected.
-* Improved MCP doctor diagnostics to report explicit browser runtime prerequisites (Node.js runtime and Chrome executable) for `browser_chrome_devtools`.
+**Scheduled Reminders**
+
+* Added a complete reminder subsystem: schedule prompts to execute at a future time (one-shot), on a recurring interval, or via cron expressions — backed by Akka.Reminders for durable scheduling.
+* LLM tools: `set_reminder`, `cancel_reminder`, and `list_reminders` — agents can now schedule and manage reminders autonomously.
+* CLI commands: `netclaw reminder list` and `netclaw reminder cancel` for operator-side management.
+* Reminders post back to the originating Slack thread (self-targeting) or a specified channel target.
+* Concurrency limiting, automatic failure-based cancellation, and configurable execution timeouts.
+
+**Proactive Slack Messaging**
+
+* Added `send_slack_message` and `lookup_slack_user` LLM tools so the agent can initiate Slack conversations (DMs and channel threads) proactively without waiting for an inbound message.
+* `lookup_slack_user` resolves human-readable names to Slack user IDs at inference time.
+* Introduces channel-specific tool registration — tools only appear when their channel adapter is enabled.
+
+**OpenAI OAuth Fix**
+
+* Fixed OpenAI OAuth device flow to use the correct proprietary 4-step protocol instead of the standard RFC 8628 flow, which was returning 403 Forbidden.
+* Extracted `IDeviceFlowService` interface and `DeviceFlowServiceFactory` to select the correct implementation per provider, preserving the generic RFC 8628 path for future providers.
+* Added friendly error messages for 404 (device code disabled) and network failures.
+
+**Browser Automation Reliability**
+
+* Hardened Playwright MCP init bootstrap and improved browser runtime selection heuristics.
+* Added user-space Node bootstrap fallback for browser MCP tooling when system Node is unavailable.
+* Fixed sessions upgrade regression on upgraded deployments by adding legacy sessions-table compatibility migration logic and resilient catalog reads for pre-0.1.x schemas.
+* Fixed SQLite migration discovery in published single-file daemon binaries by embedding migration SQL assets.
+* Changed browser automation onboarding defaults to Playwright MCP; disabled Chrome DevTools selection when no local Chrome executable is detected.
+* Improved MCP doctor diagnostics to report explicit browser runtime prerequisites for `browser_chrome_devtools`.
+
+**Slack Reliability and Observability**
+
+* Hardened Slack session recovery to handle connection drops and reconnect sequences more gracefully.
+* Fixed image media persistence so attachments sent via Slack survive session restarts.
+* Added live Slack message counters to the status display.
+* Hardened sidecar timeout observability with more granular timeout reporting.
+
+**Cross-session File Handoff**
+
+* `attach_file` can now import files from sibling Netclaw session directories (`.../sessions/*`, `.../netclaw-sessions/*`) by copying them into the current session's `attachments/` folder — resolving repeated tool failures during screenshot handoffs between sessions.
+* Strict default-deny behavior preserved for arbitrary filesystem paths; symlink escapes rejected.
+
+**Code Quality**
+
+* Added Roslyn analyzer baseline and enforced cancellation token forwarding across async call chains.
 
 #### 0.1.3 2026-03-04 ####
 
