@@ -1,0 +1,226 @@
+using Microsoft.Data.Sqlite;
+using Microsoft.Extensions.Logging.Abstractions;
+using Netclaw.Configuration;
+using Netclaw.Daemon.Gateway;
+using Xunit;
+
+namespace Netclaw.Daemon.Tests.Gateway;
+
+public sealed class SessionCatalogServiceTests : IDisposable
+{
+    private readonly string _tempBase = Path.Combine(Path.GetTempPath(), $"netclaw-catalog-test-{Guid.NewGuid():N}");
+
+    private NetclawPaths CreatePaths()
+    {
+        var paths = new NetclawPaths(_tempBase);
+        paths.EnsureDirectoriesExist();
+        return paths;
+    }
+
+    private SessionCatalogService CreateService(NetclawPaths paths)
+        => new(paths, TimeProvider.System, NullLogger<SessionCatalogService>.Instance);
+
+    public void Dispose()
+    {
+        if (Directory.Exists(_tempBase))
+            Directory.Delete(_tempBase, recursive: true);
+    }
+
+    [Fact]
+    public void ListRecent_AutoCreatesTable_WhenTableIsMissing()
+    {
+        var paths = CreatePaths();
+        var service = CreateService(paths);
+
+        // Database file exists (created by SqliteOpenMode.ReadWriteCreate) but sessions table does not.
+        var entries = service.ListRecent();
+
+        Assert.Empty(entries);
+
+        // Table should now exist — verify by querying it directly.
+        using var conn = OpenConn(paths);
+        Assert.True(TableExists(conn, "sessions"));
+        Assert.True(ColumnExists(conn, "sessions", "persistence_id"));
+    }
+
+    [Fact]
+    public void OnSessionCreated_AutoCreatesTable_WhenTableIsMissing()
+    {
+        var paths = CreatePaths();
+        var service = CreateService(paths);
+
+        service.OnSessionCreated(new Netclaw.Actors.Protocol.SessionId("signalr/test-123"), "signalr");
+
+        using var conn = OpenConn(paths);
+        Assert.True(TableExists(conn, "sessions"));
+
+        var rows = ReadAllSessions(conn);
+        Assert.Single(rows);
+        Assert.Equal("session-signalr/test-123", rows[0].persistenceId);
+        Assert.Equal("signalr", rows[0].channel);
+    }
+
+    [Fact]
+    public void ListRecent_MigratesLegacySchema_AndReturnsRows()
+    {
+        var paths = CreatePaths();
+
+        // Seed legacy schema
+        using (var conn = OpenConn(paths))
+        {
+            RunSql(conn,
+                """
+                CREATE TABLE sessions (
+                    session_id    TEXT PRIMARY KEY,
+                    last_activity INTEGER,
+                    message_count INTEGER,
+                    created       INTEGER,
+                    display_name  TEXT
+                )
+                """);
+            RunSql(conn,
+                """
+                INSERT INTO sessions (session_id, last_activity, message_count, created, display_name)
+                VALUES ('signalr/abc-123', 1000, 5, 500, 'My Session')
+                """);
+        }
+
+        var service = CreateService(paths);
+        var entries = service.ListRecent();
+
+        Assert.Single(entries);
+        var e = entries[0];
+        Assert.Equal("session-signalr/abc-123", e.PersistenceId);
+        Assert.Equal("signalr", e.Channel);
+        Assert.Equal("My Session", e.Title);
+        Assert.Equal(5, e.TurnCount);
+        Assert.Equal(1000, e.LastActivity);
+        Assert.Equal(500, e.CreatedAt);
+        Assert.Equal("active", e.Status);
+
+        // Verify the table now has the current schema
+        using var verifyConn = OpenConn(paths);
+        Assert.True(ColumnExists(verifyConn, "sessions", "persistence_id"));
+        Assert.False(ColumnExists(verifyConn, "sessions", "session_id"));
+    }
+
+    [Fact]
+    public void ListRecent_IsNoOp_WhenSchemaIsCurrent()
+    {
+        var paths = CreatePaths();
+
+        // Seed current schema with a row
+        using (var conn = OpenConn(paths))
+        {
+            RunSql(conn,
+                """
+                CREATE TABLE sessions (
+                    persistence_id    TEXT NOT NULL PRIMARY KEY,
+                    channel           TEXT NOT NULL,
+                    created_at        INTEGER NOT NULL,
+                    last_activity     INTEGER NOT NULL,
+                    status            TEXT NOT NULL DEFAULT 'active',
+                    turn_count        INTEGER NOT NULL DEFAULT 0,
+                    title             TEXT,
+                    description       TEXT,
+                    last_input_tokens INTEGER,
+                    log_path          TEXT,
+                    metadata          TEXT
+                )
+                """);
+            RunSql(conn,
+                """
+                INSERT INTO sessions (persistence_id, channel, created_at, last_activity, status, turn_count)
+                VALUES ('session-signalr/xyz', 'signalr', 100, 200, 'active', 3)
+                """);
+        }
+
+        var service = CreateService(paths);
+        var entries = service.ListRecent();
+
+        Assert.Single(entries);
+        Assert.Equal("session-signalr/xyz", entries[0].PersistenceId);
+        Assert.Equal(3, entries[0].TurnCount);
+    }
+
+    [Fact]
+    public void LegacyMigration_PreservesSlackChannelInference()
+    {
+        var paths = CreatePaths();
+
+        using (var conn = OpenConn(paths))
+        {
+            RunSql(conn,
+                """
+                CREATE TABLE sessions (
+                    session_id    TEXT PRIMARY KEY,
+                    last_activity INTEGER,
+                    message_count INTEGER,
+                    created       INTEGER,
+                    display_name  TEXT
+                )
+                """);
+            RunSql(conn, "INSERT INTO sessions VALUES ('C12345/1234567890.000100', 1000, 2, 500, NULL)");
+            RunSql(conn, "INSERT INTO sessions VALUES ('signalr/session-1', 2000, 1, 800, 'Hub Session')");
+            RunSql(conn, "INSERT INTO sessions VALUES ('unknown-format', 3000, 0, 900, NULL)");
+        }
+
+        var service = CreateService(paths);
+        var entries = service.ListRecent().OrderBy(e => e.LastActivity).ToList();
+
+        Assert.Equal(3, entries.Count);
+        Assert.Equal("slack", entries[0].Channel);    // C12345/...
+        Assert.Equal("signalr", entries[1].Channel);  // signalr/...
+        Assert.Equal("unknown", entries[2].Channel);  // unknown-format
+    }
+
+    private static SqliteConnection OpenConn(NetclawPaths paths)
+    {
+        var conn = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = paths.SqliteDbPath,
+            Mode = SqliteOpenMode.ReadWriteCreate
+        }.ToString());
+        conn.Open();
+        return conn;
+    }
+
+    private static void RunSql(SqliteConnection conn, string sql)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = sql;
+        cmd.ExecuteNonQuery();
+    }
+
+    private static bool TableExists(SqliteConnection conn, string tableName)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=$name";
+        cmd.Parameters.AddWithValue("$name", tableName);
+        return Convert.ToInt32(cmd.ExecuteScalar()) > 0;
+    }
+
+    private static bool ColumnExists(SqliteConnection conn, string tableName, string columnName)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = $"PRAGMA table_info({tableName})";
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+        {
+            if (string.Equals(reader.GetString(1), columnName, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+        return false;
+    }
+
+    private static List<(string persistenceId, string channel)> ReadAllSessions(SqliteConnection conn)
+    {
+        var rows = new List<(string, string)>();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT persistence_id, channel FROM sessions";
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+            rows.Add((reader.GetString(0), reader.GetString(1)));
+        return rows;
+    }
+}

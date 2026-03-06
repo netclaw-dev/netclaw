@@ -507,10 +507,10 @@ Done when:
 **Verification:** L2
 
 Done when:
-- [ ] `SessionCatalogService` auto-creates the `sessions` table using the `003_sessions_table.sql` schema when `DetectSchemaMode` returns `Missing`, instead of silently returning empty results.
-- [ ] Legacy schema (`session_id` column without `persistence_id`) is migrated to current schema via `ALTER TABLE` or table recreation on startup.
-- [ ] `ListRecent` returns explicit degraded status (empty list + warning log) only when migration itself fails, not on schema mismatch.
-- [ ] Tests verify: missing table → auto-create; legacy schema → auto-migrate; current schema → no-op.
+- [x] `SessionCatalogService` auto-creates the `sessions` table using the `003_sessions_table.sql` schema when `DetectSchemaMode` returns `Missing`, instead of silently returning empty results.
+- [x] Legacy schema (`session_id` column without `persistence_id`) is migrated to current schema via `ALTER TABLE` or table recreation on startup.
+- [x] `ListRecent` returns explicit degraded status (empty list + warning log) only when migration itself fails, not on schema mismatch.
+- [x] Tests verify: missing table → auto-create; legacy schema → auto-migrate; current schema → no-op.
 
 ### Task M6.3: Fix SignalR session stall after idle passivation
 

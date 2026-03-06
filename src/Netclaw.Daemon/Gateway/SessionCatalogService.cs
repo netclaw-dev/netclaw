@@ -59,38 +59,21 @@ public sealed class SessionCatalogService : ISessionLifecycleObserver
             using var conn = new SqliteConnection(_connectionString);
             conn.Open();
 
-            var schemaMode = DetectSchemaMode(conn);
-            if (schemaMode is SessionsSchemaMode.Missing)
-                return;
+            EnsureSchemaUpToDate(conn, _logger);
 
             using var cmd = conn.CreateCommand();
-            if (schemaMode is SessionsSchemaMode.Current)
-            {
-                cmd.CommandText =
-                    """
-                    INSERT INTO sessions (persistence_id, channel, created_at, last_activity, status, turn_count, log_path)
-                    VALUES ($pid, $channel, $now, $now, 'active', 0, $path)
-                    ON CONFLICT(persistence_id) DO UPDATE SET
-                        status = 'active',
-                        last_activity = $now,
-                        log_path = $path
-                    """;
-                cmd.Parameters.AddWithValue("$pid", persistenceId);
-                cmd.Parameters.AddWithValue("$channel", channelType);
-                cmd.Parameters.AddWithValue("$path", logPath);
-            }
-            else
-            {
-                cmd.CommandText =
-                    """
-                    INSERT INTO sessions (session_id, last_activity, message_count, created, display_name)
-                    VALUES ($sid, $now, 0, $now, 'Session')
-                    ON CONFLICT(session_id) DO UPDATE SET
-                        last_activity = $now
-                    """;
-                cmd.Parameters.AddWithValue("$sid", sessionId.Value);
-            }
-
+            cmd.CommandText =
+                """
+                INSERT INTO sessions (persistence_id, channel, created_at, last_activity, status, turn_count, log_path)
+                VALUES ($pid, $channel, $now, $now, 'active', 0, $path)
+                ON CONFLICT(persistence_id) DO UPDATE SET
+                    status = 'active',
+                    last_activity = $now,
+                    log_path = $path
+                """;
+            cmd.Parameters.AddWithValue("$pid", persistenceId);
+            cmd.Parameters.AddWithValue("$channel", channelType);
+            cmd.Parameters.AddWithValue("$path", logPath);
             cmd.Parameters.AddWithValue("$now", nowMs);
             cmd.ExecuteNonQuery();
         }
@@ -110,99 +93,54 @@ public sealed class SessionCatalogService : ISessionLifecycleObserver
             using var conn = new SqliteConnection(_connectionString);
             conn.Open();
 
-            var schemaMode = DetectSchemaMode(conn);
-            if (schemaMode is SessionsSchemaMode.Missing)
-                return;
+            EnsureSchemaUpToDate(conn, _logger);
 
             switch (output)
             {
                 case TurnCompleted:
-                    if (schemaMode is SessionsSchemaMode.Current)
+                    UpdateSession(conn, persistenceId, cmd =>
                     {
-                        UpdateSession(conn, persistenceId, schemaMode, cmd =>
-                        {
-                            cmd.CommandText =
-                                """
-                                UPDATE sessions SET
-                                    turn_count = turn_count + 1,
-                                    last_activity = $now
-                                WHERE persistence_id = $pid
-                                """;
-                        });
-                    }
-                    else
-                    {
-                        UpdateSession(conn, output.SessionId.Value, schemaMode, cmd =>
-                        {
-                            cmd.CommandText =
-                                """
-                                UPDATE sessions SET
-                                    message_count = COALESCE(message_count, 0) + 1,
-                                    last_activity = $now
-                                WHERE session_id = $sid
-                                """;
-                        });
-                    }
-
+                        cmd.CommandText =
+                            """
+                            UPDATE sessions SET
+                                turn_count = turn_count + 1,
+                                last_activity = $now
+                            WHERE persistence_id = $pid
+                            """;
+                    });
                     break;
 
                 case UsageOutput usage when usage.InputTokens.HasValue:
-                    if (schemaMode is SessionsSchemaMode.Current)
+                    UpdateSession(conn, persistenceId, cmd =>
                     {
-                        UpdateSession(conn, persistenceId, schemaMode, cmd =>
-                        {
-                            cmd.CommandText =
-                                """
-                                UPDATE sessions SET
-                                    last_input_tokens = $tokens,
-                                    last_activity = $now
-                                WHERE persistence_id = $pid
-                                """;
-                            cmd.Parameters.AddWithValue("$tokens", usage.InputTokens.Value);
-                        });
-                    }
-                    else
-                    {
-                        UpdateLastActivity(conn, output.SessionId.Value, schemaMode);
-                    }
-
+                        cmd.CommandText =
+                            """
+                            UPDATE sessions SET
+                                last_input_tokens = $tokens,
+                                last_activity = $now
+                            WHERE persistence_id = $pid
+                            """;
+                        cmd.Parameters.AddWithValue("$tokens", usage.InputTokens.Value);
+                    });
                     break;
 
                 case SessionTitleOutput title:
-                    if (schemaMode is SessionsSchemaMode.Current)
+                    UpdateSession(conn, persistenceId, cmd =>
                     {
-                        UpdateSession(conn, persistenceId, schemaMode, cmd =>
-                        {
-                            cmd.CommandText =
-                                """
-                                UPDATE sessions SET
-                                    title = $title,
-                                    last_activity = $now
-                                WHERE persistence_id = $pid
-                                """;
-                            cmd.Parameters.AddWithValue("$title", title.Title);
-                        });
-                    }
-                    else
-                    {
-                        UpdateSession(conn, output.SessionId.Value, schemaMode, cmd =>
-                        {
-                            cmd.CommandText =
-                                """
-                                UPDATE sessions SET
-                                    display_name = $title,
-                                    last_activity = $now
-                                WHERE session_id = $sid
-                                """;
-                            cmd.Parameters.AddWithValue("$title", title.Title);
-                        });
-                    }
-
+                        cmd.CommandText =
+                            """
+                            UPDATE sessions SET
+                                title = $title,
+                                last_activity = $now
+                            WHERE persistence_id = $pid
+                            """;
+                        cmd.Parameters.AddWithValue("$title", title.Title);
+                    });
                     break;
 
                 case CompactionOutput:
                 case ErrorOutput:
-                    UpdateLastActivity(conn, output.SessionId.Value, schemaMode);
+                    UpdateLastActivity(conn, persistenceId);
                     break;
             }
         }
@@ -224,23 +162,13 @@ public sealed class SessionCatalogService : ISessionLifecycleObserver
             using var conn = new SqliteConnection(_connectionString);
             conn.Open();
 
-            var schemaMode = DetectSchemaMode(conn);
-            if (schemaMode is SessionsSchemaMode.Missing)
-                return entries;
+            EnsureSchemaUpToDate(conn, _logger);
 
             using var cmd = conn.CreateCommand();
-            cmd.CommandText = schemaMode is SessionsSchemaMode.Current
-                ?
+            cmd.CommandText =
                 """
                 SELECT persistence_id, channel, title, description, status, turn_count,
                        created_at, last_activity, log_path, last_input_tokens
-                FROM sessions
-                ORDER BY last_activity DESC
-                LIMIT $limit
-                """
-                :
-                """
-                SELECT session_id, display_name, message_count, created, last_activity
                 FROM sessions
                 ORDER BY last_activity DESC
                 LIMIT $limit
@@ -250,39 +178,19 @@ public sealed class SessionCatalogService : ISessionLifecycleObserver
             using var reader = cmd.ExecuteReader();
             while (reader.Read())
             {
-                if (schemaMode is SessionsSchemaMode.Current)
+                entries.Add(new SessionCatalogEntry
                 {
-                    entries.Add(new SessionCatalogEntry
-                    {
-                        PersistenceId = reader.GetString(0),
-                        Channel = reader.GetString(1),
-                        Title = reader.IsDBNull(2) ? null : reader.GetString(2),
-                        Description = reader.IsDBNull(3) ? null : reader.GetString(3),
-                        Status = reader.GetString(4),
-                        TurnCount = reader.GetInt32(5),
-                        CreatedAt = reader.GetInt64(6),
-                        LastActivity = reader.GetInt64(7),
-                        LogPath = reader.IsDBNull(8) ? null : reader.GetString(8),
-                        LastInputTokens = reader.IsDBNull(9) ? null : reader.GetInt64(9)
-                    });
-                }
-                else
-                {
-                    var sessionId = reader.GetString(0);
-                    entries.Add(new SessionCatalogEntry
-                    {
-                        PersistenceId = $"session-{sessionId}",
-                        Channel = InferChannelFromSessionId(sessionId),
-                        Title = reader.IsDBNull(1) ? null : reader.GetString(1),
-                        Description = null,
-                        Status = "active",
-                        TurnCount = reader.IsDBNull(2) ? 0 : reader.GetInt32(2),
-                        CreatedAt = reader.IsDBNull(3) ? 0 : reader.GetInt64(3),
-                        LastActivity = reader.IsDBNull(4) ? 0 : reader.GetInt64(4),
-                        LogPath = null,
-                        LastInputTokens = null
-                    });
-                }
+                    PersistenceId = reader.GetString(0),
+                    Channel = reader.GetString(1),
+                    Title = reader.IsDBNull(2) ? null : reader.GetString(2),
+                    Description = reader.IsDBNull(3) ? null : reader.GetString(3),
+                    Status = reader.GetString(4),
+                    TurnCount = reader.GetInt32(5),
+                    CreatedAt = reader.GetInt64(6),
+                    LastActivity = reader.GetInt64(7),
+                    LogPath = reader.IsDBNull(8) ? null : reader.GetString(8),
+                    LastInputTokens = reader.IsDBNull(9) ? null : reader.GetInt64(9)
+                });
             }
         }
         catch (Exception ex)
@@ -295,31 +203,114 @@ public sealed class SessionCatalogService : ISessionLifecycleObserver
 
     private void UpdateSession(
         SqliteConnection conn,
-        string sessionKey,
-        SessionsSchemaMode schemaMode,
+        string persistenceId,
         Action<SqliteCommand> configure)
     {
         var nowMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
 
         using var cmd = conn.CreateCommand();
         configure(cmd);
-        if (schemaMode is SessionsSchemaMode.Current)
-            cmd.Parameters.AddWithValue("$pid", sessionKey.StartsWith("session-", StringComparison.Ordinal) ? sessionKey : $"session-{sessionKey}");
-        else
-            cmd.Parameters.AddWithValue("$sid", sessionKey.StartsWith("session-", StringComparison.Ordinal) ? sessionKey["session-".Length..] : sessionKey);
-
+        cmd.Parameters.AddWithValue("$pid", persistenceId);
         cmd.Parameters.AddWithValue("$now", nowMs);
         cmd.ExecuteNonQuery();
     }
 
-    private void UpdateLastActivity(SqliteConnection conn, string sessionId, SessionsSchemaMode schemaMode)
+    private void UpdateLastActivity(SqliteConnection conn, string persistenceId)
     {
-        UpdateSession(conn, sessionId, schemaMode, cmd =>
+        UpdateSession(conn, persistenceId, cmd =>
         {
-            cmd.CommandText = schemaMode is SessionsSchemaMode.Current
-                ? "UPDATE sessions SET last_activity = $now WHERE persistence_id = $pid"
-                : "UPDATE sessions SET last_activity = $now WHERE session_id = $sid";
+            cmd.CommandText = "UPDATE sessions SET last_activity = $now WHERE persistence_id = $pid";
         });
+    }
+
+    /// <summary>
+    /// Ensures the sessions table exists and is on the current schema.
+    /// If the table is missing, it is created. If it uses the legacy schema
+    /// (session_id column), the data is migrated to the current schema.
+    /// This is a no-op when the table already uses the current schema.
+    /// </summary>
+    private static void EnsureSchemaUpToDate(SqliteConnection conn, ILogger logger)
+    {
+        var mode = DetectSchemaMode(conn);
+
+        switch (mode)
+        {
+            case SessionsSchemaMode.Current:
+                return;
+
+            case SessionsSchemaMode.Missing:
+                logger.LogInformation("Sessions table not found — creating with current schema");
+                RunSql(conn,
+                    """
+                    CREATE TABLE IF NOT EXISTS sessions (
+                        persistence_id    TEXT NOT NULL PRIMARY KEY,
+                        channel           TEXT NOT NULL,
+                        created_at        INTEGER NOT NULL,
+                        last_activity     INTEGER NOT NULL,
+                        status            TEXT NOT NULL DEFAULT 'active',
+                        turn_count        INTEGER NOT NULL DEFAULT 0,
+                        title             TEXT,
+                        description       TEXT,
+                        last_input_tokens INTEGER,
+                        log_path          TEXT,
+                        metadata          TEXT
+                    )
+                    """);
+                RunSql(conn, "CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions (status)");
+                RunSql(conn, "CREATE INDEX IF NOT EXISTS idx_sessions_last_activity ON sessions (last_activity)");
+                break;
+
+            case SessionsSchemaMode.Legacy:
+                logger.LogInformation("Legacy sessions schema detected — migrating to current schema");
+                RunSql(conn,
+                    """
+                    CREATE TABLE sessions_new (
+                        persistence_id    TEXT NOT NULL PRIMARY KEY,
+                        channel           TEXT NOT NULL,
+                        created_at        INTEGER NOT NULL,
+                        last_activity     INTEGER NOT NULL,
+                        status            TEXT NOT NULL DEFAULT 'active',
+                        turn_count        INTEGER NOT NULL DEFAULT 0,
+                        title             TEXT,
+                        description       TEXT,
+                        last_input_tokens INTEGER,
+                        log_path          TEXT,
+                        metadata          TEXT
+                    )
+                    """);
+                RunSql(conn,
+                    """
+                    INSERT INTO sessions_new (persistence_id, channel, created_at, last_activity, status, turn_count, title)
+                    SELECT
+                        'session-' || session_id,
+                        CASE
+                            WHEN session_id LIKE 'signalr/%' THEN 'signalr'
+                            WHEN session_id LIKE 'headless/%' THEN 'headless'
+                            WHEN session_id LIKE 'console/%'  THEN 'console'
+                            WHEN session_id LIKE 'C%' OR session_id LIKE 'D%' THEN 'slack'
+                            ELSE 'unknown'
+                        END,
+                        COALESCE(created, last_activity, 0),
+                        COALESCE(last_activity, 0),
+                        'active',
+                        COALESCE(message_count, 0),
+                        display_name
+                    FROM sessions
+                    """);
+                RunSql(conn, "DROP TABLE sessions");
+                RunSql(conn, "ALTER TABLE sessions_new RENAME TO sessions");
+                RunSql(conn, "CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions (status)");
+                RunSql(conn, "CREATE INDEX IF NOT EXISTS idx_sessions_last_activity ON sessions (last_activity)");
+                logger.LogInformation("Sessions schema migration complete");
+                break;
+        }
+    }
+
+    private static void RunSql(SqliteConnection conn, string sql)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = sql;
+        cmd.ExecuteNonQuery();
     }
 
     private static SessionsSchemaMode DetectSchemaMode(SqliteConnection conn)
@@ -345,24 +336,6 @@ public sealed class SessionCatalogService : ISessionLifecycleObserver
             return SessionsSchemaMode.Legacy;
 
         return SessionsSchemaMode.Missing;
-    }
-
-    private static string InferChannelFromSessionId(string sessionId)
-    {
-        if (sessionId.StartsWith("signalr/", StringComparison.Ordinal))
-            return "signalr";
-
-        if (sessionId.StartsWith("headless/", StringComparison.Ordinal))
-            return "headless";
-
-        if (sessionId.StartsWith("console/", StringComparison.Ordinal))
-            return "console";
-
-        if (sessionId.StartsWith("C", StringComparison.Ordinal)
-            || sessionId.StartsWith("D", StringComparison.Ordinal))
-            return "slack";
-
-        return "unknown";
     }
 }
 
