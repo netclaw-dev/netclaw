@@ -42,7 +42,7 @@ jobs:
           global-json-file: ./global.json
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Build smoke sandbox image (cached)
         uses: docker/build-push-action@v6
