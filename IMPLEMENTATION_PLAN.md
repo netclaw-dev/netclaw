@@ -558,11 +558,11 @@ Done when:
 **Verification:** L2
 
 Done when:
-- [ ] `netclaw sessions --once` lists sessions and exits (no TUI, plain text or JSON output, non-zero on failure).
-- [ ] `netclaw chat -p "..."` (headless mode, already exists) has deterministic exit code: 0 on success, non-zero on provider/session failure.
-- [ ] `netclaw status` already works as single-shot — verify exit codes are correct (0=healthy, 1=error, 2=degraded).
-- [ ] Smoke test script (`scripts/smoke/cli-smoke.sh`) exercises: `netclaw version`, `netclaw status`, `netclaw doctor`, `netclaw sessions --once` with expected exit codes.
-- [ ] CI workflow runs smoke script (can run without live daemon for offline commands; daemon-dependent commands skipped when daemon unavailable).
+- [x] `netclaw sessions --once` lists sessions and exits (no TUI, plain text or JSON output, non-zero on failure).
+- [x] `netclaw chat -p "..."` (headless mode, already exists) has deterministic exit code: 0 on success, non-zero on provider/session failure.
+- [x] `netclaw status` already works as single-shot — verify exit codes are correct (0=healthy, 1=error, 2=degraded).
+- [x] Smoke test script (`scripts/smoke/cli-smoke.sh`) exercises: `netclaw version`, `netclaw status`, `netclaw doctor`, `netclaw sessions --once` with expected exit codes.
+- [x] CI workflow runs smoke script (can run without live daemon for offline commands; daemon-dependent commands skipped when daemon unavailable).
 
 ### Task M6.7: Make bare `netclaw` show usage error
 

@@ -57,6 +57,13 @@ jobs:
         shell: bash
         run: dotnet test -c Release
 
+      - name: "CLI smoke tests"
+        if: runner.os == 'Linux'
+        shell: bash
+        run: bash scripts/smoke/cli-smoke.sh
+        env:
+          BUILD_CONFIG: Release
+
       - name: "dotnet pack"
         run: dotnet pack -c Release -o ./bin/nuget
 

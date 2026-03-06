@@ -448,6 +448,43 @@ static async Task RunAsync(string[] args)
         return;
     }
 
+    // ── Sessions single-shot mode ──
+    if (mode is "sessions")
+    {
+        var onceMode = false;
+        var sessionsJsonOutput = false;
+        for (var i = 1; i < args.Length; i++)
+        {
+            switch (args[i])
+            {
+                case "--once":
+                    onceMode = true;
+                    break;
+                case "--json":
+                    sessionsJsonOutput = true;
+                    break;
+                case "--help" or "-h" or "help":
+                    WriteSessionsHelp();
+                    return;
+            }
+        }
+
+        if (onceMode)
+        {
+            var builder = Host.CreateApplicationBuilder(args);
+            ConfigureConfigServices(builder.Services, builder.Configuration);
+            builder.Services.AddHttpClient();
+            builder.Logging.ClearProviders();
+            builder.Logging.SetMinimumLevel(LogLevel.Warning);
+
+            using var host = builder.Build();
+            using var scope = host.Services.CreateScope();
+            Environment.ExitCode = await RunSessionsOnceAsync(
+                scope.ServiceProvider, builder.Configuration, sessionsJsonOutput);
+            return;
+        }
+    }
+
     // ── Parse --resume flag for chat mode ──
     string? resumeSessionId = null;
     if (mode is "chat")
@@ -565,6 +602,7 @@ static void WriteGeneralHelp()
     Console.WriteLine("  chat                     Interactive TUI chat (default)");
     Console.WriteLine("  chat --resume <id>       Resume an existing session by ID");
     Console.WriteLine("  sessions                 Browse and resume recent sessions (TUI)");
+    Console.WriteLine("  sessions --once          List sessions and exit (no TUI, plain text or JSON)");
     Console.WriteLine("  -p, --prompt <text>      Headless single-prompt mode");
     Console.WriteLine("  doctor                   Configuration diagnostics (offline)");
     Console.WriteLine("  status                   Runtime status from daemon health JSON endpoint");
@@ -803,6 +841,88 @@ static async Task<int> RunStatusAsync(IServiceProvider services, IConfiguration 
         Console.WriteLine("       fix: run `netclaw daemon start` and retry.");
         return 1;
     }
+}
+
+static async Task<int> RunSessionsOnceAsync(
+    IServiceProvider services,
+    IConfiguration configuration,
+    bool jsonOutput)
+{
+    var endpoint = configuration["Daemon:Endpoint"]
+        ?? Environment.GetEnvironmentVariable("NETCLAW_DAEMON_ENDPOINT")
+        ?? "http://127.0.0.1:5199";
+
+    var url = $"{endpoint.TrimEnd('/')}/api/sessions";
+    var httpClientFactory = services.GetRequiredService<IHttpClientFactory>();
+    var client = httpClientFactory.CreateClient();
+
+    try
+    {
+        using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        using var response = await client.GetAsync(url, timeoutCts.Token);
+
+        if (!response.IsSuccessStatusCode)
+        {
+            Console.WriteLine($"[FAIL] sessions: daemon returned {(int)response.StatusCode} from {url}");
+            Console.WriteLine("       fix: run `netclaw daemon status` and `netclaw daemon start`.");
+            return 1;
+        }
+
+        var stream = await response.Content.ReadAsStreamAsync(timeoutCts.Token);
+        var sessions = await JsonSerializer.DeserializeAsync<List<SessionCatalogEntryDto>>(
+            stream,
+            new JsonSerializerOptions(JsonSerializerDefaults.Web),
+            timeoutCts.Token) ?? [];
+
+        if (jsonOutput)
+        {
+            Console.WriteLine(JsonSerializer.Serialize(sessions, new JsonSerializerOptions
+            {
+                WriteIndented = true
+            }));
+        }
+        else
+        {
+            if (sessions.Count == 0)
+            {
+                Console.WriteLine("No sessions found.");
+            }
+            else
+            {
+                foreach (var session in sessions)
+                {
+                    var title = string.IsNullOrWhiteSpace(session.Title) ? "(untitled)" : session.Title;
+                    var lastActivity = DateTimeOffset.FromUnixTimeMilliseconds(session.LastActivity)
+                        .ToString("yyyy-MM-dd HH:mm");
+                    Console.WriteLine(
+                        $"{session.SessionId}  {title}  [{session.Status}]  turns={session.TurnCount}  last={lastActivity}");
+                }
+            }
+        }
+
+        return 0;
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"[FAIL] sessions: unable to reach daemon at {url}: {ex.Message}");
+        Console.WriteLine("       fix: run `netclaw daemon start` and retry.");
+        return 1;
+    }
+}
+
+static void WriteSessionsHelp()
+{
+    Console.WriteLine("Usage: netclaw sessions [options]");
+    Console.WriteLine();
+    Console.WriteLine("Browse and resume recent sessions.");
+    Console.WriteLine();
+    Console.WriteLine("Options:");
+    Console.WriteLine("  --once          List sessions and exit (no TUI). Requires daemon.");
+    Console.WriteLine("  --json          Output as JSON (implies --once).");
+    Console.WriteLine();
+    Console.WriteLine("Exit codes (--once):");
+    Console.WriteLine("  0  sessions listed successfully");
+    Console.WriteLine("  1  daemon unavailable or request failed");
 }
 
 static void WriteStatusResult(DaemonRuntimeStatus.Response status, string endpoint)
