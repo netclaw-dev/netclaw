@@ -584,10 +584,10 @@ Done when:
 **Verification:** L2
 
 Done when:
-- [ ] `netclaw` with no arguments prints help text and exits with code 2 (not 0, not 1).
-- [ ] Default `mode = "chat"` fallback removed; bare invocation no longer launches chat TUI.
-- [ ] Unknown commands print error message + help text and exit with code 2 (currently falls through to chat).
-- [ ] Tests verify: no-args → exit 2 + help output; unknown command → exit 2 + error.
+- [x] `netclaw` with no arguments prints help text and exits with code 2 (not 0, not 1).
+- [x] Default `mode = "chat"` fallback removed; bare invocation no longer launches chat TUI.
+- [x] Unknown commands print error message + help text and exit with code 2 (currently falls through to chat).
+- [x] Tests verify: no-args → exit 2 + help output; unknown command → exit 2 + error.
 
 ### Task M6.8: Include update availability in `netclaw status`
 

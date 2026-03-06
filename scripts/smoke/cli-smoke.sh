@@ -135,6 +135,36 @@ else
   fail "sessions --json: unexpected exit code $sessions_json_exit (expected 0 or 1)"
 fi
 
+# ── No-args and unknown command behavior ─────────────────────────────────────
+
+echo ""
+echo "=== netclaw (no args) ==="
+set +e
+noargs_exit=0
+noargs_output="$(run_netclaw 2>&1)"
+noargs_exit=$?
+set -e
+echo "$noargs_output"
+if [[ $noargs_exit -eq 2 && "$noargs_output" == *"Usage:"* ]]; then
+  pass "no-args: exits 2 and prints help"
+else
+  fail "no-args: expected exit 2 with 'Usage:' in output, got exit=$noargs_exit"
+fi
+
+echo ""
+echo "=== netclaw unknown-command ==="
+set +e
+unknown_exit=0
+unknown_output="$(run_netclaw unknown-command 2>&1)"
+unknown_exit=$?
+set -e
+echo "$unknown_output"
+if [[ $unknown_exit -eq 2 && "$unknown_output" == *"unknown-command"* ]]; then
+  pass "unknown-command: exits 2 and mentions the bad command"
+else
+  fail "unknown-command: expected exit 2 with command name in output, got exit=$unknown_exit"
+fi
+
 # ── Summary ──────────────────────────────────────────────────────────────────
 
 echo ""

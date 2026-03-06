@@ -1,0 +1,57 @@
+namespace Netclaw.Cli;
+
+public enum CliParseKind
+{
+    NoArgs,
+    Help,
+    Version,
+    Headless,
+    Known,
+    Unknown,
+    MissingPromptArg,
+}
+
+public record CliParseResult(CliParseKind Kind, string? Mode = null, string? HeadlessPrompt = null)
+{
+    public static readonly CliParseResult NoArgs = new(CliParseKind.NoArgs);
+    public static readonly CliParseResult Help = new(CliParseKind.Help);
+    public static readonly CliParseResult Version = new(CliParseKind.Version);
+    public static readonly CliParseResult MissingPromptArg = new(CliParseKind.MissingPromptArg);
+}
+
+/// <summary>Classifies top-level command-line arguments for the netclaw CLI.</summary>
+public static class CliArgsParser
+{
+    private static readonly HashSet<string> KnownCommands = new(StringComparer.Ordinal)
+    {
+        "chat", "sessions", "init", "doctor", "status",
+        "daemon", "mcp", "provider", "model", "reminder",
+        "secrets", "config", "update",
+    };
+
+    public static CliParseResult Parse(string[] args)
+    {
+        if (args.Length == 0)
+            return CliParseResult.NoArgs;
+
+        var first = args[0];
+
+        if (first is "help" or "-h" or "--help")
+            return CliParseResult.Help;
+
+        if (first is "version" or "--version" or "-V")
+            return CliParseResult.Version;
+
+        if (first is "-p" or "--prompt")
+        {
+            if (args.Length < 2)
+                return CliParseResult.MissingPromptArg;
+            return new CliParseResult(CliParseKind.Headless, "headless", HeadlessPrompt: args[1]);
+        }
+
+        if (KnownCommands.Contains(first))
+            return new CliParseResult(CliParseKind.Known, first);
+
+        return new CliParseResult(CliParseKind.Unknown, first);
+    }
+}

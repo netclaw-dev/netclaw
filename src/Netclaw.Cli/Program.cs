@@ -35,27 +35,36 @@ catch (Exception ex)
 static async Task RunAsync(string[] args)
 {
     // ── Mode selection from CLI args ──
-    var mode = args.Length > 0 ? args[0] : "chat";
+    var parseResult = CliArgsParser.Parse(args);
     string? headlessPrompt = null;
+    string mode;
 
-    if (IsHelpToken(mode))
+    switch (parseResult.Kind)
     {
-        WriteGeneralHelp();
-        return;
-    }
-
-    if (mode is "version" or "--version" or "-V")
-    {
-        Console.WriteLine($"netclaw {BuildInfo.Version} (commit {BuildInfo.CommitHash}, built {BuildInfo.BuildTimestamp})");
-        return;
-    }
-
-    if (mode is "-p" or "--prompt")
-    {
-        headlessPrompt = args.Length > 1
-            ? args[1]
-            : throw new InvalidOperationException("Missing prompt argument after -p/--prompt");
-        mode = "headless";
+        case CliParseKind.NoArgs:
+            WriteGeneralHelp();
+            Environment.ExitCode = 2;
+            return;
+        case CliParseKind.Help:
+            WriteGeneralHelp();
+            return;
+        case CliParseKind.Version:
+            Console.WriteLine($"netclaw {BuildInfo.Version} (commit {BuildInfo.CommitHash}, built {BuildInfo.BuildTimestamp})");
+            return;
+        case CliParseKind.MissingPromptArg:
+            throw new InvalidOperationException("Missing prompt argument after -p/--prompt");
+        case CliParseKind.Unknown:
+            Console.Error.WriteLine($"netclaw: '{parseResult.Mode}' is not a netclaw command. See 'netclaw --help'.");
+            WriteGeneralHelp();
+            Environment.ExitCode = 2;
+            return;
+        case CliParseKind.Headless:
+            headlessPrompt = parseResult.HeadlessPrompt;
+            mode = "headless";
+            break;
+        default: // CliParseKind.Known
+            mode = parseResult.Mode!;
+            break;
     }
 
     // ── Lightweight modes (no Akka, no persistence) ──
@@ -561,12 +570,9 @@ static async Task RunAsync(string[] args)
             break;
 
         default:
-            // Treat unknown commands as "chat" for backward compatibility
-            webBuilder.Services.AddTermina("/chat", termina =>
-            {
-                termina.RegisterRoute<ChatPage, ChatViewModel>("/chat");
-            });
-            break;
+            Console.Error.WriteLine($"netclaw: internal error: unhandled mode '{mode}'");
+            Environment.ExitCode = 2;
+            return;
     }
 
     var app = webBuilder.Build();
