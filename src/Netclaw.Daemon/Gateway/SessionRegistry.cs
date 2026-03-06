@@ -13,12 +13,12 @@ namespace Netclaw.Daemon.Gateway;
 /// <summary>
 /// Singleton service managing the lifecycle of SignalR-connected sessions.
 /// Bridges <see cref="SessionHub"/> (transient per-invocation) to
-/// <see cref="SessionPipeline"/> (Akka.Streams) via
+/// <see cref="ISessionPipeline"/> (Akka.Streams) via
 /// <see cref="IHubContext{THub,T}"/> for thread-safe output delivery.
 /// </summary>
 public sealed class SessionRegistry
 {
-    private readonly SessionPipeline _pipeline;
+    private readonly ISessionPipeline _pipeline;
     private readonly ActorSystem _system;
     private readonly TimeProvider _timeProvider;
     private readonly IHubContext<SessionHub, ISessionHubClient> _hubContext;
@@ -31,7 +31,7 @@ public sealed class SessionRegistry
     private readonly SessionConnectionMap _connections = new();
 
     public SessionRegistry(
-        SessionPipeline pipeline,
+        ISessionPipeline pipeline,
         ActorSystem system,
         TimeProvider timeProvider,
         IHubContext<SessionHub, ISessionHubClient> hubContext,
@@ -92,7 +92,15 @@ public sealed class SessionRegistry
             .ToMaterialized(session.Input, Keep.Left)
             .Run(_system);
 
-        var hubSession = new HubSessionState(session, inputQueue);
+        // Materialize output: stream → currently attached SignalR connection.
+        // Track completion to detect post-passivation stream death.
+        var outputCompletion = session.Output
+            .ToMaterialized(
+                Sink.ForEach<SessionOutput>(output => PublishOutput(sessionId, output)),
+                Keep.Right)
+            .Run(_system);
+
+        var hubSession = new HubSessionState(session, inputQueue, channelType, outputCompletion);
 
         _sessions[sessionId] = hubSession;
 
@@ -106,10 +114,9 @@ public sealed class SessionRegistry
         if (existing is not null)
             await existing.Session.DisposeAsync();
 
-        // Materialize output: stream → currently attached SignalR connection.
-        session.Output
-            .To(Sink.ForEach<SessionOutput>(output => PublishOutput(sessionId, output)))
-            .Run(_system);
+        _logger.LogDebug(
+            "Session {SessionId} pipeline materialized and bound to connection {ConnectionId}.",
+            sessionId.Value, callerConnectionId.Value);
     }
 
     public async Task<SessionEnsureResultDto> EnsureSessionAsync(
@@ -125,9 +132,27 @@ public sealed class SessionRegistry
             if (!string.IsNullOrWhiteSpace(sessionId))
             {
                 var requestedSessionId = ParseSessionId(sessionId);
-                if (_sessions.TryGetValue(requestedSessionId, out _))
+                if (_sessions.TryGetValue(requestedSessionId, out var hubSession))
                 {
-                    _connections.AttachSession(requestedSessionId, callerConnectionId);
+                    if (hubSession.IsOutputCompleted)
+                    {
+                        _logger.LogWarning(
+                            "Session {SessionId} output stream has completed (post-passivation); " +
+                            "re-materializing pipeline for connection {ConnectionId}.",
+                            requestedSessionId.Value, callerConnectionId.Value);
+
+                        await MaterializeAndBindSessionAsync(
+                            requestedSessionId, callerConnectionId, hubSession.ChannelType);
+                    }
+                    else
+                    {
+                        _logger.LogDebug(
+                            "Attaching connection {ConnectionId} to existing session {SessionId}.",
+                            callerConnectionId.Value, requestedSessionId.Value);
+
+                        _connections.AttachSession(requestedSessionId, callerConnectionId);
+                    }
+
                     return new SessionEnsureResultDto
                     {
                         SessionId = requestedSessionId.Value,
@@ -159,6 +184,8 @@ public sealed class SessionRegistry
     /// <summary>
     /// Attaches the current SignalR connection to an existing session.
     /// Supports reconnect flows where connection IDs rotate.
+    /// If the session's output stream has completed (post-passivation), the pipeline
+    /// is re-materialized so output delivery resumes.
     /// </summary>
     public async Task AttachSessionAsync(string connectionId, string sessionId)
     {
@@ -168,10 +195,27 @@ public sealed class SessionRegistry
         await _sessionMutationGate.WaitAsync();
         try
         {
-            if (!_sessions.TryGetValue(requestedSessionId, out _))
+            if (!_sessions.TryGetValue(requestedSessionId, out var hubSession))
                 throw new HubException($"Session '{sessionId}' not found.");
 
-            _connections.AttachSession(requestedSessionId, callerConnectionId);
+            if (hubSession.IsOutputCompleted)
+            {
+                _logger.LogWarning(
+                    "Session {SessionId} output stream has completed (post-passivation); " +
+                    "re-materializing pipeline for connection {ConnectionId}.",
+                    requestedSessionId.Value, callerConnectionId.Value);
+
+                await MaterializeAndBindSessionAsync(
+                    requestedSessionId, callerConnectionId, hubSession.ChannelType);
+            }
+            else
+            {
+                _logger.LogDebug(
+                    "Attaching connection {ConnectionId} to session {SessionId}.",
+                    callerConnectionId.Value, requestedSessionId.Value);
+
+                _connections.AttachSession(requestedSessionId, callerConnectionId);
+            }
         }
         finally
         {
@@ -220,7 +264,16 @@ public sealed class SessionRegistry
     /// </summary>
     public Task OnDisconnectedAsync(string connectionId)
     {
-        _connections.Disconnect(ParseConnectionId(connectionId));
+        var parsed = ParseConnectionId(connectionId);
+
+        if (_connections.TryGetSessionForConnection(parsed, out var sessionId))
+        {
+            _logger.LogDebug(
+                "Connection {ConnectionId} disconnected; detached from session {SessionId}.",
+                connectionId, sessionId.Value);
+        }
+
+        _connections.Disconnect(parsed);
 
         return Task.CompletedTask;
     }
@@ -256,13 +309,25 @@ public sealed class SessionRegistry
         }
     }
 
+    /// <summary>
+    /// Returns the output completion task for the given session.
+    /// FOR TESTING ONLY — used to await stream completion in integration tests.
+    /// </summary>
+    internal Task? GetOutputCompletionForTesting(SessionId sessionId)
+        => _sessions.TryGetValue(sessionId, out var s) ? s.OutputCompletion : null;
+
     private void PublishOutput(SessionId sessionId, SessionOutput output)
     {
         if (!_sessions.ContainsKey(sessionId))
             return;
 
         if (!_connections.TryGetConnectionForSession(sessionId, out var connectionId))
+        {
+            _logger.LogDebug(
+                "Session {SessionId} has no active connection binding; dropping {OutputType} output.",
+                sessionId.Value, output.GetType().Name);
             return;
+        }
 
         var dto = SessionOutputDtoMapper.ToDto(output);
         _hubContext.Clients.Client(connectionId.Value).ReceiveOutput(dto)
@@ -303,14 +368,29 @@ public sealed class SessionRegistry
     {
         public HubSessionState(
             MaterializedSession session,
-            ISourceQueueWithComplete<ChannelInput> inputQueue)
+            ISourceQueueWithComplete<ChannelInput> inputQueue,
+            string channelType,
+            Task outputCompletion)
         {
             Session = session;
             InputQueue = inputQueue;
+            ChannelType = channelType;
+            OutputCompletion = outputCompletion;
         }
 
         public MaterializedSession Session { get; }
-
         public ISourceQueueWithComplete<ChannelInput> InputQueue { get; }
+
+        /// <summary>Channel type used when creating the pipeline (needed for re-materialization).</summary>
+        public string ChannelType { get; }
+
+        /// <summary>
+        /// Completes when the Akka.Streams output pipeline terminates.
+        /// Used to detect post-passivation stream death before deciding whether to re-materialize.
+        /// </summary>
+        public Task OutputCompletion { get; }
+
+        /// <summary>True when the output stream has terminated (e.g. after actor passivation).</summary>
+        public bool IsOutputCompleted => OutputCompletion.IsCompleted;
     }
 }

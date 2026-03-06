@@ -478,6 +478,7 @@ static void ConfigureDaemonServices(
 
     // Session pipeline (stream API for channels)
     services.AddSingleton<SessionPipeline>();
+    services.AddSingleton<ISessionPipeline>(sp => sp.GetRequiredService<SessionPipeline>());
 
     services.AddSlackChannelIntegration(configuration);
 

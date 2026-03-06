@@ -519,11 +519,11 @@ Done when:
 **Verification:** L2
 
 Done when:
-- [ ] `SessionRegistry.PublishOutput` logs when output is dropped due to missing connection binding (currently silently returns).
-- [ ] `SessionRegistry.AttachSessionAsync` re-materializes the output stream when attaching to a session whose Akka.Streams output has completed (post-passivation recovery creates new pipeline but old output sink is dead).
-- [ ] `DaemonClient` reconnect flow re-attaches to the active session after SignalR reconnection, not just re-establishes the SignalR connection.
-- [ ] Correlation logging added: log session attach/detach events with connection ID and session ID for post-mortem tracing.
-- [ ] Test: simulate disconnect → reconnect → send message → verify output delivery resumes.
+- [x] `SessionRegistry.PublishOutput` logs when output is dropped due to missing connection binding (currently silently returns).
+- [x] `SessionRegistry.AttachSessionAsync` re-materializes the output stream when attaching to a session whose Akka.Streams output has completed (post-passivation recovery creates new pipeline but old output sink is dead).
+- [x] `DaemonClient` reconnect flow re-attaches to the active session after SignalR reconnection, not just re-establishes the SignalR connection.
+- [x] Correlation logging added: log session attach/detach events with connection ID and session ID for post-mortem tracing.
+- [x] Test: simulate disconnect → reconnect → send message → verify output delivery resumes.
 
 ### Task M6.4: Add correlation IDs and cause categories to Slack error fallback
 

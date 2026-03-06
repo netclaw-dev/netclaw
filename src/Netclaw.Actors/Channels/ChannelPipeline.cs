@@ -81,6 +81,21 @@ public sealed class MaterializedSession : IAsyncDisposable
 }
 
 /// <summary>
+/// Abstraction over session pipeline creation.
+/// Allows test fakes to supply controlled <see cref="MaterializedSession"/> instances
+/// without needing a real actor system or session manager.
+/// </summary>
+public interface ISessionPipeline
+{
+    /// <summary>Creates a materialized session for the given ID and options.</summary>
+    Task<MaterializedSession> CreateAsync(
+        SessionId sessionId,
+        SessionPipelineOptions options,
+        IMaterializer? materializer = null,
+        CancellationToken cancellationToken = default);
+}
+
+/// <summary>
 /// Factory for creating per-session Akka.Streams pipelines. Injected via DI.
 /// Channels call <see cref="CreateAsync"/> to get a <see cref="MaterializedSession"/>
 /// without touching actor system internals.
@@ -91,7 +106,7 @@ public sealed class MaterializedSession : IAsyncDisposable
 /// with a shared <see cref="SharedKillSwitch"/> for coordinated teardown.
 /// </para>
 /// </summary>
-public sealed class SessionPipeline
+public sealed class SessionPipeline : ISessionPipeline
 {
     private const int SessionOutputBufferSize = 2048;
 
