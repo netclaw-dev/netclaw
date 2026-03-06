@@ -106,6 +106,11 @@ public static class DaemonRuntimeStatus
     {
         public bool Available { get; init; }
 
+        /// <summary>
+        /// Update availability state: "up-to-date", "update-available", or "unknown" (check failed or not yet run).
+        /// </summary>
+        public string State { get; init; } = "unknown";
+
         public required string CurrentVersion { get; init; }
 
         public string? LatestVersion { get; init; }

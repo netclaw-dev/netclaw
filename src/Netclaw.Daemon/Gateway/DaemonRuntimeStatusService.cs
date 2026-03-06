@@ -205,15 +205,23 @@ internal sealed class DaemonRuntimeStatusService(
         };
     }
 
-    private static DaemonRuntimeStatus.Update? BuildUpdateStatus()
+    private static DaemonRuntimeStatus.Update BuildUpdateStatus()
     {
         var result = UpdateCheckService.GetLastResult();
         if (result is null)
-            return null;
+        {
+            return new DaemonRuntimeStatus.Update
+            {
+                Available = false,
+                State = "unknown",
+                CurrentVersion = BuildInfo.Version,
+            };
+        }
 
         return new DaemonRuntimeStatus.Update
         {
             Available = result.IsUpdateAvailable,
+            State = result.IsUpdateAvailable ? "update-available" : "up-to-date",
             CurrentVersion = result.CurrentVersion,
             LatestVersion = result.IsUpdateAvailable ? result.LatestVersion : null,
             ReleaseNotesUrl = result.IsUpdateAvailable ? result.ReleaseNotesUrl : null,

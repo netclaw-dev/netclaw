@@ -799,6 +799,10 @@ static async Task<int> RunStatusAsync(IServiceProvider services, IConfiguration 
     var httpClientFactory = services.GetRequiredService<IHttpClientFactory>();
     var client = httpClientFactory.CreateClient();
 
+    // Start CLI update check concurrently with daemon status fetch (3s timeout, non-blocking)
+    var updateClient = httpClientFactory.CreateClient();
+    var updateTask = StatusUpdateChecker.CheckAsync(updateClient, BuildInfo.Version);
+
     try
     {
         using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
@@ -823,6 +827,9 @@ static async Task<int> RunStatusAsync(IServiceProvider services, IConfiguration 
             return 1;
         }
 
+        // Await the CLI update check (it has its own 3s timeout so this should be fast)
+        var cliUpdate = await updateTask;
+
         if (jsonOutput)
         {
             Console.WriteLine(JsonSerializer.Serialize(status, new JsonSerializerOptions
@@ -832,7 +839,7 @@ static async Task<int> RunStatusAsync(IServiceProvider services, IConfiguration 
         }
         else
         {
-            WriteStatusResult(status, endpoint);
+            WriteStatusResult(status, endpoint, cliUpdate);
         }
 
         return status.Overall.ToLowerInvariant() switch
@@ -932,7 +939,7 @@ static void WriteSessionsHelp()
     Console.WriteLine("  1  daemon unavailable or request failed");
 }
 
-static void WriteStatusResult(DaemonRuntimeStatus.Response status, string endpoint)
+static void WriteStatusResult(DaemonRuntimeStatus.Response status, string endpoint, StatusUpdateResult? cliUpdate = null)
 {
     Console.WriteLine($"overall: {status.Overall}");
     Console.WriteLine($"version: {status.Build.Version} (commit {status.Build.CommitHash}, built {status.Build.BuildTimestamp})");
@@ -979,13 +986,27 @@ static void WriteStatusResult(DaemonRuntimeStatus.Response status, string endpoi
             Console.WriteLine($"    {connector.Message}");
     }
 
-    if (status.Update is { Available: true } update)
+    // Resolve update state: prefer CLI check (freshest), fall back to daemon's cached result
+    var updateState = cliUpdate?.State ?? status.Update?.State ?? "unknown";
+    var updateCurrentVersion = cliUpdate?.CurrentVersion ?? status.Update?.CurrentVersion ?? status.Build.Version;
+    var updateLatestVersion = cliUpdate?.LatestVersion ?? status.Update?.LatestVersion;
+    var updateReleaseNotesUrl = cliUpdate?.ReleaseNotesUrl ?? status.Update?.ReleaseNotesUrl;
+
+    Console.WriteLine();
+    switch (updateState)
     {
-        Console.WriteLine();
-        Console.WriteLine($"UPDATE AVAILABLE: v{update.CurrentVersion} → v{update.LatestVersion}");
-        Console.WriteLine("  Run: netclaw update");
-        if (update.ReleaseNotesUrl is not null)
-            Console.WriteLine($"  Release notes: {update.ReleaseNotesUrl}");
+        case "update-available":
+            Console.WriteLine($"update: UPDATE AVAILABLE — v{updateCurrentVersion} → v{updateLatestVersion}");
+            Console.WriteLine("  Run: netclaw update");
+            if (updateReleaseNotesUrl is not null)
+                Console.WriteLine($"  Release notes: {updateReleaseNotesUrl}");
+            break;
+        case "up-to-date":
+            Console.WriteLine($"update: up-to-date (v{updateCurrentVersion})");
+            break;
+        default:
+            Console.WriteLine("update: unknown (check failed — run 'netclaw update --check' to retry)");
+            break;
     }
 }
 

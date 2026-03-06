@@ -596,10 +596,10 @@ Done when:
 **Verification:** L2
 
 Done when:
-- [ ] `netclaw status` output includes current version, latest available version, and update state (`up-to-date` / `update-available` / `unknown`).
-- [ ] Update check is non-blocking with a short timeout (3s); failure results in `update status: unknown` with reason, not a command failure.
-- [ ] JSON output mode includes update info in the response payload.
-- [ ] Test: mock GitHub releases API → verify `update-available` when newer version exists; verify `unknown` on timeout/error.
+- [x] `netclaw status` output includes current version, latest available version, and update state (`up-to-date` / `update-available` / `unknown`).
+- [x] Update check is non-blocking with a short timeout (3s); failure results in `update status: unknown` with reason, not a command failure.
+- [x] JSON output mode includes update info in the response payload.
+- [x] Test: mock GitHub releases API → verify `update-available` when newer version exists; verify `unknown` on timeout/error.
 
 ---
 
