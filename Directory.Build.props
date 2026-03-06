@@ -7,16 +7,16 @@
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
-    <VersionPrefix>0.3.0</VersionPrefix>
-    <PackageReleaseNotes>Netclaw v0.3.0 — Slack allowlist persistence and Playwright MCP isolation
+    <VersionPrefix>0.3.1</VersionPrefix>
+    <PackageReleaseNotes>Netclaw v0.3.1 - Provider probe resilience and diagnostics
 
-**Slack Init Wizard Reliability**
+**Provider Probe Reliability**
 
-* Fixed Slack allowlist persistence in the init wizard so saved allowlists survive restarts and reconfigure flows. (#154)
+* Hardened provider probe flows in the init wizard, provider manager, and model manager with explicit timeout and exception handling so validation failures no longer hang indefinitely. ([#158](https://github.com/Aaronontheweb/netclaw/pull/158))
 
-**Playwright MCP Isolation**
+**Diagnostics**
 
-* Isolated Playwright MCP sessions per tool context to prevent cross-tool leakage and improve reliability when multiple tools run in parallel. (#153)</PackageReleaseNotes>
+* Added provider probe diagnostics logging to `~/.netclaw/logs/provider-probe.log` with probe ID, source, endpoint host, elapsed time, and failure details to make OAuth and model discovery failures easier to diagnose. ([#158](https://github.com/Aaronontheweb/netclaw/pull/158))</PackageReleaseNotes>
   </PropertyGroup>
   <PropertyGroup>
     <NetCoreTestVersion>net10.0</NetCoreTestVersion>

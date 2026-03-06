@@ -1,3 +1,15 @@
+#### 0.3.1 2026-03-06 ####
+
+Netclaw v0.3.1 - Provider probe resilience and diagnostics
+
+**Provider Probe Reliability**
+
+* Hardened provider probe flows in the init wizard, provider manager, and model manager with explicit timeout and exception handling so validation failures no longer hang indefinitely. ([#158](https://github.com/Aaronontheweb/netclaw/pull/158))
+
+**Diagnostics**
+
+* Added provider probe diagnostics logging to `~/.netclaw/logs/provider-probe.log` with probe ID, source, endpoint host, elapsed time, and failure details to make OAuth and model discovery failures easier to diagnose. ([#158](https://github.com/Aaronontheweb/netclaw/pull/158))
+
 #### 0.3.0 2026-03-05 ####
 
 Netclaw v0.3.0 — Slack allowlist persistence and Playwright MCP isolation
