@@ -94,4 +94,23 @@ public sealed class CliArgsParserTests
         var result = CliArgsParser.Parse(["--prompt"]);
         Assert.Equal(CliParseKind.MissingPromptArg, result.Kind);
     }
+
+    /// <summary>
+    /// Guard test: asserts that KnownCommands contains exactly the expected set.
+    /// If a new command is added to CliArgsParser.KnownCommands, this test fails,
+    /// reminding the author to also add a corresponding mode handler in Program.cs.
+    /// Update this set when adding a new command.
+    /// </summary>
+    [Fact]
+    public void KnownCommands_matches_expected_set_of_handled_modes()
+    {
+        var expected = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "chat", "sessions", "init", "doctor", "status",
+            "daemon", "mcp", "provider", "model", "reminder",
+            "secrets", "config", "update",
+        };
+
+        Assert.Equal(expected, CliArgsParser.KnownCommands);
+    }
 }

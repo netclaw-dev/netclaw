@@ -22,7 +22,11 @@ public record CliParseResult(CliParseKind Kind, string? Mode = null, string? Hea
 /// <summary>Classifies top-level command-line arguments for the netclaw CLI.</summary>
 public static class CliArgsParser
 {
-    private static readonly HashSet<string> KnownCommands = new(StringComparer.Ordinal)
+    /// <summary>
+    /// The set of top-level commands the CLI can dispatch. Must stay in sync with
+    /// the mode handlers in Program.cs. Exposed publicly so tests can assert completeness.
+    /// </summary>
+    public static readonly IReadOnlySet<string> KnownCommands = new HashSet<string>(StringComparer.Ordinal)
     {
         "chat", "sessions", "init", "doctor", "status",
         "daemon", "mcp", "provider", "model", "reminder",

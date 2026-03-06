@@ -3,6 +3,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Netclaw.Channels;
 using Netclaw.Channels.Slack;
 using Netclaw.Cli;
@@ -52,7 +53,10 @@ static async Task RunAsync(string[] args)
             Console.WriteLine($"netclaw {BuildInfo.Version} (commit {BuildInfo.CommitHash}, built {BuildInfo.BuildTimestamp})");
             return;
         case CliParseKind.MissingPromptArg:
-            throw new InvalidOperationException("Missing prompt argument after -p/--prompt");
+            Console.Error.WriteLine("netclaw: -p/--prompt requires an argument.");
+            Console.Error.WriteLine("Usage: netclaw -p \"your prompt here\"");
+            Environment.ExitCode = 1;
+            return;
         case CliParseKind.Unknown:
             Console.Error.WriteLine($"netclaw: '{parseResult.Mode}' is not a netclaw command. See 'netclaw --help'.");
             WriteGeneralHelp();
@@ -799,9 +803,11 @@ static async Task<int> RunStatusAsync(IServiceProvider services, IConfiguration 
     var httpClientFactory = services.GetRequiredService<IHttpClientFactory>();
     var client = httpClientFactory.CreateClient();
 
-    // Start CLI update check concurrently with daemon status fetch (3s timeout, non-blocking)
+    // Start CLI update check concurrently with daemon status fetch (3s timeout, non-blocking).
+    // Use a shared CTS so early-return paths can cancel it promptly.
+    using var updateCts = new CancellationTokenSource();
     var updateClient = httpClientFactory.CreateClient();
-    var updateTask = StatusUpdateChecker.CheckAsync(updateClient, BuildInfo.Version);
+    var updateTask = StatusUpdateChecker.CheckAsync(updateClient, BuildInfo.Version, updateCts.Token);
 
     try
     {
@@ -810,6 +816,7 @@ static async Task<int> RunStatusAsync(IServiceProvider services, IConfiguration 
 
         if (!response.IsSuccessStatusCode)
         {
+            await updateCts.CancelAsync();
             Console.WriteLine($"[FAIL] status: daemon returned {(int)response.StatusCode} from {url}");
             Console.WriteLine("       fix: run `netclaw daemon status` and `netclaw daemon start`.");
             return 1;
@@ -823,6 +830,7 @@ static async Task<int> RunStatusAsync(IServiceProvider services, IConfiguration 
 
         if (status is null)
         {
+            await updateCts.CancelAsync();
             Console.WriteLine("[FAIL] status: daemon returned an empty status payload.");
             return 1;
         }
@@ -832,10 +840,17 @@ static async Task<int> RunStatusAsync(IServiceProvider services, IConfiguration 
 
         if (jsonOutput)
         {
-            Console.WriteLine(JsonSerializer.Serialize(status, new JsonSerializerOptions
-            {
-                WriteIndented = true
-            }));
+            // Merge CLI update result into the JSON output so consumers always see a fresh State.
+            var node = JsonSerializer.SerializeToNode(
+                status, new JsonSerializerOptions(JsonSerializerDefaults.Web))!;
+            var updateNode = (node["update"] as JsonObject) ?? new JsonObject();
+            updateNode["state"] = cliUpdate.State;
+            if (cliUpdate.LatestVersion is not null)
+                updateNode["latestVersion"] = cliUpdate.LatestVersion;
+            if (cliUpdate.ReleaseNotesUrl is not null)
+                updateNode["releaseNotesUrl"] = cliUpdate.ReleaseNotesUrl;
+            node["update"] = updateNode;
+            Console.WriteLine(node.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
         }
         else
         {
@@ -851,6 +866,7 @@ static async Task<int> RunStatusAsync(IServiceProvider services, IConfiguration 
     }
     catch (Exception ex)
     {
+        await updateCts.CancelAsync();
         Console.WriteLine($"[FAIL] status: unable to reach daemon at {url}: {ex.Message}");
         Console.WriteLine("       fix: run `netclaw daemon start` and retry.");
         return 1;

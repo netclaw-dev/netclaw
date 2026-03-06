@@ -60,7 +60,7 @@ public sealed class StatusUpdateCheckerTests : IDisposable
     [Fact]
     public async Task CheckAsync_ReturnsUnknown_OnTimeout()
     {
-        var handler = new SlowHttpHandler(delayMs: 5_000); // longer than the injected 200ms timeout
+        var handler = new SlowHttpHandler(); // blocks until cancellation, triggering the 200ms timeout
 
         using var httpClient = new HttpClient(handler);
         var result = await StatusUpdateChecker.CheckAsync(
@@ -146,13 +146,18 @@ public sealed class StatusUpdateCheckerTests : IDisposable
         }
     }
 
-    private sealed class SlowHttpHandler(int delayMs) : HttpMessageHandler
+    /// <summary>
+    /// Blocks the HTTP request until the cancellation token fires (simulating a slow/hung server).
+    /// </summary>
+    private sealed class SlowHttpHandler : HttpMessageHandler
     {
         protected override async Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request, CancellationToken cancellationToken)
         {
-            await Task.Delay(delayMs, cancellationToken);
-            return new HttpResponseMessage(HttpStatusCode.OK);
+            var tcs = new TaskCompletionSource<HttpResponseMessage>();
+            using var reg = cancellationToken.Register(
+                () => tcs.TrySetCanceled(cancellationToken));
+            return await tcs.Task;
         }
     }
 }

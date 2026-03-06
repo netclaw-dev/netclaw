@@ -1,12 +1,13 @@
 # Netclaw Implementation Plan
 
-Last updated: 2026-03-03
+Last updated: 2026-03-06
 Mode: build
 
 This file is RALPH-consumable.
 
-**Active milestone: Milestone 6 (0.3.2)**
-Only work on tasks in the active milestone. Skip all tasks outside it.
+**Active milestone: Milestone 6 (0.3.2) — COMPLETE**
+All M6.x tasks are done. The next active milestone has not been designated.
+Update this header before the next RALPH run.
 
 ---
 

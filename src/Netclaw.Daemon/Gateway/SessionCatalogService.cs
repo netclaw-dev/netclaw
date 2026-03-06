@@ -223,6 +223,24 @@ public sealed class SessionCatalogService : ISessionLifecycleObserver
         });
     }
 
+    // Shared DDL for the current sessions schema (used in both Missing and Legacy migration paths).
+    private const string SessionsCreateTableDdl =
+        """
+        CREATE TABLE IF NOT EXISTS sessions (
+            persistence_id    TEXT NOT NULL PRIMARY KEY,
+            channel           TEXT NOT NULL,
+            created_at        INTEGER NOT NULL,
+            last_activity     INTEGER NOT NULL,
+            status            TEXT NOT NULL DEFAULT 'active',
+            turn_count        INTEGER NOT NULL DEFAULT 0,
+            title             TEXT,
+            description       TEXT,
+            last_input_tokens INTEGER,
+            log_path          TEXT,
+            metadata          TEXT
+        )
+        """;
+
     /// <summary>
     /// Ensures the sessions table exists and is on the current schema.
     /// If the table is missing, it is created. If it uses the legacy schema
@@ -240,68 +258,65 @@ public sealed class SessionCatalogService : ISessionLifecycleObserver
 
             case SessionsSchemaMode.Missing:
                 logger.LogInformation("Sessions table not found — creating with current schema");
-                RunSql(conn,
-                    """
-                    CREATE TABLE IF NOT EXISTS sessions (
-                        persistence_id    TEXT NOT NULL PRIMARY KEY,
-                        channel           TEXT NOT NULL,
-                        created_at        INTEGER NOT NULL,
-                        last_activity     INTEGER NOT NULL,
-                        status            TEXT NOT NULL DEFAULT 'active',
-                        turn_count        INTEGER NOT NULL DEFAULT 0,
-                        title             TEXT,
-                        description       TEXT,
-                        last_input_tokens INTEGER,
-                        log_path          TEXT,
-                        metadata          TEXT
-                    )
-                    """);
+                RunSql(conn, SessionsCreateTableDdl);
                 RunSql(conn, "CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions (status)");
                 RunSql(conn, "CREATE INDEX IF NOT EXISTS idx_sessions_last_activity ON sessions (last_activity)");
                 break;
 
             case SessionsSchemaMode.Legacy:
                 logger.LogInformation("Legacy sessions schema detected — migrating to current schema");
-                RunSql(conn,
-                    """
-                    CREATE TABLE sessions_new (
-                        persistence_id    TEXT NOT NULL PRIMARY KEY,
-                        channel           TEXT NOT NULL,
-                        created_at        INTEGER NOT NULL,
-                        last_activity     INTEGER NOT NULL,
-                        status            TEXT NOT NULL DEFAULT 'active',
-                        turn_count        INTEGER NOT NULL DEFAULT 0,
-                        title             TEXT,
-                        description       TEXT,
-                        last_input_tokens INTEGER,
-                        log_path          TEXT,
-                        metadata          TEXT
-                    )
-                    """);
-                RunSql(conn,
-                    """
-                    INSERT INTO sessions_new (persistence_id, channel, created_at, last_activity, status, turn_count, title)
-                    SELECT
-                        'session-' || session_id,
-                        CASE
-                            WHEN session_id LIKE 'signalr/%' THEN 'signalr'
-                            WHEN session_id LIKE 'headless/%' THEN 'headless'
-                            WHEN session_id LIKE 'console/%'  THEN 'console'
-                            WHEN session_id LIKE 'C%' OR session_id LIKE 'D%' THEN 'slack'
-                            ELSE 'unknown'
-                        END,
-                        COALESCE(created, last_activity, 0),
-                        COALESCE(last_activity, 0),
-                        'active',
-                        COALESCE(message_count, 0),
-                        display_name
-                    FROM sessions
-                    """);
-                RunSql(conn, "DROP TABLE sessions");
-                RunSql(conn, "ALTER TABLE sessions_new RENAME TO sessions");
-                RunSql(conn, "CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions (status)");
-                RunSql(conn, "CREATE INDEX IF NOT EXISTS idx_sessions_last_activity ON sessions (last_activity)");
-                logger.LogInformation("Sessions schema migration complete");
+                using (var tx = conn.BeginTransaction())
+                {
+                    try
+                    {
+                        RunSql(conn,
+                            """
+                            CREATE TABLE sessions_new (
+                                persistence_id    TEXT NOT NULL PRIMARY KEY,
+                                channel           TEXT NOT NULL,
+                                created_at        INTEGER NOT NULL,
+                                last_activity     INTEGER NOT NULL,
+                                status            TEXT NOT NULL DEFAULT 'active',
+                                turn_count        INTEGER NOT NULL DEFAULT 0,
+                                title             TEXT,
+                                description       TEXT,
+                                last_input_tokens INTEGER,
+                                log_path          TEXT,
+                                metadata          TEXT
+                            )
+                            """);
+                        RunSql(conn,
+                            """
+                            INSERT INTO sessions_new (persistence_id, channel, created_at, last_activity, status, turn_count, title)
+                            SELECT
+                                'session-' || session_id,
+                                CASE
+                                    WHEN session_id LIKE 'signalr/%' THEN 'signalr'
+                                    WHEN session_id LIKE 'headless/%' THEN 'headless'
+                                    WHEN session_id LIKE 'console/%'  THEN 'console'
+                                    WHEN session_id LIKE 'C%' OR session_id LIKE 'D%' THEN 'slack'
+                                    ELSE 'unknown'
+                                END,
+                                COALESCE(created, last_activity, 0),
+                                COALESCE(last_activity, 0),
+                                'active',
+                                COALESCE(message_count, 0),
+                                display_name
+                            FROM sessions
+                            """);
+                        RunSql(conn, "DROP TABLE sessions");
+                        RunSql(conn, "ALTER TABLE sessions_new RENAME TO sessions");
+                        RunSql(conn, "CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions (status)");
+                        RunSql(conn, "CREATE INDEX IF NOT EXISTS idx_sessions_last_activity ON sessions (last_activity)");
+                        tx.Commit();
+                        logger.LogInformation("Sessions schema migration complete");
+                    }
+                    catch
+                    {
+                        tx.Rollback();
+                        throw;
+                    }
+                }
                 break;
         }
     }

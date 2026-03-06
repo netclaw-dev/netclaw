@@ -34,7 +34,7 @@ internal static class StatusUpdateChecker
                 ? new StatusUpdateResult("update-available", result.CurrentVersion, result.LatestVersion, result.ReleaseNotesUrl)
                 : new StatusUpdateResult("up-to-date", result.CurrentVersion, null, null);
         }
-        catch
+        catch (Exception)
         {
             // OperationCanceledException (3s timeout) or HttpRequestException (network failure)
             return new StatusUpdateResult("unknown", currentVersion, null, null);
