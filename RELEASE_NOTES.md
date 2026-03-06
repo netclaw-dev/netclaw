@@ -1,3 +1,43 @@
+#### 0.3.2 2026-03-06 ####
+
+Netclaw v0.3.2 — Session catalog hardening, diagnostics, and CLI improvements
+
+**Session Catalog Hardening**
+
+* Auto-created missing `sessions` table instead of silently returning empty results; first access triggers table creation or migration from legacy schema (`session_id` column).
+* Migrated legacy sessions table to current schema via atomic SQLite transaction with consistent `CREATE TABLE` DDL on both modern and legacy paths.
+* `ListRecent()` now logs a warning and returns an empty list only when schema init/migration itself fails, not on schema mismatch. ([#162](https://github.com/Aaronontheweb/netclaw/issues/162))
+
+**SignalR Session Stall Fix**
+
+* Fixed session stall after idle passivation — `SessionRegistry` now detects stale output streams and re-materializes the Akka.Streams pipeline to reconnect subscribers.
+* Added correlation logging for session attach, detach, and disconnect events with connection ID and session ID for post-mortem tracing. ([#163](https://github.com/Aaronontheweb/netclaw/issues/163))
+
+**Error Correlation IDs in Slack**
+
+* Added 8-character hex ref (correlation ID) to Slack error fallback messages for cross-referencing with daemon logs.
+* Categorized errors at call sites: `ToolFailure`, `ProviderFailure`, `StreamFailure`, `Timeout`, and `Unknown`. ([#164](https://github.com/Aaronontheweb/netclaw/issues/164))
+
+**Reminder Execution Diagnostics**
+
+* Added structured lifecycle logging for reminder execution (Dispatched, Initialized, Completed, Failed, Timeout) with execution IDs, reminder IDs, and full exception chains.
+* Added `/status` endpoint displays reminder health: scheduled count, active executions, and failure tracking count. ([#165](https://github.com/Aaronontheweb/netclaw/issues/165))
+
+**CLI Improvements**
+
+* **Bare invocation**: `netclaw` with no args now prints help and exits 2 (was launching chat TUI).
+* **Unknown commands**: Invalid subcommands print an error message, show help, and exit 2.
+* **--once mode for sessions**: `netclaw sessions --once` lists recent sessions as plain text or JSON without launching TUI; `netclaw status` and `netclaw chat -p` return correct exit codes (0=success, 1=error). ([#166](https://github.com/Aaronontheweb/netclaw/issues/166), [#167](https://github.com/Aaronontheweb/netclaw/issues/167))
+
+**Update Availability in Status**
+
+* Added update check to `netclaw status`: always shows `update:` line with state — `up-to-date`, `UPDATE AVAILABLE`, or `unknown` (timeout/network failure).
+* Concurrent update fetch with 3s timeout; release notes URL propagated to JSON output. ([#168](https://github.com/Aaronontheweb/netclaw/issues/168))
+
+**Search Backend Fixes**
+
+* Fixed Brave Search gzip decompression: now validates `Content-Encoding` and `Content-Type`, auto-decompresses gzip responses, and returns structured error for unsupported encodings. ([#161](https://github.com/Aaronontheweb/netclaw/issues/161))
+
 #### 0.3.1 2026-03-06 ####
 
 Netclaw v0.3.1 - Provider probe resilience and diagnostics
