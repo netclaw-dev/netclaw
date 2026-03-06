@@ -135,12 +135,45 @@ public sealed record SessionTitleOutput : SessionOutput
 }
 
 /// <summary>
+/// Classifies the source of an <see cref="ErrorOutput"/> for structured
+/// diagnostics and Slack fallback messages.
+/// </summary>
+public enum ErrorCategory
+{
+    /// <summary>A tool execution failed or timed out.</summary>
+    ToolFailure,
+
+    /// <summary>The LLM provider returned an error or unexpected response.</summary>
+    ProviderFailure,
+
+    /// <summary>The LLM response stream broke mid-delivery.</summary>
+    StreamFailure,
+
+    /// <summary>An operation exceeded its configured timeout.</summary>
+    Timeout,
+
+    /// <summary>Error source is unclassified (e.g. compaction failures).</summary>
+    Unknown
+}
+
+/// <summary>
 /// An error occurred during LLM processing.
 /// Lifecycle — always delivered regardless of <see cref="OutputFilter"/>.
 /// </summary>
 public sealed record ErrorOutput : SessionOutput
 {
     public required string Message { get; init; }
+
+    /// <summary>
+    /// Unique identifier for this error instance. Included in the Slack
+    /// fallback message and session log so operators can cross-reference.
+    /// </summary>
+    public Guid CorrelationId { get; init; } = Guid.NewGuid();
+
+    /// <summary>
+    /// Classifies the source of the error for structured diagnostics.
+    /// </summary>
+    public ErrorCategory Category { get; init; } = ErrorCategory.Unknown;
 
     /// <summary>
     /// The underlying exception, if available. Not user-facing — intended

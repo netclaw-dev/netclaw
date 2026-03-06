@@ -94,7 +94,9 @@ public static class SessionOutputDtoMapper
             SessionId = msg.SessionId.Value,
             TimestampMs = msg.TimestampMs,
             ErrorMessage = msg.Message,
-            ErrorDetail = msg.Cause?.ToString()
+            ErrorDetail = msg.Cause?.ToString(),
+            ErrorCorrelationId = msg.CorrelationId.ToString("N"),
+            ErrorCategory = msg.Category.ToString()
         },
 
         FileOutput msg => new SessionOutputDto
@@ -226,6 +228,8 @@ public static class SessionOutputDtoMapper
                 SessionId = sessionId,
                 TimestampMs = dto.TimestampMs,
                 Message = dto.ErrorMessage ?? "Unknown daemon error",
+                CorrelationId = Guid.TryParse(dto.ErrorCorrelationId, out var cid) ? cid : Guid.NewGuid(),
+                Category = Enum.TryParse<ErrorCategory>(dto.ErrorCategory, out var cat) ? cat : ErrorCategory.Unknown,
                 Cause = dto.ErrorDetail is not null
                     ? new Exception(dto.ErrorDetail) : null
             },

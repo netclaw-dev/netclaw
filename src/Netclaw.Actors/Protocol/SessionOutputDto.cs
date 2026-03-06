@@ -50,6 +50,8 @@ public sealed record SessionOutputDto
     // Error
     public string? ErrorMessage { get; init; }
     public string? ErrorDetail { get; init; }
+    public string? ErrorCorrelationId { get; init; }
+    public string? ErrorCategory { get; init; }
 
     // Compaction
     public int? MessagesBefore { get; init; }

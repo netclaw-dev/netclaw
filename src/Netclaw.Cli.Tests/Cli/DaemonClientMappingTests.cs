@@ -187,4 +187,53 @@ public sealed class DaemonClientMappingTests
         Assert.True(result.Success);
         Assert.Equal(12300, result.Duration.TotalMilliseconds, 1);
     }
+
+    [Theory]
+    [InlineData(ErrorCategory.ToolFailure)]
+    [InlineData(ErrorCategory.ProviderFailure)]
+    [InlineData(ErrorCategory.Timeout)]
+    [InlineData(ErrorCategory.Unknown)]
+    public void ErrorOutput_roundtrips_correlation_id_and_category_through_dto(ErrorCategory category)
+    {
+        var correlationId = Guid.NewGuid();
+        var original = new ErrorOutput
+        {
+            SessionId = new SessionId("signalr/test"),
+            TimestampMs = 100,
+            Message = "Something went wrong.",
+            CorrelationId = correlationId,
+            Category = category
+        };
+
+        var dto = SessionOutputDtoMapper.ToDto(original);
+
+        Assert.Equal("error", dto.Type);
+        Assert.Equal(correlationId.ToString("N"), dto.ErrorCorrelationId);
+        Assert.Equal(category.ToString(), dto.ErrorCategory);
+
+        var roundTripped = DaemonClient.FromDto(dto);
+        var result = Assert.IsType<ErrorOutput>(roundTripped);
+        Assert.Equal(correlationId, result.CorrelationId);
+        Assert.Equal(category, result.Category);
+        Assert.Equal("Something went wrong.", result.Message);
+    }
+
+    [Fact]
+    public void ErrorOutput_defaults_to_unknown_category_when_dto_field_missing()
+    {
+        var dto = new SessionOutputDto
+        {
+            Type = "error",
+            SessionId = "signalr/test",
+            TimestampMs = 100,
+            ErrorMessage = "Daemon error"
+            // ErrorCategory and ErrorCorrelationId intentionally absent
+        };
+
+        var output = DaemonClient.FromDto(dto);
+
+        var error = Assert.IsType<ErrorOutput>(output);
+        Assert.Equal(ErrorCategory.Unknown, error.Category);
+        Assert.NotEqual(Guid.Empty, error.CorrelationId);
+    }
 }

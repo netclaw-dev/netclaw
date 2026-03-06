@@ -101,7 +101,7 @@ public sealed class SessionLogActor : ReceiveActor
                     $"SubAgent started: {sa.AgentName} (tools={sa.ToolCount})",
                 SubAgentOutput sa =>
                     $"SubAgent completed: {sa.AgentName} (success={sa.Success}, duration={sa.Duration.TotalSeconds:F1}s)",
-                ErrorOutput error => $"Error: {error.Message}",
+                ErrorOutput error => $"Error [{error.Category}] (ref: {error.CorrelationId:N}): {error.Message}",
                 FileOutput file => $"File: {file.FileName} ({file.MimeType})",
                 _ => null
             };

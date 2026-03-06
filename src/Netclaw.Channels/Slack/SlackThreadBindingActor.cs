@@ -402,7 +402,8 @@ internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStas
                 break;
 
             case ErrorOutput err:
-                await SafePostAsync($":warning: {err.Message}");
+                var refId = err.CorrelationId.ToString("N")[..8];
+                await SafePostAsync($":warning: {err.Message} (ref: {refId})");
                 _buffer.Clear();
                 break;
 

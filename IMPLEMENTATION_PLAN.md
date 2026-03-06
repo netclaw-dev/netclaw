@@ -532,11 +532,11 @@ Done when:
 **Verification:** L2
 
 Done when:
-- [ ] `ErrorOutput` includes a `CorrelationId` (GUID) and `ErrorCategory` enum (`ToolFailure`, `ProviderFailure`, `StreamFailure`, `Timeout`, `Unknown`).
-- [ ] `SlackThreadBindingActor` includes correlation ID in the Slack fallback message (e.g., `:warning: Error processing your message (ref: abc123). Check logs for details.`).
-- [ ] Session log entries for errors include the same correlation ID for cross-referencing.
-- [ ] `LlmSessionActor` categorizes errors when emitting `ErrorOutput` (tool execution failure vs provider failure vs timeout).
-- [ ] Tests verify correlation ID propagation from error source through to output.
+- [x] `ErrorOutput` includes a `CorrelationId` (GUID) and `ErrorCategory` enum (`ToolFailure`, `ProviderFailure`, `StreamFailure`, `Timeout`, `Unknown`).
+- [x] `SlackThreadBindingActor` includes correlation ID in the Slack fallback message (e.g., `:warning: Error processing your message (ref: abc123). Check logs for details.`).
+- [x] Session log entries for errors include the same correlation ID for cross-referencing.
+- [x] `LlmSessionActor` categorizes errors when emitting `ErrorOutput` (tool execution failure vs provider failure vs timeout).
+- [x] Tests verify correlation ID propagation from error source through to output.
 
 ### Task M6.5: Add structured reminder execution diagnostics
 

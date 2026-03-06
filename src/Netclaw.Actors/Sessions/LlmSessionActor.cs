@@ -386,7 +386,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             _log.Error(msg.Cause, "Tool execution failed");
 
             const string errorMessage = "I encountered an error executing a tool. Please try again.";
-            FailCurrentTurn(errorMessage, msg.Cause);
+            var category = msg.Cause is TimeoutException ? ErrorCategory.Timeout : ErrorCategory.ToolFailure;
+            FailCurrentTurn(errorMessage, msg.Cause, category);
         });
 
         Command<LlmCallFailed>(msg =>
@@ -397,7 +398,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             var errorMessage = IsContextOverflowError(msg.Cause)
                 ? $"Context window exceeded after compaction — the session has too many tools or a large system prompt for the {_config.ModelId} context window ({_config.ContextWindowTokens} tokens). Try reducing tools or increasing the model's context window."
                 : "I encountered an error processing your message. Please try again.";
-            FailCurrentTurn(errorMessage, msg.Cause);
+            var category = msg.Cause is TimeoutException ? ErrorCategory.Timeout : ErrorCategory.ProviderFailure;
+            FailCurrentTurn(errorMessage, msg.Cause, category);
         });
 
         Command<ProcessingWatchdogExpired>(msg =>
@@ -416,7 +418,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 $"Session processing operation '{msg.OperationName}' exceeded watchdog timeout of {timeout.TotalSeconds:F0}s");
 
             StopProcessingWatchdog();
-            FailCurrentTurn("I encountered a timeout while processing your message. Please try again.", timeoutCause);
+            FailCurrentTurn("I encountered a timeout while processing your message. Please try again.", timeoutCause, ErrorCategory.Timeout);
         });
     }
 
@@ -573,6 +575,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             {
                 SessionId = _sessionId,
                 Message = "Context compaction encountered an error. The session will continue.",
+                Category = ErrorCategory.Unknown,
+                CorrelationId = Guid.NewGuid(),
                 Cause = msg.Cause
             });
 
@@ -1687,7 +1691,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         _processingOperationName = null;
     }
 
-    private void FailCurrentTurn(string errorMessage, Exception cause)
+    private void FailCurrentTurn(string errorMessage, Exception cause, ErrorCategory category = ErrorCategory.Unknown)
     {
         _state = _state.AddErrorReply(errorMessage);
 
@@ -1695,6 +1699,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         {
             SessionId = _sessionId,
             Message = errorMessage,
+            Category = category,
+            CorrelationId = Guid.NewGuid(),
             Cause = cause
         });
         EmitOutput(new TurnCompleted
