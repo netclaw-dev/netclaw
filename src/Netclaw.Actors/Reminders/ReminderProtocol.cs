@@ -206,3 +206,21 @@ internal sealed record ReminderExecutionCompleted(
     ReminderId Id,
     bool Success,
     string? ErrorMessage = null);
+
+// ── Health query ──
+
+/// <summary>
+/// Query sent to <see cref="ReminderManagerActor"/> to obtain current health counters.
+/// </summary>
+public sealed record GetReminderHealthQuery
+{
+    public static readonly GetReminderHealthQuery Instance = new();
+}
+
+/// <summary>
+/// Response from <see cref="GetReminderHealthQuery"/> with current runtime counters.
+/// </summary>
+public sealed record ReminderHealthResponse(
+    int ScheduledCount,
+    int ActiveExecutions,
+    int FailedCount);

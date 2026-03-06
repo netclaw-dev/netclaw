@@ -1,6 +1,10 @@
 using System.Diagnostics;
+using Akka.Actor;
+using Akka.Hosting;
 using Microsoft.Extensions.Options;
+using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Memory;
+using Netclaw.Actors.Reminders;
 using Netclaw.Channels;
 using Netclaw.Channels.Slack;
 using Netclaw.Channels.Telemetry;
@@ -22,7 +26,8 @@ internal sealed class DaemonRuntimeStatusService(
     MemoryConfig memoryConfig,
     NetclawPaths paths,
     McpClientManager? mcpClientManager = null,
-    FileMemoryStore? fileMemoryStore = null)
+    FileMemoryStore? fileMemoryStore = null,
+    IRequiredActor<ReminderManagerActorKey>? reminderManagerActor = null)
 {
     private readonly DateTimeOffset _startedAt = timeProvider.GetUtcNow();
 
@@ -76,7 +81,8 @@ internal sealed class DaemonRuntimeStatusService(
                 ContextWindow = sessionConfig.ContextWindowTokens
             },
             Update = BuildUpdateStatus(),
-            Memory = await BuildMemoryStatusAsync(cancellationToken)
+            Memory = await BuildMemoryStatusAsync(cancellationToken),
+            Reminders = await BuildReminderHealthAsync(cancellationToken)
         };
     }
 
@@ -273,6 +279,29 @@ internal sealed class DaemonRuntimeStatusService(
             MemoryCount = 0,
             IndexPath = paths.MemoryIndexPath
         };
+    }
+
+    private async Task<DaemonRuntimeStatus.Reminders?> BuildReminderHealthAsync(CancellationToken ct)
+    {
+        if (reminderManagerActor is null)
+            return null;
+
+        try
+        {
+            var actorRef = await reminderManagerActor.GetAsync(ct);
+            var response = await actorRef.Ask<ReminderHealthResponse>(
+                GetReminderHealthQuery.Instance, TimeSpan.FromSeconds(3), ct);
+            return new DaemonRuntimeStatus.Reminders
+            {
+                ScheduledCount = response.ScheduledCount,
+                ActiveExecutions = response.ActiveExecutions,
+                FailedCount = response.FailedCount
+            };
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     private static string ResolveOverallStatus(IReadOnlyList<DaemonRuntimeStatus.Connector> connectors)

@@ -18,7 +18,7 @@ public sealed partial class ReminderManagerActor : ReceiveActor
     public const string EntityId = "manager";
 
     private readonly ReminderConfig _config;
-    private readonly SessionPipeline _pipeline;
+    private readonly ISessionPipeline _pipeline;
     private readonly TimeProvider _timeProvider;
     private readonly ReminderDefinitionStore _definitionStore;
     private readonly ILoggingAdapter _log;
@@ -31,7 +31,7 @@ public sealed partial class ReminderManagerActor : ReceiveActor
 
     public ReminderManagerActor(
         ReminderConfig config,
-        SessionPipeline pipeline,
+        ISessionPipeline pipeline,
         TimeProvider timeProvider,
         ReminderDefinitionStore definitionStore)
     {
@@ -52,6 +52,7 @@ public sealed partial class ReminderManagerActor : ReceiveActor
         ReceiveAsync<ReminderExecutionCompleted>(HandleExecutionCompletedAsync);
 
         ReceiveAsync<ReconcileReminders>(_ => HandleReconcileAsync());
+        Receive<GetReminderHealthQuery>(_ => HandleGetHealth());
     }
 
     protected override void PreStart()
@@ -368,6 +369,9 @@ public sealed partial class ReminderManagerActor : ReceiveActor
             return;
         }
 
+        _log.Info("Reminder fired: id='{0}', title='{1}', schedule_type={2}",
+            reminderId.Value, definition.Title, definition.Schedule.Type);
+
         // Cron reminders are implemented as recurring single-shot schedules.
         if (definition.Schedule.Type == ReminderScheduleType.Cron)
         {
@@ -638,6 +642,15 @@ public sealed partial class ReminderManagerActor : ReceiveActor
         if (sanitized.Length > 60)
             return sanitized[..60];
         return sanitized;
+    }
+
+    private void HandleGetHealth()
+    {
+        var scheduledCount = _definitionStore.List().Count(d => d.Enabled);
+        Sender.Tell(new ReminderHealthResponse(
+            scheduledCount,
+            _activeExecutionIds.Count,
+            _failureCounts.Count));
     }
 
     private sealed record ScheduleAttempt(bool IsSuccess, DateTimeOffset? NextFire, string? ErrorMessage)

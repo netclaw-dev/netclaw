@@ -545,11 +545,11 @@ Done when:
 **Verification:** L2
 
 Done when:
-- [ ] `ReminderExecutionActor` logs structured execution lifecycle: `{ReminderId, ExecutionId, Phase, DueAt, DispatchedAt, CompletedAt, Success, ErrorType, ErrorMessage}`.
-- [ ] All exceptions in reminder execution (including inner exceptions) are logged with full stack trace, not just `Message`.
-- [ ] `ReminderManagerActor.HandleReminderFiredAsync` logs the reminder ID, definition title, and schedule type when a reminder fires.
-- [ ] `netclaw status` includes reminder health counters: scheduled count, active executions, failed count (from `ReminderManagerActor` state, exposed via health endpoint).
-- [ ] Test: simulate reminder execution failure → verify structured log contains full exception chain.
+- [x] `ReminderExecutionActor` logs structured execution lifecycle: `{ReminderId, ExecutionId, Phase, DueAt, DispatchedAt, CompletedAt, Success, ErrorType, ErrorMessage}`.
+- [x] All exceptions in reminder execution (including inner exceptions) are logged with full stack trace, not just `Message`.
+- [x] `ReminderManagerActor.HandleReminderFiredAsync` logs the reminder ID, definition title, and schedule type when a reminder fires.
+- [x] `netclaw status` includes reminder health counters: scheduled count, active executions, failed count (from `ReminderManagerActor` state, exposed via health endpoint).
+- [x] Test: simulate reminder execution failure → verify structured log contains full exception chain.
 
 ### Task M6.6: Add single-shot CLI mode and CI smoke coverage
 

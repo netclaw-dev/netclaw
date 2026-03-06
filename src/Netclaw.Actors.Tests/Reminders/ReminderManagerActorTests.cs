@@ -115,6 +115,37 @@ public class ReminderManagerActorTests : TestKit
         Assert.False(cancelled.Found);
     }
 
+    [Fact]
+    public async Task Health_query_returns_scheduled_count()
+    {
+        var manager = await GetManagerAsync();
+
+        var definition = CreateDefinition("test-health", "Check health");
+
+        await manager.Ask<ReminderSavedResponse>(
+            new SaveReminderCommand(definition), TimeSpan.FromSeconds(5));
+
+        var health = await manager.Ask<ReminderHealthResponse>(
+            GetReminderHealthQuery.Instance, TimeSpan.FromSeconds(5));
+
+        Assert.Equal(1, health.ScheduledCount);
+        Assert.Equal(0, health.ActiveExecutions);
+        Assert.Equal(0, health.FailedCount);
+    }
+
+    [Fact]
+    public async Task Health_query_on_empty_manager_returns_zeros()
+    {
+        var manager = await GetManagerAsync();
+
+        var health = await manager.Ask<ReminderHealthResponse>(
+            GetReminderHealthQuery.Instance, TimeSpan.FromSeconds(5));
+
+        Assert.Equal(0, health.ScheduledCount);
+        Assert.Equal(0, health.ActiveExecutions);
+        Assert.Equal(0, health.FailedCount);
+    }
+
     private static ReminderDefinition CreateDefinition(string name, string instructions)
     {
         var id = new ReminderId($"{name}-{Guid.NewGuid():N}"[..20]);

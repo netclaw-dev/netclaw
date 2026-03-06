@@ -19,9 +19,10 @@ internal sealed class ReminderExecutionActor : ReceiveActor
 {
     private readonly Guid _executionId;
     private readonly ReminderDefinition _definition;
-    private readonly SessionPipeline _pipeline;
+    private readonly ISessionPipeline _pipeline;
     private readonly TimeProvider _timeProvider;
     private readonly ILoggingAdapter _log;
+    private readonly DateTimeOffset _dispatchedAt;
 
     private readonly StringBuilder _buffer = new();
     private bool _sawTextDelta;
@@ -33,15 +34,15 @@ internal sealed class ReminderExecutionActor : ReceiveActor
     public static Props CreateProps(
         Guid executionId,
         ReminderDefinition definition,
-        SessionPipeline pipeline,
+        ISessionPipeline pipeline,
         ReminderConfig config,
         TimeProvider timeProvider) =>
         Props.Create(() => new ReminderExecutionActor(executionId, definition, pipeline, config, timeProvider));
 
-    private ReminderExecutionActor(
+    public ReminderExecutionActor(
         Guid executionId,
         ReminderDefinition definition,
-        SessionPipeline pipeline,
+        ISessionPipeline pipeline,
         ReminderConfig config,
         TimeProvider timeProvider)
     {
@@ -49,6 +50,7 @@ internal sealed class ReminderExecutionActor : ReceiveActor
         _definition = definition;
         _pipeline = pipeline;
         _timeProvider = timeProvider;
+        _dispatchedAt = timeProvider.GetUtcNow();
         _log = Context.GetLogger();
 
         Context.SetReceiveTimeout(TimeSpan.FromSeconds(config.ExecutionTimeoutSeconds));
@@ -57,13 +59,18 @@ internal sealed class ReminderExecutionActor : ReceiveActor
         Receive<ExecutionStarted>(_ => { });
         Receive<ReceiveTimeout>(_ =>
         {
-            _log.Warning("Reminder execution timed out: '{0}'", _definition.Title);
+            var elapsed = (int)(_timeProvider.GetUtcNow() - _dispatchedAt).TotalSeconds;
+            _log.Warning(
+                $"ReminderExecution Timeout: execution_id={_executionId} reminder_id={_definition.Id} title={_definition.Title} dispatched_at={_dispatchedAt} elapsed_s={elapsed}");
             ReportAndStop(false, "Execution timed out");
         });
     }
 
     protected override void PreStart()
     {
+        _log.Info(
+            $"ReminderExecution Dispatched: execution_id={_executionId} reminder_id={_definition.Id} title={_definition.Title} schedule_type={_definition.Schedule.Type} dispatched_at={_dispatchedAt}");
+
         Self.Tell(new ExecutionStarted());
         RunTask(InitializeAsync);
     }
@@ -76,8 +83,8 @@ internal sealed class ReminderExecutionActor : ReceiveActor
                 ? new SessionId(_definition.SessionId)
                 : new SessionId($"reminder/{_definition.Id}/{_timeProvider.GetUtcNow().ToUnixTimeMilliseconds()}");
 
-            _log.Info("Starting reminder execution for '{0}' with session '{1}'",
-                _definition.Title, sessionId.Value);
+            _log.Info(
+                $"ReminderExecution Initialized: execution_id={_executionId} reminder_id={_definition.Id} session_id={sessionId.Value}");
 
             _materializer = Context.Materializer(namePrefix: "reminder-exec");
 
@@ -113,7 +120,7 @@ internal sealed class ReminderExecutionActor : ReceiveActor
         }
         catch (Exception ex)
         {
-            _log.Error(ex, "Failed to initialize reminder execution for '{0}'", _definition.Title);
+            LogFullException(ex, "ReminderExecution InitializationFailed");
             ReportAndStop(false, ex.Message);
         }
     }
@@ -142,20 +149,22 @@ internal sealed class ReminderExecutionActor : ReceiveActor
 
             case TurnCompleted:
                 var result = _buffer.ToString().Trim();
-                _log.Info("Reminder '{0}' execution completed, output length: {1}",
-                    _definition.Title, result.Length);
+                _log.Info(
+                    $"ReminderExecution Completed: execution_id={_executionId} reminder_id={_definition.Id} title={_definition.Title} success=true output_length={result.Length} dispatched_at={_dispatchedAt} completed_at={_timeProvider.GetUtcNow()}");
 
                 if (string.IsNullOrWhiteSpace(result))
                     result = $"(Reminder '{_definition.Title}' executed but produced no output)";
-
-                _log.Info("Reminder output for '{0}': {1}",
-                    _definition.Title, result.Length > 200 ? result[..200] + "..." : result);
 
                 ReportAndStop(true);
                 break;
 
             case ErrorOutput err:
-                _log.Warning("Reminder '{0}' error output: {1}", _definition.Title, err.Message);
+                var completedAt = _timeProvider.GetUtcNow();
+                var failedMsg = $"ReminderExecution Failed: execution_id={_executionId} reminder_id={_definition.Id} title={_definition.Title} success=false error_type={err.Category} error_message={err.Message} dispatched_at={_dispatchedAt} completed_at={completedAt}";
+                if (err.Cause is not null)
+                    _log.Error(err.Cause, "{0}\n{1}", failedMsg, err.Cause.ToString());
+                else
+                    _log.Warning("{0}", failedMsg);
                 ReportAndStop(false, err.Message);
                 break;
         }
@@ -167,6 +176,13 @@ internal sealed class ReminderExecutionActor : ReceiveActor
             return;
 
         _completed = true;
+
+        if (!success)
+        {
+            _log.Warning(
+                $"ReminderExecution ReportFailed: execution_id={_executionId} reminder_id={_definition.Id} title={_definition.Title} success=false error_message={errorMessage}");
+        }
+
         Context.Parent.Tell(new ReminderExecutionCompleted(
             _executionId,
             new ReminderId(_definition.Id),
@@ -186,6 +202,13 @@ internal sealed class ReminderExecutionActor : ReceiveActor
         {
             _log.Debug(ex, "Failed to dispose reminder execution resources for '{0}'", _definition.Title);
         }
+    }
+
+    private void LogFullException(Exception ex, string phase)
+    {
+        var completedAt = _timeProvider.GetUtcNow();
+        var msg = $"{phase}: execution_id={_executionId} reminder_id={_definition.Id} title={_definition.Title} success=false dispatched_at={_dispatchedAt} completed_at={completedAt}\n{ex}";
+        _log.Error(ex, "{0}", msg);
     }
 
     private sealed record ExecutionStarted;
