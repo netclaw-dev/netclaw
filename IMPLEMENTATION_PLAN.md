@@ -5,8 +5,11 @@ Mode: build
 
 This file is RALPH-consumable.
 
+**Active milestone: Milestone 6 (0.3.2)**
+Only work on tasks in the active milestone. Skip all tasks outside it.
+
 Rules for loop execution:
-- RALPH always picks the first task with unchecked `Done when` items.
+- RALPH only picks tasks from the **active milestone** listed above.
 - One iteration completes one task block.
 - Task metadata must include PRD + OpenSpec references.
 - Commits that complete a task must update this file and the referenced
