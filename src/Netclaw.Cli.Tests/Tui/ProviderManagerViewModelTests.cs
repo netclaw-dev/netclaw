@@ -446,6 +446,29 @@ public sealed class ProviderManagerViewModelTests : IDisposable
     }
 
     [Fact]
+    public async Task SubmitCredentials_WhenProbeThrows_ReportsFailureAndStopsProbing()
+    {
+        _fakeProbe.ExceptionToThrow = new InvalidOperationException("simulated probe failure");
+
+        using var vm = CreateViewModel();
+        await ActivateAndProbeAsync(vm);
+
+        var idx = vm.DisplayProviders.FindIndex(p => p.ProviderType == "openrouter");
+        vm.SelectedProviderIndex = idx;
+        vm.ActivateSelectedProvider();
+        vm.SelectAuthMethod(AuthMethod.ApiKey);
+
+        vm.NewApiKey = "sk-test";
+        vm.SubmitCredentials();
+        await vm.ProbeCompletion!.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.False(vm.IsProbing.Value);
+        Assert.NotNull(vm.ProbeResult.Value);
+        Assert.False(vm.ProbeResult.Value!.Success);
+        Assert.Contains("simulated probe failure", vm.ProbeResult.Value.ErrorMessage);
+    }
+
+    [Fact]
     public async Task ConfirmAdd_OAuth_TokensPersistOnlyOnSave()
     {
         using var vm = CreateViewModel();

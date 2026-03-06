@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Diagnostics;
 using Netclaw.Cli.Config;
 using Netclaw.Configuration;
 using R3;
@@ -25,6 +26,7 @@ public enum ModelManagerState
 public sealed class ModelManagerViewModel : ReactiveViewModel
 {
     private const int MaxDisplayedModels = 30;
+    private static readonly TimeSpan ProbeHardTimeout = TimeSpan.FromSeconds(20);
 
     private readonly NetclawPaths _paths;
     private readonly IProviderProbe _probe;
@@ -280,6 +282,10 @@ public sealed class ModelManagerViewModel : ReactiveViewModel
 
         _probeCts = new CancellationTokenSource();
         var ct = _probeCts.Token;
+        var providerType = provider.Entry.Type;
+        var probeId = Guid.NewGuid().ToString("N")[..8];
+        var stopwatch = Stopwatch.StartNew();
+        Exception? probeException = null;
 
         IsProbing.Value = true;
         ProbeResult.Value = null;
@@ -287,15 +293,55 @@ public sealed class ModelManagerViewModel : ReactiveViewModel
         DiscoveredModels.Clear();
         RequestRedraw();
 
+        ProbeDiagnosticsLog.Write(
+            _paths,
+            "model-manager",
+            providerType,
+            provider.Entry.Endpoint,
+            probeId,
+            "start");
+
         _ = RunProbeTimerAsync(ct);
 
-        var result = await _probe.ProbeAsync(
-            provider.Entry.Type,
-            string.IsNullOrWhiteSpace(provider.Entry.Endpoint) ? null : provider.Entry.Endpoint,
-            provider.Entry.ApiKey?.Value ?? provider.Entry.OAuthAccessToken?.Value,
-            ct);
+        var result = new ProviderProbeResult(false, "Validation failed before probe completed.", []);
+        try
+        {
+            result = await _probe.ProbeAsync(
+                    providerType,
+                    string.IsNullOrWhiteSpace(provider.Entry.Endpoint) ? null : provider.Entry.Endpoint,
+                    provider.Entry.ApiKey?.Value ?? provider.Entry.OAuthAccessToken?.Value,
+                    ct)
+                .WaitAsync(ProbeHardTimeout, ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            result = new ProviderProbeResult(false, "Validation cancelled.", []);
+        }
+        catch (TimeoutException)
+        {
+            result = new ProviderProbeResult(false,
+                $"Validation timed out after {(int)ProbeHardTimeout.TotalSeconds} seconds. Check network connectivity and try again.", []);
+        }
+        catch (Exception ex)
+        {
+            probeException = ex;
+            result = new ProviderProbeResult(false, $"Validation failed: {ex.Message}", []);
+        }
+        finally
+        {
+            CancelProbe();
 
-        CancelProbe();
+            ProbeDiagnosticsLog.Write(
+                _paths,
+                "model-manager",
+                providerType,
+                provider.Entry.Endpoint,
+                probeId,
+                result.Success ? "success" : "failure",
+                result.ErrorMessage,
+                stopwatch.Elapsed,
+                probeException);
+        }
 
         if (result.Success)
             DiscoveredModels.AddRange(result.Models.Take(MaxDisplayedModels));

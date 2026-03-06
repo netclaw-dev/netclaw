@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Diagnostics;
 using Netclaw.Cli.Config;
 using Netclaw.Configuration;
 using Netclaw.Configuration.Providers;
@@ -61,6 +62,8 @@ public sealed class ProviderDisplayItem
 /// </summary>
 public sealed class ProviderManagerViewModel : ReactiveViewModel
 {
+    private static readonly TimeSpan ProbeHardTimeout = TimeSpan.FromSeconds(20);
+
     private readonly NetclawPaths _paths;
     private readonly ProviderDescriptorRegistry _registry;
     private readonly IProviderProbe _probe;
@@ -716,21 +719,66 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
     {
         _probeCts = new CancellationTokenSource();
         var ct = _probeCts.Token;
+        var providerType = NewProviderType ?? "unknown";
+        var probeId = Guid.NewGuid().ToString("N")[..8];
+        var stopwatch = Stopwatch.StartNew();
+        Exception? probeException = null;
 
         IsProbing.Value = true;
         ProbeResult.Value = null;
         ProbeElapsedSeconds.Value = 0;
         RequestRedraw();
 
+        ProbeDiagnosticsLog.Write(
+            _paths,
+            "provider-manager",
+            providerType,
+            NewEndpoint,
+            probeId,
+            "start");
+
         _ = RunProbeTimerAsync(ct);
 
-        var result = await _probe.ProbeAsync(
-            NewProviderType ?? "unknown",
-            NewEndpoint,
-            NewApiKey,
-            ct);
+        var result = new ProviderProbeResult(false, "Validation failed before probe completed.", []);
+        try
+        {
+            result = await _probe.ProbeAsync(
+                    providerType,
+                    NewEndpoint,
+                    NewApiKey,
+                    ct)
+                .WaitAsync(ProbeHardTimeout, ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            result = new ProviderProbeResult(false, "Validation cancelled.", []);
+        }
+        catch (TimeoutException)
+        {
+            result = new ProviderProbeResult(false,
+                $"Validation timed out after {(int)ProbeHardTimeout.TotalSeconds} seconds. Check network connectivity and try again.", []);
+        }
+        catch (Exception ex)
+        {
+            probeException = ex;
+            result = new ProviderProbeResult(false, $"Validation failed: {ex.Message}", []);
+        }
+        finally
+        {
+            CancelProbe();
 
-        CancelProbe();
+            ProbeDiagnosticsLog.Write(
+                _paths,
+                "provider-manager",
+                providerType,
+                NewEndpoint,
+                probeId,
+                result.Success ? "success" : "failure",
+                result.ErrorMessage,
+                stopwatch.Elapsed,
+                probeException);
+        }
+
         ProbeResult.Value = result;
         IsProbing.Value = false;
 

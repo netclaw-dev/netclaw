@@ -1,4 +1,5 @@
 using System.Net.Sockets;
+using System.Diagnostics;
 using System.Text.Json;
 using Netclaw.Channels.Slack;
 using Netclaw.Cli.Daemon;
@@ -37,6 +38,7 @@ public enum WizardStep
 public partial class InitWizardViewModel : ReactiveViewModel
 {
     public const int TotalSteps = 9;
+    private static readonly TimeSpan ProbeHardTimeout = TimeSpan.FromSeconds(20);
 
     private readonly NetclawPaths _paths;
     private readonly IProviderProbe _probe;
@@ -314,25 +316,69 @@ public partial class InitWizardViewModel : ReactiveViewModel
     {
         _probeCts = new CancellationTokenSource();
         var ct = _probeCts.Token;
+        var providerType = SelectedProviderType ?? "unknown";
+        var probeId = Guid.NewGuid().ToString("N")[..8];
+        var stopwatch = Stopwatch.StartNew();
+        Exception? probeException = null;
 
         IsProbing.Value = true;
         ProbeResult.Value = null;
         ProbeElapsedSeconds.Value = 0;
         RequestRedraw();
 
+        ProbeDiagnosticsLog.Write(
+            _paths,
+            "init-wizard",
+            providerType,
+            EndpointInput,
+            probeId,
+            "start");
+
         // Fire-and-forget timer — self-cancels via the shared CTS.
         // RunProbeTimerAsync handles OperationCanceledException internally
         // and exits cleanly, so no need to await it after cancellation.
         _ = RunProbeTimerAsync(ct);
 
-        var result = await _probe.ProbeAsync(
-            SelectedProviderType ?? "unknown",
-            EndpointInput,
-            ApiKeyInput,
-            ct);
+        var result = new ProviderProbeResult(false, "Validation failed before probe completed.", []);
+        try
+        {
+            result = await _probe.ProbeAsync(
+                    providerType,
+                    EndpointInput,
+                    ApiKeyInput,
+                    ct)
+                .WaitAsync(ProbeHardTimeout, ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            result = new ProviderProbeResult(false, "Validation cancelled.", []);
+        }
+        catch (TimeoutException)
+        {
+            result = new ProviderProbeResult(false,
+                $"Validation timed out after {(int)ProbeHardTimeout.TotalSeconds} seconds. Check network connectivity and try again.", []);
+        }
+        catch (Exception ex)
+        {
+            probeException = ex;
+            result = new ProviderProbeResult(false, $"Validation failed: {ex.Message}", []);
+        }
+        finally
+        {
+            // Stop the timer and cancel any in-flight probe request
+            CancelProbe();
 
-        // Stop the timer
-        CancelProbe();
+            ProbeDiagnosticsLog.Write(
+                _paths,
+                "init-wizard",
+                providerType,
+                EndpointInput,
+                probeId,
+                result.Success ? "success" : "failure",
+                result.ErrorMessage,
+                stopwatch.Elapsed,
+                probeException);
+        }
 
         DiscoveredModels.Clear();
         if (result.Success)

@@ -203,6 +203,23 @@ public sealed class InitWizardViewModelTests : IDisposable
     }
 
     [Fact]
+    public async Task ProbeProvider_WhenProbeThrows_ReportsFailureAndStopsProbing()
+    {
+        using var vm = CreateViewModel();
+        vm.SelectedProviderType = "openai";
+        vm.ApiKeyInput = "oauth-token";
+        _fakeProbe.ExceptionToThrow = new InvalidOperationException("simulated probe failure");
+
+        vm.StartProbe();
+        await vm.ProbeCompletion!.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.False(vm.IsProbing.Value);
+        Assert.NotNull(vm.ProbeResult.Value);
+        Assert.False(vm.ProbeResult.Value!.Success);
+        Assert.Contains("simulated probe failure", vm.ProbeResult.Value.ErrorMessage);
+    }
+
+    [Fact]
     public async Task HealthCheck_WritesOllamaConfig()
     {
         using var vm = CreateViewModel();

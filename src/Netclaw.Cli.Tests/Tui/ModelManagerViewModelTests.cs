@@ -164,6 +164,37 @@ public sealed class ModelManagerViewModelTests : IDisposable
     }
 
     [Fact]
+    public async Task StartAssignment_WhenProbeThrows_ReportsFailureAndStopsProbing()
+    {
+        WriteConfig(new Dictionary<string, object>
+        {
+            ["configVersion"] = 1,
+            ["Providers"] = new Dictionary<string, object>
+            {
+                ["my-openrouter"] = new Dictionary<string, object>
+                {
+                    ["Type"] = "openrouter",
+                    ["Endpoint"] = "https://openrouter.ai/api/v1",
+                    ["AuthMethod"] = "ApiKey"
+                }
+            }
+        });
+
+        _fakeProbe.ExceptionToThrow = new InvalidOperationException("simulated probe failure");
+
+        using var vm = CreateViewModel();
+        vm.Refresh();
+
+        vm.StartAssignment("Main");
+        await vm.ProbeCompletion!.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.False(vm.IsProbing.Value);
+        Assert.NotNull(vm.ProbeResult.Value);
+        Assert.False(vm.ProbeResult.Value!.Success);
+        Assert.Contains("simulated probe failure", vm.ProbeResult.Value.ErrorMessage);
+    }
+
+    [Fact]
     public void ClearRole_Main_IsRejected()
     {
         using var vm = CreateViewModel();

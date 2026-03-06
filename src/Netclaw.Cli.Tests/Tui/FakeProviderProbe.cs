@@ -31,6 +31,12 @@ public sealed class FakeProviderProbe : IProviderProbe
         ]);
 
     /// <summary>
+    /// Optional exception to throw from <see cref="ProbeAsync"/>.
+    /// Useful for testing probe error handling paths.
+    /// </summary>
+    public Exception? ExceptionToThrow { get; set; }
+
+    /// <summary>
     /// Number of times <see cref="ProbeAsync"/> has been called.
     /// </summary>
     public int ProbeCallCount { get; private set; }
@@ -53,6 +59,9 @@ public sealed class FakeProviderProbe : IProviderProbe
         LastProviderType = providerType;
         LastApiKey = apiKey;
         ProbedTypes.Add(providerType);
+
+        if (ExceptionToThrow is not null)
+            return Task.FromException<ProviderProbeResult>(ExceptionToThrow);
 
         var result = TypeResults.TryGetValue(providerType, out var typeResult)
             ? typeResult
