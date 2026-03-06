@@ -148,7 +148,7 @@ Done when:
 **Verification:** L3
 
 Done when:
-- [ ] Tests use Termina `VirtualTerminal` + `VirtualInputSource` for headless wizard testing.
+- [x] Tests use Termina `VirtualTerminal` + `VirtualInputSource` for headless wizard testing.
 - [x] Test: full wizard flow with Ollama (no auth) produces valid config file. *(ViewModel-level test via `InitWizardViewModelTests`)*
 - [x] Test: provider selection → back-navigation clears downstream state.
 - [x] Test: API key entry with masked input produces correct secrets.json.
