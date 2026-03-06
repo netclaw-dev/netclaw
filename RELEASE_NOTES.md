@@ -1,3 +1,15 @@
+#### 0.3.0 2026-03-05 ####
+
+Netclaw v0.3.0 — Slack allowlist persistence and Playwright MCP isolation
+
+**Slack Init Wizard Reliability**
+
+* Fixed Slack allowlist persistence in the init wizard so saved allowlists survive restarts and reconfigure flows. (#154)
+
+**Playwright MCP Isolation**
+
+* Isolated Playwright MCP sessions per tool context to prevent cross-tool leakage and improve reliability when multiple tools run in parallel. (#153)
+
 #### 0.2.0 2026-03-05 ####
 
 Netclaw v0.2.0 — Scheduled Reminders, Proactive Slack Messaging, and Reliability

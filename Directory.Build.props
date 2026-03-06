@@ -7,8 +7,16 @@
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
-    <VersionPrefix>0.2.0</VersionPrefix>
-    <PackageReleaseNotes>Netclaw v0.2.0 — scheduled reminders (one-shot, interval, cron), proactive Slack messaging, fixed OpenAI OAuth device flow, browser automation reliability improvements, cross-session file handoff, and Slack session recovery hardening.</PackageReleaseNotes>
+    <VersionPrefix>0.3.0</VersionPrefix>
+    <PackageReleaseNotes>Netclaw v0.3.0 — Slack allowlist persistence and Playwright MCP isolation
+
+**Slack Init Wizard Reliability**
+
+* Fixed Slack allowlist persistence in the init wizard so saved allowlists survive restarts and reconfigure flows. (#154)
+
+**Playwright MCP Isolation**
+
+* Isolated Playwright MCP sessions per tool context to prevent cross-tool leakage and improve reliability when multiple tools run in parallel. (#153)</PackageReleaseNotes>
   </PropertyGroup>
   <PropertyGroup>
     <NetCoreTestVersion>net10.0</NetCoreTestVersion>
