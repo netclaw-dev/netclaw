@@ -22,6 +22,10 @@ public sealed class SessionCatalogServiceTests : IDisposable
 
     public void Dispose()
     {
+        // Drain the SQLite connection pool before deleting the temp directory.
+        // On Windows, pooled connections keep file handles open, causing Directory.Delete to fail.
+        SqliteConnection.ClearAllPools();
+
         if (Directory.Exists(_tempBase))
             Directory.Delete(_tempBase, recursive: true);
     }
