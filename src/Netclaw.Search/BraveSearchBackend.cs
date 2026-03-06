@@ -1,3 +1,4 @@
+using System.IO.Compression;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Text.Json;
@@ -55,7 +56,37 @@ public sealed partial class BraveSearchBackend : ISearchBackend
 
                 response.EnsureSuccessStatusCode();
 
-                var json = await response.Content.ReadAsStringAsync(ct);
+                var contentEncoding = response.Content.Headers.ContentEncoding.FirstOrDefault();
+                var contentType = response.Content.Headers.ContentType?.MediaType ?? "";
+
+                if (!string.IsNullOrEmpty(contentType) &&
+                    !contentType.Contains("json", StringComparison.OrdinalIgnoreCase))
+                    return new SearchBackendResult.Error(
+                        $"Brave Search returned unexpected content " +
+                        $"(status: {(int)response.StatusCode}, content-type: {contentType}, " +
+                        $"content-encoding: {contentEncoding ?? "none"}).");
+
+                string json;
+                if (string.Equals(contentEncoding, "gzip", StringComparison.OrdinalIgnoreCase))
+                {
+                    using var compressed = await response.Content.ReadAsStreamAsync(ct);
+                    using var decompressor = new GZipStream(compressed, CompressionMode.Decompress);
+                    using var reader = new StreamReader(decompressor);
+                    json = await reader.ReadToEndAsync(ct);
+                }
+                else if (!string.IsNullOrEmpty(contentEncoding) &&
+                         !string.Equals(contentEncoding, "identity", StringComparison.OrdinalIgnoreCase))
+                {
+                    return new SearchBackendResult.Error(
+                        $"Brave Search returned unsupported encoding " +
+                        $"(status: {(int)response.StatusCode}, content-type: {contentType}, " +
+                        $"content-encoding: {contentEncoding}).");
+                }
+                else
+                {
+                    json = await response.Content.ReadAsStringAsync(ct);
+                }
+
                 var results = ParseResults(json, maxResults);
                 return new SearchBackendResult.Success(results);
             }

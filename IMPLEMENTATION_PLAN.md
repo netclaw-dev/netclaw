@@ -495,10 +495,10 @@ resume, Slack error diagnostics, reminder execution, and CLI ergonomics.
 **Verification:** L2
 
 Done when:
-- [ ] `BraveSearchBackend` correctly handles gzip-encoded responses (the `0x1F` byte is the gzip magic number; `ReadAsStringAsync` does not auto-decompress when `AcceptEncoding: gzip` is set manually).
-- [ ] Response `Content-Encoding` and `Content-Type` validated before JSON parse; unexpected encoding produces a controlled `SearchBackendResult.Error` with response metadata (status, content-type, content-encoding).
-- [ ] Tests with mock HTTP handler returning gzip-compressed JSON verify successful parse.
-- [ ] Test with mock returning unexpected binary content verifies controlled error path.
+- [x] `BraveSearchBackend` correctly handles gzip-encoded responses (the `0x1F` byte is the gzip magic number; `ReadAsStringAsync` does not auto-decompress when `AcceptEncoding: gzip` is set manually).
+- [x] Response `Content-Encoding` and `Content-Type` validated before JSON parse; unexpected encoding produces a controlled `SearchBackendResult.Error` with response metadata (status, content-type, content-encoding).
+- [x] Tests with mock HTTP handler returning gzip-compressed JSON verify successful parse.
+- [x] Test with mock returning unexpected binary content verifies controlled error path.
 
 ### Task M6.2: Harden session catalog schema migration
 

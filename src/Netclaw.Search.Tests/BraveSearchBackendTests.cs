@@ -1,3 +1,4 @@
+using System.IO.Compression;
 using System.Net;
 using System.Net.Http.Headers;
 using Netclaw.Search;
@@ -165,6 +166,34 @@ public class BraveSearchBackendTests
         Assert.Equal(TimeSpan.FromSeconds(expectedSeconds), delay);
     }
 
+    [Fact]
+    public async Task SearchAsync_handles_gzip_encoded_response()
+    {
+        var handler = new FakeHttpMessageHandler();
+        handler.Enqueue(CreateGzipSuccessResponse());
+
+        var backend = new BraveSearchBackend("test-key", new HttpClient(handler));
+        var result = await backend.SearchAsync("test", 10, CancellationToken.None);
+
+        var success = Assert.IsType<SearchBackendResult.Success>(result);
+        Assert.Single(success.Results);
+        Assert.Equal("https://example.com", success.Results[0].Url);
+    }
+
+    [Fact]
+    public async Task SearchAsync_returns_controlled_error_for_unexpected_binary_content()
+    {
+        var handler = new FakeHttpMessageHandler();
+        handler.Enqueue(CreateBinaryResponse());
+
+        var backend = new BraveSearchBackend("test-key", new HttpClient(handler));
+        var result = await backend.SearchAsync("test", 10, CancellationToken.None);
+
+        var error = Assert.IsType<SearchBackendResult.Error>(result);
+        Assert.Contains("application/octet-stream", error.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("200", error.Message, StringComparison.Ordinal);
+    }
+
     private static HttpResponseMessage CreateSuccessResponse()
     {
         const string json = """{"web":{"results":[{"title":"Test Result","url":"https://example.com","description":"A test result"}]}}""";
@@ -172,6 +201,34 @@ public class BraveSearchBackendTests
         {
             Content = new StringContent(json, System.Text.Encoding.UTF8, "application/json")
         };
+    }
+
+    private static HttpResponseMessage CreateGzipSuccessResponse()
+    {
+        const string json = """{"web":{"results":[{"title":"Test Result","url":"https://example.com","description":"A test result"}]}}""";
+        var ms = new MemoryStream();
+        using (var gzip = new GZipStream(ms, CompressionMode.Compress, leaveOpen: true))
+        using (var writer = new StreamWriter(gzip, System.Text.Encoding.UTF8))
+            writer.Write(json);
+        ms.Position = 0;
+
+        var response = new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StreamContent(ms)
+        };
+        response.Content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
+        response.Content.Headers.ContentEncoding.Add("gzip");
+        return response;
+    }
+
+    private static HttpResponseMessage CreateBinaryResponse()
+    {
+        var response = new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new ByteArrayContent(new byte[] { 0x1F, 0x8B, 0x00, 0x01 })
+        };
+        response.Content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
+        return response;
     }
 
     private static string LoadFixture(string filename)
