@@ -178,6 +178,33 @@ public sealed class SessionCatalogServiceTests : IDisposable
         Assert.Equal("unknown", entries[2].Channel);  // unknown-format
     }
 
+    [Fact]
+    public void LegacyMigration_InfersSlackChannel_ForPrivateChannelIds()
+    {
+        var paths = CreatePaths();
+
+        using (var conn = OpenConn(paths))
+        {
+            RunSql(conn,
+                """
+                CREATE TABLE sessions (
+                    session_id    TEXT PRIMARY KEY,
+                    last_activity INTEGER,
+                    message_count INTEGER,
+                    created       INTEGER,
+                    display_name  TEXT
+                )
+                """);
+            RunSql(conn, "INSERT INTO sessions VALUES ('G12345/1234567890.000100', 1000, 1, 500, NULL)");
+        }
+
+        var service = CreateService(paths);
+        var entries = service.ListRecent();
+
+        Assert.Single(entries);
+        Assert.Equal("slack", entries[0].Channel);
+    }
+
     private static SqliteConnection OpenConn(NetclawPaths paths)
     {
         var conn = new SqliteConnection(new SqliteConnectionStringBuilder

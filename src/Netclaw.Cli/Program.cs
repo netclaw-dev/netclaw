@@ -610,7 +610,7 @@ static void WriteGeneralHelp()
     Console.WriteLine("Usage: netclaw <command> [options]");
     Console.WriteLine();
     Console.WriteLine("Commands:");
-    Console.WriteLine("  chat                     Interactive TUI chat (default)");
+    Console.WriteLine("  chat                     Interactive TUI chat");
     Console.WriteLine("  chat --resume <id>       Resume an existing session by ID");
     Console.WriteLine("  sessions                 Browse and resume recent sessions (TUI)");
     Console.WriteLine("  sessions --once          List sessions and exit (no TUI, plain text or JSON)");
@@ -844,11 +844,12 @@ static async Task<int> RunStatusAsync(IServiceProvider services, IConfiguration 
             var node = JsonSerializer.SerializeToNode(
                 status, new JsonSerializerOptions(JsonSerializerDefaults.Web))!;
             var updateNode = (node["update"] as JsonObject) ?? new JsonObject();
+            var updateAvailable = string.Equals(cliUpdate.State, "update-available", StringComparison.Ordinal);
+            updateNode["available"] = updateAvailable;
             updateNode["state"] = cliUpdate.State;
-            if (cliUpdate.LatestVersion is not null)
-                updateNode["latestVersion"] = cliUpdate.LatestVersion;
-            if (cliUpdate.ReleaseNotesUrl is not null)
-                updateNode["releaseNotesUrl"] = cliUpdate.ReleaseNotesUrl;
+            updateNode["currentVersion"] = cliUpdate.CurrentVersion;
+            updateNode["latestVersion"] = updateAvailable ? cliUpdate.LatestVersion : null;
+            updateNode["releaseNotesUrl"] = updateAvailable ? cliUpdate.ReleaseNotesUrl : null;
             node["update"] = updateNode;
             Console.WriteLine(node.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
         }

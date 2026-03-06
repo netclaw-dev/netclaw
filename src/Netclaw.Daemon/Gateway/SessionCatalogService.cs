@@ -269,22 +269,7 @@ public sealed class SessionCatalogService : ISessionLifecycleObserver
                 {
                     try
                     {
-                        RunSql(conn,
-                            """
-                            CREATE TABLE sessions_new (
-                                persistence_id    TEXT NOT NULL PRIMARY KEY,
-                                channel           TEXT NOT NULL,
-                                created_at        INTEGER NOT NULL,
-                                last_activity     INTEGER NOT NULL,
-                                status            TEXT NOT NULL DEFAULT 'active',
-                                turn_count        INTEGER NOT NULL DEFAULT 0,
-                                title             TEXT,
-                                description       TEXT,
-                                last_input_tokens INTEGER,
-                                log_path          TEXT,
-                                metadata          TEXT
-                            )
-                            """);
+                        RunSql(conn, SessionsCreateTableDdl.Replace("sessions", "sessions_new", StringComparison.Ordinal));
                         RunSql(conn,
                             """
                             INSERT INTO sessions_new (persistence_id, channel, created_at, last_activity, status, turn_count, title)
@@ -294,7 +279,7 @@ public sealed class SessionCatalogService : ISessionLifecycleObserver
                                     WHEN session_id LIKE 'signalr/%' THEN 'signalr'
                                     WHEN session_id LIKE 'headless/%' THEN 'headless'
                                     WHEN session_id LIKE 'console/%'  THEN 'console'
-                                    WHEN session_id LIKE 'C%' OR session_id LIKE 'D%' THEN 'slack'
+                                    WHEN session_id LIKE 'C%' OR session_id LIKE 'D%' OR session_id LIKE 'G%' THEN 'slack'
                                     ELSE 'unknown'
                                 END,
                                 COALESCE(created, last_activity, 0),
