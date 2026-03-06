@@ -7,14 +7,24 @@
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
-    <VersionPrefix>0.3.1</VersionPrefix>
-    <PackageReleaseNotes>Netclaw v0.3.1 - Provider probe resilience and diagnostics
+    <VersionPrefix>0.3.2</VersionPrefix>
+    <PackageReleaseNotes>Netclaw v0.3.2 - Session hardening, diagnostics, CLI updates
 
-**Provider Probe Reliability**
+**Session Catalog Hardening**
+
+* Fixed provider catalog refresh to properly handle missing provider entries and prevent crash loops when a provider is removed. ([#170](https://github.com/Aaronontheweb/netclaw/pull/170))
+
+**Enhanced Diagnostics**
+
+* Added `netclaw doctor diagnostics` command to collect comprehensive diagnostic information including version info, configuration analysis, session health, and logs for troubleshooting. ([#170](https://github.com/Aaronontheweb/netclaw/pull/170))
+
+**CLI Improvements**
+
+* Improved completion handling in `init wizard` to prevent duplicate completion calls. ([#170](https://github.com/Aaronontheweb/netclaw/pull/170))
+
+**Provider Probe Resilience**
 
 * Hardened provider probe flows in the init wizard, provider manager, and model manager with explicit timeout and exception handling so validation failures no longer hang indefinitely. ([#158](https://github.com/Aaronontheweb/netclaw/pull/158))
-
-**Diagnostics**
 
 * Added provider probe diagnostics logging to `~/.netclaw/logs/provider-probe.log` with probe ID, source, endpoint host, elapsed time, and failure details to make OAuth and model discovery failures easier to diagnose. ([#158](https://github.com/Aaronontheweb/netclaw/pull/158))</PackageReleaseNotes>
   </PropertyGroup>
