@@ -462,6 +462,7 @@ static async Task RunAsync(string[] args)
                     break;
                 case "--json":
                     sessionsJsonOutput = true;
+                    onceMode = true;
                     break;
                 case "--help" or "-h" or "help":
                     WriteSessionsHelp();

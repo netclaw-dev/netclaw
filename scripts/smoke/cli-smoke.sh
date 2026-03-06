@@ -120,6 +120,21 @@ else
   fail "sessions --once: unexpected exit code $sessions_exit (expected 0 or 1)"
 fi
 
+echo ""
+echo "=== netclaw sessions --json (daemon-optional) ==="
+set +e
+sessions_json_exit=0
+sessions_json_output="$(run_netclaw sessions --json 2>&1)"
+sessions_json_exit=$?
+set -e
+echo "$sessions_json_output"
+# 0=sessions listed, 1=daemon unreachable — both valid; must not launch TUI (exits)
+if [[ $sessions_json_exit -le 1 ]]; then
+  pass "sessions --json: exits with valid code $sessions_json_exit (not TUI)"
+else
+  fail "sessions --json: unexpected exit code $sessions_json_exit (expected 0 or 1)"
+fi
+
 # ── Summary ──────────────────────────────────────────────────────────────────
 
 echo ""

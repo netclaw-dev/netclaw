@@ -8,6 +8,19 @@ This file is RALPH-consumable.
 **Active milestone: Milestone 6 (0.3.2)**
 Only work on tasks in the active milestone. Skip all tasks outside it.
 
+---
+
+## Review Fix-it: Sessions `--json` flag does not imply `--once`
+
+**Source:** RALPH run 20260306-185029, review-after-iter-06 (finding F.1)
+**Surface area:** `src/Netclaw.Cli/Program.cs`
+**Verification:** L2
+
+Done when:
+- [x] `--json` case in the sessions argument parser also sets `onceMode = true` (line ~463 in Program.cs).
+- [x] `netclaw sessions --json` produces JSON output and exits (does not fall through to TUI).
+- [x] Smoke test updated to verify `sessions --json` exits 0 or 1 (not TUI launch).
+
 Rules for loop execution:
 - RALPH only picks tasks from the **active milestone** listed above.
 - One iteration completes one task block.
