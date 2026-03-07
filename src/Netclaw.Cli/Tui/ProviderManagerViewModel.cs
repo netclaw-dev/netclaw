@@ -779,8 +779,8 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
                 probeException);
         }
 
-        ProbeResult.Value = result;
         IsProbing.Value = false;
+        ProbeResult.Value = result;
 
         if (result.Success)
         {

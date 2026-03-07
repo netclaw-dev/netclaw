@@ -1,4 +1,5 @@
 using System.Text.Json;
+using R3;
 using Netclaw.Cli.Tui;
 using Netclaw.Configuration;
 using Xunit;
@@ -192,6 +193,42 @@ public sealed class ModelManagerViewModelTests : IDisposable
         Assert.NotNull(vm.ProbeResult.Value);
         Assert.False(vm.ProbeResult.Value!.Success);
         Assert.Contains("simulated probe failure", vm.ProbeResult.Value.ErrorMessage);
+    }
+
+    [Fact]
+    public async Task StartAssignment_PublishesResultAfterIsProbingClears()
+    {
+        WriteConfig(new Dictionary<string, object>
+        {
+            ["configVersion"] = 1,
+            ["Providers"] = new Dictionary<string, object>
+            {
+                ["my-openrouter"] = new Dictionary<string, object>
+                {
+                    ["Type"] = "openrouter",
+                    ["Endpoint"] = "https://openrouter.ai/api/v1",
+                    ["AuthMethod"] = "ApiKey"
+                }
+            }
+        });
+
+        _fakeProbe.NextResult = new ProviderProbeResult(false, "synthetic failure", []);
+
+        using var vm = CreateViewModel();
+        vm.Refresh();
+
+        bool? isProbingAtResultPublish = null;
+        using var sub = vm.ProbeResult.Subscribe(result =>
+        {
+            if (result is not null)
+                isProbingAtResultPublish = vm.IsProbing.Value;
+        });
+
+        vm.StartAssignment("Main");
+        await vm.ProbeCompletion!.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(false, isProbingAtResultPublish);
+        Assert.False(vm.IsProbing.Value);
     }
 
     [Fact]

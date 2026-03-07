@@ -1,4 +1,5 @@
 using System.Text.Json;
+using R3;
 using Netclaw.Cli.Provider;
 using Netclaw.Cli.Tui;
 using Netclaw.Configuration;
@@ -466,6 +467,34 @@ public sealed class ProviderManagerViewModelTests : IDisposable
         Assert.NotNull(vm.ProbeResult.Value);
         Assert.False(vm.ProbeResult.Value!.Success);
         Assert.Contains("simulated probe failure", vm.ProbeResult.Value.ErrorMessage);
+    }
+
+    [Fact]
+    public async Task SubmitCredentials_PublishesResultAfterIsProbingClears()
+    {
+        using var vm = CreateViewModel();
+        await ActivateAndProbeAsync(vm);
+
+        var idx = vm.DisplayProviders.FindIndex(p => p.ProviderType == "openrouter");
+        vm.SelectedProviderIndex = idx;
+        vm.ActivateSelectedProvider();
+        vm.SelectAuthMethod(AuthMethod.ApiKey);
+
+        vm.NewApiKey = "sk-test";
+        _fakeProbe.NextResult = new ProviderProbeResult(false, "synthetic failure", []);
+
+        bool? isProbingAtResultPublish = null;
+        using var sub = vm.ProbeResult.Subscribe(result =>
+        {
+            if (result is not null)
+                isProbingAtResultPublish = vm.IsProbing.Value;
+        });
+
+        vm.SubmitCredentials();
+        await vm.ProbeCompletion!.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(false, isProbingAtResultPublish);
+        Assert.False(vm.IsProbing.Value);
     }
 
     [Fact]

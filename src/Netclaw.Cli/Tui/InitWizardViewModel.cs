@@ -384,8 +384,10 @@ public partial class InitWizardViewModel : ReactiveViewModel
         if (result.Success)
             DiscoveredModels.AddRange(result.Models);
 
-        ProbeResult.Value = result;
+        // Clear probing state before publishing final result so subscribers that
+        // render based on both values don't get stuck on the spinner frame.
         IsProbing.Value = false;
+        ProbeResult.Value = result;
         RequestRedraw();
     }
 

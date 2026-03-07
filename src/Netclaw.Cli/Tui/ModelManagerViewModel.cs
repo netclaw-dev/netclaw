@@ -346,8 +346,8 @@ public sealed class ModelManagerViewModel : ReactiveViewModel
         if (result.Success)
             DiscoveredModels.AddRange(result.Models.Take(MaxDisplayedModels));
 
-        ProbeResult.Value = result;
         IsProbing.Value = false;
+        ProbeResult.Value = result;
         NotifyStateChanged();
     }
 
