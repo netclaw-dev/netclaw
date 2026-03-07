@@ -33,6 +33,8 @@ public sealed record SlackThreadInbound(
     SessionId SessionId,
     SlackChannelId ChannelId,
     SlackThreadTs ThreadTs,
+    SlackEventId EventId,
+    string TurnId,
     string SenderId,
     string Text,
     DateTimeOffset ReceivedAt,

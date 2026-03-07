@@ -5,6 +5,7 @@ using Netclaw.Cli.Provider;
 using Netclaw.Cli.Tui;
 using Netclaw.Configuration;
 using Netclaw.Configuration.Providers;
+using Netclaw.Configuration.Providers.OAuth;
 using Xunit;
 
 namespace Netclaw.Cli.Tests.Tui;
@@ -240,6 +241,30 @@ public sealed class InitWizardViewModelTests : IDisposable
 
         Assert.Equal(false, isProbingAtResultPublish);
         Assert.False(vm.IsProbing.Value);
+    }
+
+    [Fact]
+    public async Task ProbeProvider_OAuth_UsesOAuthTokenWhenApiKeyInputEmpty()
+    {
+        using var vm = CreateViewModel();
+        vm.SelectedProviderType = "openai";
+        vm.SelectedAuthMethod = AuthMethod.OAuthDevice;
+        vm.ApiKeyInput = null;
+        vm.OAuthResult = new OAuthDeviceFlowResult(
+            new SensitiveString("oauth-access-token"),
+            new SensitiveString("oauth-refresh-token"),
+            DateTimeOffset.UtcNow.AddHours(1));
+
+        _fakeProbe.NextResult = new ProviderProbeResult(true, null,
+        [
+            new DiscoveredModel { ModelId = "gpt-4.1" }
+        ]);
+
+        vm.StartProbe();
+        await vm.ProbeCompletion!.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal("oauth-access-token", _fakeProbe.LastApiKey);
+        Assert.True(vm.ProbeResult.Value!.Success);
     }
 
     [Fact]

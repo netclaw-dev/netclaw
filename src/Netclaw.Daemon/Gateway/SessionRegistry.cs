@@ -244,9 +244,14 @@ public sealed class SessionRegistry
         if (!_sessions.TryGetValue(attachedSessionId, out var hubSession))
             throw new HubException($"Session '{sessionId}' not found.");
 
+        var signalrMessageId = $"signalr:{callerConnectionId.Value}:{_timeProvider.GetUtcNow().ToUnixTimeMilliseconds()}:{Guid.NewGuid():N}";
+        if (signalrMessageId.Length > 128)
+            signalrMessageId = signalrMessageId[..128];
+
         var result = await hubSession.InputQueue.OfferAsync(new ChannelInput
         {
             SenderId = "signalr-user",
+            MessageId = signalrMessageId,
             Contents = [new TextContent(text)],
             ReceivedAt = _timeProvider.GetUtcNow()
         });

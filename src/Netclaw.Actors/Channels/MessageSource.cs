@@ -22,6 +22,18 @@ public sealed record MessageSource
     public string? ChannelId { get; init; }
 
     /// <summary>
+    /// Optional source message identifier from the inbound transport.
+    /// Useful for routing diagnostics and dedup correlation.
+    /// </summary>
+    public string? MessageId { get; init; }
+
+    /// <summary>
+    /// Correlation identifier for this turn. Propagated across session logs
+    /// and actor boundaries for end-to-end traceability.
+    /// </summary>
+    public string? TurnId { get; init; }
+
+    /// <summary>
     /// When the message was received by the channel.
     /// </summary>
     public DateTimeOffset ReceivedAt { get; init; }

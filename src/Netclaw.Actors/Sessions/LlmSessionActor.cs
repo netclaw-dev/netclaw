@@ -6,6 +6,7 @@ using Akka.Actor;
 using Akka.Event;
 using Akka.Persistence;
 using Microsoft.Extensions.AI;
+using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
 using Netclaw.Configuration;
 using Netclaw.Actors.Tools;
@@ -69,6 +70,11 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     private static readonly object ProcessingWatchdogTimerKey = new();
     private long _processingOperationId;
     private string? _processingOperationName;
+
+    // Per-turn diagnostic correlation (ephemeral)
+    private string? _activeTurnId;
+    private string? _activeMessageId;
+    private string? _activeChannelType;
 
     // Persistent state (immutable — replaced on each event)
     private SessionState _state = SessionState.Empty;
@@ -185,7 +191,13 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         Command<SendUserMessage>(cmd =>
         {
-            _log.Info("Received user message");
+            BindTurnTelemetry(cmd.Source);
+            TurnLog().Info(
+                "turn_received channel={ChannelType} sender={SenderId} hasMedia={HasMedia} textChars={TextLength}",
+                cmd.Source?.ChannelType ?? "unknown",
+                cmd.Source?.SenderId ?? "unknown",
+                cmd.MediaReferences.Count > 0,
+                cmd.Content?.Length ?? 0);
             _logActor?.Tell(cmd);
 
             _toolIterationCount = 0;
@@ -229,7 +241,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 return;
             }
 
-            _state = _state.AddUserMessage(cmd.Content, mediaRefs.Count > 0 ? mediaRefs : null);
+            var userContent = cmd.Content ?? string.Empty;
+            _state = _state.AddUserMessage(userContent, mediaRefs.Count > 0 ? mediaRefs : null);
             TryReplyAck();
             FireLlmCall();
             Become(Processing);
@@ -368,14 +381,14 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             // Safety circuit breaker: force text response when tool iteration limit reached
             if (_toolIterationCount >= _config.MaxToolIterationsPerTurn)
             {
-                _log.Warning("Tool iteration limit reached ({Count}/{Max}), forcing text response",
+                TurnLog().Warning("turn_tool_iteration_limit_reached count={Count} max={Max}",
                     _toolIterationCount, _config.MaxToolIterationsPerTurn);
                 FireLlmCall(forceNoTools: true);
                 return;
             }
 
             // Fire follow-up LLM call with tool results in context
-            _log.Info("Tool execution complete ({Iteration}/{Max}), firing follow-up LLM call with {ResultCount} results",
+            TurnLog().Info("turn_tool_execution_complete iteration={Iteration} max={Max} resultCount={ResultCount}",
                 _toolIterationCount, _config.MaxToolIterationsPerTurn, msg.ToolResults.Count);
             FireLlmCall();
         });
@@ -383,7 +396,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         Command<ToolExecutionFailed>(msg =>
         {
             StopProcessingWatchdog();
-            _log.Error(msg.Cause, "Tool execution failed");
+            TurnLog().Error(msg.Cause, "turn_tool_execution_failed");
 
             const string errorMessage = "I encountered an error executing a tool. Please try again.";
             var category = msg.Cause is TimeoutException ? ErrorCategory.Timeout : ErrorCategory.ToolFailure;
@@ -393,7 +406,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         Command<LlmCallFailed>(msg =>
         {
             StopProcessingWatchdog();
-            _log.Error(msg.Cause, "LLM call failed");
+            TurnLog().Error(msg.Cause, "turn_llm_call_failed");
 
             var errorMessage = IsContextOverflowError(msg.Cause)
                 ? $"Context window exceeded after compaction — the session has too many tools or a large system prompt for the {_config.ModelId} context window ({_config.ContextWindowTokens} tokens). Try reducing tools or increasing the model's context window."
@@ -889,7 +902,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
             if (_buffer.Count > 0)
             {
-                _log.Info("Draining {BufferCount} buffered message(s)", _buffer.Count);
+                TurnLog().Info("turn_buffer_drain count={BufferCount}", _buffer.Count);
                 foreach (var buffered in _buffer)
                 {
                     var refs = buffered.MediaReferences.Count > 0 ? buffered.MediaReferences : null;
@@ -1130,6 +1143,11 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         }
 
         StartProcessingWatchdog("llm-call", timeout);
+
+        TurnLog().Info("turn_llm_call_start messages={MessageCount} toolsEnabled={ToolsEnabled} forceNoTools={ForceNoTools}",
+            messages.Count,
+            options?.Tools?.Count > 0,
+            forceNoTools);
 
         _ = InvokeLlmAsync(client, messages, options, self, timeout);
     }
@@ -1695,12 +1713,20 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     {
         _state = _state.AddErrorReply(errorMessage);
 
+        var correlationId = Guid.NewGuid();
+
+        TurnLog().Error(cause,
+            "turn_failed category={Category} correlationId={CorrelationId} message={Message}",
+            category,
+            correlationId,
+            errorMessage);
+
         EmitOutput(new ErrorOutput
         {
             SessionId = _sessionId,
             Message = errorMessage,
             Category = category,
-            CorrelationId = Guid.NewGuid(),
+            CorrelationId = correlationId,
             Cause = cause
         });
         EmitOutput(new TurnCompleted
@@ -1724,6 +1750,32 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         }
 
         _logActor?.Tell(output);
+    }
+
+    private void BindTurnTelemetry(MessageSource? source)
+    {
+        var sourceMessageId = source?.MessageId;
+        _activeMessageId = sourceMessageId;
+        _activeTurnId = source?.TurnId
+            ?? sourceMessageId
+            ?? Guid.NewGuid().ToString("N")[..8];
+        _activeChannelType = source?.ChannelType;
+    }
+
+    private ILoggingAdapter TurnLog()
+    {
+        var log = _log;
+
+        if (!string.IsNullOrWhiteSpace(_activeTurnId))
+            log = log.WithContext("TurnId", _activeTurnId);
+
+        if (!string.IsNullOrWhiteSpace(_activeMessageId))
+            log = log.WithContext("MessageId", _activeMessageId);
+
+        if (!string.IsNullOrWhiteSpace(_activeChannelType))
+            log = log.WithContext("ChannelType", _activeChannelType);
+
+        return log;
     }
 
     private void TryReplyAck()

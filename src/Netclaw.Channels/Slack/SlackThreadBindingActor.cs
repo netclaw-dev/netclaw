@@ -142,10 +142,18 @@ internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStas
 
     private async Task HandleInboundAsync(SlackThreadInbound message)
     {
+        var inboundLog = _log
+            .WithContext("TurnId", message.TurnId)
+            .WithContext("SlackEventId", message.EventId.Value);
+
         using var inboundCts = new CancellationTokenSource(InboundProcessingTimeout);
 
         try
         {
+            inboundLog.Info("slack_turn_received textChars={TextLength} fileCount={FileCount}",
+                message.Text?.Length ?? 0,
+                message.Files?.Count ?? 0);
+
             if (!string.IsNullOrWhiteSpace(message.Text))
             {
                 PromptInjectionResult detection;
@@ -245,6 +253,7 @@ internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStas
                 {
                     SenderId = message.SenderId,
                     ChannelId = _channelId.Value,
+                    MessageId = message.EventId.Value,
                     Contents = contents,
                     ReceivedAt = message.ReceivedAt
                 }, queueWriteCts.Token);
@@ -262,16 +271,16 @@ internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStas
                 return;
             }
 
-            _log.Debug("Accepted inbound Slack message for session queue");
+            inboundLog.Info("slack_turn_enqueued contentItems={ContentCount}", contents.Count);
             ChannelTelemetry.RecordSlackMessageEnqueued();
         }
         catch (OperationCanceledException ex)
         {
-            _log.Warning(ex, "Inbound Slack processing timed out for session {0}", _sessionId.Value);
+            inboundLog.Warning(ex, "slack_turn_enqueue_timeout");
         }
         catch (Exception ex)
         {
-            _log.Error(ex, "Failed to enqueue Slack message for session {0}", _sessionId.Value);
+            inboundLog.Error(ex, "slack_turn_enqueue_failed");
         }
     }
 
