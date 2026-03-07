@@ -188,7 +188,21 @@ public sealed partial class MemorizerStoreMemoryTool : NetclawTool<MemorizerStor
                 AgentName = definition.Name,
                 IsStarted = false,
                 Success = result.Success,
-                Duration = sw.Elapsed
+                Duration = sw.Elapsed,
+                Findings = result.Findings
+                    .Select(f => new SubAgentFindingCandidate
+                    {
+                        Title = f.Title,
+                        Content = f.Content,
+                        Kind = f.Kind,
+                        Domain = f.Domain,
+                        Sensitivity = f.Sensitivity,
+                        RecallMode = f.RecallMode,
+                        UpdateSemantics = f.UpdateSemantics,
+                        Confidence = f.Confidence,
+                        FreshnessAtMs = f.FreshnessAtMs
+                    })
+                    .ToArray()
             });
 
             if (result.Success)

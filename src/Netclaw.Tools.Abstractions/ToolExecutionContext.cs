@@ -17,6 +17,23 @@ public sealed record SubAgentNotificationInfo
     public int ToolCount { get; init; }
     public bool Success { get; init; }
     public TimeSpan Duration { get; init; }
+    public IReadOnlyList<SubAgentFindingCandidate> Findings { get; init; } = [];
+}
+
+/// <summary>
+/// Structured candidate surfaced by a subagent for parent-session durable-memory review.
+/// </summary>
+public sealed record SubAgentFindingCandidate
+{
+    public required string Title { get; init; }
+    public required string Content { get; init; }
+    public string Kind { get; init; } = "record";
+    public string Domain { get; init; } = "project:default";
+    public string Sensitivity { get; init; } = "normal";
+    public string RecallMode { get; init; } = "auto";
+    public string UpdateSemantics { get; init; } = "append-document";
+    public double Confidence { get; init; } = 0.7;
+    public long? FreshnessAtMs { get; init; }
 }
 
 /// <summary>

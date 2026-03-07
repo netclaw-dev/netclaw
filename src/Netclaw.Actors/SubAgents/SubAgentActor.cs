@@ -5,6 +5,7 @@ using Microsoft.Extensions.AI;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Sessions;
 using Netclaw.Actors.Tools;
+using Netclaw.Actors.Memory;
 using Netclaw.Tools;
 using AiChatMessage = Microsoft.Extensions.AI.ChatMessage;
 
@@ -28,6 +29,7 @@ public sealed class SubAgentActor : ReceiveActor
     private readonly ToolRegistry _toolRegistry;
     private readonly IReadOnlyList<AITool> _aiTools;
     private readonly ILoggingAdapter _log;
+    private readonly MemoryPolicyEvaluator _policyEvaluator = new();
 
     // Conversation state (not persisted — ephemeral)
     private readonly List<AiChatMessage> _history = new();
@@ -195,14 +197,75 @@ public sealed class SubAgentActor : ReceiveActor
         _log.Info("SubAgent [{AgentName}] completed (success={Success}, output={OutputLength} chars, iterations={Iterations})",
             _definition.Name, success, output.Length, _toolIterationCount);
 
+        var findings = success
+            ? BuildFindings(output, _toolExecutionContext.SessionId)
+            : [];
+
         _replyTo.Tell(new SubAgentResult
         {
             Success = success,
             Output = output,
-            AgentName = _definition.Name
+            AgentName = _definition.Name,
+            Findings = findings
         });
 
         Context.Stop(Self);
+    }
+
+    private List<SubAgentFinding> BuildFindings(string output, string? sessionId)
+    {
+        var content = output?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(content))
+            return [];
+
+        if (content.Length < 30)
+            return [];
+
+        var normalized = content.Length <= 1800
+            ? content
+            : content[..1800];
+
+        var domain = ResolveDomain(sessionId);
+        var confidence = 0.65;
+        var policy = _policyEvaluator.EvaluateWrite(
+            domain,
+            sensitivity: "normal",
+            recallMode: "auto",
+            confidence,
+            isExplicitRequest: false);
+
+        if (!policy.Allowed)
+            return [];
+
+        return
+        [
+            new SubAgentFinding
+            {
+                Title = $"subagent:{_definition.Name}",
+                Content = normalized,
+                Kind = "record",
+                Domain = domain,
+                Sensitivity = "normal",
+                RecallMode = "auto",
+                UpdateSemantics = "append-document",
+                Confidence = confidence
+            }
+        ];
+    }
+
+    private static string ResolveDomain(string? sessionId)
+    {
+        if (string.IsNullOrWhiteSpace(sessionId))
+            return "project:default";
+
+        var slash = sessionId.IndexOf('/', StringComparison.Ordinal);
+        if (slash <= 0)
+            return "project:default";
+
+        var prefix = sessionId[..slash].Trim();
+        return string.IsNullOrWhiteSpace(prefix)
+            ? "project:default"
+            : $"project:{prefix.ToLowerInvariant()}";
     }
 
     private static string ExtractText(AiChatMessage message)

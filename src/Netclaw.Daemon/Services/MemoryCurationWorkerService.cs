@@ -46,8 +46,17 @@ internal sealed class MemoryCurationWorkerService(
             catch (Exception ex)
             {
                 logger.LogWarning(ex,
-                    "Memory checkpoint curation failed for {CheckpointId}; scheduling retry",
-                    leased.CheckpointId);
+                    "Memory checkpoint curation failed for {CheckpointId} (trigger={TriggerType}); scheduling retry",
+                    leased.CheckpointId,
+                    leased.TriggerType);
+
+                if (string.Equals(leased.TriggerType, "subagent-findings", StringComparison.OrdinalIgnoreCase))
+                {
+                    logger.LogWarning(
+                        "Subagent-originated memory candidate retry scheduled for checkpoint {CheckpointId}",
+                        leased.CheckpointId);
+                }
+
                 await store.MarkCheckpointRetryAsync(leased.CheckpointId, maxRetries: 5, ct);
             }
         }

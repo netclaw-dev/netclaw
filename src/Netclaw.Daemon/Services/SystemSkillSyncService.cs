@@ -88,7 +88,7 @@ internal sealed class SystemSkillSyncService : IHostedService
     /// </summary>
     private void MigrateFlatSkills()
     {
-        var builtInNames = new[] { "identity-management", "memorizer-usage", "self-diagnostics" };
+        var builtInNames = new[] { "identity-management", "memory-usage", "memorizer-usage", "self-diagnostics" };
         var migrated = false;
 
         foreach (var name in builtInNames)

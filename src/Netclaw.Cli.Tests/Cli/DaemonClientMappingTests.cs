@@ -154,6 +154,7 @@ public sealed class DaemonClientMappingTests
         Assert.Equal("memory-curator", dto.AgentName);
         Assert.Equal("started", dto.Phase);
         Assert.Equal(5, dto.ToolCountSub);
+        Assert.Null(dto.MemoryDecision);
 
         var roundTripped = DaemonClient.FromDto(dto);
         var result = Assert.IsType<SubAgentOutput>(roundTripped);
@@ -180,12 +181,21 @@ public sealed class DaemonClientMappingTests
         Assert.Equal("completed", dto.Phase);
         Assert.True(dto.SubAgentSuccess);
 
-        var roundTripped = DaemonClient.FromDto(dto);
+        var enrichedDto = dto with
+        {
+            MemoryDecision = "accepted",
+            MemoryDecisionReason = null,
+            FindingsCount = 2
+        };
+
+        var roundTripped = DaemonClient.FromDto(enrichedDto);
         var result = Assert.IsType<SubAgentOutput>(roundTripped);
         Assert.Equal("memory-retriever", result.AgentName);
         Assert.Equal(SubAgentPhase.Completed, result.Phase);
         Assert.True(result.Success);
         Assert.Equal(12300, result.Duration.TotalMilliseconds, 1);
+        Assert.Equal("accepted", result.MemoryDecision);
+        Assert.Equal(2, result.FindingsCount);
     }
 
     [Theory]

@@ -46,6 +46,7 @@ public class SubAgentActorTests : TestKit
         Assert.True(result.Success);
         Assert.Contains("Response #1", result.Output);
         Assert.Equal("test-agent", result.AgentName);
+        Assert.Empty(result.Findings);
     }
 
     [Fact]
@@ -116,6 +117,7 @@ public class SubAgentActorTests : TestKit
 
         Assert.False(result.Success);
         Assert.Contains("timed out", result.Output, StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(result.Findings);
     }
 
     [Fact]
@@ -131,6 +133,7 @@ public class SubAgentActorTests : TestKit
 
         Assert.False(result.Success);
         Assert.Contains("LLM call failed", result.Output);
+        Assert.Empty(result.Findings);
     }
 
     [Fact]
@@ -187,6 +190,25 @@ public class SubAgentActorTests : TestKit
         Assert.Equal("navigate_page", invoker.ToolName);
     }
 
+    [Fact]
+    public async Task Long_text_response_emits_structured_finding()
+    {
+        var fakeClient = new FakeChatClient
+        {
+            ResponseText = "This is a durable subagent summary with enough detail to be considered a memory candidate for parent-session checkpoint review."
+        };
+        var definition = CreateDefinition();
+        var agent = Sys.ActorOf(SubAgentActor.CreateProps(definition, fakeClient));
+
+        var result = await agent.Ask<SubAgentResult>(
+            new RunSubAgent { Task = "Summarize research", Timeout = TimeSpan.FromSeconds(5) },
+            TimeSpan.FromSeconds(5));
+
+        Assert.True(result.Success);
+        Assert.Single(result.Findings);
+        Assert.Equal("subagent:test-agent", result.Findings[0].Title);
+    }
+
     /// <summary>
     /// IChatClient that always throws on GetResponseAsync.
     /// </summary>
@@ -234,6 +256,8 @@ internal sealed class FakeChatClient : IChatClient
     /// </summary>
     public bool AlwaysReturnToolCalls { get; set; }
 
+    public string? ResponseText { get; set; }
+
     public async Task<ChatResponse> GetResponseAsync(
         IEnumerable<ChatMessage> messages,
         ChatOptions? options = null,
@@ -260,7 +284,8 @@ internal sealed class FakeChatClient : IChatClient
         }
 
         var responseMessage = new ChatMessage(
-            ChatRole.Assistant, [new TextContent($"[fake] Response #{_callCount}")]);
+            ChatRole.Assistant,
+            [new TextContent(ResponseText ?? $"[fake] Response #{_callCount}")]);
         return new ChatResponse(responseMessage);
     }
 

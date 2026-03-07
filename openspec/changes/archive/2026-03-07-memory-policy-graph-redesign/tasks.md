@@ -24,17 +24,17 @@
 
 ## 5. Subagent Ownership Changes
 
-- [ ] 5.1 Change the subagent result contract to return structured findings envelopes without default durable-memory write access.
-- [ ] 5.2 Route accepted subagent findings through the owning session's checkpoint pipeline.
-- [ ] 5.3 Add audit and observability coverage for accepted, deferred, rejected, and retried subagent-originated memory candidates.
+- [x] 5.1 Change the subagent result contract to return structured findings envelopes without default durable-memory write access.
+- [x] 5.2 Route accepted subagent findings through the owning session's checkpoint pipeline.
+- [x] 5.3 Add audit and observability coverage for accepted, deferred, rejected, and retried subagent-originated memory candidates.
 
 ## 6. Prompt Guidance, Skills, And Evaluation
 
-- [ ] 6.1 Update system guidance artifacts that mention memory behavior, including `memory-usage` and `memorizer-usage`, to reflect automatic recall as primary and explicit tools as deliberate/manual control paths.
-- [ ] 6.2 Create the seeded eval suite and operational checks for recall quality, noise suppression, privacy behavior, and latency thresholds from this change.
-- [ ] 6.3 Add a local Ollama eval profile using smaller models as the default gate for memory recall/curation quality before larger-model validation.
+- [x] 6.1 Update system guidance artifacts that mention memory behavior, including `memory-usage` and `memorizer-usage`, to reflect automatic recall as primary and explicit tools as deliberate/manual control paths.
+- [x] 6.2 Create the seeded eval suite and operational checks for recall quality, noise suppression, privacy behavior, and latency thresholds from this change.
+- [x] 6.3 Add a local Ollama eval profile using smaller models as the default gate for memory recall/curation quality before larger-model validation.
 
 ## 7. Spec And Operator Surface Updates
 
-- [ ] 7.1 Sync the final `netclaw-agent-memory`, `netclaw-session`, and `netclaw-subagents` specs once implementation details settle.
-- [ ] 7.2 Update operator-facing docs and diagnostics to explain SQLite memory health, pending checkpoints, automatic recall behavior, and deliberate manual memory tool usage.
+- [x] 7.1 Sync the final `netclaw-agent-memory`, `netclaw-session`, and `netclaw-subagents` specs once implementation details settle.
+- [x] 7.2 Update operator-facing docs and diagnostics to explain SQLite memory health, pending checkpoints, automatic recall behavior, and deliberate manual memory tool usage.

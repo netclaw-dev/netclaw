@@ -215,6 +215,22 @@ public sealed record SubAgentOutput : SessionOutput
 
     /// <summary>Wall-clock duration (on Completed).</summary>
     public TimeSpan Duration { get; init; }
+
+    /// <summary>
+    /// Durable-memory decision made by the parent session for structured findings.
+    /// Values: accepted, deferred, rejected.
+    /// </summary>
+    public string? MemoryDecision { get; init; }
+
+    /// <summary>
+    /// Optional reason explaining why a finding was deferred/rejected.
+    /// </summary>
+    public string? MemoryDecisionReason { get; init; }
+
+    /// <summary>
+    /// Number of structured findings included in this subagent completion.
+    /// </summary>
+    public int FindingsCount { get; init; }
 }
 
 /// <summary>

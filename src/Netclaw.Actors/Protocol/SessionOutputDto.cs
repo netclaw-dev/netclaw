@@ -70,6 +70,9 @@ public sealed record SessionOutputDto
     public int? ToolCountSub { get; init; }
     public bool? SubAgentSuccess { get; init; }
     public double? DurationMs { get; init; }
+    public string? MemoryDecision { get; init; }
+    public string? MemoryDecisionReason { get; init; }
+    public int? FindingsCount { get; init; }
 
     // File Output
     public string? FilePath { get; init; }

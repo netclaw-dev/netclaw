@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "feedType": "system",
-  "updatedAt": "2026-03-03T18:45:55Z",
+  "updatedAt": "2026-03-07T22:08:39Z",
   "skills": [
     {
       "name": "identity-management",
@@ -15,33 +15,33 @@
     },
     {
       "name": "memorizer-usage",
-      "version": "1.1.2",
+      "version": "1.2.0",
       "minimumDaemonVersion": "0.1.0",
-      "sha256": "d13aae120bccc0121416f27ad64868488f34f5d774e623a685baac5761be1a8a",
-      "sizeBytes": 5693,
-      "url": "https://feeds.netclaw.dev/skills/.system/files/memorizer-usage/1.1.2.md",
+      "sha256": "8262d08aafaf6f158b56a2629c66f7af19d39c2fa0fbbfc5bbf42f3183217ca4",
+      "sizeBytes": 2116,
+      "url": "https://feeds.netclaw.dev/skills/.system/files/memorizer-usage/1.2.0.md",
       "category": null,
-      "description": "Advanced Memorizer capabilities — workspaces, projects, relationships, confidence. Read when organizing memories across domains."
+      "description": "Memorizer MCP operations for explicit manual memory workflows under SQLite-first Netclaw memory"
     },
     {
       "name": "memory-usage",
-      "version": "1.1.1",
+      "version": "1.2.0",
       "minimumDaemonVersion": "0.1.0",
-      "sha256": "bc4ecb1186f1de099b63b264386b076d7a98f3ca600e5ffea4e9e7d8fce0d01c",
-      "sizeBytes": 5696,
-      "url": "https://feeds.netclaw.dev/skills/.system/files/memory-usage/1.1.1.md",
+      "sha256": "b6544a153294d4d44a02d815373b92b150c5030419c673ae60a594f7e8260cf4",
+      "sizeBytes": 2791,
+      "url": "https://feeds.netclaw.dev/skills/.system/files/memory-usage/1.2.0.md",
       "category": null,
-      "description": "How to use cross-session memory (file-backed or Memorizer)"
+      "description": "How SQLite-backed durable memory works with automatic recall and manual memory tools"
     },
     {
       "name": "self-diagnostics",
-      "version": "1.0.3",
+      "version": "1.0.4",
       "minimumDaemonVersion": "0.1.0",
-      "sha256": "2d5faef04c0592eb5b31e7f15b3f1252f1cf0cdc9a3eb845c96dd4a7e34cf40b",
-      "sizeBytes": 5525,
-      "url": "https://feeds.netclaw.dev/skills/.system/files/self-diagnostics/1.0.3.md",
+      "sha256": "0951f195677cd62cd5cdbfcf94187a31d33f3ec8ed9d9ae17e2bca975c18d1d7",
+      "sizeBytes": 3032,
+      "url": "https://feeds.netclaw.dev/skills/.system/files/self-diagnostics/1.0.4.md",
       "category": null,
-      "description": "Read when sessions timeout, connections fail, tools are missing, or the user reports errors. Covers netclaw doctor, logs, MCP status."
+      "description": "Read when sessions timeout, connections fail, tools are missing, or the user reports errors. Covers netclaw doctor, logs, MCP status, and memory health."
     },
     {
       "name": "skill-authoring",

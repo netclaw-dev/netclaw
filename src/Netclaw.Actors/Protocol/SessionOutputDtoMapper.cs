@@ -118,7 +118,10 @@ public static class SessionOutputDtoMapper
             Phase = msg.Phase.ToString().ToLowerInvariant(),
             ToolCountSub = msg.ToolCount,
             SubAgentSuccess = msg.Success,
-            DurationMs = msg.Duration.TotalMilliseconds
+            DurationMs = msg.Duration.TotalMilliseconds,
+            MemoryDecision = msg.MemoryDecision,
+            MemoryDecisionReason = msg.MemoryDecisionReason,
+            FindingsCount = msg.FindingsCount
         },
 
         CompactionOutput msg => new SessionOutputDto
@@ -251,7 +254,10 @@ public static class SessionOutputDtoMapper
                     : SubAgents.SubAgentPhase.Started,
                 ToolCount = dto.ToolCountSub ?? 0,
                 Success = dto.SubAgentSuccess ?? false,
-                Duration = TimeSpan.FromMilliseconds(dto.DurationMs ?? 0)
+                Duration = TimeSpan.FromMilliseconds(dto.DurationMs ?? 0),
+                MemoryDecision = dto.MemoryDecision,
+                MemoryDecisionReason = dto.MemoryDecisionReason,
+                FindingsCount = dto.FindingsCount ?? 0
             },
             "compaction" => new CompactionOutput
             {

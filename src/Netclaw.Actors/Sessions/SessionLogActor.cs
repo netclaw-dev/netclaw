@@ -100,7 +100,7 @@ public sealed class SessionLogActor : ReceiveActor
                 SubAgentOutput sa when sa.Phase == SubAgentPhase.Started =>
                     $"SubAgent started: {sa.AgentName} (tools={sa.ToolCount})",
                 SubAgentOutput sa =>
-                    $"SubAgent completed: {sa.AgentName} (success={sa.Success}, duration={sa.Duration.TotalSeconds:F1}s)",
+                    $"SubAgent completed: {sa.AgentName} (success={sa.Success}, duration={sa.Duration.TotalSeconds:F1}s, findings={sa.FindingsCount}, memory={sa.MemoryDecision ?? "n/a"}{(string.IsNullOrWhiteSpace(sa.MemoryDecisionReason) ? string.Empty : $", reason={sa.MemoryDecisionReason}")})",
                 ErrorOutput error => $"Error [{error.Category}] (ref: {error.CorrelationId:N}): {error.Message}",
                 FileOutput file => $"File: {file.FileName} ({file.MimeType})",
                 _ => null

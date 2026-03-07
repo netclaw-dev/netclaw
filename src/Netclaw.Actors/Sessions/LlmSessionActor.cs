@@ -380,6 +380,21 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
             foreach (var finding in msg.AcceptedSubAgentFindings)
             {
+                EmitOutput(new SubAgentOutput
+                {
+                    SessionId = _sessionId,
+                    AgentName = finding.AgentName,
+                    Phase = Netclaw.Actors.SubAgents.SubAgentPhase.Completed,
+                    Success = true,
+                    Duration = finding.Duration,
+                    MemoryDecision = finding.Decision,
+                    MemoryDecisionReason = finding.DecisionReason,
+                    FindingsCount = 1
+                }, OutputFilter.ToolCalls);
+
+                if (!string.Equals(finding.Decision, "accepted", StringComparison.OrdinalIgnoreCase))
+                    continue;
+
                 EnqueueCheckpointFireAndForget(new MemoryCheckpointRequest(
                     SessionId: _sessionId.Value,
                     TurnId: _activeTurnId,
@@ -389,18 +404,19 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                         SessionId: _sessionId.Value,
                         TriggerType: "subagent-findings",
                         Source: finding.AgentName,
-                        Content: $"Subagent '{finding.AgentName}' completed successfully.",
+                        Content: finding.Content,
                         IsExplicitRequest: false,
                         HasVerifiedToolFinding: false,
                         IsCompactionBoundary: false,
                         HasAcceptedSubAgentFinding: true,
-                        Domain: ResolveDomainFromSession(_sessionId.Value),
-                        Sensitivity: "normal",
-                        RecallMode: "auto",
-                        Confidence: 0.8,
-                        Title: $"subagent:{finding.AgentName}",
-                        Kind: "record",
-                        UpdateSemantics: "append-document")));
+                        Domain: finding.Domain,
+                        Sensitivity: finding.Sensitivity,
+                        RecallMode: finding.RecallMode,
+                        Confidence: finding.Confidence,
+                        Title: finding.Title,
+                        Kind: finding.Kind,
+                        UpdateSemantics: finding.UpdateSemantics,
+                        FreshnessAtMs: finding.FreshnessAtMs)));
             }
 
             // Add tool results to history and log each result
@@ -1588,11 +1604,47 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
             if (!info.IsStarted && info.Success)
             {
-                acceptedFindings.Add(new AcceptedSubAgentFinding
+                if (info.Findings.Count == 0)
                 {
-                    AgentName = info.AgentName,
-                    Duration = info.Duration
-                });
+                    acceptedFindings.Add(new AcceptedSubAgentFinding
+                    {
+                        AgentName = info.AgentName,
+                        Duration = info.Duration,
+                        Title = $"subagent:{info.AgentName}",
+                        Content = $"Subagent '{info.AgentName}' completed successfully.",
+                        Kind = "record",
+                        Domain = ResolveDomainFromSession(sessionId.Value),
+                        Sensitivity = "normal",
+                        RecallMode = "auto",
+                        UpdateSemantics = "append-document",
+                        Confidence = 0.6,
+                        Decision = "deferred",
+                        DecisionReason = "subagent returned no structured findings"
+                    });
+                }
+                else
+                {
+                    foreach (var finding in info.Findings)
+                    {
+                        var decision = EvaluateSubAgentFindingDecision(finding, sessionId.Value);
+                        acceptedFindings.Add(new AcceptedSubAgentFinding
+                        {
+                            AgentName = info.AgentName,
+                            Duration = info.Duration,
+                            Title = finding.Title,
+                            Content = finding.Content,
+                            Kind = finding.Kind,
+                            Domain = finding.Domain,
+                            Sensitivity = finding.Sensitivity,
+                            RecallMode = finding.RecallMode,
+                            UpdateSemantics = finding.UpdateSemantics,
+                            Confidence = finding.Confidence,
+                            FreshnessAtMs = finding.FreshnessAtMs,
+                            Decision = decision.Decision,
+                            DecisionReason = decision.Reason
+                        });
+                    }
+                }
             }
         };
         try
@@ -1640,6 +1692,30 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             message,
             context.FileAttachments,
             acceptedFindings);
+    }
+
+    private static (string Decision, string? Reason) EvaluateSubAgentFindingDecision(
+        SubAgentFindingCandidate finding,
+        string sessionId)
+    {
+        if (string.IsNullOrWhiteSpace(finding.Content))
+            return ("rejected", "empty content");
+
+        if (string.Equals(finding.RecallMode, "never", StringComparison.OrdinalIgnoreCase))
+            return ("rejected", "recallMode=never");
+
+        if (string.Equals(finding.Sensitivity, "secret", StringComparison.OrdinalIgnoreCase)
+            && string.Equals(finding.RecallMode, "auto", StringComparison.OrdinalIgnoreCase))
+            return ("rejected", "secret cannot auto-recall");
+
+        var expectedDomain = ResolveDomainFromSession(sessionId);
+        if (!string.Equals(finding.Domain, expectedDomain, StringComparison.OrdinalIgnoreCase))
+            return ("deferred", $"domain mismatch: expected {expectedDomain}");
+
+        if (finding.Confidence < 0.55)
+            return ("deferred", "low confidence");
+
+        return ("accepted", null);
     }
 
     private static string ClampToolResult(string resultText, int maxInlineToolResultChars)
