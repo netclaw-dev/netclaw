@@ -18,7 +18,7 @@ The system SHALL replace the current single-step pre-compaction memory flush wit
 
 ### Requirement: Standard configuration directory
 
-The system SHALL use `~/.netclaw/` as the standard configuration directory with `memory/` as the durable memory home. The memory subsystem SHALL store its SQLite database, schema metadata, and migration artifacts under `~/.netclaw/memory/`. The legacy `~/.netclaw/memories/` directory SHALL be preserved as a read-only migration source during transition and SHALL NOT remain the primary write path after this redesign.
+The system SHALL use `~/.netclaw/` as the standard configuration directory with `memory/` as the durable memory home. The memory subsystem SHALL store its SQLite database, schema metadata, and health/queue state under `~/.netclaw/memory/`. The redesigned MVP SHALL NOT require any legacy memory directory or import step in order to start cleanly.
 
 #### Scenario: Memory directory and database created on startup
 - **GIVEN** `~/.netclaw/memory/` does not exist
@@ -26,31 +26,31 @@ The system SHALL use `~/.netclaw/` as the standard configuration directory with 
 - **THEN** the system creates the directory and initializes the SQLite database schema
 - **AND** the daemon reports memory status as healthy when initialization succeeds
 
-#### Scenario: Legacy file memory directory preserved during migration
-- **GIVEN** `~/.netclaw/memories/` contains legacy markdown memories
-- **WHEN** the redesigned memory subsystem starts
-- **THEN** the system leaves the legacy files untouched
-- **AND** treats them as import input rather than the active write store
+#### Scenario: Greenfield startup requires no legacy memory store
+- **GIVEN** `~/.netclaw/memory/` is empty and `~/.netclaw/memories/` does not exist
+- **WHEN** the redesigned memory subsystem starts for the first time
+- **THEN** the system initializes successfully without any import step
+- **AND** uses the SQLite memory store as the only required durable memory substrate
 
 ### Requirement: Pluggable memory backend with 4-tool surface
 
-The system SHALL use a local SQLite-backed structured memory substrate as Netclaw's default and normative durable memory implementation. The frontline model SHALL continue to see the explicit compatibility tools `find_memories`, `get_memories`, `store_memory`, and `update_memory`, but those tools SHALL operate over the SQLite memory graph and shared policy pipeline rather than selecting between file-backed and Memorizer-backed primary providers. Legacy provider settings MAY be read only for migration and compatibility messaging.
+The system SHALL use a local SQLite-backed structured memory substrate as Netclaw's default and normative durable memory implementation. The frontline model SHALL continue to see the explicit tools `find_memories`, `get_memories`, `store_memory`, and `update_memory`, but those tools SHALL operate over the SQLite memory graph and shared policy pipeline rather than selecting between file-backed and Memorizer-backed primary providers. Legacy provider modes SHALL NOT be required for MVP delivery.
 
 #### Scenario: SQLite memory is the active default substrate
 - **GIVEN** Netclaw starts with the redesigned memory system
-- **WHEN** no legacy migration override is required
+- **WHEN** the daemon initializes the memory subsystem
 - **THEN** the daemon uses the local SQLite memory database as the primary durable memory store
 - **AND** explicit memory tools route to that store
 
-#### Scenario: Legacy provider config triggers compatibility migration
-- **GIVEN** configuration still contains a legacy `Memory.Provider` value such as `files` or `memorizer`
-- **WHEN** the daemon starts after this redesign
-- **THEN** the daemon reports that the legacy provider mode is deprecated
-- **AND** begins migration or degraded compatibility behavior instead of treating the legacy provider as the normative architecture
+#### Scenario: MVP does not depend on legacy provider compatibility
+- **GIVEN** the redesigned memory subsystem is being delivered for greenfield MVP use
+- **WHEN** implementation scope is evaluated
+- **THEN** SQLite-backed memory and the explicit tool surface are sufficient for completion
+- **AND** legacy provider-mode bridging may be omitted or deferred to a future change
 
 ### Requirement: Two-phase memory retrieval
 
-Memory retrieval SHALL run in two modes: automatic pre-turn recall and explicit two-phase retrieval. Automatic recall SHALL happen before each user-facing model turn and SHALL inject a bounded recall bundle derived from the structured memory graph. Explicit retrieval SHALL continue to use `find_memories` for lightweight search and `get_memories` for full hydration when manual follow-up is needed.
+Memory retrieval SHALL run in two modes: automatic pre-turn recall and explicit two-phase retrieval. Automatic recall SHALL happen before each user-facing model turn and SHALL inject a bounded recall bundle derived from the structured memory graph. Explicit retrieval SHALL continue to use `find_memories` for lightweight search and `get_memories` for full hydration when manual follow-up is needed. Automatic recall is the primary retrieval path; explicit retrieval is a deliberate manual-control path.
 
 #### Scenario: Automatic recall runs before a user-facing turn
 - **GIVEN** a user sends a new message into an existing or new session
@@ -64,15 +64,27 @@ Memory retrieval SHALL run in two modes: automatic pre-turn recall and explicit 
 - **THEN** it receives lightweight results suitable for selection
 - **AND** can call `get_memories` to fetch full memory bodies only for the selected items
 
+#### Scenario: Routine turn relies on automatic recall first
+- **GIVEN** a normal user-facing turn begins
+- **WHEN** the automatic recall bundle already provides the relevant durable context
+- **THEN** the frontline model does not need to call explicit retrieval tools by default
+- **AND** proceeds using the system-managed recall bundle
+
 ### Requirement: Memory context layer per backend
 
-The memory context layer SHALL explain that durable recall is automatic by default and that explicit memory tools are reserved for manual search, save, and correction workflows. The layer SHALL surface degraded memory status when automatic recall or durable persistence is unavailable. It SHALL no longer teach the model that backend selection is part of normal memory usage.
+The memory context layer SHALL explain that durable recall is automatic by default and that explicit memory tools are reserved for deliberate manual search, save, and correction workflows. The layer SHALL surface degraded memory status when automatic recall or durable persistence is unavailable. It SHALL no longer teach the model that backend selection is part of normal memory usage, and it SHALL explicitly tell the frontline model not to call write tools reflexively on every turn.
 
 #### Scenario: Context layer teaches automatic recall first
 - **GIVEN** the redesigned memory subsystem is healthy
 - **WHEN** a session prompt is assembled
 - **THEN** the memory context layer explains that Netclaw automatically recalls durable memory before each turn
 - **AND** reserves explicit memory tools for deliberate memory operations
+
+#### Scenario: Context layer distinguishes store and update usage
+- **GIVEN** the redesigned memory subsystem is healthy
+- **WHEN** memory guidance is injected into the session prompt
+- **THEN** the guidance says `store_memory` is for deliberate save/remember actions
+- **AND** the guidance says `update_memory` is for correction, supersede, tombstone, or metadata changes to existing memory
 
 #### Scenario: Context layer reports degraded memory state
 - **GIVEN** the memory database is unavailable or recall has been disabled due to an operational fault
@@ -84,19 +96,19 @@ The memory context layer SHALL explain that durable recall is automatic by defau
 
 ### Requirement: Memorizer-backed store_memory delegation
 **Reason**: Durable memory ownership now belongs to Netclaw's first-party SQLite substrate and checkpoint pipeline rather than a Memorizer-backed primary provider.
-**Migration**: Route explicit `store_memory` calls through the compatibility facade and background curation pipeline; keep Memorizer only as a deferred optional integration/export path.
+**Migration**: Route explicit `store_memory` calls through the SQLite-backed explicit tool facade and background curation pipeline; keep Memorizer only as a deferred optional integration/export path if it is reintroduced later.
 
 ### Requirement: Memorizer-backed find/get/update as MCP pass-throughs
 **Reason**: Netclaw no longer treats Memorizer MCP tools as the primary durable memory implementation.
-**Migration**: Keep `find_memories`, `get_memories`, and `update_memory` as SQLite-backed compatibility tools; any future Memorizer bridge must sit behind the first-party memory service instead of replacing it.
+**Migration**: Keep `find_memories`, `get_memories`, and `update_memory` as SQLite-backed explicit tools; any future Memorizer bridge must sit behind the first-party memory service instead of replacing it.
 
 ### Requirement: File-based memory store
 **Reason**: The markdown file store is replaced by structured SQLite memory so Netclaw can support hierarchy, policy metadata, graph edges, and automatic recall.
-**Migration**: Import legacy markdown memories into SQLite and preserve source files as read-only migration artifacts.
+**Migration**: No import path is required for MVP; if legacy markdown compatibility is needed later, it should be introduced through a follow-up change.
 
 ### Requirement: Memorizer discovery guidance
 **Reason**: Core memory usage should no longer depend on discovering an optional external tool server.
-**Migration**: Update system skills and prompt guidance to teach automatic recall plus explicit compatibility tools, with optional Memorizer integration documented separately if reintroduced later.
+**Migration**: Update system skills and prompt guidance to teach automatic recall plus explicit manual tools, with optional Memorizer integration documented separately if reintroduced later.
 
 ## ADDED Requirements
 
@@ -172,6 +184,22 @@ The main user-facing session SHALL be the default owner of durable memory writes
 - **THEN** the parent session turns them into a checkpoint for durable memory review
 - **AND** the subagent does not write durable memory directly
 
+### Requirement: Explicit memory control paths
+
+The system SHALL treat `store_memory` and `update_memory` as deliberate manual-control paths layered on top of automatic recall and background curation. The frontline agent SHALL invoke `store_memory` only for explicit remember/save requests, deliberate high-value pinning, or operator-directed structured note capture. The frontline agent SHALL invoke `update_memory` only for correction, supersede, tombstone, or metadata changes to an existing durable memory item.
+
+#### Scenario: Frontline agent uses store_memory for an explicit save request
+- **GIVEN** the user explicitly asks Netclaw to remember a fact or preference
+- **WHEN** the frontline agent chooses how to persist that information
+- **THEN** it uses `store_memory` as the deliberate explicit write path
+- **AND** the request still flows through checkpoint and policy handling rather than direct uncontrolled persistence
+
+#### Scenario: Frontline agent uses update_memory for correction
+- **GIVEN** an existing durable memory item must be corrected or superseded
+- **WHEN** the frontline agent applies the user's correction
+- **THEN** it uses `update_memory`
+- **AND** it does not use `store_memory` to create an untracked duplicate for the same correction
+
 ### Requirement: Memory evaluation and operational criteria
 
 The redesigned memory subsystem SHALL ship with an eval suite and operational SLOs covering recall quality, noise suppression, privacy behavior, and latency. The implementation SHALL NOT be considered complete until the seeded eval suite demonstrates the configured thresholds.
@@ -188,18 +216,18 @@ The redesigned memory subsystem SHALL ship with an eval suite and operational SL
 - **THEN** it runs the default gate against smaller local Ollama-hosted models
 - **AND** passing larger hosted models does not waive a failing local Ollama eval result
 
-### Requirement: Legacy memory migration and compatibility stance
+### Requirement: Greenfield SQLite-first delivery stance
 
-The system SHALL provide a migration path from the legacy markdown memory directory and legacy provider-oriented configuration into the SQLite structured memory substrate. During the transition window, explicit memory tool names SHALL remain stable so existing prompts and skills continue to function.
+The redesigned memory subsystem SHALL be implementation-ready as a greenfield MVP without requiring legacy markdown import or legacy provider-mode compatibility. Explicit memory tool names SHALL remain stable within the redesigned subsystem so prompt and skill guidance can target a consistent manual-control surface.
 
-#### Scenario: Legacy markdown memories import into SQLite
-- **GIVEN** legacy markdown memories exist under `~/.netclaw/memories/`
-- **WHEN** the operator runs or accepts migration into the redesigned subsystem
-- **THEN** those memories are imported into anchors, documents, and records in SQLite
-- **AND** the original markdown files are preserved as source artifacts
+#### Scenario: Greenfield MVP completes without import work
+- **GIVEN** Netclaw has no production-deployed public memory data that must be preserved
+- **WHEN** the redesigned memory subsystem is implemented for MVP
+- **THEN** no markdown import or provider-mode migration is required for completeness
+- **AND** deferred legacy compatibility does not block delivery
 
-#### Scenario: Compatibility tool names remain stable
-- **GIVEN** an existing prompt or skill instructs the model to use `find_memories` and `store_memory`
+#### Scenario: Explicit tool names remain stable
+- **GIVEN** a prompt or skill instructs the model to use `find_memories` and `store_memory`
 - **WHEN** the redesigned memory subsystem is active
 - **THEN** those tool names continue to function
 - **AND** they execute against the SQLite memory service and policy pipeline

@@ -2,7 +2,7 @@
 
 - [ ] 1.1 Add the dedicated SQLite memory database, schema migrator, and health surface under `~/.netclaw/memory/`.
 - [ ] 1.2 Implement repositories for anchors, documents, records, edges, and pending checkpoints with policy metadata fields.
-- [ ] 1.3 Replace legacy primary-backend selection with the new substrate config plus migration warnings for old `Memory.Provider` values.
+- [ ] 1.3 Define the new SQLite-first memory configuration and explicitly leave legacy provider-mode compatibility/import out of MVP scope.
 
 ## 2. Automatic Recall In Session Turns
 
@@ -20,7 +20,7 @@
 
 - [ ] 4.1 Rewire `find_memories`, `get_memories`, `store_memory`, and `update_memory` to the SQLite memory service and policy pipeline.
 - [ ] 4.2 Implement document-vs-record update semantics in the explicit tool paths, including supersede and tombstone behavior.
-- [ ] 4.3 Preserve compatibility for existing prompts and skills while marking legacy file-backed and Memorizer-backed provider modes deprecated as primary backends.
+- [ ] 4.3 Preserve `find_memories`/`get_memories`/`store_memory`/`update_memory` as explicit manual-control paths while leaving legacy file-backed and Memorizer-backed provider modes out of MVP.
 
 ## 5. Subagent Ownership Changes
 
@@ -28,14 +28,13 @@
 - [ ] 5.2 Route accepted subagent findings through the owning session's checkpoint pipeline.
 - [ ] 5.3 Add audit and observability coverage for accepted, deferred, rejected, and retried subagent-originated memory candidates.
 
-## 6. Migration, Skills, And Evaluation
+## 6. Prompt Guidance, Skills, And Evaluation
 
-- [ ] 6.1 Add one-time import/migration from legacy `~/.netclaw/memories/` markdown memories into SQLite while preserving source files.
-- [ ] 6.2 Update system guidance artifacts that mention memory behavior, including `memory-usage` and `memorizer-usage`, to reflect the new ownership and compatibility stance.
-- [ ] 6.3 Create the seeded eval suite and operational checks for recall quality, noise suppression, privacy behavior, and latency thresholds from this change.
-- [ ] 6.4 Add a local Ollama eval profile using smaller models as the default gate for memory recall/curation quality before larger-model validation.
+- [ ] 6.1 Update system guidance artifacts that mention memory behavior, including `memory-usage` and `memorizer-usage`, to reflect automatic recall as primary and explicit tools as deliberate/manual control paths.
+- [ ] 6.2 Create the seeded eval suite and operational checks for recall quality, noise suppression, privacy behavior, and latency thresholds from this change.
+- [ ] 6.3 Add a local Ollama eval profile using smaller models as the default gate for memory recall/curation quality before larger-model validation.
 
 ## 7. Spec And Operator Surface Updates
 
 - [ ] 7.1 Sync the final `netclaw-agent-memory`, `netclaw-session`, and `netclaw-subagents` specs once implementation details settle.
-- [ ] 7.2 Update operator-facing docs, diagnostics, and migration messaging to explain SQLite memory health, pending checkpoints, and deprecated legacy provider modes.
+- [ ] 7.2 Update operator-facing docs and diagnostics to explain SQLite memory health, pending checkpoints, automatic recall behavior, and deliberate manual memory tool usage.

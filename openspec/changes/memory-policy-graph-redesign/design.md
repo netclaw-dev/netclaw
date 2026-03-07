@@ -20,13 +20,14 @@ This redesign makes memory a first-party Netclaw subsystem with its own local SQ
 - Make recall automatic before each user-facing turn, bounded by policy and latency budgets.
 - Move durable persistence into checkpoint-driven background curation with deterministic filtering before any LLM curator call.
 - Keep the main session as the durable-memory owner; subagents return findings, not writes.
-- Preserve a small compatibility tool surface for explicit save/search/correct workflows so existing prompts and skills keep functioning during migration.
+- Preserve a small explicit tool surface for deliberate save/search/correct workflows so prompts and skills can distinguish automatic recall from manual memory control.
 - Provide measurable success criteria and eval gates before the redesign becomes the only supported path.
 
 **Non-Goals:**
 - Embedding or vector retrieval in MVP-now.
 - Bi-directional live sync with Memorizer as a primary store.
 - Replacing the existing 4 explicit memory tools with a brand-new graph-native tool API in MVP-now.
+- Legacy markdown import or provider-compatibility work as a required MVP deliverable.
 - Full encrypted-at-rest key management beyond host filesystem controls.
 - Automatic cross-device memory replication.
 - General-purpose knowledge graph authoring UI.
@@ -106,14 +107,14 @@ Alternatives considered:
 - Allow all subagents to call durable memory tools directly. Rejected because it spreads trust and persistence policy across too many actors.
 - Forbid subagent findings entirely. Rejected because subagents still need to contribute research and summaries.
 
-### Decision: Preserve the existing 4 explicit memory tools as compatibility shims in MVP-now
+### Decision: Preserve the existing 4 explicit memory tools as deliberate manual control paths in MVP-now
 
 The frontline agent will continue to see `find_memories`, `get_memories`, `store_memory`, and `update_memory`, but they become thin facades over the SQLite memory service and policy pipeline.
 
 Rationale:
 - Minimizes prompt churn and skill breakage.
 - Keeps explicit workflows available for "remember this", "search memory", and "correct this note" requests.
-- Lets Netclaw switch the underlying substrate without forcing an immediate tool-contract rewrite.
+- Makes it clear that automatic recall is the default while explicit tools are only for deliberate operator- or agent-driven control.
 
 Alternatives considered:
 - Introduce new graph-native memory tools immediately. Rejected for MVP-now because automatic recall is the bigger value and compatibility matters.
@@ -125,7 +126,7 @@ Alternatives considered:
 
 1. `MemorySchemaMigrator`
    - Creates/upgrades `netclaw-memory.db`
-   - Tracks schema version and legacy import status
+   - Tracks schema version and health
 
 2. `MemoryRepository`
    - CRUD/query methods for anchors, documents, records, edges, and pending checkpoints
@@ -220,6 +221,37 @@ checkpoints(
 )
 ```
 
+### Example Populated Knowledge Graph
+
+```text
+[person:aaron]
+  |-- document: operator-preferences
+  |     `-- tone=concise, timezone=America/Chicago
+  |-- related_to --> [project:netclaw]
+  `-- owns --> [host:pi1]
+
+[project:netclaw]
+  |-- document: project-brief
+  |-- child_of --> [domain:business]
+  |-- contains --> [repo:stannardlabs/netclaw]
+  |-- related_to --> [service:slack-adapter]
+  `-- related_to --> [concept:memory-policy-graph-redesign]
+
+[repo:stannardlabs/netclaw]
+  |-- document: current-focus
+  |-- depends_on --> [service:sqlite-memory]
+  `-- record: issue-164-fixed@2026-03-07
+
+[host:pi1]
+  |-- document: homelab-inventory
+  `-- runs_on --> [service:netclaw-daemon]
+
+[service:sqlite-memory]
+  |-- document: schema-notes
+  |-- record: migration-disabled-for-mvp@decision
+  `-- related_to --> [concept:automatic-recall]
+```
+
 ### Policy Model
 
 Every durable memory candidate and stored object includes:
@@ -256,6 +288,49 @@ When explicit memory tools are still used:
 - user explicitly says "remember this", "forget this", or "what do you remember about X"
 - the agent needs manual follow-up beyond the automatic recall bundle
 - operator correction or cleanup workflows need a direct edit/supersede path
+
+When the frontline agent should explicitly invoke `store_memory`:
+- the user directly asks Netclaw to remember or save something
+- the agent wants to deliberately pin a high-value fact, decision, or preference instead of waiting for background checkpoint curation
+- a workflow requires immediate durable capture with an acknowledgment back to the user
+
+When the frontline agent should explicitly invoke `update_memory`:
+- the user corrects an existing preference, fact, or project summary
+- a prior record needs supersede/tombstone handling
+- sensitivity, recall mode, or other durable metadata must be intentionally changed
+
+When the frontline agent should not use explicit write tools:
+- routine user turns where automatic recall already provides what is needed
+- background curation opportunities detected by the system after the turn
+- speculative or low-confidence facts that should first pass through checkpoint filtering
+
+### System Prompt And Memory Context Guidance
+
+Session prompt guidance should teach a simple operating model:
+
+- automatic recall is primary and happens before each user-facing turn
+- explicit memory tools are manual control paths, not the default way to use memory
+- `store_memory` is for deliberate remember/save actions
+- `update_memory` is for correction, supersede, tombstone, or metadata changes
+- if memory is degraded, the prompt must say so plainly instead of implying recall is active
+
+Illustrative context guidance:
+
+```text
+[memory]
+
+Netclaw automatically recalls durable memory before each user-facing turn.
+Assume relevant durable context may already be present in the recall bundle.
+
+Use `find_memories` / `get_memories` only when you need manual follow-up beyond
+the automatic bundle or the user explicitly asks what you remember.
+
+Use `store_memory` only for deliberate save/remember actions.
+Use `update_memory` only to correct, supersede, tombstone, or change metadata on
+existing durable memory.
+
+Do not call explicit memory tools as a routine reflex on every turn.
+```
 
 ### Actor Boundaries and Recovery Behavior
 
@@ -397,27 +472,26 @@ function handleSubagentResult(parentSession, subagentResult):
 
 - [SQLite query complexity on constrained hardware] -> Keep schema small, use indexed fields only, and gate recall to top-N bounded queries.
 - [Automatic recall may inject noise] -> Keep strict candidate limits, policy filters, and eval gates for precision before rollout.
-- [Migration may strand legacy memories] -> Provide one-time import plus idempotent re-run support and operator-visible migration status.
+- [Deferred legacy compatibility might leave old data unused if it exists locally] -> Treat MVP as greenfield and document that any legacy import/provider bridge is a separate follow-up concern, not a hidden partial feature.
 - [Compatibility shims may preserve old habits too long] -> Mark them as explicit/manual paths in prompt guidance and keep graph-native APIs deferred behind a later change.
 - [Background curation can silently fail] -> Persist checkpoints with retry state, surface queue health in diagnostics, and never report a save as complete before enqueue acknowledgment.
 
-## Migration Plan
+## Delivery Plan / Compatibility Stance
 
 1. Add `memory/` directory, SQLite schema migrator, and health reporting.
 2. Build repositories and policy evaluator for anchors, documents, records, edges, and checkpoints.
-3. Add compatibility tool facades backed by the new substrate.
+3. Add explicit memory tool facades backed by the new substrate.
 4. Implement automatic recall in `LlmSessionActor` with bounded timeout and degraded fallback.
 5. Implement checkpoint detection plus `MemoryCurationWorker` retry queue.
 6. Change subagent contract to return findings envelopes; route accepted findings through the parent session.
-7. Import legacy markdown memories from `~/.netclaw/memories/` into SQLite as anchors/documents/records; leave source files untouched as read-only migration artifacts.
-8. Treat legacy `Memory.Provider` values (`files`, `memorizer`) as migration inputs only; emit warnings and write upgraded config for the new default substrate.
-9. Keep existing 4 memory tool names as shims for at least one release; deprecate backend-specific prompt guidance and system skills in the same implementation cycle.
-10. After eval gates pass, mark legacy file-backed and Memorizer-backed provider modes unsupported as primary backends.
+7. Update system-prompt guidance, memory context guidance, and system skills so automatic recall is primary and explicit tools are manual control paths.
+8. Ship the seeded eval suite and require the smaller local Ollama profile to pass before broader validation.
+9. Do not require markdown import, provider-mode migration, or Memorizer-compatibility bridges for MVP. If needed later, they should be proposed as separate follow-up changes.
 
 Rollback stance:
 - Schema migrations are additive before cutover.
-- Legacy markdown files remain untouched, so rollback can disable SQLite memory and fall back to read-only legacy behavior during the transition window.
-- Once write cutover happens, rollback keeps SQLite data intact and does not attempt reverse-sync into markdown files.
+- Rollback can disable the redesigned memory subsystem and preserve the SQLite data directory for inspection.
+- No reverse-sync or legacy import/export path is assumed in MVP.
 
 ## Success and Evaluation Criteria
 
