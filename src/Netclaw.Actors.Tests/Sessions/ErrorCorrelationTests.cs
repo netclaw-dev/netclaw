@@ -61,7 +61,7 @@ public sealed class ErrorCorrelationTests(ITestOutputHelper output) : TestKit(ou
             Subscriber = subscriber,
             Filter = OutputFilter.TextOnly
         }, TimeSpan.FromSeconds(3));
-        subscriber.ExpectMsg<SessionJoined>();
+        await subscriber.ExpectMsgAsync<SessionJoined>();
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
@@ -69,11 +69,11 @@ public sealed class ErrorCorrelationTests(ITestOutputHelper output) : TestKit(ou
             Content = "trigger error"
         }, TimeSpan.FromSeconds(3));
 
-        var error = subscriber.ExpectMsg<ErrorOutput>(TimeSpan.FromSeconds(5));
+        var error = await subscriber.ExpectMsgAsync<ErrorOutput>(TimeSpan.FromSeconds(5));
 
         Assert.Equal(ErrorCategory.ProviderFailure, error.Category);
         Assert.NotEqual(Guid.Empty, error.CorrelationId);
-        subscriber.ExpectMsg<TurnCompleted>(TimeSpan.FromSeconds(3));
+        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
     }
 
     [Fact]
@@ -89,7 +89,7 @@ public sealed class ErrorCorrelationTests(ITestOutputHelper output) : TestKit(ou
             Subscriber = subscriber,
             Filter = OutputFilter.TextOnly
         }, TimeSpan.FromSeconds(3));
-        subscriber.ExpectMsg<SessionJoined>();
+        await subscriber.ExpectMsgAsync<SessionJoined>();
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
@@ -97,8 +97,8 @@ public sealed class ErrorCorrelationTests(ITestOutputHelper output) : TestKit(ou
             Content = "first"
         }, TimeSpan.FromSeconds(3));
 
-        var firstError = subscriber.ExpectMsg<ErrorOutput>(TimeSpan.FromSeconds(5));
-        subscriber.ExpectMsg<TurnCompleted>(TimeSpan.FromSeconds(3));
+        var firstError = await subscriber.ExpectMsgAsync<ErrorOutput>(TimeSpan.FromSeconds(5));
+        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
@@ -106,8 +106,8 @@ public sealed class ErrorCorrelationTests(ITestOutputHelper output) : TestKit(ou
             Content = "second"
         }, TimeSpan.FromSeconds(3));
 
-        var secondError = subscriber.ExpectMsg<ErrorOutput>(TimeSpan.FromSeconds(5));
-        subscriber.ExpectMsg<TurnCompleted>(TimeSpan.FromSeconds(3));
+        var secondError = await subscriber.ExpectMsgAsync<ErrorOutput>(TimeSpan.FromSeconds(5));
+        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
 
         Assert.NotEqual(firstError.CorrelationId, secondError.CorrelationId);
         Assert.Equal(ErrorCategory.ProviderFailure, firstError.Category);
@@ -129,7 +129,7 @@ public sealed class ErrorCorrelationTests(ITestOutputHelper output) : TestKit(ou
             Subscriber = subscriber,
             Filter = OutputFilter.TextOnly
         }, TimeSpan.FromSeconds(3));
-        subscriber.ExpectMsg<SessionJoined>();
+        await subscriber.ExpectMsgAsync<SessionJoined>();
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
@@ -137,11 +137,11 @@ public sealed class ErrorCorrelationTests(ITestOutputHelper output) : TestKit(ou
             Content = "trigger timeout"
         }, TimeSpan.FromSeconds(3));
 
-        var error = subscriber.ExpectMsg<ErrorOutput>(TimeSpan.FromSeconds(5));
+        var error = await subscriber.ExpectMsgAsync<ErrorOutput>(TimeSpan.FromSeconds(5));
 
         Assert.Equal(ErrorCategory.Timeout, error.Category);
         Assert.NotEqual(Guid.Empty, error.CorrelationId);
-        subscriber.ExpectMsg<TurnCompleted>(TimeSpan.FromSeconds(3));
+        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
     }
 
     private sealed class FailingChatClient : IChatClient

@@ -96,7 +96,7 @@ public class LlmSessionIntegrationTests : TestKit
             Subscriber = subscriber,
             Filter = OutputFilter.TextOnly
         }, TimeSpan.FromSeconds(3));
-        subscriber.ExpectMsg<SessionJoined>(); // Drain subscriber notification
+        await subscriber.ExpectMsgAsync<SessionJoined>(); // Drain subscriber notification
 
         var ack = await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
@@ -106,11 +106,11 @@ public class LlmSessionIntegrationTests : TestKit
         Assert.Equal(sessionId, ack.SessionId);
 
         // Subscriber receives typed output events
-        var text = subscriber.ExpectMsg<TextOutput>(TimeSpan.FromSeconds(3));
+        var text = await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3));
         Assert.Equal(sessionId, text.SessionId);
         Assert.Contains("fake", text.Text, StringComparison.OrdinalIgnoreCase);
 
-        var completed = subscriber.ExpectMsg<TurnCompleted>(TimeSpan.FromSeconds(3));
+        var completed = await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
         Assert.Equal(sessionId, completed.SessionId);
         Assert.Equal(1, completed.TurnNumber);
     }
@@ -133,21 +133,21 @@ public class LlmSessionIntegrationTests : TestKit
             Subscriber = textOnlySub,
             Filter = OutputFilter.TextOnly
         }, TimeSpan.FromSeconds(3));
-        textOnlySub.ExpectMsg<SessionJoined>(); // Drain subscriber notification
+        await textOnlySub.ExpectMsgAsync<SessionJoined>(); // Drain subscriber notification
         await sessionManager.Ask<SessionJoined>(new JoinSession
         {
             SessionId = sessionId,
             Subscriber = textAndUsageSub,
             Filter = OutputFilter.TextAndUsage
         }, TimeSpan.FromSeconds(3));
-        textAndUsageSub.ExpectMsg<SessionJoined>(); // Drain subscriber notification
+        await textAndUsageSub.ExpectMsgAsync<SessionJoined>(); // Drain subscriber notification
         await sessionManager.Ask<SessionJoined>(new JoinSession
         {
             SessionId = sessionId,
             Subscriber = fullSub,
             Filter = OutputFilter.Full
         }, TimeSpan.FromSeconds(3));
-        fullSub.ExpectMsg<SessionJoined>(); // Drain subscriber notification
+        await fullSub.ExpectMsgAsync<SessionJoined>(); // Drain subscriber notification
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
@@ -156,25 +156,25 @@ public class LlmSessionIntegrationTests : TestKit
         }, TimeSpan.FromSeconds(3));
 
         // TextOnly: TextOutput + TurnCompleted (lifecycle always delivered)
-        textOnlySub.ExpectMsg<TextOutput>(TimeSpan.FromSeconds(3));
-        textOnlySub.ExpectMsg<TurnCompleted>(TimeSpan.FromSeconds(3));
-        textOnlySub.ExpectNoMsg(TimeSpan.FromMilliseconds(200));
+        await textOnlySub.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3));
+        await textOnlySub.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
+        await textOnlySub.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(200));
 
         // TextAndUsage: TextOutput + UsageOutput + TurnCompleted (no thinking)
-        textAndUsageSub.ExpectMsg<TextOutput>(TimeSpan.FromSeconds(3));
-        textAndUsageSub.ExpectMsg<UsageOutput>(TimeSpan.FromSeconds(3));
-        textAndUsageSub.ExpectMsg<TurnCompleted>(TimeSpan.FromSeconds(3));
-        textAndUsageSub.ExpectNoMsg(TimeSpan.FromMilliseconds(200));
+        await textAndUsageSub.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3));
+        await textAndUsageSub.ExpectMsgAsync<UsageOutput>(TimeSpan.FromSeconds(3));
+        await textAndUsageSub.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
+        await textAndUsageSub.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(200));
 
         // Full: ThinkingOutput + TextOutput + UsageOutput + TurnCompleted
-        fullSub.ExpectMsg<ThinkingOutput>(TimeSpan.FromSeconds(3));
-        fullSub.ExpectMsg<TextOutput>(TimeSpan.FromSeconds(3));
-        var usage = fullSub.ExpectMsg<UsageOutput>(TimeSpan.FromSeconds(3));
+        await fullSub.ExpectMsgAsync<ThinkingOutput>(TimeSpan.FromSeconds(3));
+        await fullSub.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3));
+        var usage = await fullSub.ExpectMsgAsync<UsageOutput>(TimeSpan.FromSeconds(3));
         Assert.Equal(128_000, usage.ContextWindowTokens);
         Assert.NotNull(usage.UsagePercent);
         Assert.True(usage.UsagePercent > 0);
-        fullSub.ExpectMsg<TurnCompleted>(TimeSpan.FromSeconds(3));
-        fullSub.ExpectNoMsg(TimeSpan.FromMilliseconds(200));
+        await fullSub.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
+        await fullSub.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(200));
     }
 
     [Fact]
@@ -192,14 +192,14 @@ public class LlmSessionIntegrationTests : TestKit
             Subscriber = sub1,
             Filter = OutputFilter.TextOnly
         }, TimeSpan.FromSeconds(3));
-        sub1.ExpectMsg<SessionJoined>(); // Drain subscriber notification
+        await sub1.ExpectMsgAsync<SessionJoined>(); // Drain subscriber notification
         await sessionManager.Ask<SessionJoined>(new JoinSession
         {
             SessionId = session2,
             Subscriber = sub2,
             Filter = OutputFilter.TextOnly
         }, TimeSpan.FromSeconds(3));
-        sub2.ExpectMsg<SessionJoined>(); // Drain subscriber notification
+        await sub2.ExpectMsgAsync<SessionJoined>(); // Drain subscriber notification
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
@@ -214,16 +214,16 @@ public class LlmSessionIntegrationTests : TestKit
         }, TimeSpan.FromSeconds(3));
 
         // Each subscriber only gets its own session's output
-        var text1 = sub1.ExpectMsg<TextOutput>(TimeSpan.FromSeconds(3));
+        var text1 = await sub1.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3));
         Assert.Equal(session1, text1.SessionId);
-        sub1.ExpectMsg<TurnCompleted>();
+        await sub1.ExpectMsgAsync<TurnCompleted>();
 
-        var text2 = sub2.ExpectMsg<TextOutput>(TimeSpan.FromSeconds(3));
+        var text2 = await sub2.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3));
         Assert.Equal(session2, text2.SessionId);
-        sub2.ExpectMsg<TurnCompleted>();
+        await sub2.ExpectMsgAsync<TurnCompleted>();
 
-        sub1.ExpectNoMsg(TimeSpan.FromMilliseconds(200));
-        sub2.ExpectNoMsg(TimeSpan.FromMilliseconds(200));
+        await sub1.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(200));
+        await sub2.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(200));
     }
 
     [Fact]
@@ -240,7 +240,7 @@ public class LlmSessionIntegrationTests : TestKit
             Subscriber = subscriber,
             Filter = OutputFilter.TextOnly
         }, TimeSpan.FromSeconds(3));
-        subscriber.ExpectMsg<SessionJoined>(); // Drain subscriber notification
+        await subscriber.ExpectMsgAsync<SessionJoined>(); // Drain subscriber notification
 
         // First message — actor enters Processing
         var ack1 = await sessionManager.Ask<CommandAck>(new SendUserMessage
@@ -263,17 +263,17 @@ public class LlmSessionIntegrationTests : TestKit
         }, TimeSpan.FromSeconds(3));
 
         // First turn output
-        subscriber.ExpectMsg<TextOutput>(TimeSpan.FromSeconds(6));
-        subscriber.ExpectMsg<TurnCompleted>(TimeSpan.FromSeconds(6));
+        await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(6));
+        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(6));
 
         // Second turn output (batched follow-up)
-        subscriber.ExpectMsg<TextOutput>(TimeSpan.FromSeconds(6));
-        subscriber.ExpectMsg<TurnCompleted>(TimeSpan.FromSeconds(6));
+        await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(6));
+        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(6));
 
         // Only two LLM calls total
         Assert.Equal(2, _fakeChatClient.CallCount);
 
-        subscriber.ExpectNoMsg(TimeSpan.FromMilliseconds(300));
+        await subscriber.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(300));
     }
 
     [Fact]
@@ -300,7 +300,7 @@ public class LlmSessionIntegrationTests : TestKit
             Subscriber = subscriber,
             Filter = OutputFilter.Full
         }, TimeSpan.FromSeconds(3));
-        subscriber.ExpectMsg<SessionJoined>();
+        await subscriber.ExpectMsgAsync<SessionJoined>();
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
@@ -308,9 +308,9 @@ public class LlmSessionIntegrationTests : TestKit
             Content = "Find browser tools"
         }, TimeSpan.FromSeconds(3));
 
-        subscriber.ExpectMsg<ToolCallOutput>(TimeSpan.FromSeconds(3));
-        subscriber.ExpectMsg<TextOutput>(TimeSpan.FromSeconds(6));
-        subscriber.ExpectMsg<TurnCompleted>(TimeSpan.FromSeconds(6));
+        await subscriber.ExpectMsgAsync<ToolCallOutput>(TimeSpan.FromSeconds(3));
+        await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(6));
+        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(6));
 
         for (var i = 0; i < 4; i++)
         {
@@ -320,8 +320,8 @@ public class LlmSessionIntegrationTests : TestKit
                 Content = $"Follow-up turn {i + 1}"
             }, TimeSpan.FromSeconds(3));
 
-            subscriber.ExpectMsg<TextOutput>(TimeSpan.FromSeconds(6));
-            subscriber.ExpectMsg<TurnCompleted>(TimeSpan.FromSeconds(6));
+            await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(6));
+            await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(6));
         }
 
         Assert.True(_fakeChatClient.ReceivedToolNames.Count >= 6);
@@ -346,23 +346,23 @@ public class LlmSessionIntegrationTests : TestKit
             Subscriber = subscriber,
             Filter = OutputFilter.TextOnly
         }, TimeSpan.FromSeconds(3));
-        subscriber.ExpectMsg<SessionJoined>(); // Drain subscriber notification
+        await subscriber.ExpectMsgAsync<SessionJoined>(); // Drain subscriber notification
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = sessionId,
             Content = "First message"
         }, TimeSpan.FromSeconds(3));
-        subscriber.ExpectMsg<TextOutput>(TimeSpan.FromSeconds(3));
-        subscriber.ExpectMsg<TurnCompleted>(TimeSpan.FromSeconds(3));
+        await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3));
+        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = sessionId,
             Content = "Second message"
         }, TimeSpan.FromSeconds(3));
-        subscriber.ExpectMsg<TextOutput>(TimeSpan.FromSeconds(3));
-        subscriber.ExpectMsg<TurnCompleted>(TimeSpan.FromSeconds(3));
+        await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3));
+        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
 
         // Phase 2: Kill the session actor child
         var escapedId = Uri.EscapeDataString(sessionId.Value);
@@ -381,7 +381,7 @@ public class LlmSessionIntegrationTests : TestKit
             Subscriber = recoverSub,
             Filter = OutputFilter.TextOnly
         }, TimeSpan.FromSeconds(5));
-        recoverSub.ExpectMsg<SessionJoined>(); // Drain subscriber notification
+        await recoverSub.ExpectMsgAsync<SessionJoined>(); // Drain subscriber notification
         Assert.Equal(sessionId, recovered.SessionId);
         Assert.Equal(2, recovered.TurnCount); // Both turns recovered
 
@@ -391,10 +391,10 @@ public class LlmSessionIntegrationTests : TestKit
             SessionId = sessionId,
             Content = "Third message after recovery"
         }, TimeSpan.FromSeconds(3));
-        var text = recoverSub.ExpectMsg<TextOutput>(TimeSpan.FromSeconds(3));
+        var text = await recoverSub.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3));
         Assert.Contains("fake", text.Text, StringComparison.OrdinalIgnoreCase);
 
-        var completed = recoverSub.ExpectMsg<TurnCompleted>(TimeSpan.FromSeconds(3));
+        var completed = await recoverSub.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
         Assert.Equal(3, completed.TurnNumber); // Continues from recovered state
     }
 }

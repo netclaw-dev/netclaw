@@ -33,7 +33,7 @@ public class ReminderExecutionActorTests : TestKit
             Props.Create(() => new ParentProxy(probe.Ref, definition, failingPipeline)),
             "exec-parent");
 
-        var completed = probe.ExpectMsg<ReminderExecutionCompleted>(TimeSpan.FromSeconds(5));
+        var completed = await probe.ExpectMsgAsync<ReminderExecutionCompleted>(TimeSpan.FromSeconds(5));
 
         Assert.False(completed.Success);
         Assert.Equal("fail-test", completed.Id.Value);
@@ -57,7 +57,7 @@ public class ReminderExecutionActorTests : TestKit
             Props.Create(() => new ParentProxy(probe.Ref, definition, failingPipeline)),
             "exec-parent-2");
 
-        var completed = probe.ExpectMsg<ReminderExecutionCompleted>(TimeSpan.FromSeconds(5));
+        var completed = await probe.ExpectMsgAsync<ReminderExecutionCompleted>(TimeSpan.FromSeconds(5));
 
         Assert.False(completed.Success);
         // Outer message is the protocol-level error; inner is in the log via ex.ToString()

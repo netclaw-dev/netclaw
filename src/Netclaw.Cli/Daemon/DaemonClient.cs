@@ -46,7 +46,8 @@ public sealed class DaemonClient : IAsyncDisposable
     public DaemonClient(
         string daemonEndpoint,
         TimeProvider? timeProvider = null,
-        TimeSpan[]? reconnectDelays = null)
+        TimeSpan[]? reconnectDelays = null,
+        TimeSpan? serverTimeout = null)
     {
         if (string.IsNullOrWhiteSpace(daemonEndpoint))
             throw new ArgumentException("Daemon endpoint cannot be empty.", nameof(daemonEndpoint));
@@ -60,6 +61,9 @@ public sealed class DaemonClient : IAsyncDisposable
             .WithUrl(_hubUrl)
             .WithAutomaticReconnect(_reconnectDelays)
             .Build();
+
+        if (serverTimeout is { } timeout)
+            _connection.ServerTimeout = timeout;
 
         _connection.On<SessionOutputDto>("ReceiveOutput", dto =>
         {

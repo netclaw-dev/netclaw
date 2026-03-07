@@ -42,7 +42,7 @@ public class SetReminderToolTests : TestKit
             return result;
         });
 
-        var cmd = probe.ExpectMsg<SaveReminderCommand>(TimeSpan.FromSeconds(5));
+        var cmd = await probe.ExpectMsgAsync<SaveReminderCommand>(TimeSpan.FromSeconds(5));
         Assert.Equal("Check the server", cmd.Definition.Instructions);
         Assert.Equal(ReminderScheduleType.OneShot, cmd.Definition.Schedule.Type);
 
@@ -78,7 +78,7 @@ public class SetReminderToolTests : TestKit
             return result;
         });
 
-        var cmd = probe.ExpectMsg<SaveReminderCommand>(TimeSpan.FromSeconds(5));
+        var cmd = await probe.ExpectMsgAsync<SaveReminderCommand>(TimeSpan.FromSeconds(5));
         Assert.Equal(ReminderScheduleType.Interval, cmd.Definition.Schedule.Type);
         Assert.Equal(TimeSpan.FromHours(2), cmd.Definition.Schedule.Interval);
 
@@ -109,7 +109,7 @@ public class SetReminderToolTests : TestKit
             return result;
         });
 
-        var cmd = probe.ExpectMsg<SaveReminderCommand>(TimeSpan.FromSeconds(5));
+        var cmd = await probe.ExpectMsgAsync<SaveReminderCommand>(TimeSpan.FromSeconds(5));
         Assert.Equal(ReminderScheduleType.Cron, cmd.Definition.Schedule.Type);
         Assert.Equal("0 */6 * * *", cmd.Definition.Schedule.CronExpression);
 
@@ -138,7 +138,7 @@ public class SetReminderToolTests : TestKit
 
         Assert.Contains("Error:", result);
         Assert.Contains("Invalid cron expression", result);
-        probe.ExpectNoMsg(TimeSpan.FromMilliseconds(100));
+        await probe.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(100));
     }
 
     [Fact]
@@ -196,7 +196,7 @@ public class SetReminderToolTests : TestKit
             return result;
         });
 
-        var cmd = probe.ExpectMsg<SaveReminderCommand>(TimeSpan.FromSeconds(5));
+        var cmd = await probe.ExpectMsgAsync<SaveReminderCommand>(TimeSpan.FromSeconds(5));
         Assert.Equal("C0123ABC", cmd.Definition.ReportToChannel);
         Assert.Equal("1234567890.123456", cmd.Definition.ReportToThreadTs);
         Assert.Equal("C0123ABC/1234567890.123456", cmd.Definition.SessionId);

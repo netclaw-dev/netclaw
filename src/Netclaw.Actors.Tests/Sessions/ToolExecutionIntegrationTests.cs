@@ -84,7 +84,7 @@ public class ToolExecutionIntegrationTests : TestKit
             Subscriber = subscriber,
             Filter = OutputFilter.Full
         }, TimeSpan.FromSeconds(10));
-        subscriber.ExpectMsg<SessionJoined>(); // Drain subscriber notification
+        await subscriber.ExpectMsgAsync<SessionJoined>(); // Drain subscriber notification
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
@@ -93,15 +93,15 @@ public class ToolExecutionIntegrationTests : TestKit
         }, TimeSpan.FromSeconds(3));
 
         // First: subscriber receives tool call output
-        var toolCall = subscriber.ExpectMsg<ToolCallOutput>(TimeSpan.FromSeconds(3));
+        var toolCall = await subscriber.ExpectMsgAsync<ToolCallOutput>(TimeSpan.FromSeconds(3));
         Assert.Equal("web_search", toolCall.ToolName);
         Assert.Equal("call-1", toolCall.CallId);
 
         // Then: subscriber receives final text response (after tool result fed back)
-        var text = subscriber.ExpectMsg<TextOutput>(TimeSpan.FromSeconds(5));
+        var text = await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(5));
         Assert.Contains("fake", text.Text, StringComparison.OrdinalIgnoreCase);
 
-        var completed = subscriber.ExpectMsg<TurnCompleted>(TimeSpan.FromSeconds(3));
+        var completed = await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
         Assert.Equal(1, completed.TurnNumber);
 
         // Two LLM calls: first returned tool call, second returned text
@@ -139,7 +139,7 @@ public class ToolExecutionIntegrationTests : TestKit
             Subscriber = subscriber,
             Filter = OutputFilter.Full
         }, TimeSpan.FromSeconds(10));
-        subscriber.ExpectMsg<SessionJoined>(); // Drain subscriber notification
+        await subscriber.ExpectMsgAsync<SessionJoined>(); // Drain subscriber notification
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
@@ -148,12 +148,12 @@ public class ToolExecutionIntegrationTests : TestKit
         }, TimeSpan.FromSeconds(3));
 
         // Two tool call outputs
-        subscriber.ExpectMsg<ToolCallOutput>(TimeSpan.FromSeconds(3));
-        subscriber.ExpectMsg<ToolCallOutput>(TimeSpan.FromSeconds(3));
+        await subscriber.ExpectMsgAsync<ToolCallOutput>(TimeSpan.FromSeconds(3));
+        await subscriber.ExpectMsgAsync<ToolCallOutput>(TimeSpan.FromSeconds(3));
 
         // Final text response
-        subscriber.ExpectMsg<TextOutput>(TimeSpan.FromSeconds(5));
-        subscriber.ExpectMsg<TurnCompleted>(TimeSpan.FromSeconds(3));
+        await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(5));
+        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
 
         Assert.Equal(2, _fakeToolExecutor.CallCount);
         Assert.Equal(2, _fakeAuditLogger.Entries.Count);
@@ -179,7 +179,7 @@ public class ToolExecutionIntegrationTests : TestKit
             Subscriber = subscriber,
             Filter = OutputFilter.Full
         }, TimeSpan.FromSeconds(10));
-        subscriber.ExpectMsg<SessionJoined>(); // Drain subscriber notification
+        await subscriber.ExpectMsgAsync<SessionJoined>(); // Drain subscriber notification
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
@@ -188,13 +188,13 @@ public class ToolExecutionIntegrationTests : TestKit
         }, TimeSpan.FromSeconds(3));
 
         // Tool call output emitted
-        subscriber.ExpectMsg<ToolCallOutput>(TimeSpan.FromSeconds(3));
+        await subscriber.ExpectMsgAsync<ToolCallOutput>(TimeSpan.FromSeconds(3));
 
         // LLM gets called again with the error message as tool result,
         // then returns normal text
-        var text = subscriber.ExpectMsg<TextOutput>(TimeSpan.FromSeconds(5));
+        var text = await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(5));
         Assert.Contains("fake", text.Text, StringComparison.OrdinalIgnoreCase);
-        subscriber.ExpectMsg<TurnCompleted>(TimeSpan.FromSeconds(3));
+        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
 
         // Two LLM calls total
         Assert.Equal(2, _fakeChatClient.CallCount);
@@ -221,7 +221,7 @@ public class ToolExecutionIntegrationTests : TestKit
             Subscriber = subscriber,
             Filter = OutputFilter.Full
         }, TimeSpan.FromSeconds(10));
-        subscriber.ExpectMsg<SessionJoined>();
+        await subscriber.ExpectMsgAsync<SessionJoined>();
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
@@ -229,9 +229,9 @@ public class ToolExecutionIntegrationTests : TestKit
             Content = "Run huge tool"
         }, TimeSpan.FromSeconds(3));
 
-        subscriber.ExpectMsg<ToolCallOutput>(TimeSpan.FromSeconds(3));
-        subscriber.ExpectMsg<TextOutput>(TimeSpan.FromSeconds(5));
-        subscriber.ExpectMsg<TurnCompleted>(TimeSpan.FromSeconds(3));
+        await subscriber.ExpectMsgAsync<ToolCallOutput>(TimeSpan.FromSeconds(3));
+        await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(5));
+        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
 
         Assert.Equal(2, _fakeChatClient.CallCount);
         Assert.Equal(2, _fakeChatClient.ReceivedMessages.Count);

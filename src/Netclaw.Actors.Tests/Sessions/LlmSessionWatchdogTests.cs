@@ -56,7 +56,7 @@ public sealed class LlmSessionWatchdogTests(ITestOutputHelper output) : TestKit(
             Subscriber = subscriber,
             Filter = OutputFilter.TextOnly
         }, TimeSpan.FromSeconds(3));
-        subscriber.ExpectMsg<SessionJoined>();
+        await subscriber.ExpectMsgAsync<SessionJoined>();
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
@@ -64,9 +64,9 @@ public sealed class LlmSessionWatchdogTests(ITestOutputHelper output) : TestKit(
             Content = "first"
         }, TimeSpan.FromSeconds(3));
 
-        var firstError = subscriber.ExpectMsg<ErrorOutput>(TimeSpan.FromSeconds(6));
+        var firstError = await subscriber.ExpectMsgAsync<ErrorOutput>(TimeSpan.FromSeconds(6));
         Assert.Contains("timeout", firstError.Message, StringComparison.OrdinalIgnoreCase);
-        subscriber.ExpectMsg<TurnCompleted>(TimeSpan.FromSeconds(3));
+        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
@@ -74,9 +74,9 @@ public sealed class LlmSessionWatchdogTests(ITestOutputHelper output) : TestKit(
             Content = "second"
         }, TimeSpan.FromSeconds(3));
 
-        var secondError = subscriber.ExpectMsg<ErrorOutput>(TimeSpan.FromSeconds(6));
+        var secondError = await subscriber.ExpectMsgAsync<ErrorOutput>(TimeSpan.FromSeconds(6));
         Assert.Contains("timeout", secondError.Message, StringComparison.OrdinalIgnoreCase);
-        subscriber.ExpectMsg<TurnCompleted>(TimeSpan.FromSeconds(3));
+        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
 
         Assert.True(_chatClient.CallCount >= 2);
     }

@@ -396,7 +396,7 @@ public sealed class SlackProactiveThreadActorTests(ITestOutputHelper output) : T
     }
 
     [Fact]
-    public void Routes_proactive_thread_to_thread_actor()
+    public async Task Routes_proactive_thread_to_thread_actor()
     {
         var sink = CreateTestProbe("proactive-thread-sink");
         var deps = CreateDependencies(
@@ -412,12 +412,12 @@ public sealed class SlackProactiveThreadActorTests(ITestOutputHelper output) : T
             new SlackThreadTs("100.1"),
             sessionId));
 
-        sink.ExpectMsg<StartProactiveThread>(msg =>
+        await sink.ExpectMsgAsync<StartProactiveThread>(msg =>
             Assert.Equal("C1/100.1", msg.SessionId.Value));
     }
 
     [Fact]
-    public void Reuses_existing_conversation_thread_for_proactive()
+    public async Task Reuses_existing_conversation_thread_for_proactive()
     {
         var sink = CreateTestProbe("reuse-conversation-sink");
         var deps = CreateDependencies(
@@ -429,7 +429,7 @@ public sealed class SlackProactiveThreadActorTests(ITestOutputHelper output) : T
 
         // First: mention starts a thread
         conversation.Tell(CreateAppMention("C1:200", "C1", "200.1", "<@UBOT> start"));
-        var first = sink.ExpectMsg<SlackThreadInbound>();
+        var first = await sink.ExpectMsgAsync<SlackThreadInbound>();
         Assert.Equal("C1/200.1", first.SessionId.Value);
 
         // Second: proactive thread with the same thread ts reuses the existing actor
@@ -438,12 +438,12 @@ public sealed class SlackProactiveThreadActorTests(ITestOutputHelper output) : T
             new SlackThreadTs("200.1"),
             new SessionId("C1/200.1")));
 
-        sink.ExpectMsg<StartProactiveThread>(msg =>
+        await sink.ExpectMsgAsync<StartProactiveThread>(msg =>
             Assert.Equal("C1/200.1", msg.SessionId.Value));
     }
 
     [Fact]
-    public void StartProactiveThread_rejected_for_disallowed_channel()
+    public async Task StartProactiveThread_rejected_for_disallowed_channel()
     {
         var sink = CreateTestProbe("disallowed-channel-sink");
         var deps = CreateDependencies(
@@ -458,15 +458,15 @@ public sealed class SlackProactiveThreadActorTests(ITestOutputHelper output) : T
             new SlackThreadTs("400.1"),
             new SessionId("CBAD/400.1")));
 
-        ExpectMsg<Status.Failure>(failure =>
+        await ExpectMsgAsync<Status.Failure>(failure =>
             Assert.Contains("allowed channels", failure.Cause.Message, StringComparison.OrdinalIgnoreCase));
 
         // Message should be rejected before thread actor creation.
-        sink.ExpectNoMsg(TimeSpan.FromMilliseconds(250));
+        await sink.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(250));
     }
 
     [Fact]
-    public void StartProactiveThread_rejected_when_dm_disabled()
+    public async Task StartProactiveThread_rejected_when_dm_disabled()
     {
         var sink = CreateTestProbe("dm-disabled-sink");
         var deps = CreateDependencies(
@@ -482,13 +482,13 @@ public sealed class SlackProactiveThreadActorTests(ITestOutputHelper output) : T
             new SlackThreadTs("510.1"),
             new SessionId("DU1/510.1")));
 
-        ExpectMsg<Status.Failure>(failure =>
+        await ExpectMsgAsync<Status.Failure>(failure =>
             Assert.Contains("Direct messages are disabled", failure.Cause.Message, StringComparison.OrdinalIgnoreCase));
-        sink.ExpectNoMsg(TimeSpan.FromMilliseconds(250));
+        await sink.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(250));
     }
 
     [Fact]
-    public void StartProactiveThread_allows_dm_channel_not_in_allow_list()
+    public async Task StartProactiveThread_allows_dm_channel_not_in_allow_list()
     {
         var sink = CreateTestProbe("dm-bypass-sink");
         // AllowedChannelIds = ["C1"] — "DU1" is NOT in the list
@@ -505,12 +505,12 @@ public sealed class SlackProactiveThreadActorTests(ITestOutputHelper output) : T
             new SessionId("DU1/500.1")));
 
         // DM channels bypass the channel ACL check — should be forwarded
-        sink.ExpectMsg<StartProactiveThread>(msg =>
+        await sink.ExpectMsgAsync<StartProactiveThread>(msg =>
             Assert.Equal("DU1/500.1", msg.SessionId.Value));
     }
 
     [Fact]
-    public void ProactiveThreadAck_flows_back_through_gateway()
+    public async Task ProactiveThreadAck_flows_back_through_gateway()
     {
         var deps = CreateDependencies(
             threadPropsFactory: (_, _, _, _) =>
@@ -525,7 +525,7 @@ public sealed class SlackProactiveThreadActorTests(ITestOutputHelper output) : T
             sessionId));
 
         // The ack should flow back to us (the sender) through Forward chain
-        ExpectMsg<ProactiveThreadAck>(ack =>
+        await ExpectMsgAsync<ProactiveThreadAck>(ack =>
             Assert.Equal("C1/300.1", ack.SessionId.Value));
     }
 

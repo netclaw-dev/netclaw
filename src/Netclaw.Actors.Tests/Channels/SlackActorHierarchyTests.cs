@@ -1,5 +1,4 @@
 using Akka.Actor;
-using Akka.Configuration;
 using Akka.Hosting;
 using Akka.Hosting.TestKit;
 using Microsoft.Extensions.DependencyInjection;
@@ -15,11 +14,6 @@ namespace Netclaw.Actors.Tests.Channels;
 
 public sealed class SlackActorHierarchyTests(ITestOutputHelper output) : TestKit(output: output)
 {
-    // Windows CI runners (2 vCPU) can starve the thread pool when multiple
-    // TestKit hosts run in parallel, causing the default 3s timeout to flake.
-    protected override Config? Config =>
-        ConfigurationFactory.ParseString("akka.test.default-timeout = 5s");
-
     protected override void ConfigureServices(HostBuilderContext context, IServiceCollection services)
     {
     }
@@ -29,7 +23,7 @@ public sealed class SlackActorHierarchyTests(ITestOutputHelper output) : TestKit
     }
 
     [Fact]
-    public void Gateway_deduplicates_same_event_id()
+    public async Task Gateway_deduplicates_same_event_id()
     {
         var sink = CreateTestProbe("gateway-sink");
         var deps = CreateDependencies(
@@ -41,12 +35,12 @@ public sealed class SlackActorHierarchyTests(ITestOutputHelper output) : TestKit
         gateway.Tell(message);
         gateway.Tell(message);
 
-        sink.ExpectMsg<SlackInboundMessage>();
-        sink.ExpectNoMsg(TimeSpan.FromMilliseconds(250));
+        await sink.ExpectMsgAsync<SlackInboundMessage>();
+        await ExpectNoMsgAsync(TimeSpan.FromMilliseconds(250));
     }
 
     [Fact]
-    public void Conversation_requires_mention_to_start_and_allows_thread_followups()
+    public async Task Conversation_requires_mention_to_start_and_allows_thread_followups()
     {
         var sink = CreateTestProbe("conversation-sink");
         var deps = CreateDependencies(
@@ -61,7 +55,7 @@ public sealed class SlackActorHierarchyTests(ITestOutputHelper output) : TestKit
             text: "no mention",
             threadTs: null));
 
-        sink.ExpectNoMsg(TimeSpan.FromMilliseconds(250));
+        await ExpectNoMsgAsync(TimeSpan.FromMilliseconds(250));
 
         conversation.Tell(CreateAppMention(
             eventId: "C1:201",
@@ -69,7 +63,7 @@ public sealed class SlackActorHierarchyTests(ITestOutputHelper output) : TestKit
             eventTs: "201.1",
             text: "<@UBOT> start"));
 
-        var first = sink.ExpectMsg<SlackThreadInbound>();
+        var first = await sink.ExpectMsgAsync<SlackThreadInbound>();
         Assert.Equal("C1/201.1", first.SessionId.Value);
         Assert.Equal("start", first.Text);
 
@@ -80,13 +74,13 @@ public sealed class SlackActorHierarchyTests(ITestOutputHelper output) : TestKit
             text: "follow up",
             threadTs: "201.1"));
 
-        var second = sink.ExpectMsg<SlackThreadInbound>();
+        var second = await sink.ExpectMsgAsync<SlackThreadInbound>();
         Assert.Equal("C1/201.1", second.SessionId.Value);
         Assert.Equal("follow up", second.Text);
     }
 
     [Fact]
-    public void Conversation_allows_dm_without_mention_when_enabled()
+    public async Task Conversation_allows_dm_without_mention_when_enabled()
     {
         var sink = CreateTestProbe("dm-sink");
         var deps = CreateDependencies(
@@ -102,13 +96,13 @@ public sealed class SlackActorHierarchyTests(ITestOutputHelper output) : TestKit
             isDirectMessage: true,
             threadTs: null));
 
-        var inbound = sink.ExpectMsg<SlackThreadInbound>();
+        var inbound = await sink.ExpectMsgAsync<SlackThreadInbound>();
         Assert.Equal("D1/300.1", inbound.SessionId.Value);
         Assert.Equal("hello from dm", inbound.Text);
     }
 
     [Fact]
-    public void Conversation_forwards_files_from_app_mention()
+    public async Task Conversation_forwards_files_from_app_mention()
     {
         var sink = CreateTestProbe("files-mention-sink");
         var deps = CreateDependencies(
@@ -128,7 +122,7 @@ public sealed class SlackActorHierarchyTests(ITestOutputHelper output) : TestKit
             text: "<@UBOT> check this",
             files: files));
 
-        var inbound = sink.ExpectMsg<SlackThreadInbound>();
+        var inbound = await sink.ExpectMsgAsync<SlackThreadInbound>();
         Assert.Equal("check this", inbound.Text);
         Assert.NotNull(inbound.Files);
         Assert.Single(inbound.Files);
@@ -136,7 +130,7 @@ public sealed class SlackActorHierarchyTests(ITestOutputHelper output) : TestKit
     }
 
     [Fact]
-    public void Conversation_forwards_files_when_normalized_text_empty()
+    public async Task Conversation_forwards_files_when_normalized_text_empty()
     {
         var sink = CreateTestProbe("files-empty-text-sink");
         var deps = CreateDependencies(
@@ -157,7 +151,7 @@ public sealed class SlackActorHierarchyTests(ITestOutputHelper output) : TestKit
             text: "<@UBOT>",
             files: files));
 
-        var inbound = sink.ExpectMsg<SlackThreadInbound>();
+        var inbound = await sink.ExpectMsgAsync<SlackThreadInbound>();
         Assert.Equal(string.Empty, inbound.Text);
         Assert.NotNull(inbound.Files);
         Assert.Single(inbound.Files);
@@ -165,7 +159,7 @@ public sealed class SlackActorHierarchyTests(ITestOutputHelper output) : TestKit
     }
 
     [Fact]
-    public void Conversation_ignores_bot_messages_to_prevent_feedback_loop()
+    public async Task Conversation_ignores_bot_messages_to_prevent_feedback_loop()
     {
         var sink = CreateTestProbe("bot-loop-sink");
         var deps = CreateDependencies(
@@ -186,7 +180,7 @@ public sealed class SlackActorHierarchyTests(ITestOutputHelper output) : TestKit
             Hidden: false,
             IsDirectMessage: false));
 
-        sink.ExpectNoMsg(TimeSpan.FromMilliseconds(250));
+        await ExpectNoMsgAsync(TimeSpan.FromMilliseconds(250));
     }
 
     private static SlackGatewayDependencies CreateDependencies(

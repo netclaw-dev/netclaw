@@ -23,7 +23,9 @@ public sealed class DaemonClientReconnectIntegrationTests
         var port = GetFreeTcpPort();
         using var host = await StartFakeHubAsync(port);
 
-        await using var client = new DaemonClient($"http://127.0.0.1:{port}");
+        await using var client = new DaemonClient(
+            $"http://127.0.0.1:{port}",
+            serverTimeout: TimeSpan.FromSeconds(2));
 
         var disconnected = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var reconnected = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -85,9 +87,12 @@ public sealed class DaemonClientReconnectIntegrationTests
         // Fast reconnect delays exhaust auto-reconnect in ~50ms instead of ~17s,
         // so the Disconnected event fires quickly and the test budget is not wasted
         // waiting for built-in retries to time out.
+        // Short ServerTimeout (2s) ensures the client detects the server going away
+        // quickly on all platforms (Windows TCP stack can be slow to detect drops).
         await using var client = new DaemonClient(
             $"http://127.0.0.1:{port}",
-            reconnectDelays: [TimeSpan.Zero, TimeSpan.FromMilliseconds(50)]);
+            reconnectDelays: [TimeSpan.Zero, TimeSpan.FromMilliseconds(50)],
+            serverTimeout: TimeSpan.FromSeconds(2));
 
         var outputs = new List<SessionOutput>();
         var firstResponseReceived = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
