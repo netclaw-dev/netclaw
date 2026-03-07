@@ -1,3 +1,21 @@
+#### 0.3.3 2026-03-07 ####
+
+Netclaw v0.3.3 — OpenAI setup reliability and session traceability
+
+**OpenAI Setup Reliability**
+
+* Fixed OAuth probing in the init wizard by reusing the OAuth access token when API key input is empty, preventing false "missing credentials" probe failures after successful device auth.
+* Added a manual model-entry continuation path on provider validation failure (`M`) so setup can proceed when model discovery fails due to permissions or endpoint behavior. ([#176](https://github.com/Aaronontheweb/netclaw/pull/176))
+
+**Session and Slack Telemetry**
+
+* Added turn-level correlation metadata (`TurnId`, `MessageId`) across Slack/SignalR ingress, session pipeline, and session actor logs for end-to-end tracing.
+* Added structured session lifecycle events for turn receive, LLM call start, tool iteration limit, and turn failure to make "amnesia" and reply continuity issues diagnosable from logs. ([#176](https://github.com/Aaronontheweb/netclaw/pull/176))
+
+**Validation UX**
+
+* Fixed probe state publication ordering so validation screens no longer get stuck showing a spinner after probe completion. ([#174](https://github.com/Aaronontheweb/netclaw/pull/174))
+
 #### 0.3.2 2026-03-06 ####
 
 Netclaw v0.3.2 — Session catalog hardening, diagnostics, and CLI improvements
