@@ -90,16 +90,26 @@ public sealed class SlackConversationActor : ReceiveActor
             }
 
             var sessionId = new SessionId($"{_conversationId.Value}/{threadTs.Value}");
+            var turnId = string.IsNullOrWhiteSpace(message.EventId.Value)
+                ? Guid.NewGuid().ToString("N")[..8]
+                : message.EventId.Value;
             var log = _log
                 .WithContext("SlackThreadTs", threadTs.Value)
-                .WithContext("SessionId", sessionId.Value);
+                .WithContext("SessionId", sessionId.Value)
+                .WithContext("TurnId", turnId)
+                .WithContext("SlackEventId", message.EventId.Value);
 
-            log.Debug("Routing Slack event {0} to session thread actor", message.EventId);
+            log.Info("slack_turn_routed event={EventId} hasFiles={HasFiles} textChars={TextLength}",
+                message.EventId.Value,
+                message.Files is { Count: > 0 },
+                normalized.Length);
 
             thread.Forward(new SlackThreadInbound(
                 SessionId: sessionId,
                 ChannelId: message.ChannelId,
                 ThreadTs: threadTs,
+                EventId: message.EventId,
+                TurnId: turnId,
                 SenderId: message.UserId?.Value ?? "slack-user",
                 Text: normalized,
                 ReceivedAt: _dependencies.TimeProvider.GetUtcNow(),

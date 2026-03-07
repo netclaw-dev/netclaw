@@ -202,6 +202,10 @@ public sealed class SessionPipeline : ISessionPipeline
         SessionPipelineOptions options,
         NetclawPaths? paths)
     {
+        var turnId = string.IsNullOrWhiteSpace(input.MessageId)
+            ? Guid.NewGuid().ToString("N")[..8]
+            : input.MessageId!;
+
         var textParts = input.Contents.OfType<TextContent>().Select(t => t.Text);
         var content = string.Join("\n", textParts);
 
@@ -248,6 +252,8 @@ public sealed class SessionPipeline : ISessionPipeline
                 ChannelType = options.ChannelType,
                 SenderId = input.SenderId,
                 ChannelId = input.ChannelId,
+                MessageId = input.MessageId,
+                TurnId = turnId,
                 ReceivedAt = input.ReceivedAt
             }
         };

@@ -320,6 +320,13 @@ public partial class InitWizardViewModel : ReactiveViewModel
         var probeId = Guid.NewGuid().ToString("N")[..8];
         var stopwatch = Stopwatch.StartNew();
         Exception? probeException = null;
+        var credential = ApiKeyInput;
+        if (string.IsNullOrWhiteSpace(credential)
+            && SelectedAuthMethod == AuthMethod.OAuthDevice
+            && OAuthResult is not null)
+        {
+            credential = OAuthResult.AccessToken.Value;
+        }
 
         IsProbing.Value = true;
         ProbeResult.Value = null;
@@ -332,7 +339,8 @@ public partial class InitWizardViewModel : ReactiveViewModel
             providerType,
             EndpointInput,
             probeId,
-            "start");
+            "start",
+            $"auth={SelectedAuthMethod} credentialPresent={!string.IsNullOrWhiteSpace(credential)}");
 
         // Fire-and-forget timer — self-cancels via the shared CTS.
         // RunProbeTimerAsync handles OperationCanceledException internally
@@ -345,7 +353,7 @@ public partial class InitWizardViewModel : ReactiveViewModel
             result = await _probe.ProbeAsync(
                     providerType,
                     EndpointInput,
-                    ApiKeyInput,
+                    credential,
                     ct)
                 .WaitAsync(ProbeHardTimeout, ct);
         }

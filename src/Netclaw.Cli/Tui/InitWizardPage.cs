@@ -521,7 +521,8 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
         return Layouts.Vertical()
             .WithChild(new TextNode($"  \u2717 {probeResult.ErrorMessage}").WithForeground(Color.Red))
             .WithChild(new TextNode(""))
-            .WithChild(new TextNode("  Press Enter to retry, or Esc to go back.").WithForeground(Color.BrightBlack));
+            .WithChild(new TextNode("  Press Enter to retry, M for manual model entry, or Esc to go back.")
+                .WithForeground(Color.BrightBlack));
     }
 
     private ILayoutNode BuildModelSelectionSubStep()
@@ -1559,6 +1560,20 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             && ViewModel.ProbeResult.Value is { Success: false })
         {
             ViewModel.StartProbe();
+            _stepContentNode?.Invalidate();
+            _helpTextNode?.Invalidate();
+            ViewModel.RequestRedraw();
+            return;
+        }
+
+        // On validation sub-step with failed result, M continues to manual model entry
+        if (ViewModel.CurrentStep.Value == WizardStep.Provider
+            && _providerSubStep == 3
+            && keyInfo.Key == ConsoleKey.M
+            && ViewModel.ProbeResult.Value is { Success: false })
+        {
+            _manualModelEntry = false;
+            SetProviderSubStep(4);
             _stepContentNode?.Invalidate();
             _helpTextNode?.Invalidate();
             ViewModel.RequestRedraw();
