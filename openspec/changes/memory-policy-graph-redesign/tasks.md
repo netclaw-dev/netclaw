@@ -1,0 +1,41 @@
+## 1. SQLite Substrate And Policy Model
+
+- [ ] 1.1 Add the dedicated SQLite memory database, schema migrator, and health surface under `~/.netclaw/memory/`.
+- [ ] 1.2 Implement repositories for anchors, documents, records, edges, and pending checkpoints with policy metadata fields.
+- [ ] 1.3 Replace legacy primary-backend selection with the new substrate config plus migration warnings for old `Memory.Provider` values.
+
+## 2. Automatic Recall In Session Turns
+
+- [ ] 2.1 Implement the pre-turn recall coordinator with bounded query/ranking logic and policy-aware filtering.
+- [ ] 2.2 Inject the automatic recall bundle into session turn assembly and degrade safely on timeout or storage failure.
+- [ ] 2.3 Update prompt/context guidance so the frontline model treats memory recall as automatic and explicit memory tools as manual-control paths.
+
+## 3. Checkpoint Detection And Background Curation
+
+- [ ] 3.1 Implement checkpoint detection for turn completion, explicit memory requests, tool findings, compaction boundaries, and accepted subagent findings.
+- [ ] 3.2 Implement rules-first candidate extraction, duplicate suppression, and policy gating before any curator LLM call.
+- [ ] 3.3 Implement the background curation worker with retryable checkpoint recovery and atomic durable writes.
+
+## 4. Explicit Memory Tools And Compatibility Layer
+
+- [ ] 4.1 Rewire `find_memories`, `get_memories`, `store_memory`, and `update_memory` to the SQLite memory service and policy pipeline.
+- [ ] 4.2 Implement document-vs-record update semantics in the explicit tool paths, including supersede and tombstone behavior.
+- [ ] 4.3 Preserve compatibility for existing prompts and skills while marking legacy file-backed and Memorizer-backed provider modes deprecated as primary backends.
+
+## 5. Subagent Ownership Changes
+
+- [ ] 5.1 Change the subagent result contract to return structured findings envelopes without default durable-memory write access.
+- [ ] 5.2 Route accepted subagent findings through the owning session's checkpoint pipeline.
+- [ ] 5.3 Add audit and observability coverage for accepted, deferred, rejected, and retried subagent-originated memory candidates.
+
+## 6. Migration, Skills, And Evaluation
+
+- [ ] 6.1 Add one-time import/migration from legacy `~/.netclaw/memories/` markdown memories into SQLite while preserving source files.
+- [ ] 6.2 Update system guidance artifacts that mention memory behavior, including `memory-usage` and `memorizer-usage`, to reflect the new ownership and compatibility stance.
+- [ ] 6.3 Create the seeded eval suite and operational checks for recall quality, noise suppression, privacy behavior, and latency thresholds from this change.
+- [ ] 6.4 Add a local Ollama eval profile using smaller models as the default gate for memory recall/curation quality before larger-model validation.
+
+## 7. Spec And Operator Surface Updates
+
+- [ ] 7.1 Sync the final `netclaw-agent-memory`, `netclaw-session`, and `netclaw-subagents` specs once implementation details settle.
+- [ ] 7.2 Update operator-facing docs, diagnostics, and migration messaging to explain SQLite memory health, pending checkpoints, and deprecated legacy provider modes.
