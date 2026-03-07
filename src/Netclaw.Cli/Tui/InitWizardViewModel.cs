@@ -512,6 +512,9 @@ public partial class InitWizardViewModel : ReactiveViewModel
         _oauthCts = new CancellationTokenSource();
         var ct = _oauthCts.Token;
 
+        ProbeElapsedSeconds.Value = 0;
+        _ = RunProbeTimerAsync(ct);
+
         var service = _oauthFactory.GetFor(descriptor);
         var config = OAuthDeviceFlowConfig.FromDescriptor(descriptor);
 
@@ -526,6 +529,9 @@ public partial class InitWizardViewModel : ReactiveViewModel
             var result = await service.PollForTokenAsync(config, deviceAuth,
                 state =>
                 {
+                    if (state == DeviceFlowState.Succeeded)
+                        return;
+
                     OAuthFlowState.Value = state;
                     RequestRedraw();
                 }, ct);
@@ -557,6 +563,10 @@ public partial class InitWizardViewModel : ReactiveViewModel
             OAuthErrorMessage = ex.Message;
             OAuthFlowState.Value = DeviceFlowState.Error;
             RequestRedraw();
+        }
+        finally
+        {
+            CancelOAuthFlow();
         }
     }
 

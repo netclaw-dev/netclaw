@@ -562,6 +562,9 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
         _oauthCts = new CancellationTokenSource();
         var ct = _oauthCts.Token;
 
+        ProbeElapsedSeconds.Value = 0;
+        _ = RunProbeTimerAsync(ct);
+
         var service = _oauthFactory.GetFor(descriptor);
         var config = OAuthDeviceFlowConfig.FromDescriptor(descriptor);
 
@@ -578,12 +581,17 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
             var result = await service.PollForTokenAsync(config, deviceAuth,
                 state =>
                 {
+                    if (state == DeviceFlowState.Succeeded)
+                        return;
+
                     OAuthFlowState.Value = state;
                     NotifyStateChanged();
                 }, ct);
 
             // Step 3: Keep tokens in-memory until provider is confirmed
             OAuthResult = result;
+            OAuthFlowState.Value = DeviceFlowState.Succeeded;
+            NotifyStateChanged();
 
             // Step 4: Transition to probe validation using the OAuth token
             NewApiKey = result.AccessToken.Value;
@@ -613,6 +621,10 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
             OAuthErrorMessage = ex.Message;
             OAuthFlowState.Value = DeviceFlowState.Error;
             NotifyStateChanged();
+        }
+        finally
+        {
+            CancelOAuthFlow();
         }
     }
 
