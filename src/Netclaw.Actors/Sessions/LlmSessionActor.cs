@@ -7,6 +7,7 @@ using Akka.Event;
 using Akka.Persistence;
 using Microsoft.Extensions.AI;
 using Netclaw.Actors.Channels;
+using Netclaw.Actors.Memory;
 using Netclaw.Actors.Protocol;
 using Netclaw.Configuration;
 using Netclaw.Actors.Tools;
@@ -40,6 +41,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     private readonly IToolExecutor? _toolExecutor;
     private readonly IToolAuditLogger? _auditLogger;
     private readonly IMemoryExtractor _memoryExtractor;
+    private readonly IMemoryRecallCoordinator _memoryRecallCoordinator;
+    private readonly IMemoryCheckpointSink _memoryCheckpointSink;
     private readonly TimeProvider _timeProvider;
     private readonly string? _sessionsBasePath;
     private readonly string? _sessionLogsBasePath;
@@ -75,6 +78,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     private string? _activeTurnId;
     private string? _activeMessageId;
     private string? _activeChannelType;
+    private AutomaticRecallResult? _activeRecall;
 
     // Persistent state (immutable — replaced on each event)
     private SessionState _state = SessionState.Empty;
@@ -94,6 +98,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         IToolAuditLogger? auditLogger = null,
         ToolRegistry? toolRegistry = null,
         IMemoryExtractor? memoryExtractor = null,
+        IMemoryRecallCoordinator? memoryRecallCoordinator = null,
+        IMemoryCheckpointSink? memoryCheckpointSink = null,
         TimeProvider? timeProvider = null,
         IReadOnlyList<IContextLayerProvider>? contextLayers = null,
         NetclawPaths? paths = null)
@@ -109,6 +115,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         _toolExecutor = toolExecutor;
         _auditLogger = auditLogger;
         _memoryExtractor = memoryExtractor ?? NullMemoryExtractor.Instance;
+        _memoryRecallCoordinator = memoryRecallCoordinator ?? NullMemoryRecallCoordinator.Instance;
+        _memoryCheckpointSink = memoryCheckpointSink ?? NullMemoryCheckpointSink.Instance;
         _timeProvider = timeProvider ?? TimeProvider.System;
         _sessionsBasePath = paths?.SessionsDirectory;
         _sessionLogsBasePath = paths?.SessionLogsDirectory;
@@ -244,7 +252,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             var userContent = cmd.Content ?? string.Empty;
             _state = _state.AddUserMessage(userContent, mediaRefs.Count > 0 ? mediaRefs : null);
             TryReplyAck();
-            FireLlmCall();
+            FireLlmCall(userContent);
             Become(Processing);
         });
     }
@@ -307,7 +315,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             }
 
             // Normal text response — persist turn
-            HandleTextResponse(lastMessage, response.Usage, msg.StreamedText, msg.StreamedThinking);
+            HandleTextResponse(lastMessage, response.Usage, msg.StreamedText, msg.StreamedThinking, msg.RecallResult);
         });
 
         Command<LlmResponseDeltaReceived>(msg =>
@@ -337,6 +345,63 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         Command<ToolExecutionCompleted>(msg =>
         {
             StopProcessingWatchdog();
+
+            var hasVerifiedToolFinding = msg.ToolResults.Any(r =>
+                r.Name is "web_search" or "webfetch" or "memorizer/search_memories");
+            if (hasVerifiedToolFinding)
+            {
+                var summarized = string.Join("\n", msg.ToolResults
+                    .Where(r => r.Name is "web_search" or "webfetch" or "memorizer/search_memories")
+                    .Take(2)
+                    .Select(r => $"[{r.Name}] {r.Content}"));
+
+                EnqueueCheckpointFireAndForget(new MemoryCheckpointRequest(
+                    SessionId: _sessionId.Value,
+                    TurnId: _activeTurnId,
+                    TriggerType: "verified-tool-finding",
+                    Priority: 60,
+                    Payload: new MemoryCheckpointPayload(
+                        SessionId: _sessionId.Value,
+                        TriggerType: "verified-tool-finding",
+                        Source: "tool",
+                        Content: summarized,
+                        IsExplicitRequest: false,
+                        HasVerifiedToolFinding: true,
+                        IsCompactionBoundary: false,
+                        HasAcceptedSubAgentFinding: false,
+                        Domain: ResolveDomainFromSession(_sessionId.Value),
+                        Sensitivity: "normal",
+                        RecallMode: "auto",
+                        Confidence: 0.85,
+                        Kind: "record",
+                        Title: "verified-tool-finding",
+                        UpdateSemantics: "immutable-record")));
+            }
+
+            foreach (var finding in msg.AcceptedSubAgentFindings)
+            {
+                EnqueueCheckpointFireAndForget(new MemoryCheckpointRequest(
+                    SessionId: _sessionId.Value,
+                    TurnId: _activeTurnId,
+                    TriggerType: "subagent-findings",
+                    Priority: 80,
+                    Payload: new MemoryCheckpointPayload(
+                        SessionId: _sessionId.Value,
+                        TriggerType: "subagent-findings",
+                        Source: finding.AgentName,
+                        Content: $"Subagent '{finding.AgentName}' completed successfully.",
+                        IsExplicitRequest: false,
+                        HasVerifiedToolFinding: false,
+                        IsCompactionBoundary: false,
+                        HasAcceptedSubAgentFinding: true,
+                        Domain: ResolveDomainFromSession(_sessionId.Value),
+                        Sensitivity: "normal",
+                        RecallMode: "auto",
+                        Confidence: 0.8,
+                        Title: $"subagent:{finding.AgentName}",
+                        Kind: "record",
+                        UpdateSemantics: "append-document")));
+            }
 
             // Add tool results to history and log each result
             foreach (var result in msg.ToolResults)
@@ -538,6 +603,30 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             {
                 _state = _state.Apply(evt);
                 _lastInputTokenCount = 0; // Reset — next LLM call will provide fresh count
+
+                EnqueueCheckpointFireAndForget(new MemoryCheckpointRequest(
+                    SessionId: _sessionId.Value,
+                    TurnId: _activeTurnId,
+                    TriggerType: "compaction-boundary",
+                    Priority: 90,
+                    Payload: new MemoryCheckpointPayload(
+                        SessionId: _sessionId.Value,
+                        TriggerType: "compaction-boundary",
+                        Source: "compaction",
+                        Content: string.IsNullOrWhiteSpace(observationText)
+                            ? "Compaction completed"
+                            : observationText,
+                        IsExplicitRequest: false,
+                        HasVerifiedToolFinding: false,
+                        IsCompactionBoundary: true,
+                        HasAcceptedSubAgentFinding: false,
+                        Domain: ResolveDomainFromSession(_sessionId.Value),
+                        Sensitivity: "normal",
+                        RecallMode: "auto",
+                        Confidence: 0.8,
+                        Kind: "document",
+                        Title: "compaction-boundary",
+                        UpdateSemantics: "append-document")));
 
                 // Always snapshot after compaction
                 SaveSnapshot(_state.ToSnapshot());
@@ -853,7 +942,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         AiChatMessage lastMessage,
         UsageDetails? usage,
         bool streamedText,
-        bool streamedThinking)
+        bool streamedThinking,
+        AutomaticRecallResult? recallResult)
     {
         _toolIterationCount = 0; // Reset for potential buffer drain (new logical turn)
 
@@ -889,6 +979,29 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             EmitResponseOutputs(lastMessage, usage, includeText: true, includeThinking: true);
             MaybeSnapshot();
             MaybeGenerateTitle();
+            _activeRecall = recallResult;
+
+            EnqueueCheckpointFireAndForget(new MemoryCheckpointRequest(
+                SessionId: _sessionId.Value,
+                TurnId: _activeTurnId,
+                TriggerType: "turn-complete",
+                Priority: 40,
+                Payload: new MemoryCheckpointPayload(
+                    SessionId: _sessionId.Value,
+                    TriggerType: "turn-complete",
+                    Source: "session",
+                    Content: $"User: {evt.UserMessage.Content}\nAssistant: {evt.AssistantReply.Content}",
+                    IsExplicitRequest: false,
+                    HasVerifiedToolFinding: false,
+                    IsCompactionBoundary: false,
+                    HasAcceptedSubAgentFinding: false,
+                    Domain: ResolveDomainFromSession(_sessionId.Value),
+                    Sensitivity: "normal",
+                    RecallMode: "auto",
+                    Confidence: 0.7,
+                    Kind: "document",
+                    Title: "turn-completion",
+                    UpdateSemantics: "append-document")));
 
             // Check if compaction should trigger
             if (ShouldCompact())
@@ -1121,10 +1234,13 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         });
     }
 
-    private void FireLlmCall(bool forceNoTools = false)
+    private void FireLlmCall(string? recallQuery = null, bool forceNoTools = false)
     {
         var sessionDir = GetSessionDirectory();
         var messages = ChatMessageConverter.ToAiMessages(_state.History, sessionDir);
+
+        _activeRecall = ResolveRecallBundle(recallQuery);
+        InjectAutomaticRecall(messages, _activeRecall);
 
         // Inject dynamic context layers (e.g. tool index) as transient system messages.
         // These are NOT persisted — rebuilt on every call so rehydrated sessions stay fresh.
@@ -1150,6 +1266,71 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             forceNoTools);
 
         _ = InvokeLlmAsync(client, messages, options, self, timeout);
+    }
+
+    private AutomaticRecallResult ResolveRecallBundle(string? recallQuery)
+    {
+        var query = string.IsNullOrWhiteSpace(recallQuery)
+            ? _state.FindLastUserMessage()?.Content ?? string.Empty
+            : recallQuery;
+
+        if (string.IsNullOrWhiteSpace(query))
+            return new AutomaticRecallResult([]);
+
+        var recentUser = _state.History
+            .Where(x => x.Role == Protocol.ChatRole.User && !SessionState.IsSystemNudge(x))
+            .Select(x => x.Content)
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .TakeLast(3)
+            .ToArray();
+
+        var request = new AutomaticRecallRequest(
+            _sessionId.Value,
+            query,
+            recentUser,
+            3);
+
+        try
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(300));
+            return _memoryRecallCoordinator.RecallAsync(request, cts.Token)
+                .GetAwaiter()
+                .GetResult();
+        }
+        catch (Exception ex)
+        {
+            return new AutomaticRecallResult([], true, ex.Message);
+        }
+    }
+
+    private static void InjectAutomaticRecall(List<AiChatMessage> messages, AutomaticRecallResult recall)
+    {
+        if (recall.Degraded)
+        {
+            var degraded = new AiChatMessage(
+                Microsoft.Extensions.AI.ChatRole.System,
+                "[memory-recall]\nstatus: degraded\nreason: automatic recall unavailable for this turn");
+            var insertAt = messages.FindLastIndex(m => m.Role == Microsoft.Extensions.AI.ChatRole.System);
+            messages.Insert(insertAt >= 0 ? insertAt + 1 : 0, degraded);
+            return;
+        }
+
+        if (recall.Items.Count == 0)
+            return;
+
+        var sb = new StringBuilder();
+        sb.AppendLine("[memory-recall]");
+        sb.AppendLine("status: healthy");
+        sb.AppendLine("mode: automatic");
+        foreach (var item in recall.Items)
+        {
+            sb.AppendLine($"- {item.Title} [{item.Id}] domain={item.Domain} sensitivity={item.Sensitivity} score={item.Score:F2}");
+            sb.AppendLine($"  {item.Content}");
+        }
+
+        var recallMessage = new AiChatMessage(Microsoft.Extensions.AI.ChatRole.System, sb.ToString().TrimEnd());
+        var index = messages.FindLastIndex(m => m.Role == Microsoft.Extensions.AI.ChatRole.System);
+        messages.Insert(index >= 0 ? index + 1 : 0, recallMessage);
     }
 
     /// <summary>
@@ -1310,13 +1491,15 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         {
             Response = response,
             StreamedText = textDeltaCount > 1,
-            StreamedThinking = thinkingDeltaCount > 1
+            StreamedThinking = thinkingDeltaCount > 1,
+            RecallResult = null
         };
     }
 
     private sealed record ToolCallResult(
         SerializableChatMessage Message,
-        IReadOnlyList<FileAttachmentInfo> FileAttachments);
+        IReadOnlyList<FileAttachmentInfo> FileAttachments,
+        IReadOnlyList<AcceptedSubAgentFinding> AcceptedSubAgentFindings);
 
     private static async Task ExecuteToolsAsync(
         IToolExecutor executor,
@@ -1351,7 +1534,10 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             self.Tell(new ToolExecutionCompleted
             {
                 ToolResults = results.Select(r => r.Message).ToList(),
-                FileAttachments = fileAttachments
+                FileAttachments = fileAttachments,
+                AcceptedSubAgentFindings = results
+                    .SelectMany(r => r.AcceptedSubAgentFindings)
+                    .ToList()
             });
         }
         catch (OperationCanceledException ex)
@@ -1382,23 +1568,31 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     {
         var sw = Stopwatch.StartNew();
         string resultText;
-        var context = new Netclaw.Tools.ToolExecutionContext(sessionId.Value, sessionDir)
+        var context = new Netclaw.Tools.ToolExecutionContext(sessionId.Value, sessionDir);
+        var acceptedFindings = new List<AcceptedSubAgentFinding>();
+        context.OnSubAgentActivity = info =>
         {
-            OnSubAgentActivity = info =>
+            var output = new SubAgentOutput
             {
-                var output = new SubAgentOutput
+                SessionId = sessionId,
+                TimestampMs = timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
+                AgentName = info.AgentName,
+                Phase = info.IsStarted
+                    ? Netclaw.Actors.SubAgents.SubAgentPhase.Started
+                    : Netclaw.Actors.SubAgents.SubAgentPhase.Completed,
+                ToolCount = info.ToolCount,
+                Success = info.Success,
+                Duration = info.Duration
+            };
+            emitSubAgentOutput(output);
+
+            if (!info.IsStarted && info.Success)
+            {
+                acceptedFindings.Add(new AcceptedSubAgentFinding
                 {
-                    SessionId = sessionId,
-                    TimestampMs = timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
                     AgentName = info.AgentName,
-                    Phase = info.IsStarted
-                        ? Netclaw.Actors.SubAgents.SubAgentPhase.Started
-                        : Netclaw.Actors.SubAgents.SubAgentPhase.Completed,
-                    ToolCount = info.ToolCount,
-                    Success = info.Success,
                     Duration = info.Duration
-                };
-                emitSubAgentOutput(output);
+                });
             }
         };
         try
@@ -1442,7 +1636,10 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             Name = tc.Name
         };
 
-        return new ToolCallResult(message, context.FileAttachments);
+        return new ToolCallResult(
+            message,
+            context.FileAttachments,
+            acceptedFindings);
     }
 
     private static string ClampToolResult(string resultText, int maxInlineToolResultChars)
@@ -1453,6 +1650,37 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         var omittedChars = resultText.Length - maxInlineToolResultChars;
         return resultText[..maxInlineToolResultChars]
                + $"\n[tool result truncated: omitted {omittedChars} chars to protect context window]";
+    }
+
+    private void EnqueueCheckpointFireAndForget(MemoryCheckpointRequest request)
+    {
+        var sink = _memoryCheckpointSink;
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await sink.EnqueueAsync(request, CancellationToken.None);
+            }
+            catch (Exception ex)
+            {
+                _log.Warning(ex, "Failed to enqueue memory checkpoint trigger={TriggerType}", request.TriggerType);
+            }
+        });
+    }
+
+    private static string ResolveDomainFromSession(string sessionId)
+    {
+        if (string.IsNullOrWhiteSpace(sessionId))
+            return "project:default";
+
+        var slash = sessionId.IndexOf('/', StringComparison.Ordinal);
+        if (slash <= 0)
+            return "project:default";
+
+        var prefix = sessionId[..slash].Trim();
+        return string.IsNullOrWhiteSpace(prefix)
+            ? "project:default"
+            : $"project:{prefix.ToLowerInvariant()}";
     }
 
     /// <summary>

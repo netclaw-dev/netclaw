@@ -533,3 +533,11 @@ internal sealed class FakeChatClient : IChatClient
 
     public void Dispose() { }
 }
+
+internal sealed class FakeRecallCoordinator : IMemoryRecallCoordinator
+{
+    public AutomaticRecallResult Result { get; set; } = new([]);
+
+    public Task<AutomaticRecallResult> RecallAsync(AutomaticRecallRequest request, CancellationToken ct = default)
+        => Task.FromResult(Result);
+}

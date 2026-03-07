@@ -1,26 +1,26 @@
 ## 1. SQLite Substrate And Policy Model
 
-- [ ] 1.1 Add the dedicated SQLite memory database, schema migrator, and health surface under `~/.netclaw/memory/`.
-- [ ] 1.2 Implement repositories for anchors, documents, records, edges, and pending checkpoints with policy metadata fields.
-- [ ] 1.3 Define the new SQLite-first memory configuration and explicitly leave legacy provider-mode compatibility/import out of MVP scope.
+- [x] 1.1 Add the dedicated SQLite memory database, schema migrator, and health surface under `~/.netclaw/memory/`.
+- [x] 1.2 Implement repositories for anchors, documents, records, edges, and pending checkpoints with policy metadata fields.
+- [x] 1.3 Define the new SQLite-first memory configuration and explicitly leave legacy provider-mode compatibility/import out of MVP scope.
 
 ## 2. Automatic Recall In Session Turns
 
-- [ ] 2.1 Implement the pre-turn recall coordinator with bounded query/ranking logic and policy-aware filtering.
-- [ ] 2.2 Inject the automatic recall bundle into session turn assembly and degrade safely on timeout or storage failure.
-- [ ] 2.3 Update prompt/context guidance so the frontline model treats memory recall as automatic and explicit memory tools as manual-control paths.
+- [x] 2.1 Implement the pre-turn recall coordinator with bounded query/ranking logic and policy-aware filtering.
+- [x] 2.2 Inject the automatic recall bundle into session turn assembly and degrade safely on timeout or storage failure.
+- [x] 2.3 Update prompt/context guidance so the frontline model treats memory recall as automatic and explicit memory tools as manual-control paths.
 
 ## 3. Checkpoint Detection And Background Curation
 
-- [ ] 3.1 Implement checkpoint detection for turn completion, explicit memory requests, tool findings, compaction boundaries, and accepted subagent findings.
-- [ ] 3.2 Implement rules-first candidate extraction, duplicate suppression, and policy gating before any curator LLM call.
-- [ ] 3.3 Implement the background curation worker with retryable checkpoint recovery and atomic durable writes.
+- [x] 3.1 Implement checkpoint detection for turn completion, explicit memory requests, tool findings, compaction boundaries, and accepted subagent findings.
+- [x] 3.2 Implement rules-first candidate extraction, duplicate suppression, and policy gating before any curator LLM call.
+- [x] 3.3 Implement the background curation worker with retryable checkpoint recovery and atomic durable writes.
 
 ## 4. Explicit Memory Tools And Compatibility Layer
 
-- [ ] 4.1 Rewire `find_memories`, `get_memories`, `store_memory`, and `update_memory` to the SQLite memory service and policy pipeline.
-- [ ] 4.2 Implement document-vs-record update semantics in the explicit tool paths, including supersede and tombstone behavior.
-- [ ] 4.3 Preserve `find_memories`/`get_memories`/`store_memory`/`update_memory` as explicit manual-control paths while leaving legacy file-backed and Memorizer-backed provider modes out of MVP.
+- [x] 4.1 Rewire `find_memories`, `get_memories`, `store_memory`, and `update_memory` to the SQLite memory service and policy pipeline.
+- [x] 4.2 Implement document-vs-record update semantics in the explicit tool paths, including supersede and tombstone behavior.
+- [x] 4.3 Preserve `find_memories`/`get_memories`/`store_memory`/`update_memory` as explicit manual-control paths while leaving legacy file-backed and Memorizer-backed provider modes out of MVP.
 
 ## 5. Subagent Ownership Changes
 

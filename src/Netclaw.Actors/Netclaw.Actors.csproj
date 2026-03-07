@@ -17,6 +17,7 @@
     <PackageReference Include="Aaron.Akka.Reminders" />
     <PackageReference Include="Aaron.Akka.Reminders.Sqlite" />
     <PackageReference Include="Cronos" />
+    <PackageReference Include="Microsoft.Data.Sqlite" />
     <PackageReference Include="Microsoft.Extensions.AI.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
     <PackageReference Include="ModelContextProtocol.Core" />

@@ -134,7 +134,7 @@ public partial class InitWizardViewModel : ReactiveViewModel
     public string ChromeDevToolsUnavailableReason { get; }
 
     // ── Step 6: Memory ──
-    public string SelectedMemoryBackend { get; set; } = "files";
+    public string SelectedMemoryBackend { get; set; } = "sqlite";
     public string? MemorizerUrl { get; set; }
 
     // ── Step 7: Exposure ──

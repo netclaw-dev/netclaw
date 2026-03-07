@@ -95,13 +95,27 @@
     },
     "Memory": {
       "type": "object",
-      "description": "Cross-session memory backend configuration.",
+      "description": "Cross-session memory configuration.",
       "properties": {
         "Provider": {
           "type": "string",
-          "enum": ["files", "memorizer"],
-          "default": "files",
-          "description": "Memory backend: 'files' for local markdown, 'memorizer' for Memorizer MCP server."
+          "enum": ["sqlite", "memorizer", "files"],
+          "default": "sqlite",
+          "description": "Memory backend: 'sqlite' for local durable memory graph (MVP default)."
+        },
+        "RecallTimeoutMs": {
+          "type": "integer",
+          "minimum": 50,
+          "maximum": 10000,
+          "default": 300,
+          "description": "Automatic recall timeout budget in milliseconds."
+        },
+        "AutoRecallMaxItems": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10,
+          "default": 3,
+          "description": "Maximum number of memory items auto-injected per turn."
         }
       },
       "additionalProperties": false

@@ -12,12 +12,7 @@ namespace Netclaw.Daemon.Mcp;
 /// Runs after <see cref="McpClientManager"/> so MCP tools are included in the index.
 /// The tool index is written to system-managed shadow files and injected dynamically
 /// into each LLM call via file-backed context layers. Also updates memory context layers
-/// based on config provider + Memorizer connectivity.
-///
-/// When Memorizer is configured and connected, registers memory tools
-/// (<see cref="MemorizerFindMemoriesTool"/>, <see cref="MemorizerGetMemoriesTool"/>,
-/// <see cref="MemorizerStoreMemoryTool"/>, <see cref="MemorizerUpdateMemoryTool"/>)
-/// that delegate to Memorizer MCP or curation subagents.
+/// based on sqlite memory availability.
 /// </summary>
 internal sealed class ToolIndexUpdater : IHostedService
 {
@@ -25,9 +20,6 @@ internal sealed class ToolIndexUpdater : IHostedService
     private readonly ToolRegistry _toolRegistry;
     private readonly MemoryIndexContextLayer _memoryIndexLayer;
     private readonly MemoryConfig _memoryConfig;
-    private readonly SubAgentConfig _subAgentConfig;
-    private readonly ActorSystem _actorSystem;
-    private readonly IChatClientProvider _clientProvider;
     private readonly ILogger<ToolIndexUpdater> _logger;
 
     public ToolIndexUpdater(
@@ -35,18 +27,12 @@ internal sealed class ToolIndexUpdater : IHostedService
         ToolRegistry toolRegistry,
         MemoryIndexContextLayer memoryIndexLayer,
         MemoryConfig memoryConfig,
-        SubAgentConfig subAgentConfig,
-        ActorSystem actorSystem,
-        IChatClientProvider clientProvider,
         ILogger<ToolIndexUpdater> logger)
     {
         _shadowCatalogWriter = shadowCatalogWriter;
         _toolRegistry = toolRegistry;
         _memoryIndexLayer = memoryIndexLayer;
         _memoryConfig = memoryConfig;
-        _subAgentConfig = subAgentConfig;
-        _actorSystem = actorSystem;
-        _clientProvider = clientProvider;
         _logger = logger;
     }
 
@@ -54,20 +40,7 @@ internal sealed class ToolIndexUpdater : IHostedService
     {
         var state = ResolveMemoryState();
 
-        // When Memorizer is connected, register subagent-backed memory tools.
-        // These must be registered after MCP discovery so the curation subagent
-        // can resolve Memorizer tools from the registry at execution time.
-        if (state == MemoryContextState.MemorizerConnected)
-        {
-            _toolRegistry.Register(new MemorizerFindMemoriesTool(_toolRegistry));
-            _toolRegistry.Register(new MemorizerGetMemoriesTool(_toolRegistry));
-            _toolRegistry.Register(new MemorizerStoreMemoryTool(
-                _actorSystem, _clientProvider, _toolRegistry, _subAgentConfig));
-            _toolRegistry.Register(new MemorizerUpdateMemoryTool(_toolRegistry));
-            _logger.LogInformation("Registered Memorizer-backed memory tools (find, get, store, update)");
-        }
-
-        // Write catalogs after all tools are registered (including Memorizer tools above)
+        // Write catalogs after all tools are registered.
         _shadowCatalogWriter.WriteCatalogs();
         _logger.LogInformation("Tool index updated ({ToolCount} registrations)", _toolRegistry.GetAllRegistrations().Count);
 
@@ -81,16 +54,8 @@ internal sealed class ToolIndexUpdater : IHostedService
 
     private MemoryContextState ResolveMemoryState()
     {
-        if (!_memoryConfig.Provider.Equals("memorizer", StringComparison.OrdinalIgnoreCase))
-            return MemoryContextState.FileBacked;
-
-        // Memorizer path: check if MCP tools are actually connected
-        var memorizerConnected =
-            _toolRegistry.GetByName("memorizer/search_memories") is not null
-            || _toolRegistry.GetByName("memorizer/search") is not null;
-
-        return memorizerConnected
-            ? MemoryContextState.MemorizerConnected
-            : MemoryContextState.MemorizerDisconnected;
+        return _memoryConfig.Provider.Equals("sqlite", StringComparison.OrdinalIgnoreCase)
+            ? MemoryContextState.SqlitePrimary
+            : MemoryContextState.SqliteDegraded;
     }
 }

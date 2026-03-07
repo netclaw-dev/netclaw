@@ -13,6 +13,8 @@ internal sealed record LlmResponseReceived
     public bool StreamedText { get; init; }
 
     public bool StreamedThinking { get; init; }
+
+    public AutomaticRecallResult? RecallResult { get; init; }
 }
 
 /// <summary>
@@ -39,6 +41,13 @@ internal sealed record ToolExecutionCompleted
 {
     public required List<Protocol.SerializableChatMessage> ToolResults { get; init; }
     public List<FileAttachmentInfo> FileAttachments { get; init; } = [];
+    public List<AcceptedSubAgentFinding> AcceptedSubAgentFindings { get; init; } = [];
+}
+
+internal sealed record AcceptedSubAgentFinding
+{
+    public required string AgentName { get; init; }
+    public required TimeSpan Duration { get; init; }
 }
 
 /// <summary>

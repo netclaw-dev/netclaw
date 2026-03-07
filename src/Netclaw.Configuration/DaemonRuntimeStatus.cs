@@ -131,6 +131,10 @@ public static class DaemonRuntimeStatus
         public string? Endpoint { get; init; }
 
         public int? ToolCount { get; init; }
+
+        public string? DatabasePath { get; init; }
+
+        public int? PendingCheckpoints { get; init; }
     }
 
     public sealed class Reminders : IWireType

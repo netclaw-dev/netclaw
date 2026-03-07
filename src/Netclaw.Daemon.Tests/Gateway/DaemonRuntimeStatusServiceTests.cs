@@ -222,6 +222,36 @@ public sealed class DaemonRuntimeStatusServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task StatusIncludesMemory_SqliteBackend()
+    {
+        var paths = CreatePaths();
+        paths.EnsureDirectoriesExist();
+
+        var sqliteStore = new SQLiteMemoryStore(paths.MemorySqliteDbPath, TimeProvider.System);
+        await sqliteStore.InitializeAsync();
+
+        var service = new DaemonRuntimeStatusService(
+            TimeProvider.System,
+            channels: Array.Empty<IChannel>(),
+            slackOptions: new SlackChannelOptions { Enabled = false },
+            persistenceOptions: new DaemonPersistenceOptions(),
+            telemetryOptions: Options.Create(new TelemetryOptions()),
+            sessionConfig: DefaultSessionConfig,
+            modelSelection: DefaultModelSelection,
+            memoryConfig: new MemoryConfig { Provider = "sqlite" },
+            paths: paths,
+            sqliteMemoryStore: sqliteStore);
+
+        var status = await service.GetStatusAsync();
+
+        Assert.NotNull(status.Memory);
+        Assert.Equal("sqlite", status.Memory.Provider);
+        Assert.Equal("healthy", status.Memory.Status);
+        Assert.Equal(paths.MemorySqliteDbPath, status.Memory.DatabasePath);
+        Assert.Equal(0, status.Memory.PendingCheckpoints);
+    }
+
+    [Fact]
     public async Task StatusIncludesSlackCountersSnapshot()
     {
         var before = ChannelTelemetry.GetSnapshot();

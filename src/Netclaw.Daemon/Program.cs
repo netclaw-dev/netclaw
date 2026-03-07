@@ -305,25 +305,29 @@ static void ConfigureDaemonServices(
         .Get<MemoryConfig>() ?? new MemoryConfig();
     services.AddSingleton(memoryConfig);
 
-    if (memoryConfig.Provider.Equals("memorizer", StringComparison.OrdinalIgnoreCase))
-    {
-        // Memorizer path: subagent-backed memory tools (store_memory, search_memories) are
-        // registered later by ToolIndexUpdater after MCP discovery completes and Memorizer
-        // connectivity is confirmed. The compaction extractor still uses direct MCP delegation.
-        services.AddSingleton<IMemoryExtractor>(sp =>
-            new MemorizerMemoryExtractor(sp.GetRequiredService<ToolRegistry>()));
-    }
-    else
-    {
-        // File path: register builtin memory tools backed by local markdown files
-        var fileStore = new FileMemoryStore(paths.MemoriesDirectory, TimeProvider.System);
-        services.AddSingleton(fileStore);
-        toolRegistry.Register(new FileFindMemoriesTool(fileStore));
-        toolRegistry.Register(new FileGetMemoriesTool(fileStore));
-        toolRegistry.Register(new StoreMemoryTool(fileStore));
-        toolRegistry.Register(new FileUpdateMemoryTool(fileStore));
-        services.AddSingleton<IMemoryExtractor>(new FileMemoryExtractor(fileStore));
-    }
+    // New SQLite-backed memory substrate (uses existing daemon SQLite file by design)
+    var memoryStore = new SQLiteMemoryStore(paths.MemorySqliteDbPath, TimeProvider.System);
+    services.AddSingleton(memoryStore);
+    services.AddSingleton<IMemoryRecallCoordinator, SQLiteMemoryRecallCoordinator>();
+    services.AddSingleton<MemoryPolicyEvaluator>();
+    services.AddSingleton<MemoryRulesFirstExtractor>();
+    services.AddSingleton<MemoryCurationEngine>();
+    services.AddSingleton<IMemoryCheckpointSink, SQLiteMemoryCheckpointSink>();
+    services.AddSingleton<MemoryCurationWorkerService>();
+    services.AddSingleton<IHostedService>(sp => sp.GetRequiredService<MemoryCurationWorkerService>());
+
+    // Ensure memory schema exists on startup (idempotent)
+    memoryStore.InitializeAsync(CancellationToken.None).GetAwaiter().GetResult();
+
+    // SQLite-first mode: explicit manual-control memory tools are always routed
+    // through the SQLite memory + checkpoint/policy pipeline.
+    toolRegistry.Register(new SqliteFindMemoriesTool(memoryStore));
+    toolRegistry.Register(new SqliteGetMemoriesTool(memoryStore));
+    toolRegistry.Register(new SqliteStoreMemoryTool(new SQLiteMemoryCheckpointSink(memoryStore, TimeProvider.System)));
+    toolRegistry.Register(new SqliteUpdateMemoryTool(
+        memoryStore,
+        new SQLiteMemoryCheckpointSink(memoryStore, TimeProvider.System)));
+    services.AddSingleton<IMemoryExtractor>(NullMemoryExtractor.Instance);
 
     services.AddSingleton(toolRegistry);
     services.AddSingleton<IToolExecutor>(sp =>

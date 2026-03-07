@@ -33,7 +33,11 @@ public sealed class NetclawPaths
     public string SystemSkillsDirectory => Path.Combine(SkillsDirectory, ".system");
     public string SkillSyncStatePath => Path.Combine(SystemSkillsDirectory, ".sync-state.json");
 
-    // ── Memory directory (file-backed cross-session memory) ──
+    // ── Memory directories ──
+    public string MemoryDirectory => Path.Combine(BasePath, "memory");
+    public string MemorySqliteDbPath => SqliteDbPath;
+
+    // Legacy file-backed memory path (kept until explicit tools are rewired)
     public string MemoriesDirectory => Path.Combine(BasePath, "memories");
     public string MemoryIndexPath => Path.Combine(MemoriesDirectory, "memory.md");
 
@@ -86,6 +90,7 @@ public sealed class NetclawPaths
         Directory.CreateDirectory(ConfigDirectory);
         Directory.CreateDirectory(LogsDirectory);
         Directory.CreateDirectory(SessionLogsDirectory);
+        Directory.CreateDirectory(MemoryDirectory);
         Directory.CreateDirectory(MemoriesDirectory);
         Directory.CreateDirectory(SessionsDirectory);
         Directory.CreateDirectory(BinDirectory);

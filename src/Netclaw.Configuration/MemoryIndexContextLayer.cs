@@ -6,8 +6,17 @@ namespace Netclaw.Configuration;
 public enum MemoryContextState
 {
     /// <summary>
-    /// File-backed memory using local markdown files.
-    /// <c>search_memories</c> and <c>store_memory</c> are always-loaded builtins.
+    /// SQLite-backed memory with automatic pre-turn recall.
+    /// </summary>
+    SqlitePrimary,
+
+    /// <summary>
+    /// SQLite-backed memory is degraded or unavailable.
+    /// </summary>
+    SqliteDegraded,
+
+    /// <summary>
+    /// Legacy file-backed memory mode.
     /// </summary>
     FileBacked,
 
@@ -39,6 +48,32 @@ public sealed class MemoryIndexContextLayer : IContextLayerProvider
     {
         _status = state switch
         {
+            MemoryContextState.SqlitePrimary => """
+                [memories — sqlite-backed with automatic recall]
+                Tools: find_memories, get_memories, store_memory, update_memory
+                Durable memory recall is automatic before each user-facing turn.
+                Use explicit memory tools only for deliberate manual control.
+
+                Use find_memories/get_memories when automatic recall is insufficient or the
+                user explicitly asks what you remember.
+
+                Use store_memory only for explicit remember/save requests.
+                Use update_memory only for corrections, supersede, tombstone, or metadata changes.
+
+                Do not call explicit memory write tools as a reflex on every turn.
+
+                For full guidance: file_read memory-usage.
+                On errors or degraded memory: file_read self-diagnostics.
+                """,
+
+            MemoryContextState.SqliteDegraded => """
+                [memories — sqlite degraded]
+                Automatic durable recall is currently degraded.
+                Continue the turn without assuming recall data is complete.
+                Use explicit memory tools only for deliberate/manual control paths.
+                Check self-diagnostics for memory health and recovery guidance.
+                """,
+
             MemoryContextState.FileBacked => """
                 [memories — file-backed, 4 tools always available]
                 Tools: find_memories, get_memories, store_memory, update_memory

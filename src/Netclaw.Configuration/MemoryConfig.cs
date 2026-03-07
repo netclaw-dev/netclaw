@@ -2,14 +2,22 @@ namespace Netclaw.Configuration;
 
 /// <summary>
 /// Configuration for the cross-session memory subsystem.
-/// <c>Provider</c> selects the backend: "files" for local markdown files,
-/// "memorizer" for the Memorizer MCP server.
+/// SQLite-first durable memory settings.
 /// </summary>
 public sealed class MemoryConfig
 {
     /// <summary>
-    /// Memory backend provider. "files" (default) uses local markdown files;
-    /// "memorizer" delegates to the Memorizer MCP server.
+    /// Durability backend. MVP defaults to local SQLite.
     /// </summary>
-    public string Provider { get; set; } = "files";
+    public string Provider { get; set; } = "sqlite";
+
+    /// <summary>
+    /// Automatic recall timeout budget in milliseconds.
+    /// </summary>
+    public int RecallTimeoutMs { get; set; } = 300;
+
+    /// <summary>
+    /// Maximum number of items injected into the automatic recall bundle.
+    /// </summary>
+    public int AutoRecallMaxItems { get; set; } = 3;
 }

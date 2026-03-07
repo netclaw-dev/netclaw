@@ -27,6 +27,7 @@ internal sealed class DaemonRuntimeStatusService(
     NetclawPaths paths,
     McpClientManager? mcpClientManager = null,
     FileMemoryStore? fileMemoryStore = null,
+    SQLiteMemoryStore? sqliteMemoryStore = null,
     IRequiredActor<ReminderManagerActorKey>? reminderManagerActor = null)
 {
     private readonly DateTimeOffset _startedAt = timeProvider.GetUtcNow();
@@ -230,6 +231,40 @@ internal sealed class DaemonRuntimeStatusService(
 
     private async Task<DaemonRuntimeStatus.Memory> BuildMemoryStatusAsync(CancellationToken ct)
     {
+        if (memoryConfig.Provider.Equals("sqlite", StringComparison.OrdinalIgnoreCase))
+        {
+            if (sqliteMemoryStore is null)
+            {
+                return new DaemonRuntimeStatus.Memory
+                {
+                    Provider = "sqlite",
+                    Status = "unavailable",
+                    DatabasePath = paths.MemorySqliteDbPath
+                };
+            }
+
+            try
+            {
+                var pending = await sqliteMemoryStore.GetPendingCheckpointCountAsync(ct);
+                return new DaemonRuntimeStatus.Memory
+                {
+                    Provider = "sqlite",
+                    Status = "healthy",
+                    DatabasePath = paths.MemorySqliteDbPath,
+                    PendingCheckpoints = pending
+                };
+            }
+            catch
+            {
+                return new DaemonRuntimeStatus.Memory
+                {
+                    Provider = "sqlite",
+                    Status = "degraded",
+                    DatabasePath = paths.MemorySqliteDbPath
+                };
+            }
+        }
+
         if (memoryConfig.Provider.Equals("memorizer", StringComparison.OrdinalIgnoreCase))
         {
             if (mcpClientManager is null)

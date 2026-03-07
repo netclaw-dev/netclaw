@@ -917,6 +917,22 @@ public sealed class InitWizardViewModelTests : IDisposable
     }
 
     [Fact]
+    public async Task HealthCheck_DefaultMemoryBackend_IsSqlite()
+    {
+        using var vm = CreateViewModel();
+        vm.SelectedProviderType = "ollama";
+        vm.SlackEnabled = false;
+
+        vm.CurrentStep.Value = WizardStep.HealthCheck;
+        vm.GoNext();
+        await vm.HealthCheckCompletion!.WaitAsync(TimeSpan.FromSeconds(5));
+
+        var config = JsonDocument.Parse(File.ReadAllText(_paths.NetclawConfigPath));
+        Assert.True(config.RootElement.TryGetProperty("Memory", out var memory));
+        Assert.Equal("sqlite", memory.GetProperty("Provider").GetString());
+    }
+
+    [Fact]
     public async Task HealthCheck_FilesMemoryBackend_WritesMemoryProvider()
     {
         using var vm = CreateViewModel();
