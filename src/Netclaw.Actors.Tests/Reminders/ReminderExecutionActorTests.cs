@@ -1,4 +1,6 @@
 using Akka.Actor;
+using Akka;
+using Akka.Streams.Dsl;
 using Akka.Hosting;
 using Akka.Hosting.TestKit;
 using Akka.Streams;
@@ -64,6 +66,62 @@ public class ReminderExecutionActorTests : TestKit
         Assert.Equal("pipeline initialization failed", completed.ErrorMessage);
     }
 
+    [Fact]
+    public async Task Execution_fails_when_notification_tool_returns_error()
+    {
+        var pipeline = new ScriptedSessionPipeline(sessionId =>
+        [
+            new ToolResultOutput
+            {
+                SessionId = sessionId,
+                CallId = "call-1",
+                ToolName = "send_slack_message",
+                Result = "Error parsing arguments for tool 'send_slack_message': Required parameter 'Message' is missing or empty."
+            },
+            new TurnCompleted { SessionId = sessionId, TurnNumber = 1 }
+        ]);
+
+        var definition = CreateDefinition("notify-fail-test");
+        var probe = CreateTestProbe();
+        Sys.ActorOf(
+            Props.Create(() => new ParentProxy(probe.Ref, definition, pipeline)),
+            "exec-parent-3");
+
+        var completed = await probe.ExpectMsgAsync<ReminderExecutionCompleted>(TimeSpan.FromSeconds(5));
+
+        Assert.False(completed.Success);
+        Assert.Equal("notify-fail-test", completed.Id.Value);
+        Assert.Contains("Required parameter 'Message'", completed.ErrorMessage);
+    }
+
+    [Fact]
+    public async Task Execution_succeeds_when_notification_tool_reports_success()
+    {
+        var pipeline = new ScriptedSessionPipeline(sessionId =>
+        [
+            new ToolResultOutput
+            {
+                SessionId = sessionId,
+                CallId = "call-2",
+                ToolName = "send_slack_message",
+                Result = "Message sent to channel C1. Thread: C1/1234567890.000001"
+            },
+            new TurnCompleted { SessionId = sessionId, TurnNumber = 1 }
+        ]);
+
+        var definition = CreateDefinition("notify-success-test");
+        var probe = CreateTestProbe();
+        Sys.ActorOf(
+            Props.Create(() => new ParentProxy(probe.Ref, definition, pipeline)),
+            "exec-parent-4");
+
+        var completed = await probe.ExpectMsgAsync<ReminderExecutionCompleted>(TimeSpan.FromSeconds(5));
+
+        Assert.True(completed.Success);
+        Assert.Equal("notify-success-test", completed.Id.Value);
+        Assert.Null(completed.ErrorMessage);
+    }
+
     private static ReminderDefinition CreateDefinition(string id)
     {
         var now = TimeProvider.System.GetUtcNow();
@@ -116,5 +174,26 @@ public class ReminderExecutionActorTests : TestKit
             IMaterializer? materializer = null,
             CancellationToken cancellationToken = default) =>
             throw exception;
+    }
+
+    private sealed class ScriptedSessionPipeline(
+        Func<SessionId, IReadOnlyList<SessionOutput>> outputFactory) : ISessionPipeline
+    {
+        public Task<MaterializedSession> CreateAsync(
+            SessionId sessionId,
+            SessionPipelineOptions options,
+            IMaterializer? materializer = null,
+            CancellationToken cancellationToken = default)
+        {
+            var killSwitch = KillSwitches.Shared($"scripted-{sessionId.Value}");
+
+            var input = Sink.Ignore<ChannelInput>()
+                .MapMaterializedValue<NotUsed>(_ => NotUsed.Instance);
+
+            var output = Source.From(outputFactory(sessionId).ToList())
+                .Via(killSwitch.Flow<SessionOutput>());
+
+            return Task.FromResult(new MaterializedSession(input, output, killSwitch));
+        }
     }
 }

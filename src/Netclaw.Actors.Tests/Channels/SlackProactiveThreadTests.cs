@@ -129,6 +129,42 @@ public sealed class SendSlackMessageToolTests
     }
 
     [Fact]
+    public async Task Accepts_lowercase_message_and_snake_case_channel_id()
+    {
+        var fake = new FakeSlackOutboundClient();
+        var gateway = new FakeGatewayActor();
+        var tool = CreateTool(outbound: fake, gatewayAccessor: () => gateway);
+
+        var result = await tool.ExecuteAsync(new Dictionary<string, object?>
+        {
+            ["message"] = "hello from lowercase",
+            ["channel_id"] = "C1"
+        }, CancellationToken.None);
+
+        Assert.Contains("Message sent to channel C1", result);
+        Assert.Single(fake.PostedThreads);
+        Assert.Equal("hello from lowercase", fake.PostedThreads[0].Text);
+    }
+
+    [Fact]
+    public async Task Accepts_text_alias_for_message_parameter()
+    {
+        var fake = new FakeSlackOutboundClient();
+        var gateway = new FakeGatewayActor();
+        var tool = CreateTool(outbound: fake, gatewayAccessor: () => gateway);
+
+        var result = await tool.ExecuteAsync(new Dictionary<string, object?>
+        {
+            ["text"] = "hello from text alias",
+            ["ChannelId"] = "C1"
+        }, CancellationToken.None);
+
+        Assert.Contains("Message sent to channel C1", result);
+        Assert.Single(fake.PostedThreads);
+        Assert.Equal("hello from text alias", fake.PostedThreads[0].Text);
+    }
+
+    [Fact]
     public async Task Successful_DM()
     {
         var fake = new FakeSlackOutboundClient();

@@ -9,9 +9,70 @@ namespace Netclaw.Tools;
 /// </summary>
 public static class ToolArgumentHelper
 {
+    private static bool TryGetValueFlexible(IDictionary<string, object?> arguments, string key, out object? value)
+    {
+        if (arguments.TryGetValue(key, out value))
+            return true;
+
+        // Case-insensitive exact-name fallback
+        foreach (var kvp in arguments)
+        {
+            if (string.Equals(kvp.Key, key, StringComparison.OrdinalIgnoreCase))
+            {
+                value = kvp.Value;
+                return true;
+            }
+        }
+
+        // Normalized-name fallback: treat ChannelId == channel_id == channel-id
+        var normalizedKey = NormalizeKey(key);
+        foreach (var kvp in arguments)
+        {
+            if (string.Equals(NormalizeKey(kvp.Key), normalizedKey, StringComparison.OrdinalIgnoreCase))
+            {
+                value = kvp.Value;
+                return true;
+            }
+        }
+
+        value = null;
+        return false;
+    }
+
+    private static string NormalizeKey(string key)
+    {
+        if (string.IsNullOrWhiteSpace(key))
+            return string.Empty;
+
+        var buffer = new char[key.Length];
+        var count = 0;
+
+        foreach (var ch in key)
+        {
+            if (char.IsLetterOrDigit(ch))
+                buffer[count++] = ch;
+        }
+
+        return count == 0 ? string.Empty : new string(buffer, 0, count);
+    }
+
     public static string? GetString(IDictionary<string, object?> arguments, string key)
     {
-        if (!arguments.TryGetValue(key, out var value) || value is null)
+        if (string.Equals(key, "Message", StringComparison.OrdinalIgnoreCase)
+            && !TryGetValueFlexible(arguments, key, out _)
+            && TryGetValueFlexible(arguments, "text", out var textAlias)
+            && textAlias is not null)
+        {
+            return textAlias switch
+            {
+                string s => s,
+                JsonElement { ValueKind: JsonValueKind.String } je => je.GetString(),
+                JsonElement je => je.ToString(),
+                _ => textAlias.ToString()
+            };
+        }
+
+        if (!TryGetValueFlexible(arguments, key, out var value) || value is null)
             return null;
 
         return value switch
@@ -25,7 +86,7 @@ public static class ToolArgumentHelper
 
     public static int? GetNullableInt(IDictionary<string, object?> arguments, string key)
     {
-        if (!arguments.TryGetValue(key, out var value) || value is null)
+        if (!TryGetValueFlexible(arguments, key, out var value) || value is null)
             return null;
 
         return value switch
@@ -42,7 +103,7 @@ public static class ToolArgumentHelper
 
     public static double? GetNullableDouble(IDictionary<string, object?> arguments, string key)
     {
-        if (!arguments.TryGetValue(key, out var value) || value is null)
+        if (!TryGetValueFlexible(arguments, key, out var value) || value is null)
             return null;
 
         return value switch
@@ -60,7 +121,7 @@ public static class ToolArgumentHelper
 
     public static bool? GetNullableBool(IDictionary<string, object?> arguments, string key)
     {
-        if (!arguments.TryGetValue(key, out var value) || value is null)
+        if (!TryGetValueFlexible(arguments, key, out var value) || value is null)
             return null;
 
         return value switch

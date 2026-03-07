@@ -27,6 +27,9 @@ internal sealed class ReminderExecutionActor : ReceiveActor
     private readonly StringBuilder _buffer = new();
     private bool _sawTextDelta;
     private bool _completed;
+    private bool _notifyAttempted;
+    private bool _notifyFailed;
+    private string? _notifyFailureDetail;
 
     private ActorMaterializer? _materializer;
     private MaterializedSession? _session;
@@ -147,15 +150,21 @@ internal sealed class ReminderExecutionActor : ReceiveActor
                     _buffer.Append(text.Text);
                 break;
 
+            case ToolResultOutput toolResult:
+                TrackNotificationResult(toolResult);
+                break;
+
             case TurnCompleted:
                 var result = _buffer.ToString().Trim();
+                var notifyFailureMessage = BuildNotifyFailureMessage();
+                var success = notifyFailureMessage is null;
                 _log.Info(
-                    $"ReminderExecution Completed: execution_id={_executionId} reminder_id={_definition.Id} title={_definition.Title} success=true output_length={result.Length} dispatched_at={_dispatchedAt} completed_at={_timeProvider.GetUtcNow()}");
+                    $"ReminderExecution Completed: execution_id={_executionId} reminder_id={_definition.Id} title={_definition.Title} success={success} output_length={result.Length} notify_attempted={_notifyAttempted} notify_failed={_notifyFailed} dispatched_at={_dispatchedAt} completed_at={_timeProvider.GetUtcNow()}");
 
                 if (string.IsNullOrWhiteSpace(result))
                     result = $"(Reminder '{_definition.Title}' executed but produced no output)";
 
-                ReportAndStop(true);
+                ReportAndStop(success, notifyFailureMessage);
                 break;
 
             case ErrorOutput err:
@@ -189,6 +198,52 @@ internal sealed class ReminderExecutionActor : ReceiveActor
             success,
             errorMessage));
         Context.Stop(Self);
+    }
+
+    private void TrackNotificationResult(ToolResultOutput toolResult)
+    {
+        if (!string.Equals(toolResult.ToolName, "send_slack_message", StringComparison.Ordinal))
+            return;
+
+        _notifyAttempted = true;
+
+        var result = toolResult.Result?.Trim() ?? string.Empty;
+        if (result.StartsWith("Error", StringComparison.OrdinalIgnoreCase))
+        {
+            _notifyFailed = true;
+            _notifyFailureDetail = result;
+            _log.Warning(
+                "ReminderExecution NotifyFailed: execution_id={0} reminder_id={1} tool={2} call_id={3} detail={4}",
+                _executionId,
+                _definition.Id,
+                toolResult.ToolName,
+                toolResult.CallId,
+                result);
+            return;
+        }
+
+        _notifyFailed = false;
+        _notifyFailureDetail = null;
+        _log.Info(
+            "ReminderExecution NotifySucceeded: execution_id={0} reminder_id={1} tool={2} call_id={3}",
+            _executionId,
+            _definition.Id,
+            toolResult.ToolName,
+            toolResult.CallId);
+    }
+
+    private string? BuildNotifyFailureMessage()
+    {
+        if (string.IsNullOrWhiteSpace(_definition.NotifyInstructions))
+            return null;
+
+        if (!_notifyAttempted)
+            return "Notification instructions were provided but no notification tool was invoked.";
+
+        if (_notifyFailed)
+            return _notifyFailureDetail ?? "Notification tool returned an unspecified error.";
+
+        return null;
     }
 
     protected override void PostStop()
