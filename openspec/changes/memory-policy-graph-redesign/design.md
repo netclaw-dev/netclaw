@@ -493,6 +493,70 @@ Rollback stance:
 - Rollback can disable the redesigned memory subsystem and preserve the SQLite data directory for inspection.
 - No reverse-sync or legacy import/export path is assumed in MVP.
 
+## Dependency Map And Sequencing
+
+This change intentionally separates the memory redesign from broader platform work that is still evolving.
+
+### What this change depends on directly
+
+- SQLite-backed durable storage, recall, checkpointing, and policy evaluation.
+- Session-layer prompt/context injection for automatic recall.
+- A parent-session-owned path for accepting or rejecting structured subagent findings.
+
+### What this change does not need to wait for
+
+- Issue `#150` (`Refactor skill system to adopt AgentSkills.io SKILL.md standard`)
+  - Not a blocker.
+  - The memory redesign only needs prompt guidance and system-skill updates explaining that automatic recall is primary and explicit memory tools are manual control paths.
+  - The memory curator should remain an internal platform role in MVP, not a discoverable user skill.
+
+- Issue `#149` (`Improve skill guidance for Playwright screenshot handoff and simplify skill routing`)
+  - Not a blocker.
+  - This memory redesign may improve general prompt discipline around explicit tools, but screenshot workflow routing is a separate skill-system concern.
+
+- Issue `#147` (`Reminder UX follow-up: allow selecting agent definition for execution`)
+  - Not a blocker.
+  - Memory curation does not require user-selectable agent profiles.
+  - The memory curator should be a platform-owned internal role with a fixed prompt/tool set, not a reminder-style user choice.
+
+### What this change should pull forward from subagent work
+
+- Structured findings on `SubAgentResult` rather than text-only output.
+- Parent-session acceptance/rejection of findings before durable checkpoint creation.
+- A safe internal invocation path for platform-owned subagents such as a future `memory-curator` role.
+
+### Recommended staging
+
+```text
+Phase A: Memory foundation
+- SQLite schema and repositories
+- automatic pre-turn recall
+- checkpoint queue and policy evaluation
+
+Phase B: Session-owned curation
+- rules-first candidate extraction
+- deterministic document/record operations
+- structured subagent findings envelopes
+
+Phase C: Internal memory-curator role (optional if deterministic-only is insufficient)
+- platform-owned internal subagent definition
+- fixed prompt + narrow tool scope
+- findings/operation handoff back to parent session
+
+Phase D: Broader platform follow-ups
+- reminder agent-definition UX (#147)
+- AgentSkills.io skill-system refactor (#150)
+- screenshot-handoff routing cleanup (#149)
+```
+
+### Recommended follow-up implementation issues
+
+- `Add structured findings envelopes to SubAgentResult and parent-session acceptance flow`
+- `Add internal platform-owned agent definition support for non-user-routable subagents`
+- `Package memory curator as an internal role if deterministic checkpoint curation proves insufficient`
+- `Refactor reminder execution to use agent-definition selection after internal agent-definition support stabilizes`
+- `Adopt AgentSkills.io SKILL.md/frontmatter without coupling it to memory-curator implementation`
+
 ## Success and Evaluation Criteria
 
 The implementation is not done until it passes a seeded memory eval suite with measurable outcomes:
