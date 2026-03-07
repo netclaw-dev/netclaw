@@ -1,3 +1,11 @@
+#### 0.3.4 2026-03-07 ####
+
+Netclaw v0.3.4 — OAuth device flow sequencing fix
+
+**OpenAI OAuth Reliability**
+
+* Fixed OAuth device flow sequencing so success is only published after token assignment, preventing probe validation from running before credentials are available and avoiding false "API key or OAuth token is required" failures. ([#178](https://github.com/Aaronontheweb/netclaw/pull/178))
+
 #### 0.3.3 2026-03-07 ####
 
 Netclaw v0.3.3 — OpenAI setup reliability and session traceability
