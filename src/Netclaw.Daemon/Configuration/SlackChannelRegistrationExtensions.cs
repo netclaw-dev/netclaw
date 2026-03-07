@@ -28,6 +28,8 @@ public static class SlackChannelRegistrationExtensions
         services.AddHttpClient("slack-files");
         services.AddSingleton<ISlackReplyClient, SlackReplyClient>();
         services.AddSingleton<ISlackOutboundClient, SlackOutboundClient>();
+        services.AddSingleton<ISlackTargetLookupClient, SlackApiTargetLookupClient>();
+        services.AddSingleton<ISlackTargetResolver, SlackTargetResolver>();
         services.AddKeyedSingleton<IChannel, SlackChannel>(SlackChannelKey);
         services.AddSingleton<IChannel>(sp =>
             sp.GetRequiredKeyedService<IChannel>(SlackChannelKey));

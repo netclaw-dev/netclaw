@@ -411,7 +411,7 @@ static async Task RunAsync(string[] args)
     // ── Reminder management ──
     if (mode is "reminder")
     {
-        if (args.Length == 1)
+        if (args.Length > 1 && args[1] is "ui" or "tui")
         {
             var builder = Host.CreateApplicationBuilder(args);
             ConfigureConfigServices(builder.Services, builder.Configuration);

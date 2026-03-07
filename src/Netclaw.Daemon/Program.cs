@@ -639,11 +639,39 @@ static void MapReminderEndpoints(WebApplication app)
     app.MapPost("/api/reminders", async (
         CreateReminderRequest request,
         Akka.Hosting.IRequiredActor<Netclaw.Actors.Hosting.ReminderManagerActorKey> actor,
+        IServiceProvider serviceProvider,
         TimeProvider timeProvider,
         ReminderConfig reminderConfig,
         CancellationToken ct) =>
     {
         var manager = await actor.GetAsync(ct);
+
+        string? reportToChannel = request.ReportToChannel;
+        string? notifyInstructions = request.NotifyInstructions;
+
+        if (!string.IsNullOrWhiteSpace(request.ReportTarget))
+        {
+            var resolver = serviceProvider.GetService<Netclaw.Channels.Slack.ISlackTargetResolver>();
+            if (resolver is null)
+                return Results.BadRequest(new { error = "Slack is not enabled; cannot resolve report target." });
+
+            var resolved = await resolver.ResolveAsync(request.ReportTarget, ct);
+            if (!resolved.Success)
+                return Results.BadRequest(new { error = resolved.ErrorMessage ?? "Failed to resolve report target." });
+
+            if (!string.IsNullOrWhiteSpace(resolved.UserId))
+            {
+                var targetUserId = resolved.UserId;
+                reportToChannel = null;
+                notifyInstructions = $"Send a direct message to Slack user {targetUserId} with your findings, or lack thereof.";
+            }
+            else
+            {
+                reportToChannel = resolved.ChannelId;
+                if (string.IsNullOrWhiteSpace(notifyInstructions))
+                    notifyInstructions = $"Post the result to Slack channel {reportToChannel}.";
+            }
+        }
 
         var tool = new Netclaw.Actors.Reminders.SetReminderTool(manager, timeProvider, reminderConfig);
         var result = await tool.ExecuteAsync(
@@ -653,8 +681,8 @@ static void MapReminderEndpoints(WebApplication app)
                 ["Prompt"] = request.Prompt,
                 ["ScheduleType"] = request.ScheduleType,
                 ["Schedule"] = request.Schedule,
-                ["ReportToChannel"] = request.ReportToChannel,
-                ["NotifyInstructions"] = request.NotifyInstructions
+                ["ReportToChannel"] = reportToChannel,
+                ["NotifyInstructions"] = notifyInstructions
             }, ct);
 
         return result.StartsWith("Error", StringComparison.Ordinal)
@@ -815,6 +843,7 @@ sealed record CreateReminderRequest
     public required string ScheduleType { get; init; }
     public required string Schedule { get; init; }
     public string? ReportToChannel { get; init; }
+    public string? ReportTarget { get; init; }
     public string? NotifyInstructions { get; init; }
 }
 

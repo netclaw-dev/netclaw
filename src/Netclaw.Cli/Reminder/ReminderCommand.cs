@@ -19,6 +19,12 @@ internal static class ReminderCommand
 
     public static async Task<int> RunAsync(string[] args)
     {
+        if (args.Length == 1)
+        {
+            WriteHelp();
+            return 0;
+        }
+
         var subcommand = args.Length > 1 ? args[1] : "help";
         if (subcommand is "help" or "-h" or "--help")
         {
@@ -79,10 +85,10 @@ internal static class ReminderCommand
 
     private static async Task<int> RunCreateAsync(HttpClient client, string baseUrl, string[] args)
     {
-        // netclaw reminder create <name> <scheduleType> <schedule> "<prompt>" [--channel <id>]
+        // netclaw reminder create <name> <scheduleType> <schedule> "<prompt>" [--target <#channel|@user|id>] [--channel <id>]
         if (args.Length < 6)
         {
-            Console.Error.WriteLine("Usage: netclaw reminder create <name> <scheduleType> <schedule> \"<prompt>\" [--channel <id>]");
+            Console.Error.WriteLine("Usage: netclaw reminder create <name> <scheduleType> <schedule> \"<prompt>\" [--target <#channel|@user|id>] [--channel <id>]");
             Console.Error.WriteLine();
             Console.Error.WriteLine("  scheduleType: once, interval, cron");
             Console.Error.WriteLine("  schedule:     '30m', '2h', '0 */6 * * *', etc.");
@@ -94,6 +100,7 @@ internal static class ReminderCommand
         var schedule = args[4];
         var prompt = args[5];
         string? channel = null;
+        string? reportTarget = null;
 
         for (var i = 6; i < args.Length; i++)
         {
@@ -101,7 +108,13 @@ internal static class ReminderCommand
             {
                 channel = args[++i];
             }
+            else if (args[i] is "--target" && i + 1 < args.Length)
+            {
+                reportTarget = args[++i];
+            }
         }
+
+        reportTarget ??= channel;
 
         var body = new
         {
@@ -109,7 +122,8 @@ internal static class ReminderCommand
             prompt,
             scheduleType,
             schedule,
-            reportToChannel = channel
+            reportToChannel = channel,
+            reportTarget
         };
 
         try
@@ -427,6 +441,10 @@ internal static class ReminderCommand
         Console.WriteLine("  import <file> [--replace|--upsert]            Import one reminder file");
         Console.WriteLine("  validate <file>                               Validate reminder file");
         Console.WriteLine("  show <id>                                     Show reminder details");
+        Console.WriteLine();
+        Console.WriteLine("Create options:");
+        Console.WriteLine("  --target  <#channel|@user|C...|U...>          Human-friendly or canonical Slack target");
+        Console.WriteLine("  --channel <id>                                 Back-compat alias (channel id or name)");
         Console.WriteLine();
         Console.WriteLine("Schedule types: once, interval, cron");
         Console.WriteLine("Schedule examples: '30m', '2h', '1d', '0 */6 * * *'");
