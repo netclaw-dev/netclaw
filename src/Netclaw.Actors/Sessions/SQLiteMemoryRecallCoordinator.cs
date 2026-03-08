@@ -16,9 +16,12 @@ public sealed class SQLiteMemoryRecallCoordinator(
         {
             var domain = ResolveDomain(request.SessionId);
             var maxItems = request.MaxItems <= 0 ? 3 : request.MaxItems;
+            var effectiveQuery = string.IsNullOrWhiteSpace(request.Query)
+                ? request.RecentUserMessages.LastOrDefault() ?? string.Empty
+                : request.Query;
 
             var primary = await store.SearchAutoRecallDocumentsAsync(
-                request.Query,
+                effectiveQuery,
                 domain,
                 Math.Max(maxItems * 3, 12),
                 ct);
@@ -36,7 +39,7 @@ public sealed class SQLiteMemoryRecallCoordinator(
             }
 
             LogRecallTrace(
-                request.Query,
+                effectiveQuery,
                 fallbackQuery,
                 domain,
                 maxItems,

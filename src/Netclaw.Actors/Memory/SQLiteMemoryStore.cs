@@ -198,11 +198,25 @@ public sealed class SQLiteMemoryStore
         if (string.IsNullOrWhiteSpace(query) || maxResults <= 0)
             return [];
 
+        var tokens = TokenizeQuery(query);
+        if (tokens.Count == 0)
+            return [];
+
         await using var conn = new SqliteConnection(_connectionString);
         await conn.OpenAsync(ct);
 
         await using var cmd = conn.CreateCommand();
-        cmd.CommandText = """
+        var termClauses = new List<string>();
+        for (var i = 0; i < tokens.Count; i++)
+        {
+            termClauses.Add($"(d.title LIKE $t{i} OR d.markdown_body LIKE $t{i} OR a.canonical_name LIKE $t{i})");
+            cmd.Parameters.AddWithValue($"$t{i}", $"%{tokens[i]}%");
+        }
+
+        var scoredTerms = string.Join(" + ", Enumerable.Range(0, tokens.Count).Select(i => $"(CASE WHEN {termClauses[i]} THEN 1 ELSE 0 END)"));
+        var whereTerms = string.Join(" OR ", termClauses);
+
+        cmd.CommandText = $"""
             SELECT
               d.document_id,
               d.anchor_id,
@@ -218,7 +232,8 @@ public sealed class SQLiteMemoryStore
               d.confidence,
               d.freshness_at,
               d.created_at,
-              d.updated_at
+              d.updated_at,
+              ({scoredTerms}) AS token_score
             FROM memory_documents d
             INNER JOIN memory_anchors a ON a.anchor_id = d.anchor_id
             WHERE d.recall_mode = 'auto'
@@ -226,17 +241,12 @@ public sealed class SQLiteMemoryStore
               AND d.domain = $domain
               AND d.title != 'turn-completion'
               AND d.update_semantics != 'conversation_trace'
-              AND (
-                d.title LIKE $query
-                OR d.markdown_body LIKE $query
-                OR a.canonical_name LIKE $query
-              )
-            ORDER BY d.confidence DESC, d.updated_at DESC
+              AND ({whereTerms})
+            ORDER BY token_score DESC, d.confidence DESC, d.updated_at DESC
             LIMIT $limit;
             """;
         cmd.Parameters.AddWithValue("$domain", domain);
-        cmd.Parameters.AddWithValue("$query", $"%{query}%");
-        cmd.Parameters.AddWithValue("$limit", maxResults);
+        cmd.Parameters.AddWithValue("$limit", Math.Max(maxResults, 1));
 
         var results = new List<SQLiteMemoryDocument>();
         await using var reader = await cmd.ExecuteReaderAsync(ct);
@@ -273,6 +283,25 @@ public sealed class SQLiteMemoryStore
 
         return results;
     }
+
+    private static List<string> TokenizeQuery(string query)
+    {
+        return query
+            .Split(new[] { ' ', '\t', '\n', '\r', '.', ',', ':', ';', '!', '?', '(', ')', '[', ']', '{', '}', '/', '\\', '"', '\'' },
+                StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(t => t.Trim())
+            .Where(t => t.Length >= 3)
+            .Select(t => t.ToLowerInvariant())
+            .Where(t => !StopWords.Contains(t))
+            .Distinct(StringComparer.Ordinal)
+            .Take(8)
+            .ToList();
+    }
+
+    private static readonly HashSet<string> StopWords = new(StringComparer.Ordinal)
+    {
+        "the", "and", "for", "with", "from", "that", "this", "what", "when", "where", "have", "into", "your", "about", "again"
+    };
 
     public async Task<int> GetPendingCheckpointCountAsync(CancellationToken ct = default)
     {
