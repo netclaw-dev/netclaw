@@ -1,11 +1,14 @@
 using Netclaw.Actors.Memory;
+using Microsoft.Extensions.Logging;
 
 namespace Netclaw.Actors.Sessions;
 
 /// <summary>
 /// Automatic recall coordinator over SQLite-backed durable memory.
 /// </summary>
-public sealed class SQLiteMemoryRecallCoordinator(SQLiteMemoryStore store) : IMemoryRecallCoordinator
+public sealed class SQLiteMemoryRecallCoordinator(
+    SQLiteMemoryStore store,
+    ILogger<SQLiteMemoryRecallCoordinator> logger) : IMemoryRecallCoordinator
 {
     public async Task<AutomaticRecallResult> RecallAsync(AutomaticRecallRequest request, CancellationToken ct = default)
     {
@@ -21,15 +24,25 @@ public sealed class SQLiteMemoryRecallCoordinator(SQLiteMemoryStore store) : IMe
                 ct);
 
             var documents = primary;
+            string? fallbackQuery = null;
             if (documents.Count == 0 && request.RecentUserMessages.Count > 0)
             {
-                var fallbackQuery = request.RecentUserMessages[^1];
+                fallbackQuery = request.RecentUserMessages[^1];
                 documents = await store.SearchAutoRecallDocumentsAsync(
                     fallbackQuery,
                     domain,
                     maxItems,
                     ct);
             }
+
+            LogRecallTrace(
+                request.Query,
+                fallbackQuery,
+                domain,
+                maxItems,
+                primary.Count,
+                documents.Count,
+                documents.Select(d => d.DocumentId));
 
             var items = documents
                 .Take(maxItems)
@@ -63,5 +76,44 @@ public sealed class SQLiteMemoryRecallCoordinator(SQLiteMemoryStore store) : IMe
         return string.IsNullOrWhiteSpace(prefix)
             ? "project:default"
             : $"project:{prefix.ToLowerInvariant()}";
+    }
+
+    private void LogRecallTrace(
+        string query,
+        string? fallbackQuery,
+        string domain,
+        int maxItems,
+        int primaryCount,
+        int selectedCount,
+        IEnumerable<string> selectedDocumentIds)
+    {
+        var queryTerms = TokenizeTerms(query);
+        var fallbackTerms = string.IsNullOrWhiteSpace(fallbackQuery)
+            ? Array.Empty<string>()
+            : TokenizeTerms(fallbackQuery);
+        var selectedIds = string.Join(",", selectedDocumentIds.Take(maxItems));
+
+        logger.LogInformation(
+            "memory_recall_query_trace domain={Domain} maxItems={MaxItems} primaryCount={PrimaryCount} selectedCount={SelectedCount} queryTerms={QueryTerms} fallbackTerms={FallbackTerms} selectedIds={SelectedIds}",
+            domain,
+            maxItems,
+            primaryCount,
+            selectedCount,
+            string.Join("|", queryTerms),
+            string.Join("|", fallbackTerms),
+            string.IsNullOrWhiteSpace(selectedIds) ? "-" : selectedIds);
+    }
+
+    private static string[] TokenizeTerms(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return [];
+
+        return value
+            .Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(x => x.ToLowerInvariant())
+            .Distinct(StringComparer.Ordinal)
+            .Take(8)
+            .ToArray();
     }
 }

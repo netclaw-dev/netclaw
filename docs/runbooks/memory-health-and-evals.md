@@ -106,10 +106,22 @@ Run the deterministic memory score script:
 scripts/evals/memory-score.sh
 ```
 
+Suites:
+
+- `SUITE=smoke` (default): direct retrieval checks and pipeline sanity.
+- `SUITE=realistic`: indirect/paraphrased prompts for stronger recall validation.
+
+Profiles:
+
+- `PROFILE=fast` (default): tuned for 9B-ish local models.
+- `PROFILE=slow`: longer prompt timeout for larger/slower models (e.g. 27B+).
+
 Optional overrides:
 
 ```bash
 RUNS=3 \
+SUITE=realistic \
+PROFILE=slow \
 DB_PATH="$HOME/.netclaw/netclaw.db" \
 LOG_PATH="$HOME/.netclaw/logs/daemon-$(date +%F).log" \
 scripts/evals/memory-score.sh
@@ -136,3 +148,9 @@ Hard gates:
 
 This eval uses deterministic fixture seeding, structured memory/turn observability,
 and SQLite/log inspection. It does not use another LLM to grade outputs.
+
+For recall miss diagnostics in realistic suites, inspect daemon logs for:
+
+- `memory_recall_query_trace` (query terms, fallback terms, selected IDs)
+- `turn_memory_recall` (bundle size and IDs)
+- `turn_memory_checkpoint_enqueued` + `Memory checkpoint curation completed`

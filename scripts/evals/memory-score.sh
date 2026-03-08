@@ -3,11 +3,46 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 OUT_DIR="${OUT_DIR:-$ROOT_DIR/artifacts/evals/memory}"
-FIXTURES="${FIXTURES:-$ROOT_DIR/scripts/evals/fixtures/memory-cases.json}"
+SUITE="${SUITE:-smoke}"
+PROFILE="${PROFILE:-fast}"
+
+if [[ -n "${FIXTURES:-}" ]]; then
+  FIXTURES="$FIXTURES"
+else
+  case "$SUITE" in
+    smoke)
+      FIXTURES="$ROOT_DIR/scripts/evals/fixtures/memory-cases.smoke.json"
+      ;;
+    realistic)
+      FIXTURES="$ROOT_DIR/scripts/evals/fixtures/memory-cases.realistic.json"
+      ;;
+    *)
+      echo "Unknown SUITE='$SUITE' (expected: smoke|realistic)" >&2
+      exit 1
+      ;;
+  esac
+fi
+
 RUNS="${RUNS:-1}"
 DB_PATH="${DB_PATH:-$HOME/.netclaw/netclaw.db}"
 LOG_PATH="${LOG_PATH:-$HOME/.netclaw/logs/daemon-$(date +%F).log}"
-PROMPT_TIMEOUT_SECONDS="${PROMPT_TIMEOUT_SECONDS:-180}"
+
+if [[ -n "${PROMPT_TIMEOUT_SECONDS:-}" ]]; then
+  PROMPT_TIMEOUT_SECONDS="$PROMPT_TIMEOUT_SECONDS"
+else
+  case "$PROFILE" in
+    fast)
+      PROMPT_TIMEOUT_SECONDS=180
+      ;;
+    slow)
+      PROMPT_TIMEOUT_SECONDS=420
+      ;;
+    *)
+      echo "Unknown PROFILE='$PROFILE' (expected: fast|slow)" >&2
+      exit 1
+      ;;
+  esac
+fi
 
 mkdir -p "$OUT_DIR"
 
@@ -17,10 +52,13 @@ if ! command -v python3 >/dev/null 2>&1; then
 fi
 
 echo "[eval] repo: $ROOT_DIR"
+echo "[eval] suite: $SUITE"
+echo "[eval] profile: $PROFILE"
 echo "[eval] fixtures: $FIXTURES"
 echo "[eval] output dir: $OUT_DIR"
 echo "[eval] db: $DB_PATH"
 echo "[eval] log: $LOG_PATH"
+echo "[eval] prompt timeout: ${PROMPT_TIMEOUT_SECONDS}s"
 
 # Ensure latest local binaries pick up observability changes.
 dotnet build "$ROOT_DIR/src/Netclaw.Daemon/Netclaw.Daemon.csproj" >/dev/null
