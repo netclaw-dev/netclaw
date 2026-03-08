@@ -179,7 +179,29 @@ public sealed class MemoryEvalSeedSuiteTests : IDisposable
 
     public void Dispose()
     {
-        if (Directory.Exists(_baseDir))
-            Directory.Delete(_baseDir, recursive: true);
+        TryDeleteDirectory(_baseDir);
+    }
+
+    private static void TryDeleteDirectory(string path)
+    {
+        if (!Directory.Exists(path))
+            return;
+
+        for (var i = 0; i < 8; i++)
+        {
+            try
+            {
+                Directory.Delete(path, recursive: true);
+                return;
+            }
+            catch (IOException) when (i < 7)
+            {
+                Thread.Sleep(25 * (i + 1));
+            }
+            catch (UnauthorizedAccessException) when (i < 7)
+            {
+                Thread.Sleep(25 * (i + 1));
+            }
+        }
     }
 }
