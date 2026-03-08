@@ -1,3 +1,4 @@
+using Microsoft.Data.Sqlite;
 using Netclaw.Actors.Memory;
 using Xunit;
 
@@ -100,6 +101,8 @@ public sealed class SQLiteMemoryStoreTests : IDisposable
         if (!Directory.Exists(path))
             return;
 
+        SqliteConnection.ClearAllPools();
+
         for (var i = 0; i < 8; i++)
         {
             try
@@ -116,5 +119,8 @@ public sealed class SQLiteMemoryStoreTests : IDisposable
                 Thread.Sleep(25 * (i + 1));
             }
         }
+
+        // Best effort cleanup: file handles can remain briefly open on Windows CI.
+        // Leaving temp dirs behind is preferable to failing the test run.
     }
 }

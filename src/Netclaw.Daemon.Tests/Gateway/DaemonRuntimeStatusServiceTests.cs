@@ -1,3 +1,4 @@
+using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Logging.Abstractions;
 using Netclaw.Actors.Memory;
@@ -44,6 +45,8 @@ public sealed class DaemonRuntimeStatusServiceTests : IDisposable
         if (!Directory.Exists(path))
             return;
 
+        SqliteConnection.ClearAllPools();
+
         for (var i = 0; i < 8; i++)
         {
             try
@@ -60,6 +63,9 @@ public sealed class DaemonRuntimeStatusServiceTests : IDisposable
                 Thread.Sleep(25 * (i + 1));
             }
         }
+
+        // Best effort cleanup: file handles can remain briefly open on Windows CI.
+        // Leaving temp dirs behind is preferable to failing the test run.
     }
 
     [Fact]
