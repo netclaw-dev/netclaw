@@ -128,6 +128,18 @@ public sealed class SQLiteMemoryStore
         await using var cmd = conn.CreateCommand();
         cmd.CommandText = schemaSql;
         await cmd.ExecuteNonQueryAsync(ct);
+
+        // Phase A hygiene: conversation turn snapshots are diagnostic trace, not
+        // durable auto-recall memory. This repo is prototype-only; normalize any
+        // existing rows aggressively to prevent recall pollution.
+        await using var hygieneCmd = conn.CreateCommand();
+        hygieneCmd.CommandText = """
+            UPDATE memory_documents
+            SET recall_mode = 'never'
+            WHERE title = 'turn-completion'
+               OR update_semantics = 'conversation_trace';
+            """;
+        await hygieneCmd.ExecuteNonQueryAsync(ct);
     }
 
     public async Task UpsertDocumentAsync(SQLiteMemoryDocument document, CancellationToken ct = default)
@@ -212,6 +224,8 @@ public sealed class SQLiteMemoryStore
             WHERE d.recall_mode = 'auto'
               AND d.sensitivity != 'secret'
               AND d.domain = $domain
+              AND d.title != 'turn-completion'
+              AND d.update_semantics != 'conversation_trace'
               AND (
                 d.title LIKE $query
                 OR d.markdown_body LIKE $query

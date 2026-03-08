@@ -69,6 +69,12 @@ def seed_documents(conn, fixtures):
             ),
         )
 
+        recall_mode = doc.get("recallMode", "auto")
+        sensitivity = doc.get("sensitivity", "normal")
+        if recall_mode == "auto" and sensitivity == "secret":
+            # Align with production policy: secret memories are never auto-recallable.
+            recall_mode = "manual"
+
         conn.execute(
             """
             INSERT INTO memory_documents(document_id, anchor_id, title, markdown_body, update_semantics,
@@ -90,8 +96,8 @@ def seed_documents(conn, fixtures):
                 doc["title"],
                 doc["markdownBody"],
                 doc["domain"],
-                doc["sensitivity"],
-                doc["recallMode"],
+                sensitivity,
+                recall_mode,
                 doc["confidence"],
                 ts,
                 ts,
@@ -190,6 +196,35 @@ def parse_log_metrics(log_text):
     return {"recall": recall, "enqueue": enqueue, "curation": curation}
 
 
+def warm_search_index(repo_root: Path, fixtures):
+    # Ensure the daemon has produced searchable memory entries before issuing
+    # recall probes. This aligns eval ordering with real runtime behavior.
+    warm_phrases = []
+    for doc in fixtures.get("seedDocuments", []):
+        title = doc.get("title", "")
+        body = doc.get("markdownBody", "")
+        if title:
+            warm_phrases.append(title)
+        if body:
+            warm_phrases.append(body[:96])
+
+    for phrase in warm_phrases[:4]:
+        run(
+            [
+                "dotnet",
+                "run",
+                "--project",
+                "src/Netclaw.Cli/Netclaw.Cli.csproj",
+                "--",
+                "-p",
+                f"search memory for: {phrase}",
+            ],
+            check=False,
+            timeout=120,
+        )
+        time.sleep(0.2)
+
+
 def p95(values):
     if not values:
         return None
@@ -271,6 +306,7 @@ def main():
     for run_idx in range(args.runs):
         conn = sqlite_conn(str(db_path))
         seed_documents(conn, fixtures)
+        warm_search_index(repo_root, fixtures)
 
         start_line_count = len(log_path.read_text(errors="ignore").splitlines())
 

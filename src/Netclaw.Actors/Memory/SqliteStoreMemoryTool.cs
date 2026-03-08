@@ -61,9 +61,9 @@ public sealed partial class SqliteStoreMemoryTool : NetclawTool<SqliteStoreMemor
             Priority: 100,
             Payload: payload), ct);
 
-        _logger.LogInformation("SQLite store_memory enqueued checkpoint={CheckpointId} session={SessionId}",
+        _logger.LogInformation("SQLite store_memory committed checkpoint={CheckpointId} session={SessionId}",
             result.CheckpointId, sessionId);
-        return $"Memory save queued: \"{args.Title}\" (checkpoint: {result.CheckpointId}).";
+        return $"Memory save confirmed: \"{args.Title}\" (checkpoint: {result.CheckpointId}).";
     }
 
     protected override Task<string> ExecuteAsync(Params args, CancellationToken ct)

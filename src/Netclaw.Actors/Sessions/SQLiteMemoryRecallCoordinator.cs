@@ -20,7 +20,7 @@ public sealed class SQLiteMemoryRecallCoordinator(
             var primary = await store.SearchAutoRecallDocumentsAsync(
                 request.Query,
                 domain,
-                maxItems,
+                Math.Max(maxItems * 3, 12),
                 ct);
 
             var documents = primary;
@@ -31,7 +31,7 @@ public sealed class SQLiteMemoryRecallCoordinator(
                 documents = await store.SearchAutoRecallDocumentsAsync(
                     fallbackQuery,
                     domain,
-                    maxItems,
+                    Math.Max(maxItems * 3, 12),
                     ct);
             }
 
@@ -130,8 +130,14 @@ public sealed class SQLiteMemoryRecallCoordinator(
         else if (string.Equals(document.UpdateSemantics, "conversation_trace", StringComparison.OrdinalIgnoreCase))
             score -= 300;
 
+        if (string.Equals(document.UpdateSemantics, "immutable-record", StringComparison.OrdinalIgnoreCase))
+            score += 30;
+
         if (string.Equals(document.Title, "turn-completion", StringComparison.OrdinalIgnoreCase))
             score -= 200;
+
+        if (string.Equals(document.Title, "verified-tool-finding", StringComparison.OrdinalIgnoreCase))
+            score += 25;
 
         score += (int)Math.Round(document.Confidence * 20.0);
 

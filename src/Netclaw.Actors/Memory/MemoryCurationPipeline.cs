@@ -94,7 +94,7 @@ public sealed class MemoryRulesFirstExtractor(MemoryPolicyEvaluator policy)
             UpdateSemantics: updateSemantics,
             Domain: payload.Domain,
             Sensitivity: payload.Sensitivity,
-            RecallMode: payload.RecallMode,
+            RecallMode: ResolveRecallMode(payload, memoryClass),
             Confidence: payload.Confidence,
             FreshnessAtMs: payload.FreshnessAtMs,
             MemoryId: payload.MemoryId,
@@ -151,6 +151,14 @@ public sealed class MemoryRulesFirstExtractor(MemoryPolicyEvaluator policy)
             return ConversationTrace;
 
         return kind == "record" ? "immutable-record" : "merge-document";
+    }
+
+    private static string ResolveRecallMode(MemoryCheckpointPayload payload, string memoryClass)
+    {
+        if (memoryClass == ConversationTrace)
+            return "never";
+
+        return payload.RecallMode;
     }
 
     private static string ResolveTitle(MemoryCheckpointPayload payload, string kind, string content)
