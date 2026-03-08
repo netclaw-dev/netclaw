@@ -92,6 +92,8 @@ public sealed partial class SqliteUpdateMemoryTool : NetclawTool<SqliteUpdateMem
             TriggerType: "explicit-memory-request",
             Source: "update_memory",
             Content: args.NewText ?? args.OldText ?? args.Id,
+            UserContent: args.NewText ?? args.OldText ?? args.Id,
+            AssistantContent: null,
             IsExplicitRequest: true,
             HasVerifiedToolFinding: false,
             IsCompactionBoundary: false,

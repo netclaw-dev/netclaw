@@ -1,5 +1,6 @@
 using Netclaw.Actors.Memory;
 using Netclaw.Actors.Sessions;
+using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
 namespace Netclaw.Actors.Tests.Memory;
@@ -38,7 +39,7 @@ public sealed class MemoryEvalSeedSuiteTests : IDisposable
             CreatedAtMs: now,
             UpdatedAtMs: now));
 
-        var coordinator = new SQLiteMemoryRecallCoordinator(_store);
+        var coordinator = new SQLiteMemoryRecallCoordinator(_store, NullLogger<SQLiteMemoryRecallCoordinator>.Instance);
         var result = await coordinator.RecallAsync(new AutomaticRecallRequest(
             SessionId: "ops/thread-1",
             Query: "router failover",
@@ -71,7 +72,7 @@ public sealed class MemoryEvalSeedSuiteTests : IDisposable
             CreatedAtMs: now,
             UpdatedAtMs: now));
 
-        var coordinator = new SQLiteMemoryRecallCoordinator(_store);
+        var coordinator = new SQLiteMemoryRecallCoordinator(_store, NullLogger<SQLiteMemoryRecallCoordinator>.Instance);
         var result = await coordinator.RecallAsync(new AutomaticRecallRequest(
             SessionId: "ops/thread-1",
             Query: "token",
@@ -94,6 +95,8 @@ public sealed class MemoryEvalSeedSuiteTests : IDisposable
             TriggerType: "turn-complete",
             Source: "assistant",
             Content: "thanks",
+            UserContent: "thanks",
+            AssistantContent: "thanks",
             IsExplicitRequest: false,
             HasVerifiedToolFinding: false,
             IsCompactionBoundary: false,
@@ -102,6 +105,36 @@ public sealed class MemoryEvalSeedSuiteTests : IDisposable
             Sensitivity: "normal",
             RecallMode: "auto",
             Confidence: 0.9);
+
+        var candidates = extractor.Extract(payload, new HashSet<string>(StringComparer.OrdinalIgnoreCase));
+        Assert.Empty(candidates);
+    }
+
+    [Fact]
+    public async Task TurnCompletion_snapshot_is_classed_conversation_trace_and_rejected_from_durable_candidates()
+    {
+        await _store.InitializeAsync();
+        var policy = new MemoryPolicyEvaluator();
+        var extractor = new MemoryRulesFirstExtractor(policy);
+
+        var payload = new MemoryCheckpointPayload(
+            SessionId: "ops/thread-3",
+            TriggerType: "turn-complete",
+            Source: "session",
+            Content: "User: Where should we start?\nAssistant: I don't remember that yet.",
+            UserContent: "Where should we start?",
+            AssistantContent: "I don't remember that yet.",
+            IsExplicitRequest: false,
+            HasVerifiedToolFinding: false,
+            IsCompactionBoundary: false,
+            HasAcceptedSubAgentFinding: false,
+            Domain: "project:ops",
+            Sensitivity: "normal",
+            RecallMode: "auto",
+            Confidence: 0.8,
+            Kind: "document",
+            Title: "turn-completion",
+            UpdateSemantics: "append-document");
 
         var candidates = extractor.Extract(payload, new HashSet<string>(StringComparer.OrdinalIgnoreCase));
         Assert.Empty(candidates);
@@ -131,7 +164,7 @@ public sealed class MemoryEvalSeedSuiteTests : IDisposable
                 UpdatedAtMs: now));
         }
 
-        var coordinator = new SQLiteMemoryRecallCoordinator(_store);
+        var coordinator = new SQLiteMemoryRecallCoordinator(_store, NullLogger<SQLiteMemoryRecallCoordinator>.Instance);
         var start = TimeProvider.System.GetTimestamp();
         var result = await coordinator.RecallAsync(new AutomaticRecallRequest(
             SessionId: "latency/thread-1",

@@ -45,6 +45,7 @@ public sealed class SQLiteMemoryRecallCoordinator(
                 documents.Select(d => d.DocumentId));
 
             var items = documents
+                .OrderByDescending(RecallRank)
                 .Take(maxItems)
                 .Select(d => new AutomaticRecallItem(
                     d.DocumentId,
@@ -115,5 +116,29 @@ public sealed class SQLiteMemoryRecallCoordinator(
             .Distinct(StringComparer.Ordinal)
             .Take(8)
             .ToArray();
+    }
+
+    private static int RecallRank(SQLiteMemoryDocument document)
+    {
+        var score = 0;
+
+        // Prefer deterministic durable classes and explicit/inferred semantics.
+        if (string.Equals(document.UpdateSemantics, "merge-document", StringComparison.OrdinalIgnoreCase))
+            score += 80;
+        else if (string.Equals(document.UpdateSemantics, "append-document", StringComparison.OrdinalIgnoreCase))
+            score += 60;
+        else if (string.Equals(document.UpdateSemantics, "conversation_trace", StringComparison.OrdinalIgnoreCase))
+            score -= 300;
+
+        if (string.Equals(document.Title, "turn-completion", StringComparison.OrdinalIgnoreCase))
+            score -= 200;
+
+        score += (int)Math.Round(document.Confidence * 20.0);
+
+        // Prefer fresher entries, bounded contribution.
+        if (document.FreshnessAtMs.HasValue)
+            score += 10;
+
+        return score;
     }
 }

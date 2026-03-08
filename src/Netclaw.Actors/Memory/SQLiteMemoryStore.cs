@@ -707,6 +707,10 @@ public sealed class SQLiteMemoryStore
                 continue;
             }
 
+            var resolvedRecallMode = string.Equals(operation.MemoryClass, "conversation_trace", StringComparison.OrdinalIgnoreCase)
+                ? "never"
+                : operation.RecallMode;
+
             await using var documentCmd = conn.CreateCommand();
             documentCmd.Transaction = tx;
             documentCmd.CommandText = """
@@ -735,7 +739,7 @@ public sealed class SQLiteMemoryStore
             documentCmd.Parameters.AddWithValue("$semantics", operation.UpdateSemantics);
             documentCmd.Parameters.AddWithValue("$domain", operation.Domain);
             documentCmd.Parameters.AddWithValue("$sensitivity", operation.Sensitivity);
-            documentCmd.Parameters.AddWithValue("$recallMode", operation.RecallMode);
+            documentCmd.Parameters.AddWithValue("$recallMode", resolvedRecallMode);
             documentCmd.Parameters.AddWithValue("$confidence", operation.Confidence);
             documentCmd.Parameters.AddWithValue("$freshnessAt", (object?)operation.FreshnessAtMs ?? DBNull.Value);
             documentCmd.Parameters.AddWithValue("$createdAt", now);
@@ -892,6 +896,7 @@ public sealed record SQLiteMemoryHydratedItem(
 
 public sealed record SQLiteMemoryCurationOperation(
     string Kind,
+    string MemoryClass,
     string? MemoryId,
     string AnchorCanonicalName,
     string AnchorType,

@@ -7,6 +7,8 @@ public sealed record MemoryCheckpointPayload(
     string TriggerType,
     string Source,
     string Content,
+    string? UserContent,
+    string? AssistantContent,
     bool IsExplicitRequest,
     bool HasVerifiedToolFinding,
     bool IsCompactionBoundary,
@@ -27,6 +29,7 @@ public sealed record MemoryCheckpointPayload(
 
 public sealed record MemoryCheckpointCandidate(
     string Kind,
+    string MemoryClass,
     string AnchorCanonicalName,
     string AnchorType,
     string Title,
@@ -42,6 +45,10 @@ public sealed record MemoryCheckpointCandidate(
 
 public sealed class MemoryRulesFirstExtractor(MemoryPolicyEvaluator policy)
 {
+    private const string DurableExplicit = "durable_explicit";
+    private const string DurableInferred = "durable_inferred";
+    private const string ConversationTrace = "conversation_trace";
+
     public IReadOnlyList<MemoryCheckpointCandidate> Extract(
         MemoryCheckpointPayload payload,
         IReadOnlySet<string> fingerprintSet)
@@ -64,9 +71,13 @@ public sealed class MemoryRulesFirstExtractor(MemoryPolicyEvaluator policy)
         if (!decision.Allowed)
             return results;
 
+        var memoryClass = ResolveMemoryClass(payload);
+        if (memoryClass == ConversationTrace && !payload.IsExplicitRequest)
+            return results;
+
         var kind = ResolveKind(payload);
         var title = ResolveTitle(payload, kind, content);
-        var updateSemantics = ResolveUpdateSemantics(payload, kind);
+        var updateSemantics = ResolveUpdateSemantics(payload, kind, memoryClass);
         var anchor = ResolveAnchor(content, payload.SessionId);
         var anchorType = kind == "record" ? "event" : "concept";
         var fingerprint = BuildFingerprint(kind, payload.Domain, title, content);
@@ -75,6 +86,7 @@ public sealed class MemoryRulesFirstExtractor(MemoryPolicyEvaluator policy)
 
         results.Add(new MemoryCheckpointCandidate(
             Kind: kind,
+            MemoryClass: memoryClass,
             AnchorCanonicalName: anchor,
             AnchorType: anchorType,
             Title: title,
@@ -91,6 +103,21 @@ public sealed class MemoryRulesFirstExtractor(MemoryPolicyEvaluator policy)
         return results;
     }
 
+    private static string ResolveMemoryClass(MemoryCheckpointPayload payload)
+    {
+        if (payload.IsExplicitRequest ||
+            string.Equals(payload.TriggerType, "explicit-memory-request", StringComparison.OrdinalIgnoreCase))
+            return DurableExplicit;
+
+        if (payload.HasVerifiedToolFinding || payload.HasAcceptedSubAgentFinding || payload.IsCompactionBoundary)
+            return DurableInferred;
+
+        if (string.Equals(payload.TriggerType, "turn-complete", StringComparison.OrdinalIgnoreCase))
+            return ConversationTrace;
+
+        return DurableInferred;
+    }
+
     private static bool IsEphemeral(string content)
     {
         var lowered = content.ToLowerInvariant();
@@ -99,6 +126,10 @@ public sealed class MemoryRulesFirstExtractor(MemoryPolicyEvaluator policy)
 
     private static string ResolveKind(MemoryCheckpointPayload payload)
     {
+        if (string.Equals(payload.TriggerType, "turn-complete", StringComparison.OrdinalIgnoreCase)
+            && !payload.IsExplicitRequest)
+            return "record";
+
         if (!string.IsNullOrWhiteSpace(payload.Kind))
             return payload.Kind;
 
@@ -108,13 +139,16 @@ public sealed class MemoryRulesFirstExtractor(MemoryPolicyEvaluator policy)
         return "document";
     }
 
-    private static string ResolveUpdateSemantics(MemoryCheckpointPayload payload, string kind)
+    private static string ResolveUpdateSemantics(MemoryCheckpointPayload payload, string kind, string memoryClass)
     {
         if (!string.IsNullOrWhiteSpace(payload.UpdateSemantics))
             return payload.UpdateSemantics;
 
         if (payload.Delete)
             return "tombstone";
+
+        if (memoryClass == ConversationTrace)
+            return ConversationTrace;
 
         return kind == "record" ? "immutable-record" : "merge-document";
     }
@@ -178,6 +212,7 @@ public sealed class MemoryCurationEngine(SQLiteMemoryStore store, MemoryRulesFir
 
         return candidates.Select(c => new SQLiteMemoryCurationOperation(
             Kind: c.Kind,
+            MemoryClass: c.MemoryClass,
             MemoryId: c.MemoryId,
             AnchorCanonicalName: c.AnchorCanonicalName,
             AnchorType: c.AnchorType,

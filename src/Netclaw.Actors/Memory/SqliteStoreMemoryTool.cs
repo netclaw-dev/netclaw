@@ -40,6 +40,8 @@ public sealed partial class SqliteStoreMemoryTool : NetclawTool<SqliteStoreMemor
             TriggerType: "explicit-memory-request",
             Source: "store_memory",
             Content: args.Content,
+            UserContent: args.Content,
+            AssistantContent: null,
             IsExplicitRequest: true,
             HasVerifiedToolFinding: false,
             IsCompactionBoundary: false,
