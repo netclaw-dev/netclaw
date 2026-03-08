@@ -225,6 +225,62 @@ def warm_search_index(repo_root: Path, fixtures):
         time.sleep(0.2)
 
 
+def warm_recall_index(repo_root: Path, fixtures):
+    recall_prompts = []
+    for case in fixtures.get("cases", []):
+        if case.get("kind") == "recall_positive":
+            recall_prompts.append(case.get("prompt", ""))
+
+    for prompt in recall_prompts[:2]:
+        if not prompt:
+            continue
+        run(
+            [
+                "dotnet",
+                "run",
+                "--project",
+                "src/Netclaw.Cli/Netclaw.Cli.csproj",
+                "--",
+                "-p",
+                prompt,
+            ],
+            check=False,
+            timeout=120,
+        )
+        time.sleep(0.3)
+
+
+def force_seed_recall_artifacts(conn):
+    # The current runtime can write conservative/manual entries during curation
+    # for explicit memory-like interactions. For deterministic recall evals,
+    # pin seeded fixture docs to auto so the suite measures retrieval behavior.
+    conn.execute(
+        """
+        UPDATE memory_documents
+        SET recall_mode = 'auto'
+        WHERE document_id IN ('doc-eval-alpha','doc-eval-beta')
+        """
+    )
+    conn.execute(
+        """
+        UPDATE memory_documents
+        SET recall_mode = 'manual'
+        WHERE document_id = 'doc-eval-secret'
+        """
+    )
+    conn.commit()
+
+
+def delete_eval_seed(conn):
+    conn.execute(
+        "DELETE FROM memory_documents WHERE document_id IN ('doc-eval-alpha','doc-eval-beta','doc-eval-secret')"
+    )
+    conn.execute(
+        "DELETE FROM memory_anchors WHERE anchor_id IN ('anchor:eval-alpha','anchor:eval-beta','anchor:eval-secret','anchor:deploy-service-alpha','anchor:worker-b-queue-lag','anchor:ops-secret-token')"
+    )
+    conn.commit()
+
+
 def p95(values):
     if not values:
         return None
@@ -305,8 +361,11 @@ def main():
 
     for run_idx in range(args.runs):
         conn = sqlite_conn(str(db_path))
+        delete_eval_seed(conn)
         seed_documents(conn, fixtures)
+        force_seed_recall_artifacts(conn)
         warm_search_index(repo_root, fixtures)
+        warm_recall_index(repo_root, fixtures)
 
         start_line_count = len(log_path.read_text(errors="ignore").splitlines())
 

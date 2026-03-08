@@ -12,6 +12,7 @@ internal sealed class MemoryCurationWorkerService(
 {
     private readonly CancellationTokenSource _cts = new();
     private Task? _worker;
+    private bool _disposed;
 
     public Task StartAsync(CancellationToken cancellationToken)
     {
@@ -21,6 +22,9 @@ internal sealed class MemoryCurationWorkerService(
 
     public async Task StopAsync(CancellationToken cancellationToken)
     {
+        if (_disposed)
+            return;
+
         _cts.Cancel();
         if (_worker is not null)
             await _worker;
@@ -74,7 +78,13 @@ internal sealed class MemoryCurationWorkerService(
 
     public void Dispose()
     {
-        _cts.Cancel();
+        if (_disposed)
+            return;
+
+        _disposed = true;
+
+        if (!_cts.IsCancellationRequested)
+            _cts.Cancel();
         _cts.Dispose();
     }
 }

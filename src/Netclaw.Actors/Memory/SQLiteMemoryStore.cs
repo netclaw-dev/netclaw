@@ -286,7 +286,7 @@ public sealed class SQLiteMemoryStore
 
     private static List<string> TokenizeQuery(string query)
     {
-        return query
+        var tokens = query
             .Split(new[] { ' ', '\t', '\n', '\r', '.', ',', ':', ';', '!', '?', '(', ')', '[', ']', '{', '}', '/', '\\', '"', '\'' },
                 StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .Select(t => t.Trim())
@@ -295,6 +295,18 @@ public sealed class SQLiteMemoryStore
             .Where(t => !StopWords.Contains(t))
             .Distinct(StringComparer.Ordinal)
             .Take(8)
+            .ToList();
+
+        // If the query had no useful tokens after stopword filtering, fall back
+        // to best-effort lexical terms so recall doesn't collapse to zero.
+        if (tokens.Count > 0)
+            return tokens;
+
+        return query
+            .Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(t => t.Trim().ToLowerInvariant())
+            .Distinct(StringComparer.Ordinal)
+            .Take(3)
             .ToList();
     }
 
