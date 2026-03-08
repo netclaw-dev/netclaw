@@ -68,6 +68,48 @@ public sealed class SystemSkillSyncServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task StartAsync_SkipFeedSync_WhenDisableSystemSkillSyncTrue()
+    {
+        var localContent = "# Local Skill\n\n<!-- description: Local -->\n\nLocal instructions.";
+        File.WriteAllText(Path.Combine(_paths.SystemSkillsDirectory, "local-only.md"), localContent);
+
+        var manifest = new SkillFeedManifest
+        {
+            Skills =
+            [
+                new SkillFeedEntry
+                {
+                    Name = "remote-skill",
+                    Version = "1.0.0",
+                    Sha256 = SystemSkillSyncService.ComputeSha256("# Remote"),
+                    SizeBytes = 8,
+                    Url = "https://feeds.netclaw.dev/skills/.system/files/remote-skill/1.0.0.md"
+                }
+            ]
+        };
+
+        var handler = new FakeHttpHandler();
+        handler.AddJsonResponse(FeedConstants.SystemSkillsManifestUrl, manifest);
+        handler.AddStringResponse(manifest.Skills[0].Url, "# Remote");
+
+        var service = new SystemSkillSyncService(
+            new HttpClient(handler),
+            _paths,
+            new SkillSyncConfig { DisableSystemSkillSync = true },
+            _skillRegistry,
+            _skillIndexLayer,
+            TimeProvider.System,
+            NullLogger<SystemSkillSyncService>.Instance,
+            "0.1.0");
+
+        await service.StartAsync(CancellationToken.None);
+
+        Assert.True(File.Exists(Path.Combine(_paths.SystemSkillsDirectory, "local-only.md")));
+        Assert.False(File.Exists(Path.Combine(_paths.SystemSkillsDirectory, "remote-skill.md")));
+        Assert.False(File.Exists(_paths.SkillSyncStatePath));
+    }
+
+    [Fact]
     public async Task StartAsync_SkipsSkillWhenVersionAlreadySynced()
     {
         var skillContent = "# Already Here\n\nContent.";
@@ -331,6 +373,7 @@ public sealed class SystemSkillSyncServiceTests : IDisposable
         return new SystemSkillSyncService(
             httpClient,
             _paths,
+            new SkillSyncConfig(),
             _skillRegistry,
             _skillIndexLayer,
             TimeProvider.System,

@@ -305,6 +305,11 @@ static void ConfigureDaemonServices(
         .Get<MemoryConfig>() ?? new MemoryConfig();
     services.AddSingleton(memoryConfig);
 
+    // System skill sync behavior
+    var skillSyncConfig = configuration.GetSection("SkillSync")
+        .Get<SkillSyncConfig>() ?? new SkillSyncConfig();
+    services.AddSingleton(skillSyncConfig);
+
     // New SQLite-backed memory substrate (uses existing daemon SQLite file by design)
     var memoryStore = new SQLiteMemoryStore(paths.MemorySqliteDbPath, TimeProvider.System);
     services.AddSingleton(memoryStore);

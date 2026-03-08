@@ -1255,7 +1255,20 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         var sessionDir = GetSessionDirectory();
         var messages = ChatMessageConverter.ToAiMessages(_state.History, sessionDir);
 
+        var recallSw = Stopwatch.StartNew();
         _activeRecall = ResolveRecallBundle(recallQuery);
+        recallSw.Stop();
+
+        var recallIds = _activeRecall.Items.Count == 0
+            ? "-"
+            : string.Join(",", _activeRecall.Items.Select(i => i.Id));
+        TurnLog().Info(
+            "turn_memory_recall degraded={Degraded} durationMs={DurationMs} itemCount={ItemCount} itemIds={ItemIds}",
+            _activeRecall.Degraded,
+            recallSw.ElapsedMilliseconds,
+            _activeRecall.Items.Count,
+            recallIds);
+
         InjectAutomaticRecall(messages, _activeRecall);
 
         // Inject dynamic context layers (e.g. tool index) as transient system messages.
@@ -1733,12 +1746,20 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         var sink = _memoryCheckpointSink;
         _ = Task.Run(async () =>
         {
+            var sw = Stopwatch.StartNew();
             try
             {
-                await sink.EnqueueAsync(request, CancellationToken.None);
+                var result = await sink.EnqueueAsync(request, CancellationToken.None);
+                sw.Stop();
+                TurnLog().Info(
+                    "turn_memory_checkpoint_enqueued trigger={TriggerType} checkpointId={CheckpointId} durationMs={DurationMs}",
+                    request.TriggerType,
+                    result.CheckpointId,
+                    sw.ElapsedMilliseconds);
             }
             catch (Exception ex)
             {
+                sw.Stop();
                 _log.Warning(ex, "Failed to enqueue memory checkpoint trigger={TriggerType}", request.TriggerType);
             }
         });

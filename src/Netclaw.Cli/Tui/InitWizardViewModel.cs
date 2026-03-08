@@ -969,6 +969,12 @@ public partial class InitWizardViewModel : ReactiveViewModel
             ["Provider"] = SelectedMemoryBackend
         };
 
+        // Skill sync section
+        config["SkillSync"] = new Dictionary<string, object>
+        {
+            ["DisableSystemSkillSync"] = false
+        };
+
         // MCP servers: browser automation + memorizer (both optional)
         var mcpServers = new Dictionary<string, object>();
 

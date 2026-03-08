@@ -7,6 +7,7 @@ namespace Netclaw.Daemon.Services;
 internal sealed class MemoryCurationWorkerService(
     SQLiteMemoryStore store,
     MemoryCurationEngine engine,
+    TimeProvider timeProvider,
     ILogger<MemoryCurationWorkerService> logger) : IHostedService, IDisposable
 {
     private readonly CancellationTokenSource _cts = new();
@@ -40,8 +41,17 @@ internal sealed class MemoryCurationWorkerService(
 
             try
             {
+                var started = timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
                 var operations = await engine.CurateAsync(leased, ct);
                 await store.ApplyCurationBatchAsync(leased.CheckpointId, operations, ct);
+
+                var ended = timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
+                logger.LogInformation(
+                    "Memory checkpoint curation completed for {CheckpointId} (trigger={TriggerType}, operations={OperationCount}, durationMs={DurationMs})",
+                    leased.CheckpointId,
+                    leased.TriggerType,
+                    operations.Count,
+                    ended - started);
             }
             catch (Exception ex)
             {

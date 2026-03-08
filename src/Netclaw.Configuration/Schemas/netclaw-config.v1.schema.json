@@ -120,6 +120,18 @@
       },
       "additionalProperties": false
     },
+    "SkillSync": {
+      "type": "object",
+      "description": "Startup synchronization behavior for system skills.",
+      "properties": {
+        "DisableSystemSkillSync": {
+          "type": "boolean",
+          "default": false,
+          "description": "When true, skip feed sync at startup and use local built-in/on-disk system skills only."
+        }
+      },
+      "additionalProperties": false
+    },
     "SubAgents": {
       "type": "object",
       "description": "Timeout configuration for subagent execution (seconds).",
@@ -159,22 +171,24 @@
             "enum": ["stdio", "sse", "http"],
             "default": "stdio"
           },
-          "Command": { "type": "string" },
+          "Command": { "type": ["string", "null"] },
           "Arguments": {
-            "type": "array",
+            "type": ["array", "null"],
             "items": { "type": "string" }
           },
-          "Url": { "type": "string", "format": "uri" },
+          "Url": { "type": ["string", "null"], "format": "uri" },
           "EnvironmentVariables": {
-            "type": "object",
+            "type": ["object", "null"],
             "additionalProperties": { "type": "string" }
           },
           "Headers": {
-            "type": "object",
+            "type": ["object", "null"],
             "additionalProperties": { "type": "string" }
           },
           "Enabled": { "type": "boolean", "default": true },
-          "GrantCategory": { "type": ["string", "null"] }
+          "GrantCategory": { "type": ["string", "null"] },
+          "OAuthClientId": { "type": ["string", "null"] },
+          "OAuthScope": { "type": ["string", "null"] }
         },
         "additionalProperties": false
       }
@@ -193,6 +207,10 @@
         "Provider": { "type": "string", "description": "Key into the Providers dictionary." },
         "ModelId": { "type": "string", "description": "Model identifier for API calls." },
         "ContextWindow": { "type": "integer", "description": "Max context window in tokens." },
+        "Provenance": {
+          "type": ["string", "null"],
+          "description": "Optional model provenance marker (e.g. AutoDetected, Manual)."
+        },
         "InputModalities": {
           "type": "array",
           "items": { "$ref": "#/$defs/ModelModality" },

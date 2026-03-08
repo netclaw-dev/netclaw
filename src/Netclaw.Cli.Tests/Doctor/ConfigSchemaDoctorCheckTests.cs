@@ -75,6 +75,29 @@ public sealed class ConfigSchemaDoctorCheckTests
     }
 
     [Fact]
+    public async Task ReturnsPass_WhenSkillSyncSectionValid()
+    {
+        var basePath = CreateTempBasePath();
+        var paths = new NetclawPaths(basePath);
+        paths.EnsureDirectoriesExist();
+
+        await File.WriteAllTextAsync(paths.NetclawConfigPath,
+            """
+            {
+              "configVersion": 1,
+              "SkillSync": {
+                "DisableSystemSkillSync": true
+              }
+            }
+            """);
+
+        var check = new ConfigSchemaDoctorCheck(paths);
+        var result = await check.RunAsync();
+
+        Assert.Equal(DoctorSeverity.Pass, result.Severity);
+    }
+
+    [Fact]
     public async Task ReturnsError_WhenMemoryProviderInvalid()
     {
         var basePath = CreateTempBasePath();

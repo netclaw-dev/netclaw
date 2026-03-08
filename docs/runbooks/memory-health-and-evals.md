@@ -80,3 +80,59 @@ Recommended model profile values in `~/.netclaw/config/netclaw.json`:
 - recall budget: max 3 auto-recall items
 
 Passing a larger hosted model run does not waive a failing local Ollama run.
+
+If feed-published system skills lag behind local source changes, disable startup
+skill feed sync in `~/.netclaw/config/netclaw.json` to force use of local
+built-in skill copies:
+
+```bash
+python3 - <<'PY'
+import json, pathlib
+p = pathlib.Path.home() / '.netclaw' / 'config' / 'netclaw.json'
+obj = json.loads(p.read_text())
+obj.setdefault('SkillSync', {})['DisableSystemSkillSync'] = True
+p.write_text(json.dumps(obj, indent=2) + '\n')
+print(p)
+PY
+```
+
+Then restart the daemon from local binaries before running evals.
+
+## Reproducible Memory Score (Non-LLM Judge)
+
+Run the deterministic memory score script:
+
+```bash
+scripts/evals/memory-score.sh
+```
+
+Optional overrides:
+
+```bash
+RUNS=3 \
+DB_PATH="$HOME/.netclaw/netclaw.db" \
+LOG_PATH="$HOME/.netclaw/logs/daemon-$(date +%F).log" \
+scripts/evals/memory-score.sh
+```
+
+Outputs:
+
+- `artifacts/evals/memory/eval-results.json`
+- `artifacts/evals/memory/eval-summary.md`
+
+Scoring model (100 points total):
+
+- Recall hit rate: 30
+- Noise suppression: 20
+- Privacy/sensitivity leaks: 20 (hard gate)
+- Update correctness: 10
+- Checkpoint/curation reliability: 10
+- Latency SLO adherence: 10
+
+Hard gates:
+
+- Any privacy leak fails the run.
+- Deploy candidate requires score >= 85 and no hard-gate failure.
+
+This eval uses deterministic fixture seeding, structured memory/turn observability,
+and SQLite/log inspection. It does not use another LLM to grade outputs.

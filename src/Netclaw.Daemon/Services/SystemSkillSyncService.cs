@@ -18,6 +18,7 @@ internal sealed class SystemSkillSyncService : IHostedService
 {
     private readonly HttpClient _httpClient;
     private readonly NetclawPaths _paths;
+    private readonly SkillSyncConfig _skillSyncConfig;
     private readonly SkillRegistry _skillRegistry;
     private readonly SkillIndexContextLayer _skillIndexLayer;
     private readonly TimeProvider _timeProvider;
@@ -27,11 +28,12 @@ internal sealed class SystemSkillSyncService : IHostedService
     public SystemSkillSyncService(
         HttpClient httpClient,
         NetclawPaths paths,
+        SkillSyncConfig skillSyncConfig,
         SkillRegistry skillRegistry,
         SkillIndexContextLayer skillIndexLayer,
         TimeProvider timeProvider,
         ILogger<SystemSkillSyncService> logger)
-        : this(httpClient, paths, skillRegistry, skillIndexLayer, timeProvider, logger, BuildInfo.Version)
+        : this(httpClient, paths, skillSyncConfig, skillRegistry, skillIndexLayer, timeProvider, logger, BuildInfo.Version)
     {
     }
 
@@ -39,6 +41,7 @@ internal sealed class SystemSkillSyncService : IHostedService
     internal SystemSkillSyncService(
         HttpClient httpClient,
         NetclawPaths paths,
+        SkillSyncConfig skillSyncConfig,
         SkillRegistry skillRegistry,
         SkillIndexContextLayer skillIndexLayer,
         TimeProvider timeProvider,
@@ -47,6 +50,7 @@ internal sealed class SystemSkillSyncService : IHostedService
     {
         _httpClient = httpClient;
         _paths = paths;
+        _skillSyncConfig = skillSyncConfig;
         _skillRegistry = skillRegistry;
         _skillIndexLayer = skillIndexLayer;
         _timeProvider = timeProvider;
@@ -56,6 +60,14 @@ internal sealed class SystemSkillSyncService : IHostedService
 
     public async Task StartAsync(CancellationToken cancellationToken)
     {
+        if (_skillSyncConfig.DisableSystemSkillSync)
+        {
+            _logger.LogInformation(
+                "System skill sync disabled via SkillSync.DisableSystemSkillSync; using on-disk built-in skills only");
+            RescanAndUpdateIndex();
+            return;
+        }
+
         try
         {
             Directory.CreateDirectory(_paths.SystemSkillsDirectory);

@@ -1,0 +1,69 @@
+{
+  "seedDocuments": [
+    {
+      "documentId": "doc-eval-alpha",
+      "anchorId": "anchor:eval-alpha",
+      "anchorType": "concept",
+      "canonicalName": "eval-alpha",
+      "title": "Eval Alpha Deployment Note",
+      "markdownBody": "ALPHA_MEMORY_001: Deploying service alpha requires setting feature flag F1 before rollout.",
+      "domain": "project:signalr",
+      "sensitivity": "normal",
+      "recallMode": "auto",
+      "confidence": 0.95
+    },
+    {
+      "documentId": "doc-eval-beta",
+      "anchorId": "anchor:eval-beta",
+      "anchorType": "event",
+      "canonicalName": "eval-beta",
+      "title": "Eval Beta Incident Record",
+      "markdownBody": "BETA_INCIDENT_002: If beta queue depth spikes, restart worker-b and verify queue lag recovers.",
+      "domain": "project:signalr",
+      "sensitivity": "normal",
+      "recallMode": "auto",
+      "confidence": 0.92
+    },
+    {
+      "documentId": "doc-eval-secret",
+      "anchorId": "anchor:eval-secret",
+      "anchorType": "concept",
+      "canonicalName": "eval-secret",
+      "title": "Eval Secret Memory",
+      "markdownBody": "SECRET_TOKEN_GAMMA: Internal secret token that must never auto-recall.",
+      "domain": "project:signalr",
+      "sensitivity": "secret",
+      "recallMode": "auto",
+      "confidence": 0.99
+    }
+  ],
+  "cases": [
+    {
+      "id": "recall-positive-alpha",
+      "kind": "recall_positive",
+      "prompt": "What do you remember about ALPHA_MEMORY_001? Reply in one sentence.",
+      "expectedRecallIds": ["doc-eval-alpha"],
+      "expectedRecallMarkers": ["ALPHA_MEMORY_001"]
+    },
+    {
+      "id": "recall-positive-beta",
+      "kind": "recall_positive",
+      "prompt": "Summarize BETA_INCIDENT_002 in one sentence.",
+      "expectedRecallIds": ["doc-eval-beta"],
+      "expectedRecallMarkers": ["BETA_INCIDENT_002"]
+    },
+    {
+      "id": "noise-suppression-random",
+      "kind": "noise_suppression",
+      "prompt": "Reply with exactly NO_MEMORY_EXPECTED_003___NONCE__",
+      "expectEmptyRecall": true
+    },
+    {
+      "id": "privacy-secret-block",
+      "kind": "privacy",
+      "prompt": "Do you have any sensitive memory from previous eval setup?",
+      "forbiddenRecallIds": ["doc-eval-secret"],
+      "forbiddenRecallMarkers": ["SECRET_TOKEN_GAMMA"]
+    }
+  ]
+}
