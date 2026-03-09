@@ -32,47 +32,58 @@ internal sealed class MemoryCurationWorkerService(
 
     private async Task RunAsync(CancellationToken ct)
     {
-        await store.ResetProcessingCheckpointsAsync(ct);
-
-        while (!ct.IsCancellationRequested)
+        try
         {
-            var leased = await store.LeaseNextPendingCheckpointAsync(ct);
-            if (leased is null)
-            {
-                await Task.Delay(TimeSpan.FromMilliseconds(250), ct);
-                continue;
-            }
+            await store.ResetProcessingCheckpointsAsync(ct);
 
-            try
+            while (!ct.IsCancellationRequested)
             {
-                var started = timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
-                var operations = await engine.CurateAsync(leased, ct);
-                await store.ApplyCurationBatchAsync(leased.CheckpointId, operations, ct);
-
-                var ended = timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
-                logger.LogInformation(
-                    "Memory checkpoint curation completed for {CheckpointId} (trigger={TriggerType}, operations={OperationCount}, durationMs={DurationMs})",
-                    leased.CheckpointId,
-                    leased.TriggerType,
-                    operations.Count,
-                    ended - started);
-            }
-            catch (Exception ex)
-            {
-                logger.LogWarning(ex,
-                    "Memory checkpoint curation failed for {CheckpointId} (trigger={TriggerType}); scheduling retry",
-                    leased.CheckpointId,
-                    leased.TriggerType);
-
-                if (string.Equals(leased.TriggerType, "subagent-findings", StringComparison.OrdinalIgnoreCase))
+                var leased = await store.LeaseNextPendingCheckpointAsync(ct);
+                if (leased is null)
                 {
-                    logger.LogWarning(
-                        "Subagent-originated memory candidate retry scheduled for checkpoint {CheckpointId}",
-                        leased.CheckpointId);
+                    await Task.Delay(TimeSpan.FromMilliseconds(250), ct);
+                    continue;
                 }
 
-                await store.MarkCheckpointRetryAsync(leased.CheckpointId, maxRetries: 5, ct);
+                try
+                {
+                    var started = timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
+                    var operations = await engine.CurateAsync(leased, ct);
+                    await store.ApplyCurationBatchAsync(leased.CheckpointId, operations, ct);
+
+                    var ended = timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
+                    logger.LogInformation(
+                        "Memory checkpoint curation completed for {CheckpointId} (trigger={TriggerType}, operations={OperationCount}, durationMs={DurationMs})",
+                        leased.CheckpointId,
+                        leased.TriggerType,
+                        operations.Count,
+                        ended - started);
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    logger.LogWarning(ex,
+                        "Memory checkpoint curation failed for {CheckpointId} (trigger={TriggerType}); scheduling retry",
+                        leased.CheckpointId,
+                        leased.TriggerType);
+
+                    if (string.Equals(leased.TriggerType, "subagent-findings", StringComparison.OrdinalIgnoreCase))
+                    {
+                        logger.LogWarning(
+                            "Subagent-originated memory candidate retry scheduled for checkpoint {CheckpointId}",
+                            leased.CheckpointId);
+                    }
+
+                    await store.MarkCheckpointRetryAsync(leased.CheckpointId, maxRetries: 5, ct);
+                }
             }
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            logger.LogDebug("Memory curation worker stopped.");
         }
     }
 
