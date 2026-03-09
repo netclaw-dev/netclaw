@@ -19,6 +19,7 @@ using Netclaw.Configuration;
 using Netclaw.Configuration.Providers;
 using Netclaw.Configuration.Secrets;
 using Netclaw.Configuration.Feeds;
+using Netclaw.Daemon;
 using Netclaw.Daemon.Configuration;
 using Netclaw.Daemon.Gateway;
 using Netclaw.Daemon.Mcp;
@@ -471,6 +472,7 @@ static void ConfigureDaemonServices(
             : null;
 
         akkaBuilder.WithNetclawActors(reminderStorage);
+        akkaBuilder.WithSignalRGateway();
 
         // Register reminder tools after actors start (needs ReminderManagerActor ref)
         akkaBuilder.StartActors((system, registry, _) =>
