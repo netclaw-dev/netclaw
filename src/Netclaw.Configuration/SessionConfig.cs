@@ -96,6 +96,12 @@ public sealed record SessionConfig
     public int SidecarLlmTimeoutSeconds { get; init; } = 90;
 
     /// <summary>
+    /// Enables structured memory sidecars for recall planning and post-turn
+    /// observation. Disabled by default until rollout gates are satisfied.
+    /// </summary>
+    public bool MemorySidecarsEnabled { get; init; } = false;
+
+    /// <summary>
     /// Timeout in seconds for the primary per-turn LLM streaming call.
     /// Prevents sessions from remaining stuck in Processing forever when a
     /// provider stream stalls under network/backpressure failure modes.

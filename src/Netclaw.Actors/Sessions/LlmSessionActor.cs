@@ -43,6 +43,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     private readonly IMemoryExtractor _memoryExtractor;
     private readonly IMemoryRecallCoordinator _memoryRecallCoordinator;
     private readonly IMemoryCheckpointSink _memoryCheckpointSink;
+    private readonly SidecarMemoryObserver _sidecarMemoryObserver = new();
+    private readonly MemoryProposalGate _memoryProposalGate = new();
     private readonly TimeProvider _timeProvider;
     private readonly string? _sessionsBasePath;
     private readonly string? _sessionLogsBasePath;
@@ -1003,6 +1005,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             MaybeGenerateTitle();
             _activeRecall = recallResult;
 
+            if (_config.MemorySidecarsEnabled)
+                ObserveTurnForMemory(evt.UserMessage, evt.AssistantReply);
+
             EnqueueCheckpointFireAndForget(new MemoryCheckpointRequest(
                 SessionId: _sessionId.Value,
                 TurnId: _activeTurnId,
@@ -1073,6 +1078,31 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 SetTitle(title);
             }
         });
+
+        Command<MemoryObservationCompleted>(msg =>
+        {
+            var accepted = _memoryProposalGate.Accept(
+                msg.Proposals,
+                ResolveDomainFromSession(_sessionId.Value),
+                "normal",
+                NowMs());
+            if (accepted.Count == 0)
+                return;
+
+            EnqueueCheckpointFireAndForget(new MemoryCheckpointRequest(
+                SessionId: _sessionId.Value,
+                TurnId: _activeTurnId,
+                TriggerType: "observed-memory-proposals",
+                Priority: 60,
+                Payload: new ObservedMemoryCheckpointPayload(
+                    _sessionId.Value,
+                    "observed-memory-proposals",
+                    ResolveDomainFromSession(_sessionId.Value),
+                    "normal",
+                    accepted)));
+        });
+
+        Command<MemoryObservationFailed>(_ => { });
 
         Command<JoinSession>(cmd =>
         {
@@ -1325,7 +1355,14 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             _sessionId.Value,
             query,
             recentUser,
-            3);
+            3,
+            RecentAssistantMessages: _state.History
+                .Where(x => x.Role == Protocol.ChatRole.Assistant)
+                .Select(x => x.Content)
+                .Where(x => !string.IsNullOrWhiteSpace(x))
+                .TakeLast(3)
+                .ToArray(),
+            RecentEntities: []);
 
         try
         {
@@ -1979,6 +2016,84 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             SessionId = _sessionId,
             TurnNumber = _state.TurnCount
         });
+    }
+
+    private void ObserveTurnForMemory(SerializableChatMessage userMessage, SerializableChatMessage assistantReply)
+    {
+        var userText = userMessage.Content ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(userText))
+            return;
+
+        var recentUser = _state.History
+            .Where(x => x.Role == Protocol.ChatRole.User && !SessionState.IsSystemNudge(x))
+            .Select(x => x.Content)
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .TakeLast(3)
+            .ToArray();
+
+        var recentAssistant = _state.History
+            .Where(x => x.Role == Protocol.ChatRole.Assistant)
+            .Select(x => x.Content)
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .TakeLast(3)
+            .ToArray();
+
+        var strongAssertions = BuildStrongAssertions(userText);
+        var request = _sidecarMemoryObserver.BuildRequest(
+            _sessionId.Value,
+            _activeTurnId ?? $"{_sessionId.Value}:{NowMs()}",
+            "turn_completed",
+            ResolveDomainFromSession(_sessionId.Value),
+            "normal",
+            userText,
+            assistantReply.Content ?? string.Empty,
+            strongAssertions,
+            [],
+            recentUser,
+            recentAssistant,
+            [],
+            false,
+            _timeProvider.GetUtcNow());
+
+        var self = Self;
+        var timeout = TimeSpan.FromSeconds(Math.Max(1, _config.SidecarLlmTimeoutSeconds));
+        _ = ObserveMemoryAsync(_compactionClient, request, self, _log, timeout);
+    }
+
+    private static async Task ObserveMemoryAsync(
+        IChatClient client,
+        MemoryObservationRequest request,
+        IActorRef self,
+        ILoggingAdapter log,
+        TimeSpan timeout)
+    {
+        var proposals = await SessionSidecarRunner.RunJsonAsync<IReadOnlyList<MemoryProposal>>(
+            client,
+            MemorySidecarPromptBuilder.BuildMemoryObservationSystemPrompt(),
+            MemorySidecarPromptBuilder.BuildMemoryObservationUserPrompt(request),
+            timeout,
+            message => log.Warning("Memory observation sidecar failed: {0}", message));
+
+        if (proposals is null)
+        {
+            self.Tell(new MemoryObservationFailed { Reason = "sidecar failed or returned null" });
+            return;
+        }
+
+        self.Tell(new MemoryObservationCompleted { Proposals = proposals });
+    }
+
+    private static IReadOnlyList<string> BuildStrongAssertions(string userText)
+    {
+        var assertions = new List<string>();
+        var text = userText.Trim();
+        if (text.StartsWith("I ", StringComparison.OrdinalIgnoreCase)
+            || text.StartsWith("I'm ", StringComparison.OrdinalIgnoreCase)
+            || text.StartsWith("I’m ", StringComparison.OrdinalIgnoreCase))
+        {
+            assertions.Add(text);
+        }
+        return assertions;
     }
 
     private void EmitUsageOutput(UsageDetails usage)

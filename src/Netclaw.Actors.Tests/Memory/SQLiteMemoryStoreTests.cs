@@ -38,6 +38,7 @@ public sealed class SQLiteMemoryStoreTests : IDisposable
         await _store.UpsertDocumentAsync(new SQLiteMemoryDocument(
             DocumentId: "doc-1",
             Anchor: anchor,
+            MemoryClass: "durable_fact",
             Title: "Netclaw memory redesign",
             MarkdownBody: "Use sqlite-backed automatic recall.",
             UpdateSemantics: "merge-document",
@@ -46,12 +47,14 @@ public sealed class SQLiteMemoryStoreTests : IDisposable
             RecallMode: "auto",
             Confidence: 0.95,
             FreshnessAtMs: now,
+            ExpiresAtMs: null,
             CreatedAtMs: now,
             UpdatedAtMs: now));
 
         await _store.UpsertDocumentAsync(new SQLiteMemoryDocument(
             DocumentId: "doc-2",
             Anchor: anchor,
+            MemoryClass: "durable_fact",
             Title: "Secret token",
             MarkdownBody: "This should not auto recall.",
             UpdateSemantics: "merge-document",
@@ -60,6 +63,7 @@ public sealed class SQLiteMemoryStoreTests : IDisposable
             RecallMode: "auto",
             Confidence: 0.99,
             FreshnessAtMs: now,
+            ExpiresAtMs: null,
             CreatedAtMs: now,
             UpdatedAtMs: now));
 

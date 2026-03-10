@@ -1,5 +1,6 @@
 using Netclaw.Actors.Memory;
 using Microsoft.Extensions.Logging;
+using Netclaw.Configuration;
 
 namespace Netclaw.Actors.Sessions;
 
@@ -8,22 +9,60 @@ namespace Netclaw.Actors.Sessions;
 /// </summary>
 public sealed class SQLiteMemoryRecallCoordinator(
     SQLiteMemoryStore store,
-    ILogger<SQLiteMemoryRecallCoordinator> logger) : IMemoryRecallCoordinator
+    ILogger<SQLiteMemoryRecallCoordinator> logger,
+    IChatClientProvider? clientProvider = null,
+    SidecarRecallPlanner? sidecarPlanner = null,
+    RecallPlanGate? recallPlanGate = null,
+    SessionConfig? sessionConfig = null) : IMemoryRecallCoordinator
 {
+    private readonly SidecarRecallPlanner _sidecarPlanner = sidecarPlanner ?? new SidecarRecallPlanner();
+    private readonly RecallPlanGate _recallPlanGate = recallPlanGate ?? new RecallPlanGate();
+    private readonly SessionConfig _sessionConfig = sessionConfig ?? new SessionConfig();
+
     public async Task<AutomaticRecallResult> RecallAsync(AutomaticRecallRequest request, CancellationToken ct = default)
     {
         try
         {
+            if (!_sessionConfig.MemorySidecarsEnabled)
+                return new AutomaticRecallResult([]);
+
             var domain = ResolveDomain(request.SessionId);
             var maxItems = request.MaxItems <= 0 ? 3 : request.MaxItems;
             var effectiveQuery = string.IsNullOrWhiteSpace(request.Query)
                 ? request.RecentUserMessages.LastOrDefault() ?? string.Empty
                 : request.Query;
 
-            var primary = await store.SearchAutoRecallDocumentsAsync(
-                effectiveQuery,
+            var fallbackRequest = _sidecarPlanner.BuildRequest(
+                request.SessionId,
                 domain,
+                effectiveQuery,
+                request.RecentUserMessages,
+                request.RecentAssistantMessages ?? [],
+                request.RecentEntities ?? [],
+                "automatic",
+                8,
+                maxItems);
+
+            var plan = await BuildPlanAsync(request, domain, effectiveQuery, maxItems, ct)
+                ?? _recallPlanGate.Clamp(new RecallQueryPlan(
+                    "automatic",
+                    "fallback",
+                    request.RecentEntities ?? [],
+                    [],
+                    FallbackSearchTerms(effectiveQuery, request.RecentUserMessages),
+                    ["durable_fact"],
+                    maxItems,
+                    false),
+                    fallbackRequest);
+
+            var searchQuery = string.Join(' ', plan.SearchTerms);
+
+            var primary = await store.SearchByPlanAsync(
+                plan.SearchTerms,
+                domain,
+                plan.MemoryClasses,
                 Math.Max(maxItems * 3, 12),
+                plan.AllowExpiredEvidence,
                 ct);
 
             var documents = primary;
@@ -31,32 +70,34 @@ public sealed class SQLiteMemoryRecallCoordinator(
             if (documents.Count == 0 && request.RecentUserMessages.Count > 0)
             {
                 fallbackQuery = request.RecentUserMessages[^1];
-                documents = await store.SearchAutoRecallDocumentsAsync(
-                    fallbackQuery,
+                documents = await store.SearchByPlanAsync(
+                    fallbackQuery.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries),
                     domain,
+                    plan.MemoryClasses,
                     Math.Max(maxItems * 3, 12),
+                    plan.AllowExpiredEvidence,
                     ct);
             }
 
             LogRecallTrace(
-                effectiveQuery,
+                searchQuery,
                 fallbackQuery,
                 domain,
                 maxItems,
                 primary.Count,
                 documents.Count,
-                documents.Select(d => d.DocumentId));
+                documents.Select(d => d.Id));
 
             var items = documents
                 .OrderByDescending(RecallRank)
                 .Take(maxItems)
                 .Select(d => new AutomaticRecallItem(
-                    d.DocumentId,
+                    d.Id,
                     d.Title,
-                    d.MarkdownBody,
+                    d.Content,
                     d.Domain,
                     d.Sensitivity,
-                    d.Confidence))
+                    RecallRank(d)))
                 .ToArray();
 
             return new AutomaticRecallResult(items);
@@ -80,6 +121,41 @@ public sealed class SQLiteMemoryRecallCoordinator(
         return string.IsNullOrWhiteSpace(prefix)
             ? "project:default"
             : $"project:{prefix.ToLowerInvariant()}";
+    }
+
+    private async Task<RecallQueryPlan?> BuildPlanAsync(
+        AutomaticRecallRequest request,
+        string domain,
+        string effectiveQuery,
+        int maxItems,
+        CancellationToken ct)
+    {
+        if (clientProvider is null)
+            return null;
+
+        if (!_sessionConfig.MemorySidecarsEnabled)
+            return null;
+
+        var plannerRequest = _sidecarPlanner.BuildRequest(
+            request.SessionId,
+            domain,
+            effectiveQuery,
+            request.RecentUserMessages,
+            request.RecentAssistantMessages ?? [],
+            request.RecentEntities ?? [],
+            "automatic",
+            8,
+            maxItems);
+
+        var timeout = TimeSpan.FromSeconds(15);
+        var plan = await SessionSidecarRunner.RunJsonAsync<RecallQueryPlan>(
+            clientProvider.GetClient(Configuration.ModelRole.Compaction),
+            MemorySidecarPromptBuilder.BuildRecallPlanningSystemPrompt(),
+            MemorySidecarPromptBuilder.BuildRecallPlanningUserPrompt(plannerRequest),
+            timeout,
+            message => logger.LogWarning("Recall planner sidecar failed: {Message}", message));
+
+        return _recallPlanGate.Clamp(plan, plannerRequest);
     }
 
     private void LogRecallTrace(
@@ -121,11 +197,34 @@ public sealed class SQLiteMemoryRecallCoordinator(
             .ToArray();
     }
 
-    private static int RecallRank(SQLiteMemoryDocument document)
+    private static IReadOnlyList<string> FallbackSearchTerms(string query, IReadOnlyList<string> recentUserMessages)
+    {
+        var combined = new List<string>();
+        if (!string.IsNullOrWhiteSpace(query))
+            combined.Add(query);
+        combined.AddRange(recentUserMessages);
+
+        return combined
+            .SelectMany(x => x.Split(new[] { ' ', '\t', '\n', '\r', '.', ',', ':', ';', '!', '?', '(', ')', '[', ']', '{', '}', '/', '\\', '"', '\'' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            .Select(x => x.Trim().ToLowerInvariant())
+            .Where(x => x.Length >= 3)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(8)
+            .ToArray();
+    }
+
+    private static int RecallRank(SQLiteMemoryHydratedItem document)
     {
         var score = 0;
 
         // Prefer deterministic durable classes and explicit/inferred semantics.
+        if (string.Equals(document.MemoryClass, "durable_fact", StringComparison.OrdinalIgnoreCase))
+            score += 120;
+        else if (string.Equals(document.MemoryClass, "evidence", StringComparison.OrdinalIgnoreCase))
+            score += 40;
+        else if (string.Equals(document.MemoryClass, "trace", StringComparison.OrdinalIgnoreCase))
+            score -= 400;
+
         if (string.Equals(document.UpdateSemantics, "merge-document", StringComparison.OrdinalIgnoreCase))
             score += 80;
         else if (string.Equals(document.UpdateSemantics, "append-document", StringComparison.OrdinalIgnoreCase))
@@ -142,11 +241,8 @@ public sealed class SQLiteMemoryRecallCoordinator(
         if (string.Equals(document.Title, "verified-tool-finding", StringComparison.OrdinalIgnoreCase))
             score += 25;
 
-        score += (int)Math.Round(document.Confidence * 20.0);
-
-        // Prefer fresher entries, bounded contribution.
-        if (document.FreshnessAtMs.HasValue)
-            score += 10;
+        if (document.ExpiresAtMs.HasValue)
+            score += 5;
 
         return score;
     }

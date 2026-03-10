@@ -199,6 +199,12 @@ public sealed class MemoryCurationEngine(SQLiteMemoryStore store, MemoryRulesFir
         MemoryCheckpointPayload? payload;
         try
         {
+            if (checkpoint.TriggerType == "observed-memory-proposals")
+            {
+                var observed = JsonSerializer.Deserialize<ObservedMemoryCheckpointPayload>(checkpoint.PayloadJson);
+                return observed?.Operations ?? [];
+            }
+
             payload = JsonSerializer.Deserialize<MemoryCheckpointPayload>(checkpoint.PayloadJson);
         }
         catch
@@ -232,6 +238,7 @@ public sealed class MemoryCurationEngine(SQLiteMemoryStore store, MemoryRulesFir
             RecallMode: c.RecallMode,
             Confidence: c.Confidence,
             FreshnessAtMs: c.FreshnessAtMs,
+            ExpiresAtMs: null,
             SupersedesRecordId: c.SupersedesRecordId)).ToArray();
     }
 }

@@ -2,6 +2,7 @@ using Microsoft.Data.Sqlite;
 using Netclaw.Actors.Memory;
 using Netclaw.Actors.Sessions;
 using Microsoft.Extensions.Logging.Abstractions;
+using Netclaw.Configuration;
 using Xunit;
 
 namespace Netclaw.Actors.Tests.Memory;
@@ -29,6 +30,7 @@ public sealed class MemoryEvalSeedSuiteTests : IDisposable
         await _store.UpsertDocumentAsync(new SQLiteMemoryDocument(
             DocumentId: "doc-ops",
             Anchor: anchor,
+            MemoryClass: "durable_fact",
             Title: "Router failover runbook",
             MarkdownBody: "Use VRRP preemption delay of 15 seconds for stable failover.",
             UpdateSemantics: "merge-document",
@@ -37,10 +39,11 @@ public sealed class MemoryEvalSeedSuiteTests : IDisposable
             RecallMode: "auto",
             Confidence: 0.92,
             FreshnessAtMs: now,
+            ExpiresAtMs: null,
             CreatedAtMs: now,
             UpdatedAtMs: now));
 
-        var coordinator = new SQLiteMemoryRecallCoordinator(_store, NullLogger<SQLiteMemoryRecallCoordinator>.Instance);
+        var coordinator = new SQLiteMemoryRecallCoordinator(_store, NullLogger<SQLiteMemoryRecallCoordinator>.Instance, sessionConfig: new SessionConfig { MemorySidecarsEnabled = true });
         var result = await coordinator.RecallAsync(new AutomaticRecallRequest(
             SessionId: "ops/thread-1",
             Query: "router failover",
@@ -62,6 +65,7 @@ public sealed class MemoryEvalSeedSuiteTests : IDisposable
         await _store.UpsertDocumentAsync(new SQLiteMemoryDocument(
             DocumentId: "doc-secret",
             Anchor: anchor,
+            MemoryClass: "durable_fact",
             Title: "Prod token",
             MarkdownBody: "token=abc123",
             UpdateSemantics: "merge-document",
@@ -70,10 +74,11 @@ public sealed class MemoryEvalSeedSuiteTests : IDisposable
             RecallMode: "auto",
             Confidence: 0.99,
             FreshnessAtMs: now,
+            ExpiresAtMs: null,
             CreatedAtMs: now,
             UpdatedAtMs: now));
 
-        var coordinator = new SQLiteMemoryRecallCoordinator(_store, NullLogger<SQLiteMemoryRecallCoordinator>.Instance);
+        var coordinator = new SQLiteMemoryRecallCoordinator(_store, NullLogger<SQLiteMemoryRecallCoordinator>.Instance, sessionConfig: new SessionConfig { MemorySidecarsEnabled = true });
         var result = await coordinator.RecallAsync(new AutomaticRecallRequest(
             SessionId: "ops/thread-1",
             Query: "token",
@@ -153,6 +158,7 @@ public sealed class MemoryEvalSeedSuiteTests : IDisposable
             await _store.UpsertDocumentAsync(new SQLiteMemoryDocument(
                 DocumentId: $"doc-{i}",
                 Anchor: anchor,
+                MemoryClass: "durable_fact",
                 Title: $"Latency note {i}",
                 MarkdownBody: "sqlite recall budget check",
                 UpdateSemantics: "merge-document",
@@ -161,11 +167,12 @@ public sealed class MemoryEvalSeedSuiteTests : IDisposable
                 RecallMode: "auto",
                 Confidence: 0.8,
                 FreshnessAtMs: now,
+                ExpiresAtMs: null,
                 CreatedAtMs: now,
                 UpdatedAtMs: now));
         }
 
-        var coordinator = new SQLiteMemoryRecallCoordinator(_store, NullLogger<SQLiteMemoryRecallCoordinator>.Instance);
+        var coordinator = new SQLiteMemoryRecallCoordinator(_store, NullLogger<SQLiteMemoryRecallCoordinator>.Instance, sessionConfig: new SessionConfig { MemorySidecarsEnabled = true });
         var start = TimeProvider.System.GetTimestamp();
         var result = await coordinator.RecallAsync(new AutomaticRecallRequest(
             SessionId: "latency/thread-1",

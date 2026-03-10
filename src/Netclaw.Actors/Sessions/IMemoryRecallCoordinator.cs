@@ -15,7 +15,9 @@ public sealed record AutomaticRecallRequest(
     string SessionId,
     string Query,
     IReadOnlyList<string> RecentUserMessages,
-    int MaxItems);
+    int MaxItems,
+    IReadOnlyList<string>? RecentAssistantMessages = null,
+    IReadOnlyList<string>? RecentEntities = null);
 
 /// <summary>
 /// Automatic recall output for a single turn.
