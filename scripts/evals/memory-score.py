@@ -196,7 +196,7 @@ def parse_log_metrics(log_text):
     return {"recall": recall, "enqueue": enqueue, "curation": curation}
 
 
-def warm_search_index(repo_root: Path, fixtures):
+def warm_search_index(repo_root: Path, fixtures, prompt_timeout_seconds: int):
     # Ensure the daemon has produced searchable memory entries before issuing
     # recall probes. This aligns eval ordering with real runtime behavior.
     warm_phrases = []
@@ -220,12 +220,12 @@ def warm_search_index(repo_root: Path, fixtures):
                 f"search memory for: {phrase}",
             ],
             check=False,
-            timeout=120,
+            timeout=prompt_timeout_seconds,
         )
         time.sleep(0.2)
 
 
-def warm_recall_index(repo_root: Path, fixtures):
+def warm_recall_index(repo_root: Path, fixtures, prompt_timeout_seconds: int):
     recall_prompts = []
     for case in fixtures.get("cases", []):
         if case.get("kind") == "recall_positive":
@@ -245,7 +245,7 @@ def warm_recall_index(repo_root: Path, fixtures):
                 prompt,
             ],
             check=False,
-            timeout=120,
+            timeout=prompt_timeout_seconds,
         )
         time.sleep(0.3)
 
@@ -366,8 +366,8 @@ def main():
         delete_eval_seed(conn)
         seed_documents(conn, fixtures)
         force_seed_recall_artifacts(conn)
-        warm_search_index(repo_root, fixtures)
-        warm_recall_index(repo_root, fixtures)
+        warm_search_index(repo_root, fixtures, args.prompt_timeout_seconds)
+        warm_recall_index(repo_root, fixtures, args.prompt_timeout_seconds)
 
         start_line_count = len(log_path.read_text(errors="ignore").splitlines())
 
