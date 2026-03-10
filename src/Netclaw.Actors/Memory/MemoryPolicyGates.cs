@@ -5,6 +5,9 @@ namespace Netclaw.Actors.Memory;
 
 public sealed class MemoryProposalGate
 {
+    private static readonly TimeSpan EvidenceExpiry = TimeSpan.FromDays(30);
+    private static readonly TimeSpan TraceExpiry = TimeSpan.FromHours(72);
+
     public IReadOnlyList<SQLiteMemoryCurationOperation> Accept(
         IReadOnlyList<MemoryProposal> proposals,
         string domain,
@@ -33,7 +36,7 @@ public sealed class MemoryProposalGate
 
             var recallMode = ResolveRecallMode(proposal, sensitivity);
             var freshnessAt = proposal.FreshUntilMs ?? nowMs;
-            var expiry = proposal.ExpiresAtMs;
+            var expiry = ResolveExpiry(proposal, freshnessAt);
             var content = proposal.Content;
 
             if (proposal.MemoryClass == "evidence" || proposal.MemoryClass == "trace")
@@ -82,6 +85,19 @@ public sealed class MemoryProposalGate
             "durable_fact" => "auto",
             "evidence" => "searchable",
             _ => "never"
+        };
+    }
+
+    private static long? ResolveExpiry(MemoryProposal proposal, long freshnessAt)
+    {
+        if (proposal.ExpiresAtMs.HasValue)
+            return proposal.ExpiresAtMs;
+
+        return proposal.MemoryClass switch
+        {
+            "evidence" => freshnessAt + (long)EvidenceExpiry.TotalMilliseconds,
+            "trace" => freshnessAt + (long)TraceExpiry.TotalMilliseconds,
+            _ => null
         };
     }
 

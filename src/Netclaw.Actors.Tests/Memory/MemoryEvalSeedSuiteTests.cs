@@ -147,6 +147,39 @@ public sealed class MemoryEvalSeedSuiteTests : IDisposable
     }
 
     [Fact]
+    public async Task Verified_tool_finding_is_classed_as_evidence_with_default_expiry()
+    {
+        await _store.InitializeAsync();
+        var policy = new MemoryPolicyEvaluator();
+        var extractor = new MemoryRulesFirstExtractor(policy);
+        var now = TimeProvider.System.GetUtcNow().ToUnixTimeMilliseconds();
+
+        var payload = new MemoryCheckpointPayload(
+            SessionId: "ops/thread-4",
+            TriggerType: "verified-tool-finding",
+            Source: "tool",
+            Content: "Hilton Easton is near the venue.",
+            UserContent: null,
+            AssistantContent: null,
+            IsExplicitRequest: false,
+            HasVerifiedToolFinding: true,
+            IsCompactionBoundary: false,
+            HasAcceptedSubAgentFinding: false,
+            Domain: "project:ops",
+            Sensitivity: "normal",
+            RecallMode: "auto",
+            Confidence: 0.8,
+            FreshnessAtMs: now);
+
+        var candidates = extractor.Extract(payload, new HashSet<string>(StringComparer.OrdinalIgnoreCase));
+        var candidate = Assert.Single(candidates);
+
+        Assert.Equal("evidence", candidate.MemoryClass);
+        Assert.Equal("searchable", candidate.RecallMode);
+        Assert.Equal(now + (long)TimeSpan.FromDays(30).TotalMilliseconds, candidate.ExpiresAtMs);
+    }
+
+    [Fact]
     public async Task Latency_seeded_fixture_recall_completes_under_budget_on_local_store()
     {
         await _store.InitializeAsync();

@@ -57,7 +57,7 @@ public sealed class SqliteMemoryToolsTests : IDisposable
                     RecallMode: "searchable",
                     Confidence: 0.8,
                     FreshnessAtMs: now,
-                    ExpiresAtMs: now + TimeSpan.FromDays(7).Milliseconds),
+                    ExpiresAtMs: now + (long)TimeSpan.FromDays(7).TotalMilliseconds),
                 new SQLiteMemoryCurationOperation(
                     Kind: "record",
                     MemoryClass: "trace",
@@ -72,7 +72,7 @@ public sealed class SqliteMemoryToolsTests : IDisposable
                     RecallMode: "never",
                     Confidence: 0.5,
                     FreshnessAtMs: now,
-                    ExpiresAtMs: now + TimeSpan.FromDays(1).Milliseconds)
+                    ExpiresAtMs: now + (long)TimeSpan.FromDays(1).TotalMilliseconds)
             ],
             CancellationToken.None);
 
@@ -114,8 +114,8 @@ public sealed class SqliteMemoryToolsTests : IDisposable
                     Sensitivity: "normal",
                     RecallMode: "searchable",
                     Confidence: 0.7,
-                    FreshnessAtMs: now - TimeSpan.FromDays(30).Milliseconds,
-                    ExpiresAtMs: now - TimeSpan.FromDays(1).Milliseconds)
+                    FreshnessAtMs: now - (long)TimeSpan.FromDays(30).TotalMilliseconds,
+                    ExpiresAtMs: now - (long)TimeSpan.FromDays(1).TotalMilliseconds)
             ],
             CancellationToken.None);
 

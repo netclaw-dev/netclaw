@@ -254,6 +254,7 @@ public sealed class SQLiteMemoryStore
             WHERE d.recall_mode = 'auto'
               AND d.sensitivity != 'secret'
               AND d.domain = $domain
+              AND (d.expires_at IS NULL OR d.expires_at > $now)
               AND d.title != 'turn-completion'
               AND d.update_semantics != 'conversation_trace'
               AND ({whereTerms})
@@ -261,6 +262,7 @@ public sealed class SQLiteMemoryStore
             LIMIT $limit;
             """;
         cmd.Parameters.AddWithValue("$domain", domain);
+        cmd.Parameters.AddWithValue("$now", _timeProvider.GetUtcNow().ToUnixTimeMilliseconds());
         cmd.Parameters.AddWithValue("$limit", Math.Max(maxResults, 1));
 
         var results = new List<SQLiteMemoryDocument>();
@@ -905,7 +907,7 @@ public sealed class SQLiteMemoryStore
                 continue;
             }
 
-            var resolvedRecallMode = string.Equals(operation.MemoryClass, "conversation_trace", StringComparison.OrdinalIgnoreCase)
+            var resolvedRecallMode = string.Equals(operation.MemoryClass, "trace", StringComparison.OrdinalIgnoreCase)
                 ? "never"
                 : operation.RecallMode;
 

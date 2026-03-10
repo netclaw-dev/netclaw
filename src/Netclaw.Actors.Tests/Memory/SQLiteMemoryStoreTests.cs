@@ -95,6 +95,69 @@ public sealed class SQLiteMemoryStoreTests : IDisposable
         Assert.Equal(1, pending);
     }
 
+    [Fact]
+    public async Task SearchAutoRecallDocuments_excludes_expired_evidence_and_trace()
+    {
+        await _store.InitializeAsync();
+
+        var anchor = _store.CreateDefaultAnchor("netclaw", "project:test");
+        var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+        await _store.UpsertDocumentAsync(new SQLiteMemoryDocument(
+            DocumentId: "doc-durable",
+            Anchor: anchor,
+            MemoryClass: "durable_fact",
+            Title: "Active durable fact",
+            MarkdownBody: "keep this visible in auto recall",
+            UpdateSemantics: "merge-document",
+            Domain: "project:test",
+            Sensitivity: "normal",
+            RecallMode: "auto",
+            Confidence: 0.95,
+            FreshnessAtMs: now,
+            ExpiresAtMs: null,
+            CreatedAtMs: now,
+            UpdatedAtMs: now));
+
+        await _store.UpsertDocumentAsync(new SQLiteMemoryDocument(
+            DocumentId: "doc-expired-evidence",
+            Anchor: anchor,
+            MemoryClass: "evidence",
+            Title: "Expired evidence",
+            MarkdownBody: "should be excluded from auto recall",
+            UpdateSemantics: "merge-document",
+            Domain: "project:test",
+            Sensitivity: "normal",
+            RecallMode: "auto",
+            Confidence: 0.8,
+            FreshnessAtMs: now - 1000,
+            ExpiresAtMs: now - 1,
+            CreatedAtMs: now,
+            UpdatedAtMs: now));
+
+        await _store.UpsertDocumentAsync(new SQLiteMemoryDocument(
+            DocumentId: "doc-expired-trace",
+            Anchor: anchor,
+            MemoryClass: "trace",
+            Title: "Trace breadcrumb",
+            MarkdownBody: "should never appear",
+            UpdateSemantics: "conversation_trace",
+            Domain: "project:test",
+            Sensitivity: "normal",
+            RecallMode: "auto",
+            Confidence: 0.5,
+            FreshnessAtMs: now - 1000,
+            ExpiresAtMs: now - 1,
+            CreatedAtMs: now,
+            UpdatedAtMs: now));
+
+        var results = await _store.SearchAutoRecallDocumentsAsync("visible excluded", "project:test", 10);
+
+        Assert.Contains(results, x => x.DocumentId == "doc-durable");
+        Assert.DoesNotContain(results, x => x.DocumentId == "doc-expired-evidence");
+        Assert.DoesNotContain(results, x => x.DocumentId == "doc-expired-trace");
+    }
+
     public void Dispose()
     {
         TryDeleteDirectory(_baseDir);

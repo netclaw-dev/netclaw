@@ -40,14 +40,17 @@ public sealed record MemoryCheckpointCandidate(
     string RecallMode,
     double Confidence,
     long? FreshnessAtMs,
+    long? ExpiresAtMs,
     string? MemoryId,
     string? SupersedesRecordId = null);
 
 public sealed class MemoryRulesFirstExtractor(MemoryPolicyEvaluator policy)
 {
-    private const string DurableExplicit = "durable_explicit";
-    private const string DurableInferred = "durable_inferred";
-    private const string ConversationTrace = "conversation_trace";
+    private const string DurableFact = "durable_fact";
+    private const string Evidence = "evidence";
+    private const string Trace = "trace";
+    private static readonly TimeSpan EvidenceExpiry = TimeSpan.FromDays(30);
+    private static readonly TimeSpan TraceExpiry = TimeSpan.FromHours(72);
 
     public IReadOnlyList<MemoryCheckpointCandidate> Extract(
         MemoryCheckpointPayload payload,
@@ -72,7 +75,7 @@ public sealed class MemoryRulesFirstExtractor(MemoryPolicyEvaluator policy)
             return results;
 
         var memoryClass = ResolveMemoryClass(payload);
-        if (memoryClass == ConversationTrace && !payload.IsExplicitRequest)
+        if (memoryClass == Trace && !payload.IsExplicitRequest)
             return results;
 
         var kind = ResolveKind(payload);
@@ -97,6 +100,7 @@ public sealed class MemoryRulesFirstExtractor(MemoryPolicyEvaluator policy)
             RecallMode: ResolveRecallMode(payload, memoryClass),
             Confidence: payload.Confidence,
             FreshnessAtMs: payload.FreshnessAtMs,
+            ExpiresAtMs: ResolveExpiry(payload, memoryClass),
             MemoryId: payload.MemoryId,
             SupersedesRecordId: payload.SupersedesRecordId));
 
@@ -107,15 +111,15 @@ public sealed class MemoryRulesFirstExtractor(MemoryPolicyEvaluator policy)
     {
         if (payload.IsExplicitRequest ||
             string.Equals(payload.TriggerType, "explicit-memory-request", StringComparison.OrdinalIgnoreCase))
-            return DurableExplicit;
+            return DurableFact;
 
         if (payload.HasVerifiedToolFinding || payload.HasAcceptedSubAgentFinding || payload.IsCompactionBoundary)
-            return DurableInferred;
+            return Evidence;
 
         if (string.Equals(payload.TriggerType, "turn-complete", StringComparison.OrdinalIgnoreCase))
-            return ConversationTrace;
+            return Trace;
 
-        return DurableInferred;
+        return DurableFact;
     }
 
     private static bool IsEphemeral(string content)
@@ -147,18 +151,35 @@ public sealed class MemoryRulesFirstExtractor(MemoryPolicyEvaluator policy)
         if (payload.Delete)
             return "tombstone";
 
-        if (memoryClass == ConversationTrace)
-            return ConversationTrace;
+        if (memoryClass == Trace)
+            return "conversation_trace";
 
         return kind == "record" ? "immutable-record" : "merge-document";
     }
 
     private static string ResolveRecallMode(MemoryCheckpointPayload payload, string memoryClass)
     {
-        if (memoryClass == ConversationTrace)
+        if (memoryClass == Trace)
             return "never";
 
+        if (memoryClass == Evidence)
+            return "searchable";
+
         return payload.RecallMode;
+    }
+
+    private static long? ResolveExpiry(MemoryCheckpointPayload payload, string memoryClass)
+    {
+        var freshnessAt = payload.FreshnessAtMs;
+        if (!freshnessAt.HasValue)
+            return null;
+
+        return memoryClass switch
+        {
+            Evidence => freshnessAt.Value + (long)EvidenceExpiry.TotalMilliseconds,
+            Trace => freshnessAt.Value + (long)TraceExpiry.TotalMilliseconds,
+            _ => null
+        };
     }
 
     private static string ResolveTitle(MemoryCheckpointPayload payload, string kind, string content)
@@ -238,7 +259,7 @@ public sealed class MemoryCurationEngine(SQLiteMemoryStore store, MemoryRulesFir
             RecallMode: c.RecallMode,
             Confidence: c.Confidence,
             FreshnessAtMs: c.FreshnessAtMs,
-            ExpiresAtMs: null,
+            ExpiresAtMs: c.ExpiresAtMs,
             SupersedesRecordId: c.SupersedesRecordId)).ToArray();
     }
 }

@@ -68,6 +68,55 @@ public sealed class MemoryPolicyGatesTests
     }
 
     [Fact]
+    public void ProposalGate_derives_default_expiry_for_evidence_and_trace()
+    {
+        var gate = new MemoryProposalGate();
+        var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+        var accepted = gate.Accept(
+        [
+            new MemoryProposal(
+                "append_record",
+                "evidence",
+                "event",
+                "travel-research",
+                "Hotel options",
+                "Found hotel options near Easton.",
+                "searchable",
+                "normal",
+                0.8,
+                now,
+                null,
+                null,
+                "one-off research"),
+            new MemoryProposal(
+                "append_record",
+                "trace",
+                "event",
+                "debug-step",
+                "Trace breadcrumb",
+                "Called web search tool.",
+                "never",
+                "normal",
+                0.6,
+                now,
+                null,
+                null,
+                "execution trace")
+        ],
+        "project:test",
+        "normal",
+        now);
+
+        var evidence = Assert.Single(accepted, x => x.MemoryClass == "evidence");
+        var trace = Assert.Single(accepted, x => x.MemoryClass == "trace");
+
+        Assert.Equal(now + (long)TimeSpan.FromDays(30).TotalMilliseconds, evidence.ExpiresAtMs);
+        Assert.Equal(now + (long)TimeSpan.FromHours(72).TotalMilliseconds, trace.ExpiresAtMs);
+        Assert.Equal("never", trace.RecallMode);
+    }
+
+    [Fact]
     public void RecallPlanGate_forces_automatic_mode_to_durable_fact_only()
     {
         var gate = new RecallPlanGate();
