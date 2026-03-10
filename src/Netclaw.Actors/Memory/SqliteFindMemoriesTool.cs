@@ -23,7 +23,9 @@ public sealed partial class SqliteFindMemoriesTool : NetclawTool<SqliteFindMemor
         [property: Description("Search query to find relevant memories")]
         string Query,
         [property: Description("Maximum number of results to return (default 5)")]
-        int? Limit = null);
+        int? Limit = null,
+        [property: Description("Set true to include expired evidence for audit/debug search")]
+        bool? IncludeStale = null);
 
     public SqliteFindMemoriesTool(SQLiteMemoryStore store, TimeProvider? timeProvider = null, ILogger<SqliteFindMemoriesTool>? logger = null)
     {
@@ -35,6 +37,7 @@ public sealed partial class SqliteFindMemoriesTool : NetclawTool<SqliteFindMemor
     protected override async Task<string> ExecuteAsync(Params args, ToolExecutionContext context, CancellationToken ct)
     {
         var limit = args.Limit is > 0 ? args.Limit.Value : 5;
+        var includeStale = args.IncludeStale ?? false;
         var sessionId = string.IsNullOrWhiteSpace(context.SessionId)
             ? "manual/tool"
             : context.SessionId!;
@@ -57,7 +60,7 @@ public sealed partial class SqliteFindMemoriesTool : NetclawTool<SqliteFindMemor
             domain,
             plan.MemoryClasses,
             limit,
-            allowExpiredEvidence: true,
+            allowExpiredEvidence: includeStale,
             ct);
 
         if (results.Count == 0)
@@ -79,7 +82,7 @@ public sealed partial class SqliteFindMemoriesTool : NetclawTool<SqliteFindMemor
         }
 
         sb.AppendLine($"Use get_memories(\"{string.Join(", ", results.Select(r => r.Kind == "record" ? $"rec:{r.Id}" : $"doc:{r.Id}"))}\") to load full content.");
-        _logger.LogInformation("SQLite memory find completed: query='{Query}', results={Count}", args.Query, results.Count);
+        _logger.LogInformation("SQLite memory find completed: query='{Query}', results={Count}, includeStale={IncludeStale}", args.Query, results.Count, includeStale);
         return sb.ToString().TrimEnd();
     }
 

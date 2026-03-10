@@ -1081,13 +1081,27 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         Command<MemoryObservationCompleted>(msg =>
         {
-            var accepted = _memoryProposalGate.Accept(
+            TurnLog().Info("memory_observation_sidecar_completed proposalCount={ProposalCount}", msg.Proposals.Count);
+            var gateResult = _memoryProposalGate.Evaluate(
                 msg.Proposals,
                 ResolveDomainFromSession(_sessionId.Value),
                 "normal",
                 NowMs());
+            var accepted = gateResult.MemoryOperations;
+            if (gateResult.IdentityUpdates.Count > 0)
+            {
+                TurnLog().Info(
+                    "memory_observation_identity_updates count={Count} titles={Titles}",
+                    gateResult.IdentityUpdates.Count,
+                    string.Join("|", gateResult.IdentityUpdates.Select(x => x.Title)));
+            }
             if (accepted.Count == 0)
+            {
+                TurnLog().Info("memory_observation_gate_result accepted=0 rejectedOrIgnored={RejectedCount}", msg.Proposals.Count);
                 return;
+            }
+
+            TurnLog().Info("memory_observation_gate_result accepted={AcceptedCount} rejectedOrIgnored={RejectedCount}", accepted.Count, Math.Max(0, msg.Proposals.Count - accepted.Count));
 
             EnqueueCheckpointFireAndForget(new MemoryCheckpointRequest(
                 SessionId: _sessionId.Value,
@@ -1102,7 +1116,10 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                     accepted)));
         });
 
-        Command<MemoryObservationFailed>(_ => { });
+        Command<MemoryObservationFailed>(msg =>
+        {
+            TurnLog().Warning("memory_observation_sidecar_failed reason={Reason}", msg.Reason);
+        });
 
         Command<JoinSession>(cmd =>
         {

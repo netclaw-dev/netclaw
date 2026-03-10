@@ -55,6 +55,14 @@ public sealed class SQLiteMemoryRecallCoordinator(
                     false),
                     fallbackRequest);
 
+            logger.LogInformation(
+                "memory_recall_plan_resolved mode={Mode} intent={Intent} classes={Classes} allowExpiredEvidence={AllowExpiredEvidence} searchTerms={SearchTerms}",
+                plan.Mode,
+                plan.Intent,
+                string.Join("|", plan.MemoryClasses),
+                plan.AllowExpiredEvidence,
+                string.Join("|", plan.SearchTerms));
+
             var searchQuery = string.Join(' ', plan.SearchTerms);
 
             var primary = await store.SearchByPlanAsync(
@@ -104,6 +112,7 @@ public sealed class SQLiteMemoryRecallCoordinator(
         }
         catch (Exception ex)
         {
+            logger.LogWarning(ex, "memory_recall_degraded reason={Reason}", ex.Message);
             return new AutomaticRecallResult([], true, ex.Message);
         }
     }
@@ -154,6 +163,14 @@ public sealed class SQLiteMemoryRecallCoordinator(
             MemorySidecarPromptBuilder.BuildRecallPlanningUserPrompt(plannerRequest),
             timeout,
             message => logger.LogWarning("Recall planner sidecar failed: {Message}", message));
+
+        if (plan is null)
+        {
+            logger.LogWarning(
+                "memory_recall_plan_fallback reason=sidecar_null_or_invalid session={SessionId} domain={Domain}",
+                request.SessionId,
+                domain);
+        }
 
         return _recallPlanGate.Clamp(plan, plannerRequest);
     }

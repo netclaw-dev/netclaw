@@ -52,12 +52,23 @@ Only `accepted` findings are enqueued into the memory checkpoint pipeline.
 
 ## Eval Execution
 
-Run the seeded memory quality tests:
+Run the provider-independent memory quality tests:
 
 ```bash
-dotnet test src/Netclaw.Actors.Tests/Netclaw.Actors.Tests.csproj --filter "FullyQualifiedName~SubAgentActorTests"
+dotnet test src/Netclaw.Actors.Tests/Netclaw.Actors.Tests.csproj --filter "FullyQualifiedName~MemoryRedesignedEvalSuiteTests|FullyQualifiedName~MemoryEvalSeedSuiteTests"
 dotnet test src/Netclaw.Cli.Tests/Netclaw.Cli.Tests.csproj --filter "FullyQualifiedName~MemoryCheckpointHealthDoctorCheckTests|FullyQualifiedName~DaemonClientMappingTests"
 ```
+
+Redesigned eval coverage now includes:
+
+- `formation_then_auto_recall`
+- `formation_then_intentional_search`
+- `evidence_vs_durable_separation`
+- `proposal_gate_rejection`
+- `soul_boundary`
+- `expiry_and_staleness`
+
+These suites are synthetic/sanitized and do not require live provider credentials.
 
 Run quality gate checks:
 

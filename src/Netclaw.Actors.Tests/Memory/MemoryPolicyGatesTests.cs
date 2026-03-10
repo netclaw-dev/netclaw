@@ -7,12 +7,12 @@ namespace Netclaw.Actors.Tests.Memory;
 public sealed class MemoryPolicyGatesTests
 {
     [Fact]
-    public void ProposalGate_accepts_durable_fact_and_evidence_but_blocks_identity_surface()
+    public void ProposalGate_accepts_durable_fact_and_evidence_but_blocks_non_identity_soul_promotions()
     {
         var gate = new MemoryProposalGate();
         var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
-        var accepted = gate.Accept(
+        var result = gate.Evaluate(
         [
             new MemoryProposal(
                 "upsert_document",
@@ -45,6 +45,20 @@ public sealed class MemoryPolicyGatesTests
             new MemoryProposal(
                 "upsert_document",
                 "durable_fact",
+                "assistant",
+                "self",
+                "Communication style",
+                "Prefer concise responses.",
+                "auto",
+                "normal",
+                0.9,
+                now,
+                null,
+                "identity_profile",
+                "standing communication preference"),
+            new MemoryProposal(
+                "upsert_document",
+                "durable_fact",
                 "user",
                 "self",
                 "Identity profile update",
@@ -61,10 +75,13 @@ public sealed class MemoryPolicyGatesTests
         "normal",
         now);
 
-        Assert.Equal(2, accepted.Count);
-        Assert.Contains(accepted, x => x.MemoryClass == "durable_fact" && x.Kind == "document");
-        Assert.Contains(accepted, x => x.MemoryClass == "evidence" && x.Kind == "record");
-        Assert.DoesNotContain(accepted, x => x.Title == "Identity profile update");
+        Assert.Equal(2, result.MemoryOperations.Count);
+        Assert.Contains(result.MemoryOperations, x => x.MemoryClass == "durable_fact" && x.Kind == "document");
+        Assert.Contains(result.MemoryOperations, x => x.MemoryClass == "evidence" && x.Kind == "record");
+        Assert.DoesNotContain(result.MemoryOperations, x => x.Title == "Identity profile update");
+
+        var identityUpdate = Assert.Single(result.IdentityUpdates);
+        Assert.Equal("Communication style", identityUpdate.Title);
     }
 
     [Fact]

@@ -56,6 +56,7 @@ public sealed class MemoryIndexContextLayer : IContextLayerProvider
                 Automatic recall injects durable_fact only.
                 Deliberate find_memories searches may return durable_fact plus evidence.
                 Trace data is excluded from normal search results.
+                Expired evidence is hidden from normal find_memories results unless explicitly requested for audit/debug review.
 
                 Use find_memories/get_memories when automatic recall is insufficient or the
                 user explicitly asks what you remember.

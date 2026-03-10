@@ -128,6 +128,59 @@ public sealed class SqliteMemoryToolsTests : IDisposable
         Assert.Contains("stale=true", result);
     }
 
+    [Fact]
+    public async Task FindMemories_hides_stale_evidence_unless_include_stale_is_true()
+    {
+        await _store.InitializeAsync();
+        var now = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
+
+        await _store.ApplyCurationBatchAsync(
+            "cp-3",
+            [
+                new SQLiteMemoryCurationOperation(
+                    Kind: "record",
+                    MemoryClass: "evidence",
+                    MemoryId: "rec-stale-find",
+                    AnchorCanonicalName: "stir trek",
+                    AnchorType: "event",
+                    Title: "Old venue note",
+                    Content: "Old parking instructions.",
+                    UpdateSemantics: "immutable-record",
+                    Domain: "project:slack",
+                    Sensitivity: "normal",
+                    RecallMode: "searchable",
+                    Confidence: 0.7,
+                    FreshnessAtMs: now - (long)TimeSpan.FromDays(30).TotalMilliseconds,
+                    ExpiresAtMs: now - (long)TimeSpan.FromDays(1).TotalMilliseconds)
+            ],
+            CancellationToken.None);
+
+        var tool = new SqliteFindMemoriesTool(_store, _timeProvider);
+
+        var normal = await tool.ExecuteAsync(
+            new Dictionary<string, object?>
+            {
+                ["Query"] = "stir trek parking",
+                ["Limit"] = 5
+            },
+            new ToolExecutionContext("slack/thread-1", sessionDirectory: null),
+            CancellationToken.None);
+
+        var debug = await tool.ExecuteAsync(
+            new Dictionary<string, object?>
+            {
+                ["Query"] = "stir trek parking",
+                ["Limit"] = 5,
+                ["IncludeStale"] = true
+            },
+            new ToolExecutionContext("slack/thread-1", sessionDirectory: null),
+            CancellationToken.None);
+
+        Assert.Equal("No memories found.", normal);
+        Assert.Contains("Old venue note", debug);
+        Assert.Contains("stale=true", debug);
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_baseDir))

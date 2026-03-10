@@ -179,11 +179,13 @@ public sealed class SQLiteMemoryStoreTests : IDisposable
             }
             catch (IOException) when (i < 7)
             {
-                Thread.Sleep(25 * (i + 1));
+                GC.Collect();
+                GC.WaitForPendingFinalizers();
             }
             catch (UnauthorizedAccessException) when (i < 7)
             {
-                Thread.Sleep(25 * (i + 1));
+                GC.Collect();
+                GC.WaitForPendingFinalizers();
             }
         }
 

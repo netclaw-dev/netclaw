@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Netclaw.Actors.Sessions;
 
 namespace Netclaw.Actors.Memory;
@@ -7,14 +8,25 @@ public sealed class MemoryProposalGate
 {
     private static readonly TimeSpan EvidenceExpiry = TimeSpan.FromDays(30);
     private static readonly TimeSpan TraceExpiry = TimeSpan.FromHours(72);
+    private static readonly Regex IdentityTitlePattern = new(
+        "\\b(name|tone|style|voice|persona|communication preference|response preference)\\b",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
     public IReadOnlyList<SQLiteMemoryCurationOperation> Accept(
         IReadOnlyList<MemoryProposal> proposals,
         string domain,
         string defaultSensitivity,
         long nowMs)
+        => Evaluate(proposals, domain, defaultSensitivity, nowMs).MemoryOperations;
+
+    public MemoryProposalGateResult Evaluate(
+        IReadOnlyList<MemoryProposal> proposals,
+        string domain,
+        string defaultSensitivity,
+        long nowMs)
     {
         var accepted = new List<SQLiteMemoryCurationOperation>();
+        var identityUpdates = new List<IdentityProfileUpdate>();
 
         foreach (var proposal in proposals)
         {
@@ -27,8 +39,17 @@ public sealed class MemoryProposalGate
             if (proposal.MemoryClass is not ("durable_fact" or "evidence" or "trace"))
                 continue;
 
-            if (proposal.TargetSurface == "identity_profile")
+            if (string.Equals(proposal.TargetSurface, "identity_profile", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!IsIdentityEligible(proposal))
+                    continue;
+
+                identityUpdates.Add(new IdentityProfileUpdate(
+                    proposal.Title,
+                    proposal.Content,
+                    proposal.Rationale));
                 continue;
+            }
 
             var sensitivity = string.IsNullOrWhiteSpace(proposal.Sensitivity)
                 ? defaultSensitivity
@@ -72,7 +93,7 @@ public sealed class MemoryProposalGate
                 SupersedesRecordId: null));
         }
 
-        return accepted;
+        return new MemoryProposalGateResult(accepted, identityUpdates);
     }
 
     private static string ResolveRecallMode(MemoryProposal proposal, string sensitivity)
@@ -101,6 +122,21 @@ public sealed class MemoryProposalGate
         };
     }
 
+    private static bool IsIdentityEligible(MemoryProposal proposal)
+    {
+        if (proposal.MemoryClass != "durable_fact")
+            return false;
+
+        if (!string.Equals(proposal.SubjectKind, "user", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(proposal.SubjectKind, "assistant", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(proposal.SubjectKind, "agent", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        var title = proposal.Title ?? string.Empty;
+        var rationale = proposal.Rationale ?? string.Empty;
+        return IdentityTitlePattern.IsMatch(title) || IdentityTitlePattern.IsMatch(rationale);
+    }
+
     private sealed record EvidenceEnvelope(
         string SubjectKind,
         string SubjectValue,
@@ -110,6 +146,15 @@ public sealed class MemoryProposalGate
         long? ExpiresAtMs,
         long? FreshUntilMs);
 }
+
+public sealed record IdentityProfileUpdate(
+    string Title,
+    string Content,
+    string? Rationale);
+
+public sealed record MemoryProposalGateResult(
+    IReadOnlyList<SQLiteMemoryCurationOperation> MemoryOperations,
+    IReadOnlyList<IdentityProfileUpdate> IdentityUpdates);
 
 public sealed class RecallPlanGate
 {
