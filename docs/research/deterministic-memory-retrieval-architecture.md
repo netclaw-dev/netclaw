@@ -35,10 +35,10 @@ The PoCs show that we can replace much of this with a deterministic pipeline.
 
 1. **Hard scope is system-owned**
    - Slack workspace, channel, DM participant, thread, and configuration define
-     the legal search boundary.
+      the legal search boundary.
 2. **Soft scope is conversation-owned**
-   - Thread title, active topic, prompt terms, and recent anchors define what
-     should be searched first.
+   - Thread title, active topic, prompt entities, speaker profile, and recent
+     anchors define what should be searched first.
 3. **Write time carries semantic cost**
    - Extract aliases, facets, anchors, and relations once when memory is formed.
 4. **Read time stays deterministic**
@@ -146,6 +146,21 @@ This layer answers:
 - what topic/project should narrow search?
 - should we look for ranked hits or bundle slots?
 
+### Primary Relevance Signals
+
+Not all soft-scope signals are equally strong.
+
+Recommended ordering:
+
+1. explicit named entities or proper nouns in the prompt
+2. speaker-specific profile and stable preferences
+3. current thread/topic/title
+4. recent active anchors in the session
+5. channel/workspace priors
+
+This means Slack metadata is often more useful as a permission/container
+boundary than as the main relevance signal.
+
 ### Practical Behavior
 
 - DM query about `TextForge`:
@@ -160,6 +175,24 @@ This layer answers:
   - hard scope: `project:signalr`
   - soft scope: `scope:ops`, `worker-b alerts`
   - mode: `ranked`
+
+### Generic Prompt Behavior
+
+Not every prompt deserves meaningful memory retrieval.
+
+Examples:
+
+- `what's the best way to find cheap flights`
+  - generic advice query
+  - low memory activation
+  - probably better served by world knowledge or live search
+- `what's the cheapest flight for me to Boston`
+  - named entity + first-person context
+  - medium to high memory activation
+  - likely relevant: origin airport, preferred airline
+
+The presence of proper nouns or named entities should be treated as a strong
+activation signal, but not the only one.
 
 ## Tier 2 - Cheap Candidate Selection In SQLite
 
@@ -297,6 +330,9 @@ This means DMs need:
 - narrow soft scope
 - topic drift handling over time
 
+DMs should heavily prefer speaker-profile memories and explicit named entities
+over generic channel-like priors.
+
 ## Topic Drift And Thread Titles
 
 Thread titles or topic labels are useful as soft-scope hints.
@@ -329,6 +365,10 @@ Examples:
   - family/preferences
 
 These learned profiles should bias retrieval, not replace hard scope.
+
+In practice, user-profile memory is often a stronger retrieval prior than
+channel history, especially for stable preferences, habits, and recurring
+personal contexts.
 
 ## Write-Time Metadata Responsibilities
 
@@ -397,6 +437,28 @@ This is one of the biggest advantages over a planner-sidecar hot path.
 - add deterministic request planning
 - add cheap candidate selection
 - run deterministic reranker behind a feature flag
+
+### First Minimal Production Slice
+
+Before replacing the current hot path, implement only the deterministic request
+planning layer and log its outputs.
+
+That slice should:
+
+- resolve hard scope from runtime metadata
+- derive soft scopes from prompt/title/entities
+- choose retrieval mode (`ranked` vs `bundle`)
+- emit lexical terms, anchor hints, and facets
+- log the request plan for offline analysis
+
+This gives real production signal without changing recall behavior yet.
+
+Success criteria for the first slice:
+
+- stable hard-scope selection in channels and DMs
+- entity activation for prompts like `TextForge`, `Stir Trek`, `IAH`, and `United`
+- correct mode selection for direct vs composite prompts
+- low-noise request plans on generic prompts that should not strongly activate memory
 
 ### Phase 2
 
