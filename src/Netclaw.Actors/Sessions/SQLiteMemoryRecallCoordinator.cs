@@ -156,7 +156,7 @@ public sealed class SQLiteMemoryRecallCoordinator(
             8,
             maxItems);
 
-        var timeout = TimeSpan.FromSeconds(15);
+        var timeout = TimeSpan.FromSeconds(Math.Max(1, _sessionConfig.SidecarLlmTimeoutSeconds));
         var plan = await SessionSidecarRunner.RunJsonAsync<RecallQueryPlan>(
             clientProvider.GetClient(Configuration.ModelRole.Compaction),
             MemorySidecarPromptBuilder.BuildRecallPlanningSystemPrompt(),
@@ -170,6 +170,17 @@ public sealed class SQLiteMemoryRecallCoordinator(
                 "memory_recall_plan_fallback reason=sidecar_null_or_invalid session={SessionId} domain={Domain}",
                 request.SessionId,
                 domain);
+
+            return _recallPlanGate.Clamp(new RecallQueryPlan(
+                    "automatic",
+                    "fallback",
+                    request.RecentEntities ?? [],
+                    [],
+                    FallbackSearchTerms(effectiveQuery, request.RecentUserMessages),
+                    ["durable_fact"],
+                    maxItems,
+                    false),
+                plannerRequest);
         }
 
         return _recallPlanGate.Clamp(plan, plannerRequest);

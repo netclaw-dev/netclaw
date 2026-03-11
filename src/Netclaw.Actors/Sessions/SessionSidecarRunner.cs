@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Microsoft.Extensions.AI;
 
 namespace Netclaw.Actors.Sessions;
@@ -29,7 +30,9 @@ internal static class SessionSidecarRunner
                 return default;
             }
 
-            return JsonSerializer.Deserialize<T>(text, new JsonSerializerOptions
+            var normalized = NormalizeJsonPayload<T>(text);
+
+            return JsonSerializer.Deserialize<T>(normalized, new JsonSerializerOptions
             {
                 PropertyNameCaseInsensitive = true
             });
@@ -39,5 +42,51 @@ internal static class SessionSidecarRunner
             logWarning($"Sidecar failed: {ex.Message}");
             return default;
         }
+    }
+
+    private static string NormalizeJsonPayload<T>(string raw)
+    {
+        var text = raw.Trim();
+        if (text.StartsWith("```", StringComparison.Ordinal))
+        {
+            var firstNewline = text.IndexOf('\n', StringComparison.Ordinal);
+            if (firstNewline >= 0)
+            {
+                text = text[(firstNewline + 1)..];
+                var fence = text.LastIndexOf("```", StringComparison.Ordinal);
+                if (fence >= 0)
+                    text = text[..fence];
+            }
+        }
+
+        text = text.Trim();
+
+        if (typeof(T) == typeof(IReadOnlyList<MemoryProposal>) || typeof(T) == typeof(List<MemoryProposal>))
+        {
+            var node = JsonNode.Parse(text);
+            if (node is JsonObject obj)
+            {
+                foreach (var key in new[] { "proposals", "items", "memories" })
+                {
+                    if (obj[key] is JsonArray arr)
+                        return arr.ToJsonString();
+                }
+            }
+        }
+
+        if (typeof(T) == typeof(RecallQueryPlan))
+        {
+            var node = JsonNode.Parse(text);
+            if (node is JsonObject obj)
+            {
+                foreach (var key in new[] { "plan", "queryPlan", "recallPlan" })
+                {
+                    if (obj[key] is JsonObject inner)
+                        return inner.ToJsonString();
+                }
+            }
+        }
+
+        return text;
     }
 }
