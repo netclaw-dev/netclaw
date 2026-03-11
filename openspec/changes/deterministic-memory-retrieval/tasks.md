@@ -1,8 +1,8 @@
 ## 1. Retrieval planning foundation
 
-- [ ] 1.1 Add deterministic retrieval planning types and runtime hard-scope resolution for automatic recall.
-- [ ] 1.2 Implement conversation-owned soft-scope derivation, retrieval-mode selection, and request-plan logging behind a feature flag.
-- [ ] 1.3 Add structured observability and degraded reason codes for scope resolution, planning, and fallback stages.
+- [x] 1.1 Add deterministic retrieval planning types and runtime hard-scope resolution for automatic recall.
+- [x] 1.2 Implement conversation-owned soft-scope derivation, retrieval-mode selection, and request-plan logging behind a feature flag.
+- [x] 1.3 Add structured observability and degraded reason codes for scope resolution, planning, and fallback stages.
 
 ## 2. Write-time retrieval metadata
 

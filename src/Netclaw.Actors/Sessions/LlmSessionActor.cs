@@ -1318,8 +1318,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             ? "-"
             : string.Join(",", _activeRecall.Items.Select(i => i.Id));
         TurnLog().Info(
-            "turn_memory_recall degraded={Degraded} durationMs={DurationMs} itemCount={ItemCount} itemIds={ItemIds}",
+            "turn_memory_recall degraded={Degraded} stage={Stage} durationMs={DurationMs} itemCount={ItemCount} itemIds={ItemIds}",
             _activeRecall.Degraded,
+            _activeRecall.DegradeStage ?? "-",
             recallSw.ElapsedMilliseconds,
             _activeRecall.Items.Count,
             recallIds);
@@ -1379,7 +1380,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 .Where(x => !string.IsNullOrWhiteSpace(x))
                 .TakeLast(3)
                 .ToArray(),
-            RecentEntities: []);
+            RecentEntities: [],
+            HardScopeOverride: ResolveDomainFromSession(_sessionId.Value),
+            ThreadTitle: _state.Title);
 
         try
         {
@@ -1390,7 +1393,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         }
         catch (Exception ex)
         {
-            return new AutomaticRecallResult([], true, ex.Message);
+            return new AutomaticRecallResult([], true, ex.Message, "resolution");
         }
     }
 

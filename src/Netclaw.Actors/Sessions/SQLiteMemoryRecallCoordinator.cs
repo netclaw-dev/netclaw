@@ -18,11 +18,36 @@ public sealed class SQLiteMemoryRecallCoordinator(
     private readonly SidecarRecallPlanner _sidecarPlanner = sidecarPlanner ?? new SidecarRecallPlanner();
     private readonly RecallPlanGate _recallPlanGate = recallPlanGate ?? new RecallPlanGate();
     private readonly SessionConfig _sessionConfig = sessionConfig ?? new SessionConfig();
+    private readonly DeterministicRetrievalRequestPlanner _deterministicPlanner = new();
 
     public async Task<AutomaticRecallResult> RecallAsync(AutomaticRecallRequest request, CancellationToken ct = default)
     {
         try
         {
+            if (_sessionConfig.DeterministicRetrievalEnabled)
+            {
+                DeterministicRetrievalRequestPlan deterministicPlan;
+                try
+                {
+                    deterministicPlan = _deterministicPlanner.Plan(request);
+                }
+                catch (Exception ex)
+                {
+                    logger.LogWarning(ex, "memory_recall_degraded stage=planning reason={Reason}", ex.Message);
+                    return new AutomaticRecallResult([], true, ex.Message, "planning");
+                }
+
+                logger.LogInformation(
+                    "memory_retrieval_request_plan hardScope={HardScope} mode={Mode} candidateLimit={CandidateLimit} facets={Facets} softScopes={SoftScopes} anchorHints={AnchorHints} lexicalTerms={LexicalTerms}",
+                    deterministicPlan.HardScope,
+                    deterministicPlan.RetrievalMode,
+                    deterministicPlan.CandidateLimit,
+                    string.Join("|", deterministicPlan.Facets),
+                    string.Join("|", deterministicPlan.SoftScopes),
+                    string.Join("|", deterministicPlan.AnchorHints),
+                    string.Join("|", deterministicPlan.LexicalTerms));
+            }
+
             if (!_sessionConfig.MemorySidecarsEnabled)
                 return new AutomaticRecallResult([]);
 
@@ -112,8 +137,8 @@ public sealed class SQLiteMemoryRecallCoordinator(
         }
         catch (Exception ex)
         {
-            logger.LogWarning(ex, "memory_recall_degraded reason={Reason}", ex.Message);
-            return new AutomaticRecallResult([], true, ex.Message);
+            logger.LogWarning(ex, "memory_recall_degraded stage=execution reason={Reason}", ex.Message);
+            return new AutomaticRecallResult([], true, ex.Message, "execution");
         }
     }
 
