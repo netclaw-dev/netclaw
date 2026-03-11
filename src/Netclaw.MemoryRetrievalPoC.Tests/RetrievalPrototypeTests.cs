@@ -194,4 +194,55 @@ public sealed class RetrievalPrototypeTests : IDisposable
         Assert.Contains(opsCandidates, x => x.DocumentId == "doc-beta-dashboard");
         Assert.DoesNotContain(opsCandidates, x => x.DocumentId == "doc-secret-token");
     }
+
+    [Fact]
+    public async Task End_to_end_trace_shows_plan_candidates_ranked_hits_and_bundle_for_stirtrek_trip()
+    {
+        await _store.InitializeAndSeedAsync(_fixture);
+
+        var signalrDocuments = await _store.LoadDocumentsAsync("project:signalr");
+        var userDocuments = await _store.LoadDocumentsAsync("user:aaron");
+        var allDocuments = signalrDocuments.Concat(userDocuments).ToArray();
+        var signalrEdges = await _store.LoadEdgesAsync("project:signalr");
+        var userEdges = await _store.LoadEdgesAsync("user:aaron");
+        var allEdges = signalrEdges.Concat(userEdges).ToArray();
+
+        var planner = new ScopeRequestPlanner(allDocuments, allEdges);
+        var selector = new CandidateSelector();
+
+        const string prompt = "I'm speaking at Stir Trek 2026 - I fly out of IAH. What's the best flight / hotel combination for me? Closest to the venue preferably. And do you think I'll need a rental car?";
+        var plan = planner.Plan(new QueryContext(
+            Surface: "slack_dm",
+            Prompt: prompt,
+            UserDomain: "user:aaron",
+            ChannelDomain: null,
+            ThreadTitle: "Stir Trek 2026 travel planning"));
+
+        var candidates = selector.Select(plan, allDocuments);
+        var candidateEdges = allEdges.Where(e => candidates.Any(d => d.AnchorId == e.FromAnchorId || d.AnchorId == e.ToAnchorId)).ToArray();
+        var engine = new DeterministicRecallEngine(candidates, candidateEdges);
+        var ranked = engine.Search(prompt, 4);
+        var bundle = engine.SearchBundle(prompt);
+        var explanation = engine.Explain(prompt, 4);
+
+        var sb = new StringBuilder();
+        sb.AppendLine($"HARD_SCOPE {plan.HardScope}");
+        sb.AppendLine($"SOFT_SCOPES [{string.Join(", ", plan.SoftScopes)}]");
+        sb.AppendLine($"MODE {plan.RetrievalMode}");
+        sb.AppendLine($"FACETS [{string.Join(", ", plan.Facets)}]");
+        sb.AppendLine($"ANCHOR_HINTS [{string.Join(", ", plan.AnchorHints)}]");
+        sb.AppendLine($"CANDIDATES [{string.Join(", ", candidates.Select(x => x.DocumentId))}]");
+        sb.AppendLine("RANKED");
+        foreach (var hit in ranked)
+            sb.AppendLine($"- {hit.DocumentId} score={hit.Score:F1} reasons=[{string.Join(", ", hit.Reasons)}]");
+        sb.AppendLine($"BUNDLE [{string.Join(", ", bundle.Slots.Select(x => x.Key + "=" + x.Value.DocumentId))}]");
+        sb.AppendLine("EXPLAIN_FACETS");
+        sb.AppendLine($"- [{string.Join(", ", explanation.Facets)}]");
+
+        Assert.Contains("HARD_SCOPE user:aaron", sb.ToString(), StringComparison.Ordinal);
+        Assert.Contains("MODE bundle", sb.ToString(), StringComparison.Ordinal);
+        Assert.Contains("doc-stirtrek-travel-plan", sb.ToString(), StringComparison.Ordinal);
+        Assert.Contains("preferred_airline=doc-travel-airline", sb.ToString(), StringComparison.Ordinal);
+        Assert.Contains("origin_airport=doc-travel-origin", sb.ToString(), StringComparison.Ordinal);
+    }
 }
