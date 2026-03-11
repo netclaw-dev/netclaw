@@ -255,6 +255,8 @@ public sealed class MemoryCurationEngine(SQLiteMemoryStore store, MemoryRulesFir
             Content: c.Content,
             AliasesJson: null,
             FacetsJson: null,
+            SlotsJson: null,
+            Relations: null,
             UpdateSemantics: c.UpdateSemantics,
             Domain: c.Domain,
             Sensitivity: c.Sensitivity,

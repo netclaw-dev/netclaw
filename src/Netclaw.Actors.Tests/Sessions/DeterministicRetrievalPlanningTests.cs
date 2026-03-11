@@ -69,4 +69,51 @@ public sealed class DeterministicRetrievalPlanningTests
         Assert.False(result.Degraded);
         Assert.Null(result.DegradeStage);
     }
+
+    [Fact]
+    public async Task Coordinator_returns_ranked_candidates_from_deterministic_path()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "netclaw-deterministic-candidate-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        var store = new SQLiteMemoryStore(Path.Combine(dir, "memory.db"), TimeProvider.System);
+        await store.InitializeAsync();
+
+        var anchor = store.CreateDefaultAnchor("textforge-pricing-model", "user:aaron");
+        var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+        await store.UpsertDocumentAsync(new SQLiteMemoryDocument(
+            DocumentId: "doc-textforge-pricing",
+            Anchor: anchor,
+            MemoryClass: "durable_fact",
+            Title: "TextForge Pricing Model",
+            MarkdownBody: "TextForge uses a monthly subscription with a discounted annual plan.",
+            AliasesJson: "[\"textforge\",\"pricing model\"]",
+            FacetsJson: "[\"project_fact\"]",
+            SlotsJson: null,
+            UpdateSemantics: "merge-document",
+            Domain: "user:aaron",
+            Sensitivity: "normal",
+            RecallMode: "auto",
+            Confidence: 0.9,
+            FreshnessAtMs: now,
+            ExpiresAtMs: null,
+            CreatedAtMs: now,
+            UpdatedAtMs: now));
+
+        var coordinator = new SQLiteMemoryRecallCoordinator(
+            store,
+            NullLogger<SQLiteMemoryRecallCoordinator>.Instance,
+            sessionConfig: new SessionConfig { DeterministicRetrievalEnabled = true, MemorySidecarsEnabled = false });
+
+        var result = await coordinator.RecallAsync(new AutomaticRecallRequest(
+            SessionId: "signalr/thread-4",
+            Query: "What's the pricing model for TextForge?",
+            RecentUserMessages: ["What's the pricing model for TextForge?"],
+            MaxItems: 3,
+            HardScopeOverride: "user:aaron",
+            ThreadTitle: "Product planning"));
+
+        Assert.False(result.Degraded);
+        Assert.Contains(result.Items, x => x.Id == "doc-textforge-pricing");
+    }
 }

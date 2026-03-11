@@ -136,7 +136,7 @@ def hydrate_recall_contents(conn, recall_ids):
 
 
 RE_RECALL = re.compile(
-    r"turn_memory_recall\s+degraded=(?P<degraded>\S+)\s+durationMs=(?P<duration>\d+)\s+itemCount=(?P<count>\d+)\s+itemIds=(?P<ids>\S+)"
+    r"turn_memory_recall\s+degraded=(?P<degraded>\S+)(?:\s+stage=(?P<stage>\S+))?\s+durationMs=(?P<duration>\d+)\s+itemCount=(?P<count>\d+)\s+itemIds=(?P<ids>\S+)"
 )
 
 RE_ENQUEUE = re.compile(
@@ -161,6 +161,7 @@ def parse_log_metrics(log_text):
             recall.append(
                 {
                     "degraded": m.group("degraded").lower() == "true",
+                    "stage": m.group("stage"),
                     "durationMs": int(m.group("duration")),
                     "itemCount": int(m.group("count")),
                     "itemIds": ids,

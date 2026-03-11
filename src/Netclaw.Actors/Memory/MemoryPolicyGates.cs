@@ -90,6 +90,8 @@ public sealed class MemoryProposalGate
                 Content: content,
                 AliasesJson: SerializeStringList(proposal.Aliases),
                 FacetsJson: SerializeStringList(proposal.Facets),
+                SlotsJson: SerializeSlots(proposal),
+                Relations: BuildRelations(proposal),
                 UpdateSemantics: proposal.MemoryClass == "trace"
                     ? "conversation_trace"
                     : proposal.Operation == "append_record" ? "immutable-record" : "merge-document",
@@ -170,6 +172,37 @@ public sealed class MemoryProposalGate
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
         return cleaned.Length == 0 ? null : JsonSerializer.Serialize(cleaned);
+    }
+
+    private static string? SerializeSlots(MemoryProposal proposal)
+    {
+        if (proposal.MemoryClass != "durable_fact")
+            return null;
+
+        return SerializeStringList(proposal.Slots);
+    }
+
+    private static IReadOnlyList<SQLiteMemoryRelationOperation>? BuildRelations(MemoryProposal proposal)
+    {
+        if (proposal.MemoryClass != "durable_fact" || proposal.Confidence < 0.9)
+            return null;
+
+        var relations = proposal.Relations ?? [];
+        var accepted = relations
+            .Where(r => r is not null)
+            .Where(r => !string.IsNullOrWhiteSpace(r.RelationType))
+            .Where(r => r.TargetAnchor is not null
+                && !string.IsNullOrWhiteSpace(r.TargetAnchor.CanonicalName)
+                && !string.IsNullOrWhiteSpace(r.TargetAnchor.AnchorType))
+            .Take(3)
+            .Select(r => new SQLiteMemoryRelationOperation(
+                RelationType: r.RelationType.Trim(),
+                TargetCanonicalName: r.TargetAnchor.CanonicalName.Trim(),
+                TargetAnchorType: r.TargetAnchor.AnchorType.Trim(),
+                Confidence: Math.Clamp(proposal.Confidence, 0.0, 1.0)))
+            .ToArray();
+
+        return accepted.Length == 0 ? null : accepted;
     }
 
     private sealed record EvidenceEnvelope(

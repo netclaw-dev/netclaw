@@ -19,6 +19,7 @@ public sealed class SQLiteMemoryRecallCoordinator(
     private readonly RecallPlanGate _recallPlanGate = recallPlanGate ?? new RecallPlanGate();
     private readonly SessionConfig _sessionConfig = sessionConfig ?? new SessionConfig();
     private readonly DeterministicRetrievalRequestPlanner _deterministicPlanner = new();
+    private readonly DeterministicCandidateSelector _candidateSelector = new();
 
     public async Task<AutomaticRecallResult> RecallAsync(AutomaticRecallRequest request, CancellationToken ct = default)
     {
@@ -46,6 +47,36 @@ public sealed class SQLiteMemoryRecallCoordinator(
                     string.Join("|", deterministicPlan.SoftScopes),
                     string.Join("|", deterministicPlan.AnchorHints),
                     string.Join("|", deterministicPlan.LexicalTerms));
+
+                var rawCandidates = await store.SearchByPlanAsync(
+                    deterministicPlan.LexicalTerms.Count > 0 ? deterministicPlan.LexicalTerms : [request.Query],
+                    deterministicPlan.HardScope,
+                    deterministicPlan.AllowedMemoryClasses,
+                    deterministicPlan.CandidateLimit,
+                    allowExpiredEvidence: false,
+                    ct);
+
+                var candidates = _candidateSelector.Select(deterministicPlan, rawCandidates);
+                logger.LogInformation(
+                    "memory_retrieval_candidate_selection hardScope={HardScope} rawCount={RawCount} selectedCount={SelectedCount} ids={Ids}",
+                    deterministicPlan.HardScope,
+                    rawCandidates.Count,
+                    candidates.Count,
+                    string.Join("|", candidates.Select(x => x.Id)));
+
+                var deterministicItems = candidates
+                    .OrderByDescending(RecallRank)
+                    .Take(request.MaxItems <= 0 ? 3 : request.MaxItems)
+                    .Select(d => new AutomaticRecallItem(
+                        d.Id,
+                        d.Title,
+                        d.Content,
+                        d.Domain,
+                        d.Sensitivity,
+                        RecallRank(d)))
+                    .ToArray();
+
+                return new AutomaticRecallResult(deterministicItems);
             }
 
             if (!_sessionConfig.MemorySidecarsEnabled)
