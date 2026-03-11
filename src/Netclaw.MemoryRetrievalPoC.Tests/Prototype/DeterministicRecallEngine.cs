@@ -22,7 +22,7 @@ internal sealed class DeterministicRecallEngine
     ];
     private static readonly HashSet<string> TravelIntentTerms =
     [
-        "travel", "trip", "flight", "fly", "hotel", "rental", "car", "airport", "airline", "book", "boston", "columbus", "stir", "trek"
+        "travel", "trip", "flight", "fly", "hotel", "rental", "car", "airport", "airline", "book"
     ];
 
     private readonly IReadOnlyList<IndexedDocument> _documents;
@@ -380,7 +380,7 @@ internal sealed class DeterministicRecallEngine
             var markers = MarkerRegex.Matches(prompt).Select(x => x.Value).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
             var tokens = Tokenize(prompt).ToArray();
             var bigrams = MakeBigrams(tokens).ToArray();
-            var facets = InferFacets(prompt, prompt, prompt).ToArray();
+            var facets = InferQueryFacets(tokens, bigrams).ToArray();
             return new QueryFeatures(markers, tokens, bigrams, facets);
         }
     }
@@ -590,22 +590,57 @@ internal sealed class DeterministicRecallEngine
 
     private static IReadOnlyList<string> InferSlots(IndexedDocument document)
     {
-        var text = (document.AnchorId + " " + document.Title).ToLowerInvariant();
+        var text = (document.AnchorId + " " + document.Title + " " + string.Join(' ', document.Facets)).ToLowerInvariant();
         var slots = new List<string>();
 
-        if (text.Contains("airport", StringComparison.Ordinal) || text.Contains("iah", StringComparison.Ordinal))
+        if (text.Contains("airport", StringComparison.Ordinal) || text.Contains("iah", StringComparison.Ordinal) || text.Contains("origin", StringComparison.Ordinal))
             slots.Add("origin_airport");
 
-        if (text.Contains("airline", StringComparison.Ordinal) || text.Contains("united", StringComparison.Ordinal))
+        if (text.Contains("airline", StringComparison.Ordinal) || text.Contains("united", StringComparison.Ordinal) || text.Contains("preferred", StringComparison.Ordinal))
             slots.Add("preferred_airline");
 
-        if (text.Contains("travel recommendation", StringComparison.Ordinal) || text.Contains("hotel", StringComparison.Ordinal) || text.Contains("rental car", StringComparison.Ordinal))
+        if (text.Contains("travel recommendation", StringComparison.Ordinal) || text.Contains("hotel", StringComparison.Ordinal) || text.Contains("rental car", StringComparison.Ordinal) || text.Contains("trip_planning", StringComparison.Ordinal))
             slots.Add("trip_plan");
 
-        if (text.Contains("venue area", StringComparison.Ordinal) || text.Contains("downtown", StringComparison.Ordinal) || text.Contains("easton", StringComparison.Ordinal))
+        if (text.Contains("venue area", StringComparison.Ordinal) || text.Contains("downtown", StringComparison.Ordinal) || text.Contains("easton", StringComparison.Ordinal) || text.Contains("venue", StringComparison.Ordinal))
             slots.Add("venue_area");
 
         return slots;
+    }
+
+    private static IEnumerable<string> InferQueryFacets(IReadOnlyList<string> tokens, IReadOnlyList<string> bigrams)
+    {
+        var joined = string.Join(' ', tokens.Concat(bigrams));
+
+        if (joined.Contains("airport", StringComparison.Ordinal)
+            || joined.Contains("airline", StringComparison.Ordinal)
+            || joined.Contains("flight", StringComparison.Ordinal)
+            || joined.Contains("fly", StringComparison.Ordinal)
+            || joined.Contains("trip", StringComparison.Ordinal)
+            || joined.Contains("travel", StringComparison.Ordinal)
+            || joined.Contains("book flight", StringComparison.Ordinal))
+            yield return "travel_profile";
+
+        if (joined.Contains("hotel", StringComparison.Ordinal)
+            || joined.Contains("rental car", StringComparison.Ordinal)
+            || joined.Contains("stir trek", StringComparison.Ordinal)
+            || joined.Contains("downtown columbu", StringComparison.Ordinal)
+            || joined.Contains("venue", StringComparison.Ordinal))
+            yield return "trip_planning";
+
+        if (joined.Contains("queue", StringComparison.Ordinal)
+            || joined.Contains("backlog", StringComparison.Ordinal)
+            || joined.Contains("control", StringComparison.Ordinal)
+            || joined.Contains("last time", StringComparison.Ordinal)
+            || joined.Contains("incident", StringComparison.Ordinal))
+            yield return "incident_recovery";
+
+        if (joined.Contains("rollout", StringComparison.Ordinal)
+            || joined.Contains("precaution", StringComparison.Ordinal)
+            || joined.Contains("wobble", StringComparison.Ordinal)
+            || joined.Contains("deploy", StringComparison.Ordinal)
+            || joined.Contains("feature flag", StringComparison.Ordinal))
+            yield return "rollout_guardrail";
     }
 
     private static IReadOnlyDictionary<string, List<NeighborEdge>> BuildInferredNeighbors(
