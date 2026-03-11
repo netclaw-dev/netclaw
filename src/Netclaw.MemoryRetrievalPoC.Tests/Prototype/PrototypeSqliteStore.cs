@@ -163,9 +163,10 @@ internal sealed class PrototypeSqliteStore : IDisposable
 
         await using var cmd = conn.CreateCommand();
         cmd.CommandText = """
-            SELECT document_id, anchor_id, title, markdown_body, memory_class, domain, sensitivity, recall_mode, confidence
-            FROM memory_documents
-            WHERE domain = $domain AND recall_mode = 'auto' AND sensitivity != 'secret';
+            SELECT d.document_id, d.anchor_id, a.canonical_name, d.title, d.markdown_body, d.memory_class, d.domain, d.sensitivity, d.recall_mode, d.confidence
+            FROM memory_documents d
+            INNER JOIN memory_anchors a ON a.anchor_id = d.anchor_id
+            WHERE d.domain = $domain AND d.recall_mode = 'auto' AND d.sensitivity != 'secret';
             """;
         cmd.Parameters.AddWithValue("$domain", domain);
 
@@ -182,7 +183,8 @@ internal sealed class PrototypeSqliteStore : IDisposable
                 reader.GetString(5),
                 reader.GetString(6),
                 reader.GetString(7),
-                reader.GetDouble(8)));
+                reader.GetString(8),
+                reader.GetDouble(9)));
         }
 
         return docs;

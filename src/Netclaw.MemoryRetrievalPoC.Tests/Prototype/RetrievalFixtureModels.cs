@@ -61,6 +61,7 @@ internal sealed record RetrievalCase(
 internal sealed record RetrievedDocument(
     string DocumentId,
     string AnchorId,
+    string CanonicalName,
     string Title,
     string Body,
     string MemoryClass,

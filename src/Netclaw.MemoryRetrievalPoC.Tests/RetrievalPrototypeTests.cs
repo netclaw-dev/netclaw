@@ -156,4 +156,42 @@ public sealed class RetrievalPrototypeTests : IDisposable
         Assert.Contains("incident_recovery", opsChannel.Facets);
         Assert.Contains(opsChannel.SoftScopes, x => x.Contains("worker-b", StringComparison.OrdinalIgnoreCase) || x.Contains("ops", StringComparison.OrdinalIgnoreCase));
     }
+
+    [Fact]
+    public async Task Candidate_selector_filters_corpus_before_reranking()
+    {
+        await _store.InitializeAndSeedAsync(_fixture);
+
+        var signalrDocuments = await _store.LoadDocumentsAsync("project:signalr");
+        var userDocuments = await _store.LoadDocumentsAsync("user:aaron");
+        var allDocuments = signalrDocuments.Concat(userDocuments).ToArray();
+        var signalrEdges = await _store.LoadEdgesAsync("project:signalr");
+        var userEdges = await _store.LoadEdgesAsync("user:aaron");
+        var allEdges = signalrEdges.Concat(userEdges).ToArray();
+        var planner = new ScopeRequestPlanner(allDocuments, allEdges);
+        var selector = new CandidateSelector();
+
+        var dmTextForge = planner.Plan(new QueryContext(
+            Surface: "slack_dm",
+            Prompt: "What's the pricing model for TextForge?",
+            UserDomain: "user:aaron",
+            ChannelDomain: null,
+            ThreadTitle: "Product planning"));
+
+        var dmCandidates = selector.Select(dmTextForge, userDocuments);
+        Assert.Contains(dmCandidates, x => x.DocumentId == "doc-textforge-pricing");
+        Assert.DoesNotContain(dmCandidates, x => x.DocumentId == "doc-travel-origin");
+
+        var opsPlan = planner.Plan(new QueryContext(
+            Surface: "slack_channel",
+            Prompt: "The queue is piling up again. What did we do last time to get backlog under control?",
+            UserDomain: "user:aaron",
+            ChannelDomain: "project:signalr",
+            ThreadTitle: "worker-b alerts"));
+
+        var opsCandidates = selector.Select(opsPlan, signalrDocuments);
+        Assert.Contains(opsCandidates, x => x.DocumentId == "doc-beta-recovery");
+        Assert.Contains(opsCandidates, x => x.DocumentId == "doc-beta-dashboard");
+        Assert.DoesNotContain(opsCandidates, x => x.DocumentId == "doc-secret-token");
+    }
 }
