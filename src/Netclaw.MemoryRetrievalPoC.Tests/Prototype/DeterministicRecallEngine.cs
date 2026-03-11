@@ -1,0 +1,364 @@
+using System.Text.RegularExpressions;
+
+namespace Netclaw.MemoryRetrievalPoC.Tests.Prototype;
+
+internal sealed class DeterministicRecallEngine
+{
+    private static readonly Regex MarkerRegex = new("\\b[A-Z][A-Z0-9_]{2,}\\b", RegexOptions.Compiled);
+    private static readonly Regex TokenRegex = new("[A-Za-z0-9][A-Za-z0-9_-]*", RegexOptions.Compiled);
+    private static readonly HashSet<string> StopWords =
+    [
+        "a", "an", "and", "again", "about", "any", "are", "at", "be", "before", "did", "do", "does", "for", "from", "get",
+        "how", "i", "if", "in", "into", "is", "it", "last", "of", "on", "only", "or", "our", "out", "reply", "sentence", "so",
+        "should", "the", "there", "time", "to", "up", "use", "usually", "we", "what", "when", "where", "which", "with", "you"
+    ];
+    private static readonly HashSet<string> ActionIntentTerms =
+    [
+        "precaution", "agree", "wobble", "restart", "recover", "recovery", "backlog", "control", "fix", "mitigate", "procedure", "incident", "spike", "queue"
+    ];
+    private static readonly HashSet<string> LookupIntentTerms =
+    [
+        "dashboard", "where", "url", "metrics", "chart", "airport", "airline"
+    ];
+
+    private readonly IReadOnlyList<IndexedDocument> _documents;
+    private readonly IReadOnlyDictionary<string, List<Posting>> _postings;
+    private readonly IReadOnlyDictionary<string, double> _idf;
+    private readonly TermTrie _trie;
+    private readonly IReadOnlyDictionary<string, List<RetrievedEdge>> _edgesByAnchor;
+
+    public DeterministicRecallEngine(IReadOnlyList<RetrievedDocument> documents, IReadOnlyList<RetrievedEdge> edges)
+    {
+        _documents = documents.Select(IndexedDocument.Create).ToArray();
+        _edgesByAnchor = edges
+            .GroupBy(x => x.FromAnchorId, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(x => x.Key, x => x.ToList(), StringComparer.OrdinalIgnoreCase);
+
+        var postings = new Dictionary<string, List<Posting>>(StringComparer.OrdinalIgnoreCase);
+        var trie = new TermTrie();
+        var documentFrequency = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var document in _documents)
+        {
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            void addTerms(IEnumerable<string> terms, PostingField field)
+            {
+                foreach (var term in terms)
+                {
+                    if (!postings.TryGetValue(term, out var list))
+                    {
+                        list = [];
+                        postings[term] = list;
+                        trie.Add(term);
+                    }
+
+                    list.Add(new Posting(document.DocumentId, document.AnchorId, field));
+                    if (seen.Add(term))
+                        documentFrequency[term] = documentFrequency.TryGetValue(term, out var current) ? current + 1 : 1;
+                }
+            }
+
+            addTerms(document.MarkerTokens, PostingField.Marker);
+            addTerms(document.AnchorTokens, PostingField.Anchor);
+            addTerms(document.TitleTokens, PostingField.Title);
+            addTerms(document.BodyTokens, PostingField.Body);
+            addTerms(document.Bigrams, PostingField.Bigram);
+        }
+
+        _postings = postings;
+        _trie = trie;
+        _idf = documentFrequency.ToDictionary(
+            x => x.Key,
+            x => Math.Log(1.0 + (_documents.Count / (double)x.Value)),
+            StringComparer.OrdinalIgnoreCase);
+    }
+
+    public IReadOnlyList<RetrievalHit> Search(string prompt, int maxResults = 3)
+    {
+        var query = QueryFeatures.From(prompt);
+        var scores = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
+        var reasons = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+        var anchorScores = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var marker in query.Markers)
+        {
+            Accumulate(marker, 18.0, exactOnly: true);
+        }
+
+        foreach (var token in query.Tokens)
+        {
+            Accumulate(token, 5.0, exactOnly: false);
+        }
+
+        foreach (var bigram in query.Bigrams)
+        {
+            Accumulate(bigram, 8.0, exactOnly: true, PostingField.Bigram);
+        }
+
+        foreach (var document in _documents)
+        {
+            if (anchorScores.TryGetValue(document.AnchorId, out var anchorBoost))
+                Add(document.DocumentId, anchorBoost * 2.5, $"anchor:{document.AnchorId}");
+
+            if (_edgesByAnchor.TryGetValue(document.AnchorId, out var neighbors))
+            {
+                foreach (var edge in neighbors)
+                {
+                    if (anchorScores.TryGetValue(edge.ToAnchorId, out var neighborBoost))
+                        Add(document.DocumentId, neighborBoost * 0.75, $"edge:{edge.RelationType}");
+                }
+            }
+
+            Add(document.DocumentId, document.Confidence * 2.0, "confidence");
+            Add(document.DocumentId, IntentAdjustment(query, document), "intent");
+        }
+
+        var hits = _documents
+            .Where(d => scores.TryGetValue(d.DocumentId, out var score) && score >= 8.0)
+            .Select(d => new RetrievalHit(d.DocumentId, d.Title, scores[d.DocumentId], reasons[d.DocumentId]))
+            .OrderByDescending(x => x.Score)
+            .ThenBy(x => x.DocumentId, StringComparer.Ordinal)
+            .Take(maxResults)
+            .ToArray();
+
+        return hits;
+
+        void Accumulate(string term, double baseBoost, bool exactOnly, PostingField? restrictedField = null)
+        {
+            foreach (var candidate in EnumerateTerms(term, exactOnly))
+            {
+                if (!_postings.TryGetValue(candidate.Term, out var postingList))
+                    continue;
+
+                var idf = _idf.GetValueOrDefault(candidate.Term, 1.0);
+                foreach (var posting in postingList)
+                {
+                    if (restrictedField.HasValue && posting.Field != restrictedField.Value)
+                        continue;
+
+                    var fieldWeight = posting.Field switch
+                    {
+                        PostingField.Marker => 8.0,
+                        PostingField.Anchor => 5.0,
+                        PostingField.Title => 4.0,
+                        PostingField.Bigram => 4.5,
+                        _ => 2.0
+                    };
+
+                    var exactness = candidate.IsPrefix ? 0.55 : 1.0;
+                    var score = baseBoost * fieldWeight * idf * exactness;
+                    Add(posting.DocumentId, score, $"{posting.Field}:{candidate.Term}");
+
+                    var anchorScore = baseBoost * (posting.Field == PostingField.Anchor ? 2.0 : 0.8) * idf * exactness;
+                    anchorScores[posting.AnchorId] = anchorScores.TryGetValue(posting.AnchorId, out var current)
+                        ? current + anchorScore
+                        : anchorScore;
+                }
+            }
+        }
+
+        void Add(string documentId, double score, string reason)
+        {
+            scores[documentId] = scores.TryGetValue(documentId, out var current)
+                ? current + score
+                : score;
+
+            if (!reasons.TryGetValue(documentId, out var list))
+            {
+                list = [];
+                reasons[documentId] = list;
+            }
+
+            if (list.Count < 6)
+                list.Add(reason);
+        }
+    }
+
+    private IEnumerable<(string Term, bool IsPrefix)> EnumerateTerms(string term, bool exactOnly)
+    {
+        yield return (term, false);
+        if (exactOnly || term.Length < 4)
+            yield break;
+
+        foreach (var prefixMatch in _trie.GetByPrefix(term).Where(x => !string.Equals(x, term, StringComparison.OrdinalIgnoreCase)).Take(4))
+            yield return (prefixMatch, true);
+    }
+
+    private sealed record IndexedDocument(
+        string DocumentId,
+        string AnchorId,
+        string Title,
+        double Confidence,
+        bool IsActionOrProcedure,
+        bool IsLookupOrDashboard,
+        IReadOnlyList<string> MarkerTokens,
+        IReadOnlyList<string> AnchorTokens,
+        IReadOnlyList<string> TitleTokens,
+        IReadOnlyList<string> BodyTokens,
+        IReadOnlyList<string> Bigrams)
+    {
+        public static IndexedDocument Create(RetrievedDocument document)
+        {
+            var anchorTokens = Tokenize(document.AnchorId).Concat(Tokenize(document.Title)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+            var titleTokens = Tokenize(document.Title).ToArray();
+            var bodyTokens = Tokenize(document.Body).ToArray();
+            var markers = MarkerRegex.Matches(document.Title + " " + document.Body).Select(x => x.Value).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+            var bigrams = MakeBigrams(titleTokens.Concat(bodyTokens)).ToArray();
+            var allText = (document.Title + " " + document.Body).ToLowerInvariant();
+            var isActionOrProcedure = allText.Contains("procedure", StringComparison.Ordinal)
+                || allText.Contains("restart", StringComparison.Ordinal)
+                || allText.Contains("recover", StringComparison.Ordinal)
+                || allText.Contains("enable", StringComparison.Ordinal)
+                || allText.Contains("before deploy", StringComparison.Ordinal)
+                || allText.Contains("precaution", StringComparison.Ordinal)
+                || allText.Contains("guardrail", StringComparison.Ordinal);
+            var isLookupOrDashboard = allText.Contains("dashboard", StringComparison.Ordinal)
+                || allText.Contains("url", StringComparison.Ordinal)
+                || allText.Contains("chart", StringComparison.Ordinal)
+                || allText.Contains("metrics", StringComparison.Ordinal);
+
+            return new IndexedDocument(document.DocumentId, document.AnchorId, document.Title, document.Confidence, isActionOrProcedure, isLookupOrDashboard, markers, anchorTokens, titleTokens, bodyTokens, bigrams);
+        }
+    }
+
+    private sealed record QueryFeatures(IReadOnlyList<string> Markers, IReadOnlyList<string> Tokens, IReadOnlyList<string> Bigrams)
+    {
+        public static QueryFeatures From(string prompt)
+        {
+            var markers = MarkerRegex.Matches(prompt).Select(x => x.Value).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+            var tokens = Tokenize(prompt).ToArray();
+            var bigrams = MakeBigrams(tokens).ToArray();
+            return new QueryFeatures(markers, tokens, bigrams);
+        }
+    }
+
+    private static double IntentAdjustment(QueryFeatures query, IndexedDocument document)
+    {
+        var actionSignals = query.Tokens.Count(x => ActionIntentTerms.Contains(x));
+        var lookupSignals = query.Tokens.Count(x => LookupIntentTerms.Contains(x));
+        var score = 0.0;
+
+        if (actionSignals > 0)
+        {
+            if (document.IsActionOrProcedure)
+                score += 180.0 + (actionSignals * 18.0);
+            if (document.IsLookupOrDashboard)
+                score -= 180.0;
+        }
+
+        if (lookupSignals > 0)
+        {
+            if (document.IsLookupOrDashboard)
+                score += 90.0 + (lookupSignals * 10.0);
+            if (document.IsActionOrProcedure && lookupSignals >= actionSignals)
+                score -= 40.0;
+        }
+
+        return score;
+    }
+
+    private static IEnumerable<string> Tokenize(string text)
+    {
+        foreach (Match match in TokenRegex.Matches(text))
+        {
+            var token = match.Value.Trim().ToLowerInvariant();
+            if (token.Length < 2)
+                continue;
+            if (StopWords.Contains(token))
+                continue;
+
+            yield return Stem(token);
+        }
+    }
+
+    private static string Stem(string token)
+    {
+        if (token.EndsWith("ies", StringComparison.Ordinal) && token.Length > 4)
+            return token[..^3] + "y";
+        if (token.EndsWith("ing", StringComparison.Ordinal) && token.Length > 5)
+            return token[..^3];
+        if (token.EndsWith("ed", StringComparison.Ordinal) && token.Length > 4)
+            return token[..^2];
+        if (token.EndsWith('s') && token.Length > 4)
+            return token[..^1];
+
+        return token;
+    }
+
+    private static IEnumerable<string> MakeBigrams(IEnumerable<string> tokens)
+    {
+        string? previous = null;
+        foreach (var token in tokens)
+        {
+            if (previous is not null)
+                yield return previous + " " + token;
+            previous = token;
+        }
+    }
+
+    private sealed class TermTrie
+    {
+        private readonly Node _root = new();
+
+        public void Add(string term)
+        {
+            var current = _root;
+            foreach (var ch in term)
+            {
+                if (!current.Children.TryGetValue(ch, out var next))
+                {
+                    next = new Node();
+                    current.Children[ch] = next;
+                }
+
+                current = next;
+            }
+
+            current.Term = term;
+        }
+
+        public IEnumerable<string> GetByPrefix(string prefix)
+        {
+            var current = _root;
+            foreach (var ch in prefix)
+            {
+                if (!current.Children.TryGetValue(ch, out var next))
+                    yield break;
+                current = next;
+            }
+
+            foreach (var term in Enumerate(current))
+                yield return term;
+        }
+
+        private static IEnumerable<string> Enumerate(Node node)
+        {
+            if (node.Term is not null)
+                yield return node.Term;
+
+            foreach (var child in node.Children.Values)
+            {
+                foreach (var term in Enumerate(child))
+                    yield return term;
+            }
+        }
+
+        private sealed class Node
+        {
+            public Dictionary<char, Node> Children { get; } = [];
+            public string? Term { get; set; }
+        }
+    }
+
+    private sealed record Posting(string DocumentId, string AnchorId, PostingField Field);
+
+    private enum PostingField
+    {
+        Marker,
+        Anchor,
+        Title,
+        Body,
+        Bigram
+    }
+}
