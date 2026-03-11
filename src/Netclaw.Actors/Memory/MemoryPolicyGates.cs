@@ -39,6 +39,9 @@ public sealed class MemoryProposalGate
             if (proposal.MemoryClass is not ("durable_fact" or "evidence" or "trace"))
                 continue;
 
+            if (!HasRequiredRetrievalMetadata(proposal))
+                continue;
+
             if (string.Equals(proposal.TargetSurface, "identity_profile", StringComparison.OrdinalIgnoreCase))
             {
                 if (!IsIdentityEligible(proposal))
@@ -77,10 +80,16 @@ public sealed class MemoryProposalGate
                 Kind: proposal.Operation == "append_record" ? "record" : "document",
                 MemoryClass: proposal.MemoryClass,
                 MemoryId: null,
-                AnchorCanonicalName: string.IsNullOrWhiteSpace(proposal.SubjectValue) ? proposal.Title : proposal.SubjectValue,
-                AnchorType: string.IsNullOrWhiteSpace(proposal.SubjectKind) ? "concept" : proposal.SubjectKind,
+                AnchorCanonicalName: string.IsNullOrWhiteSpace(proposal.Anchor?.CanonicalName)
+                    ? (string.IsNullOrWhiteSpace(proposal.SubjectValue) ? proposal.Title : proposal.SubjectValue)
+                    : proposal.Anchor.CanonicalName,
+                AnchorType: string.IsNullOrWhiteSpace(proposal.Anchor?.AnchorType)
+                    ? (string.IsNullOrWhiteSpace(proposal.SubjectKind) ? "concept" : proposal.SubjectKind)
+                    : proposal.Anchor.AnchorType,
                 Title: proposal.Title,
                 Content: content,
+                AliasesJson: SerializeStringList(proposal.Aliases),
+                FacetsJson: SerializeStringList(proposal.Facets),
                 UpdateSemantics: proposal.MemoryClass == "trace"
                     ? "conversation_trace"
                     : proposal.Operation == "append_record" ? "immutable-record" : "merge-document",
@@ -135,6 +144,32 @@ public sealed class MemoryProposalGate
         var title = proposal.Title ?? string.Empty;
         var rationale = proposal.Rationale ?? string.Empty;
         return IdentityTitlePattern.IsMatch(title) || IdentityTitlePattern.IsMatch(rationale);
+    }
+
+    private static bool HasRequiredRetrievalMetadata(MemoryProposal proposal)
+    {
+        if (proposal.MemoryClass == "trace")
+            return true;
+
+        if (proposal.Anchor is null || string.IsNullOrWhiteSpace(proposal.Anchor.CanonicalName) || string.IsNullOrWhiteSpace(proposal.Anchor.AnchorType))
+            return false;
+
+        var aliases = proposal.Aliases ?? [];
+        var facets = proposal.Facets ?? [];
+        return aliases.Count > 0 && facets.Count > 0;
+    }
+
+    private static string? SerializeStringList(IReadOnlyList<string>? values)
+    {
+        if (values is null || values.Count == 0)
+            return null;
+
+        var cleaned = values
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Select(x => x.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        return cleaned.Length == 0 ? null : JsonSerializer.Serialize(cleaned);
     }
 
     private sealed record EvidenceEnvelope(

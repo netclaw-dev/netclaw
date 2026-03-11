@@ -6,9 +6,9 @@
 
 ## 2. Write-time retrieval metadata
 
-- [ ] 2.1 Extend durable memory proposal validation and persistence to store anchors, aliases, facets, recall metadata, and freshness fields needed for deterministic retrieval.
+- [x] 2.1 Extend durable memory proposal validation and persistence to store anchors, aliases, facets, recall metadata, and freshness fields needed for deterministic retrieval.
 - [ ] 2.2 Add optional bundle slots and sparse relation persistence with strict confidence and policy gates.
-- [ ] 2.3 Add contract validation tests that fail malformed or incomplete retrieval metadata before it reaches SQLite.
+- [x] 2.3 Add contract validation tests that fail malformed or incomplete retrieval metadata before it reaches SQLite.
 
 ## 3. Deterministic recall execution
 

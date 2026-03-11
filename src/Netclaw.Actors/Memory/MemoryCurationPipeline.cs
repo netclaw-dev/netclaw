@@ -253,6 +253,8 @@ public sealed class MemoryCurationEngine(SQLiteMemoryStore store, MemoryRulesFir
             AnchorType: c.AnchorType,
             Title: c.Title,
             Content: c.Content,
+            AliasesJson: null,
+            FacetsJson: null,
             UpdateSemantics: c.UpdateSemantics,
             Domain: c.Domain,
             Sensitivity: c.Sensitivity,

@@ -48,6 +48,8 @@ public sealed class SQLiteMemoryStore
               memory_class TEXT NOT NULL DEFAULT 'durable_fact',
               title TEXT NOT NULL,
               markdown_body TEXT NOT NULL,
+              aliases_json TEXT NULL,
+              facets_json TEXT NULL,
               update_semantics TEXT NOT NULL,
               domain TEXT NOT NULL,
               sensitivity TEXT NOT NULL,
@@ -72,6 +74,8 @@ public sealed class SQLiteMemoryStore
               memory_class TEXT NOT NULL DEFAULT 'evidence',
               record_type TEXT NOT NULL,
               payload_json TEXT NOT NULL,
+              aliases_json TEXT NULL,
+              facets_json TEXT NULL,
               supersedes_record_id TEXT NULL,
               update_semantics TEXT NOT NULL,
               domain TEXT NOT NULL,
@@ -135,8 +139,12 @@ public sealed class SQLiteMemoryStore
 
         await EnsureColumnExistsAsync(conn, "memory_documents", "memory_class", "TEXT NOT NULL DEFAULT 'durable_fact'", ct);
         await EnsureColumnExistsAsync(conn, "memory_documents", "expires_at", "INTEGER NULL", ct);
+        await EnsureColumnExistsAsync(conn, "memory_documents", "aliases_json", "TEXT NULL", ct);
+        await EnsureColumnExistsAsync(conn, "memory_documents", "facets_json", "TEXT NULL", ct);
         await EnsureColumnExistsAsync(conn, "memory_records", "memory_class", "TEXT NOT NULL DEFAULT 'evidence'", ct);
         await EnsureColumnExistsAsync(conn, "memory_records", "expires_at", "INTEGER NULL", ct);
+        await EnsureColumnExistsAsync(conn, "memory_records", "aliases_json", "TEXT NULL", ct);
+        await EnsureColumnExistsAsync(conn, "memory_records", "facets_json", "TEXT NULL", ct);
 
         // Phase A hygiene: conversation turn snapshots are diagnostic trace, not
         // durable auto-recall memory. This repo is prototype-only; normalize any
@@ -164,16 +172,18 @@ public sealed class SQLiteMemoryStore
         cmd.Transaction = tx;
         cmd.CommandText = """
             INSERT INTO memory_documents(
-              document_id, anchor_id, memory_class, title, markdown_body, update_semantics,
+              document_id, anchor_id, memory_class, title, markdown_body, aliases_json, facets_json, update_semantics,
               domain, sensitivity, recall_mode, confidence, freshness_at,
               expires_at, created_at, updated_at)
-            VALUES($id, $anchorId, $memoryClass, $title, $body, $semantics,
+            VALUES($id, $anchorId, $memoryClass, $title, $body, $aliasesJson, $facetsJson, $semantics,
               $domain, $sensitivity, $recallMode, $confidence, $freshnessAt,
               $expiresAt, $createdAt, $updatedAt)
             ON CONFLICT(document_id) DO UPDATE SET
               memory_class=excluded.memory_class,
               title=excluded.title,
               markdown_body=excluded.markdown_body,
+              aliases_json=excluded.aliases_json,
+              facets_json=excluded.facets_json,
               update_semantics=excluded.update_semantics,
               domain=excluded.domain,
               sensitivity=excluded.sensitivity,
@@ -188,6 +198,8 @@ public sealed class SQLiteMemoryStore
         cmd.Parameters.AddWithValue("$memoryClass", document.MemoryClass);
         cmd.Parameters.AddWithValue("$title", document.Title);
         cmd.Parameters.AddWithValue("$body", document.MarkdownBody);
+        cmd.Parameters.AddWithValue("$aliasesJson", (object?)document.AliasesJson ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$facetsJson", (object?)document.FacetsJson ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$semantics", document.UpdateSemantics);
         cmd.Parameters.AddWithValue("$domain", document.Domain);
         cmd.Parameters.AddWithValue("$sensitivity", document.Sensitivity);
@@ -239,6 +251,8 @@ public sealed class SQLiteMemoryStore
               d.memory_class,
               d.title,
               d.markdown_body,
+              d.aliases_json,
+              d.facets_json,
               d.update_semantics,
               d.domain,
               d.sensitivity,
@@ -274,14 +288,14 @@ public sealed class SQLiteMemoryStore
                 reader.GetString(2),
                 reader.GetString(3),
                 reader.IsDBNull(4) ? null : reader.GetString(4),
-                reader.GetString(9),
-                reader.GetString(10),
                 reader.GetString(11),
-                reader.GetDouble(12),
-                reader.IsDBNull(13) ? null : reader.GetInt64(13),
+                reader.GetString(12),
+                reader.GetString(13),
+                reader.GetDouble(14),
+                reader.IsDBNull(15) ? null : reader.GetInt64(15),
                 "active",
-                reader.GetInt64(15),
-                reader.GetInt64(16));
+                reader.GetInt64(17),
+                reader.GetInt64(18));
 
             results.Add(new SQLiteMemoryDocument(
                 reader.GetString(0),
@@ -289,15 +303,17 @@ public sealed class SQLiteMemoryStore
                 reader.GetString(5),
                 reader.GetString(6),
                 reader.GetString(7),
-                reader.GetString(8),
-                reader.GetString(9),
+                reader.IsDBNull(8) ? null : reader.GetString(8),
+                reader.IsDBNull(9) ? null : reader.GetString(9),
                 reader.GetString(10),
                 reader.GetString(11),
-                reader.GetDouble(12),
-                reader.IsDBNull(13) ? null : reader.GetInt64(13),
-                reader.IsDBNull(14) ? null : reader.GetInt64(14),
-                reader.GetInt64(15),
-                reader.GetInt64(16)));
+                reader.GetString(12),
+                reader.GetString(13),
+                reader.GetDouble(14),
+                reader.IsDBNull(15) ? null : reader.GetInt64(15),
+                reader.IsDBNull(16) ? null : reader.GetInt64(16),
+                reader.GetInt64(17),
+                reader.GetInt64(18)));
         }
 
         return results;
@@ -573,7 +589,7 @@ public sealed class SQLiteMemoryStore
         {
             await using var cmd = conn.CreateCommand();
             cmd.CommandText = """
-                SELECT document_id, memory_class, title, markdown_body, domain, sensitivity, recall_mode, update_semantics, expires_at, updated_at
+                SELECT document_id, memory_class, title, markdown_body, aliases_json, facets_json, domain, sensitivity, recall_mode, update_semantics, expires_at, updated_at
                 FROM memory_documents
                 WHERE document_id = $id;
                 """;
@@ -587,12 +603,14 @@ public sealed class SQLiteMemoryStore
                     MemoryClass: reader.GetString(1),
                     Title: reader.GetString(2),
                     Content: reader.GetString(3),
-                    Domain: reader.GetString(4),
-                    Sensitivity: reader.GetString(5),
-                    RecallMode: reader.GetString(6),
-                    UpdateSemantics: reader.GetString(7),
-                    ExpiresAtMs: reader.IsDBNull(8) ? null : reader.GetInt64(8),
-                    UpdatedAtMs: reader.GetInt64(9)));
+                    AliasesJson: reader.IsDBNull(4) ? null : reader.GetString(4),
+                    FacetsJson: reader.IsDBNull(5) ? null : reader.GetString(5),
+                    Domain: reader.GetString(6),
+                    Sensitivity: reader.GetString(7),
+                    RecallMode: reader.GetString(8),
+                    UpdateSemantics: reader.GetString(9),
+                    ExpiresAtMs: reader.IsDBNull(10) ? null : reader.GetInt64(10),
+                    UpdatedAtMs: reader.GetInt64(11)));
             }
         }
 
@@ -600,7 +618,7 @@ public sealed class SQLiteMemoryStore
         {
             await using var cmd = conn.CreateCommand();
             cmd.CommandText = """
-                SELECT record_id, memory_class, record_type, payload_json, domain, sensitivity, recall_mode, update_semantics, expires_at, created_at
+                SELECT record_id, memory_class, record_type, payload_json, aliases_json, facets_json, domain, sensitivity, recall_mode, update_semantics, expires_at, created_at
                 FROM memory_records
                 WHERE record_id = $id;
                 """;
@@ -614,12 +632,14 @@ public sealed class SQLiteMemoryStore
                     MemoryClass: reader.GetString(1),
                     Title: reader.GetString(2),
                     Content: reader.GetString(3),
-                    Domain: reader.GetString(4),
-                    Sensitivity: reader.GetString(5),
-                    RecallMode: reader.GetString(6),
-                    UpdateSemantics: reader.GetString(7),
-                    ExpiresAtMs: reader.IsDBNull(8) ? null : reader.GetInt64(8),
-                    UpdatedAtMs: reader.GetInt64(9)));
+                    AliasesJson: reader.IsDBNull(4) ? null : reader.GetString(4),
+                    FacetsJson: reader.IsDBNull(5) ? null : reader.GetString(5),
+                    Domain: reader.GetString(6),
+                    Sensitivity: reader.GetString(7),
+                    RecallMode: reader.GetString(8),
+                    UpdateSemantics: reader.GetString(9),
+                    ExpiresAtMs: reader.IsDBNull(10) ? null : reader.GetInt64(10),
+                    UpdatedAtMs: reader.GetInt64(11)));
             }
         }
 
@@ -666,7 +686,7 @@ public sealed class SQLiteMemoryStore
         var whereClasses = string.Join(",", classClauses);
 
         cmd.CommandText = $"""
-            SELECT id, kind, memory_class, title, body, domain, sensitivity, recall_mode, update_semantics, expires_at, updated_at, score
+            SELECT id, kind, memory_class, title, body, aliases_json, facets_json, domain, sensitivity, recall_mode, update_semantics, expires_at, updated_at, score
             FROM (
                 SELECT
                     d.document_id AS id,
@@ -674,6 +694,8 @@ public sealed class SQLiteMemoryStore
                     d.memory_class AS memory_class,
                     d.title AS title,
                     d.markdown_body AS body,
+                    d.aliases_json AS aliases_json,
+                    d.facets_json AS facets_json,
                     d.domain AS domain,
                     d.sensitivity AS sensitivity,
                     d.recall_mode AS recall_mode,
@@ -697,6 +719,8 @@ public sealed class SQLiteMemoryStore
                     r.memory_class AS memory_class,
                     r.record_type AS title,
                     r.payload_json AS body,
+                    r.aliases_json AS aliases_json,
+                    r.facets_json AS facets_json,
                     r.domain AS domain,
                     r.sensitivity AS sensitivity,
                     r.recall_mode AS recall_mode,
@@ -730,12 +754,14 @@ public sealed class SQLiteMemoryStore
                 MemoryClass: reader.GetString(2),
                 Title: reader.GetString(3),
                 Content: reader.GetString(4),
-                Domain: reader.GetString(5),
-                Sensitivity: reader.GetString(6),
-                RecallMode: reader.GetString(7),
-                UpdateSemantics: reader.GetString(8),
-                ExpiresAtMs: reader.IsDBNull(9) ? null : reader.GetInt64(9),
-                UpdatedAtMs: reader.GetInt64(10)));
+                AliasesJson: reader.IsDBNull(5) ? null : reader.GetString(5),
+                FacetsJson: reader.IsDBNull(6) ? null : reader.GetString(6),
+                Domain: reader.GetString(7),
+                Sensitivity: reader.GetString(8),
+                RecallMode: reader.GetString(9),
+                UpdateSemantics: reader.GetString(10),
+                ExpiresAtMs: reader.IsDBNull(11) ? null : reader.GetInt64(11),
+                UpdatedAtMs: reader.GetInt64(12)));
         }
 
         return output;
@@ -882,10 +908,10 @@ public sealed class SQLiteMemoryStore
                 recordCmd.Transaction = tx;
                 recordCmd.CommandText = """
                     INSERT INTO memory_records(
-                      record_id, anchor_id, memory_class, record_type, payload_json, supersedes_record_id,
+                      record_id, anchor_id, memory_class, record_type, payload_json, aliases_json, facets_json, supersedes_record_id,
                       update_semantics, domain, sensitivity, recall_mode, confidence,
                       freshness_at, expires_at, created_at)
-                    VALUES($id, $anchorId, $memoryClass, $recordType, $payloadJson, $supersedes,
+                    VALUES($id, $anchorId, $memoryClass, $recordType, $payloadJson, $aliasesJson, $facetsJson, $supersedes,
                       $semantics, $domain, $sensitivity, $recallMode, $confidence,
                       $freshnessAt, $expiresAt, $createdAt);
                     """;
@@ -894,6 +920,8 @@ public sealed class SQLiteMemoryStore
                 recordCmd.Parameters.AddWithValue("$memoryClass", operation.MemoryClass);
                 recordCmd.Parameters.AddWithValue("$recordType", operation.Title);
                 recordCmd.Parameters.AddWithValue("$payloadJson", operation.Content);
+                recordCmd.Parameters.AddWithValue("$aliasesJson", (object?)operation.AliasesJson ?? DBNull.Value);
+                recordCmd.Parameters.AddWithValue("$facetsJson", (object?)operation.FacetsJson ?? DBNull.Value);
                 recordCmd.Parameters.AddWithValue("$supersedes", (object?)operation.SupersedesRecordId ?? DBNull.Value);
                 recordCmd.Parameters.AddWithValue("$semantics", operation.UpdateSemantics);
                 recordCmd.Parameters.AddWithValue("$domain", operation.Domain);
@@ -915,16 +943,18 @@ public sealed class SQLiteMemoryStore
             documentCmd.Transaction = tx;
             documentCmd.CommandText = """
                 INSERT INTO memory_documents(
-                  document_id, anchor_id, memory_class, title, markdown_body, update_semantics,
+                  document_id, anchor_id, memory_class, title, markdown_body, aliases_json, facets_json, update_semantics,
                   domain, sensitivity, recall_mode, confidence, freshness_at,
                   expires_at, created_at, updated_at)
-                VALUES($id, $anchorId, $memoryClass, $title, $body, $semantics,
+                VALUES($id, $anchorId, $memoryClass, $title, $body, $aliasesJson, $facetsJson, $semantics,
                   $domain, $sensitivity, $recallMode, $confidence, $freshnessAt,
                   $expiresAt, $createdAt, $updatedAt)
                 ON CONFLICT(document_id) DO UPDATE SET
                   memory_class=excluded.memory_class,
                   title=excluded.title,
                   markdown_body=excluded.markdown_body,
+                  aliases_json=excluded.aliases_json,
+                  facets_json=excluded.facets_json,
                   update_semantics=excluded.update_semantics,
                   domain=excluded.domain,
                   sensitivity=excluded.sensitivity,
@@ -939,6 +969,8 @@ public sealed class SQLiteMemoryStore
             documentCmd.Parameters.AddWithValue("$memoryClass", operation.MemoryClass);
             documentCmd.Parameters.AddWithValue("$title", operation.Title);
             documentCmd.Parameters.AddWithValue("$body", operation.Content);
+            documentCmd.Parameters.AddWithValue("$aliasesJson", (object?)operation.AliasesJson ?? DBNull.Value);
+            documentCmd.Parameters.AddWithValue("$facetsJson", (object?)operation.FacetsJson ?? DBNull.Value);
             documentCmd.Parameters.AddWithValue("$semantics", operation.UpdateSemantics);
             documentCmd.Parameters.AddWithValue("$domain", operation.Domain);
             documentCmd.Parameters.AddWithValue("$sensitivity", operation.Sensitivity);
@@ -1078,6 +1110,8 @@ public sealed record SQLiteMemoryDocument(
     string MemoryClass,
     string Title,
     string MarkdownBody,
+    string? AliasesJson,
+    string? FacetsJson,
     string UpdateSemantics,
     string Domain,
     string Sensitivity,
@@ -1117,6 +1151,8 @@ public sealed record SQLiteMemoryHydratedItem(
     string MemoryClass,
     string Title,
     string Content,
+    string? AliasesJson,
+    string? FacetsJson,
     string Domain,
     string Sensitivity,
     string RecallMode,
@@ -1132,6 +1168,8 @@ public sealed record SQLiteMemoryCurationOperation(
     string AnchorType,
     string Title,
     string Content,
+    string? AliasesJson,
+    string? FacetsJson,
     string UpdateSemantics,
     string Domain,
     string Sensitivity,

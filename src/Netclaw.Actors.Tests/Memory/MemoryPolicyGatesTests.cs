@@ -19,8 +19,13 @@ public sealed class MemoryPolicyGatesTests
                 "durable_fact",
                 "user",
                 "self",
+                new MemoryAnchor("user-travel-airline", "preference"),
                 "Preferred Airline",
                 "Preferred airline: United",
+                ["preferred airline", "united airlines"],
+                ["travel_profile", "user_preference"],
+                null,
+                null,
                 "auto",
                 "normal",
                 0.95,
@@ -33,8 +38,13 @@ public sealed class MemoryPolicyGatesTests
                 "evidence",
                 "event",
                 "travel-research",
+                new MemoryAnchor("stirtrek-2026-travel-plan", "event"),
                 "Hotel Options",
                 "Hilton Easton and Courtyard Easton were found.",
+                ["hotel options", "easton hotel"],
+                ["trip_planning"],
+                null,
+                null,
                 "searchable",
                 "normal",
                 0.80,
@@ -47,8 +57,13 @@ public sealed class MemoryPolicyGatesTests
                 "durable_fact",
                 "assistant",
                 "self",
+                new MemoryAnchor("assistant-communication-style", "preference"),
                 "Communication style",
                 "Prefer concise responses.",
+                ["communication preference", "response style"],
+                ["user_preference"],
+                null,
+                null,
                 "auto",
                 "normal",
                 0.9,
@@ -61,8 +76,13 @@ public sealed class MemoryPolicyGatesTests
                 "durable_fact",
                 "user",
                 "self",
+                new MemoryAnchor("user-identity-update", "preference"),
                 "Identity profile update",
                 "Should not route here",
+                ["identity profile"],
+                ["user_preference"],
+                null,
+                null,
                 "auto",
                 "normal",
                 0.9,
@@ -97,8 +117,13 @@ public sealed class MemoryPolicyGatesTests
                 "evidence",
                 "event",
                 "travel-research",
+                new MemoryAnchor("travel-research", "event"),
                 "Hotel options",
                 "Found hotel options near Easton.",
+                ["hotel options"],
+                ["trip_planning"],
+                null,
+                null,
                 "searchable",
                 "normal",
                 0.8,
@@ -111,8 +136,13 @@ public sealed class MemoryPolicyGatesTests
                 "trace",
                 "event",
                 "debug-step",
+                new MemoryAnchor("debug-step", "event"),
                 "Trace breadcrumb",
                 "Called web search tool.",
+                null,
+                null,
+                null,
+                null,
                 "never",
                 "normal",
                 0.6,
@@ -131,6 +161,41 @@ public sealed class MemoryPolicyGatesTests
         Assert.Equal(now + (long)TimeSpan.FromDays(30).TotalMilliseconds, evidence.ExpiresAtMs);
         Assert.Equal(now + (long)TimeSpan.FromHours(72).TotalMilliseconds, trace.ExpiresAtMs);
         Assert.Equal("never", trace.RecallMode);
+    }
+
+    [Fact]
+    public void ProposalGate_rejects_durable_fact_without_anchor_aliases_or_facets()
+    {
+        var gate = new MemoryProposalGate();
+        var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+        var accepted = gate.Accept(
+        [
+            new MemoryProposal(
+                "upsert_document",
+                "durable_fact",
+                "user",
+                "self",
+                null,
+                "Preferred Airline",
+                "Preferred airline: United",
+                null,
+                null,
+                null,
+                null,
+                "auto",
+                "normal",
+                0.95,
+                now,
+                null,
+                null,
+                "missing retrieval metadata")
+        ],
+        "project:test",
+        "normal",
+        now);
+
+        Assert.Empty(accepted);
     }
 
     [Fact]

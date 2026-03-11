@@ -31,8 +31,13 @@ public sealed record MemoryProposal(
     string MemoryClass,
     string SubjectKind,
     string SubjectValue,
+    MemoryAnchor? Anchor,
     string Title,
     string Content,
+    IReadOnlyList<string>? Aliases,
+    IReadOnlyList<string>? Facets,
+    IReadOnlyList<string>? Slots,
+    IReadOnlyList<MemoryRelation>? Relations,
     string RecallMode,
     string Sensitivity,
     double Confidence,
@@ -61,6 +66,14 @@ public sealed record RecallQueryPlan(
     IReadOnlyList<string> MemoryClasses,
     int MaxResults,
     bool AllowExpiredEvidence);
+
+public sealed record MemoryAnchor(
+    string CanonicalName,
+    string AnchorType);
+
+public sealed record MemoryRelation(
+    string RelationType,
+    MemoryAnchor TargetAnchor);
 
 internal sealed record MemoryObservationCompleted
 {
