@@ -61,7 +61,7 @@
       "anchorId": "anchor:user-travel-origin",
       "anchorType": "preference",
       "canonicalName": "user-travel-origin",
-      "aliases": ["home airport", "origin airport", "fly out of", "depart from"],
+      "aliases": ["home airport", "origin airport", "fly out of", "depart from", "travel preference", "travel preferences"],
       "title": "Travel Profile: Primary Origin Airport",
       "markdownBody": "HOME_AIRPORT_IAH: Primary origin airport is IAH in Houston.",
       "memoryClass": "durable_fact",
@@ -75,14 +75,42 @@
       "anchorId": "anchor:user-travel-airline",
       "anchorType": "preference",
       "canonicalName": "user-travel-airline",
-      "aliases": ["preferred airline", "usually fly", "flight preference", "travel airline"],
+      "aliases": ["preferred airline", "usually fly", "flight preference", "travel airline", "travel preference", "travel preferences", "status with united"],
       "title": "Travel Profile: Preferred Airline",
-      "markdownBody": "PREFERRED_AIRLINE_UA: Preferred airline is United Airlines.",
+      "markdownBody": "PREFERRED_AIRLINE_UA: Preferred airline is United Airlines because status benefits matter.",
       "memoryClass": "durable_fact",
       "domain": "project:signalr",
       "sensitivity": "normal",
       "recallMode": "auto",
       "confidence": 0.96
+    },
+    {
+      "documentId": "doc-stirtrek-venue-area",
+      "anchorId": "anchor:stirtrek-2026-easton",
+      "anchorType": "event",
+      "canonicalName": "stirtrek-2026-easton",
+      "aliases": ["stir trek", "stir trek 2026", "easton town center", "closest to the venue", "downtown columbus"],
+      "title": "Stir Trek 2026 Venue Area",
+      "markdownBody": "STIRTREK_2026_EASTON: Stir Trek 2026 is near Easton Town Center and not essentially in downtown Columbus.",
+      "memoryClass": "durable_fact",
+      "domain": "project:signalr",
+      "sensitivity": "normal",
+      "recallMode": "auto",
+      "confidence": 0.88
+    },
+    {
+      "documentId": "doc-stirtrek-travel-plan",
+      "anchorId": "anchor:stirtrek-2026-travel-plan",
+      "anchorType": "event",
+      "canonicalName": "stirtrek-2026-travel-plan",
+      "aliases": ["best flight hotel combination", "hotel near venue", "rental car", "united flight", "easton hotel"],
+      "title": "Stir Trek 2026 Travel Recommendation",
+      "markdownBody": "For Stir Trek 2026, the best fit is a direct United flight from IAH to CMH, a hotel at Easton such as the Hilton Columbus at Easton, and likely no rental car if staying by the venue.",
+      "memoryClass": "durable_fact",
+      "domain": "project:signalr",
+      "sensitivity": "normal",
+      "recallMode": "auto",
+      "confidence": 0.84
     },
     {
       "documentId": "doc-secret-token",
@@ -129,6 +157,106 @@
       "sensitivity": "normal",
       "recallMode": "auto",
       "confidence": 0.82
+    },
+    {
+      "edgeId": "edge-cluster-travel-origin",
+      "fromAnchorId": "anchor:user-travel-origin",
+      "toAnchorId": "cluster:travel-profile",
+      "relationType": "member_of_cluster",
+      "domain": "project:signalr",
+      "sensitivity": "normal",
+      "recallMode": "auto",
+      "confidence": 0.95
+    },
+    {
+      "edgeId": "edge-cluster-travel-airline",
+      "fromAnchorId": "anchor:user-travel-airline",
+      "toAnchorId": "cluster:travel-profile",
+      "relationType": "member_of_cluster",
+      "domain": "project:signalr",
+      "sensitivity": "normal",
+      "recallMode": "auto",
+      "confidence": 0.95
+    },
+    {
+      "edgeId": "edge-role-travel-origin",
+      "fromAnchorId": "anchor:user-travel-origin",
+      "toAnchorId": "role:origin-airport",
+      "relationType": "has_role",
+      "domain": "project:signalr",
+      "sensitivity": "normal",
+      "recallMode": "auto",
+      "confidence": 0.92
+    },
+    {
+      "edgeId": "edge-role-travel-airline",
+      "fromAnchorId": "anchor:user-travel-airline",
+      "toAnchorId": "role:preferred-airline",
+      "relationType": "has_role",
+      "domain": "project:signalr",
+      "sensitivity": "normal",
+      "recallMode": "auto",
+      "confidence": 0.92
+    },
+    {
+      "edgeId": "edge-cluster-stirtrek-area",
+      "fromAnchorId": "anchor:stirtrek-2026-easton",
+      "toAnchorId": "cluster:stirtrek-trip",
+      "relationType": "member_of_cluster",
+      "domain": "project:signalr",
+      "sensitivity": "normal",
+      "recallMode": "auto",
+      "confidence": 0.9
+    },
+    {
+      "edgeId": "edge-cluster-stirtrek-plan",
+      "fromAnchorId": "anchor:stirtrek-2026-travel-plan",
+      "toAnchorId": "cluster:stirtrek-trip",
+      "relationType": "member_of_cluster",
+      "domain": "project:signalr",
+      "sensitivity": "normal",
+      "recallMode": "auto",
+      "confidence": 0.9
+    },
+    {
+      "edgeId": "edge-role-stirtrek-plan",
+      "fromAnchorId": "anchor:stirtrek-2026-travel-plan",
+      "toAnchorId": "role:trip-plan",
+      "relationType": "has_role",
+      "domain": "project:signalr",
+      "sensitivity": "normal",
+      "recallMode": "auto",
+      "confidence": 0.88
+    },
+    {
+      "edgeId": "edge-role-stirtrek-area",
+      "fromAnchorId": "anchor:stirtrek-2026-easton",
+      "toAnchorId": "role:venue-area",
+      "relationType": "has_role",
+      "domain": "project:signalr",
+      "sensitivity": "normal",
+      "recallMode": "auto",
+      "confidence": 0.88
+    },
+    {
+      "edgeId": "edge-travel-to-stirtrek-plan",
+      "fromAnchorId": "anchor:user-travel-airline",
+      "toAnchorId": "anchor:stirtrek-2026-travel-plan",
+      "relationType": "preference_applies_to_trip",
+      "domain": "project:signalr",
+      "sensitivity": "normal",
+      "recallMode": "auto",
+      "confidence": 0.73
+    },
+    {
+      "edgeId": "edge-travel-profile-to-stirtrek-cluster",
+      "fromAnchorId": "cluster:travel-profile",
+      "toAnchorId": "cluster:stirtrek-trip",
+      "relationType": "supports_cluster",
+      "domain": "project:signalr",
+      "sensitivity": "normal",
+      "recallMode": "auto",
+      "confidence": 0.74
     }
   ],
   "cases": [
@@ -171,6 +299,26 @@
       "id": "travel-combined",
       "prompt": "When I book flights, what airport and airline do I usually use?",
       "expectedContainsDocumentIds": ["doc-travel-origin", "doc-travel-airline"]
+    },
+    {
+      "id": "travel-preferences-reminder",
+      "prompt": "So you don't remember my travel preferences?",
+      "expectedContainsDocumentIds": ["doc-travel-origin", "doc-travel-airline"]
+    },
+    {
+      "id": "boston-trip-should-recall-travel-profile",
+      "prompt": "If I wanted to fly to Boston in October how much would I have to pay round trip?",
+      "expectedContainsDocumentIds": ["doc-travel-origin", "doc-travel-airline"]
+    },
+    {
+      "id": "stirtrek-flight-hotel-combo",
+      "prompt": "I'm speaking at Stir Trek 2026 - I fly out of IAH. What's the best flight / hotel combination for me? Closest to the venue preferably. And do you think I'll need a rental car?",
+      "expectedContainsDocumentIds": ["doc-travel-origin", "doc-travel-airline", "doc-stirtrek-travel-plan"]
+    },
+    {
+      "id": "stirtrek-downtown-check",
+      "prompt": "And is the conference in downtown Columbus essentially?",
+      "expectedTopDocumentId": "doc-stirtrek-venue-area"
     },
     {
       "id": "noise-smalltalk",

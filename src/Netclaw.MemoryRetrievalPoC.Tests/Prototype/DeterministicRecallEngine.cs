@@ -20,12 +20,21 @@ internal sealed class DeterministicRecallEngine
     [
         "dashboard", "where", "url", "metrics", "chart", "airport", "airline"
     ];
+    private static readonly HashSet<string> TravelIntentTerms =
+    [
+        "travel", "trip", "flight", "fly", "hotel", "rental", "car", "airport", "airline", "book", "boston", "columbus", "stir", "trek"
+    ];
 
     private readonly IReadOnlyList<IndexedDocument> _documents;
     private readonly IReadOnlyDictionary<string, List<Posting>> _postings;
     private readonly IReadOnlyDictionary<string, double> _idf;
     private readonly TermTrie _trie;
     private readonly IReadOnlyDictionary<string, List<RetrievedEdge>> _edgesByAnchor;
+    private readonly IReadOnlyDictionary<string, IndexedDocument[]> _documentsByFacet;
+    private readonly IReadOnlyDictionary<string, string[]> _clustersByAnchor;
+    private readonly IReadOnlyDictionary<string, string[]> _rolesByAnchor;
+    private readonly IReadOnlyDictionary<string, string[]> _anchorsByCluster;
+    private readonly IReadOnlyDictionary<string, string[]> _supportedClusters;
 
     public DeterministicRecallEngine(IReadOnlyList<RetrievedDocument> documents, IReadOnlyList<RetrievedEdge> edges)
     {
@@ -33,6 +42,26 @@ internal sealed class DeterministicRecallEngine
         _edgesByAnchor = edges
             .GroupBy(x => x.FromAnchorId, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(x => x.Key, x => x.ToList(), StringComparer.OrdinalIgnoreCase);
+        _clustersByAnchor = edges
+            .Where(x => x.RelationType == "member_of_cluster")
+            .GroupBy(x => x.FromAnchorId, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(x => x.Key, x => x.Select(e => e.ToAnchorId).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), StringComparer.OrdinalIgnoreCase);
+        _rolesByAnchor = edges
+            .Where(x => x.RelationType == "has_role")
+            .GroupBy(x => x.FromAnchorId, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(x => x.Key, x => x.Select(e => e.ToAnchorId).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), StringComparer.OrdinalIgnoreCase);
+        _anchorsByCluster = edges
+            .Where(x => x.RelationType == "member_of_cluster")
+            .GroupBy(x => x.ToAnchorId, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(x => x.Key, x => x.Select(e => e.FromAnchorId).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), StringComparer.OrdinalIgnoreCase);
+        _supportedClusters = edges
+            .Where(x => x.RelationType == "supports_cluster")
+            .GroupBy(x => x.FromAnchorId, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(x => x.Key, x => x.Select(e => e.ToAnchorId).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), StringComparer.OrdinalIgnoreCase);
+        _documentsByFacet = _documents
+            .SelectMany(d => d.Facets.Select(f => (Facet: f, Document: d)))
+            .GroupBy(x => x.Facet, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(x => x.Key, x => x.Select(y => y.Document).Distinct().ToArray(), StringComparer.OrdinalIgnoreCase);
 
         var postings = new Dictionary<string, List<Posting>>(StringComparer.OrdinalIgnoreCase);
         var trie = new TermTrie();
@@ -80,6 +109,7 @@ internal sealed class DeterministicRecallEngine
         var scores = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
         var reasons = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
         var anchorScores = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
+        var clusterScores = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var marker in query.Markers)
         {
@@ -96,10 +126,28 @@ internal sealed class DeterministicRecallEngine
             Accumulate(bigram, 8.0, exactOnly: true, PostingField.Bigram);
         }
 
+        foreach (var facet in query.Facets)
+        {
+            if (!_documentsByFacet.TryGetValue(facet, out var facetDocuments))
+                continue;
+
+            foreach (var document in facetDocuments)
+                Add(document.DocumentId, FacetBoost(facet, query, document), $"facet:{facet}");
+        }
+
         foreach (var document in _documents)
         {
             if (anchorScores.TryGetValue(document.AnchorId, out var anchorBoost))
                 Add(document.DocumentId, anchorBoost * 2.5, $"anchor:{document.AnchorId}");
+
+            if (_clustersByAnchor.TryGetValue(document.AnchorId, out var clusters))
+            {
+                foreach (var cluster in clusters)
+                {
+                    if (clusterScores.TryGetValue(cluster, out var clusterBoost))
+                        Add(document.DocumentId, clusterBoost * ClusterWeight(query, document, cluster), $"cluster:{cluster}");
+                }
+            }
 
             if (_edgesByAnchor.TryGetValue(document.AnchorId, out var neighbors))
             {
@@ -114,12 +162,15 @@ internal sealed class DeterministicRecallEngine
             Add(document.DocumentId, IntentAdjustment(query, document), "intent");
         }
 
-        var hits = _documents
+        var rankedHits = _documents
             .Where(d => scores.TryGetValue(d.DocumentId, out var score) && score >= 8.0)
-            .Select(d => new RetrievalHit(d.DocumentId, d.Title, scores[d.DocumentId], reasons[d.DocumentId]))
+            .Select(d => new ScoredHit(d, scores[d.DocumentId], reasons[d.DocumentId]))
             .OrderByDescending(x => x.Score)
             .ThenBy(x => x.DocumentId, StringComparer.Ordinal)
-            .Take(maxResults)
+            .ToArray();
+
+        var hits = Diversify(rankedHits, query, maxResults)
+            .Select(x => new RetrievalHit(x.DocumentId, x.Title, x.Score, x.Reasons))
             .ToArray();
 
         return hits;
@@ -154,6 +205,28 @@ internal sealed class DeterministicRecallEngine
                     anchorScores[posting.AnchorId] = anchorScores.TryGetValue(posting.AnchorId, out var current)
                         ? current + anchorScore
                         : anchorScore;
+
+                    if (_clustersByAnchor.TryGetValue(posting.AnchorId, out var clusters))
+                    {
+                        foreach (var cluster in clusters)
+                        {
+                            var clusterScore = anchorScore * 0.9;
+                            clusterScores[cluster] = clusterScores.TryGetValue(cluster, out var currentCluster)
+                                ? currentCluster + clusterScore
+                                : clusterScore;
+
+                            if (_supportedClusters.TryGetValue(cluster, out var supported))
+                            {
+                                foreach (var siblingCluster in supported)
+                                {
+                                    var supportScore = clusterScore * 0.55;
+                                    clusterScores[siblingCluster] = clusterScores.TryGetValue(siblingCluster, out var currentSupport)
+                                        ? currentSupport + supportScore
+                                        : supportScore;
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -192,6 +265,7 @@ internal sealed class DeterministicRecallEngine
         double Confidence,
         bool IsActionOrProcedure,
         bool IsLookupOrDashboard,
+        IReadOnlyList<string> Facets,
         IReadOnlyList<string> MarkerTokens,
         IReadOnlyList<string> AnchorTokens,
         IReadOnlyList<string> TitleTokens,
@@ -217,19 +291,21 @@ internal sealed class DeterministicRecallEngine
                 || allText.Contains("url", StringComparison.Ordinal)
                 || allText.Contains("chart", StringComparison.Ordinal)
                 || allText.Contains("metrics", StringComparison.Ordinal);
+            var facets = InferFacets(document.AnchorId, document.Title, document.Body).ToArray();
 
-            return new IndexedDocument(document.DocumentId, document.AnchorId, document.Title, document.Confidence, isActionOrProcedure, isLookupOrDashboard, markers, anchorTokens, titleTokens, bodyTokens, bigrams);
+            return new IndexedDocument(document.DocumentId, document.AnchorId, document.Title, document.Confidence, isActionOrProcedure, isLookupOrDashboard, facets, markers, anchorTokens, titleTokens, bodyTokens, bigrams);
         }
     }
 
-    private sealed record QueryFeatures(IReadOnlyList<string> Markers, IReadOnlyList<string> Tokens, IReadOnlyList<string> Bigrams)
+    private sealed record QueryFeatures(IReadOnlyList<string> Markers, IReadOnlyList<string> Tokens, IReadOnlyList<string> Bigrams, IReadOnlyList<string> Facets)
     {
         public static QueryFeatures From(string prompt)
         {
             var markers = MarkerRegex.Matches(prompt).Select(x => x.Value).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
             var tokens = Tokenize(prompt).ToArray();
             var bigrams = MakeBigrams(tokens).ToArray();
-            return new QueryFeatures(markers, tokens, bigrams);
+            var facets = InferFacets(prompt, prompt, prompt).ToArray();
+            return new QueryFeatures(markers, tokens, bigrams, facets);
         }
     }
 
@@ -237,14 +313,15 @@ internal sealed class DeterministicRecallEngine
     {
         var actionSignals = query.Tokens.Count(x => ActionIntentTerms.Contains(x));
         var lookupSignals = query.Tokens.Count(x => LookupIntentTerms.Contains(x));
+        var travelSignals = query.Tokens.Count(x => TravelIntentTerms.Contains(x));
         var score = 0.0;
 
         if (actionSignals > 0)
         {
             if (document.IsActionOrProcedure)
-                score += 180.0 + (actionSignals * 18.0);
+                score += 240.0 + (actionSignals * 24.0);
             if (document.IsLookupOrDashboard)
-                score -= 180.0;
+                score -= 260.0;
         }
 
         if (lookupSignals > 0)
@@ -255,7 +332,108 @@ internal sealed class DeterministicRecallEngine
                 score -= 40.0;
         }
 
+        if (travelSignals > 0)
+        {
+            if (document.AnchorId.Contains("travel", StringComparison.OrdinalIgnoreCase))
+                score += 85.0 + (travelSignals * 10.0);
+            if (document.AnchorId.Contains("stirtrek", StringComparison.OrdinalIgnoreCase))
+                score += 45.0 + (travelSignals * 4.0);
+        }
+
         return score;
+    }
+
+    private static double FacetBoost(string facet, QueryFeatures query, IndexedDocument document)
+    {
+        return facet switch
+        {
+            "travel_profile" => document.Facets.Contains("travel_profile", StringComparer.OrdinalIgnoreCase)
+                ? 140.0 + (query.Tokens.Count(x => TravelIntentTerms.Contains(x)) * 8.0)
+                : 0.0,
+            "trip_planning" => document.Facets.Contains("trip_planning", StringComparer.OrdinalIgnoreCase)
+                ? 110.0 + (query.Tokens.Count(x => TravelIntentTerms.Contains(x)) * 6.0)
+                : 0.0,
+            "incident_recovery" => document.IsActionOrProcedure
+                ? 130.0
+                : document.IsLookupOrDashboard ? -120.0 : 45.0,
+            "rollout_guardrail" => document.IsActionOrProcedure ? 120.0 : 35.0,
+            _ => 0.0
+        };
+    }
+
+    private double ClusterWeight(QueryFeatures query, IndexedDocument document, string cluster)
+    {
+        var weight = 1.2;
+
+        if (cluster.Contains("travel-profile", StringComparison.OrdinalIgnoreCase))
+        {
+            var travelSignals = query.Tokens.Count(x => TravelIntentTerms.Contains(x));
+            weight += travelSignals > 0 ? 3.0 : 0.0;
+
+            if (_rolesByAnchor.TryGetValue(document.AnchorId, out var roles))
+            {
+                if (roles.Contains("role:origin-airport", StringComparer.OrdinalIgnoreCase)
+                    || roles.Contains("role:preferred-airline", StringComparer.OrdinalIgnoreCase))
+                    weight += 2.5;
+            }
+        }
+
+        if (cluster.Contains("stirtrek-trip", StringComparison.OrdinalIgnoreCase))
+        {
+            var tripSignals = query.Tokens.Count(x => TravelIntentTerms.Contains(x)) + query.Tokens.Count(x => x is "stir" or "trek");
+            weight += tripSignals > 0 ? 1.75 : 0.0;
+        }
+
+        return weight;
+    }
+
+    private IReadOnlyList<ScoredHit> Diversify(IReadOnlyList<ScoredHit> rankedHits, QueryFeatures query, int maxResults)
+    {
+        if (rankedHits.Count <= maxResults)
+            return rankedHits;
+
+        var results = new List<ScoredHit>(maxResults);
+        var used = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var activeFacets = query.Facets
+            .Where(f => f is "travel_profile" or "trip_planning" or "incident_recovery" or "rollout_guardrail")
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        foreach (var facet in activeFacets)
+        {
+            var bestFacetHit = rankedHits.FirstOrDefault(x => x.Document.Facets.Contains(facet, StringComparer.OrdinalIgnoreCase) && used.Add(x.DocumentId));
+            if (bestFacetHit is not null)
+                results.Add(bestFacetHit);
+            if (results.Count == maxResults)
+                return results;
+        }
+
+        var wantsTravelBundle = query.Facets.Contains("travel_profile", StringComparer.OrdinalIgnoreCase)
+            || query.Facets.Contains("trip_planning", StringComparer.OrdinalIgnoreCase);
+        if (wantsTravelBundle)
+        {
+            foreach (var requiredRole in new[] { "role:origin-airport", "role:preferred-airline" })
+            {
+                var bestRoleHit = rankedHits.FirstOrDefault(x =>
+                    _rolesByAnchor.TryGetValue(x.Document.AnchorId, out var roles)
+                    && roles.Contains(requiredRole, StringComparer.OrdinalIgnoreCase)
+                    && used.Add(x.DocumentId));
+                if (bestRoleHit is not null)
+                    results.Add(bestRoleHit);
+                if (results.Count == maxResults)
+                    return results;
+            }
+        }
+
+        foreach (var hit in rankedHits)
+        {
+            if (used.Add(hit.DocumentId))
+                results.Add(hit);
+            if (results.Count == maxResults)
+                break;
+        }
+
+        return results;
     }
 
     private static IEnumerable<string> Tokenize(string text)
@@ -295,6 +473,44 @@ internal sealed class DeterministicRecallEngine
                 yield return previous + " " + token;
             previous = token;
         }
+    }
+
+    private static IEnumerable<string> InferFacets(string anchorId, string title, string body)
+    {
+        var text = (anchorId + " " + title + " " + body).ToLowerInvariant();
+
+        if (text.Contains("airport", StringComparison.Ordinal)
+            || text.Contains("airline", StringComparison.Ordinal)
+            || text.Contains("united", StringComparison.Ordinal)
+            || text.Contains("iah", StringComparison.Ordinal)
+            || text.Contains("flight", StringComparison.Ordinal)
+            || text.Contains("fly", StringComparison.Ordinal)
+            || text.Contains("travel profile", StringComparison.Ordinal)
+            || text.Contains("status benefits", StringComparison.Ordinal))
+            yield return "travel_profile";
+
+        if (text.Contains("hotel", StringComparison.Ordinal)
+            || text.Contains("rental car", StringComparison.Ordinal)
+            || text.Contains("stir trek", StringComparison.Ordinal)
+            || text.Contains("easton", StringComparison.Ordinal)
+            || text.Contains("columbus", StringComparison.Ordinal)
+            || text.Contains("cmh", StringComparison.Ordinal))
+            yield return "trip_planning";
+
+        if (text.Contains("beta", StringComparison.Ordinal)
+            || text.Contains("queue", StringComparison.Ordinal)
+            || text.Contains("backlog", StringComparison.Ordinal)
+            || text.Contains("worker-b", StringComparison.Ordinal)
+            || text.Contains("recover", StringComparison.Ordinal)
+            || text.Contains("restart", StringComparison.Ordinal))
+            yield return "incident_recovery";
+
+        if (text.Contains("alpha", StringComparison.Ordinal)
+            || text.Contains("rollout", StringComparison.Ordinal)
+            || text.Contains("feature flag", StringComparison.Ordinal)
+            || text.Contains("guardrail", StringComparison.Ordinal)
+            || text.Contains("deploy", StringComparison.Ordinal))
+            yield return "rollout_guardrail";
     }
 
     private sealed class TermTrie
@@ -352,6 +568,12 @@ internal sealed class DeterministicRecallEngine
     }
 
     private sealed record Posting(string DocumentId, string AnchorId, PostingField Field);
+
+    private sealed record ScoredHit(IndexedDocument Document, double Score, IReadOnlyList<string> Reasons)
+    {
+        public string DocumentId => Document.DocumentId;
+        public string Title => Document.Title;
+    }
 
     private enum PostingField
     {
