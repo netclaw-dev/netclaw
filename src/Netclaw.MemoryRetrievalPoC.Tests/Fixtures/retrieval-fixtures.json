@@ -113,6 +113,34 @@
       "confidence": 0.84
     },
     {
+      "documentId": "doc-textforge-pricing",
+      "anchorId": "anchor:textforge-pricing-model",
+      "anchorType": "project",
+      "canonicalName": "textforge-pricing-model",
+      "aliases": ["textforge", "pricing model", "monthly annual pricing", "textforge pricing"],
+      "title": "TextForge Pricing Model",
+      "markdownBody": "TextForge uses a monthly subscription with a discounted annual plan for teams.",
+      "memoryClass": "durable_fact",
+      "domain": "user:aaron",
+      "sensitivity": "normal",
+      "recallMode": "auto",
+      "confidence": 0.91
+    },
+    {
+      "documentId": "doc-homepage-messaging",
+      "anchorId": "anchor:homepage-feature-messaging",
+      "anchorType": "project",
+      "canonicalName": "homepage-feature-messaging",
+      "aliases": ["homepage copy", "feature naming", "marketing message", "homepage feature"],
+      "title": "Homepage Feature Messaging",
+      "markdownBody": "For homepage messaging, prefer benefit-first language and concrete outcome framing.",
+      "memoryClass": "durable_fact",
+      "domain": "user:aaron",
+      "sensitivity": "normal",
+      "recallMode": "auto",
+      "confidence": 0.83
+    },
+    {
       "documentId": "doc-secret-token",
       "anchorId": "anchor:ops-secret-token",
       "anchorType": "credential",

@@ -108,4 +108,52 @@ public sealed class RetrievalPrototypeTests : IDisposable
         Assert.Contains("preferred_airline=doc-travel-airline", sb.ToString(), StringComparison.Ordinal);
         Assert.Contains("facet:travel_profile", sb.ToString(), StringComparison.Ordinal);
     }
+
+    [Fact]
+    public async Task Scope_request_planner_builds_reasonable_hard_and_soft_scopes()
+    {
+        await _store.InitializeAndSeedAsync(_fixture);
+
+        var documents = await _store.LoadDocumentsAsync("project:signalr");
+        var userDocuments = await _store.LoadDocumentsAsync("user:aaron");
+        var allDocuments = documents.Concat(userDocuments).ToArray();
+        var edges = await _store.LoadEdgesAsync("project:signalr");
+        var planner = new ScopeRequestPlanner(allDocuments, edges);
+
+        var dmTravel = planner.Plan(new QueryContext(
+            Surface: "slack_dm",
+            Prompt: "I'm speaking at Stir Trek 2026 - I fly out of IAH. What's the best flight / hotel combination for me?",
+            UserDomain: "user:aaron",
+            ChannelDomain: null,
+            ThreadTitle: "Stir Trek 2026 travel planning"));
+
+        Assert.Equal("user:aaron", dmTravel.HardScope);
+        Assert.Equal("bundle", dmTravel.RetrievalMode);
+        Assert.Contains("travel_profile", dmTravel.Facets);
+        Assert.Contains("trip_planning", dmTravel.Facets);
+        Assert.Contains(dmTravel.SoftScopes, x => x.Contains("Stir Trek", StringComparison.OrdinalIgnoreCase) || x.Contains("stirtrek", StringComparison.OrdinalIgnoreCase));
+
+        var dmTextForge = planner.Plan(new QueryContext(
+            Surface: "slack_dm",
+            Prompt: "What's the pricing model for TextForge?",
+            UserDomain: "user:aaron",
+            ChannelDomain: null,
+            ThreadTitle: "Product planning"));
+
+        Assert.Equal("user:aaron", dmTextForge.HardScope);
+        Assert.Contains(dmTextForge.SoftScopes, x => x.Contains("textforge", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains("project_fact", dmTextForge.Facets);
+
+        var opsChannel = planner.Plan(new QueryContext(
+            Surface: "slack_channel",
+            Prompt: "The queue is piling up again. What did we do last time to get backlog under control?",
+            UserDomain: "user:aaron",
+            ChannelDomain: "project:signalr",
+            ThreadTitle: "worker-b alerts"));
+
+        Assert.Equal("project:signalr", opsChannel.HardScope);
+        Assert.Equal("ranked", opsChannel.RetrievalMode);
+        Assert.Contains("incident_recovery", opsChannel.Facets);
+        Assert.Contains(opsChannel.SoftScopes, x => x.Contains("worker-b", StringComparison.OrdinalIgnoreCase) || x.Contains("ops", StringComparison.OrdinalIgnoreCase));
+    }
 }
