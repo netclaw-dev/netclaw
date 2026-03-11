@@ -1,4 +1,5 @@
 using Netclaw.MemoryRetrievalPoC.Tests.Prototype;
+using System.Text;
 using Xunit;
 
 namespace Netclaw.MemoryRetrievalPoC.Tests;
@@ -76,4 +77,35 @@ public sealed class RetrievalPrototypeTests : IDisposable
     }
 
     public void Dispose() => _store.Dispose();
+
+    [Fact]
+    public async Task Deterministic_retrieval_explains_ranked_hits_bundles_and_neighbors()
+    {
+        await _store.InitializeAndSeedAsync(_fixture);
+
+        var documents = await _store.LoadDocumentsAsync("project:signalr");
+        var edges = await _store.LoadEdgesAsync("project:signalr");
+        var engine = new DeterministicRecallEngine(documents, edges);
+
+        var sb = new StringBuilder();
+        foreach (var testCase in _fixture.Cases)
+        {
+            var explanation = engine.Explain(testCase.Prompt, 4);
+            sb.AppendLine($"CASE {testCase.Id}");
+            sb.AppendLine($"PROMPT {explanation.Prompt}");
+            sb.AppendLine($"FACETS [{string.Join(", ", explanation.Facets)}]");
+            sb.AppendLine("RANKED");
+            foreach (var hit in explanation.RankedHits)
+                sb.AppendLine($"- {hit.DocumentId} score={hit.Score:F1} facets=[{string.Join(", ", hit.Facets)}] slots=[{string.Join(", ", hit.Slots)}] reasons=[{string.Join(", ", hit.Reasons)}]");
+            sb.AppendLine($"BUNDLE [{string.Join(", ", explanation.BundleSlots.Select(x => x.Key + "=" + x.Value))}]");
+            sb.AppendLine("NEIGHBORS");
+            foreach (var pair in explanation.InferredNeighbors)
+                sb.AppendLine($"- {pair.Key}: [{string.Join(", ", pair.Value)}]");
+            sb.AppendLine();
+        }
+
+        Assert.Contains("CASE stirtrek-flight-hotel-combo", sb.ToString(), StringComparison.Ordinal);
+        Assert.Contains("preferred_airline=doc-travel-airline", sb.ToString(), StringComparison.Ordinal);
+        Assert.Contains("facet:travel_profile", sb.ToString(), StringComparison.Ordinal);
+    }
 }

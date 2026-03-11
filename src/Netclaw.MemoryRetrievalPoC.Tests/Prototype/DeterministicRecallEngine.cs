@@ -31,6 +31,8 @@ internal sealed class DeterministicRecallEngine
     private readonly TermTrie _trie;
     private readonly IReadOnlyDictionary<string, List<RetrievedEdge>> _edgesByAnchor;
     private readonly IReadOnlyDictionary<string, IndexedDocument[]> _documentsByFacet;
+    private readonly IReadOnlyDictionary<string, string[]> _aliasesByAnchor;
+    private readonly IReadOnlyDictionary<string, List<NeighborEdge>> _inferredNeighborsByAnchor;
     private readonly IReadOnlyDictionary<string, string[]> _clustersByAnchor;
     private readonly IReadOnlyDictionary<string, string[]> _rolesByAnchor;
     private readonly IReadOnlyDictionary<string, string[]> _anchorsByCluster;
@@ -50,6 +52,13 @@ internal sealed class DeterministicRecallEngine
             .Where(x => x.RelationType == "has_role")
             .GroupBy(x => x.FromAnchorId, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(x => x.Key, x => x.Select(e => e.ToAnchorId).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), StringComparer.OrdinalIgnoreCase);
+        _aliasesByAnchor = edges
+            .Where(x => x.RelationType == "alias" && x.ToAnchorId.StartsWith("alias:", StringComparison.OrdinalIgnoreCase))
+            .GroupBy(x => x.FromAnchorId, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(
+                x => x.Key,
+                x => x.Select(e => e.ToAnchorId["alias:".Length..]).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+                StringComparer.OrdinalIgnoreCase);
         _anchorsByCluster = edges
             .Where(x => x.RelationType == "member_of_cluster")
             .GroupBy(x => x.ToAnchorId, StringComparer.OrdinalIgnoreCase)
@@ -58,6 +67,7 @@ internal sealed class DeterministicRecallEngine
             .Where(x => x.RelationType == "supports_cluster")
             .GroupBy(x => x.FromAnchorId, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(x => x.Key, x => x.Select(e => e.ToAnchorId).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), StringComparer.OrdinalIgnoreCase);
+        _inferredNeighborsByAnchor = BuildInferredNeighbors(_documents, _aliasesByAnchor);
         _documentsByFacet = _documents
             .SelectMany(d => d.Facets.Select(f => (Facet: f, Document: d)))
             .GroupBy(x => x.Facet, StringComparer.OrdinalIgnoreCase)
@@ -155,6 +165,15 @@ internal sealed class DeterministicRecallEngine
                 {
                     if (anchorScores.TryGetValue(edge.ToAnchorId, out var neighborBoost))
                         Add(document.DocumentId, neighborBoost * 0.75, $"edge:{edge.RelationType}");
+                }
+            }
+
+            if (_inferredNeighborsByAnchor.TryGetValue(document.AnchorId, out var inferredNeighbors))
+            {
+                foreach (var neighbor in inferredNeighbors)
+                {
+                    if (anchorScores.TryGetValue(neighbor.ToAnchorId, out var neighborBoost))
+                        Add(document.DocumentId, neighborBoost * neighbor.Weight, $"neighbor:{neighbor.Reason}");
                 }
             }
 
@@ -268,6 +287,41 @@ internal sealed class DeterministicRecallEngine
         }
 
         return new RetrievalBundle(slotMap);
+    }
+
+    public RetrievalExplanation Explain(string prompt, int maxResults = 5)
+    {
+        var query = QueryFeatures.From(prompt);
+        var rankedHits = Search(prompt, maxResults);
+        var bundle = SearchBundle(prompt);
+
+        var explainedHits = rankedHits
+            .Select(hit =>
+            {
+                var document = _documents.First(x => x.DocumentId == hit.DocumentId);
+                return new ExplainedHit(
+                    hit.DocumentId,
+                    hit.Title,
+                    hit.Score,
+                    hit.Reasons,
+                    document.Facets,
+                    InferSlots(document));
+            })
+            .ToArray();
+
+        var neighbors = explainedHits.ToDictionary(
+            x => x.DocumentId,
+            x => (IReadOnlyList<string>)(_inferredNeighborsByAnchor.TryGetValue(_documents.First(d => d.DocumentId == x.DocumentId).AnchorId, out var list)
+                ? list.Select(n => $"{n.ToAnchorId} ({n.Reason}, {n.Weight:F2})").ToArray()
+                : Array.Empty<string>()),
+            StringComparer.OrdinalIgnoreCase);
+
+        return new RetrievalExplanation(
+            prompt,
+            query.Facets,
+            explainedHits,
+            bundle.Slots.ToDictionary(x => x.Key, x => x.Value.DocumentId, StringComparer.OrdinalIgnoreCase),
+            neighbors);
     }
 
     private IEnumerable<(string Term, bool IsPrefix)> EnumerateTerms(string term, bool exactOnly)
@@ -554,6 +608,76 @@ internal sealed class DeterministicRecallEngine
         return slots;
     }
 
+    private static IReadOnlyDictionary<string, List<NeighborEdge>> BuildInferredNeighbors(
+        IReadOnlyList<IndexedDocument> documents,
+        IReadOnlyDictionary<string, string[]> aliasesByAnchor)
+    {
+        var byAnchor = new Dictionary<string, List<NeighborEdge>>(StringComparer.OrdinalIgnoreCase);
+
+        for (var i = 0; i < documents.Count; i++)
+        {
+            var left = documents[i];
+            var leftSignature = BuildSignature(left, aliasesByAnchor);
+
+            for (var j = i + 1; j < documents.Count; j++)
+            {
+                var right = documents[j];
+                var rightSignature = BuildSignature(right, aliasesByAnchor);
+                var sharedTerms = leftSignature.Intersect(rightSignature, StringComparer.OrdinalIgnoreCase).ToArray();
+                if (sharedTerms.Length == 0)
+                    continue;
+
+                var overlap = sharedTerms.Length / (double)Math.Max(leftSignature.Count, rightSignature.Count);
+                var sharedFacets = left.Facets.Intersect(right.Facets, StringComparer.OrdinalIgnoreCase).Count();
+                var similarity = overlap + (sharedFacets * 0.18);
+                if (similarity < 0.22)
+                    continue;
+
+                var reason = sharedFacets > 0 ? "signature+facet" : "signature";
+                AddNeighbor(left.AnchorId, right.AnchorId, Math.Min(1.1, 0.45 + similarity), reason);
+                AddNeighbor(right.AnchorId, left.AnchorId, Math.Min(1.1, 0.45 + similarity), reason);
+            }
+        }
+
+        return byAnchor;
+
+        void AddNeighbor(string fromAnchor, string toAnchor, double weight, string reason)
+        {
+            if (!byAnchor.TryGetValue(fromAnchor, out var list))
+            {
+                list = [];
+                byAnchor[fromAnchor] = list;
+            }
+
+            list.Add(new NeighborEdge(toAnchor, weight, reason));
+        }
+    }
+
+    private static HashSet<string> BuildSignature(IndexedDocument document, IReadOnlyDictionary<string, string[]> aliasesByAnchor)
+    {
+        var signature = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var term in document.MarkerTokens)
+            signature.Add(term);
+        foreach (var term in document.TitleTokens)
+            signature.Add(term);
+        foreach (var term in document.AnchorTokens)
+            signature.Add(term);
+        foreach (var facet in document.Facets)
+            signature.Add($"facet:{facet}");
+
+        if (aliasesByAnchor.TryGetValue(document.AnchorId, out var aliases))
+        {
+            foreach (var alias in aliases)
+            {
+                foreach (var token in Tokenize(alias))
+                    signature.Add(token);
+            }
+        }
+
+        return signature;
+    }
+
     private sealed class TermTrie
     {
         private readonly Node _root = new();
@@ -609,6 +733,8 @@ internal sealed class DeterministicRecallEngine
     }
 
     private sealed record Posting(string DocumentId, string AnchorId, PostingField Field);
+
+    private sealed record NeighborEdge(string ToAnchorId, double Weight, string Reason);
 
     private sealed record ScoredHit(IndexedDocument Document, double Score, IReadOnlyList<string> Reasons)
     {

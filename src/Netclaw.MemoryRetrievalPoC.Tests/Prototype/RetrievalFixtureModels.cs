@@ -83,3 +83,18 @@ internal sealed record RetrievalHit(
 
 internal sealed record RetrievalBundle(
     IReadOnlyDictionary<string, RetrievalHit> Slots);
+
+internal sealed record RetrievalExplanation(
+    string Prompt,
+    IReadOnlyList<string> Facets,
+    IReadOnlyList<ExplainedHit> RankedHits,
+    IReadOnlyDictionary<string, string> BundleSlots,
+    IReadOnlyDictionary<string, IReadOnlyList<string>> InferredNeighbors);
+
+internal sealed record ExplainedHit(
+    string DocumentId,
+    string Title,
+    double Score,
+    IReadOnlyList<string> Reasons,
+    IReadOnlyList<string> Facets,
+    IReadOnlyList<string> Slots);
