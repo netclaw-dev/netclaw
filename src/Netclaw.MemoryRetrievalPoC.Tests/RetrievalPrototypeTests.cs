@@ -21,6 +21,7 @@ public sealed class RetrievalPrototypeTests : IDisposable
         foreach (var testCase in _fixture.Cases)
         {
             var hits = engine.Search(testCase.Prompt, 3);
+            var bundle = engine.SearchBundle(testCase.Prompt);
 
             if (testCase.ExpectEmpty && hits.Count != 0)
             {
@@ -52,6 +53,21 @@ public sealed class RetrievalPrototypeTests : IDisposable
                 {
                     if (hits.Any(x => x.DocumentId == forbidden))
                         failures.Add($"{testCase.Id}: forbidden hit {forbidden} surfaced");
+                }
+            }
+
+            if (testCase.ExpectedBundle is { Count: > 0 })
+            {
+                foreach (var pair in testCase.ExpectedBundle)
+                {
+                    if (!bundle.Slots.TryGetValue(pair.Key, out var hit))
+                    {
+                        failures.Add($"{testCase.Id}: expected bundle slot {pair.Key} but it was missing; bundle=[{string.Join(", ", bundle.Slots.Select(x => x.Key + "=" + x.Value.DocumentId))}]");
+                        continue;
+                    }
+
+                    if (!string.Equals(hit.DocumentId, pair.Value, StringComparison.Ordinal))
+                        failures.Add($"{testCase.Id}: expected bundle slot {pair.Key} -> {pair.Value} but got {hit.DocumentId}");
                 }
             }
         }

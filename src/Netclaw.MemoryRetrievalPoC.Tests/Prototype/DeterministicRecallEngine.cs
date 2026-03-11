@@ -248,6 +248,28 @@ internal sealed class DeterministicRecallEngine
         }
     }
 
+    public RetrievalBundle SearchBundle(string prompt)
+    {
+        var rankedHits = Search(prompt, maxResults: Math.Max(_documents.Count, 8));
+        var slotMap = new Dictionary<string, RetrievalHit>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var hit in rankedHits)
+        {
+            var document = _documents.First(x => x.DocumentId == hit.DocumentId);
+            var roles = InferSlots(document);
+
+            foreach (var role in roles)
+            {
+                if (slotMap.ContainsKey(role))
+                    continue;
+
+                slotMap[role] = hit;
+            }
+        }
+
+        return new RetrievalBundle(slotMap);
+    }
+
     private IEnumerable<(string Term, bool IsPrefix)> EnumerateTerms(string term, bool exactOnly)
     {
         yield return (term, false);
@@ -412,11 +434,10 @@ internal sealed class DeterministicRecallEngine
             || query.Facets.Contains("trip_planning", StringComparer.OrdinalIgnoreCase);
         if (wantsTravelBundle)
         {
-            foreach (var requiredRole in new[] { "role:origin-airport", "role:preferred-airline" })
+            foreach (var requiredSlot in new[] { "origin_airport", "preferred_airline" })
             {
                 var bestRoleHit = rankedHits.FirstOrDefault(x =>
-                    _rolesByAnchor.TryGetValue(x.Document.AnchorId, out var roles)
-                    && roles.Contains(requiredRole, StringComparer.OrdinalIgnoreCase)
+                    InferSlots(x.Document).Contains(requiredSlot, StringComparer.OrdinalIgnoreCase)
                     && used.Add(x.DocumentId));
                 if (bestRoleHit is not null)
                     results.Add(bestRoleHit);
@@ -511,6 +532,26 @@ internal sealed class DeterministicRecallEngine
             || text.Contains("guardrail", StringComparison.Ordinal)
             || text.Contains("deploy", StringComparison.Ordinal))
             yield return "rollout_guardrail";
+    }
+
+    private static IReadOnlyList<string> InferSlots(IndexedDocument document)
+    {
+        var text = (document.AnchorId + " " + document.Title).ToLowerInvariant();
+        var slots = new List<string>();
+
+        if (text.Contains("airport", StringComparison.Ordinal) || text.Contains("iah", StringComparison.Ordinal))
+            slots.Add("origin_airport");
+
+        if (text.Contains("airline", StringComparison.Ordinal) || text.Contains("united", StringComparison.Ordinal))
+            slots.Add("preferred_airline");
+
+        if (text.Contains("travel recommendation", StringComparison.Ordinal) || text.Contains("hotel", StringComparison.Ordinal) || text.Contains("rental car", StringComparison.Ordinal))
+            slots.Add("trip_plan");
+
+        if (text.Contains("venue area", StringComparison.Ordinal) || text.Contains("downtown", StringComparison.Ordinal) || text.Contains("easton", StringComparison.Ordinal))
+            slots.Add("venue_area");
+
+        return slots;
     }
 
     private sealed class TermTrie

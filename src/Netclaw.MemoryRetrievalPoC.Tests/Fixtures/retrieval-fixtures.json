@@ -298,7 +298,10 @@
     {
       "id": "travel-combined",
       "prompt": "When I book flights, what airport and airline do I usually use?",
-      "expectedContainsDocumentIds": ["doc-travel-origin", "doc-travel-airline"]
+      "expectedBundle": {
+        "origin_airport": "doc-travel-origin",
+        "preferred_airline": "doc-travel-airline"
+      }
     },
     {
       "id": "travel-preferences-reminder",
@@ -308,12 +311,19 @@
     {
       "id": "boston-trip-should-recall-travel-profile",
       "prompt": "If I wanted to fly to Boston in October how much would I have to pay round trip?",
-      "expectedContainsDocumentIds": ["doc-travel-origin", "doc-travel-airline"]
+      "expectedBundle": {
+        "origin_airport": "doc-travel-origin",
+        "preferred_airline": "doc-travel-airline"
+      }
     },
     {
       "id": "stirtrek-flight-hotel-combo",
       "prompt": "I'm speaking at Stir Trek 2026 - I fly out of IAH. What's the best flight / hotel combination for me? Closest to the venue preferably. And do you think I'll need a rental car?",
-      "expectedContainsDocumentIds": ["doc-travel-origin", "doc-travel-airline", "doc-stirtrek-travel-plan"]
+      "expectedBundle": {
+        "origin_airport": "doc-travel-origin",
+        "preferred_airline": "doc-travel-airline",
+        "trip_plan": "doc-stirtrek-travel-plan"
+      }
     },
     {
       "id": "stirtrek-downtown-check",

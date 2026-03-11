@@ -54,6 +54,7 @@ internal sealed record RetrievalCase(
     string Prompt,
     string? ExpectedTopDocumentId = null,
     IReadOnlyList<string>? ExpectedContainsDocumentIds = null,
+    IReadOnlyDictionary<string, string>? ExpectedBundle = null,
     IReadOnlyList<string>? ForbiddenDocumentIds = null,
     bool ExpectEmpty = false);
 
@@ -79,3 +80,6 @@ internal sealed record RetrievalHit(
     string Title,
     double Score,
     IReadOnlyList<string> Reasons);
+
+internal sealed record RetrievalBundle(
+    IReadOnlyDictionary<string, RetrievalHit> Slots);
