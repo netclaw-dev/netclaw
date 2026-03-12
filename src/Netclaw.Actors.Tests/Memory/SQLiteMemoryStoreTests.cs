@@ -173,6 +173,45 @@ public sealed class SQLiteMemoryStoreTests : IDisposable
         Assert.DoesNotContain(results, x => x.DocumentId == "doc-expired-trace");
     }
 
+    [Fact]
+    public async Task InitializeAsync_demotes_malformed_auto_recall_documents_to_searchable()
+    {
+        await _store.InitializeAsync();
+
+        var anchor = _store.CreateDefaultAnchor("textforge", "project:test");
+        var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+        await _store.UpsertDocumentAsync(new SQLiteMemoryDocument(
+            DocumentId: "doc-bad",
+            Anchor: anchor,
+            MemoryClass: "durable_fact",
+            Title: "doc:doc-bad",
+            MarkdownBody: "Malformed imported document.",
+            AliasesJson: null,
+            FacetsJson: null,
+            SlotsJson: null,
+            UpdateSemantics: "merge-document",
+            Domain: "project:test",
+            Sensitivity: "normal",
+            RecallMode: "auto",
+            Confidence: 0.8,
+            FreshnessAtMs: now,
+            ExpiresAtMs: null,
+            CreatedAtMs: now,
+            UpdatedAtMs: now));
+
+        await _store.InitializeAsync();
+
+        await using var conn = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = _dbPath }.ToString());
+        await conn.OpenAsync();
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT recall_mode, facets_json FROM memory_documents WHERE document_id = 'doc-bad';";
+        await using var reader = await cmd.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        Assert.Equal("searchable", reader.GetString(0));
+        Assert.Contains("needs_metadata_enrichment", reader.GetString(1), StringComparison.OrdinalIgnoreCase);
+    }
+
     public void Dispose()
     {
         TryDeleteDirectory(_baseDir);

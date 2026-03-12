@@ -365,6 +365,9 @@ static void ConfigureDaemonServices(
     services.AddSingleton(memoryIndexLayer);
     services.AddSingleton<IContextLayerProvider>(memoryIndexLayer);
 
+    // Current time context layer — transient per-turn grounding for date/time-sensitive prompts
+    services.AddSingleton<IContextLayerProvider, CurrentTimeContextLayer>();
+
     // Expose all context layers as IReadOnlyList for actor DI resolution
     services.AddSingleton<IReadOnlyList<IContextLayerProvider>>(sp =>
         sp.GetServices<IContextLayerProvider>().ToList());

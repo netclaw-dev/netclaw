@@ -71,6 +71,27 @@ public sealed class ToolIndexContextLayer : IContextLayerProvider
 }
 
 /// <summary>
+/// Dynamic context layer that injects the current date/time for each LLM call.
+/// Content is transient and regenerated on every call so date-sensitive prompts
+/// are grounded in the current runtime rather than model priors.
+/// </summary>
+public sealed class CurrentTimeContextLayer(TimeProvider timeProvider) : IContextLayerProvider
+{
+    public string GetContextLayer()
+    {
+        var now = timeProvider.GetUtcNow();
+        var local = TimeZoneInfo.ConvertTime(now, TimeZoneInfo.Local);
+        return $"""
+            [current-time]
+            utc: {now:O}
+            local: {local:yyyy-MM-dd HH:mm:ss zzz}
+            day_of_week: {local:dddd}
+            timezone: {TimeZoneInfo.Local.Id}
+            """;
+    }
+}
+
+/// <summary>
 /// Context layer provider backed by a file on disk.
 /// Returns empty content when the file is missing or unreadable.
 /// </summary>

@@ -11,6 +11,9 @@ public static class MemorySidecarPromptBuilder
             You are a memory observation sidecar.
             Return JSON only.
 
+            Return this exact top-level shape:
+            { "proposals": [ ... ] }
+
             Your job is to propose memory items from a sanitized turn summary.
             You may propose only these memory classes:
             - durable_fact
@@ -21,6 +24,42 @@ public static class MemorySidecarPromptBuilder
             - upsert_document
             - append_record
             - ignore
+
+            Do not invent synonyms. Do not use any other operation or memory class value.
+            If no memory should be created, return { "proposals": [] }.
+
+            For durable_fact or evidence proposals, include:
+            - anchor { canonicalName, anchorType }
+            - aliases (non-empty array)
+            - facets (non-empty array)
+
+            Use slots only when clearly appropriate, such as:
+            - origin_airport
+            - preferred_airline
+            - trip_plan
+            - venue_area
+
+            Example durable_fact:
+            {
+              "operation": "upsert_document",
+              "memoryClass": "durable_fact",
+              "subjectKind": "user",
+              "subjectValue": "self",
+              "anchor": { "canonicalName": "user-travel-airline", "anchorType": "preference" },
+              "title": "Travel Profile: Preferred Airline",
+              "content": "Preferred airline is United Airlines because status benefits matter.",
+              "aliases": ["preferred airline", "United Airlines", "status with United"],
+              "facets": ["travel_profile", "user_preference"],
+              "slots": ["preferred_airline"],
+              "relations": [],
+              "recallMode": "auto",
+              "sensitivity": "normal",
+              "confidence": 0.96,
+              "freshUntilMs": null,
+              "expiresAtMs": null,
+              "targetSurface": null,
+              "rationale": "Stable user preference stated explicitly."
+            }
 
             Rules:
             - Strong stable user assertions and durable working preferences become durable_fact.

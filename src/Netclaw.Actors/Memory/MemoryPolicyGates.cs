@@ -6,10 +6,35 @@ namespace Netclaw.Actors.Memory;
 
 public sealed class MemoryProposalGate
 {
+    private static readonly string[] StableIdentityFacets =
+    [
+        "travel_profile",
+        "personal_profile",
+        "household_profile",
+        "pet_profile"
+    ];
+
+    private static readonly string[] StableIdentityAnchorTypes =
+    [
+        "preference",
+        "profile",
+        "pet",
+        "location"
+    ];
+
+    public sealed record ProposalDecisionSummary(
+        int Total,
+        int Accepted,
+        int IdentityUpdates,
+        IReadOnlyDictionary<string, int> RejectionReasons);
+
     private static readonly TimeSpan EvidenceExpiry = TimeSpan.FromDays(30);
     private static readonly TimeSpan TraceExpiry = TimeSpan.FromHours(72);
     private static readonly Regex IdentityTitlePattern = new(
         "\\b(name|tone|style|voice|persona|communication preference|response preference)\\b",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
+    private static readonly Regex VolatileIdentityPattern = new(
+        "\\b(today|tonight|tomorrow|this week|this month|right now|currently)\\b",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
     public IReadOnlyList<SQLiteMemoryCurationOperation> Accept(
@@ -27,30 +52,51 @@ public sealed class MemoryProposalGate
     {
         var accepted = new List<SQLiteMemoryCurationOperation>();
         var identityUpdates = new List<IdentityProfileUpdate>();
+        var rejectionReasons = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var proposal in proposals)
         {
             if (proposal is null)
+            {
+                CountReject("null-proposal");
                 continue;
+            }
 
             if (proposal.Operation is not ("upsert_document" or "append_record"))
+            {
+                CountReject("invalid-operation");
                 continue;
+            }
 
             if (proposal.MemoryClass is not ("durable_fact" or "evidence" or "trace"))
+            {
+                CountReject("invalid-memory-class");
                 continue;
+            }
 
             if (!HasRequiredRetrievalMetadata(proposal))
+            {
+                CountReject("missing-retrieval-metadata");
                 continue;
+            }
 
             if (string.Equals(proposal.TargetSurface, "identity_profile", StringComparison.OrdinalIgnoreCase))
             {
                 if (!IsIdentityEligible(proposal))
+                {
+                    CountReject("invalid-identity-surface");
                     continue;
+                }
 
                 identityUpdates.Add(new IdentityProfileUpdate(
                     proposal.Title,
                     proposal.Content,
                     proposal.Rationale));
+
+                var mirrorOperation = TryBuildIdentityMirrorOperation(proposal, domain, defaultSensitivity, nowMs);
+                if (mirrorOperation is not null)
+                    accepted.Add(mirrorOperation);
+
                 continue;
             }
 
@@ -76,35 +122,20 @@ public sealed class MemoryProposalGate
                 content = JsonSerializer.Serialize(envelope);
             }
 
-            accepted.Add(new SQLiteMemoryCurationOperation(
-                Kind: proposal.Operation == "append_record" ? "record" : "document",
-                MemoryClass: proposal.MemoryClass,
-                MemoryId: null,
-                AnchorCanonicalName: string.IsNullOrWhiteSpace(proposal.Anchor?.CanonicalName)
-                    ? (string.IsNullOrWhiteSpace(proposal.SubjectValue) ? proposal.Title : proposal.SubjectValue)
-                    : proposal.Anchor.CanonicalName,
-                AnchorType: string.IsNullOrWhiteSpace(proposal.Anchor?.AnchorType)
-                    ? (string.IsNullOrWhiteSpace(proposal.SubjectKind) ? "concept" : proposal.SubjectKind)
-                    : proposal.Anchor.AnchorType,
-                Title: proposal.Title,
-                Content: content,
-                AliasesJson: SerializeStringList(proposal.Aliases),
-                FacetsJson: SerializeStringList(proposal.Facets),
-                SlotsJson: SerializeSlots(proposal),
-                Relations: BuildRelations(proposal),
-                UpdateSemantics: proposal.MemoryClass == "trace"
-                    ? "conversation_trace"
-                    : proposal.Operation == "append_record" ? "immutable-record" : "merge-document",
-                Domain: domain,
-                Sensitivity: sensitivity,
-                RecallMode: recallMode,
-                Confidence: Math.Clamp(proposal.Confidence, 0.0, 1.0),
-                FreshnessAtMs: freshnessAt,
-                ExpiresAtMs: expiry,
-                SupersedesRecordId: null));
+            accepted.Add(BuildMemoryOperation(proposal, domain, sensitivity, recallMode, freshnessAt, expiry, content));
         }
 
-        return new MemoryProposalGateResult(accepted, identityUpdates);
+        return new MemoryProposalGateResult(
+            accepted,
+            identityUpdates,
+            new ProposalDecisionSummary(
+                Total: proposals.Count,
+                Accepted: accepted.Count,
+                IdentityUpdates: identityUpdates.Count,
+                RejectionReasons: rejectionReasons));
+
+        void CountReject(string reason)
+            => rejectionReasons[reason] = rejectionReasons.TryGetValue(reason, out var current) ? current + 1 : 1;
     }
 
     private static string ResolveRecallMode(MemoryProposal proposal, string sensitivity)
@@ -138,14 +169,93 @@ public sealed class MemoryProposalGate
         if (proposal.MemoryClass != "durable_fact")
             return false;
 
-        if (!string.Equals(proposal.SubjectKind, "user", StringComparison.OrdinalIgnoreCase)
-            && !string.Equals(proposal.SubjectKind, "assistant", StringComparison.OrdinalIgnoreCase)
-            && !string.Equals(proposal.SubjectKind, "agent", StringComparison.OrdinalIgnoreCase))
+        var isUser = string.Equals(proposal.SubjectKind, "user", StringComparison.OrdinalIgnoreCase);
+        var isAssistant = string.Equals(proposal.SubjectKind, "assistant", StringComparison.OrdinalIgnoreCase);
+        var isAgent = string.Equals(proposal.SubjectKind, "agent", StringComparison.OrdinalIgnoreCase);
+        if (!isUser && !isAssistant && !isAgent)
             return false;
 
         var title = proposal.Title ?? string.Empty;
         var rationale = proposal.Rationale ?? string.Empty;
-        return IdentityTitlePattern.IsMatch(title) || IdentityTitlePattern.IsMatch(rationale);
+        if (IdentityTitlePattern.IsMatch(title) || IdentityTitlePattern.IsMatch(rationale))
+            return true;
+
+        if (!isUser)
+            return false;
+
+        var facets = proposal.Facets ?? [];
+        if (facets.Any(f => StableIdentityFacets.Contains(f, StringComparer.OrdinalIgnoreCase)))
+            return true;
+
+        return proposal.Anchor is not null
+            && StableIdentityAnchorTypes.Contains(proposal.Anchor.AnchorType, StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static SQLiteMemoryCurationOperation? TryBuildIdentityMirrorOperation(
+        MemoryProposal proposal,
+        string domain,
+        string defaultSensitivity,
+        long nowMs)
+    {
+        if (!string.Equals(proposal.SubjectKind, "user", StringComparison.OrdinalIgnoreCase))
+            return null;
+
+        var facets = proposal.Facets ?? [];
+        if (!facets.Any(f => StableIdentityFacets.Contains(f, StringComparer.OrdinalIgnoreCase)))
+            return null;
+
+        var identityText = string.Join(" ", new[] { proposal.Title, proposal.Content, proposal.Rationale }.Where(x => !string.IsNullOrWhiteSpace(x)));
+        if (VolatileIdentityPattern.IsMatch(identityText))
+            return null;
+
+        var sensitivity = string.IsNullOrWhiteSpace(proposal.Sensitivity)
+            ? defaultSensitivity
+            : proposal.Sensitivity;
+
+        if (string.Equals(sensitivity, "secret", StringComparison.OrdinalIgnoreCase))
+            return null;
+
+        var freshnessAt = proposal.FreshUntilMs ?? nowMs;
+        var expiry = ResolveExpiry(proposal, freshnessAt);
+        var recallMode = ResolveRecallMode(proposal, sensitivity);
+        return BuildMemoryOperation(proposal, domain, sensitivity, recallMode, freshnessAt, expiry, proposal.Content);
+    }
+
+    private static SQLiteMemoryCurationOperation BuildMemoryOperation(
+        MemoryProposal proposal,
+        string domain,
+        string sensitivity,
+        string recallMode,
+        long freshnessAt,
+        long? expiry,
+        string content)
+    {
+        return new SQLiteMemoryCurationOperation(
+            Kind: proposal.Operation == "append_record" ? "record" : "document",
+            MemoryClass: proposal.MemoryClass,
+            MemoryId: null,
+            AnchorCanonicalName: string.IsNullOrWhiteSpace(proposal.Anchor?.CanonicalName)
+                ? (string.IsNullOrWhiteSpace(proposal.SubjectValue) ? proposal.Title : proposal.SubjectValue)
+                : proposal.Anchor.CanonicalName,
+            AnchorType: string.IsNullOrWhiteSpace(proposal.Anchor?.AnchorType)
+                ? (string.IsNullOrWhiteSpace(proposal.SubjectKind) ? "concept" : proposal.SubjectKind)
+                : proposal.Anchor.AnchorType,
+            Title: proposal.Title,
+            Content: content,
+            AliasesJson: SerializeStringList(proposal.Aliases),
+            FacetsJson: SerializeStringList(proposal.Facets),
+            SlotsJson: SerializeSlots(proposal),
+            Relations: BuildRelations(proposal),
+            UpdateSemantics: proposal.MemoryClass == "trace"
+                ? "conversation_trace"
+                : proposal.Operation == "append_record" ? "immutable-record" : "merge-document",
+            Domain: domain,
+            Sensitivity: sensitivity,
+            RecallMode: recallMode,
+            Confidence: Math.Clamp(proposal.Confidence, 0.0, 1.0),
+            FreshnessAtMs: freshnessAt,
+            ExpiresAtMs: expiry,
+            SupersedesRecordId: null);
     }
 
     private static bool HasRequiredRetrievalMetadata(MemoryProposal proposal)
@@ -222,7 +332,8 @@ public sealed record IdentityProfileUpdate(
 
 public sealed record MemoryProposalGateResult(
     IReadOnlyList<SQLiteMemoryCurationOperation> MemoryOperations,
-    IReadOnlyList<IdentityProfileUpdate> IdentityUpdates);
+    IReadOnlyList<IdentityProfileUpdate> IdentityUpdates,
+    MemoryProposalGate.ProposalDecisionSummary Summary);
 
 public sealed class RecallPlanGate
 {

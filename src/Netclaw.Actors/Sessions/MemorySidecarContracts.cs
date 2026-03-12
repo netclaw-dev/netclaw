@@ -1,5 +1,19 @@
 namespace Netclaw.Actors.Sessions;
 
+public enum MemoryProposalOperation
+{
+    UpsertDocument,
+    AppendRecord,
+    Ignore
+}
+
+public enum MemoryProposalClass
+{
+    DurableFact,
+    Evidence,
+    Trace
+}
+
 public sealed record MemoryObservationRequest(
     string SessionId,
     string TurnId,

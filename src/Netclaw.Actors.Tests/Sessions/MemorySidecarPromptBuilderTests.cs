@@ -48,4 +48,18 @@ public sealed class MemorySidecarPromptBuilderTests
         Assert.Contains("I always fly out of IAH", prompt, StringComparison.Ordinal);
         Assert.Contains("turn_completed", prompt, StringComparison.Ordinal);
     }
+
+    [Fact]
+    public void MemoryObservationSystemPrompt_constrains_shape_and_allowed_values()
+    {
+        var prompt = MemorySidecarPromptBuilder.BuildMemoryObservationSystemPrompt();
+
+        Assert.Contains("{ \"proposals\": [ ... ] }", prompt, StringComparison.Ordinal);
+        Assert.Contains("Do not invent synonyms", prompt, StringComparison.Ordinal);
+        Assert.Contains("upsert_document", prompt, StringComparison.Ordinal);
+        Assert.Contains("append_record", prompt, StringComparison.Ordinal);
+        Assert.Contains("durable_fact", prompt, StringComparison.Ordinal);
+        Assert.Contains("evidence", prompt, StringComparison.Ordinal);
+        Assert.Contains("trace", prompt, StringComparison.Ordinal);
+    }
 }

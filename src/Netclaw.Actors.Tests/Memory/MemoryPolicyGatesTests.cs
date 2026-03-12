@@ -98,10 +98,90 @@ public sealed class MemoryPolicyGatesTests
         Assert.Equal(2, result.MemoryOperations.Count);
         Assert.Contains(result.MemoryOperations, x => x.MemoryClass == "durable_fact" && x.Kind == "document");
         Assert.Contains(result.MemoryOperations, x => x.MemoryClass == "evidence" && x.Kind == "record");
+        Assert.DoesNotContain(result.MemoryOperations, x => x.Title == "Communication style");
         Assert.DoesNotContain(result.MemoryOperations, x => x.Title == "Identity profile update");
 
+        Assert.Equal(2, result.IdentityUpdates.Count);
+        Assert.Contains(result.IdentityUpdates, x => x.Title == "Communication style");
+        Assert.Contains(result.IdentityUpdates, x => x.Title == "Identity profile update");
+    }
+
+    [Fact]
+    public void ProposalGate_mirrors_stable_user_identity_fact_into_durable_memory()
+    {
+        var gate = new MemoryProposalGate();
+        var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+        var result = gate.Evaluate(
+        [
+            new MemoryProposal(
+                "upsert_document",
+                "durable_fact",
+                "user",
+                "self",
+                new MemoryAnchor("user-cat-ardbeg", "pet"),
+                "Cat",
+                "Aaron's cat is named Ardbeg.",
+                ["Ardbeg", "cat"],
+                ["personal_profile", "pet_profile"],
+                ["pet_name"],
+                null,
+                "auto",
+                "normal",
+                0.95,
+                now,
+                null,
+                "identity_profile",
+                "Stable personal fact useful for future recall")
+        ],
+        "project:test",
+        "normal",
+        now);
+
         var identityUpdate = Assert.Single(result.IdentityUpdates);
-        Assert.Equal("Communication style", identityUpdate.Title);
+        Assert.Equal("Cat", identityUpdate.Title);
+
+        var mirrored = Assert.Single(result.MemoryOperations);
+        Assert.Equal("durable_fact", mirrored.MemoryClass);
+        Assert.Equal("document", mirrored.Kind);
+        Assert.Equal("Cat", mirrored.Title);
+        Assert.Contains("pet_profile", mirrored.FacetsJson ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void ProposalGate_does_not_mirror_volatile_identity_status_into_durable_memory()
+    {
+        var gate = new MemoryProposalGate();
+        var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+        var result = gate.Evaluate(
+        [
+            new MemoryProposal(
+                "upsert_document",
+                "durable_fact",
+                "user",
+                "self",
+                new MemoryAnchor("user-current-location", "location"),
+                "Current location",
+                "Aaron is working out of the RV this week and will be home Friday.",
+                ["RV", "working remotely"],
+                ["personal_profile"],
+                ["current_location"],
+                null,
+                "auto",
+                "normal",
+                0.9,
+                now,
+                null,
+                "identity_profile",
+                "Current temporary status update")
+        ],
+        "project:test",
+        "normal",
+        now);
+
+        Assert.Single(result.IdentityUpdates);
+        Assert.Empty(result.MemoryOperations);
     }
 
     [Fact]

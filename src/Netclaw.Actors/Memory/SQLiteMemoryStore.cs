@@ -7,6 +7,7 @@ namespace Netclaw.Actors.Memory;
 /// </summary>
 public sealed class SQLiteMemoryStore
 {
+    private const string MissingMetadataFacet = "needs_metadata_enrichment";
     private readonly string _connectionString;
     private readonly TimeProvider _timeProvider;
 
@@ -161,6 +162,24 @@ public sealed class SQLiteMemoryStore
                OR update_semantics = 'conversation_trace';
             """;
         await hygieneCmd.ExecuteNonQueryAsync(ct);
+
+        await using var metadataCmd = conn.CreateCommand();
+        metadataCmd.CommandText = $"""
+            UPDATE memory_documents
+            SET recall_mode = 'searchable',
+                facets_json = CASE
+                    WHEN facets_json IS NULL OR TRIM(facets_json) = '' THEN '[\"{MissingMetadataFacet}\"]'
+                    ELSE facets_json
+                END
+            WHERE memory_class = 'durable_fact'
+              AND recall_mode = 'auto'
+              AND (
+                    title LIKE 'doc:%'
+                 OR aliases_json IS NULL
+                 OR facets_json IS NULL
+              );
+            """;
+        await metadataCmd.ExecuteNonQueryAsync(ct);
     }
 
     public async Task UpsertDocumentAsync(SQLiteMemoryDocument document, CancellationToken ct = default)

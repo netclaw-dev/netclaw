@@ -1088,6 +1088,16 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 "normal",
                 NowMs());
             var accepted = gateResult.MemoryOperations;
+
+            TurnLog().Info(
+                "memory_observation_gate_summary total={Total} accepted={Accepted} identityUpdates={IdentityUpdates} rejections={Rejections}",
+                gateResult.Summary.Total,
+                gateResult.Summary.Accepted,
+                gateResult.Summary.IdentityUpdates,
+                gateResult.Summary.RejectionReasons.Count == 0
+                    ? "-"
+                    : string.Join("|", gateResult.Summary.RejectionReasons.Select(x => $"{x.Key}:{x.Value}")));
+
             if (gateResult.IdentityUpdates.Count > 0)
             {
                 TurnLog().Info(
@@ -1102,6 +1112,10 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             }
 
             TurnLog().Info("memory_observation_gate_result accepted={AcceptedCount} rejectedOrIgnored={RejectedCount}", accepted.Count, Math.Max(0, msg.Proposals.Count - accepted.Count));
+            TurnLog().Info(
+                "memory_observation_accept_details items={Items}",
+                string.Join(" | ", accepted.Select(x =>
+                    $"title={x.Title};anchor={x.AnchorCanonicalName};class={x.MemoryClass};aliases={(x.AliasesJson ?? "-")};facets={(x.FacetsJson ?? "-")};slots={(x.SlotsJson ?? "-")}")));
 
             EnqueueCheckpointFireAndForget(new MemoryCheckpointRequest(
                 SessionId: _sessionId.Value,
