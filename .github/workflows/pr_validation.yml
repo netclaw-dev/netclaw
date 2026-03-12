@@ -20,7 +20,7 @@ jobs:
 
     strategy:
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [arc-netclaw]
 
     steps:
       - name: "Checkout"
@@ -69,7 +69,7 @@ jobs:
 
   slopwatch:
     name: Slopwatch
-    runs-on: ubuntu-latest
+    runs-on: arc-netclaw
     timeout-minutes: 10
 
     steps:

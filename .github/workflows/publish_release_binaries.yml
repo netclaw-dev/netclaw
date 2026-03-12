@@ -14,7 +14,7 @@ jobs:
   # ────────────────────────────────────────────────────────────────────
   create-release:
     name: Create GitHub Release
-    runs-on: ubuntu-latest
+    runs-on: arc-netclaw
     timeout-minutes: 5
     steps:
     - name: Checkout
@@ -75,7 +75,7 @@ jobs:
     strategy:
       matrix:
         include:
-          - os: ubuntu-latest
+          - os: arc-netclaw
             rid: linux-x64
             archive_ext: tar.gz
           - os: ubuntu-24.04-arm
@@ -210,7 +210,7 @@ jobs:
   publish-binary-manifest:
     name: Publish Binary Manifest
     needs: publish-binaries
-    runs-on: ubuntu-latest
+    runs-on: arc-netclaw
     timeout-minutes: 10
     steps:
     - name: Checkout

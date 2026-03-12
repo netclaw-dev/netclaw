@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   publish:
-    runs-on: ubuntu-latest
+    runs-on: arc-netclaw
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
