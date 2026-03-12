@@ -14,13 +14,15 @@ on:
 
 jobs:
   test:
-    name: Test-${{matrix.os}}
+    name: Test-${{matrix.name}}
     runs-on: ${{matrix.os}}
     timeout-minutes: 30
 
     strategy:
       matrix:
-        os: [arc-netclaw]
+        include:
+          - os: arc-netclaw
+            name: ubuntu-latest
 
     steps:
       - name: "Checkout"
