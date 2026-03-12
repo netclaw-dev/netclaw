@@ -23,11 +23,13 @@ public static class ProviderDescriptorServiceExtensions
                 sp.GetRequiredService<IHttpClientFactory>().CreateClient(HttpClientName)));
 
         services.AddSingleton(sp => sp.GetRequiredService<ProviderDescriptorCatalog>().Ollama);
+        services.AddSingleton(sp => sp.GetRequiredService<ProviderDescriptorCatalog>().OpenAiCompatible);
         services.AddSingleton(sp => sp.GetRequiredService<ProviderDescriptorCatalog>().OpenAi);
         services.AddSingleton(sp => sp.GetRequiredService<ProviderDescriptorCatalog>().Anthropic);
         services.AddSingleton(sp => sp.GetRequiredService<ProviderDescriptorCatalog>().OpenRouter);
 
         services.AddSingleton<IProviderDescriptor>(sp => sp.GetRequiredService<ProviderDescriptorCatalog>().Ollama);
+        services.AddSingleton<IProviderDescriptor>(sp => sp.GetRequiredService<ProviderDescriptorCatalog>().OpenAiCompatible);
         services.AddSingleton<IProviderDescriptor>(sp => sp.GetRequiredService<ProviderDescriptorCatalog>().OpenAi);
         services.AddSingleton<IProviderDescriptor>(sp => sp.GetRequiredService<ProviderDescriptorCatalog>().Anthropic);
         services.AddSingleton<IProviderDescriptor>(sp => sp.GetRequiredService<ProviderDescriptorCatalog>().OpenRouter);
