@@ -10,18 +10,22 @@ public sealed class ProviderDescriptorCatalog
 {
     private ProviderDescriptorCatalog(
         OllamaDescriptor ollama,
+        OpenAiCompatibleDescriptor openAiCompatible,
         OpenAiDescriptor openAi,
         AnthropicDescriptor anthropic,
         OpenRouterDescriptor openRouter)
     {
         Ollama = ollama;
+        OpenAiCompatible = openAiCompatible;
         OpenAi = openAi;
         Anthropic = anthropic;
         OpenRouter = openRouter;
-        All = [Ollama, OpenAi, Anthropic, OpenRouter];
+        All = [Ollama, OpenAiCompatible, OpenAi, Anthropic, OpenRouter];
     }
 
     public OllamaDescriptor Ollama { get; }
+
+    public OpenAiCompatibleDescriptor OpenAiCompatible { get; }
 
     public OpenAiDescriptor OpenAi { get; }
 
@@ -37,6 +41,7 @@ public sealed class ProviderDescriptorCatalog
 
         return new ProviderDescriptorCatalog(
             new OllamaDescriptor(httpClient),
+            new OpenAiCompatibleDescriptor(httpClient),
             new OpenAiDescriptor(httpClient),
             new AnthropicDescriptor(httpClient),
             new OpenRouterDescriptor(httpClient));
