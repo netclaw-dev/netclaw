@@ -14,7 +14,7 @@ using Xunit;
 
 namespace Netclaw.Daemon.Tests.Gateway;
 
-public sealed class DaemonRuntimeStatusServiceTests : IDisposable
+public sealed class DaemonRuntimeStatusServiceTests : IAsyncLifetime
 {
     private static readonly SessionConfig DefaultSessionConfig = new()
     {
@@ -35,12 +35,14 @@ public sealed class DaemonRuntimeStatusServiceTests : IDisposable
 
     private NetclawPaths CreatePaths() => new(_tempBase);
 
-    public void Dispose()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
     {
-        TryDeleteDirectory(_tempBase);
+        await TryDeleteDirectoryAsync(_tempBase);
     }
 
-    private static void TryDeleteDirectory(string path)
+    private static async Task TryDeleteDirectoryAsync(string path)
     {
         if (!Directory.Exists(path))
             return;
@@ -56,11 +58,11 @@ public sealed class DaemonRuntimeStatusServiceTests : IDisposable
             }
             catch (IOException) when (i < 7)
             {
-                Thread.Sleep(25 * (i + 1));
+                await Task.Delay(25 * (i + 1));
             }
             catch (UnauthorizedAccessException) when (i < 7)
             {
-                Thread.Sleep(25 * (i + 1));
+                await Task.Delay(25 * (i + 1));
             }
         }
 
