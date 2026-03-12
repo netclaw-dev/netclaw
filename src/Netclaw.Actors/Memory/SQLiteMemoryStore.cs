@@ -176,10 +176,10 @@ public sealed class SQLiteMemoryStore
         cmd.Transaction = tx;
         cmd.CommandText = """
             INSERT INTO memory_documents(
-              document_id, anchor_id, memory_class, title, markdown_body, aliases_json, facets_json, update_semantics,
+              document_id, anchor_id, memory_class, title, markdown_body, aliases_json, facets_json, slots_json, update_semantics,
               domain, sensitivity, recall_mode, confidence, freshness_at,
               expires_at, created_at, updated_at)
-            VALUES($id, $anchorId, $memoryClass, $title, $body, $aliasesJson, $facetsJson, $semantics,
+            VALUES($id, $anchorId, $memoryClass, $title, $body, $aliasesJson, $facetsJson, $slotsJson, $semantics,
               $domain, $sensitivity, $recallMode, $confidence, $freshnessAt,
               $expiresAt, $createdAt, $updatedAt)
             ON CONFLICT(document_id) DO UPDATE SET
@@ -188,6 +188,7 @@ public sealed class SQLiteMemoryStore
               markdown_body=excluded.markdown_body,
               aliases_json=excluded.aliases_json,
               facets_json=excluded.facets_json,
+              slots_json=excluded.slots_json,
               update_semantics=excluded.update_semantics,
               domain=excluded.domain,
               sensitivity=excluded.sensitivity,
@@ -204,6 +205,7 @@ public sealed class SQLiteMemoryStore
         cmd.Parameters.AddWithValue("$body", document.MarkdownBody);
         cmd.Parameters.AddWithValue("$aliasesJson", (object?)document.AliasesJson ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$facetsJson", (object?)document.FacetsJson ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$slotsJson", (object?)document.SlotsJson ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$semantics", document.UpdateSemantics);
         cmd.Parameters.AddWithValue("$domain", document.Domain);
         cmd.Parameters.AddWithValue("$sensitivity", document.Sensitivity);
@@ -919,10 +921,10 @@ public sealed class SQLiteMemoryStore
                 recordCmd.Transaction = tx;
                 recordCmd.CommandText = """
                     INSERT INTO memory_records(
-                      record_id, anchor_id, memory_class, record_type, payload_json, aliases_json, facets_json, supersedes_record_id,
+                      record_id, anchor_id, memory_class, record_type, payload_json, aliases_json, facets_json, slots_json, supersedes_record_id,
                       update_semantics, domain, sensitivity, recall_mode, confidence,
                       freshness_at, expires_at, created_at)
-                    VALUES($id, $anchorId, $memoryClass, $recordType, $payloadJson, $aliasesJson, $facetsJson, $supersedes,
+                    VALUES($id, $anchorId, $memoryClass, $recordType, $payloadJson, $aliasesJson, $facetsJson, $slotsJson, $supersedes,
                       $semantics, $domain, $sensitivity, $recallMode, $confidence,
                       $freshnessAt, $expiresAt, $createdAt);
                     """;
@@ -933,6 +935,7 @@ public sealed class SQLiteMemoryStore
                 recordCmd.Parameters.AddWithValue("$payloadJson", operation.Content);
                 recordCmd.Parameters.AddWithValue("$aliasesJson", (object?)operation.AliasesJson ?? DBNull.Value);
                 recordCmd.Parameters.AddWithValue("$facetsJson", (object?)operation.FacetsJson ?? DBNull.Value);
+                recordCmd.Parameters.AddWithValue("$slotsJson", (object?)operation.SlotsJson ?? DBNull.Value);
                 recordCmd.Parameters.AddWithValue("$supersedes", (object?)operation.SupersedesRecordId ?? DBNull.Value);
                 recordCmd.Parameters.AddWithValue("$semantics", operation.UpdateSemantics);
                 recordCmd.Parameters.AddWithValue("$domain", operation.Domain);
@@ -954,10 +957,10 @@ public sealed class SQLiteMemoryStore
             documentCmd.Transaction = tx;
             documentCmd.CommandText = """
                 INSERT INTO memory_documents(
-                  document_id, anchor_id, memory_class, title, markdown_body, aliases_json, facets_json, update_semantics,
+                  document_id, anchor_id, memory_class, title, markdown_body, aliases_json, facets_json, slots_json, update_semantics,
                   domain, sensitivity, recall_mode, confidence, freshness_at,
                   expires_at, created_at, updated_at)
-                VALUES($id, $anchorId, $memoryClass, $title, $body, $aliasesJson, $facetsJson, $semantics,
+                VALUES($id, $anchorId, $memoryClass, $title, $body, $aliasesJson, $facetsJson, $slotsJson, $semantics,
                   $domain, $sensitivity, $recallMode, $confidence, $freshnessAt,
                   $expiresAt, $createdAt, $updatedAt)
                 ON CONFLICT(document_id) DO UPDATE SET
@@ -966,6 +969,7 @@ public sealed class SQLiteMemoryStore
                   markdown_body=excluded.markdown_body,
                   aliases_json=excluded.aliases_json,
                   facets_json=excluded.facets_json,
+                  slots_json=excluded.slots_json,
                   update_semantics=excluded.update_semantics,
                   domain=excluded.domain,
                   sensitivity=excluded.sensitivity,
@@ -982,6 +986,7 @@ public sealed class SQLiteMemoryStore
             documentCmd.Parameters.AddWithValue("$body", operation.Content);
             documentCmd.Parameters.AddWithValue("$aliasesJson", (object?)operation.AliasesJson ?? DBNull.Value);
             documentCmd.Parameters.AddWithValue("$facetsJson", (object?)operation.FacetsJson ?? DBNull.Value);
+            documentCmd.Parameters.AddWithValue("$slotsJson", (object?)operation.SlotsJson ?? DBNull.Value);
             documentCmd.Parameters.AddWithValue("$semantics", operation.UpdateSemantics);
             documentCmd.Parameters.AddWithValue("$domain", operation.Domain);
             documentCmd.Parameters.AddWithValue("$sensitivity", operation.Sensitivity);

@@ -74,6 +74,132 @@ public sealed class MemoryRedesignedEvalSuiteTests : IDisposable
     }
 
     [Fact]
+    public async Task Formation_then_recall_surfaces_travel_origin_and_persists_metadata()
+    {
+        await _store.InitializeAsync();
+        var now = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
+        var gate = new MemoryProposalGate();
+
+        var gateResult = gate.Evaluate(
+        [
+            new MemoryProposal(
+                "upsert_document",
+                "durable_fact",
+                "user",
+                "self",
+                new MemoryAnchor("user-travel-origin", "preference"),
+                "Travel Profile: Primary Origin Airport",
+                "Primary origin airport is IAH in Houston.",
+                ["origin airport", "fly out of", "IAH"],
+                ["travel_profile", "user_preference"],
+                ["origin_airport"],
+                null,
+                "auto",
+                "normal",
+                0.97,
+                now,
+                null,
+                null,
+                "stable explicit user travel preference")
+        ],
+        "user:aaron",
+        "normal",
+        now);
+
+        var op = Assert.Single(gateResult.MemoryOperations);
+        Assert.Contains("IAH", op.AliasesJson ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("travel_profile", op.FacetsJson ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("origin_airport", op.SlotsJson ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+
+        await _store.ApplyCurationBatchAsync("cp-formation-iah", gateResult.MemoryOperations, CancellationToken.None);
+
+        var stored = await _store.SearchAutoRecallDocumentsAsync("airport IAH fly", "user:aaron", 5);
+        var storedDoc = Assert.Single(stored, x => x.Title == "Travel Profile: Primary Origin Airport");
+        Assert.Contains("IAH", storedDoc.AliasesJson ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("travel_profile", storedDoc.FacetsJson ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("origin_airport", storedDoc.SlotsJson ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+
+        var recall = new SQLiteMemoryRecallCoordinator(
+            _store,
+            NullLogger<SQLiteMemoryRecallCoordinator>.Instance,
+            sessionConfig: new SessionConfig { DeterministicRetrievalEnabled = true, MemorySidecarsEnabled = false });
+
+        var result = await recall.RecallAsync(new AutomaticRecallRequest(
+            "signalr/thread-iah",
+            "What airport do I usually fly out of?",
+            ["What airport do I usually fly out of?"],
+            3,
+            HardScopeOverride: "user:aaron",
+            ThreadTitle: "Travel preferences"));
+
+        Assert.False(result.Degraded);
+        Assert.Contains(result.Items, x => x.Content.Contains("IAH", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task Formation_then_recall_surfaces_preferred_airline_and_persists_metadata()
+    {
+        await _store.InitializeAsync();
+        var now = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
+        var gate = new MemoryProposalGate();
+
+        var gateResult = gate.Evaluate(
+        [
+            new MemoryProposal(
+                "upsert_document",
+                "durable_fact",
+                "user",
+                "self",
+                new MemoryAnchor("user-travel-airline", "preference"),
+                "Travel Profile: Preferred Airline",
+                "Preferred airline is United Airlines because status benefits matter.",
+                ["preferred airline", "United Airlines", "status with United"],
+                ["travel_profile", "user_preference"],
+                ["preferred_airline"],
+                null,
+                "auto",
+                "normal",
+                0.96,
+                now,
+                null,
+                null,
+                "stable explicit user airline preference")
+        ],
+        "user:aaron",
+        "normal",
+        now);
+
+        var op = Assert.Single(gateResult.MemoryOperations);
+        Assert.Contains("United Airlines", op.AliasesJson ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("travel_profile", op.FacetsJson ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("preferred_airline", op.SlotsJson ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+
+        await _store.ApplyCurationBatchAsync("cp-formation-united", gateResult.MemoryOperations, CancellationToken.None);
+
+        var stored = await _store.SearchAutoRecallDocumentsAsync("airline United status", "user:aaron", 5);
+        var storedDoc = Assert.Single(stored, x => x.Title == "Travel Profile: Preferred Airline");
+        Assert.Contains("United Airlines", storedDoc.AliasesJson ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("travel_profile", storedDoc.FacetsJson ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("preferred_airline", storedDoc.SlotsJson ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+
+        var recall = new SQLiteMemoryRecallCoordinator(
+            _store,
+            NullLogger<SQLiteMemoryRecallCoordinator>.Instance,
+            sessionConfig: new SessionConfig { DeterministicRetrievalEnabled = true, MemorySidecarsEnabled = false });
+
+        var result = await recall.RecallAsync(new AutomaticRecallRequest(
+            "signalr/thread-united",
+            "What airline do I usually take?",
+            ["What airline do I usually take?"],
+            3,
+            HardScopeOverride: "user:aaron",
+            ThreadTitle: "Travel preferences"));
+
+        Assert.False(result.Degraded);
+        Assert.Contains(result.Items, x => x.Content.Contains("United Airlines", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public async Task Formation_then_intentional_search_returns_evidence_without_auto_recall_leakage()
     {
         await _store.InitializeAsync();
