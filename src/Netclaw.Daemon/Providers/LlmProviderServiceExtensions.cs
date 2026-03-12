@@ -38,11 +38,13 @@ public static class LlmProviderServiceExtensions
 
         // Register daemon-specific plugins
         services.AddSingleton<OllamaProviderPlugin>();
+        services.AddSingleton<OpenAiCompatibleProviderPlugin>();
         services.AddSingleton<OpenAiProviderPlugin>();
         services.AddSingleton<AnthropicProviderPlugin>();
         services.AddSingleton<OpenRouterProviderPlugin>();
 
         services.AddSingleton<ILlmProviderPlugin>(sp => sp.GetRequiredService<OllamaProviderPlugin>());
+        services.AddSingleton<ILlmProviderPlugin>(sp => sp.GetRequiredService<OpenAiCompatibleProviderPlugin>());
         services.AddSingleton<ILlmProviderPlugin>(sp => sp.GetRequiredService<OpenAiProviderPlugin>());
         services.AddSingleton<ILlmProviderPlugin>(sp => sp.GetRequiredService<AnthropicProviderPlugin>());
         services.AddSingleton<ILlmProviderPlugin>(sp => sp.GetRequiredService<OpenRouterProviderPlugin>());
