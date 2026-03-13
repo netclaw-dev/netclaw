@@ -682,6 +682,23 @@ public sealed class SQLiteMemoryStore
         int limit,
         bool allowExpiredEvidence,
         CancellationToken ct = default)
+        => await SearchByPlanInternalAsync(queryTerms, domain, memoryClasses, limit, allowExpiredEvidence, ct);
+
+    public async Task<IReadOnlyList<SQLiteMemoryHydratedItem>> SearchAcrossDomainsByPlanAsync(
+        IReadOnlyList<string> queryTerms,
+        IReadOnlyList<string> memoryClasses,
+        int limit,
+        bool allowExpiredEvidence,
+        CancellationToken ct = default)
+        => await SearchByPlanInternalAsync(queryTerms, null, memoryClasses, limit, allowExpiredEvidence, ct);
+
+    private async Task<IReadOnlyList<SQLiteMemoryHydratedItem>> SearchByPlanInternalAsync(
+        IReadOnlyList<string> queryTerms,
+        string? domain,
+        IReadOnlyList<string> memoryClasses,
+        int limit,
+        bool allowExpiredEvidence,
+        CancellationToken ct)
     {
         if (queryTerms.Count == 0 || limit <= 0)
             return [];
@@ -713,6 +730,8 @@ public sealed class SQLiteMemoryStore
         var documentWhereTerms = string.Join(" OR ", documentTermClauses);
         var recordWhereTerms = string.Join(" OR ", recordTermClauses);
         var whereClasses = string.Join(",", classClauses);
+        var documentDomainClause = domain is null ? string.Empty : "AND d.domain = $domain";
+        var recordDomainClause = domain is null ? string.Empty : "AND r.domain = $domain";
 
         cmd.CommandText = $"""
             SELECT id, kind, memory_class, title, body, aliases_json, facets_json, slots_json, domain, sensitivity, recall_mode, update_semantics, expires_at, updated_at, score
@@ -734,7 +753,8 @@ public sealed class SQLiteMemoryStore
                     d.updated_at AS updated_at,
                     ({documentScoredTerms}) + CAST(ROUND(d.confidence * 10.0) AS INTEGER) AS score
                 FROM memory_documents d
-                WHERE d.domain = $domain
+                WHERE 1 = 1
+                  {documentDomainClause}
                   AND d.recall_mode IN ('auto', 'searchable')
                   AND d.sensitivity != 'secret'
                   AND d.memory_class IN ({whereClasses})
@@ -760,7 +780,8 @@ public sealed class SQLiteMemoryStore
                     r.created_at AS updated_at,
                     ({recordScoredTerms}) + CAST(ROUND(r.confidence * 10.0) AS INTEGER) AS score
                 FROM memory_records r
-                WHERE r.domain = $domain
+                WHERE 1 = 1
+                  {recordDomainClause}
                   AND r.recall_mode IN ('auto', 'searchable')
                   AND r.sensitivity != 'secret'
                   AND r.memory_class IN ({whereClasses})
@@ -770,7 +791,8 @@ public sealed class SQLiteMemoryStore
             ORDER BY score DESC, updated_at DESC
             LIMIT $limit;
             """;
-        cmd.Parameters.AddWithValue("$domain", domain);
+        if (domain is not null)
+            cmd.Parameters.AddWithValue("$domain", domain);
         cmd.Parameters.AddWithValue("$now", now);
         cmd.Parameters.AddWithValue("$allowExpiredEvidence", allowExpiredEvidence ? 1 : 0);
         cmd.Parameters.AddWithValue("$limit", limit);

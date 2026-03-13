@@ -116,4 +116,50 @@ public sealed class DeterministicRetrievalPlanningTests
         Assert.False(result.Degraded);
         Assert.Contains(result.Items, x => x.Id == "doc-textforge-pricing");
     }
+
+    [Fact]
+    public async Task Coordinator_widens_across_domains_for_named_project_entities()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "netclaw-deterministic-cross-domain-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        var store = new SQLiteMemoryStore(Path.Combine(dir, "memory.db"), TimeProvider.System);
+        await store.InitializeAsync();
+
+        var anchor = store.CreateDefaultAnchor("textforge-project", "project:d0ac6ckbk5k");
+        var now = TimeProvider.System.GetUtcNow().ToUnixTimeMilliseconds();
+
+        await store.UpsertDocumentAsync(new SQLiteMemoryDocument(
+            DocumentId: "doc-textforge-business-context",
+            Anchor: anchor,
+            MemoryClass: "durable_fact",
+            Title: "TextForge Business Context",
+            MarkdownBody: "TextForge is an AI sales tool focused on safe email automation and Gmail integration.",
+            AliasesJson: "[\"textforge\",\"ai sales tool\"]",
+            FacetsJson: "[\"project_fact\"]",
+            SlotsJson: null,
+            UpdateSemantics: "merge-document",
+            Domain: "project:d0ac6ckbk5k",
+            Sensitivity: "normal",
+            RecallMode: "auto",
+            Confidence: 0.95,
+            FreshnessAtMs: now,
+            ExpiresAtMs: null,
+            CreatedAtMs: now,
+            UpdatedAtMs: now));
+
+        var coordinator = new SQLiteMemoryRecallCoordinator(
+            store,
+            NullLogger<SQLiteMemoryRecallCoordinator>.Instance,
+            sessionConfig: new SessionConfig { DeterministicRetrievalEnabled = true, MemorySidecarsEnabled = false });
+
+        var result = await coordinator.RecallAsync(new AutomaticRecallRequest(
+            SessionId: "signalr/thread-5",
+            Query: "what is TextForge",
+            RecentUserMessages: ["what is TextForge"],
+            MaxItems: 3,
+            ThreadTitle: "General DM"));
+
+        Assert.False(result.Degraded);
+        Assert.Contains(result.Items, x => x.Id == "doc-textforge-business-context");
+    }
 }

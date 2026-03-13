@@ -16,7 +16,6 @@ public sealed class OpenAiCompatibleChatClient : IChatClient
     private readonly HttpClient _httpClient;
     private readonly OpenAiCompatibleEndpoint _endpoint;
     private readonly string _modelId;
-
     public OpenAiCompatibleChatClient(HttpClient httpClient, OpenAiCompatibleEndpoint endpoint, string modelId)
     {
         _httpClient = httpClient;
@@ -29,9 +28,10 @@ public sealed class OpenAiCompatibleChatClient : IChatClient
         ChatOptions? options = null,
         CancellationToken cancellationToken = default)
     {
-        using var request = BuildRequest(messages, options, stream: false);
+        var payload = BuildPayload(messages, options, stream: false);
+        using var request = BuildRequest(payload);
         using var response = await _httpClient.SendAsync(request, cancellationToken);
-        response.EnsureSuccessStatusCode();
+        await EnsureSuccessAsync(response, payload, cancellationToken);
 
         await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
         using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
@@ -43,15 +43,17 @@ public sealed class OpenAiCompatibleChatClient : IChatClient
         ChatOptions? options = null,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        using var request = BuildRequest(messages, options, stream: true);
+        var payload = BuildPayload(messages, options, stream: true);
+        using var request = BuildRequest(payload);
         using var response = await _httpClient.SendAsync(
             request,
             HttpCompletionOption.ResponseHeadersRead,
             cancellationToken);
-        response.EnsureSuccessStatusCode();
+        await EnsureSuccessAsync(response, payload, cancellationToken);
 
         await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
         using var reader = new StreamReader(stream, Encoding.UTF8);
+        var pendingToolCalls = new Dictionary<int, PendingToolCall>();
 
         while (!cancellationToken.IsCancellationRequested)
         {
@@ -62,12 +64,12 @@ public sealed class OpenAiCompatibleChatClient : IChatClient
             if (string.IsNullOrWhiteSpace(line) || !line.StartsWith("data:", StringComparison.Ordinal))
                 continue;
 
-            var payload = line[5..].Trim();
-            if (payload == "[DONE]")
+            var ssePayload = line[5..].Trim();
+            if (ssePayload == "[DONE]")
                 yield break;
 
-            using var document = JsonDocument.Parse(payload);
-            foreach (var update in ParseStreamingUpdates(document.RootElement))
+            using var document = JsonDocument.Parse(ssePayload);
+            foreach (var update in ParseStreamingUpdates(document.RootElement, pendingToolCalls))
                 yield return update;
         }
     }
@@ -78,12 +80,14 @@ public sealed class OpenAiCompatibleChatClient : IChatClient
     {
     }
 
-    private HttpRequestMessage BuildRequest(IEnumerable<ChatMessage> messages, ChatOptions? options, bool stream)
+    private Dictionary<string, object?> BuildPayload(IEnumerable<ChatMessage> messages, ChatOptions? options, bool stream)
     {
+        var toolList = options?.Tools?.ToList();
+
         var body = new Dictionary<string, object?>
         {
             ["model"] = options?.ModelId ?? _modelId,
-            ["messages"] = messages.Select(ToMessage).ToArray(),
+            ["messages"] = NormalizeMessages(messages).ToArray(),
             ["stream"] = stream
         };
 
@@ -97,18 +101,68 @@ public sealed class OpenAiCompatibleChatClient : IChatClient
             body["max_tokens"] = maxTokens;
         if (options?.StopSequences is { Count: > 0 } stop)
             body["stop"] = stop;
-        if (options?.Tools is { Count: > 0 } tools)
-            body["tools"] = tools.Select(ToTool).ToArray();
+        if (toolList is { Count: > 0 })
+            body["tools"] = toolList.Select(ToTool).ToArray();
+
+        return body;
+    }
+
+    private static IEnumerable<object> NormalizeMessages(IEnumerable<ChatMessage> messages)
+    {
+        var normalized = new List<object>();
+        var systemSegments = new List<string>();
+
+        foreach (var message in messages)
+        {
+            if (message.Role == ChatRole.System)
+            {
+                if (!string.IsNullOrWhiteSpace(message.Text))
+                    systemSegments.Add(message.Text);
+
+                continue;
+            }
+
+            normalized.Add(ToMessage(message));
+        }
+
+        if (systemSegments.Count > 0)
+        {
+            normalized.Insert(0, new Dictionary<string, object?>
+            {
+                ["role"] = "system",
+                ["content"] = string.Join("\n\n", systemSegments)
+            });
+        }
+
+        return normalized;
+    }
+
+    private HttpRequestMessage BuildRequest(Dictionary<string, object?> payload)
+    {
+        var serializedPayload = JsonSerializer.Serialize(payload, JsonOptions);
 
         var request = new HttpRequestMessage(HttpMethod.Post, _endpoint.ChatCompletionsPath)
         {
-            Content = new StringContent(JsonSerializer.Serialize(body, JsonOptions), Encoding.UTF8, "application/json")
+            Content = new StringContent(serializedPayload, Encoding.UTF8, "application/json")
         };
 
         if (!string.IsNullOrWhiteSpace(_endpoint.ApiKey))
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _endpoint.ApiKey);
 
         return request;
+    }
+
+    private async Task EnsureSuccessAsync(HttpResponseMessage response, Dictionary<string, object?> payload, CancellationToken cancellationToken)
+    {
+        if (response.IsSuccessStatusCode)
+            return;
+
+        var responseBody = response.Content is null
+            ? null
+            : await response.Content.ReadAsStringAsync(cancellationToken);
+
+        throw new HttpRequestException(
+            $"OpenAI-compatible request failed: status={(int)response.StatusCode} path={_endpoint.ChatCompletionsPath} payload={JsonSerializer.Serialize(payload, JsonOptions)} response={responseBody}");
     }
 
     private static object ToMessage(ChatMessage message)
@@ -180,7 +234,7 @@ public sealed class OpenAiCompatibleChatClient : IChatClient
         };
     }
 
-    private static IEnumerable<ChatResponseUpdate> ParseStreamingUpdates(JsonElement root)
+    private static IEnumerable<ChatResponseUpdate> ParseStreamingUpdates(JsonElement root, Dictionary<int, PendingToolCall> pendingToolCalls)
     {
         if (!root.TryGetProperty("choices", out var choices) || choices.GetArrayLength() == 0)
             yield break;
@@ -209,30 +263,82 @@ public sealed class OpenAiCompatibleChatClient : IChatClient
         {
             foreach (var toolCall in toolCalls.EnumerateArray())
             {
-                var callId = toolCall.TryGetProperty("id", out var id) ? id.GetString() : null;
-                var function = toolCall.GetProperty("function");
-                var name = function.GetProperty("name").GetString() ?? string.Empty;
-                var argumentsJson = function.TryGetProperty("arguments", out var arguments)
-                    ? arguments.GetString()
-                    : null;
+                var index = toolCall.TryGetProperty("index", out var indexElement)
+                    && indexElement.ValueKind == JsonValueKind.Number
+                    ? indexElement.GetInt32()
+                    : pendingToolCalls.Count;
 
-                var parsedArgs = string.IsNullOrWhiteSpace(argumentsJson)
-                    ? null
-                    : JsonSerializer.Deserialize<Dictionary<string, object?>>(argumentsJson!, JsonOptions);
+                if (!pendingToolCalls.TryGetValue(index, out var pending))
+                {
+                    pending = new PendingToolCall();
+                    pendingToolCalls[index] = pending;
+                }
 
-                contents.Add(new FunctionCallContent(callId ?? Guid.NewGuid().ToString("N"), name, parsedArgs));
+                if (toolCall.TryGetProperty("id", out var id)
+                    && id.ValueKind == JsonValueKind.String
+                    && !string.IsNullOrWhiteSpace(id.GetString()))
+                {
+                    pending.Id = id.GetString();
+                }
+
+                if (!toolCall.TryGetProperty("function", out var function)
+                    || function.ValueKind != JsonValueKind.Object)
+                    continue;
+
+                if (function.TryGetProperty("name", out var name)
+                    && name.ValueKind == JsonValueKind.String
+                    && !string.IsNullOrWhiteSpace(name.GetString()))
+                {
+                    pending.Name = name.GetString();
+                }
+
+                if (function.TryGetProperty("arguments", out var arguments)
+                    && arguments.ValueKind == JsonValueKind.String
+                    && arguments.GetString() is { Length: > 0 } argumentsChunk)
+                {
+                    pending.Arguments.Append(argumentsChunk);
+                }
             }
         }
 
-        if (contents.Count == 0 && !choice.TryGetProperty("finish_reason", out _))
+        var finishReason = ParseFinishReason(choice);
+        if (finishReason == ChatFinishReason.ToolCalls && pendingToolCalls.Count > 0)
+        {
+            foreach (var pending in pendingToolCalls.OrderBy(kvp => kvp.Key).Select(kvp => kvp.Value))
+            {
+                contents.Add(new FunctionCallContent(
+                    pending.Id ?? Guid.NewGuid().ToString("N"),
+                    pending.Name ?? string.Empty,
+                    TryDeserializeArguments(pending.Arguments.ToString())));
+            }
+
+            pendingToolCalls.Clear();
+        }
+
+        if (contents.Count == 0 && finishReason is null)
             yield break;
 
         yield return new ChatResponseUpdate(ChatRole.Assistant, contents)
         {
             ModelId = root.TryGetProperty("model", out var model) ? model.GetString() : null,
             ResponseId = root.TryGetProperty("id", out var responseId) ? responseId.GetString() : null,
-            FinishReason = ParseFinishReason(choice)
+            FinishReason = finishReason
         };
+    }
+
+    private static Dictionary<string, object?>? TryDeserializeArguments(string? argumentsJson)
+    {
+        if (string.IsNullOrWhiteSpace(argumentsJson))
+            return null;
+
+        try
+        {
+            return JsonSerializer.Deserialize<Dictionary<string, object?>>(argumentsJson, JsonOptions);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
     }
 
     private static ChatFinishReason? ParseFinishReason(JsonElement choice)
@@ -248,5 +354,14 @@ public sealed class OpenAiCompatibleChatClient : IChatClient
             "tool_calls" => ChatFinishReason.ToolCalls,
             _ => null
         };
+    }
+
+    private sealed class PendingToolCall
+    {
+        public string? Id { get; set; }
+
+        public string? Name { get; set; }
+
+        public StringBuilder Arguments { get; } = new();
     }
 }

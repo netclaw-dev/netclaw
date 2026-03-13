@@ -56,10 +56,23 @@ public sealed class SQLiteMemoryRecallCoordinator(
                     allowExpiredEvidence: false,
                     ct);
 
+                var widened = false;
+                if (rawCandidates.Count == 0 && ShouldWidenAcrossDomains(deterministicPlan))
+                {
+                    rawCandidates = await store.SearchAcrossDomainsByPlanAsync(
+                        deterministicPlan.LexicalTerms.Count > 0 ? deterministicPlan.LexicalTerms : [request.Query],
+                        deterministicPlan.AllowedMemoryClasses,
+                        deterministicPlan.CandidateLimit,
+                        allowExpiredEvidence: false,
+                        ct);
+                    widened = true;
+                }
+
                 var candidates = _candidateSelector.Select(deterministicPlan, rawCandidates);
                 logger.LogInformation(
-                    "memory_retrieval_candidate_selection hardScope={HardScope} rawCount={RawCount} selectedCount={SelectedCount} ids={Ids}",
+                    "memory_retrieval_candidate_selection hardScope={HardScope} widenedAcrossDomains={WidenedAcrossDomains} rawCount={RawCount} selectedCount={SelectedCount} ids={Ids}",
                     deterministicPlan.HardScope,
+                    widened,
                     rawCandidates.Count,
                     candidates.Count,
                     string.Join("|", candidates.Select(x => x.Id)));
@@ -187,6 +200,10 @@ public sealed class SQLiteMemoryRecallCoordinator(
             ? "project:default"
             : $"project:{prefix.ToLowerInvariant()}";
     }
+
+    private static bool ShouldWidenAcrossDomains(DeterministicRetrievalRequestPlan plan)
+        => plan.AnchorHints.Count > 0
+           || plan.Facets.Contains("project_fact", StringComparer.OrdinalIgnoreCase);
 
     private async Task<RecallQueryPlan?> BuildPlanAsync(
         AutomaticRecallRequest request,
