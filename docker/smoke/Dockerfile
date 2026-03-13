@@ -1,14 +1,4 @@
-FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
-
-WORKDIR /src
-COPY . .
-
-RUN --mount=type=cache,id=nuget,target=/root/.nuget/packages \
-    dotnet restore Netclaw.slnx
-RUN dotnet publish src/Netclaw.Cli/Netclaw.Cli.csproj -c Release -o /out/cli
-RUN dotnet publish src/Netclaw.Daemon/Netclaw.Daemon.csproj -c Release -o /out/daemon
-
-FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
+FROM ubuntu:24.04
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends curl procps \
@@ -16,8 +6,9 @@ RUN apt-get update \
 
 WORKDIR /opt/netclaw
 
-COPY --from=build /out/cli/ /opt/netclaw/cli/
-COPY --from=build /out/daemon/ /opt/netclaw/daemon/
+# Self-contained binaries are published on the host and copied in
+COPY publish/cli/netclaw /opt/netclaw/cli/netclaw
+COPY publish/daemon/netclawd /opt/netclaw/daemon/netclawd
 
 RUN ln -s /opt/netclaw/cli/netclaw /usr/local/bin/netclaw \
     && ln -s /opt/netclaw/daemon/netclawd /usr/local/bin/netclawd

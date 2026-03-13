@@ -41,19 +41,34 @@ jobs:
         with:
           global-json-file: ./global.json
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
+      - name: Publish CLI
+        run: >
+          dotnet publish src/Netclaw.Cli/Netclaw.Cli.csproj
+          -c Release
+          -r linux-x64
+          --self-contained true
+          /p:PublishSingleFile=true
+          /p:EnableCompressionInSingleFile=true
+          -o ./publish/cli
 
-      - name: Build smoke sandbox image (cached)
-        timeout-minutes: 10
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          file: docker/smoke/Dockerfile
-          tags: netclaw-smoke:local
-          load: true
-          cache-from: type=gha,scope=netclaw-smoke
-          cache-to: type=gha,mode=max,scope=netclaw-smoke
+      - name: Publish Daemon
+        run: >
+          dotnet publish src/Netclaw.Daemon/Netclaw.Daemon.csproj
+          -c Release
+          -r linux-x64
+          --self-contained true
+          /p:PublishSingleFile=true
+          /p:EnableCompressionInSingleFile=true
+          /p:IncludeNativeLibrariesForSelfExtract=true
+          -o ./publish/daemon
+
+      - name: Build smoke sandbox image
+        timeout-minutes: 5
+        run: >
+          docker build
+          -f docker/smoke/Dockerfile
+          -t netclaw-smoke:local
+          .
 
       - name: Start smoke sandbox
         run: bash scripts/smoke/up.sh
