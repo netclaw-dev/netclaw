@@ -212,15 +212,55 @@ internal sealed class SystemSkillSyncService : IHostedService
                 continue;
             }
 
-            // Download the skill
+            // Download the skill (directory-based or flat file)
             try
             {
-                var content = await DownloadSkillAsync(entry, cancellationToken);
-                if (content is null)
-                    continue;
+                if (entry.Files is { Count: > 0 })
+                {
+                    // Directory-based skill: create dir, download SKILL.md + resource files
+                    var skillDir = Path.Combine(_paths.SystemSkillsDirectory, entry.Name);
+                    Directory.CreateDirectory(skillDir);
 
-                var targetPath = Path.Combine(_paths.SystemSkillsDirectory, $"{entry.Name}.md");
-                await File.WriteAllTextAsync(targetPath, content, cancellationToken);
+                    // Download main SKILL.md
+                    var mainContent = await DownloadAndVerifyAsync(entry.Url, entry.Sha256, entry.Name, cancellationToken);
+                    if (mainContent is null)
+                        continue;
+                    await File.WriteAllTextAsync(Path.Combine(skillDir, "SKILL.md"), mainContent, cancellationToken);
+
+                    // Download each resource file
+                    var allFilesOk = true;
+                    foreach (var file in entry.Files)
+                    {
+                        var fileContent = await DownloadAndVerifyAsync(file.Url, file.Sha256, $"{entry.Name}/{file.Path}", cancellationToken);
+                        if (fileContent is null)
+                        {
+                            allFilesOk = false;
+                            break;
+                        }
+
+                        var filePath = Path.Combine(skillDir, file.Path.Replace('/', Path.DirectorySeparatorChar));
+                        Directory.CreateDirectory(Path.GetDirectoryName(filePath)!);
+                        await File.WriteAllTextAsync(filePath, fileContent, cancellationToken);
+                    }
+
+                    if (!allFilesOk)
+                        continue;
+
+                    // Remove legacy flat file if it exists (migrated to directory)
+                    var legacyFlat = Path.Combine(_paths.SystemSkillsDirectory, $"{entry.Name}.md");
+                    if (File.Exists(legacyFlat))
+                        File.Delete(legacyFlat);
+                }
+                else
+                {
+                    // Flat file skill
+                    var content = await DownloadAndVerifyAsync(entry.Url, entry.Sha256, entry.Name, cancellationToken);
+                    if (content is null)
+                        continue;
+
+                    var targetPath = Path.Combine(_paths.SystemSkillsDirectory, $"{entry.Name}.md");
+                    await File.WriteAllTextAsync(targetPath, content, cancellationToken);
+                }
 
                 syncState.Skills[entry.Name] = new SyncedSkillState
                 {
@@ -255,22 +295,23 @@ internal sealed class SystemSkillSyncService : IHostedService
         }
     }
 
-    private async Task<string?> DownloadSkillAsync(SkillFeedEntry entry, CancellationToken cancellationToken)
+    private async Task<string?> DownloadAndVerifyAsync(
+        string url, string expectedSha256, string label, CancellationToken cancellationToken)
     {
         try
         {
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             cts.CancelAfter(FeedConstants.FeedHttpTimeout);
 
-            var content = await _httpClient.GetStringAsync(entry.Url, cts.Token);
+            var content = await _httpClient.GetStringAsync(url, cts.Token);
 
             // Verify SHA-256
             var hash = ComputeSha256(content);
-            if (!string.Equals(hash, entry.Sha256, StringComparison.OrdinalIgnoreCase))
+            if (!string.Equals(hash, expectedSha256, StringComparison.OrdinalIgnoreCase))
             {
                 _logger.LogWarning(
-                    "SHA-256 mismatch for skill {SkillName}: expected {Expected}, got {Actual}",
-                    entry.Name, entry.Sha256, hash);
+                    "SHA-256 mismatch for {Label}: expected {Expected}, got {Actual}",
+                    label, expectedSha256, hash);
                 return null;
             }
 
@@ -278,12 +319,12 @@ internal sealed class SystemSkillSyncService : IHostedService
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
-            _logger.LogWarning("Download timed out for skill {SkillName}", entry.Name);
+            _logger.LogWarning("Download timed out for {Label}", label);
             return null;
         }
         catch (HttpRequestException ex)
         {
-            _logger.LogWarning("Download failed for skill {SkillName}: {Message}", entry.Name, ex.Message);
+            _logger.LogWarning("Download failed for {Label}: {Message}", label, ex.Message);
             return null;
         }
     }

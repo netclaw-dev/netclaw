@@ -28,7 +28,7 @@ public sealed class SystemSkillSyncServiceTests : IDisposable
     [Fact]
     public async Task StartAsync_SyncsNewSkillFromFeed()
     {
-        var skillContent = "# Test Skill\n\n<!-- description: A test skill -->\n\nSome instructions.";
+        var skillContent = "---\nname: test-skill\ndescription: A test skill\n---\n\n# Test Skill\n\nSome instructions.";
         var sha256 = SystemSkillSyncService.ComputeSha256(skillContent);
 
         var manifest = new SkillFeedManifest
@@ -70,7 +70,7 @@ public sealed class SystemSkillSyncServiceTests : IDisposable
     [Fact]
     public async Task StartAsync_SkipFeedSync_WhenDisableSystemSkillSyncTrue()
     {
-        var localContent = "# Local Skill\n\n<!-- description: Local -->\n\nLocal instructions.";
+        var localContent = "---\nname: local-only\ndescription: Local\n---\n\n# Local Skill\n\nLocal instructions.";
         File.WriteAllText(Path.Combine(_paths.SystemSkillsDirectory, "local-only.md"), localContent);
 
         var manifest = new SkillFeedManifest
@@ -275,7 +275,7 @@ public sealed class SystemSkillSyncServiceTests : IDisposable
     public async Task StartAsync_GracefullyHandlesNetworkFailure()
     {
         // Pre-populate a skill so we verify it's still usable after failure
-        var existingContent = "# Existing\n\n<!-- description: Still here -->\n\nContent.";
+        var existingContent = "---\nname: existing\ndescription: Still here\n---\n\n# Existing\n\nContent.";
         File.WriteAllText(Path.Combine(_paths.SystemSkillsDirectory, "existing.md"), existingContent);
 
         var handler = new FakeHttpHandler();
@@ -292,7 +292,7 @@ public sealed class SystemSkillSyncServiceTests : IDisposable
     [Fact]
     public async Task StartAsync_MigratesFlatSkillsToSystemDirectory()
     {
-        var content = "# Identity Management\n\n<!-- description: test -->\n\nContent.";
+        var content = "---\nname: identity-management\ndescription: test\n---\n\n# Identity Management\n\nContent.";
         File.WriteAllText(Path.Combine(_paths.SkillsDirectory, "identity-management.md"), content);
 
         var handler = new FakeHttpHandler();
@@ -313,12 +313,12 @@ public sealed class SystemSkillSyncServiceTests : IDisposable
         // System skill
         File.WriteAllText(
             Path.Combine(_paths.SystemSkillsDirectory, "system-skill.md"),
-            "# System\n\n<!-- description: system skill -->\n\nContent.");
+            "---\nname: system-skill\ndescription: system skill\n---\n\n# System\n\nContent.");
 
         // User skill in root skills directory
         File.WriteAllText(
             Path.Combine(_paths.SkillsDirectory, "user-skill.md"),
-            "# User\n\n<!-- description: user skill -->\n\nContent.");
+            "---\nname: user-skill\ndescription: user skill\n---\n\n# User\n\nContent.");
 
         var handler = new FakeHttpHandler();
         handler.AddErrorResponse(FeedConstants.SystemSkillsManifestUrl, HttpStatusCode.ServiceUnavailable);

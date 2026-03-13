@@ -49,4 +49,41 @@ public sealed class SkillFeedEntry
 
     [JsonPropertyName("description")]
     public string? Description { get; init; }
+
+    /// <summary>
+    /// Metadata format of the skill file. Defaults to "legacy" for backward compatibility.
+    /// Values: "standard" (YAML frontmatter), "legacy" (HTML comments).
+    /// </summary>
+    [JsonPropertyName("format")]
+    public string? Format { get; init; }
+
+    /// <summary>
+    /// Additional resource files for directory-based skills.
+    /// When present, the sync service creates a directory and downloads all files.
+    /// When null, the skill is a single flat file (downloaded via <see cref="Url"/>).
+    /// Old daemons ignore this field.
+    /// </summary>
+    [JsonPropertyName("files")]
+    public List<SkillFeedFile>? Files { get; init; }
+}
+
+/// <summary>
+/// A single resource file within a directory-based skill.
+/// </summary>
+public sealed class SkillFeedFile
+{
+    /// <summary>
+    /// Relative path within the skill directory (e.g. "references/flight-pricing.md").
+    /// </summary>
+    [JsonPropertyName("path")]
+    public required string Path { get; init; }
+
+    [JsonPropertyName("sha256")]
+    public required string Sha256 { get; init; }
+
+    [JsonPropertyName("sizeBytes")]
+    public long SizeBytes { get; init; }
+
+    [JsonPropertyName("url")]
+    public required string Url { get; init; }
 }

@@ -65,6 +65,8 @@ public sealed class SkillRegistry
             sb.AppendLine($"  {skill.Description}");
             if (skill.Triggers is not null)
                 sb.AppendLine($"  LOAD WHEN: {skill.Triggers}");
+            if (skill.ResourcePaths is { Count: > 0 })
+                sb.AppendLine($"  [{skill.ResourcePaths.Count} resources in {skill.SkillDirectory}]");
         }
 
         return sb.ToString();
