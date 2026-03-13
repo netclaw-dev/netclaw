@@ -202,6 +202,43 @@ data: [DONE]
         Assert.Contains("\"role\":\"tool\"", body, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task ExtractsToolCalls_FromTextBasedFormat_WhenModelSkipsStructuredFormat()
+    {
+        var textWithToolCall = """
+            Let me save that for you.
+            <tool_call>
+            <function=store_memory>
+            <parameter=Content>Important note</parameter>
+            <parameter=Domain>project:test</parameter>
+            </function>
+            </tool_call>
+            """;
+
+        var responseJson = $"{{\"id\":\"1\",\"model\":\"test\",\"choices\":[{{\"finish_reason\":\"stop\",\"message\":{{\"role\":\"assistant\",\"content\":{System.Text.Json.JsonSerializer.Serialize(textWithToolCall)}}}}}]}}";
+
+        using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(responseJson, Encoding.UTF8, "application/json")
+        });
+        using var httpClient = new HttpClient(handler) { BaseAddress = new Uri("http://localhost:8000") };
+        var endpoint = OpenAiCompatibleEndpoint.FromBaseUrl("http://localhost:8000");
+        var client = new OpenAiCompatibleChatClient(httpClient, endpoint, "test-model");
+
+        var response = await client.GetResponseAsync([new ChatMessage(ChatRole.User, "save this")]);
+
+        var toolCall = Assert.Single(response.Messages[^1].Contents.OfType<FunctionCallContent>());
+        Assert.Equal("store_memory", toolCall.Name);
+        Assert.Equal("Important note", toolCall.Arguments!["Content"]?.ToString());
+        Assert.Equal("project:test", toolCall.Arguments!["Domain"]?.ToString());
+        Assert.Equal(ChatFinishReason.ToolCalls, response.FinishReason);
+
+        var remainingText = response.Messages[^1].Contents.OfType<TextContent>().FirstOrDefault();
+        Assert.NotNull(remainingText);
+        Assert.Contains("Let me save that", remainingText.Text);
+        Assert.DoesNotContain("<tool_call>", remainingText.Text);
+    }
+
     private sealed class RecordingHandler : HttpMessageHandler
     {
         private readonly Func<HttpRequestMessage, HttpResponseMessage> _handler;

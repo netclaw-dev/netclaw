@@ -54,23 +54,53 @@ public sealed class OpenAiCompatibleChatClient : IChatClient
         await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
         using var reader = new StreamReader(stream, Encoding.UTF8);
         var pendingToolCalls = new Dictionary<int, PendingToolCall>();
+        var accumulatedText = new StringBuilder();
+        var hadStructuredToolCalls = false;
+        ChatResponseUpdate? finalUpdate = null;
 
         while (!cancellationToken.IsCancellationRequested)
         {
             var line = await reader.ReadLineAsync(cancellationToken);
             if (line is null)
-                yield break;
+                break;
 
             if (string.IsNullOrWhiteSpace(line) || !line.StartsWith("data:", StringComparison.Ordinal))
                 continue;
 
             var ssePayload = line[5..].Trim();
             if (ssePayload == "[DONE]")
-                yield break;
+                break;
 
             using var document = JsonDocument.Parse(ssePayload);
             foreach (var update in ParseStreamingUpdates(document.RootElement, pendingToolCalls))
+            {
+                foreach (var tc in update.Contents.OfType<TextContent>())
+                    accumulatedText.Append(tc.Text);
+
+                if (update.Contents.OfType<FunctionCallContent>().Any())
+                    hadStructuredToolCalls = true;
+
+                if (update.FinishReason is not null)
+                    finalUpdate = update;
+
                 yield return update;
+            }
+        }
+
+        // Fallback: if the model stopped without structured tool calls but the text
+        // contains XML-like tool call blocks, emit a synthetic tool call update.
+        if (!hadStructuredToolCalls
+            && finalUpdate?.FinishReason != ChatFinishReason.ToolCalls
+            && accumulatedText.Length > 0)
+        {
+            var textToolCalls = TextToolCallParser.ExtractFromText(accumulatedText.ToString());
+            if (textToolCalls.Count > 0)
+            {
+                yield return new ChatResponseUpdate(ChatRole.Assistant, textToolCalls.Cast<AIContent>().ToList())
+                {
+                    FinishReason = ChatFinishReason.ToolCalls
+                };
+            }
         }
     }
 
@@ -251,6 +281,7 @@ public sealed class OpenAiCompatibleChatClient : IChatClient
         var choice = root.GetProperty("choices")[0];
         var message = choice.GetProperty("message");
         var contents = new List<AIContent>();
+        var finishReason = ParseFinishReason(choice);
 
         if (message.TryGetProperty("reasoning_content", out var reasoning)
             && reasoning.ValueKind == JsonValueKind.String)
@@ -264,11 +295,27 @@ public sealed class OpenAiCompatibleChatClient : IChatClient
             contents.Add(new TextContent(content.GetString()!));
         }
 
+        // Fallback: extract tool calls from text when model uses XML-like format
+        if (finishReason != ChatFinishReason.ToolCalls)
+        {
+            var textContent = content.ValueKind == JsonValueKind.String ? content.GetString() : null;
+            var textToolCalls = TextToolCallParser.ExtractFromText(textContent);
+            if (textToolCalls.Count > 0)
+            {
+                contents.RemoveAll(c => c is TextContent);
+                var cleaned = TextToolCallParser.StripToolCallText(textContent!);
+                if (!string.IsNullOrWhiteSpace(cleaned))
+                    contents.Add(new TextContent(cleaned));
+                contents.AddRange(textToolCalls);
+                finishReason = ChatFinishReason.ToolCalls;
+            }
+        }
+
         return new ChatResponse(new ChatMessage(ChatRole.Assistant, contents))
         {
             ModelId = root.TryGetProperty("model", out var model) ? model.GetString() : null,
             ResponseId = root.TryGetProperty("id", out var id) ? id.GetString() : null,
-            FinishReason = ParseFinishReason(choice)
+            FinishReason = finishReason
         };
     }
 
