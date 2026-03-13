@@ -1,8 +1,18 @@
 {
   "schemaVersion": 1,
   "feedType": "system",
-  "updatedAt": "2026-03-13T18:30:59Z",
+  "updatedAt": "2026-03-13T19:58:13Z",
   "skills": [
+    {
+      "name": "capability-reference",
+      "version": "1.0.0",
+      "minimumDaemonVersion": "0.1.0",
+      "sha256": "7a0c2e1c40fb9dd5360eb6f8e25643d154bb2775964d906a3add6e5166ac92b6",
+      "sizeBytes": 6208,
+      "url": "https://feeds.netclaw.dev/skills/.system/files/capability-reference/1.0.0/SKILL.md",
+      "category": null,
+      "description": "Quick-lookup catalog of all built-in tools, CLI commands, tool grant categories, scheduling syntax, and MCP discovery. Read when unsure what tools or commands are available."
+    },
     {
       "name": "identity-management",
       "version": "1.1.0",
@@ -35,11 +45,11 @@
     },
     {
       "name": "self-diagnostics",
-      "version": "1.1.0",
+      "version": "1.2.0",
       "minimumDaemonVersion": "0.1.0",
-      "sha256": "279d639d36b31c1b88d43bbba3f0e16a0f61efa7abb436aa905477b511a97e9a",
-      "sizeBytes": 3076,
-      "url": "https://feeds.netclaw.dev/skills/.system/files/self-diagnostics/1.1.0/SKILL.md",
+      "sha256": "52d1c01cbdc95f76f6b758d90a659a40bf8d3ba75aaf89c1a87484b187c91e15",
+      "sizeBytes": 3191,
+      "url": "https://feeds.netclaw.dev/skills/.system/files/self-diagnostics/1.2.0/SKILL.md",
       "category": null,
       "description": "Read when sessions timeout, connections fail, tools are missing, or the user reports errors. Covers netclaw doctor, logs, MCP status, and memory health."
     },
