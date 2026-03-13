@@ -1,5 +1,7 @@
 using System.Net;
 using System.Text;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using Microsoft.Extensions.AI;
 using Netclaw.OpenAICompatible;
 using Xunit;
@@ -237,6 +239,189 @@ data: [DONE]
         Assert.NotNull(remainingText);
         Assert.Contains("Let me save that", remainingText.Text);
         Assert.DoesNotContain("<tool_call>", remainingText.Text);
+    }
+
+    [Fact]
+    public void ToMessage_TextAndImage_ProducesContentArray()
+    {
+        var imageBytes = new byte[] { 0x89, 0x50, 0x4E, 0x47 }; // PNG header stub
+        var msg = new ChatMessage(ChatRole.User,
+        [
+            new TextContent("What is in this image?"),
+            new DataContent(imageBytes, "image/png")
+        ]);
+
+        var result = OpenAiCompatibleChatClient.ToMessage(msg);
+
+        Assert.Equal("user", result["role"]!.GetValue<string>());
+        var content = result["content"]!.AsArray();
+        Assert.Equal(2, content.Count);
+
+        // First part should be text
+        Assert.Equal("text", content[0]!["type"]!.GetValue<string>());
+        Assert.Equal("What is in this image?", content[0]!["text"]!.GetValue<string>());
+
+        // Second part should be image_url with base64 data URI
+        Assert.Equal("image_url", content[1]!["type"]!.GetValue<string>());
+        var dataUri = content[1]!["image_url"]!["url"]!.GetValue<string>();
+        Assert.StartsWith("data:image/png;base64,", dataUri);
+        Assert.Equal(Convert.ToBase64String(imageBytes), dataUri["data:image/png;base64,".Length..]);
+    }
+
+    [Fact]
+    public void ToMessage_ImageOnly_ProducesContentArrayWithoutText()
+    {
+        var imageBytes = new byte[] { 0xFF, 0xD8, 0xFF }; // JPEG header stub
+        var msg = new ChatMessage(ChatRole.User,
+        [
+            new DataContent(imageBytes, "image/jpeg")
+        ]);
+
+        var result = OpenAiCompatibleChatClient.ToMessage(msg);
+
+        var content = result["content"]!.AsArray();
+        Assert.Single(content);
+        Assert.Equal("image_url", content[0]!["type"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToMessage_TextOnly_ProducesSimpleStringContent()
+    {
+        var msg = new ChatMessage(ChatRole.User, "hello world");
+
+        var result = OpenAiCompatibleChatClient.ToMessage(msg);
+
+        Assert.Equal("user", result["role"]!.GetValue<string>());
+        Assert.Equal("hello world", result["content"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void SerializeToolResult_HandlesStringResult()
+    {
+        Assert.Equal("hello", OpenAiCompatibleChatClient.SerializeToolResult("hello"));
+    }
+
+    [Fact]
+    public void SerializeToolResult_HandlesNullResult()
+    {
+        Assert.Equal(string.Empty, OpenAiCompatibleChatClient.SerializeToolResult(null));
+    }
+
+    [Fact]
+    public void SerializeToolResult_HandlesDictionaryResult()
+    {
+        var dict = new Dictionary<string, object?> { ["key"] = "value" };
+        var result = OpenAiCompatibleChatClient.SerializeToolResult(dict);
+        Assert.Contains("\"key\"", result, StringComparison.Ordinal);
+        Assert.Contains("\"value\"", result, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SerializeToolResult_HandlesJsonElementResult()
+    {
+        using var doc = JsonDocument.Parse("{\"answer\":42}");
+        var result = OpenAiCompatibleChatClient.SerializeToolResult(doc.RootElement);
+        Assert.Equal("{\"answer\":42}", result);
+    }
+
+    [Fact]
+    public void ToolCallTextFilter_SuppressesOnToolCallTag()
+    {
+        var filter = new OpenAiCompatibleChatClient.ToolCallTextFilter();
+
+        Assert.False(filter.ShouldSuppress("Hello "));
+        Assert.False(filter.IsActive);
+
+        Assert.True(filter.ShouldSuppress("Hello <tool_call><function=test>"));
+        Assert.True(filter.IsActive);
+
+        // Subsequent calls are also suppressed
+        Assert.True(filter.ShouldSuppress("Hello <tool_call><function=test></function></tool_call>"));
+    }
+
+    [Fact]
+    public void ToolCallTextFilter_ReturnsCleanedText()
+    {
+        var filter = new OpenAiCompatibleChatClient.ToolCallTextFilter();
+        var fullText = "Preamble text <tool_call><function=search><parameter=Query>test</parameter></function></tool_call> Done";
+
+        filter.ShouldSuppress(fullText);
+
+        var cleaned = filter.GetCleanedText();
+        Assert.Contains("Preamble text", cleaned, StringComparison.Ordinal);
+        Assert.DoesNotContain("<tool_call>", cleaned, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task StreamingSuppressesToolCallXml_WhenModelEmitsTextToolCalls()
+    {
+        // Simulate Qwen 3.5 emitting tool calls as XML text (no structured tool_calls)
+        const string sse = """
+data: {"id":"abc","model":"Qwen","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant","content":"<tool_call>\n<function=web_search>\n<parameter=Query>test</parameter>\n</function>\n</tool_call>"}}]}
+
+data: {"id":"abc","model":"Qwen","object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+
+data: [DONE]
+
+""";
+
+        using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(sse, Encoding.UTF8, "text/event-stream")
+        });
+        using var httpClient = new HttpClient(handler) { BaseAddress = new Uri("http://localhost:8000") };
+        var endpoint = OpenAiCompatibleEndpoint.FromBaseUrl("http://localhost:8000/api/v1");
+        var client = new OpenAiCompatibleChatClient(httpClient, endpoint, "test-model");
+
+        var updates = new List<ChatResponseUpdate>();
+        await foreach (var update in client.GetStreamingResponseAsync([new ChatMessage(ChatRole.User, "search test")]))
+            updates.Add(update);
+
+        // Should NOT contain any TextContent with XML tool call tags
+        var textUpdates = updates.SelectMany(u => u.Contents.OfType<TextContent>()).ToList();
+        foreach (var tc in textUpdates)
+        {
+            Assert.DoesNotContain("<tool_call>", tc.Text ?? string.Empty, StringComparison.Ordinal);
+        }
+
+        // Should contain extracted tool call
+        var toolCallUpdate = updates.FirstOrDefault(u => u.FinishReason == ChatFinishReason.ToolCalls);
+        Assert.NotNull(toolCallUpdate);
+        var toolCall = Assert.Single(toolCallUpdate.Contents.OfType<FunctionCallContent>());
+        Assert.Equal("web_search", toolCall.Name);
+    }
+
+    [Fact]
+    public async Task SerializesMultimodalMessage_InRequestPayload()
+    {
+        string? body = null;
+        var imageBytes = new byte[] { 0x89, 0x50, 0x4E, 0x47 };
+
+        using var handler = new RecordingHandler(req =>
+        {
+            body = req.Content is null ? null : req.Content.ReadAsStringAsync().GetAwaiter().GetResult();
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("{\"id\":\"1\",\"model\":\"test\",\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"role\":\"assistant\",\"content\":\"I see a PNG\"}}]}", Encoding.UTF8, "application/json")
+            };
+        });
+        using var httpClient = new HttpClient(handler) { BaseAddress = new Uri("http://localhost:8000") };
+        var endpoint = OpenAiCompatibleEndpoint.FromBaseUrl("http://localhost:8000");
+        var client = new OpenAiCompatibleChatClient(httpClient, endpoint, "test-model");
+
+        await client.GetResponseAsync(
+        [
+            new ChatMessage(ChatRole.User,
+            [
+                new TextContent("What is this?"),
+                new DataContent(imageBytes, "image/png")
+            ])
+        ]);
+
+        Assert.NotNull(body);
+        Assert.Contains("\"type\":\"text\"", body, StringComparison.Ordinal);
+        Assert.Contains("\"type\":\"image_url\"", body, StringComparison.Ordinal);
+        Assert.Contains("data:image/png;base64,", body, StringComparison.Ordinal);
     }
 
     private sealed class RecordingHandler : HttpMessageHandler

@@ -2,6 +2,7 @@ using System.Net.Http.Headers;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Microsoft.Extensions.AI;
 
 namespace Netclaw.OpenAICompatible;
@@ -57,6 +58,7 @@ public sealed class OpenAiCompatibleChatClient : IChatClient
         var accumulatedText = new StringBuilder();
         var hadStructuredToolCalls = false;
         ChatResponseUpdate? finalUpdate = null;
+        var filter = new ToolCallTextFilter();
 
         while (!cancellationToken.IsCancellationRequested)
         {
@@ -83,6 +85,11 @@ public sealed class OpenAiCompatibleChatClient : IChatClient
                 if (update.FinishReason is not null)
                     finalUpdate = update;
 
+                // Suppress text updates that contain tool call XML
+                if (update.Contents.OfType<TextContent>().Any()
+                    && filter.ShouldSuppress(accumulatedText.ToString()))
+                    continue;
+
                 yield return update;
             }
         }
@@ -91,7 +98,30 @@ public sealed class OpenAiCompatibleChatClient : IChatClient
         // contains XML-like tool call blocks, emit a synthetic tool call update.
         if (!hadStructuredToolCalls
             && finalUpdate?.FinishReason != ChatFinishReason.ToolCalls
-            && accumulatedText.Length > 0)
+            && accumulatedText.Length > 0
+            && filter.IsActive)
+        {
+            var textToolCalls = TextToolCallParser.ExtractFromText(accumulatedText.ToString());
+            if (textToolCalls.Count > 0)
+            {
+                // Emit any cleaned non-tool-call text that was suppressed
+                var cleaned = filter.GetCleanedText();
+                if (!string.IsNullOrWhiteSpace(cleaned))
+                {
+                    yield return new ChatResponseUpdate(ChatRole.Assistant, [new TextContent(cleaned)]);
+                }
+
+                yield return new ChatResponseUpdate(ChatRole.Assistant, textToolCalls.Cast<AIContent>().ToList())
+                {
+                    FinishReason = ChatFinishReason.ToolCalls
+                };
+            }
+        }
+        // Original fallback for non-filtered text tool calls
+        else if (!hadStructuredToolCalls
+            && finalUpdate?.FinishReason != ChatFinishReason.ToolCalls
+            && accumulatedText.Length > 0
+            && !filter.IsActive)
         {
             var textToolCalls = TextToolCallParser.ExtractFromText(accumulatedText.ToString());
             if (textToolCalls.Count > 0)
@@ -110,14 +140,12 @@ public sealed class OpenAiCompatibleChatClient : IChatClient
     {
     }
 
-    private Dictionary<string, object?> BuildPayload(IEnumerable<ChatMessage> messages, ChatOptions? options, bool stream)
+    private JsonObject BuildPayload(IEnumerable<ChatMessage> messages, ChatOptions? options, bool stream)
     {
-        var toolList = options?.Tools?.ToList();
-
-        var body = new Dictionary<string, object?>
+        var body = new JsonObject
         {
             ["model"] = options?.ModelId ?? _modelId,
-            ["messages"] = NormalizeMessages(messages).ToArray(),
+            ["messages"] = NormalizeMessages(messages),
             ["stream"] = stream
         };
 
@@ -130,16 +158,16 @@ public sealed class OpenAiCompatibleChatClient : IChatClient
         if (options?.MaxOutputTokens is { } maxTokens)
             body["max_tokens"] = maxTokens;
         if (options?.StopSequences is { Count: > 0 } stop)
-            body["stop"] = stop;
-        if (toolList is { Count: > 0 })
-            body["tools"] = toolList.Select(ToTool).ToArray();
+            body["stop"] = new JsonArray(stop.Select(s => (JsonNode)JsonValue.Create(s)!).ToArray());
+        if (options?.Tools is { Count: > 0 } tools)
+            body["tools"] = new JsonArray(tools.Select(ToTool).ToArray<JsonNode>());
 
         return body;
     }
 
-    private static IEnumerable<object> NormalizeMessages(IEnumerable<ChatMessage> messages)
+    private static JsonArray NormalizeMessages(IEnumerable<ChatMessage> messages)
     {
-        var normalized = new List<object>();
+        var normalized = new JsonArray();
         var systemSegments = new List<string>();
 
         foreach (var message in messages)
@@ -157,7 +185,7 @@ public sealed class OpenAiCompatibleChatClient : IChatClient
 
         if (systemSegments.Count > 0)
         {
-            normalized.Insert(0, new Dictionary<string, object?>
+            normalized.Insert(0, new JsonObject
             {
                 ["role"] = "system",
                 ["content"] = string.Join("\n\n", systemSegments)
@@ -167,9 +195,9 @@ public sealed class OpenAiCompatibleChatClient : IChatClient
         return normalized;
     }
 
-    private HttpRequestMessage BuildRequest(Dictionary<string, object?> payload)
+    private HttpRequestMessage BuildRequest(JsonObject payload)
     {
-        var serializedPayload = JsonSerializer.Serialize(payload, JsonOptions);
+        var serializedPayload = payload.ToJsonString(JsonOptions);
 
         var request = new HttpRequestMessage(HttpMethod.Post, _endpoint.ChatCompletionsPath)
         {
@@ -182,7 +210,7 @@ public sealed class OpenAiCompatibleChatClient : IChatClient
         return request;
     }
 
-    private async Task EnsureSuccessAsync(HttpResponseMessage response, Dictionary<string, object?> payload, CancellationToken cancellationToken)
+    private async Task EnsureSuccessAsync(HttpResponseMessage response, JsonObject payload, CancellationToken cancellationToken)
     {
         if (response.IsSuccessStatusCode)
             return;
@@ -192,56 +220,135 @@ public sealed class OpenAiCompatibleChatClient : IChatClient
             : await response.Content.ReadAsStringAsync(cancellationToken);
 
         throw new HttpRequestException(
-            $"OpenAI-compatible request failed: status={(int)response.StatusCode} path={_endpoint.ChatCompletionsPath} payload={JsonSerializer.Serialize(payload, JsonOptions)} response={responseBody}");
+            $"OpenAI-compatible request failed: status={(int)response.StatusCode} path={_endpoint.ChatCompletionsPath} payload={payload.ToJsonString(JsonOptions)} response={responseBody}");
     }
 
-    private static object ToMessage(ChatMessage message)
+    internal static JsonObject ToMessage(ChatMessage message)
     {
-        var toolCalls = message.Contents.OfType<FunctionCallContent>().ToList();
-        var toolResult = message.Contents.OfType<FunctionResultContent>().FirstOrDefault();
+        // Classify contents by MEAI type
+        var textSegments = new List<string>();
+        var imageParts = new List<JsonObject>();
+        var toolCalls = new List<JsonObject>();
+        FunctionResultContent? toolResult = null;
 
-        // Tool result message — needs tool_call_id
+        foreach (var content in message.Contents)
+        {
+            switch (content)
+            {
+                case TextContent text when !string.IsNullOrEmpty(text.Text):
+                    textSegments.Add(text.Text);
+                    break;
+
+                case DataContent data:
+                    var mime = data.MediaType ?? "application/octet-stream";
+                    var b64 = Convert.ToBase64String(data.Data.ToArray());
+                    imageParts.Add(new JsonObject
+                    {
+                        ["type"] = "image_url",
+                        ["image_url"] = new JsonObject
+                        {
+                            ["url"] = $"data:{mime};base64,{b64}"
+                        }
+                    });
+                    break;
+
+                case FunctionCallContent tc:
+                    toolCalls.Add(new JsonObject
+                    {
+                        ["id"] = tc.CallId ?? Guid.NewGuid().ToString("N"),
+                        ["type"] = "function",
+                        ["function"] = new JsonObject
+                        {
+                            ["name"] = tc.Name ?? string.Empty,
+                            ["arguments"] = tc.Arguments is not null
+                                ? JsonSerializer.Serialize(tc.Arguments, JsonOptions)
+                                : "{}"
+                        }
+                    });
+                    break;
+
+                case FunctionResultContent tr:
+                    toolResult = tr;
+                    break;
+            }
+        }
+
+        // Tool result message
         if (message.Role == ChatRole.Tool && toolResult is not null)
         {
-            return new Dictionary<string, object?>
+            return new JsonObject
             {
                 ["role"] = "tool",
                 ["tool_call_id"] = toolResult.CallId,
-                ["content"] = toolResult.Result?.ToString() ?? string.Empty
+                ["content"] = SerializeToolResult(toolResult.Result)
             };
         }
 
-        // Assistant message with tool calls — needs tool_calls array
+        // Assistant message with tool calls
         if (message.Role == ChatRole.Assistant && toolCalls.Count > 0)
         {
-            var text = message.Contents.OfType<TextContent>().FirstOrDefault()?.Text;
-            var calls = toolCalls.Select(tc => new Dictionary<string, object?>
-            {
-                ["id"] = tc.CallId,
-                ["type"] = "function",
-                ["function"] = new Dictionary<string, object?>
-                {
-                    ["name"] = tc.Name,
-                    ["arguments"] = tc.Arguments is not null
-                        ? JsonSerializer.Serialize(tc.Arguments, JsonOptions)
-                        : "{}"
-                }
-            }).ToArray();
-
-            return new Dictionary<string, object?>
+            var msg = new JsonObject
             {
                 ["role"] = "assistant",
-                ["content"] = text,
-                ["tool_calls"] = calls
+                ["tool_calls"] = new JsonArray(toolCalls.ToArray<JsonNode>())
+            };
+            if (textSegments.Count > 0)
+                msg["content"] = textSegments[0];
+            return msg;
+        }
+
+        // Multimodal: images present → content array
+        if (imageParts.Count > 0)
+        {
+            var parts = new JsonArray();
+
+            if (textSegments.Count > 0)
+            {
+                foreach (var seg in textSegments)
+                    parts.Add(new JsonObject
+                    {
+                        ["type"] = "text",
+                        ["text"] = seg
+                    });
+            }
+            else if (!string.IsNullOrWhiteSpace(message.Text))
+            {
+                parts.Add(new JsonObject
+                {
+                    ["type"] = "text",
+                    ["text"] = message.Text
+                });
+            }
+
+            foreach (var img in imageParts)
+                parts.Add(img);
+
+            return new JsonObject
+            {
+                ["role"] = ToRole(message.Role),
+                ["content"] = parts
             };
         }
 
-        return new Dictionary<string, object?>
+        // Text-only (simple string, backward compatible)
+        var textContent = textSegments.Count > 0
+            ? string.Join("", textSegments)
+            : message.Text ?? string.Empty;
+
+        return new JsonObject
         {
             ["role"] = ToRole(message.Role),
-            ["content"] = message.Text
+            ["content"] = textContent
         };
     }
+
+    internal static string SerializeToolResult(object? result) => result switch
+    {
+        null => string.Empty,
+        string s => s,
+        JsonElement je => je.GetRawText(),
+        _ => JsonSerializer.Serialize(result, JsonOptions)
+    };
 
     private static string ToRole(ChatRole? role)
         => role switch
@@ -253,21 +360,27 @@ public sealed class OpenAiCompatibleChatClient : IChatClient
             _ => "user"
         };
 
-    private static object ToTool(AITool tool)
+    private static JsonObject ToTool(AITool tool)
     {
         var schemaProperty = tool.GetType().GetProperty("JsonSchema");
-        var schema = schemaProperty?.GetValue(tool) is JsonElement jsonSchema
-            ? JsonSerializer.Deserialize<object>(jsonSchema.GetRawText(), JsonOptions)
-            : new Dictionary<string, object?>
+        JsonNode? schema;
+        if (schemaProperty?.GetValue(tool) is JsonElement jsonSchema)
+        {
+            schema = JsonNode.Parse(jsonSchema.GetRawText());
+        }
+        else
+        {
+            schema = new JsonObject
             {
                 ["type"] = "object",
-                ["properties"] = new Dictionary<string, object?>()
+                ["properties"] = new JsonObject()
             };
+        }
 
-        return new Dictionary<string, object?>
+        return new JsonObject
         {
             ["type"] = "function",
-            ["function"] = new Dictionary<string, object?>
+            ["function"] = new JsonObject
             {
                 ["name"] = tool.Name,
                 ["description"] = tool.Description,
@@ -448,5 +561,35 @@ public sealed class OpenAiCompatibleChatClient : IChatClient
         public string? Name { get; set; }
 
         public StringBuilder Arguments { get; } = new();
+    }
+
+    internal sealed class ToolCallTextFilter
+    {
+        private bool _suppressionActive;
+        private readonly StringBuilder _suppressedText = new();
+
+        public bool ShouldSuppress(string accumulatedText)
+        {
+            if (_suppressionActive)
+            {
+                _suppressedText.Clear();
+                _suppressedText.Append(accumulatedText);
+                return true;
+            }
+
+            if (accumulatedText.Contains("<tool_call", StringComparison.Ordinal))
+            {
+                _suppressionActive = true;
+                _suppressedText.Append(accumulatedText);
+                return true;
+            }
+
+            return false;
+        }
+
+        public bool IsActive => _suppressionActive;
+
+        public string GetCleanedText()
+            => TextToolCallParser.StripToolCallText(_suppressedText.ToString());
     }
 }
