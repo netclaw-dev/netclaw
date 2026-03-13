@@ -1458,7 +1458,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 parts.Add(content.Trim());
         }
 
-        if (parts.Count == 0) return;
+        // Session identity — allows the agent to reference its own session
+        parts.Add($"[session]\nid: {_sessionId.Value}");
 
         var contextMessage = new AiChatMessage(
             Microsoft.Extensions.AI.ChatRole.System,
