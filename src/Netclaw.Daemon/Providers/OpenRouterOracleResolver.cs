@@ -35,11 +35,25 @@ public sealed class OpenRouterOracleResolver : IModelCapabilityResolver
         if (catalog is null)
             return null;
 
-        // Try all normalized candidates
-        foreach (var candidate in ModelIdNormalizer.GetCandidates(modelId))
+        var candidates = ModelIdNormalizer.GetCandidates(modelId);
+
+        // Fast path: exact dictionary lookup for all normalized candidates
+        foreach (var candidate in candidates)
         {
             if (catalog.TryGetValue(candidate, out var caps))
                 return caps with { ModelId = modelId };
+        }
+
+        // Suffix scan: for unprefixed candidates, check if any catalog entry
+        // ends with "/{candidate}" — handles arbitrary org prefixes dynamically
+        foreach (var candidate in candidates.Where(
+            c => !c.Contains('/', StringComparison.Ordinal)))
+        {
+            var suffix = $"/{candidate}";
+            var match = catalog.Keys.FirstOrDefault(
+                k => k.EndsWith(suffix, StringComparison.OrdinalIgnoreCase));
+            if (match is not null)
+                return catalog[match] with { ModelId = modelId };
         }
 
         _logger.LogDebug("Model {ModelId} not found in OpenRouter catalog", modelId);

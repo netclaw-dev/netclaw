@@ -76,6 +76,7 @@ internal sealed class DaemonRuntimeStatusService(
             Model = new DaemonRuntimeStatus.Model
             {
                 ModelId = sessionConfig.ModelId,
+                DisplayName = ModelIdNormalizer.GetDisplayName(sessionConfig.ModelId),
                 Provider = modelSelection.Main.Provider,
                 InputModalities = sessionConfig.InputModalities.ToString(),
                 OutputModalities = sessionConfig.OutputModalities.ToString(),

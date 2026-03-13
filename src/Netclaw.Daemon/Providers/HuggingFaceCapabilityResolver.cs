@@ -12,6 +12,7 @@ namespace Netclaw.Daemon.Providers;
 public sealed class HuggingFaceCapabilityResolver : IModelCapabilityResolver
 {
     private const string BaseUrl = "https://huggingface.co/api/models/";
+    private const int MaxHttpAttempts = 3;
 
     private readonly HttpClient _httpClient;
     private readonly ILogger<HuggingFaceCapabilityResolver> _logger;
@@ -25,27 +26,36 @@ public sealed class HuggingFaceCapabilityResolver : IModelCapabilityResolver
     public async Task<ResolvedModelCapabilities?> ResolveAsync(
         string modelId, CancellationToken ct = default)
     {
-        // HuggingFace IDs use org/model format — skip bare names without a slash
-        // unless they're already a valid HF ID
-        var hfId = modelId;
+        // Use normalizer candidates, but only try those with org/model format (HF requires a slash)
+        var candidates = ModelIdNormalizer.GetCandidates(modelId)
+            .Where(c => c.Contains('/', StringComparison.Ordinal))
+            .Take(MaxHttpAttempts);
 
-        // Strip Ollama tags
-        var colonIdx = hfId.IndexOf(':', StringComparison.Ordinal);
-        if (colonIdx > 0)
-            hfId = hfId[..colonIdx];
+        foreach (var candidate in candidates)
+        {
+            var result = await TryResolveHfIdAsync(candidate, modelId, ct);
+            if (result is not null)
+                return result;
+        }
 
+        return null;
+    }
+
+    private async Task<ResolvedModelCapabilities?> TryResolveHfIdAsync(
+        string hfId, string originalModelId, CancellationToken ct)
+    {
         var url = $"{BaseUrl}{Uri.EscapeDataString(hfId)}";
         using var request = new HttpRequestMessage(HttpMethod.Get, url);
 
         using var response = await _httpClient.SendAsync(request, ct);
         if (!response.IsSuccessStatusCode)
         {
-            _logger.LogDebug("HuggingFace returned {Status} for model {ModelId}", response.StatusCode, hfId);
+            _logger.LogDebug("HuggingFace returned {Status} for {HfId}", response.StatusCode, hfId);
             return null;
         }
 
         var json = await response.Content.ReadAsStringAsync(ct);
-        return ParseModelInfo(modelId, json);
+        return ParseModelInfo(originalModelId, json);
     }
 
     internal static ResolvedModelCapabilities? ParseModelInfo(string modelId, string json)

@@ -989,7 +989,7 @@ static void WriteStatusResult(DaemonRuntimeStatus.Response status, string endpoi
 
     if (status.Model is { } model)
     {
-        Console.WriteLine($"model: {model.ModelId} (provider: {model.Provider}, context: {model.ContextWindow:N0} tokens)");
+        Console.WriteLine($"model: {model.DisplayName ?? model.ModelId} (provider: {model.Provider}, context: {model.ContextWindow:N0} tokens)");
         Console.WriteLine($"  input: {model.InputModalities}");
         Console.WriteLine($"  output: {model.OutputModalities}");
     }

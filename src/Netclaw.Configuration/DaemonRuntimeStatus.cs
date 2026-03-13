@@ -93,6 +93,12 @@ public static class DaemonRuntimeStatus
     {
         public required string ModelId { get; init; }
 
+        /// <summary>
+        /// Human-friendly model name with file-format noise stripped
+        /// (.gguf extension, quantization suffixes, Ollama tags).
+        /// </summary>
+        public string? DisplayName { get; init; }
+
         public required string Provider { get; init; }
 
         public required string InputModalities { get; init; }
