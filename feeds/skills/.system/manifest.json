@@ -1,15 +1,15 @@
 {
   "schemaVersion": 1,
   "feedType": "system",
-  "updatedAt": "2026-03-13T19:58:13Z",
+  "updatedAt": "2026-03-13T20:48:06Z",
   "skills": [
     {
       "name": "capability-reference",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "minimumDaemonVersion": "0.1.0",
-      "sha256": "7a0c2e1c40fb9dd5360eb6f8e25643d154bb2775964d906a3add6e5166ac92b6",
-      "sizeBytes": 6208,
-      "url": "https://feeds.netclaw.dev/skills/.system/files/capability-reference/1.0.0/SKILL.md",
+      "sha256": "235de715ffed23c32c196b2f4da6e22d7fe01fe2636bf9e608bf55083f3f1f85",
+      "sizeBytes": 6270,
+      "url": "https://feeds.netclaw.dev/skills/.system/files/capability-reference/1.1.0/SKILL.md",
       "category": null,
       "description": "Quick-lookup catalog of all built-in tools, CLI commands, tool grant categories, scheduling syntax, and MCP discovery. Read when unsure what tools or commands are available."
     },
@@ -42,6 +42,36 @@
       "url": "https://feeds.netclaw.dev/skills/.system/files/memory-usage/1.4.0/SKILL.md",
       "category": null,
       "description": "How SQLite-backed memory now splits automatic durable recall from intentional evidence search"
+    },
+    {
+      "name": "search-citation",
+      "version": "1.0.0",
+      "minimumDaemonVersion": "0.1.0",
+      "sha256": "e26d4ae5d9554df04d6238886b564b74b3f8b8ba13ec858a9ea787f32775b062",
+      "sizeBytes": 3718,
+      "url": "https://feeds.netclaw.dev/skills/.system/files/search-citation/1.0.0/SKILL.md",
+      "category": null,
+      "description": "Guides when to use web search vs. training data and how to cite sources. Ensures specific factual claims include source URLs and the agent does not hallucinate verifiable information.",
+      "files": [
+        {
+          "path": "references/local-search.md",
+          "sha256": "a913d2efdfd546ef85d24116ae3ad2a621f422c885f79751a7c465072b72dda2",
+          "sizeBytes": 1584,
+          "url": "https://feeds.netclaw.dev/skills/.system/files/search-citation/1.0.0/references/local-search.md"
+        },
+        {
+          "path": "references/product-search.md",
+          "sha256": "e89a691b5209e235fd9e8ae5f76cb4a7a1bb5d9a96dcbe454077ad01ee56d2b4",
+          "sizeBytes": 1642,
+          "url": "https://feeds.netclaw.dev/skills/.system/files/search-citation/1.0.0/references/product-search.md"
+        },
+        {
+          "path": "references/travel-search.md",
+          "sha256": "b1b3eba5ecb374d8f14e7340c46c3c4c33e4f68767fc1a9a0ef30662d04144dc",
+          "sizeBytes": 1531,
+          "url": "https://feeds.netclaw.dev/skills/.system/files/search-citation/1.0.0/references/travel-search.md"
+        }
+      ]
     },
     {
       "name": "self-diagnostics",
