@@ -136,7 +136,7 @@ def hydrate_recall_contents(conn, recall_ids):
 
 
 RE_RECALL = re.compile(
-    r"turn_memory_recall\s+degraded=(?P<degraded>\S+)\s+durationMs=(?P<duration>\d+)\s+itemCount=(?P<count>\d+)\s+itemIds=(?P<ids>\S+)"
+    r"turn_memory_recall\s+degraded=(?P<degraded>\S+)(?:\s+stage=(?P<stage>\S+))?\s+durationMs=(?P<duration>\d+)\s+itemCount=(?P<count>\d+)\s+itemIds=(?P<ids>\S+)"
 )
 
 RE_ENQUEUE = re.compile(
@@ -161,6 +161,7 @@ def parse_log_metrics(log_text):
             recall.append(
                 {
                     "degraded": m.group("degraded").lower() == "true",
+                    "stage": m.group("stage"),
                     "durationMs": int(m.group("duration")),
                     "itemCount": int(m.group("count")),
                     "itemIds": ids,
@@ -196,7 +197,7 @@ def parse_log_metrics(log_text):
     return {"recall": recall, "enqueue": enqueue, "curation": curation}
 
 
-def warm_search_index(repo_root: Path, fixtures):
+def warm_search_index(repo_root: Path, fixtures, prompt_timeout_seconds: int):
     # Ensure the daemon has produced searchable memory entries before issuing
     # recall probes. This aligns eval ordering with real runtime behavior.
     warm_phrases = []
@@ -220,12 +221,12 @@ def warm_search_index(repo_root: Path, fixtures):
                 f"search memory for: {phrase}",
             ],
             check=False,
-            timeout=120,
+            timeout=prompt_timeout_seconds,
         )
         time.sleep(0.2)
 
 
-def warm_recall_index(repo_root: Path, fixtures):
+def warm_recall_index(repo_root: Path, fixtures, prompt_timeout_seconds: int):
     recall_prompts = []
     for case in fixtures.get("cases", []):
         if case.get("kind") == "recall_positive":
@@ -245,7 +246,7 @@ def warm_recall_index(repo_root: Path, fixtures):
                 prompt,
             ],
             check=False,
-            timeout=120,
+            timeout=prompt_timeout_seconds,
         )
         time.sleep(0.3)
 
@@ -311,6 +312,8 @@ def main():
     parser.add_argument("--log-path", default="")
     parser.add_argument("--runs", type=int, default=1)
     parser.add_argument("--prompt-timeout-seconds", type=int, default=180)
+    parser.add_argument("--smoke-pass-streak", type=int, default=1)
+    parser.add_argument("--realistic-pass-streak", type=int, default=1)
     args = parser.parse_args()
 
     repo_root = Path(args.repo_root)
@@ -364,8 +367,8 @@ def main():
         delete_eval_seed(conn)
         seed_documents(conn, fixtures)
         force_seed_recall_artifacts(conn)
-        warm_search_index(repo_root, fixtures)
-        warm_recall_index(repo_root, fixtures)
+        warm_search_index(repo_root, fixtures, args.prompt_timeout_seconds)
+        warm_recall_index(repo_root, fixtures, args.prompt_timeout_seconds)
 
         start_line_count = len(log_path.read_text(errors="ignore").splitlines())
 
@@ -593,6 +596,14 @@ def main():
     )
     any_hard_fail = any(r["hardFail"] for r in all_run_results)
     deploy_candidate = (not any_hard_fail) and overall_score >= 85.0
+    smoke_gate_pass = all(
+        r["metrics"]["recallHitRate"] >= 0.90 and r["metrics"]["privacyLeakCount"] == 0
+        for r in all_run_results
+    )
+    realistic_gate_pass = all(
+        r["metrics"]["recallHitRate"] >= 0.75 and r["metrics"]["privacyLeakCount"] <= 0
+        for r in all_run_results
+    )
 
     output = {
         "timestampUtc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -605,6 +616,10 @@ def main():
             "meanRecallHitRate": mean(recall_rates),
             "meanNoiseSuppressionRate": mean(noise_rates),
             "maxPrivacyLeakCount": max(privacy_counts) if privacy_counts else 0,
+            "smokeGatePass": smoke_gate_pass,
+            "realisticGatePass": realistic_gate_pass,
+            "requiredSmokePassStreak": args.smoke_pass_streak,
+            "requiredRealisticPassStreak": args.realistic_pass_streak,
         },
         "runResults": all_run_results,
     }
@@ -621,6 +636,10 @@ def main():
         f"- score spread: {output['overall']['scoreSpread']:.2f}",
         f"- hard fail: {any_hard_fail}",
         f"- deploy candidate: {deploy_candidate}",
+        f"- smoke gate pass: {smoke_gate_pass}",
+        f"- realistic gate pass: {realistic_gate_pass}",
+        f"- required smoke pass streak: {args.smoke_pass_streak}",
+        f"- required realistic pass streak: {args.realistic_pass_streak}",
         "",
     ]
 

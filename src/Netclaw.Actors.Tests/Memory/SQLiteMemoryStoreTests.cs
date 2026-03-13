@@ -38,28 +38,38 @@ public sealed class SQLiteMemoryStoreTests : IAsyncLifetime
         await _store.UpsertDocumentAsync(new SQLiteMemoryDocument(
             DocumentId: "doc-1",
             Anchor: anchor,
+            MemoryClass: "durable_fact",
             Title: "Netclaw memory redesign",
             MarkdownBody: "Use sqlite-backed automatic recall.",
+            AliasesJson: "[\"sqlite memory\",\"automatic recall\"]",
+            FacetsJson: "[\"project_fact\"]",
+            SlotsJson: null,
             UpdateSemantics: "merge-document",
             Domain: "project:test",
             Sensitivity: "normal",
             RecallMode: "auto",
             Confidence: 0.95,
             FreshnessAtMs: now,
+            ExpiresAtMs: null,
             CreatedAtMs: now,
             UpdatedAtMs: now));
 
         await _store.UpsertDocumentAsync(new SQLiteMemoryDocument(
             DocumentId: "doc-2",
             Anchor: anchor,
+            MemoryClass: "durable_fact",
             Title: "Secret token",
             MarkdownBody: "This should not auto recall.",
+            AliasesJson: "[\"secret token\"]",
+            FacetsJson: "[\"project_fact\"]",
+            SlotsJson: null,
             UpdateSemantics: "merge-document",
             Domain: "project:test",
             Sensitivity: "secret",
             RecallMode: "auto",
             Confidence: 0.99,
             FreshnessAtMs: now,
+            ExpiresAtMs: null,
             CreatedAtMs: now,
             UpdatedAtMs: now));
 
@@ -89,6 +99,117 @@ public sealed class SQLiteMemoryStoreTests : IAsyncLifetime
 
         var pending = await _store.GetPendingCheckpointCountAsync();
         Assert.Equal(1, pending);
+    }
+
+    [Fact]
+    public async Task SearchAutoRecallDocuments_excludes_expired_evidence_and_trace()
+    {
+        await _store.InitializeAsync();
+
+        var anchor = _store.CreateDefaultAnchor("netclaw", "project:test");
+        var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+        await _store.UpsertDocumentAsync(new SQLiteMemoryDocument(
+            DocumentId: "doc-durable",
+            Anchor: anchor,
+            MemoryClass: "durable_fact",
+            Title: "Active durable fact",
+            MarkdownBody: "keep this visible in auto recall",
+            AliasesJson: "[\"durable fact\"]",
+            FacetsJson: "[\"project_fact\"]",
+            SlotsJson: null,
+            UpdateSemantics: "merge-document",
+            Domain: "project:test",
+            Sensitivity: "normal",
+            RecallMode: "auto",
+            Confidence: 0.95,
+            FreshnessAtMs: now,
+            ExpiresAtMs: null,
+            CreatedAtMs: now,
+            UpdatedAtMs: now));
+
+        await _store.UpsertDocumentAsync(new SQLiteMemoryDocument(
+            DocumentId: "doc-expired-evidence",
+            Anchor: anchor,
+            MemoryClass: "evidence",
+            Title: "Expired evidence",
+            MarkdownBody: "should be excluded from auto recall",
+            AliasesJson: "[\"expired evidence\"]",
+            FacetsJson: "[\"project_fact\"]",
+            SlotsJson: null,
+            UpdateSemantics: "merge-document",
+            Domain: "project:test",
+            Sensitivity: "normal",
+            RecallMode: "auto",
+            Confidence: 0.8,
+            FreshnessAtMs: now - 1000,
+            ExpiresAtMs: now - 1,
+            CreatedAtMs: now,
+            UpdatedAtMs: now));
+
+        await _store.UpsertDocumentAsync(new SQLiteMemoryDocument(
+            DocumentId: "doc-expired-trace",
+            Anchor: anchor,
+            MemoryClass: "trace",
+            Title: "Trace breadcrumb",
+            MarkdownBody: "should never appear",
+            AliasesJson: null,
+            FacetsJson: null,
+            SlotsJson: null,
+            UpdateSemantics: "conversation_trace",
+            Domain: "project:test",
+            Sensitivity: "normal",
+            RecallMode: "auto",
+            Confidence: 0.5,
+            FreshnessAtMs: now - 1000,
+            ExpiresAtMs: now - 1,
+            CreatedAtMs: now,
+            UpdatedAtMs: now));
+
+        var results = await _store.SearchAutoRecallDocumentsAsync("visible excluded", "project:test", 10);
+
+        Assert.Contains(results, x => x.DocumentId == "doc-durable");
+        Assert.DoesNotContain(results, x => x.DocumentId == "doc-expired-evidence");
+        Assert.DoesNotContain(results, x => x.DocumentId == "doc-expired-trace");
+    }
+
+    [Fact]
+    public async Task InitializeAsync_demotes_malformed_auto_recall_documents_to_searchable()
+    {
+        await _store.InitializeAsync();
+
+        var anchor = _store.CreateDefaultAnchor("textforge", "project:test");
+        var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+        await _store.UpsertDocumentAsync(new SQLiteMemoryDocument(
+            DocumentId: "doc-bad",
+            Anchor: anchor,
+            MemoryClass: "durable_fact",
+            Title: "doc:doc-bad",
+            MarkdownBody: "Malformed imported document.",
+            AliasesJson: null,
+            FacetsJson: null,
+            SlotsJson: null,
+            UpdateSemantics: "merge-document",
+            Domain: "project:test",
+            Sensitivity: "normal",
+            RecallMode: "auto",
+            Confidence: 0.8,
+            FreshnessAtMs: now,
+            ExpiresAtMs: null,
+            CreatedAtMs: now,
+            UpdatedAtMs: now));
+
+        await _store.InitializeAsync();
+
+        await using var conn = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = _dbPath }.ToString());
+        await conn.OpenAsync();
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT recall_mode, facets_json FROM memory_documents WHERE document_id = 'doc-bad';";
+        await using var reader = await cmd.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        Assert.Equal("searchable", reader.GetString(0));
+        Assert.Contains("needs_metadata_enrichment", reader.GetString(1), StringComparison.OrdinalIgnoreCase);
     }
 
     public Task InitializeAsync() => Task.CompletedTask;

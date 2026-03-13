@@ -15,7 +15,11 @@ public sealed record AutomaticRecallRequest(
     string SessionId,
     string Query,
     IReadOnlyList<string> RecentUserMessages,
-    int MaxItems);
+    int MaxItems,
+    IReadOnlyList<string>? RecentAssistantMessages = null,
+    IReadOnlyList<string>? RecentEntities = null,
+    string? HardScopeOverride = null,
+    string? ThreadTitle = null);
 
 /// <summary>
 /// Automatic recall output for a single turn.
@@ -23,7 +27,8 @@ public sealed record AutomaticRecallRequest(
 public sealed record AutomaticRecallResult(
     IReadOnlyList<AutomaticRecallItem> Items,
     bool Degraded = false,
-    string? DegradeReason = null);
+    string? DegradeReason = null,
+    string? DegradeStage = null);
 
 /// <summary>
 /// A single memory item selected for automatic recall.

@@ -1,17 +1,17 @@
 {
   "schemaVersion": 1,
   "feedType": "system",
-  "updatedAt": "2026-03-07T22:08:39Z",
+  "updatedAt": "2026-03-10T00:41:24Z",
   "skills": [
     {
       "name": "identity-management",
-      "version": "1.0.3",
+      "version": "1.0.4",
       "minimumDaemonVersion": "0.1.0",
-      "sha256": "dc15ea53fbd70077b05f02a00454f7373950681dd58d4e8b23e677bb3681113e",
-      "sizeBytes": 4336,
-      "url": "https://feeds.netclaw.dev/skills/.system/files/identity-management/1.0.3.md",
+      "sha256": "0d3c700ea75d60d4cc258c57419cf6372e2778c92751d6903c0b740c2e5c70be",
+      "sizeBytes": 2383,
+      "url": "https://feeds.netclaw.dev/skills/.system/files/identity-management/1.0.4.md",
       "category": null,
-      "description": "Update SOUL.md/AGENTS.md/TOOLING.md when learning durable user preferences or environment facts. Read for file structure and triage."
+      "description": "How to keep SOUL.md narrowly scoped to identity/profile updates while project facts and evidence stay in SQLite memory"
     },
     {
       "name": "memorizer-usage",
@@ -25,13 +25,13 @@
     },
     {
       "name": "memory-usage",
-      "version": "1.2.0",
+      "version": "1.3.0",
       "minimumDaemonVersion": "0.1.0",
-      "sha256": "b6544a153294d4d44a02d815373b92b150c5030419c673ae60a594f7e8260cf4",
-      "sizeBytes": 2791,
-      "url": "https://feeds.netclaw.dev/skills/.system/files/memory-usage/1.2.0.md",
+      "sha256": "ff84917195f292b999fbfec9c648bbd56649c2e15e9d39967fa77844583f40b2",
+      "sizeBytes": 2846,
+      "url": "https://feeds.netclaw.dev/skills/.system/files/memory-usage/1.3.0.md",
       "category": null,
-      "description": "How SQLite-backed durable memory works with automatic recall and manual memory tools"
+      "description": "How SQLite-backed memory now splits automatic durable recall from intentional evidence search"
     },
     {
       "name": "self-diagnostics",

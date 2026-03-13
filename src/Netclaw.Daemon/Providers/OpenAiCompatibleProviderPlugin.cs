@@ -1,8 +1,7 @@
-using System.ClientModel;
 using Microsoft.Extensions.AI;
 using Netclaw.Configuration;
 using Netclaw.Configuration.Providers.Descriptors;
-using OpenAI;
+using Netclaw.OpenAICompatible;
 
 namespace Netclaw.Daemon.Providers;
 
@@ -15,17 +14,10 @@ public sealed class OpenAiCompatibleProviderPlugin : ProviderPluginBase<OpenAiCo
 
     public override IChatClient CreateChatClient(ProviderEntry entry, ModelReference model)
     {
-        var endpoint = string.IsNullOrWhiteSpace(entry.Endpoint)
-            ? new Uri(DefaultEndpoint)
-            : new Uri(entry.Endpoint);
+        var endpoint = OpenAiCompatibleEndpoint.FromBaseUrl(
+            entry.Endpoint ?? DefaultEndpoint,
+            entry.ApiKey?.Value);
 
-        var options = new OpenAIClientOptions { Endpoint = endpoint };
-
-        var credential = entry.ApiKey is { Value.Length: > 0 }
-            ? new ApiKeyCredential(entry.ApiKey.Value)
-            : new ApiKeyCredential("netclaw-local-openai-compatible");
-
-        var client = new OpenAIClient(credential, options);
-        return client.GetChatClient(model.ModelId).AsIChatClient();
+        return new OpenAiCompatibleChatClient(new HttpClient { BaseAddress = endpoint.BaseUri }, endpoint, model.ModelId);
     }
 }

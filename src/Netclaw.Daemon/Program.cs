@@ -238,6 +238,14 @@ static void ConfigureDaemonServices(
             ? Netclaw.Configuration.Providers.Descriptors.OllamaDescriptor.DefaultEndpointValue
             : mainProvider.Endpoint)
         : null;
+    var openAiCompatibleEndpoint = mainProviderType?.Equals("openai-compatible", StringComparison.OrdinalIgnoreCase) == true
+        ? (string.IsNullOrWhiteSpace(mainProvider!.Endpoint)
+            ? "http://localhost:11434"
+            : mainProvider.Endpoint)
+        : null;
+    var openAiCompatibleApiKey = mainProviderType?.Equals("openai-compatible", StringComparison.OrdinalIgnoreCase) == true
+        ? mainProvider?.ApiKey?.Value
+        : null;
 
     var inputModalities = models.Main.InputModalities;
     var outputModalities = models.Main.OutputModalities;
@@ -245,7 +253,7 @@ static void ConfigureDaemonServices(
     if (inputModalities is null || outputModalities is null || contextWindow is null)
     {
         var detected = ResolveStartupCapabilities(
-            models.Main.ModelId, daemonLogLevel, mainProviderType, ollamaEndpoint);
+            models.Main.ModelId, daemonLogLevel, mainProviderType, ollamaEndpoint, openAiCompatibleEndpoint, openAiCompatibleApiKey);
         if (detected is not null)
         {
             inputModalities ??= detected.InputModalities;
@@ -366,6 +374,9 @@ static void ConfigureDaemonServices(
     services.AddSingleton(memoryIndexLayer);
     services.AddSingleton<IContextLayerProvider>(memoryIndexLayer);
 
+    // Current time context layer — transient per-turn grounding for date/time-sensitive prompts
+    services.AddSingleton<IContextLayerProvider, CurrentTimeContextLayer>();
+
     // Expose all context layers as IReadOnlyList for actor DI resolution
     services.AddSingleton<IReadOnlyList<IContextLayerProvider>>(sp =>
         sp.GetServices<IContextLayerProvider>().ToList());
@@ -419,11 +430,23 @@ static void ConfigureDaemonServices(
                 sp.GetRequiredService<ILogger<OllamaCapabilityResolver>>(),
                 ollamaEndpoint));
     }
+    if (openAiCompatibleEndpoint is not null)
+    {
+        services.AddHttpClient(nameof(OpenAiCompatibleCapabilityResolver));
+        services.AddSingleton(sp =>
+            new OpenAiCompatibleCapabilityResolver(
+                sp.GetRequiredService<IHttpClientFactory>().CreateClient(nameof(OpenAiCompatibleCapabilityResolver)),
+                sp.GetRequiredService<ILogger<OpenAiCompatibleCapabilityResolver>>(),
+                openAiCompatibleEndpoint,
+                openAiCompatibleApiKey));
+    }
     services.AddSingleton<IModelCapabilityResolver>(sp =>
     {
         var resolvers = new List<IModelCapabilityResolver>();
         if (ollamaEndpoint is not null)
             resolvers.Add(sp.GetRequiredService<OllamaCapabilityResolver>());
+        if (openAiCompatibleEndpoint is not null)
+            resolvers.Add(sp.GetRequiredService<OpenAiCompatibleCapabilityResolver>());
         resolvers.Add(sp.GetRequiredService<OpenRouterOracleResolver>());
         resolvers.Add(sp.GetRequiredService<HuggingFaceCapabilityResolver>());
 
@@ -543,7 +566,7 @@ static ISearchBackend? CreateSearchBackend(SearchConfig config)
 /// Returns null if detection fails (caller falls back to text-only).
 /// </summary>
 static ResolvedModelCapabilities? ResolveStartupCapabilities(
-    string modelId, LogLevel logLevel, string? providerType, string? ollamaEndpoint)
+    string modelId, LogLevel logLevel, string? providerType, string? ollamaEndpoint, string? openAiCompatibleEndpoint, string? openAiCompatibleApiKey)
 {
     try
     {
@@ -567,6 +590,27 @@ static ResolvedModelCapabilities? ResolveStartupCapabilities(
                     modelId, ollamaResult.InputModalities, ollamaResult.OutputModalities,
                     ollamaResult.ContextWindowTokens?.ToString() ?? "unknown");
                 return ollamaResult;
+            }
+        }
+
+        if (providerType?.Equals("openai-compatible", StringComparison.OrdinalIgnoreCase) == true
+            && openAiCompatibleEndpoint is not null)
+        {
+            var openAiCompatibleResolver = new OpenAiCompatibleCapabilityResolver(
+                httpClient,
+                loggerFactory.CreateLogger<OpenAiCompatibleCapabilityResolver>(),
+                openAiCompatibleEndpoint,
+                openAiCompatibleApiKey);
+            var openAiCompatibleResult = openAiCompatibleResolver.ResolveAsync(modelId, CancellationToken.None)
+                .GetAwaiter().GetResult();
+
+            if (openAiCompatibleResult is not null)
+            {
+                logger.LogInformation(
+                    "Auto-detected model capabilities for {ModelId}: input={Input}, output={Output}, context_window={ContextWindow}",
+                    modelId, openAiCompatibleResult.InputModalities, openAiCompatibleResult.OutputModalities,
+                    openAiCompatibleResult.ContextWindowTokens?.ToString() ?? "unknown");
+                return openAiCompatibleResult;
             }
         }
 

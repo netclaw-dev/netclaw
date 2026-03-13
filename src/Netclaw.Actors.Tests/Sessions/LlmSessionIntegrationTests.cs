@@ -2,11 +2,13 @@ using Akka.Actor;
 using Akka.Hosting;
 using Akka.Hosting.TestKit;
 using Akka.Persistence.Hosting;
+using System.Text.Json;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Netclaw.Configuration;
 using Netclaw.Actors.Hosting;
+using Netclaw.Actors.Memory;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Sessions;
 using Netclaw.Actors.Tools;
@@ -39,11 +41,24 @@ public class LlmSessionIntegrationTests : TestKit
             ContextWindowTokens = 128_000,
             SnapshotInterval = 5,
             TitleGenerationInterval = 0,
+            MemorySidecarsEnabled = false,
             DiscoveredToolRetentionTurns = 3,
             DiscoveredToolMaxCount = 12
         });
         services.AddSingleton<ISystemPromptProvider>(new StaticSystemPromptProvider(
             "You are a test assistant."));
+        services.AddSingleton<SidecarRecallPlanner>();
+        services.AddSingleton<MemoryProposalGate>();
+        services.AddSingleton<RecallPlanGate>();
+        services.AddSingleton<IMemoryCheckpointSink, NullMemoryCheckpointSink>();
+        services.AddSingleton<SQLiteMemoryStore>(sp => new SQLiteMemoryStore(Path.Combine(Path.GetTempPath(), $"netclaw-sidecar-tests-{Guid.NewGuid():N}.db"), TimeProvider.System));
+        services.AddSingleton<IMemoryRecallCoordinator>(sp => new SQLiteMemoryRecallCoordinator(
+            sp.GetRequiredService<SQLiteMemoryStore>(),
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<SQLiteMemoryRecallCoordinator>.Instance,
+            sp.GetRequiredService<IChatClientProvider>(),
+            sp.GetRequiredService<SidecarRecallPlanner>(),
+            sp.GetRequiredService<RecallPlanGate>(),
+            sp.GetRequiredService<SessionConfig>()));
 
         var registry = new ToolRegistry();
         registry.Register(new McpToolAdapter(
@@ -113,6 +128,43 @@ public class LlmSessionIntegrationTests : TestKit
         var completed = await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
         Assert.Equal(sessionId, completed.SessionId);
         Assert.Equal(1, completed.TurnNumber);
+    }
+
+    [Fact]
+    public async Task Sidecar_observation_promotes_strong_user_assertion_into_memory()
+    {
+        var gate = new MemoryProposalGate();
+        var observer = new SidecarMemoryObserver();
+        var request = observer.BuildRequest(
+            "slack/test-memory",
+            "turn-1",
+            "turn_completed",
+            "project:slack",
+            "normal",
+            "I always fly out of IAH and I use United Airlines.",
+            "Understood.",
+            ["I always fly out of IAH and I use United Airlines."],
+            [],
+            ["I always fly out of IAH and I use United Airlines."],
+            ["Understood."],
+            [],
+            false,
+            DateTimeOffset.UtcNow);
+
+        var response = await _fakeChatClient.GetResponseAsync(new[]
+        {
+            new ChatMessage(Microsoft.Extensions.AI.ChatRole.System, MemorySidecarPromptBuilder.BuildMemoryObservationSystemPrompt()),
+            new ChatMessage(Microsoft.Extensions.AI.ChatRole.User, MemorySidecarPromptBuilder.BuildMemoryObservationUserPrompt(request))
+        });
+
+        var proposals = JsonSerializer.Deserialize<IReadOnlyList<MemoryProposal>>(
+            response.Messages[^1].Text!,
+            new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+
+        var accepted = gate.Accept(proposals!, "project:slack", "normal", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+
+        Assert.Contains(accepted, x => x.Title.Contains("Preferred Airline", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(accepted, x => x.Title.Contains("Origin Airport", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
@@ -445,7 +497,8 @@ internal sealed class FakeChatClient : IChatClient
         ChatOptions? options = null,
         CancellationToken cancellationToken = default)
     {
-        ReceivedMessages.Add(messages.ToList());
+        var messageList = messages.ToList();
+        ReceivedMessages.Add(messageList);
         ReceivedToolNames.Add(options?.Tools?
             .Select(t => t is AIFunction f ? f.Name : t.GetType().Name)
             .ToList()
@@ -454,6 +507,108 @@ internal sealed class FakeChatClient : IChatClient
 
         if (Delay > TimeSpan.Zero)
             await Task.Delay(Delay, cancellationToken);
+
+        var systemText = messageList.FirstOrDefault(m => m.Role == Microsoft.Extensions.AI.ChatRole.System)?.Text ?? string.Empty;
+        var userText = messageList.LastOrDefault(m => m.Role == Microsoft.Extensions.AI.ChatRole.User)?.Text ?? string.Empty;
+
+        if (systemText.Contains("You are a recall planning sidecar", StringComparison.Ordinal))
+        {
+            var request = JsonSerializer.Deserialize<RecallPlanningRequest>(userText, new JsonSerializerOptions
+            {
+                PropertyNameCaseInsensitive = true
+            });
+
+            var terms = new List<string>();
+            if (!string.IsNullOrWhiteSpace(request?.UserText))
+                terms.AddRange(request.UserText.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+            if (request?.RecentEntities is not null)
+                terms.AddRange(request.RecentEntities);
+
+            var filtered = terms
+                .Select(x => x.Trim(',', '.', '?', '!').ToLowerInvariant())
+                .Where(x => x.Length >= 3)
+                .Where(x => x is not ("what" or "should" or "there" or "some" or "give" or "with" or "from"))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Take(request?.MaxQueryTerms ?? 8)
+                .ToArray();
+
+            var plan = new RecallQueryPlan(
+                request?.Mode ?? "automatic",
+                "test",
+                request?.RecentEntities ?? [],
+                [],
+                filtered,
+                request?.Mode == "intentional" ? ["durable_fact", "evidence"] : ["durable_fact"],
+                Math.Min(request?.MaxResults ?? 3, 3),
+                false);
+
+            return new ChatResponse(new ChatMessage(
+                Microsoft.Extensions.AI.ChatRole.Assistant,
+                JsonSerializer.Serialize(plan)));
+        }
+
+        if (systemText.Contains("You are a memory observation sidecar", StringComparison.Ordinal))
+        {
+            var request = JsonSerializer.Deserialize<MemoryObservationRequest>(userText, new JsonSerializerOptions
+            {
+                PropertyNameCaseInsensitive = true
+            });
+
+            var proposals = new List<MemoryProposal>();
+            var assertions = request?.CurrentTurn.StrongAssertions ?? [];
+            foreach (var assertion in assertions)
+            {
+                if (assertion.Contains("IAH", StringComparison.OrdinalIgnoreCase))
+                {
+                    proposals.Add(new MemoryProposal(
+                        "upsert_document",
+                        "durable_fact",
+                        "user",
+                        "self",
+                        new MemoryAnchor("user-travel-origin", "preference"),
+                        "Travel Profile: Primary Origin Airport",
+                        "Primary origin airport: IAH",
+                        ["origin airport", "fly out of", "IAH"],
+                        ["travel_profile", "user_preference"],
+                        ["origin_airport"],
+                        null,
+                        "auto",
+                        "normal",
+                        0.95,
+                        null,
+                        null,
+                        null,
+                        "strong user assertion"));
+                }
+
+                if (assertion.Contains("United", StringComparison.OrdinalIgnoreCase))
+                {
+                    proposals.Add(new MemoryProposal(
+                        "upsert_document",
+                        "durable_fact",
+                        "user",
+                        "self",
+                        new MemoryAnchor("user-travel-airline", "preference"),
+                        "Travel Profile: Preferred Airline",
+                        "Preferred airline: United Airlines",
+                        ["preferred airline", "united airlines", "usually fly"],
+                        ["travel_profile", "user_preference"],
+                        ["preferred_airline"],
+                        null,
+                        "auto",
+                        "normal",
+                        0.95,
+                        null,
+                        null,
+                        null,
+                        "strong user assertion"));
+                }
+            }
+
+            return new ChatResponse(new ChatMessage(
+                Microsoft.Extensions.AI.ChatRole.Assistant,
+                JsonSerializer.Serialize<IReadOnlyList<MemoryProposal>>(proposals)));
+        }
 
         // Return tool calls if configured
         if (ToolCallsOnFirstCall is not null)

@@ -26,6 +26,8 @@ fi
 RUNS="${RUNS:-1}"
 DB_PATH="${DB_PATH:-$HOME/.netclaw/netclaw.db}"
 LOG_PATH="${LOG_PATH:-$HOME/.netclaw/logs/daemon-$(date +%F).log}"
+SMOKE_PASS_STREAK="${SMOKE_PASS_STREAK:-1}"
+REALISTIC_PASS_STREAK="${REALISTIC_PASS_STREAK:-1}"
 
 if [[ -n "${PROMPT_TIMEOUT_SECONDS:-}" ]]; then
   PROMPT_TIMEOUT_SECONDS="$PROMPT_TIMEOUT_SECONDS"
@@ -59,6 +61,8 @@ echo "[eval] output dir: $OUT_DIR"
 echo "[eval] db: $DB_PATH"
 echo "[eval] log: $LOG_PATH"
 echo "[eval] prompt timeout: ${PROMPT_TIMEOUT_SECONDS}s"
+echo "[eval] smoke streak: $SMOKE_PASS_STREAK"
+echo "[eval] realistic streak: $REALISTIC_PASS_STREAK"
 
 # Ensure latest local binaries pick up observability changes.
 dotnet build "$ROOT_DIR/src/Netclaw.Daemon/Netclaw.Daemon.csproj" >/dev/null
@@ -72,6 +76,8 @@ python3 "$ROOT_DIR/scripts/evals/memory-score.py" \
   --db-path "$DB_PATH" \
   --log-path "$LOG_PATH" \
   --runs "$RUNS" \
+  --smoke-pass-streak "$SMOKE_PASS_STREAK" \
+  --realistic-pass-streak "$REALISTIC_PASS_STREAK" \
   --prompt-timeout-seconds "$PROMPT_TIMEOUT_SECONDS"
 
 echo "[eval] wrote: $OUT_DIR/eval-results.json"

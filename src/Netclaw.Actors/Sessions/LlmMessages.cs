@@ -113,3 +113,13 @@ internal sealed record TitleGenerationCompleted
 {
     public required string Title { get; init; }
 }
+
+internal sealed record MemoryObservationFailed
+{
+    public required string Reason { get; init; }
+}
+
+internal sealed record RecallPlanningFailed
+{
+    public required string Reason { get; init; }
+}

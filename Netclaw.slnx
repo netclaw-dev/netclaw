@@ -16,9 +16,11 @@
     <Project Path="src/Netclaw.Cli.Tests/Netclaw.Cli.Tests.csproj" />
     <Project Path="src/Netclaw.Cli/Netclaw.Cli.csproj" />
     <Project Path="src/Netclaw.Actors.Tests/Netclaw.Actors.Tests.csproj" />
+    <Project Path="src/Netclaw.MemoryRetrievalPoC.Tests/Netclaw.MemoryRetrievalPoC.Tests.csproj" />
     <Project Path="src/Netclaw.Tools.Abstractions/Netclaw.Tools.Abstractions.csproj" />
     <Project Path="src/Netclaw.Tools.Generators/Netclaw.Tools.Generators.csproj" />
     <Project Path="src/Netclaw.Search/Netclaw.Search.csproj" />
+    <Project Path="src/Netclaw.OpenAICompatible/Netclaw.OpenAICompatible.csproj" />
     <Project Path="src/Netclaw.Search.Tests/Netclaw.Search.Tests.csproj" />
     <Project Path="src/Netclaw.Security/Netclaw.Security.csproj" />
     <Project Path="src/Netclaw.Security.Tests/Netclaw.Security.Tests.csproj" />

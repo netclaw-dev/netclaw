@@ -48,7 +48,7 @@ public sealed partial class SqliteStoreMemoryTool : NetclawTool<SqliteStoreMemor
             HasAcceptedSubAgentFinding: false,
             Domain: ResolveDomain(sessionId),
             Sensitivity: "normal",
-            RecallMode: "manual",
+            RecallMode: "auto",
             Confidence: 0.95,
             Title: args.Title,
             UpdateSemantics: "merge-document",

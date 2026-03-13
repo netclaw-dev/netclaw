@@ -2,6 +2,7 @@ using Microsoft.Data.Sqlite;
 using Netclaw.Actors.Memory;
 using Netclaw.Actors.Sessions;
 using Microsoft.Extensions.Logging.Abstractions;
+using Netclaw.Configuration;
 using Xunit;
 
 namespace Netclaw.Actors.Tests.Memory;
@@ -29,18 +30,23 @@ public sealed class MemoryEvalSeedSuiteTests : IAsyncLifetime
         await _store.UpsertDocumentAsync(new SQLiteMemoryDocument(
             DocumentId: "doc-ops",
             Anchor: anchor,
+            MemoryClass: "durable_fact",
             Title: "Router failover runbook",
             MarkdownBody: "Use VRRP preemption delay of 15 seconds for stable failover.",
+            AliasesJson: "[\"router failover\",\"vrrp delay\"]",
+            FacetsJson: "[\"incident_recovery\"]",
+            SlotsJson: null,
             UpdateSemantics: "merge-document",
             Domain: "project:ops",
             Sensitivity: "normal",
             RecallMode: "auto",
             Confidence: 0.92,
             FreshnessAtMs: now,
+            ExpiresAtMs: null,
             CreatedAtMs: now,
             UpdatedAtMs: now));
 
-        var coordinator = new SQLiteMemoryRecallCoordinator(_store, NullLogger<SQLiteMemoryRecallCoordinator>.Instance);
+        var coordinator = new SQLiteMemoryRecallCoordinator(_store, NullLogger<SQLiteMemoryRecallCoordinator>.Instance, sessionConfig: new SessionConfig { MemorySidecarsEnabled = true });
         var result = await coordinator.RecallAsync(new AutomaticRecallRequest(
             SessionId: "ops/thread-1",
             Query: "router failover",
@@ -62,18 +68,23 @@ public sealed class MemoryEvalSeedSuiteTests : IAsyncLifetime
         await _store.UpsertDocumentAsync(new SQLiteMemoryDocument(
             DocumentId: "doc-secret",
             Anchor: anchor,
+            MemoryClass: "durable_fact",
             Title: "Prod token",
             MarkdownBody: "token=abc123",
+            AliasesJson: "[\"prod token\"]",
+            FacetsJson: "[\"project_fact\"]",
+            SlotsJson: null,
             UpdateSemantics: "merge-document",
             Domain: "project:ops",
             Sensitivity: "secret",
             RecallMode: "auto",
             Confidence: 0.99,
             FreshnessAtMs: now,
+            ExpiresAtMs: null,
             CreatedAtMs: now,
             UpdatedAtMs: now));
 
-        var coordinator = new SQLiteMemoryRecallCoordinator(_store, NullLogger<SQLiteMemoryRecallCoordinator>.Instance);
+        var coordinator = new SQLiteMemoryRecallCoordinator(_store, NullLogger<SQLiteMemoryRecallCoordinator>.Instance, sessionConfig: new SessionConfig { MemorySidecarsEnabled = true });
         var result = await coordinator.RecallAsync(new AutomaticRecallRequest(
             SessionId: "ops/thread-1",
             Query: "token",
@@ -142,6 +153,110 @@ public sealed class MemoryEvalSeedSuiteTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Verified_tool_finding_is_classed_as_evidence_with_default_expiry()
+    {
+        await _store.InitializeAsync();
+        var policy = new MemoryPolicyEvaluator();
+        var extractor = new MemoryRulesFirstExtractor(policy);
+        var now = TimeProvider.System.GetUtcNow().ToUnixTimeMilliseconds();
+
+        var payload = new MemoryCheckpointPayload(
+            SessionId: "ops/thread-4",
+            TriggerType: "verified-tool-finding",
+            Source: "tool",
+            Content: "Hilton Easton is near the venue.",
+            UserContent: null,
+            AssistantContent: null,
+            IsExplicitRequest: false,
+            HasVerifiedToolFinding: true,
+            IsCompactionBoundary: false,
+            HasAcceptedSubAgentFinding: false,
+            Domain: "project:ops",
+            Sensitivity: "normal",
+            RecallMode: "auto",
+            Confidence: 0.8,
+            FreshnessAtMs: now);
+
+        var candidates = extractor.Extract(payload, new HashSet<string>(StringComparer.OrdinalIgnoreCase));
+        var candidate = Assert.Single(candidates);
+
+        Assert.Equal("evidence", candidate.MemoryClass);
+        Assert.Equal("searchable", candidate.RecallMode);
+        Assert.Equal(now + (long)TimeSpan.FromDays(30).TotalMilliseconds, candidate.ExpiresAtMs);
+    }
+
+    [Fact]
+    public async Task TurnCompletion_promotes_stable_project_fact_into_durable_document()
+    {
+        await _store.InitializeAsync();
+        var policy = new MemoryPolicyEvaluator();
+        var extractor = new MemoryRulesFirstExtractor(policy);
+        var now = TimeProvider.System.GetUtcNow().ToUnixTimeMilliseconds();
+
+        var payload = new MemoryCheckpointPayload(
+            SessionId: "ops/thread-5",
+            TriggerType: "turn-complete",
+            Source: "session",
+            Content: "User: TextForge has oauth\nAssistant: Got it.",
+            UserContent: "TextForge has oauth",
+            AssistantContent: "Got it.",
+            IsExplicitRequest: false,
+            HasVerifiedToolFinding: false,
+            IsCompactionBoundary: false,
+            HasAcceptedSubAgentFinding: false,
+            Domain: "project:ops",
+            Sensitivity: "normal",
+            RecallMode: "auto",
+            Confidence: 0.8,
+            FreshnessAtMs: now,
+            Kind: "document",
+            Title: "turn-completion",
+            UpdateSemantics: "append-document");
+
+        var candidates = extractor.Extract(payload, new HashSet<string>(StringComparer.OrdinalIgnoreCase));
+        var candidate = Assert.Single(candidates);
+
+        Assert.Equal("durable_fact", candidate.MemoryClass);
+        Assert.Equal("Project Fact: TextForge has Oauth", candidate.Title);
+        Assert.Contains("project_fact", candidate.FacetsJson ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("product_capability", candidate.FacetsJson ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task TurnCompletion_promotes_completed_project_milestone_into_durable_document()
+    {
+        await _store.InitializeAsync();
+        var policy = new MemoryPolicyEvaluator();
+        var extractor = new MemoryRulesFirstExtractor(policy);
+
+        var payload = new MemoryCheckpointPayload(
+            SessionId: "ops/thread-6",
+            TriggerType: "turn-complete",
+            Source: "session",
+            Content: "User: we successfully completed our security audit\nAssistant: Nice.",
+            UserContent: "we successfully completed our security audit",
+            AssistantContent: "Nice.",
+            IsExplicitRequest: false,
+            HasVerifiedToolFinding: false,
+            IsCompactionBoundary: false,
+            HasAcceptedSubAgentFinding: false,
+            Domain: "project:ops",
+            Sensitivity: "normal",
+            RecallMode: "auto",
+            Confidence: 0.8,
+            Kind: "document",
+            Title: "turn-completion",
+            UpdateSemantics: "append-document");
+
+        var candidates = extractor.Extract(payload, new HashSet<string>(StringComparer.OrdinalIgnoreCase));
+        var candidate = Assert.Single(candidates);
+
+        Assert.Equal("durable_fact", candidate.MemoryClass);
+        Assert.Equal("Project Milestone: Our security audit", candidate.Title);
+        Assert.Contains("delivery_status", candidate.FacetsJson ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task Latency_seeded_fixture_recall_completes_under_budget_on_local_store()
     {
         await _store.InitializeAsync();
@@ -153,19 +268,24 @@ public sealed class MemoryEvalSeedSuiteTests : IAsyncLifetime
             await _store.UpsertDocumentAsync(new SQLiteMemoryDocument(
                 DocumentId: $"doc-{i}",
                 Anchor: anchor,
+                MemoryClass: "durable_fact",
                 Title: $"Latency note {i}",
                 MarkdownBody: "sqlite recall budget check",
+                AliasesJson: "[\"latency note\"]",
+                FacetsJson: "[\"project_fact\"]",
+                SlotsJson: null,
                 UpdateSemantics: "merge-document",
                 Domain: "project:latency",
                 Sensitivity: "normal",
                 RecallMode: "auto",
                 Confidence: 0.8,
                 FreshnessAtMs: now,
+                ExpiresAtMs: null,
                 CreatedAtMs: now,
                 UpdatedAtMs: now));
         }
 
-        var coordinator = new SQLiteMemoryRecallCoordinator(_store, NullLogger<SQLiteMemoryRecallCoordinator>.Instance);
+        var coordinator = new SQLiteMemoryRecallCoordinator(_store, NullLogger<SQLiteMemoryRecallCoordinator>.Instance, sessionConfig: new SessionConfig { MemorySidecarsEnabled = true });
         var start = TimeProvider.System.GetTimestamp();
         var result = await coordinator.RecallAsync(new AutomaticRecallRequest(
             SessionId: "latency/thread-1",
