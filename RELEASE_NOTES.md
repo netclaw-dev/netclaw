@@ -1,3 +1,33 @@
+#### 0.5.0 2026-03-13 ####
+
+Netclaw v0.5.0 — Observer-driven memory recall, local model reliability, and skills platform overhaul
+
+**Memory Recall Planning**
+
+* Added sidecar-driven memory observation and recall planning with deterministic policy gates, expiry handling, and SQLite-backed retrieval — the agent now plans what to recall before acting, rather than issuing ad-hoc memory queries. ([#198](https://github.com/Aaronontheweb/netclaw/pull/198))
+* Fixed memory curation worker shutdown: `TaskCanceledException` from in-flight store awaitables during daemon stop is now caught and discarded cleanly instead of surfacing as a crash log. ([#190](https://github.com/Aaronontheweb/netclaw/pull/190))
+
+**Local Model Reliability**
+
+* Fixed multi-turn tool calling for OpenAI-compatible providers: assistant messages with tool calls and tool result messages now serialize `tool_calls` and `tool_call_id` correctly — previously the second LLM request in a tool loop contained malformed history causing models to fall back to emitting tool calls as raw text. ([#210](https://github.com/Aaronontheweb/netclaw/pull/210))
+* Added text-based tool call extraction for models that emit tool calls as XML-like prose instead of structured fields (observed with Qwen3.5) — the parser activates as a fallback when no structured tool calls are present, making these models usable for multi-step tool workflows. ([#213](https://github.com/Aaronontheweb/netclaw/pull/213))
+* Added OpenAI-compatible local endpoint support — operators can now configure endpoints like Ollama or LM Studio as a first-class provider type. ([#208](https://github.com/Aaronontheweb/netclaw/pull/208))
+* Fixed capability detection for GGUF and quantized model IDs: the normalizer now strips `.gguf` extensions, GGML quantization suffixes (`-Q5_K_M`, `-IQ2_XXS`, `-Q4_K_XL`), and build-variant segments (`-UD`, `-BPW4`) before capability resolution — models now correctly report multimodal context windows and input types instead of falling back to text-only defaults. ([#215](https://github.com/Aaronontheweb/netclaw/pull/215))
+
+**Skills Platform**
+
+* Adopted the AgentSkills.io SKILL.md standard: skills now use YAML frontmatter (name, description, triggers, license, compatibility, allowed-tools) and a directory-based layout (`skill-name/SKILL.md`) with progressive disclosure via `references/`, `scripts/`, and `assets/` subdirectories. Feed manifest supports per-file SHA-256 verification for multi-file skills. ([#216](https://github.com/Aaronontheweb/netclaw/pull/216))
+* Added `capability-reference` system skill — the agent's single authoritative reference for all 16 built-in tools across 5 grant categories, CLI commands, scheduling syntax, MCP discovery patterns, and session context. Also updates `self-diagnostics` to v1.2.0 with a cross-reference. ([#217](https://github.com/Aaronontheweb/netclaw/pull/217))
+* Added `search-citation` system skill — guides the agent on when to use `web_search` versus training data, requires source URLs for all specific factual claims, and covers local search, travel, and product search verticals with progressive disclosure reference files. ([#219](https://github.com/Aaronontheweb/netclaw/pull/219))
+
+**Session Self-Awareness**
+
+* The agent's session ID (`{channelId}/{threadTs}`) is now injected into the per-turn dynamic context layers, allowing the agent to be self-referential about its own session in tool calls and memory operations. ([#218](https://github.com/Aaronontheweb/netclaw/pull/218))
+
+**Stability**
+
+* Fixed a stream materializer actor leak in the SignalR session binding: stream stage actors were previously created under the global `StreamSupervisor-0` and accumulated over the daemon's lifetime. A new per-session `SignalRSessionActor` scopes the materializer to the session lifecycle, so all stream children are torn down automatically when the session ends. ([#192](https://github.com/Aaronontheweb/netclaw/pull/192))
+
 #### 0.4.0 2026-03-08 ####
 
 Netclaw v0.4.0 — SQLite memory redesign and deterministic memory evals
