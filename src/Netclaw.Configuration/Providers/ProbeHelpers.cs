@@ -63,7 +63,10 @@ internal static class ProbeHelpers
             using var response = await httpClient.SendAsync(request, timeoutCts.Token);
 
             if (!response.IsSuccessStatusCode)
-                return FailForStatus(response.StatusCode, providerName);
+            {
+                var apiErrorDetail = await ExtractApiErrorDetailAsync(response, timeoutCts.Token);
+                return FailForStatus(response.StatusCode, providerName, apiErrorDetail);
+            }
 
             var json = await response.Content.ReadAsStringAsync(timeoutCts.Token);
             return parseResponse(json);
@@ -86,15 +89,20 @@ internal static class ProbeHelpers
     /// <summary>
     /// Maps HTTP status codes to user-friendly error messages.
     /// Covers auth errors (401/403), rate limiting (429), and server errors (5xx).
+    /// When <paramref name="apiErrorDetail"/> is provided, it is appended to auth
+    /// error messages so users can see the actual reason from the provider.
     /// </summary>
-    public static ProviderProbeResult FailForStatus(HttpStatusCode statusCode, string providerName)
+    public static ProviderProbeResult FailForStatus(
+        HttpStatusCode statusCode, string providerName, string? apiErrorDetail = null)
     {
         var message = statusCode switch
         {
-            HttpStatusCode.Unauthorized =>
-                $"Invalid credentials. Double-check your {providerName} API key.",
-            HttpStatusCode.Forbidden =>
-                $"Access denied. Your {providerName} API key may lack model-listing permissions.",
+            HttpStatusCode.Unauthorized => apiErrorDetail is not null
+                ? $"Invalid credentials for {providerName}: {apiErrorDetail}"
+                : $"Invalid credentials. Double-check your {providerName} credentials.",
+            HttpStatusCode.Forbidden => apiErrorDetail is not null
+                ? $"Access denied by {providerName}: {apiErrorDetail}"
+                : $"Access denied. Your {providerName} credentials may lack model-listing permissions.",
             HttpStatusCode.NotFound =>
                 $"The {providerName} models API was not found. The service may be down.",
             HttpStatusCode.TooManyRequests =>
@@ -107,5 +115,38 @@ internal static class ProbeHelpers
         };
 
         return new ProviderProbeResult(false, message, []);
+    }
+
+    /// <summary>
+    /// Best-effort extraction of an error detail string from an HTTP error response body.
+    /// Handles OpenAI-style <c>{"error": {"message": "..."}}</c> and simple
+    /// <c>{"error": "..."}</c> formats.
+    /// </summary>
+    internal static async Task<string?> ExtractApiErrorDetailAsync(
+        HttpResponseMessage response, CancellationToken ct)
+    {
+        try
+        {
+            var body = await response.Content.ReadAsStringAsync(ct);
+            if (string.IsNullOrWhiteSpace(body))
+                return null;
+
+            using var doc = JsonDocument.Parse(body);
+            if (!doc.RootElement.TryGetProperty("error", out var errorProp))
+                return null;
+
+            return errorProp.ValueKind switch
+            {
+                JsonValueKind.Object when errorProp.TryGetProperty("message", out var msgProp) =>
+                    msgProp.GetString(),
+                JsonValueKind.String => errorProp.GetString(),
+                _ => null
+            };
+        }
+        catch
+        {
+            // Best-effort: malformed body, non-JSON content, etc.
+            return null;
+        }
     }
 }
