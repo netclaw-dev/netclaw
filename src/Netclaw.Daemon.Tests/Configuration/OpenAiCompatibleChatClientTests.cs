@@ -154,6 +154,54 @@ data: [DONE]
         Assert.Equal("what is TextForge", toolCall.Arguments!["Query"]?.ToString());
     }
 
+    [Fact]
+    public async Task SerializesAssistantToolCalls_AndToolResults_InConversationHistory()
+    {
+        string? body = null;
+        using var handler = new RecordingHandler(req =>
+        {
+            body = req.Content is null ? null : req.Content.ReadAsStringAsync().GetAwaiter().GetResult();
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    "{\"id\":\"1\",\"model\":\"test\",\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"role\":\"assistant\",\"content\":\"The answer is 4.\"}}]}",
+                    Encoding.UTF8, "application/json")
+            };
+        });
+        using var httpClient = new HttpClient(handler) { BaseAddress = new Uri("http://localhost:8000") };
+        var endpoint = OpenAiCompatibleEndpoint.FromBaseUrl("http://localhost:8000");
+        var client = new OpenAiCompatibleChatClient(httpClient, endpoint, "test-model");
+
+        // Simulate a conversation with tool call history
+        var assistantWithToolCall = new ChatMessage(ChatRole.Assistant,
+        [
+            new FunctionCallContent("call_42", "calculator", new Dictionary<string, object?> { ["expression"] = "2+2" })
+        ]);
+        var toolResult = new ChatMessage(ChatRole.Tool,
+        [
+            new FunctionResultContent("call_42", "4")
+        ]);
+
+        await client.GetResponseAsync(
+        [
+            new ChatMessage(ChatRole.User, "What is 2+2?"),
+            assistantWithToolCall,
+            toolResult,
+            new ChatMessage(ChatRole.User, "Thanks, and what about 3+3?")
+        ]);
+
+        Assert.NotNull(body);
+
+        // Assistant message should include tool_calls array with id, function name, arguments
+        Assert.Contains("\"tool_calls\":", body, StringComparison.Ordinal);
+        Assert.Contains("\"id\":\"call_42\"", body, StringComparison.Ordinal);
+        Assert.Contains("\"name\":\"calculator\"", body, StringComparison.Ordinal);
+
+        // Tool result message should include tool_call_id
+        Assert.Contains("\"tool_call_id\":\"call_42\"", body, StringComparison.Ordinal);
+        Assert.Contains("\"role\":\"tool\"", body, StringComparison.Ordinal);
+    }
+
     private sealed class RecordingHandler : HttpMessageHandler
     {
         private readonly Func<HttpRequestMessage, HttpResponseMessage> _handler;

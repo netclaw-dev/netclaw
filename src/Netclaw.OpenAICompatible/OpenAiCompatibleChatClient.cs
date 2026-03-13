@@ -167,11 +167,49 @@ public sealed class OpenAiCompatibleChatClient : IChatClient
 
     private static object ToMessage(ChatMessage message)
     {
-        var text = message.Text;
+        var toolCalls = message.Contents.OfType<FunctionCallContent>().ToList();
+        var toolResult = message.Contents.OfType<FunctionResultContent>().FirstOrDefault();
+
+        // Tool result message — needs tool_call_id
+        if (message.Role == ChatRole.Tool && toolResult is not null)
+        {
+            return new Dictionary<string, object?>
+            {
+                ["role"] = "tool",
+                ["tool_call_id"] = toolResult.CallId,
+                ["content"] = toolResult.Result?.ToString() ?? string.Empty
+            };
+        }
+
+        // Assistant message with tool calls — needs tool_calls array
+        if (message.Role == ChatRole.Assistant && toolCalls.Count > 0)
+        {
+            var text = message.Contents.OfType<TextContent>().FirstOrDefault()?.Text;
+            var calls = toolCalls.Select(tc => new Dictionary<string, object?>
+            {
+                ["id"] = tc.CallId,
+                ["type"] = "function",
+                ["function"] = new Dictionary<string, object?>
+                {
+                    ["name"] = tc.Name,
+                    ["arguments"] = tc.Arguments is not null
+                        ? JsonSerializer.Serialize(tc.Arguments, JsonOptions)
+                        : "{}"
+                }
+            }).ToArray();
+
+            return new Dictionary<string, object?>
+            {
+                ["role"] = "assistant",
+                ["content"] = text,
+                ["tool_calls"] = calls
+            };
+        }
+
         return new Dictionary<string, object?>
         {
             ["role"] = ToRole(message.Role),
-            ["content"] = text
+            ["content"] = message.Text
         };
     }
 
