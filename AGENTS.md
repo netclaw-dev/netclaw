@@ -159,6 +159,7 @@ feature area, the corresponding skill **must** be updated in the same PR.
 | Config format, daemon health, logs, MCP wiring, diagnostics CLI, doctor | `self-diagnostics` |
 | Skill file format, discovery, authoring workflow | `skill-authoring` |
 | Tool definitions, CLI commands, grant categories, search_tools, scheduling tools | `capability-reference` |
+| Search tool behavior, citation policy, web_search/web_fetch usage guidance | `search-citation` |
 
 **Workflow:**
 1. Edit the skill source at `feeds/skills/.system/files/{name}/{version}.md`
