@@ -959,7 +959,11 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             logActor?.Tell(output);
         };
 
-        _ = ExecuteToolsAsync(executor, toolCalls, sessionId, auditLogger, tp, sessionDir, maxInlineToolResultChars, toolExecutionTimeout, self, emitSubAgentOutput);
+        // Capture Context.ActorOf for subagent child-actor spawning.
+        // Must be captured here (instance scope) — static methods below can't access Context.
+        Func<object, string, object> spawnChildActor = (props, name) => Context.ActorOf((Props)props, name);
+
+        _ = ExecuteToolsAsync(executor, toolCalls, sessionId, auditLogger, tp, sessionDir, maxInlineToolResultChars, toolExecutionTimeout, self, emitSubAgentOutput, spawnChildActor);
     }
 
     private void HandleTextResponse(
@@ -1620,7 +1624,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         int maxInlineToolResultChars,
         TimeSpan timeout,
         IActorRef self,
-        Action<SubAgentOutput> emitSubAgentOutput)
+        Action<SubAgentOutput> emitSubAgentOutput,
+        Func<object, string, object> spawnChildActor)
     {
         try
         {
@@ -1636,6 +1641,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 sessionDir,
                 maxInlineToolResultChars,
                 emitSubAgentOutput,
+                spawnChildActor,
                 cts.Token));
             var results = await Task.WhenAll(tasks);
 
@@ -1673,11 +1679,13 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         string sessionDir,
         int maxInlineToolResultChars,
         Action<SubAgentOutput> emitSubAgentOutput,
+        Func<object, string, object> spawnChildActor,
         CancellationToken ct)
     {
         var sw = Stopwatch.StartNew();
         string resultText;
         var context = new Netclaw.Tools.ToolExecutionContext(sessionId.Value, sessionDir);
+        context.SpawnChildActor = spawnChildActor;
         var acceptedFindings = new List<AcceptedSubAgentFinding>();
         context.OnSubAgentActivity = info =>
         {

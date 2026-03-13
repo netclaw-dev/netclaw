@@ -58,6 +58,19 @@ public sealed class ToolExecutionContext
     /// </summary>
     public Action<SubAgentNotificationInfo>? OnSubAgentActivity { get; set; }
 
+    /// <summary>
+    /// Factory delegate for spawning subagent actors as children of the owning session.
+    /// Wired by <c>LlmSessionActor</c> so subagents are supervised and lifecycle-managed
+    /// by the session. Returns an <c>IActorRef</c>-compatible object that supports Ask.
+    /// The delegate receives (Props, actorName) and returns the child actor reference.
+    /// </summary>
+    /// <remarks>
+    /// Using <c>object</c> for Props and IActorRef to avoid Akka dependency in the
+    /// tools abstraction layer. The actual types are <c>Akka.Actor.Props</c> and
+    /// <c>Akka.Actor.IActorRef</c>.
+    /// </remarks>
+    public Func<object, string, object>? SpawnChildActor { get; set; }
+
     /// <summary>The session that initiated this tool call.</summary>
     public string? SessionId { get; }
 

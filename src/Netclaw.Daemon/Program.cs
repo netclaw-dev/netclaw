@@ -14,6 +14,7 @@ using Netclaw.Actors.Sessions;
 using Netclaw.Actors.Memory;
 using Netclaw.Actors.Reminders;
 using Netclaw.Actors.Skills;
+using Netclaw.Actors.SubAgents;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 using Netclaw.Configuration.Providers;
@@ -309,6 +310,12 @@ static void ConfigureDaemonServices(
         .Get<SubAgentConfig>() ?? new SubAgentConfig();
     services.AddSingleton(subAgentConfig);
 
+    // Subagent definition registry and file loader
+    var subAgentRegistry = new SubAgentDefinitionRegistry();
+    services.AddSingleton(subAgentRegistry);
+    services.AddSingleton<FileSubAgentDefinitionLoader>();
+    services.AddSingleton<SubAgentSpawner>();
+
     // Cross-session memory: provider-based wiring
     var memoryConfig = configuration.GetSection("Memory")
         .Get<MemoryConfig>() ?? new MemoryConfig();
@@ -373,6 +380,11 @@ static void ConfigureDaemonServices(
     var memoryIndexLayer = new MemoryIndexContextLayer();
     services.AddSingleton(memoryIndexLayer);
     services.AddSingleton<IContextLayerProvider>(memoryIndexLayer);
+
+    // Subagent discovery context layer — updated by ToolIndexUpdater after file-based agents load
+    var subAgentDiscoveryLayer = new SubAgentDiscoveryContextLayer();
+    services.AddSingleton(subAgentDiscoveryLayer);
+    services.AddSingleton<IContextLayerProvider>(subAgentDiscoveryLayer);
 
     // Current time context layer — transient per-turn grounding for date/time-sensitive prompts
     services.AddSingleton<IContextLayerProvider, CurrentTimeContextLayer>();
