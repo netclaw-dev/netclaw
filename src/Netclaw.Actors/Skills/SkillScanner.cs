@@ -6,13 +6,10 @@ using YamlDotNet.Serialization.NamingConventions;
 namespace Netclaw.Actors.Skills;
 
 /// <summary>
-/// Discovers skill files recursively under the skills directory.
-/// Supports two layouts:
-/// <list type="bullet">
-///   <item>Directory-based: <c>skill-name/SKILL.md</c> (AgentSkills.io standard, preferred)</item>
-///   <item>Flat file: <c>skill-name.md</c> with YAML frontmatter</item>
-/// </list>
-/// Skills must have YAML frontmatter with at least <c>name</c> and <c>description</c>.
+/// Discovers skills under the skills directory using the AgentSkills.io
+/// directory layout: each skill is a directory containing <c>SKILL.md</c>
+/// with YAML frontmatter. Optional subdirectories (<c>scripts/</c>,
+/// <c>references/</c>, <c>assets/</c>) hold progressive-disclosure resources.
 /// </summary>
 public static partial class SkillScanner
 {
@@ -46,14 +43,14 @@ public static partial class SkillScanner
         var entries = new List<SkillEntry>();
         var seenNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        // Pass 1: directory-based skills (skill-name/SKILL.md) — preferred
+        // Pass 1: root-level directory skills (skill-name/SKILL.md)
         foreach (var dir in Directory.GetDirectories(rootFull))
         {
             var skillMdPath = Path.Combine(dir, SkillFileName);
             if (!File.Exists(skillMdPath))
                 continue;
 
-            var entry = ParseSkillFile(skillMdPath, rootFull, isDirectoryBased: true);
+            var entry = ParseSkillFile(skillMdPath, rootFull);
             if (entry is not null)
             {
                 entries.Add(entry);
@@ -61,27 +58,12 @@ public static partial class SkillScanner
             }
         }
 
-        // Pass 2: flat .md files — skip if a directory-based skill with the same name exists
-        foreach (var file in Directory.GetFiles(rootFull, "*.md", SearchOption.TopDirectoryOnly))
-        {
-            var name = Path.GetFileNameWithoutExtension(file).ToLowerInvariant();
-            if (seenNames.Contains(name))
-                continue; // directory-based skill takes precedence
-
-            var entry = ParseSkillFile(file, rootFull, isDirectoryBased: false);
-            if (entry is not null)
-            {
-                entries.Add(entry);
-                seenNames.Add(entry.Name);
-            }
-        }
-
-        // Pass 3: subdirectory flat files (category/skill.md) — for user-organized skills
+        // Pass 2: nested directory skills (.system/skill-name/SKILL.md, category/skill-name/SKILL.md)
         foreach (var subDir in Directory.GetDirectories(rootFull))
         {
             var subDirName = Path.GetFileName(subDir);
 
-            // Skip directories that are skills themselves (have SKILL.md)
+            // Skip directories that are skills themselves (have SKILL.md — handled in Pass 1)
             if (File.Exists(Path.Combine(subDir, SkillFileName)))
                 continue;
 
@@ -89,13 +71,17 @@ public static partial class SkillScanner
             if (subDirName.StartsWith('.') && !subDirName.Equals(".system", StringComparison.Ordinal))
                 continue;
 
-            foreach (var file in Directory.GetFiles(subDir, "*.md", SearchOption.TopDirectoryOnly))
+            foreach (var nestedDir in Directory.GetDirectories(subDir))
             {
-                var name = Path.GetFileNameWithoutExtension(file).ToLowerInvariant();
+                var skillMdPath = Path.Combine(nestedDir, SkillFileName);
+                if (!File.Exists(skillMdPath))
+                    continue;
+
+                var name = Path.GetFileName(nestedDir).ToLowerInvariant();
                 if (seenNames.Contains(name))
                     continue;
 
-                var entry = ParseSkillFile(file, rootFull, isDirectoryBased: false);
+                var entry = ParseSkillFile(skillMdPath, rootFull);
                 if (entry is not null)
                 {
                     entries.Add(entry);
@@ -108,7 +94,7 @@ public static partial class SkillScanner
         return entries;
     }
 
-    private static SkillEntry? ParseSkillFile(string filePath, string rootDirectory, bool isDirectoryBased)
+    private static SkillEntry? ParseSkillFile(string filePath, string rootDirectory)
     {
         string content;
         try
@@ -120,13 +106,11 @@ public static partial class SkillScanner
             return null;
         }
 
-        // Try YAML frontmatter first
         var frontmatter = ExtractFrontmatter(content);
-        if (frontmatter is not null)
-            return BuildEntryFromFrontmatter(frontmatter, content, filePath, rootDirectory, isDirectoryBased);
+        if (frontmatter is null)
+            return null;
 
-        // No frontmatter — skip the file (YAML frontmatter is required)
-        return null;
+        return BuildEntryFromFrontmatter(frontmatter, content, filePath, rootDirectory);
     }
 
     /// <summary>
@@ -172,16 +156,17 @@ public static partial class SkillScanner
         SkillFrontmatter fm,
         string content,
         string filePath,
-        string rootDirectory,
-        bool isDirectoryBased)
+        string rootDirectory)
     {
         // Description is required per AgentSkills.io spec
         if (string.IsNullOrWhiteSpace(fm.Description))
             return null;
 
+        var skillDirectory = Path.GetDirectoryName(filePath)!;
+
         var name = !string.IsNullOrWhiteSpace(fm.Name)
             ? fm.Name.Trim().ToLowerInvariant()
-            : Path.GetFileNameWithoutExtension(filePath).ToLowerInvariant();
+            : Path.GetFileName(skillDirectory).ToLowerInvariant();
 
         // Extract display name from first # heading in the body
         var body = ExtractBody(content);
@@ -191,21 +176,13 @@ public static partial class SkillScanner
             : TitleCase(name);
 
         // Resolve category from directory structure
+        // For skill at root/skill-name/SKILL.md → category is null
+        // For skill at root/category/skill-name/SKILL.md → category is "category"
         var relativePath = Path.GetRelativePath(rootDirectory, filePath);
         string? category = null;
-        if (isDirectoryBased)
-        {
-            // For directory-based skills, the parent of the skill dir could be a category
-            var skillDir = Path.GetDirectoryName(Path.GetDirectoryName(relativePath));
-            if (!string.IsNullOrEmpty(skillDir) && skillDir != ".")
-                category = skillDir.Replace(Path.DirectorySeparatorChar, '/');
-        }
-        else
-        {
-            var directoryPart = Path.GetDirectoryName(relativePath);
-            if (!string.IsNullOrEmpty(directoryPart) && directoryPart != ".")
-                category = directoryPart.Replace(Path.DirectorySeparatorChar, '/');
-        }
+        var parentOfSkillDir = Path.GetDirectoryName(Path.GetDirectoryName(relativePath));
+        if (!string.IsNullOrEmpty(parentOfSkillDir) && parentOfSkillDir != ".")
+            category = parentOfSkillDir.Replace(Path.DirectorySeparatorChar, '/');
 
         // Extract triggers from metadata
         string? triggers = null;
@@ -217,30 +194,20 @@ public static partial class SkillScanner
         if (fm.Metadata is not null && fm.Metadata.TryGetValue("version", out var versionValue))
             version = versionValue;
 
-        // Build resource paths for directory-based skills
-        string? skillDirectory = null;
-        IReadOnlyList<string>? resourcePaths = null;
-        if (isDirectoryBased)
-        {
-            skillDirectory = Path.GetDirectoryName(filePath)!;
-            resourcePaths = EnumerateResources(skillDirectory);
-        }
-
         return new SkillEntry(
             Name: name,
             DisplayName: displayName,
             Description: Truncate(fm.Description.Trim(), MaxDescriptionLength),
             FilePath: filePath,
+            SkillDirectory: skillDirectory,
             Category: category)
         {
             Triggers = triggers,
-            Format = SkillFormat.Standard,
             Version = version,
             License = fm.License,
             Compatibility = fm.Compatibility,
             AllowedTools = fm.AllowedTools,
-            SkillDirectory = skillDirectory,
-            ResourcePaths = resourcePaths
+            ResourcePaths = EnumerateResources(skillDirectory)
         };
     }
 

@@ -7,7 +7,7 @@ namespace Netclaw.Actors.Tests.Skills;
 public class SkillRegistryTests
 {
     private static SkillEntry MakeEntry(string name, string description = "desc", string? triggers = null) =>
-        new(name, name, description, $"/skills/{name}.md", null) { Triggers = triggers };
+        new(name, name, description, $"/skills/{name}/SKILL.md", $"/skills/{name}", null) { Triggers = triggers };
 
     [Fact]
     public void Search_matches_by_name()
@@ -77,10 +77,10 @@ public class SkillRegistryTests
         var index = registry.GenerateCompressedIndex();
 
         Assert.Contains("identity-management", index);
-        Assert.Contains("/skills/identity-management.md", index);
+        Assert.Contains("/skills/identity-management/SKILL.md", index);
         Assert.Contains("How to edit identity files", index);
         Assert.Contains("self-diagnostics", index);
-        Assert.Contains("/skills/self-diagnostics.md", index);
+        Assert.Contains("/skills/self-diagnostics/SKILL.md", index);
         Assert.Contains("Check Netclaw configuration", index);
         Assert.Contains("LOAD these with file_read when your current situation matches a trigger", index);
         Assert.DoesNotContain("search_skills", index);

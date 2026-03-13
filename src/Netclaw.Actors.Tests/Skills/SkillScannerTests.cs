@@ -37,7 +37,7 @@ public class SkillScannerTests : IDisposable
     [Fact]
     public void Parses_yaml_frontmatter_with_name_and_description()
     {
-        WriteFlatSkill("git-workflow.md", """
+        WriteSkill("git-workflow", """
             ---
             name: git-workflow
             description: How to manage branches and PRs in this project.
@@ -55,14 +55,14 @@ public class SkillScannerTests : IDisposable
         Assert.Equal("git-workflow", result[0].Name);
         Assert.Equal("Git Workflow", result[0].DisplayName);
         Assert.Equal("How to manage branches and PRs in this project.", result[0].Description);
-        Assert.Equal(SkillFormat.Standard, result[0].Format);
         Assert.Null(result[0].Category);
+        Assert.Equal(Path.Combine(_skillsDir, "git-workflow"), result[0].SkillDirectory);
     }
 
     [Fact]
     public void Extracts_triggers_from_metadata()
     {
-        WriteFlatSkill("diagnostics.md", """
+        WriteSkill("diagnostics", """
             ---
             name: diagnostics
             description: Check system health and diagnose errors.
@@ -84,7 +84,7 @@ public class SkillScannerTests : IDisposable
     [Fact]
     public void Extracts_optional_fields_from_frontmatter()
     {
-        WriteFlatSkill("pdf-processing.md", """
+        WriteSkill("pdf-processing", """
             ---
             name: pdf-processing
             description: Extract PDF text, fill forms, merge files.
@@ -109,9 +109,9 @@ public class SkillScannerTests : IDisposable
     }
 
     [Fact]
-    public void Discovers_directory_based_skill()
+    public void Discovers_directory_based_skill_with_resources()
     {
-        WriteDirectorySkill("web-search", "SKILL.md", """
+        WriteSkill("web-search", """
             ---
             name: web-search
             description: Search the web effectively for various domains.
@@ -121,6 +121,9 @@ public class SkillScannerTests : IDisposable
 
             Use domain-specific strategies for best results.
             """);
+        WriteSkillFile("web-search", "references/flight-pricing.md", "# Flight Pricing");
+        WriteSkillFile("web-search", "references/restaurant-search.md", "# Restaurant Search");
+        WriteSkillFile("web-search", "scripts/validate.sh", "#!/bin/bash\necho ok");
 
         var result = SkillScanner.Scan(_skillsDir);
 
@@ -129,26 +132,6 @@ public class SkillScannerTests : IDisposable
         Assert.Equal("Web Search", result[0].DisplayName);
         Assert.Equal(Path.Combine(_skillsDir, "web-search", "SKILL.md"), result[0].FilePath);
         Assert.Equal(Path.Combine(_skillsDir, "web-search"), result[0].SkillDirectory);
-    }
-
-    [Fact]
-    public void Directory_skill_enumerates_resources()
-    {
-        WriteDirectorySkill("web-search", "SKILL.md", """
-            ---
-            name: web-search
-            description: Search the web effectively.
-            ---
-
-            # Web Search
-            """);
-        WriteDirectorySkill("web-search", "references/flight-pricing.md", "# Flight Pricing");
-        WriteDirectorySkill("web-search", "references/restaurant-search.md", "# Restaurant Search");
-        WriteDirectorySkill("web-search", "scripts/validate.sh", "#!/bin/bash\necho ok");
-
-        var result = SkillScanner.Scan(_skillsDir);
-
-        Assert.Single(result);
         Assert.NotNull(result[0].ResourcePaths);
         Assert.Equal(3, result[0].ResourcePaths!.Count);
         Assert.Contains("references/flight-pricing.md", result[0].ResourcePaths!);
@@ -157,38 +140,9 @@ public class SkillScannerTests : IDisposable
     }
 
     [Fact]
-    public void Directory_based_skill_preferred_over_flat_file()
+    public void Skill_without_frontmatter_is_skipped()
     {
-        // Create both a flat file and a directory-based skill with the same name
-        WriteFlatSkill("deploy.md", """
-            ---
-            name: deploy
-            description: Old flat file deploy skill.
-            ---
-
-            # Deploy (flat)
-            """);
-
-        WriteDirectorySkill("deploy", "SKILL.md", """
-            ---
-            name: deploy
-            description: Directory-based deploy skill.
-            ---
-
-            # Deploy (directory)
-            """);
-
-        var result = SkillScanner.Scan(_skillsDir);
-
-        Assert.Single(result);
-        Assert.Equal("Directory-based deploy skill.", result[0].Description);
-        Assert.EndsWith("SKILL.md", result[0].FilePath);
-    }
-
-    [Fact]
-    public void Files_without_frontmatter_are_skipped()
-    {
-        WriteFlatSkill("notes.md", "# Just some notes\n\nNo frontmatter here.");
+        WriteSkill("notes", "# Just some notes\n\nNo frontmatter here.");
 
         var result = SkillScanner.Scan(_skillsDir);
 
@@ -196,9 +150,9 @@ public class SkillScannerTests : IDisposable
     }
 
     [Fact]
-    public void Files_with_missing_description_are_skipped()
+    public void Skill_with_missing_description_is_skipped()
     {
-        WriteFlatSkill("bad-skill.md", """
+        WriteSkill("bad-skill", """
             ---
             name: bad-skill
             ---
@@ -215,7 +169,7 @@ public class SkillScannerTests : IDisposable
     [Fact]
     public void Malformed_yaml_is_skipped_gracefully()
     {
-        WriteFlatSkill("broken.md", """
+        WriteSkill("broken", """
             ---
             name: broken
             description: [this is: not: valid: yaml: {{{
@@ -235,7 +189,7 @@ public class SkillScannerTests : IDisposable
     public void Handles_colons_in_description()
     {
         // This is a common edge case called out in the AgentSkills.io integration guide
-        WriteFlatSkill("colon-test.md", """
+        WriteSkill("colon-test", """
             ---
             name: colon-test
             description: "Use this skill when: the user asks about PDFs."
@@ -251,9 +205,9 @@ public class SkillScannerTests : IDisposable
     }
 
     [Fact]
-    public void Falls_back_to_filename_when_no_name_in_frontmatter()
+    public void Falls_back_to_directory_name_when_no_name_in_frontmatter()
     {
-        WriteFlatSkill("my-skill.md", """
+        WriteSkill("my-skill", """
             ---
             description: A skill without an explicit name field.
             ---
@@ -269,11 +223,11 @@ public class SkillScannerTests : IDisposable
     }
 
     [Fact]
-    public void Subdirectory_flat_files_get_category()
+    public void Nested_directory_skills_get_category()
     {
-        var subDir = Path.Combine(_skillsDir, "devops");
+        var subDir = Path.Combine(_skillsDir, "devops", "docker");
         Directory.CreateDirectory(subDir);
-        File.WriteAllText(Path.Combine(subDir, "docker.md"), """
+        File.WriteAllText(Path.Combine(subDir, "SKILL.md"), """
             ---
             name: docker
             description: Docker container management and troubleshooting.
@@ -289,10 +243,15 @@ public class SkillScannerTests : IDisposable
     }
 
     [Fact]
-    public void Non_md_files_are_ignored()
+    public void Directories_without_skill_md_are_ignored()
     {
-        File.WriteAllText(Path.Combine(_skillsDir, "notes.txt"), "not a skill");
-        WriteFlatSkill("real-skill.md", """
+        // Directory with random files but no SKILL.md
+        var dir = Path.Combine(_skillsDir, "not-a-skill");
+        Directory.CreateDirectory(dir);
+        File.WriteAllText(Path.Combine(dir, "notes.txt"), "not a skill");
+        File.WriteAllText(Path.Combine(dir, "readme.md"), "# Readme");
+
+        WriteSkill("real-skill", """
             ---
             name: real-skill
             description: This is a real skill.
@@ -310,9 +269,9 @@ public class SkillScannerTests : IDisposable
     [Fact]
     public void Hidden_subdirectories_are_skipped()
     {
-        var hiddenDir = Path.Combine(_skillsDir, ".hidden");
+        var hiddenDir = Path.Combine(_skillsDir, ".hidden", "secret");
         Directory.CreateDirectory(hiddenDir);
-        File.WriteAllText(Path.Combine(hiddenDir, "secret.md"), """
+        File.WriteAllText(Path.Combine(hiddenDir, "SKILL.md"), """
             ---
             name: secret
             description: Should not be discovered.
@@ -327,9 +286,30 @@ public class SkillScannerTests : IDisposable
     }
 
     [Fact]
+    public void System_directory_is_not_skipped()
+    {
+        var systemDir = Path.Combine(_skillsDir, ".system", "diagnostics");
+        Directory.CreateDirectory(systemDir);
+        File.WriteAllText(Path.Combine(systemDir, "SKILL.md"), """
+            ---
+            name: diagnostics
+            description: System diagnostics skill.
+            ---
+
+            # Diagnostics
+            """);
+
+        var result = SkillScanner.Scan(_skillsDir);
+
+        Assert.Single(result);
+        Assert.Equal("diagnostics", result[0].Name);
+        Assert.Equal(".system", result[0].Category);
+    }
+
+    [Fact]
     public void Triggers_null_when_not_in_metadata()
     {
-        WriteFlatSkill("simple.md", """
+        WriteSkill("simple", """
             ---
             name: simple
             description: A simple skill without triggers.
@@ -345,12 +325,12 @@ public class SkillScannerTests : IDisposable
     }
 
     [Fact]
-    public void Directory_skill_with_no_resources_has_null_resource_paths()
+    public void Skill_with_no_resources_has_null_resource_paths()
     {
-        WriteDirectorySkill("minimal", "SKILL.md", """
+        WriteSkill("minimal", """
             ---
             name: minimal
-            description: A minimal directory skill with no resources.
+            description: A minimal skill with no resources.
             ---
 
             # Minimal
@@ -363,12 +343,18 @@ public class SkillScannerTests : IDisposable
         Assert.NotNull(result[0].SkillDirectory);
     }
 
-    private void WriteFlatSkill(string fileName, string content)
+    /// <summary>
+    /// Creates a skill directory with SKILL.md containing the given content.
+    /// </summary>
+    private void WriteSkill(string skillName, string content)
     {
-        File.WriteAllText(Path.Combine(_skillsDir, fileName), content);
+        WriteSkillFile(skillName, "SKILL.md", content);
     }
 
-    private void WriteDirectorySkill(string skillName, string relativePath, string content)
+    /// <summary>
+    /// Writes a file at the given relative path within a skill directory.
+    /// </summary>
+    private void WriteSkillFile(string skillName, string relativePath, string content)
     {
         var fullPath = Path.Combine(_skillsDir, skillName, relativePath);
         var dir = Path.GetDirectoryName(fullPath)!;

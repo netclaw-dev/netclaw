@@ -72,8 +72,6 @@ internal sealed class SystemSkillSyncService : IHostedService
         {
             Directory.CreateDirectory(_paths.SystemSkillsDirectory);
 
-            MigrateFlatSkills();
-
             var syncState = ReadSyncState();
             var manifest = await FetchManifestAsync(cancellationToken);
 
@@ -93,32 +91,6 @@ internal sealed class SystemSkillSyncService : IHostedService
     }
 
     public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
-
-    /// <summary>
-    /// One-time migration: move built-in skills from flat <c>skills/*.md</c> into
-    /// <c>skills/.system/</c> and create an initial sync state.
-    /// </summary>
-    private void MigrateFlatSkills()
-    {
-        var builtInNames = new[] { "identity-management", "memory-usage", "memorizer-usage", "self-diagnostics" };
-        var migrated = false;
-
-        foreach (var name in builtInNames)
-        {
-            var flatPath = Path.Combine(_paths.SkillsDirectory, $"{name}.md");
-            var systemPath = Path.Combine(_paths.SystemSkillsDirectory, $"{name}.md");
-
-            if (File.Exists(flatPath) && !File.Exists(systemPath))
-            {
-                File.Move(flatPath, systemPath);
-                _logger.LogInformation("Migrated skill {SkillName} from skills/ to skills/.system/", name);
-                migrated = true;
-            }
-        }
-
-        if (migrated)
-            _logger.LogInformation("Completed one-time migration of built-in skills to .system/ directory");
-    }
 
     private SkillSyncState ReadSyncState()
     {
@@ -212,22 +184,21 @@ internal sealed class SystemSkillSyncService : IHostedService
                 continue;
             }
 
-            // Download the skill (directory-based or flat file)
+            // Download skill into its directory (skill-name/SKILL.md)
             try
             {
+                var skillDir = Path.Combine(_paths.SystemSkillsDirectory, entry.Name);
+                Directory.CreateDirectory(skillDir);
+
+                // Download main SKILL.md
+                var mainContent = await DownloadAndVerifyAsync(entry.Url, entry.Sha256, entry.Name, cancellationToken);
+                if (mainContent is null)
+                    continue;
+                await File.WriteAllTextAsync(Path.Combine(skillDir, "SKILL.md"), mainContent, cancellationToken);
+
+                // Download resource files if present
                 if (entry.Files is { Count: > 0 })
                 {
-                    // Directory-based skill: create dir, download SKILL.md + resource files
-                    var skillDir = Path.Combine(_paths.SystemSkillsDirectory, entry.Name);
-                    Directory.CreateDirectory(skillDir);
-
-                    // Download main SKILL.md
-                    var mainContent = await DownloadAndVerifyAsync(entry.Url, entry.Sha256, entry.Name, cancellationToken);
-                    if (mainContent is null)
-                        continue;
-                    await File.WriteAllTextAsync(Path.Combine(skillDir, "SKILL.md"), mainContent, cancellationToken);
-
-                    // Download each resource file
                     var allFilesOk = true;
                     foreach (var file in entry.Files)
                     {
@@ -245,21 +216,6 @@ internal sealed class SystemSkillSyncService : IHostedService
 
                     if (!allFilesOk)
                         continue;
-
-                    // Remove legacy flat file if it exists (migrated to directory)
-                    var legacyFlat = Path.Combine(_paths.SystemSkillsDirectory, $"{entry.Name}.md");
-                    if (File.Exists(legacyFlat))
-                        File.Delete(legacyFlat);
-                }
-                else
-                {
-                    // Flat file skill
-                    var content = await DownloadAndVerifyAsync(entry.Url, entry.Sha256, entry.Name, cancellationToken);
-                    if (content is null)
-                        continue;
-
-                    var targetPath = Path.Combine(_paths.SystemSkillsDirectory, $"{entry.Name}.md");
-                    await File.WriteAllTextAsync(targetPath, content, cancellationToken);
                 }
 
                 syncState.Skills[entry.Name] = new SyncedSkillState

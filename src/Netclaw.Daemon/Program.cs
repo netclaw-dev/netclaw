@@ -648,7 +648,8 @@ static ResolvedModelCapabilities? ResolveStartupCapabilities(
 
 /// <summary>
 /// Copies built-in skill files from embedded resources to the skills directory.
-/// Only writes a file if it does not already exist (user edits are preserved).
+/// Each embedded <c>*.md</c> resource is written as <c>skill-name/SKILL.md</c>.
+/// Only writes a file if it does not already exist (feed updates are preserved).
 /// </summary>
 static void CopyBuiltInSkills(string skillsDirectory)
 {
@@ -661,10 +662,14 @@ static void CopyBuiltInSkills(string skillsDirectory)
             continue;
 
         var fileName = resourceName[prefix.Length..];
-        var targetPath = Path.Combine(skillsDirectory, fileName);
+        var skillName = Path.GetFileNameWithoutExtension(fileName);
+        var skillDir = Path.Combine(skillsDirectory, skillName);
+        var targetPath = Path.Combine(skillDir, "SKILL.md");
 
         if (File.Exists(targetPath))
             continue;
+
+        Directory.CreateDirectory(skillDir);
 
         using var stream = assembly.GetManifestResourceStream(resourceName);
         if (stream is null)

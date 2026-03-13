@@ -51,13 +51,6 @@ public sealed class SkillFeedEntry
     public string? Description { get; init; }
 
     /// <summary>
-    /// Metadata format of the skill file. Defaults to "legacy" for backward compatibility.
-    /// Values: "standard" (YAML frontmatter), "legacy" (HTML comments).
-    /// </summary>
-    [JsonPropertyName("format")]
-    public string? Format { get; init; }
-
-    /// <summary>
     /// Additional resource files for directory-based skills.
     /// When present, the sync service creates a directory and downloads all files.
     /// When null, the skill is a single flat file (downloaded via <see cref="Url"/>).

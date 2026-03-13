@@ -41,7 +41,7 @@ public sealed class SystemSkillSyncServiceTests : IDisposable
                     Version = "1.0.0",
                     Sha256 = sha256,
                     SizeBytes = skillContent.Length,
-                    Url = "https://feeds.netclaw.dev/skills/.system/files/test-skill/1.0.0.md"
+                    Url = "https://feeds.netclaw.dev/skills/.system/files/test-skill/1.0.0/SKILL.md"
                 }
             ]
         };
@@ -53,8 +53,8 @@ public sealed class SystemSkillSyncServiceTests : IDisposable
         var sut = CreateService(handler);
         await sut.StartAsync(CancellationToken.None);
 
-        // Skill file should be written to .system/
-        var skillPath = Path.Combine(_paths.SystemSkillsDirectory, "test-skill.md");
+        // Skill should be written as directory-based: test-skill/SKILL.md
+        var skillPath = Path.Combine(_paths.SystemSkillsDirectory, "test-skill", "SKILL.md");
         Assert.True(File.Exists(skillPath));
         Assert.Equal(skillContent, File.ReadAllText(skillPath));
 
@@ -70,8 +70,11 @@ public sealed class SystemSkillSyncServiceTests : IDisposable
     [Fact]
     public async Task StartAsync_SkipFeedSync_WhenDisableSystemSkillSyncTrue()
     {
+        // Pre-populate a directory-based skill
+        var localDir = Path.Combine(_paths.SystemSkillsDirectory, "local-only");
+        Directory.CreateDirectory(localDir);
         var localContent = "---\nname: local-only\ndescription: Local\n---\n\n# Local Skill\n\nLocal instructions.";
-        File.WriteAllText(Path.Combine(_paths.SystemSkillsDirectory, "local-only.md"), localContent);
+        File.WriteAllText(Path.Combine(localDir, "SKILL.md"), localContent);
 
         var manifest = new SkillFeedManifest
         {
@@ -83,7 +86,7 @@ public sealed class SystemSkillSyncServiceTests : IDisposable
                     Version = "1.0.0",
                     Sha256 = SystemSkillSyncService.ComputeSha256("# Remote"),
                     SizeBytes = 8,
-                    Url = "https://feeds.netclaw.dev/skills/.system/files/remote-skill/1.0.0.md"
+                    Url = "https://feeds.netclaw.dev/skills/.system/files/remote-skill/1.0.0/SKILL.md"
                 }
             ]
         };
@@ -104,19 +107,21 @@ public sealed class SystemSkillSyncServiceTests : IDisposable
 
         await service.StartAsync(CancellationToken.None);
 
-        Assert.True(File.Exists(Path.Combine(_paths.SystemSkillsDirectory, "local-only.md")));
-        Assert.False(File.Exists(Path.Combine(_paths.SystemSkillsDirectory, "remote-skill.md")));
+        Assert.True(File.Exists(Path.Combine(localDir, "SKILL.md")));
+        Assert.False(Directory.Exists(Path.Combine(_paths.SystemSkillsDirectory, "remote-skill")));
         Assert.False(File.Exists(_paths.SkillSyncStatePath));
     }
 
     [Fact]
     public async Task StartAsync_SkipsSkillWhenVersionAlreadySynced()
     {
-        var skillContent = "# Already Here\n\nContent.";
+        var skillContent = "---\nname: existing\ndescription: Already here\n---\n\n# Already Here\n\nContent.";
         var sha256 = SystemSkillSyncService.ComputeSha256(skillContent);
 
-        // Pre-populate the skill and sync state
-        File.WriteAllText(Path.Combine(_paths.SystemSkillsDirectory, "existing.md"), skillContent);
+        // Pre-populate the skill directory and sync state
+        var skillDir = Path.Combine(_paths.SystemSkillsDirectory, "existing");
+        Directory.CreateDirectory(skillDir);
+        File.WriteAllText(Path.Combine(skillDir, "SKILL.md"), skillContent);
         WriteSyncState(new SkillSyncState
         {
             Skills =
@@ -140,7 +145,7 @@ public sealed class SystemSkillSyncServiceTests : IDisposable
                     Version = "1.0.0",
                     Sha256 = sha256,
                     SizeBytes = skillContent.Length,
-                    Url = "https://feeds.netclaw.dev/skills/.system/files/existing/1.0.0.md"
+                    Url = "https://feeds.netclaw.dev/skills/.system/files/existing/1.0.0/SKILL.md"
                 }
             ]
         };
@@ -153,18 +158,20 @@ public sealed class SystemSkillSyncServiceTests : IDisposable
         await sut.StartAsync(CancellationToken.None);
 
         // Verify the file wasn't re-downloaded (handler would throw if URL was hit)
-        Assert.Equal(skillContent, File.ReadAllText(Path.Combine(_paths.SystemSkillsDirectory, "existing.md")));
+        Assert.Equal(skillContent, File.ReadAllText(Path.Combine(skillDir, "SKILL.md")));
     }
 
     [Fact]
     public async Task StartAsync_DownloadsUpdatedVersion()
     {
-        var oldContent = "# Old\n\nOld content.";
-        var newContent = "# Updated\n\nNew content.";
+        var oldContent = "---\nname: my-skill\ndescription: Old\n---\n\n# Old\n\nOld content.";
+        var newContent = "---\nname: my-skill\ndescription: Updated\n---\n\n# Updated\n\nNew content.";
         var oldSha = SystemSkillSyncService.ComputeSha256(oldContent);
         var newSha = SystemSkillSyncService.ComputeSha256(newContent);
 
-        File.WriteAllText(Path.Combine(_paths.SystemSkillsDirectory, "my-skill.md"), oldContent);
+        var skillDir = Path.Combine(_paths.SystemSkillsDirectory, "my-skill");
+        Directory.CreateDirectory(skillDir);
+        File.WriteAllText(Path.Combine(skillDir, "SKILL.md"), oldContent);
         WriteSyncState(new SkillSyncState
         {
             Skills =
@@ -188,7 +195,7 @@ public sealed class SystemSkillSyncServiceTests : IDisposable
                     Version = "1.1.0",
                     Sha256 = newSha,
                     SizeBytes = newContent.Length,
-                    Url = "https://feeds.netclaw.dev/skills/.system/files/my-skill/1.1.0.md"
+                    Url = "https://feeds.netclaw.dev/skills/.system/files/my-skill/1.1.0/SKILL.md"
                 }
             ]
         };
@@ -200,7 +207,7 @@ public sealed class SystemSkillSyncServiceTests : IDisposable
         var sut = CreateService(handler);
         await sut.StartAsync(CancellationToken.None);
 
-        var onDisk = File.ReadAllText(Path.Combine(_paths.SystemSkillsDirectory, "my-skill.md"));
+        var onDisk = File.ReadAllText(Path.Combine(skillDir, "SKILL.md"));
         Assert.Equal(newContent, onDisk);
 
         var state = ReadSyncState();
@@ -224,7 +231,7 @@ public sealed class SystemSkillSyncServiceTests : IDisposable
                     Version = "1.0.0",
                     Sha256 = correctSha, // expects hash of skillContent
                     SizeBytes = skillContent.Length,
-                    Url = "https://feeds.netclaw.dev/skills/.system/files/tampered/1.0.0.md"
+                    Url = "https://feeds.netclaw.dev/skills/.system/files/tampered/1.0.0/SKILL.md"
                 }
             ]
         };
@@ -236,8 +243,9 @@ public sealed class SystemSkillSyncServiceTests : IDisposable
         var sut = CreateService(handler);
         await sut.StartAsync(CancellationToken.None);
 
-        // Skill file should NOT be written
-        Assert.False(File.Exists(Path.Combine(_paths.SystemSkillsDirectory, "tampered.md")));
+        // Skill directory should NOT contain SKILL.md (dir created but content rejected)
+        var skillMd = Path.Combine(_paths.SystemSkillsDirectory, "tampered", "SKILL.md");
+        Assert.False(File.Exists(skillMd));
     }
 
     [Fact]
@@ -257,7 +265,7 @@ public sealed class SystemSkillSyncServiceTests : IDisposable
                     MinimumDaemonVersion = "99.0.0",
                     Sha256 = sha256,
                     SizeBytes = skillContent.Length,
-                    Url = "https://feeds.netclaw.dev/skills/.system/files/future-skill/1.0.0.md"
+                    Url = "https://feeds.netclaw.dev/skills/.system/files/future-skill/1.0.0/SKILL.md"
                 }
             ]
         };
@@ -268,15 +276,17 @@ public sealed class SystemSkillSyncServiceTests : IDisposable
         var sut = CreateService(handler, daemonVersion: "0.1.0");
         await sut.StartAsync(CancellationToken.None);
 
-        Assert.False(File.Exists(Path.Combine(_paths.SystemSkillsDirectory, "future-skill.md")));
+        Assert.False(Directory.Exists(Path.Combine(_paths.SystemSkillsDirectory, "future-skill")));
     }
 
     [Fact]
     public async Task StartAsync_GracefullyHandlesNetworkFailure()
     {
         // Pre-populate a skill so we verify it's still usable after failure
-        var existingContent = "---\nname: existing\ndescription: Still here\n---\n\n# Existing\n\nContent.";
-        File.WriteAllText(Path.Combine(_paths.SystemSkillsDirectory, "existing.md"), existingContent);
+        var existingDir = Path.Combine(_paths.SystemSkillsDirectory, "existing");
+        Directory.CreateDirectory(existingDir);
+        File.WriteAllText(Path.Combine(existingDir, "SKILL.md"),
+            "---\nname: existing\ndescription: Still here\n---\n\n# Existing\n\nContent.");
 
         var handler = new FakeHttpHandler();
         handler.AddErrorResponse(FeedConstants.SystemSkillsManifestUrl, HttpStatusCode.ServiceUnavailable);
@@ -290,34 +300,18 @@ public sealed class SystemSkillSyncServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task StartAsync_MigratesFlatSkillsToSystemDirectory()
-    {
-        var content = "---\nname: identity-management\ndescription: test\n---\n\n# Identity Management\n\nContent.";
-        File.WriteAllText(Path.Combine(_paths.SkillsDirectory, "identity-management.md"), content);
-
-        var handler = new FakeHttpHandler();
-        handler.AddErrorResponse(FeedConstants.SystemSkillsManifestUrl, HttpStatusCode.ServiceUnavailable);
-
-        var sut = CreateService(handler);
-        await sut.StartAsync(CancellationToken.None);
-
-        // File should have moved from skills/ to skills/.system/
-        Assert.False(File.Exists(Path.Combine(_paths.SkillsDirectory, "identity-management.md")));
-        Assert.True(File.Exists(Path.Combine(_paths.SystemSkillsDirectory, "identity-management.md")));
-        Assert.Equal(content, File.ReadAllText(Path.Combine(_paths.SystemSkillsDirectory, "identity-management.md")));
-    }
-
-    [Fact]
     public async Task StartAsync_PicksUpUserSkillsAlongWithSystemSkills()
     {
-        // System skill
-        File.WriteAllText(
-            Path.Combine(_paths.SystemSkillsDirectory, "system-skill.md"),
+        // System skill in .system/skill-name/SKILL.md
+        var systemDir = Path.Combine(_paths.SystemSkillsDirectory, "system-skill");
+        Directory.CreateDirectory(systemDir);
+        File.WriteAllText(Path.Combine(systemDir, "SKILL.md"),
             "---\nname: system-skill\ndescription: system skill\n---\n\n# System\n\nContent.");
 
-        // User skill in root skills directory
-        File.WriteAllText(
-            Path.Combine(_paths.SkillsDirectory, "user-skill.md"),
+        // User skill in skills/skill-name/SKILL.md
+        var userDir = Path.Combine(_paths.SkillsDirectory, "user-skill");
+        Directory.CreateDirectory(userDir);
+        File.WriteAllText(Path.Combine(userDir, "SKILL.md"),
             "---\nname: user-skill\ndescription: user skill\n---\n\n# User\n\nContent.");
 
         var handler = new FakeHttpHandler();
