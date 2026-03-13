@@ -4,7 +4,7 @@
     <!-- Nuget package versions -->
     <AkkaHostingVersion>1.5.60</AkkaHostingVersion>
     <AkkaPersistenceSqlHostingVersion>1.5.60.1</AkkaPersistenceSqlHostingVersion>
-    <AkkaRemindersVersion>0.5.0</AkkaRemindersVersion>
+    <AkkaRemindersVersion>0.5.1</AkkaRemindersVersion>
     <OpenTelemetryVersion>1.13.1</OpenTelemetryVersion>
   </PropertyGroup>
   <!-- App dependencies -->
