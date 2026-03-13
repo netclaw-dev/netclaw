@@ -3,7 +3,8 @@ FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
 COPY . .
 
-RUN dotnet restore Netclaw.slnx
+RUN --mount=type=cache,id=nuget,target=/root/.nuget/packages \
+    dotnet restore Netclaw.slnx
 RUN dotnet publish src/Netclaw.Cli/Netclaw.Cli.csproj -c Release -o /out/cli
 RUN dotnet publish src/Netclaw.Daemon/Netclaw.Daemon.csproj -c Release -o /out/daemon
 
