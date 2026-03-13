@@ -45,6 +45,7 @@ jobs:
         uses: docker/setup-buildx-action@v4
 
       - name: Build smoke sandbox image (cached)
+        timeout-minutes: 10
         uses: docker/build-push-action@v7
         with:
           context: .
