@@ -20,7 +20,7 @@ concurrency:
 jobs:
   smoke:
     name: Smoke Sandbox
-    runs-on: ubuntu-latest
+    runs-on: arc-netclaw
     timeout-minutes: 45
 
     env:

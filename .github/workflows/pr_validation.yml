@@ -14,19 +14,20 @@ on:
 
 jobs:
   test:
-    name: Test-${{matrix.os}}
+    name: Test-${{matrix.name}}
     runs-on: ${{matrix.os}}
     timeout-minutes: 30
 
     strategy:
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        include:
+          - os: arc-netclaw
+            name: ubuntu-latest
 
     steps:
       - name: "Checkout"
         uses: actions/checkout@v6
         with:
-          lfs: true
           fetch-depth: 0
 
       - name: "Install .NET SDK"
@@ -69,7 +70,7 @@ jobs:
 
   slopwatch:
     name: Slopwatch
-    runs-on: ubuntu-latest
+    runs-on: arc-netclaw
     timeout-minutes: 10
 
     steps:

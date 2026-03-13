@@ -101,6 +101,22 @@ start_daemon_with_timeout() {
   return 1
 }
 
+wait_for_health() {
+  local deadline=$((SECONDS + START_TIMEOUT_SECONDS))
+  while (( SECONDS < deadline )); do
+    local health_output
+    health_output="$(run_sandbox_timed "$STEP_TIMEOUT_SECONDS" curl -fsS http://127.0.0.1:5199/api/health/ready 2>/dev/null || true)"
+    if [[ "$health_output" == "healthy" || "$health_output" == '"healthy"' ]]; then
+      echo "Health endpoint ready."
+      return 0
+    fi
+    sleep 2
+  done
+
+  echo "Timed out waiting for health endpoint after ${START_TIMEOUT_SECONDS}s."
+  return 1
+}
+
 cleanup() {
   run_sandbox_timed "$STOP_TIMEOUT_SECONDS" netclaw daemon stop >/dev/null 2>&1 || true
 }
@@ -120,12 +136,8 @@ if [[ "$status_output" != *"Daemon running"* ]]; then
   exit 1
 fi
 
-echo "Checking daemon health endpoint..."
-health_output="$(run_sandbox_timed "$STEP_TIMEOUT_SECONDS" curl -fsS http://127.0.0.1:5199/api/health/ready)"
-if [[ "$health_output" != "healthy" && "$health_output" != '"healthy"' ]]; then
-  echo "Expected /api/health/ready to return healthy, got: $health_output"
-  exit 1
-fi
+echo "Waiting for daemon health endpoint..."
+wait_for_health
 
 echo "Stopping daemon..."
 stop_output="$(run_sandbox_timed "$STEP_TIMEOUT_SECONDS" netclaw daemon stop || true)"
@@ -232,12 +244,8 @@ fi
 echo "Restarting daemon for session tests..."
 start_daemon_with_timeout
 
-echo "Checking health before session tests..."
-health_output="$(run_sandbox_timed "$STEP_TIMEOUT_SECONDS" curl -fsS http://127.0.0.1:5199/api/health/ready)"
-if [[ "$health_output" != "healthy" && "$health_output" != '"healthy"' ]]; then
-  echo "Expected /api/health/ready to return healthy, got: $health_output"
-  exit 1
-fi
+echo "Waiting for daemon health endpoint..."
+wait_for_health
 
 echo "Sending a headless prompt to create a session..."
 run_sandbox_timed "$STEP_TIMEOUT_SECONDS" netclaw -p "Say hello in one word" || true

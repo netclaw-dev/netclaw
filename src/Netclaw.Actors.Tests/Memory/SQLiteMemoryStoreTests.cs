@@ -4,7 +4,7 @@ using Xunit;
 
 namespace Netclaw.Actors.Tests.Memory;
 
-public sealed class SQLiteMemoryStoreTests : IDisposable
+public sealed class SQLiteMemoryStoreTests : IAsyncLifetime
 {
     private readonly string _baseDir = Path.Combine(Path.GetTempPath(), "netclaw-sqlite-memory-tests", Guid.NewGuid().ToString("N"));
     private readonly string _dbPath;
@@ -212,12 +212,14 @@ public sealed class SQLiteMemoryStoreTests : IDisposable
         Assert.Contains("needs_metadata_enrichment", reader.GetString(1), StringComparison.OrdinalIgnoreCase);
     }
 
-    public void Dispose()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
     {
-        TryDeleteDirectory(_baseDir);
+        await TryDeleteDirectoryAsync(_baseDir);
     }
 
-    private static void TryDeleteDirectory(string path)
+    private static async Task TryDeleteDirectoryAsync(string path)
     {
         if (!Directory.Exists(path))
             return;
@@ -233,13 +235,11 @@ public sealed class SQLiteMemoryStoreTests : IDisposable
             }
             catch (IOException) when (i < 7)
             {
-                GC.Collect();
-                GC.WaitForPendingFinalizers();
+                await Task.Delay(25 * (i + 1));
             }
             catch (UnauthorizedAccessException) when (i < 7)
             {
-                GC.Collect();
-                GC.WaitForPendingFinalizers();
+                await Task.Delay(25 * (i + 1));
             }
         }
 

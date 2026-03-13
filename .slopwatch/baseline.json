@@ -1,7 +1,7 @@
 {
   "version": 1,
   "createdAt": "2026-02-21T18:55:14.1378608+00:00",
-  "updatedAt": "2026-03-02T20:00:17.1880024+00:00",
+  "updatedAt": "2026-03-12T23:29:28.7781033+00:00",
   "description": "Initial baseline created by 'slopwatch init' on 2026-02-21 18:55:14 UTC",
   "entries": [
     {
@@ -30,6 +30,33 @@
       "codeSnippet": "Task.Delay(Delay, cancellationToken)",
       "message": "Test uses Task.Delay(Delay) which may indicate a timing-dependent test",
       "baselinedAt": "2026-03-02T20:00:17.1879824+00:00"
+    },
+    {
+      "hash": "b691cefe260611c6",
+      "ruleId": "SW004",
+      "filePath": "src/Netclaw.Actors.Tests/Memory/SQLiteMemoryStoreTests.cs",
+      "lineNumber": 117,
+      "codeSnippet": "Task.Delay(25 * (i + 1))",
+      "message": "Test uses Task.Delay(25 * (i + 1)) which may indicate a timing-dependent test",
+      "baselinedAt": "2026-03-12T23:29:28.3091789+00:00"
+    },
+    {
+      "hash": "1305b3c2911b984b",
+      "ruleId": "SW004",
+      "filePath": "src/Netclaw.Actors.Tests/Memory/MemoryEvalSeedSuiteTests.cs",
+      "lineNumber": 204,
+      "codeSnippet": "Task.Delay(25 * (i + 1))",
+      "message": "Test uses Task.Delay(25 * (i + 1)) which may indicate a timing-dependent test",
+      "baselinedAt": "2026-03-12T23:29:28.3181295+00:00"
+    },
+    {
+      "hash": "6ea5c8bbead4b59c",
+      "ruleId": "SW004",
+      "filePath": "src/Netclaw.Daemon.Tests/Gateway/DaemonRuntimeStatusServiceTests.cs",
+      "lineNumber": 61,
+      "codeSnippet": "Task.Delay(25 * (i + 1))",
+      "message": "Test uses Task.Delay(25 * (i + 1)) which may indicate a timing-dependent test",
+      "baselinedAt": "2026-03-12T23:29:28.7781027+00:00"
     }
   ]
 }

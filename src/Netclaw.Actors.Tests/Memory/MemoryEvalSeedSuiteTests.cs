@@ -7,7 +7,7 @@ using Xunit;
 
 namespace Netclaw.Actors.Tests.Memory;
 
-public sealed class MemoryEvalSeedSuiteTests : IDisposable
+public sealed class MemoryEvalSeedSuiteTests : IAsyncLifetime
 {
     private readonly string _baseDir = Path.Combine(Path.GetTempPath(), "netclaw-memory-eval-tests", Guid.NewGuid().ToString("N"));
     private readonly string _dbPath;
@@ -298,12 +298,14 @@ public sealed class MemoryEvalSeedSuiteTests : IDisposable
         Assert.True(elapsed <= TimeSpan.FromMilliseconds(300));
     }
 
-    public void Dispose()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
     {
-        TryDeleteDirectory(_baseDir);
+        await TryDeleteDirectoryAsync(_baseDir);
     }
 
-    private static void TryDeleteDirectory(string path)
+    private static async Task TryDeleteDirectoryAsync(string path)
     {
         if (!Directory.Exists(path))
             return;
@@ -319,13 +321,11 @@ public sealed class MemoryEvalSeedSuiteTests : IDisposable
             }
             catch (IOException) when (i < 7)
             {
-                GC.Collect();
-                GC.WaitForPendingFinalizers();
+                await Task.Delay(25 * (i + 1));
             }
             catch (UnauthorizedAccessException) when (i < 7)
             {
-                GC.Collect();
-                GC.WaitForPendingFinalizers();
+                await Task.Delay(25 * (i + 1));
             }
         }
 
