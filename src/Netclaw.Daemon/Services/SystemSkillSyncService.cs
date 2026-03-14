@@ -419,7 +419,20 @@ internal sealed class SystemSkillSyncService : IHostedService
                 new(ChatRole.User, content)
             };
 
-            var response = await client.GetResponseAsync(messages, cancellationToken: cts.Token);
+            // Disable reasoning/thinking tokens — keyword extraction is a simple task
+            // and reasoning bloats the response time from <1s to 25s+ on Qwen models.
+            var options = new ChatOptions
+            {
+                AdditionalProperties = new AdditionalPropertiesDictionary
+                {
+                    ["chat_template_kwargs"] = new Dictionary<string, object>
+                    {
+                        ["enable_thinking"] = false
+                    }
+                }
+            };
+
+            var response = await client.GetResponseAsync(messages, options, cts.Token);
             var text = response.Messages[^1].Text ?? string.Empty;
 
             if (string.IsNullOrWhiteSpace(text))

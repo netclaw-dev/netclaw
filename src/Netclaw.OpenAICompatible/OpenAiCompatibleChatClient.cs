@@ -31,7 +31,10 @@ public sealed class OpenAiCompatibleChatClient : IChatClient
     {
         var payload = BuildPayload(messages, options, stream: false);
         using var request = BuildRequest(payload);
-        using var response = await _httpClient.SendAsync(request, cancellationToken);
+        using var response = await _httpClient.SendAsync(
+            request,
+            HttpCompletionOption.ResponseHeadersRead,
+            cancellationToken);
         await EnsureSuccessAsync(response, payload, cancellationToken);
 
         await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
@@ -161,6 +164,18 @@ public sealed class OpenAiCompatibleChatClient : IChatClient
             body["stop"] = new JsonArray(stop.Select(s => (JsonNode)JsonValue.Create(s)!).ToArray());
         if (options?.Tools is { Count: > 0 } tools)
             body["tools"] = new JsonArray(tools.Select(ToTool).ToArray<JsonNode>());
+
+        // Pass through additional properties as top-level JSON fields.
+        // Enables provider-specific options like chat_template_kwargs for llama.cpp.
+        if (options?.AdditionalProperties is { Count: > 0 } additional)
+        {
+            foreach (var (key, value) in additional)
+            {
+                body[key] = value is not null
+                    ? JsonSerializer.SerializeToNode(value, JsonOptions)
+                    : null;
+            }
+        }
 
         return body;
     }
