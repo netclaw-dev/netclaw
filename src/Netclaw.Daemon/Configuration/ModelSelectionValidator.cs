@@ -5,7 +5,7 @@ namespace Netclaw.Daemon.Configuration;
 
 public sealed class ModelSelectionValidator : IValidateOptions<ModelSelection>
 {
-    private const int MinContextWindow = 8192;
+    private const int MinContextWindow = 4096;
 
     public ValidateOptionsResult Validate(string? name, ModelSelection options)
     {
@@ -26,6 +26,6 @@ public sealed class ModelSelectionValidator : IValidateOptions<ModelSelection>
         if (model.ContextWindowOverride is int value && value < MinContextWindow)
             errors.Add(
                 $"Models:{role}:ContextWindowOverride ({value}) is below minimum ({MinContextWindow}). " +
-                "A context window below 8192 tokens is too small for practical use.");
+                "A context window below 4096 tokens is too small for practical use.");
     }
 }

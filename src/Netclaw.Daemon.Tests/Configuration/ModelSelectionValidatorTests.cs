@@ -19,7 +19,7 @@ public sealed class ModelSelectionValidatorTests
     [Fact]
     public void OverrideAtMinimum_Passes()
     {
-        var selection = new ModelSelection { Main = new ModelReference { ContextWindowOverride = 8192 } };
+        var selection = new ModelSelection { Main = new ModelReference { ContextWindowOverride = 4096 } };
         var result = Validator.Validate(null, selection);
         Assert.False(result.Failed);
     }
@@ -35,11 +35,11 @@ public sealed class ModelSelectionValidatorTests
     [Fact]
     public void OverrideBelowMinimum_Fails()
     {
-        var selection = new ModelSelection { Main = new ModelReference { ContextWindowOverride = 4096 } };
+        var selection = new ModelSelection { Main = new ModelReference { ContextWindowOverride = 2048 } };
         var result = Validator.Validate(null, selection);
         Assert.True(result.Failed);
+        Assert.Contains("2048", result.FailureMessage);
         Assert.Contains("4096", result.FailureMessage);
-        Assert.Contains("8192", result.FailureMessage);
     }
 
     [Fact]
