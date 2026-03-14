@@ -495,9 +495,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             StopProcessingWatchdog();
             TurnLog().Error(msg.Cause, "turn_llm_call_failed");
 
-            var errorMessage = IsContextOverflowError(msg.Cause)
-                ? $"Context window exceeded after compaction — the session has too many tools or a large system prompt for the {_config.ModelId} context window ({_config.ContextWindowTokens} tokens). Try reducing tools or increasing the model's context window."
-                : "I encountered an error processing your message. Please try again.";
+            var errorMessage = ExtractLlmErrorMessage(msg.Cause);
             var category = msg.Cause is TimeoutException ? ErrorCategory.Timeout : ErrorCategory.ProviderFailure;
             FailCurrentTurn(errorMessage, msg.Cause, category);
         });
@@ -1196,6 +1194,42 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     }
 
     // ── Helpers ──
+
+    /// <summary>
+    /// Extracts the best user-facing error message from an LLM call failure.
+    /// Checks for ProviderException (user-safe message), context overflow,
+    /// timeouts, and falls back to a generic message.
+    /// </summary>
+    private string ExtractLlmErrorMessage(Exception? cause)
+    {
+        if (cause is null)
+            return "I encountered an error processing your message. Please try again.";
+
+        // ProviderException carries a pre-formatted user-safe message
+        var providerEx = FindException<Configuration.ProviderException>(cause);
+        if (providerEx is not null)
+            return providerEx.UserMessage;
+
+        if (IsContextOverflowError(cause))
+            return $"Context window exceeded after compaction — the session has too many tools or a large system prompt for the {_config.ModelId} context window ({_config.ContextWindowTokens} tokens). Try reducing tools or increasing the model's context window.";
+
+        return "I encountered an error processing your message. Please try again.";
+    }
+
+    /// <summary>
+    /// Walks the exception chain (including inner exceptions) to find an exception
+    /// of the specified type.
+    /// </summary>
+    private static T? FindException<T>(Exception? ex) where T : Exception
+    {
+        while (ex is not null)
+        {
+            if (ex is T match)
+                return match;
+            ex = ex.InnerException;
+        }
+        return null;
+    }
 
     /// <summary>
     /// Detect context-length overflow errors from LLM providers.

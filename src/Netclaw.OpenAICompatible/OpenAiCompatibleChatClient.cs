@@ -219,8 +219,57 @@ public sealed class OpenAiCompatibleChatClient : IChatClient
             ? null
             : await response.Content.ReadAsStringAsync(cancellationToken);
 
-        throw new HttpRequestException(
-            $"OpenAI-compatible request failed: status={(int)response.StatusCode} path={_endpoint.ChatCompletionsPath} payload={payload.ToJsonString(JsonOptions)} response={responseBody}");
+        var statusCode = (int)response.StatusCode;
+        var technicalMessage =
+            $"OpenAI-compatible request failed: status={statusCode} path={_endpoint.ChatCompletionsPath} payload={payload.ToJsonString(JsonOptions)} response={responseBody}";
+        var userMessage = ExtractUserMessage(responseBody, statusCode);
+
+        throw new Configuration.ProviderException(userMessage, technicalMessage, statusCode);
+    }
+
+    /// <summary>
+    /// Extracts a user-friendly error message from an OpenAI-compatible error response.
+    /// Falls back to a generic message if the response can't be parsed.
+    /// </summary>
+    internal static string ExtractUserMessage(string? responseBody, int statusCode)
+    {
+        if (!string.IsNullOrWhiteSpace(responseBody))
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(responseBody);
+                if (doc.RootElement.TryGetProperty("error", out var error))
+                {
+                    if (error.ValueKind == JsonValueKind.Object
+                        && error.TryGetProperty("message", out var msg)
+                        && msg.ValueKind == JsonValueKind.String
+                        && msg.GetString() is { Length: > 0 } errorMessage)
+                    {
+                        return $"LLM provider error ({statusCode}): {errorMessage}";
+                    }
+
+                    if (error.ValueKind == JsonValueKind.String
+                        && error.GetString() is { Length: > 0 } simpleError)
+                    {
+                        return $"LLM provider error ({statusCode}): {simpleError}";
+                    }
+                }
+            }
+            catch (JsonException)
+            {
+                // Response wasn't valid JSON — fall through to status-code-based message.
+                // This is expected when providers return HTML error pages or plain text.
+                return $"LLM provider returned an error (HTTP {statusCode}). Response was not valid JSON.";
+            }
+        }
+
+        return statusCode switch
+        {
+            401 or 403 => "LLM provider rejected the request — check credentials.",
+            429 => "LLM provider is rate-limiting requests. Try again shortly.",
+            >= 500 => $"LLM provider returned a server error ({statusCode}). The provider may be experiencing issues.",
+            _ => $"LLM provider returned an error (HTTP {statusCode}). Please try again."
+        };
     }
 
     internal static JsonObject ToMessage(ChatMessage message)
