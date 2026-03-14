@@ -1,18 +1,29 @@
 ---
-name: identity-management
-description: How to keep SOUL.md narrowly scoped to identity/profile updates while project facts and evidence stay in SQLite memory
+name: netclaw-identity
+description: "Netclaw identity files. Read when the user wants to update lasting profile, tone, workflow, or environment preferences that should shape future Netclaw sessions."
 metadata:
   author: netclaw
-  version: "1.1.0"
-  triggers: learn user preference | update personality | identity profile | save durable fact | soul update
+  version: "1.0.0"
+  triggers: remember my preference | update how you should respond to me | save this as a standing preference | update your profile for me | keep this in future sessions | change your workflow preference
 ---
 
-## Overview
+# Netclaw Identity
+
+Use this skill when the user's intent is to change long-lived Netclaw identity
+context that should affect future sessions:
+
+- personal preferences or response style
+- stable relationship facts and profile details
+- lasting workflow rules
+- environment/tooling notes that belong in identity, not memory
+
+If the user is asking to remember project facts, research findings, or session
+evidence, use `netclaw-memory` instead of editing identity files.
+
+## Identity Files
 
 Your identity is defined by three files in `~/.netclaw/identity/`. These files
 are loaded into every system prompt, so keep them concise and high-signal.
-
-## Identity Files
 
 | File | Purpose | What Belongs Here |
 |------|---------|-------------------|

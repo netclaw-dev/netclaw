@@ -1,11 +1,24 @@
 ---
-name: capability-reference
-description: "Quick-lookup catalog of all built-in tools, CLI commands, tool grant categories, scheduling syntax, and MCP discovery. Read when unsure what tools or commands are available."
+name: netclaw-manual
+description: "Netclaw Manual. Read when the user is asking what Netclaw can do, which command/tool to use, how to schedule work, switch models, manage providers, or discover available capabilities."
 metadata:
   author: netclaw
-  version: "1.1.0"
-  triggers: what can I do | available tools | CLI commands | how to schedule | tool grants | MCP discovery | list capabilities
+  version: "1.0.0"
+  triggers: what can netclaw do | what command should I use | can you schedule a cron job | schedule a reminder | switch models | change model | manage providers | manage mcp servers | list available tools | how do I do this in netclaw
 ---
+
+# Netclaw Manual
+
+Use this skill when the user's intent is about Netclaw's own capabilities:
+
+- which Netclaw command, tool, or workflow should be used
+- whether Netclaw can do something directly
+- how to schedule reminders or cron jobs through Netclaw
+- how to switch models, providers, or MCP servers
+- how to discover and use tools safely inside Netclaw
+
+If the user is asking about a Netclaw/session failure, log issue, missing tool, or
+runtime problem, read `netclaw-diagnostics` instead.
 
 ## Session Context
 
@@ -16,6 +29,16 @@ prompt. Use the session ID to:
 - correlate with `netclaw sessions` output for diagnostics
 - identify which session is running during troubleshooting
 
+## Fast Routing Guide
+
+| User intent | Go to |
+|-------------|-------|
+| "What can Netclaw do here?" | this skill |
+| "Can you schedule this for me?" | scheduling section below |
+| "How do I switch models/providers?" | configuration section below |
+| "What MCP tools are available?" | MCP discovery section below |
+| "Why did this session/tool run fail?" | `netclaw-diagnostics` |
+
 ## Built-in Tools by Grant Category
 
 ### builtin (always granted)
@@ -23,6 +46,7 @@ prompt. Use the session ID to:
 | Tool | Purpose |
 |------|---------|
 | `search_tools` | Discover and load MCP tools by keyword or server |
+| `spawn_agent` | Delegate a bounded task to a named user-facing subagent |
 | `store_memory` | Save knowledge to cross-session memory |
 | `find_memories` | Search memory (returns IDs, titles, snippets) |
 | `get_memories` | Load full memory content by ID |
@@ -66,6 +90,28 @@ are unavailable for that session. `builtin` is always granted. Other categories
 (`web`, `file`, `shell`, `scheduling`) are granted per ACL configuration in
 `netclaw.json`.
 
+## Subagent Delegation (`spawn_agent`)
+
+`spawn_agent` lets the main session delegate bounded work to named specialist
+subagents. Use it when one focused worker with a narrow prompt can do the job
+more cleanly than the main agent.
+
+- User-facing file-defined subagents are intentionally constrained.
+- They can only use this safe tool subset: `web_search`, `web_fetch`, `file_read`, `attach_file`.
+- They cannot request `shell_execute`, `file_write`, `search_tools`, or raw MCP tools.
+- Subagent prompt files must stay inside `~/.netclaw/agents/`; path traversal is rejected.
+- Subagents are supervised as session children and are cancelled when the parent tool call is cancelled or times out.
+- Session observers receive both start and completion events for each subagent run; completion can report `findings=0` when no structured memory candidates were produced.
+
+Built-in seeded agents:
+
+- `research-assistant` -> `web_search`, `web_fetch`, `file_read`, `attach_file`
+- `code-analyst` -> `file_read`
+- `summarizer` -> `file_read`
+
+Use `spawn_agent` with a specific task description. The subagent does not inherit
+the full session conversation history.
+
 ## MCP Discovery (search_tools)
 
 MCP tools are not loaded into the prompt by default. Use `search_tools` to
@@ -73,7 +119,7 @@ discover and load them:
 
 ```
 search_tools(query: "servers")                     # list all MCP servers
-search_tools(query: "all", server: "memorizer")    # browse all tools in one server
+search_tools(query: "all", server: "notion")       # browse all tools in one server
 search_tools(query: "email")                       # keyword search across all servers
 ```
 
@@ -83,6 +129,9 @@ match is found, `search_tools` suggests similar tools.
 Generated MCP catalogs are cached at `identity/tooling/shadow/mcp/<server>.md`.
 
 ## Scheduling Quick Reference
+
+When the user says things like "schedule this," "set a cron job," or "remind me
+every weekday," use `set_reminder`.
 
 `set_reminder` accepts three schedule types:
 
@@ -125,7 +174,7 @@ scheduled work back to the originating conversation.
 
 | Command | Purpose |
 |---------|---------|
-| `netclaw doctor` | Offline config validation (see `self-diagnostics`) |
+| `netclaw doctor` | Offline config validation (see `netclaw-diagnostics`) |
 | `netclaw status` | Runtime health from daemon endpoint |
 
 ### Configuration
@@ -169,8 +218,8 @@ scheduled work back to the originating conversation.
 
 ## Cross-References
 
-- Memory tool usage: read `memory-usage`
-- Troubleshooting and diagnostics: read `self-diagnostics`
-- Identity file management: read `identity-management`
+- Memory tool usage: read `netclaw-memory`
+- Troubleshooting and diagnostics: read `netclaw-diagnostics`
+- Identity file management: read `netclaw-identity`
 - Creating new skills: read `skill-authoring`
 - Search behavior and citation policy: read `search-citation`

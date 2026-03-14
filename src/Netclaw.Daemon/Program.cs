@@ -294,7 +294,8 @@ static void ConfigureDaemonServices(
     var toolRegistry = new ToolRegistry();
     toolRegistry.WithFirstPartyTools(toolConfig, searchBackend, toolPathPolicy);
 
-    // Skills system: seed built-in skills to .system/, register sync service
+    // Skills system: migrate legacy IDs, seed built-in skills to .system/, register sync service
+    MigrateLegacySystemSkillIds(paths);
     CopyBuiltInSkills(paths.SystemSkillsDirectory);
     var skillRegistry = new SkillRegistry();
     foreach (var skill in SkillScanner.Scan(paths.SkillsDirectory))
@@ -686,6 +687,51 @@ static void CopyBuiltInSkills(string skillsDirectory)
 
         using var fileStream = File.Create(targetPath);
         stream.CopyTo(fileStream);
+    }
+}
+
+static void MigrateLegacySystemSkillIds(NetclawPaths paths)
+{
+    var skillRenames = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+    {
+        ["capability-reference"] = "netclaw-manual",
+        ["self-diagnostics"] = "netclaw-diagnostics",
+        ["identity-management"] = "netclaw-identity",
+        ["memory-usage"] = "netclaw-memory"
+    };
+
+    foreach (var (oldName, newName) in skillRenames)
+    {
+        var oldDir = Path.Combine(paths.SystemSkillsDirectory, oldName);
+        var newDir = Path.Combine(paths.SystemSkillsDirectory, newName);
+
+        if (Directory.Exists(oldDir) && !Directory.Exists(newDir))
+            Directory.Move(oldDir, newDir);
+
+        foreach (var cacheFile in Directory.GetFiles(paths.SkillKeywordCacheDirectory, $"{oldName}-*.json"))
+        {
+            var newFile = Path.Combine(paths.SkillKeywordCacheDirectory,
+                Path.GetFileName(cacheFile).Replace(oldName, newName, StringComparison.OrdinalIgnoreCase));
+            if (!File.Exists(newFile))
+                File.Move(cacheFile, newFile);
+        }
+    }
+
+    if (File.Exists(paths.SkillSyncStatePath))
+    {
+        var json = File.ReadAllText(paths.SkillSyncStatePath);
+        var updated = false;
+        foreach (var (oldName, newName) in skillRenames)
+        {
+            if (!json.Contains($"\"{oldName}\"", StringComparison.Ordinal))
+                continue;
+
+            json = json.Replace($"\"{oldName}\"", $"\"{newName}\"", StringComparison.Ordinal);
+            updated = true;
+        }
+
+        if (updated)
+            File.WriteAllText(paths.SkillSyncStatePath, json);
     }
 }
 

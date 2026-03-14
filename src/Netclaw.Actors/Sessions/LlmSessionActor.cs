@@ -1545,19 +1545,19 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         // 1. Find NEW matches (excludes already-loaded skills)
         var newMatches = _skillRegistry.MatchByKeywords(userMessage, _autoLoadedSkills);
-        foreach (var (skill, _) in newMatches)
+        foreach (var match in newMatches)
         {
             try
             {
-                _autoLoadedSkillContent[skill.Name] = File.ReadAllText(skill.FilePath);
+                _autoLoadedSkillContent[match.Skill.Name] = File.ReadAllText(match.Skill.FilePath);
             }
             catch (IOException ex)
             {
-                _log.Warning(ex, "Failed to read skill for auto-load: {SkillName}", skill.Name);
+                _log.Warning(ex, "Failed to read skill for auto-load: {SkillName}", match.Skill.Name);
                 continue;
             }
 
-            _autoLoadedSkills.Add(skill.Name);
+            _autoLoadedSkills.Add(match.Skill.Name);
         }
 
         // 2. Inject ALL loaded skills (new + previously cached)
@@ -1576,11 +1576,21 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         messages.Insert(idx >= 0 ? idx + 1 : 0, msg);
 
         if (newMatches.Count > 0)
+        {
+            var details = string.Join(" | ", newMatches.Select(m =>
+                $"{m.Skill.Name}:score={m.Score.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture)}"
+                + $"/threshold={m.Threshold.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture)}"
+                + $" tokens=[{string.Join(",", m.MatchedTokens)}]"
+                + $" phrases=[{string.Join(",", m.MatchedPhrases)}]"));
+
             TurnLog().Info(
-                "turn_skill_auto_load new={New} total={Total} skills={Names} scores={Scores}",
+                "turn_skill_auto_load new={New} total={Total} skills={Names} tokenHits={TokenHits} phraseHits={PhraseHits} details={Details}",
                 newMatches.Count, _autoLoadedSkillContent.Count,
                 string.Join(",", newMatches.Select(m => m.Skill.Name)),
-                string.Join(",", newMatches.Select(m => m.Score)));
+                string.Join(",", newMatches.Select(m => m.TokenHits)),
+                string.Join(",", newMatches.Select(m => m.PhraseHits)),
+                details);
+        }
     }
 
     /// <summary>

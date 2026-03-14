@@ -60,10 +60,11 @@ public class SkillRegistryMatchTests
             var name = $"skill-{i}";
             registry.Register(MakeEntry(name));
             registry.SetEnrichedKeywords(name,
-                new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "buy", "price" });
+                new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "buy", "price", $"product-{i}" },
+                threshold: 1.5);
         }
 
-        var results = registry.MatchByKeywords("buy at a good price", maxResults: 2);
+        var results = registry.MatchByKeywords("buy at a good price for product-0 product-1 product-2 product-3 product-4", maxResults: 2);
 
         Assert.Equal(2, results.Count);
     }
@@ -74,7 +75,8 @@ public class SkillRegistryMatchTests
         var registry = new SkillRegistry();
         registry.Register(MakeEntry("low-score"));
         registry.SetEnrichedKeywords("low-score",
-            new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "buy", "price" });
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "buy", "price" },
+            threshold: 1.5);
 
         registry.Register(MakeEntry("high-score"));
         registry.SetEnrichedKeywords("high-score",
@@ -85,6 +87,61 @@ public class SkillRegistryMatchTests
         Assert.Equal(2, results.Count);
         Assert.Equal("high-score", results[0].Skill.Name);
         Assert.True(results[0].Score > results[1].Score);
+    }
+
+    [Fact]
+    public void MatchByKeywords_phrase_hits_help_broad_skill_clear_threshold()
+    {
+        var registry = new SkillRegistry();
+        registry.Register(MakeEntry("netclaw-diagnostics"));
+        registry.SetEnrichedKeywords(
+            "netclaw-diagnostics",
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "timeout", "daemon", "missing", "tool" },
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "missing tool", "session timeout" });
+
+        var results = registry.MatchByKeywords("The daemon has a session timeout and missing tools");
+
+        Assert.Single(results);
+        Assert.Equal("netclaw-diagnostics", results[0].Skill.Name);
+        Assert.True(results[0].PhraseHits >= 1);
+        Assert.True(results[0].Score >= results[0].Threshold);
+    }
+
+    [Fact]
+    public void MatchByKeywords_generic_overlap_does_not_trigger_broad_skill()
+    {
+        var registry = new SkillRegistry();
+        registry.Register(MakeEntry("netclaw-diagnostics"));
+        registry.SetEnrichedKeywords(
+            "netclaw-diagnostics",
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "check", "status", "timeout" },
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "check logs" });
+
+        var results = registry.MatchByKeywords("NanoGPT C# Progress Check-in status update");
+
+        Assert.Empty(results);
+    }
+
+    [Fact]
+    public void MatchByKeywords_shared_tokens_are_downweighted()
+    {
+        var registry = new SkillRegistry();
+        registry.Register(MakeEntry("skill-a"));
+        registry.Register(MakeEntry("skill-b"));
+        registry.Register(MakeEntry("skill-c"));
+        registry.SetEnrichedKeywords("skill-a",
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "check", "daemon", "timeout" },
+            threshold: 2.0);
+        registry.SetEnrichedKeywords("skill-b",
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "check", "price", "product" },
+            threshold: 2.0);
+        registry.SetEnrichedKeywords("skill-c",
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "check", "memory", "recall" },
+            threshold: 2.0);
+
+        var results = registry.MatchByKeywords("check");
+
+        Assert.Empty(results);
     }
 
     [Fact]
@@ -135,7 +192,7 @@ public class SkillRegistryMatchTests
         var results = registry.MatchByKeywords("check prices for flights");
 
         Assert.Single(results);
-        Assert.Equal(2, results[0].Score);
+        Assert.True(results[0].Score >= 2);
     }
 
     [Fact]

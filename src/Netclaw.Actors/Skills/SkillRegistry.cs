@@ -11,7 +11,17 @@ namespace Netclaw.Actors.Skills;
 public sealed class SkillRegistry
 {
     private readonly List<SkillEntry> _skills = new();
-    private readonly Dictionary<string, HashSet<string>> _enrichedKeywords = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, SkillKeywordIndex> _enrichedKeywords = new(StringComparer.OrdinalIgnoreCase);
+
+    private static readonly IReadOnlyDictionary<string, double> ThresholdOverrides =
+        new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["netclaw-diagnostics"] = 3.0,
+            ["netclaw-manual"] = 2.5,
+            ["netclaw-memory"] = 3.0,
+            ["netclaw-identity"] = 3.0,
+            ["skill-authoring"] = 3.0
+        };
 
     public void Register(SkillEntry skill)
     {
@@ -34,15 +44,22 @@ public sealed class SkillRegistry
     /// Store enriched keywords for a skill. Called by the enrichment service
     /// after sidecar LLM generates keywords from the skill's content.
     /// </summary>
-    public void SetEnrichedKeywords(string skillName, HashSet<string> keywords)
+    public void SetEnrichedKeywords(
+        string skillName,
+        HashSet<string> keywords,
+        HashSet<string>? phrases = null,
+        double? threshold = null)
     {
-        _enrichedKeywords[skillName] = keywords;
+        _enrichedKeywords[skillName] = new SkillKeywordIndex(
+            keywords,
+            phrases ?? new HashSet<string>(StringComparer.OrdinalIgnoreCase),
+            threshold ?? ResolveThreshold(skillName));
     }
 
     /// <summary>
     /// Get all enriched keyword sets indexed by skill name.
     /// </summary>
-    public IReadOnlyDictionary<string, HashSet<string>> GetEnrichedKeywords()
+    public IReadOnlyDictionary<string, SkillKeywordIndex> GetEnrichedKeywords()
         => _enrichedKeywords;
 
     /// <summary>
@@ -70,39 +87,96 @@ public sealed class SkillRegistry
     /// set intersection. Returns skills with overlap count >= threshold,
     /// sorted by score descending. Skills without enriched keywords are skipped.
     /// </summary>
-    public IReadOnlyList<(SkillEntry Skill, int Score)> MatchByKeywords(
+    public IReadOnlyList<SkillMatchResult> MatchByKeywords(
         string userMessage,
         IReadOnlySet<string>? excludeNames = null,
-        int threshold = 2,
         int maxResults = 3)
     {
         if (string.IsNullOrWhiteSpace(userMessage) || _enrichedKeywords.Count == 0)
             return [];
 
-        var userTokens = TextTokenizer.Tokenize(userMessage).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        if (userTokens.Count == 0)
+        var userTokenList = TextTokenizer.Tokenize(userMessage);
+        if (userTokenList.Count == 0)
             return [];
 
-        var candidates = new List<(SkillEntry Skill, int Score)>();
+        var userTokens = userTokenList.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var userBigrams = TextTokenizer.MakeBigrams(userTokenList).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var documentFrequency = BuildTokenDocumentFrequency();
+        var candidates = new List<SkillMatchResult>();
 
         foreach (var skill in _skills)
         {
             if (excludeNames is not null && excludeNames.Contains(skill.Name))
                 continue;
 
-            if (!_enrichedKeywords.TryGetValue(skill.Name, out var keywords))
+            if (!_enrichedKeywords.TryGetValue(skill.Name, out var keywordIndex))
                 continue;
 
-            var overlap = userTokens.Count(t => keywords.Contains(t));
-            if (overlap >= threshold)
-                candidates.Add((skill, overlap));
+            var matchedTokens = userTokens
+                .Where(t => keywordIndex.Keywords.Contains(t))
+                .OrderBy(t => t, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+
+            var matchedPhrases = userBigrams
+                .Where(p => keywordIndex.Phrases.Contains(p))
+                .OrderBy(p => p, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+
+            var tokenScore = matchedTokens.Sum(t => GetTokenWeight(t, documentFrequency));
+            var phraseScore = matchedPhrases.Length * 1.5;
+            var totalScore = tokenScore + phraseScore;
+
+            if (totalScore >= keywordIndex.Threshold)
+            {
+                candidates.Add(new SkillMatchResult(
+                    skill,
+                    totalScore,
+                    matchedTokens.Length,
+                    matchedPhrases.Length,
+                    keywordIndex.Threshold,
+                    matchedTokens,
+                    matchedPhrases));
+            }
         }
 
         return candidates
             .OrderByDescending(c => c.Score)
+            .ThenByDescending(c => c.PhraseHits)
+            .ThenByDescending(c => c.TokenHits)
             .Take(maxResults)
             .ToList();
     }
+
+    private Dictionary<string, int> BuildTokenDocumentFrequency()
+    {
+        var frequency = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var keywordIndex in _enrichedKeywords.Values)
+        {
+            foreach (var token in keywordIndex.Keywords)
+            {
+                frequency[token] = frequency.TryGetValue(token, out var count)
+                    ? count + 1
+                    : 1;
+            }
+        }
+
+        return frequency;
+    }
+
+    private static double GetTokenWeight(string token, IReadOnlyDictionary<string, int> documentFrequency)
+    {
+        if (!documentFrequency.TryGetValue(token, out var frequency) || frequency <= 1)
+            return 1.0;
+
+        if (frequency == 2)
+            return 0.75;
+
+        return 0.5;
+    }
+
+    private static double ResolveThreshold(string skillName)
+        => ThresholdOverrides.TryGetValue(skillName, out var threshold) ? threshold : 2.0;
 
     /// <summary>
     /// Produces a compressed index for the system prompt context layer.
@@ -129,3 +203,17 @@ public sealed class SkillRegistry
         return sb.ToString();
     }
 }
+
+public sealed record SkillKeywordIndex(
+    IReadOnlySet<string> Keywords,
+    IReadOnlySet<string> Phrases,
+    double Threshold);
+
+public sealed record SkillMatchResult(
+    SkillEntry Skill,
+    double Score,
+    int TokenHits,
+    int PhraseHits,
+    double Threshold,
+    IReadOnlyList<string> MatchedTokens,
+    IReadOnlyList<string> MatchedPhrases);

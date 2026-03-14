@@ -89,6 +89,6 @@ If a search returns no useful results:
 
 ## Cross-References
 
-- Tool catalog and grant system: read `capability-reference`
-- Memory patterns and recall: read `memory-usage`
+- Tool catalog and grant system: read `netclaw-manual` (`Netclaw Manual`)
+- Memory patterns and recall: read `netclaw-memory`
 - Search-type-specific guidance: see `references/` files listed above
