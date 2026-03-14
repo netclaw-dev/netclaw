@@ -1,8 +1,6 @@
 using System.Text;
-using Akka.Actor;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
-using Netclaw.Actors.Memory;
 using Netclaw.Actors.SubAgents;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
@@ -24,7 +22,6 @@ internal sealed class ToolIndexUpdater : IHostedService
     private readonly SubAgentDefinitionRegistry _subAgentRegistry;
     private readonly FileSubAgentDefinitionLoader _agentLoader;
     private readonly SubAgentSpawner _subAgentSpawner;
-    private readonly MemoryConfig _memoryConfig;
     private readonly ILogger<ToolIndexUpdater> _logger;
 
     public ToolIndexUpdater(
@@ -35,7 +32,6 @@ internal sealed class ToolIndexUpdater : IHostedService
         SubAgentDefinitionRegistry subAgentRegistry,
         FileSubAgentDefinitionLoader agentLoader,
         SubAgentSpawner subAgentSpawner,
-        MemoryConfig memoryConfig,
         ILogger<ToolIndexUpdater> logger)
     {
         _shadowCatalogWriter = shadowCatalogWriter;
@@ -45,7 +41,6 @@ internal sealed class ToolIndexUpdater : IHostedService
         _subAgentRegistry = subAgentRegistry;
         _agentLoader = agentLoader;
         _subAgentSpawner = subAgentSpawner;
-        _memoryConfig = memoryConfig;
         _logger = logger;
     }
 
@@ -121,10 +116,5 @@ internal sealed class ToolIndexUpdater : IHostedService
         _logger.LogInformation("Subagent discovery layer updated ({Count} agents)", agents.Count);
     }
 
-    private MemoryContextState ResolveMemoryState()
-    {
-        return _memoryConfig.Provider.Equals("sqlite", StringComparison.OrdinalIgnoreCase)
-            ? MemoryContextState.SqlitePrimary
-            : MemoryContextState.SqliteDegraded;
-    }
+    private static MemoryContextState ResolveMemoryState() => MemoryContextState.SqlitePrimary;
 }

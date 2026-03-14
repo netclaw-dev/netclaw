@@ -97,12 +97,6 @@
       "type": "object",
       "description": "Cross-session memory configuration.",
       "properties": {
-        "Provider": {
-          "type": "string",
-          "enum": ["sqlite", "memorizer", "files"],
-          "default": "sqlite",
-          "description": "Memory backend: 'sqlite' for local durable memory graph (MVP default)."
-        },
         "RecallTimeoutMs": {
           "type": "integer",
           "minimum": 50,

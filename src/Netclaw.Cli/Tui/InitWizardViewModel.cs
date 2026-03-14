@@ -1,4 +1,3 @@
-using System.Net.Sockets;
 using System.Diagnostics;
 using System.Text.Json;
 using Netclaw.Channels.Slack;
@@ -71,21 +70,6 @@ public partial class InitWizardViewModel : ReactiveViewModel
     public ReactiveProperty<int> ProbeElapsedSeconds { get; } = new(0);
 
     /// <summary>
-    /// True while the Memorizer connectivity probe is running.
-    /// </summary>
-    public ReactiveProperty<bool> IsMemorizerProbing { get; } = new(false);
-
-    /// <summary>
-    /// Result of the Memorizer connectivity probe. Null before first probe.
-    /// </summary>
-    public ReactiveProperty<bool?> MemorizerProbeResult { get; } = new(null);
-
-    /// <summary>
-    /// Completes when the Memorizer probe finishes. Used for testing without polling.
-    /// </summary>
-    internal Task? MemorizerProbeCompletion { get; private set; }
-
-    /// <summary>
     /// Monotonically increasing counter that ticks whenever health check results
     /// change. The page subscribes to this to invalidate its DynamicLayoutNode,
     /// since RequestRedraw alone won't trigger factory re-evaluation in Termina 0.7.1+.
@@ -132,10 +116,6 @@ public partial class InitWizardViewModel : ReactiveViewModel
     public string SelectedBrowserAutomationBackend { get; set; } = BrowserAutomationMcpProfiles.PlaywrightBackend;
     public bool IsChromeDevToolsAvailable { get; }
     public string ChromeDevToolsUnavailableReason { get; }
-
-    // ── Step 6: Memory ──
-    public string SelectedMemoryBackend { get; set; } = "sqlite";
-    public string? MemorizerUrl { get; set; }
 
     // ── Step 7: Exposure ──
     public string? ExposureMode { get; set; }
@@ -417,57 +397,6 @@ public partial class InitWizardViewModel : ReactiveViewModel
         }
     }
 
-    /// <summary>
-    /// Start the Memorizer connectivity probe. Updates reactive properties
-    /// so the page can show a spinner and auto-advance on success.
-    /// </summary>
-    public void StartMemorizerProbe()
-    {
-        MemorizerProbeCompletion = ProbeMemorizerAsync();
-    }
-
-    /// <summary>
-    /// Probe the Memorizer endpoint for connectivity. Returns true if reachable.
-    /// </summary>
-    internal async Task<bool> ProbeMemorizerAsync()
-    {
-        if (string.IsNullOrWhiteSpace(MemorizerUrl))
-        {
-            MemorizerProbeResult.Value = false;
-            IsMemorizerProbing.Value = false;
-            RequestRedraw();
-            return false;
-        }
-
-        IsMemorizerProbing.Value = true;
-        MemorizerProbeResult.Value = null;
-        RequestRedraw();
-
-        bool reachable;
-        try
-        {
-            // TCP connect to verify the server is alive. MCP endpoints only accept
-            // POST, so an HTTP GET would return 405. A simple TCP handshake is the
-            // most reliable liveness check.
-            var baseUri = new Uri(MemorizerUrl);
-            var port = baseUri.Port > 0 ? baseUri.Port : (baseUri.Scheme == "https" ? 443 : 80);
-
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
-            using var tcp = new TcpClient();
-            await tcp.ConnectAsync(baseUri.Host, port, cts.Token);
-            reachable = true;
-        }
-        catch
-        {
-            reachable = false;
-        }
-
-        MemorizerProbeResult.Value = reachable;
-        IsMemorizerProbing.Value = false;
-        RequestRedraw();
-        return reachable;
-    }
-
     private void HandleGlobalKey(KeyPressed key)
     {
         if (key.KeyInfo.Key == ConsoleKey.Q &&
@@ -706,23 +635,8 @@ public partial class InitWizardViewModel : ReactiveViewModel
             NotifyHealthCheckChanged();
         }
 
-        // Memory backend check
-        HealthCheckResults.Add(new HealthCheckItem("Memory backend", null));
-        NotifyHealthCheckChanged();
-        await Task.Delay(200);
-
-        if (SelectedMemoryBackend == "memorizer")
-        {
-            // For Memorizer, check reachability — degraded (not failed) if unreachable
-            var memorizerReachable = await ProbeMemorizerAsync();
-            HealthCheckResults[^1] = memorizerReachable
-                ? new HealthCheckItem("Memory backend (Memorizer connected)", true)
-                : new HealthCheckItem("Memorizer unreachable \u2014 memory will use local files", true); // warning, not failure
-        }
-        else
-        {
-            HealthCheckResults[^1] = new HealthCheckItem("Memory backend (local files)", true);
-        }
+        // Memory backend check — SQLite is the only backend
+        HealthCheckResults.Add(new HealthCheckItem("Memory backend (SQLite)", true));
         NotifyHealthCheckChanged();
 
         // Browser automation prerequisites (optional)
@@ -963,19 +877,13 @@ public partial class InitWizardViewModel : ReactiveViewModel
             config["Search"] = searchSection;
         }
 
-        // Memory section
-        config["Memory"] = new Dictionary<string, object>
-        {
-            ["Provider"] = SelectedMemoryBackend
-        };
-
         // Skill sync section
         config["SkillSync"] = new Dictionary<string, object>
         {
             ["DisableSystemSkillSync"] = false
         };
 
-        // MCP servers: browser automation + memorizer (both optional)
+        // MCP servers: browser automation (optional)
         var mcpServers = new Dictionary<string, object>();
 
         if (BrowserAutomationEnabled)
@@ -990,20 +898,6 @@ public partial class InitWizardViewModel : ReactiveViewModel
                 ["Enabled"] = entry.Enabled,
                 ["GrantCategory"] = entry.GrantCategory
             };
-        }
-
-        if (SelectedMemoryBackend == "memorizer")
-        {
-            var memorizerEntry = new Dictionary<string, object>
-            {
-                ["Enabled"] = true,
-                ["Transport"] = "http"
-            };
-
-            if (!string.IsNullOrWhiteSpace(MemorizerUrl))
-                memorizerEntry["Url"] = MemorizerUrl;
-
-            mcpServers["memorizer"] = memorizerEntry;
         }
 
         if (mcpServers.Count > 0)
@@ -1162,7 +1056,7 @@ public partial class InitWizardViewModel : ReactiveViewModel
             | Personal facts (name, family, preferences) | `SOUL.md` |
             | Operating rules, workflow preferences | `AGENTS.md` |
             | Environment capabilities, tool configs | `TOOLING.md` |
-            | World knowledge, project details, solutions | Memorizer (`search_memories`) |
+            | World knowledge, project details, solutions | Memory tools (`store_memory`, `find_memories`) |
             | Procedures, reusable workflows | Skill files in `{_paths.SkillsDirectory}/` |
 
             ## Skills
@@ -1293,8 +1187,6 @@ public partial class InitWizardViewModel : ReactiveViewModel
         IsProbing.Dispose();
         ProbeResult.Dispose();
         ProbeElapsedSeconds.Dispose();
-        IsMemorizerProbing.Dispose();
-        MemorizerProbeResult.Dispose();
         HealthCheckResultVersion.Dispose();
         OAuthFlowState.Dispose();
         base.Dispose();

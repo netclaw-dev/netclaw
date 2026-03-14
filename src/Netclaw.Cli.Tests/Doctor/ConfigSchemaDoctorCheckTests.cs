@@ -58,7 +58,8 @@ public sealed class ConfigSchemaDoctorCheckTests
             {
               "configVersion": 1,
               "Memory": {
-                "Provider": "memorizer"
+                "RecallTimeoutMs": 500,
+                "AutoRecallMaxItems": 5
               },
               "SubAgents": {
                 "DefaultTimeoutSeconds": 60,

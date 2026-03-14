@@ -41,7 +41,7 @@ public sealed class NetclawPaths
     public string MemoryDirectory => Path.Combine(BasePath, "memory");
     public string MemorySqliteDbPath => SqliteDbPath;
 
-    // Legacy file-backed memory path (kept until explicit tools are rewired)
+    // Legacy file-backed memory paths (kept for migration detection only)
     public string MemoriesDirectory => Path.Combine(BasePath, "memories");
     public string MemoryIndexPath => Path.Combine(MemoriesDirectory, "memory.md");
 

@@ -23,10 +23,8 @@ internal sealed class DaemonRuntimeStatusService(
     IOptions<TelemetryOptions> telemetryOptions,
     SessionConfig sessionConfig,
     ModelSelection modelSelection,
-    MemoryConfig memoryConfig,
     NetclawPaths paths,
     McpClientManager? mcpClientManager = null,
-    FileMemoryStore? fileMemoryStore = null,
     SQLiteMemoryStore? sqliteMemoryStore = null,
     IRequiredActor<ReminderManagerActorKey>? reminderManagerActor = null)
 {
@@ -232,97 +230,36 @@ internal sealed class DaemonRuntimeStatusService(
 
     private async Task<DaemonRuntimeStatus.Memory> BuildMemoryStatusAsync(CancellationToken ct)
     {
-        if (memoryConfig.Provider.Equals("sqlite", StringComparison.OrdinalIgnoreCase))
+        if (sqliteMemoryStore is null)
         {
-            if (sqliteMemoryStore is null)
-            {
-                return new DaemonRuntimeStatus.Memory
-                {
-                    Provider = "sqlite",
-                    Status = "unavailable",
-                    DatabasePath = paths.MemorySqliteDbPath
-                };
-            }
-
-            try
-            {
-                var pending = await sqliteMemoryStore.GetPendingCheckpointCountAsync(ct);
-                return new DaemonRuntimeStatus.Memory
-                {
-                    Provider = "sqlite",
-                    Status = "healthy",
-                    DatabasePath = paths.MemorySqliteDbPath,
-                    PendingCheckpoints = pending
-                };
-            }
-            catch
-            {
-                return new DaemonRuntimeStatus.Memory
-                {
-                    Provider = "sqlite",
-                    Status = "degraded",
-                    DatabasePath = paths.MemorySqliteDbPath
-                };
-            }
-        }
-
-        if (memoryConfig.Provider.Equals("memorizer", StringComparison.OrdinalIgnoreCase))
-        {
-            if (mcpClientManager is null)
-            {
-                return new DaemonRuntimeStatus.Memory
-                {
-                    Provider = "memorizer",
-                    Status = "unavailable"
-                };
-            }
-
-            var statuses = mcpClientManager.GetServerStatuses();
-            if (statuses.TryGetValue("memorizer", out var memorizer))
-            {
-                return memorizer.State switch
-                {
-                    McpConnectionState.Connected => new DaemonRuntimeStatus.Memory
-                    {
-                        Provider = "memorizer",
-                        Status = "healthy",
-                        ToolCount = memorizer.ToolCount
-                    },
-                    _ => new DaemonRuntimeStatus.Memory
-                    {
-                        Provider = "memorizer",
-                        Status = "degraded"
-                    }
-                };
-            }
-
             return new DaemonRuntimeStatus.Memory
             {
-                Provider = "memorizer",
-                Status = "unavailable"
+                Provider = "sqlite",
+                Status = "unavailable",
+                DatabasePath = paths.MemorySqliteDbPath
             };
         }
 
-        // File backend
-        if (fileMemoryStore is not null)
+        try
         {
-            var entries = await fileMemoryStore.GetEntriesAsync(ct);
+            var pending = await sqliteMemoryStore.GetPendingCheckpointCountAsync(ct);
             return new DaemonRuntimeStatus.Memory
             {
-                Provider = "files",
+                Provider = "sqlite",
                 Status = "healthy",
-                MemoryCount = entries.Count,
-                IndexPath = paths.MemoryIndexPath
+                DatabasePath = paths.MemorySqliteDbPath,
+                PendingCheckpoints = pending
             };
         }
-
-        return new DaemonRuntimeStatus.Memory
+        catch
         {
-            Provider = "files",
-            Status = "healthy",
-            MemoryCount = 0,
-            IndexPath = paths.MemoryIndexPath
-        };
+            return new DaemonRuntimeStatus.Memory
+            {
+                Provider = "sqlite",
+                Status = "degraded",
+                DatabasePath = paths.MemorySqliteDbPath
+            };
+        }
     }
 
     private async Task<DaemonRuntimeStatus.Reminders?> BuildReminderHealthAsync(CancellationToken ct)

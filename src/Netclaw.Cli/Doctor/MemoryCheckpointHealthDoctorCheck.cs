@@ -43,16 +43,6 @@ public sealed class MemoryCheckpointHealthDoctorCheck(NetclawPaths paths) : IDoc
         }
     }
 
-    private static bool UsesSqliteMemory(NetclawPaths paths)
-    {
-        var (root, readError) = DoctorJsonConfigReader.TryReadConfig(paths);
-        if (readError is not null)
-            return true;
-
-        var provider = root?["Memory"]?["Provider"]?.GetValue<string>();
-        if (string.IsNullOrWhiteSpace(provider))
-            return true;
-
-        return provider.Equals("sqlite", StringComparison.OrdinalIgnoreCase);
-    }
+    // SQLite is the only memory backend — always run the check.
+    private static bool UsesSqliteMemory(NetclawPaths paths) => true;
 }

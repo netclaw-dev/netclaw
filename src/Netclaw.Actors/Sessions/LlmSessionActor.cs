@@ -359,11 +359,11 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             StopProcessingWatchdog();
 
             var hasVerifiedToolFinding = msg.ToolResults.Any(r =>
-                r.Name is "web_search" or "webfetch" or "memorizer/search_memories");
+                r.Name is "web_search" or "webfetch");
             if (hasVerifiedToolFinding)
             {
                 var summarized = string.Join("\n", msg.ToolResults
-                    .Where(r => r.Name is "web_search" or "webfetch" or "memorizer/search_memories")
+                    .Where(r => r.Name is "web_search" or "webfetch")
                     .Take(2)
                     .Select(r => $"[{r.Name}] {r.Content}"));
 
