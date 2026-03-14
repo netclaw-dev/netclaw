@@ -310,18 +310,23 @@ internal sealed class SystemSkillSyncService : IHostedService
         _skillIndexLayer.Update(_skillRegistry.GenerateCompressedIndex());
         _logger.LogInformation("Skill index updated ({SkillCount} skills)", _skillRegistry.GetAll().Count);
 
-        // Enrich keywords for deterministic skill auto-loading (fire and forget)
-        _ = Task.Run(async () =>
+        // Enrich keywords for deterministic skill auto-loading (fire and forget).
+        // Requires a chat client provider for LLM-based enrichment; skipped in tests
+        // that use the internal constructor without a provider.
+        if (_chatClientProvider is not null)
         {
-            try
+            _ = Task.Run(async () =>
             {
-                await EnrichAllSkillsAsync();
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Skill keyword enrichment failed");
-            }
-        });
+                try
+                {
+                    await EnrichAllSkillsAsync();
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Skill keyword enrichment failed");
+                }
+            });
+        }
     }
 
     // ── Skill keyword enrichment ──
