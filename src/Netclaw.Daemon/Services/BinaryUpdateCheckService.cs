@@ -24,7 +24,7 @@ internal sealed class BinaryUpdateCheckService : IHostedService
     {
     }
 
-    // Internal constructor for testing — allows injecting a fake version
+    // Internal constructor for testing — accepts HttpClient directly
     internal BinaryUpdateCheckService(
         HttpClient httpClient,
         ILogger<BinaryUpdateCheckService> logger,

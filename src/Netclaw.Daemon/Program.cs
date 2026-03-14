@@ -384,15 +384,11 @@ static void ConfigureDaemonServices(
 
     // System skills feed sync — checks CDN for updated skills at startup.
     // Runs after initial skill scan; re-scans and updates the index if any skills changed.
+    // Also enriches skills with keyword indexes for deterministic auto-loading.
     // Never blocks startup on network failures.
     services.AddHttpClient<SystemSkillSyncService>(client =>
         client.Timeout = FeedConstants.FeedHttpTimeout);
     services.AddHostedService<SystemSkillSyncService>();
-
-    // Skill trigger enrichment — generates keyword indexes via sidecar LLM.
-    // Runs after skill scan; caches results per skill version.
-    services.AddSingleton<SkillTriggerEnrichmentService>();
-    services.AddHostedService(sp => sp.GetRequiredService<SkillTriggerEnrichmentService>());
 
     // Binary update check — logs a warning at startup if a newer version is available.
     // Never blocks startup, never downloads anything.
