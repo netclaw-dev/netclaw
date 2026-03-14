@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using Netclaw.Actors.Text;
 
 namespace Netclaw.Actors.Sessions;
 
@@ -22,20 +23,14 @@ public sealed record DeterministicRetrievalRequestPlan(
 
 public sealed class DeterministicRetrievalRequestPlanner
 {
-    private static readonly Regex TokenRegex = new("[A-Za-z0-9][A-Za-z0-9_-]*", RegexOptions.Compiled);
-    private static readonly HashSet<string> StopWords =
-    [
-        "a", "an", "and", "about", "are", "at", "be", "did", "do", "for", "from", "how", "i", "if", "in", "is", "it", "of", "on", "or", "the", "to", "we", "what", "when", "where", "with", "you"
-    ];
-
     public DeterministicRetrievalRequestPlan Plan(AutomaticRecallRequest request)
     {
         var hardScope = ResolveHardScope(request);
         var prompt = string.IsNullOrWhiteSpace(request.Query)
             ? request.RecentUserMessages.LastOrDefault() ?? string.Empty
             : request.Query;
-        var tokens = Tokenize(prompt).ToArray();
-        var bigrams = MakeBigrams(tokens).ToArray();
+        var tokens = TextTokenizer.Tokenize(prompt);
+        var bigrams = TextTokenizer.MakeBigrams(tokens);
         var anchorHints = InferAnchorHints(request, prompt, tokens).ToArray();
         var softScopes = InferSoftScopes(request, tokens, anchorHints).ToArray();
         var facets = InferFacets(tokens, bigrams, anchorHints).ToArray();
@@ -131,20 +126,4 @@ public sealed class DeterministicRetrievalRequestPlanner
         return wantsBundle ? DeterministicRetrievalMode.Bundle : DeterministicRetrievalMode.Ranked;
     }
 
-    private static IEnumerable<string> Tokenize(string text)
-    {
-        foreach (Match match in TokenRegex.Matches(text.ToLowerInvariant()))
-        {
-            var token = match.Value;
-            if (token.Length < 2 || StopWords.Contains(token))
-                continue;
-            yield return token;
-        }
-    }
-
-    private static IEnumerable<string> MakeBigrams(IReadOnlyList<string> tokens)
-    {
-        for (var i = 1; i < tokens.Count; i++)
-            yield return tokens[i - 1] + " " + tokens[i];
-    }
 }

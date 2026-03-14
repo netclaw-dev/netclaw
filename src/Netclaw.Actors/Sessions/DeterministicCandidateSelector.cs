@@ -1,15 +1,10 @@
-using System.Text.RegularExpressions;
 using Netclaw.Actors.Memory;
+using Netclaw.Actors.Text;
 
 namespace Netclaw.Actors.Sessions;
 
 public sealed class DeterministicCandidateSelector
 {
-    private static readonly Regex TokenRegex = new("[A-Za-z0-9][A-Za-z0-9_-]*", RegexOptions.Compiled);
-    private static readonly HashSet<string> StopWords =
-    [
-        "a", "an", "and", "about", "are", "at", "be", "for", "from", "how", "i", "if", "in", "is", "it", "of", "on", "or", "the", "to", "what", "when", "where", "with", "you"
-    ];
 
     public IReadOnlyList<SQLiteMemoryHydratedItem> Select(
         DeterministicRetrievalRequestPlan plan,
@@ -31,7 +26,7 @@ public sealed class DeterministicCandidateSelector
     {
         var score = 0.0;
         var text = (document.Title + " " + document.Content + " " + (document.AliasesJson ?? string.Empty) + " " + (document.FacetsJson ?? string.Empty)).ToLowerInvariant();
-        var tokens = Tokenize(text).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var tokens = TextTokenizer.Tokenize(text).ToHashSet(StringComparer.OrdinalIgnoreCase);
 
         foreach (var term in plan.LexicalTerms)
             if (tokens.Contains(term))
@@ -54,14 +49,4 @@ public sealed class DeterministicCandidateSelector
         return score;
     }
 
-    private static IEnumerable<string> Tokenize(string text)
-    {
-        foreach (Match match in TokenRegex.Matches(text))
-        {
-            var token = match.Value.ToLowerInvariant();
-            if (token.Length < 2 || StopWords.Contains(token))
-                continue;
-            yield return token;
-        }
-    }
 }

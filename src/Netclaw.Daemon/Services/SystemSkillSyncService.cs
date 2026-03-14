@@ -24,6 +24,7 @@ internal sealed class SystemSkillSyncService : IHostedService
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<SystemSkillSyncService> _logger;
     private readonly string _daemonVersion;
+    private readonly SkillTriggerEnrichmentService? _enrichmentService;
 
     public SystemSkillSyncService(
         HttpClient httpClient,
@@ -32,8 +33,9 @@ internal sealed class SystemSkillSyncService : IHostedService
         SkillRegistry skillRegistry,
         SkillIndexContextLayer skillIndexLayer,
         TimeProvider timeProvider,
-        ILogger<SystemSkillSyncService> logger)
-        : this(httpClient, paths, skillSyncConfig, skillRegistry, skillIndexLayer, timeProvider, logger, BuildInfo.Version)
+        ILogger<SystemSkillSyncService> logger,
+        SkillTriggerEnrichmentService? enrichmentService = null)
+        : this(httpClient, paths, skillSyncConfig, skillRegistry, skillIndexLayer, timeProvider, logger, BuildInfo.Version, enrichmentService)
     {
     }
 
@@ -46,7 +48,8 @@ internal sealed class SystemSkillSyncService : IHostedService
         SkillIndexContextLayer skillIndexLayer,
         TimeProvider timeProvider,
         ILogger<SystemSkillSyncService> logger,
-        string daemonVersion)
+        string daemonVersion,
+        SkillTriggerEnrichmentService? enrichmentService = null)
     {
         _httpClient = httpClient;
         _paths = paths;
@@ -56,6 +59,7 @@ internal sealed class SystemSkillSyncService : IHostedService
         _timeProvider = timeProvider;
         _logger = logger;
         _daemonVersion = daemonVersion;
+        _enrichmentService = enrichmentService;
     }
 
     public async Task StartAsync(CancellationToken cancellationToken)
@@ -297,6 +301,10 @@ internal sealed class SystemSkillSyncService : IHostedService
 
         _skillIndexLayer.Update(_skillRegistry.GenerateCompressedIndex());
         _logger.LogInformation("Skill index updated ({SkillCount} skills)", _skillRegistry.GetAll().Count);
+
+        // Trigger keyword enrichment for auto-loading (fire and forget)
+        if (_enrichmentService is not null)
+            _ = _enrichmentService.EnrichAllAsync();
     }
 
     internal static string ComputeSha256(string content)

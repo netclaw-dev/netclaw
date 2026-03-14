@@ -1,4 +1,5 @@
 using System.Text;
+using Netclaw.Actors.Text;
 using Netclaw.Configuration;
 
 namespace Netclaw.Actors.Skills;
@@ -10,6 +11,7 @@ namespace Netclaw.Actors.Skills;
 public sealed class SkillRegistry
 {
     private readonly List<SkillEntry> _skills = new();
+    private readonly Dictionary<string, HashSet<string>> _enrichedKeywords = new(StringComparer.OrdinalIgnoreCase);
 
     public void Register(SkillEntry skill)
     {
@@ -23,9 +25,25 @@ public sealed class SkillRegistry
     public void Clear()
     {
         _skills.Clear();
+        _enrichedKeywords.Clear();
     }
 
     public IReadOnlyList<SkillEntry> GetAll() => _skills;
+
+    /// <summary>
+    /// Store enriched keywords for a skill. Called by the enrichment service
+    /// after sidecar LLM generates keywords from the skill's content.
+    /// </summary>
+    public void SetEnrichedKeywords(string skillName, HashSet<string> keywords)
+    {
+        _enrichedKeywords[skillName] = keywords;
+    }
+
+    /// <summary>
+    /// Get all enriched keyword sets indexed by skill name.
+    /// </summary>
+    public IReadOnlyDictionary<string, HashSet<string>> GetEnrichedKeywords()
+        => _enrichedKeywords;
 
     /// <summary>
     /// Case-insensitive substring search against name, display name, and description.
@@ -43,6 +61,45 @@ public sealed class SkillRegistry
                 || s.DisplayName.Contains(queryLower, StringComparison.OrdinalIgnoreCase)
                 || s.Description.Contains(queryLower, StringComparison.OrdinalIgnoreCase)
                 || (s.Triggers is not null && s.Triggers.Contains(queryLower, StringComparison.OrdinalIgnoreCase)))
+            .Take(maxResults)
+            .ToList();
+    }
+
+    /// <summary>
+    /// Score each skill's enriched keywords against user message tokens using
+    /// set intersection. Returns skills with overlap count >= threshold,
+    /// sorted by score descending. Skills without enriched keywords are skipped.
+    /// </summary>
+    public IReadOnlyList<(SkillEntry Skill, int Score)> MatchByKeywords(
+        string userMessage,
+        IReadOnlySet<string>? excludeNames = null,
+        int threshold = 2,
+        int maxResults = 3)
+    {
+        if (string.IsNullOrWhiteSpace(userMessage) || _enrichedKeywords.Count == 0)
+            return [];
+
+        var userTokens = TextTokenizer.Tokenize(userMessage).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (userTokens.Count == 0)
+            return [];
+
+        var candidates = new List<(SkillEntry Skill, int Score)>();
+
+        foreach (var skill in _skills)
+        {
+            if (excludeNames is not null && excludeNames.Contains(skill.Name))
+                continue;
+
+            if (!_enrichedKeywords.TryGetValue(skill.Name, out var keywords))
+                continue;
+
+            var overlap = userTokens.Count(t => keywords.Contains(t));
+            if (overlap >= threshold)
+                candidates.Add((skill, overlap));
+        }
+
+        return candidates
+            .OrderByDescending(c => c.Score)
             .Take(maxResults)
             .ToList();
     }
