@@ -5,8 +5,7 @@ namespace Netclaw.Actors.Sessions;
 /// The session actor fires a memory extraction LLM call and passes the result
 /// to this interface for durable storage.
 ///
-/// Implementations may write to local memory files, MCP Memorizer, or other
-/// persistence backends.
+/// Implementations write to the SQLite memory store.
 /// </summary>
 public interface IMemoryExtractor
 {

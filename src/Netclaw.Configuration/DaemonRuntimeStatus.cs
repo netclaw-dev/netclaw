@@ -130,14 +130,6 @@ public static class DaemonRuntimeStatus
 
         public required string Status { get; init; }
 
-        public int? MemoryCount { get; init; }
-
-        public string? IndexPath { get; init; }
-
-        public string? Endpoint { get; init; }
-
-        public int? ToolCount { get; init; }
-
         public string? DatabasePath { get; init; }
 
         public int? PendingCheckpoints { get; init; }

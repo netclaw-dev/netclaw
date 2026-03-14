@@ -8,7 +8,7 @@ internal sealed class FakeNetclawTool : INetclawTool
 {
     private readonly string _result;
 
-    public FakeNetclawTool(string name, string result, string grantCategory = "mcp:memorizer")
+    public FakeNetclawTool(string name, string result, string grantCategory = "builtin")
     {
         Name = name;
         _result = result;

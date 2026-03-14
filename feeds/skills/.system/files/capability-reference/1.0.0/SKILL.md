@@ -170,7 +170,6 @@ scheduled work back to the originating conversation.
 ## Cross-References
 
 - Memory tool usage: read `memory-usage`
-- Memorizer MCP operations: read `memorizer-usage`
 - Troubleshooting and diagnostics: read `self-diagnostics`
 - Identity file management: read `identity-management`
 - Creating new skills: read `skill-authoring`

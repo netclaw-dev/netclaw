@@ -154,8 +154,7 @@ feature area, the corresponding skill **must** be updated in the same PR.
 | Feature area changed | Skill to update |
 |----------------------|-----------------|
 | Identity files, SOUL/AGENTS/TOOLING paths, progressive disclosure | `identity-management` |
-| Memory provider routing, file-backed memory tools, general memory guidance | `memory-usage` |
-| Memorizer MCP server, workspaces/projects/relationships, subagent memory | `memorizer-usage` |
+| Memory provider routing, SQLite memory tools, general memory guidance | `memory-usage` |
 | Config format, daemon health, logs, MCP wiring, diagnostics CLI, doctor | `self-diagnostics` |
 | Skill file format, discovery, authoring workflow | `skill-authoring` |
 | Tool definitions, CLI commands, grant categories, search_tools, scheduling tools | `capability-reference` |

@@ -917,7 +917,7 @@ public sealed class InitWizardViewModelTests : IDisposable
     }
 
     [Fact]
-    public async Task HealthCheck_DefaultMemoryBackend_IsSqlite()
+    public async Task HealthCheck_MemoryBackend_IsSqlite_NoProviderInConfig()
     {
         using var vm = CreateViewModel();
         vm.SelectedProviderType = "ollama";
@@ -928,78 +928,19 @@ public sealed class InitWizardViewModelTests : IDisposable
         await vm.HealthCheckCompletion!.WaitAsync(TimeSpan.FromSeconds(5));
 
         var config = JsonDocument.Parse(File.ReadAllText(_paths.NetclawConfigPath));
-        Assert.True(config.RootElement.TryGetProperty("Memory", out var memory));
-        Assert.Equal("sqlite", memory.GetProperty("Provider").GetString());
-    }
+        // Memory section should not exist — SQLite is the implicit default
+        Assert.False(config.RootElement.TryGetProperty("Memory", out _));
 
-    [Fact]
-    public async Task HealthCheck_FilesMemoryBackend_WritesMemoryProvider()
-    {
-        using var vm = CreateViewModel();
-        vm.SelectedProviderType = "ollama";
-        vm.SlackEnabled = false;
-        vm.SelectedMemoryBackend = "files";
-
-        vm.CurrentStep.Value = WizardStep.HealthCheck;
-        vm.GoNext();
-        await vm.HealthCheckCompletion!.WaitAsync(TimeSpan.FromSeconds(5));
-        Assert.True(vm.IsComplete.Value);
-
-        var config = JsonDocument.Parse(File.ReadAllText(_paths.NetclawConfigPath));
-        Assert.True(config.RootElement.TryGetProperty("Memory", out var memory));
-        Assert.Equal("files", memory.GetProperty("Provider").GetString());
-
-        // No McpServers.memorizer when using file backend
+        // No McpServers.memorizer
         if (config.RootElement.TryGetProperty("McpServers", out var mcpServers))
             Assert.False(mcpServers.TryGetProperty("memorizer", out _));
-    }
 
-    [Fact]
-    public async Task HealthCheck_MemorizerBackend_WritesMemoryAndMcpServer()
-    {
-        using var vm = CreateViewModel();
-        vm.SelectedProviderType = "ollama";
-        vm.SlackEnabled = false;
-        vm.SelectedMemoryBackend = "memorizer";
-        vm.MemorizerUrl = "http://localhost:5012/mcp";
-
-        vm.CurrentStep.Value = WizardStep.HealthCheck;
-        vm.GoNext();
-        await vm.HealthCheckCompletion!.WaitAsync(TimeSpan.FromSeconds(5));
-        Assert.True(vm.IsComplete.Value);
-
-        var config = JsonDocument.Parse(File.ReadAllText(_paths.NetclawConfigPath));
-        Assert.True(config.RootElement.TryGetProperty("Memory", out var memory));
-        Assert.Equal("memorizer", memory.GetProperty("Provider").GetString());
-
-        Assert.True(config.RootElement.TryGetProperty("McpServers", out var mcpServers));
-        Assert.True(mcpServers.TryGetProperty("memorizer", out var memorizer));
-        Assert.Equal("http", memorizer.GetProperty("Transport").GetString());
-        Assert.Equal("http://localhost:5012/mcp", memorizer.GetProperty("Url").GetString());
-        Assert.True(memorizer.GetProperty("Enabled").GetBoolean());
-    }
-
-    [Fact]
-    public async Task HealthCheck_MemorizerUnreachable_ReportsDegradedNotFailed()
-    {
-        using var vm = CreateViewModel();
-        vm.SelectedProviderType = "ollama";
-        vm.SlackEnabled = false;
-        vm.SelectedMemoryBackend = "memorizer";
-        vm.MemorizerUrl = "http://unreachable-host:9999/mcp";
-
-        vm.CurrentStep.Value = WizardStep.HealthCheck;
-        vm.GoNext();
-        await vm.HealthCheckCompletion!.WaitAsync(TimeSpan.FromSeconds(15));
-        Assert.True(vm.IsComplete.Value);
-
+        // Health check should show SQLite
         var memoryCheck = vm.HealthCheckResults
-            .FirstOrDefault(h => h.Label.Contains("Memorizer", StringComparison.OrdinalIgnoreCase)
-                || h.Label.Contains("Memory", StringComparison.OrdinalIgnoreCase));
+            .FirstOrDefault(h => h.Label.Contains("Memory", StringComparison.OrdinalIgnoreCase));
         Assert.NotNull(memoryCheck);
-        // Degraded = Passed is true (warning), not false (failure)
         Assert.True(memoryCheck.Passed);
-        Assert.Contains("local files", memoryCheck.Label, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("SQLite", memoryCheck.Label, StringComparison.Ordinal);
     }
 
     [Fact]

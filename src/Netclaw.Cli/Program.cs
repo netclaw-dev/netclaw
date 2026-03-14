@@ -965,14 +965,7 @@ static void WriteStatusResult(DaemonRuntimeStatus.Response status, string endpoi
 
     if (status.Memory is { } memory)
     {
-        var memoryDetail = memory.Provider switch
-        {
-            "files" => $"files ({memory.Status}, {memory.MemoryCount ?? 0} memories, index: {memory.IndexPath})",
-            "memorizer" when memory.Status is "healthy" =>
-                $"memorizer ({memory.Status}{(memory.ToolCount is > 0 ? $", {memory.ToolCount} tools" : "")})",
-            "memorizer" => $"memorizer ({memory.Status})",
-            _ => $"{memory.Provider} ({memory.Status})"
-        };
+        var memoryDetail = $"{memory.Provider} ({memory.Status})";
         Console.WriteLine($"memory: {memoryDetail}");
     }
 

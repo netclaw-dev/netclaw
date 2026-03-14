@@ -67,19 +67,6 @@ public sealed class MemoryCheckpointHealthDoctorCheckTests
         Assert.Contains("pending checkpoints", result.Message, StringComparison.OrdinalIgnoreCase);
     }
 
-    [Fact]
-    public async Task Passes_WhenMemoryProviderIsNotSqlite()
-    {
-        var paths = CreateTempPaths();
-        WriteMemoryProvider(paths, "memorizer");
-
-        var check = new MemoryCheckpointHealthDoctorCheck(paths);
-        var result = await check.RunAsync();
-
-        Assert.Equal(DoctorSeverity.Pass, result.Severity);
-        Assert.Contains("not SQLite", result.Message, StringComparison.OrdinalIgnoreCase);
-    }
-
     private static NetclawPaths CreateTempPaths()
     {
         var basePath = Path.Combine(Path.GetTempPath(), "netclaw-tests", Guid.NewGuid().ToString("N"));
