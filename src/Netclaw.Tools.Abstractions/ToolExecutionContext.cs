@@ -26,6 +26,7 @@ public sealed record SubAgentNotificationInfo
 /// </summary>
 public sealed record SubAgentFindingCandidate
 {
+    public string Shape { get; init; } = "conclusion";
     public required string Title { get; init; }
     public required string Content { get; init; }
     public string Kind { get; init; } = "record";
@@ -34,6 +35,9 @@ public sealed record SubAgentFindingCandidate
     public string RecallMode { get; init; } = "auto";
     public string UpdateSemantics { get; init; } = "append-document";
     public double Confidence { get; init; } = 0.7;
+    public string Durability { get; init; } = "durable";
+    public string Reusability { get; init; } = "reusable";
+    public IReadOnlyList<string> Evidence { get; init; } = [];
     public long? FreshnessAtMs { get; init; }
 }
 

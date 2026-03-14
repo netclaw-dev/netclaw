@@ -122,6 +122,7 @@ public sealed class SubAgentSpawner
                 Findings = result.Findings
                     .Select(f => new SubAgentFindingCandidate
                     {
+                        Shape = f.Shape,
                         Title = f.Title,
                         Content = f.Content,
                         Kind = f.Kind,
@@ -130,6 +131,9 @@ public sealed class SubAgentSpawner
                         RecallMode = f.RecallMode,
                         UpdateSemantics = f.UpdateSemantics,
                         Confidence = f.Confidence,
+                        Durability = f.Durability,
+                        Reusability = f.Reusability,
+                        Evidence = f.Evidence,
                         FreshnessAtMs = f.FreshnessAtMs
                     })
                     .ToArray()

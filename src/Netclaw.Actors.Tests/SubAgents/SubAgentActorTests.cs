@@ -225,7 +225,11 @@ public class SubAgentActorTests : TestKit
 
         Assert.True(result.Success);
         Assert.Single(result.Findings);
+        Assert.Equal("conclusion", result.Findings[0].Shape);
         Assert.Equal("subagent:test-agent", result.Findings[0].Title);
+        Assert.Equal("durable", result.Findings[0].Durability);
+        Assert.Equal("reusable", result.Findings[0].Reusability);
+        Assert.Equal("searchable", result.Findings[0].RecallMode);
     }
 
     /// <summary>

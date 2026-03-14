@@ -440,6 +440,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                         Title: finding.Title,
                         Kind: finding.Kind,
                         UpdateSemantics: finding.UpdateSemantics,
+                        Evidence: finding.Evidence,
                         FreshnessAtMs: finding.FreshnessAtMs)));
             }
 
@@ -1863,7 +1864,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
                 if (info.Success && info.Findings.Count == 1)
                 {
-                    var singleDecision = EvaluateSubAgentFindingDecision(info.Findings[0], sessionId.Value);
+                    var singleDecision = ReviewSubAgentFinding(info.Findings[0], sessionId.Value);
                     decision = singleDecision.Decision;
                     reason = singleDecision.Reason;
                 }
@@ -1884,12 +1885,13 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             {
                 foreach (var finding in info.Findings)
                 {
-                    var decision = EvaluateSubAgentFindingDecision(finding, sessionId.Value);
+                    var decision = ReviewSubAgentFinding(finding, sessionId.Value);
                     acceptedFindings.Add(new AcceptedSubAgentFinding
                     {
                         RunId = info.RunId,
                         AgentName = info.AgentName,
                         Duration = info.Duration,
+                        Shape = finding.Shape,
                         Title = finding.Title,
                         Content = finding.Content,
                         Kind = finding.Kind,
@@ -1898,6 +1900,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                         RecallMode = finding.RecallMode,
                         UpdateSemantics = finding.UpdateSemantics,
                         Confidence = finding.Confidence,
+                        Durability = finding.Durability,
+                        Reusability = finding.Reusability,
+                        Evidence = finding.Evidence,
                         FreshnessAtMs = finding.FreshnessAtMs,
                         Decision = decision.Decision,
                         DecisionReason = decision.Reason
@@ -1953,15 +1958,31 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             acceptedFindings);
     }
 
-    private static (string Decision, string? Reason) EvaluateSubAgentFindingDecision(
+    internal static (string Decision, string? Reason) ReviewSubAgentFinding(
         SubAgentFindingCandidate finding,
         string sessionId)
     {
+        if (string.IsNullOrWhiteSpace(finding.Title))
+            return ("deferred", "missing title");
+
         if (string.IsNullOrWhiteSpace(finding.Content))
             return ("rejected", "empty content");
 
+        if (!string.Equals(finding.Shape, "conclusion", StringComparison.OrdinalIgnoreCase))
+            return ("rejected", "unsupported shape");
+
+        if (string.IsNullOrWhiteSpace(finding.Durability))
+            return ("deferred", "missing durability");
+
+        if (string.IsNullOrWhiteSpace(finding.Reusability))
+            return ("deferred", "missing reusability");
+
         if (string.Equals(finding.RecallMode, "never", StringComparison.OrdinalIgnoreCase))
             return ("rejected", "recallMode=never");
+
+        if (!string.Equals(finding.Kind, "record", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(finding.Kind, "document", StringComparison.OrdinalIgnoreCase))
+            return ("deferred", "unsupported kind");
 
         if (string.Equals(finding.Sensitivity, "secret", StringComparison.OrdinalIgnoreCase)
             && string.Equals(finding.RecallMode, "auto", StringComparison.OrdinalIgnoreCase))
@@ -1970,6 +1991,12 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         var expectedDomain = ResolveDomainFromSession(sessionId);
         if (!string.Equals(finding.Domain, expectedDomain, StringComparison.OrdinalIgnoreCase))
             return ("deferred", $"domain mismatch: expected {expectedDomain}");
+
+        if (!string.Equals(finding.Durability, "durable", StringComparison.OrdinalIgnoreCase))
+            return ("deferred", "insufficient durability");
+
+        if (!string.Equals(finding.Reusability, "reusable", StringComparison.OrdinalIgnoreCase))
+            return ("deferred", "insufficient reusability");
 
         if (finding.Confidence < 0.55)
             return ("deferred", "low confidence");

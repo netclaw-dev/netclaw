@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "feedType": "system",
-  "updatedAt": "2026-03-14T17:19:25Z",
+  "updatedAt": "2026-03-15T12:48:25Z",
   "skills": [
     {
       "name": "netclaw-diagnostics",
@@ -27,8 +27,8 @@
       "name": "netclaw-manual",
       "version": "1.0.0",
       "minimumDaemonVersion": "0.1.0",
-      "sha256": "1d6947c7e6b9e591559af35b9251da33733a93422879e1fa0d43da23386e329b",
-      "sizeBytes": 8562,
+      "sha256": "1da8293e5dea4751857754d5cde3ec1dade0a00b8f7cb62bdee8c4d6738bb540",
+      "sizeBytes": 8749,
       "url": "https://feeds.netclaw.dev/skills/.system/files/netclaw-manual/1.0.0/SKILL.md",
       "category": null,
       "description": "Netclaw Manual. Read when the user is asking what Netclaw can do, which command/tool to use, how to schedule work, switch models, manage providers, or discover available capabilities."

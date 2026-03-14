@@ -263,14 +263,18 @@ public sealed class SubAgentActor : ReceiveActor
         [
             new SubAgentFinding
             {
+                Shape = "conclusion",
                 Title = $"subagent:{_definition.Name}",
                 Content = normalized,
                 Kind = "record",
                 Domain = domain,
                 Sensitivity = "normal",
-                RecallMode = "auto",
+                RecallMode = "searchable",
                 UpdateSemantics = "append-document",
-                Confidence = confidence
+                Confidence = confidence,
+                Durability = "durable",
+                Reusability = "reusable",
+                Evidence = []
             }
         ];
     }
