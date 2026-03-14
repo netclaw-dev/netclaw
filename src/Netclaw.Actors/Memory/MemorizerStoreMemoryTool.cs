@@ -145,12 +145,16 @@ public sealed partial class MemorizerStoreMemoryTool : NetclawTool<MemorizerStor
             Name = "memory-curator",
             SystemPrompt = CurationPrompt,
             Tools = tools,
-            ModelRole = ModelRole.Compaction
+            ModelRole = ModelRole.Compaction,
+            EmitStructuredFindings = true
         };
+
+        var runId = System.Guid.NewGuid().ToString("N");
 
         // Notify session that subagent is starting
         context.OnSubAgentActivity?.Invoke(new SubAgentNotificationInfo
         {
+            RunId = runId,
             AgentName = definition.Name,
             IsStarted = true,
             ToolCount = tools.Count
@@ -159,8 +163,8 @@ public sealed partial class MemorizerStoreMemoryTool : NetclawTool<MemorizerStor
         var task = FormatTask(args);
         var chatClient = _clientProvider.GetClient(definition.ModelRole);
         var subAgentScopeId = !string.IsNullOrWhiteSpace(context.SessionId)
-            ? $"{context.SessionId}/subagent/{definition.Name}/{System.Guid.NewGuid():N}"
-            : $"subagent/{definition.Name}/{System.Guid.NewGuid():N}";
+            ? $"{context.SessionId}/subagent/{definition.Name}/{runId}"
+            : $"subagent/{definition.Name}/{runId}";
 
         // Spawn subagent as a top-level actor (not tied to a session)
         var subAgent = _actorSystem.ActorOf(
@@ -175,7 +179,8 @@ public sealed partial class MemorizerStoreMemoryTool : NetclawTool<MemorizerStor
                 {
                     Task = task,
                     Timeout = subAgentTimeout,
-                    SessionScopeId = subAgentScopeId
+                    SessionScopeId = subAgentScopeId,
+                    Cancellation = ct
                 },
                 timeout: subAgentTimeout.Add(TimeSpan.FromSeconds(5)), // slightly longer than subagent timeout
                 cancellationToken: ct);
@@ -185,6 +190,7 @@ public sealed partial class MemorizerStoreMemoryTool : NetclawTool<MemorizerStor
             // Notify session that subagent completed
             context.OnSubAgentActivity?.Invoke(new SubAgentNotificationInfo
             {
+                RunId = runId,
                 AgentName = definition.Name,
                 IsStarted = false,
                 Success = result.Success,
@@ -221,8 +227,11 @@ public sealed partial class MemorizerStoreMemoryTool : NetclawTool<MemorizerStor
         {
             sw.Stop();
 
+            TryStopSubAgent(subAgent);
+
             context.OnSubAgentActivity?.Invoke(new SubAgentNotificationInfo
             {
+                RunId = runId,
                 AgentName = definition.Name,
                 IsStarted = false,
                 Success = false,
@@ -245,6 +254,11 @@ public sealed partial class MemorizerStoreMemoryTool : NetclawTool<MemorizerStor
         }
 
         return tools;
+    }
+
+    private static void TryStopSubAgent(IActorRef subAgent)
+    {
+        subAgent.Tell(PoisonPill.Instance);
     }
 
     private static string FormatTask(Params args)

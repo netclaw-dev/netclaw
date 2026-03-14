@@ -28,7 +28,8 @@ public class SubAgentActorTests : TestKit
         {
             Name = "test-agent",
             SystemPrompt = "You are a test agent.",
-            Tools = tools ?? []
+            Tools = tools ?? [],
+            EmitStructuredFindings = false
         };
     }
 
@@ -191,13 +192,31 @@ public class SubAgentActorTests : TestKit
     }
 
     [Fact]
-    public async Task Long_text_response_emits_structured_finding()
+    public async Task Long_text_response_does_not_emit_findings_by_default()
     {
         var fakeClient = new FakeChatClient
         {
             ResponseText = "This is a durable subagent summary with enough detail to be considered a memory candidate for parent-session checkpoint review."
         };
         var definition = CreateDefinition();
+        var agent = Sys.ActorOf(SubAgentActor.CreateProps(definition, fakeClient));
+
+        var result = await agent.Ask<SubAgentResult>(
+            new RunSubAgent { Task = "Summarize research", Timeout = TimeSpan.FromSeconds(5) },
+            TimeSpan.FromSeconds(5));
+
+        Assert.True(result.Success);
+        Assert.Empty(result.Findings);
+    }
+
+    [Fact]
+    public async Task Long_text_response_emits_findings_when_enabled()
+    {
+        var fakeClient = new FakeChatClient
+        {
+            ResponseText = "This is a durable subagent summary with enough detail to be considered a memory candidate for parent-session checkpoint review."
+        };
+        var definition = CreateDefinition() with { EmitStructuredFindings = true };
         var agent = Sys.ActorOf(SubAgentActor.CreateProps(definition, fakeClient));
 
         var result = await agent.Ask<SubAgentResult>(

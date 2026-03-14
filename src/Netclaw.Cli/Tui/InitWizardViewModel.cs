@@ -1012,6 +1012,9 @@ public partial class InitWizardViewModel : ReactiveViewModel
         // Write identity files
         WriteIdentityFiles();
 
+        // Seed default subagent definitions
+        SeedBuiltInAgents();
+
         // Write netclaw.json
         var jsonOptions = new JsonSerializerOptions { WriteIndented = true };
         File.WriteAllText(_paths.NetclawConfigPath,
@@ -1181,6 +1184,102 @@ public partial class InitWizardViewModel : ReactiveViewModel
 
             No capabilities discovered yet. Run `netclaw doctor` or ask Netclaw to probe your environment.
             """);
+    }
+
+    /// <summary>
+    /// Seeds default subagent definition files to the agents directory.
+    /// Does not overwrite existing files so operator customizations are preserved.
+    /// </summary>
+    internal void SeedBuiltInAgents()
+    {
+        var agentsDir = _paths.AgentsDirectory;
+        Directory.CreateDirectory(agentsDir);
+
+        SeedAgentFile(agentsDir, "research-assistant.json", """
+            {
+              "name": "research-assistant",
+              "description": "Deep web research with search and citation",
+              "systemPromptFile": "research-assistant.md",
+              "tools": ["web_search", "web_fetch", "file_read", "attach_file"],
+              "modelRole": "Compaction",
+              "timeoutSeconds": 120
+            }
+            """);
+
+        SeedAgentFile(agentsDir, "research-assistant.md", """
+            You are a research assistant. Your job is to help the user by searching the
+            web, gathering information from multiple sources, and synthesizing findings
+            into clear, well-organized summaries.
+
+            ## Guidelines
+
+            - Search for information using web_search, then fetch relevant pages with web_fetch.
+            - Cross-reference multiple sources when possible.
+            - Always cite your sources with URLs.
+            - Use file_read to inspect local reference material when needed.
+            - Use attach_file when the parent session needs to deliver an existing file.
+            - Be thorough but concise — focus on facts and actionable information.
+            - Use markdown formatting for structure (headers, lists, code blocks).
+            - If a search returns no useful results, say so rather than guessing.
+            """);
+
+        SeedAgentFile(agentsDir, "code-analyst.json", """
+            {
+              "name": "code-analyst",
+              "description": "Analyze code, run commands, and review files",
+              "systemPromptFile": "code-analyst.md",
+              "tools": ["file_read"],
+              "modelRole": "Compaction",
+              "timeoutSeconds": 120
+            }
+            """);
+
+        SeedAgentFile(agentsDir, "code-analyst.md", """
+            You are a code analyst. Your job is to read source code, run build and test
+            commands, and provide clear analysis of code quality, structure, and issues.
+
+            ## Guidelines
+
+            - Read files with file_read to understand code structure.
+            - Report findings with file paths and line numbers.
+            - Focus on actionable observations — bugs, performance issues, design concerns.
+            - Use markdown formatting with code blocks for examples.
+            - Do not modify code or run commands directly; return analysis for the parent session to act on.
+            """);
+
+        SeedAgentFile(agentsDir, "summarizer.json", """
+            {
+              "name": "summarizer",
+              "description": "Summarize documents and content concisely",
+              "systemPromptFile": "summarizer.md",
+              "tools": ["file_read"],
+              "modelRole": "Compaction",
+              "timeoutSeconds": 60
+            }
+            """);
+
+        SeedAgentFile(agentsDir, "summarizer.md", """
+            You are a summarizer. Your job is to read content and produce concise,
+            structured summaries that capture the essential information.
+
+            ## Guidelines
+
+            - Focus on key facts, decisions, and action items.
+            - Use bullet points and headers for scannable structure.
+            - Preserve important details like names, dates, numbers, and links.
+            - Omit filler, repetition, and low-signal content.
+            - Keep summaries under 500 words unless the source material is very long.
+            - If summarizing code, highlight the main purpose, public API, and key patterns.
+            """);
+    }
+
+    private static void SeedAgentFile(string directory, string fileName, string content)
+    {
+        var path = Path.Combine(directory, fileName);
+        if (File.Exists(path))
+            return; // Do not overwrite operator customizations
+
+        File.WriteAllText(path, content);
     }
 
     public override void Dispose()

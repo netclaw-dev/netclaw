@@ -207,6 +207,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         });
 
         Command<ProcessingWatchdogExpired>(_ => { });
+        Command<SpawnChildActorRequest>(msg => Sender.Tell(Context.ActorOf(msg.Props, msg.ActorName)));
 
         Command<SendUserMessage>(cmd =>
         {
@@ -391,19 +392,27 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                         UpdateSemantics: "immutable-record")));
             }
 
+            var emittedRunIds = new HashSet<string>(StringComparer.Ordinal);
             foreach (var finding in msg.AcceptedSubAgentFindings)
             {
-                EmitOutput(new SubAgentOutput
+                if (emittedRunIds.Add(finding.RunId))
                 {
-                    SessionId = _sessionId,
-                    AgentName = finding.AgentName,
-                    Phase = Netclaw.Actors.SubAgents.SubAgentPhase.Completed,
-                    Success = true,
-                    Duration = finding.Duration,
-                    MemoryDecision = finding.Decision,
-                    MemoryDecisionReason = finding.DecisionReason,
-                    FindingsCount = 1
-                }, OutputFilter.ToolCalls);
+                    var runSummary = msg.CompletedSubAgentRuns
+                        .FirstOrDefault(x => string.Equals(x.RunId, finding.RunId, StringComparison.Ordinal));
+
+                    EmitOutput(new SubAgentOutput
+                    {
+                        SessionId = _sessionId,
+                        TimestampMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
+                        AgentName = finding.AgentName,
+                        Phase = Netclaw.Actors.SubAgents.SubAgentPhase.Completed,
+                        Success = true,
+                        Duration = finding.Duration,
+                        MemoryDecision = finding.Decision,
+                        MemoryDecisionReason = finding.DecisionReason,
+                        FindingsCount = runSummary?.FindingsCount ?? 1
+                    }, OutputFilter.ToolCalls);
+                }
 
                 if (!string.Equals(finding.Decision, "accepted", StringComparison.OrdinalIgnoreCase))
                     continue;
@@ -432,6 +441,25 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                         Kind: finding.Kind,
                         UpdateSemantics: finding.UpdateSemantics,
                         FreshnessAtMs: finding.FreshnessAtMs)));
+            }
+
+            foreach (var run in msg.CompletedSubAgentRuns)
+            {
+                if (!emittedRunIds.Add(run.RunId))
+                    continue;
+
+                EmitOutput(new SubAgentOutput
+                {
+                    SessionId = _sessionId,
+                    TimestampMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
+                    AgentName = run.AgentName,
+                    Phase = Netclaw.Actors.SubAgents.SubAgentPhase.Completed,
+                    Success = run.Success,
+                    Duration = run.Duration,
+                    MemoryDecision = run.MemoryDecision,
+                    MemoryDecisionReason = run.MemoryDecisionReason,
+                    FindingsCount = run.FindingsCount
+                }, OutputFilter.ToolCalls);
             }
 
             // Add tool results to history and log each result
@@ -527,6 +555,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             StopProcessingWatchdog();
             FailCurrentTurn("I encountered a timeout while processing your message. Please try again.", timeoutCause, ErrorCategory.Timeout);
         });
+
+        Command<SpawnChildActorRequest>(msg => Sender.Tell(Context.ActorOf(msg.Props, msg.ActorName)));
     }
 
     private void Compacting()
@@ -545,6 +575,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         });
 
         Command<ProcessingWatchdogExpired>(_ => { });
+        Command<SpawnChildActorRequest>(msg => Sender.Tell(Context.ActorOf(msg.Props, msg.ActorName)));
 
         CommandAsync<CompactionTriggered>(async msg =>
         {
@@ -968,7 +999,18 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             logActor?.Tell(output);
         };
 
-        _ = ExecuteToolsAsync(executor, toolCalls, sessionId, auditLogger, tp, sessionDir, maxInlineToolResultChars, toolExecutionTimeout, self, emitSubAgentOutput);
+        // Marshal child-actor spawning back onto the session actor thread.
+        Func<object, string, CancellationToken, Task<object>> spawnChildActor = async (props, name, ct) =>
+            await self.Ask<IActorRef>(
+                new SpawnChildActorRequest
+                {
+                    Props = (Props)props,
+                    ActorName = name
+                },
+                timeout: toolExecutionTimeout,
+                cancellationToken: ct);
+
+        _ = ExecuteToolsAsync(executor, toolCalls, sessionId, auditLogger, tp, sessionDir, maxInlineToolResultChars, toolExecutionTimeout, self, emitSubAgentOutput, spawnChildActor);
     }
 
     private void HandleTextResponse(
@@ -1708,6 +1750,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     private sealed record ToolCallResult(
         SerializableChatMessage Message,
         IReadOnlyList<FileAttachmentInfo> FileAttachments,
+        IReadOnlyList<CompletedSubAgentRun> CompletedSubAgentRuns,
         IReadOnlyList<AcceptedSubAgentFinding> AcceptedSubAgentFindings);
 
     private static async Task ExecuteToolsAsync(
@@ -1720,7 +1763,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         int maxInlineToolResultChars,
         TimeSpan timeout,
         IActorRef self,
-        Action<SubAgentOutput> emitSubAgentOutput)
+        Action<SubAgentOutput> emitSubAgentOutput,
+        Func<object, string, CancellationToken, Task<object>> spawnChildActor)
     {
         try
         {
@@ -1736,6 +1780,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 sessionDir,
                 maxInlineToolResultChars,
                 emitSubAgentOutput,
+                spawnChildActor,
                 cts.Token));
             var results = await Task.WhenAll(tasks);
 
@@ -1744,6 +1789,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             {
                 ToolResults = results.Select(r => r.Message).ToList(),
                 FileAttachments = fileAttachments,
+                CompletedSubAgentRuns = results
+                    .SelectMany(r => r.CompletedSubAgentRuns)
+                    .ToList(),
                 AcceptedSubAgentFindings = results
                     .SelectMany(r => r.AcceptedSubAgentFindings)
                     .ToList()
@@ -1773,70 +1821,77 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         string sessionDir,
         int maxInlineToolResultChars,
         Action<SubAgentOutput> emitSubAgentOutput,
+        Func<object, string, CancellationToken, Task<object>> spawnChildActor,
         CancellationToken ct)
     {
         var sw = Stopwatch.StartNew();
         string resultText;
         var context = new Netclaw.Tools.ToolExecutionContext(sessionId.Value, sessionDir);
+        context.SpawnChildActor = spawnChildActor;
+        var completedRuns = new List<CompletedSubAgentRun>();
         var acceptedFindings = new List<AcceptedSubAgentFinding>();
         context.OnSubAgentActivity = info =>
         {
-            var output = new SubAgentOutput
+            if (info.IsStarted)
             {
-                SessionId = sessionId,
-                TimestampMs = timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
-                AgentName = info.AgentName,
-                Phase = info.IsStarted
-                    ? Netclaw.Actors.SubAgents.SubAgentPhase.Started
-                    : Netclaw.Actors.SubAgents.SubAgentPhase.Completed,
-                ToolCount = info.ToolCount,
-                Success = info.Success,
-                Duration = info.Duration
-            };
-            emitSubAgentOutput(output);
+                emitSubAgentOutput(new SubAgentOutput
+                {
+                    SessionId = sessionId,
+                    TimestampMs = timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
+                    AgentName = info.AgentName,
+                    Phase = Netclaw.Actors.SubAgents.SubAgentPhase.Started,
+                    ToolCount = info.ToolCount,
+                    Success = info.Success,
+                    Duration = info.Duration
+                });
+            }
+
+            if (!info.IsStarted)
+            {
+                string? decision = null;
+                string? reason = null;
+
+                if (info.Success && info.Findings.Count == 1)
+                {
+                    var singleDecision = EvaluateSubAgentFindingDecision(info.Findings[0], sessionId.Value);
+                    decision = singleDecision.Decision;
+                    reason = singleDecision.Reason;
+                }
+
+                completedRuns.Add(new CompletedSubAgentRun
+                {
+                    RunId = info.RunId,
+                    AgentName = info.AgentName,
+                    Success = info.Success,
+                    Duration = info.Duration,
+                    FindingsCount = info.Findings.Count,
+                    MemoryDecision = decision,
+                    MemoryDecisionReason = reason
+                });
+            }
 
             if (!info.IsStarted && info.Success)
             {
-                if (info.Findings.Count == 0)
+                foreach (var finding in info.Findings)
                 {
+                    var decision = EvaluateSubAgentFindingDecision(finding, sessionId.Value);
                     acceptedFindings.Add(new AcceptedSubAgentFinding
                     {
+                        RunId = info.RunId,
                         AgentName = info.AgentName,
                         Duration = info.Duration,
-                        Title = $"subagent:{info.AgentName}",
-                        Content = $"Subagent '{info.AgentName}' completed successfully.",
-                        Kind = "record",
-                        Domain = ResolveDomainFromSession(sessionId.Value),
-                        Sensitivity = "normal",
-                        RecallMode = "auto",
-                        UpdateSemantics = "append-document",
-                        Confidence = 0.6,
-                        Decision = "deferred",
-                        DecisionReason = "subagent returned no structured findings"
+                        Title = finding.Title,
+                        Content = finding.Content,
+                        Kind = finding.Kind,
+                        Domain = finding.Domain,
+                        Sensitivity = finding.Sensitivity,
+                        RecallMode = finding.RecallMode,
+                        UpdateSemantics = finding.UpdateSemantics,
+                        Confidence = finding.Confidence,
+                        FreshnessAtMs = finding.FreshnessAtMs,
+                        Decision = decision.Decision,
+                        DecisionReason = decision.Reason
                     });
-                }
-                else
-                {
-                    foreach (var finding in info.Findings)
-                    {
-                        var decision = EvaluateSubAgentFindingDecision(finding, sessionId.Value);
-                        acceptedFindings.Add(new AcceptedSubAgentFinding
-                        {
-                            AgentName = info.AgentName,
-                            Duration = info.Duration,
-                            Title = finding.Title,
-                            Content = finding.Content,
-                            Kind = finding.Kind,
-                            Domain = finding.Domain,
-                            Sensitivity = finding.Sensitivity,
-                            RecallMode = finding.RecallMode,
-                            UpdateSemantics = finding.UpdateSemantics,
-                            Confidence = finding.Confidence,
-                            FreshnessAtMs = finding.FreshnessAtMs,
-                            Decision = decision.Decision,
-                            DecisionReason = decision.Reason
-                        });
-                    }
                 }
             }
         };
@@ -1884,6 +1939,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         return new ToolCallResult(
             message,
             context.FileAttachments,
+            completedRuns,
             acceptedFindings);
     }
 

@@ -23,6 +23,11 @@ public sealed record SubAgentDefinition
     /// Defaults to <see cref="Configuration.ModelRole.Compaction"/> (cheaper/faster model).
     /// </summary>
     public Configuration.ModelRole ModelRole { get; init; } = Configuration.ModelRole.Compaction;
+
+    /// <summary>
+    /// Whether successful free-form output should be converted into structured findings.
+    /// </summary>
+    public bool EmitStructuredFindings { get; init; }
 }
 
 /// <summary>
@@ -35,6 +40,12 @@ public sealed record RunSubAgent
 
     /// <summary>Wall-clock timeout set by the caller.</summary>
     public required TimeSpan Timeout { get; init; }
+
+    /// <summary>
+    /// Cancellation token from the calling tool execution. Used to stop the
+    /// subagent promptly when the parent turn is cancelled or times out.
+    /// </summary>
+    public CancellationToken Cancellation { get; init; }
 
     /// <summary>
     /// Optional execution scope ID used for session-scoped tool routing.
@@ -61,6 +72,11 @@ public sealed record SubAgentResult
     /// Structured findings returned to the owning session for policy and checkpoint review.
     /// </summary>
     public List<SubAgentFinding> Findings { get; init; } = [];
+
+    /// <summary>
+    /// Total number of structured findings returned before parent-session review.
+    /// </summary>
+    public int FindingsCount { get; init; }
 }
 
 /// <summary>

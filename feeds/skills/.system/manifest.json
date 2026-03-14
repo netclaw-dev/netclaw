@@ -1,17 +1,17 @@
 {
   "schemaVersion": 1,
   "feedType": "system",
-  "updatedAt": "2026-03-13T20:48:06Z",
+  "updatedAt": "2026-03-14T01:55:21Z",
   "skills": [
     {
       "name": "capability-reference",
-      "version": "1.1.0",
+      "version": "1.2.0",
       "minimumDaemonVersion": "0.1.0",
-      "sha256": "235de715ffed23c32c196b2f4da6e22d7fe01fe2636bf9e608bf55083f3f1f85",
-      "sizeBytes": 6270,
-      "url": "https://feeds.netclaw.dev/skills/.system/files/capability-reference/1.1.0/SKILL.md",
+      "sha256": "b8eb68108c148c138237a16f67365221ef51cc3fbf0cbe11ad5978bde1970065",
+      "sizeBytes": 7555,
+      "url": "https://feeds.netclaw.dev/skills/.system/files/capability-reference/1.2.0/SKILL.md",
       "category": null,
-      "description": "Quick-lookup catalog of all built-in tools, CLI commands, tool grant categories, scheduling syntax, and MCP discovery. Read when unsure what tools or commands are available."
+      "description": "Quick-lookup catalog of all built-in tools, CLI commands, tool grant categories, scheduling syntax, MCP discovery, and subagent delegation limits. Read when unsure what tools or commands are available."
     },
     {
       "name": "identity-management",

@@ -12,6 +12,7 @@ public sealed record FileAttachmentInfo(string FilePath, string FileName, string
 /// </summary>
 public sealed record SubAgentNotificationInfo
 {
+    public required string RunId { get; init; }
     public required string AgentName { get; init; }
     public required bool IsStarted { get; init; }
     public int ToolCount { get; init; }
@@ -57,6 +58,20 @@ public sealed class ToolExecutionContext
     /// The session wires this to relay notifications as <c>SubAgentOutput</c> events.
     /// </summary>
     public Action<SubAgentNotificationInfo>? OnSubAgentActivity { get; set; }
+
+    /// <summary>
+    /// Factory delegate for spawning subagent actors as children of the owning session.
+    /// Wired by <c>LlmSessionActor</c> so subagents are supervised and lifecycle-managed
+    /// by the session. Returns an <c>IActorRef</c>-compatible object that supports Ask.
+    /// The delegate receives (Props, actorName, cancellationToken) and marshals the
+    /// request back onto the session actor thread before creating the child.
+    /// </summary>
+    /// <remarks>
+    /// Using <c>object</c> for Props and IActorRef to avoid Akka dependency in the
+    /// tools abstraction layer. The actual types are <c>Akka.Actor.Props</c> and
+    /// <c>Akka.Actor.IActorRef</c>.
+    /// </remarks>
+    public Func<object, string, CancellationToken, Task<object>>? SpawnChildActor { get; set; }
 
     /// <summary>The session that initiated this tool call.</summary>
     public string? SessionId { get; }

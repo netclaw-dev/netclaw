@@ -49,6 +49,9 @@ public sealed class NetclawPaths
     public string BinDirectory => Path.Combine(BasePath, "bin");
     public string BinarySyncStatePath => Path.Combine(BinDirectory, ".sync-state.json");
 
+    // ── Agent definitions directory ──
+    public string AgentsDirectory => Path.Combine(BasePath, "agents");
+
     // ── Other standard directories ──
     public string ProjectsDirectory => Path.Combine(BasePath, "projects");
     public string EnvironmentDirectory => Path.Combine(BasePath, "environment");
@@ -94,6 +97,7 @@ public sealed class NetclawPaths
         Directory.CreateDirectory(ConfigDirectory);
         Directory.CreateDirectory(LogsDirectory);
         Directory.CreateDirectory(SessionLogsDirectory);
+        Directory.CreateDirectory(AgentsDirectory);
         Directory.CreateDirectory(MemoryDirectory);
         Directory.CreateDirectory(MemoriesDirectory);
         Directory.CreateDirectory(SessionsDirectory);
