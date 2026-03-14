@@ -96,7 +96,7 @@ discover and load them:
 
 ```
 search_tools(query: "servers")                     # list all MCP servers
-search_tools(query: "all", server: "memorizer")    # browse all tools in one server
+search_tools(query: "all", server: "notion")       # browse all tools in one server
 search_tools(query: "email")                       # keyword search across all servers
 ```
 
@@ -193,7 +193,6 @@ scheduled work back to the originating conversation.
 ## Cross-References
 
 - Memory tool usage: read `memory-usage`
-- Memorizer MCP operations: read `memorizer-usage`
 - Troubleshooting and diagnostics: read `self-diagnostics`
 - Identity file management: read `identity-management`
 - Creating new skills: read `skill-authoring`

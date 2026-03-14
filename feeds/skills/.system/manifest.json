@@ -1,14 +1,14 @@
 {
   "schemaVersion": 1,
   "feedType": "system",
-  "updatedAt": "2026-03-14T01:55:21Z",
+  "updatedAt": "2026-03-14T04:18:20Z",
   "skills": [
     {
       "name": "capability-reference",
       "version": "1.2.0",
       "minimumDaemonVersion": "0.1.0",
-      "sha256": "b8eb68108c148c138237a16f67365221ef51cc3fbf0cbe11ad5978bde1970065",
-      "sizeBytes": 7555,
+      "sha256": "15767f0fb8d96f1bf88b9d1a207786252b83c22a050f02d70aaf65f786f62922",
+      "sizeBytes": 7504,
       "url": "https://feeds.netclaw.dev/skills/.system/files/capability-reference/1.2.0/SKILL.md",
       "category": null,
       "description": "Quick-lookup catalog of all built-in tools, CLI commands, tool grant categories, scheduling syntax, MCP discovery, and subagent delegation limits. Read when unsure what tools or commands are available."
@@ -22,16 +22,6 @@
       "url": "https://feeds.netclaw.dev/skills/.system/files/identity-management/1.1.0/SKILL.md",
       "category": null,
       "description": "How to keep SOUL.md narrowly scoped to identity/profile updates while project facts and evidence stay in SQLite memory"
-    },
-    {
-      "name": "memorizer-usage",
-      "version": "1.3.0",
-      "minimumDaemonVersion": "0.1.0",
-      "sha256": "e5ac6542838bd717f24e2628faa098da7ad095766c711555fc755fc1aaf9b99a",
-      "sizeBytes": 2158,
-      "url": "https://feeds.netclaw.dev/skills/.system/files/memorizer-usage/1.3.0/SKILL.md",
-      "category": null,
-      "description": "Memorizer MCP operations for explicit manual memory workflows under SQLite-first Netclaw memory"
     },
     {
       "name": "memory-usage",
