@@ -36,6 +36,8 @@ public sealed class SubAgentActor : ReceiveActor
     private int _toolIterationCount;
     private IActorRef _replyTo = ActorRefs.Nobody;
     private ICancelable? _timeoutSchedule;
+    private CancellationTokenSource? _executionCts;
+    private CancellationTokenRegistration _externalCancellationRegistration;
     private ToolExecutionContext _toolExecutionContext = ToolExecutionContext.Empty;
 
     public SubAgentActor(
@@ -73,6 +75,8 @@ public sealed class SubAgentActor : ReceiveActor
                 ? msg.SessionScopeId!
                 : $"subagent/{_definition.Name}/{Guid.NewGuid():N}";
             _toolExecutionContext = new ToolExecutionContext(scopeId, null);
+            _executionCts = new CancellationTokenSource();
+            _externalCancellationRegistration = msg.Cancellation.Register(() => Self.Tell(SubAgentCancelled.Instance));
 
             // Schedule wall-clock timeout
             _timeoutSchedule = Context.System.Scheduler.ScheduleTellOnceCancelable(
@@ -149,8 +153,16 @@ public sealed class SubAgentActor : ReceiveActor
             Complete(false, $"LLM call failed: {msg.Cause.Message}");
         });
 
+        Receive<SubAgentCancelled>(_ =>
+        {
+            _executionCts?.Cancel();
+            _log.Warning("SubAgent [{AgentName}] cancelled by parent", _definition.Name);
+            Complete(false, "Subagent cancelled by parent");
+        });
+
         Receive<SubAgentTimeout>(_ =>
         {
+            _executionCts?.Cancel();
             _log.Warning("SubAgent [{AgentName}] timed out after {Iterations} tool iterations",
                 _definition.Name, _toolIterationCount);
             Complete(false, "Subagent timed out");
@@ -169,7 +181,12 @@ public sealed class SubAgentActor : ReceiveActor
         var self = Self;
         var executor = new DispatchingToolExecutor(_toolRegistry);
 
-        _ = ExecuteToolsAsync(executor, toolCalls, _toolExecutionContext, self);
+        _ = ExecuteToolsAsync(
+            executor,
+            toolCalls,
+            _toolExecutionContext,
+            _executionCts?.Token ?? CancellationToken.None,
+            self);
     }
 
     private void FireLlmCall(bool forceNoTools = false)
@@ -187,17 +204,21 @@ public sealed class SubAgentActor : ReceiveActor
             };
         }
 
-        _ = InvokeLlmAsync(client, messages, options, self);
+        _ = InvokeLlmAsync(client, messages, options, _executionCts?.Token ?? CancellationToken.None, self);
     }
 
     private void Complete(bool success, string output)
     {
+        _executionCts?.Cancel();
         _timeoutSchedule?.Cancel();
+        _externalCancellationRegistration.Dispose();
+        _executionCts?.Dispose();
+        _executionCts = null;
 
         _log.Info("SubAgent [{AgentName}] completed (success={Success}, output={OutputLength} chars, iterations={Iterations})",
             _definition.Name, success, output.Length, _toolIterationCount);
 
-        var findings = success
+        var findings = success && _definition.EmitStructuredFindings
             ? BuildFindings(output, _toolExecutionContext.SessionId)
             : [];
 
@@ -206,7 +227,8 @@ public sealed class SubAgentActor : ReceiveActor
             Success = success,
             Output = output,
             AgentName = _definition.Name,
-            Findings = findings
+            Findings = findings,
+            FindingsCount = findings.Count
         });
 
         Context.Stop(Self);
@@ -286,12 +308,12 @@ public sealed class SubAgentActor : ReceiveActor
     // ── Static async helpers (same pattern as LlmSessionActor) ──
 
     private static async Task InvokeLlmAsync(
-        IChatClient client, List<AiChatMessage> messages, ChatOptions? options, IActorRef self)
+        IChatClient client, List<AiChatMessage> messages, ChatOptions? options, CancellationToken ct, IActorRef self)
     {
         try
         {
             // No streaming for subagents — just get the complete response
-            var response = await client.GetResponseAsync(messages, options);
+            var response = await client.GetResponseAsync(messages, options, ct);
             self.Tell(new LlmResponseReceived { Response = response });
         }
         catch (Exception ex)
@@ -304,6 +326,7 @@ public sealed class SubAgentActor : ReceiveActor
         IToolExecutor executor,
         List<FunctionCallContent> toolCalls,
         ToolExecutionContext executionContext,
+        CancellationToken ct,
         IActorRef self)
     {
         try
@@ -312,7 +335,7 @@ public sealed class SubAgentActor : ReceiveActor
             {
                 try
                 {
-                    var result = await executor.ExecuteAsync(tc, executionContext);
+                    var result = await executor.ExecuteAsync(tc, executionContext, ct);
                     return new SerializableChatMessage
                     {
                         Role = Protocol.ChatRole.Tool,
@@ -350,6 +373,12 @@ public sealed class SubAgentActor : ReceiveActor
     {
         public static readonly SubAgentTimeout Instance = new();
         private SubAgentTimeout() { }
+    }
+
+    private sealed class SubAgentCancelled
+    {
+        public static readonly SubAgentCancelled Instance = new();
+        private SubAgentCancelled() { }
     }
 
     // ── Reuse LlmSessionActor's internal message types ──

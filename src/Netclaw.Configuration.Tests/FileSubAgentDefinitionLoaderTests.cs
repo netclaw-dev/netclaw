@@ -169,4 +169,40 @@ public class FileSubAgentDefinitionLoaderTests : IDisposable
         Assert.Equal(ModelRole.Compaction, profile.ModelRole);
         Assert.Equal(60, profile.TimeoutSeconds);
     }
+
+    [Fact]
+    public void LoadAll_skips_prompt_path_outside_agents_directory()
+    {
+        var escapedPath = Path.Combine("..", "outside.md");
+        File.WriteAllText(Path.Combine(_tempDir, "outside.md"), "secret");
+        File.WriteAllText(Path.Combine(_paths.AgentsDirectory, "test.json"), $$"""
+            {
+              "name": "test-agent",
+              "description": "A test agent",
+              "systemPromptFile": "{{escapedPath}}",
+              "tools": ["web_search"]
+            }
+            """);
+
+        var results = _loader.LoadAll();
+
+        Assert.Empty(results);
+    }
+
+    [Fact]
+    public void LoadAll_skips_user_facing_agent_with_disallowed_tools()
+    {
+        File.WriteAllText(Path.Combine(_paths.AgentsDirectory, "test.json"), """
+            {
+              "name": "test-agent",
+              "description": "A test agent",
+              "systemPrompt": "You are a test agent.",
+              "tools": ["web_search", "file_write", "shell_execute"]
+            }
+            """);
+
+        var results = _loader.LoadAll();
+
+        Assert.Empty(results);
+    }
 }

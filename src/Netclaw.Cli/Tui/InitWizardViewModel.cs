@@ -1200,7 +1200,7 @@ public partial class InitWizardViewModel : ReactiveViewModel
               "name": "research-assistant",
               "description": "Deep web research with search and citation",
               "systemPromptFile": "research-assistant.md",
-              "tools": ["web_search", "web_fetch", "file_read", "file_write"],
+              "tools": ["web_search", "web_fetch", "file_read", "attach_file"],
               "modelRole": "Compaction",
               "timeoutSeconds": 120
             }
@@ -1216,7 +1216,8 @@ public partial class InitWizardViewModel : ReactiveViewModel
             - Search for information using web_search, then fetch relevant pages with web_fetch.
             - Cross-reference multiple sources when possible.
             - Always cite your sources with URLs.
-            - If asked, write results to files using file_write.
+            - Use file_read to inspect local reference material when needed.
+            - Use attach_file when the parent session needs to deliver an existing file.
             - Be thorough but concise — focus on facts and actionable information.
             - Use markdown formatting for structure (headers, lists, code blocks).
             - If a search returns no useful results, say so rather than guessing.
@@ -1227,7 +1228,7 @@ public partial class InitWizardViewModel : ReactiveViewModel
               "name": "code-analyst",
               "description": "Analyze code, run commands, and review files",
               "systemPromptFile": "code-analyst.md",
-              "tools": ["shell", "file_read", "file_write"],
+              "tools": ["file_read"],
               "modelRole": "Compaction",
               "timeoutSeconds": 120
             }
@@ -1240,11 +1241,10 @@ public partial class InitWizardViewModel : ReactiveViewModel
             ## Guidelines
 
             - Read files with file_read to understand code structure.
-            - Run commands with shell to build, test, lint, or inspect the project.
             - Report findings with file paths and line numbers.
             - Focus on actionable observations — bugs, performance issues, design concerns.
             - Use markdown formatting with code blocks for examples.
-            - Do not modify code unless explicitly asked to write results to a file.
+            - Do not modify code or run commands directly; return analysis for the parent session to act on.
             """);
 
         SeedAgentFile(agentsDir, "summarizer.json", """

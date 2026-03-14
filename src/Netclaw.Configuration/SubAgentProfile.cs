@@ -45,6 +45,12 @@ public sealed record SubAgentProfile
     /// <summary>Wall-clock timeout in seconds for subagent execution.</summary>
     public int TimeoutSeconds { get; init; } = 60;
 
+    /// <summary>
+    /// Whether successful free-form output should be converted into structured
+    /// findings for parent-session memory review.
+    /// </summary>
+    public bool EmitStructuredFindings { get; init; }
+
     /// <summary>Controls whether this agent is visible to the frontline LLM.</summary>
     public SubAgentVisibility Visibility { get; init; } = SubAgentVisibility.UserFacing;
 }

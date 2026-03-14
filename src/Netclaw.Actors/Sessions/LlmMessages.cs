@@ -1,3 +1,4 @@
+using Akka.Actor;
 using Microsoft.Extensions.AI;
 using Netclaw.Tools;
 
@@ -46,6 +47,7 @@ internal sealed record ToolExecutionCompleted
 
 internal sealed record AcceptedSubAgentFinding
 {
+    public required string RunId { get; init; }
     public required string AgentName { get; init; }
     public required TimeSpan Duration { get; init; }
     public required string Title { get; init; }
@@ -78,6 +80,16 @@ internal sealed record ProcessingWatchdogExpired
     public required long OperationId { get; init; }
 
     public required string OperationName { get; init; }
+}
+
+/// <summary>
+/// Marshal a child actor creation request back onto the session actor thread.
+/// This keeps <c>Context.ActorOf</c> usage on the actor mailbox thread.
+/// </summary>
+internal sealed record SpawnChildActorRequest
+{
+    public required Props Props { get; init; }
+    public required string ActorName { get; init; }
 }
 
 /// <summary>

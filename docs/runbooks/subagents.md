@@ -49,6 +49,10 @@ subagent has no conversation history from the main session.
    returns its final text response.
 6. The main agent receives this response as the `spawn_agent` tool result.
 
+Child creation is marshaled back onto the session actor thread, so supervision
+stays within Akka's actor-thread rules. If the parent tool call is cancelled or
+times out, the subagent is cancelled too.
+
 ### Observability
 
 Subagent start/complete events are emitted as `SubAgentOutput` session events:
@@ -85,7 +89,7 @@ an optional companion markdown file for the system prompt.
   "name": "research-assistant",
   "description": "Deep web research with search and citation",
   "systemPromptFile": "research-assistant.md",
-  "tools": ["web_search", "web_fetch", "file_read", "file_write"],
+  "tools": ["web_search", "web_fetch", "file_read", "attach_file"],
   "modelRole": "Compaction",
   "timeoutSeconds": 120
 }
@@ -95,9 +99,9 @@ an optional companion markdown file for the system prompt.
 |-------|----------|-------------|
 | `name` | Yes | Unique identifier. Used in `spawn_agent(agent: "<name>")`. |
 | `description` | Yes | One-line description shown in the discovery context layer. |
-| `systemPromptFile` | No | Path to a `.md` file (relative to `~/.netclaw/agents/`) containing the system prompt. |
+| `systemPromptFile` | No | Path to a `.md` file (relative to `~/.netclaw/agents/`) containing the system prompt. Paths outside this directory are rejected. |
 | `systemPrompt` | No | Inline system prompt string. Used if `systemPromptFile` is absent. |
-| `tools` | Yes | List of tool names the subagent can use. Must match registered tool names. |
+| `tools` | Yes | List of tool names the subagent can use. For user-facing file-based agents, only `web_search`, `web_fetch`, `file_read`, and `attach_file` are allowed. |
 | `modelRole` | No | `"Compaction"` (default, cheaper/faster) or `"Main"` (full model). |
 | `timeoutSeconds` | No | Wall-clock timeout in seconds (default: 60). |
 
@@ -119,7 +123,8 @@ into clear, well-organized summaries.
 - Search for information using web_search, then fetch relevant pages with web_fetch.
 - Cross-reference multiple sources when possible.
 - Always cite your sources with URLs.
-- If asked, write results to files using file_write.
+- Use file_read for local reference material when needed.
+- Use attach_file if the parent session should deliver an existing file.
 - Be thorough but concise — focus on facts and actionable information.
 ```
 
@@ -142,14 +147,11 @@ These are the built-in tool names you can reference in agent definitions:
 |------|-------------|
 | `web_search` | Search the web (requires Brave API key) |
 | `web_fetch` | Fetch and parse web page content |
-| `shell` | Execute shell commands |
 | `file_read` | Read file contents |
-| `file_write` | Write files to disk |
 | `attach_file` | Attach a file to the response |
-| `search_tools` | Search for available tools |
 
-MCP tools use namespaced names like `memorizer/store`, `memorizer/search_memories`.
-You can reference these in agent definitions if the MCP server is configured.
+User-facing file-defined agents cannot request `shell`, `file_write`, `search_tools`,
+or raw MCP tool names. Those remain available to platform-owned/internal subagents.
 
 ## Built-in agents
 
@@ -157,10 +159,10 @@ Three agents are seeded during `netclaw init`. They are regular file-based
 definitions — you can edit or delete them.
 
 **research-assistant** — Deep web research with search and citation.
-Tools: `web_search`, `web_fetch`, `file_read`, `file_write`. Timeout: 120s.
+Tools: `web_search`, `web_fetch`, `file_read`, `attach_file`. Timeout: 120s.
 
 **code-analyst** — Analyze code, run commands, and review files.
-Tools: `shell`, `file_read`, `file_write`. Timeout: 120s.
+Tools: `file_read`. Timeout: 120s.
 
 **summarizer** — Summarize documents and content concisely.
 Tools: `file_read`. Timeout: 60s.
@@ -174,7 +176,7 @@ Tools: `file_read`. Timeout: 60s.
   "name": "github-helper",
   "description": "Create issues, review PRs, and manage GitHub repos",
   "systemPromptFile": "github-helper.md",
-  "tools": ["shell", "file_read"],
+  "tools": ["file_read"],
   "timeoutSeconds": 90
 }
 ```
@@ -182,13 +184,12 @@ Tools: `file_read`. Timeout: 60s.
 2. Create the companion prompt file:
 
 ```markdown
-You are a GitHub operations assistant. Use the `gh` CLI via the shell tool
-to manage issues, pull requests, and repository operations.
+You are a GitHub review assistant. Read local notes and summarize what the
+parent session should do next.
 
 ## Guidelines
 
-- Always use `gh` commands (not raw git or API calls).
-- Confirm destructive operations before executing.
+- Do not execute commands or modify files directly.
 - Format output as markdown for readability.
 ```
 

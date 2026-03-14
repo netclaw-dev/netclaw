@@ -70,12 +70,16 @@ public sealed class SubAgentSpawner
             Name = profile.Name,
             SystemPrompt = profile.SystemPrompt,
             Tools = tools,
-            ModelRole = profile.ModelRole
+            ModelRole = profile.ModelRole,
+            EmitStructuredFindings = profile.EmitStructuredFindings
         };
+
+        var runId = Guid.NewGuid().ToString("N");
 
         // Notify session that subagent is starting
         context.OnSubAgentActivity?.Invoke(new SubAgentNotificationInfo
         {
+            RunId = runId,
             AgentName = definition.Name,
             IsStarted = true,
             ToolCount = tools.Count
@@ -84,13 +88,13 @@ public sealed class SubAgentSpawner
         var chatClient = _chatClientProvider.GetClient(definition.ModelRole);
         var subAgentTimeout = TimeSpan.FromSeconds(profile.TimeoutSeconds);
         var subAgentScopeId = !string.IsNullOrWhiteSpace(context.SessionId)
-            ? $"{context.SessionId}/subagent/{definition.Name}/{Guid.NewGuid():N}"
-            : $"subagent/{definition.Name}/{Guid.NewGuid():N}";
+            ? $"{context.SessionId}/subagent/{definition.Name}/{runId}"
+            : $"subagent/{definition.Name}/{runId}";
 
         // Spawn as child of the session actor via the context factory
         var props = SubAgentActor.CreateProps(definition, chatClient);
-        var actorName = $"subagent-{definition.Name}-{Guid.NewGuid():N}";
-        var subAgent = (IActorRef)context.SpawnChildActor(props, actorName);
+        var actorName = $"subagent-{definition.Name}-{runId}";
+        var subAgent = (IActorRef)await context.SpawnChildActor(props, actorName, ct);
 
         var sw = Stopwatch.StartNew();
         try
@@ -100,7 +104,8 @@ public sealed class SubAgentSpawner
                 {
                     Task = task,
                     Timeout = subAgentTimeout,
-                    SessionScopeId = subAgentScopeId
+                    SessionScopeId = subAgentScopeId,
+                    Cancellation = ct
                 },
                 timeout: subAgentTimeout.Add(TimeSpan.FromSeconds(5)),
                 cancellationToken: ct);
@@ -109,6 +114,7 @@ public sealed class SubAgentSpawner
 
             context.OnSubAgentActivity?.Invoke(new SubAgentNotificationInfo
             {
+                RunId = runId,
                 AgentName = definition.Name,
                 IsStarted = false,
                 Success = result.Success,
@@ -139,8 +145,11 @@ public sealed class SubAgentSpawner
         {
             sw.Stop();
 
+            TryStopSubAgent(subAgent);
+
             context.OnSubAgentActivity?.Invoke(new SubAgentNotificationInfo
             {
+                RunId = runId,
                 AgentName = definition.Name,
                 IsStarted = false,
                 Success = false,
@@ -162,6 +171,16 @@ public sealed class SubAgentSpawner
         var tools = new List<INetclawTool>();
         foreach (var name in profile.ToolNames)
         {
+            if (profile.Visibility == SubAgentVisibility.UserFacing
+                && !SubAgentToolPolicy.IsAllowedForUserFacing(name))
+            {
+                _logger.LogWarning(
+                    "SubAgent [{AgentName}] references tool '{ToolName}' which is not allowed for user-facing agents — skipping",
+                    profile.Name,
+                    name);
+                continue;
+            }
+
             var tool = _toolRegistry.GetByName(name);
             if (tool is not null)
             {
@@ -176,5 +195,10 @@ public sealed class SubAgentSpawner
         }
 
         return tools;
+    }
+
+    private static void TryStopSubAgent(IActorRef subAgent)
+    {
+        subAgent.Tell(PoisonPill.Instance);
     }
 }

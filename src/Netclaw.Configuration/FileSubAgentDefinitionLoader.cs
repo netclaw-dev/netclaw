@@ -19,11 +19,13 @@ public sealed class FileSubAgentDefinitionLoader
     };
 
     private readonly string _agentsDirectory;
+    private readonly string _agentsDirectoryFullPath;
     private readonly ILogger<FileSubAgentDefinitionLoader> _logger;
 
     public FileSubAgentDefinitionLoader(NetclawPaths paths, ILogger<FileSubAgentDefinitionLoader> logger)
     {
         _agentsDirectory = paths.AgentsDirectory;
+        _agentsDirectoryFullPath = Path.GetFullPath(_agentsDirectory);
         _logger = logger;
     }
 
@@ -68,7 +70,7 @@ public sealed class FileSubAgentDefinitionLoader
                 // Resolve system prompt from companion file or inline
                 if (!string.IsNullOrWhiteSpace(file.SystemPromptFile))
                 {
-                    var promptPath = Path.Combine(_agentsDirectory, file.SystemPromptFile);
+                    var promptPath = ResolvePromptPath(file.SystemPromptFile);
                     if (File.Exists(promptPath))
                     {
                         file = file with { ResolvedSystemPrompt = File.ReadAllText(promptPath) };
@@ -95,6 +97,21 @@ public sealed class FileSubAgentDefinitionLoader
                     continue;
                 }
 
+                var disallowedTools = file.Tools
+                    .Where(t => !SubAgentToolPolicy.IsAllowedForUserFacing(t))
+                    .Distinct(StringComparer.Ordinal)
+                    .OrderBy(t => t, StringComparer.Ordinal)
+                    .ToList();
+                if (disallowedTools.Count > 0)
+                {
+                    _logger.LogWarning(
+                        "Agent '{Name}' references disallowed tools for user-facing agents: {Tools}. Allowed tools: {AllowedTools}. Skipping",
+                        file.Name,
+                        string.Join(", ", disallowedTools),
+                        string.Join(", ", SubAgentToolPolicy.GetAllowedUserFacingTools()));
+                    continue;
+                }
+
                 results.Add(file);
                 _logger.LogInformation("Loaded agent definition: {Name} ({ToolCount} tools, timeout={Timeout}s)",
                     file.Name, file.Tools.Count, file.TimeoutSeconds);
@@ -110,6 +127,23 @@ public sealed class FileSubAgentDefinitionLoader
         }
 
         return results;
+    }
+
+    private string ResolvePromptPath(string systemPromptFile)
+    {
+        var combined = Path.Combine(_agentsDirectory, systemPromptFile);
+        var fullPath = Path.GetFullPath(combined);
+        var allowedPrefix = _agentsDirectoryFullPath.EndsWith(Path.DirectorySeparatorChar)
+            ? _agentsDirectoryFullPath
+            : _agentsDirectoryFullPath + Path.DirectorySeparatorChar;
+
+        if (!fullPath.StartsWith(allowedPrefix, StringComparison.Ordinal)
+            && !string.Equals(fullPath, _agentsDirectoryFullPath, StringComparison.Ordinal))
+        {
+            throw new IOException($"Prompt file '{systemPromptFile}' escapes the agents directory.");
+        }
+
+        return fullPath;
     }
 }
 

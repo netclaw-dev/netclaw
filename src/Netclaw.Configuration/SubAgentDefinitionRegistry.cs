@@ -30,6 +30,11 @@ public sealed class SubAgentDefinitionRegistry
     }
 
     /// <summary>
+    /// Returns true when a profile with the given name exists.
+    /// </summary>
+    public bool Contains(string name) => _profiles.ContainsKey(name);
+
+    /// <summary>
     /// Returns all user-facing profiles (visible to <c>spawn_agent</c> and discovery).
     /// </summary>
     public IReadOnlyList<SubAgentProfile> GetUserFacing()
