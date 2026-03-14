@@ -117,6 +117,13 @@ public class SubAgentSpawnIntegrationTests : TestKit
         Assert.Equal("summarizer", started.AgentName);
         Assert.Equal(1, started.ToolCount);
 
+        var completed = await subscriber.ExpectMsgAsync<SubAgentOutput>(TimeSpan.FromSeconds(3));
+        Assert.Equal(SubAgentPhase.Completed, completed.Phase);
+        Assert.Equal("summarizer", completed.AgentName);
+        Assert.True(completed.Success);
+        Assert.Equal(0, completed.FindingsCount);
+        Assert.Null(completed.MemoryDecision);
+
         var text = await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(5));
         Assert.Contains("fake", text.Text, StringComparison.OrdinalIgnoreCase);
 

@@ -65,6 +65,10 @@ Subagent start/complete events are emitted as `SubAgentOutput` session events:
 These appear in the headless CLI output and session logs. They are suppressed
 in Slack.
 
+Completion events are emitted for every finished subagent run, even when the
+subagent returns no structured findings. In that case `FindingsCount` is `0`
+and the memory-decision fields are empty because there was nothing to review.
+
 ## Defining subagents
 
 Agent definitions live in `~/.netclaw/agents/`. Each agent is a JSON file with

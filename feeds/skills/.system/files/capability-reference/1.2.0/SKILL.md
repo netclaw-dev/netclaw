@@ -78,6 +78,7 @@ more cleanly than the main agent.
 - They cannot request `shell_execute`, `file_write`, `search_tools`, or raw MCP tools.
 - Subagent prompt files must stay inside `~/.netclaw/agents/`; path traversal is rejected.
 - Subagents are supervised as session children and are cancelled when the parent tool call is cancelled or times out.
+- Session observers receive both start and completion events for each subagent run; completion can report `findings=0` when no structured memory candidates were produced.
 
 Built-in seeded agents:
 

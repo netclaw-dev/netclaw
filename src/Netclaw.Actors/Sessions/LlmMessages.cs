@@ -42,7 +42,19 @@ internal sealed record ToolExecutionCompleted
 {
     public required List<Protocol.SerializableChatMessage> ToolResults { get; init; }
     public List<FileAttachmentInfo> FileAttachments { get; init; } = [];
+    public List<CompletedSubAgentRun> CompletedSubAgentRuns { get; init; } = [];
     public List<AcceptedSubAgentFinding> AcceptedSubAgentFindings { get; init; } = [];
+}
+
+internal sealed record CompletedSubAgentRun
+{
+    public required string RunId { get; init; }
+    public required string AgentName { get; init; }
+    public required bool Success { get; init; }
+    public required TimeSpan Duration { get; init; }
+    public int FindingsCount { get; init; }
+    public string? MemoryDecision { get; init; }
+    public string? MemoryDecisionReason { get; init; }
 }
 
 internal sealed record AcceptedSubAgentFinding

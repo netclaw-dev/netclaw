@@ -1,14 +1,14 @@
 {
   "schemaVersion": 1,
   "feedType": "system",
-  "updatedAt": "2026-03-14T01:35:20Z",
+  "updatedAt": "2026-03-14T01:55:21Z",
   "skills": [
     {
       "name": "capability-reference",
       "version": "1.2.0",
       "minimumDaemonVersion": "0.1.0",
-      "sha256": "1197d311dcdfc9b970729ff5c3e98568c535cc3e7cd4ce599657a61bed52fd95",
-      "sizeBytes": 7384,
+      "sha256": "b8eb68108c148c138237a16f67365221ef51cc3fbf0cbe11ad5978bde1970065",
+      "sizeBytes": 7555,
       "url": "https://feeds.netclaw.dev/skills/.system/files/capability-reference/1.2.0/SKILL.md",
       "category": null,
       "description": "Quick-lookup catalog of all built-in tools, CLI commands, tool grant categories, scheduling syntax, MCP discovery, and subagent delegation limits. Read when unsure what tools or commands are available."

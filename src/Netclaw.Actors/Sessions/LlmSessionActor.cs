@@ -383,20 +383,27 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                         UpdateSemantics: "immutable-record")));
             }
 
+            var emittedRunIds = new HashSet<string>(StringComparer.Ordinal);
             foreach (var finding in msg.AcceptedSubAgentFindings)
             {
-                EmitOutput(new SubAgentOutput
+                if (emittedRunIds.Add(finding.RunId))
                 {
-                    SessionId = _sessionId,
-                    TimestampMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
-                    AgentName = finding.AgentName,
-                    Phase = Netclaw.Actors.SubAgents.SubAgentPhase.Completed,
-                    Success = true,
-                    Duration = finding.Duration,
-                    MemoryDecision = finding.Decision,
-                    MemoryDecisionReason = finding.DecisionReason,
-                    FindingsCount = 1
-                }, OutputFilter.ToolCalls);
+                    var runSummary = msg.CompletedSubAgentRuns
+                        .FirstOrDefault(x => string.Equals(x.RunId, finding.RunId, StringComparison.Ordinal));
+
+                    EmitOutput(new SubAgentOutput
+                    {
+                        SessionId = _sessionId,
+                        TimestampMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
+                        AgentName = finding.AgentName,
+                        Phase = Netclaw.Actors.SubAgents.SubAgentPhase.Completed,
+                        Success = true,
+                        Duration = finding.Duration,
+                        MemoryDecision = finding.Decision,
+                        MemoryDecisionReason = finding.DecisionReason,
+                        FindingsCount = runSummary?.FindingsCount ?? 1
+                    }, OutputFilter.ToolCalls);
+                }
 
                 if (!string.Equals(finding.Decision, "accepted", StringComparison.OrdinalIgnoreCase))
                     continue;
@@ -425,6 +432,25 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                         Kind: finding.Kind,
                         UpdateSemantics: finding.UpdateSemantics,
                         FreshnessAtMs: finding.FreshnessAtMs)));
+            }
+
+            foreach (var run in msg.CompletedSubAgentRuns)
+            {
+                if (!emittedRunIds.Add(run.RunId))
+                    continue;
+
+                EmitOutput(new SubAgentOutput
+                {
+                    SessionId = _sessionId,
+                    TimestampMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
+                    AgentName = run.AgentName,
+                    Phase = Netclaw.Actors.SubAgents.SubAgentPhase.Completed,
+                    Success = run.Success,
+                    Duration = run.Duration,
+                    MemoryDecision = run.MemoryDecision,
+                    MemoryDecisionReason = run.MemoryDecisionReason,
+                    FindingsCount = run.FindingsCount
+                }, OutputFilter.ToolCalls);
             }
 
             // Add tool results to history and log each result
@@ -1658,6 +1684,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     private sealed record ToolCallResult(
         SerializableChatMessage Message,
         IReadOnlyList<FileAttachmentInfo> FileAttachments,
+        IReadOnlyList<CompletedSubAgentRun> CompletedSubAgentRuns,
         IReadOnlyList<AcceptedSubAgentFinding> AcceptedSubAgentFindings);
 
     private static async Task ExecuteToolsAsync(
@@ -1696,6 +1723,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             {
                 ToolResults = results.Select(r => r.Message).ToList(),
                 FileAttachments = fileAttachments,
+                CompletedSubAgentRuns = results
+                    .SelectMany(r => r.CompletedSubAgentRuns)
+                    .ToList(),
                 AcceptedSubAgentFindings = results
                     .SelectMany(r => r.AcceptedSubAgentFindings)
                     .ToList()
@@ -1732,6 +1762,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         string resultText;
         var context = new Netclaw.Tools.ToolExecutionContext(sessionId.Value, sessionDir);
         context.SpawnChildActor = spawnChildActor;
+        var completedRuns = new List<CompletedSubAgentRun>();
         var acceptedFindings = new List<AcceptedSubAgentFinding>();
         context.OnSubAgentActivity = info =>
         {
@@ -1746,6 +1777,30 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                     ToolCount = info.ToolCount,
                     Success = info.Success,
                     Duration = info.Duration
+                });
+            }
+
+            if (!info.IsStarted)
+            {
+                string? decision = null;
+                string? reason = null;
+
+                if (info.Success && info.Findings.Count == 1)
+                {
+                    var singleDecision = EvaluateSubAgentFindingDecision(info.Findings[0], sessionId.Value);
+                    decision = singleDecision.Decision;
+                    reason = singleDecision.Reason;
+                }
+
+                completedRuns.Add(new CompletedSubAgentRun
+                {
+                    RunId = info.RunId,
+                    AgentName = info.AgentName,
+                    Success = info.Success,
+                    Duration = info.Duration,
+                    FindingsCount = info.Findings.Count,
+                    MemoryDecision = decision,
+                    MemoryDecisionReason = reason
                 });
             }
 
@@ -1818,6 +1873,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         return new ToolCallResult(
             message,
             context.FileAttachments,
+            completedRuns,
             acceptedFindings);
     }
 
