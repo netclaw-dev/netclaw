@@ -21,6 +21,7 @@ public sealed class OpenAiCompatibleCapabilityResolver : IModelCapabilityResolve
         _httpClient = httpClient;
         _logger = logger;
         _endpoint = OpenAiCompatibleEndpoint.FromBaseUrl(endpoint, apiKey);
+        _httpClient.BaseAddress ??= _endpoint.BaseUri;
     }
 
     public async Task<ResolvedModelCapabilities?> ResolveAsync(string modelId, CancellationToken ct = default)
@@ -95,6 +96,17 @@ public sealed class OpenAiCompatibleCapabilityResolver : IModelCapabilityResolve
         using var document = JsonDocument.Parse(json);
         var root = document.RootElement;
 
+        int? effectiveContextWindow = contextWindow;
+        if (root.TryGetProperty("default_generation_settings", out var defaultGenerationSettings)
+            && defaultGenerationSettings.ValueKind == JsonValueKind.Object
+            && defaultGenerationSettings.TryGetProperty("params", out var parameters)
+            && parameters.ValueKind == JsonValueKind.Object
+            && parameters.TryGetProperty("n_ctx", out var nCtx)
+            && nCtx.ValueKind == JsonValueKind.Number)
+        {
+            effectiveContextWindow = nCtx.GetInt32();
+        }
+
         var inputModalities = ModelModality.Text;
         if (root.TryGetProperty("modalities", out var modalities)
             && modalities.ValueKind == JsonValueKind.Object
@@ -105,7 +117,7 @@ public sealed class OpenAiCompatibleCapabilityResolver : IModelCapabilityResolve
             inputModalities |= ModelModality.Image;
         }
 
-        return new ResolvedModelCapabilities(modelId, inputModalities, ModelModality.Text, contextWindow);
+        return new ResolvedModelCapabilities(modelId, inputModalities, ModelModality.Text, effectiveContextWindow);
     }
 
     private void ApplyAuth(HttpRequestMessage request)

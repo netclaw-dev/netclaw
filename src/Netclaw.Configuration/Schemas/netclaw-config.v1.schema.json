@@ -200,7 +200,7 @@
       "properties": {
         "Provider": { "type": "string", "description": "Key into the Providers dictionary." },
         "ModelId": { "type": "string", "description": "Model identifier for API calls." },
-        "ContextWindow": { "type": "integer", "description": "Max context window in tokens." },
+        "ContextWindow": { "type": "integer", "description": "Effective runtime context window in tokens. When set, clamps the detected provider value." },
         "Provenance": {
           "type": ["string", "null"],
           "description": "Optional model provenance marker (e.g. AutoDetected, Manual)."

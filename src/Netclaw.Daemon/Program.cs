@@ -207,6 +207,11 @@ static void ConfigureDaemonServices(
     LogLevel daemonLogLevel)
 {
     services
+        .AddOptions<ModelSelection>()
+        .Bind(configuration.GetSection("Models"))
+        .ValidateOnStart();
+    services.AddSingleton<IValidateOptions<ModelSelection>, ModelSelectionValidator>();
+    services
         .AddOptions<DaemonPersistenceOptions>()
         .Bind(configuration.GetSection("Persistence"))
         .ValidateOnStart();
@@ -248,30 +253,21 @@ static void ConfigureDaemonServices(
         ? mainProvider?.ApiKey?.Value
         : null;
 
-    var inputModalities = models.Main.InputModalities;
-    var outputModalities = models.Main.OutputModalities;
-    int? contextWindow = models.Main.ContextWindow;
-    if (inputModalities is null || outputModalities is null || contextWindow is null)
-    {
-        var detected = ResolveStartupCapabilities(
-            models.Main.ModelId, daemonLogLevel, mainProviderType, ollamaEndpoint, openAiCompatibleEndpoint, openAiCompatibleApiKey);
-        if (detected is not null)
-        {
-            inputModalities ??= detected.InputModalities;
-            outputModalities ??= detected.OutputModalities;
-            contextWindow ??= detected.ContextWindowTokens;
-        }
-    }
+    var detected = ResolveStartupCapabilities(
+        models.Main.ModelId, daemonLogLevel, mainProviderType, ollamaEndpoint, openAiCompatibleEndpoint, openAiCompatibleApiKey);
+
+    var (inputModalities, outputModalities, contextWindow) =
+        ModelCapabilityResolution.ResolveSessionConfig(models.Main, detected);
 
     // Session config: bind defaults from config section, overlay model-derived values
     var sessionConfig = configuration.GetSection("Session").Get<SessionConfig>() ?? new SessionConfig();
     var resolvedSessionConfig = sessionConfig with
     {
         ModelId = models.Main.ModelId,
-        ContextWindowTokens = contextWindow ?? 32_768,
+        ContextWindowTokens = contextWindow,
         CompactionModelId = models.Compaction?.ModelId,
-        InputModalities = inputModalities ?? ModelModality.Text,
-        OutputModalities = outputModalities ?? ModelModality.Text,
+        InputModalities = inputModalities,
+        OutputModalities = outputModalities,
     };
     services.AddSingleton(resolvedSessionConfig);
 

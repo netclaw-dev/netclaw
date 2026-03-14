@@ -9,6 +9,12 @@ public sealed class ModelReference
 {
     public string Provider { get; set; } = "local-ollama";
     public string ModelId { get; set; } = "qwen3:30b";
+
+    /// <summary>
+    /// Effective context window size in tokens for this model. When set,
+    /// this value clamps the runtime session budget and takes precedence
+    /// over provider-reported capability detection.
+    /// </summary>
     public int? ContextWindow { get; set; }
 
     /// <summary>
