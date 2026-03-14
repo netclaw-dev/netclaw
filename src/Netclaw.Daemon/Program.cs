@@ -396,6 +396,7 @@ static void ConfigureDaemonServices(
 
     // System skills feed sync — checks CDN for updated skills at startup.
     // Runs after initial skill scan; re-scans and updates the index if any skills changed.
+    // Also enriches skills with keyword indexes for deterministic auto-loading.
     // Never blocks startup on network failures.
     services.AddHttpClient<SystemSkillSyncService>(client =>
         client.Timeout = FeedConstants.FeedHttpTimeout);

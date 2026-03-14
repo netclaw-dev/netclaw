@@ -9,6 +9,8 @@ using Microsoft.Extensions.AI;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Memory;
 using Netclaw.Actors.Protocol;
+using Netclaw.Actors.Skills;
+using Netclaw.Actors.Text;
 using Netclaw.Configuration;
 using Netclaw.Actors.Tools;
 using Netclaw.Tools;
@@ -82,6 +84,11 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     private string? _activeChannelType;
     private AutomaticRecallResult? _activeRecall;
 
+    // Skill auto-load state (transient — cleared on compaction, empty on recovery)
+    private readonly HashSet<string> _autoLoadedSkills = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, string> _autoLoadedSkillContent = new(StringComparer.OrdinalIgnoreCase);
+    private readonly SkillRegistry? _skillRegistry;
+
     // Persistent state (immutable — replaced on each event)
     private SessionState _state = SessionState.Empty;
 
@@ -104,9 +111,11 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         IMemoryCheckpointSink? memoryCheckpointSink = null,
         TimeProvider? timeProvider = null,
         IReadOnlyList<IContextLayerProvider>? contextLayers = null,
-        NetclawPaths? paths = null)
+        NetclawPaths? paths = null,
+        SkillRegistry? skillRegistry = null)
     {
         _sessionId = new SessionId(entityId);
+        _skillRegistry = skillRegistry;
         _chatClient = clientProvider.GetClient(ModelRole.Main);
         _compactionClient = config.CompactionModelId is not null
             ? clientProvider.GetClient(ModelRole.Compaction)
@@ -654,6 +663,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             {
                 _state = _state.Apply(evt);
                 _lastInputTokenCount = 0; // Reset — next LLM call will provide fresh count
+                _autoLoadedSkills.Clear();
+                _autoLoadedSkillContent.Clear();
 
                 EnqueueCheckpointFireAndForget(new MemoryCheckpointRequest(
                     SessionId: _sessionId.Value,
@@ -1417,6 +1428,12 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         InjectAutomaticRecall(messages, _activeRecall);
 
+        // Skill auto-load: deterministic keyword matching against enriched skill index.
+        // Injects matched skill content as transient system messages before the LLM decides.
+        var userMessage = _state.FindLastUserMessage()?.Content;
+        if (!string.IsNullOrWhiteSpace(userMessage))
+            ResolveAndInjectAutoLoadedSkills(messages, userMessage);
+
         // Inject dynamic context layers (e.g. tool index) as transient system messages.
         // These are NOT persisted — rebuilt on every call so rehydrated sessions stay fresh.
         InjectDynamicContextLayers(messages);
@@ -1515,6 +1532,55 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         var recallMessage = new AiChatMessage(Microsoft.Extensions.AI.ChatRole.System, sb.ToString().TrimEnd());
         var index = messages.FindLastIndex(m => m.Role == Microsoft.Extensions.AI.ChatRole.System);
         messages.Insert(index >= 0 ? index + 1 : 0, recallMessage);
+    }
+
+    /// <summary>
+    /// Deterministic skill auto-loading: score user message against enriched keywords,
+    /// load matching skill content from disk (first match) or cache (subsequent turns),
+    /// and inject as transient system messages.
+    /// </summary>
+    private void ResolveAndInjectAutoLoadedSkills(List<AiChatMessage> messages, string userMessage)
+    {
+        if (_skillRegistry is null) return;
+
+        // 1. Find NEW matches (excludes already-loaded skills)
+        var newMatches = _skillRegistry.MatchByKeywords(userMessage, _autoLoadedSkills);
+        foreach (var (skill, _) in newMatches)
+        {
+            try
+            {
+                _autoLoadedSkillContent[skill.Name] = File.ReadAllText(skill.FilePath);
+            }
+            catch (IOException ex)
+            {
+                _log.Warning(ex, "Failed to read skill for auto-load: {SkillName}", skill.Name);
+                continue;
+            }
+
+            _autoLoadedSkills.Add(skill.Name);
+        }
+
+        // 2. Inject ALL loaded skills (new + previously cached)
+        if (_autoLoadedSkillContent.Count == 0) return;
+
+        var sb = new StringBuilder();
+        foreach (var (name, content) in _autoLoadedSkillContent)
+        {
+            if (sb.Length > 0) sb.AppendLine();
+            sb.AppendLine($"[skill-auto-loaded: {name}]");
+            sb.AppendLine(content);
+        }
+
+        var msg = new AiChatMessage(Microsoft.Extensions.AI.ChatRole.System, sb.ToString().TrimEnd());
+        var idx = messages.FindLastIndex(m => m.Role == Microsoft.Extensions.AI.ChatRole.System);
+        messages.Insert(idx >= 0 ? idx + 1 : 0, msg);
+
+        if (newMatches.Count > 0)
+            TurnLog().Info(
+                "turn_skill_auto_load new={New} total={Total} skills={Names} scores={Scores}",
+                newMatches.Count, _autoLoadedSkillContent.Count,
+                string.Join(",", newMatches.Select(m => m.Skill.Name)),
+                string.Join(",", newMatches.Select(m => m.Score)));
     }
 
     /// <summary>
