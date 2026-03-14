@@ -424,6 +424,61 @@ data: [DONE]
         Assert.Contains("data:image/png;base64,", body, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void ExtractUserMessage_ParsesOpenAiErrorObject()
+    {
+        var body = """{"error":{"code":500,"message":"image input is not supported - hint: if this is unexpected, you may need to provide the mmproj","type":"server_error"}}""";
+        var result = OpenAiCompatibleChatClient.ExtractUserMessage(body, 400);
+
+        Assert.Contains("image input is not supported", result, StringComparison.Ordinal);
+        Assert.Contains("400", result, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ExtractUserMessage_ParsesSimpleErrorString()
+    {
+        var body = """{"error":"something went wrong"}""";
+        var result = OpenAiCompatibleChatClient.ExtractUserMessage(body, 500);
+
+        Assert.Contains("something went wrong", result, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ExtractUserMessage_FallsBackOnInvalidJson()
+    {
+        var result = OpenAiCompatibleChatClient.ExtractUserMessage("not json", 502);
+
+        Assert.Contains("502", result, StringComparison.Ordinal);
+        Assert.Contains("not valid JSON", result, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void ExtractUserMessage_FallsBackOnNullBody()
+    {
+        var result = OpenAiCompatibleChatClient.ExtractUserMessage(null, 401);
+
+        Assert.Contains("credentials", result, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task ThrowsProviderException_OnHttpError()
+    {
+        var errorResponse = """{"error":{"message":"model not found"}}""";
+        using var handler = new RecordingHandler(_ => new HttpResponseMessage(System.Net.HttpStatusCode.NotFound)
+        {
+            Content = new StringContent(errorResponse, Encoding.UTF8, "application/json")
+        });
+        using var httpClient = new HttpClient(handler) { BaseAddress = new Uri("http://localhost:8000") };
+        var endpoint = OpenAiCompatibleEndpoint.FromBaseUrl("http://localhost:8000");
+        var client = new OpenAiCompatibleChatClient(httpClient, endpoint, "test-model");
+
+        var ex = await Assert.ThrowsAsync<Netclaw.Configuration.ProviderException>(
+            () => client.GetResponseAsync([new ChatMessage(ChatRole.User, "hello")]));
+
+        Assert.Contains("model not found", ex.UserMessage, StringComparison.Ordinal);
+        Assert.Equal(404, ex.StatusCode);
+    }
+
     private sealed class RecordingHandler : HttpMessageHandler
     {
         private readonly Func<HttpRequestMessage, HttpResponseMessage> _handler;
