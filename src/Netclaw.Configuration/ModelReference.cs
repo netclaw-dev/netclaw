@@ -9,7 +9,14 @@ public sealed class ModelReference
 {
     public string Provider { get; set; } = "local-ollama";
     public string ModelId { get; set; } = "qwen3:30b";
-    public int? ContextWindow { get; set; }
+    /// <summary>
+    /// Override for the effective context window size in tokens.
+    /// Useful when parallelism factors reduce the actual usable window
+    /// (e.g., Lemonade with parallelism=4 reduces a 262,144-token window to ~65,536).
+    /// If not specified, the provider-reported window is used.
+    /// Must be >= 8192.
+    /// </summary>
+    public int? ContextWindowOverride { get; set; }
 
     /// <summary>
     /// How this model ID was resolved during onboarding or model selection.

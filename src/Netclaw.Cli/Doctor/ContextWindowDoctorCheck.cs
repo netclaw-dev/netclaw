@@ -22,17 +22,17 @@ public sealed class ContextWindowDoctorCheck(NetclawPaths paths) : IDoctorCheck
             return Task.FromResult(DoctorCheckResult.Warning(
                 "Context Window",
                 "No Models.Main section in config. Using default context window (32,768 tokens).",
-                "Add a Models.Main section with ContextWindow to netclaw.json."));
+                "Add a Models.Main section with ContextWindowOverride to netclaw.json."));
         }
 
-        var contextWindow = main["ContextWindow"];
+        var contextWindow = main["ContextWindowOverride"];
         if (contextWindow is null)
         {
             var modelId = main["ModelId"]?.GetValue<string>() ?? "unknown";
             return Task.FromResult(DoctorCheckResult.Warning(
                 "Context Window",
                 $"No explicit context window configured for {modelId}. Using default 32,768 tokens.",
-                "Set Models.Main.ContextWindow in netclaw.json to match your model's actual context window."));
+                "Set Models.Main.ContextWindowOverride in netclaw.json to match your model's effective context window."));
         }
 
         if (contextWindow.GetValue<int>() is var cw and > 0)
@@ -44,7 +44,7 @@ public sealed class ContextWindowDoctorCheck(NetclawPaths paths) : IDoctorCheck
 
         return Task.FromResult(DoctorCheckResult.Error(
             "Context Window",
-            "Models.Main.ContextWindow must be a positive integer.",
-            "Set Models.Main.ContextWindow to the model's context window size in tokens."));
+            "Models.Main.ContextWindowOverride must be a positive integer.",
+            "Set Models.Main.ContextWindowOverride to the model's effective context window size in tokens."));
     }
 }

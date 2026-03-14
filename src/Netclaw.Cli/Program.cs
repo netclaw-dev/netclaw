@@ -160,7 +160,7 @@ static async Task RunAsync(string[] args)
                 return sessionConfig with
                 {
                     ModelId = models.Main.ModelId,
-                    ContextWindowTokens = models.Main.ContextWindow ?? 32_768,
+                    ContextWindowTokens = models.Main.ContextWindowOverride ?? 32_768,
                     CompactionModelId = models.Compaction?.ModelId,
                 };
             });
@@ -1087,7 +1087,7 @@ static void ConfigureCliChatServices(IServiceCollection services, IConfiguration
     services.AddSingleton(sessionConfig with
     {
         ModelId = models.Main.ModelId,
-        ContextWindowTokens = models.Main.ContextWindow ?? 32_768,
+        ContextWindowTokens = models.Main.ContextWindowOverride ?? 32_768,
         CompactionModelId = models.Compaction?.ModelId,
     });
 

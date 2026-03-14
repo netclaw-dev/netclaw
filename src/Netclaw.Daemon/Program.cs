@@ -221,6 +221,11 @@ static void ConfigureDaemonServices(
     });
 
     // Resolve models for session config
+    services
+        .AddOptions<ModelSelection>()
+        .Bind(configuration.GetSection("Models"))
+        .ValidateOnStart();
+    services.AddSingleton<IValidateOptions<ModelSelection>, ModelSelectionValidator>();
     var models = configuration.GetSection("Models")
         .Get<ModelSelection>() ?? new ModelSelection();
     services.AddSingleton(models);
@@ -250,7 +255,7 @@ static void ConfigureDaemonServices(
 
     var inputModalities = models.Main.InputModalities;
     var outputModalities = models.Main.OutputModalities;
-    int? contextWindow = models.Main.ContextWindow;
+    int? contextWindow = models.Main.ContextWindowOverride;
     if (inputModalities is null || outputModalities is null || contextWindow is null)
     {
         var detected = ResolveStartupCapabilities(
@@ -259,6 +264,18 @@ static void ConfigureDaemonServices(
         {
             inputModalities ??= detected.InputModalities;
             outputModalities ??= detected.OutputModalities;
+
+            // Validate override does not exceed provider-reported limit
+            if (models.Main.ContextWindowOverride is int overrideValue
+                && detected.ContextWindowTokens is int detectedValue
+                && overrideValue > detectedValue)
+            {
+                throw new InvalidOperationException(
+                    $"Models:Main:ContextWindowOverride ({overrideValue}) exceeds the " +
+                    $"provider-reported context window ({detectedValue}). " +
+                    "The override must be <= the provider's reported context window.");
+            }
+
             contextWindow ??= detected.ContextWindowTokens;
         }
     }

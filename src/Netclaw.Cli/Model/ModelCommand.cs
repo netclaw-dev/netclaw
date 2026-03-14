@@ -63,8 +63,8 @@ internal static class ModelCommand
 
     private static void WriteModelRow(string role, ModelReference model, TextWriter writer)
     {
-        var ctxWindow = model.ContextWindow.HasValue
-            ? $"{model.ContextWindow.Value:N0} tokens"
+        var ctxWindow = model.ContextWindowOverride.HasValue
+            ? $"{model.ContextWindowOverride.Value:N0} tokens"
             : "(default)";
         writer.WriteLine($"{role,-12} {model.Provider,-20} {model.ModelId,-30} {ctxWindow}");
     }
@@ -128,11 +128,11 @@ internal static class ModelCommand
 
         // Check for context window downgrade
         var currentModels = LoadModelSelection(paths);
-        if (roleKey == "Main" && currentModels?.Main.ContextWindow is > 0 && contextWindow.HasValue)
+        if (roleKey == "Main" && currentModels?.Main.ContextWindowOverride is > 0 && contextWindow.HasValue)
         {
-            if (contextWindow.Value < currentModels.Main.ContextWindow.Value)
+            if (contextWindow.Value < currentModels.Main.ContextWindowOverride.Value)
             {
-                writer.WriteLine($"Warning: Context window shrinking from {currentModels.Main.ContextWindow.Value:N0} to {contextWindow.Value:N0} tokens.");
+                writer.WriteLine($"Warning: Context window shrinking from {currentModels.Main.ContextWindowOverride.Value:N0} to {contextWindow.Value:N0} tokens.");
                 writer.WriteLine("         Existing sessions with longer history may fail until compacted.");
             }
         }
@@ -149,7 +149,7 @@ internal static class ModelCommand
         };
 
         if (contextWindow.HasValue)
-            modelEntry["ContextWindow"] = contextWindow.Value;
+            modelEntry["ContextWindowOverride"] = contextWindow.Value;
 
         modelsSection[roleKey] = modelEntry;
         ConfigFileHelper.WriteConfigFile(paths.NetclawConfigPath, config);

@@ -88,7 +88,7 @@ public sealed class ModelCommandTests : IDisposable
         Assert.Equal("my-ollama", main.GetProperty("Provider").GetString());
         Assert.Equal("qwen3:30b", main.GetProperty("ModelId").GetString());
         Assert.Equal("Manual", main.GetProperty("Provenance").GetString());
-        Assert.Equal(32768, main.GetProperty("ContextWindow").GetInt32());
+        Assert.Equal(32768, main.GetProperty("ContextWindowOverride").GetInt32());
     }
 
     [Fact]
