@@ -84,6 +84,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     private string? _activeChannelType;
     private AutomaticRecallResult? _activeRecall;
 
+    // Startup context layers: injected on first LLM call, re-injected after compaction
+    private bool _startupContextInjected;
+
     // Skill auto-load state (transient — cleared on compaction, empty on recovery)
     private readonly HashSet<string> _autoLoadedSkills = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, string> _autoLoadedSkillContent = new(StringComparer.OrdinalIgnoreCase);
@@ -663,6 +666,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             {
                 _state = _state.Apply(evt);
                 _lastInputTokenCount = 0; // Reset — next LLM call will provide fresh count
+                _startupContextInjected = false; // Re-inject static layers on next LLM call
                 _autoLoadedSkills.Clear();
                 _autoLoadedSkillContent.Clear();
 
@@ -1585,8 +1589,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     /// <summary>
     /// Inject dynamic context layers as system messages after the persisted system prompt
-    /// but before user messages. This keeps context layers transient — they are regenerated
-    /// on every LLM call rather than being part of the persisted journal.
+    /// but before user messages. Static (<see cref="ContextLayerTiming.OnceAtStart"/>) layers
+    /// are injected on the first call and again after compaction resets
+    /// <see cref="_startupContextInjected"/>. Per-turn layers are always injected.
     /// </summary>
     private void InjectDynamicContextLayers(List<AiChatMessage> messages)
     {
@@ -1595,6 +1600,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         var parts = new List<string>();
         foreach (var layer in _contextLayers)
         {
+            if (_startupContextInjected && layer.Timing == ContextLayerTiming.OnceAtStart)
+                continue;
+
             var content = layer.GetContextLayer();
             if (!string.IsNullOrWhiteSpace(content))
                 parts.Add(content.Trim());
@@ -1602,6 +1610,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         // Session identity — allows the agent to reference its own session
         parts.Add($"[session]\nid: {_sessionId.Value}");
+
+        _startupContextInjected = true;
 
         var contextMessage = new AiChatMessage(
             Microsoft.Extensions.AI.ChatRole.System,
