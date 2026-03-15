@@ -3,7 +3,7 @@ name: netclaw-memory
 description: "Netclaw memory usage. Read when the user asks what Netclaw remembers, wants something saved for later, or when you need to decide between automatic recall, explicit memory search, and identity-file updates."
 metadata:
   author: netclaw
-  version: "1.0.0"
+  version: "0.6.0"
   triggers: what do you remember about me | remember this for later | save this for future sessions | recall prior details | search memory | fix an incorrect memory | memory seems wrong
 ---
 

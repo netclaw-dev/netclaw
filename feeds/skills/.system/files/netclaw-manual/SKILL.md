@@ -3,7 +3,7 @@ name: netclaw-manual
 description: "Netclaw Manual. Read when the user is asking what Netclaw can do, which command/tool to use, how to schedule work, switch models, manage providers, or discover available capabilities."
 metadata:
   author: netclaw
-  version: "1.0.0"
+  version: "0.6.0"
   triggers: what can netclaw do | what command should I use | can you schedule a cron job | schedule a reminder | switch models | change model | manage providers | manage mcp servers | list available tools | how do I do this in netclaw
 ---
 

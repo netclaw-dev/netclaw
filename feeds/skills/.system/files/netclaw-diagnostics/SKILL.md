@@ -3,7 +3,7 @@ name: netclaw-diagnostics
 description: "Netclaw diagnostics and session debugging. Read when the user wants to understand what happened in a Netclaw session, why a tool failed, why capabilities are missing, or whether daemon/memory/config health is degraded."
 metadata:
   author: netclaw
-  version: "1.0.0"
+  version: "0.6.0"
   triggers: what happened in this session | debug this session | why did netclaw do that | why did this tool fail | missing tools in this session | session timeout | daemon unhealthy | memory degraded | inspect netclaw logs
 ---
 
