@@ -75,6 +75,31 @@ public class CronScheduleHelperTests
         Assert.Equal(new DateTimeOffset(2026, 6, 15, 18, 0, 0, TimeSpan.Zero), next);
     }
 
+    [Theory]
+    [InlineData("*/15 * * * *", "every 15 minute(s)")]
+    [InlineData("0 */6 * * *", "every 6 hour(s)")]
+    [InlineData("0 9 * * *", "daily at 09:00 UTC")]
+    [InlineData("0 0 * * *", "daily at 00:00 UTC")]
+    [InlineData("0 9 * * MON-FRI", "weekdays at 09:00 UTC")]
+    [InlineData("0 9 * * 1-5", "weekdays at 09:00 UTC")]
+    [InlineData("0 9 * * SAT,SUN", "weekends at 09:00 UTC")]
+    [InlineData("0 9 * * MON", "every Monday at 09:00 UTC")]
+    [InlineData("0 14 * * FRI", "every Friday at 14:00 UTC")]
+    [InlineData("0 9 1 * *", "monthly on day 1 at 09:00 UTC")]
+    [InlineData("0 9 * * MON,WED,FRI", "every Mon, Wed, Fri at 09:00 UTC")]
+    public void Describe_translates_common_patterns(string cron, string expected)
+    {
+        Assert.Equal(expected, CronScheduleHelper.Describe(cron));
+    }
+
+    [Fact]
+    public void Describe_falls_back_for_complex_expressions()
+    {
+        // Complex expression that doesn't match simple patterns
+        var result = CronScheduleHelper.Describe("0 9 1-15 * MON");
+        Assert.StartsWith("cron '", result);
+    }
+
     private sealed class FakeTimeProvider(DateTimeOffset utcNow) : TimeProvider
     {
         public override DateTimeOffset GetUtcNow() => utcNow;

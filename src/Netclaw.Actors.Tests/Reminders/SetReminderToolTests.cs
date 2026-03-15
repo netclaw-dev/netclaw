@@ -34,6 +34,7 @@ public class SetReminderToolTests : TestKit
         {
             var result = await tool.ExecuteAsync(new Dictionary<string, object?>
             {
+                ["Id"] = "test-reminder",
                 ["Name"] = "test-reminder",
                 ["Prompt"] = "Check the server",
                 ["ScheduleType"] = "once",
@@ -43,8 +44,10 @@ public class SetReminderToolTests : TestKit
         });
 
         var cmd = await probe.ExpectMsgAsync<SaveReminderCommand>(TimeSpan.FromSeconds(5));
+        Assert.Equal("test-reminder", cmd.Definition.Id);
         Assert.Equal("Check the server", cmd.Definition.Instructions);
         Assert.Equal(ReminderScheduleType.OneShot, cmd.Definition.Schedule.Type);
+        Assert.Equal(ReminderWriteMode.Upsert, cmd.WriteMode);
 
         var expectedFire = _timeProvider.GetUtcNow().AddMinutes(30);
         Assert.NotNull(cmd.Definition.Schedule.FireAt);
@@ -70,6 +73,7 @@ public class SetReminderToolTests : TestKit
         {
             var result = await tool.ExecuteAsync(new Dictionary<string, object?>
             {
+                ["Id"] = "interval-check",
                 ["Name"] = "interval-check",
                 ["Prompt"] = "Run diagnostics",
                 ["ScheduleType"] = "interval",
@@ -79,8 +83,10 @@ public class SetReminderToolTests : TestKit
         });
 
         var cmd = await probe.ExpectMsgAsync<SaveReminderCommand>(TimeSpan.FromSeconds(5));
+        Assert.Equal("interval-check", cmd.Definition.Id);
         Assert.Equal(ReminderScheduleType.Interval, cmd.Definition.Schedule.Type);
         Assert.Equal(TimeSpan.FromHours(2), cmd.Definition.Schedule.Interval);
+        Assert.Equal(ReminderWriteMode.Upsert, cmd.WriteMode);
 
         probe.Reply(new ReminderSavedResponse(
             new ReminderId(cmd.Definition.Id),
@@ -101,6 +107,7 @@ public class SetReminderToolTests : TestKit
         {
             var result = await tool.ExecuteAsync(new Dictionary<string, object?>
             {
+                ["Id"] = "cron-check",
                 ["Name"] = "cron-check",
                 ["Prompt"] = "Periodic scan",
                 ["ScheduleType"] = "cron",
@@ -110,8 +117,10 @@ public class SetReminderToolTests : TestKit
         });
 
         var cmd = await probe.ExpectMsgAsync<SaveReminderCommand>(TimeSpan.FromSeconds(5));
+        Assert.Equal("cron-check", cmd.Definition.Id);
         Assert.Equal(ReminderScheduleType.Cron, cmd.Definition.Schedule.Type);
         Assert.Equal("0 */6 * * *", cmd.Definition.Schedule.CronExpression);
+        Assert.Equal(ReminderWriteMode.Upsert, cmd.WriteMode);
 
         probe.Reply(new ReminderSavedResponse(
             new ReminderId(cmd.Definition.Id),
@@ -130,6 +139,7 @@ public class SetReminderToolTests : TestKit
 
         var result = await tool.ExecuteAsync(new Dictionary<string, object?>
         {
+            ["Id"] = "bad-cron",
             ["Name"] = "bad-cron",
             ["Prompt"] = "Test",
             ["ScheduleType"] = "cron",
@@ -149,6 +159,7 @@ public class SetReminderToolTests : TestKit
 
         var result = await tool.ExecuteAsync(new Dictionary<string, object?>
         {
+            ["Id"] = "bad-type",
             ["Name"] = "bad-type",
             ["Prompt"] = "Test",
             ["ScheduleType"] = "weekly",
@@ -167,6 +178,7 @@ public class SetReminderToolTests : TestKit
 
         var result = await tool.ExecuteAsync(new Dictionary<string, object?>
         {
+            ["Id"] = "too-fast",
             ["Name"] = "too-fast",
             ["Prompt"] = "Test",
             ["ScheduleType"] = "interval",
@@ -188,6 +200,7 @@ public class SetReminderToolTests : TestKit
         {
             var result = await tool.ExecuteAsync(new Dictionary<string, object?>
             {
+                ["Id"] = "self-target",
                 ["Name"] = "self-target",
                 ["Prompt"] = "Check weather",
                 ["ScheduleType"] = "once",
@@ -197,15 +210,50 @@ public class SetReminderToolTests : TestKit
         });
 
         var cmd = await probe.ExpectMsgAsync<SaveReminderCommand>(TimeSpan.FromSeconds(5));
+        Assert.Equal("self-target", cmd.Definition.Id);
         Assert.Equal("C0123ABC", cmd.Definition.ReportToChannel);
         Assert.Equal("1234567890.123456", cmd.Definition.ReportToThreadTs);
         Assert.Equal("C0123ABC/1234567890.123456", cmd.Definition.SessionId);
+        Assert.Equal(ReminderWriteMode.Upsert, cmd.WriteMode);
 
         probe.Reply(new ReminderSavedResponse(
             new ReminderId(cmd.Definition.Id),
             cmd.Definition.Title,
             Success: true,
             NextFire: _timeProvider.GetUtcNow().AddMinutes(5)));
+
+        await execution;
+    }
+
+    [Fact]
+    public async Task Normalizes_id_to_kebab_case()
+    {
+        var probe = CreateTestProbe();
+        var tool = new SetReminderTool(probe, _timeProvider, new ReminderConfig());
+
+        var execution = Task.Run(async () =>
+        {
+            var result = await tool.ExecuteAsync(new Dictionary<string, object?>
+            {
+                ["Id"] = "RAM Price Tracking",
+                ["Name"] = "RAM Price Tracking",
+                ["Prompt"] = "Check prices",
+                ["ScheduleType"] = "interval",
+                ["Schedule"] = "24h"
+            });
+            return result;
+        });
+
+        var cmd = await probe.ExpectMsgAsync<SaveReminderCommand>(TimeSpan.FromSeconds(5));
+        Assert.Equal("ram-price-tracking", cmd.Definition.Id);
+        Assert.Equal("RAM Price Tracking", cmd.Definition.Title);
+        Assert.Equal(ReminderWriteMode.Upsert, cmd.WriteMode);
+
+        probe.Reply(new ReminderSavedResponse(
+            new ReminderId(cmd.Definition.Id),
+            cmd.Definition.Title,
+            Success: true,
+            NextFire: _timeProvider.GetUtcNow().AddHours(24)));
 
         await execution;
     }

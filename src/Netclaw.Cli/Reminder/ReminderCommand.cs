@@ -85,26 +85,34 @@ internal static class ReminderCommand
 
     private static async Task<int> RunCreateAsync(HttpClient client, string baseUrl, string[] args)
     {
-        // netclaw reminder create <name> <scheduleType> <schedule> "<prompt>" [--target <#channel|@user|id>] [--channel <id>]
+        // netclaw reminder create <id> <scheduleType> <schedule> "<prompt>" [--name <title>] [--target <#channel|@user|id>] [--channel <id>]
         if (args.Length < 6)
         {
-            Console.Error.WriteLine("Usage: netclaw reminder create <name> <scheduleType> <schedule> \"<prompt>\" [--target <#channel|@user|id>] [--channel <id>]");
+            Console.Error.WriteLine("Usage: netclaw reminder create <id> <scheduleType> <schedule> \"<prompt>\" [--name <title>] [--target <#channel|@user|id>] [--channel <id>]");
             Console.Error.WriteLine();
+            Console.Error.WriteLine("  id:           Stable reminder identifier (kebab-case slug, e.g. 'daily-standup')");
             Console.Error.WriteLine("  scheduleType: once, interval, cron");
             Console.Error.WriteLine("  schedule:     '30m', '2h', '0 */6 * * *', etc.");
+            Console.Error.WriteLine();
+            Console.Error.WriteLine("If a reminder with the given ID already exists, it will be updated.");
             return 1;
         }
 
-        var name = args[2];
+        var id = args[2];
         var scheduleType = args[3];
         var schedule = args[4];
         var prompt = args[5];
+        string? name = null;
         string? channel = null;
         string? reportTarget = null;
 
         for (var i = 6; i < args.Length; i++)
         {
-            if (args[i] is "--channel" && i + 1 < args.Length)
+            if (args[i] is "--name" && i + 1 < args.Length)
+            {
+                name = args[++i];
+            }
+            else if (args[i] is "--channel" && i + 1 < args.Length)
             {
                 channel = args[++i];
             }
@@ -114,10 +122,12 @@ internal static class ReminderCommand
             }
         }
 
+        name ??= id;
         reportTarget ??= channel;
 
         var body = new
         {
+            id,
             name,
             prompt,
             scheduleType,
@@ -434,7 +444,7 @@ internal static class ReminderCommand
         Console.WriteLine();
         Console.WriteLine("Subcommands:");
         Console.WriteLine("  list                                          List all active reminders");
-        Console.WriteLine("  create <name> <type> <schedule> \"<prompt>\"    Create a reminder");
+        Console.WriteLine("  create <id> <type> <schedule> \"<prompt>\"      Create or update a reminder");
         Console.WriteLine("  delete <id>                                   Delete a reminder");
         Console.WriteLine("  disable <id>                                  Disable a reminder");
         Console.WriteLine("  enable <id>                                   Enable a reminder");
@@ -443,8 +453,11 @@ internal static class ReminderCommand
         Console.WriteLine("  show <id>                                     Show reminder details");
         Console.WriteLine();
         Console.WriteLine("Create options:");
+        Console.WriteLine("  --name    <title>                              Human-readable title (defaults to <id>)");
         Console.WriteLine("  --target  <#channel|@user|C...|U...>          Human-friendly or canonical Slack target");
         Console.WriteLine("  --channel <id>                                 Back-compat alias (channel id or name)");
+        Console.WriteLine();
+        Console.WriteLine("If a reminder with the given ID already exists, it will be updated (upsert).");
         Console.WriteLine();
         Console.WriteLine("Schedule types: once, interval, cron");
         Console.WriteLine("Schedule examples: '30m', '2h', '1d', '0 */6 * * *'");
