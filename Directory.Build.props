@@ -7,44 +7,20 @@
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
-    <VersionPrefix>0.6.0</VersionPrefix>
-    <PackageReleaseNotes>Netclaw v0.6.0 — Subagents, deterministic skill loading, and reminder idempotency
+    <VersionPrefix>0.6.1</VersionPrefix>
+    <PackageReleaseNotes>Netclaw v0.6.1 — Init wizard hardening and installer progress indicators
 
-IMPORTANT: This is a breaking change release. All installs prior to 0.6.0 are unsupported and no migration path is provided. Read the Breaking Changes section before upgrading.
+**Init Wizard**
 
-**Breaking Changes**
+* Removed the Memory backend selection step from the init wizard — SQLite is the only supported backend and no user input is needed. The underlying SQLite health check verification is retained. ([#247](https://github.com/Aaronontheweb/netclaw/pull/247))
+* Fixed bracketed paste being silently dropped in the init wizard — `PasteEvent` is now routed to the active text input, matching behavior in the chat and reminder pages. ([#247](https://github.com/Aaronontheweb/netclaw/pull/247))
+* Replaced the single-line primary use description field with a multi-line text area so operators can enter longer descriptions without line truncation. ([#247](https://github.com/Aaronontheweb/netclaw/pull/247))
+* Added `xoxb-`/`xapp-` prefix validation on Slack token submit — invalid tokens are rejected inline with a status message before the wizard advances. ([#247](https://github.com/Aaronontheweb/netclaw/pull/247))
+* Wrapped each async health check stage with per-operation timeouts so the init wizard no longer hangs indefinitely: Slack probe 15s, channel resolution 35s, browser bootstrap 3 minutes, daemon poll 5s per request, overall 5 minutes. ([#247](https://github.com/Aaronontheweb/netclaw/pull/247))
 
-* The skills feed has moved to skills.netclaw.dev and all skill version numbers have been bumped to 0.6.0. The feed format is incompatible with daemons older than 0.6.0 — older installs will not receive skill updates and may fail to parse the new manifest. There is no plan to support or maintain any Netclaw version prior to 0.6.0.
-* Removed memorizer and files memory backend options. MemoryConfig.Provider no longer accepts memorizer or files values — SQLite is now the only supported memory backend. Configurations referencing either removed option must be updated before upgrading. ([#233](https://github.com/Aaronontheweb/netclaw/pull/233))
-* set_reminder now requires a caller-provided Id as a mandatory parameter. Existing reminder automations or scripts that omit an ID will fail. The reminder create CLI command now takes &lt;id&gt; as its first positional argument. ([#241](https://github.com/Aaronontheweb/netclaw/pull/241))
+**Installer**
 
-**Subagents**
-
-* Added spawn_agent tool and SubAgentDefinitionRegistry so the frontline agent can delegate tasks to named subagents — research-assistant, code-analyst, and summarizer are seeded during netclaw init. Operators can define custom agents by placing ~/.netclaw/agents/&lt;name&gt;.json and companion &lt;name&gt;.md prompt files in that directory. ([#226](https://github.com/Aaronontheweb/netclaw/pull/226))
-
-**Skills Platform**
-
-* Skills now load deterministically before each LLM call based on conversation context — a keyword index scores skills against the current turn. This fixes cases where the agent omitted source URLs in search responses because search-citation was never loaded. ([#230](https://github.com/Aaronontheweb/netclaw/pull/230))
-* System skills are now published to skills.netclaw.dev (Cloudflare R2) with cumulative historical retention. The manifest gains an allVersions array for future version pinning and rollback. ([#243](https://github.com/Aaronontheweb/netclaw/pull/243))
-* System skills renamed to Netclaw-prefixed intent-based IDs (netclaw-manual, netclaw-memory, netclaw-diagnostics). On-disk skill directories migrate automatically on next daemon start. ([#239](https://github.com/Aaronontheweb/netclaw/pull/239))
-* Fixed search responses in Slack to use inline hyperlinks instead of footnote-style citation markers. ([#235](https://github.com/Aaronontheweb/netclaw/pull/235))
-
-**Reminders**
-
-* set_reminder upsert semantics: same ID updates the existing reminder instead of creating a duplicate. Schedule descriptions are now human-readable (e.g. weekdays at 09:00 UTC; next-fire times include day-of-week and local timezone). ([#241](https://github.com/Aaronontheweb/netclaw/pull/241))
-
-**Local Model Reliability**
-
-* Context window detection for OpenAI-compatible providers now prefers the live runtime value from the model server over training metadata, with startup validation against the runtime maximum. ([#238](https://github.com/Aaronontheweb/netclaw/pull/238))
-* Fixed image handling for OpenAI-compatible providers: images attached in Slack were silently dropped in multi-turn conversations. Also suppressed raw tool_call XML leaking into Slack responses and fixed duplicate tool call loops. ([#227](https://github.com/Aaronontheweb/netclaw/pull/227))
-
-**Provider Diagnostics**
-
-* Provider probe failures now surface the actual API error message from the response body instead of a generic message. Error wording updated from API key to credentials to be accurate for OAuth paths. ([#228](https://github.com/Aaronontheweb/netclaw/pull/228), [#224](https://github.com/Aaronontheweb/netclaw/pull/224))
-
-**Stability**
-
-* Fixed a startup crash on minimal Linux systems without ICU libraries — self-contained netclawd and netclaw binaries now enable InvariantGlobalization and no longer require libicu at runtime. ([#223](https://github.com/Aaronontheweb/netclaw/pull/223))</PackageReleaseNotes>
+* Added download progress indicators to the install scripts — the Bash installer shows `curl --progress-bar` when stderr is a TTY and falls back to silent mode in non-interactive contexts (CI). The PowerShell installer shows a spinner via a background runspace to avoid the `Write-Progress` performance penalty on PowerShell 5.1. ([#246](https://github.com/Aaronontheweb/netclaw/pull/246))</PackageReleaseNotes>
   </PropertyGroup>
   <PropertyGroup>
     <NetCoreTestVersion>net10.0</NetCoreTestVersion>

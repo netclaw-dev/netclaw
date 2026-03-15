@@ -1,3 +1,19 @@
+#### 0.6.1 2026-03-15 ####
+
+Netclaw v0.6.1 — Init wizard hardening and installer progress indicators
+
+**Init Wizard**
+
+* Removed the Memory backend selection step from the init wizard — SQLite is the only supported backend and no user input is needed. The underlying SQLite health check verification is retained. ([#247](https://github.com/Aaronontheweb/netclaw/pull/247))
+* Fixed bracketed paste being silently dropped in the init wizard — `PasteEvent` is now routed to the active text input, matching behavior in the chat and reminder pages. ([#247](https://github.com/Aaronontheweb/netclaw/pull/247))
+* Replaced the single-line primary use description field with a multi-line text area so operators can enter longer descriptions without line truncation. ([#247](https://github.com/Aaronontheweb/netclaw/pull/247))
+* Added `xoxb-`/`xapp-` prefix validation on Slack token submit — invalid tokens are rejected inline with a status message before the wizard advances. ([#247](https://github.com/Aaronontheweb/netclaw/pull/247))
+* Wrapped each async health check stage with per-operation timeouts so the init wizard no longer hangs indefinitely: Slack probe 15s, channel resolution 35s, browser bootstrap 3 minutes, daemon poll 5s per request, overall 5 minutes. ([#247](https://github.com/Aaronontheweb/netclaw/pull/247))
+
+**Installer**
+
+* Added download progress indicators to the install scripts — the Bash installer shows `curl --progress-bar` when stderr is a TTY and falls back to silent mode in non-interactive contexts (CI). The PowerShell installer shows a spinner via a background runspace to avoid the `Write-Progress` performance penalty on PowerShell 5.1. ([#246](https://github.com/Aaronontheweb/netclaw/pull/246))
+
 #### 0.6.0 2026-03-15 ####
 
 Netclaw v0.6.0 — Subagents, deterministic skill loading, and reminder idempotency
