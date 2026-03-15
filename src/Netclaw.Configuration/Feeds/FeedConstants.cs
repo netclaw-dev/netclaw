@@ -24,6 +24,13 @@ public static class FeedConstants
     public const string BinaryManifestUrl = "https://releases.netclaw.dev/manifest.json";
 
     /// <summary>
+    /// Base URL for skill file downloads (Cloudflare R2 + custom domain).
+    /// Skill files are immutable and cached indefinitely at versioned URLs.
+    /// The manifest URL remains at <see cref="FeedBaseUrl"/> on Cloudflare Pages.
+    /// </summary>
+    public const string SkillFilesBaseUrl = "https://skills.netclaw.dev";
+
+    /// <summary>
     /// HTTP timeout for feed manifest and skill downloads.
     /// Short timeout ensures startup is never blocked by network issues.
     /// </summary>
