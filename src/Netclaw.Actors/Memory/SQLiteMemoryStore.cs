@@ -155,24 +155,24 @@ public sealed class SQLiteMemoryStore
         // durable auto-recall memory. This repo is prototype-only; normalize any
         // existing rows aggressively to prevent recall pollution.
         await using var hygieneCmd = conn.CreateCommand();
-        hygieneCmd.CommandText = """
+        hygieneCmd.CommandText = $"""
             UPDATE memory_documents
-            SET recall_mode = 'never'
+            SET recall_mode = '{MemoryRecallMode.Never.ToWireValue()}'
             WHERE title = 'turn-completion'
-               OR update_semantics = 'conversation_trace';
+               OR update_semantics = '{MemoryUpdateSemantics.ConversationTrace.ToWireValue()}';
             """;
         await hygieneCmd.ExecuteNonQueryAsync(ct);
 
         await using var metadataCmd = conn.CreateCommand();
         metadataCmd.CommandText = $"""
             UPDATE memory_documents
-            SET recall_mode = 'searchable',
+            SET recall_mode = '{MemoryRecallMode.Searchable.ToWireValue()}',
                 facets_json = CASE
                     WHEN facets_json IS NULL OR TRIM(facets_json) = '' THEN '[\"{MissingMetadataFacet}\"]'
                     ELSE facets_json
                 END
-            WHERE memory_class = 'durable_fact'
-              AND recall_mode = 'auto'
+            WHERE memory_class = '{MemoryClass.DurableFact.ToWireValue()}'
+              AND recall_mode = '{MemoryRecallMode.Auto.ToWireValue()}'
               AND (
                     title LIKE 'doc:%'
                  OR aliases_json IS NULL
@@ -291,12 +291,12 @@ public sealed class SQLiteMemoryStore
               ({scoredTerms}) AS token_score
             FROM memory_documents d
             INNER JOIN memory_anchors a ON a.anchor_id = d.anchor_id
-            WHERE d.recall_mode = 'auto'
-              AND d.sensitivity != 'secret'
+            WHERE d.recall_mode = '{MemoryRecallMode.Auto.ToWireValue()}'
+              AND d.sensitivity != '{MemorySensitivity.Secret.ToWireValue()}'
               AND d.domain = $domain
               AND (d.expires_at IS NULL OR d.expires_at > $now)
               AND d.title != 'turn-completion'
-              AND d.update_semantics != 'conversation_trace'
+              AND d.update_semantics != '{MemoryUpdateSemantics.ConversationTrace.ToWireValue()}'
               AND ({whereTerms})
             ORDER BY token_score DESC, d.confidence DESC, d.updated_at DESC
             LIMIT $limit;
@@ -543,7 +543,7 @@ public sealed class SQLiteMemoryStore
                     d.updated_at AS sort_ts
                 FROM memory_documents d
                 WHERE (d.title LIKE $query OR d.markdown_body LIKE $query)
-                  AND d.recall_mode IN ('auto', 'searchable')
+                  AND d.recall_mode IN ('{MemoryRecallMode.Auto.ToWireValue()}', '{MemoryRecallMode.Searchable.ToWireValue()}')
 
                 UNION ALL
 
@@ -560,7 +560,7 @@ public sealed class SQLiteMemoryStore
                     r.created_at AS sort_ts
                 FROM memory_records r
                 WHERE (r.record_type LIKE $query OR r.payload_json LIKE $query)
-                  AND r.recall_mode IN ('auto', 'searchable')
+                  AND r.recall_mode IN ('{MemoryRecallMode.Auto.ToWireValue()}', '{MemoryRecallMode.Searchable.ToWireValue()}')
             ) all_memories
             ORDER BY confidence DESC, sort_ts DESC
             LIMIT $limit;
@@ -595,14 +595,14 @@ public sealed class SQLiteMemoryStore
 
         var documents = ids
             .Select(ParseTypedId)
-            .Where(x => x.Kind is "document" or "unknown")
+            .Where(x => x.Kind is MemoryKind.Document or MemoryKind.Unknown)
             .Select(x => x.Id)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
 
         var records = ids
             .Select(ParseTypedId)
-            .Where(x => x.Kind is "record" or "unknown")
+            .Where(x => x.Kind is MemoryKind.Record or MemoryKind.Unknown)
             .Select(x => x.Id)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
@@ -755,8 +755,8 @@ public sealed class SQLiteMemoryStore
                 FROM memory_documents d
                 WHERE 1 = 1
                   {documentDomainClause}
-                  AND d.recall_mode IN ('auto', 'searchable')
-                  AND d.sensitivity != 'secret'
+                  AND d.recall_mode IN ('{MemoryRecallMode.Auto.ToWireValue()}', '{MemoryRecallMode.Searchable.ToWireValue()}')
+                  AND d.sensitivity != '{MemorySensitivity.Secret.ToWireValue()}'
                   AND d.memory_class IN ({whereClasses})
                   AND ({documentWhereTerms})
                   AND (d.expires_at IS NULL OR d.expires_at > $now OR $allowExpiredEvidence = 1)
@@ -782,8 +782,8 @@ public sealed class SQLiteMemoryStore
                 FROM memory_records r
                 WHERE 1 = 1
                   {recordDomainClause}
-                  AND r.recall_mode IN ('auto', 'searchable')
-                  AND r.sensitivity != 'secret'
+                  AND r.recall_mode IN ('{MemoryRecallMode.Auto.ToWireValue()}', '{MemoryRecallMode.Searchable.ToWireValue()}')
+                  AND r.sensitivity != '{MemorySensitivity.Secret.ToWireValue()}'
                   AND r.memory_class IN ({whereClasses})
                   AND ({recordWhereTerms})
                   AND (r.expires_at IS NULL OR r.expires_at > $now OR $allowExpiredEvidence = 1)
@@ -860,8 +860,8 @@ public sealed class SQLiteMemoryStore
         await using var cmd = conn.CreateCommand();
         cmd.CommandText = """
             UPDATE memory_documents
-            SET update_semantics = 'tombstone',
-                recall_mode = 'never',
+            SET update_semantics = '{MemoryUpdateSemantics.Tombstone.ToWireValue()}',
+                recall_mode = '{MemoryRecallMode.Never.ToWireValue()}',
                 updated_at = $updatedAt
             WHERE document_id = $id;
             """;
@@ -906,7 +906,7 @@ public sealed class SQLiteMemoryStore
               record_id, anchor_id, record_type, payload_json, supersedes_record_id,
               update_semantics, domain, sensitivity, recall_mode, confidence, freshness_at, created_at)
             VALUES($id, $anchorId, $recordType, $payload, $supersedes,
-              'supersede-record', $domain, $sensitivity, $recallMode, $confidence, $freshnessAt, $createdAt);
+              '{MemoryUpdateSemantics.SupersedeRecord.ToWireValue()}', $domain, $sensitivity, $recallMode, $confidence, $freshnessAt, $createdAt);
             """;
         insert.Parameters.AddWithValue("$id", newId);
         insert.Parameters.AddWithValue("$anchorId", anchorId);
@@ -956,7 +956,7 @@ public sealed class SQLiteMemoryStore
 
             await EnsureAnchorAsync(conn, tx, anchor, ct);
 
-            if (operation.Kind == "record")
+            if (operation.Kind == MemoryKind.Record.ToWireValue())
             {
                 await using var recordCmd = conn.CreateCommand();
                 recordCmd.Transaction = tx;
@@ -990,8 +990,8 @@ public sealed class SQLiteMemoryStore
                 continue;
             }
 
-            var resolvedRecallMode = string.Equals(operation.MemoryClass, "trace", StringComparison.OrdinalIgnoreCase)
-                ? "never"
+            var resolvedRecallMode = string.Equals(operation.MemoryClass, MemoryClass.Trace.ToWireValue(), StringComparison.OrdinalIgnoreCase)
+                ? MemoryRecallMode.Never.ToWireValue()
                 : operation.RecallMode;
 
             await using var documentCmd = conn.CreateCommand();
@@ -1055,14 +1055,7 @@ public sealed class SQLiteMemoryStore
         await tx.CommitAsync(ct);
     }
 
-    private static (string Kind, string Id) ParseTypedId(string raw)
-    {
-        if (raw.StartsWith("doc:", StringComparison.OrdinalIgnoreCase))
-            return ("document", raw[4..]);
-        if (raw.StartsWith("rec:", StringComparison.OrdinalIgnoreCase))
-            return ("record", raw[4..]);
-        return ("unknown", raw);
-    }
+    private static MemoryTypedId ParseTypedId(string raw) => MemoryTypedId.Parse(raw);
 
     private static async Task EnsureAnchorAsync(
         SqliteConnection conn,
@@ -1137,8 +1130,8 @@ public sealed class SQLiteMemoryStore
             CanonicalName: canonicalName,
             ParentAnchorId: null,
             Domain: domain,
-            Sensitivity: "normal",
-            RecallMode: "auto",
+            Sensitivity: MemorySensitivity.Normal.ToWireValue(),
+            RecallMode: MemoryRecallMode.Auto.ToWireValue(),
             Confidence: 0.8,
             FreshnessAtMs: nowMs,
             Status: "active",

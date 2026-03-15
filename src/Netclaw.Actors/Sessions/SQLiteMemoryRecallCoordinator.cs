@@ -119,7 +119,7 @@ public sealed class SQLiteMemoryRecallCoordinator(
                     request.RecentEntities ?? [],
                     [],
                     FallbackSearchTerms(effectiveQuery, request.RecentUserMessages),
-                    ["durable_fact"],
+                    [Memory.MemoryClass.DurableFact.ToWireValue()],
                     maxItems,
                     false),
                     fallbackRequest);
@@ -250,7 +250,7 @@ public sealed class SQLiteMemoryRecallCoordinator(
                     request.RecentEntities ?? [],
                     [],
                     FallbackSearchTerms(effectiveQuery, request.RecentUserMessages),
-                    ["durable_fact"],
+                    [Memory.MemoryClass.DurableFact.ToWireValue()],
                     maxItems,
                     false),
                 plannerRequest);
@@ -319,21 +319,21 @@ public sealed class SQLiteMemoryRecallCoordinator(
         var score = 0;
 
         // Prefer deterministic durable classes and explicit/inferred semantics.
-        if (string.Equals(document.MemoryClass, "durable_fact", StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(document.MemoryClass, Memory.MemoryClass.DurableFact.ToWireValue(), StringComparison.OrdinalIgnoreCase))
             score += 120;
-        else if (string.Equals(document.MemoryClass, "evidence", StringComparison.OrdinalIgnoreCase))
+        else if (string.Equals(document.MemoryClass, Memory.MemoryClass.Evidence.ToWireValue(), StringComparison.OrdinalIgnoreCase))
             score += 40;
-        else if (string.Equals(document.MemoryClass, "trace", StringComparison.OrdinalIgnoreCase))
+        else if (string.Equals(document.MemoryClass, Memory.MemoryClass.Trace.ToWireValue(), StringComparison.OrdinalIgnoreCase))
             score -= 400;
 
-        if (string.Equals(document.UpdateSemantics, "merge-document", StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(document.UpdateSemantics, Memory.MemoryUpdateSemantics.MergeDocument.ToWireValue(), StringComparison.OrdinalIgnoreCase))
             score += 80;
         else if (string.Equals(document.UpdateSemantics, "append-document", StringComparison.OrdinalIgnoreCase))
             score += 60;
-        else if (string.Equals(document.UpdateSemantics, "conversation_trace", StringComparison.OrdinalIgnoreCase))
+        else if (string.Equals(document.UpdateSemantics, Memory.MemoryUpdateSemantics.ConversationTrace.ToWireValue(), StringComparison.OrdinalIgnoreCase))
             score -= 300;
 
-        if (string.Equals(document.UpdateSemantics, "immutable-record", StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(document.UpdateSemantics, Memory.MemoryUpdateSemantics.ImmutableRecord.ToWireValue(), StringComparison.OrdinalIgnoreCase))
             score += 30;
 
         if (string.Equals(document.Title, "turn-completion", StringComparison.OrdinalIgnoreCase))

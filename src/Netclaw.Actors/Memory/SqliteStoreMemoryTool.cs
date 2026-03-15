@@ -37,7 +37,7 @@ public sealed partial class SqliteStoreMemoryTool : NetclawTool<SqliteStoreMemor
 
         var payload = new MemoryCheckpointPayload(
             SessionId: sessionId,
-            TriggerType: "explicit-memory-request",
+            TriggerType: CheckpointTriggerType.ExplicitMemoryRequest.ToWireValue(),
             Source: "store_memory",
             Content: args.Content,
             UserContent: args.Content,
@@ -47,12 +47,12 @@ public sealed partial class SqliteStoreMemoryTool : NetclawTool<SqliteStoreMemor
             IsCompactionBoundary: false,
             HasAcceptedSubAgentFinding: false,
             Domain: ResolveDomain(sessionId),
-            Sensitivity: "normal",
-            RecallMode: "auto",
+            Sensitivity: MemorySensitivity.Normal.ToWireValue(),
+            RecallMode: MemoryRecallMode.Auto.ToWireValue(),
             Confidence: 0.95,
             Title: args.Title,
-            UpdateSemantics: "merge-document",
-            Kind: "document");
+            UpdateSemantics: MemoryUpdateSemantics.MergeDocument.ToWireValue(),
+            Kind: MemoryKind.Document.ToWireValue());
 
         var result = await _checkpointSink.EnqueueAsync(new MemoryCheckpointRequest(
             SessionId: sessionId,

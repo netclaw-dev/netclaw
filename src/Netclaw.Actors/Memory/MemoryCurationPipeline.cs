@@ -30,16 +30,16 @@ public sealed record MemoryCheckpointPayload(
     long? FreshnessAtMs = null);
 
 public sealed record MemoryCheckpointCandidate(
-    string Kind,
-    string MemoryClass,
+    MemoryKind Kind,
+    MemoryClass MemoryClass,
     string AnchorCanonicalName,
     string AnchorType,
     string Title,
     string Content,
-    string UpdateSemantics,
+    MemoryUpdateSemantics UpdateSemantics,
     string Domain,
     string Sensitivity,
-    string RecallMode,
+    MemoryRecallMode RecallMode,
     double Confidence,
     string? AliasesJson,
     string? FacetsJson,
@@ -51,9 +51,6 @@ public sealed record MemoryCheckpointCandidate(
 
 public sealed class MemoryRulesFirstExtractor(MemoryPolicyEvaluator policy)
 {
-    private const string DurableFact = "durable_fact";
-    private const string Evidence = "evidence";
-    private const string Trace = "trace";
     private static readonly TimeSpan EvidenceExpiry = TimeSpan.FromDays(30);
     private static readonly TimeSpan TraceExpiry = TimeSpan.FromHours(72);
     private static readonly Regex ProjectStatementPattern = new(
@@ -85,7 +82,8 @@ public sealed class MemoryRulesFirstExtractor(MemoryPolicyEvaluator policy)
         if (!decision.Allowed)
             return results;
 
-        if (string.Equals(payload.TriggerType, "turn-complete", StringComparison.OrdinalIgnoreCase)
+        if (MemoryDomainEnumExtensions.TryFromWireValue(payload.TriggerType, out CheckpointTriggerType trigger)
+            && trigger == CheckpointTriggerType.TurnComplete
             && !payload.IsExplicitRequest)
         {
             var promoted = TryExtractProjectOperatingFact(payload, fingerprintSet);
@@ -96,15 +94,15 @@ public sealed class MemoryRulesFirstExtractor(MemoryPolicyEvaluator policy)
         }
 
         var memoryClass = ResolveMemoryClass(payload);
-        if (memoryClass == Trace && !payload.IsExplicitRequest)
+        if (memoryClass == MemoryClass.Trace && !payload.IsExplicitRequest)
             return results;
 
         var kind = ResolveKind(payload);
         var title = ResolveTitle(payload, kind, content);
         var updateSemantics = ResolveUpdateSemantics(payload, kind, memoryClass);
         var anchor = ResolveAnchor(content, payload.SessionId);
-        var anchorType = kind == "record" ? "event" : "concept";
-        var fingerprint = BuildFingerprint(kind, payload.Domain, title, content);
+        var anchorType = kind == MemoryKind.Record ? "event" : "concept";
+        var fingerprint = BuildFingerprint(kind.ToWireValue(), payload.Domain, title, content);
         if (fingerprintSet.Contains(fingerprint))
             return results;
 
@@ -131,19 +129,19 @@ public sealed class MemoryRulesFirstExtractor(MemoryPolicyEvaluator policy)
         return results;
     }
 
-    private static string ResolveMemoryClass(MemoryCheckpointPayload payload)
+    private static MemoryClass ResolveMemoryClass(MemoryCheckpointPayload payload)
     {
         if (payload.IsExplicitRequest ||
-            string.Equals(payload.TriggerType, "explicit-memory-request", StringComparison.OrdinalIgnoreCase))
-            return DurableFact;
+            string.Equals(payload.TriggerType, CheckpointTriggerType.ExplicitMemoryRequest.ToWireValue(), StringComparison.OrdinalIgnoreCase))
+            return MemoryClass.DurableFact;
 
         if (payload.HasVerifiedToolFinding || payload.HasAcceptedSubAgentFinding || payload.IsCompactionBoundary)
-            return Evidence;
+            return MemoryClass.Evidence;
 
-        if (string.Equals(payload.TriggerType, "turn-complete", StringComparison.OrdinalIgnoreCase))
-            return Trace;
+        if (string.Equals(payload.TriggerType, CheckpointTriggerType.TurnComplete.ToWireValue(), StringComparison.OrdinalIgnoreCase))
+            return MemoryClass.Trace;
 
-        return DurableFact;
+        return MemoryClass.DurableFact;
     }
 
     private static bool IsEphemeral(string content)
@@ -152,47 +150,55 @@ public sealed class MemoryRulesFirstExtractor(MemoryPolicyEvaluator policy)
         return lowered is "ok" or "thanks" or "thank you" or "sounds good";
     }
 
-    private static string ResolveKind(MemoryCheckpointPayload payload)
+    private static MemoryKind ResolveKind(MemoryCheckpointPayload payload)
     {
-        if (string.Equals(payload.TriggerType, "turn-complete", StringComparison.OrdinalIgnoreCase)
+        if (string.Equals(payload.TriggerType, CheckpointTriggerType.TurnComplete.ToWireValue(), StringComparison.OrdinalIgnoreCase)
             && !payload.IsExplicitRequest)
-            return "record";
+            return MemoryKind.Record;
 
         if (!string.IsNullOrWhiteSpace(payload.Kind))
-            return payload.Kind;
+        {
+            if (MemoryDomainEnumExtensions.TryFromWireValue(payload.Kind, out MemoryKind parsed))
+                return parsed;
+            return MemoryKind.Document;
+        }
 
         if (payload.HasVerifiedToolFinding || payload.TriggerType.Contains("tool", StringComparison.OrdinalIgnoreCase))
-            return "record";
+            return MemoryKind.Record;
 
-        return "document";
+        return MemoryKind.Document;
     }
 
-    private static string ResolveUpdateSemantics(MemoryCheckpointPayload payload, string kind, string memoryClass)
+    private static MemoryUpdateSemantics ResolveUpdateSemantics(MemoryCheckpointPayload payload, MemoryKind kind, MemoryClass memoryClass)
     {
-        if (!string.IsNullOrWhiteSpace(payload.UpdateSemantics))
-            return payload.UpdateSemantics;
+        if (!string.IsNullOrWhiteSpace(payload.UpdateSemantics)
+            && MemoryDomainEnumExtensions.TryFromWireValue(payload.UpdateSemantics, out MemoryUpdateSemantics parsed))
+            return parsed;
 
         if (payload.Delete)
-            return "tombstone";
+            return MemoryUpdateSemantics.Tombstone;
 
-        if (memoryClass == Trace)
-            return "conversation_trace";
+        if (memoryClass == MemoryClass.Trace)
+            return MemoryUpdateSemantics.ConversationTrace;
 
-        return kind == "record" ? "immutable-record" : "merge-document";
+        return kind == MemoryKind.Record ? MemoryUpdateSemantics.ImmutableRecord : MemoryUpdateSemantics.MergeDocument;
     }
 
-    private static string ResolveRecallMode(MemoryCheckpointPayload payload, string memoryClass)
+    private static MemoryRecallMode ResolveRecallMode(MemoryCheckpointPayload payload, MemoryClass memoryClass)
     {
-        if (memoryClass == Trace)
-            return "never";
+        if (memoryClass == MemoryClass.Trace)
+            return MemoryRecallMode.Never;
 
-        if (memoryClass == Evidence)
-            return "searchable";
+        if (memoryClass == MemoryClass.Evidence)
+            return MemoryRecallMode.Searchable;
 
-        return payload.RecallMode;
+        if (MemoryDomainEnumExtensions.TryFromWireValue(payload.RecallMode, out MemoryRecallMode parsed))
+            return parsed;
+
+        return MemoryRecallMode.Auto;
     }
 
-    private static long? ResolveExpiry(MemoryCheckpointPayload payload, string memoryClass)
+    private static long? ResolveExpiry(MemoryCheckpointPayload payload, MemoryClass memoryClass)
     {
         var freshnessAt = payload.FreshnessAtMs;
         if (!freshnessAt.HasValue)
@@ -200,18 +206,18 @@ public sealed class MemoryRulesFirstExtractor(MemoryPolicyEvaluator policy)
 
         return memoryClass switch
         {
-            Evidence => freshnessAt.Value + (long)EvidenceExpiry.TotalMilliseconds,
-            Trace => freshnessAt.Value + (long)TraceExpiry.TotalMilliseconds,
+            MemoryClass.Evidence => freshnessAt.Value + (long)EvidenceExpiry.TotalMilliseconds,
+            MemoryClass.Trace => freshnessAt.Value + (long)TraceExpiry.TotalMilliseconds,
             _ => null
         };
     }
 
-    private static string ResolveTitle(MemoryCheckpointPayload payload, string kind, string content)
+    private static string ResolveTitle(MemoryCheckpointPayload payload, MemoryKind kind, string content)
     {
         if (!string.IsNullOrWhiteSpace(payload.Title))
             return payload.Title;
 
-        if (kind == "record")
+        if (kind == MemoryKind.Record)
             return payload.TriggerType;
 
         return content.Length <= 72 ? content : content[..72];
@@ -247,14 +253,14 @@ public sealed class MemoryRulesFirstExtractor(MemoryPolicyEvaluator policy)
 
         if (TryMatchCompletedStatement(userText, out var completedCandidate))
         {
-            var completedFingerprint = BuildFingerprint(completedCandidate.Kind, completedCandidate.Domain, completedCandidate.Title, completedCandidate.Content);
+            var completedFingerprint = BuildFingerprint(completedCandidate.Kind.ToWireValue(), completedCandidate.Domain, completedCandidate.Title, completedCandidate.Content);
             return fingerprintSet.Contains(completedFingerprint) ? null : completedCandidate;
         }
 
         if (!TryMatchProjectStatement(userText, payload.Domain, payload.FreshnessAtMs, out var candidate))
             return null;
 
-        var fingerprint = BuildFingerprint(candidate.Kind, candidate.Domain, candidate.Title, candidate.Content);
+        var fingerprint = BuildFingerprint(candidate.Kind.ToWireValue(), candidate.Domain, candidate.Title, candidate.Content);
         return fingerprintSet.Contains(fingerprint) ? null : candidate;
 
         bool TryMatchCompletedStatement(string text, out MemoryCheckpointCandidate matched)
@@ -276,16 +282,17 @@ public sealed class MemoryRulesFirstExtractor(MemoryPolicyEvaluator policy)
             var normalizedObject = NormalizeSentence(rawObject);
             var title = $"Project Milestone: {SummarizeObject(rawObject)}";
             matched = new MemoryCheckpointCandidate(
-                Kind: "document",
-                MemoryClass: DurableFact,
+                Kind: MemoryKind.Document,
+                MemoryClass: MemoryClass.DurableFact,
                 AnchorCanonicalName: Slugify(rawObject),
                 AnchorType: "milestone",
                 Title: title,
                 Content: normalizedObject,
-                UpdateSemantics: "merge-document",
+                UpdateSemantics: MemoryUpdateSemantics.MergeDocument,
                 Domain: payload.Domain,
                 Sensitivity: payload.Sensitivity,
-                RecallMode: payload.RecallMode,
+                RecallMode: MemoryDomainEnumExtensions.TryFromWireValue(payload.RecallMode, out MemoryRecallMode rm)
+                    ? rm : MemoryRecallMode.Auto,
                 Confidence: Math.Max(payload.Confidence, 0.86),
                 AliasesJson: SerializeValues([SummarizeObject(rawObject)]),
                 FacetsJson: SerializeValues(["project_fact", "delivery_status"]),
@@ -330,18 +337,18 @@ public sealed class MemoryRulesFirstExtractor(MemoryPolicyEvaluator policy)
             : "Project Fact";
 
         candidate = new MemoryCheckpointCandidate(
-            Kind: "document",
-            MemoryClass: DurableFact,
+            Kind: MemoryKind.Document,
+            MemoryClass: MemoryClass.DurableFact,
             AnchorCanonicalName: Slugify(rawSubject),
             AnchorType: rawSubject.StartsWith("our ", StringComparison.OrdinalIgnoreCase) || rawSubject.StartsWith("the ", StringComparison.OrdinalIgnoreCase)
                 ? "workflow"
                 : "project",
             Title: $"{titlePrefix}: {subjectLabel} {NormalizeVerb(rawVerb)} {objectLabel}",
             Content: normalizedContent,
-            UpdateSemantics: "merge-document",
+            UpdateSemantics: MemoryUpdateSemantics.MergeDocument,
             Domain: domain,
-            Sensitivity: "normal",
-            RecallMode: "auto",
+            Sensitivity: MemorySensitivity.Normal.ToWireValue(),
+            RecallMode: MemoryRecallMode.Auto,
             Confidence: 0.88,
             AliasesJson: SerializeValues([subjectLabel, objectLabel]),
             FacetsJson: SerializeValues(["project_fact", facet]),
@@ -415,7 +422,7 @@ public sealed class MemoryCurationEngine(SQLiteMemoryStore store, MemoryRulesFir
         MemoryCheckpointPayload? payload;
         try
         {
-            if (checkpoint.TriggerType == "observed-memory-proposals")
+            if (checkpoint.TriggerType == CheckpointTriggerType.ObservedMemoryProposals.ToWireValue())
             {
                 var observed = JsonSerializer.Deserialize<ObservedMemoryCheckpointPayload>(checkpoint.PayloadJson);
                 return observed?.Operations ?? [];
@@ -441,18 +448,18 @@ public sealed class MemoryCurationEngine(SQLiteMemoryStore store, MemoryRulesFir
             return [];
 
         return candidates.Select(c => new SQLiteMemoryCurationOperation(
-            Kind: c.Kind,
-            MemoryClass: c.MemoryClass,
+            Kind: c.Kind.ToWireValue(),
+            MemoryClass: c.MemoryClass.ToWireValue(),
             MemoryId: c.MemoryId,
             AnchorCanonicalName: c.AnchorCanonicalName,
             AnchorType: c.AnchorType,
             Title: c.Title,
             Content: c.Content,
             Relations: null,
-            UpdateSemantics: c.UpdateSemantics,
+            UpdateSemantics: c.UpdateSemantics.ToWireValue(),
             Domain: c.Domain,
             Sensitivity: c.Sensitivity,
-            RecallMode: c.RecallMode,
+            RecallMode: c.RecallMode.ToWireValue(),
             Confidence: c.Confidence,
             AliasesJson: c.AliasesJson,
             FacetsJson: c.FacetsJson,

@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.Extensions.AI;
+using Netclaw.Actors.Memory;
 
 namespace Netclaw.Actors.Sessions;
 
@@ -105,27 +106,35 @@ internal static class SessionSidecarRunner
 
     private static string NormalizeOperation(string raw)
     {
+        var upsert = MemoryProposalOperation.UpsertDocument.ToWireValue();
+        var append = MemoryProposalOperation.AppendRecord.ToWireValue();
+        var ignore = MemoryProposalOperation.Ignore.ToWireValue();
+
         var value = NormalizeToken(raw);
         return value switch
         {
-            "upsertdocument" => "upsert_document",
-            "upsert_document" or "store_document" or "store" or "save" or "remember" => "upsert_document",
-            "appendrecord" => "append_record",
-            "append_record" or "append" or "record" or "evidence_record" => "append_record",
-            "ignore" or "skip" or "none" => "ignore",
+            "upsertdocument" => upsert,
+            "upsert_document" or "store_document" or "store" or "save" or "remember" => upsert,
+            "appendrecord" => append,
+            "append_record" or "append" or "record" or "evidence_record" => append,
+            "ignore" or "skip" or "none" => ignore,
             _ => raw
         };
     }
 
     private static string NormalizeMemoryClass(string raw)
     {
+        var durableFact = MemoryClass.DurableFact.ToWireValue();
+        var evidence = MemoryClass.Evidence.ToWireValue();
+        var trace = MemoryClass.Trace.ToWireValue();
+
         var value = NormalizeToken(raw);
         return value switch
         {
-            "durablefact" => "durable_fact",
-            "durable_fact" or "durable" or "fact" or "preference" => "durable_fact",
-            "evidence" or "research" or "finding" => "evidence",
-            "trace" or "breadcrumb" or "diagnostic" => "trace",
+            "durablefact" => durableFact,
+            "durable_fact" or "durable" or "fact" or "preference" => durableFact,
+            "evidence" or "research" or "finding" => evidence,
+            "trace" or "breadcrumb" or "diagnostic" => trace,
             _ => raw
         };
     }

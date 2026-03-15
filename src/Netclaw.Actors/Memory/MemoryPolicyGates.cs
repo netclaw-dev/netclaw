@@ -62,19 +62,20 @@ public sealed class MemoryProposalGate
                 continue;
             }
 
-            if (proposal.Operation is not ("upsert_document" or "append_record"))
+            if (!MemoryDomainEnumExtensions.TryFromWireValue(proposal.Operation, out MemoryProposalOperation operation)
+                || operation == MemoryProposalOperation.Ignore)
             {
                 CountReject("invalid-operation");
                 continue;
             }
 
-            if (proposal.MemoryClass is not ("durable_fact" or "evidence" or "trace"))
+            if (!MemoryDomainEnumExtensions.TryFromWireValue(proposal.MemoryClass, out MemoryClass memoryClass))
             {
                 CountReject("invalid-memory-class");
                 continue;
             }
 
-            if (!HasRequiredRetrievalMetadata(proposal))
+            if (!HasRequiredRetrievalMetadata(proposal, memoryClass))
             {
                 CountReject("missing-retrieval-metadata");
                 continue;
@@ -82,7 +83,7 @@ public sealed class MemoryProposalGate
 
             if (string.Equals(proposal.TargetSurface, "identity_profile", StringComparison.OrdinalIgnoreCase))
             {
-                if (!IsIdentityEligible(proposal))
+                if (!IsIdentityEligible(proposal, memoryClass))
                 {
                     CountReject("invalid-identity-surface");
                     continue;
@@ -93,7 +94,7 @@ public sealed class MemoryProposalGate
                     proposal.Content,
                     proposal.Rationale));
 
-                var mirrorOperation = TryBuildIdentityMirrorOperation(proposal, domain, defaultSensitivity, nowMs);
+                var mirrorOperation = TryBuildIdentityMirrorOperation(proposal, operation, memoryClass, domain, defaultSensitivity, nowMs);
                 if (mirrorOperation is not null)
                     accepted.Add(mirrorOperation);
 
@@ -104,12 +105,12 @@ public sealed class MemoryProposalGate
                 ? defaultSensitivity
                 : proposal.Sensitivity;
 
-            var recallMode = ResolveRecallMode(proposal, sensitivity);
+            var recallMode = ResolveRecallMode(memoryClass, sensitivity);
             var freshnessAt = proposal.FreshUntilMs ?? nowMs;
-            var expiry = ResolveExpiry(proposal, freshnessAt);
+            var expiry = ResolveExpiry(memoryClass, proposal.ExpiresAtMs, freshnessAt);
             var content = proposal.Content;
 
-            if (proposal.MemoryClass == "evidence" || proposal.MemoryClass == "trace")
+            if (memoryClass is MemoryClass.Evidence or MemoryClass.Trace)
             {
                 var envelope = new EvidenceEnvelope(
                     proposal.SubjectKind,
@@ -122,7 +123,7 @@ public sealed class MemoryProposalGate
                 content = JsonSerializer.Serialize(envelope);
             }
 
-            accepted.Add(BuildMemoryOperation(proposal, domain, sensitivity, recallMode, freshnessAt, expiry, content));
+            accepted.Add(BuildMemoryOperation(proposal, operation, memoryClass, domain, sensitivity, recallMode, freshnessAt, expiry, content));
         }
 
         return new MemoryProposalGateResult(
@@ -138,41 +139,40 @@ public sealed class MemoryProposalGate
             => rejectionReasons[reason] = rejectionReasons.TryGetValue(reason, out var current) ? current + 1 : 1;
     }
 
-    private static string ResolveRecallMode(MemoryProposal proposal, string sensitivity)
+    private static MemoryRecallMode ResolveRecallMode(MemoryClass memoryClass, string sensitivity)
     {
-        if (string.Equals(sensitivity, "secret", StringComparison.OrdinalIgnoreCase))
-            return "never";
+        if (MemoryDomainEnumExtensions.TryFromWireValue(sensitivity, out MemorySensitivity sens)
+            && sens == MemorySensitivity.Secret)
+            return MemoryRecallMode.Never;
 
-        return proposal.MemoryClass switch
+        return memoryClass switch
         {
-            "durable_fact" => "auto",
-            "evidence" => "searchable",
-            _ => "never"
+            MemoryClass.DurableFact => MemoryRecallMode.Auto,
+            MemoryClass.Evidence => MemoryRecallMode.Searchable,
+            _ => MemoryRecallMode.Never
         };
     }
 
-    private static long? ResolveExpiry(MemoryProposal proposal, long freshnessAt)
+    private static long? ResolveExpiry(MemoryClass memoryClass, long? proposalExpiry, long freshnessAt)
     {
-        if (proposal.ExpiresAtMs.HasValue)
-            return proposal.ExpiresAtMs;
+        if (proposalExpiry.HasValue)
+            return proposalExpiry;
 
-        return proposal.MemoryClass switch
+        return memoryClass switch
         {
-            "evidence" => freshnessAt + (long)EvidenceExpiry.TotalMilliseconds,
-            "trace" => freshnessAt + (long)TraceExpiry.TotalMilliseconds,
+            MemoryClass.Evidence => freshnessAt + (long)EvidenceExpiry.TotalMilliseconds,
+            MemoryClass.Trace => freshnessAt + (long)TraceExpiry.TotalMilliseconds,
             _ => null
         };
     }
 
-    private static bool IsIdentityEligible(MemoryProposal proposal)
+    private static bool IsIdentityEligible(MemoryProposal proposal, MemoryClass memoryClass)
     {
-        if (proposal.MemoryClass != "durable_fact")
+        if (memoryClass != MemoryClass.DurableFact)
             return false;
 
-        var isUser = string.Equals(proposal.SubjectKind, "user", StringComparison.OrdinalIgnoreCase);
-        var isAssistant = string.Equals(proposal.SubjectKind, "assistant", StringComparison.OrdinalIgnoreCase);
-        var isAgent = string.Equals(proposal.SubjectKind, "agent", StringComparison.OrdinalIgnoreCase);
-        if (!isUser && !isAssistant && !isAgent)
+        MemoryDomainEnumExtensions.TryFromWireValue(proposal.SubjectKind, out SubjectKind subjectKind);
+        if (subjectKind is not (SubjectKind.User or SubjectKind.Assistant or SubjectKind.Agent))
             return false;
 
         var title = proposal.Title ?? string.Empty;
@@ -180,7 +180,7 @@ public sealed class MemoryProposalGate
         if (IdentityTitlePattern.IsMatch(title) || IdentityTitlePattern.IsMatch(rationale))
             return true;
 
-        if (!isUser)
+        if (subjectKind != SubjectKind.User)
             return false;
 
         var facets = proposal.Facets ?? [];
@@ -193,11 +193,14 @@ public sealed class MemoryProposalGate
 
     private static SQLiteMemoryCurationOperation? TryBuildIdentityMirrorOperation(
         MemoryProposal proposal,
+        MemoryProposalOperation operation,
+        MemoryClass memoryClass,
         string domain,
         string defaultSensitivity,
         long nowMs)
     {
-        if (!string.Equals(proposal.SubjectKind, "user", StringComparison.OrdinalIgnoreCase))
+        if (!MemoryDomainEnumExtensions.TryFromWireValue(proposal.SubjectKind, out SubjectKind subjectKind)
+            || subjectKind != SubjectKind.User)
             return null;
 
         var facets = proposal.Facets ?? [];
@@ -212,27 +215,37 @@ public sealed class MemoryProposalGate
             ? defaultSensitivity
             : proposal.Sensitivity;
 
-        if (string.Equals(sensitivity, "secret", StringComparison.OrdinalIgnoreCase))
+        if (MemoryDomainEnumExtensions.TryFromWireValue(sensitivity, out MemorySensitivity sens)
+            && sens == MemorySensitivity.Secret)
             return null;
 
         var freshnessAt = proposal.FreshUntilMs ?? nowMs;
-        var expiry = ResolveExpiry(proposal, freshnessAt);
-        var recallMode = ResolveRecallMode(proposal, sensitivity);
-        return BuildMemoryOperation(proposal, domain, sensitivity, recallMode, freshnessAt, expiry, proposal.Content);
+        var expiry = ResolveExpiry(memoryClass, proposal.ExpiresAtMs, freshnessAt);
+        var recallMode = ResolveRecallMode(memoryClass, sensitivity);
+        return BuildMemoryOperation(proposal, operation, memoryClass, domain, sensitivity, recallMode, freshnessAt, expiry, proposal.Content);
     }
 
     private static SQLiteMemoryCurationOperation BuildMemoryOperation(
         MemoryProposal proposal,
+        MemoryProposalOperation operation,
+        MemoryClass memoryClass,
         string domain,
         string sensitivity,
-        string recallMode,
+        MemoryRecallMode recallMode,
         long freshnessAt,
         long? expiry,
         string content)
     {
+        var kind = operation == MemoryProposalOperation.AppendRecord ? MemoryKind.Record : MemoryKind.Document;
+        var updateSemantics = memoryClass == MemoryClass.Trace
+            ? MemoryUpdateSemantics.ConversationTrace
+            : operation == MemoryProposalOperation.AppendRecord
+                ? MemoryUpdateSemantics.ImmutableRecord
+                : MemoryUpdateSemantics.MergeDocument;
+
         return new SQLiteMemoryCurationOperation(
-            Kind: proposal.Operation == "append_record" ? "record" : "document",
-            MemoryClass: proposal.MemoryClass,
+            Kind: kind.ToWireValue(),
+            MemoryClass: memoryClass.ToWireValue(),
             MemoryId: null,
             AnchorCanonicalName: string.IsNullOrWhiteSpace(proposal.Anchor?.CanonicalName)
                 ? (string.IsNullOrWhiteSpace(proposal.SubjectValue) ? proposal.Title : proposal.SubjectValue)
@@ -244,23 +257,21 @@ public sealed class MemoryProposalGate
             Content: content,
             AliasesJson: SerializeStringList(proposal.Aliases),
             FacetsJson: SerializeStringList(proposal.Facets),
-            SlotsJson: SerializeSlots(proposal),
-            Relations: BuildRelations(proposal),
-            UpdateSemantics: proposal.MemoryClass == "trace"
-                ? "conversation_trace"
-                : proposal.Operation == "append_record" ? "immutable-record" : "merge-document",
+            SlotsJson: SerializeSlots(proposal, memoryClass),
+            Relations: BuildRelations(proposal, memoryClass),
+            UpdateSemantics: updateSemantics.ToWireValue(),
             Domain: domain,
             Sensitivity: sensitivity,
-            RecallMode: recallMode,
+            RecallMode: recallMode.ToWireValue(),
             Confidence: Math.Clamp(proposal.Confidence, 0.0, 1.0),
             FreshnessAtMs: freshnessAt,
             ExpiresAtMs: expiry,
             SupersedesRecordId: null);
     }
 
-    private static bool HasRequiredRetrievalMetadata(MemoryProposal proposal)
+    private static bool HasRequiredRetrievalMetadata(MemoryProposal proposal, MemoryClass memoryClass)
     {
-        if (proposal.MemoryClass == "trace")
+        if (memoryClass == MemoryClass.Trace)
             return true;
 
         if (proposal.Anchor is null || string.IsNullOrWhiteSpace(proposal.Anchor.CanonicalName) || string.IsNullOrWhiteSpace(proposal.Anchor.AnchorType))
@@ -284,17 +295,17 @@ public sealed class MemoryProposalGate
         return cleaned.Length == 0 ? null : JsonSerializer.Serialize(cleaned);
     }
 
-    private static string? SerializeSlots(MemoryProposal proposal)
+    private static string? SerializeSlots(MemoryProposal proposal, MemoryClass memoryClass)
     {
-        if (proposal.MemoryClass != "durable_fact")
+        if (memoryClass != MemoryClass.DurableFact)
             return null;
 
         return SerializeStringList(proposal.Slots);
     }
 
-    private static IReadOnlyList<SQLiteMemoryRelationOperation>? BuildRelations(MemoryProposal proposal)
+    private static IReadOnlyList<SQLiteMemoryRelationOperation>? BuildRelations(MemoryProposal proposal, MemoryClass memoryClass)
     {
-        if (proposal.MemoryClass != "durable_fact" || proposal.Confidence < 0.9)
+        if (memoryClass != MemoryClass.DurableFact || proposal.Confidence < 0.9)
             return null;
 
         var relations = proposal.Relations ?? [];
@@ -352,14 +363,19 @@ public sealed class RecallPlanGate
                 [],
                 [],
                 fallbackTerms,
-                request.Mode == "intentional" ? ["durable_fact", "evidence"] : ["durable_fact"],
+                request.Mode == "intentional"
+                    ? [MemoryClass.DurableFact.ToWireValue(), MemoryClass.Evidence.ToWireValue()]
+                    : [MemoryClass.DurableFact.ToWireValue()],
                 request.MaxResults,
                 false);
         }
 
+        var durableFactWire = MemoryClass.DurableFact.ToWireValue();
+        var evidenceWire = MemoryClass.Evidence.ToWireValue();
+
         var classes = request.Mode == "intentional"
-            ? plan.MemoryClasses.Where(c => c is "durable_fact" or "evidence").DefaultIfEmpty("durable_fact").Distinct(StringComparer.OrdinalIgnoreCase).ToArray()
-            : ["durable_fact"];
+            ? plan.MemoryClasses.Where(c => string.Equals(c, durableFactWire, StringComparison.OrdinalIgnoreCase) || string.Equals(c, evidenceWire, StringComparison.OrdinalIgnoreCase)).DefaultIfEmpty(durableFactWire).Distinct(StringComparer.OrdinalIgnoreCase).ToArray()
+            : [durableFactWire];
 
         var searchTerms = plan.SearchTerms
             .Where(t => !string.IsNullOrWhiteSpace(t))
