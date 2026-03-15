@@ -355,6 +355,26 @@ public sealed class SystemSkillSyncServiceTests : IDisposable
         Assert.Equal(64, hash1.Length); // SHA-256 = 32 bytes = 64 hex chars
     }
 
+    [Fact]
+    public async Task StartAsync_FallbackKeywordIndexCapturesTriggerPhrases()
+    {
+        var skillDir = Path.Combine(_paths.SystemSkillsDirectory, "netclaw-diagnostics");
+        Directory.CreateDirectory(skillDir);
+        File.WriteAllText(Path.Combine(skillDir, "SKILL.md"),
+            "---\nname: netclaw-diagnostics\ndescription: diagnose daemon issues\nmetadata:\n  triggers: session timeout | missing tools | check logs\n---\n\n# Self Diagnostics\n");
+
+        var handler = new FakeHttpHandler();
+        handler.AddErrorResponse(FeedConstants.SystemSkillsManifestUrl, HttpStatusCode.ServiceUnavailable);
+
+        var sut = CreateService(handler);
+        await sut.StartAsync(CancellationToken.None);
+
+        var index = Assert.Contains("netclaw-diagnostics", _skillRegistry.GetEnrichedKeywords());
+        Assert.Contains("session timeout", index.Phrases);
+        Assert.Contains("missing tool", index.Phrases);
+        Assert.DoesNotContain("check", index.Keywords);
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_tempDir))

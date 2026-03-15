@@ -31,6 +31,18 @@ internal sealed class SystemSkillSyncService : IHostedService
     private readonly IChatClientProvider? _chatClientProvider;
 
     private static readonly TimeSpan EnrichmentTimeout = TimeSpan.FromSeconds(30);
+    private static readonly HashSet<string> GenericKeywords = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "check", "checking", "status", "support", "supported", "new", "good", "best",
+        "help", "use", "using", "work", "working", "change", "changes", "run", "running",
+        "view", "show", "find", "look", "issue", "issues", "problem", "problems",
+        "netclaw"
+    };
+
+    private static readonly HashSet<string> GenericPhraseTokens = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "check", "status", "new", "good", "best", "help", "use", "run", "show", "view"
+    };
 
     public SystemSkillSyncService(
         HttpClient httpClient,
@@ -327,6 +339,15 @@ internal sealed class SystemSkillSyncService : IHostedService
                 }
             });
         }
+        else
+        {
+            foreach (var skill in _skillRegistry.GetAll())
+                ApplyFallbackKeywords(skill);
+
+            _logger.LogInformation(
+                "Skill keyword enrichment provider unavailable; loaded fallback keyword index for {SkillCount} skills",
+                _skillRegistry.GetEnrichedKeywords().Count);
+        }
     }
 
     // ── Skill keyword enrichment ──
@@ -373,35 +394,35 @@ internal sealed class SystemSkillSyncService : IHostedService
         var cached = LoadCachedKeywords(skill.Name, skill.Version, contentHash);
         if (cached is not null)
         {
-            _skillRegistry.SetEnrichedKeywords(skill.Name, cached);
-            _logger.LogDebug("Loaded cached keywords for {SkillName} ({Count} keywords)",
-                skill.Name, cached.Count);
+            _skillRegistry.SetEnrichedKeywords(skill.Name, cached.Keywords, cached.Phrases);
+            _logger.LogDebug("Loaded cached keywords for {SkillName} ({Count} keywords, {PhraseCount} phrases)",
+                skill.Name, cached.Keywords.Count, cached.Phrases.Count);
             return;
         }
 
         // Try sidecar LLM
-        var keywords = await GenerateKeywordsAsync(skill.Name, content);
-        if (keywords is null || keywords.Count == 0)
+        var generated = await GenerateKeywordsAsync(skill.Name, content);
+        if (generated is null || (generated.Keywords.Count == 0 && generated.Phrases.Count == 0))
         {
             _logger.LogWarning("Sidecar returned no keywords for {SkillName}, using fallback", skill.Name);
             ApplyFallbackKeywords(skill);
             return;
         }
 
-        _skillRegistry.SetEnrichedKeywords(skill.Name, keywords);
-        SaveCachedKeywords(skill.Name, skill.Version, contentHash, keywords);
-        _logger.LogInformation("Enriched {SkillName} with {Count} keywords via LLM",
-            skill.Name, keywords.Count);
+        _skillRegistry.SetEnrichedKeywords(skill.Name, generated.Keywords, generated.Phrases);
+        SaveCachedKeywords(skill.Name, skill.Version, contentHash, generated);
+        _logger.LogInformation("Enriched {SkillName} with {Count} keywords and {PhraseCount} phrases via LLM",
+            skill.Name, generated.Keywords.Count, generated.Phrases.Count);
     }
 
-    private async Task<HashSet<string>?> GenerateKeywordsAsync(string skillName, string content)
+    private async Task<GeneratedSkillKeywords?> GenerateKeywordsAsync(string skillName, string content)
     {
         if (_chatClientProvider is null)
             return null;
 
         try
         {
-            var client = _chatClientProvider.GetClient(ModelRole.Main);
+            var client = _chatClientProvider.GetClient(ModelRole.Compaction);
             using var cts = new CancellationTokenSource(EnrichmentTimeout);
 
             var messages = new List<ChatMessage>
@@ -412,14 +433,22 @@ internal sealed class SystemSkillSyncService : IHostedService
                     list of single words and short phrases (2-3 words max) that a USER might
                     say in a message when they would benefit from this skill's guidance.
 
+                    Focus on USER INTENT, not internal implementation terminology.
+                    Prefer phrases that answer: "what is the user trying to get Netclaw to do?"
+
                     Include:
-                    - Action verbs users would use (buy, find, compare, book, etc.)
-                    - Domain nouns the skill covers (price, product, flight, restaurant, etc.)
-                    - Common user phrasings (how much, best deal, where to, etc.)
-                    - Adjectives users might use (cheap, expensive, best, good, etc.)
+                    - Domain-specific action verbs users would use (buy, compare, diagnose, cite)
+                    - Domain nouns the skill covers (price, product, flight, timeout, memory)
+                    - High-signal user phrasings that are specific to this skill's domain
+
+                    Avoid:
+                    - generic workflow words that could apply to many skills (check, status, help, use, run, support)
+                    - adjectives or filler words unless they are domain-specific
+                    - keywords that only describe the skill authoring process rather than user intent
+                    - internal category labels unless users actually say them
 
                     Return ONLY the keywords, one per line, lowercase. No numbering, no
-                    explanations, no categories. Just the words.
+                    explanations, no categories. Favor precise keywords over broad ones.
                     """),
                 new(ChatRole.User, content)
             };
@@ -444,13 +473,33 @@ internal sealed class SystemSkillSyncService : IHostedService
                 return null;
 
             var keywords = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var phrases = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var line in text.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
             {
-                foreach (var token in TextTokenizer.Tokenize(line))
-                    keywords.Add(token);
+                var tokens = TextTokenizer.Tokenize(line);
+                if (tokens.Count == 0)
+                    continue;
+
+                if (tokens.Count >= 2)
+                {
+                    foreach (var phrase in TextTokenizer.MakeBigrams(tokens))
+                    {
+                        if (!IsGenericPhrase(phrase))
+                            phrases.Add(phrase);
+                    }
+                }
+
+                foreach (var token in tokens)
+                {
+                    if (!GenericKeywords.Contains(token))
+                        keywords.Add(token);
+                }
             }
 
-            return keywords.Count > 0 ? keywords : null;
+            if (keywords.Count == 0 && phrases.Count == 0)
+                return null;
+
+            return new GeneratedSkillKeywords(keywords, phrases);
         }
         catch (OperationCanceledException)
         {
@@ -466,15 +515,45 @@ internal sealed class SystemSkillSyncService : IHostedService
 
     private void ApplyFallbackKeywords(SkillEntry skill)
     {
-        var text = (skill.Triggers ?? string.Empty) + " " + skill.Description;
-        var keywords = TextTokenizer.Tokenize(text).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        if (keywords.Count > 0)
-            _skillRegistry.SetEnrichedKeywords(skill.Name, keywords);
+        var combined = new List<string>();
+        if (!string.IsNullOrWhiteSpace(skill.Triggers))
+            combined.Add(skill.Triggers);
+        if (!string.IsNullOrWhiteSpace(skill.Description))
+            combined.Add(skill.Description);
+
+        var tokens = TextTokenizer.Tokenize(string.Join(' ', combined));
+        var keywords = tokens
+            .Where(token => !GenericKeywords.Contains(token))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var phrases = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        if (!string.IsNullOrWhiteSpace(skill.Triggers))
+        {
+            foreach (var trigger in skill.Triggers.Split('|', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            {
+                var triggerTokens = TextTokenizer.Tokenize(trigger);
+                foreach (var phrase in TextTokenizer.MakeBigrams(triggerTokens))
+                {
+                    if (!IsGenericPhrase(phrase))
+                        phrases.Add(phrase);
+                }
+            }
+        }
+
+        if (keywords.Count > 0 || phrases.Count > 0)
+            _skillRegistry.SetEnrichedKeywords(skill.Name, keywords, phrases);
     }
 
     // ── Keyword cache I/O ──
 
-    private record KeywordCacheEntry(string SkillName, string? Version, string ContentHash, string[] Keywords);
+    private sealed record GeneratedSkillKeywords(HashSet<string> Keywords, HashSet<string> Phrases);
+
+    private record KeywordCacheEntry(
+        string SkillName,
+        string? Version,
+        string ContentHash,
+        string[] Keywords,
+        string[]? Phrases = null);
 
     private string GetKeywordCachePath(string skillName, string? version)
     {
@@ -482,7 +561,7 @@ internal sealed class SystemSkillSyncService : IHostedService
         return Path.Combine(_paths.SkillKeywordCacheDirectory, fileName);
     }
 
-    private HashSet<string>? LoadCachedKeywords(string skillName, string? version, string contentHash)
+    private GeneratedSkillKeywords? LoadCachedKeywords(string skillName, string? version, string contentHash)
     {
         var path = GetKeywordCachePath(skillName, version);
         if (!File.Exists(path))
@@ -495,7 +574,9 @@ internal sealed class SystemSkillSyncService : IHostedService
             if (entry is null || entry.ContentHash != contentHash)
                 return null;
 
-            return new HashSet<string>(entry.Keywords, StringComparer.OrdinalIgnoreCase);
+            return new GeneratedSkillKeywords(
+                new HashSet<string>(entry.Keywords, StringComparer.OrdinalIgnoreCase),
+                new HashSet<string>(entry.Phrases ?? [], StringComparer.OrdinalIgnoreCase));
         }
         catch (Exception ex)
         {
@@ -504,11 +585,16 @@ internal sealed class SystemSkillSyncService : IHostedService
         }
     }
 
-    private void SaveCachedKeywords(string skillName, string? version, string contentHash, HashSet<string> keywords)
+    private void SaveCachedKeywords(string skillName, string? version, string contentHash, GeneratedSkillKeywords generated)
     {
         try
         {
-            var entry = new KeywordCacheEntry(skillName, version, contentHash, keywords.ToArray());
+            var entry = new KeywordCacheEntry(
+                skillName,
+                version,
+                contentHash,
+                generated.Keywords.ToArray(),
+                generated.Phrases.ToArray());
             var json = JsonSerializer.Serialize(entry, new JsonSerializerOptions { WriteIndented = true });
             File.WriteAllText(GetKeywordCachePath(skillName, version), json);
         }
@@ -539,5 +625,11 @@ internal sealed class SystemSkillSyncService : IHostedService
 
         // If parsing fails, assume satisfied to avoid blocking skills unnecessarily
         return true;
+    }
+
+    private static bool IsGenericPhrase(string phrase)
+    {
+        var tokens = phrase.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        return tokens.Length > 0 && tokens.All(GenericPhraseTokens.Contains);
     }
 }

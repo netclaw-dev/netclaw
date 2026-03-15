@@ -17,7 +17,7 @@ Netclaw v0.5.0 — Observer-driven memory recall, local model reliability, and s
 **Skills Platform**
 
 * Adopted the AgentSkills.io SKILL.md standard: skills now use YAML frontmatter (name, description, triggers, license, compatibility, allowed-tools) and a directory-based layout (`skill-name/SKILL.md`) with progressive disclosure via `references/`, `scripts/`, and `assets/` subdirectories. Feed manifest supports per-file SHA-256 verification for multi-file skills. ([#216](https://github.com/Aaronontheweb/netclaw/pull/216))
-* Added `capability-reference` system skill — the agent's single authoritative reference for all 16 built-in tools across 5 grant categories, CLI commands, scheduling syntax, MCP discovery patterns, and session context. Also updates `self-diagnostics` to v1.2.0 with a cross-reference. ([#217](https://github.com/Aaronontheweb/netclaw/pull/217))
+* Added `netclaw-manual` system skill — the agent's single authoritative reference for all 16 built-in tools across 5 grant categories, CLI commands, scheduling syntax, MCP discovery patterns, and session context. Also updates `netclaw-diagnostics` to v1.2.0 with a cross-reference. ([#217](https://github.com/Aaronontheweb/netclaw/pull/217))
 * Added `search-citation` system skill — guides the agent on when to use `web_search` versus training data, requires source URLs for all specific factual claims, and covers local search, travel, and product search verticals with progressive disclosure reference files. ([#219](https://github.com/Aaronontheweb/netclaw/pull/219))
 
 **Session Self-Awareness**

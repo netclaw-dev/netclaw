@@ -1,11 +1,24 @@
 ---
-name: memory-usage
-description: How SQLite-backed memory now splits automatic durable recall from intentional evidence search
+name: netclaw-memory
+description: "Netclaw memory usage. Read when the user asks what Netclaw remembers, wants something saved for later, or when you need to decide between automatic recall, explicit memory search, and identity-file updates."
 metadata:
   author: netclaw
-  version: "1.4.0"
-  triggers: conversation start | user shares durable fact | need prior knowledge | memory error | save information
+  version: "1.0.0"
+  triggers: what do you remember about me | remember this for later | save this for future sessions | recall prior details | search memory | fix an incorrect memory | memory seems wrong
 ---
+
+# Netclaw Memory
+
+Use this skill when the user's intent is about Netclaw memory behavior:
+
+- asking what Netclaw remembers
+- asking to remember or save something for later
+- needing prior context beyond the automatic recall bundle
+- correcting or superseding an existing memory
+- deciding whether information belongs in memory or identity files
+
+If the user is updating long-lived preferences or identity/profile behavior,
+consider `netclaw-identity` instead.
 
 ## Default Model
 
@@ -81,7 +94,7 @@ Freshness rules:
 - `evidence` expires and is excluded from auto recall after expiry
 - `trace` is short-lived and never part of normal recall/search behavior
 
-## SOUL Boundary
+## Identity Boundary
 
 Do not use identity files as a sink for project facts, research passages, tool
 findings, or evidence. `SOUL.md` is only for narrow identity/profile updates.
@@ -92,7 +105,7 @@ When memory behavior looks wrong:
 
 1. `netclaw status`
 2. `netclaw doctor`
-3. read `self-diagnostics`
+3. read `netclaw-diagnostics`
 4. read `docs/runbooks/memory-health-and-evals.md`
 
 Useful log events:

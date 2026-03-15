@@ -37,8 +37,8 @@ budget without adding capability the agent didn't already have.
 
 ```
 ~/.netclaw/skills/
-  ├── identity-management.md    (built-in, copied from embedded resources)
-  ├── self-diagnostics.md       (built-in)
+  ├── netclaw-identity.md    (built-in, copied from embedded resources)
+  ├── netclaw-diagnostics.md       (built-in)
   └── user-created-skill.md     (user-created)
 
 Startup:
@@ -46,11 +46,11 @@ Startup:
 
 System prompt injection:
   SkillIndexContextLayer → "[skills — read with file_read for full instructions]
-    identity-management (/home/user/.netclaw/skills/identity-management.md)
+    netclaw-identity (/home/user/.netclaw/skills/netclaw-identity.md)
       How to read and update Netclaw identity files ...
     memorizer-usage (/home/user/.netclaw/skills/memorizer-usage.md)
       How to use the Memorizer MCP server ...
-    self-diagnostics (/home/user/.netclaw/skills/self-diagnostics.md)
+    netclaw-diagnostics (/home/user/.netclaw/skills/netclaw-diagnostics.md)
       How to check Netclaw configuration ..."
 ```
 
@@ -212,7 +212,7 @@ registry + search tool + context layer.
 The agent already has `file_read` and `file_write` which work on any path. The
 identity tools (`identity_read`, `identity_write`, `identity_list`) added three
 tool definitions that consumed context window tokens without providing
-capability the agent lacked. The `identity-management` built-in skill provides
+capability the agent lacked. The `netclaw-identity` built-in skill provides
 better guidance (what goes where, how to edit safely) than tool descriptions
 could.
 

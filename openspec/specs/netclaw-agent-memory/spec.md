@@ -44,13 +44,13 @@ The system SHALL bootstrap agent personality through the `netclaw init`
 onboarding wizard. The wizard SHALL collect owner identity, write initial
 `SOUL.md`, and configure the standard identity directory. The agent MAY
 refine personality through conversation using `file_write` on identity files,
-guided by the `identity-management` skill.
+guided by the `netclaw-identity` skill.
 
 ### Requirement: Self-configuration through conversation
 
 The system SHALL allow the agent to modify identity files (`SOUL.md`,
 `AGENTS.md`, `TOOLING.md`) and skill files (`~/.netclaw/skills/*.md`) through
-conversation using `file_read` and `file_write`. The `identity-management`
+conversation using `file_read` and `file_write`. The `netclaw-identity`
 built-in skill SHALL provide triage guidance for what information goes where.
 The agent SHALL NOT have tools that directly modify `netclaw.json`,
 `secrets.json`, ACL, or security policy.

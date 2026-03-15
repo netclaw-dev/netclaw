@@ -365,11 +365,11 @@ Done when:
 Done when:
 - [x] Init wizard Identity step (step 8 of 9) collects agent name and communication style.
 - [x] `WriteIdentityFiles()` writes `SOUL.md`, `AGENTS.md`, `TOOLING.md` to `~/.netclaw/identity/`.
-- [x] `identity-management` system skill provides triage guidance for identity file content.
+- [x] `netclaw-identity` system skill provides triage guidance for identity file content.
 
 > _Design note: conversational bootstrap was replaced with wizard-based bootstrap.
 > The agent refines personality through conversation using `file_write` on identity
-> files, guided by the `identity-management` skill._
+> files, guided by the `netclaw-identity` skill._
 
 ### Task M4.2: System prompt assembly verification
 
@@ -464,7 +464,7 @@ Done when:
 **Verification:** L1
 
 Done when:
-- [x] `memory-usage/1.1.0.md` — 4-tool surface, two-phase retrieval, update/delete, backend notes.
+- [x] `netclaw-memory/1.1.0.md` — 4-tool surface, two-phase retrieval, update/delete, backend notes.
 - [x] `memorizer-usage/1.1.0.md` — subagent delegation, two-tier model, advanced ops.
 - [x] Embedded copies in `src/Netclaw.Daemon/BuiltInSkills/` in sync.
 - [x] Manifest regenerated.

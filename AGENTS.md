@@ -153,11 +153,11 @@ feature area, the corresponding skill **must** be updated in the same PR.
 
 | Feature area changed | Skill to update |
 |----------------------|-----------------|
-| Identity files, SOUL/AGENTS/TOOLING paths, progressive disclosure | `identity-management` |
-| Memory provider routing, SQLite memory tools, general memory guidance | `memory-usage` |
-| Config format, daemon health, logs, MCP wiring, diagnostics CLI, doctor | `self-diagnostics` |
+| Identity files, SOUL/AGENTS/TOOLING paths, progressive disclosure | `netclaw-identity` |
+| Memory provider routing, SQLite memory tools, general memory guidance | `netclaw-memory` |
+| Config format, daemon health, logs, MCP wiring, diagnostics CLI, doctor | `netclaw-diagnostics` |
 | Skill file format, discovery, authoring workflow | `skill-authoring` |
-| Tool definitions, CLI commands, grant categories, search_tools, scheduling tools | `capability-reference` |
+| Tool definitions, CLI commands, grant categories, search_tools, scheduling tools | `netclaw-manual` |
 | Search tool behavior, citation policy, web_search/web_fetch usage guidance | `search-citation` |
 
 **Workflow:**

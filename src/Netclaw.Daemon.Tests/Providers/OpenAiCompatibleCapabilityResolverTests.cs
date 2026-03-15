@@ -35,6 +35,11 @@ public sealed class OpenAiCompatibleCapabilityResolverTests
     {
         const string json = """
         {
+          "default_generation_settings": {
+            "params": {
+              "n_ctx": 65536
+            }
+          },
           "modalities": {
             "vision": true
           }
@@ -46,7 +51,7 @@ public sealed class OpenAiCompatibleCapabilityResolverTests
         Assert.NotNull(result);
         Assert.Equal(ModelModality.Text | ModelModality.Image, result.InputModalities);
         Assert.Equal(ModelModality.Text, result.OutputModalities);
-        Assert.Equal(32768, result.ContextWindowTokens);
+        Assert.Equal(65536, result.ContextWindowTokens);
     }
 
     [Fact]
@@ -65,5 +70,23 @@ public sealed class OpenAiCompatibleCapabilityResolverTests
         Assert.NotNull(result);
         Assert.Equal(ModelModality.Text, result.InputModalities);
         Assert.Equal(32768, result.ContextWindowTokens);
+    }
+
+    [Fact]
+    public void ParsePropsResponse_UsesModelContextWindowWhenRuntimeValueMissing()
+    {
+        const string json = """
+        {
+          "modalities": {
+            "vision": true
+          }
+        }
+        """;
+
+        var result = OpenAiCompatibleCapabilityResolver.ParsePropsResponse(json, "Qwen3.5", 262144);
+
+        Assert.NotNull(result);
+        Assert.Equal(ModelModality.Text | ModelModality.Image, result.InputModalities);
+        Assert.Equal(262144, result.ContextWindowTokens);
     }
 }

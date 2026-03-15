@@ -1,11 +1,24 @@
 ---
-name: capability-reference
-description: "Quick-lookup catalog of all built-in tools, CLI commands, tool grant categories, scheduling syntax, MCP discovery, and subagent delegation limits. Read when unsure what tools or commands are available."
+name: netclaw-manual
+description: "Netclaw Manual. Read when the user is asking what Netclaw can do, which command/tool to use, how to schedule work, switch models, manage providers, or discover available capabilities."
 metadata:
   author: netclaw
-  version: "1.2.0"
-  triggers: what can I do | available tools | CLI commands | how to schedule | tool grants | MCP discovery | list capabilities | spawn_agent | subagents
+  version: "1.0.0"
+  triggers: what can netclaw do | what command should I use | can you schedule a cron job | schedule a reminder | switch models | change model | manage providers | manage mcp servers | list available tools | how do I do this in netclaw
 ---
+
+# Netclaw Manual
+
+Use this skill when the user's intent is about Netclaw's own capabilities:
+
+- which Netclaw command, tool, or workflow should be used
+- whether Netclaw can do something directly
+- how to schedule reminders or cron jobs through Netclaw
+- how to switch models, providers, or MCP servers
+- how to discover and use tools safely inside Netclaw
+
+If the user is asking about a Netclaw/session failure, log issue, missing tool, or
+runtime problem, read `netclaw-diagnostics` instead.
 
 ## Session Context
 
@@ -15,6 +28,16 @@ prompt. Use the session ID to:
 - reference yourself in scheduled reminders
 - correlate with `netclaw sessions` output for diagnostics
 - identify which session is running during troubleshooting
+
+## Fast Routing Guide
+
+| User intent | Go to |
+|-------------|-------|
+| "What can Netclaw do here?" | this skill |
+| "Can you schedule this for me?" | scheduling section below |
+| "How do I switch models/providers?" | configuration section below |
+| "What MCP tools are available?" | MCP discovery section below |
+| "Why did this session/tool run fail?" | `netclaw-diagnostics` |
 
 ## Built-in Tools by Grant Category
 
@@ -107,6 +130,9 @@ Generated MCP catalogs are cached at `identity/tooling/shadow/mcp/<server>.md`.
 
 ## Scheduling Quick Reference
 
+When the user says things like "schedule this," "set a cron job," or "remind me
+every weekday," use `set_reminder`.
+
 `set_reminder` accepts three schedule types:
 
 | Type | Schedule value examples |
@@ -148,7 +174,7 @@ scheduled work back to the originating conversation.
 
 | Command | Purpose |
 |---------|---------|
-| `netclaw doctor` | Offline config validation (see `self-diagnostics`) |
+| `netclaw doctor` | Offline config validation (see `netclaw-diagnostics`) |
 | `netclaw status` | Runtime health from daemon endpoint |
 
 ### Configuration
@@ -192,8 +218,8 @@ scheduled work back to the originating conversation.
 
 ## Cross-References
 
-- Memory tool usage: read `memory-usage`
-- Troubleshooting and diagnostics: read `self-diagnostics`
-- Identity file management: read `identity-management`
+- Memory tool usage: read `netclaw-memory`
+- Troubleshooting and diagnostics: read `netclaw-diagnostics`
+- Identity file management: read `netclaw-identity`
 - Creating new skills: read `skill-authoring`
 - Search behavior and citation policy: read `search-citation`

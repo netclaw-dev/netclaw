@@ -120,7 +120,7 @@ Named model roles. Each role points to a provider and model ID.
 |-------|------|---------|-------------|
 | `Provider` | string | `"local-ollama"` | Key into the `Providers` dictionary. |
 | `ModelId` | string | `"qwen3:30b"` | Model identifier as used by the provider's API. |
-| `ContextWindow` | int? | `null` | Context window size in tokens. Defaults to 32,768 if not set. Future: auto-discovered from provider. |
+| `ContextWindow` | int? | `null` | Effective runtime context window in tokens. When set, it clamps the detected provider value. If not set, Netclaw uses the provider-reported value when available, otherwise defaults to 32,768. |
 | `InputModalities` | string[]? | `null` | Manual override for input modalities (`"Text"`, `"Image"`, `"Audio"`, `"Video"`). When set, bypasses automated capability detection. |
 | `OutputModalities` | string[]? | `null` | Manual override for output modalities. Same values as `InputModalities`. |
 

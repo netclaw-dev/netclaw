@@ -30,7 +30,7 @@
 
 ## 6. Prompt Guidance, Skills, And Evaluation
 
-- [x] 6.1 Update system guidance artifacts that mention memory behavior, including `memory-usage` and `memorizer-usage`, to reflect automatic recall as primary and explicit tools as deliberate/manual control paths.
+- [x] 6.1 Update system guidance artifacts that mention memory behavior, including `netclaw-memory` and `memorizer-usage`, to reflect automatic recall as primary and explicit tools as deliberate/manual control paths.
 - [x] 6.2 Create the seeded eval suite and operational checks for recall quality, noise suppression, privacy behavior, and latency thresholds from this change.
 - [x] 6.3 Add a local Ollama eval profile using smaller models as the default gate for memory recall/curation quality before larger-model validation.
 

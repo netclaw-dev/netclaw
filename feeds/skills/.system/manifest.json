@@ -1,44 +1,54 @@
 {
   "schemaVersion": 1,
   "feedType": "system",
-  "updatedAt": "2026-03-14T04:55:45Z",
+  "updatedAt": "2026-03-14T17:19:25Z",
   "skills": [
     {
-      "name": "capability-reference",
-      "version": "1.2.0",
+      "name": "netclaw-diagnostics",
+      "version": "1.0.0",
       "minimumDaemonVersion": "0.1.0",
-      "sha256": "15767f0fb8d96f1bf88b9d1a207786252b83c22a050f02d70aaf65f786f62922",
-      "sizeBytes": 7504,
-      "url": "https://feeds.netclaw.dev/skills/.system/files/capability-reference/1.2.0/SKILL.md",
+      "sha256": "05445103322016bb4c0941de6d500c5d4de1adeaf73ffe5ee2314c1f4baeb1bb",
+      "sizeBytes": 4424,
+      "url": "https://feeds.netclaw.dev/skills/.system/files/netclaw-diagnostics/1.0.0/SKILL.md",
       "category": null,
-      "description": "Quick-lookup catalog of all built-in tools, CLI commands, tool grant categories, scheduling syntax, MCP discovery, and subagent delegation limits. Read when unsure what tools or commands are available."
+      "description": "Netclaw diagnostics and session debugging. Read when the user wants to understand what happened in a Netclaw session, why a tool failed, why capabilities are missing, or whether daemon/memory/config health is degraded."
     },
     {
-      "name": "identity-management",
-      "version": "1.1.0",
+      "name": "netclaw-identity",
+      "version": "1.0.0",
       "minimumDaemonVersion": "0.1.0",
-      "sha256": "c39546ad80fdc549bcb9df77f5d46cc56c4925a6eec4efeeee134e90ac61971d",
-      "sizeBytes": 2425,
-      "url": "https://feeds.netclaw.dev/skills/.system/files/identity-management/1.1.0/SKILL.md",
+      "sha256": "168db0b60ff75beb6be7afda7509b982842cdcef68236b17cfac2874353c5637",
+      "sizeBytes": 3019,
+      "url": "https://feeds.netclaw.dev/skills/.system/files/netclaw-identity/1.0.0/SKILL.md",
       "category": null,
-      "description": "How to keep SOUL.md narrowly scoped to identity/profile updates while project facts and evidence stay in SQLite memory"
+      "description": "Netclaw identity files. Read when the user wants to update lasting profile, tone, workflow, or environment preferences that should shape future Netclaw sessions."
     },
     {
-      "name": "memory-usage",
-      "version": "1.4.0",
+      "name": "netclaw-manual",
+      "version": "1.0.0",
       "minimumDaemonVersion": "0.1.0",
-      "sha256": "f437275603f2a4663735838119bc6e98a408dc9189746783684408ba5bc71336",
-      "sizeBytes": 2888,
-      "url": "https://feeds.netclaw.dev/skills/.system/files/memory-usage/1.4.0/SKILL.md",
+      "sha256": "1d6947c7e6b9e591559af35b9251da33733a93422879e1fa0d43da23386e329b",
+      "sizeBytes": 8562,
+      "url": "https://feeds.netclaw.dev/skills/.system/files/netclaw-manual/1.0.0/SKILL.md",
       "category": null,
-      "description": "How SQLite-backed memory now splits automatic durable recall from intentional evidence search"
+      "description": "Netclaw Manual. Read when the user is asking what Netclaw can do, which command/tool to use, how to schedule work, switch models, manage providers, or discover available capabilities."
+    },
+    {
+      "name": "netclaw-memory",
+      "version": "1.0.0",
+      "minimumDaemonVersion": "0.1.0",
+      "sha256": "f63178f7b15d8a53653ecf59149ba192ca8be2b3e0c6cb437b55ff34b2b2d010",
+      "sizeBytes": 3544,
+      "url": "https://feeds.netclaw.dev/skills/.system/files/netclaw-memory/1.0.0/SKILL.md",
+      "category": null,
+      "description": "Netclaw memory usage. Read when the user asks what Netclaw remembers, wants something saved for later, or when you need to decide between automatic recall, explicit memory search, and identity-file updates."
     },
     {
       "name": "search-citation",
       "version": "1.1.0",
       "minimumDaemonVersion": "0.1.0",
-      "sha256": "42515f760b6bd8607eed51c695ca5b6333af3c6596c46418ae4676dd7506031f",
-      "sizeBytes": 4320,
+      "sha256": "e5553f1fb56dab6c19b11973bd60be8a7ecfa65d4678136d4d6e4223531a10cb",
+      "sizeBytes": 4335,
       "url": "https://feeds.netclaw.dev/skills/.system/files/search-citation/1.1.0/SKILL.md",
       "category": null,
       "description": "Guides when to use web search vs. training data and how to cite sources. Ensures specific factual claims include source URLs and the agent does not hallucinate verifiable information.",
@@ -62,16 +72,6 @@
           "url": "https://feeds.netclaw.dev/skills/.system/files/search-citation/1.1.0/references/travel-search.md"
         }
       ]
-    },
-    {
-      "name": "self-diagnostics",
-      "version": "1.2.0",
-      "minimumDaemonVersion": "0.1.0",
-      "sha256": "52d1c01cbdc95f76f6b758d90a659a40bf8d3ba75aaf89c1a87484b187c91e15",
-      "sizeBytes": 3191,
-      "url": "https://feeds.netclaw.dev/skills/.system/files/self-diagnostics/1.2.0/SKILL.md",
-      "category": null,
-      "description": "Read when sessions timeout, connections fail, tools are missing, or the user reports errors. Covers netclaw doctor, logs, MCP status, and memory health."
     },
     {
       "name": "skill-authoring",
