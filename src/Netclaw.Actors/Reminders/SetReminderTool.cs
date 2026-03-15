@@ -10,7 +10,7 @@ namespace Netclaw.Actors.Reminders;
 /// LLM tool for scheduling reminders. Supports one-shot, interval, and cron schedules.
 /// </summary>
 [NetclawTool("set_reminder",
-    "Schedule a reminder that will execute at a specific time or on a recurring schedule. " +
+    "Schedule or update a reminder by ID. If a reminder with the given ID already exists it will be updated (upsert). " +
     "Supports relative durations ('30m', '2h'), interval schedules ('every 6h'), and cron ('0 */6 * * *').",
     Grant = "scheduling")]
 public sealed partial class SetReminderTool : NetclawTool<SetReminderTool.Params>
@@ -20,7 +20,9 @@ public sealed partial class SetReminderTool : NetclawTool<SetReminderTool.Params
     private readonly ReminderConfig _config;
 
     public record Params(
-        [property: Description("A short title for this reminder (e.g. 'daily-standup').")]
+        [property: Description("Stable identifier for this reminder (kebab-case slug, e.g. 'daily-standup'). If a reminder with this ID exists it will be updated.")]
+        string Id,
+        [property: Description("A short human-readable title for this reminder.")]
         string Name,
         [property: Description("Execution instructions for this reminder.")]
         string Prompt,
@@ -45,12 +47,17 @@ public sealed partial class SetReminderTool : NetclawTool<SetReminderTool.Params
 
     protected override async Task<string> ExecuteAsync(Params args, ToolExecutionContext context, CancellationToken ct)
     {
+        if (string.IsNullOrWhiteSpace(args.Id))
+            return "Error: 'id' is required.";
         if (string.IsNullOrWhiteSpace(args.Name))
             return "Error: 'name' is required.";
         if (string.IsNullOrWhiteSpace(args.Prompt))
             return "Error: 'prompt' is required.";
         if (string.IsNullOrWhiteSpace(args.Schedule))
             return "Error: 'schedule' is required.";
+
+        // Normalize ID at the tool boundary: lowercase, kebab-case, length cap
+        var normalizedId = ReminderIdGenerator.Normalize(args.Id);
 
         var (schedule, error) = ReminderScheduleParser.Parse(
             args.ScheduleType,
@@ -61,7 +68,7 @@ public sealed partial class SetReminderTool : NetclawTool<SetReminderTool.Params
         if (schedule is null)
             return $"Error: {error}";
 
-        var id = ReminderIdGenerator.Generate(args.Name);
+        var id = new ReminderId(normalizedId);
         var now = _timeProvider.GetUtcNow();
 
         string? sessionId = null;
@@ -105,19 +112,40 @@ public sealed partial class SetReminderTool : NetclawTool<SetReminderTool.Params
         };
 
         var response = await _reminderManager.Ask<ReminderSavedResponse>(
-            new SaveReminderCommand(definition, ReminderWriteMode.CreateOnly), TimeSpan.FromSeconds(10), ct);
+            new SaveReminderCommand(definition, ReminderWriteMode.Upsert), TimeSpan.FromSeconds(10), ct);
 
         if (!response.Success)
             return $"Failed to schedule reminder '{args.Name}': {response.ErrorMessage ?? "unknown error"}";
 
+        var nextFireStr = FormatNextFire(response.NextFire);
+
         var scheduleDesc = schedule.Type switch
         {
-            ReminderScheduleType.OneShot => $"once at {response.NextFire:u}",
-            ReminderScheduleType.Interval => $"every {schedule.Interval!.Value.TotalMinutes:F0}m, next: {response.NextFire:u}",
-            ReminderScheduleType.Cron => $"cron '{schedule.CronExpression}', next: {response.NextFire:u}",
-            _ => response.NextFire?.ToString("u") ?? "scheduled"
+            ReminderScheduleType.OneShot => $"Runs once. Next execution: {nextFireStr}.",
+            ReminderScheduleType.Interval => $"Runs every {FormatInterval(schedule.Interval!.Value)}. Next execution: {nextFireStr}.",
+            ReminderScheduleType.Cron => $"Runs {CronScheduleHelper.Describe(schedule.CronExpression!)}. Next execution: {nextFireStr}.",
+            _ => $"Next execution: {nextFireStr}."
         };
 
-        return $"Reminder '{args.Name}' scheduled ({scheduleDesc}). ID: {id.Value}";
+        return $"Reminder '{args.Name}' scheduled. {scheduleDesc} ID: {id.Value}";
+    }
+
+    private static string FormatInterval(TimeSpan interval) => interval.TotalHours switch
+    {
+        >= 24 when interval.TotalHours % 24 == 0 => $"{interval.TotalDays:F0} day(s)",
+        >= 1 when interval.TotalMinutes % 60 == 0 => $"{interval.TotalHours:F0}h",
+        _ => $"{interval.TotalMinutes:F0}m"
+    };
+
+    public static string FormatNextFire(DateTimeOffset? nextFire)
+    {
+        if (nextFire is not { } nf)
+            return "unknown";
+
+        var local = nf.ToLocalTime();
+        var tz = TimeZoneInfo.Local;
+        var tzAbbrev = tz.IsDaylightSavingTime(local) ? tz.DaylightName : tz.StandardName;
+
+        return $"{local:dddd, MMMM d 'at' h:mm tt} {tzAbbrev} ({nf:u})";
     }
 }

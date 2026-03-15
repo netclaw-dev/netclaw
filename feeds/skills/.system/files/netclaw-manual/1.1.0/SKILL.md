@@ -102,7 +102,6 @@ more cleanly than the main agent.
 - Subagent prompt files must stay inside `~/.netclaw/agents/`; path traversal is rejected.
 - Subagents are supervised as session children and are cancelled when the parent tool call is cancelled or times out.
 - Session observers receive both start and completion events for each subagent run; completion can report `findings=0` when no structured memory candidates were produced.
-- Structured findings are explicit conclusion envelopes reviewed by the parent session; work-log or transcript-shaped findings are rejected instead of being inferred from free-form text.
 
 Built-in seeded agents:
 

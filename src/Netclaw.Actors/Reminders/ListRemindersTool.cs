@@ -40,23 +40,33 @@ public sealed partial class ListRemindersTool : NetclawTool<ListRemindersTool.Pa
 
         foreach (var r in response.Reminders)
         {
-            var scheduleDesc = r.Schedule.Type switch
-            {
-                ReminderScheduleType.OneShot => $"once at {r.Schedule.FireAt:u}",
-                ReminderScheduleType.Interval => $"every {r.Schedule.Interval!.Value.TotalMinutes:F0}m",
-                ReminderScheduleType.Cron => $"cron '{r.Schedule.CronExpression}'",
-                _ => r.Schedule.OriginalExpression ?? "unknown"
-            };
+            var scheduleDesc = DescribeSchedule(r.Schedule);
 
             sb.AppendLine($"  ID: {r.Id.Value}");
             sb.AppendLine($"  Title: {r.Title}");
             sb.AppendLine($"  Status: {(r.Enabled ? "active" : "disabled")}");
             sb.AppendLine($"  Schedule: {scheduleDesc}");
             if (r.NextFire is not null)
-                sb.AppendLine($"  Next fire: {r.NextFire:u}");
+                sb.AppendLine($"  Next fire: {SetReminderTool.FormatNextFire(r.NextFire)}");
             sb.AppendLine();
         }
 
         return sb.ToString().TrimEnd();
     }
+
+    public static string DescribeSchedule(ReminderSchedule schedule) => schedule.Type switch
+    {
+        ReminderScheduleType.OneShot => "runs once",
+        ReminderScheduleType.Interval when schedule.Interval is { } iv => $"runs {FormatInterval(iv)}",
+        ReminderScheduleType.Cron when schedule.CronExpression is not null =>
+            $"runs {CronScheduleHelper.Describe(schedule.CronExpression)}",
+        _ => schedule.OriginalExpression ?? "unknown"
+    };
+
+    private static string FormatInterval(TimeSpan interval) => interval.TotalHours switch
+    {
+        >= 24 when interval.TotalHours % 24 == 0 => $"every {interval.TotalDays:F0} day(s)",
+        >= 1 when interval.TotalMinutes % 60 == 0 => $"every {interval.TotalHours:F0}h",
+        _ => $"every {interval.TotalMinutes:F0}m"
+    };
 }

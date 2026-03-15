@@ -702,7 +702,15 @@ static void MapReminderEndpoints(WebApplication app)
         var manager = await actor.GetAsync(ct);
         var response = await manager.Ask<Netclaw.Actors.Reminders.ReminderListResponse>(
             new Netclaw.Actors.Reminders.ListRemindersCommand(), TimeSpan.FromSeconds(10), ct);
-        return Results.Ok(response.Reminders);
+        var projected = response.Reminders.Select(r => new
+        {
+            id = r.Id.Value,
+            title = r.Title,
+            enabled = r.Enabled,
+            schedule = Netclaw.Actors.Reminders.ListRemindersTool.DescribeSchedule(r.Schedule),
+            nextFire = Netclaw.Actors.Reminders.SetReminderTool.FormatNextFire(r.NextFire),
+        });
+        return Results.Ok(projected);
     });
 
     app.MapPost("/api/reminders", async (
@@ -742,10 +750,16 @@ static void MapReminderEndpoints(WebApplication app)
             }
         }
 
+        // Use caller-provided ID if available, otherwise auto-generate for backward compatibility
+        var effectiveId = !string.IsNullOrWhiteSpace(request.Id)
+            ? request.Id
+            : Netclaw.Actors.Reminders.ReminderIdGenerator.Generate(request.Name).Value;
+
         var tool = new Netclaw.Actors.Reminders.SetReminderTool(manager, timeProvider, reminderConfig);
         var result = await tool.ExecuteAsync(
             new Dictionary<string, object?>
             {
+                ["Id"] = effectiveId,
                 ["Name"] = request.Name,
                 ["Prompt"] = request.Prompt,
                 ["ScheduleType"] = request.ScheduleType,
@@ -886,7 +900,22 @@ static void MapReminderEndpoints(WebApplication app)
             new Netclaw.Actors.Reminders.GetReminderCommand(new Netclaw.Actors.Reminders.ReminderId(id)),
             TimeSpan.FromSeconds(10), ct);
 
-        return response.Reminder is not null ? Results.Ok(response.Reminder) : Results.NotFound(new { error = $"Reminder '{id}' not found." });
+        if (response.Reminder is null)
+            return Results.NotFound(new { error = $"Reminder '{id}' not found." });
+
+        var r = response.Reminder;
+        return Results.Ok(new
+        {
+            id = r.Id.Value,
+            title = r.Title,
+            enabled = r.Enabled,
+            schedule = Netclaw.Actors.Reminders.ListRemindersTool.DescribeSchedule(r.Schedule),
+            nextFire = Netclaw.Actors.Reminders.SetReminderTool.FormatNextFire(r.NextFire),
+            instructions = r.Instructions,
+            notifyInstructions = r.NotifyInstructions,
+            sessionId = r.SessionId,
+            reportToChannel = r.ReportToChannel,
+        });
     });
 }
 
@@ -907,6 +936,7 @@ static Akka.Event.LogLevel ToAkkaLogLevel(LogLevel logLevel)
 /// </summary>
 sealed record CreateReminderRequest
 {
+    public string? Id { get; init; }
     public required string Name { get; init; }
     public required string Prompt { get; init; }
     public required string ScheduleType { get; init; }
