@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using Netclaw.Actors.Memory;
 using Netclaw.Actors.Text;
 
 namespace Netclaw.Actors.Sessions;
@@ -44,8 +45,8 @@ public sealed class DeterministicRetrievalRequestPlanner
             Facets: facets,
             AnchorHints: anchorHints,
             CandidateLimit: retrievalMode == DeterministicRetrievalMode.Bundle ? 60 : 30,
-            AllowedMemoryClasses: ["durable_fact"],
-            ExcludedSensitivity: ["secret"],
+            AllowedMemoryClasses: [MemoryClass.DurableFact.ToWireValue()],
+            ExcludedSensitivity: [MemorySensitivity.Secret.ToWireValue()],
             ExcludeExpired: true);
     }
 

@@ -384,12 +384,12 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                         IsCompactionBoundary: false,
                         HasAcceptedSubAgentFinding: false,
                         Domain: ResolveDomainFromSession(_sessionId.Value),
-                        Sensitivity: "normal",
-                        RecallMode: "auto",
+                        Sensitivity: Memory.MemorySensitivity.Normal.ToWireValue(),
+                        RecallMode: Memory.MemoryRecallMode.Auto.ToWireValue(),
                         Confidence: 0.85,
-                        Kind: "record",
+                        Kind: Memory.MemoryKind.Record.ToWireValue(),
                         Title: "verified-tool-finding",
-                        UpdateSemantics: "immutable-record")));
+                        UpdateSemantics: Memory.MemoryUpdateSemantics.ImmutableRecord.ToWireValue())));
             }
 
             var emittedRunIds = new HashSet<string>(StringComparer.Ordinal);
@@ -686,10 +686,10 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                         IsCompactionBoundary: true,
                         HasAcceptedSubAgentFinding: false,
                         Domain: ResolveDomainFromSession(_sessionId.Value),
-                        Sensitivity: "normal",
-                        RecallMode: "auto",
+                        Sensitivity: Memory.MemorySensitivity.Normal.ToWireValue(),
+                        RecallMode: Memory.MemoryRecallMode.Auto.ToWireValue(),
                         Confidence: 0.8,
-                        Kind: "document",
+                        Kind: Memory.MemoryKind.Document.ToWireValue(),
                         Title: "compaction-boundary",
                         UpdateSemantics: "append-document")));
 
@@ -1063,11 +1063,11 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             EnqueueCheckpointFireAndForget(new MemoryCheckpointRequest(
                 SessionId: _sessionId.Value,
                 TurnId: _activeTurnId,
-                TriggerType: "turn-complete",
+                TriggerType: Memory.CheckpointTriggerType.TurnComplete.ToWireValue(),
                 Priority: 40,
                     Payload: new MemoryCheckpointPayload(
                         SessionId: _sessionId.Value,
-                        TriggerType: "turn-complete",
+                        TriggerType: Memory.CheckpointTriggerType.TurnComplete.ToWireValue(),
                         Source: "session",
                         Content: $"User: {evt.UserMessage.Content}\nAssistant: {evt.AssistantReply.Content}",
                         UserContent: evt.UserMessage.Content,
@@ -1077,10 +1077,10 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                     IsCompactionBoundary: false,
                     HasAcceptedSubAgentFinding: false,
                     Domain: ResolveDomainFromSession(_sessionId.Value),
-                    Sensitivity: "normal",
-                    RecallMode: "auto",
+                    Sensitivity: Memory.MemorySensitivity.Normal.ToWireValue(),
+                    RecallMode: Memory.MemoryRecallMode.Auto.ToWireValue(),
                     Confidence: 0.7,
-                    Kind: "document",
+                    Kind: Memory.MemoryKind.Document.ToWireValue(),
                     Title: "turn-completion",
                     UpdateSemantics: "append-document")));
 
@@ -1137,7 +1137,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             var gateResult = _memoryProposalGate.Evaluate(
                 msg.Proposals,
                 ResolveDomainFromSession(_sessionId.Value),
-                "normal",
+                Memory.MemorySensitivity.Normal.ToWireValue(),
                 NowMs());
             var accepted = gateResult.MemoryOperations;
 
@@ -1172,13 +1172,13 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             EnqueueCheckpointFireAndForget(new MemoryCheckpointRequest(
                 SessionId: _sessionId.Value,
                 TurnId: _activeTurnId,
-                TriggerType: "observed-memory-proposals",
+                TriggerType: Memory.CheckpointTriggerType.ObservedMemoryProposals.ToWireValue(),
                 Priority: 60,
                 Payload: new ObservedMemoryCheckpointPayload(
                     _sessionId.Value,
-                    "observed-memory-proposals",
+                    Memory.CheckpointTriggerType.ObservedMemoryProposals.ToWireValue(),
                     ResolveDomainFromSession(_sessionId.Value),
-                    "normal",
+                    Memory.MemorySensitivity.Normal.ToWireValue(),
                     accepted)));
         });
 
@@ -2272,7 +2272,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             _activeTurnId ?? $"{_sessionId.Value}:{NowMs()}",
             "turn_completed",
             ResolveDomainFromSession(_sessionId.Value),
-            "normal",
+            Memory.MemorySensitivity.Normal.ToWireValue(),
             userText,
             assistantReply.Content ?? string.Empty,
             strongAssertions,

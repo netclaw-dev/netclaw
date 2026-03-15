@@ -7,13 +7,6 @@ public enum MemoryProposalOperation
     Ignore
 }
 
-public enum MemoryProposalClass
-{
-    DurableFact,
-    Evidence,
-    Trace
-}
-
 public sealed record MemoryObservationRequest(
     string SessionId,
     string TurnId,

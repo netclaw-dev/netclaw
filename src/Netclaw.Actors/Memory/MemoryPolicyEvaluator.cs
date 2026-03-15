@@ -4,13 +4,6 @@ public sealed record MemoryPolicyDecision(bool Allowed, string? Reason = null);
 
 public sealed class MemoryPolicyEvaluator
 {
-    private static readonly HashSet<string> AllowedRecallModes =
-    [
-        "auto",
-        "manual",
-        "never"
-    ];
-
     public MemoryPolicyDecision EvaluateWrite(
         string domain,
         string sensitivity,
@@ -21,11 +14,13 @@ public sealed class MemoryPolicyEvaluator
         if (string.IsNullOrWhiteSpace(domain))
             return new MemoryPolicyDecision(false, "missing-domain");
 
-        if (!AllowedRecallModes.Contains(recallMode))
+        if (!MemoryDomainEnumExtensions.TryFromWireValue(recallMode, out MemoryRecallMode parsedMode)
+            || parsedMode == MemoryRecallMode.Searchable)
             return new MemoryPolicyDecision(false, "invalid-recall-mode");
 
-        if (string.Equals(sensitivity, "secret", StringComparison.OrdinalIgnoreCase)
-            && string.Equals(recallMode, "auto", StringComparison.OrdinalIgnoreCase))
+        if (MemoryDomainEnumExtensions.TryFromWireValue(sensitivity, out MemorySensitivity parsedSensitivity)
+            && parsedSensitivity == MemorySensitivity.Secret
+            && parsedMode == MemoryRecallMode.Auto)
             return new MemoryPolicyDecision(false, "secret-cannot-be-auto");
 
         if (!isExplicitRequest && confidence < 0.55)

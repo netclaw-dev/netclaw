@@ -180,8 +180,8 @@ public sealed class MemoryEvalSeedSuiteTests : IAsyncLifetime
         var candidates = extractor.Extract(payload, new HashSet<string>(StringComparer.OrdinalIgnoreCase));
         var candidate = Assert.Single(candidates);
 
-        Assert.Equal("evidence", candidate.MemoryClass);
-        Assert.Equal("searchable", candidate.RecallMode);
+        Assert.Equal(MemoryClass.Evidence, candidate.MemoryClass);
+        Assert.Equal(MemoryRecallMode.Searchable, candidate.RecallMode);
         Assert.Equal(now + (long)TimeSpan.FromDays(30).TotalMilliseconds, candidate.ExpiresAtMs);
     }
 
@@ -216,7 +216,7 @@ public sealed class MemoryEvalSeedSuiteTests : IAsyncLifetime
         var candidates = extractor.Extract(payload, new HashSet<string>(StringComparer.OrdinalIgnoreCase));
         var candidate = Assert.Single(candidates);
 
-        Assert.Equal("durable_fact", candidate.MemoryClass);
+        Assert.Equal(MemoryClass.DurableFact, candidate.MemoryClass);
         Assert.Equal("Project Fact: TextForge has Oauth", candidate.Title);
         Assert.Contains("project_fact", candidate.FacetsJson ?? string.Empty, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("product_capability", candidate.FacetsJson ?? string.Empty, StringComparison.OrdinalIgnoreCase);
@@ -251,7 +251,7 @@ public sealed class MemoryEvalSeedSuiteTests : IAsyncLifetime
         var candidates = extractor.Extract(payload, new HashSet<string>(StringComparer.OrdinalIgnoreCase));
         var candidate = Assert.Single(candidates);
 
-        Assert.Equal("durable_fact", candidate.MemoryClass);
+        Assert.Equal(MemoryClass.DurableFact, candidate.MemoryClass);
         Assert.Equal("Project Milestone: Our security audit", candidate.Title);
         Assert.Contains("delivery_status", candidate.FacetsJson ?? string.Empty, StringComparison.OrdinalIgnoreCase);
     }
