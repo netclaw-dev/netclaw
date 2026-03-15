@@ -13,29 +13,29 @@ public class SubAgentFindingReviewTests
 
         var result = LlmSessionActor.ReviewSubAgentFinding(finding, "project-a/thread-1");
 
-        Assert.Equal("accepted", result.Decision);
+        Assert.Equal(SubAgentFindingReviewDecision.Accepted, result.Decision);
         Assert.Null(result.Reason);
     }
 
     [Fact]
     public void Review_defers_missing_durability()
     {
-        var finding = CreateFinding() with { Durability = "" };
+        var finding = CreateFinding() with { Durability = (SubAgentFindingDurability)999 };
 
         var result = LlmSessionActor.ReviewSubAgentFinding(finding, "project-a/thread-1");
 
-        Assert.Equal("deferred", result.Decision);
+        Assert.Equal(SubAgentFindingReviewDecision.Deferred, result.Decision);
         Assert.Equal("missing durability", result.Reason);
     }
 
     [Fact]
     public void Review_defers_non_reusable_findings()
     {
-        var finding = CreateFinding() with { Reusability = "task-local" };
+        var finding = CreateFinding() with { Reusability = SubAgentFindingReusability.TaskLocal };
 
         var result = LlmSessionActor.ReviewSubAgentFinding(finding, "project-a/thread-1");
 
-        Assert.Equal("deferred", result.Decision);
+        Assert.Equal(SubAgentFindingReviewDecision.Deferred, result.Decision);
         Assert.Equal("insufficient reusability", result.Reason);
     }
 
@@ -44,13 +44,13 @@ public class SubAgentFindingReviewTests
     {
         var finding = CreateFinding() with
         {
-            Shape = "worklog",
+            Shape = SubAgentFindingShape.Worklog,
             Content = "Step 1: I called file_read. Step 2: I inspected stdout: done."
         };
 
         var result = LlmSessionActor.ReviewSubAgentFinding(finding, "project-a/thread-1");
 
-        Assert.Equal("rejected", result.Decision);
+        Assert.Equal(SubAgentFindingReviewDecision.Rejected, result.Decision);
         Assert.Equal("unsupported shape", result.Reason);
     }
 
@@ -59,13 +59,13 @@ public class SubAgentFindingReviewTests
     {
         var finding = CreateFinding() with
         {
-            Sensitivity = "secret",
-            RecallMode = "auto"
+            Sensitivity = SubAgentFindingSensitivity.Secret,
+            RecallMode = SubAgentFindingRecallMode.Auto
         };
 
         var result = LlmSessionActor.ReviewSubAgentFinding(finding, "project-a/thread-1");
 
-        Assert.Equal("rejected", result.Decision);
+        Assert.Equal(SubAgentFindingReviewDecision.Rejected, result.Decision);
         Assert.Equal("secret cannot auto-recall", result.Reason);
     }
 
@@ -76,7 +76,7 @@ public class SubAgentFindingReviewTests
 
         var result = LlmSessionActor.ReviewSubAgentFinding(finding, "project-a/thread-1");
 
-        Assert.Equal("deferred", result.Decision);
+        Assert.Equal(SubAgentFindingReviewDecision.Deferred, result.Decision);
         Assert.Contains("domain mismatch", result.Reason);
     }
 
@@ -87,13 +87,13 @@ public class SubAgentFindingReviewTests
             Content = "Netclaw uses SQLite journal persistence for session durability in the current deployment.",
             Kind = "record",
             Domain = "project:project-a",
-            Sensitivity = "normal",
-            RecallMode = "searchable",
+            Sensitivity = SubAgentFindingSensitivity.Normal,
+            RecallMode = SubAgentFindingRecallMode.Searchable,
             UpdateSemantics = "append-document",
             Confidence = 0.8,
-            Shape = "conclusion",
-            Durability = "durable",
-            Reusability = "reusable",
+            Shape = SubAgentFindingShape.Conclusion,
+            Durability = SubAgentFindingDurability.Durable,
+            Reusability = SubAgentFindingReusability.Reusable,
             Evidence = ["docs/architecture.md"]
         };
 }
