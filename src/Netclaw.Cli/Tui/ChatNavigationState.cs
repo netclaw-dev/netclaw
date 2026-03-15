@@ -22,4 +22,21 @@ public sealed class ChatNavigationState
         ResumeSessionId = null;
         return id;
     }
+
+    /// <summary>
+    /// When set, <see cref="ChatViewModel"/> will auto-send this message
+    /// (hidden from the UI) after the session is established. Used by the
+    /// init wizard to trigger the onboarding interview.
+    /// </summary>
+    public string? InitialMessage { get; set; }
+
+    /// <summary>
+    /// Takes and clears the initial message in one operation.
+    /// </summary>
+    public string? TakeInitialMessage()
+    {
+        var msg = InitialMessage;
+        InitialMessage = null;
+        return msg;
+    }
 }

@@ -997,7 +997,6 @@ public sealed class InitWizardViewModelTests : IDisposable
         vm.CommunicationStyle = "Concise & casual";
         vm.UserName = "Dave";
         vm.UserTimezone = "America/Chicago";
-        vm.PrimaryUse = "Managing Kubernetes clusters";
 
         vm.WriteIdentityFiles();
 
@@ -1008,7 +1007,7 @@ public sealed class InitWizardViewModelTests : IDisposable
         Assert.Contains("concise and casual", soul, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("Dave", soul, StringComparison.Ordinal);
         Assert.Contains("America/Chicago", soul, StringComparison.Ordinal);
-        Assert.Contains("Managing Kubernetes clusters", soul, StringComparison.Ordinal);
+        Assert.DoesNotContain("Primary use", soul, StringComparison.OrdinalIgnoreCase);
 
         // AGENTS.md
         Assert.True(File.Exists(_paths.AgentsPath));

@@ -18,6 +18,7 @@ public partial class ChatViewModel : ReactiveViewModel
     private readonly TimeProvider _timeProvider;
     private readonly SessionConfig _sessionConfig;
     private string? _resumeSessionId;
+    private string? _initialMessage;
 
     private readonly Subject<SessionOutput> _outputSubject = new();
     private readonly Queue<string> _pendingMessages = new();
@@ -55,6 +56,7 @@ public partial class ChatViewModel : ReactiveViewModel
         _timeProvider = timeProvider;
         _sessionConfig = sessionConfig;
         _resumeSessionId = navigationState.TakeResumeSessionId();
+        _initialMessage = navigationState.TakeInitialMessage();
     }
 
     public override void OnActivated()
@@ -89,6 +91,7 @@ public partial class ChatViewModel : ReactiveViewModel
                 if (evt.State is DaemonConnectionState.Disconnected or DaemonConnectionState.Reconnecting)
                 {
                     _sessionReady = false;
+                    IsGenerating.Value = false;
                 }
 
                 if (evt.State is DaemonConnectionState.Connected)
@@ -225,6 +228,24 @@ public partial class ChatViewModel : ReactiveViewModel
                 Contents = [new TextContent(pending)],
                 ReceivedAt = _timeProvider.GetUtcNow()
             });
+        }
+
+        // Auto-send hidden trigger message (e.g., onboarding interview prompt).
+        // Not rendered as a user bubble — the LLM's greeting is the first visible thing.
+        if (_initialMessage is not null)
+        {
+            var trigger = _initialMessage;
+            _initialMessage = null;
+            IsGenerating.Value = true;
+            StatusMessage.Value = "Generating...";
+            RequestRedraw();
+            await _daemonClient.SendAsync(new ChannelInput
+            {
+                SenderId = "system-init",
+                Contents = [new TextContent(trigger)],
+                ReceivedAt = _timeProvider.GetUtcNow()
+            });
+            return;
         }
 
         if (!IsGenerating.Value)

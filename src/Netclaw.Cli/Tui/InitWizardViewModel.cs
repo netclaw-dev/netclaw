@@ -48,6 +48,7 @@ public partial class InitWizardViewModel : ReactiveViewModel
     private readonly IProviderProbe _probe;
     private readonly ProviderDescriptorRegistry _registry;
     private readonly ISlackProbe _slackProbe;
+    private readonly ChatNavigationState? _navigationState;
     private readonly IBrowserAutomationBootstrapper _browserBootstrapper;
     private readonly DeviceFlowServiceFactory? _oauthFactory;
     private CancellationTokenSource? _oauthCts;
@@ -130,7 +131,6 @@ public partial class InitWizardViewModel : ReactiveViewModel
     public string? CommunicationStyle { get; set; }
     public string? UserName { get; set; }
     public string UserTimezone { get; set; } = TimeZoneInfo.Local.Id;
-    public string? PrimaryUse { get; set; }
 
     // ── Step 9: Health Check ──
     public List<HealthCheckItem> HealthCheckResults { get; } = [];
@@ -149,10 +149,11 @@ public partial class InitWizardViewModel : ReactiveViewModel
         NetclawPaths paths,
         ProviderDescriptorRegistry registry,
         ISlackProbe slackProbe,
+        ChatNavigationState? navigationState = null,
         DeviceFlowServiceFactory? oauthFactory = null,
         DaemonManager? daemonManager = null,
         string? daemonEndpoint = null)
-        : this(paths, registry, registry, slackProbe, null, oauthFactory, daemonManager, daemonEndpoint)
+        : this(paths, registry, registry, slackProbe, null, navigationState, oauthFactory, daemonManager, daemonEndpoint)
     {
     }
 
@@ -165,6 +166,7 @@ public partial class InitWizardViewModel : ReactiveViewModel
         IProviderProbe probe,
         ISlackProbe slackProbe,
         IBrowserAutomationBootstrapper? browserBootstrapper = null,
+        ChatNavigationState? navigationState = null,
         DeviceFlowServiceFactory? oauthFactory = null,
         DaemonManager? daemonManager = null,
         string? daemonEndpoint = null)
@@ -173,6 +175,7 @@ public partial class InitWizardViewModel : ReactiveViewModel
         _probe = probe;
         _registry = registry;
         _slackProbe = slackProbe;
+        _navigationState = navigationState;
         _browserBootstrapper = browserBootstrapper ?? new BrowserAutomationBootstrapper();
         _oauthFactory = oauthFactory;
         _daemonManager = daemonManager;
@@ -784,6 +787,8 @@ public partial class InitWizardViewModel : ReactiveViewModel
         allPassed = HealthCheckResults.All(h => h.Passed == true);
         if (allPassed)
         {
+            if (_navigationState is not null)
+                _navigationState.InitialMessage = BuildOnboardingTrigger();
             StatusMessage.Value = "Setup complete! Launching chat...";
             Navigate?.Invoke("/chat");
         }
@@ -1052,7 +1057,6 @@ public partial class InitWizardViewModel : ReactiveViewModel
         var name = AgentName;
         var userName = string.IsNullOrWhiteSpace(UserName) ? "User" : UserName;
         var timezone = UserTimezone;
-        var primaryUse = string.IsNullOrWhiteSpace(PrimaryUse) ? "General purpose" : PrimaryUse;
 
         File.WriteAllText(_paths.SoulPath,
             $"""
@@ -1064,7 +1068,6 @@ public partial class InitWizardViewModel : ReactiveViewModel
             ## User
             - Name: {userName}
             - Timezone: {timezone}
-            - Primary use: {primaryUse}
             """);
 
         File.WriteAllText(_paths.AgentsPath,
@@ -1143,6 +1146,26 @@ public partial class InitWizardViewModel : ReactiveViewModel
 
             No capabilities discovered yet. Run `netclaw doctor` or ask Netclaw to probe your environment.
             """);
+    }
+
+    internal string BuildOnboardingTrigger()
+    {
+        var userName = string.IsNullOrWhiteSpace(UserName) ? "User" : UserName;
+        var commStyle = CommunicationStyle ?? "Concise & casual";
+        var soulPath = _paths.SoulPath;
+
+        return $"""
+            I just finished setting up. My name is {userName} and I chose "{commStyle}" as my communication style.
+
+            This is our first conversation. I'd like you to get to know me so you can be more helpful. Please:
+
+            1. Introduce yourself briefly
+            2. Ask me what I'd primarily like to use you for
+            3. Ask if there's anything else you should know about me — my background, how I work, tools I use, preferences, etc.
+            4. After our conversation, update my profile in SOUL.md ({soulPath}) with what you've learned. Use file_read to check current content first, then file_write to update it. Keep the existing structure but enrich it with the details from our conversation.
+
+            Keep it natural and conversational — don't ask everything at once.
+            """;
     }
 
     /// <summary>

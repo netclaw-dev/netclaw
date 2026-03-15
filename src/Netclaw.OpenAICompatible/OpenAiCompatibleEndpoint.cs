@@ -23,8 +23,8 @@ public sealed record OpenAiCompatibleEndpoint(
 
         return new OpenAiCompatibleEndpoint(
             baseUri,
-            ChatCompletionsPath: Combine(basePath, "api/v1/chat/completions"),
-            ModelsPath: Combine(basePath, "api/v1/models"),
+            ChatCompletionsPath: Combine(basePath, "v1/chat/completions"),
+            ModelsPath: Combine(basePath, "v1/models"),
             ApiKey: apiKey);
     }
 
