@@ -3,7 +3,7 @@ name: netclaw-identity
 description: "Netclaw identity files. Read when the user wants to update lasting profile, tone, workflow, or environment preferences that should shape future Netclaw sessions."
 metadata:
   author: netclaw
-  version: "1.0.0"
+  version: "0.6.0"
   triggers: remember my preference | update how you should respond to me | save this as a standing preference | update your profile for me | keep this in future sessions | change your workflow preference
 ---
 

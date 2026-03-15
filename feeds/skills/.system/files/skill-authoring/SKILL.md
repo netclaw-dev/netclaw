@@ -3,7 +3,7 @@ name: skill-authoring
 description: Create a skill when a repeatable workflow emerges. Read for file format, naming, and discovery conventions.
 metadata:
   author: netclaw
-  version: "1.1.0"
+  version: "0.6.0"
   triggers: repeating workflow | create skill file | skill format question | update skill
 ---
 
@@ -81,7 +81,7 @@ compatibility: Requires kubectl and helm
 allowed-tools: Bash(kubectl:*) Bash(helm:*) Read
 metadata:
   author: my-team
-  version: "1.0"
+  version: "0.6.0"
   triggers: deploy to staging | deploy to production | rollback needed
 ---
 ```

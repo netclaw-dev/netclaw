@@ -3,7 +3,7 @@ name: search-citation
 description: "Guides when to use web search vs. training data and how to cite sources. Ensures specific factual claims include source URLs and the agent does not hallucinate verifiable information."
 metadata:
   author: netclaw
-  version: "1.1.0"
+  version: "0.6.0"
   triggers: web search needed | cite sources | link results | price check | product search | find near me | verify facts
 ---
 

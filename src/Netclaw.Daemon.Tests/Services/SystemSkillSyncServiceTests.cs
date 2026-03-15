@@ -356,6 +356,48 @@ public sealed class SystemSkillSyncServiceTests : IDisposable
     }
 
     [Fact]
+    public void SkillFeedManifest_DeserializesAllVersions()
+    {
+        var json = """
+            {
+              "schemaVersion": 1,
+              "feedType": "system",
+              "updatedAt": "2026-01-01T00:00:00Z",
+              "skills": [
+                { "name": "foo", "version": "1.1.0", "sha256": "abc", "url": "https://skills.netclaw.dev/.system/files/foo/1.1.0/SKILL.md" }
+              ],
+              "allVersions": [
+                { "name": "foo", "version": "1.0.0", "sha256": "xyz", "url": "https://skills.netclaw.dev/.system/files/foo/1.0.0/SKILL.md" },
+                { "name": "foo", "version": "1.1.0", "sha256": "abc", "url": "https://skills.netclaw.dev/.system/files/foo/1.1.0/SKILL.md" }
+              ]
+            }
+            """;
+        var manifest = JsonSerializer.Deserialize<SkillFeedManifest>(json);
+        Assert.NotNull(manifest);
+        Assert.Single(manifest.Skills);
+        Assert.NotNull(manifest.AllVersions);
+        Assert.Equal(2, manifest.AllVersions.Count);
+    }
+
+    [Fact]
+    public void SkillFeedManifest_MissingAllVersions_DeserializesToNull()
+    {
+        var json = """
+            {
+              "schemaVersion": 1,
+              "feedType": "system",
+              "updatedAt": "2026-01-01T00:00:00Z",
+              "skills": [
+                { "name": "foo", "version": "1.0.0", "sha256": "abc", "url": "https://example.com/foo" }
+              ]
+            }
+            """;
+        var manifest = JsonSerializer.Deserialize<SkillFeedManifest>(json);
+        Assert.NotNull(manifest);
+        Assert.Null(manifest.AllVersions);
+    }
+
+    [Fact]
     public async Task StartAsync_FallbackKeywordIndexCapturesTriggerPhrases()
     {
         var skillDir = Path.Combine(_paths.SystemSkillsDirectory, "netclaw-diagnostics");

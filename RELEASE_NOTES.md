@@ -1,3 +1,43 @@
+#### 0.6.0 2026-03-15 ####
+
+Netclaw v0.6.0 — Subagents, deterministic skill loading, and reminder idempotency
+
+**IMPORTANT: This is a breaking change release. All installs prior to 0.6.0 are unsupported and no migration path is provided. Please read the Breaking Changes section before upgrading.**
+
+**Breaking Changes**
+
+* The skills feed has moved to `skills.netclaw.dev` and all skill version numbers have been bumped to 0.6.0. The feed format is incompatible with daemons older than 0.6.0 — older installs will not receive skill updates and may fail to parse the new manifest. There is no plan to support or maintain any Netclaw version prior to 0.6.0.
+* Removed `memorizer` and `files` memory backend options. `MemoryConfig.Provider` no longer accepts `memorizer` or `files` values — SQLite is now the only supported memory backend. Configurations referencing either removed option must be updated before upgrading. ([#233](https://github.com/Aaronontheweb/netclaw/pull/233))
+* `set_reminder` now requires a caller-provided `Id` as a mandatory parameter. Existing reminder automations or scripts that omit an ID will fail. The `reminder create` CLI command now takes `<id>` as its first positional argument. ([#241](https://github.com/Aaronontheweb/netclaw/pull/241))
+
+**Subagents**
+
+* Added `spawn_agent` tool and `SubAgentDefinitionRegistry` so the frontline agent can delegate tasks to named subagents — research-assistant, code-analyst, and summarizer are seeded during `netclaw init`. Operators can define custom agents by placing `~/.netclaw/agents/<name>.json` and companion `<name>.md` prompt files in that directory. ([#226](https://github.com/Aaronontheweb/netclaw/pull/226))
+
+**Skills Platform**
+
+* Skills now load deterministically before each LLM call based on conversation context — a keyword index (built by a sidecar LLM at scan time and cached per skill version+content hash) scores skills against the current turn. This fixes cases where the agent omitted source URLs in search responses because `search-citation` was never loaded. ([#230](https://github.com/Aaronontheweb/netclaw/pull/230))
+* System skills are now published to `skills.netclaw.dev` (Cloudflare R2) with cumulative historical retention — each version of every skill file is preserved at a versioned URL. The manifest gains an `allVersions` array for future version pinning and rollback. Skills publish on release tags and manual dispatch; dev pushes no longer auto-publish. ([#243](https://github.com/Aaronontheweb/netclaw/pull/243))
+* System skills renamed to Netclaw-prefixed intent-based IDs (e.g., `netclaw-manual`, `netclaw-memory`, `netclaw-diagnostics`). On-disk skill directories, caches, and references migrate automatically to the new names on next daemon start. ([#239](https://github.com/Aaronontheweb/netclaw/pull/239))
+* Fixed search responses in Slack to use inline hyperlinks (`[text](url)`) instead of footnote-style citation markers (`[1]`, `[2]` with a trailing reference list) — the `search-citation` skill now explicitly requires the inline format. ([#235](https://github.com/Aaronontheweb/netclaw/pull/235))
+
+**Reminders**
+
+* `set_reminder` upsert semantics: calling with the same ID now updates the existing reminder instead of creating a duplicate. IDs are normalized to lowercase kebab-case with a 50-character cap. Schedule descriptions in all tool responses, the REST API, and the CLI are now human-readable (e.g., `0 9 * * MON-FRI` → "weekdays at 09:00 UTC"; next-fire times include day-of-week and local timezone). ([#241](https://github.com/Aaronontheweb/netclaw/pull/241))
+
+**Local Model Reliability**
+
+* Context window detection for OpenAI-compatible providers now prefers the live runtime value from the model server (e.g., Lemonade `/props` `n_ctx`) over training metadata from `/v1/models`. The configured `ContextWindow` is validated against the detected provider capacity at startup and clamped to the runtime maximum. ([#238](https://github.com/Aaronontheweb/netclaw/pull/238))
+* Fixed image handling for OpenAI-compatible providers: images attached in Slack were silently dropped in multi-turn conversations. Also suppressed raw `<tool_call>` XML leaking into Slack responses and fixed duplicate tool call loops that could repeat 15+ times when assistant history was malformed. ([#227](https://github.com/Aaronontheweb/netclaw/pull/227))
+
+**Provider Diagnostics**
+
+* Provider probe failures now surface the actual API error message extracted from the response body (handles both `{"error": {"message": "..."}}` and `{"error": "..."}` JSON formats) instead of a generic "API key may lack permissions" message. Error wording updated from "API key" to "credentials" to be accurate for OAuth authentication paths. ([#228](https://github.com/Aaronontheweb/netclaw/pull/228), [#224](https://github.com/Aaronontheweb/netclaw/pull/224))
+
+**Stability**
+
+* Fixed a startup crash on minimal Linux systems (containers, VMs) that do not have ICU libraries installed — self-contained `netclawd` and `netclaw` binaries now enable `InvariantGlobalization` and no longer require `libicu` at runtime. ([#223](https://github.com/Aaronontheweb/netclaw/pull/223))
+
 #### 0.5.0 2026-03-13 ####
 
 Netclaw v0.5.0 — Observer-driven memory recall, local model reliability, and skills platform overhaul

@@ -19,6 +19,15 @@ public sealed class SkillFeedManifest
 
     [JsonPropertyName("skills")]
     public List<SkillFeedEntry> Skills { get; init; } = [];
+
+    /// <summary>
+    /// All published versions of all skills (cumulative history).
+    /// Old daemons ignore this field (STJ silently skips unknown properties).
+    /// The daemon currently only uses <see cref="Skills"/> (latest per skill).
+    /// This field enables future features like version pinning or rollback.
+    /// </summary>
+    [JsonPropertyName("allVersions")]
+    public List<SkillFeedEntry>? AllVersions { get; init; }
 }
 
 /// <summary>
