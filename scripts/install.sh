@@ -13,6 +13,13 @@
 
 set -euo pipefail
 
+# Progress display: show curl progress bar when stderr is a terminal
+if [ -t 2 ]; then
+    CURL_PROGRESS=(--progress-bar)
+else
+    CURL_PROGRESS=(-s)
+fi
+
 MANIFEST_URL="https://releases.netclaw.dev/manifest.json"
 
 # ── Argument parsing ──
@@ -131,7 +138,7 @@ download_component() {
     filename=$(basename "$url")
 
     echo "  Downloading $component..."
-    curl -sSL --fail -o "$TMPDIR/$filename" "$url" || {
+    curl "${CURL_PROGRESS[@]}" -fL -o "$TMPDIR/$filename" "$url" || {
         echo "  Error: Failed to download $url" >&2
         return 1
     }
