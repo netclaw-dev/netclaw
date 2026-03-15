@@ -251,8 +251,8 @@ public sealed class SubAgentActor : ReceiveActor
         var confidence = 0.65;
         var policy = _policyEvaluator.EvaluateWrite(
             domain,
-            sensitivity: "normal",
-            recallMode: "auto",
+            sensitivity: SubAgentFindingSensitivity.Normal.ToWireValue(),
+            recallMode: SubAgentFindingRecallMode.Auto.ToWireValue(),
             confidence,
             isExplicitRequest: false);
 
@@ -263,14 +263,18 @@ public sealed class SubAgentActor : ReceiveActor
         [
             new SubAgentFinding
             {
+                Shape = SubAgentFindingShape.Conclusion,
                 Title = $"subagent:{_definition.Name}",
                 Content = normalized,
                 Kind = "record",
                 Domain = domain,
-                Sensitivity = "normal",
-                RecallMode = "auto",
+                Sensitivity = SubAgentFindingSensitivity.Normal,
+                RecallMode = SubAgentFindingRecallMode.Searchable,
                 UpdateSemantics = "append-document",
-                Confidence = confidence
+                Confidence = confidence,
+                Durability = SubAgentFindingDurability.Durable,
+                Reusability = SubAgentFindingReusability.Reusable,
+                Evidence = []
             }
         ];
     }

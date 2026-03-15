@@ -440,6 +440,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                         Title: finding.Title,
                         Kind: finding.Kind,
                         UpdateSemantics: finding.UpdateSemantics,
+                        Evidence: finding.Evidence,
                         FreshnessAtMs: finding.FreshnessAtMs)));
             }
 
@@ -1863,8 +1864,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
                 if (info.Success && info.Findings.Count == 1)
                 {
-                    var singleDecision = EvaluateSubAgentFindingDecision(info.Findings[0], sessionId.Value);
-                    decision = singleDecision.Decision;
+                    var singleDecision = ReviewSubAgentFinding(info.Findings[0], sessionId.Value);
+                    decision = singleDecision.Decision.ToWireValue();
                     reason = singleDecision.Reason;
                 }
 
@@ -1884,22 +1885,26 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             {
                 foreach (var finding in info.Findings)
                 {
-                    var decision = EvaluateSubAgentFindingDecision(finding, sessionId.Value);
+                    var decision = ReviewSubAgentFinding(finding, sessionId.Value);
                     acceptedFindings.Add(new AcceptedSubAgentFinding
                     {
                         RunId = info.RunId,
                         AgentName = info.AgentName,
                         Duration = info.Duration,
+                        Shape = finding.Shape.ToWireValue(),
                         Title = finding.Title,
                         Content = finding.Content,
                         Kind = finding.Kind,
                         Domain = finding.Domain,
-                        Sensitivity = finding.Sensitivity,
-                        RecallMode = finding.RecallMode,
+                        Sensitivity = finding.Sensitivity.ToWireValue(),
+                        RecallMode = finding.RecallMode.ToWireValue(),
                         UpdateSemantics = finding.UpdateSemantics,
                         Confidence = finding.Confidence,
+                        Durability = finding.Durability.ToWireValue(),
+                        Reusability = finding.Reusability.ToWireValue(),
+                        Evidence = finding.Evidence,
                         FreshnessAtMs = finding.FreshnessAtMs,
-                        Decision = decision.Decision,
+                        Decision = decision.Decision.ToWireValue(),
                         DecisionReason = decision.Reason
                     });
                 }
@@ -1953,28 +1958,50 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             acceptedFindings);
     }
 
-    private static (string Decision, string? Reason) EvaluateSubAgentFindingDecision(
+    internal static SubAgentFindingReviewResult ReviewSubAgentFinding(
         SubAgentFindingCandidate finding,
         string sessionId)
     {
+        if (string.IsNullOrWhiteSpace(finding.Title))
+            return new(SubAgentFindingReviewDecision.Deferred, "missing title");
+
         if (string.IsNullOrWhiteSpace(finding.Content))
-            return ("rejected", "empty content");
+            return new(SubAgentFindingReviewDecision.Rejected, "empty content");
 
-        if (string.Equals(finding.RecallMode, "never", StringComparison.OrdinalIgnoreCase))
-            return ("rejected", "recallMode=never");
+        if (finding.Shape != SubAgentFindingShape.Conclusion)
+            return new(SubAgentFindingReviewDecision.Rejected, "unsupported shape");
 
-        if (string.Equals(finding.Sensitivity, "secret", StringComparison.OrdinalIgnoreCase)
-            && string.Equals(finding.RecallMode, "auto", StringComparison.OrdinalIgnoreCase))
-            return ("rejected", "secret cannot auto-recall");
+        if (!Enum.IsDefined(finding.Durability))
+            return new(SubAgentFindingReviewDecision.Deferred, "missing durability");
+
+        if (!Enum.IsDefined(finding.Reusability))
+            return new(SubAgentFindingReviewDecision.Deferred, "missing reusability");
+
+        if (finding.RecallMode == SubAgentFindingRecallMode.Never)
+            return new(SubAgentFindingReviewDecision.Rejected, "recallMode=never");
+
+        if (!string.Equals(finding.Kind, "record", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(finding.Kind, "document", StringComparison.OrdinalIgnoreCase))
+            return new(SubAgentFindingReviewDecision.Deferred, "unsupported kind");
+
+        if (finding.Sensitivity == SubAgentFindingSensitivity.Secret
+            && finding.RecallMode == SubAgentFindingRecallMode.Auto)
+            return new(SubAgentFindingReviewDecision.Rejected, "secret cannot auto-recall");
 
         var expectedDomain = ResolveDomainFromSession(sessionId);
         if (!string.Equals(finding.Domain, expectedDomain, StringComparison.OrdinalIgnoreCase))
-            return ("deferred", $"domain mismatch: expected {expectedDomain}");
+            return new(SubAgentFindingReviewDecision.Deferred, $"domain mismatch: expected {expectedDomain}");
+
+        if (finding.Durability != SubAgentFindingDurability.Durable)
+            return new(SubAgentFindingReviewDecision.Deferred, "insufficient durability");
+
+        if (finding.Reusability != SubAgentFindingReusability.Reusable)
+            return new(SubAgentFindingReviewDecision.Deferred, "insufficient reusability");
 
         if (finding.Confidence < 0.55)
-            return ("deferred", "low confidence");
+            return new(SubAgentFindingReviewDecision.Deferred, "low confidence");
 
-        return ("accepted", null);
+        return new(SubAgentFindingReviewDecision.Accepted, null);
     }
 
     private static string ClampToolResult(string resultText, int maxInlineToolResultChars)

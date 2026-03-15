@@ -25,6 +25,7 @@ public sealed record MemoryCheckpointPayload(
     string? Kind = null,
     string? Title = null,
     string? UpdateSemantics = null,
+    IReadOnlyList<string>? Evidence = null,
     string? SupersedesRecordId = null,
     long? FreshnessAtMs = null);
 

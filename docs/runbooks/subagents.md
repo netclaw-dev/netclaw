@@ -69,6 +69,10 @@ Completion events are emitted for every finished subagent run, even when the
 subagent returns no structured findings. In that case `FindingsCount` is `0`
 and the memory-decision fields are empty because there was nothing to review.
 
+Structured findings are conservative, parent-reviewed durable-memory candidates.
+They should be emitted as explicit conclusion envelopes with review metadata,
+not inferred from free-form work logs or tool transcripts.
+
 ## Defining subagents
 
 Agent definitions live in `~/.netclaw/agents/`. Each agent is a JSON file with
@@ -215,4 +219,7 @@ tool, the agent is skipped with a warning in the logs.
   `"modelRole": "Main"` if the task requires the full model's capabilities.
 - Subagents **cannot write durable cross-session memory** directly. They can
   return structured findings to the parent session for policy evaluation.
+- Findings envelopes are intended for durable conclusion candidates only.
+  Work-log or transcript-shaped envelopes are rejected by the parent-session
+  review path.
 - There is no inter-subagent communication — each subagent is independent.

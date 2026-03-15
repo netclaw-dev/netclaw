@@ -62,6 +62,7 @@ internal sealed record AcceptedSubAgentFinding
     public required string RunId { get; init; }
     public required string AgentName { get; init; }
     public required TimeSpan Duration { get; init; }
+    public required string Shape { get; init; }
     public required string Title { get; init; }
     public required string Content { get; init; }
     public required string Kind { get; init; }
@@ -70,6 +71,9 @@ internal sealed record AcceptedSubAgentFinding
     public required string RecallMode { get; init; }
     public required string UpdateSemantics { get; init; }
     public required double Confidence { get; init; }
+    public required string Durability { get; init; }
+    public required string Reusability { get; init; }
+    public IReadOnlyList<string> Evidence { get; init; } = [];
     public long? FreshnessAtMs { get; init; }
     public required string Decision { get; init; }
     public string? DecisionReason { get; init; }
