@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "feedType": "system",
-  "updatedAt": "2026-03-15T15:23:10Z",
+  "updatedAt": "2026-03-15T15:32:17Z",
   "skills": [
     {
       "name": "netclaw-diagnostics",
@@ -43,16 +43,22 @@
       "name": "netclaw-manual",
       "version": "0.6.0",
       "minimumDaemonVersion": "0.1.0",
-      "sha256": "ebdb8d2ee01f64fd695a88f607d48c0bc3de7944df21ce66a0e3cdcd42fc2c8c",
-      "sizeBytes": 8562,
+      "sha256": "6092c8aa17b2b0a9dd1adba3d9315da285012a0e72fa2be875d4e31caef04fc3",
+      "sizeBytes": 8749,
       "url": "https://skills.netclaw.dev/.system/files/netclaw-manual/0.6.0/SKILL.md",
       "category": null,
       "description": "Netclaw Manual. Read when the user is asking what Netclaw can do, which command/tool to use, how to schedule work, switch models, manage providers, or discover available capabilities.",
       "files": [
         {
+          "path": "/home/petabridge/repositories/stannardlabs/netclaw/.claude-wt/worktrees/claude-wt-historical-skills/feeds/skills/.system/files/netclaw-manual/1.1.0/SKILL.md",
+          "sha256": "2716283af3994f9374bd891c68d2d6ddbd9b88c9bc36af65d152ae328858ae46",
+          "sizeBytes": 9009,
+          "url": "https://skills.netclaw.dev/.system/files/netclaw-manual/0.6.0//home/petabridge/repositories/stannardlabs/netclaw/.claude-wt/worktrees/claude-wt-historical-skills/feeds/skills/.system/files/netclaw-manual/1.1.0/SKILL.md"
+        },
+        {
           "path": "/home/petabridge/repositories/stannardlabs/netclaw/.claude-wt/worktrees/claude-wt-historical-skills/feeds/skills/.system/files/netclaw-manual/SKILL.md",
-          "sha256": "ebdb8d2ee01f64fd695a88f607d48c0bc3de7944df21ce66a0e3cdcd42fc2c8c",
-          "sizeBytes": 8562,
+          "sha256": "6092c8aa17b2b0a9dd1adba3d9315da285012a0e72fa2be875d4e31caef04fc3",
+          "sizeBytes": 8749,
           "url": "https://skills.netclaw.dev/.system/files/netclaw-manual/0.6.0//home/petabridge/repositories/stannardlabs/netclaw/.claude-wt/worktrees/claude-wt-historical-skills/feeds/skills/.system/files/netclaw-manual/SKILL.md"
         }
       ]
@@ -171,16 +177,22 @@
       "name": "netclaw-manual",
       "version": "0.6.0",
       "minimumDaemonVersion": "0.1.0",
-      "sha256": "ebdb8d2ee01f64fd695a88f607d48c0bc3de7944df21ce66a0e3cdcd42fc2c8c",
-      "sizeBytes": 8562,
+      "sha256": "6092c8aa17b2b0a9dd1adba3d9315da285012a0e72fa2be875d4e31caef04fc3",
+      "sizeBytes": 8749,
       "url": "https://skills.netclaw.dev/.system/files/netclaw-manual/0.6.0/SKILL.md",
       "category": null,
       "description": "Netclaw Manual. Read when the user is asking what Netclaw can do, which command/tool to use, how to schedule work, switch models, manage providers, or discover available capabilities.",
       "files": [
         {
+          "path": "/home/petabridge/repositories/stannardlabs/netclaw/.claude-wt/worktrees/claude-wt-historical-skills/feeds/skills/.system/files/netclaw-manual/1.1.0/SKILL.md",
+          "sha256": "2716283af3994f9374bd891c68d2d6ddbd9b88c9bc36af65d152ae328858ae46",
+          "sizeBytes": 9009,
+          "url": "https://skills.netclaw.dev/.system/files/netclaw-manual/0.6.0//home/petabridge/repositories/stannardlabs/netclaw/.claude-wt/worktrees/claude-wt-historical-skills/feeds/skills/.system/files/netclaw-manual/1.1.0/SKILL.md"
+        },
+        {
           "path": "/home/petabridge/repositories/stannardlabs/netclaw/.claude-wt/worktrees/claude-wt-historical-skills/feeds/skills/.system/files/netclaw-manual/SKILL.md",
-          "sha256": "ebdb8d2ee01f64fd695a88f607d48c0bc3de7944df21ce66a0e3cdcd42fc2c8c",
-          "sizeBytes": 8562,
+          "sha256": "6092c8aa17b2b0a9dd1adba3d9315da285012a0e72fa2be875d4e31caef04fc3",
+          "sizeBytes": 8749,
           "url": "https://skills.netclaw.dev/.system/files/netclaw-manual/0.6.0//home/petabridge/repositories/stannardlabs/netclaw/.claude-wt/worktrees/claude-wt-historical-skills/feeds/skills/.system/files/netclaw-manual/SKILL.md"
         }
       ]
