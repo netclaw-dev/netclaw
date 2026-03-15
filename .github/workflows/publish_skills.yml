@@ -1,11 +1,7 @@
 name: Publish Skills Feed
 
 on:
-  push:
-    branches: [dev, main]
-    paths:
-      - 'feeds/skills/.system/files/**'
-      - 'feeds/scripts/generate-skill-manifest.sh'
+  workflow_call: {}
   workflow_dispatch: {}
 
 permissions:

@@ -344,3 +344,12 @@ jobs:
     - name: Cleanup signing key
       if: always()
       run: rm -f /tmp/netclaw-manifest.key
+
+  # ────────────────────────────────────────────────────────────────────
+  # Job 4: Publish system skills feed to R2
+  # ────────────────────────────────────────────────────────────────────
+  publish-skills:
+    name: Publish Skills Feed
+    needs: publish-binary-manifest
+    uses: ./.github/workflows/publish_skills.yml
+    secrets: inherit

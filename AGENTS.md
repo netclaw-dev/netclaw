@@ -161,12 +161,17 @@ feature area, the corresponding skill **must** be updated in the same PR.
 | Search tool behavior, citation policy, web_search/web_fetch usage guidance | `search-citation` |
 
 **Workflow:**
-1. Edit the skill source at `feeds/skills/.system/files/{name}/{version}.md`
-2. Bump the version (new file, e.g. `1.1.0.md`) — do not overwrite old versions
-3. Run `./feeds/scripts/generate-skill-manifest.sh` to rebuild `manifest.json`
-4. Update the embedded copy in `src/Netclaw.Daemon/BuiltInSkills/` to match
-   (this is the offline bootstrap — must stay in sync with the latest feed version)
-5. Include all four changes (skill file, manifest, embedded copy) in the same commit
+1. Edit the skill at `feeds/skills/.system/files/{name}/SKILL.md`
+2. Bump `metadata.version` in the YAML frontmatter
+3. Update the embedded copy in `src/Netclaw.Daemon/BuiltInSkills/` to match
+4. Include skill file + embedded copy changes in the same commit
+5. Do NOT run `generate-skill-manifest.sh` locally — CI generates the manifest
+   and publishes to R2 on release tags or manual `workflow_dispatch`
+
+**Publishing:**
+- Skills publish automatically as part of the binary release workflow (on git tags)
+- For hot-patches without a daemon release: `gh workflow run publish_skills.yml`
+- Normal dev pushes do NOT publish to the live feed
 
 If a new feature area needs agent guidance, create a new skill file and add a
 row to this table.

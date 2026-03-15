@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "feedType": "system",
-  "updatedAt": "2026-03-15T13:10:53Z",
+  "updatedAt": "2026-03-15T15:11:52Z",
   "skills": [
     {
       "name": "netclaw-diagnostics",
@@ -14,10 +14,10 @@
       "description": "Netclaw diagnostics and session debugging. Read when the user wants to understand what happened in a Netclaw session, why a tool failed, why capabilities are missing, or whether daemon/memory/config health is degraded.",
       "files": [
         {
-          "path": "/home/petabridge/repositories/stannardlabs/netclaw/.claude-wt/worktrees/claude-wt-historical-skills/feeds/skills/.system/files/netclaw-diagnostics/1.0.0/SKILL.md",
+          "path": "/home/petabridge/repositories/stannardlabs/netclaw/.claude-wt/worktrees/claude-wt-historical-skills/feeds/skills/.system/files/netclaw-diagnostics/SKILL.md",
           "sha256": "05445103322016bb4c0941de6d500c5d4de1adeaf73ffe5ee2314c1f4baeb1bb",
           "sizeBytes": 4424,
-          "url": "https://skills.netclaw.dev/.system/files/netclaw-diagnostics/1.0.0//home/petabridge/repositories/stannardlabs/netclaw/.claude-wt/worktrees/claude-wt-historical-skills/feeds/skills/.system/files/netclaw-diagnostics/1.0.0/SKILL.md"
+          "url": "https://skills.netclaw.dev/.system/files/netclaw-diagnostics/1.0.0//home/petabridge/repositories/stannardlabs/netclaw/.claude-wt/worktrees/claude-wt-historical-skills/feeds/skills/.system/files/netclaw-diagnostics/SKILL.md"
         }
       ]
     },
@@ -32,10 +32,10 @@
       "description": "Netclaw identity files. Read when the user wants to update lasting profile, tone, workflow, or environment preferences that should shape future Netclaw sessions.",
       "files": [
         {
-          "path": "/home/petabridge/repositories/stannardlabs/netclaw/.claude-wt/worktrees/claude-wt-historical-skills/feeds/skills/.system/files/netclaw-identity/1.0.0/SKILL.md",
+          "path": "/home/petabridge/repositories/stannardlabs/netclaw/.claude-wt/worktrees/claude-wt-historical-skills/feeds/skills/.system/files/netclaw-identity/SKILL.md",
           "sha256": "168db0b60ff75beb6be7afda7509b982842cdcef68236b17cfac2874353c5637",
           "sizeBytes": 3019,
-          "url": "https://skills.netclaw.dev/.system/files/netclaw-identity/1.0.0//home/petabridge/repositories/stannardlabs/netclaw/.claude-wt/worktrees/claude-wt-historical-skills/feeds/skills/.system/files/netclaw-identity/1.0.0/SKILL.md"
+          "url": "https://skills.netclaw.dev/.system/files/netclaw-identity/1.0.0//home/petabridge/repositories/stannardlabs/netclaw/.claude-wt/worktrees/claude-wt-historical-skills/feeds/skills/.system/files/netclaw-identity/SKILL.md"
         }
       ]
     },
@@ -50,10 +50,10 @@
       "description": "Netclaw Manual. Read when the user is asking what Netclaw can do, which command/tool to use, how to schedule work, switch models, manage providers, or discover available capabilities.",
       "files": [
         {
-          "path": "/home/petabridge/repositories/stannardlabs/netclaw/.claude-wt/worktrees/claude-wt-historical-skills/feeds/skills/.system/files/netclaw-manual/1.0.0/SKILL.md",
+          "path": "/home/petabridge/repositories/stannardlabs/netclaw/.claude-wt/worktrees/claude-wt-historical-skills/feeds/skills/.system/files/netclaw-manual/SKILL.md",
           "sha256": "1d6947c7e6b9e591559af35b9251da33733a93422879e1fa0d43da23386e329b",
           "sizeBytes": 8562,
-          "url": "https://skills.netclaw.dev/.system/files/netclaw-manual/1.0.0//home/petabridge/repositories/stannardlabs/netclaw/.claude-wt/worktrees/claude-wt-historical-skills/feeds/skills/.system/files/netclaw-manual/1.0.0/SKILL.md"
+          "url": "https://skills.netclaw.dev/.system/files/netclaw-manual/1.0.0//home/petabridge/repositories/stannardlabs/netclaw/.claude-wt/worktrees/claude-wt-historical-skills/feeds/skills/.system/files/netclaw-manual/SKILL.md"
         }
       ]
     },
@@ -68,10 +68,10 @@
       "description": "Netclaw memory usage. Read when the user asks what Netclaw remembers, wants something saved for later, or when you need to decide between automatic recall, explicit memory search, and identity-file updates.",
       "files": [
         {
-          "path": "/home/petabridge/repositories/stannardlabs/netclaw/.claude-wt/worktrees/claude-wt-historical-skills/feeds/skills/.system/files/netclaw-memory/1.0.0/SKILL.md",
+          "path": "/home/petabridge/repositories/stannardlabs/netclaw/.claude-wt/worktrees/claude-wt-historical-skills/feeds/skills/.system/files/netclaw-memory/SKILL.md",
           "sha256": "f63178f7b15d8a53653ecf59149ba192ca8be2b3e0c6cb437b55ff34b2b2d010",
           "sizeBytes": 3544,
-          "url": "https://skills.netclaw.dev/.system/files/netclaw-memory/1.0.0//home/petabridge/repositories/stannardlabs/netclaw/.claude-wt/worktrees/claude-wt-historical-skills/feeds/skills/.system/files/netclaw-memory/1.0.0/SKILL.md"
+          "url": "https://skills.netclaw.dev/.system/files/netclaw-memory/1.0.0//home/petabridge/repositories/stannardlabs/netclaw/.claude-wt/worktrees/claude-wt-historical-skills/feeds/skills/.system/files/netclaw-memory/SKILL.md"
         }
       ]
     },
@@ -86,28 +86,28 @@
       "description": "Guides when to use web search vs. training data and how to cite sources. Ensures specific factual claims include source URLs and the agent does not hallucinate verifiable information.",
       "files": [
         {
-          "path": "/home/petabridge/repositories/stannardlabs/netclaw/.claude-wt/worktrees/claude-wt-historical-skills/feeds/skills/.system/files/search-citation/1.1.0/references/local-search.md",
+          "path": "/home/petabridge/repositories/stannardlabs/netclaw/.claude-wt/worktrees/claude-wt-historical-skills/feeds/skills/.system/files/search-citation/references/local-search.md",
           "sha256": "a913d2efdfd546ef85d24116ae3ad2a621f422c885f79751a7c465072b72dda2",
           "sizeBytes": 1584,
-          "url": "https://skills.netclaw.dev/.system/files/search-citation/1.1.0//home/petabridge/repositories/stannardlabs/netclaw/.claude-wt/worktrees/claude-wt-historical-skills/feeds/skills/.system/files/search-citation/1.1.0/references/local-search.md"
+          "url": "https://skills.netclaw.dev/.system/files/search-citation/1.1.0//home/petabridge/repositories/stannardlabs/netclaw/.claude-wt/worktrees/claude-wt-historical-skills/feeds/skills/.system/files/search-citation/references/local-search.md"
         },
         {
-          "path": "/home/petabridge/repositories/stannardlabs/netclaw/.claude-wt/worktrees/claude-wt-historical-skills/feeds/skills/.system/files/search-citation/1.1.0/references/product-search.md",
+          "path": "/home/petabridge/repositories/stannardlabs/netclaw/.claude-wt/worktrees/claude-wt-historical-skills/feeds/skills/.system/files/search-citation/references/product-search.md",
           "sha256": "e89a691b5209e235fd9e8ae5f76cb4a7a1bb5d9a96dcbe454077ad01ee56d2b4",
           "sizeBytes": 1642,
-          "url": "https://skills.netclaw.dev/.system/files/search-citation/1.1.0//home/petabridge/repositories/stannardlabs/netclaw/.claude-wt/worktrees/claude-wt-historical-skills/feeds/skills/.system/files/search-citation/1.1.0/references/product-search.md"
+          "url": "https://skills.netclaw.dev/.system/files/search-citation/1.1.0//home/petabridge/repositories/stannardlabs/netclaw/.claude-wt/worktrees/claude-wt-historical-skills/feeds/skills/.system/files/search-citation/references/product-search.md"
         },
         {
-          "path": "/home/petabridge/repositories/stannardlabs/netclaw/.claude-wt/worktrees/claude-wt-historical-skills/feeds/skills/.system/files/search-citation/1.1.0/references/travel-search.md",
+          "path": "/home/petabridge/repositories/stannardlabs/netclaw/.claude-wt/worktrees/claude-wt-historical-skills/feeds/skills/.system/files/search-citation/references/travel-search.md",
           "sha256": "b1b3eba5ecb374d8f14e7340c46c3c4c33e4f68767fc1a9a0ef30662d04144dc",
           "sizeBytes": 1531,
-          "url": "https://skills.netclaw.dev/.system/files/search-citation/1.1.0//home/petabridge/repositories/stannardlabs/netclaw/.claude-wt/worktrees/claude-wt-historical-skills/feeds/skills/.system/files/search-citation/1.1.0/references/travel-search.md"
+          "url": "https://skills.netclaw.dev/.system/files/search-citation/1.1.0//home/petabridge/repositories/stannardlabs/netclaw/.claude-wt/worktrees/claude-wt-historical-skills/feeds/skills/.system/files/search-citation/references/travel-search.md"
         },
         {
-          "path": "/home/petabridge/repositories/stannardlabs/netclaw/.claude-wt/worktrees/claude-wt-historical-skills/feeds/skills/.system/files/search-citation/1.1.0/SKILL.md",
+          "path": "/home/petabridge/repositories/stannardlabs/netclaw/.claude-wt/worktrees/claude-wt-historical-skills/feeds/skills/.system/files/search-citation/SKILL.md",
           "sha256": "e5553f1fb56dab6c19b11973bd60be8a7ecfa65d4678136d4d6e4223531a10cb",
           "sizeBytes": 4335,
-          "url": "https://skills.netclaw.dev/.system/files/search-citation/1.1.0//home/petabridge/repositories/stannardlabs/netclaw/.claude-wt/worktrees/claude-wt-historical-skills/feeds/skills/.system/files/search-citation/1.1.0/SKILL.md"
+          "url": "https://skills.netclaw.dev/.system/files/search-citation/1.1.0//home/petabridge/repositories/stannardlabs/netclaw/.claude-wt/worktrees/claude-wt-historical-skills/feeds/skills/.system/files/search-citation/SKILL.md"
         }
       ]
     },
@@ -122,10 +122,10 @@
       "description": "Create a skill when a repeatable workflow emerges. Read for file format, naming, and discovery conventions.",
       "files": [
         {
-          "path": "/home/petabridge/repositories/stannardlabs/netclaw/.claude-wt/worktrees/claude-wt-historical-skills/feeds/skills/.system/files/skill-authoring/1.1.0/SKILL.md",
+          "path": "/home/petabridge/repositories/stannardlabs/netclaw/.claude-wt/worktrees/claude-wt-historical-skills/feeds/skills/.system/files/skill-authoring/SKILL.md",
           "sha256": "91578731d56c2bcec50c4b44b6d0d0352b1d652d03b46b96a131b541a7c1227b",
           "sizeBytes": 6983,
-          "url": "https://skills.netclaw.dev/.system/files/skill-authoring/1.1.0//home/petabridge/repositories/stannardlabs/netclaw/.claude-wt/worktrees/claude-wt-historical-skills/feeds/skills/.system/files/skill-authoring/1.1.0/SKILL.md"
+          "url": "https://skills.netclaw.dev/.system/files/skill-authoring/1.1.0//home/petabridge/repositories/stannardlabs/netclaw/.claude-wt/worktrees/claude-wt-historical-skills/feeds/skills/.system/files/skill-authoring/SKILL.md"
         }
       ]
     }
@@ -142,10 +142,10 @@
       "description": "Netclaw diagnostics and session debugging. Read when the user wants to understand what happened in a Netclaw session, why a tool failed, why capabilities are missing, or whether daemon/memory/config health is degraded.",
       "files": [
         {
-          "path": "/home/petabridge/repositories/stannardlabs/netclaw/.claude-wt/worktrees/claude-wt-historical-skills/feeds/skills/.system/files/netclaw-diagnostics/1.0.0/SKILL.md",
+          "path": "/home/petabridge/repositories/stannardlabs/netclaw/.claude-wt/worktrees/claude-wt-historical-skills/feeds/skills/.system/files/netclaw-diagnostics/SKILL.md",
           "sha256": "05445103322016bb4c0941de6d500c5d4de1adeaf73ffe5ee2314c1f4baeb1bb",
           "sizeBytes": 4424,
-          "url": "https://skills.netclaw.dev/.system/files/netclaw-diagnostics/1.0.0//home/petabridge/repositories/stannardlabs/netclaw/.claude-wt/worktrees/claude-wt-historical-skills/feeds/skills/.system/files/netclaw-diagnostics/1.0.0/SKILL.md"
+          "url": "https://skills.netclaw.dev/.system/files/netclaw-diagnostics/1.0.0//home/petabridge/repositories/stannardlabs/netclaw/.claude-wt/worktrees/claude-wt-historical-skills/feeds/skills/.system/files/netclaw-diagnostics/SKILL.md"
         }
       ]
     },
@@ -160,10 +160,10 @@
       "description": "Netclaw identity files. Read when the user wants to update lasting profile, tone, workflow, or environment preferences that should shape future Netclaw sessions.",
       "files": [
         {
-          "path": "/home/petabridge/repositories/stannardlabs/netclaw/.claude-wt/worktrees/claude-wt-historical-skills/feeds/skills/.system/files/netclaw-identity/1.0.0/SKILL.md",
+          "path": "/home/petabridge/repositories/stannardlabs/netclaw/.claude-wt/worktrees/claude-wt-historical-skills/feeds/skills/.system/files/netclaw-identity/SKILL.md",
           "sha256": "168db0b60ff75beb6be7afda7509b982842cdcef68236b17cfac2874353c5637",
           "sizeBytes": 3019,
-          "url": "https://skills.netclaw.dev/.system/files/netclaw-identity/1.0.0//home/petabridge/repositories/stannardlabs/netclaw/.claude-wt/worktrees/claude-wt-historical-skills/feeds/skills/.system/files/netclaw-identity/1.0.0/SKILL.md"
+          "url": "https://skills.netclaw.dev/.system/files/netclaw-identity/1.0.0//home/petabridge/repositories/stannardlabs/netclaw/.claude-wt/worktrees/claude-wt-historical-skills/feeds/skills/.system/files/netclaw-identity/SKILL.md"
         }
       ]
     },
@@ -178,10 +178,10 @@
       "description": "Netclaw Manual. Read when the user is asking what Netclaw can do, which command/tool to use, how to schedule work, switch models, manage providers, or discover available capabilities.",
       "files": [
         {
-          "path": "/home/petabridge/repositories/stannardlabs/netclaw/.claude-wt/worktrees/claude-wt-historical-skills/feeds/skills/.system/files/netclaw-manual/1.0.0/SKILL.md",
+          "path": "/home/petabridge/repositories/stannardlabs/netclaw/.claude-wt/worktrees/claude-wt-historical-skills/feeds/skills/.system/files/netclaw-manual/SKILL.md",
           "sha256": "1d6947c7e6b9e591559af35b9251da33733a93422879e1fa0d43da23386e329b",
           "sizeBytes": 8562,
-          "url": "https://skills.netclaw.dev/.system/files/netclaw-manual/1.0.0//home/petabridge/repositories/stannardlabs/netclaw/.claude-wt/worktrees/claude-wt-historical-skills/feeds/skills/.system/files/netclaw-manual/1.0.0/SKILL.md"
+          "url": "https://skills.netclaw.dev/.system/files/netclaw-manual/1.0.0//home/petabridge/repositories/stannardlabs/netclaw/.claude-wt/worktrees/claude-wt-historical-skills/feeds/skills/.system/files/netclaw-manual/SKILL.md"
         }
       ]
     },
@@ -196,46 +196,10 @@
       "description": "Netclaw memory usage. Read when the user asks what Netclaw remembers, wants something saved for later, or when you need to decide between automatic recall, explicit memory search, and identity-file updates.",
       "files": [
         {
-          "path": "/home/petabridge/repositories/stannardlabs/netclaw/.claude-wt/worktrees/claude-wt-historical-skills/feeds/skills/.system/files/netclaw-memory/1.0.0/SKILL.md",
+          "path": "/home/petabridge/repositories/stannardlabs/netclaw/.claude-wt/worktrees/claude-wt-historical-skills/feeds/skills/.system/files/netclaw-memory/SKILL.md",
           "sha256": "f63178f7b15d8a53653ecf59149ba192ca8be2b3e0c6cb437b55ff34b2b2d010",
           "sizeBytes": 3544,
-          "url": "https://skills.netclaw.dev/.system/files/netclaw-memory/1.0.0//home/petabridge/repositories/stannardlabs/netclaw/.claude-wt/worktrees/claude-wt-historical-skills/feeds/skills/.system/files/netclaw-memory/1.0.0/SKILL.md"
-        }
-      ]
-    },
-    {
-      "name": "search-citation",
-      "version": "1.0.0",
-      "minimumDaemonVersion": "0.1.0",
-      "sha256": "b19176d44bb496e8e471e834a5322af73649ce0b2fdb24cc90df7f5799bbb00c",
-      "sizeBytes": 3714,
-      "url": "https://skills.netclaw.dev/.system/files/search-citation/1.0.0/SKILL.md",
-      "category": null,
-      "description": "Guides when to use web search vs. training data and how to cite sources. Ensures specific factual claims include source URLs and the agent does not hallucinate verifiable information.",
-      "files": [
-        {
-          "path": "/home/petabridge/repositories/stannardlabs/netclaw/.claude-wt/worktrees/claude-wt-historical-skills/feeds/skills/.system/files/search-citation/1.0.0/references/local-search.md",
-          "sha256": "a913d2efdfd546ef85d24116ae3ad2a621f422c885f79751a7c465072b72dda2",
-          "sizeBytes": 1584,
-          "url": "https://skills.netclaw.dev/.system/files/search-citation/1.0.0//home/petabridge/repositories/stannardlabs/netclaw/.claude-wt/worktrees/claude-wt-historical-skills/feeds/skills/.system/files/search-citation/1.0.0/references/local-search.md"
-        },
-        {
-          "path": "/home/petabridge/repositories/stannardlabs/netclaw/.claude-wt/worktrees/claude-wt-historical-skills/feeds/skills/.system/files/search-citation/1.0.0/references/product-search.md",
-          "sha256": "e89a691b5209e235fd9e8ae5f76cb4a7a1bb5d9a96dcbe454077ad01ee56d2b4",
-          "sizeBytes": 1642,
-          "url": "https://skills.netclaw.dev/.system/files/search-citation/1.0.0//home/petabridge/repositories/stannardlabs/netclaw/.claude-wt/worktrees/claude-wt-historical-skills/feeds/skills/.system/files/search-citation/1.0.0/references/product-search.md"
-        },
-        {
-          "path": "/home/petabridge/repositories/stannardlabs/netclaw/.claude-wt/worktrees/claude-wt-historical-skills/feeds/skills/.system/files/search-citation/1.0.0/references/travel-search.md",
-          "sha256": "b1b3eba5ecb374d8f14e7340c46c3c4c33e4f68767fc1a9a0ef30662d04144dc",
-          "sizeBytes": 1531,
-          "url": "https://skills.netclaw.dev/.system/files/search-citation/1.0.0//home/petabridge/repositories/stannardlabs/netclaw/.claude-wt/worktrees/claude-wt-historical-skills/feeds/skills/.system/files/search-citation/1.0.0/references/travel-search.md"
-        },
-        {
-          "path": "/home/petabridge/repositories/stannardlabs/netclaw/.claude-wt/worktrees/claude-wt-historical-skills/feeds/skills/.system/files/search-citation/1.0.0/SKILL.md",
-          "sha256": "b19176d44bb496e8e471e834a5322af73649ce0b2fdb24cc90df7f5799bbb00c",
-          "sizeBytes": 3714,
-          "url": "https://skills.netclaw.dev/.system/files/search-citation/1.0.0//home/petabridge/repositories/stannardlabs/netclaw/.claude-wt/worktrees/claude-wt-historical-skills/feeds/skills/.system/files/search-citation/1.0.0/SKILL.md"
+          "url": "https://skills.netclaw.dev/.system/files/netclaw-memory/1.0.0//home/petabridge/repositories/stannardlabs/netclaw/.claude-wt/worktrees/claude-wt-historical-skills/feeds/skills/.system/files/netclaw-memory/SKILL.md"
         }
       ]
     },
@@ -250,28 +214,28 @@
       "description": "Guides when to use web search vs. training data and how to cite sources. Ensures specific factual claims include source URLs and the agent does not hallucinate verifiable information.",
       "files": [
         {
-          "path": "/home/petabridge/repositories/stannardlabs/netclaw/.claude-wt/worktrees/claude-wt-historical-skills/feeds/skills/.system/files/search-citation/1.1.0/references/local-search.md",
+          "path": "/home/petabridge/repositories/stannardlabs/netclaw/.claude-wt/worktrees/claude-wt-historical-skills/feeds/skills/.system/files/search-citation/references/local-search.md",
           "sha256": "a913d2efdfd546ef85d24116ae3ad2a621f422c885f79751a7c465072b72dda2",
           "sizeBytes": 1584,
-          "url": "https://skills.netclaw.dev/.system/files/search-citation/1.1.0//home/petabridge/repositories/stannardlabs/netclaw/.claude-wt/worktrees/claude-wt-historical-skills/feeds/skills/.system/files/search-citation/1.1.0/references/local-search.md"
+          "url": "https://skills.netclaw.dev/.system/files/search-citation/1.1.0//home/petabridge/repositories/stannardlabs/netclaw/.claude-wt/worktrees/claude-wt-historical-skills/feeds/skills/.system/files/search-citation/references/local-search.md"
         },
         {
-          "path": "/home/petabridge/repositories/stannardlabs/netclaw/.claude-wt/worktrees/claude-wt-historical-skills/feeds/skills/.system/files/search-citation/1.1.0/references/product-search.md",
+          "path": "/home/petabridge/repositories/stannardlabs/netclaw/.claude-wt/worktrees/claude-wt-historical-skills/feeds/skills/.system/files/search-citation/references/product-search.md",
           "sha256": "e89a691b5209e235fd9e8ae5f76cb4a7a1bb5d9a96dcbe454077ad01ee56d2b4",
           "sizeBytes": 1642,
-          "url": "https://skills.netclaw.dev/.system/files/search-citation/1.1.0//home/petabridge/repositories/stannardlabs/netclaw/.claude-wt/worktrees/claude-wt-historical-skills/feeds/skills/.system/files/search-citation/1.1.0/references/product-search.md"
+          "url": "https://skills.netclaw.dev/.system/files/search-citation/1.1.0//home/petabridge/repositories/stannardlabs/netclaw/.claude-wt/worktrees/claude-wt-historical-skills/feeds/skills/.system/files/search-citation/references/product-search.md"
         },
         {
-          "path": "/home/petabridge/repositories/stannardlabs/netclaw/.claude-wt/worktrees/claude-wt-historical-skills/feeds/skills/.system/files/search-citation/1.1.0/references/travel-search.md",
+          "path": "/home/petabridge/repositories/stannardlabs/netclaw/.claude-wt/worktrees/claude-wt-historical-skills/feeds/skills/.system/files/search-citation/references/travel-search.md",
           "sha256": "b1b3eba5ecb374d8f14e7340c46c3c4c33e4f68767fc1a9a0ef30662d04144dc",
           "sizeBytes": 1531,
-          "url": "https://skills.netclaw.dev/.system/files/search-citation/1.1.0//home/petabridge/repositories/stannardlabs/netclaw/.claude-wt/worktrees/claude-wt-historical-skills/feeds/skills/.system/files/search-citation/1.1.0/references/travel-search.md"
+          "url": "https://skills.netclaw.dev/.system/files/search-citation/1.1.0//home/petabridge/repositories/stannardlabs/netclaw/.claude-wt/worktrees/claude-wt-historical-skills/feeds/skills/.system/files/search-citation/references/travel-search.md"
         },
         {
-          "path": "/home/petabridge/repositories/stannardlabs/netclaw/.claude-wt/worktrees/claude-wt-historical-skills/feeds/skills/.system/files/search-citation/1.1.0/SKILL.md",
+          "path": "/home/petabridge/repositories/stannardlabs/netclaw/.claude-wt/worktrees/claude-wt-historical-skills/feeds/skills/.system/files/search-citation/SKILL.md",
           "sha256": "e5553f1fb56dab6c19b11973bd60be8a7ecfa65d4678136d4d6e4223531a10cb",
           "sizeBytes": 4335,
-          "url": "https://skills.netclaw.dev/.system/files/search-citation/1.1.0//home/petabridge/repositories/stannardlabs/netclaw/.claude-wt/worktrees/claude-wt-historical-skills/feeds/skills/.system/files/search-citation/1.1.0/SKILL.md"
+          "url": "https://skills.netclaw.dev/.system/files/search-citation/1.1.0//home/petabridge/repositories/stannardlabs/netclaw/.claude-wt/worktrees/claude-wt-historical-skills/feeds/skills/.system/files/search-citation/SKILL.md"
         }
       ]
     },
@@ -286,10 +250,10 @@
       "description": "Create a skill when a repeatable workflow emerges. Read for file format, naming, and discovery conventions.",
       "files": [
         {
-          "path": "/home/petabridge/repositories/stannardlabs/netclaw/.claude-wt/worktrees/claude-wt-historical-skills/feeds/skills/.system/files/skill-authoring/1.1.0/SKILL.md",
+          "path": "/home/petabridge/repositories/stannardlabs/netclaw/.claude-wt/worktrees/claude-wt-historical-skills/feeds/skills/.system/files/skill-authoring/SKILL.md",
           "sha256": "91578731d56c2bcec50c4b44b6d0d0352b1d652d03b46b96a131b541a7c1227b",
           "sizeBytes": 6983,
-          "url": "https://skills.netclaw.dev/.system/files/skill-authoring/1.1.0//home/petabridge/repositories/stannardlabs/netclaw/.claude-wt/worktrees/claude-wt-historical-skills/feeds/skills/.system/files/skill-authoring/1.1.0/SKILL.md"
+          "url": "https://skills.netclaw.dev/.system/files/skill-authoring/1.1.0//home/petabridge/repositories/stannardlabs/netclaw/.claude-wt/worktrees/claude-wt-historical-skills/feeds/skills/.system/files/skill-authoring/SKILL.md"
         }
       ]
     }
