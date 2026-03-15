@@ -41,18 +41,27 @@ public sealed class FakeSlackProbe : ISlackProbe
     /// </summary>
     public IReadOnlyList<string>? LastResolvedNames { get; private set; }
 
-    public Task<SlackProbeResult> ProbeAsync(string botToken, CancellationToken ct = default)
+    /// <summary>
+    /// Optional delay before returning results. Used to test timeout behavior.
+    /// </summary>
+    public TimeSpan? DelayBeforeResult { get; set; }
+
+    public async Task<SlackProbeResult> ProbeAsync(string botToken, CancellationToken ct = default)
     {
         ProbeCallCount++;
         LastBotToken = botToken;
-        return Task.FromResult(NextResult);
+        if (DelayBeforeResult.HasValue)
+            await Task.Delay(DelayBeforeResult.Value, ct);
+        return NextResult;
     }
 
-    public Task<SlackChannelResolutionResult> ResolveChannelNamesAsync(
+    public async Task<SlackChannelResolutionResult> ResolveChannelNamesAsync(
         string botToken, IReadOnlyList<string> channelNames, CancellationToken ct = default)
     {
         ResolveCallCount++;
         LastResolvedNames = channelNames;
-        return Task.FromResult(NextResolutionResult);
+        if (DelayBeforeResult.HasValue)
+            await Task.Delay(DelayBeforeResult.Value, ct);
+        return NextResolutionResult;
     }
 }

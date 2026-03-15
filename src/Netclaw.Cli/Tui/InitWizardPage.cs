@@ -60,7 +60,7 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
     private SelectionListNode<string>? _commStyleList;
     private TextInputNode? _userNameInput;
     private TextInputNode? _timezoneInput;
-    private TextInputNode? _primaryUseInput;
+    private TextAreaNode? _primaryUseInput;
 
     // Track sub-step for provider (0=select, 1=auth, 2=credentials, 3=validate, 4=model)
     private int _providerSubStep;
@@ -69,7 +69,7 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
 
     // Focus tracking for selection lists (mirrors _lastFocusedInput for text inputs)
     private IFocusable? _lastFocusedList;
-    private TextInputNode? _lastFocusedInput;
+    private TextInputBaseNode? _lastFocusedInput;
 
     // Dynamic layout nodes — invalidation-driven (Termina 0.7.1+).
     // Factory runs once on creation, then only on Invalidate().
@@ -88,6 +88,11 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
         // Route keyboard input
         ViewModel.Input.OfType<IInputEvent, KeyPressed>()
             .Subscribe(HandleKeyPress)
+            .DisposeWith(Subscriptions);
+
+        // Route bracketed paste events to the active text input
+        ViewModel.Input.OfType<IInputEvent, PasteEvent>()
+            .Subscribe(HandlePaste)
             .DisposeWith(Subscriptions);
     }
 
@@ -139,7 +144,7 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
                     WizardStep.Acl => "Access Control",
                     WizardStep.Search => "Web Search",
                     WizardStep.BrowserAutomation => "Browser Automation",
-                    WizardStep.Memory => "Memory Backend",
+
                     WizardStep.Exposure => "Exposure Mode",
                     WizardStep.Identity => "Identity",
                     WizardStep.HealthCheck => "Health Check",
@@ -193,7 +198,7 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
                 WizardStep.Acl => BuildAclStep(),
                 WizardStep.Search => BuildSearchStep(),
                 WizardStep.BrowserAutomation => BuildBrowserAutomationStep(),
-                WizardStep.Memory => BuildMemoryStep(),
+
                 WizardStep.Exposure => BuildExposureStep(),
                 WizardStep.Identity => BuildIdentityStep(),
                 _ => Layouts.Empty()
@@ -244,8 +249,7 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
                     "  Optional. Enable this to let the agent delegate browser steering via MCP tools.",
                 WizardStep.BrowserAutomation when _browserAutomationSubStep == 1 =>
                     "  Playwright MCP is the default no-sudo path. Chrome DevTools is enabled only when a local Chrome executable is detected.",
-                WizardStep.Memory =>
-                    "  SQLite provides durable cross-session memory. No configuration required.",
+
                 WizardStep.Exposure =>
                     "  Local-only is recommended for homelab use.",
                 WizardStep.Identity when _identitySubStep == 0 =>
@@ -726,6 +730,12 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             .Where(text => !string.IsNullOrWhiteSpace(text))
             .Subscribe(text =>
             {
+                if (!text.StartsWith("xoxb-", StringComparison.OrdinalIgnoreCase))
+                {
+                    ViewModel.StatusMessage.Value = "Bot tokens start with xoxb-. Check you pasted the correct value.";
+                    return;
+                }
+                ViewModel.StatusMessage.Value = "";
                 ViewModel.SlackBotToken = text;
                 SetChatServicesSubStep(2);
             })
@@ -754,6 +764,12 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             .Where(text => !string.IsNullOrWhiteSpace(text))
             .Subscribe(text =>
             {
+                if (!text.StartsWith("xapp-", StringComparison.OrdinalIgnoreCase))
+                {
+                    ViewModel.StatusMessage.Value = "App tokens start with xapp-. Check you pasted the correct value.";
+                    return;
+                }
+                ViewModel.StatusMessage.Value = "";
                 ViewModel.SlackAppToken = text;
                 SetChatServicesSubStep(3);
             })
@@ -1091,18 +1107,6 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             .WithChild(_browserAutomationBackendList);
     }
 
-    /// <summary>
-    /// Memory step — SQLite is the only backend. Shows a static info line
-    /// and advances to the next step on Enter.
-    /// </summary>
-    private ILayoutNode BuildMemoryStep()
-    {
-        return Layouts.Vertical()
-            .WithChild(new TextNode("  Memory backend: SQLite (local durable memory)").WithForeground(Color.White))
-            .WithChild(new TextNode(""))
-            .WithChild(new TextNode("  Press Enter to continue.").WithForeground(Color.BrightBlack));
-    }
-
     private ILayoutNode BuildExposureStep()
     {
         _exposureList = Layouts.SelectionList(
@@ -1259,8 +1263,9 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
 
     private ILayoutNode BuildPrimaryUseSubStep()
     {
-        _primaryUseInput = new TextInputNode()
-            .WithPlaceholder("e.g., homelab management, dev environment, home automation");
+        _primaryUseInput = new TextAreaNode()
+            .WithPlaceholder("e.g., homelab management, dev environment, home automation")
+            .WithMaxHeight(6);
 
         if (!string.IsNullOrWhiteSpace(ViewModel.PrimaryUse))
             _primaryUseInput.Text = ViewModel.PrimaryUse;
@@ -1284,7 +1289,7 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
                 .WithBorder(BorderStyle.Rounded)
                 .WithBorderColor(Color.Gray)
                 .WithContent(_primaryUseInput)
-                .Height(3));
+                .Height(8));
     }
 
     private ILayoutNode BuildHealthCheckStep()
@@ -1331,6 +1336,13 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
 
         // Route input to active component
         RouteInputToActiveComponent(keyInfo);
+    }
+
+    private void HandlePaste(PasteEvent paste)
+    {
+        var activeInput = GetActiveTextInput();
+        activeInput?.HandlePaste(paste);
+        ViewModel.RequestRedraw();
     }
 
     private bool HandleSubStepBack()
@@ -1463,13 +1475,6 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             return;
         }
 
-        // On Memory step, Enter advances to next step
-        if (ViewModel.CurrentStep.Value == WizardStep.Memory && keyInfo.Key == ConsoleKey.Enter)
-        {
-            ViewModel.GoNext();
-            return;
-        }
-
         // On health check step, Enter triggers the check
         if (ViewModel.CurrentStep.Value == WizardStep.HealthCheck && keyInfo.Key == ConsoleKey.Enter)
         {
@@ -1498,7 +1503,7 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
         };
     }
 
-    private TextInputNode? GetActiveTextInput()
+    private TextInputBaseNode? GetActiveTextInput()
     {
         return ViewModel.CurrentStep.Value switch
         {

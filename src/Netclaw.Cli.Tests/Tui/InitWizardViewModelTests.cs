@@ -61,10 +61,7 @@ public sealed class InitWizardViewModelTests : IDisposable
         vm.GoNext();
         Assert.Equal(WizardStep.BrowserAutomation, vm.CurrentStep.Value);
 
-        vm.GoNext();
-        Assert.Equal(WizardStep.Memory, vm.CurrentStep.Value);
-
-        vm.GoNext();
+        vm.GoNext(); // Memory is skipped
         Assert.Equal(WizardStep.Exposure, vm.CurrentStep.Value);
 
         vm.GoNext();
@@ -426,39 +423,37 @@ public sealed class InitWizardViewModelTests : IDisposable
     }
 
     [Fact]
-    public void ActiveStepCount_IsEight_WhenNoChatServices()
+    public void ActiveStepCount_IsSeven_WhenNoChatServices()
     {
         using var vm = CreateViewModel();
         vm.SlackEnabled = false;
+        Assert.Equal(7, vm.ActiveStepCount);
+    }
+
+    [Fact]
+    public void ActiveStepCount_IsEight_WhenChatServicesEnabled()
+    {
+        using var vm = CreateViewModel();
+        vm.SlackEnabled = true;
         Assert.Equal(8, vm.ActiveStepCount);
     }
 
     [Fact]
-    public void ActiveStepCount_IsNine_WhenChatServicesEnabled()
-    {
-        using var vm = CreateViewModel();
-        vm.SlackEnabled = true;
-        Assert.Equal(9, vm.ActiveStepCount);
-    }
-
-    [Fact]
-    public void GetDisplayStepNumber_AdjustsForSkippedAcl()
+    public void GetDisplayStepNumber_AdjustsForSkippedAclAndMemory()
     {
         using var vm = CreateViewModel();
         vm.SlackEnabled = false;
 
-        // Provider = 1, ChatServices = 2, Acl would be 3 but skipped
-        // Search = 3 (adjusted from 4), BrowserAutomation = 4 (adjusted from 5),
-        // Memory = 5 (adjusted from 6), Exposure = 6 (adjusted from 7),
-        // Identity = 7, HealthCheck = 8
+        // Provider = 1, ChatServices = 2, Acl skipped, Search = 3,
+        // BrowserAutomation = 4, Memory skipped, Exposure = 5,
+        // Identity = 6, HealthCheck = 7
         Assert.Equal(1, vm.GetDisplayStepNumber(WizardStep.Provider));
         Assert.Equal(2, vm.GetDisplayStepNumber(WizardStep.ChatServices));
         Assert.Equal(3, vm.GetDisplayStepNumber(WizardStep.Search));
         Assert.Equal(4, vm.GetDisplayStepNumber(WizardStep.BrowserAutomation));
-        Assert.Equal(5, vm.GetDisplayStepNumber(WizardStep.Memory));
-        Assert.Equal(6, vm.GetDisplayStepNumber(WizardStep.Exposure));
-        Assert.Equal(7, vm.GetDisplayStepNumber(WizardStep.Identity));
-        Assert.Equal(8, vm.GetDisplayStepNumber(WizardStep.HealthCheck));
+        Assert.Equal(5, vm.GetDisplayStepNumber(WizardStep.Exposure));
+        Assert.Equal(6, vm.GetDisplayStepNumber(WizardStep.Identity));
+        Assert.Equal(7, vm.GetDisplayStepNumber(WizardStep.HealthCheck));
     }
 
     [Fact]
@@ -944,6 +939,57 @@ public sealed class InitWizardViewModelTests : IDisposable
     }
 
     [Fact]
+    public async Task HealthCheck_SlackProbeTimeout_ShowsTimeoutFailure()
+    {
+        _fakeSlackProbe.DelayBeforeResult = TimeSpan.FromMinutes(5); // way beyond 15s timeout
+        using var vm = CreateViewModel();
+        vm.SelectedProviderType = "ollama";
+        vm.SlackEnabled = true;
+        vm.SlackBotToken = "xoxb-test-bot-token";
+        vm.SlackAppToken = "xapp-test-app-token";
+
+        vm.CurrentStep.Value = WizardStep.HealthCheck;
+        vm.GoNext();
+
+        await vm.HealthCheckCompletion!.WaitAsync(TimeSpan.FromSeconds(30));
+        Assert.True(vm.IsComplete.Value);
+
+        var slackCheck = vm.HealthCheckResults
+            .FirstOrDefault(h => h.Label.Contains("Slack", StringComparison.OrdinalIgnoreCase));
+        Assert.NotNull(slackCheck);
+        Assert.False(slackCheck.Passed);
+        Assert.Contains("timed out", slackCheck.Label, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task HealthCheck_BrowserBootstrapTimeout_ShowsTimeoutFailure()
+    {
+        var browserBootstrapper = new FakeBrowserAutomationBootstrapper
+        {
+            NextResult = new BrowserAutomationBootstrapResult(true, false, "ready"),
+            DelayBeforeResult = TimeSpan.FromMinutes(10) // way beyond 3m timeout
+        };
+        using var vm = CreateViewModel(browserBootstrapper);
+
+        vm.SelectedProviderType = "ollama";
+        vm.SlackEnabled = false;
+        vm.BrowserAutomationEnabled = true;
+        vm.SelectedBrowserAutomationBackend = BrowserAutomationMcpProfiles.PlaywrightBackend;
+
+        vm.CurrentStep.Value = WizardStep.HealthCheck;
+        vm.GoNext();
+
+        await vm.HealthCheckCompletion!.WaitAsync(TimeSpan.FromMinutes(5));
+        Assert.True(vm.IsComplete.Value);
+
+        var browserCheck = vm.HealthCheckResults
+            .FirstOrDefault(h => h.Label.Contains("Browser automation", StringComparison.OrdinalIgnoreCase));
+        Assert.NotNull(browserCheck);
+        Assert.False(browserCheck.Passed);
+        Assert.Contains("timed out", browserCheck.Label, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void WriteIdentityFiles_GeneratesAllThreeFiles()
     {
         using var vm = CreateViewModel();
@@ -990,9 +1036,16 @@ internal sealed class FakeBrowserAutomationBootstrapper : IBrowserAutomationBoot
     public BrowserAutomationBootstrapResult NextResult { get; set; } =
         new(true, false, "ready");
 
-    public Task<BrowserAutomationBootstrapResult> EnsureReadyAsync(string backend, CancellationToken ct = default)
+    /// <summary>
+    /// Optional delay before returning results. Used to test timeout behavior.
+    /// </summary>
+    public TimeSpan? DelayBeforeResult { get; set; }
+
+    public async Task<BrowserAutomationBootstrapResult> EnsureReadyAsync(string backend, CancellationToken ct = default)
     {
         CallCount++;
-        return Task.FromResult(NextResult);
+        if (DelayBeforeResult.HasValue)
+            await Task.Delay(DelayBeforeResult.Value, ct);
+        return NextResult;
     }
 }

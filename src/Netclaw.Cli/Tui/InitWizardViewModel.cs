@@ -38,6 +38,11 @@ public partial class InitWizardViewModel : ReactiveViewModel
 {
     public const int TotalSteps = 9;
     private static readonly TimeSpan ProbeHardTimeout = TimeSpan.FromSeconds(20);
+    private static readonly TimeSpan SlackProbeHardTimeout = TimeSpan.FromSeconds(15);
+    private static readonly TimeSpan ChannelResolutionHardTimeout = TimeSpan.FromSeconds(35);
+    private static readonly TimeSpan BrowserBootstrapHardTimeout = TimeSpan.FromMinutes(3);
+    private static readonly TimeSpan DaemonPollRequestTimeout = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan OverallHealthCheckTimeout = TimeSpan.FromMinutes(5);
 
     private readonly NetclawPaths _paths;
     private readonly IProviderProbe _probe;
@@ -196,7 +201,7 @@ public partial class InitWizardViewModel : ReactiveViewModel
     /// <summary>
     /// Returns the number of active steps (skipping ACL when no chat services).
     /// </summary>
-    public int ActiveStepCount => AnyChatServicesEnabled() ? TotalSteps : TotalSteps - 1;
+    public int ActiveStepCount => TotalSteps - 1 - (AnyChatServicesEnabled() ? 0 : 1);
 
     /// <summary>
     /// Returns the display number for the given step, accounting for skipped steps.
@@ -205,7 +210,9 @@ public partial class InitWizardViewModel : ReactiveViewModel
     {
         var num = (int)step;
         if (!AnyChatServicesEnabled() && step > WizardStep.ChatServices)
-            return num - 1;
+            num--;
+        if (step > WizardStep.Memory)
+            num--;
         return num;
     }
 
@@ -226,6 +233,10 @@ public partial class InitWizardViewModel : ReactiveViewModel
 
         // Skip ACL when no chat services are enabled
         if (next == WizardStep.Acl && !AnyChatServicesEnabled())
+            next = (WizardStep)((int)next + 1);
+
+        // Skip Memory — SQLite is the only backend, no user input needed
+        if (next == WizardStep.Memory)
             next = (WizardStep)((int)next + 1);
 
         CurrentStep.Value = next;
@@ -250,6 +261,10 @@ public partial class InitWizardViewModel : ReactiveViewModel
 
         // Skip ACL when going back too
         if (previous == WizardStep.Acl && !AnyChatServicesEnabled())
+            previous = (WizardStep)((int)previous - 1);
+
+        // Skip Memory going back too
+        if (previous == WizardStep.Memory)
             previous = (WizardStep)((int)previous - 1);
 
         // Back-navigation clearing rules from design doc:
@@ -544,6 +559,23 @@ public partial class InitWizardViewModel : ReactiveViewModel
 
     private async Task RunHealthCheckAsync()
     {
+        using var overallCts = new CancellationTokenSource(OverallHealthCheckTimeout);
+        try
+        {
+            await RunHealthCheckCoreAsync(overallCts.Token);
+        }
+        catch (OperationCanceledException) when (overallCts.IsCancellationRequested)
+        {
+            HealthCheckResults.Add(new HealthCheckItem("Health check timed out", false));
+            IsHealthCheckRunning.Value = false;
+            IsComplete.Value = true;
+            NotifyHealthCheckChanged();
+            StatusMessage.Value = "Setup timed out. Run `netclaw daemon start` to begin.";
+        }
+    }
+
+    private async Task RunHealthCheckCoreAsync(CancellationToken ct)
+    {
         IsHealthCheckRunning.Value = true;
         IsComplete.Value = false;
         HealthCheckResults.Clear();
@@ -552,7 +584,7 @@ public partial class InitWizardViewModel : ReactiveViewModel
         // Provider check
         HealthCheckResults.Add(new HealthCheckItem("LLM provider configured", null));
         NotifyHealthCheckChanged();
-        await Task.Delay(200); // simulate validation
+        await Task.Delay(200, ct); // simulate validation
 
         var providerOk = !string.IsNullOrWhiteSpace(SelectedProviderType);
         HealthCheckResults[^1] = new HealthCheckItem(
@@ -563,7 +595,7 @@ public partial class InitWizardViewModel : ReactiveViewModel
         // Model check
         HealthCheckResults.Add(new HealthCheckItem("Model selected", null));
         NotifyHealthCheckChanged();
-        await Task.Delay(200);
+        await Task.Delay(200, ct);
 
         var modelOk = !string.IsNullOrWhiteSpace(SelectedModelId);
         HealthCheckResults[^1] = new HealthCheckItem(
@@ -590,17 +622,27 @@ public partial class InitWizardViewModel : ReactiveViewModel
         }
         else
         {
-            var slackResult = await _slackProbe.ProbeAsync(SlackBotToken!);
-            if (slackResult.Success)
+            try
             {
-                HealthCheckResults[^1] = new HealthCheckItem(
-                    $"Slack bot authenticated (team: {slackResult.TeamName})", true);
-                slackAuthOk = true;
+                using var slackCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                slackCts.CancelAfter(SlackProbeHardTimeout);
+                var slackResult = await _slackProbe.ProbeAsync(SlackBotToken!, slackCts.Token);
+                if (slackResult.Success)
+                {
+                    HealthCheckResults[^1] = new HealthCheckItem(
+                        $"Slack bot authenticated (team: {slackResult.TeamName})", true);
+                    slackAuthOk = true;
+                }
+                else
+                {
+                    HealthCheckResults[^1] = new HealthCheckItem(
+                        $"Slack auth failed: {slackResult.ErrorMessage}", false);
+                }
             }
-            else
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
             {
                 HealthCheckResults[^1] = new HealthCheckItem(
-                    $"Slack auth failed: {slackResult.ErrorMessage}", false);
+                    "Slack auth timed out (15s). Check your network connection.", false);
             }
         }
         NotifyHealthCheckChanged();
@@ -612,25 +654,35 @@ public partial class InitWizardViewModel : ReactiveViewModel
             HealthCheckResults.Add(new HealthCheckItem("Resolving Slack channels", null));
             NotifyHealthCheckChanged();
 
-            LastChannelResolution = await _slackProbe.ResolveChannelNamesAsync(
-                SlackBotToken!, parsedChannelNames);
+            try
+            {
+                using var channelCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                channelCts.CancelAfter(ChannelResolutionHardTimeout);
+                LastChannelResolution = await _slackProbe.ResolveChannelNamesAsync(
+                    SlackBotToken!, parsedChannelNames, channelCts.Token);
 
-            if (LastChannelResolution.ErrorMessage is not null)
-            {
-                HealthCheckResults[^1] = new HealthCheckItem(
-                    $"Slack channel lookup failed: {LastChannelResolution.ErrorMessage}", false);
+                if (LastChannelResolution.ErrorMessage is not null)
+                {
+                    HealthCheckResults[^1] = new HealthCheckItem(
+                        $"Slack channel lookup failed: {LastChannelResolution.ErrorMessage}", false);
+                }
+                else if (LastChannelResolution.Unresolved.Count > 0)
+                {
+                    var notFound = string.Join(", ", LastChannelResolution.Unresolved.Select(n => $"#{n}"));
+                    HealthCheckResults[^1] = new HealthCheckItem(
+                        $"Slack channels: resolved {LastChannelResolution.Resolved.Count}/{parsedChannelNames.Count}, not found: {notFound}",
+                        false);
+                }
+                else
+                {
+                    HealthCheckResults[^1] = new HealthCheckItem(
+                        $"Slack channels resolved ({LastChannelResolution.Resolved.Count})", true);
+                }
             }
-            else if (LastChannelResolution.Unresolved.Count > 0)
-            {
-                var notFound = string.Join(", ", LastChannelResolution.Unresolved.Select(n => $"#{n}"));
-                HealthCheckResults[^1] = new HealthCheckItem(
-                    $"Slack channels: resolved {LastChannelResolution.Resolved.Count}/{parsedChannelNames.Count}, not found: {notFound}",
-                    false);
-            }
-            else
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
             {
                 HealthCheckResults[^1] = new HealthCheckItem(
-                    $"Slack channels resolved ({LastChannelResolution.Resolved.Count})", true);
+                    "Slack channel resolution timed out (35s). Check your network connection.", false);
             }
             NotifyHealthCheckChanged();
         }
@@ -645,34 +697,46 @@ public partial class InitWizardViewModel : ReactiveViewModel
             HealthCheckResults.Add(new HealthCheckItem("Browser automation prerequisites", null));
             NotifyHealthCheckChanged();
 
-            var bootstrap = await _browserBootstrapper.EnsureReadyAsync(SelectedBrowserAutomationBackend);
-            if (bootstrap.Success)
+            try
             {
-                var backendName = SelectedBrowserAutomationBackend == BrowserAutomationMcpProfiles.PlaywrightBackend
-                    ? "Playwright MCP"
-                    : "Chrome DevTools MCP";
-                HealthCheckResults[^1] = new HealthCheckItem(
-                    $"Browser automation ready ({backendName})", true);
-                NotifyHealthCheckChanged();
-            }
-            else
-            {
-                var suffix = string.IsNullOrWhiteSpace(bootstrap.ManualCommand)
-                    ? string.Empty
-                    : $" Command: {bootstrap.ManualCommand}";
-
-                HealthCheckResults[^1] = new HealthCheckItem(
-                    $"Browser automation setup blocked: {bootstrap.Message}{suffix}", false);
-                NotifyHealthCheckChanged();
-
-                if (bootstrap.NeedsManualAction)
+                using var browserCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                browserCts.CancelAfter(BrowserBootstrapHardTimeout);
+                var bootstrap = await _browserBootstrapper.EnsureReadyAsync(
+                    SelectedBrowserAutomationBackend, browserCts.Token);
+                if (bootstrap.Success)
                 {
-                    IsHealthCheckRunning.Value = false;
-                    StatusMessage.Value = string.IsNullOrWhiteSpace(bootstrap.ManualCommand)
-                        ? $"{bootstrap.Message} Press Enter to retry."
-                        : $"{bootstrap.Message} Run `{bootstrap.ManualCommand}`, then press Enter to retry.";
-                    return;
+                    var backendName = SelectedBrowserAutomationBackend == BrowserAutomationMcpProfiles.PlaywrightBackend
+                        ? "Playwright MCP"
+                        : "Chrome DevTools MCP";
+                    HealthCheckResults[^1] = new HealthCheckItem(
+                        $"Browser automation ready ({backendName})", true);
+                    NotifyHealthCheckChanged();
                 }
+                else
+                {
+                    var suffix = string.IsNullOrWhiteSpace(bootstrap.ManualCommand)
+                        ? string.Empty
+                        : $" Command: {bootstrap.ManualCommand}";
+
+                    HealthCheckResults[^1] = new HealthCheckItem(
+                        $"Browser automation setup blocked: {bootstrap.Message}{suffix}", false);
+                    NotifyHealthCheckChanged();
+
+                    if (bootstrap.NeedsManualAction)
+                    {
+                        IsHealthCheckRunning.Value = false;
+                        StatusMessage.Value = string.IsNullOrWhiteSpace(bootstrap.ManualCommand)
+                            ? $"{bootstrap.Message} Press Enter to retry."
+                            : $"{bootstrap.Message} Run `{bootstrap.ManualCommand}`, then press Enter to retry.";
+                        return;
+                    }
+                }
+            }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                HealthCheckResults[^1] = new HealthCheckItem(
+                    "Browser automation setup timed out (3m). Try again or skip browser automation.", false);
+                NotifyHealthCheckChanged();
             }
         }
 
@@ -699,7 +763,7 @@ public partial class InitWizardViewModel : ReactiveViewModel
             HealthCheckResults.Add(new HealthCheckItem("Starting daemon", null));
             NotifyHealthCheckChanged();
 
-            var daemonOk = await StartAndPollDaemonAsync();
+            var daemonOk = await StartAndPollDaemonAsync(ct);
             if (daemonOk)
             {
                 HealthCheckResults[^1] = new HealthCheckItem("Daemon ready", true);
@@ -733,7 +797,7 @@ public partial class InitWizardViewModel : ReactiveViewModel
     /// Start the daemon and poll its health endpoint until ready (up to 30s).
     /// Returns false if DaemonManager is not available or health poll times out.
     /// </summary>
-    private async Task<bool> StartAndPollDaemonAsync()
+    private async Task<bool> StartAndPollDaemonAsync(CancellationToken ct = default)
     {
         if (_daemonManager is null)
             return false;
@@ -742,14 +806,15 @@ public partial class InitWizardViewModel : ReactiveViewModel
         if (!result.Success && !result.Message.Contains("already running", StringComparison.OrdinalIgnoreCase))
             return false;
 
-        using var httpClient = new HttpClient();
+        using var httpClient = new HttpClient { Timeout = DaemonPollRequestTimeout };
         var healthUrl = $"{_daemonEndpoint}/api/health/ready";
 
         for (var i = 0; i < 30; i++)
         {
+            ct.ThrowIfCancellationRequested();
             try
             {
-                var response = await httpClient.GetAsync(healthUrl);
+                var response = await httpClient.GetAsync(healthUrl, ct);
                 if (response.IsSuccessStatusCode)
                     return true;
             }
@@ -758,13 +823,13 @@ public partial class InitWizardViewModel : ReactiveViewModel
                 HealthCheckResults[^1] = new HealthCheckItem($"Starting daemon ({i + 1}s)", null);
                 NotifyHealthCheckChanged();
             }
-            catch (TaskCanceledException)
+            catch (TaskCanceledException) when (!ct.IsCancellationRequested)
             {
                 HealthCheckResults[^1] = new HealthCheckItem($"Starting daemon ({i + 1}s)", null);
                 NotifyHealthCheckChanged();
             }
 
-            await Task.Delay(1000);
+            await Task.Delay(1000, ct);
         }
 
         return false;
