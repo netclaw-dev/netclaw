@@ -17,6 +17,62 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+function Invoke-DownloadWithProgress {
+    param(
+        [string]$Uri,
+        [string]$OutFile,
+        [string]$Label
+    )
+
+    $isInteractive = [Environment]::UserInteractive -and $Host.UI.RawUI -ne $null
+
+    if (-not $isInteractive) {
+        Write-Host "  Downloading $Label..."
+        $oldPref = $ProgressPreference
+        $ProgressPreference = 'SilentlyContinue'
+        try {
+            Invoke-WebRequest -Uri $Uri -OutFile $OutFile -UseBasicParsing
+        } finally {
+            $ProgressPreference = $oldPref
+        }
+        return
+    }
+
+    # Interactive: download in background runspace, spinner in foreground
+    $runspace = [runspacefactory]::CreateRunspace()
+    $runspace.Open()
+
+    $ps = [powershell]::Create().AddScript({
+        param($uri, $outFile)
+        $ProgressPreference = 'SilentlyContinue'
+        Invoke-WebRequest -Uri $uri -OutFile $outFile -UseBasicParsing
+    }).AddArgument($Uri).AddArgument($OutFile)
+
+    $ps.Runspace = $runspace
+    $handle = $ps.BeginInvoke()
+
+    $spinChars = @('|', '/', '-', '\')
+    $i = 0
+    try {
+        while (-not $handle.IsCompleted) {
+            $char = $spinChars[$i % $spinChars.Length]
+            Write-Host -NoNewline "`r  Downloading $Label... $char"
+            Start-Sleep -Milliseconds 120
+            $i++
+        }
+        Write-Host -NoNewline "`r  Downloading $Label... done"
+        Write-Host ""
+
+        $ps.EndInvoke($handle)
+        if ($ps.HadErrors) {
+            throw $ps.Streams.Error[0]
+        }
+    } finally {
+        $ps.Dispose()
+        $runspace.Close()
+    }
+}
+
 $ManifestUrl = "https://releases.netclaw.dev/manifest.json"
 $DefaultInstallDir = Join-Path $env:LOCALAPPDATA "Programs\netclaw"
 
@@ -78,9 +134,8 @@ try {
         $fileName = [System.IO.Path]::GetFileName([Uri]::new($asset.url).AbsolutePath)
         $downloadPath = Join-Path $tempDir $fileName
 
-        Write-Host "  Downloading $ComponentName..."
         try {
-            Invoke-WebRequest -Uri $asset.url -OutFile $downloadPath -UseBasicParsing
+            Invoke-DownloadWithProgress -Uri $asset.url -OutFile $downloadPath -Label $ComponentName
         } catch {
             Write-Error "Failed to download $($asset.url): $_"
             return $false
