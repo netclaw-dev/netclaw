@@ -656,43 +656,27 @@ static ResolvedModelCapabilities? ResolveStartupCapabilities(
 }
 
 /// <summary>
-/// Copies built-in skill files from embedded resources to the skills directory.
-/// Skills are sourced from <c>feeds/skills/.system/files/</c> and embedded as
-/// <c>Netclaw.Daemon.BuiltInSkills.{name}.SKILL.md</c>. Hyphens in skill names
-/// become underscores in resource names due to MSBuild conventions.
-/// Only writes a file if it does not already exist (feed updates are preserved).
+/// Copies built-in skill files from the output directory to the skills directory.
+/// Skills are sourced from <c>feeds/skills/.system/files/</c> and copied to the
+/// build output as <c>BuiltInSkills/{skill-name}/SKILL.md</c> (with companion files).
+/// Only writes files that do not already exist (feed updates are preserved).
 /// </summary>
 static void CopyBuiltInSkills(string skillsDirectory)
 {
-    var assembly = typeof(Program).Assembly;
-    const string prefix = "Netclaw.Daemon.BuiltInSkills.";
-    const string suffix = ".SKILL.md";
+    var builtInDir = Path.Combine(AppContext.BaseDirectory, "BuiltInSkills");
+    if (!Directory.Exists(builtInDir))
+        return;
 
-    foreach (var resourceName in assembly.GetManifestResourceNames())
+    foreach (var sourceFile in Directory.EnumerateFiles(builtInDir, "*", SearchOption.AllDirectories))
     {
-        if (!resourceName.StartsWith(prefix, StringComparison.Ordinal)
-            || !resourceName.EndsWith(suffix, StringComparison.Ordinal))
-            continue;
-
-        // Extract skill name: "Netclaw.Daemon.BuiltInSkills.netclaw_memory.SKILL.md" → "netclaw_memory"
-        var nameWithUnderscores = resourceName[prefix.Length..^suffix.Length];
-        // Restore hyphens: "netclaw_memory" → "netclaw-memory"
-        var skillName = nameWithUnderscores.Replace('_', '-');
-
-        var skillDir = Path.Combine(skillsDirectory, skillName);
-        var targetPath = Path.Combine(skillDir, "SKILL.md");
+        var relativePath = Path.GetRelativePath(builtInDir, sourceFile);
+        var targetPath = Path.Combine(skillsDirectory, relativePath);
 
         if (File.Exists(targetPath))
             continue;
 
-        Directory.CreateDirectory(skillDir);
-
-        using var stream = assembly.GetManifestResourceStream(resourceName);
-        if (stream is null)
-            continue;
-
-        using var fileStream = File.Create(targetPath);
-        stream.CopyTo(fileStream);
+        Directory.CreateDirectory(Path.GetDirectoryName(targetPath)!);
+        File.Copy(sourceFile, targetPath);
     }
 }
 
