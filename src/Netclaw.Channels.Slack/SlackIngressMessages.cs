@@ -1,4 +1,6 @@
 using Netclaw.Actors.Protocol;
+using Netclaw.Actors.Channels;
+using Netclaw.Configuration;
 
 namespace Netclaw.Channels.Slack;
 
@@ -36,6 +38,9 @@ public sealed record SlackThreadInbound(
     SlackEventId EventId,
     string TurnId,
     string SenderId,
+    TrustAudience Audience,
+    PrincipalClassification Principal,
+    SourceProvenance Provenance,
     string Text,
     DateTimeOffset ReceivedAt,
     IReadOnlyList<SlackFileReference>? Files = null);

@@ -45,7 +45,7 @@ The system SHALL apply ACL, trust-context policy, and MCP capability classificat
 #### Scenario: Sensitive-read MCP denied in public context
 
 - **GIVEN** an MCP server is classified as sensitive-read
-- **WHEN** a `public` or `community` turn requests a tool from that server
+- **WHEN** a `public` turn requests a tool from that server
 - **THEN** invocation is denied regardless of transport health or discovery status
 
 #### Scenario: Memory-safe MCP allowed in team context

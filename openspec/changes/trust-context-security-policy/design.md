@@ -7,7 +7,7 @@ The current model is too static for upcoming scenarios:
 - a personal bot may allow shell execution for the owner but must not grant the same authority to teammate DMs
 - a verified GitHub webhook from a public repository is authentic transport but still carries public-tainted content
 - an owner-initiated request to inspect email or other sensitive-read content should temporarily narrow what the bot may do until it returns to the owner for approval
-- public/community bots still need useful memory, but only from public-safe audiences
+- public bots still need useful memory, but only from public-safe audiences
 
 This change is cross-cutting because it touches inbound source metadata, ACL evaluation, tool exposure and invocation, memory recall, MCP server classification, config defaults, diagnostics, and future adapter extensibility. The design must preserve transport-agnostic actor boundaries, remain fail-closed when policy is incomplete, and reserve room for future sandboxed execution without making it an MVP dependency.
 
@@ -51,12 +51,12 @@ Alternative considered: keep separate channel, memory, and tool policies with ad
 Add a first-class `audience` field with a small ordered ladder:
 
 - `public`
-- `community`
 - `team`
 - `personal`
-- `operator`
 
 Audience answers who a fact, tool, source, or output may be exposed to. Existing `domain` continues to answer what area the item belongs to (`project:netclaw`, `project:akadana`, etc.). `sensitivity` continues to answer how harmful disclosure would be.
+
+Operator authority remains important, but it belongs in principal classification and approval policy rather than in the audience ladder.
 
 Rationale: project memory may exist at multiple exposure levels; overloading domain or sensitivity would blur scope and visibility.
 
@@ -66,7 +66,7 @@ Alternative considered: extend only `sensitivity`. Rejected because non-secret t
 
 Trust-context transitions may narrow authority whenever the bot crosses into higher-risk content or sources, such as:
 
-- public Discord/community messages
+- public Discord messages
 - webhook payloads containing public issue comments
 - email or other sensitive-read MCP results
 - fetched web content
@@ -151,7 +151,7 @@ Alternative considered: require fully explicit user-authored policy for all inst
 - [Risk] Trust-context derivation could become too implicit and hard to debug. -> Mitigation: log the derived context, the narrowing inputs, and the deny reasons for recall/tool decisions.
 - [Risk] `host-allowed` shell in personal posture leaves residual blast radius until sandboxing exists. -> Mitigation: keep it owner-context only, default team/public to `off`, and track sandbox execution as a follow-up issue.
 - [Risk] Existing memory rows lack audience metadata. -> Mitigation: define migration defaults conservatively (for example, derive from current deployment posture/domain) and require doctor warnings until data is reclassified.
-- [Risk] Public/community bots may become too constrained to feel useful. -> Mitigation: allow public-safe memory and future isolated-execution capability without exposing host shell or sensitive-read tools.
+- [Risk] Public bots may become too constrained to feel useful. -> Mitigation: allow public-safe memory and future isolated-execution capability without exposing host shell or sensitive-read tools.
 
 ## Migration Plan
 
@@ -169,7 +169,7 @@ Rollback strategy:
 
 ## Open Questions
 
-- Should `operator` be fully distinct from `personal` in MVP behavior, or remain a reserved audience tier until especially sensitive actions need it?
+- Should especially sensitive operator-only actions be modeled purely through principal classification and approval policy, or do we still need a separate audience later?
 - How should existing durable memories be backfilled with an initial audience without forcing immediate manual reclassification?
 - Do we want a policy explain simulator in the first implementation slice, or is doctor output sufficient for MVP?
 - Which built-in tools besides shell need explicit effect-class metadata in v1 of the config schema, versus inferred defaults from tool registration?

@@ -1,12 +1,12 @@
 ## 1. Trust context and policy model
 
-- [ ] 1.1 Add trust-context, audience, provenance, and shell-mode configuration types with strict-default semantics in `Netclaw.Configuration`.
-- [ ] 1.2 Extend inbound source/session metadata so adapters can carry audience, principal classification, and verified-source vs payload-taint fields.
-- [ ] 1.3 Implement runtime trust-context derivation that composes deployment posture, source metadata, and working-context downgrades into an effective audience.
+- [x] 1.1 Add trust-context, audience, provenance, and shell-mode configuration types with strict-default semantics in `Netclaw.Configuration`.
+- [x] 1.2 Extend inbound source/session metadata so adapters can carry audience, principal classification, and verified-source vs payload-taint fields.
+- [x] 1.3 Implement runtime trust-context derivation that composes deployment posture, source metadata, and working-context downgrades into an effective audience.
 
 ## 2. ACL, memory, and tool enforcement
 
-- [ ] 2.1 Update ACL evaluation so admission returns both allow/deny and initial trust-context/audience decisions.
+- [x] 2.1 Update ACL evaluation so admission returns both allow/deny and initial trust-context/audience decisions.
 - [ ] 2.2 Extend durable memory policy with audience-aware filtering and conservative migration/default rules for existing memory rows.
 - [ ] 2.3 Update built-in tool exposure and invocation policy to honor effective trust context, capability classes, and shell mode.
 - [ ] 2.4 Update MCP server policy handling to support capability classification and trust-context-aware exposure/invocation.

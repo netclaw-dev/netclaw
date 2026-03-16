@@ -340,6 +340,13 @@ static void ConfigureDaemonServices(
         .Get<ToolConfig>() ?? new ToolConfig();
     services.AddSingleton(toolConfig);
 
+    var securityPolicyConfig = configuration.GetSection("Security")
+        .Get<SecurityPolicyConfig>() ?? new SecurityPolicyConfig();
+    services.AddSingleton(securityPolicyConfig);
+    var effectivePolicyDefaults = SecurityPolicyDefaults.Resolve(securityPolicyConfig);
+    services.AddSingleton(effectivePolicyDefaults);
+    services.AddSingleton<TrustContextDeriver>();
+
     // Reminders
     var reminderConfig = configuration.GetSection("Reminders")
         .Get<ReminderConfig>() ?? new ReminderConfig();

@@ -28,10 +28,15 @@ public sealed class SlackConversationActor : ReceiveActor
 
         Receive<SlackInboundMessage>(message =>
         {
-            if (!IsAllowedConversation(message))
+            var aclDecision = SlackAclPolicy.EvaluateInbound(
+                message,
+                _dependencies.Options,
+                _dependencies.DefaultChannelId);
+
+            if (!aclDecision.IsAllowed)
             {
-                _log.Debug("Ignoring Slack event {0}: channel not allowed", message.EventId);
-                ChannelTelemetry.RecordSlackEventDropped("channel_not_allowed");
+                _log.Debug("Ignoring Slack event {0}: {1}", message.EventId, aclDecision.DenyReason);
+                ChannelTelemetry.RecordSlackEventDropped(aclDecision.DenyReason ?? "acl_denied");
                 return;
             }
 
@@ -39,13 +44,6 @@ public sealed class SlackConversationActor : ReceiveActor
             {
                 _log.Debug("Ignoring Slack event {0}: bot/self message", message.EventId);
                 ChannelTelemetry.RecordSlackEventFiltered("bot_message");
-                return;
-            }
-
-            if (!IsAllowedUser(message))
-            {
-                _log.Debug("Ignoring Slack event {0}: user not allowed", message.EventId);
-                ChannelTelemetry.RecordSlackEventDropped("user_not_allowed");
                 return;
             }
 
@@ -111,6 +109,9 @@ public sealed class SlackConversationActor : ReceiveActor
                 EventId: message.EventId,
                 TurnId: turnId,
                 SenderId: message.UserId?.Value ?? "slack-user",
+                Audience: aclDecision.Audience,
+                Principal: aclDecision.Principal,
+                Provenance: aclDecision.Provenance,
                 Text: normalized,
                 ReceivedAt: _dependencies.TimeProvider.GetUtcNow(),
                 Files: message.Files));
@@ -153,15 +154,6 @@ public sealed class SlackConversationActor : ReceiveActor
     public static Props CreateProps(SlackChannelId conversationId, SlackGatewayDependencies dependencies) =>
         Props.Create(() => new SlackConversationActor(conversationId, dependencies));
 
-    private bool IsAllowedConversation(SlackInboundMessage message)
-    {
-        if (message.IsDirectMessage)
-            return _dependencies.Options.AllowDirectMessages;
-
-        return SlackAclPolicy.IsAllowedChannel(
-            message.ChannelId, _dependencies.Options, _dependencies.DefaultChannelId);
-    }
-
     private bool IsBotMessage(SlackInboundMessage message)
     {
         if (message.BotId is not null)
@@ -172,14 +164,6 @@ public sealed class SlackConversationActor : ReceiveActor
             return true;
 
         return false;
-    }
-
-    private bool IsAllowedUser(SlackInboundMessage message)
-    {
-        if (message.UserId is not { } userId)
-            return false;
-
-        return SlackAclPolicy.IsAllowedUser(userId, _dependencies.Options);
     }
 
     private bool ContainsBotMention(string text)

@@ -108,5 +108,5 @@ The system SHALL check grants, posture policy, effective trust context, and capa
 #### Scenario: Exfiltration-capable tool denied for downgraded audience
 
 - **GIVEN** a tool is classified as publish-external or exfiltration-capable
-- **WHEN** the active trust context is `public`, `community`, or a downgraded sensitive-read subtask without approval
+- **WHEN** the active trust context is `public` or a downgraded sensitive-read subtask without approval
 - **THEN** the runtime denies invocation even if the tool is configured and registered

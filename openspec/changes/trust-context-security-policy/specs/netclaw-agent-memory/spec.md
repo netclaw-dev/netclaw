@@ -14,7 +14,7 @@ Every durable anchor, document, record, and edge SHALL carry policy metadata inc
 #### Scenario: Audience blocks broader memory from public turn
 
 - **GIVEN** a stored memory item is marked `audience=personal`
-- **WHEN** a `public` or `community` turn runs recall
+- **WHEN** a `public` turn runs recall
 - **THEN** the item is excluded from both automatic recall and inline retrieval unless a higher-trust approval flow authorizes it
 
 ### Requirement: Automatic pre-turn recall

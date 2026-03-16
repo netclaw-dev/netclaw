@@ -2,13 +2,13 @@
 
 Netclaw's current security model is strong on default-deny ACLs and tool grants, but it does not yet have a first-class trust context that can consistently downgrade capabilities across deployment posture, channel exposure, source provenance, risky subtasks, memory recall, and MCP/built-in tools. This gap becomes urgent as Netclaw expands beyond private owner-operated Slack threads into public or mixed-trust environments such as Discord, webhooks, and teammate-facing personal bots.
 
-This change establishes a cross-cutting audience and trust-context model so Netclaw can fail closed when policy is incomplete, keep prompt-injection-prone content from inheriting privileged authority, and give operators a configurable but inspectable security story before webhook and public-community adapters arrive.
+This change establishes a cross-cutting audience and trust-context model so Netclaw can fail closed when policy is incomplete, keep prompt-injection-prone content from inheriting privileged authority, and give operators a configurable but inspectable security story before webhook and public adapters arrive.
 
 ## What Changes
 
 - Introduce a first-class trust-context model that combines deployment posture, source/channel exposure, principal identity, payload provenance, and working-context downgrades into an effective audience/capability envelope per turn.
 - Add cross-cutting audience policy concepts for channels, memories, tools, MCP servers, and output effects so visibility/exposure is modeled consistently across the runtime.
-- Extend memory policy beyond the current coarse `normal`/`secret` split by defining audience-aware recall rules that preserve project/domain scoping while separating public/community/team/personal visibility from sensitivity.
+- Extend memory policy beyond the current coarse `normal`/`secret` split by defining audience-aware recall rules that preserve project/domain scoping while separating public/team/personal visibility from sensitivity.
 - Define posture-based tool policy for built-in tools and MCP servers, including shell execution mode policy (`off`, `sandbox-only`, `host-allowed`) and explicit downgrade rules for tainted or public-origin work.
 - Add strict-default configuration behavior and diagnostics rules so missing or partial security policy resolves to less capability, with operator-facing doctor checks and explainability for effective policy.
 - Clarify webhook and public-source trust evaluation so verified transport, source ownership, source visibility, event type, and payload taint are treated separately.

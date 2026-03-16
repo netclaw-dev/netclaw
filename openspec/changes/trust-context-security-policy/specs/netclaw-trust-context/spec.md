@@ -14,7 +14,7 @@ The system SHALL derive an effective trust context for every inbound turn from r
 - **AND** the turn does not inherit the owner's personal-only capabilities or memory audiences
 
 ### Requirement: Audience is a cross-cutting visibility boundary
-The system SHALL use a shared audience ladder across channels, memories, tools, MCP servers, and outputs. The ordered audiences SHALL be `public`, `community`, `team`, `personal`, and `operator`.
+The system SHALL use a shared audience ladder across channels, memories, tools, MCP servers, and outputs. The ordered audiences SHALL be `public`, `team`, and `personal`.
 
 #### Scenario: Public channel cannot access broader audience memory
 - **WHEN** a turn originates from a `public` audience source
@@ -22,8 +22,8 @@ The system SHALL use a shared audience ladder across channels, memories, tools, 
 
 #### Scenario: Team channel can access team-scoped resources only
 - **WHEN** a turn originates from a `team` audience source
-- **THEN** the runtime may expose `public`, `community`, and `team` resources that also satisfy other policy checks
-- **AND** the runtime excludes `personal` and `operator` resources unless an explicit approval flow widens them
+- **THEN** the runtime may expose `public` and `team` resources that also satisfy other policy checks
+- **AND** the runtime excludes `personal` resources unless an explicit approval flow widens them
 
 ### Requirement: Trust context can auto-downgrade but not auto-upgrade
 The system SHALL allow trust context to narrow automatically as the bot enters risky working contexts, but SHALL NOT widen authority automatically after a downgrade.

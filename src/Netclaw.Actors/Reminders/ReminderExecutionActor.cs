@@ -101,6 +101,14 @@ internal sealed class ReminderExecutionActor : ReceiveActor
             var materialized = await _pipeline.CreateAsync(sessionId, new SessionPipelineOptions
             {
                 ChannelType = Channels.ChannelType.Reminder,
+                DefaultAudience = TrustAudience.Team,
+                DefaultPrincipal = PrincipalClassification.VerifiedAutomation,
+                DefaultProvenance = new SourceProvenance
+                {
+                    TransportAuthenticity = TransportAuthenticity.LocalProcess,
+                    PayloadTaint = PayloadTaint.Trusted,
+                    SourceKind = "reminder"
+                },
                 Filter = OutputFilter.Text
             }, materializer: _materializer);
 
