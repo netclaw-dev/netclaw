@@ -35,7 +35,9 @@ public sealed class OpenAiDeviceFlowService : IDeviceFlowService
     public async Task<DeviceAuthorizationResponse> StartDeviceAuthorizationAsync(
         OAuthDeviceFlowConfig config, CancellationToken ct = default)
     {
-        var payload = new { client_id = config.ClientId };
+        var payload = new Dictionary<string, string> { ["client_id"] = config.ClientId };
+        if (config.Scope is not null)
+            payload["scope"] = config.Scope;
 
         HttpResponseMessage response;
         try

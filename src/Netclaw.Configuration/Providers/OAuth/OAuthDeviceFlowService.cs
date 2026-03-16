@@ -35,6 +35,7 @@ public sealed record OAuthDeviceFlowConfig(
             deviceEndpoint,
             descriptor.OAuthPollingEndpoint ?? tokenEndpoint,
             clientId,
+            Scope: descriptor.OAuthScope,
             PkceExchangeEndpoint: descriptor.UseProprietaryDeviceFlow
                 ? tokenEndpoint : null);
     }

@@ -26,6 +26,7 @@ public sealed class OpenAiDescriptor : IProviderDescriptor
     public string? OAuthDefaultClientId => "app_EMoamEEZ73f0CkXaXp7hrann";
     public string? OAuthPollingEndpoint => "https://auth.openai.com/api/accounts/deviceauth/token";
     public bool UseProprietaryDeviceFlow => true;
+    public string? OAuthScope => "openid profile email offline_access model.request api.model.read";
 
     public Task<ProviderProbeResult> ProbeAsync(
         ProviderEntry entry, CancellationToken ct = default)

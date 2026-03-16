@@ -55,6 +55,12 @@ public interface IProviderDescriptor
     string? OAuthDefaultClientId { get; }
 
     /// <summary>
+    /// Space-separated OAuth scopes to request during device authorization.
+    /// Null to omit the scope parameter (server decides default scopes).
+    /// </summary>
+    string? OAuthScope => null;
+
+    /// <summary>
     /// Polling endpoint for proprietary device flows (e.g. OpenAI's
     /// <c>/api/accounts/deviceauth/token</c>). Null for standard RFC 8628 flows
     /// where polling goes to <see cref="OAuthTokenEndpoint"/>.

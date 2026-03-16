@@ -13,6 +13,7 @@ public class OpenAiDeviceFlowServiceTests
         DeviceAuthorizationEndpoint: "https://auth.openai.com/api/accounts/deviceauth/usercode",
         TokenEndpoint: "https://auth.openai.com/api/accounts/deviceauth/token",
         ClientId: "test-client-id",
+        Scope: "openid profile email offline_access model.request api.model.read",
         PkceExchangeEndpoint: "https://auth.openai.com/oauth/token");
 
     [Fact]
@@ -37,11 +38,13 @@ public class OpenAiDeviceFlowServiceTests
         var service = new OpenAiDeviceFlowService(new HttpClient(handler));
         var result = await service.StartDeviceAuthorizationAsync(TestConfig);
 
-        // Verify JSON body with client_id
+        // Verify JSON body with client_id and scope
         Assert.Equal("application/json", capturedContentType);
         Assert.NotNull(capturedBody);
         using var doc = JsonDocument.Parse(capturedBody!);
         Assert.Equal("test-client-id", doc.RootElement.GetProperty("client_id").GetString());
+        Assert.Equal("openid profile email offline_access model.request api.model.read",
+            doc.RootElement.GetProperty("scope").GetString());
 
         // Verify response mapping
         Assert.Equal("daid-123", result.DeviceCode); // device_auth_id -> DeviceCode
@@ -49,6 +52,35 @@ public class OpenAiDeviceFlowServiceTests
         Assert.Equal("https://auth.openai.com/codex/device", result.VerificationUri);
         Assert.Equal(1200, result.ExpiresIn);
         Assert.Equal(5, result.Interval);
+    }
+
+    [Fact]
+    public async Task StartDeviceAuthorization_NullScope_OmitsScopeFromJson()
+    {
+        var configNoScope = new OAuthDeviceFlowConfig(
+            DeviceAuthorizationEndpoint: "https://auth.openai.com/api/accounts/deviceauth/usercode",
+            TokenEndpoint: "https://auth.openai.com/api/accounts/deviceauth/token",
+            ClientId: "test-client-id",
+            PkceExchangeEndpoint: "https://auth.openai.com/oauth/token");
+
+        string? capturedBody = null;
+        var handler = new FakeHttpMessageHandler(request =>
+        {
+            capturedBody = request.Content?.ReadAsStringAsync().GetAwaiter().GetResult();
+            return JsonResponse(new
+            {
+                device_auth_id = "daid-123",
+                user_code = "ABCD-1234",
+                interval = 5
+            });
+        });
+
+        var service = new OpenAiDeviceFlowService(new HttpClient(handler));
+        await service.StartDeviceAuthorizationAsync(configNoScope);
+
+        Assert.NotNull(capturedBody);
+        using var doc = JsonDocument.Parse(capturedBody!);
+        Assert.False(doc.RootElement.TryGetProperty("scope", out _));
     }
 
     [Fact]
