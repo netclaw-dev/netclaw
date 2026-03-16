@@ -657,21 +657,28 @@ static ResolvedModelCapabilities? ResolveStartupCapabilities(
 
 /// <summary>
 /// Copies built-in skill files from embedded resources to the skills directory.
-/// Each embedded <c>*.md</c> resource is written as <c>skill-name/SKILL.md</c>.
+/// Skills are sourced from <c>feeds/skills/.system/files/</c> and embedded as
+/// <c>Netclaw.Daemon.BuiltInSkills.{name}.SKILL.md</c>. Hyphens in skill names
+/// become underscores in resource names due to MSBuild conventions.
 /// Only writes a file if it does not already exist (feed updates are preserved).
 /// </summary>
 static void CopyBuiltInSkills(string skillsDirectory)
 {
     var assembly = typeof(Program).Assembly;
     const string prefix = "Netclaw.Daemon.BuiltInSkills.";
+    const string suffix = ".SKILL.md";
 
     foreach (var resourceName in assembly.GetManifestResourceNames())
     {
-        if (!resourceName.StartsWith(prefix, StringComparison.Ordinal))
+        if (!resourceName.StartsWith(prefix, StringComparison.Ordinal)
+            || !resourceName.EndsWith(suffix, StringComparison.Ordinal))
             continue;
 
-        var fileName = resourceName[prefix.Length..];
-        var skillName = Path.GetFileNameWithoutExtension(fileName);
+        // Extract skill name: "Netclaw.Daemon.BuiltInSkills.netclaw_memory.SKILL.md" → "netclaw_memory"
+        var nameWithUnderscores = resourceName[prefix.Length..^suffix.Length];
+        // Restore hyphens: "netclaw_memory" → "netclaw-memory"
+        var skillName = nameWithUnderscores.Replace('_', '-');
+
         var skillDir = Path.Combine(skillsDirectory, skillName);
         var targetPath = Path.Combine(skillDir, "SKILL.md");
 
