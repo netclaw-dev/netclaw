@@ -23,7 +23,7 @@ public sealed class OpenAiCompatibleChatClientTests
 
         var response = await client.GetResponseAsync([new ChatMessage(ChatRole.User, "hello")]);
 
-        Assert.Equal("/api/v1/chat/completions", handler.Requests.Single().RequestUri!.AbsolutePath);
+        Assert.Equal("/v1/chat/completions", handler.Requests.Single().RequestUri!.AbsolutePath);
         Assert.Equal("hi", response.Text);
     }
 

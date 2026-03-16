@@ -60,12 +60,10 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
     private SelectionListNode<string>? _commStyleList;
     private TextInputNode? _userNameInput;
     private TextInputNode? _timezoneInput;
-    private TextAreaNode? _primaryUseInput;
-
     // Track sub-step for provider (0=select, 1=auth, 2=credentials, 3=validate, 4=model)
     private int _providerSubStep;
     private int _chatServicesSubStep; // 0=enable?, 1=bot token, 2=app token, 3=channel names
-    private int _identitySubStep; // 0=agent name, 1=comm style, 2=user name, 3=timezone, 4=primary use
+    private int _identitySubStep; // 0=agent name, 1=comm style, 2=user name, 3=timezone
 
     // Focus tracking for selection lists (mirrors _lastFocusedInput for text inputs)
     private IFocusable? _lastFocusedList;
@@ -436,7 +434,7 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
                 .DisposeWith(_stepSubs);
 
             return Layouts.Vertical()
-                .WithChild(new TextNode("  Ollama endpoint:").WithForeground(Color.White))
+                .WithChild(new TextNode($"  {providerType} endpoint:").WithForeground(Color.White))
                 .WithChild(new PanelNode()
                     .WithTitle("Endpoint")
                     .WithBorder(BorderStyle.Rounded)
@@ -1143,7 +1141,6 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             1 => BuildCommStyleSubStep(),
             2 => BuildUserNameSubStep(),
             3 => BuildTimezoneSubStep(),
-            4 => BuildPrimaryUseSubStep(),
             _ => Layouts.Empty()
         };
     }
@@ -1247,7 +1244,8 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             {
                 ViewModel.UserTimezone = string.IsNullOrWhiteSpace(text)
                     ? TimeZoneInfo.Local.Id : text;
-                SetIdentitySubStep(4);
+                _identitySubStep = 0;
+                ViewModel.GoNext();
             })
             .DisposeWith(_stepSubs);
 
@@ -1259,37 +1257,6 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
                 .WithBorderColor(Color.Gray)
                 .WithContent(_timezoneInput)
                 .Height(3));
-    }
-
-    private ILayoutNode BuildPrimaryUseSubStep()
-    {
-        _primaryUseInput = new TextAreaNode()
-            .WithPlaceholder("e.g., homelab management, dev environment, home automation")
-            .WithMaxHeight(6);
-
-        if (!string.IsNullOrWhiteSpace(ViewModel.PrimaryUse))
-            _primaryUseInput.Text = ViewModel.PrimaryUse;
-
-        _primaryUseInput.OnFocused();
-        _lastFocusedInput = _primaryUseInput;
-
-        _primaryUseInput.Submitted
-            .Subscribe(text =>
-            {
-                ViewModel.PrimaryUse = string.IsNullOrWhiteSpace(text) ? null : text;
-                _identitySubStep = 0;
-                ViewModel.GoNext();
-            })
-            .DisposeWith(_stepSubs);
-
-        return Layouts.Vertical()
-            .WithChild(new TextNode("  What will you primarily use this for?").WithForeground(Color.White))
-            .WithChild(new PanelNode()
-                .WithTitle("Primary Use")
-                .WithBorder(BorderStyle.Rounded)
-                .WithBorderColor(Color.Gray)
-                .WithContent(_primaryUseInput)
-                .Height(8));
     }
 
     private ILayoutNode BuildHealthCheckStep()
@@ -1520,7 +1487,6 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             WizardStep.Identity when _identitySubStep == 0 => _agentNameInput,
             WizardStep.Identity when _identitySubStep == 2 => _userNameInput,
             WizardStep.Identity when _identitySubStep == 3 => _timezoneInput,
-            WizardStep.Identity when _identitySubStep == 4 => _primaryUseInput,
             _ => null
         };
     }
