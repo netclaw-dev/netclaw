@@ -8,6 +8,7 @@ INIT_TIMEOUT_SECONDS="${INIT_TIMEOUT_SECONDS:-1200}"
 STEP_TIMEOUT_SECONDS="${STEP_TIMEOUT_SECONDS:-120}"
 START_TIMEOUT_SECONDS="${START_TIMEOUT_SECONDS:-180}"
 STOP_TIMEOUT_SECONDS="${STOP_TIMEOUT_SECONDS:-90}"
+REMINDER_WAIT_TIMEOUT="${REMINDER_WAIT_TIMEOUT:-150}"
 
 compose() {
   docker compose -p "$PROJECT_NAME" -f "$COMPOSE_FILE" "$@"
@@ -273,5 +274,61 @@ if [[ "$resume_help" != *"--resume"* ]]; then
   echo "Expected chat help to include --resume flag."
   exit 1
 fi
+
+# ── Reminder lifecycle smoke tests ──
+# Schedule a one-shot reminder, wait for it to execute and record history,
+# then cancel it and verify it is fully removed.
+
+REMINDER_ID="smoke-lifecycle-$$"
+
+echo "Testing reminder create (one-shot in 1m, id=$REMINDER_ID)..."
+run_sandbox_timed "$STEP_TIMEOUT_SECONDS" netclaw reminder create "$REMINDER_ID" once 1m "Say OK in one word"
+
+echo "Verifying reminder appears in list..."
+reminder_list="$(run_sandbox_timed "$STEP_TIMEOUT_SECONDS" netclaw reminder list)"
+echo "$reminder_list"
+if [[ "$reminder_list" != *"$REMINDER_ID"* ]]; then
+  echo "Expected reminder list to include $REMINDER_ID."
+  exit 1
+fi
+
+echo "Waiting up to ${REMINDER_WAIT_TIMEOUT}s for reminder to execute and record history..."
+history_found=false
+deadline=$((SECONDS + REMINDER_WAIT_TIMEOUT))
+while (( SECONDS < deadline )); do
+  history_output="$(run_sandbox_timed "$STEP_TIMEOUT_SECONDS" netclaw reminder history "$REMINDER_ID" --last 5 2>/dev/null || true)"
+  if [[ "$history_output" == *"fired_at"* ]]; then
+    history_found=true
+    echo "Reminder executed. History:"
+    echo "$history_output"
+    break
+  fi
+  sleep 5
+done
+
+if [[ "$history_found" != "true" ]]; then
+  echo "Timed out after ${REMINDER_WAIT_TIMEOUT}s waiting for $REMINDER_ID to execute."
+  exit 1
+fi
+
+echo "Cancelling reminder $REMINDER_ID..."
+run_sandbox_timed "$STEP_TIMEOUT_SECONDS" netclaw reminder cancel "$REMINDER_ID"
+
+echo "Verifying reminder is absent from list after cancel..."
+after_cancel_list="$(run_sandbox_timed "$STEP_TIMEOUT_SECONDS" netclaw reminder list)"
+echo "$after_cancel_list"
+if [[ "$after_cancel_list" == *"$REMINDER_ID"* ]]; then
+  echo "Expected $REMINDER_ID to be absent from reminder list after cancel."
+  exit 1
+fi
+
+echo "Verifying history returns not-found for deleted reminder..."
+history_exit=0
+run_sandbox_timed "$STEP_TIMEOUT_SECONDS" netclaw reminder history "$REMINDER_ID" 2>/dev/null || history_exit=$?
+if [[ "$history_exit" -eq 0 ]]; then
+  echo "Expected non-zero exit for history query on deleted reminder $REMINDER_ID."
+  exit 1
+fi
+echo "History correctly returned exit $history_exit for deleted reminder."
 
 echo "Smoke sandbox checks passed."

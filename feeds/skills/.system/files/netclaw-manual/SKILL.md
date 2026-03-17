@@ -3,7 +3,7 @@ name: netclaw-manual
 description: "Netclaw Manual. Read when the user is asking what Netclaw can do, which command/tool to use, how to schedule work, switch models, manage providers, or discover available capabilities."
 metadata:
   author: netclaw
-  version: "0.6.0"
+  version: "0.7.0"
   triggers: what can netclaw do | what command should I use | can you schedule a cron job | schedule a reminder | switch models | change model | manage providers | manage mcp servers | list available tools | how do I do this in netclaw
 ---
 
@@ -82,6 +82,7 @@ prompt. Use the session ID to:
 | `set_reminder` | Schedule one-shot, interval, or cron reminders |
 | `list_reminders` | List reminders with IDs, status, next fire times |
 | `cancel_reminder` | Delete a reminder by ID |
+| `get_reminder_history` | Get recent execution history for a reminder — timestamps, success/failure, duration, and session IDs. Use `reminder_id` (required) and `last` (optional int, default 20, max 100). Returns empty result for reminders with no history yet. |
 
 ## Tool Grant System
 
@@ -195,6 +196,7 @@ scheduled work back to the originating conversation.
 | `netclaw reminder list` | List all reminders |
 | `netclaw reminder create` | Create a reminder |
 | `netclaw reminder show <id>` | Show reminder details |
+| `netclaw reminder history <id> [--last N]` | Show recent execution history (default: 20 most recent runs) |
 | `netclaw reminder cancel <id>` | Delete a reminder |
 | `netclaw reminder enable <id>` | Enable a disabled reminder |
 | `netclaw reminder disable <id>` | Disable a reminder |

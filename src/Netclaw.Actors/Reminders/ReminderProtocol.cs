@@ -224,3 +224,16 @@ public sealed record ReminderHealthResponse(
     int ScheduledCount,
     int ActiveExecutions,
     int FailedCount);
+
+// ── Execution history ──
+
+/// <summary>
+/// A single execution history entry for a reminder, appended to
+/// <c>~/.netclaw/reminders/{id}.history.jsonl</c> after each run.
+/// </summary>
+public sealed record HistoryRecord(
+    DateTimeOffset FiredAt,
+    bool Success,
+    long DurationMs,
+    string SessionId,
+    string? ErrorMessage);

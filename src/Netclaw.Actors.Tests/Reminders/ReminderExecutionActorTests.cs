@@ -13,9 +13,24 @@ using Xunit.Abstractions;
 
 namespace Netclaw.Actors.Tests.Reminders;
 
-public class ReminderExecutionActorTests : TestKit
+public class ReminderExecutionActorTests : TestKit, IDisposable
 {
-    public ReminderExecutionActorTests(ITestOutputHelper output) : base(output: output) { }
+    private readonly string _tempDir = Path.Combine(Path.GetTempPath(), $"netclaw-exec-actor-tests-{Guid.NewGuid():N}");
+    private readonly ReminderHistoryStore _historyStore;
+
+    public ReminderExecutionActorTests(ITestOutputHelper output) : base(output: output)
+    {
+        Directory.CreateDirectory(_tempDir);
+        var paths = new NetclawPaths(_tempDir);
+        Directory.CreateDirectory(paths.RemindersDirectory);
+        _historyStore = new ReminderHistoryStore(paths, new ReminderConfig());
+    }
+
+    void IDisposable.Dispose()
+    {
+        if (Directory.Exists(_tempDir))
+            Directory.Delete(_tempDir, recursive: true);
+    }
 
     protected override void ConfigureAkka(AkkaConfigurationBuilder builder, IServiceProvider provider)
     {
@@ -32,7 +47,7 @@ public class ReminderExecutionActorTests : TestKit
 
         var probe = CreateTestProbe();
         Sys.ActorOf(
-            Props.Create(() => new ParentProxy(probe.Ref, definition, failingPipeline)),
+            Props.Create(() => new ParentProxy(probe.Ref, definition, failingPipeline, _historyStore)),
             "exec-parent");
 
         var completed = await probe.ExpectMsgAsync<ReminderExecutionCompleted>(TimeSpan.FromSeconds(5));
@@ -56,7 +71,7 @@ public class ReminderExecutionActorTests : TestKit
 
         var probe = CreateTestProbe();
         Sys.ActorOf(
-            Props.Create(() => new ParentProxy(probe.Ref, definition, failingPipeline)),
+            Props.Create(() => new ParentProxy(probe.Ref, definition, failingPipeline, _historyStore)),
             "exec-parent-2");
 
         var completed = await probe.ExpectMsgAsync<ReminderExecutionCompleted>(TimeSpan.FromSeconds(5));
@@ -84,7 +99,7 @@ public class ReminderExecutionActorTests : TestKit
         var definition = CreateDefinition("notify-fail-test");
         var probe = CreateTestProbe();
         Sys.ActorOf(
-            Props.Create(() => new ParentProxy(probe.Ref, definition, pipeline)),
+            Props.Create(() => new ParentProxy(probe.Ref, definition, pipeline, _historyStore)),
             "exec-parent-3");
 
         var completed = await probe.ExpectMsgAsync<ReminderExecutionCompleted>(TimeSpan.FromSeconds(5));
@@ -112,7 +127,7 @@ public class ReminderExecutionActorTests : TestKit
         var definition = CreateDefinition("notify-success-test");
         var probe = CreateTestProbe();
         Sys.ActorOf(
-            Props.Create(() => new ParentProxy(probe.Ref, definition, pipeline)),
+            Props.Create(() => new ParentProxy(probe.Ref, definition, pipeline, _historyStore)),
             "exec-parent-4");
 
         var completed = await probe.ExpectMsgAsync<ReminderExecutionCompleted>(TimeSpan.FromSeconds(5));
@@ -149,7 +164,7 @@ public class ReminderExecutionActorTests : TestKit
     /// </summary>
     private sealed class ParentProxy : ReceiveActor
     {
-        public ParentProxy(IActorRef probe, ReminderDefinition definition, ISessionPipeline pipeline)
+        public ParentProxy(IActorRef probe, ReminderDefinition definition, ISessionPipeline pipeline, ReminderHistoryStore historyStore)
         {
             var executionId = Guid.NewGuid();
             Context.ActorOf(
@@ -158,7 +173,8 @@ public class ReminderExecutionActorTests : TestKit
                     definition,
                     pipeline,
                     new ReminderConfig(),
-                    TimeProvider.System),
+                    TimeProvider.System,
+                    historyStore),
                 "exec");
 
             ReceiveAny(msg => probe.Tell(msg));
@@ -195,5 +211,65 @@ public class ReminderExecutionActorTests : TestKit
 
             return Task.FromResult(new MaterializedSession(input, output, killSwitch));
         }
+    }
+
+    // ── History integration tests ─────────────────────────────────────────────
+
+    [Fact]
+    public async Task Successful_execution_appends_success_true_history_record()
+    {
+        var pipeline = new ScriptedSessionPipeline(sessionId =>
+        [
+            new TurnCompleted { SessionId = sessionId, TurnNumber = 1 }
+        ]);
+
+        // Use empty NotifyInstructions so success is not gated on send_slack_message
+        var definition = CreateDefinition("history-success-test") with { NotifyInstructions = string.Empty };
+        var probe = CreateTestProbe();
+        Sys.ActorOf(
+            Props.Create(() => new ParentProxy(probe.Ref, definition, pipeline, _historyStore)),
+            "exec-history-success");
+
+        var completed = await probe.ExpectMsgAsync<ReminderExecutionCompleted>(TimeSpan.FromSeconds(5));
+        Assert.True(completed.Success);
+
+        // PostStop writes the history record asynchronously after the actor stops.
+        // Poll until the record appears rather than using a fixed delay.
+        var rid = new ReminderId("history-success-test");
+        await AwaitConditionAsync(
+            async () => (await _historyStore.ReadAsync(rid, 10)).Count > 0,
+            TimeSpan.FromSeconds(5));
+
+        var records = await _historyStore.ReadAsync(rid, 10);
+        Assert.Single(records);
+        Assert.True(records[0].Success);
+        Assert.Null(records[0].ErrorMessage);
+        Assert.Contains("history-success-test", records[0].SessionId);
+    }
+
+    [Fact]
+    public async Task Failed_execution_appends_success_false_with_error_message()
+    {
+        var exception = new InvalidOperationException("pipeline blew up");
+        var failingPipeline = new FailingSessionPipeline(exception);
+        var definition = CreateDefinition("history-failure-test");
+
+        var probe = CreateTestProbe();
+        Sys.ActorOf(
+            Props.Create(() => new ParentProxy(probe.Ref, definition, failingPipeline, _historyStore)),
+            "exec-history-failure");
+
+        var completed = await probe.ExpectMsgAsync<ReminderExecutionCompleted>(TimeSpan.FromSeconds(5));
+        Assert.False(completed.Success);
+
+        var rid = new ReminderId("history-failure-test");
+        await AwaitConditionAsync(
+            async () => (await _historyStore.ReadAsync(rid, 10)).Count > 0,
+            TimeSpan.FromSeconds(5));
+
+        var records = await _historyStore.ReadAsync(rid, 10);
+        Assert.Single(records);
+        Assert.False(records[0].Success);
+        Assert.Equal("pipeline blew up", records[0].ErrorMessage);
     }
 }
