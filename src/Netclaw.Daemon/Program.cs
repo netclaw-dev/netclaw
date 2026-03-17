@@ -162,7 +162,11 @@ static async Task RunDaemonAsync(string[] args, DaemonRestartSignal restartSigna
             descriptor.OAuthTokenEndpoint,
             descriptor.OAuthDefaultClientId,
             descriptor.OAuthRedirectUri,
-            descriptor.OAuthScope);
+            descriptor.OAuthScope,
+            descriptor.OAuthExtraAuthParams);
+
+        // Start temporary callback listener on the redirect URI's port
+        _ = pkceService.ListenForCallbackAsync(descriptor.OAuthRedirectUri, state);
 
         return Results.Ok(new { authorizationUrl = authUrl, state });
     });

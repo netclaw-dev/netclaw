@@ -33,7 +33,8 @@ public sealed class OAuthPkceService
         string tokenEndpoint,
         string clientId,
         string redirectUri,
-        string? scope = null)
+        string? scope = null,
+        IReadOnlyDictionary<string, string>? extraParams = null)
     {
         var codeVerifier = GenerateCodeVerifier();
         var codeChallenge = ComputeCodeChallenge(codeVerifier);
@@ -51,6 +52,12 @@ public sealed class OAuthPkceService
 
         if (!string.IsNullOrWhiteSpace(scope))
             queryParams["scope"] = scope;
+
+        if (extraParams is not null)
+        {
+            foreach (var (key, value) in extraParams)
+                queryParams[key] = value;
+        }
 
         var authUrl = authorizationEndpoint + "?" + string.Join("&",
             queryParams.Select(kv => $"{Uri.EscapeDataString(kv.Key)}={Uri.EscapeDataString(kv.Value)}"));
@@ -167,6 +174,71 @@ public sealed class OAuthPkceService
         };
 
         return result;
+    }
+
+    /// <summary>
+    /// Start a temporary HTTP listener on the redirect URI's port to receive the OAuth callback.
+    /// Listens until the callback arrives or the cancellation token fires.
+    /// On callback, exchanges the authorization code for tokens and completes the pending flow.
+    /// </summary>
+    public async Task<OAuthDeviceFlowResult> ListenForCallbackAsync(
+        string redirectUri, string state, CancellationToken ct = default)
+    {
+        // Extract the listener prefix from the redirect URI (e.g., "http://localhost:1455/")
+        var uri = new Uri(redirectUri);
+        var prefix = $"{uri.Scheme}://{uri.Host}:{uri.Port}/";
+
+        using var listener = new System.Net.HttpListener();
+        listener.Prefixes.Add(prefix);
+        listener.Start();
+
+        try
+        {
+            while (!ct.IsCancellationRequested)
+            {
+                var contextTask = listener.GetContextAsync();
+                var completedTask = await Task.WhenAny(contextTask, Task.Delay(Timeout.Infinite, ct));
+
+                if (completedTask != contextTask)
+                    throw new OperationCanceledException(ct);
+
+                var context = await contextTask;
+                var request = context.Request;
+                var query = request.QueryString;
+
+                var code = query["code"];
+                var callbackState = query["state"];
+
+                if (!string.IsNullOrEmpty(code) && callbackState == state)
+                {
+                    // Send success HTML response to the browser
+                    var responseBytes = System.Text.Encoding.UTF8.GetBytes(
+                        "<html><body><h2>Authorization complete</h2><p>You may close this tab and return to the terminal.</p></body></html>");
+                    context.Response.ContentType = "text/html";
+                    context.Response.ContentLength64 = responseBytes.Length;
+                    await context.Response.OutputStream.WriteAsync(responseBytes, ct);
+                    context.Response.Close();
+
+                    // Exchange code for tokens
+                    return await CompleteAuthorizationAsync(code, state, ct);
+                }
+
+                // Wrong request — send error and keep listening
+                var errorBytes = System.Text.Encoding.UTF8.GetBytes(
+                    "<html><body><h2>Authorization failed</h2><p>Missing or mismatched parameters.</p></body></html>");
+                context.Response.StatusCode = 400;
+                context.Response.ContentType = "text/html";
+                context.Response.ContentLength64 = errorBytes.Length;
+                await context.Response.OutputStream.WriteAsync(errorBytes, ct);
+                context.Response.Close();
+            }
+
+            throw new OperationCanceledException(ct);
+        }
+        finally
+        {
+            listener.Stop();
+        }
     }
 
     /// <summary>

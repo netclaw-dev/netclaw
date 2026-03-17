@@ -73,6 +73,13 @@ public interface IProviderDescriptor
     string? OAuthRedirectUri => null;
 
     /// <summary>
+    /// Extra query parameters to include in the authorization URL.
+    /// Provider-specific parameters required by the OAuth endpoint.
+    /// Null if no extra parameters are needed.
+    /// </summary>
+    IReadOnlyDictionary<string, string>? OAuthExtraAuthParams => null;
+
+    /// <summary>
     /// Polling endpoint for proprietary device flows (e.g. OpenAI's
     /// <c>/api/accounts/deviceauth/token</c>). Null for standard RFC 8628 flows
     /// where polling goes to <see cref="OAuthTokenEndpoint"/>.

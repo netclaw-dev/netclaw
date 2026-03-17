@@ -23,12 +23,32 @@ public sealed class OpenAiDescriptor : IProviderDescriptor
     public string? ApiKeyGuidanceUrl => "https://platform.openai.com/api-keys";
     public string? OAuthDeviceEndpoint => "https://auth.openai.com/api/accounts/deviceauth/usercode";
     public string? OAuthTokenEndpoint => "https://auth.openai.com/oauth/token";
-    public string? OAuthDefaultClientId => "app_EMoamEEZ73f0CkXaXp7hrann";
     public string? OAuthPollingEndpoint => "https://auth.openai.com/api/accounts/deviceauth/token";
     public bool UseProprietaryDeviceFlow => true;
     public string? OAuthScope => "openid profile email offline_access";
     public string? OAuthAuthorizationEndpoint => "https://auth.openai.com/oauth/authorize";
-    public string? OAuthRedirectUri => "http://127.0.0.1:5199/api/provider/oauth/callback";
+
+    // The Codex CLI public client ID. All third-party tools (OpenCode, OpenClaw, etc.) reuse
+    // this because OpenAI does not provide a public API for registering custom OAuth clients.
+    // The redirect_uri and extra auth params below must match what's registered for this client.
+    // Sources:
+    //   - OpenCode: https://github.com/anomalyco/opencode/issues/3281
+    //   - codex-oauth: https://github.com/7shi/codex-oauth
+    //   - OpenClaw: https://docs.openclaw.ai/concepts/oauth
+    public string? OAuthDefaultClientId => "app_EMoamEEZ73f0CkXaXp7hrann";
+
+    // Port 1455 and path /auth/callback are registered with OpenAI for the Codex CLI client ID.
+    // Using any other redirect_uri produces "unknown_error" from auth.openai.com.
+    public string? OAuthRedirectUri => "http://localhost:1455/auth/callback";
+
+    // OpenAI-specific authorization parameters required by the Codex OAuth flow.
+    // Without these, the authorization endpoint returns errors.
+    public IReadOnlyDictionary<string, string>? OAuthExtraAuthParams => new Dictionary<string, string>
+    {
+        ["id_token_add_organizations"] = "true",
+        ["codex_cli_simplified_flow"] = "true",
+        ["originator"] = "netclaw",
+    };
 
     public Task<ProviderProbeResult> ProbeAsync(
         ProviderEntry entry, CancellationToken ct = default)
