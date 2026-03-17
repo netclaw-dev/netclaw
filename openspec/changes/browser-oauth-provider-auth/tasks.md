@@ -1,15 +1,15 @@
 ## 1. Termina Upgrade
 
-- [ ] 1.1 Upgrade Termina from 0.7.2 to 0.8.0 in `Directory.Packages.props`
-- [ ] 1.2 Fix any breaking API changes from Termina 0.8.0 upgrade across CLI project
-- [ ] 1.3 Verify `dotnet build` succeeds and all existing tests pass after upgrade
+- [x] 1.1 Upgrade Termina from 0.7.2 to 0.8.0 in `Directory.Packages.props`
+- [x] 1.2 Fix any breaking API changes from Termina 0.8.0 upgrade across CLI project
+- [x] 1.3 Verify `dotnet build` succeeds and all existing tests pass after upgrade
 
 ## 2. Shared OAuth Primitives
 
-- [ ] 2.1 Create `OAuthPkceService` in `Netclaw.Configuration/Providers/OAuth/` with PKCE generation (code_verifier, code_challenge), authorization URL construction, and state tracking
-- [ ] 2.2 Add token exchange method to `OAuthPkceService` (POST authorization code + code_verifier to token endpoint, return `OAuthDeviceFlowResult`)
-- [ ] 2.3 Add token refresh method to `OAuthPkceService` (POST refresh_token, handle `invalid_grant`)
-- [ ] 2.4 Write unit tests for `OAuthPkceService` — PKCE generation, URL construction, token exchange with mock HTTP, refresh with mock HTTP
+- [x] 2.1 Create `OAuthPkceService` in `Netclaw.Configuration/Providers/OAuth/` with PKCE generation (code_verifier, code_challenge), authorization URL construction, and state tracking
+- [x] 2.2 Add token exchange method to `OAuthPkceService` (POST authorization code + code_verifier to token endpoint, return `OAuthDeviceFlowResult`)
+- [x] 2.3 Add token refresh method to `OAuthPkceService` (POST refresh_token, handle `invalid_grant`)
+- [x] 2.4 Write unit tests for `OAuthPkceService` — PKCE generation, URL construction, token exchange with mock HTTP, refresh with mock HTTP
 - [ ] 2.5 Refactor `McpOAuthService` to delegate PKCE generation and token exchange to `OAuthPkceService` (verify MCP OAuth still works via existing tests)
 
 ## 3. Provider Descriptor Changes
