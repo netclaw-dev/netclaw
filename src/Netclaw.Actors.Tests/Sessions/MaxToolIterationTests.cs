@@ -111,6 +111,49 @@ public class MaxToolIterationTests : TestKit
     }
 
     [Fact]
+    public async Task Tool_iteration_limit_fails_turn_when_model_keeps_emitting_tool_calls_without_tools()
+    {
+        _fakeChatClient.ToolCallsOnFirstCall =
+        [
+            new FunctionCallContent("call-1", "web_search",
+                new Dictionary<string, object?> { ["query"] = "test" })
+        ];
+        _fakeChatClient.AlwaysReturnToolCalls = true;
+        _fakeChatClient.IgnoreToolAvailability = true;
+        _fakeToolExecutor.Results["web_search"] = "search result";
+
+        var sessionId = new SessionId("test-channel/max-iter-violation");
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("max-iter-violation-sub");
+
+        await sessionManager.Ask<SessionJoined>(new JoinSession
+        {
+            SessionId = sessionId,
+            Subscriber = subscriber,
+            Filter = OutputFilter.Full
+        }, TimeSpan.FromSeconds(3));
+        await subscriber.ExpectMsgAsync<SessionJoined>();
+
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Keep calling tools even when disabled"
+        }, TimeSpan.FromSeconds(3));
+
+        for (var i = 0; i < 3; i++)
+            await subscriber.ExpectMsgAsync<ToolCallOutput>(TimeSpan.FromSeconds(3));
+
+        var error = await subscriber.ExpectMsgAsync<ErrorOutput>(TimeSpan.FromSeconds(5));
+        Assert.Equal(ErrorCategory.ProviderFailure, error.Category);
+        Assert.Contains("Please try rephrasing", error.Message, StringComparison.OrdinalIgnoreCase);
+
+        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
+
+        Assert.Equal(4, _fakeChatClient.CallCount);
+        Assert.Equal(3, _fakeToolExecutor.CallCount);
+    }
+
+    [Fact]
     public async Task Tool_iteration_counter_resets_between_turns()
     {
         // Configure: LLM always returns tool calls when tools are available

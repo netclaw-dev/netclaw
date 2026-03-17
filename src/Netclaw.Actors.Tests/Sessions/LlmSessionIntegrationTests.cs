@@ -578,6 +578,12 @@ internal sealed class FakeChatClient : IChatClient
     public bool AlwaysReturnToolCalls { get; set; }
 
     /// <summary>
+    /// When true, tool calls continue even if the caller omits tools from ChatOptions.
+    /// Simulates providers that hallucinate tool calls after the circuit breaker fires.
+    /// </summary>
+    public bool IgnoreToolAvailability { get; set; }
+
+    /// <summary>
     /// When set, all responses include this usage data.
     /// Used to simulate token counts that trigger compaction.
     /// </summary>
@@ -711,7 +717,7 @@ internal sealed class FakeChatClient : IChatClient
         if (ToolCallsOnFirstCall is not null)
         {
             var returnToolCalls = AlwaysReturnToolCalls
-                ? options?.Tools?.Count > 0   // Every call, as long as tools are available
+                ? (IgnoreToolAvailability || options?.Tools?.Count > 0)   // Every call, even when tools are withheld
                 : _callCount == 1;            // First call only (existing behavior)
 
             if (returnToolCalls)

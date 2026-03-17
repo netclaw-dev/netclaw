@@ -76,6 +76,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     // Number of consecutive empty responses observed before any tool work happened
     private int _preToolEmptyResponseCount;
 
+    // Whether the current LLM call intentionally disabled tool use after a circuit breaker fired.
+    private bool _forceNoToolsActive;
+
     // Child actor for per-session log file (created when session logs directory is configured)
     private IActorRef? _logActor;
 
@@ -229,6 +232,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             _toolIterationCount = 0;
             _postToolNudgeSent = false;
             _preToolEmptyResponseCount = 0;
+            _forceNoToolsActive = false;
             PrepareDiscoveredToolsForNewTurn();
 
             // Modality gate: strip unsupported media references
@@ -299,6 +303,19 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
             // Check for tool calls
             var toolCalls = lastMessage.Contents.OfType<FunctionCallContent>().ToList();
+            if (toolCalls.Count > 0 && _forceNoToolsActive)
+            {
+                TurnLog().Warning(
+                    "turn_force_no_tools_violation toolCallCount={ToolCallCount} max={Max}",
+                    toolCalls.Count,
+                    _config.MaxToolIterationsPerTurn);
+                FailCurrentTurn(
+                    EmptyResponseFallbackMessage,
+                    new InvalidOperationException("LLM continued requesting tools after tool execution was disabled for this turn."),
+                    ErrorCategory.ProviderFailure);
+                return;
+            }
+
             if (toolCalls.Count > 0 && _toolExecutor is not null)
             {
                 HandleToolCallResponse(lastMessage, toolCalls, response.Usage);
@@ -974,6 +991,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         // if the model stalls later in the chain.
         _postToolNudgeSent = false;
         _preToolEmptyResponseCount = 0;
+        _forceNoToolsActive = false;
 
         // Add assistant message (with tool calls) to history
         var assistantMsg = ChatMessageConverter.FromAiMessage(lastMessage);
@@ -1442,6 +1460,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     private void FireLlmCall(string? recallQuery = null, bool forceNoTools = false)
     {
+        _forceNoToolsActive = forceNoTools;
+
         var sessionDir = GetSessionDirectory();
         var messages = ChatMessageConverter.ToAiMessages(_state.History, sessionDir);
 
