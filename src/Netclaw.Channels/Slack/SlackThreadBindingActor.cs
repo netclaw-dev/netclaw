@@ -39,6 +39,7 @@ internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStas
     private static readonly TimeSpan FileDownloadTimeout = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan ContentScanTimeout = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan PipelineInitTimeout = TimeSpan.FromSeconds(15);
+    private static readonly TimeSpan ReplyOperationTimeout = TimeSpan.FromSeconds(5);
 
     public IStash Stash { get; set; } = null!;
     public ITimerScheduler Timers { get; set; } = null!;
@@ -415,6 +416,7 @@ internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStas
             case ErrorOutput err:
                 var refId = err.CorrelationId.ToString("N")[..8];
                 await SafePostAsync($":warning: {err.Message} (ref: {refId})");
+                _postedThisTurn = true;
                 _buffer.Clear();
                 break;
 
@@ -448,13 +450,19 @@ internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStas
         var startedAt = _dependencies.TimeProvider.GetTimestamp();
         try
         {
+            using var cts = new CancellationTokenSource(ReplyOperationTimeout);
             await _dependencies.ReplyClient.PostThreadReplyAsync(new SlackPostMessage(
                 ChannelId: _channelId,
                 ThreadTs: _threadTs,
-                Text: text));
+                Text: text), cts.Token);
 
             _log.Info("Posted Slack reply message");
             ChannelTelemetry.RecordSlackReplyPosted(_dependencies.TimeProvider.GetElapsedTime(startedAt).TotalMilliseconds);
+        }
+        catch (OperationCanceledException ex)
+        {
+            _log.Error(ex, "Timed out posting Slack reply for session {0}", _sessionId.Value);
+            ChannelTelemetry.RecordSlackReplyFailed(_dependencies.TimeProvider.GetElapsedTime(startedAt).TotalMilliseconds);
         }
         catch (Exception ex)
         {
@@ -465,6 +473,7 @@ internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStas
 
     private async Task SafeUploadFileAsync(FileOutput file)
     {
+        var startedAt = _dependencies.TimeProvider.GetTimestamp();
         try
         {
             if (!File.Exists(file.FilePath))
@@ -473,18 +482,26 @@ internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStas
                 return;
             }
 
+            using var cts = new CancellationTokenSource(ReplyOperationTimeout);
             await _dependencies.ReplyClient.UploadFileToThreadAsync(
                 _channelId,
                 _threadTs,
                 file.FilePath,
-                file.FileName);
+                file.FileName,
+                cts.Token);
 
             _uploadedFileThisTurn = true;
             _log.Info("Uploaded file to Slack thread: {FileName}", file.FileName);
         }
+        catch (OperationCanceledException ex)
+        {
+            _log.Error(ex, "Timed out uploading file {FileName} to Slack thread", file.FileName);
+            ChannelTelemetry.RecordSlackReplyFailed(_dependencies.TimeProvider.GetElapsedTime(startedAt).TotalMilliseconds);
+        }
         catch (Exception ex)
         {
             _log.Error(ex, "Failed to upload file {FileName} to Slack thread", file.FileName);
+            ChannelTelemetry.RecordSlackReplyFailed(_dependencies.TimeProvider.GetElapsedTime(startedAt).TotalMilliseconds);
         }
     }
 

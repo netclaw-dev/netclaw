@@ -1145,22 +1145,28 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 return;
             }
 
-            if (_buffer.Count > 0)
-            {
-                TurnLog().Info("turn_buffer_drain count={BufferCount}", _buffer.Count);
-                foreach (var buffered in _buffer)
-                {
-                    var refs = buffered.MediaReferences.Count > 0 ? buffered.MediaReferences : null;
-                    _state = _state.AddUserMessage(buffered.Content, refs);
-                }
-                _buffer.Clear();
-                FireLlmCall();
-            }
-            else
-            {
-                Become(Ready);
-            }
+            DrainBufferedMessagesOrBecomeReady();
         });
+    }
+
+    private void DrainBufferedMessagesOrBecomeReady()
+    {
+        if (_buffer.Count > 0)
+        {
+            TurnLog().Info("turn_buffer_drain count={BufferCount}", _buffer.Count);
+            foreach (var buffered in _buffer)
+            {
+                var refs = buffered.MediaReferences.Count > 0 ? buffered.MediaReferences : null;
+                _state = _state.AddUserMessage(buffered.Content, refs);
+            }
+
+            _buffer.Clear();
+            FireLlmCall();
+            Become(Processing);
+            return;
+        }
+
+        Become(Ready);
     }
 
     private bool ShouldCompact()
@@ -2464,8 +2470,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             TurnNumber = _state.TurnCount
         });
 
-        _buffer.Clear();
-        Become(Ready);
+        DrainBufferedMessagesOrBecomeReady();
     }
 
     private void EmitOutput(SessionOutput output, OutputFilter requiredFlag = OutputFilter.None)

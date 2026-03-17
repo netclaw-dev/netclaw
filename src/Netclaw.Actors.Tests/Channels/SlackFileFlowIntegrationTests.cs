@@ -329,6 +329,121 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
         Assert.Equal(0, _chatClient.CallCount);
     }
 
+    [Fact]
+    public async Task Failed_turn_posts_single_error_without_generic_fallback()
+    {
+        var pipeline = Host.Services.GetRequiredService<SessionPipeline>();
+        _chatClient.Failure = new InvalidOperationException("synthetic provider failure");
+
+        var deps = new SlackGatewayDependencies(
+            Pipeline: pipeline,
+            ActorSystem: Sys,
+            TimeProvider: TimeProvider.System,
+            Options: new SlackChannelOptions
+            {
+                Enabled = true,
+                MentionOnly = false,
+                AllowDirectMessages = true,
+                BotToken = new SensitiveString("xoxb-fake-token")
+            },
+            BotUserId: new SlackUserId("UBOT"),
+            DefaultChannelId: null,
+            ReplyClient: _replyClient,
+            ContentScanner: new NullContentScanner());
+
+        var gateway = Sys.ActorOf(SlackGatewayActor.CreateProps(deps), "slack-gw-error-turn-test");
+
+        gateway.Tell(new SlackInboundMessage(
+            Kind: SlackInboundKind.Message,
+            EventId: new SlackEventId("D4:5000"),
+            ChannelId: new SlackChannelId("D4"),
+            ThreadTs: null,
+            EventTs: new SlackEventTs("5000.1"),
+            UserId: new SlackUserId("U_HUMAN"),
+            BotId: null,
+            Text: "trigger a provider failure",
+            Subtype: null,
+            Hidden: false,
+            IsDirectMessage: true,
+            Files: null));
+
+        await AwaitAssertAsync(() =>
+        {
+            Assert.Single(_replyClient.PostedMessages);
+        }, duration: TimeSpan.FromSeconds(10));
+
+        var posted = Assert.Single(_replyClient.PostedMessages);
+        Assert.Contains(":warning:", posted.Text, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("didn't manage to produce a reply", posted.Text, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Timed_out_slack_post_does_not_block_later_turns()
+    {
+        var pipeline = Host.Services.GetRequiredService<SessionPipeline>();
+        _replyClient.BlockPostsUntilCanceled = true;
+
+        var deps = new SlackGatewayDependencies(
+            Pipeline: pipeline,
+            ActorSystem: Sys,
+            TimeProvider: TimeProvider.System,
+            Options: new SlackChannelOptions
+            {
+                Enabled = true,
+                MentionOnly = false,
+                AllowDirectMessages = true,
+                BotToken = new SensitiveString("xoxb-fake-token")
+            },
+            BotUserId: new SlackUserId("UBOT"),
+            DefaultChannelId: null,
+            ReplyClient: _replyClient,
+            ContentScanner: new NullContentScanner());
+
+        var gateway = Sys.ActorOf(SlackGatewayActor.CreateProps(deps), "slack-gw-post-timeout-test");
+
+        gateway.Tell(new SlackInboundMessage(
+            Kind: SlackInboundKind.Message,
+            EventId: new SlackEventId("D5:6000"),
+            ChannelId: new SlackChannelId("D5"),
+            ThreadTs: null,
+            EventTs: new SlackEventTs("6000.1"),
+            UserId: new SlackUserId("U_HUMAN"),
+            BotId: null,
+            Text: "first message",
+            Subtype: null,
+            Hidden: false,
+            IsDirectMessage: true,
+            Files: null));
+
+        await AwaitAssertAsync(() =>
+        {
+            Assert.True(_replyClient.CanceledPostCount > 0,
+                "Expected the first Slack post attempt to be canceled by timeout");
+        }, duration: TimeSpan.FromSeconds(15));
+
+        _replyClient.BlockPostsUntilCanceled = false;
+
+        gateway.Tell(new SlackInboundMessage(
+            Kind: SlackInboundKind.Message,
+            EventId: new SlackEventId("D5:6001"),
+            ChannelId: new SlackChannelId("D5"),
+            ThreadTs: new SlackThreadTs("6000.1"),
+            EventTs: new SlackEventTs("6001.1"),
+            UserId: new SlackUserId("U_HUMAN"),
+            BotId: null,
+            Text: "second message",
+            Subtype: null,
+            Hidden: false,
+            IsDirectMessage: true,
+            Files: null));
+
+        await AwaitAssertAsync(() =>
+        {
+            Assert.Contains(_replyClient.PostedMessages,
+                message => message.Text.Contains("call #2", StringComparison.OrdinalIgnoreCase));
+        }, duration: TimeSpan.FromSeconds(10));
+    }
+
     /// <summary>
     /// Fake HTTP handler that serves canned image bytes for Slack file download requests.
     /// </summary>
@@ -361,11 +476,30 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
     {
         public List<SlackPostMessage> PostedMessages { get; } = [];
         public List<(SlackChannelId ChannelId, SlackThreadTs ThreadTs, string FilePath, string? FileName)> UploadedFiles { get; } = [];
+        public volatile bool BlockPostsUntilCanceled;
+        private int _canceledPostCount;
 
-        public Task PostThreadReplyAsync(SlackPostMessage message, CancellationToken cancellationToken = default)
+        public int CanceledPostCount => _canceledPostCount;
+
+        public async Task PostThreadReplyAsync(SlackPostMessage message, CancellationToken cancellationToken = default)
         {
+            if (BlockPostsUntilCanceled)
+            {
+                var waitForCancellation = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                using var registration = cancellationToken.Register(() => waitForCancellation.TrySetCanceled(cancellationToken));
+
+                try
+                {
+                    await waitForCancellation.Task;
+                }
+                catch (OperationCanceledException)
+                {
+                    Interlocked.Increment(ref _canceledPostCount);
+                    throw;
+                }
+            }
+
             PostedMessages.Add(message);
-            return Task.CompletedTask;
         }
 
         public Task UploadFileToThreadAsync(
@@ -398,6 +532,7 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
         private int _callCount;
         public int CallCount => _callCount;
         public volatile bool ReceivedImageContent;
+        public Exception? Failure { get; set; }
 
         public Task<ChatResponse> GetResponseAsync(
             IEnumerable<ChatMessage> messages,
@@ -405,6 +540,9 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
             CancellationToken cancellationToken = default)
         {
             Interlocked.Increment(ref _callCount);
+
+            if (Failure is not null)
+                throw Failure;
 
             foreach (var msg in messages)
             {

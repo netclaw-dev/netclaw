@@ -81,11 +81,52 @@ public sealed class LlmSessionWatchdogTests(ITestOutputHelper output) : TestKit(
         Assert.True(_chatClient.CallCount >= 2);
     }
 
+    [Fact]
+    public async Task Buffered_reprompt_is_replayed_after_failed_turn()
+    {
+        _chatClient.SucceedAfterFirstTimeout = true;
+
+        var sessionId = new SessionId("watchdog/session-buffered-retry");
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("watchdog-buffered-retry-subscriber");
+
+        await sessionManager.Ask<SessionJoined>(new JoinSession
+        {
+            SessionId = sessionId,
+            Subscriber = subscriber,
+            Filter = OutputFilter.TextOnly
+        }, TimeSpan.FromSeconds(3));
+        await subscriber.ExpectMsgAsync<SessionJoined>();
+
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "first"
+        }, TimeSpan.FromSeconds(3));
+
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "second"
+        }, TimeSpan.FromSeconds(3));
+
+        var firstError = await subscriber.ExpectMsgAsync<ErrorOutput>(TimeSpan.FromSeconds(6));
+        Assert.Contains("timeout", firstError.Message, StringComparison.OrdinalIgnoreCase);
+        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
+
+        var recoveredText = await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(6));
+        Assert.Contains("recovered after timeout", recoveredText.Text, StringComparison.OrdinalIgnoreCase);
+        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
+
+        Assert.Equal(2, _chatClient.CallCount);
+    }
+
     private sealed class HangingStreamingChatClient : IChatClient
     {
         private int _callCount;
 
         public int CallCount => _callCount;
+        public bool SucceedAfterFirstTimeout { get; set; }
 
         public Task<ChatResponse> GetResponseAsync(
             IEnumerable<ChatMessage> messages,
@@ -98,7 +139,11 @@ public sealed class LlmSessionWatchdogTests(ITestOutputHelper output) : TestKit(
             ChatOptions? options = null,
             CancellationToken cancellationToken = default)
         {
-            Interlocked.Increment(ref _callCount);
+            var callNumber = Interlocked.Increment(ref _callCount);
+
+            if (SucceedAfterFirstTimeout && callNumber > 1)
+                return ReturnTextAsync($"recovered after timeout on call {callNumber}", cancellationToken);
+
             return NeverCompletesAsync(CancellationToken.None);
         }
 
@@ -108,6 +153,22 @@ public sealed class LlmSessionWatchdogTests(ITestOutputHelper output) : TestKit(
             var gate = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
             await gate.Task;
             yield break;
+        }
+
+        private static async IAsyncEnumerable<ChatResponseUpdate> ReturnTextAsync(
+            string text,
+            [EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            var response = new ChatResponse(new ChatMessage(
+                Microsoft.Extensions.AI.ChatRole.Assistant,
+                [new TextContent(text)]));
+
+            foreach (var update in response.ToChatResponseUpdates())
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                yield return update;
+                await Task.Yield();
+            }
         }
 
         public object? GetService(Type serviceType, object? serviceKey = null) => null;
