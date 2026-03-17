@@ -222,6 +222,45 @@ public class LlmSessionIntegrationTests : TestKit
     }
 
     [Fact]
+    public async Task Text_is_emitted_immediately_when_response_also_contains_tool_calls()
+    {
+        _fakeChatClient.PlannedResponses.Enqueue(
+        [
+            new TextContent("I'll look into that and send back the results."),
+            new FunctionCallContent("call-1", "web_search",
+                new Dictionary<string, object?> { ["query"] = "dell ai desktop" })
+        ]);
+
+        var sessionId = new SessionId("test-channel/tool-preamble");
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("tool-preamble-sub");
+
+        await sessionManager.Ask<SessionJoined>(new JoinSession
+        {
+            SessionId = sessionId,
+            Subscriber = subscriber,
+            Filter = OutputFilter.Full
+        }, TimeSpan.FromSeconds(3));
+        await subscriber.ExpectMsgAsync<SessionJoined>();
+
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Find me images of Dell's newest AI desktop"
+        }, TimeSpan.FromSeconds(3));
+
+        var preamble = await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3));
+        Assert.Equal("I'll look into that and send back the results.", preamble.Text);
+
+        var toolCall = await subscriber.ExpectMsgAsync<ToolCallOutput>(TimeSpan.FromSeconds(3));
+        Assert.Equal("web_search", toolCall.ToolName);
+
+        var finalText = await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3));
+        Assert.Contains("[fake] Response #2", finalText.Text, StringComparison.OrdinalIgnoreCase);
+        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
+    }
+
+    [Fact]
     public async Task Sidecar_observation_promotes_strong_user_assertion_into_memory()
     {
         var gate = new MemoryProposalGate();

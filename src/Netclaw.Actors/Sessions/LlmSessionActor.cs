@@ -1118,6 +1118,20 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         var assistantMsg = ChatMessageConverter.FromAiMessage(lastMessage);
         _state = _state with { History = _state.History.Add(assistantMsg) };
 
+        // If the model included short user-facing text alongside tool calls,
+        // surface it immediately instead of waiting until the turn completes.
+        foreach (var content in lastMessage.Contents)
+        {
+            if (content is TextContent text && !string.IsNullOrWhiteSpace(text.Text))
+            {
+                EmitOutput(new TextOutput
+                {
+                    SessionId = _sessionId,
+                    Text = text.Text
+                }, OutputFilter.Text);
+            }
+        }
+
         // Emit tool call outputs to subscribers
         foreach (var tc in toolCalls)
         {
