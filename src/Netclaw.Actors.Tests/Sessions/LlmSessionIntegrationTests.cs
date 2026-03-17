@@ -321,6 +321,57 @@ public class LlmSessionIntegrationTests : TestKit
     }
 
     [Fact]
+    public async Task Tool_call_visibility_is_scoped_per_subscriber_filter_within_same_session()
+    {
+        _fakeChatClient.ToolCallsOnFirstCall =
+        [
+            new FunctionCallContent("call-1", "web_search",
+                new Dictionary<string, object?> { ["query"] = "test" })
+        ];
+        _fakeToolExecutor.Results["web_search"] = "search result";
+
+        var sessionId = new SessionId("test-channel/filter-tool-visibility");
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var toolAwareSub = CreateTestProbe("tool-aware-sub");
+        var textOnlySub = CreateTestProbe("text-only-sub");
+
+        await sessionManager.Ask<SessionJoined>(new JoinSession
+        {
+            SessionId = sessionId,
+            Subscriber = toolAwareSub,
+            Filter = OutputFilter.Text | OutputFilter.ToolCalls
+        }, TimeSpan.FromSeconds(3));
+        await toolAwareSub.ExpectMsgAsync<SessionJoined>();
+
+        await sessionManager.Ask<SessionJoined>(new JoinSession
+        {
+            SessionId = sessionId,
+            Subscriber = textOnlySub,
+            Filter = OutputFilter.TextOnly
+        }, TimeSpan.FromSeconds(3));
+        await textOnlySub.ExpectMsgAsync<SessionJoined>();
+
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Use a tool and answer"
+        }, TimeSpan.FromSeconds(3));
+
+        var toolCall = await toolAwareSub.ExpectMsgAsync<ToolCallOutput>(TimeSpan.FromSeconds(3));
+        Assert.Equal("web_search", toolCall.ToolName);
+
+        var toolAwareText = await toolAwareSub.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(6));
+        Assert.Contains("[fake] Response #2", toolAwareText.Text, StringComparison.OrdinalIgnoreCase);
+        await toolAwareSub.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
+        await toolAwareSub.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(200));
+
+        var textOnlyText = await textOnlySub.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(6));
+        Assert.Contains("[fake] Response #2", textOnlyText.Text, StringComparison.OrdinalIgnoreCase);
+        await textOnlySub.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
+        await textOnlySub.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(200));
+    }
+
+    [Fact]
     public async Task Two_sessions_are_routed_independently()
     {
         var session1 = new SessionId("channel-A/thread-1");
@@ -409,12 +460,16 @@ public class LlmSessionIntegrationTests : TestKit
         await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(6));
         await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(6));
 
-        // Second turn output (batched follow-up)
+        // Second buffered follow-up turn
         await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(6));
         await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(6));
 
-        // Only two LLM calls total
-        Assert.Equal(2, _fakeChatClient.CallCount);
+        // Third buffered follow-up turn
+        await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(6));
+        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(6));
+
+        // Three LLM calls total: initial turn plus two replayed follow-ups
+        Assert.Equal(3, _fakeChatClient.CallCount);
 
         await subscriber.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(300));
     }

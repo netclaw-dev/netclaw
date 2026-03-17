@@ -10,6 +10,8 @@ namespace Netclaw.Actors.Sessions;
 /// </summary>
 internal sealed record LlmResponseReceived
 {
+    public required long OperationId { get; init; }
+
     public required ChatResponse Response { get; init; }
 
     public bool StreamedText { get; init; }
@@ -24,6 +26,8 @@ internal sealed record LlmResponseReceived
 /// </summary>
 internal sealed record LlmResponseDeltaReceived
 {
+    public required long OperationId { get; init; }
+
     public required AIContent Content { get; init; }
 }
 
@@ -32,6 +36,8 @@ internal sealed record LlmResponseDeltaReceived
 /// </summary>
 internal sealed record LlmCallFailed
 {
+    public required long OperationId { get; init; }
+
     public required Exception Cause { get; init; }
 }
 
@@ -41,6 +47,8 @@ internal sealed record LlmCallFailed
 /// </summary>
 internal sealed record ToolExecutionCompleted
 {
+    public required long OperationId { get; init; }
+
     public required List<Protocol.SerializableChatMessage> ToolResults { get; init; }
     public List<FileAttachmentInfo> FileAttachments { get; init; } = [];
     public List<CompletedSubAgentRun> CompletedSubAgentRuns { get; init; } = [];
@@ -85,6 +93,8 @@ internal sealed record AcceptedSubAgentFinding
 /// </summary>
 internal sealed record ToolExecutionFailed
 {
+    public required long OperationId { get; init; }
+
     public required Exception Cause { get; init; }
 }
 
@@ -98,6 +108,13 @@ internal sealed record ProcessingWatchdogExpired
 
     public required string OperationName { get; init; }
 }
+
+internal sealed record TurnBudgetExpired
+{
+    public required long TurnId { get; init; }
+}
+
+internal sealed record ResumeBufferedReplay;
 
 /// <summary>
 /// Marshal a child actor creation request back onto the session actor thread.

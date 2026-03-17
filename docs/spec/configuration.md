@@ -147,10 +147,11 @@ Tuning parameters for LLM session behavior.
 | `CompactionThreshold` | double | `0.75` | Context usage ratio (0.0–1.0) at which compaction triggers. |
 | `SnapshotInterval` | int | `20` | Number of turns between persistence snapshots. |
 | `KeepRecentToolResults` | int | `3` | Recent tool call/result pairs kept in full during compaction. |
-| `MaxToolIterationsPerTurn` | int | `10` | Max tool execution rounds per turn before forcing a text response. |
+| `MaxToolIterationsPerTurn` | int | `10` | Max tool execution rounds per turn before forcing a no-tools degraded completion path. |
 | `SidecarLlmTimeoutSeconds` | int | `90` | Timeout for sidecar LLM calls (title generation, observer summaries, memory extraction). |
 | `TurnLlmTimeoutSeconds` | int | `180` | Timeout for the primary per-turn LLM streaming call before forcing an error/recovery path. |
 | `ToolExecutionTimeoutSeconds` | int | `90` | Timeout for one tool-execution batch before failing the turn safely. |
+| `MaxTurnDurationSeconds` | int | `300` | Absolute wall-clock timeout for an entire user turn across all LLM and tool iterations. |
 
 ### Tools
 

@@ -39,6 +39,7 @@ public sealed class SubAgentActor : ReceiveActor
     private CancellationTokenSource? _executionCts;
     private CancellationTokenRegistration _externalCancellationRegistration;
     private ToolExecutionContext _toolExecutionContext = ToolExecutionContext.Empty;
+    private long _operationId;
 
     public SubAgentActor(
         SubAgentDefinition definition,
@@ -98,6 +99,9 @@ public sealed class SubAgentActor : ReceiveActor
     {
         Receive<LlmResponseReceived>(msg =>
         {
+            if (msg.OperationId != _operationId)
+                return;
+
             var response = msg.Response;
             var lastMessage = response.Messages[^1];
 
@@ -115,6 +119,9 @@ public sealed class SubAgentActor : ReceiveActor
 
         Receive<ToolExecutionCompleted>(msg =>
         {
+            if (msg.OperationId != _operationId)
+                return;
+
             // Append tool results as MEAI messages and log each result
             foreach (var result in msg.ToolResults)
             {
@@ -143,12 +150,18 @@ public sealed class SubAgentActor : ReceiveActor
 
         Receive<ToolExecutionFailed>(msg =>
         {
+            if (msg.OperationId != _operationId)
+                return;
+
             _log.Error(msg.Cause, "SubAgent [{AgentName}] tool execution failed", _definition.Name);
             Complete(false, $"Tool execution failed: {msg.Cause.Message}");
         });
 
         Receive<LlmCallFailed>(msg =>
         {
+            if (msg.OperationId != _operationId)
+                return;
+
             _log.Error(msg.Cause, "SubAgent [{AgentName}] LLM call failed", _definition.Name);
             Complete(false, $"LLM call failed: {msg.Cause.Message}");
         });
@@ -180,13 +193,15 @@ public sealed class SubAgentActor : ReceiveActor
 
         var self = Self;
         var executor = new DispatchingToolExecutor(_toolRegistry);
+        var operationId = ++_operationId;
 
         _ = ExecuteToolsAsync(
             executor,
             toolCalls,
             _toolExecutionContext,
             _executionCts?.Token ?? CancellationToken.None,
-            self);
+            self,
+            operationId);
     }
 
     private void FireLlmCall(bool forceNoTools = false)
@@ -194,6 +209,7 @@ public sealed class SubAgentActor : ReceiveActor
         var self = Self;
         var client = _chatClient;
         var messages = new List<AiChatMessage>(_history);
+        var operationId = ++_operationId;
 
         ChatOptions? options = null;
         if (!forceNoTools && _aiTools.Count > 0)
@@ -204,7 +220,7 @@ public sealed class SubAgentActor : ReceiveActor
             };
         }
 
-        _ = InvokeLlmAsync(client, messages, options, _executionCts?.Token ?? CancellationToken.None, self);
+        _ = InvokeLlmAsync(client, messages, options, _executionCts?.Token ?? CancellationToken.None, self, operationId);
     }
 
     private void Complete(bool success, string output)
@@ -312,17 +328,17 @@ public sealed class SubAgentActor : ReceiveActor
     // ── Static async helpers (same pattern as LlmSessionActor) ──
 
     private static async Task InvokeLlmAsync(
-        IChatClient client, List<AiChatMessage> messages, ChatOptions? options, CancellationToken ct, IActorRef self)
+        IChatClient client, List<AiChatMessage> messages, ChatOptions? options, CancellationToken ct, IActorRef self, long operationId)
     {
         try
         {
             // No streaming for subagents — just get the complete response
             var response = await client.GetResponseAsync(messages, options, ct);
-            self.Tell(new LlmResponseReceived { Response = response });
+            self.Tell(new LlmResponseReceived { OperationId = operationId, Response = response });
         }
         catch (Exception ex)
         {
-            self.Tell(new LlmCallFailed { Cause = ex });
+            self.Tell(new LlmCallFailed { OperationId = operationId, Cause = ex });
         }
     }
 
@@ -331,7 +347,8 @@ public sealed class SubAgentActor : ReceiveActor
         List<FunctionCallContent> toolCalls,
         ToolExecutionContext executionContext,
         CancellationToken ct,
-        IActorRef self)
+        IActorRef self,
+        long operationId)
     {
         try
         {
@@ -363,12 +380,13 @@ public sealed class SubAgentActor : ReceiveActor
             var results = await Task.WhenAll(tasks);
             self.Tell(new ToolExecutionCompleted
             {
+                OperationId = operationId,
                 ToolResults = results.ToList()
             });
         }
         catch (Exception ex)
         {
-            self.Tell(new ToolExecutionFailed { Cause = ex });
+            self.Tell(new ToolExecutionFailed { OperationId = operationId, Cause = ex });
         }
     }
 

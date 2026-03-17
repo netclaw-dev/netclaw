@@ -99,6 +99,60 @@ public sealed class SerializationRoundTripTests
         Assert.Equal(ChatRole.Assistant, result.AssistantReply.Role);
         Assert.Equal("Hi there!", result.AssistantReply.Content);
         Assert.Equal(original.RecordedAtMs, result.RecordedAtMs);
+        Assert.False(result.ConsumesBufferedInput);
+    }
+
+    [Fact]
+    public void TurnFailedRecorded_round_trips()
+    {
+        var ts = new DateTimeOffset(2026, 2, 21, 10, 2, 0, TimeSpan.Zero);
+        var original = new TurnFailedRecorded
+        {
+            SessionId = new SessionId("C99999/1708531200.000100"),
+            UserMessage = new SerializableChatMessage
+            {
+                Role = ChatRole.User,
+                Content = "Hello"
+            },
+            AssistantReply = new SerializableChatMessage
+            {
+                Role = ChatRole.Assistant,
+                Content = "Timed out"
+            },
+            RecordedAtMs = ts.ToUnixTimeMilliseconds(),
+            ConsumesBufferedInput = true,
+            ErrorCategory = (int)ErrorCategory.Timeout
+        };
+
+        var result = RoundTrip(original);
+
+        Assert.Equal(original.SessionId, result.SessionId);
+        Assert.Equal("Hello", result.UserMessage.Content);
+        Assert.Equal("Timed out", result.AssistantReply.Content);
+        Assert.True(result.ConsumesBufferedInput);
+        Assert.Equal((int)ErrorCategory.Timeout, result.ErrorCategory);
+    }
+
+    [Fact]
+    public void BufferedInputAccepted_round_trips()
+    {
+        var ts = new DateTimeOffset(2026, 2, 21, 10, 3, 0, TimeSpan.Zero);
+        var original = new BufferedInputAccepted
+        {
+            SessionId = new SessionId("C99999/1708531200.000100"),
+            UserMessage = new SerializableChatMessage
+            {
+                Role = ChatRole.User,
+                Content = "Follow-up"
+            },
+            AcceptedAtMs = ts.ToUnixTimeMilliseconds()
+        };
+
+        var result = RoundTrip(original);
+
+        Assert.Equal(original.SessionId, result.SessionId);
+        Assert.Equal("Follow-up", result.UserMessage.Content);
+        Assert.Equal(original.AcceptedAtMs, result.AcceptedAtMs);
     }
 
     [Fact]

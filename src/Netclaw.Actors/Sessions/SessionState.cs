@@ -24,6 +24,9 @@ public sealed record SessionState
 
     public string? Title { get; init; }
 
+    public ImmutableList<SerializableChatMessage> PendingBufferedInputs { get; init; } =
+        ImmutableList<SerializableChatMessage>.Empty;
+
     // ── Event application (pure functions) ──
 
     public SessionState Apply(SystemPromptSet evt)
@@ -45,10 +48,29 @@ public sealed record SessionState
 
     public SessionState Apply(TurnRecorded evt)
     {
+        var pending = evt.ConsumesBufferedInput && PendingBufferedInputs.Count > 0
+            ? PendingBufferedInputs.RemoveAt(0)
+            : PendingBufferedInputs;
+
         return this with
         {
             History = History.Add(evt.UserMessage).Add(evt.AssistantReply),
-            TurnCount = TurnCount + 1
+            TurnCount = TurnCount + 1,
+            PendingBufferedInputs = pending
+        };
+    }
+
+    public SessionState Apply(TurnFailedRecorded evt)
+    {
+        var pending = evt.ConsumesBufferedInput && PendingBufferedInputs.Count > 0
+            ? PendingBufferedInputs.RemoveAt(0)
+            : PendingBufferedInputs;
+
+        return this with
+        {
+            History = History.Add(evt.UserMessage).Add(evt.AssistantReply),
+            TurnCount = TurnCount + 1,
+            PendingBufferedInputs = pending
         };
     }
 
@@ -68,6 +90,11 @@ public sealed record SessionState
 
         builder.AddRange(evt.CompactedMessages);
         return this with { History = builder.ToImmutable() };
+    }
+
+    public SessionState Apply(BufferedInputAccepted evt)
+    {
+        return this with { PendingBufferedInputs = PendingBufferedInputs.Add(evt.UserMessage) };
     }
 
     // ── Command helpers ──
@@ -105,6 +132,9 @@ public sealed record SessionState
             TurnCount = TurnCount + 1
         };
     }
+
+    public SerializableChatMessage? PeekPendingBufferedInput()
+        => PendingBufferedInputs.Count > 0 ? PendingBufferedInputs[0] : null;
 
     /// <summary>
     /// Add a transient system nudge to history to correct LLM behavior (e.g., empty response recovery).
@@ -208,7 +238,8 @@ public sealed record SessionState
         {
             History = new List<SerializableChatMessage>(History),
             TurnCount = TurnCount,
-            Title = Title
+            Title = Title,
+            PendingBufferedInputs = new List<SerializableChatMessage>(PendingBufferedInputs)
         };
     }
 
@@ -218,7 +249,8 @@ public sealed record SessionState
         {
             History = ImmutableList.CreateRange(snapshot.History),
             TurnCount = snapshot.TurnCount,
-            Title = snapshot.Title
+            Title = snapshot.Title,
+            PendingBufferedInputs = ImmutableList.CreateRange(snapshot.PendingBufferedInputs)
         };
     }
 }

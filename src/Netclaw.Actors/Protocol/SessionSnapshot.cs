@@ -17,4 +17,7 @@ public sealed class SessionSnapshot
 
     [ProtoMember(3)]
     public string? Title { get; set; }
+
+    [ProtoMember(4)]
+    public List<SerializableChatMessage> PendingBufferedInputs { get; set; } = new();
 }

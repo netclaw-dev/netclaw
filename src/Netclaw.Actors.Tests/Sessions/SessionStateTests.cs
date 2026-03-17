@@ -66,6 +66,65 @@ public class SessionStateTests
     }
 
     [Fact]
+    public void Apply_TurnFailedRecorded_adds_messages_and_increments_turn()
+    {
+        var state = SessionState.Empty;
+        var evt = new TurnFailedRecorded
+        {
+            SessionId = TestSessionId,
+            UserMessage = new SerializableChatMessage { Role = ChatRole.User, Content = "Hello" },
+            AssistantReply = new SerializableChatMessage { Role = ChatRole.Assistant, Content = "Something went wrong" },
+            ErrorCategory = (int)ErrorCategory.Timeout,
+            RecordedAtMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+        };
+
+        var next = state.Apply(evt);
+
+        Assert.Equal(2, next.History.Count);
+        Assert.Equal(ChatRole.User, next.History[0].Role);
+        Assert.Equal(ChatRole.Assistant, next.History[1].Role);
+        Assert.Equal(1, next.TurnCount);
+    }
+
+    [Fact]
+    public void Apply_BufferedInputAccepted_enqueues_pending_input()
+    {
+        var state = SessionState.Empty;
+        var next = state.Apply(new BufferedInputAccepted
+        {
+            SessionId = TestSessionId,
+            UserMessage = new SerializableChatMessage { Role = ChatRole.User, Content = "Buffered" },
+            AcceptedAtMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+        });
+
+        Assert.Single(next.PendingBufferedInputs);
+        Assert.Equal("Buffered", next.PendingBufferedInputs[0].Content);
+    }
+
+    [Fact]
+    public void Apply_TurnRecorded_consumes_buffered_input_when_flagged()
+    {
+        var state = SessionState.Empty.Apply(new BufferedInputAccepted
+        {
+            SessionId = TestSessionId,
+            UserMessage = new SerializableChatMessage { Role = ChatRole.User, Content = "Buffered" },
+            AcceptedAtMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+        });
+
+        var next = state.Apply(new TurnRecorded
+        {
+            SessionId = TestSessionId,
+            UserMessage = new SerializableChatMessage { Role = ChatRole.User, Content = "Buffered" },
+            AssistantReply = new SerializableChatMessage { Role = ChatRole.Assistant, Content = "Done" },
+            ConsumesBufferedInput = true,
+            RecordedAtMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+        });
+
+        Assert.Empty(next.PendingBufferedInputs);
+        Assert.Equal(2, next.History.Count);
+    }
+
+    [Fact]
     public void Apply_SystemPromptSet_inserts_at_beginning()
     {
         var state = SessionState.Empty;
@@ -267,7 +326,13 @@ public class SessionStateTests
                 UserMessage = new SerializableChatMessage { Role = ChatRole.User, Content = "Hello" },
                 AssistantReply = new SerializableChatMessage { Role = ChatRole.Assistant, Content = "Hi" },
             })
-            .Apply(new SessionTitleSet { SessionId = TestSessionId, Title = "Test title" });
+            .Apply(new SessionTitleSet { SessionId = TestSessionId, Title = "Test title" })
+            .Apply(new BufferedInputAccepted
+            {
+                SessionId = TestSessionId,
+                UserMessage = new SerializableChatMessage { Role = ChatRole.User, Content = "Buffered later" },
+                AcceptedAtMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+            });
 
         var snapshot = state.ToSnapshot();
         var restored = SessionState.FromSnapshot(snapshot);
@@ -275,12 +340,15 @@ public class SessionStateTests
         Assert.Equal(state.History.Count, restored.History.Count);
         Assert.Equal(state.TurnCount, restored.TurnCount);
         Assert.Equal(state.Title, restored.Title);
+        Assert.Equal(state.PendingBufferedInputs.Count, restored.PendingBufferedInputs.Count);
 
         for (int i = 0; i < state.History.Count; i++)
         {
             Assert.Equal(state.History[i].Role, restored.History[i].Role);
             Assert.Equal(state.History[i].Content, restored.History[i].Content);
         }
+
+        Assert.Equal("Buffered later", restored.PendingBufferedInputs[0].Content);
     }
 
     [Fact]

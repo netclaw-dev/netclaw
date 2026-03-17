@@ -111,7 +111,7 @@ public class MaxToolIterationTests : TestKit
     }
 
     [Fact]
-    public async Task Tool_iteration_limit_fails_turn_when_model_keeps_emitting_tool_calls_without_tools()
+    public async Task Tool_iteration_limit_degrades_to_text_when_model_keeps_emitting_tool_calls_without_tools()
     {
         _fakeChatClient.ToolCallsOnFirstCall =
         [
@@ -143,9 +143,8 @@ public class MaxToolIterationTests : TestKit
         for (var i = 0; i < 3; i++)
             await subscriber.ExpectMsgAsync<ToolCallOutput>(TimeSpan.FromSeconds(3));
 
-        var error = await subscriber.ExpectMsgAsync<ErrorOutput>(TimeSpan.FromSeconds(5));
-        Assert.Equal(ErrorCategory.ProviderFailure, error.Category);
-        Assert.Contains("Please try rephrasing", error.Message, StringComparison.OrdinalIgnoreCase);
+        var text = await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(5));
+        Assert.Contains("tool-use limit", text.Text, StringComparison.OrdinalIgnoreCase);
 
         await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
 

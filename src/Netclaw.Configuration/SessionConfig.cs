@@ -123,6 +123,13 @@ public sealed record SessionConfig
     public int ToolExecutionTimeoutSeconds { get; init; } = 90;
 
     /// <summary>
+    /// Absolute wall-clock timeout in seconds for an entire user turn across
+    /// all LLM and tool iterations. Prevents turns from remaining active
+    /// indefinitely even when individual operations keep making partial progress.
+    /// </summary>
+    public int MaxTurnDurationSeconds { get; init; } = 300;
+
+    /// <summary>
     /// How long a session can be idle before passivating.
     /// The actor saves a snapshot and stops itself; re-creation by
     /// <c>GenericChildPerEntityParent</c> on next message recovers state from journal.

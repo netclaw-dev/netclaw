@@ -53,7 +53,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     private readonly ILoggingAdapter _log;
 
     // Transient state (not persisted)
-    private readonly List<SendUserMessage> _buffer = new();
     private readonly Dictionary<IActorRef, OutputFilter> _subscribers = new();
     private readonly List<AITool> _availableTools = new();
     private readonly ToolRegistry? _fullRegistry;
@@ -69,6 +68,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     private const int MaxPreToolEmptyResponseRetries = 2;
     private const string EmptyResponseFallbackMessage = "I didn't manage to produce a reply. Please try rephrasing or sending your request again.";
+    private const string ToolBudgetFallbackMessage = "I hit my tool-use limit before I could finish. Please narrow the request or tell me what to focus on next, and I'll continue from there.";
+    private const string TurnBudgetFallbackMessage = "I spent too long working on that turn and had to stop. Please try again with a narrower follow-up.";
 
     // Whether we already sent a post-tool empty-response nudge in this tool chain
     private bool _postToolNudgeSent;
@@ -84,8 +85,11 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     // Processing watchdog state (non-persistent)
     private static readonly object ProcessingWatchdogTimerKey = new();
+    private static readonly object TurnBudgetTimerKey = new();
     private long _processingOperationId;
     private string? _processingOperationName;
+    private long _activeTurnBudgetId;
+    private SerializableChatMessage? _activeBufferedReplayMessage;
 
     // Per-turn diagnostic correlation (ephemeral)
     private string? _activeTurnId;
@@ -162,6 +166,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             _systemPromptRecovered = true;
         });
         Recover<TurnRecorded>(evt => _state = _state.Apply(evt));
+        Recover<TurnFailedRecorded>(evt => _state = _state.Apply(evt));
+        Recover<BufferedInputAccepted>(evt => _state = _state.Apply(evt));
         Recover<SessionTitleSet>(evt => _state = _state.Apply(evt));
         Recover<SessionCompacted>(evt => _state = _state.Apply(evt));
         Recover<SnapshotOffer>(offer =>
@@ -185,6 +191,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             }
 
             Become(Ready);
+
+            if (_state.PendingBufferedInputs.Count > 0)
+                Self.Tell(new ResumeBufferedReplay());
 
             if (_sessionLogsBasePath is not null)
             {
@@ -216,8 +225,10 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         });
 
         Command<ProcessingWatchdogExpired>(_ => { });
+        Command<TurnBudgetExpired>(_ => { });
         Command<CompactionWorkCompleted>(_ => { });
         Command<CompactionWorkFailed>(_ => { });
+        Command<ResumeBufferedReplay>(_ => ResumeBufferedReplayOrBecomeReady());
         Command<SpawnChildActorRequest>(msg => Sender.Tell(Context.ActorOf(msg.Props, msg.ActorName)));
 
         Command<SendUserMessage>(cmd =>
@@ -231,11 +242,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 cmd.Content?.Length ?? 0);
             _logActor?.Tell(cmd);
 
-            _toolIterationCount = 0;
-            _postToolNudgeSent = false;
-            _preToolEmptyResponseCount = 0;
-            _forceNoToolsActive = false;
-            PrepareDiscoveredToolsForNewTurn();
+            ResetTurnScopedState();
 
             // Modality gate: strip unsupported media references
             var mediaRefs = cmd.MediaReferences;
@@ -275,10 +282,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             }
 
             var userContent = cmd.Content ?? string.Empty;
-            _state = _state.AddUserMessage(userContent, mediaRefs.Count > 0 ? mediaRefs : null);
+            var userMessage = CreateUserMessage(userContent, mediaRefs.Count > 0 ? mediaRefs : null);
             TryReplyAck();
-            FireLlmCall(userContent);
-            Become(Processing);
+            BeginTurn(userMessage, consumesBufferedInput: false);
         });
     }
 
@@ -292,7 +298,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         Command<SendUserMessage>(cmd =>
         {
             _log.Info("Buffering user message (LLM call in progress)");
-            _buffer.Add(cmd);
+            BufferBusyTurnInput(cmd);
             TryReplyAck();
         });
 
@@ -301,6 +307,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         Command<LlmResponseReceived>(msg =>
         {
+            if (!IsCurrentProcessingOperation(msg.OperationId, "llm-call"))
+                return;
+
             StopProcessingWatchdog();
 
             var response = msg.Response;
@@ -314,10 +323,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                     "turn_force_no_tools_violation toolCallCount={ToolCallCount} max={Max}",
                     toolCalls.Count,
                     _config.MaxToolIterationsPerTurn);
-                FailCurrentTurn(
-                    EmptyResponseFallbackMessage,
-                    new InvalidOperationException("LLM continued requesting tools after tool execution was disabled for this turn."),
-                    ErrorCategory.ProviderFailure);
+                CompleteCurrentTurnWithDeterministicText(ToolBudgetFallbackMessage);
                 return;
             }
 
@@ -386,6 +392,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         Command<LlmResponseDeltaReceived>(msg =>
         {
+            if (!IsCurrentProcessingOperation(msg.OperationId, "llm-call"))
+                return;
+
             RefreshProcessingWatchdogIfActive();
 
             switch (msg.Content)
@@ -410,6 +419,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         Command<ToolExecutionCompleted>(msg =>
         {
+            if (!IsCurrentProcessingOperation(msg.OperationId, "tool-execution"))
+                return;
+
             StopProcessingWatchdog();
 
             var hasVerifiedToolFinding = msg.ToolResults.Any(r =>
@@ -574,6 +586,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         Command<ToolExecutionFailed>(msg =>
         {
+            if (!IsCurrentProcessingOperation(msg.OperationId, "tool-execution"))
+                return;
+
             StopProcessingWatchdog();
             TurnLog().Error(msg.Cause, "turn_tool_execution_failed");
 
@@ -584,6 +599,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         Command<LlmCallFailed>(msg =>
         {
+            if (!IsCurrentProcessingOperation(msg.OperationId, "llm-call"))
+                return;
+
             StopProcessingWatchdog();
             TurnLog().Error(msg.Cause, "turn_llm_call_failed");
 
@@ -611,6 +629,17 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             FailCurrentTurn("I encountered a timeout while processing your message. Please try again.", timeoutCause, ErrorCategory.Timeout);
         });
 
+        Command<TurnBudgetExpired>(msg =>
+        {
+            if (!IsCurrentTurnBudget(msg))
+                return;
+
+            StopProcessingWatchdog();
+            TurnLog().Warning("turn_wall_clock_budget_exceeded maxSeconds={MaxSeconds}", _config.MaxTurnDurationSeconds);
+            FailCurrentTurn(TurnBudgetFallbackMessage, new TimeoutException(
+                $"Turn exceeded wall-clock budget of {_config.MaxTurnDurationSeconds}s"), ErrorCategory.Timeout);
+        });
+
         Command<SpawnChildActorRequest>(msg => Sender.Tell(Context.ActorOf(msg.Props, msg.ActorName)));
     }
 
@@ -625,9 +654,11 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         Command<SendUserMessage>(cmd =>
         {
             _log.Info("Buffering user message (compaction in progress)");
-            _buffer.Add(cmd);
+            BufferBusyTurnInput(cmd);
             TryReplyAck();
         });
+
+        Command<ResumeBufferedReplay>(_ => { });
 
         Command<ProcessingWatchdogExpired>(msg =>
         {
@@ -656,9 +687,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         Command<CompactionTriggered>(msg =>
         {
             var timeout = GetCompactionTimeout();
-            StartProcessingWatchdog("compaction", timeout);
-
-            var operationId = _processingOperationId;
+            var operationId = StartProcessingWatchdog("compaction", timeout);
             var stateSnapshot = _state;
             var self = Self;
             var log = _log;
@@ -802,22 +831,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     private void DrainBufferOrReady()
     {
-        if (_buffer.Count > 0)
-        {
-            _log.Info("Post-compaction: draining {BufferCount} buffered message(s)", _buffer.Count);
-            foreach (var buffered in _buffer)
-            {
-                var refs = buffered.MediaReferences.Count > 0 ? buffered.MediaReferences : null;
-                _state = _state.AddUserMessage(buffered.Content, refs);
-            }
-            _buffer.Clear();
-            FireLlmCall();
-            Become(Processing);
-        }
-        else
-        {
-            Become(Ready);
-        }
+        ResumeBufferedReplayOrBecomeReady();
     }
 
     private TimeSpan GetCompactionTimeout()
@@ -1151,7 +1165,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         var maxInlineToolResultChars = _config.MaxInlineToolResultChars;
         var toolExecutionTimeout = TimeSpan.FromSeconds(Math.Max(1, _config.ToolExecutionTimeoutSeconds));
 
-        StartProcessingWatchdog("tool-execution", toolExecutionTimeout);
+        var operationId = StartProcessingWatchdog("tool-execution", toolExecutionTimeout);
 
         // Capture subscriber snapshot for subagent activity notifications.
         // These are emitted directly from the tool execution thread via Tell(),
@@ -1180,7 +1194,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 timeout: toolExecutionTimeout,
                 cancellationToken: ct);
 
-        _ = ExecuteToolsAsync(executor, toolCalls, sessionId, auditLogger, tp, sessionDir, maxInlineToolResultChars, toolExecutionTimeout, self, emitSubAgentOutput, spawnChildActor);
+        _ = ExecuteToolsAsync(executor, toolCalls, sessionId, auditLogger, tp, sessionDir, maxInlineToolResultChars, toolExecutionTimeout, self, emitSubAgentOutput, spawnChildActor, operationId);
     }
 
     private void HandleTextResponse(
@@ -1193,13 +1207,16 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         _toolIterationCount = 0; // Reset for potential buffer drain (new logical turn)
 
         var reply = ChatMessageConverter.FromAiMessage(lastMessage);
-        var userMsg = _state.FindLastUserMessage();
+        var consumesBufferedInput = _activeBufferedReplayMessage is not null;
+        var userMsg = consumesBufferedInput ? _activeBufferedReplayMessage : _state.FindLastUserMessage();
 
         // Track input token count for compaction threshold check
         if (usage?.InputTokenCount is > 0)
         {
             _lastInputTokenCount = usage.InputTokenCount.Value;
         }
+
+        StopTurnBudget();
 
         var turnEvent = new TurnRecorded
         {
@@ -1210,7 +1227,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 Content = string.Empty
             },
             AssistantReply = reply,
-            RecordedAtMs = NowMs()
+            RecordedAtMs = NowMs(),
+            ConsumesBufferedInput = consumesBufferedInput
         };
 
         Persist(turnEvent, evt =>
@@ -1218,8 +1236,12 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             _state = _state with
             {
                 History = _state.History.Add(evt.AssistantReply),
-                TurnCount = _state.TurnCount + 1
+                TurnCount = _state.TurnCount + 1,
+                PendingBufferedInputs = evt.ConsumesBufferedInput && _state.PendingBufferedInputs.Count > 0
+                    ? _state.PendingBufferedInputs.RemoveAt(0)
+                    : _state.PendingBufferedInputs
             };
+            _activeBufferedReplayMessage = null;
 
             EmitResponseOutputs(lastMessage, usage, includeText: true, includeThinking: true);
             MaybeSnapshot();
@@ -1269,22 +1291,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     private void DrainBufferedMessagesOrBecomeReady()
     {
-        if (_buffer.Count > 0)
-        {
-            TurnLog().Info("turn_buffer_drain count={BufferCount}", _buffer.Count);
-            foreach (var buffered in _buffer)
-            {
-                var refs = buffered.MediaReferences.Count > 0 ? buffered.MediaReferences : null;
-                _state = _state.AddUserMessage(buffered.Content, refs);
-            }
-
-            _buffer.Clear();
-            FireLlmCall();
-            Become(Processing);
-            return;
-        }
-
-        Become(Ready);
+        ResumeBufferedReplayOrBecomeReady();
     }
 
     private bool ShouldCompact()
@@ -1413,12 +1420,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     protected override void PreRestart(Exception reason, object message)
     {
-        foreach (var buffered in _buffer)
-        {
-            Self.Tell(buffered);
-        }
-        _buffer.Clear();
-
         base.PreRestart(reason, message);
     }
 
@@ -1559,6 +1560,94 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     private long NowMs() => _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
 
+    private static SerializableChatMessage CreateUserMessage(
+        string content,
+        List<SerializableMediaReference>? mediaReferences = null)
+    {
+        var msg = new SerializableChatMessage
+        {
+            Role = Protocol.ChatRole.User,
+            Content = content
+        };
+
+        if (mediaReferences is { Count: > 0 })
+            msg.MediaReferences = mediaReferences;
+
+        return msg;
+    }
+
+    private void ResetTurnScopedState()
+    {
+        _toolIterationCount = 0;
+        _postToolNudgeSent = false;
+        _preToolEmptyResponseCount = 0;
+        _forceNoToolsActive = false;
+        _activeBufferedReplayMessage = null;
+        PrepareDiscoveredToolsForNewTurn();
+    }
+
+    private void BeginTurn(SerializableChatMessage userMessage, bool consumesBufferedInput)
+    {
+        _activeBufferedReplayMessage = consumesBufferedInput ? userMessage : null;
+        _state = _state with { History = _state.History.Add(userMessage) };
+        StartTurnBudget();
+        FireLlmCall(userMessage.Content);
+        Become(Processing);
+    }
+
+    private void BufferBusyTurnInput(SendUserMessage cmd)
+    {
+        var refs = cmd.MediaReferences.Count > 0 ? cmd.MediaReferences : null;
+        var evt = new BufferedInputAccepted
+        {
+            SessionId = _sessionId,
+            UserMessage = CreateUserMessage(cmd.Content ?? string.Empty, refs),
+            AcceptedAtMs = NowMs()
+        };
+
+        Persist(evt, persisted =>
+        {
+            _state = _state.Apply(persisted);
+            TurnLog().Info("turn_buffered_input_accepted count={BufferCount}", _state.PendingBufferedInputs.Count);
+        });
+    }
+
+    private void ResumeBufferedReplayOrBecomeReady()
+    {
+        var nextBuffered = _state.PeekPendingBufferedInput();
+        if (nextBuffered is null)
+        {
+            _activeBufferedReplayMessage = null;
+            Become(Ready);
+            return;
+        }
+
+        ResetTurnScopedState();
+        TurnLog().Info("turn_buffer_drain count={BufferCount}", _state.PendingBufferedInputs.Count);
+        BeginTurn(nextBuffered, consumesBufferedInput: true);
+    }
+
+    private void StartTurnBudget()
+    {
+        _activeTurnBudgetId++;
+        Timers.StartSingleTimer(
+            TurnBudgetTimerKey,
+            new TurnBudgetExpired { TurnId = _activeTurnBudgetId },
+            TimeSpan.FromSeconds(Math.Max(1, _config.MaxTurnDurationSeconds)));
+    }
+
+    private void StopTurnBudget()
+    {
+        Timers.Cancel(TurnBudgetTimerKey);
+    }
+
+    private bool IsCurrentTurnBudget(TurnBudgetExpired msg)
+        => msg.TurnId == _activeTurnBudgetId;
+
+    private bool IsCurrentProcessingOperation(long operationId, string operationName)
+        => operationId == _processingOperationId
+           && string.Equals(operationName, _processingOperationName, StringComparison.Ordinal);
+
     private void SetSystemPrompt()
     {
         var content = _promptProvider.GetSystemPrompt();
@@ -1628,14 +1717,14 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             };
         }
 
-        StartProcessingWatchdog("llm-call", timeout);
+        var operationId = StartProcessingWatchdog("llm-call", timeout);
 
         TurnLog().Info("turn_llm_call_start messages={MessageCount} toolsEnabled={ToolsEnabled} forceNoTools={ForceNoTools}",
             messages.Count,
             options?.Tools?.Count > 0,
             forceNoTools);
 
-        _ = InvokeLlmAsync(client, messages, options, self, timeout);
+        _ = InvokeLlmAsync(client, messages, options, self, timeout, operationId);
     }
 
     private AutomaticRecallResult ResolveRecallBundle(string? recallQuery)
@@ -1813,18 +1902,20 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         List<AiChatMessage> messages,
         ChatOptions? options,
         IActorRef self,
-        TimeSpan timeout)
+        TimeSpan timeout,
+        long operationId)
     {
         try
         {
             using var cts = new CancellationTokenSource(timeout);
-            var response = await InvokeStreamingResponseAsync(client, messages, options, self, cts.Token);
+            var response = await InvokeStreamingResponseAsync(client, messages, options, self, cts.Token, operationId);
             self.Tell(response);
         }
         catch (OperationCanceledException ex)
         {
             self.Tell(new LlmCallFailed
             {
+                OperationId = operationId,
                 Cause = new TimeoutException(
                     $"LLM call exceeded timeout of {timeout.TotalSeconds:F0}s",
                     ex)
@@ -1832,7 +1923,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         }
         catch (Exception ex)
         {
-            self.Tell(new LlmCallFailed { Cause = ex });
+            self.Tell(new LlmCallFailed { OperationId = operationId, Cause = ex });
         }
     }
 
@@ -1841,7 +1932,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         List<AiChatMessage> messages,
         ChatOptions? options,
         IActorRef self,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        long operationId)
     {
         var contents = new List<AIContent>();
         var updates = new List<ChatResponseUpdate>();
@@ -1875,11 +1967,12 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                                 {
                                     self.Tell(new LlmResponseDeltaReceived
                                     {
+                                        OperationId = operationId,
                                         Content = new TextContent(pendingTextDelta)
                                     });
                                 }
 
-                                self.Tell(new LlmResponseDeltaReceived { Content = content });
+                                self.Tell(new LlmResponseDeltaReceived { OperationId = operationId, Content = content });
                             }
                             break;
 
@@ -1896,11 +1989,12 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                                 {
                                     self.Tell(new LlmResponseDeltaReceived
                                     {
+                                        OperationId = operationId,
                                         Content = new TextReasoningContent(pendingThinkingDelta)
                                     });
                                 }
 
-                                self.Tell(new LlmResponseDeltaReceived { Content = content });
+                                self.Tell(new LlmResponseDeltaReceived { OperationId = operationId, Content = content });
                             }
                             break;
 
@@ -1928,6 +2022,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         return new LlmResponseReceived
         {
+            OperationId = operationId,
             Response = response,
             StreamedText = textDeltaCount > 1,
             StreamedThinking = thinkingDeltaCount > 1,
@@ -1952,7 +2047,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         TimeSpan timeout,
         IActorRef self,
         Action<SubAgentOutput> emitSubAgentOutput,
-        Func<object, string, CancellationToken, Task<object>> spawnChildActor)
+        Func<object, string, CancellationToken, Task<object>> spawnChildActor,
+        long operationId)
     {
         try
         {
@@ -1975,6 +2071,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             var fileAttachments = results.SelectMany(r => r.FileAttachments).ToList();
             self.Tell(new ToolExecutionCompleted
             {
+                OperationId = operationId,
                 ToolResults = results.Select(r => r.Message).ToList(),
                 FileAttachments = fileAttachments,
                 CompletedSubAgentRuns = results
@@ -1989,6 +2086,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         {
             self.Tell(new ToolExecutionFailed
             {
+                OperationId = operationId,
                 Cause = new TimeoutException(
                     $"Tool execution exceeded timeout of {timeout.TotalSeconds:F0}s",
                     ex)
@@ -1996,7 +2094,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         }
         catch (Exception ex)
         {
-            self.Tell(new ToolExecutionFailed { Cause = ex });
+            self.Tell(new ToolExecutionFailed { OperationId = operationId, Cause = ex });
         }
     }
 
@@ -2521,7 +2619,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         }, OutputFilter.Usage);
     }
 
-    private void StartProcessingWatchdog(string operationName, TimeSpan timeout)
+    private long StartProcessingWatchdog(string operationName, TimeSpan timeout)
     {
         _processingOperationId++;
         _processingOperationName = operationName;
@@ -2534,6 +2632,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 OperationName = operationName
             },
             timeout);
+
+        return _processingOperationId;
     }
 
     private void RefreshProcessingWatchdogIfActive()
@@ -2562,9 +2662,71 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         _processingOperationName = null;
     }
 
+    private void CompleteCurrentTurnWithDeterministicText(string text)
+    {
+        var consumesBufferedInput = _activeBufferedReplayMessage is not null;
+        var userMessage = consumesBufferedInput ? _activeBufferedReplayMessage : _state.FindLastUserMessage();
+        var reply = new SerializableChatMessage
+        {
+            Role = Protocol.ChatRole.Assistant,
+            Content = text
+        };
+
+        StopTurnBudget();
+
+        var evt = new TurnRecorded
+        {
+            SessionId = _sessionId,
+            UserMessage = userMessage ?? new SerializableChatMessage
+            {
+                Role = Protocol.ChatRole.User,
+                Content = string.Empty
+            },
+            AssistantReply = reply,
+            RecordedAtMs = NowMs(),
+            ConsumesBufferedInput = consumesBufferedInput
+        };
+
+        Persist(evt, persisted =>
+        {
+            _state = _state with
+            {
+                History = _state.History.Add(persisted.AssistantReply),
+                TurnCount = _state.TurnCount + 1,
+                PendingBufferedInputs = persisted.ConsumesBufferedInput && _state.PendingBufferedInputs.Count > 0
+                    ? _state.PendingBufferedInputs.RemoveAt(0)
+                    : _state.PendingBufferedInputs
+            };
+            _activeBufferedReplayMessage = null;
+
+            EmitOutput(new TextOutput
+            {
+                SessionId = _sessionId,
+                Text = text
+            }, OutputFilter.Text);
+            EmitOutput(new TurnCompleted
+            {
+                SessionId = _sessionId,
+                TurnNumber = _state.TurnCount
+            });
+
+            MaybeSnapshot();
+            MaybeGenerateTitle();
+            DrainBufferedMessagesOrBecomeReady();
+        });
+    }
+
     private void FailCurrentTurn(string errorMessage, Exception cause, ErrorCategory category = ErrorCategory.Unknown)
     {
-        _state = _state.AddErrorReply(errorMessage);
+        var consumesBufferedInput = _activeBufferedReplayMessage is not null;
+        var userMessage = consumesBufferedInput ? _activeBufferedReplayMessage : _state.FindLastUserMessage();
+        var reply = new SerializableChatMessage
+        {
+            Role = Protocol.ChatRole.Assistant,
+            Content = errorMessage
+        };
+
+        StopTurnBudget();
 
         var correlationId = Guid.NewGuid();
 
@@ -2574,21 +2736,48 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             correlationId,
             errorMessage);
 
-        EmitOutput(new ErrorOutput
+        var evt = new TurnFailedRecorded
         {
             SessionId = _sessionId,
-            Message = errorMessage,
-            Category = category,
-            CorrelationId = correlationId,
-            Cause = cause
-        });
-        EmitOutput(new TurnCompleted
-        {
-            SessionId = _sessionId,
-            TurnNumber = _state.TurnCount
-        });
+            UserMessage = userMessage ?? new SerializableChatMessage
+            {
+                Role = Protocol.ChatRole.User,
+                Content = string.Empty
+            },
+            AssistantReply = reply,
+            RecordedAtMs = NowMs(),
+            ConsumesBufferedInput = consumesBufferedInput,
+            ErrorCategory = (int)category
+        };
 
-        DrainBufferedMessagesOrBecomeReady();
+        Persist(evt, persisted =>
+        {
+            _state = _state with
+            {
+                History = _state.History.Add(persisted.AssistantReply),
+                TurnCount = _state.TurnCount + 1,
+                PendingBufferedInputs = persisted.ConsumesBufferedInput && _state.PendingBufferedInputs.Count > 0
+                    ? _state.PendingBufferedInputs.RemoveAt(0)
+                    : _state.PendingBufferedInputs
+            };
+            _activeBufferedReplayMessage = null;
+
+            EmitOutput(new ErrorOutput
+            {
+                SessionId = _sessionId,
+                Message = errorMessage,
+                Category = category,
+                CorrelationId = correlationId,
+                Cause = cause
+            });
+            EmitOutput(new TurnCompleted
+            {
+                SessionId = _sessionId,
+                TurnNumber = _state.TurnCount
+            });
+
+            DrainBufferedMessagesOrBecomeReady();
+        });
     }
 
     private void EmitOutput(SessionOutput output, OutputFilter requiredFlag = OutputFilter.None)

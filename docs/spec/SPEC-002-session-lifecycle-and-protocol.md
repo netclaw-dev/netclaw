@@ -41,6 +41,13 @@ This enables:
 5. Actor emits typed `SessionOutput` events to subscribers.
 6. Actor checks compaction threshold.
 
+Failed accepted turns are also persisted as terminal turn events so restart can
+recover a consistent history instead of relying on transient in-memory error
+state.
+
+Buffered follow-up user inputs accepted while the actor is in `Processing` or
+`Compacting` are durably queued for replay in original order.
+
 ## Subscriber Model
 
 Subscribers join via `JoinSession` with an `OutputFilter` bitmask controlling
@@ -71,6 +78,15 @@ Ready → (user message) → Processing → (LLM response) → [threshold check]
 - **Compacting**: buffers incoming messages, runs tiered compaction sequence.
 
 All three states handle `JoinSession`, `LeaveSession`, and snapshot messages.
+
+## Turn Safety Guards
+
+- Every async LLM call and tool-execution batch is correlated to the active
+  operation so late completions from timed-out or superseded work are ignored.
+- Each turn has an absolute wall-clock budget in addition to per-operation
+  timeouts.
+- Hitting the tool-iteration budget degrades to a no-tools answer-or-ask path,
+  with deterministic fallback text if the model still refuses to comply.
 
 ## Compaction Lifecycle
 
@@ -132,10 +148,13 @@ are summarized as "Used {tool} for {purpose} → {outcome}".
 |-------|---------|
 | `SystemPromptSet` | System prompt set or replaced |
 | `TurnRecorded` | Completed turn (user message + assistant reply) |
+| `TurnFailedRecorded` | Failed turn recorded as a terminal assistant reply |
+| `BufferedInputAccepted` | Follow-up user input durably queued while session is busy |
 | `SessionTitleSet` | Title generated or updated |
 | `SessionCompacted` | History compacted with summary + retained messages |
 
 ## Snapshot
 
-`SessionSnapshot` captures `History`, `TurnCount`, `Title` for fast recovery.
+`SessionSnapshot` captures `History`, `TurnCount`, `Title`, and pending buffered
+inputs for fast recovery.
 Taken periodically per `SessionConfig.SnapshotInterval` and after compaction.

@@ -39,7 +39,57 @@ public sealed class TurnRecorded
     [ProtoMember(4)]
     public long RecordedAtMs { get; set; }
 
+    [ProtoMember(5)]
+    public bool ConsumesBufferedInput { get; set; }
+
     public DateTimeOffset RecordedAt => DateTimeOffset.FromUnixTimeMilliseconds(RecordedAtMs);
+}
+
+/// <summary>
+/// Persisted event recording a completed turn that ended with a user-visible
+/// failure reply instead of a normal assistant answer.
+/// </summary>
+[ProtoContract]
+public sealed class TurnFailedRecorded
+{
+    [ProtoMember(1)]
+    public SessionId SessionId { get; set; }
+
+    [ProtoMember(2)]
+    public SerializableChatMessage UserMessage { get; set; } = new();
+
+    [ProtoMember(3)]
+    public SerializableChatMessage AssistantReply { get; set; } = new();
+
+    [ProtoMember(4)]
+    public long RecordedAtMs { get; set; }
+
+    [ProtoMember(5)]
+    public bool ConsumesBufferedInput { get; set; }
+
+    [ProtoMember(6)]
+    public int ErrorCategory { get; set; }
+
+    public DateTimeOffset RecordedAt => DateTimeOffset.FromUnixTimeMilliseconds(RecordedAtMs);
+}
+
+/// <summary>
+/// Persisted event recording a user message accepted while the session is busy.
+/// The message is replayed after the active turn reaches a terminal state.
+/// </summary>
+[ProtoContract]
+public sealed class BufferedInputAccepted
+{
+    [ProtoMember(1)]
+    public SessionId SessionId { get; set; }
+
+    [ProtoMember(2)]
+    public SerializableChatMessage UserMessage { get; set; } = new();
+
+    [ProtoMember(3)]
+    public long AcceptedAtMs { get; set; }
+
+    public DateTimeOffset AcceptedAt => DateTimeOffset.FromUnixTimeMilliseconds(AcceptedAtMs);
 }
 
 /// <summary>
