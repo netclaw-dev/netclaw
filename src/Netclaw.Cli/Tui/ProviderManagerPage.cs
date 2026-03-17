@@ -645,6 +645,17 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
             return;
         }
 
+        // Browser OAuth: "C" to copy URL to clipboard
+        if (state == ProviderManagerState.AddBrowserOAuthFlow
+            && keyInfo.Key == ConsoleKey.C
+            && ViewModel.BrowserOpenFailed
+            && ViewModel.OAuthVerificationUri is not null)
+        {
+            if (OAuthFlowViews.TryCopyToClipboard(_clipboardService, ViewModel.OAuthVerificationUri))
+                ViewModel.StatusMessage.Value = "\u2714 URL copied to clipboard";
+            return;
+        }
+
         // Details state shortcuts
         if (state == ProviderManagerState.Details)
         {

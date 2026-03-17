@@ -49,6 +49,18 @@ internal static class OAuthFlowViews
     public static string GetSpinnerFrame(int tick) => SpinnerFrames[tick % SpinnerFrames.Length];
 
     /// <summary>
+    /// Copy a URL to clipboard via the provided service. Returns true if copied.
+    /// </summary>
+    public static bool TryCopyToClipboard(IClipboardService? clipboardService, string? url)
+    {
+        if (clipboardService is null || string.IsNullOrEmpty(url))
+            return false;
+
+        clipboardService.Copy(url);
+        return true;
+    }
+
+    /// <summary>
     /// Build the browser OAuth flow view with three fallback layers.
     /// </summary>
     public static ILayoutNode BuildBrowserOAuthFlow(
@@ -99,17 +111,13 @@ internal static class OAuthFlowViews
 
                     if (verificationUri is not null)
                     {
+                        children.WithChild(new TextNode($"  {verificationUri}")
+                            .WithForeground(Color.Cyan));
+
                         if (clipboardService is not null)
                         {
-                            children.WithChild(new CopyableTextNode(clipboardService, $"  {verificationUri}")
-                                .WithForeground(Color.Cyan));
-                            children.WithChild(new TextNode("  Press [Enter] to copy URL to clipboard")
+                            children.WithChild(new TextNode("  Press [C] to copy URL to clipboard")
                                 .WithForeground(Color.BrightBlack));
-                        }
-                        else
-                        {
-                            children.WithChild(new TextNode($"  {verificationUri}")
-                                .WithForeground(Color.Cyan));
                         }
                     }
 
