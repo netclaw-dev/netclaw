@@ -1,3 +1,28 @@
+#### 0.6.2 2026-03-17 ####
+
+Netclaw v0.6.2 — Reminder history, onboarding chat, and turn recovery hardening
+
+**Reminders**
+
+* Added per-reminder execution history: every reminder execution now appends a record (fired time, success/failure, duration, session ID, error message) to `~/.netclaw/reminders/{id}.history.jsonl`. History is capped at 500 records (configurable) with atomic overflow trimming. Accessible via `netclaw reminder history <id> [--last N]`, `GET /api/reminders/{id}/history`, and the `get_reminder_history` agent tool (scheduling grant required). History file is deleted when a reminder is cancelled. ([#259](https://github.com/Aaronontheweb/netclaw/pull/259))
+
+**Init Wizard**
+
+* Added an interactive onboarding chat at the end of the init wizard — after health checks pass, the agent introduces itself and asks what the operator wants to use it for, updating `SOUL.md` with what it learns. This replaces the static "primary use" text field with a richer conversational approach. ([#250](https://github.com/Aaronontheweb/netclaw/pull/250))
+* Fixed the chat TUI getting stuck on "Generating..." after an idle SignalR reconnect — `IsGenerating` is now reset on disconnect. ([#250](https://github.com/Aaronontheweb/netclaw/pull/250))
+
+**Providers**
+
+* Fixed OpenAI-compatible provider fallback path using `/api/v1/` instead of the standard `/v1/` — llama.cpp, vLLM, and other servers that follow the OpenAI path convention without the `/api/` prefix now work correctly. ([#253](https://github.com/Aaronontheweb/netclaw/pull/253))
+
+**Skills Platform**
+
+* System skills are now sourced directly from the feed directory (`feeds/skills/.system/files/`) at build time, eliminating the dual-copy maintenance problem where the embedded copy and the feed copy had silently diverged. The feed directory is the single source of truth for both on-disk seeding and published feed artifacts. ([#258](https://github.com/Aaronontheweb/netclaw/pull/258))
+
+**Stability**
+
+* Fixed agent turn recovery for empty LLM responses, forced no-tools turns, and hang scenarios — the session actor now reliably recovers and continues rather than stalling or silently dropping turns in these edge cases. ([#260](https://github.com/Aaronontheweb/netclaw/pull/260), [#269](https://github.com/Aaronontheweb/netclaw/pull/269), [#271](https://github.com/Aaronontheweb/netclaw/pull/271))
+
 #### 0.6.1 2026-03-15 ####
 
 Netclaw v0.6.1 — Init wizard hardening and installer progress indicators

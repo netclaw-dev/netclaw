@@ -7,20 +7,29 @@
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
-    <VersionPrefix>0.6.1</VersionPrefix>
-    <PackageReleaseNotes>Netclaw v0.6.1 — Init wizard hardening and installer progress indicators
+    <VersionPrefix>0.6.2</VersionPrefix>
+    <PackageReleaseNotes>Netclaw v0.6.2 — Reminder history, onboarding chat, and turn recovery hardening
+
+**Reminders**
+
+* Added per-reminder execution history: every reminder execution now appends a record (fired time, success/failure, duration, session ID, error message) to `~/.netclaw/reminders/{id}.history.jsonl`. History is capped at 500 records (configurable) with atomic overflow trimming. Accessible via `netclaw reminder history &lt;id&gt; [--last N]`, `GET /api/reminders/{id}/history`, and the `get_reminder_history` agent tool (scheduling grant required). History file is deleted when a reminder is cancelled. ([#259](https://github.com/Aaronontheweb/netclaw/pull/259))
 
 **Init Wizard**
 
-* Removed the Memory backend selection step from the init wizard — SQLite is the only supported backend and no user input is needed. The underlying SQLite health check verification is retained. ([#247](https://github.com/Aaronontheweb/netclaw/pull/247))
-* Fixed bracketed paste being silently dropped in the init wizard — `PasteEvent` is now routed to the active text input, matching behavior in the chat and reminder pages. ([#247](https://github.com/Aaronontheweb/netclaw/pull/247))
-* Replaced the single-line primary use description field with a multi-line text area so operators can enter longer descriptions without line truncation. ([#247](https://github.com/Aaronontheweb/netclaw/pull/247))
-* Added `xoxb-`/`xapp-` prefix validation on Slack token submit — invalid tokens are rejected inline with a status message before the wizard advances. ([#247](https://github.com/Aaronontheweb/netclaw/pull/247))
-* Wrapped each async health check stage with per-operation timeouts so the init wizard no longer hangs indefinitely: Slack probe 15s, channel resolution 35s, browser bootstrap 3 minutes, daemon poll 5s per request, overall 5 minutes. ([#247](https://github.com/Aaronontheweb/netclaw/pull/247))
+* Added an interactive onboarding chat at the end of the init wizard — after health checks pass, the agent introduces itself and asks what the operator wants to use it for, updating `SOUL.md` with what it learns. This replaces the static "primary use" text field with a richer conversational approach. ([#250](https://github.com/Aaronontheweb/netclaw/pull/250))
+* Fixed the chat TUI getting stuck on "Generating..." after an idle SignalR reconnect — `IsGenerating` is now reset on disconnect. ([#250](https://github.com/Aaronontheweb/netclaw/pull/250))
 
-**Installer**
+**Providers**
 
-* Added download progress indicators to the install scripts — the Bash installer shows `curl --progress-bar` when stderr is a TTY and falls back to silent mode in non-interactive contexts (CI). The PowerShell installer shows a spinner via a background runspace to avoid the `Write-Progress` performance penalty on PowerShell 5.1. ([#246](https://github.com/Aaronontheweb/netclaw/pull/246))</PackageReleaseNotes>
+* Fixed OpenAI-compatible provider fallback path using `/api/v1/` instead of the standard `/v1/` — llama.cpp, vLLM, and other servers that follow the OpenAI path convention without the `/api/` prefix now work correctly. ([#253](https://github.com/Aaronontheweb/netclaw/pull/253))
+
+**Skills Platform**
+
+* System skills are now sourced directly from the feed directory (`feeds/skills/.system/files/`) at build time, eliminating the dual-copy maintenance problem where the embedded copy and the feed copy had silently diverged. The feed directory is the single source of truth for both on-disk seeding and published feed artifacts. ([#258](https://github.com/Aaronontheweb/netclaw/pull/258))
+
+**Stability**
+
+* Fixed agent turn recovery for empty LLM responses, forced no-tools turns, and hang scenarios — the session actor now reliably recovers and continues rather than stalling or silently dropping turns in these edge cases. ([#260](https://github.com/Aaronontheweb/netclaw/pull/260), [#269](https://github.com/Aaronontheweb/netclaw/pull/269), [#271](https://github.com/Aaronontheweb/netclaw/pull/271))</PackageReleaseNotes>
   </PropertyGroup>
   <PropertyGroup>
     <NetCoreTestVersion>net10.0</NetCoreTestVersion>
