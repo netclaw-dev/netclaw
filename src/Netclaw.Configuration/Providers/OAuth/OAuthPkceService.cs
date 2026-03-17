@@ -17,6 +17,7 @@ public sealed class OAuthPkceService
     private readonly HttpClient _httpClient;
     private readonly TimeProvider _timeProvider;
     private readonly ConcurrentDictionary<string, OAuthPkcePendingFlow> _pendingFlows = new();
+    private readonly ConcurrentDictionary<string, OAuthDeviceFlowResult> _completedFlows = new();
 
     public OAuthPkceService(HttpClient httpClient, TimeProvider? timeProvider = null)
     {
@@ -90,6 +91,7 @@ public sealed class OAuthPkceService
                 flow.TokenEndpoint, flow.ClientId, code,
                 flow.CodeVerifier, flow.RedirectUri, ct);
 
+            _completedFlows[state] = result;
             flow.Completion.TrySetResult(result);
             return result;
         }
@@ -246,14 +248,15 @@ public sealed class OAuthPkceService
     /// </summary>
     public OAuthPkceFlowStatus GetFlowStatus(string state)
     {
+        if (_completedFlows.ContainsKey(state))
+            return OAuthPkceFlowStatus.Completed;
+
         if (!_pendingFlows.TryGetValue(state, out var flow))
             return OAuthPkceFlowStatus.NotStarted;
 
-        return flow.Completion.Task.IsCompletedSuccessfully
-            ? OAuthPkceFlowStatus.Completed
-            : flow.Completion.Task.IsFaulted
-                ? OAuthPkceFlowStatus.Failed
-                : OAuthPkceFlowStatus.Pending;
+        return flow.Completion.Task.IsFaulted
+            ? OAuthPkceFlowStatus.Failed
+            : OAuthPkceFlowStatus.Pending;
     }
 
     /// <summary>
@@ -261,12 +264,7 @@ public sealed class OAuthPkceService
     /// </summary>
     public OAuthDeviceFlowResult? GetFlowResult(string state)
     {
-        if (!_pendingFlows.TryGetValue(state, out var flow))
-            return null;
-
-        return flow.Completion.Task.IsCompletedSuccessfully
-            ? flow.Completion.Task.Result
-            : null;
+        return _completedFlows.TryGetValue(state, out var result) ? result : null;
     }
 
     // ── PKCE Helpers ───────────────────────────────────────────────────
