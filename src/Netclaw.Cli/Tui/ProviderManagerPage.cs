@@ -406,7 +406,7 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
 
     private ILayoutNode BuildBrowserOAuthFlowView()
     {
-        return OAuthFlowViews.BuildBrowserOAuthFlow(
+        var result = OAuthFlowViews.BuildBrowserOAuthFlow(
             ViewModel.NewProviderType ?? "unknown",
             ViewModel.OAuthFlowState.Value,
             ViewModel.BrowserOpenFailed,
@@ -417,6 +417,15 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
             _clipboardService,
             ref _redirectUrlInput,
             text => _ = ViewModel.SubmitRedirectUrlAsync(text));
+
+        // Route keyboard input to the redirect URL paste box
+        if (_redirectUrlInput is not null)
+        {
+            _lastFocusedInput = _redirectUrlInput;
+            _redirectUrlInput.OnFocused();
+        }
+
+        return result;
     }
 
     private TextInputNode? _redirectUrlInput;

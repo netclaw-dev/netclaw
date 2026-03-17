@@ -677,7 +677,7 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
 
     private ILayoutNode BuildBrowserOAuthFlowSubStep()
     {
-        return OAuthFlowViews.BuildBrowserOAuthFlow(
+        var result = OAuthFlowViews.BuildBrowserOAuthFlow(
             ViewModel.SelectedProviderType ?? "unknown",
             ViewModel.OAuthFlowState.Value,
             ViewModel.BrowserOpenFailed,
@@ -688,6 +688,15 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             _clipboardService,
             ref _redirectUrlInput,
             text => _ = ViewModel.SubmitRedirectUrlAsync(text));
+
+        // Route keyboard input to the redirect URL paste box
+        if (_redirectUrlInput is not null)
+        {
+            _lastFocusedInput = _redirectUrlInput;
+            _redirectUrlInput.OnFocused();
+        }
+
+        return result;
     }
 
     private ILayoutNode BuildChatServicesStep()
