@@ -21,6 +21,7 @@ public sealed partial class ReminderManagerActor : ReceiveActor
     private readonly ISessionPipeline _pipeline;
     private readonly TimeProvider _timeProvider;
     private readonly ReminderDefinitionStore _definitionStore;
+    private readonly ReminderHistoryStore _historyStore;
     private readonly ILoggingAdapter _log;
 
     private IReminderClient? _client;
@@ -33,12 +34,14 @@ public sealed partial class ReminderManagerActor : ReceiveActor
         ReminderConfig config,
         ISessionPipeline pipeline,
         TimeProvider timeProvider,
-        ReminderDefinitionStore definitionStore)
+        ReminderDefinitionStore definitionStore,
+        ReminderHistoryStore historyStore)
     {
         _config = config;
         _pipeline = pipeline;
         _timeProvider = timeProvider;
         _definitionStore = definitionStore;
+        _historyStore = historyStore;
         _log = Context.GetLogger();
 
         ReceiveAsync<SaveReminderCommand>(HandleSaveAsync);
@@ -196,6 +199,18 @@ public sealed partial class ReminderManagerActor : ReceiveActor
 
         _failureCounts.Remove(cmd.Id);
         RemoveFromDeferredQueue(cmd.Id);
+
+        if (deleted)
+        {
+            try
+            {
+                _historyStore.DeleteHistory(cmd.Id);
+            }
+            catch (Exception ex)
+            {
+                _log.Warning(ex, "Failed to delete history file for reminder '{0}'", cmd.Id.Value);
+            }
+        }
 
         var found = deleted || scheduleCancelled;
         _log.Info("Delete reminder '{0}': {1}", cmd.Id.Value, found ? "deleted" : "not found");
@@ -482,7 +497,8 @@ public sealed partial class ReminderManagerActor : ReceiveActor
                 definition,
                 _pipeline,
                 _config,
-                _timeProvider),
+                _timeProvider,
+                _historyStore),
             actorName);
 
         _log.Info("Started execution actor for reminder '{0}': {1}", definition.Id, executionActor.Path);

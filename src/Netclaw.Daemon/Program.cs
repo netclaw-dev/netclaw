@@ -281,6 +281,7 @@ static void ConfigureDaemonServices(
         .Get<ReminderConfig>() ?? new ReminderConfig();
     services.AddSingleton(reminderConfig);
     services.AddSingleton<ReminderDefinitionStore>();
+    services.AddSingleton<ReminderHistoryStore>();
 
     // Search backend selection
     var searchConfig = configuration.GetSection("Search")
@@ -512,7 +513,8 @@ static void ConfigureDaemonServices(
             var reminderManager = registry.Get<Netclaw.Actors.Hosting.ReminderManagerActorKey>();
             var tp = sp.GetRequiredService<TimeProvider>();
             var rc = sp.GetRequiredService<ReminderConfig>();
-            toolRegistry.WithReminderTools(reminderManager, tp, rc);
+            var historyStore = sp.GetRequiredService<ReminderHistoryStore>();
+            toolRegistry.WithReminderTools(reminderManager, tp, rc, historyStore);
         });
     });
 
@@ -907,6 +909,22 @@ static void MapReminderEndpoints(WebApplication app)
             sessionId = r.SessionId,
             reportToChannel = r.ReportToChannel,
         });
+    });
+
+    app.MapGet("/api/reminders/{id}/history", async (
+        string id,
+        int? last,
+        ReminderDefinitionStore definitionStore,
+        ReminderHistoryStore historyStore,
+        CancellationToken ct) =>
+    {
+        var rid = new ReminderId(id);
+        if (!definitionStore.Exists(rid))
+            return Results.NotFound(new { error = $"Reminder '{id}' not found." });
+
+        var maxRecords = Math.Clamp(last ?? 20, 1, 500);
+        var records = await historyStore.ReadAsync(rid, maxRecords);
+        return Results.Ok(records);
     });
 }
 

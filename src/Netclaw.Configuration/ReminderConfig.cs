@@ -25,4 +25,10 @@ public sealed record ReminderConfig
     /// Prevents accidental tight loops.
     /// </summary>
     public int MinIntervalSeconds { get; init; } = 60;
+
+    /// <summary>
+    /// Maximum number of execution history records retained per reminder.
+    /// When exceeded, the oldest records are trimmed.
+    /// </summary>
+    public int HistoryMaxRecords { get; init; } = 500;
 }

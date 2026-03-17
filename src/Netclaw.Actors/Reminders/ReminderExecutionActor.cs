@@ -20,6 +20,7 @@ internal sealed class ReminderExecutionActor : ReceiveActor
     private readonly Guid _executionId;
     private readonly ReminderDefinition _definition;
     private readonly ISessionPipeline _pipeline;
+    private readonly ReminderHistoryStore _historyStore;
     private readonly TimeProvider _timeProvider;
     private readonly ILoggingAdapter _log;
     private readonly DateTimeOffset _dispatchedAt;
@@ -30,6 +31,8 @@ internal sealed class ReminderExecutionActor : ReceiveActor
     private bool _notifyAttempted;
     private bool _notifyFailed;
     private string? _notifyFailureDetail;
+    private string? _sessionIdValue;
+    private HistoryRecord? _pendingHistory;
 
     private ActorMaterializer? _materializer;
     private MaterializedSession? _session;
@@ -39,19 +42,22 @@ internal sealed class ReminderExecutionActor : ReceiveActor
         ReminderDefinition definition,
         ISessionPipeline pipeline,
         ReminderConfig config,
-        TimeProvider timeProvider) =>
-        Props.Create(() => new ReminderExecutionActor(executionId, definition, pipeline, config, timeProvider));
+        TimeProvider timeProvider,
+        ReminderHistoryStore historyStore) =>
+        Props.Create(() => new ReminderExecutionActor(executionId, definition, pipeline, config, timeProvider, historyStore));
 
     public ReminderExecutionActor(
         Guid executionId,
         ReminderDefinition definition,
         ISessionPipeline pipeline,
         ReminderConfig config,
-        TimeProvider timeProvider)
+        TimeProvider timeProvider,
+        ReminderHistoryStore historyStore)
     {
         _executionId = executionId;
         _definition = definition;
         _pipeline = pipeline;
+        _historyStore = historyStore;
         _timeProvider = timeProvider;
         _dispatchedAt = timeProvider.GetUtcNow();
         _log = Context.GetLogger();
@@ -86,6 +92,7 @@ internal sealed class ReminderExecutionActor : ReceiveActor
                 ? new SessionId(_definition.SessionId)
                 : new SessionId($"reminder/{_definition.Id}/{_timeProvider.GetUtcNow().ToUnixTimeMilliseconds()}");
 
+            _sessionIdValue = sessionId.Value;
             _log.Info(
                 $"ReminderExecution Initialized: execution_id={_executionId} reminder_id={_definition.Id} session_id={sessionId.Value}");
 
@@ -186,6 +193,14 @@ internal sealed class ReminderExecutionActor : ReceiveActor
 
         _completed = true;
 
+        var durationMs = (long)(_timeProvider.GetUtcNow() - _dispatchedAt).TotalMilliseconds;
+        _pendingHistory = new HistoryRecord(
+            FiredAt: _dispatchedAt,
+            Success: success,
+            DurationMs: durationMs,
+            SessionId: _sessionIdValue ?? $"reminder/{_definition.Id}/unknown",
+            ErrorMessage: errorMessage);
+
         if (!success)
         {
             _log.Warning(
@@ -248,6 +263,19 @@ internal sealed class ReminderExecutionActor : ReceiveActor
 
     protected override void PostStop()
     {
+        if (_pendingHistory is not null)
+        {
+            try
+            {
+                _historyStore.AppendAsync(new ReminderId(_definition.Id), _pendingHistory)
+                    .GetAwaiter().GetResult();
+            }
+            catch (Exception ex)
+            {
+                _log.Warning(ex, "Failed to write execution history for reminder '{0}'", _definition.Id);
+            }
+        }
+
         try
         {
             _session?.DisposeAsync().AsTask().GetAwaiter().GetResult();

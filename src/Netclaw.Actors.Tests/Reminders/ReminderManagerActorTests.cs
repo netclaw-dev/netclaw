@@ -27,7 +27,9 @@ public class ReminderManagerActorTests : TestKit
 
         var paths = new NetclawPaths(_basePath);
         paths.EnsureDirectoriesExist();
+        var reminderConfig = new ReminderConfig();
         var definitionStore = new ReminderDefinitionStore(paths);
+        var historyStore = new ReminderHistoryStore(paths, reminderConfig);
 
         // Wire local reminders with in-memory storage
         var sharedResolver = new TestShardRegionResolver();
@@ -49,10 +51,11 @@ public class ReminderManagerActorTests : TestKit
 
             var reminderManager = system.ActorOf(
                 Props.Create(() => new ReminderManagerActor(
-                    new ReminderConfig(),
+                    reminderConfig,
                     pipeline,
                     TimeProvider.System,
-                    definitionStore)),
+                    definitionStore,
+                    historyStore)),
                 "reminder-manager-test");
 
             registry.Register<ReminderManagerActorKey>(reminderManager);

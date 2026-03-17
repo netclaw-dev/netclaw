@@ -48,6 +48,7 @@ internal static class ReminderCommand
             "import" => await RunImportAsync(client, baseUrl, args),
             "validate" => RunValidate(args),
             "show" => await RunShowAsync(client, baseUrl, args),
+            "history" => await RunHistoryAsync(client, baseUrl, args),
             _ => WriteHelp()
         };
     }
@@ -438,6 +439,74 @@ internal static class ReminderCommand
         }
     }
 
+    private static async Task<int> RunHistoryAsync(HttpClient client, string baseUrl, string[] args)
+    {
+        if (args.Length < 3)
+        {
+            Console.Error.WriteLine("Usage: netclaw reminder history <id> [--last N]");
+            return 1;
+        }
+
+        var id = args[2];
+        var last = 20;
+
+        for (var i = 3; i < args.Length; i++)
+        {
+            if (args[i] == "--last" && i + 1 < args.Length && int.TryParse(args[i + 1], out var n))
+            {
+                last = n;
+                i++;
+            }
+        }
+
+        try
+        {
+            var response = await client.GetAsync($"{baseUrl}/{id}/history?last={last}");
+
+            if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+            {
+                Console.Error.WriteLine($"[FAIL] Reminder '{id}' not found.");
+                return 1;
+            }
+
+            if (!response.IsSuccessStatusCode)
+            {
+                Console.Error.WriteLine($"[FAIL] daemon returned {(int)response.StatusCode}");
+                return 1;
+            }
+
+            var json = await response.Content.ReadAsStringAsync();
+            var records = JsonSerializer.Deserialize<HistoryRecord[]>(json, JsonOptions);
+
+            if (records is null || records.Length == 0)
+            {
+                Console.WriteLine($"No execution history recorded for {id}.");
+                return 0;
+            }
+
+            const int colFiredAt = 25;
+            const int colStatus = 8;
+            const int colDuration = 12;
+
+            Console.WriteLine($"{"fired_at",-colFiredAt}  {"status",-colStatus}  {"duration_ms",-colDuration}  session_id");
+            Console.WriteLine(new string('-', colFiredAt + colStatus + colDuration + 34));
+
+            foreach (var r in records)
+            {
+                var status = r.Success ? "ok" : "failed";
+                Console.WriteLine($"{r.FiredAt:u,-colFiredAt}  {status,-colStatus}  {r.DurationMs,-colDuration}  {r.SessionId}");
+            }
+
+            return 0;
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[FAIL] unable to reach daemon: {ex.Message}");
+            Console.Error.WriteLine("       fix: run `netclaw daemon start` and retry.");
+            return 1;
+        }
+    }
+
     private static int WriteHelp()
     {
         Console.WriteLine("Usage: netclaw reminder <subcommand>");
@@ -451,6 +520,7 @@ internal static class ReminderCommand
         Console.WriteLine("  import <file> [--replace|--upsert]            Import one reminder file");
         Console.WriteLine("  validate <file>                               Validate reminder file");
         Console.WriteLine("  show <id>                                     Show reminder details");
+        Console.WriteLine("  history <id> [--last N]                       Show recent execution history (default: 20)");
         Console.WriteLine();
         Console.WriteLine("Create options:");
         Console.WriteLine("  --name    <title>                              Human-readable title (defaults to <id>)");
