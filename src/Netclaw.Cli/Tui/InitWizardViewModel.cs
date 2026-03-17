@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Net.Http.Json;
 using System.Text.Json;
 using Netclaw.Channels.Slack;
 using Netclaw.Cli.Daemon;
@@ -425,11 +426,174 @@ public partial class InitWizardViewModel : ReactiveViewModel
     }
 
     /// <summary>
-    /// Start the OAuth device flow. Called by the page when the user selects OAuth.
+    /// Start the OAuth device flow. Called by the page when the user selects OAuth device flow.
     /// </summary>
     public void StartOAuthFlow()
     {
         OAuthFlowCompletion = StartOAuthDeviceFlowAsync();
+    }
+
+    /// <summary>
+    /// Start the browser-based OAuth flow. Called by the page when the user selects OAuth PKCE.
+    /// </summary>
+    public void StartBrowserOAuthFlow()
+    {
+        OAuthFlowCompletion = StartBrowserOAuthFlowAsync();
+    }
+
+    /// <summary>Whether the browser failed to open (triggers fallback URL display).</summary>
+    public bool BrowserOpenFailed { get; set; }
+
+    /// <summary>
+    /// Browser-based OAuth Authorization Code + PKCE flow.
+    /// Calls daemon to start the flow, opens browser, polls for completion.
+    /// </summary>
+    internal async Task StartBrowserOAuthFlowAsync()
+    {
+        if (SelectedProviderType is null)
+        {
+            OAuthErrorMessage = "No provider selected.";
+            OAuthFlowState.Value = DeviceFlowState.Error;
+            RequestRedraw();
+            return;
+        }
+
+        _oauthCts = new CancellationTokenSource();
+        var ct = _oauthCts.Token;
+
+        ProbeElapsedSeconds.Value = 0;
+        _ = RunProbeTimerAsync(ct);
+
+        const string daemonEndpoint = "http://127.0.0.1:5199";
+        using var httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+
+        try
+        {
+            var startResponse = await httpClient.PostAsync(
+                $"{daemonEndpoint}/api/provider/oauth/start?provider={Uri.EscapeDataString(SelectedProviderType)}", null, ct);
+
+            if (!startResponse.IsSuccessStatusCode)
+            {
+                var errorBody = await startResponse.Content.ReadAsStringAsync(ct);
+                OAuthErrorMessage = $"Failed to start OAuth flow: {errorBody}";
+                OAuthFlowState.Value = DeviceFlowState.Error;
+                RequestRedraw();
+                return;
+            }
+
+            var startResult = await startResponse.Content.ReadFromJsonAsync<System.Text.Json.JsonElement>(ct);
+            var authUrl = startResult.GetProperty("authorizationUrl").GetString()!;
+            var flowState = startResult.GetProperty("state").GetString()!;
+
+            OAuthVerificationUri = authUrl;
+            BrowserOpenFailed = false;
+            OAuthFlowState.Value = DeviceFlowState.WaitingForUser;
+            RequestRedraw();
+
+            try
+            {
+                System.Diagnostics.Process.Start(
+                    new System.Diagnostics.ProcessStartInfo(authUrl) { UseShellExecute = true });
+            }
+            catch
+            {
+                BrowserOpenFailed = true;
+                RequestRedraw();
+            }
+
+            var pollTimeout = TimeSpan.FromMinutes(5);
+            var pollInterval = TimeSpan.FromSeconds(2);
+            var elapsed = TimeSpan.Zero;
+
+            while (elapsed < pollTimeout)
+            {
+                ct.ThrowIfCancellationRequested();
+                await Task.Delay(pollInterval, ct);
+                elapsed += pollInterval;
+
+                var statusResponse = await httpClient.GetFromJsonAsync<System.Text.Json.JsonElement>(
+                    $"{daemonEndpoint}/api/provider/oauth/status/{Uri.EscapeDataString(flowState)}", ct);
+
+                var status = statusResponse.GetProperty("status").GetString();
+                if (status is "Completed")
+                {
+                    OAuthFlowState.Value = DeviceFlowState.Succeeded;
+                    RequestRedraw();
+                    return;
+                }
+
+                if (status is "Failed")
+                {
+                    OAuthErrorMessage = "Authorization failed.";
+                    OAuthFlowState.Value = DeviceFlowState.Error;
+                    RequestRedraw();
+                    return;
+                }
+            }
+
+            OAuthErrorMessage = "Authorization timed out after 5 minutes.";
+            OAuthFlowState.Value = DeviceFlowState.Expired;
+            RequestRedraw();
+        }
+        catch (OperationCanceledException)
+        {
+            OAuthFlowState.Value = DeviceFlowState.Cancelled;
+            RequestRedraw();
+        }
+        catch (HttpRequestException)
+        {
+            OAuthErrorMessage = "Could not reach the daemon. Is it running?";
+            OAuthFlowState.Value = DeviceFlowState.Error;
+            RequestRedraw();
+        }
+        catch (Exception ex)
+        {
+            OAuthErrorMessage = ex.Message;
+            OAuthFlowState.Value = DeviceFlowState.Error;
+            RequestRedraw();
+        }
+        finally
+        {
+            CancelOAuthFlow();
+        }
+    }
+
+    /// <summary>
+    /// Handle a pasted redirect URL for browser OAuth fallback.
+    /// </summary>
+    public async Task SubmitRedirectUrlAsync(string? pastedUrl)
+    {
+        if (!OAuthRedirectParser.TryParse(pastedUrl, out var code, out var state, out var error))
+        {
+            OAuthErrorMessage = error;
+            RequestRedraw();
+            return;
+        }
+
+        const string daemonEndpoint = "http://127.0.0.1:5199";
+        using var httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+
+        try
+        {
+            var response = await httpClient.GetAsync(
+                $"{daemonEndpoint}/api/provider/oauth/callback?code={Uri.EscapeDataString(code)}&state={Uri.EscapeDataString(state)}");
+
+            if (response.IsSuccessStatusCode)
+            {
+                OAuthFlowState.Value = DeviceFlowState.Succeeded;
+                RequestRedraw();
+            }
+            else
+            {
+                OAuthErrorMessage = "Token exchange failed. The authorization code may be expired.";
+                RequestRedraw();
+            }
+        }
+        catch (Exception ex)
+        {
+            OAuthErrorMessage = $"Failed to exchange code: {ex.Message}";
+            RequestRedraw();
+        }
     }
 
     /// <summary>

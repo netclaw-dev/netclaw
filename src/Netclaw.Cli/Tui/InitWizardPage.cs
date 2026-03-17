@@ -177,6 +177,8 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
                 return BuildValidationSubStep();
             if (step == WizardStep.Provider && _providerSubStep == 5)
                 return BuildOAuthDeviceFlowSubStep();
+            if (step == WizardStep.Provider && _providerSubStep == 6)
+                return BuildBrowserOAuthFlowSubStep();
 
             // Clear stale focus references BEFORE building new content.
             // The old components are about to be replaced/disposed by DynamicLayoutNode.
@@ -311,6 +313,7 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             3 => BuildValidationSubStep(),
             4 => BuildModelSelectionSubStep(),
             5 => BuildOAuthDeviceFlowSubStep(),
+            6 => BuildBrowserOAuthFlowSubStep(),
             _ => Layouts.Empty()
         };
     }
@@ -360,7 +363,8 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             .Select(m => m switch
             {
                 AuthMethod.ApiKey => "API Key",
-                AuthMethod.OAuthDevice => "OAuth Device Flow (recommended)",
+                AuthMethod.OAuthPkce => "OAuth Login (recommended)",
+                AuthMethod.OAuthDevice => "OAuth Device Flow",
                 _ => m.ToString()
             })
             .ToList();
@@ -377,12 +381,21 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             {
                 if (selected.Count > 0)
                 {
-                    var method = selected[0].StartsWith("API", StringComparison.Ordinal)
-                        ? AuthMethod.ApiKey
-                        : AuthMethod.OAuthDevice;
+                    var method = selected[0] switch
+                    {
+                        "API Key" => AuthMethod.ApiKey,
+                        "OAuth Login (recommended)" => AuthMethod.OAuthPkce,
+                        "OAuth Device Flow" => AuthMethod.OAuthDevice,
+                        _ => AuthMethod.ApiKey
+                    };
                     ViewModel.SelectedAuthMethod = method;
 
-                    if (method == AuthMethod.OAuthDevice)
+                    if (method == AuthMethod.OAuthPkce)
+                    {
+                        SetProviderSubStep(6);
+                        ViewModel.StartBrowserOAuthFlow();
+                    }
+                    else if (method == AuthMethod.OAuthDevice)
                     {
                         SetProviderSubStep(5);
                         ViewModel.StartOAuthFlow();
@@ -653,6 +666,100 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             case DeviceFlowState.Expired:
             case DeviceFlowState.Error:
                 children.WithChild(new TextNode($"  \u2717 {ViewModel.OAuthErrorMessage ?? "Authorization failed."}")
+                    .WithForeground(Color.Red));
+                children.WithChild(new TextNode("").Height(1));
+                children.WithChild(new TextNode("  Press [Esc] to go back and try again.")
+                    .WithForeground(Color.BrightBlack));
+                break;
+
+            case DeviceFlowState.Cancelled:
+                children.WithChild(new TextNode("  Authorization cancelled.")
+                    .WithForeground(Color.Yellow));
+                break;
+        }
+
+        return children;
+    }
+
+    private TextInputNode? _redirectUrlInput;
+
+    private ILayoutNode BuildBrowserOAuthFlowSubStep()
+    {
+        var children = Layouts.Vertical();
+        var providerType = ViewModel.SelectedProviderType ?? "unknown";
+        var flowState = ViewModel.OAuthFlowState.Value;
+
+        children.WithChild(new TextNode($"  OAuth Login for {providerType}")
+            .WithForeground(Color.White).Bold());
+        children.WithChild(new TextNode("").Height(1));
+
+        switch (flowState)
+        {
+            case DeviceFlowState.NotStarted:
+                children.WithChild(new TextNode("  Starting authorization...")
+                    .WithForeground(Color.Yellow));
+                break;
+
+            case DeviceFlowState.WaitingForUser:
+            case DeviceFlowState.Polling:
+            {
+                var elapsed = ViewModel.ProbeElapsedSeconds.Value;
+                var frame = SpinnerFrames[elapsed % SpinnerFrames.Length];
+
+                if (!ViewModel.BrowserOpenFailed)
+                {
+                    children.WithChild(new TextNode($"  {frame} Opening browser for authorization...")
+                        .WithForeground(Color.Yellow));
+                }
+                else
+                {
+                    children.WithChild(new TextNode("  Could not open browser automatically.")
+                        .WithForeground(Color.Red));
+                    children.WithChild(new TextNode("").Height(1));
+                    children.WithChild(new TextNode("  Open this URL to authorize:")
+                        .WithForeground(Color.White));
+
+                    if (ViewModel.OAuthVerificationUri is not null)
+                    {
+                        children.WithChild(new TextNode($"  {ViewModel.OAuthVerificationUri}")
+                            .WithForeground(Color.Cyan));
+                    }
+
+                    children.WithChild(new TextNode("").Height(1));
+                    children.WithChild(new TextNode($"  {frame} Waiting for callback...  ({elapsed}s)")
+                        .WithForeground(Color.Yellow));
+                }
+
+                children.WithChild(new TextNode("").Height(1));
+                children.WithChild(new TextNode("  Can't receive the callback? Paste the redirect URL:")
+                    .WithForeground(Color.BrightBlack));
+
+                if (_redirectUrlInput is null)
+                {
+                    _redirectUrlInput = new TextInputNode()
+                        .WithPlaceholder("Paste redirect URL here...");
+                    _redirectUrlInput.Submitted
+                        .Subscribe(text => _ = ViewModel.SubmitRedirectUrlAsync(text))
+                        .DisposeWith(_stepSubs);
+                }
+
+                children.WithChild(new PanelNode()
+                    .WithBorderColor(Color.Gray)
+                    .WithContent(_redirectUrlInput)
+                    .Height(3));
+
+                break;
+            }
+
+            case DeviceFlowState.Succeeded:
+                children.WithChild(new TextNode("  \u2714 Authorization successful!")
+                    .WithForeground(Color.Green));
+                break;
+
+            case DeviceFlowState.Denied:
+            case DeviceFlowState.Expired:
+            case DeviceFlowState.Error:
+                children.WithChild(new TextNode($"  \u2718 {ViewModel.OAuthErrorMessage ?? "Authorization failed."}")
                     .WithForeground(Color.Red));
                 children.WithChild(new TextNode("").Height(1));
                 children.WithChild(new TextNode("  Press [Esc] to go back and try again.")
@@ -1585,7 +1692,7 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             .Subscribe(_ =>
             {
                 if (ViewModel.CurrentStep.Value == WizardStep.Provider
-                    && (_providerSubStep == 3 || _providerSubStep == 5))
+                    && (_providerSubStep is 3 or 5 or 6))
                 {
                     _stepContentNode?.Invalidate();
                     ViewModel.RequestRedraw();
@@ -1597,7 +1704,7 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
         ViewModel.OAuthFlowState
             .Subscribe(state =>
             {
-                if (ViewModel.CurrentStep.Value != WizardStep.Provider || _providerSubStep != 5)
+                if (ViewModel.CurrentStep.Value != WizardStep.Provider || _providerSubStep is not (5 or 6))
                     return;
 
                 _stepContentNode?.Invalidate();

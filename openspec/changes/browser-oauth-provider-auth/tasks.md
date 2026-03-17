@@ -26,11 +26,11 @@
 
 ## 5. CLI/TUI Browser OAuth Flow
 
-- [ ] 5.1 Add browser OAuth flow method to `ProviderManagerViewModel` — call daemon `/api/provider/oauth/start`, attempt `Process.Start(authUrl)`, poll `/api/provider/oauth/status/{state}`, handle redirect URL paste fallback
-- [ ] 5.2 Add browser OAuth flow method to `InitWizardViewModel` — same flow as 5.1 adapted for init wizard context
-- [ ] 5.3 Build browser OAuth TUI sub-step in `ProviderManagerPage` — spinner while waiting, `CopyableTextNode` for auth URL on browser failure, `TextInputNode` for redirect URL paste, `ToastOverlayNode` for clipboard feedback
-- [ ] 5.4 Build browser OAuth TUI sub-step in `InitWizardPage` — matching UX from `ProviderManagerPage`
-- [ ] 5.5 Wire auth method selection to route `OAuthPkce` to browser flow and `OAuthDevice` to existing device flow in both view models
+- [x] 5.1 Add browser OAuth flow method to `ProviderManagerViewModel` — call daemon `/api/provider/oauth/start`, attempt `Process.Start(authUrl)`, poll `/api/provider/oauth/status/{state}`, handle redirect URL paste fallback
+- [x] 5.2 Add browser OAuth flow method to `InitWizardViewModel` — same flow as 5.1 adapted for init wizard context
+- [x] 5.3 Build browser OAuth TUI sub-step in `ProviderManagerPage` — spinner while waiting, `CopyableTextNode` for auth URL on browser failure, `TextInputNode` for redirect URL paste, `ToastOverlayNode` for clipboard feedback
+- [x] 5.4 Build browser OAuth TUI sub-step in `InitWizardPage` — matching UX from `ProviderManagerPage`
+- [x] 5.5 Wire auth method selection to route `OAuthPkce` to browser flow and `OAuthDevice` to existing device flow in both view models
 - [x] 5.6 Add redirect URL parsing utility — extract `code` and `state` from pasted URL, validate format, return clear error on malformed input
 
 ## 6. MCP OAuth Improvements
@@ -44,8 +44,8 @@
 ## 7. Cleanup and Verification
 
 - [x] 7.1 Update `OAuthDeviceFlowConfig.FromDescriptor` to handle `OAuthPkce` providers (skip device flow config for providers that use browser OAuth)
-- [ ] 7.2 Run `dotnet slopwatch analyze` — no new violations
-- [ ] 7.3 Run full test suite — all tests pass
+- [x] 7.2 Run `dotnet slopwatch analyze` — no new violations
+- [x] 7.3 Run full test suite — all tests pass
 - [ ] 7.4 Manual test: `netclaw provider add openai` with browser OAuth — complete flow, verify probe succeeds, verify token persisted to `secrets.json`
 - [ ] 7.5 Manual test: headless fallback — paste redirect URL, verify flow completes
 - [ ] 7.6 Manual test: `netclaw mcp oauth` with paste fallback — verify redirect URL paste works for MCP servers

@@ -1,5 +1,6 @@
-using System.Text.Json;
 using System.Diagnostics;
+using System.Net.Http.Json;
+using System.Text.Json;
 using Netclaw.Cli.Config;
 using Netclaw.Configuration;
 using Netclaw.Configuration.Providers;
@@ -21,6 +22,7 @@ public enum ProviderManagerState
     AddSelectAuth,
     AddCredentials,
     AddOAuthDeviceFlow,
+    AddBrowserOAuthFlow,
     AddValidating,
     AddComplete,
     Details,
@@ -363,6 +365,14 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
             return;
         }
 
+        if (method == AuthMethod.OAuthPkce)
+        {
+            CurrentState.Value = ProviderManagerState.AddBrowserOAuthFlow;
+            NotifyStateChanged();
+            OAuthFlowCompletion = StartBrowserOAuthFlowAsync();
+            return;
+        }
+
         CurrentState.Value = ProviderManagerState.AddCredentials;
         NotifyStateChanged();
     }
@@ -628,6 +638,176 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
         }
     }
 
+    /// <summary>
+    /// Browser-based OAuth Authorization Code + PKCE flow.
+    /// Calls daemon to start the flow, opens browser, polls for completion.
+    /// </summary>
+    internal async Task StartBrowserOAuthFlowAsync()
+    {
+        if (NewProviderType is null)
+        {
+            OAuthErrorMessage = "No provider selected.";
+            OAuthFlowState.Value = DeviceFlowState.Error;
+            NotifyStateChanged();
+            return;
+        }
+
+        _oauthCts = new CancellationTokenSource();
+        var ct = _oauthCts.Token;
+
+        ProbeElapsedSeconds.Value = 0;
+        _ = RunProbeTimerAsync(ct);
+
+        const string daemonEndpoint = "http://127.0.0.1:5199";
+        using var httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+
+        try
+        {
+            // Step 1: Ask daemon to start the OAuth flow
+            var startResponse = await httpClient.PostAsync(
+                $"{daemonEndpoint}/api/provider/oauth/start?provider={Uri.EscapeDataString(NewProviderType)}", null, ct);
+
+            if (!startResponse.IsSuccessStatusCode)
+            {
+                var errorBody = await startResponse.Content.ReadAsStringAsync(ct);
+                OAuthErrorMessage = $"Failed to start OAuth flow: {errorBody}";
+                OAuthFlowState.Value = DeviceFlowState.Error;
+                NotifyStateChanged();
+                return;
+            }
+
+            var startResult = await startResponse.Content.ReadFromJsonAsync<System.Text.Json.JsonElement>(ct);
+            var authUrl = startResult.GetProperty("authorizationUrl").GetString()!;
+            var flowState = startResult.GetProperty("state").GetString()!;
+
+            // Step 2: Try to open browser
+            OAuthVerificationUri = authUrl;
+            BrowserOpenFailed = false;
+            OAuthFlowState.Value = DeviceFlowState.WaitingForUser;
+            NotifyStateChanged();
+
+            try
+            {
+                Process.Start(new ProcessStartInfo(authUrl) { UseShellExecute = true });
+            }
+            catch
+            {
+                BrowserOpenFailed = true;
+                NotifyStateChanged();
+            }
+
+            // Step 3: Poll daemon for completion
+            var pollTimeout = TimeSpan.FromMinutes(5);
+            var pollInterval = TimeSpan.FromSeconds(2);
+            var elapsed = TimeSpan.Zero;
+
+            while (elapsed < pollTimeout)
+            {
+                ct.ThrowIfCancellationRequested();
+                await Task.Delay(pollInterval, ct);
+                elapsed += pollInterval;
+
+                var statusResponse = await httpClient.GetFromJsonAsync<System.Text.Json.JsonElement>(
+                    $"{daemonEndpoint}/api/provider/oauth/status/{Uri.EscapeDataString(flowState)}", ct);
+
+                var status = statusResponse.GetProperty("status").GetString();
+                if (status is "Completed")
+                {
+                    // Get the token result from the service
+                    OAuthFlowState.Value = DeviceFlowState.Succeeded;
+                    NotifyStateChanged();
+
+                    // Retrieve token — the daemon stored it in OAuthPkceService
+                    // We need to get it via a separate call or extract from the flow
+                    // For now, transition to probe with the daemon handling token persistence
+                    CurrentState.Value = ProviderManagerState.AddValidating;
+                    NotifyStateChanged();
+                    StartProbe();
+                    return;
+                }
+
+                if (status is "Failed")
+                {
+                    OAuthErrorMessage = "Authorization failed.";
+                    OAuthFlowState.Value = DeviceFlowState.Error;
+                    NotifyStateChanged();
+                    return;
+                }
+            }
+
+            OAuthErrorMessage = "Authorization timed out after 5 minutes.";
+            OAuthFlowState.Value = DeviceFlowState.Expired;
+            NotifyStateChanged();
+        }
+        catch (OperationCanceledException)
+        {
+            OAuthFlowState.Value = DeviceFlowState.Cancelled;
+            NotifyStateChanged();
+        }
+        catch (HttpRequestException)
+        {
+            OAuthErrorMessage = "Could not reach the daemon. Is it running?";
+            OAuthFlowState.Value = DeviceFlowState.Error;
+            NotifyStateChanged();
+        }
+        catch (Exception ex)
+        {
+            OAuthErrorMessage = ex.Message;
+            OAuthFlowState.Value = DeviceFlowState.Error;
+            NotifyStateChanged();
+        }
+        finally
+        {
+            CancelOAuthFlow();
+        }
+    }
+
+    /// <summary>
+    /// Handle a pasted redirect URL for browser OAuth fallback.
+    /// </summary>
+    public async Task SubmitRedirectUrlAsync(string? pastedUrl)
+    {
+        if (!OAuthRedirectParser.TryParse(pastedUrl, out var code, out var state, out var error))
+        {
+            OAuthErrorMessage = error;
+            NotifyStateChanged();
+            return;
+        }
+
+        const string daemonEndpoint = "http://127.0.0.1:5199";
+        using var httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+
+        try
+        {
+            // Send the extracted code+state to the daemon callback endpoint
+            var response = await httpClient.GetAsync(
+                $"{daemonEndpoint}/api/provider/oauth/callback?code={Uri.EscapeDataString(code)}&state={Uri.EscapeDataString(state)}");
+
+            if (response.IsSuccessStatusCode)
+            {
+                OAuthFlowState.Value = DeviceFlowState.Succeeded;
+                NotifyStateChanged();
+
+                CurrentState.Value = ProviderManagerState.AddValidating;
+                NotifyStateChanged();
+                StartProbe();
+            }
+            else
+            {
+                OAuthErrorMessage = "Token exchange failed. The authorization code may be expired.";
+                NotifyStateChanged();
+            }
+        }
+        catch (Exception ex)
+        {
+            OAuthErrorMessage = $"Failed to exchange code: {ex.Message}";
+            NotifyStateChanged();
+        }
+    }
+
+    /// <summary>Whether the browser failed to open (triggers fallback URL display).</summary>
+    public bool BrowserOpenFailed { get; set; }
+
     public void GoBackToList()
     {
         CancelProbe();
@@ -651,6 +831,7 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
                 GoBackToList();
                 break;
             case ProviderManagerState.AddOAuthDeviceFlow:
+            case ProviderManagerState.AddBrowserOAuthFlow:
                 CancelOAuthFlow();
                 CurrentState.Value = ProviderManagerState.AddSelectAuth;
                 NotifyStateChanged();

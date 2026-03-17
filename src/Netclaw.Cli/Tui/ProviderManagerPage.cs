@@ -77,6 +77,7 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
                 ProviderManagerState.AddSelectAuth => BuildAddAuthView(),
                 ProviderManagerState.AddCredentials => BuildCredentialsView(),
                 ProviderManagerState.AddOAuthDeviceFlow => BuildOAuthDeviceFlowView(),
+                ProviderManagerState.AddBrowserOAuthFlow => BuildBrowserOAuthFlowView(),
                 ProviderManagerState.AddValidating => BuildValidatingView(),
                 ProviderManagerState.AddComplete => BuildAddCompleteView(),
                 ProviderManagerState.Details => BuildDetailsView(),
@@ -389,6 +390,100 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
 
         return children;
     }
+
+    private ILayoutNode BuildBrowserOAuthFlowView()
+    {
+        var children = Layouts.Vertical();
+        var providerType = ViewModel.NewProviderType ?? "unknown";
+        var flowState = ViewModel.OAuthFlowState.Value;
+
+        children.WithChild(new TextNode($"  OAuth Login for {providerType}")
+            .WithForeground(Color.White).Bold());
+        children.WithChild(new TextNode("").Height(1));
+
+        switch (flowState)
+        {
+            case DeviceFlowState.NotStarted:
+                children.WithChild(new TextNode("  Starting authorization...")
+                    .WithForeground(Color.Yellow));
+                break;
+
+            case DeviceFlowState.WaitingForUser:
+            case DeviceFlowState.Polling:
+            {
+                var elapsed = ViewModel.ProbeElapsedSeconds.Value;
+                var frame = SpinnerFrames[elapsed % SpinnerFrames.Length];
+
+                if (!ViewModel.BrowserOpenFailed)
+                {
+                    children.WithChild(new TextNode($"  {frame} Opening browser for authorization...")
+                        .WithForeground(Color.Yellow));
+                }
+                else
+                {
+                    children.WithChild(new TextNode("  Could not open browser automatically.")
+                        .WithForeground(Color.Red));
+                    children.WithChild(new TextNode("").Height(1));
+                    children.WithChild(new TextNode("  Open this URL to authorize:")
+                        .WithForeground(Color.White));
+
+                    if (ViewModel.OAuthVerificationUri is not null)
+                    {
+                        children.WithChild(new TextNode($"  {ViewModel.OAuthVerificationUri}")
+                            .WithForeground(Color.Cyan));
+                    }
+
+                    children.WithChild(new TextNode("").Height(1));
+                    children.WithChild(new TextNode($"  {frame} Waiting for callback...  ({elapsed}s)")
+                        .WithForeground(Color.Yellow));
+                }
+
+                children.WithChild(new TextNode("").Height(1));
+                children.WithChild(new TextNode("  Can't receive the callback? Paste the redirect URL:")
+                    .WithForeground(Color.BrightBlack));
+
+                if (_redirectUrlInput is null)
+                {
+                    _redirectUrlInput = new TextInputNode()
+                        .WithPlaceholder("Paste redirect URL here...");
+                    _redirectUrlInput.Submitted
+                        .Subscribe(text => _ = ViewModel.SubmitRedirectUrlAsync(text))
+                        .DisposeWith(_stepSubs);
+                }
+
+                children.WithChild(new PanelNode()
+                    .WithBorderColor(Color.Gray)
+                    .WithContent(_redirectUrlInput)
+                    .Height(3));
+
+                break;
+            }
+
+            case DeviceFlowState.Succeeded:
+                children.WithChild(new TextNode("  \u2714 Authorization successful!")
+                    .WithForeground(Color.Green));
+                break;
+
+            case DeviceFlowState.Denied:
+            case DeviceFlowState.Expired:
+            case DeviceFlowState.Error:
+                children.WithChild(new TextNode($"  \u2718 {ViewModel.OAuthErrorMessage ?? "Authorization failed."}")
+                    .WithForeground(Color.Red));
+                children.WithChild(new TextNode("").Height(1));
+                children.WithChild(new TextNode("  Press [Esc] to go back and try again.")
+                    .WithForeground(Color.Gray));
+                break;
+
+            case DeviceFlowState.Cancelled:
+                children.WithChild(new TextNode("  Authorization cancelled.")
+                    .WithForeground(Color.Yellow));
+                break;
+        }
+
+        return children;
+    }
+
+    private TextInputNode? _redirectUrlInput;
 
     private ILayoutNode BuildValidatingView()
     {
