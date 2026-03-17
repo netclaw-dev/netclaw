@@ -611,7 +611,7 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
     {
         var children = Layouts.Vertical();
         var providerType = ViewModel.SelectedProviderType ?? "unknown";
-        var flowState = ViewModel.OAuthFlowState.Value;
+        var flowState = ViewModel.OAuth.FlowState.Value;
 
         children.WithChild(new TextNode($"  OAuth Device Flow for {providerType}")
             .WithForeground(Color.White).Bold());
@@ -630,16 +630,16 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
                 var elapsed = ViewModel.ProbeElapsedSeconds.Value;
                 var frame = SpinnerFrames[elapsed % SpinnerFrames.Length];
 
-                if (ViewModel.OAuthVerificationUri is not null)
+                if (ViewModel.OAuth.VerificationUri is not null)
                 {
-                    children.WithChild(new TextNode($"  Visit: {ViewModel.OAuthVerificationUri}")
+                    children.WithChild(new TextNode($"  Visit: {ViewModel.OAuth.VerificationUri}")
                         .WithForeground(Color.Cyan));
                     children.WithChild(new TextNode("").Height(1));
                 }
 
-                if (ViewModel.OAuthUserCode is not null)
+                if (ViewModel.OAuth.UserCode is not null)
                 {
-                    children.WithChild(new TextNode($"  Enter code: {ViewModel.OAuthUserCode}")
+                    children.WithChild(new TextNode($"  Enter code: {ViewModel.OAuth.UserCode}")
                         .WithForeground(Color.White).Bold());
                     children.WithChild(new TextNode("").Height(1));
                 }
@@ -657,7 +657,7 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             case DeviceFlowState.Denied:
             case DeviceFlowState.Expired:
             case DeviceFlowState.Error:
-                children.WithChild(new TextNode($"  \u2717 {ViewModel.OAuthErrorMessage ?? "Authorization failed."}")
+                children.WithChild(new TextNode($"  \u2717 {ViewModel.OAuth.ErrorMessage ?? "Authorization failed."}")
                     .WithForeground(Color.Red));
                 children.WithChild(new TextNode("").Height(1));
                 children.WithChild(new TextNode("  Press [Esc] to go back and try again.")
@@ -679,12 +679,12 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
     {
         var result = OAuthFlowViews.BuildBrowserOAuthFlow(
             ViewModel.SelectedProviderType ?? "unknown",
-            ViewModel.OAuthFlowState.Value,
-            ViewModel.BrowserOpenFailed,
-            ViewModel.OAuthVerificationUri,
+            ViewModel.OAuth.FlowState.Value,
+            ViewModel.OAuth.BrowserOpenFailed,
+            ViewModel.OAuth.VerificationUri,
             ViewModel.SpinnerTick.Value,
             ViewModel.ProbeElapsedSeconds.Value,
-            ViewModel.OAuthErrorMessage,
+            ViewModel.OAuth.ErrorMessage,
             _clipboardService,
             ref _redirectUrlInput,
             text => _ = ViewModel.SubmitRedirectUrlAsync(text));
@@ -1352,7 +1352,7 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             if (_providerSubStep == 5)
             {
                 // Going back from OAuth device flow — cancel flow and go to auth selection
-                ViewModel.CancelOAuthFlow();
+                ViewModel.OAuth.Cancel();
                 SetProviderSubStep(1);
                 return true;
             }
@@ -1625,7 +1625,7 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             .DisposeWith(Subscriptions);
 
         // OAuth device flow state changed — invalidate to show progress, auto-advance on success
-        ViewModel.OAuthFlowState
+        ViewModel.OAuth.FlowState
             .Subscribe(state =>
             {
                 if (ViewModel.CurrentStep.Value != WizardStep.Provider || _providerSubStep is not (5 or 6))

@@ -342,7 +342,7 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
     {
         var children = Layouts.Vertical();
         var providerType = ViewModel.NewProviderType ?? "unknown";
-        var flowState = ViewModel.OAuthFlowState.Value;
+        var flowState = ViewModel.OAuth.FlowState.Value;
 
         children.WithChild(new TextNode($"  OAuth Device Flow for {providerType}")
             .WithForeground(Color.White).Bold());
@@ -361,16 +361,16 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
                 var elapsed = ViewModel.ProbeElapsedSeconds.Value;
                 var frame = SpinnerFrames[elapsed % SpinnerFrames.Length];
 
-                if (ViewModel.OAuthVerificationUri is not null)
+                if (ViewModel.OAuth.VerificationUri is not null)
                 {
-                    children.WithChild(new TextNode($"  Visit: {ViewModel.OAuthVerificationUri}")
+                    children.WithChild(new TextNode($"  Visit: {ViewModel.OAuth.VerificationUri}")
                         .WithForeground(Color.Cyan));
                     children.WithChild(new TextNode("").Height(1));
                 }
 
-                if (ViewModel.OAuthUserCode is not null)
+                if (ViewModel.OAuth.UserCode is not null)
                 {
-                    children.WithChild(new TextNode($"  Enter code: {ViewModel.OAuthUserCode}")
+                    children.WithChild(new TextNode($"  Enter code: {ViewModel.OAuth.UserCode}")
                         .WithForeground(Color.White).Bold());
                     children.WithChild(new TextNode("").Height(1));
                 }
@@ -388,7 +388,7 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
             case DeviceFlowState.Denied:
             case DeviceFlowState.Expired:
             case DeviceFlowState.Error:
-                children.WithChild(new TextNode($"  \u2718 {ViewModel.OAuthErrorMessage ?? "Authorization failed."}")
+                children.WithChild(new TextNode($"  \u2718 {ViewModel.OAuth.ErrorMessage ?? "Authorization failed."}")
                     .WithForeground(Color.Red));
                 children.WithChild(new TextNode("").Height(1));
                 children.WithChild(new TextNode("  Press [Esc] to go back and try again.")
@@ -408,12 +408,12 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
     {
         var result = OAuthFlowViews.BuildBrowserOAuthFlow(
             ViewModel.NewProviderType ?? "unknown",
-            ViewModel.OAuthFlowState.Value,
-            ViewModel.BrowserOpenFailed,
-            ViewModel.OAuthVerificationUri,
+            ViewModel.OAuth.FlowState.Value,
+            ViewModel.OAuth.BrowserOpenFailed,
+            ViewModel.OAuth.VerificationUri,
             ViewModel.SpinnerTick.Value,
             ViewModel.ProbeElapsedSeconds.Value,
-            ViewModel.OAuthErrorMessage,
+            ViewModel.OAuth.ErrorMessage,
             _clipboardService,
             ref _redirectUrlInput,
             text => _ = ViewModel.SubmitRedirectUrlAsync(text));
@@ -657,10 +657,10 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
         // Browser OAuth: "C" to copy URL to clipboard
         if (state == ProviderManagerState.AddBrowserOAuthFlow
             && keyInfo.Key == ConsoleKey.C
-            && ViewModel.BrowserOpenFailed
-            && ViewModel.OAuthVerificationUri is not null)
+            && ViewModel.OAuth.BrowserOpenFailed
+            && ViewModel.OAuth.VerificationUri is not null)
         {
-            if (OAuthFlowViews.TryCopyToClipboard(_clipboardService, ViewModel.OAuthVerificationUri))
+            if (OAuthFlowViews.TryCopyToClipboard(_clipboardService, ViewModel.OAuth.VerificationUri))
                 ViewModel.StatusMessage.Value = "\u2714 URL copied to clipboard";
             return;
         }

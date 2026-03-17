@@ -1,7 +1,6 @@
 using System.Diagnostics;
-using System.Net.Http.Json;
-using System.Text.Json;
 using Netclaw.Cli.Config;
+using Netclaw.Cli.Daemon;
 using Netclaw.Configuration;
 using Netclaw.Configuration.Providers;
 using Netclaw.Configuration.Providers.OAuth;
@@ -71,7 +70,6 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
     private readonly IProviderProbe _probe;
     private readonly DeviceFlowServiceFactory? _oauthFactory;
     private CancellationTokenSource? _probeCts;
-    private CancellationTokenSource? _oauthCts;
 
     public ReactiveProperty<ProviderManagerState> CurrentState { get; } = new(ProviderManagerState.Loading);
     public ReactiveProperty<string> StatusMessage { get; } = new("");
@@ -108,17 +106,8 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
     public string? NewApiKey { get; set; }
     public string? NewEndpoint { get; set; }
 
-    // ── OAuth device flow state ──
-    public ReactiveProperty<DeviceFlowState> OAuthFlowState { get; } = new(DeviceFlowState.NotStarted);
-    public string? OAuthUserCode { get; set; }
-    public string? OAuthVerificationUri { get; set; }
-    public string? OAuthErrorMessage { get; set; }
-    internal OAuthDeviceFlowResult? OAuthResult { get; set; }
-
-    /// <summary>
-    /// Completes when the OAuth device flow finishes. Used for testing.
-    /// </summary>
-    internal Task? OAuthFlowCompletion { get; private set; }
+    // ── OAuth flow (shared coordinator) ──
+    public OAuthFlowCoordinator OAuth { get; private set; } = null!; // initialized in constructor
 
     // ── Fix flow state ──
     public string? FixApiKey { get; set; }
@@ -144,18 +133,23 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
     public ProviderDescriptorRegistry Registry => _registry;
 
     public ProviderManagerViewModel(NetclawPaths paths, ProviderDescriptorRegistry registry,
-        DeviceFlowServiceFactory? oauthFactory = null)
-        : this(paths, registry, registry, oauthFactory)
+        DeviceFlowServiceFactory? oauthFactory = null, DaemonApi? daemonApi = null)
+        : this(paths, registry, registry, oauthFactory, daemonApi)
     {
     }
 
     public ProviderManagerViewModel(NetclawPaths paths, ProviderDescriptorRegistry registry, IProviderProbe probe,
-        DeviceFlowServiceFactory? oauthFactory = null)
+        DeviceFlowServiceFactory? oauthFactory = null, DaemonApi? daemonApi = null)
     {
         _paths = paths;
         _registry = registry;
         _probe = probe;
         _oauthFactory = oauthFactory;
+        OAuth = new OAuthFlowCoordinator(
+            registry,
+            oauthFactory,
+            daemonApi,
+            requestRedraw: () => NotifyStateChanged());
     }
 
     public override void OnActivated()
@@ -361,7 +355,15 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
         {
             CurrentState.Value = ProviderManagerState.AddOAuthDeviceFlow;
             NotifyStateChanged();
-            OAuthFlowCompletion = StartOAuthDeviceFlowAsync();
+            ProbeElapsedSeconds.Value = 0;
+            var ct = OAuth.StartDeviceFlow(NewProviderType!, result =>
+            {
+                NewApiKey = result.AccessToken.Value;
+                CurrentState.Value = ProviderManagerState.AddValidating;
+                NotifyStateChanged();
+                StartProbe();
+            });
+            _ = RunProbeTimerAsync(ct);
             return;
         }
 
@@ -369,7 +371,16 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
         {
             CurrentState.Value = ProviderManagerState.AddBrowserOAuthFlow;
             NotifyStateChanged();
-            OAuthFlowCompletion = StartBrowserOAuthFlowAsync();
+            ProbeElapsedSeconds.Value = 0;
+            var ct = OAuth.StartBrowserFlow(NewProviderType!, result =>
+            {
+                NewApiKey = result.AccessToken.Value;
+                NewAuthMethod = AuthMethod.OAuthPkce;
+                CurrentState.Value = ProviderManagerState.AddValidating;
+                NotifyStateChanged();
+                StartProbe();
+            });
+            _ = RunProbeTimerAsync(ct);
             return;
         }
 
@@ -545,284 +556,18 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
     }
 
     /// <summary>
-    /// Run the OAuth device flow: start device authorization, display user code,
-    /// poll for token, persist tokens on success, then transition to probe validation.
-    /// </summary>
-    internal async Task StartOAuthDeviceFlowAsync()
-    {
-        if (_oauthFactory is null || NewProviderType is null)
-        {
-            OAuthErrorMessage = "OAuth service not available.";
-            OAuthFlowState.Value = DeviceFlowState.Error;
-            NotifyStateChanged();
-            return;
-        }
-
-        var descriptor = _registry.Get(NewProviderType);
-        if (descriptor.OAuthDeviceEndpoint is null || descriptor.OAuthTokenEndpoint is null
-            || descriptor.OAuthDefaultClientId is null)
-        {
-            OAuthErrorMessage = "Provider does not support OAuth device flow.";
-            OAuthFlowState.Value = DeviceFlowState.Error;
-            NotifyStateChanged();
-            return;
-        }
-
-        _oauthCts = new CancellationTokenSource();
-        var ct = _oauthCts.Token;
-
-        ProbeElapsedSeconds.Value = 0;
-        _ = RunProbeTimerAsync(ct);
-
-        var service = _oauthFactory.GetFor(descriptor);
-        var config = OAuthDeviceFlowConfig.FromDescriptor(descriptor);
-
-        try
-        {
-            // Step 1: Start device authorization
-            var deviceAuth = await service.StartDeviceAuthorizationAsync(config, ct);
-            OAuthUserCode = deviceAuth.UserCode;
-            OAuthVerificationUri = deviceAuth.VerificationUri;
-            OAuthFlowState.Value = DeviceFlowState.WaitingForUser;
-            NotifyStateChanged();
-
-            // Step 2: Poll for token
-            var result = await service.PollForTokenAsync(config, deviceAuth,
-                state =>
-                {
-                    if (state == DeviceFlowState.Succeeded)
-                        return;
-
-                    OAuthFlowState.Value = state;
-                    NotifyStateChanged();
-                }, ct);
-
-            // Step 3: Keep tokens in-memory until provider is confirmed
-            OAuthResult = result;
-            OAuthFlowState.Value = DeviceFlowState.Succeeded;
-            NotifyStateChanged();
-
-            // Step 4: Transition to probe validation using the OAuth token
-            NewApiKey = result.AccessToken.Value;
-            CurrentState.Value = ProviderManagerState.AddValidating;
-            NotifyStateChanged();
-            StartProbe();
-        }
-        catch (OAuthDeviceFlowDeniedException)
-        {
-            OAuthErrorMessage = "Authorization was denied.";
-            OAuthFlowState.Value = DeviceFlowState.Denied;
-            NotifyStateChanged();
-        }
-        catch (OAuthDeviceFlowExpiredException)
-        {
-            OAuthErrorMessage = "The authorization code expired. Please try again.";
-            OAuthFlowState.Value = DeviceFlowState.Expired;
-            NotifyStateChanged();
-        }
-        catch (OperationCanceledException)
-        {
-            OAuthFlowState.Value = DeviceFlowState.Cancelled;
-            NotifyStateChanged();
-        }
-        catch (Exception ex)
-        {
-            OAuthErrorMessage = ex.Message;
-            OAuthFlowState.Value = DeviceFlowState.Error;
-            NotifyStateChanged();
-        }
-        finally
-        {
-            CancelOAuthFlow();
-        }
-    }
-
-    /// <summary>
-    /// Browser-based OAuth Authorization Code + PKCE flow.
-    /// Calls daemon to start the flow, opens browser, polls for completion.
-    /// </summary>
-    internal async Task StartBrowserOAuthFlowAsync()
-    {
-        if (NewProviderType is null)
-        {
-            OAuthErrorMessage = "No provider selected.";
-            OAuthFlowState.Value = DeviceFlowState.Error;
-            NotifyStateChanged();
-            return;
-        }
-
-        _oauthCts = new CancellationTokenSource();
-        var ct = _oauthCts.Token;
-
-        ProbeElapsedSeconds.Value = 0;
-        _ = RunProbeTimerAsync(ct);
-
-        const string daemonEndpoint = "http://127.0.0.1:5199";
-        using var httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
-
-        try
-        {
-            // Step 1: Ask daemon to start the OAuth flow
-            var startResponse = await httpClient.PostAsync(
-                $"{daemonEndpoint}/api/provider/oauth/start?provider={Uri.EscapeDataString(NewProviderType)}", null, ct);
-
-            if (!startResponse.IsSuccessStatusCode)
-            {
-                var errorBody = await startResponse.Content.ReadAsStringAsync(ct);
-                OAuthErrorMessage = $"Failed to start OAuth flow: {errorBody}";
-                OAuthFlowState.Value = DeviceFlowState.Error;
-                NotifyStateChanged();
-                return;
-            }
-
-            var startResult = await startResponse.Content.ReadFromJsonAsync<System.Text.Json.JsonElement>(ct);
-            var authUrl = startResult.GetProperty("authorizationUrl").GetString()!;
-            var flowState = startResult.GetProperty("state").GetString()!;
-
-            // Step 2: Try to open browser (detect headless first)
-            OAuthVerificationUri = authUrl;
-            BrowserOpenFailed = !BrowserDetection.CanOpenBrowser();
-            OAuthFlowState.Value = DeviceFlowState.WaitingForUser;
-            NotifyStateChanged();
-
-            if (!BrowserOpenFailed)
-            {
-                try
-                {
-                    Process.Start(new ProcessStartInfo(authUrl) { UseShellExecute = true });
-                }
-                catch
-                {
-                    BrowserOpenFailed = true;
-                    NotifyStateChanged();
-                }
-            }
-
-            // Step 3: Poll daemon for completion
-            var pollTimeout = TimeSpan.FromMinutes(5);
-            var pollInterval = TimeSpan.FromSeconds(2);
-            var elapsed = TimeSpan.Zero;
-
-            while (elapsed < pollTimeout)
-            {
-                ct.ThrowIfCancellationRequested();
-                await Task.Delay(pollInterval, ct);
-                elapsed += pollInterval;
-
-                var statusResponse = await httpClient.GetFromJsonAsync<System.Text.Json.JsonElement>(
-                    $"{daemonEndpoint}/api/provider/oauth/status/{Uri.EscapeDataString(flowState)}", ct);
-
-                var status = statusResponse.GetProperty("status").GetString();
-                if (status is "Completed")
-                {
-                    // Extract token from status response
-                    var accessToken = statusResponse.TryGetProperty("accessToken", out var atProp)
-                        ? atProp.GetString() : null;
-                    var refreshToken = statusResponse.TryGetProperty("refreshToken", out var rtProp)
-                        ? rtProp.GetString() : null;
-                    var expiresAt = statusResponse.TryGetProperty("expiresAt", out var expProp)
-                        ? expProp.GetString() : null;
-
-                    if (!string.IsNullOrEmpty(accessToken))
-                    {
-                        NewApiKey = accessToken;
-                        NewAuthMethod = AuthMethod.OAuthPkce;
-                        OAuthResult = new OAuthDeviceFlowResult(
-                            new SensitiveString(accessToken),
-                            refreshToken is not null ? new SensitiveString(refreshToken) : null,
-                            expiresAt is not null ? DateTimeOffset.Parse(expiresAt) : null);
-                    }
-
-                    OAuthFlowState.Value = DeviceFlowState.Succeeded;
-                    NotifyStateChanged();
-
-                    CurrentState.Value = ProviderManagerState.AddValidating;
-                    NotifyStateChanged();
-                    StartProbe();
-                    return;
-                }
-
-                if (status is "Failed")
-                {
-                    OAuthErrorMessage = "Authorization failed.";
-                    OAuthFlowState.Value = DeviceFlowState.Error;
-                    NotifyStateChanged();
-                    return;
-                }
-            }
-
-            OAuthErrorMessage = "Authorization timed out after 5 minutes.";
-            OAuthFlowState.Value = DeviceFlowState.Expired;
-            NotifyStateChanged();
-        }
-        catch (OperationCanceledException)
-        {
-            OAuthFlowState.Value = DeviceFlowState.Cancelled;
-            NotifyStateChanged();
-        }
-        catch (HttpRequestException)
-        {
-            OAuthErrorMessage = "Could not reach the daemon. Is it running?";
-            OAuthFlowState.Value = DeviceFlowState.Error;
-            NotifyStateChanged();
-        }
-        catch (Exception ex)
-        {
-            OAuthErrorMessage = ex.Message;
-            OAuthFlowState.Value = DeviceFlowState.Error;
-            NotifyStateChanged();
-        }
-        finally
-        {
-            CancelOAuthFlow();
-        }
-    }
-
-    /// <summary>
     /// Handle a pasted redirect URL for browser OAuth fallback.
     /// </summary>
     public async Task SubmitRedirectUrlAsync(string? pastedUrl)
     {
-        if (!OAuthRedirectParser.TryParse(pastedUrl, out var code, out var state, out var error))
+        await OAuth.SubmitRedirectUrlAsync(pastedUrl);
+        if (OAuth.FlowState.Value == DeviceFlowState.Succeeded)
         {
-            OAuthErrorMessage = error;
+            CurrentState.Value = ProviderManagerState.AddValidating;
             NotifyStateChanged();
-            return;
-        }
-
-        const string daemonEndpoint = "http://127.0.0.1:5199";
-        using var httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
-
-        try
-        {
-            // Send the extracted code+state to the daemon callback endpoint
-            var response = await httpClient.GetAsync(
-                $"{daemonEndpoint}/api/provider/oauth/callback?code={Uri.EscapeDataString(code)}&state={Uri.EscapeDataString(state)}");
-
-            if (response.IsSuccessStatusCode)
-            {
-                OAuthFlowState.Value = DeviceFlowState.Succeeded;
-                NotifyStateChanged();
-
-                CurrentState.Value = ProviderManagerState.AddValidating;
-                NotifyStateChanged();
-                StartProbe();
-            }
-            else
-            {
-                OAuthErrorMessage = "Token exchange failed. The authorization code may be expired.";
-                NotifyStateChanged();
-            }
-        }
-        catch (Exception ex)
-        {
-            OAuthErrorMessage = $"Failed to exchange code: {ex.Message}";
-            NotifyStateChanged();
+            StartProbe();
         }
     }
-
-    /// <summary>Whether the browser failed to open (triggers fallback URL display).</summary>
-    public bool BrowserOpenFailed { get; set; }
 
     public void GoBackToList()
     {
@@ -848,7 +593,7 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
                 break;
             case ProviderManagerState.AddOAuthDeviceFlow:
             case ProviderManagerState.AddBrowserOAuthFlow:
-                CancelOAuthFlow();
+                OAuth.Cancel();
                 CurrentState.Value = ProviderManagerState.AddSelectAuth;
                 NotifyStateChanged();
                 break;
@@ -951,11 +696,10 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
         var result = new ProviderProbeResult(false, "Validation failed before probe completed.", []);
         try
         {
-            result = await _registry.ProbeAsync(
+            result = await _probe.ProbeAsync(
                     providerType,
                     NewEndpoint,
                     NewApiKey,
-                    NewAuthMethod,
                     ct)
                 .WaitAsync(ProbeHardTimeout, ct);
         }
@@ -1021,13 +765,13 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
             tickCount++;
             SpinnerTick.Value = tickCount;
 
-            // Update elapsed seconds every ~1 second (every 8 ticks at 120ms)
             if (tickCount % 8 == 0)
                 ProbeElapsedSeconds.Value++;
 
             RequestRedraw();
         }
     }
+
 
     // ── Config writing ──
 
@@ -1059,13 +803,13 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
         ConfigFileHelper.WriteConfigFile(_paths.NetclawConfigPath, config);
 
         // Write secrets via SecretsFileWriter for encryption-at-rest
-        if (OAuthResult is not null)
+        if (OAuth.Result is not null)
         {
             // OAuth flow: persist tokens only after user confirms add
             OAuthTokenPersistence.PersistTokens(
                 _paths,
                 NewProviderName!,
-                OAuthResult,
+                OAuth.Result,
                 SecretsProtection.CreateProtector(_paths));
         }
         else if (!string.IsNullOrWhiteSpace(NewApiKey))
@@ -1107,7 +851,7 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
     private void ClearAddState()
     {
         CancelProbe();
-        CancelOAuthFlow();
+        OAuth.Reset();
         NewProviderName = null;
         NewProviderType = null;
         NewAuthMethod = AuthMethod.None;
@@ -1116,21 +860,6 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
         ProbeResult.Value = null;
         ProbeElapsedSeconds.Value = 0;
         IsFixFlow = false;
-        OAuthFlowState.Value = DeviceFlowState.NotStarted;
-        OAuthUserCode = null;
-        OAuthVerificationUri = null;
-        OAuthErrorMessage = null;
-        OAuthResult = null;
-    }
-
-    private void CancelOAuthFlow()
-    {
-        if (_oauthCts is not null)
-        {
-            _oauthCts.Cancel();
-            _oauthCts.Dispose();
-            _oauthCts = null;
-        }
     }
 
     private void NotifyStateChanged()
@@ -1152,16 +881,16 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
     public override void Dispose()
     {
         CancelProbe();
-        CancelOAuthFlow();
+        OAuth.Dispose();
         CurrentState.Dispose();
         StatusMessage.Dispose();
         IsProbing.Dispose();
         ProbeResult.Dispose();
         ProbeElapsedSeconds.Dispose();
+        SpinnerTick.Dispose();
         IsEagerProbing.Dispose();
         EagerProbeElapsedSeconds.Dispose();
         StateVersion.Dispose();
-        OAuthFlowState.Dispose();
         base.Dispose();
     }
 }

@@ -247,7 +247,7 @@ public sealed class InitWizardViewModelTests : IDisposable
         vm.SelectedProviderType = "openai";
         vm.SelectedAuthMethod = AuthMethod.OAuthDevice;
         vm.ApiKeyInput = null;
-        vm.OAuthResult = new OAuthDeviceFlowResult(
+        vm.OAuth.Result = new OAuthDeviceFlowResult(
             new SensitiveString("oauth-access-token"),
             new SensitiveString("oauth-refresh-token"),
             DateTimeOffset.UtcNow.AddHours(1));

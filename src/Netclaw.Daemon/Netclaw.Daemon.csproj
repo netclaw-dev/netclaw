@@ -8,6 +8,8 @@
     <Nullable>enable</Nullable>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
     <InvariantGlobalization>true</InvariantGlobalization>
+    <!-- OpenAI Responses API (ResponsesClient) is still marked experimental -->
+    <NoWarn>$(NoWarn);OPENAI001</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>

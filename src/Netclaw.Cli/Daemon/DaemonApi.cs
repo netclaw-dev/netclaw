@@ -142,6 +142,32 @@ public sealed class DaemonApi
             $"{_endpoint}/api/mcp/oauth/status/{Uri.EscapeDataString(name)}", cts.Token);
     }
 
+    // ── Provider OAuth ─────────────────────────────────────────────────
+
+    public async Task<HttpResponseMessage> StartProviderOAuthAsync(string providerType, CancellationToken ct = default)
+    {
+        using var cts = CreateTimeoutCts(LongTimeout, ct);
+        var client = _factory.CreateClient();
+        return await client.PostAsync(
+            $"{_endpoint}/api/provider/oauth/start?provider={Uri.EscapeDataString(providerType)}", null, cts.Token);
+    }
+
+    public async Task<JsonElement> GetProviderOAuthStatusAsync(string state, CancellationToken ct = default)
+    {
+        using var cts = CreateTimeoutCts(DefaultTimeout, ct);
+        var client = _factory.CreateClient();
+        return await client.GetFromJsonAsync<JsonElement>(
+            $"{_endpoint}/api/provider/oauth/status/{Uri.EscapeDataString(state)}", cts.Token);
+    }
+
+    public async Task<HttpResponseMessage> ProviderOAuthCallbackAsync(string code, string state, CancellationToken ct = default)
+    {
+        using var cts = CreateTimeoutCts(LongTimeout, ct);
+        var client = _factory.CreateClient();
+        return await client.GetAsync(
+            $"{_endpoint}/api/provider/oauth/callback?code={Uri.EscapeDataString(code)}&state={Uri.EscapeDataString(state)}", cts.Token);
+    }
+
     // ── Health (for init wizard polling) ──────────────────────────────
 
     public async Task<bool> IsHealthyAsync(CancellationToken ct = default)

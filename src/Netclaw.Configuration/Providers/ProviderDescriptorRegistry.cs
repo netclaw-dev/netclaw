@@ -44,10 +44,7 @@ public sealed class ProviderDescriptorRegistry : IProviderProbe
     public bool TryGet(string typeKey, out IProviderDescriptor descriptor)
         => _descriptors.TryGetValue(typeKey, out descriptor!);
 
-    /// <summary>
-    /// <see cref="IProviderProbe"/> implementation that delegates to the
-    /// appropriate descriptor's <see cref="IProviderDescriptor.ProbeAsync"/>.
-    /// </summary>
+    /// <inheritdoc />
     public Task<ProviderProbeResult> ProbeAsync(
         string providerType, string? endpoint, string? apiKey,
         CancellationToken ct = default)
