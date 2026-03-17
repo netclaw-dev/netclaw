@@ -288,6 +288,7 @@ static async Task RunAsync(string[] args)
         }
 
         var statsAsJson = false;
+        var statsTui = false;
         int? statsDays = null;
         for (var i = 1; i < args.Length; i++)
         {
@@ -295,6 +296,12 @@ static async Task RunAsync(string[] args)
             if (arg is "--json")
             {
                 statsAsJson = true;
+                continue;
+            }
+
+            if (arg is "--tui")
+            {
+                statsTui = true;
                 continue;
             }
 
@@ -370,6 +377,19 @@ static async Task RunAsync(string[] args)
 
         builder.Logging.ClearProviders();
         builder.Logging.SetMinimumLevel(LogLevel.Warning);
+
+        if (statsTui)
+        {
+            builder.Services.AddSingleton(new StatsNavigationState { Days = statsDays ?? 7 });
+            builder.Services.AddTermina("/stats", termina =>
+            {
+                termina.RegisterRoute<StatsPage, StatsViewModel>("/stats");
+            });
+
+            var statsApp = builder.Build();
+            await statsApp.RunAsync();
+            return;
+        }
 
         using var host = builder.Build();
         using var scope = host.Services.CreateScope();
@@ -827,6 +847,7 @@ static void WriteStatsHelp()
     Console.WriteLine("Options:");
     Console.WriteLine("  --days <N>             Show trailing N-day daily breakdown");
     Console.WriteLine("  --all                  Show all-time daily breakdown");
+    Console.WriteLine("  --tui                  Visual dashboard (default: last 7 days)");
     Console.WriteLine("  --json                 Alias for --format json");
     Console.WriteLine("  --format <text|json>   Output format (default: text)");
 }
