@@ -275,6 +275,34 @@ if [[ "$resume_help" != *"--resume"* ]]; then
   exit 1
 fi
 
+# ── Stats smoke tests ──
+# Verify the stats command returns data from the running daemon.
+# At this point we have a running daemon with at least one completed session.
+
+echo "Testing netclaw stats (text)..."
+stats_output="$(run_sandbox_timed "$STEP_TIMEOUT_SECONDS" netclaw stats)"
+echo "$stats_output"
+if [[ "$stats_output" != *"tokens:"* ]]; then
+  echo "Expected stats output to include token counters."
+  exit 1
+fi
+
+echo "Testing netclaw stats --json..."
+stats_json="$(run_sandbox_timed "$STEP_TIMEOUT_SECONDS" netclaw stats --json)"
+echo "$stats_json"
+if [[ "$stats_json" != *"inputTokensTotal"* ]]; then
+  echo "Expected stats --json to include inputTokensTotal field."
+  exit 1
+fi
+
+echo "Testing netclaw stats --days 7..."
+stats_days="$(run_sandbox_timed "$STEP_TIMEOUT_SECONDS" netclaw stats --days 7)"
+echo "$stats_days"
+if [[ "$stats_days" != *"date"* ]]; then
+  echo "Expected stats --days 7 to include daily breakdown with date column."
+  exit 1
+fi
+
 # ── Reminder lifecycle smoke tests ──
 # Schedule a one-shot reminder, wait for it to execute and record history,
 # then cancel it and verify it is fully removed.

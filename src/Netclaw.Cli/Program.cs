@@ -373,7 +373,6 @@ static async Task RunAsync(string[] args)
 
         var builder = Host.CreateApplicationBuilder(args);
         ConfigureConfigServices(builder.Services, builder.Configuration);
-        builder.Services.AddHttpClient();
 
         builder.Logging.ClearProviders();
         builder.Logging.SetMinimumLevel(LogLevel.Warning);
@@ -393,7 +392,7 @@ static async Task RunAsync(string[] args)
 
         using var host = builder.Build();
         using var scope = host.Services.CreateScope();
-        var exitCode = await RunStatsAsync(scope.ServiceProvider, builder.Configuration, statsAsJson, statsDays);
+        var exitCode = await RunStatsAsync(scope.ServiceProvider, statsAsJson, statsDays);
         Environment.ExitCode = exitCode;
         return;
     }
@@ -1166,36 +1165,13 @@ static string FormatUptime(long uptimeSeconds)
 // Stats command
 // ═══════════════════════════════════════════════════════════════════════
 
-static async Task<int> RunStatsAsync(IServiceProvider services, IConfiguration configuration, bool jsonOutput, int? days = null)
+static async Task<int> RunStatsAsync(IServiceProvider services, bool jsonOutput, int? days = null)
 {
-    var endpoint = configuration["Daemon:Endpoint"]
-        ?? Environment.GetEnvironmentVariable("NETCLAW_DAEMON_ENDPOINT")
-        ?? "http://127.0.0.1:5199";
-
-    var url = $"{endpoint.TrimEnd('/')}/api/stats";
-    if (days.HasValue)
-        url += $"?days={days.Value}";
-
-    var httpClientFactory = services.GetRequiredService<IHttpClientFactory>();
-    var client = httpClientFactory.CreateClient();
+    var api = services.GetRequiredService<DaemonApi>();
 
     try
     {
-        using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-        using var response = await client.GetAsync(url, timeoutCts.Token);
-
-        if (!response.IsSuccessStatusCode)
-        {
-            Console.WriteLine($"[FAIL] stats: daemon returned {(int)response.StatusCode} from {url}");
-            Console.WriteLine("       fix: run `netclaw daemon start` and retry.");
-            return 1;
-        }
-
-        var payload = await response.Content.ReadAsStreamAsync(timeoutCts.Token);
-        var stats = await JsonSerializer.DeserializeAsync<DaemonStats.Response>(
-            payload,
-            new JsonSerializerOptions(JsonSerializerDefaults.Web),
-            timeoutCts.Token);
+        var stats = await api.GetStatsAsync(days);
 
         if (stats is null)
         {
@@ -1218,9 +1194,15 @@ static async Task<int> RunStatsAsync(IServiceProvider services, IConfiguration c
 
         return 0;
     }
+    catch (HttpRequestException ex) when (ex.StatusCode is not null)
+    {
+        Console.WriteLine($"[FAIL] stats: daemon returned {(int)ex.StatusCode} from {api.Endpoint}");
+        Console.WriteLine("       fix: run `netclaw daemon start` and retry.");
+        return 1;
+    }
     catch (Exception ex)
     {
-        Console.WriteLine($"[FAIL] stats: unable to reach daemon at {url}: {ex.Message}");
+        Console.WriteLine($"[FAIL] stats: unable to reach daemon at {api.Endpoint}: {ex.Message}");
         Console.WriteLine("       fix: run `netclaw daemon start` and retry.");
         return 1;
     }

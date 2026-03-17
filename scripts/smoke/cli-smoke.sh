@@ -135,6 +135,49 @@ else
   fail "sessions --json: unexpected exit code $sessions_json_exit (expected 0 or 1)"
 fi
 
+# ── Stats command (daemon-optional) ───────────────────────────────────────────
+
+echo ""
+echo "=== netclaw stats --help ==="
+stats_help_exit=0
+stats_help_output="$(run_netclaw stats --help)" || stats_help_exit=$?
+echo "$stats_help_output"
+if [[ $stats_help_exit -eq 0 && "$stats_help_output" == *"--days"* ]]; then
+  pass "stats --help: exits 0 and mentions --days"
+else
+  fail "stats --help: exit=$stats_help_exit, missing --days in output"
+fi
+
+echo ""
+echo "=== netclaw stats (daemon-optional) ==="
+set +e
+stats_exit=0
+stats_output="$(run_netclaw stats 2>&1)"
+stats_exit=$?
+set -e
+echo "$stats_output"
+# 0=stats returned, 1=daemon unreachable — both valid
+if [[ $stats_exit -le 1 ]]; then
+  pass "stats: exits with valid code $stats_exit"
+else
+  fail "stats: unexpected exit code $stats_exit (expected 0 or 1)"
+fi
+
+echo ""
+echo "=== netclaw stats --json (daemon-optional) ==="
+set +e
+stats_json_exit=0
+stats_json_output="$(run_netclaw stats --json 2>&1)"
+stats_json_exit=$?
+set -e
+echo "$stats_json_output"
+# 0=stats returned, 1=daemon unreachable — both valid
+if [[ $stats_json_exit -le 1 ]]; then
+  pass "stats --json: exits with valid code $stats_json_exit"
+else
+  fail "stats --json: unexpected exit code $stats_json_exit (expected 0 or 1)"
+fi
+
 # ── No-args and unknown command behavior ─────────────────────────────────────
 
 echo ""

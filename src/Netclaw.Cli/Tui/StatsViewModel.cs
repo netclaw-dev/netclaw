@@ -1,5 +1,4 @@
-using System.Net.Http.Json;
-using System.Text.Json;
+using Netclaw.Cli.Daemon;
 using Netclaw.Configuration;
 using R3;
 using Termina.Input;
@@ -9,24 +8,17 @@ namespace Netclaw.Cli.Tui;
 
 public sealed class StatsViewModel : ReactiveViewModel
 {
-    private readonly string _endpoint;
-    private readonly IHttpClientFactory _httpClientFactory;
+    private readonly DaemonApi _api;
     private readonly int? _days;
 
     public ReactiveProperty<bool> IsLoading { get; } = new(true);
     public ReactiveProperty<string> StatusMessage { get; } = new("Loading stats...");
     public DaemonStats.Response? Stats { get; private set; }
 
-    public StatsViewModel(
-        IHttpClientFactory httpClientFactory,
-        Microsoft.Extensions.Configuration.IConfiguration configuration,
-        StatsNavigationState navigationState)
+    public StatsViewModel(DaemonApi api, StatsNavigationState navigationState)
     {
-        _httpClientFactory = httpClientFactory;
+        _api = api;
         _days = navigationState.Days;
-        _endpoint = configuration["Daemon:Endpoint"]
-            ?? Environment.GetEnvironmentVariable("NETCLAW_DAEMON_ENDPOINT")
-            ?? "http://127.0.0.1:5199";
     }
 
     public override void OnActivated()
@@ -44,18 +36,7 @@ public sealed class StatsViewModel : ReactiveViewModel
     {
         try
         {
-            var url = $"{_endpoint.TrimEnd('/')}/api/stats";
-            if (_days.HasValue)
-                url += $"?days={_days.Value}";
-
-            var client = _httpClientFactory.CreateClient();
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-            var stats = await client.GetFromJsonAsync<DaemonStats.Response>(
-                url,
-                new JsonSerializerOptions(JsonSerializerDefaults.Web),
-                cts.Token);
-
-            Stats = stats;
+            Stats = await _api.GetStatsAsync(_days);
             StatusMessage.Value = " [Q] Quit";
         }
         catch
