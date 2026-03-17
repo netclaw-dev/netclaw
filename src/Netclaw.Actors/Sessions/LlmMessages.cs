@@ -41,6 +41,7 @@ internal sealed record LlmCallFailed
 internal sealed record ToolExecutionCompleted
 {
     public required List<Protocol.SerializableChatMessage> ToolResults { get; init; }
+    public List<string> ExecutedToolNames { get; init; } = [];
     public List<FileAttachmentInfo> FileAttachments { get; init; } = [];
     public List<CompletedSubAgentRun> CompletedSubAgentRuns { get; init; } = [];
     public List<AcceptedSubAgentFinding> AcceptedSubAgentFindings { get; init; } = [];

@@ -188,6 +188,30 @@ public class ToolRegistryTests
         Assert.Empty(index);
     }
 
+    [Fact]
+    public void GetRequiredPostToolSkills_deduplicates_and_sorts_skill_names()
+    {
+        var registry = new ToolRegistry();
+        registry.Register(CreateFakeTool("web_search"), "web_search", ["search-citation", "search-citation", "web-safety"]);
+        registry.Register(CreateFakeTool("web_fetch"), "web_fetch", ["SEARCH-CITATION"]);
+        registry.Register(CreateFakeTool("shell_execute"), "shell");
+
+        var required = registry.GetRequiredPostToolSkills(["web_fetch", "web_search", "shell_execute"]);
+
+        Assert.Equal(["search-citation", "web-safety"], required);
+    }
+
+    [Fact]
+    public void Register_normalizes_post_tool_required_skills()
+    {
+        var registry = new ToolRegistry();
+        registry.Register(CreateFakeTool("search"), "web_search", ["  search-citation  ", "Search-Citation", ""]);
+
+        var registration = Assert.Single(registry.GetAllRegistrations());
+
+        Assert.Equal(["search-citation"], registration.PostToolRequiredSkills);
+    }
+
     private static AIFunction CreateFakeTool(string name)
     {
         return AIFunctionFactory.Create(() => "result", name);

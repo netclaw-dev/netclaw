@@ -40,6 +40,9 @@ public sealed class SkillRegistry
 
     public IReadOnlyList<SkillEntry> GetAll() => _skills;
 
+    public SkillEntry? GetByName(string name)
+        => _skills.FirstOrDefault(skill => string.Equals(skill.Name, name, StringComparison.OrdinalIgnoreCase));
+
     /// <summary>
     /// Store enriched keywords for a skill. Called by the enrichment service
     /// after sidecar LLM generates keywords from the skill's content.

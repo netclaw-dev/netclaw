@@ -9,7 +9,9 @@ using Netclaw.Configuration;
 using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Sessions;
+using Netclaw.Actors.Skills;
 using Netclaw.Actors.Tools;
+using Netclaw.Search;
 using Xunit;
 using Xunit.Abstractions;
 
@@ -24,6 +26,7 @@ public class ToolExecutionIntegrationTests : TestKit
     private readonly FakeChatClient _fakeChatClient = new();
     private readonly FakeToolExecutor _fakeToolExecutor = new();
     private readonly FakeToolAuditLogger _fakeAuditLogger = new();
+    private readonly string _skillRoot = Path.Combine(Path.GetTempPath(), $"netclaw-skill-tests-{Guid.NewGuid():N}");
 
     public ToolExecutionIntegrationTests(ITestOutputHelper output) : base(output: output)
     {
@@ -47,10 +50,10 @@ public class ToolExecutionIntegrationTests : TestKit
 
         // Register a tool in the registry
         var registry = new ToolRegistry();
-        registry.Register(
-            AIFunctionFactory.Create(() => "search result", "web_search"),
-            "web_search");
+        registry.Register(new WebSearchTool(new FakeSearchBackend()), ["search-citation"]);
+        registry.Register(new WebFetchTool(), ["search-citation"]);
         services.AddSingleton(registry);
+        services.AddSingleton(CreateSkillRegistry());
         services.AddSingleton<IModelCapabilityResolver>(new FakeCapabilityResolver());
     }
 
@@ -245,6 +248,123 @@ public class ToolExecutionIntegrationTests : TestKit
         Assert.Contains("tool result truncated", result, StringComparison.OrdinalIgnoreCase);
         Assert.True(result!.Length < 300);
     }
+
+    [Fact]
+    public async Task Web_search_followup_injects_post_tool_skill_and_reuses_cached_content()
+    {
+        _fakeChatClient.RepeatToolCallsPerUserTurn = true;
+        _fakeChatClient.ToolCallsOnFirstCall =
+        [
+            new FunctionCallContent("call-1", "web_search",
+                new Dictionary<string, object?> { ["query"] = "citations" })
+        ];
+        _fakeToolExecutor.Results["web_search"] = "Found one result with URL https://example.com";
+
+        var sessionId = new SessionId("test-channel/post-tool-skill-cache");
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("post-tool-skill-cache-sub");
+
+        await sessionManager.Ask<SessionJoined>(new JoinSession
+        {
+            SessionId = sessionId,
+            Subscriber = subscriber,
+            Filter = OutputFilter.Full
+        }, TimeSpan.FromSeconds(10));
+        await subscriber.ExpectMsgAsync<SessionJoined>();
+
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Search for citations"
+        }, TimeSpan.FromSeconds(3));
+
+        await subscriber.ExpectMsgAsync<ToolCallOutput>(TimeSpan.FromSeconds(3));
+        await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(5));
+        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
+
+        Assert.Equal(2, _fakeChatClient.CallCount);
+        Assert.Equal(1, _fakeChatClient.ReceivedMessages.Count(m => ContainsSkill(m, "search-citation")));
+
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Search again"
+        }, TimeSpan.FromSeconds(3));
+
+        await subscriber.ExpectMsgAsync<ToolCallOutput>(TimeSpan.FromSeconds(3));
+        await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(5));
+        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
+
+        Assert.Equal(4, _fakeChatClient.CallCount);
+        Assert.Equal(3, _fakeChatClient.ReceivedMessages.Count(m => ContainsSkill(m, "search-citation")));
+    }
+
+    [Fact]
+    public async Task Web_fetch_followup_and_post_tool_nudge_retain_loaded_skill()
+    {
+        _fakeChatClient.ToolCallsOnFirstCall =
+        [
+            new FunctionCallContent("call-1", "web_fetch",
+                new Dictionary<string, object?> { ["url"] = "https://example.com" })
+        ];
+        _fakeToolExecutor.Results["web_fetch"] = "Fetched page with URL https://example.com/details";
+        _fakeChatClient.PlannedResponses.Enqueue([]);
+
+        var sessionId = new SessionId("test-channel/post-tool-nudge-skill");
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("post-tool-nudge-skill-sub");
+
+        await sessionManager.Ask<SessionJoined>(new JoinSession
+        {
+            SessionId = sessionId,
+            Subscriber = subscriber,
+            Filter = OutputFilter.Full
+        }, TimeSpan.FromSeconds(10));
+        await subscriber.ExpectMsgAsync<SessionJoined>();
+
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Fetch the page"
+        }, TimeSpan.FromSeconds(3));
+
+        await subscriber.ExpectMsgAsync<ToolCallOutput>(TimeSpan.FromSeconds(3));
+        await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(5));
+        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
+
+        Assert.Equal(3, _fakeChatClient.CallCount);
+        Assert.True(ContainsSkill(_fakeChatClient.ReceivedMessages[1], "search-citation"));
+        Assert.True(ContainsSkill(_fakeChatClient.ReceivedMessages[2], "search-citation"));
+    }
+
+    private SkillRegistry CreateSkillRegistry()
+    {
+        Directory.CreateDirectory(_skillRoot);
+        var skillDir = Path.Combine(_skillRoot, "search-citation");
+        Directory.CreateDirectory(skillDir);
+        File.WriteAllText(Path.Combine(skillDir, "SKILL.md"), "# Search Citation\nAlways cite search-derived facts.");
+
+        var registry = new SkillRegistry();
+        registry.Register(new SkillEntry(
+            "search-citation",
+            "Search Citation",
+            "Citation rules for search results",
+            Path.Combine(skillDir, "SKILL.md"),
+            skillDir,
+            null));
+
+        return registry;
+    }
+
+    private static bool ContainsSkill(IReadOnlyList<ChatMessage> messages, string skillName)
+        => messages.Any(m => m.Role == Microsoft.Extensions.AI.ChatRole.System
+            && (m.Text?.Contains($"[skill-auto-loaded: {skillName}]", StringComparison.Ordinal) ?? false));
+}
+
+internal sealed class FakeSearchBackend : ISearchBackend
+{
+    public Task<SearchBackendResult> SearchAsync(string query, int maxResults, CancellationToken ct)
+        => Task.FromResult<SearchBackendResult>(new SearchBackendResult.Success([]));
 }
 
 /// <summary>

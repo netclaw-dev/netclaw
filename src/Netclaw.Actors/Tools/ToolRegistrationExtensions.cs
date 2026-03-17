@@ -25,8 +25,8 @@ public static class ToolRegistrationExtensions
         registry.Register(new FileWriteTool(pathPolicy));
         registry.Register(new AttachFileTool());
         if (searchBackend is not null)
-            registry.Register(new WebSearchTool(searchBackend));
-        registry.Register(new WebFetchTool());
+            registry.Register(new WebSearchTool(searchBackend), ["search-citation"]);
+        registry.Register(new WebFetchTool(), ["search-citation"]);
 
         // Register search_tools meta-tool (always loaded, "builtin" grant)
         registry.Register(new SearchToolsTool(registry));

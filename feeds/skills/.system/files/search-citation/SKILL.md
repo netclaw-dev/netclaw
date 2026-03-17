@@ -3,9 +3,21 @@ name: search-citation
 description: "Guides when to use web search vs. training data and how to cite sources. Ensures specific factual claims include source URLs and the agent does not hallucinate verifiable information."
 metadata:
   author: netclaw
-  version: "0.6.0"
+  version: "0.7.0"
   triggers: web search needed | cite sources | link results | price check | product search | find near me | verify facts
 ---
+
+## Post-Tool Enforcement
+
+After `web_search` or `web_fetch` runs, Netclaw auto-loads this skill before the
+follow-up answer call even if the user's original phrasing did not explicitly
+trigger search or citation guidance.
+
+- Treat search-derived facts as citation-required on that follow-up call.
+- Keep inline links in the answer itself; do not move them into a references
+  section.
+- If the model gets nudged after an empty post-tool response, keep following the
+  same citation rules on the nudged retry.
 
 ## When to Search
 

@@ -571,6 +571,11 @@ internal sealed class FakeChatClient : IChatClient
     public List<FunctionCallContent>? ToolCallsOnFirstCall { get; set; }
 
     /// <summary>
+    /// When true, each new user turn can trigger <see cref="ToolCallsOnFirstCall"/> once.
+    /// </summary>
+    public bool RepeatToolCallsPerUserTurn { get; set; }
+
+    /// <summary>
     /// When true, every call returns tool calls (from <see cref="ToolCallsOnFirstCall"/>)
     /// as long as <c>options.Tools</c> is non-empty. When tools are omitted from options
     /// (circuit breaker fired), returns normal text instead.
@@ -588,6 +593,9 @@ internal sealed class FakeChatClient : IChatClient
     /// default fake text response. Each entry is used as the assistant message contents.
     /// </summary>
     public Queue<IReadOnlyList<AIContent>> PlannedResponses { get; } = new();
+
+    private int _lastUserMessageCount;
+    private int _toolCallTurnMarker = -1;
 
     public async Task<ChatResponse> GetResponseAsync(
         IEnumerable<ChatMessage> messages,
@@ -607,6 +615,7 @@ internal sealed class FakeChatClient : IChatClient
 
         var systemText = messageList.FirstOrDefault(m => m.Role == Microsoft.Extensions.AI.ChatRole.System)?.Text ?? string.Empty;
         var userText = messageList.LastOrDefault(m => m.Role == Microsoft.Extensions.AI.ChatRole.User)?.Text ?? string.Empty;
+        var userMessageCount = messageList.Count(m => m.Role == Microsoft.Extensions.AI.ChatRole.User);
 
         if (systemText.Contains("You are a recall planning sidecar", StringComparison.Ordinal))
         {
@@ -710,12 +719,20 @@ internal sealed class FakeChatClient : IChatClient
         // Return tool calls if configured
         if (ToolCallsOnFirstCall is not null)
         {
+            if (userMessageCount > _lastUserMessageCount)
+                _toolCallTurnMarker = -1;
+
+            _lastUserMessageCount = Math.Max(_lastUserMessageCount, userMessageCount);
+
             var returnToolCalls = AlwaysReturnToolCalls
                 ? options?.Tools?.Count > 0   // Every call, as long as tools are available
-                : _callCount == 1;            // First call only (existing behavior)
+                : RepeatToolCallsPerUserTurn
+                    ? options?.Tools?.Count > 0 && _toolCallTurnMarker != userMessageCount
+                    : _callCount == 1;            // First call only (existing behavior)
 
             if (returnToolCalls)
             {
+                _toolCallTurnMarker = userMessageCount;
                 var toolCallContents = new List<AIContent>(ToolCallsOnFirstCall);
                 var toolCallMessage = new ChatMessage(
                     Microsoft.Extensions.AI.ChatRole.Assistant,

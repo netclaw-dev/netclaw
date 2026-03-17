@@ -51,7 +51,7 @@ public sealed class FakeSlackProbe : ISlackProbe
         ProbeCallCount++;
         LastBotToken = botToken;
         if (DelayBeforeResult.HasValue)
-            await Task.Delay(DelayBeforeResult.Value, ct);
+            await WaitUntilCancelledAsync(ct);
         return NextResult;
     }
 
@@ -61,7 +61,20 @@ public sealed class FakeSlackProbe : ISlackProbe
         ResolveCallCount++;
         LastResolvedNames = channelNames;
         if (DelayBeforeResult.HasValue)
-            await Task.Delay(DelayBeforeResult.Value, ct);
+            await WaitUntilCancelledAsync(ct);
         return NextResolutionResult;
+    }
+
+    private static async Task WaitUntilCancelledAsync(CancellationToken ct)
+    {
+        if (ct.IsCancellationRequested)
+            ct.ThrowIfCancellationRequested();
+
+        var tcs = new TaskCompletionSource<object?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var registration = ct.Register(static state =>
+            ((TaskCompletionSource<object?>)state!).TrySetResult(null), tcs);
+
+        await tcs.Task;
+        ct.ThrowIfCancellationRequested();
     }
 }

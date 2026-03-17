@@ -6,9 +6,40 @@ using Netclaw.Tools;
 namespace Netclaw.Actors.Tools;
 
 /// <summary>
-/// Registration entry pairing a tool with its ACL grant category.
+/// Registration entry pairing a tool with its ACL grant category and any
+/// post-tool skill requirements.
 /// </summary>
-public sealed record ToolRegistration(INetclawTool Tool, string GrantCategory);
+public sealed record ToolRegistration
+{
+    public ToolRegistration(
+        INetclawTool tool,
+        string grantCategory,
+        IReadOnlyList<string>? postToolRequiredSkills = null)
+    {
+        Tool = tool;
+        GrantCategory = grantCategory;
+        PostToolRequiredSkills = NormalizeRequiredSkills(postToolRequiredSkills);
+    }
+
+    public INetclawTool Tool { get; }
+
+    public string GrantCategory { get; }
+
+    public IReadOnlyList<string> PostToolRequiredSkills { get; }
+
+    private static IReadOnlyList<string> NormalizeRequiredSkills(IReadOnlyList<string>? skills)
+    {
+        if (skills is null || skills.Count == 0)
+            return [];
+
+        return skills
+            .Where(static skill => !string.IsNullOrWhiteSpace(skill))
+            .Select(static skill => skill.Trim().ToLowerInvariant())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(static skill => skill, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+}
 
 /// <summary>
 /// Summary metadata for an MCP server used in progressive-disclosure routing.
@@ -23,17 +54,20 @@ public sealed class ToolRegistry
 {
     private readonly List<ToolRegistration> _tools = new();
 
-    public void Register(INetclawTool tool)
+    public void Register(INetclawTool tool, IReadOnlyList<string>? postToolRequiredSkills = null)
     {
-        _tools.Add(new ToolRegistration(tool, tool.GrantCategory));
+        _tools.Add(new ToolRegistration(tool, tool.GrantCategory, postToolRequiredSkills));
     }
 
     /// <summary>
     /// Register an <see cref="AITool"/> directly (for test fakes that don't implement INetclawTool).
     /// </summary>
-    public void Register(AITool tool, string grantCategory)
+    public void Register(AITool tool, string grantCategory, IReadOnlyList<string>? postToolRequiredSkills = null)
     {
-        _tools.Add(new ToolRegistration(new AIToolAdapter(tool, grantCategory), grantCategory));
+        _tools.Add(new ToolRegistration(
+            new AIToolAdapter(tool, grantCategory),
+            grantCategory,
+            postToolRequiredSkills));
     }
 
     /// <summary>All registered tools as AITool for ChatOptions.Tools.</summary>
@@ -65,6 +99,31 @@ public sealed class ToolRegistry
     /// Returns all registered tool registrations (for search and dynamic loading).
     /// </summary>
     public IReadOnlyList<ToolRegistration> GetAllRegistrations() => _tools;
+
+    /// <summary>
+    /// Returns the deterministic set of required post-tool skills for the provided tool names.
+    /// Duplicate skill names collapse into one case-insensitive set.
+    /// </summary>
+    public IReadOnlyList<string> GetRequiredPostToolSkills(IEnumerable<string> toolNames)
+    {
+        var requiredSkills = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var toolName in toolNames)
+        {
+            if (string.IsNullOrWhiteSpace(toolName))
+                continue;
+
+            var registration = _tools.FirstOrDefault(t =>
+                string.Equals(t.Tool.Name, toolName, StringComparison.OrdinalIgnoreCase));
+            if (registration is null)
+                continue;
+
+            foreach (var skill in registration.PostToolRequiredSkills)
+                requiredSkills.Add(skill);
+        }
+
+        return requiredSkills.ToArray();
+    }
 
     /// <summary>
     /// Returns tools discovered from one MCP server.

@@ -94,6 +94,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     private readonly HashSet<string> _autoLoadedSkills = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, string> _autoLoadedSkillContent = new(StringComparer.OrdinalIgnoreCase);
     private readonly SkillRegistry? _skillRegistry;
+    private readonly HashSet<string> _pendingPostToolSkillNames = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _pendingPostToolTriggerTools = new(StringComparer.OrdinalIgnoreCase);
 
     // Persistent state (immutable — replaced on each event)
     private SessionState _state = SessionState.Empty;
@@ -390,12 +392,14 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         {
             StopProcessingWatchdog();
 
+            CollectPendingPostToolSkills(msg.ExecutedToolNames);
+
             var hasVerifiedToolFinding = msg.ToolResults.Any(r =>
-                r.Name is "web_search" or "webfetch");
+                r.Name is "web_search" or "web_fetch" or "webfetch");
             if (hasVerifiedToolFinding)
             {
                 var summarized = string.Join("\n", msg.ToolResults
-                    .Where(r => r.Name is "web_search" or "webfetch")
+                    .Where(r => r.Name is "web_search" or "web_fetch" or "webfetch")
                     .Take(2)
                     .Select(r => $"[{r.Name}] {r.Content}"));
 
@@ -1465,8 +1469,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         // Skill auto-load: deterministic keyword matching against enriched skill index.
         // Injects matched skill content as transient system messages before the LLM decides.
         var userMessage = _state.FindLastUserMessage()?.Content;
-        if (!string.IsNullOrWhiteSpace(userMessage))
-            ResolveAndInjectAutoLoadedSkills(messages, userMessage);
+        ResolveAndInjectAutoLoadedSkills(messages, userMessage);
 
         // Inject dynamic context layers (e.g. tool index) as transient system messages.
         // These are NOT persisted — rebuilt on every call so rehydrated sessions stay fresh.
@@ -1573,57 +1576,140 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     /// load matching skill content from disk (first match) or cache (subsequent turns),
     /// and inject as transient system messages.
     /// </summary>
-    private void ResolveAndInjectAutoLoadedSkills(List<AiChatMessage> messages, string userMessage)
+    private void ResolveAndInjectAutoLoadedSkills(List<AiChatMessage> messages, string? userMessage)
     {
-        if (_skillRegistry is null) return;
+        if (_skillRegistry is null)
+            return;
 
-        // 1. Find NEW matches (excludes already-loaded skills)
-        var newMatches = _skillRegistry.MatchByKeywords(userMessage, _autoLoadedSkills);
-        foreach (var match in newMatches)
+        var loadedThisCall = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var keywordMatches = string.IsNullOrWhiteSpace(userMessage)
+            ? []
+            : _skillRegistry.MatchByKeywords(userMessage, _autoLoadedSkills);
+
+        foreach (var match in keywordMatches)
         {
-            try
-            {
-                _autoLoadedSkillContent[match.Skill.Name] = File.ReadAllText(match.Skill.FilePath);
-            }
-            catch (IOException ex)
-            {
-                _log.Warning(ex, "Failed to read skill for auto-load: {SkillName}", match.Skill.Name);
-                continue;
-            }
-
-            _autoLoadedSkills.Add(match.Skill.Name);
+            if (TryLoadSkillContent(match.Skill.Name, "keyword"))
+                loadedThisCall.Add(match.Skill.Name);
         }
 
-        // 2. Inject ALL loaded skills (new + previously cached)
-        if (_autoLoadedSkillContent.Count == 0) return;
+        foreach (var skillName in _pendingPostToolSkillNames.OrderBy(static x => x, StringComparer.OrdinalIgnoreCase))
+        {
+            if (TryLoadSkillContent(skillName, "post-tool"))
+                loadedThisCall.Add(skillName);
+        }
+
+        _pendingPostToolSkillNames.Clear();
+
+        if (_autoLoadedSkillContent.Count == 0)
+        {
+            _pendingPostToolTriggerTools.Clear();
+            return;
+        }
+
+        var injectedNames = _autoLoadedSkillContent.Keys
+            .OrderBy(static name => name, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
 
         var sb = new StringBuilder();
-        foreach (var (name, content) in _autoLoadedSkillContent)
+        foreach (var name in injectedNames)
         {
-            if (sb.Length > 0) sb.AppendLine();
+            if (sb.Length > 0)
+                sb.AppendLine();
+
             sb.AppendLine($"[skill-auto-loaded: {name}]");
-            sb.AppendLine(content);
+            sb.AppendLine(_autoLoadedSkillContent[name]);
         }
 
         var msg = new AiChatMessage(Microsoft.Extensions.AI.ChatRole.System, sb.ToString().TrimEnd());
         var idx = messages.FindLastIndex(m => m.Role == Microsoft.Extensions.AI.ChatRole.System);
         messages.Insert(idx >= 0 ? idx + 1 : 0, msg);
 
-        if (newMatches.Count > 0)
+        if (keywordMatches.Count > 0)
         {
-            var details = string.Join(" | ", newMatches.Select(m =>
+            var details = string.Join(" | ", keywordMatches.Select(m =>
                 $"{m.Skill.Name}:score={m.Score.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture)}"
                 + $"/threshold={m.Threshold.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture)}"
                 + $" tokens=[{string.Join(",", m.MatchedTokens)}]"
                 + $" phrases=[{string.Join(",", m.MatchedPhrases)}]"));
 
             TurnLog().Info(
-                "turn_skill_auto_load new={New} total={Total} skills={Names} tokenHits={TokenHits} phraseHits={PhraseHits} details={Details}",
-                newMatches.Count, _autoLoadedSkillContent.Count,
-                string.Join(",", newMatches.Select(m => m.Skill.Name)),
-                string.Join(",", newMatches.Select(m => m.TokenHits)),
-                string.Join(",", newMatches.Select(m => m.PhraseHits)),
-                details);
+                $"turn_skill_auto_load reason=keyword new={keywordMatches.Count} total={injectedNames.Length} skills={string.Join(",", keywordMatches.Select(m => m.Skill.Name))} tokenHits={string.Join(",", keywordMatches.Select(m => m.TokenHits))} phraseHits={string.Join(",", keywordMatches.Select(m => m.PhraseHits))} details={details}");
+        }
+
+        var newPostToolLoads = loadedThisCall
+            .Where(name => !keywordMatches.Any(match => string.Equals(match.Skill.Name, name, StringComparison.OrdinalIgnoreCase)))
+            .OrderBy(static name => name, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        if (newPostToolLoads.Length > 0)
+        {
+            TurnLog().Info(
+                $"turn_skill_auto_load reason=post-tool new={newPostToolLoads.Length} total={injectedNames.Length} skills={string.Join(",", newPostToolLoads)} triggerTools={string.Join(",", _pendingPostToolTriggerTools.OrderBy(static x => x, StringComparer.OrdinalIgnoreCase))}");
+        }
+
+        _pendingPostToolTriggerTools.Clear();
+    }
+
+    private void CollectPendingPostToolSkills(IReadOnlyList<string> executedToolNames)
+    {
+        if (_fullRegistry is null || executedToolNames.Count == 0)
+            return;
+
+        foreach (var toolName in executedToolNames)
+        {
+            if (string.IsNullOrWhiteSpace(toolName))
+                continue;
+
+            var registration = _fullRegistry.GetAllRegistrations().FirstOrDefault(t =>
+                string.Equals(t.Tool.Name, toolName, StringComparison.OrdinalIgnoreCase));
+            if (registration is null || registration.PostToolRequiredSkills.Count == 0)
+                continue;
+
+            _pendingPostToolTriggerTools.Add(registration.Tool.Name);
+            foreach (var skillName in registration.PostToolRequiredSkills)
+                _pendingPostToolSkillNames.Add(skillName);
+        }
+    }
+
+    private bool TryLoadSkillContent(string skillName, string reason)
+    {
+        if (_autoLoadedSkillContent.ContainsKey(skillName))
+            return true;
+
+        var skill = _skillRegistry?.GetByName(skillName);
+        if (skill is null)
+        {
+            TurnLog().Warning(
+                "turn_skill_auto_load_missing reason={Reason} skill={SkillName} triggerTools={TriggerTools}",
+                reason,
+                skillName,
+                string.Join(",", _pendingPostToolTriggerTools.OrderBy(static x => x, StringComparer.OrdinalIgnoreCase)));
+            return false;
+        }
+
+        try
+        {
+            _autoLoadedSkillContent[skill.Name] = File.ReadAllText(skill.FilePath);
+            _autoLoadedSkills.Add(skill.Name);
+            return true;
+        }
+        catch (IOException ex)
+        {
+            TurnLog().Warning(ex,
+                "turn_skill_auto_load_unreadable reason={Reason} skill={SkillName} file={FilePath}",
+                reason,
+                skill.Name,
+                skill.FilePath);
+            return false;
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            TurnLog().Warning(ex,
+                "turn_skill_auto_load_unreadable reason={Reason} skill={SkillName} file={FilePath}",
+                reason,
+                skill.Name,
+                skill.FilePath);
+            return false;
         }
     }
 
@@ -1832,6 +1918,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             self.Tell(new ToolExecutionCompleted
             {
                 ToolResults = results.Select(r => r.Message).ToList(),
+                ExecutedToolNames = toolCalls.Select(tc => tc.Name).ToList(),
                 FileAttachments = fileAttachments,
                 CompletedSubAgentRuns = results
                     .SelectMany(r => r.CompletedSubAgentRuns)
