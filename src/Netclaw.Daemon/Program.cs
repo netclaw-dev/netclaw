@@ -429,8 +429,12 @@ static void ConfigureDaemonServices(
     services.AddSingleton(mcpServers);
     services.AddHttpClient<McpOAuthService>();
     services.AddSingleton<McpOAuthService>();
-    services.AddHttpClient<Netclaw.Configuration.Providers.OAuth.OAuthPkceService>();
-    services.AddSingleton<Netclaw.Configuration.Providers.OAuth.OAuthPkceService>();
+    services.AddSingleton(sp =>
+    {
+        var httpClient = sp.GetRequiredService<IHttpClientFactory>().CreateClient("ProviderOAuth");
+        return new Netclaw.Configuration.Providers.OAuth.OAuthPkceService(httpClient);
+    });
+    services.AddHttpClient("ProviderOAuth");
     services.AddSingleton<McpClientManager>();
     services.AddHostedService(sp => sp.GetRequiredService<McpClientManager>());
 
