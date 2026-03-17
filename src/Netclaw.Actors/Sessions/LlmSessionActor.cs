@@ -67,8 +67,14 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     // Tool iteration counter (reset per turn, incremented on each ToolExecutionCompleted)
     private int _toolIterationCount;
 
+    private const int MaxPreToolEmptyResponseRetries = 2;
+    private const string EmptyResponseFallbackMessage = "I didn't manage to produce a reply. Please try rephrasing or sending your request again.";
+
     // Whether we already sent a post-tool empty-response nudge in this tool chain
     private bool _postToolNudgeSent;
+
+    // Number of consecutive empty responses observed before any tool work happened
+    private int _preToolEmptyResponseCount;
 
     // Child actor for per-session log file (created when session logs directory is configured)
     private IActorRef? _logActor;
@@ -222,6 +228,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
             _toolIterationCount = 0;
             _postToolNudgeSent = false;
+            _preToolEmptyResponseCount = 0;
             PrepareDiscoveredToolsForNewTurn();
 
             // Modality gate: strip unsupported media references
@@ -303,6 +310,19 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             var hasText = lastMessage.Contents.OfType<TextContent>().Any(t => !string.IsNullOrWhiteSpace(t.Text));
             if (!hasText && _toolIterationCount == 0)
             {
+                _preToolEmptyResponseCount++;
+                if (_preToolEmptyResponseCount > MaxPreToolEmptyResponseRetries)
+                {
+                    _log.Warning(
+                        "LLM produced empty response after {RetryCount} pre-tool retries; failing turn",
+                        _preToolEmptyResponseCount - 1);
+                    FailCurrentTurn(
+                        EmptyResponseFallbackMessage,
+                        new InvalidOperationException("LLM produced repeated empty responses before any tool execution."),
+                        ErrorCategory.ProviderFailure);
+                    return;
+                }
+
                 _log.Warning("LLM produced empty response (no text, no tool calls) — retrying with nudge");
                 _state = _state.AddSystemNudge(
                     "Your previous response was empty. If you need MCP capabilities, call search_tools(\"servers\") to pick a server "
@@ -323,6 +343,18 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                     "You received tool results but did not respond. "
                     + "Continue working or answer the user's question.");
                 FireLlmCall();
+                return;
+            }
+
+            if (!hasText && _toolIterationCount > 0 && _postToolNudgeSent)
+            {
+                _log.Warning(
+                    "LLM produced empty response after tool work and post-tool nudge; failing turn after {ToolIterations} tool iteration(s)",
+                    _toolIterationCount);
+                FailCurrentTurn(
+                    EmptyResponseFallbackMessage,
+                    new InvalidOperationException("LLM produced an empty response after tool execution and follow-up nudge."),
+                    ErrorCategory.ProviderFailure);
                 return;
             }
 
@@ -941,6 +973,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         // Model produced tool calls — reset post-tool nudge so it can fire again
         // if the model stalls later in the chain.
         _postToolNudgeSent = false;
+        _preToolEmptyResponseCount = 0;
 
         // Add assistant message (with tool calls) to history
         var assistantMsg = ChatMessageConverter.FromAiMessage(lastMessage);
