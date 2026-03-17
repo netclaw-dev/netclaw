@@ -40,11 +40,26 @@ public static class OAuthTokenPersistence
         if (result.RefreshToken is not null)
             providerNode["OAuthRefreshToken"] = result.RefreshToken.Value;
 
-        if (result.ExpiresAt.HasValue)
-            providerNode["OAuthTokenExpiry"] = result.ExpiresAt.Value.ToString("o");
-
+        // OAuthTokenExpiry is NOT a secret and must NOT go in secrets.json.
+        // SecretsFileWriter encrypts the entire file, and encrypted DateTimeOffset
+        // values break IConfiguration binding (silently drops the provider entry).
+        // Write expiry to netclaw.json instead.
         var json = root.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
         SecretsFileWriter.Write(paths.SecretsPath, json, protector);
+
+        if (result.ExpiresAt.HasValue)
+        {
+            var configJson = File.Exists(paths.NetclawConfigPath)
+                ? File.ReadAllText(paths.NetclawConfigPath) : "{}";
+            var configRoot = JsonNode.Parse(configJson)?.AsObject() ?? new JsonObject();
+            var configProviders = configRoot["Providers"]?.AsObject() ?? new JsonObject();
+            configRoot["Providers"] = configProviders;
+            var configProvider = configProviders[providerName]?.AsObject() ?? new JsonObject();
+            configProviders[providerName] = configProvider;
+            configProvider["OAuthTokenExpiry"] = result.ExpiresAt.Value.ToString("o");
+            File.WriteAllText(paths.NetclawConfigPath,
+                configRoot.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
+        }
     }
 
     /// <summary>
