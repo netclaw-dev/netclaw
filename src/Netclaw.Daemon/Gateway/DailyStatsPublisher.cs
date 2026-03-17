@@ -1,45 +1,55 @@
 using Akka.Actor;
 using Akka.Hosting;
 using Netclaw.Actors.Hosting;
+using Netclaw.Actors.Telemetry;
+using Netclaw.Channels.Telemetry;
 
 namespace Netclaw.Daemon.Gateway;
 
 /// <summary>
-/// Thin fire-and-forget wrapper over <see cref="DailyStatsActor"/>.
-/// Same API shape as the old <c>DailyStatsRecorder</c> so call sites barely change.
+/// <see cref="ISessionMetrics"/> implementation that pushes deltas to
+/// OTel counters (<see cref="SessionTelemetry"/>) and the
+/// <see cref="DailyStatsActor"/> for persistent daily aggregation
+/// and process-lifetime accumulation.
 /// </summary>
-public sealed class DailyStatsPublisher
+public sealed class DailyStatsPublisher : ISessionMetrics
 {
-    private readonly IRequiredActor<DailyStatsActorKey> _actorProvider;
+    private readonly IActorRef _statsActor;
 
     public DailyStatsPublisher(IRequiredActor<DailyStatsActorKey> actorProvider)
     {
-        _actorProvider = actorProvider;
+        _statsActor = actorProvider.ActorRef;
     }
 
     public void RecordTokenUsage(long inputTokens, long outputTokens)
-        => Tell(new DailyStatsActor.RecordTokenUsage(inputTokens, outputTokens));
+    {
+        SessionTelemetry.RecordUsage(inputTokens, outputTokens);
+        _statsActor.Tell(new DailyStatsActor.RecordTokenUsage(inputTokens, outputTokens));
+    }
 
     public void RecordTurnCompleted()
-        => Tell(new DailyStatsActor.RecordTurnCompleted());
+    {
+        SessionTelemetry.RecordTurnCompleted();
+        _statsActor.Tell(new DailyStatsActor.RecordTurnCompleted());
+    }
 
     public void RecordSessionCreated()
-        => Tell(new DailyStatsActor.RecordSessionCreated());
+    {
+        _statsActor.Tell(new DailyStatsActor.RecordSessionCreated());
+    }
 
     public void RecordMemoriesFormed(int count)
-        => Tell(new DailyStatsActor.RecordMemoriesFormed(count));
+    {
+        _statsActor.Tell(new DailyStatsActor.RecordMemoriesFormed(count));
+    }
 
     public void RecordMemoriesRecalled(int count)
-        => Tell(new DailyStatsActor.RecordMemoriesRecalled(count));
+    {
+        _statsActor.Tell(new DailyStatsActor.RecordMemoriesRecalled(count));
+    }
 
     public void RecordSkillsLoaded(int count)
-        => Tell(new DailyStatsActor.RecordSkillsLoaded(count));
-
-    private void Tell(object message)
     {
-        // GetAsync completes synchronously after actor startup; safe to .Result here
-        // since the actor is registered before any callers are active.
-        var actor = _actorProvider.ActorRef;
-        actor.Tell(message);
+        _statsActor.Tell(new DailyStatsActor.RecordSkillsLoaded(count));
     }
 }

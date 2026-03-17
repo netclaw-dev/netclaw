@@ -19,6 +19,14 @@ public sealed class DailyStatsActor : ReceiveActor, IWithTimers
     private readonly ILogger<DailyStatsActor> _logger;
     private readonly Dictionary<string, Accumulator> _pending = new();
 
+    // Process-lifetime totals (never reset, never persisted — lost on restart)
+    private long _totalInputTokens;
+    private long _totalOutputTokens;
+    private long _totalTurns;
+    private long _totalMemoriesFormed;
+    private long _totalMemoriesRecalled;
+    private long _totalSkillsLoaded;
+
     public ITimerScheduler Timers { get; set; } = null!;
 
     public DailyStatsActor(NetclawPaths paths, TimeProvider timeProvider, ILogger<DailyStatsActor> logger)
@@ -35,13 +43,24 @@ public sealed class DailyStatsActor : ReceiveActor, IWithTimers
         {
             GetOrCreate().InputTokens += msg.InputTokens;
             GetOrCreate().OutputTokens += msg.OutputTokens;
+            _totalInputTokens += msg.InputTokens;
+            _totalOutputTokens += msg.OutputTokens;
         });
 
-        Receive<RecordTurnCompleted>(_ => GetOrCreate().Turns++);
+        Receive<RecordTurnCompleted>(_ => { GetOrCreate().Turns++; _totalTurns++; });
         Receive<RecordSessionCreated>(_ => GetOrCreate().Sessions++);
-        Receive<RecordMemoriesFormed>(msg => { if (msg.Count > 0) GetOrCreate().MemoriesFormed += msg.Count; });
-        Receive<RecordMemoriesRecalled>(msg => { if (msg.Count > 0) GetOrCreate().MemoriesRecalled += msg.Count; });
-        Receive<RecordSkillsLoaded>(msg => { if (msg.Count > 0) GetOrCreate().SkillsLoaded += msg.Count; });
+        Receive<RecordMemoriesFormed>(msg =>
+        {
+            if (msg.Count > 0) { GetOrCreate().MemoriesFormed += msg.Count; _totalMemoriesFormed += msg.Count; }
+        });
+        Receive<RecordMemoriesRecalled>(msg =>
+        {
+            if (msg.Count > 0) { GetOrCreate().MemoriesRecalled += msg.Count; _totalMemoriesRecalled += msg.Count; }
+        });
+        Receive<RecordSkillsLoaded>(msg =>
+        {
+            if (msg.Count > 0) { GetOrCreate().SkillsLoaded += msg.Count; _totalSkillsLoaded += msg.Count; }
+        });
 
         Receive<Flush>(_ => FlushToSqlite());
 
@@ -51,6 +70,10 @@ public sealed class DailyStatsActor : ReceiveActor, IWithTimers
             MergeUnflushed(rows);
             Sender.Tell(new QueryDailyStatsResult(rows));
         });
+
+        Receive<QueryProcessStats>(_ => Sender.Tell(new ProcessStatsResult(
+            _totalInputTokens, _totalOutputTokens, _totalTurns,
+            _totalMemoriesFormed, _totalMemoriesRecalled, _totalSkillsLoaded)));
     }
 
     protected override void PreStart()
@@ -257,6 +280,10 @@ public sealed class DailyStatsActor : ReceiveActor, IWithTimers
     public sealed record RecordSkillsLoaded(int Count);
     public sealed record QueryDailyStats(int Days);
     public sealed record QueryDailyStatsResult(List<DailyStatsRow> Rows);
+    public sealed record QueryProcessStats;
+    public sealed record ProcessStatsResult(
+        long InputTokensTotal, long OutputTokensTotal, long TurnsCompletedTotal,
+        long MemoriesFormedTotal, long MemoriesRecalledTotal, long SkillsLoadedTotal);
     private sealed class Flush { public static readonly Flush Instance = new(); }
 
     // ── Types ────────────────────────────────────────────────────────

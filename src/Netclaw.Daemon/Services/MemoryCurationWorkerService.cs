@@ -1,8 +1,7 @@
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Netclaw.Actors.Memory;
-using Netclaw.Channels.Telemetry;
-using Netclaw.Daemon.Gateway;
+using Netclaw.Actors.Telemetry;
 
 namespace Netclaw.Daemon.Services;
 
@@ -11,7 +10,7 @@ internal sealed class MemoryCurationWorkerService(
     MemoryCurationEngine engine,
     TimeProvider timeProvider,
     ILogger<MemoryCurationWorkerService> logger,
-    DailyStatsPublisher? dailyStats = null) : IHostedService, IDisposable
+    ISessionMetrics? metrics = null) : IHostedService, IDisposable
 {
     private readonly CancellationTokenSource _cts = new();
     private Task? _worker;
@@ -64,8 +63,7 @@ internal sealed class MemoryCurationWorkerService(
 
                     if (operations.Count > 0)
                     {
-                        SessionTelemetry.RecordMemoriesFormed(operations.Count);
-                        dailyStats?.RecordMemoriesFormed(operations.Count);
+                        metrics?.RecordMemoriesFormed(operations.Count);
                     }
                 }
                 catch (OperationCanceledException)

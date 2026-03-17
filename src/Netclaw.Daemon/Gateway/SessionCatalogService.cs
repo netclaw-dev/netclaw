@@ -2,7 +2,7 @@ using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
-using Netclaw.Channels.Telemetry;
+using Netclaw.Actors.Telemetry;
 using Netclaw.Configuration;
 
 namespace Netclaw.Daemon.Gateway;
@@ -28,13 +28,13 @@ public sealed class SessionCatalogService : ISessionLifecycleObserver
     private readonly NetclawPaths _paths;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<SessionCatalogService> _logger;
-    private readonly DailyStatsPublisher? _dailyStats;
+    private readonly ISessionMetrics? _metrics;
 
     public SessionCatalogService(
         NetclawPaths paths,
         TimeProvider timeProvider,
         ILogger<SessionCatalogService> logger,
-        DailyStatsPublisher? dailyStats = null)
+        ISessionMetrics? metrics = null)
     {
         _paths = paths;
         _connectionString = new SqliteConnectionStringBuilder
@@ -44,7 +44,7 @@ public sealed class SessionCatalogService : ISessionLifecycleObserver
         }.ToString();
         _timeProvider = timeProvider;
         _logger = logger;
-        _dailyStats = dailyStats;
+        _metrics = metrics;
     }
 
     /// <inheritdoc />
@@ -81,7 +81,7 @@ public sealed class SessionCatalogService : ISessionLifecycleObserver
             cmd.Parameters.AddWithValue("$now", nowMs);
             cmd.ExecuteNonQuery();
 
-            _dailyStats?.RecordSessionCreated();
+            _metrics?.RecordSessionCreated();
         }
         catch (Exception ex)
         {
@@ -114,8 +114,7 @@ public sealed class SessionCatalogService : ISessionLifecycleObserver
                             WHERE persistence_id = $pid
                             """;
                     });
-                    SessionTelemetry.RecordTurnCompleted();
-                    _dailyStats?.RecordTurnCompleted();
+                    _metrics?.RecordTurnCompleted();
                     break;
 
                 case UsageOutput usage when usage.InputTokens.HasValue:
@@ -130,10 +129,7 @@ public sealed class SessionCatalogService : ISessionLifecycleObserver
                             """;
                         cmd.Parameters.AddWithValue("$tokens", usage.InputTokens.Value);
                     });
-                    SessionTelemetry.RecordUsage(
-                        usage.InputTokens ?? 0,
-                        usage.OutputTokens ?? 0);
-                    _dailyStats?.RecordTokenUsage(
+                    _metrics?.RecordTokenUsage(
                         usage.InputTokens ?? 0,
                         usage.OutputTokens ?? 0);
                     break;
@@ -150,16 +146,6 @@ public sealed class SessionCatalogService : ISessionLifecycleObserver
                             """;
                         cmd.Parameters.AddWithValue("$title", title.Title);
                     });
-                    break;
-
-                case MemoryRecallOutput recall:
-                    SessionTelemetry.RecordMemoriesRecalled(recall.ItemCount);
-                    _dailyStats?.RecordMemoriesRecalled(recall.ItemCount);
-                    break;
-
-                case SkillAutoLoadOutput skillLoad:
-                    SessionTelemetry.RecordSkillsLoaded(skillLoad.NewCount);
-                    _dailyStats?.RecordSkillsLoaded(skillLoad.NewCount);
                     break;
 
                 case CompactionOutput:

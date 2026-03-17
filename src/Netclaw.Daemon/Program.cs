@@ -75,6 +75,7 @@ static async Task RunDaemonAsync(string[] args, DaemonRestartSignal restartSigna
     builder.Services.AddSingleton<SessionRegistry>();
     builder.Services.AddSingleton<DaemonRuntimeStatusService>();
     builder.Services.AddSingleton<DailyStatsPublisher>();
+    builder.Services.AddSingleton<Netclaw.Actors.Telemetry.ISessionMetrics>(sp => sp.GetRequiredService<DailyStatsPublisher>());
     builder.Services.AddSingleton<DaemonStatsService>();
 
     var app = builder.Build();

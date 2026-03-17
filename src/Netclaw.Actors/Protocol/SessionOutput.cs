@@ -268,23 +268,3 @@ public sealed record CompactionOutput : SessionOutput
     /// </summary>
     public int KeepCountUsed { get; init; }
 }
-
-/// <summary>
-/// Emitted when memories are recalled for a turn.
-/// Lifecycle event — always delivered regardless of output filter.
-/// </summary>
-public sealed record MemoryRecallOutput : SessionOutput
-{
-    /// <summary>Number of memory items recalled for this turn.</summary>
-    public required int ItemCount { get; init; }
-}
-
-/// <summary>
-/// Emitted when skills are auto-loaded for a turn.
-/// Lifecycle event — always delivered regardless of output filter.
-/// </summary>
-public sealed record SkillAutoLoadOutput : SessionOutput
-{
-    /// <summary>Number of newly loaded skills this turn.</summary>
-    public required int NewCount { get; init; }
-}

@@ -24,15 +24,22 @@ internal sealed class DaemonStatsService(
         var now = timeProvider.GetUtcNow();
         var uptime = now - _startedAt;
 
-        var tokenSnapshot = SessionTelemetry.GetSnapshot();
+        var actorRef = await dailyStatsActor.GetAsync(ct);
+
+        // Ask for process-lifetime counters and daily breakdown concurrently
+        var processTask = actorRef.Ask<DailyStatsActor.ProcessStatsResult>(
+            new DailyStatsActor.QueryProcessStats(), TimeSpan.FromSeconds(5), ct);
+        var dailyTask = days.HasValue
+            ? QueryDailyStatsAsync(actorRef, days.Value, ct)
+            : Task.FromResult<List<DaemonStats.DailyRow>>([]);
+
+        var processStats = await processTask;
+        var dailyBreakdown = await dailyTask;
+
         var slackSnapshot = ChannelTelemetry.GetSnapshot();
         var sessionStats = sessionCatalog.GetStats();
         var allSkills = skillRegistry.GetAll();
         var enrichedKeywords = skillRegistry.GetEnrichedKeywords();
-
-        var dailyBreakdown = days.HasValue
-            ? await QueryDailyStatsAsync(days.Value, ct)
-            : [];
 
         return new DaemonStats.Response
         {
@@ -43,12 +50,12 @@ internal sealed class DaemonStatsService(
             },
             Tokens = new DaemonStats.Tokens
             {
-                InputTokensTotal = tokenSnapshot.InputTokensTotal,
-                OutputTokensTotal = tokenSnapshot.OutputTokensTotal,
-                TurnsCompletedTotal = tokenSnapshot.TurnsCompletedTotal,
-                MemoriesFormedTotal = tokenSnapshot.MemoriesFormedTotal,
-                MemoriesRecalledTotal = tokenSnapshot.MemoriesRecalledTotal,
-                SkillsLoadedTotal = tokenSnapshot.SkillsLoadedTotal
+                InputTokensTotal = processStats.InputTokensTotal,
+                OutputTokensTotal = processStats.OutputTokensTotal,
+                TurnsCompletedTotal = processStats.TurnsCompletedTotal,
+                MemoriesFormedTotal = processStats.MemoriesFormedTotal,
+                MemoriesRecalledTotal = processStats.MemoriesRecalledTotal,
+                SkillsLoadedTotal = processStats.SkillsLoadedTotal
             },
             Sessions = new DaemonStats.Sessions
             {
@@ -75,11 +82,10 @@ internal sealed class DaemonStatsService(
         };
     }
 
-    private async Task<List<DaemonStats.DailyRow>> QueryDailyStatsAsync(int days, CancellationToken ct)
+    private static async Task<List<DaemonStats.DailyRow>> QueryDailyStatsAsync(IActorRef actorRef, int days, CancellationToken ct)
     {
         try
         {
-            var actorRef = await dailyStatsActor.GetAsync(ct);
             var result = await actorRef.Ask<DailyStatsActor.QueryDailyStatsResult>(
                 new DailyStatsActor.QueryDailyStats(days), TimeSpan.FromSeconds(5), ct);
             return result.Rows
