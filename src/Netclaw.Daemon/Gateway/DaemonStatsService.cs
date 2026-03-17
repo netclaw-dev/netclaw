@@ -13,17 +13,12 @@ internal sealed class DaemonStatsService(
     TimeProvider timeProvider,
     SessionCatalogService sessionCatalog,
     SkillRegistry skillRegistry,
-    DailyStatsRecorder dailyStatsRecorder,
+    IRequiredActor<DailyStatsActorKey> dailyStatsActor,
     SQLiteMemoryStore? sqliteMemoryStore = null,
     IRequiredActor<ReminderManagerActorKey>? reminderManagerActor = null)
 {
     private readonly DateTimeOffset _startedAt = timeProvider.GetUtcNow();
 
-    /// <summary>
-    /// Get aggregated stats. When <paramref name="days"/> is positive, includes
-    /// a trailing N-day breakdown. When 0, includes all-time daily rows.
-    /// When null, no daily breakdown is included.
-    /// </summary>
     public async Task<DaemonStats.Response> GetStatsAsync(int? days = null, CancellationToken ct = default)
     {
         var now = timeProvider.GetUtcNow();
@@ -36,19 +31,7 @@ internal sealed class DaemonStatsService(
         var enrichedKeywords = skillRegistry.GetEnrichedKeywords();
 
         var dailyBreakdown = days.HasValue
-            ? dailyStatsRecorder.Query(days.Value)
-                .Select(r => new DaemonStats.DailyRow
-                {
-                    Date = r.DateKey,
-                    InputTokens = r.InputTokens,
-                    OutputTokens = r.OutputTokens,
-                    Turns = r.Turns,
-                    Sessions = r.Sessions,
-                    MemoriesFormed = r.MemoriesFormed,
-                    MemoriesRecalled = r.MemoriesRecalled,
-                    SkillsLoaded = r.SkillsLoaded
-                })
-                .ToList()
+            ? await QueryDailyStatsAsync(days.Value, ct)
             : [];
 
         return new DaemonStats.Response
@@ -90,6 +73,33 @@ internal sealed class DaemonStatsService(
             Reminders = await BuildReminderStatsAsync(ct),
             DailyBreakdown = dailyBreakdown
         };
+    }
+
+    private async Task<List<DaemonStats.DailyRow>> QueryDailyStatsAsync(int days, CancellationToken ct)
+    {
+        try
+        {
+            var actorRef = await dailyStatsActor.GetAsync(ct);
+            var result = await actorRef.Ask<DailyStatsActor.QueryDailyStatsResult>(
+                new DailyStatsActor.QueryDailyStats(days), TimeSpan.FromSeconds(5), ct);
+            return result.Rows
+                .Select(r => new DaemonStats.DailyRow
+                {
+                    Date = r.DateKey,
+                    InputTokens = r.InputTokens,
+                    OutputTokens = r.OutputTokens,
+                    Turns = r.Turns,
+                    Sessions = r.Sessions,
+                    MemoriesFormed = r.MemoriesFormed,
+                    MemoriesRecalled = r.MemoriesRecalled,
+                    SkillsLoaded = r.SkillsLoaded
+                })
+                .ToList();
+        }
+        catch
+        {
+            return [];
+        }
     }
 
     private async Task<DaemonStats.Memory> BuildMemoryStatsAsync(CancellationToken ct)

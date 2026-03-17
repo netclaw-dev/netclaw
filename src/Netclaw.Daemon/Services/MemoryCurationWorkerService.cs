@@ -11,7 +11,7 @@ internal sealed class MemoryCurationWorkerService(
     MemoryCurationEngine engine,
     TimeProvider timeProvider,
     ILogger<MemoryCurationWorkerService> logger,
-    DailyStatsRecorder? dailyStats = null) : IHostedService, IDisposable
+    DailyStatsPublisher? dailyStats = null) : IHostedService, IDisposable
 {
     private readonly CancellationTokenSource _cts = new();
     private Task? _worker;

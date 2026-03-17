@@ -28,13 +28,13 @@ public sealed class SessionCatalogService : ISessionLifecycleObserver
     private readonly NetclawPaths _paths;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<SessionCatalogService> _logger;
-    private readonly DailyStatsRecorder? _dailyStats;
+    private readonly DailyStatsPublisher? _dailyStats;
 
     public SessionCatalogService(
         NetclawPaths paths,
         TimeProvider timeProvider,
         ILogger<SessionCatalogService> logger,
-        DailyStatsRecorder? dailyStats = null)
+        DailyStatsPublisher? dailyStats = null)
     {
         _paths = paths;
         _connectionString = new SqliteConnectionStringBuilder

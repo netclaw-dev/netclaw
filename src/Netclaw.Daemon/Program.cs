@@ -74,7 +74,7 @@ static async Task RunDaemonAsync(string[] args, DaemonRestartSignal restartSigna
     builder.Services.AddSingleton<ISessionLifecycleObserver>(sp => sp.GetRequiredService<SessionCatalogService>());
     builder.Services.AddSingleton<SessionRegistry>();
     builder.Services.AddSingleton<DaemonRuntimeStatusService>();
-    builder.Services.AddSingleton<DailyStatsRecorder>();
+    builder.Services.AddSingleton<DailyStatsPublisher>();
     builder.Services.AddSingleton<DaemonStatsService>();
 
     var app = builder.Build();
@@ -510,6 +510,7 @@ static void ConfigureDaemonServices(
 
         akkaBuilder.WithNetclawActors(reminderStorage);
         akkaBuilder.WithSignalRGateway();
+        akkaBuilder.WithDailyStatsActor();
 
         // Register reminder tools after actors start (needs ReminderManagerActor ref)
         akkaBuilder.StartActors((system, registry, _) =>
