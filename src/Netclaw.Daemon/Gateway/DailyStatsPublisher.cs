@@ -14,42 +14,67 @@ namespace Netclaw.Daemon.Gateway;
 /// </summary>
 public sealed class DailyStatsPublisher : ISessionMetrics
 {
-    private readonly IActorRef _statsActor;
+    private readonly IRequiredActor<DailyStatsActorKey> _actorProvider;
+    private IActorRef? _statsActor;
 
     public DailyStatsPublisher(IRequiredActor<DailyStatsActorKey> actorProvider)
     {
-        _statsActor = actorProvider.ActorRef;
+        _actorProvider = actorProvider;
     }
 
     public void RecordTokenUsage(long inputTokens, long outputTokens)
     {
         SessionTelemetry.RecordUsage(inputTokens, outputTokens);
-        _statsActor.Tell(new DailyStatsActor.RecordTokenUsage(inputTokens, outputTokens));
+        GetActor()?.Tell(new DailyStatsActor.RecordTokenUsage(inputTokens, outputTokens));
     }
 
     public void RecordTurnCompleted()
     {
         SessionTelemetry.RecordTurnCompleted();
-        _statsActor.Tell(new DailyStatsActor.RecordTurnCompleted());
+        GetActor()?.Tell(new DailyStatsActor.RecordTurnCompleted());
     }
 
     public void RecordSessionCreated()
     {
-        _statsActor.Tell(new DailyStatsActor.RecordSessionCreated());
+        GetActor()?.Tell(new DailyStatsActor.RecordSessionCreated());
     }
 
     public void RecordMemoriesFormed(int count)
     {
-        _statsActor.Tell(new DailyStatsActor.RecordMemoriesFormed(count));
+        GetActor()?.Tell(new DailyStatsActor.RecordMemoriesFormed(count));
     }
 
     public void RecordMemoriesRecalled(int count)
     {
-        _statsActor.Tell(new DailyStatsActor.RecordMemoriesRecalled(count));
+        GetActor()?.Tell(new DailyStatsActor.RecordMemoriesRecalled(count));
     }
 
     public void RecordSkillsLoaded(int count)
     {
-        _statsActor.Tell(new DailyStatsActor.RecordSkillsLoaded(count));
+        GetActor()?.Tell(new DailyStatsActor.RecordSkillsLoaded(count));
+    }
+
+    /// <summary>
+    /// Lazily resolves the actor ref on first use. Returns null if the
+    /// actor system hasn't finished starting yet (messages are silently dropped).
+    /// </summary>
+    private IActorRef? GetActor()
+    {
+        if (_statsActor is not null)
+            return _statsActor;
+
+        // TryGetAsync would be ideal but ActorRef is the synchronous path.
+        // Use the non-blocking check: if the actor is registered, cache it.
+        try
+        {
+            _statsActor = _actorProvider.ActorRef;
+            return _statsActor;
+        }
+        catch
+        {
+            // Actor not yet registered — drop the message silently.
+            // Next call will retry.
+            return null;
+        }
     }
 }
