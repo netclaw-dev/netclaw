@@ -3,7 +3,7 @@ name: netclaw-manual
 description: "Netclaw Manual. Read when the user is asking what Netclaw can do, which command/tool to use, how to schedule work, switch models, manage providers, or discover available capabilities."
 metadata:
   author: netclaw
-  version: "0.7.0"
+  version: "0.8.0"
   triggers: what can netclaw do | what command should I use | can you schedule a cron job | schedule a reminder | switch models | change model | manage providers | manage mcp servers | list available tools | how do I do this in netclaw
 ---
 
@@ -149,6 +149,30 @@ results), `notify_instructions` (optional output formatting guidance).
 
 The agent can reference its own session ID when creating reminders to tie
 scheduled work back to the originating conversation.
+
+## Viewing Full Reminder Execution Details
+
+`get_reminder_history` and `netclaw reminder history` give you the lightweight
+index — timestamps, success/failure, duration, and session ID. To see
+everything the agent actually did during a run, use the session ID to open the
+full conversation log.
+
+Each reminder execution creates a session with the ID format
+`reminder/{reminderId}/{firedAtMs}`. You can navigate to it two ways:
+
+**CLI — resume into the session:**
+```
+netclaw chat --resume reminder/daily-summary/1742000000000
+```
+
+**CLI — browse all reminder sessions:**
+```
+netclaw sessions --once | grep reminder/
+```
+
+The session holds the complete turn-by-turn transcript: every tool call,
+result, and LLM response from that run. Use this when a reminder shows
+`success: false` in history and you need to understand what failed.
 
 ## CLI Commands
 

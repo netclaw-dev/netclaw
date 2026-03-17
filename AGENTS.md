@@ -163,9 +163,7 @@ feature area, the corresponding skill **must** be updated in the same PR.
 **Workflow:**
 1. Edit the skill at `feeds/skills/.system/files/{name}/SKILL.md`
 2. Bump `metadata.version` in the YAML frontmatter
-3. Update the embedded copy in `src/Netclaw.Daemon/BuiltInSkills/` to match
-4. Include skill file + embedded copy changes in the same commit
-5. Do NOT run `generate-skill-manifest.sh` locally — CI generates the manifest
+3. Do NOT run `generate-skill-manifest.sh` locally — CI generates the manifest
    and publishes to R2 on release tags or manual `workflow_dispatch`
 
 **Publishing:**

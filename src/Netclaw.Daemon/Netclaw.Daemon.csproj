@@ -35,10 +35,9 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
     <EmbeddedResource Include="migrations\sqlite\**\*.sql" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <EmbeddedResource Include="BuiltInSkills\*.md" />
+    <Content Include="..\..\feeds\skills\.system\files\**\*" Exclude="..\..\feeds\skills\.system\files\**\*.*.*\**" Link="BuiltInSkills\%(RecursiveDir)%(Filename)%(Extension)">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
   </ItemGroup>
 
   <ItemGroup>

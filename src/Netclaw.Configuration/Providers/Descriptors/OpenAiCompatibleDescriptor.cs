@@ -16,7 +16,7 @@ public sealed class OpenAiCompatibleDescriptor : IProviderDescriptor
 
     public string TypeKey => "openai-compatible";
     public string DisplayName => "OpenAI-Compatible";
-    public IReadOnlyList<AuthMethod> SupportedAuthMethods => [AuthMethod.None, AuthMethod.ApiKey];
+    public IReadOnlyList<AuthMethod> SupportedAuthMethods => [AuthMethod.None];
     public string DefaultEndpoint => "http://localhost:11434";
     public string ModelListingPath => "/v1/models";
     public CredentialInputMode CredentialMode => CredentialInputMode.EndpointOnly;

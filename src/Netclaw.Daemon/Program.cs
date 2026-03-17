@@ -658,36 +658,27 @@ static ResolvedModelCapabilities? ResolveStartupCapabilities(
 }
 
 /// <summary>
-/// Copies built-in skill files from embedded resources to the skills directory.
-/// Each embedded <c>*.md</c> resource is written as <c>skill-name/SKILL.md</c>.
-/// Only writes a file if it does not already exist (feed updates are preserved).
+/// Copies built-in skill files from the output directory to the skills directory.
+/// Skills are sourced from <c>feeds/skills/.system/files/</c> and copied to the
+/// build output as <c>BuiltInSkills/{skill-name}/SKILL.md</c> (with companion files).
+/// Only writes files that do not already exist (feed updates are preserved).
 /// </summary>
 static void CopyBuiltInSkills(string skillsDirectory)
 {
-    var assembly = typeof(Program).Assembly;
-    const string prefix = "Netclaw.Daemon.BuiltInSkills.";
+    var builtInDir = Path.Combine(AppContext.BaseDirectory, "BuiltInSkills");
+    if (!Directory.Exists(builtInDir))
+        return;
 
-    foreach (var resourceName in assembly.GetManifestResourceNames())
+    foreach (var sourceFile in Directory.EnumerateFiles(builtInDir, "*", SearchOption.AllDirectories))
     {
-        if (!resourceName.StartsWith(prefix, StringComparison.Ordinal))
-            continue;
-
-        var fileName = resourceName[prefix.Length..];
-        var skillName = Path.GetFileNameWithoutExtension(fileName);
-        var skillDir = Path.Combine(skillsDirectory, skillName);
-        var targetPath = Path.Combine(skillDir, "SKILL.md");
+        var relativePath = Path.GetRelativePath(builtInDir, sourceFile);
+        var targetPath = Path.Combine(skillsDirectory, relativePath);
 
         if (File.Exists(targetPath))
             continue;
 
-        Directory.CreateDirectory(skillDir);
-
-        using var stream = assembly.GetManifestResourceStream(resourceName);
-        if (stream is null)
-            continue;
-
-        using var fileStream = File.Create(targetPath);
-        stream.CopyTo(fileStream);
+        Directory.CreateDirectory(Path.GetDirectoryName(targetPath)!);
+        File.Copy(sourceFile, targetPath);
     }
 }
 
