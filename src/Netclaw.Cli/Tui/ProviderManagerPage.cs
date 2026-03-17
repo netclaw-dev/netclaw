@@ -2,6 +2,7 @@ using Netclaw.Configuration;
 using Netclaw.Configuration.Providers;
 using Netclaw.Configuration.Providers.OAuth;
 using R3;
+using Termina.Clipboard;
 using Termina.Extensions;
 using Termina.Input;
 using Termina.Layout;
@@ -19,6 +20,12 @@ namespace Netclaw.Cli.Tui;
 public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
 {
     private static readonly string[] SpinnerFrames = ["\u280b", "\u2819", "\u2838", "\u2834", "\u2826", "\u2807"];
+    private readonly IClipboardService? _clipboardService;
+
+    public ProviderManagerPage(IClipboardService? clipboardService = null)
+    {
+        _clipboardService = clipboardService;
+    }
 
     private SelectionListNode<string>? _providerList;
     private SelectionListNode<string>? _authList;
@@ -92,7 +99,7 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
             .DisposeWith(Subscriptions);
 
         // Animate spinners during loading, validation, and OAuth flows
-        ViewModel.ProbeElapsedSeconds
+        ViewModel.SpinnerTick
             .Subscribe(_ =>
             {
                 _contentNode.Invalidate();
@@ -404,8 +411,10 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
             ViewModel.OAuthFlowState.Value,
             ViewModel.BrowserOpenFailed,
             ViewModel.OAuthVerificationUri,
+            ViewModel.SpinnerTick.Value,
             ViewModel.ProbeElapsedSeconds.Value,
             ViewModel.OAuthErrorMessage,
+            _clipboardService,
             ref _redirectUrlInput,
             text => _ = ViewModel.SubmitRedirectUrlAsync(text));
     }

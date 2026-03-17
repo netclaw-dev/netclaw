@@ -6,6 +6,7 @@ using R3;
 using Termina.Extensions;
 using Termina.Input;
 using Termina.Layout;
+using Termina.Clipboard;
 using Termina.Reactive;
 using Termina.Rendering;
 using Termina.Terminal;
@@ -20,6 +21,12 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
 {
     private const int MaxDisplayedModels = 30;
     private static readonly string[] SpinnerFrames = ["\u280b", "\u2819", "\u2838", "\u2834", "\u2826", "\u2807"];
+    private readonly IClipboardService? _clipboardService;
+
+    public InitWizardPage(IClipboardService? clipboardService = null)
+    {
+        _clipboardService = clipboardService;
+    }
 
     // Step 1: Provider selection list + auth input + model selection
     private SelectionListNode<string>? _providerList;
@@ -675,8 +682,10 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             ViewModel.OAuthFlowState.Value,
             ViewModel.BrowserOpenFailed,
             ViewModel.OAuthVerificationUri,
+            ViewModel.SpinnerTick.Value,
             ViewModel.ProbeElapsedSeconds.Value,
             ViewModel.OAuthErrorMessage,
+            _clipboardService,
             ref _redirectUrlInput,
             text => _ = ViewModel.SubmitRedirectUrlAsync(text));
     }
@@ -1593,8 +1602,8 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             })
             .DisposeWith(Subscriptions);
 
-        // Animate spinner on validation sub-step and OAuth device flow sub-step every second
-        ViewModel.ProbeElapsedSeconds
+        // Animate spinner on validation sub-step and OAuth flow sub-steps
+        ViewModel.SpinnerTick
             .Subscribe(_ =>
             {
                 if (ViewModel.CurrentStep.Value == WizardStep.Provider

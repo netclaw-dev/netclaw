@@ -1,6 +1,7 @@
 using Netclaw.Configuration;
 using Netclaw.Configuration.Providers.OAuth;
 using R3;
+using Termina.Clipboard;
 using Termina.Layout;
 using Termina.Terminal;
 
@@ -42,6 +43,12 @@ internal static class OAuthFlowViews
     };
 
     /// <summary>
+    /// Get a spinner frame for the given tick count.
+    /// Use a fast tick counter (not elapsed seconds) for smooth animation.
+    /// </summary>
+    public static string GetSpinnerFrame(int tick) => SpinnerFrames[tick % SpinnerFrames.Length];
+
+    /// <summary>
     /// Build the browser OAuth flow view with three fallback layers.
     /// </summary>
     public static ILayoutNode BuildBrowserOAuthFlow(
@@ -49,11 +56,12 @@ internal static class OAuthFlowViews
         DeviceFlowState flowState,
         bool browserOpenFailed,
         string? verificationUri,
+        int spinnerTick,
         int elapsedSeconds,
         string? errorMessage,
+        IClipboardService? clipboardService,
         ref TextInputNode? redirectUrlInput,
-        Action<string> onRedirectUrlSubmitted,
-        IDisposable? subscriptionTarget = null)
+        Action<string> onRedirectUrlSubmitted)
     {
         var children = Layouts.Vertical();
 
@@ -71,7 +79,7 @@ internal static class OAuthFlowViews
             case DeviceFlowState.WaitingForUser:
             case DeviceFlowState.Polling:
             {
-                var frame = SpinnerFrames[elapsedSeconds % SpinnerFrames.Length];
+                var frame = GetSpinnerFrame(spinnerTick);
 
                 if (!browserOpenFailed)
                 {
@@ -91,8 +99,18 @@ internal static class OAuthFlowViews
 
                     if (verificationUri is not null)
                     {
-                        children.WithChild(new TextNode($"  {verificationUri}")
-                            .WithForeground(Color.Cyan));
+                        if (clipboardService is not null)
+                        {
+                            children.WithChild(new CopyableTextNode(clipboardService, $"  {verificationUri}")
+                                .WithForeground(Color.Cyan));
+                            children.WithChild(new TextNode("  Press [Enter] to copy URL to clipboard")
+                                .WithForeground(Color.BrightBlack));
+                        }
+                        else
+                        {
+                            children.WithChild(new TextNode($"  {verificationUri}")
+                                .WithForeground(Color.Cyan));
+                        }
                     }
 
                     children.WithChild(new TextNode("").Height(1));

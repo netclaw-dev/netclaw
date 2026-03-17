@@ -78,6 +78,7 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
     public ReactiveProperty<bool> IsProbing { get; } = new(false);
     public ReactiveProperty<ProviderProbeResult?> ProbeResult { get; } = new(null);
     public ReactiveProperty<int> ProbeElapsedSeconds { get; } = new(0);
+    public ReactiveProperty<int> SpinnerTick { get; } = new(0);
     public ReactiveProperty<bool> IsEagerProbing { get; } = new(false);
     public ReactiveProperty<int> EagerProbeElapsedSeconds { get; } = new(0);
 
@@ -998,12 +999,19 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
 
     private async Task RunProbeTimerAsync(CancellationToken ct)
     {
+        var tickCount = 0;
         while (!ct.IsCancellationRequested)
         {
-            try { await Task.Delay(1000, ct); }
+            try { await Task.Delay(120, ct); }
             catch (OperationCanceledException) { return; }
 
-            ProbeElapsedSeconds.Value++;
+            tickCount++;
+            SpinnerTick.Value = tickCount;
+
+            // Update elapsed seconds every ~1 second (every 8 ticks at 120ms)
+            if (tickCount % 8 == 0)
+                ProbeElapsedSeconds.Value++;
+
             RequestRedraw();
         }
     }

@@ -75,6 +75,7 @@ public partial class InitWizardViewModel : ReactiveViewModel
     /// validation spinner and show a live timer.
     /// </summary>
     public ReactiveProperty<int> ProbeElapsedSeconds { get; } = new(0);
+    public ReactiveProperty<int> SpinnerTick { get; } = new(0);
 
     /// <summary>
     /// Monotonically increasing counter that ticks whenever health check results
@@ -400,18 +401,25 @@ public partial class InitWizardViewModel : ReactiveViewModel
 
     private async Task RunProbeTimerAsync(CancellationToken ct)
     {
+        var tickCount = 0;
         while (!ct.IsCancellationRequested)
         {
             try
             {
-                await Task.Delay(1000, ct);
+                await Task.Delay(120, ct);
             }
             catch (OperationCanceledException)
             {
                 return;
             }
 
-            ProbeElapsedSeconds.Value++;
+            tickCount++;
+            SpinnerTick.Value = tickCount;
+
+            // Update elapsed seconds every ~1 second (every 8 ticks at 120ms)
+            if (tickCount % 8 == 0)
+                ProbeElapsedSeconds.Value++;
+
             RequestRedraw();
         }
     }
