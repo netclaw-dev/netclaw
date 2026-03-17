@@ -216,6 +216,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         });
 
         Command<ProcessingWatchdogExpired>(_ => { });
+        Command<CompactionWorkCompleted>(_ => { });
+        Command<CompactionWorkFailed>(_ => { });
         Command<SpawnChildActorRequest>(msg => Sender.Tell(Context.ActorOf(msg.Props, msg.ActorName)));
 
         Command<SendUserMessage>(cmd =>
@@ -293,6 +295,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             _buffer.Add(cmd);
             TryReplyAck();
         });
+
+        Command<CompactionWorkCompleted>(_ => { });
+        Command<CompactionWorkFailed>(_ => { });
 
         Command<LlmResponseReceived>(msg =>
         {
@@ -624,87 +629,67 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             TryReplyAck();
         });
 
-        Command<ProcessingWatchdogExpired>(_ => { });
+        Command<ProcessingWatchdogExpired>(msg =>
+        {
+            if (!IsCurrentWatchdog(msg))
+                return;
+
+            _log.Error("Compaction watchdog expired for operation {OperationName} (opId={OperationId})",
+                msg.OperationName, msg.OperationId);
+
+            StopProcessingWatchdog();
+
+            EmitOutput(new ErrorOutput
+            {
+                SessionId = _sessionId,
+                Message = "Context compaction timed out. The session will continue.",
+                Category = ErrorCategory.Timeout,
+                CorrelationId = Guid.NewGuid(),
+                Cause = new TimeoutException(
+                    $"Session compaction operation '{msg.OperationName}' exceeded watchdog timeout of {GetCompactionTimeout().TotalSeconds:F0}s")
+            });
+
+            DrainBufferOrReady();
+        });
         Command<SpawnChildActorRequest>(msg => Sender.Tell(Context.ActorOf(msg.Props, msg.ActorName)));
 
-        CommandAsync<CompactionTriggered>(async msg =>
+        Command<CompactionTriggered>(msg =>
         {
-            var messagesBefore = _state.History.Count;
-            var preCompactionInputTokens = _lastInputTokenCount;
+            var timeout = GetCompactionTimeout();
+            StartProcessingWatchdog("compaction", timeout);
 
-            // Phase 1: Clear old tool results
-            var (newState, clearedCount) = _state.ClearOldToolResults(_config.KeepRecentToolResults);
-            _state = newState;
+            var operationId = _processingOperationId;
+            var stateSnapshot = _state;
+            var self = Self;
+            var log = _log;
+            var compactionClient = _compactionClient;
 
-            if (clearedCount > 0)
-            {
-                _log.Info("Phase 1: Cleared {ClearedCount} old tool result(s)", clearedCount);
-            }
+            _ = ExecuteCompactionAsync(
+                stateSnapshot,
+                msg.InputTokenCount,
+                _config.KeepRecentToolResults,
+                _config.KeepRecentMessages,
+                _config.ContextWindowTokens,
+                TimeSpan.FromSeconds(Math.Max(1, _config.SidecarLlmTimeoutSeconds)),
+                timeout,
+                compactionClient,
+                self,
+                log,
+                operationId);
+        });
 
-            // Phase 2: Extractive reduction with adaptive keep count.
-            // Start with the configured keep count, then halve if estimated tokens
-            // still exceed 50% of the context window (minimum 2 messages).
-            var systemOffset = _state.History.Count > 0
-                && _state.History[0].Role == Protocol.ChatRole.System ? 1 : 0;
-            var effectiveKeepCount = _config.KeepRecentMessages;
-            List<SerializableChatMessage> compactedMessages;
-            int discardStartIndex;
+        Command<CompactionWorkCompleted>(msg =>
+        {
+            if (!IsCurrentCompactionOperation(msg.OperationId))
+                return;
 
-            while (true)
-            {
-                var reducer = new ExtractiveSessionReducer(effectiveKeepCount);
-                var meaiMessages = ChatMessageConverter.ToAiMessages(_state.History);
-                var reduced = await reducer.ReduceAsync(meaiMessages, CancellationToken.None);
-
-                var reducedList = reduced as IList<Microsoft.Extensions.AI.ChatMessage>
-                    ?? reduced.ToList();
-                var keptNonSystemCount = reducedList
-                    .Count(m => m.Role != Microsoft.Extensions.AI.ChatRole.System);
-
-                var startIndex = _state.History.Count - keptNonSystemCount;
-                discardStartIndex = startIndex;
-                compactedMessages = [];
-                for (var i = Math.Max(systemOffset, startIndex); i < _state.History.Count; i++)
-                {
-                    compactedMessages.Add(_state.History[i]);
-                }
-
-                // Estimate remaining token cost (naive chars/4 heuristic)
-                var estimatedTokens = EstimateTokens(compactedMessages, systemOffset > 0 ? _state.History[0] : null);
-                var budgetHalf = _config.ContextWindowTokens / 2;
-
-                if (estimatedTokens <= budgetHalf || effectiveKeepCount <= 2)
-                    break;
-
-                var newKeepCount = Math.Max(2, effectiveKeepCount / 2);
-                _log.Info("Adaptive compaction: estimated {EstimatedTokens} tokens > {Budget} budget half, reducing keep count {OldKeep} → {NewKeep}",
-                    estimatedTokens, budgetHalf, effectiveKeepCount, newKeepCount);
-                effectiveKeepCount = newKeepCount;
-            }
-
-            _log.Info("Phase 2: Extractive reduction (history={HistoryCount} → {KeptCount} messages, keepCount={KeepCount})",
-                _state.History.Count, compactedMessages.Count + systemOffset, effectiveKeepCount);
-
-            // Phase 2b: Observer — compress discarded messages into observations.
-            // Observations are prepended to the kept messages so context is preserved.
-            var observationText = await GenerateObservationsAsync(systemOffset, discardStartIndex);
-            if (!string.IsNullOrWhiteSpace(observationText))
-            {
-                var observationMsg = new SerializableChatMessage
-                {
-                    Role = Protocol.ChatRole.User,
-                    Content = ObservationPromptBuilder.WrapObservations(observationText)
-                };
-                compactedMessages.Insert(0, observationMsg);
-                _log.Info("Observer: generated {ObsLength} chars of observations from {DiscardedCount} discarded messages",
-                    observationText.Length, Math.Max(0, discardStartIndex - systemOffset));
-            }
+            StopProcessingWatchdog();
 
             var compactedEvent = new SessionCompacted
             {
                 SessionId = _sessionId,
-                Summary = observationText ?? string.Empty,
-                CompactedMessages = compactedMessages,
+                Summary = msg.Summary,
+                CompactedMessages = msg.CompactedMessages,
                 TurnCountBefore = _state.TurnCount,
                 CompactedAtMs = NowMs()
             };
@@ -712,7 +697,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             Persist(compactedEvent, evt =>
             {
                 _state = _state.Apply(evt);
-                _lastInputTokenCount = 0; // Reset — next LLM call will provide fresh count
+                _lastInputTokenCount = 0;
                 _autoLoadedSkills.Clear();
                 _autoLoadedSkillContent.Clear();
 
@@ -725,11 +710,11 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                         SessionId: _sessionId.Value,
                         TriggerType: "compaction-boundary",
                         Source: "compaction",
-                        Content: string.IsNullOrWhiteSpace(observationText)
+                        Content: string.IsNullOrWhiteSpace(msg.Summary)
                             ? "Compaction completed"
-                            : observationText,
+                            : msg.Summary,
                         UserContent: null,
-                        AssistantContent: observationText,
+                        AssistantContent: string.IsNullOrWhiteSpace(msg.Summary) ? null : msg.Summary,
                         IsExplicitRequest: false,
                         HasVerifiedToolFinding: false,
                         IsCompactionBoundary: true,
@@ -742,35 +727,49 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                         Title: "compaction-boundary",
                         UpdateSemantics: "append-document")));
 
-                // Always snapshot after compaction
                 SaveSnapshot(_state.ToSnapshot());
 
                 EmitOutput(new CompactionOutput
                 {
                     SessionId = _sessionId,
-                    MessagesBefore = messagesBefore,
+                    MessagesBefore = msg.MessagesBefore,
                     MessagesAfter = _state.History.Count,
-                    ToolResultsCleared = clearedCount > 0,
-                    Summarized = !string.IsNullOrWhiteSpace(observationText),
+                    ToolResultsCleared = msg.ClearedCount > 0,
+                    Summarized = !string.IsNullOrWhiteSpace(msg.Summary),
                     ContextWindowTokens = _config.ContextWindowTokens,
-                    PreCompactionInputTokens = preCompactionInputTokens,
-                    KeepCountUsed = effectiveKeepCount
+                    PreCompactionInputTokens = msg.PreCompactionInputTokens,
+                    KeepCountUsed = msg.KeepCountUsed
                 });
 
                 _log.Info("Compaction complete (before={MessagesBefore}, after={MessagesAfter})",
-                    messagesBefore, _state.History.Count);
+                    msg.MessagesBefore, _state.History.Count);
 
-                // Memory extraction is optional and best-effort.
-                // If no extractor is configured, skip the async LLM call and drain immediately.
                 if (_memoryExtractor is NullMemoryExtractor)
-                {
                     DrainBufferOrReady();
-                }
                 else
-                {
                     InvokeMemoryExtractionAsync();
-                }
             });
+        });
+
+        Command<CompactionWorkFailed>(msg =>
+        {
+            if (!IsCurrentCompactionOperation(msg.OperationId))
+                return;
+
+            StopProcessingWatchdog();
+
+            _log.Warning(msg.Cause, "Compaction failed");
+
+            EmitOutput(new ErrorOutput
+            {
+                SessionId = _sessionId,
+                Message = "Context compaction encountered an error. The session will continue.",
+                Category = msg.Cause is TimeoutException ? ErrorCategory.Timeout : ErrorCategory.Unknown,
+                CorrelationId = Guid.NewGuid(),
+                Cause = msg.Cause
+            });
+
+            DrainBufferOrReady();
         });
 
         Command<MemoryExtractionCompleted>(msg =>
@@ -818,6 +817,120 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         else
         {
             Become(Ready);
+        }
+    }
+
+    private TimeSpan GetCompactionTimeout()
+        => TimeSpan.FromSeconds(Math.Max(1,
+            Math.Max(_config.TurnLlmTimeoutSeconds, _config.SidecarLlmTimeoutSeconds)));
+
+    private bool IsCurrentCompactionOperation(long operationId)
+        => _processingOperationName == "compaction" && _processingOperationId == operationId;
+
+    private static async Task ExecuteCompactionAsync(
+        SessionState stateSnapshot,
+        long preCompactionInputTokens,
+        int keepRecentToolResults,
+        int keepRecentMessages,
+        int contextWindowTokens,
+        TimeSpan sidecarTimeout,
+        TimeSpan compactionTimeout,
+        IChatClient client,
+        IActorRef self,
+        ILoggingAdapter log,
+        long operationId)
+    {
+        try
+        {
+            using var cts = new CancellationTokenSource(compactionTimeout);
+
+            var messagesBefore = stateSnapshot.History.Count;
+            var (compactionState, clearedCount) = stateSnapshot.ClearOldToolResults(keepRecentToolResults);
+            var history = compactionState.History;
+
+            if (clearedCount > 0)
+            {
+                log.Info("Phase 1: Cleared {ClearedCount} old tool result(s)", clearedCount);
+            }
+
+            var systemOffset = history.Count > 0 && history[0].Role == Protocol.ChatRole.System ? 1 : 0;
+            var effectiveKeepCount = keepRecentMessages;
+            List<SerializableChatMessage> compactedMessages;
+            int discardStartIndex;
+
+            while (true)
+            {
+                cts.Token.ThrowIfCancellationRequested();
+
+                var reducer = new ExtractiveSessionReducer(effectiveKeepCount);
+                var meaiMessages = ChatMessageConverter.ToAiMessages(history);
+                var reduced = await reducer.ReduceAsync(meaiMessages, cts.Token);
+
+                var reducedList = reduced as IList<Microsoft.Extensions.AI.ChatMessage> ?? reduced.ToList();
+                var keptNonSystemCount = reducedList.Count(m => m.Role != Microsoft.Extensions.AI.ChatRole.System);
+
+                var startIndex = history.Count - keptNonSystemCount;
+                discardStartIndex = startIndex;
+                compactedMessages = [];
+                for (var i = Math.Max(systemOffset, startIndex); i < history.Count; i++)
+                {
+                    compactedMessages.Add(history[i]);
+                }
+
+                var estimatedTokens = EstimateTokens(compactedMessages, systemOffset > 0 ? history[0] : null);
+                var budgetHalf = contextWindowTokens / 2;
+
+                if (estimatedTokens <= budgetHalf || effectiveKeepCount <= 2)
+                    break;
+
+                var newKeepCount = Math.Max(2, effectiveKeepCount / 2);
+                log.Info("Adaptive compaction: estimated {EstimatedTokens} tokens > {Budget} budget half, reducing keep count {OldKeep} -> {NewKeep}",
+                    estimatedTokens, budgetHalf, effectiveKeepCount, newKeepCount);
+                effectiveKeepCount = newKeepCount;
+            }
+
+            log.Info("Phase 2: Extractive reduction (history={HistoryCount} -> {KeptCount} messages, keepCount={KeepCount})",
+                history.Count, compactedMessages.Count + systemOffset, effectiveKeepCount);
+
+            var observationText = await GenerateObservationsAsync(
+                client,
+                history,
+                systemOffset,
+                discardStartIndex,
+                sidecarTimeout,
+                log,
+                cts.Token);
+
+            if (!string.IsNullOrWhiteSpace(observationText))
+            {
+                var observationMsg = new SerializableChatMessage
+                {
+                    Role = Protocol.ChatRole.User,
+                    Content = ObservationPromptBuilder.WrapObservations(observationText)
+                };
+                compactedMessages.Insert(0, observationMsg);
+                log.Info("Observer: generated {ObsLength} chars of observations from {DiscardedCount} discarded messages",
+                    observationText.Length, Math.Max(0, discardStartIndex - systemOffset));
+            }
+
+            self.Tell(new CompactionWorkCompleted
+            {
+                OperationId = operationId,
+                Summary = observationText ?? string.Empty,
+                CompactedMessages = compactedMessages,
+                MessagesBefore = messagesBefore,
+                ClearedCount = clearedCount,
+                PreCompactionInputTokens = preCompactionInputTokens,
+                KeepCountUsed = effectiveKeepCount
+            });
+        }
+        catch (Exception ex)
+        {
+            self.Tell(new CompactionWorkFailed
+            {
+                OperationId = operationId,
+                Cause = ex
+            });
         }
     }
 
@@ -882,13 +995,19 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     /// Observer phase: compress discarded messages into observation notes via LLM call.
     /// Returns null if no messages to compress or if the LLM call fails (graceful degradation).
     /// </summary>
-    private async Task<string?> GenerateObservationsAsync(int systemOffset, int keepStartIndex)
+    private static async Task<string?> GenerateObservationsAsync(
+        IChatClient client,
+        IReadOnlyList<SerializableChatMessage> history,
+        int systemOffset,
+        int keepStartIndex,
+        TimeSpan sidecarTimeout,
+        ILoggingAdapter log,
+        CancellationToken cancellationToken)
     {
-        // Collect messages that will be discarded
         var discardedMessages = new List<SerializableChatMessage>();
-        for (var i = systemOffset; i < keepStartIndex && i < _state.History.Count; i++)
+        for (var i = systemOffset; i < keepStartIndex && i < history.Count; i++)
         {
-            discardedMessages.Add(_state.History[i]);
+            discardedMessages.Add(history[i]);
         }
 
         if (discardedMessages.Count == 0)
@@ -896,8 +1015,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         try
         {
-            var timeout = TimeSpan.FromSeconds(Math.Max(1, _config.SidecarLlmTimeoutSeconds));
-            using var cts = new CancellationTokenSource(timeout);
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            cts.CancelAfter(sidecarTimeout);
             var observerMessages = new List<AiChatMessage>
             {
                 new(Microsoft.Extensions.AI.ChatRole.System,
@@ -906,13 +1025,13 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                     ObservationPromptBuilder.BuildObservationUserPrompt(discardedMessages))
             };
 
-            var response = await _compactionClient.GetResponseAsync(
+            var response = await client.GetResponseAsync(
                 observerMessages, cancellationToken: cts.Token);
             var text = response.Messages[^1].Text;
 
             if (string.IsNullOrWhiteSpace(text))
             {
-                _log.Warning("Observer returned empty observation text — falling back to extractive-only");
+                log.Warning("Observer returned empty observation text — falling back to extractive-only");
                 return null;
             }
 
@@ -920,8 +1039,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         }
         catch (Exception ex)
         {
-            // Graceful degradation: if Observer fails, proceed with extractive-only compaction
-            _log.Warning(ex, "Observer LLM call failed — falling back to extractive-only compaction");
+            log.Warning(ex, "Observer LLM call failed — falling back to extractive-only compaction");
             return null;
         }
     }

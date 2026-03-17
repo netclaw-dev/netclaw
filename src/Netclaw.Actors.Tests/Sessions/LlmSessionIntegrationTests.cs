@@ -590,6 +590,18 @@ internal sealed class FakeChatClient : IChatClient
     public UsageDetails? UsageOverride { get; set; }
 
     /// <summary>
+    /// Number of compaction observation sidecar calls that should hang until cancellation.
+    /// Used to simulate providers that never return during compaction.
+    /// </summary>
+    public int HangingObservationCallsRemaining { get; set; }
+
+    /// <summary>
+    /// Number of compaction observation sidecar calls that should ignore cancellation
+    /// entirely and never complete. Used to simulate a wedged compaction provider.
+    /// </summary>
+    public int StuckObservationCallsRemaining { get; set; }
+
+    /// <summary>
     /// When populated, responses are dequeued in order before falling back to the
     /// default fake text response. Each entry is used as the assistant message contents.
     /// </summary>
@@ -711,6 +723,28 @@ internal sealed class FakeChatClient : IChatClient
             return new ChatResponse(new ChatMessage(
                 Microsoft.Extensions.AI.ChatRole.Assistant,
                 JsonSerializer.Serialize<IReadOnlyList<MemoryProposal>>(proposals)));
+        }
+
+        if (systemText.Contains("You are an observation compressor", StringComparison.Ordinal))
+        {
+            if (StuckObservationCallsRemaining > 0)
+            {
+                StuckObservationCallsRemaining--;
+                var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                await gate.Task;
+            }
+
+            if (HangingObservationCallsRemaining > 0)
+            {
+                HangingObservationCallsRemaining--;
+                var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                using var registration = cancellationToken.Register(() => gate.TrySetCanceled(cancellationToken));
+                await gate.Task;
+            }
+
+            return new ChatResponse(new ChatMessage(
+                Microsoft.Extensions.AI.ChatRole.Assistant,
+                "- compacted observation"));
         }
 
         // Return tool calls if configured

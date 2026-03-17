@@ -41,7 +41,9 @@ public class CompactionIntegrationTests : TestKit
             SnapshotInterval = 5,
             KeepRecentToolResults = 1,
             KeepRecentMessages = 0,
-            TitleGenerationInterval = 0
+            TitleGenerationInterval = 0,
+            TurnLlmTimeoutSeconds = 1,
+            SidecarLlmTimeoutSeconds = 1
         });
         services.AddSingleton<ISystemPromptProvider>(new StaticSystemPromptProvider(
             "You are a test assistant."));
@@ -252,6 +254,54 @@ public class CompactionIntegrationTests : TestKit
         await subscriber.ExpectMsgAsync<TextOutput>();
         await subscriber.ExpectMsgAsync<UsageOutput>();
         await subscriber.ExpectMsgAsync<TurnCompleted>();
+    }
+
+    [Fact]
+    public async Task Buffer_drains_after_compaction_timeout()
+    {
+        _fakeChatClient.UsageOverride = new UsageDetails
+        {
+            InputTokenCount = 800,
+            OutputTokenCount = 50,
+            TotalTokenCount = 850
+        };
+        _fakeChatClient.StuckObservationCallsRemaining = 1;
+
+        var sessionId = new SessionId("test-channel/buffer-drain-compact-timeout");
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("buffer-timeout-sub");
+
+        await sessionManager.Ask<SessionJoined>(new JoinSession
+        {
+            SessionId = sessionId,
+            Subscriber = subscriber,
+            Filter = OutputFilter.Full
+        });
+        await subscriber.ExpectMsgAsync<SessionJoined>();
+
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "First message"
+        });
+
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Second message (buffered)"
+        });
+
+        await subscriber.ExpectMsgAsync<TextOutput>();
+        await subscriber.ExpectMsgAsync<UsageOutput>();
+        await subscriber.ExpectMsgAsync<TurnCompleted>();
+
+        var error = await subscriber.ExpectMsgAsync<ErrorOutput>(TimeSpan.FromSeconds(6));
+        Assert.Contains("compaction timed out", error.Message, StringComparison.OrdinalIgnoreCase);
+
+        var bufferedText = await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(6));
+        Assert.Contains("fake", bufferedText.Text, StringComparison.OrdinalIgnoreCase);
+        await subscriber.ExpectMsgAsync<UsageOutput>(TimeSpan.FromSeconds(3));
+        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
     }
 
     [Fact]

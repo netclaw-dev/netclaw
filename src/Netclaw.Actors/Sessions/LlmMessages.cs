@@ -1,5 +1,6 @@
 using Akka.Actor;
 using Microsoft.Extensions.AI;
+using Netclaw.Actors.Protocol;
 using Netclaw.Tools;
 
 namespace Netclaw.Actors.Sessions;
@@ -115,6 +116,23 @@ internal sealed record SpawnChildActorRequest
 internal sealed record CompactionTriggered
 {
     public required long InputTokenCount { get; init; }
+}
+
+internal sealed record CompactionWorkCompleted
+{
+    public required long OperationId { get; init; }
+    public required string Summary { get; init; }
+    public required List<SerializableChatMessage> CompactedMessages { get; init; }
+    public required int MessagesBefore { get; init; }
+    public required int ClearedCount { get; init; }
+    public required long PreCompactionInputTokens { get; init; }
+    public required int KeepCountUsed { get; init; }
+}
+
+internal sealed record CompactionWorkFailed
+{
+    public required long OperationId { get; init; }
+    public required Exception Cause { get; init; }
 }
 
 /// <summary>
