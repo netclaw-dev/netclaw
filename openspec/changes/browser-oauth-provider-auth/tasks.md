@@ -33,10 +33,19 @@
 - [ ] 5.5 Wire auth method selection to route `OAuthPkce` to browser flow and `OAuthDevice` to existing device flow in both view models
 - [ ] 5.6 Add redirect URL parsing utility — extract `code` and `state` from pasted URL, validate format, return clear error on malformed input
 
-## 6. Cleanup and Verification
+## 6. MCP OAuth Improvements
 
-- [ ] 6.1 Update `OAuthDeviceFlowConfig.FromDescriptor` to handle `OAuthPkce` providers (skip device flow config for providers that use browser OAuth)
-- [ ] 6.2 Run `dotnet slopwatch analyze` — no new violations
-- [ ] 6.3 Run full test suite — all tests pass
-- [ ] 6.4 Manual test: `netclaw provider add openai` with browser OAuth — complete flow, verify probe succeeds, verify token persisted to `secrets.json`
-- [ ] 6.5 Manual test: headless fallback — paste redirect URL, verify flow completes
+- [ ] 6.1 Refactor `McpCommand` OAuth flow to use `OAuthPkceService` for state tracking instead of polling by server name
+- [ ] 6.2 Add `CopyableTextNode` for auth URL display in MCP OAuth (replace plain text `"If it doesn't open, visit:"`)
+- [ ] 6.3 Add redirect URL paste fallback `TextInputNode` to MCP OAuth flow for headless environments
+- [ ] 6.4 Add `ToastOverlayNode` clipboard feedback when auth URL is copied via OSC 52
+- [ ] 6.5 Refactor MCP callback endpoint to delegate token exchange to `OAuthPkceService`
+
+## 7. Cleanup and Verification
+
+- [ ] 7.1 Update `OAuthDeviceFlowConfig.FromDescriptor` to handle `OAuthPkce` providers (skip device flow config for providers that use browser OAuth)
+- [ ] 7.2 Run `dotnet slopwatch analyze` — no new violations
+- [ ] 7.3 Run full test suite — all tests pass
+- [ ] 7.4 Manual test: `netclaw provider add openai` with browser OAuth — complete flow, verify probe succeeds, verify token persisted to `secrets.json`
+- [ ] 7.5 Manual test: headless fallback — paste redirect URL, verify flow completes
+- [ ] 7.6 Manual test: `netclaw mcp oauth` with paste fallback — verify redirect URL paste works for MCP servers
