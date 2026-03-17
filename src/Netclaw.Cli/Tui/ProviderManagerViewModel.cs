@@ -680,20 +680,23 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
             var authUrl = startResult.GetProperty("authorizationUrl").GetString()!;
             var flowState = startResult.GetProperty("state").GetString()!;
 
-            // Step 2: Try to open browser
+            // Step 2: Try to open browser (detect headless first)
             OAuthVerificationUri = authUrl;
-            BrowserOpenFailed = false;
+            BrowserOpenFailed = !BrowserDetection.CanOpenBrowser();
             OAuthFlowState.Value = DeviceFlowState.WaitingForUser;
             NotifyStateChanged();
 
-            try
+            if (!BrowserOpenFailed)
             {
-                Process.Start(new ProcessStartInfo(authUrl) { UseShellExecute = true });
-            }
-            catch
-            {
-                BrowserOpenFailed = true;
-                NotifyStateChanged();
+                try
+                {
+                    Process.Start(new ProcessStartInfo(authUrl) { UseShellExecute = true });
+                }
+                catch
+                {
+                    BrowserOpenFailed = true;
+                    NotifyStateChanged();
+                }
             }
 
             // Step 3: Poll daemon for completion
@@ -1114,6 +1117,7 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
         StateVersion.Value++;
         RequestRedraw();
     }
+
 
     private void HandleGlobalKey(KeyPressed key)
     {

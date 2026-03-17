@@ -486,19 +486,22 @@ public partial class InitWizardViewModel : ReactiveViewModel
             var flowState = startResult.GetProperty("state").GetString()!;
 
             OAuthVerificationUri = authUrl;
-            BrowserOpenFailed = false;
+            BrowserOpenFailed = !BrowserDetection.CanOpenBrowser();
             OAuthFlowState.Value = DeviceFlowState.WaitingForUser;
             RequestRedraw();
 
-            try
+            if (!BrowserOpenFailed)
             {
-                System.Diagnostics.Process.Start(
-                    new System.Diagnostics.ProcessStartInfo(authUrl) { UseShellExecute = true });
-            }
-            catch
-            {
-                BrowserOpenFailed = true;
-                RequestRedraw();
+                try
+                {
+                    System.Diagnostics.Process.Start(
+                        new System.Diagnostics.ProcessStartInfo(authUrl) { UseShellExecute = true });
+                }
+                catch
+                {
+                    BrowserOpenFailed = true;
+                    RequestRedraw();
+                }
             }
 
             var pollTimeout = TimeSpan.FromMinutes(5);
