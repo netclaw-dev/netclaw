@@ -17,7 +17,7 @@ internal static class ReminderCommand
         Converters = { new JsonStringEnumConverter() }
     };
 
-    public static async Task<int> RunAsync(string[] args, DaemonApi api)
+    public static async Task<int> RunAsync(string[] args, DaemonApi? daemonApi)
     {
         if (args.Length == 1)
         {
@@ -32,17 +32,27 @@ internal static class ReminderCommand
             return 0;
         }
 
+        // validate is offline — no daemon needed
+        if (subcommand is "validate")
+            return RunValidate(args);
+
+        if (daemonApi is null)
+        {
+            Console.Error.WriteLine($"[FAIL] reminder {subcommand}: requires a running daemon.");
+            Console.Error.WriteLine("       fix: run `netclaw daemon start` and retry.");
+            return 1;
+        }
+
         return subcommand switch
         {
-            "list" => await RunListAsync(api),
-            "create" => await RunCreateAsync(api, args),
-            "cancel" or "delete" => await RunDeleteAsync(api, args),
-            "disable" => await RunDisableAsync(api, args),
-            "enable" => await RunEnableAsync(api, args),
-            "import" => await RunImportAsync(api, args),
-            "validate" => RunValidate(args),
-            "show" => await RunShowAsync(api, args),
-            "history" => await RunHistoryAsync(api, args),
+            "list" => await RunListAsync(daemonApi),
+            "create" => await RunCreateAsync(daemonApi, args),
+            "cancel" or "delete" => await RunDeleteAsync(daemonApi, args),
+            "disable" => await RunDisableAsync(daemonApi, args),
+            "enable" => await RunEnableAsync(daemonApi, args),
+            "import" => await RunImportAsync(daemonApi, args),
+            "show" => await RunShowAsync(daemonApi, args),
+            "history" => await RunHistoryAsync(daemonApi, args),
             _ => WriteHelp()
         };
     }

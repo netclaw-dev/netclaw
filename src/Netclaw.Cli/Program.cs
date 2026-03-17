@@ -329,14 +329,28 @@ static async Task RunAsync(string[] args)
     // ── MCP server management (offline, except auth which needs daemon) ──
     if (mode is "mcp")
     {
-        var builder = Host.CreateApplicationBuilder(args);
-        ConfigureConfigServices(builder.Services, builder.Configuration);
-        builder.Logging.ClearProviders();
-        builder.Logging.SetMinimumLevel(LogLevel.Warning);
-        using var mcpHost = builder.Build();
-        var mcpPaths = mcpHost.Services.GetRequiredService<NetclawPaths>();
-        var mcpDaemonApi = mcpHost.Services.GetRequiredService<DaemonApi>();
-        Environment.ExitCode = await McpCommand.RunAsync(args, mcpPaths, mcpDaemonApi);
+        var mcpSubcommand = args.Length > 1 ? args[1] : "help";
+
+        if (mcpSubcommand is "auth")
+        {
+            // auth needs the daemon — spin up DI to get DaemonApi
+            var builder = Host.CreateApplicationBuilder(args);
+            ConfigureConfigServices(builder.Services, builder.Configuration);
+            builder.Logging.ClearProviders();
+            builder.Logging.SetMinimumLevel(LogLevel.Warning);
+            using var mcpHost = builder.Build();
+            var mcpPaths = mcpHost.Services.GetRequiredService<NetclawPaths>();
+            var mcpDaemonApi = mcpHost.Services.GetRequiredService<DaemonApi>();
+            Environment.ExitCode = await McpCommand.RunAsync(args, mcpPaths, mcpDaemonApi);
+        }
+        else
+        {
+            // All other subcommands are offline config-file operations
+            var paths = new NetclawPaths();
+            paths.EnsureDirectoriesExist();
+            Environment.ExitCode = await McpCommand.RunAsync(args, paths);
+        }
+
         return;
     }
 
@@ -428,6 +442,13 @@ static async Task RunAsync(string[] args)
             return;
         }
 
+        // help and validate are offline — skip DI
+        var reminderSub = args.Length > 1 ? args[1] : "help";
+        if (reminderSub is "help" or "-h" or "--help" or "validate" || args.Length == 1)
+        {
+            Environment.ExitCode = await ReminderCommand.RunAsync(args, daemonApi: null);
+        }
+        else
         {
             var builder = Host.CreateApplicationBuilder(args);
             ConfigureConfigServices(builder.Services, builder.Configuration);
@@ -843,6 +864,13 @@ static async Task<int> RunStatusAsync(IServiceProvider services, bool jsonOutput
             _ => 1
         };
     }
+    catch (HttpRequestException ex) when (ex.StatusCode is not null)
+    {
+        await updateCts.CancelAsync();
+        Console.WriteLine($"[FAIL] status: daemon returned {(int)ex.StatusCode} from {api.Endpoint}");
+        Console.WriteLine("       fix: run `netclaw daemon status` and `netclaw daemon start`.");
+        return 1;
+    }
     catch (Exception ex)
     {
         await updateCts.CancelAsync();
@@ -887,6 +915,12 @@ static async Task<int> RunSessionsOnceAsync(IServiceProvider services, bool json
         }
 
         return 0;
+    }
+    catch (HttpRequestException ex) when (ex.StatusCode is not null)
+    {
+        Console.WriteLine($"[FAIL] sessions: daemon returned {(int)ex.StatusCode} from {api.Endpoint}");
+        Console.WriteLine("       fix: run `netclaw daemon status` and `netclaw daemon start`.");
+        return 1;
     }
     catch (Exception ex)
     {
