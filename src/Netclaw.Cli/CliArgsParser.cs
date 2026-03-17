@@ -28,7 +28,7 @@ public static class CliArgsParser
     /// </summary>
     public static readonly IReadOnlySet<string> KnownCommands = new HashSet<string>(StringComparer.Ordinal)
     {
-        "chat", "sessions", "init", "doctor", "status",
+        "chat", "sessions", "init", "doctor", "status", "stats",
         "daemon", "mcp", "provider", "model", "reminder",
         "secrets", "config", "update",
     };

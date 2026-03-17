@@ -37,6 +37,7 @@ public sealed class CliArgsParserTests
     [InlineData("sessions")]
     [InlineData("doctor")]
     [InlineData("status")]
+    [InlineData("stats")]
     [InlineData("daemon")]
     [InlineData("mcp")]
     [InlineData("provider")]
@@ -106,7 +107,7 @@ public sealed class CliArgsParserTests
     {
         var expected = new HashSet<string>(StringComparer.Ordinal)
         {
-            "chat", "sessions", "init", "doctor", "status",
+            "chat", "sessions", "init", "doctor", "status", "stats",
             "daemon", "mcp", "provider", "model", "reminder",
             "secrets", "config", "update",
         };

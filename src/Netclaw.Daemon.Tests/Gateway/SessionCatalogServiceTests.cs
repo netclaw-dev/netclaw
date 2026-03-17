@@ -205,6 +205,59 @@ public sealed class SessionCatalogServiceTests : IDisposable
         Assert.Equal("slack", entries[0].Channel);
     }
 
+    [Fact]
+    public void GetStats_ReturnsAggregates_AcrossMultipleSessions()
+    {
+        var paths = CreatePaths();
+
+        // Seed current schema with multiple sessions
+        using (var conn = OpenConn(paths))
+        {
+            RunSql(conn,
+                """
+                CREATE TABLE sessions (
+                    persistence_id    TEXT NOT NULL PRIMARY KEY,
+                    channel           TEXT NOT NULL,
+                    created_at        INTEGER NOT NULL,
+                    last_activity     INTEGER NOT NULL,
+                    status            TEXT NOT NULL DEFAULT 'active',
+                    turn_count        INTEGER NOT NULL DEFAULT 0,
+                    title             TEXT,
+                    description       TEXT,
+                    last_input_tokens INTEGER,
+                    log_path          TEXT,
+                    metadata          TEXT
+                )
+                """);
+            RunSql(conn,
+                "INSERT INTO sessions (persistence_id, channel, created_at, last_activity, status, turn_count) VALUES ('session-1', 'slack', 100, 200, 'active', 10)");
+            RunSql(conn,
+                "INSERT INTO sessions (persistence_id, channel, created_at, last_activity, status, turn_count) VALUES ('session-2', 'slack', 100, 300, 'active', 5)");
+            RunSql(conn,
+                "INSERT INTO sessions (persistence_id, channel, created_at, last_activity, status, turn_count) VALUES ('session-3', 'signalr', 100, 400, 'finished', 3)");
+        }
+
+        var service = CreateService(paths);
+        var stats = service.GetStats();
+
+        Assert.Equal(3, stats.TotalSessions);
+        Assert.Equal(2, stats.ActiveSessions);
+        Assert.Equal(18, stats.TotalTurns);
+    }
+
+    [Fact]
+    public void GetStats_ReturnsZeros_WhenNoSessions()
+    {
+        var paths = CreatePaths();
+        var service = CreateService(paths);
+
+        var stats = service.GetStats();
+
+        Assert.Equal(0, stats.TotalSessions);
+        Assert.Equal(0, stats.ActiveSessions);
+        Assert.Equal(0, stats.TotalTurns);
+    }
+
     private static SqliteConnection OpenConn(NetclawPaths paths)
     {
         var conn = new SqliteConnection(new SqliteConnectionStringBuilder

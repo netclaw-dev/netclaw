@@ -74,6 +74,7 @@ static async Task RunDaemonAsync(string[] args, DaemonRestartSignal restartSigna
     builder.Services.AddSingleton<ISessionLifecycleObserver>(sp => sp.GetRequiredService<SessionCatalogService>());
     builder.Services.AddSingleton<SessionRegistry>();
     builder.Services.AddSingleton<DaemonRuntimeStatusService>();
+    builder.Services.AddSingleton<DaemonStatsService>();
 
     var app = builder.Build();
 
@@ -84,6 +85,8 @@ static async Task RunDaemonAsync(string[] args, DaemonRestartSignal restartSigna
         Results.Ok(await statusService.GetStatusAsync(cancellationToken)));
     app.MapGet("/api/sessions", (SessionCatalogService catalog) =>
         Results.Ok(catalog.ListRecent(limit: 50)));
+    app.MapGet("/api/stats", async (DaemonStatsService statsService, CancellationToken ct) =>
+        Results.Ok(await statsService.GetStatsAsync(ct)));
 
     // MCP OAuth 2.1 endpoints
     app.MapPost("/api/mcp/oauth/start/{name}", async (

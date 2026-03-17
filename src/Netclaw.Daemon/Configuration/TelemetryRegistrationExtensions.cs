@@ -40,6 +40,7 @@ public static class TelemetryRegistrationExtensions
             .WithMetrics(metrics =>
             {
                 metrics.AddMeter(ChannelTelemetry.MeterName);
+                metrics.AddMeter(SessionTelemetry.MeterName);
                 metrics.AddOtlpExporter(otlp => otlp.Endpoint = endpoint);
             });
     }

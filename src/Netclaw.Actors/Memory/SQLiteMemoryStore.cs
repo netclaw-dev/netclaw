@@ -387,6 +387,40 @@ public sealed class SQLiteMemoryStore
         return value is long l ? (int)l : Convert.ToInt32(value ?? 0);
     }
 
+    public sealed record MemoryStats(
+        int AnchorCount,
+        int DocumentCount,
+        int RecordCount,
+        int EdgeCount,
+        int PendingCheckpoints);
+
+    public async Task<MemoryStats> GetStatsAsync(CancellationToken ct = default)
+    {
+        await using var conn = new SqliteConnection(_connectionString);
+        await conn.OpenAsync(ct);
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            SELECT
+                (SELECT COUNT(*) FROM memory_anchors),
+                (SELECT COUNT(*) FROM memory_documents),
+                (SELECT COUNT(*) FROM memory_records),
+                (SELECT COUNT(*) FROM memory_edges),
+                (SELECT COUNT(*) FROM memory_checkpoints WHERE status = 'pending')
+            """;
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        if (await reader.ReadAsync(ct))
+        {
+            return new MemoryStats(
+                AnchorCount: reader.GetInt32(0),
+                DocumentCount: reader.GetInt32(1),
+                RecordCount: reader.GetInt32(2),
+                EdgeCount: reader.GetInt32(3),
+                PendingCheckpoints: reader.GetInt32(4));
+        }
+
+        return new MemoryStats(0, 0, 0, 0, 0);
+    }
+
     public async Task EnqueueCheckpointAsync(SQLiteMemoryCheckpoint checkpoint, CancellationToken ct = default)
     {
         await using var conn = new SqliteConnection(_connectionString);

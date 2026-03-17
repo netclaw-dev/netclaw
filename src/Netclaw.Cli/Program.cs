@@ -279,6 +279,83 @@ static async Task RunAsync(string[] args)
         return;
     }
 
+    if (mode is "stats")
+    {
+        if (args.Length > 1 && IsHelpToken(args[1]))
+        {
+            WriteStatsHelp();
+            return;
+        }
+
+        var statsAsJson = false;
+        for (var i = 1; i < args.Length; i++)
+        {
+            var arg = args[i];
+            if (arg is "--json")
+            {
+                statsAsJson = true;
+                continue;
+            }
+
+            if (arg is "--format")
+            {
+                if (i + 1 >= args.Length)
+                {
+                    Console.WriteLine("[FAIL] stats options: Missing value after --format. Expected text or json.");
+                    WriteStatsHelp();
+                    Environment.ExitCode = 1;
+                    return;
+                }
+
+                i++;
+                var format = args[i];
+                statsAsJson = string.Equals(format, "json", StringComparison.OrdinalIgnoreCase);
+                if (!statsAsJson && !string.Equals(format, "text", StringComparison.OrdinalIgnoreCase))
+                {
+                    Console.WriteLine($"[FAIL] stats options: Unsupported format '{format}'. Expected text or json.");
+                    WriteStatsHelp();
+                    Environment.ExitCode = 1;
+                    return;
+                }
+
+                continue;
+            }
+
+            if (arg.StartsWith("--format=", StringComparison.Ordinal))
+            {
+                var format = arg.Substring("--format=".Length);
+                statsAsJson = string.Equals(format, "json", StringComparison.OrdinalIgnoreCase);
+                if (!statsAsJson && !string.Equals(format, "text", StringComparison.OrdinalIgnoreCase))
+                {
+                    Console.WriteLine($"[FAIL] stats options: Unsupported format '{format}'. Expected text or json.");
+                    WriteStatsHelp();
+                    Environment.ExitCode = 1;
+                    return;
+                }
+
+                continue;
+            }
+
+            Console.WriteLine($"[FAIL] stats options: Unknown option '{arg}'.");
+            WriteStatsHelp();
+            Environment.ExitCode = 1;
+            return;
+        }
+
+        var builder = Host.CreateApplicationBuilder(args);
+        ConfigureConfigServices(builder.Services, builder.Configuration);
+        builder.Services.AddHttpClient();
+
+        builder.Logging.ClearProviders();
+        builder.Logging.SetMinimumLevel(LogLevel.Warning);
+
+        using var host = builder.Build();
+        using var scope = host.Services.CreateScope();
+        var exitCode = await RunStatsAsync(scope.ServiceProvider, builder.Configuration, statsAsJson);
+        Environment.ExitCode = exitCode;
+        return;
+    }
+
     // ── Daemon management ──
     if (mode is "daemon")
     {
@@ -639,6 +716,7 @@ static void WriteGeneralHelp()
     Console.WriteLine("  -p, --prompt <text>      Headless single-prompt mode");
     Console.WriteLine("  doctor                   Configuration diagnostics (offline)");
     Console.WriteLine("  status                   Runtime status from daemon health JSON endpoint");
+    Console.WriteLine("  stats                    Usage activity statistics from daemon");
     Console.WriteLine("  daemon <subcommand>      Manage daemon lifecycle");
     Console.WriteLine("  mcp                      Manage MCP server profiles");
     Console.WriteLine("  provider                 Manage LLM providers (TUI) or use subcommands");
@@ -705,6 +783,23 @@ static void WriteStatusHelp()
     Console.WriteLine("  - daemon process uptime");
     Console.WriteLine("  - connector health (including disabled connectors)");
     Console.WriteLine("  - persistence and telemetry summary");
+    Console.WriteLine();
+    Console.WriteLine("Options:");
+    Console.WriteLine("  --json                 Alias for --format json");
+    Console.WriteLine("  --format <text|json>   Output format (default: text)");
+}
+
+static void WriteStatsHelp()
+{
+    Console.WriteLine("Usage: netclaw stats [options]");
+    Console.WriteLine();
+    Console.WriteLine("Shows usage activity statistics from the running daemon:");
+    Console.WriteLine("  - token consumption (input, output, cached)");
+    Console.WriteLine("  - session and turn counts");
+    Console.WriteLine("  - memory store statistics");
+    Console.WriteLine("  - skill availability");
+    Console.WriteLine("  - Slack activity counters");
+    Console.WriteLine("  - reminder statistics");
     Console.WriteLine();
     Console.WriteLine("Options:");
     Console.WriteLine("  --json                 Alias for --format json");
@@ -1019,6 +1114,105 @@ static string FormatUptime(long uptimeSeconds)
         return $"{uptime.Hours}h {uptime.Minutes}m";
 
     return $"{uptime.Minutes}m {uptime.Seconds}s";
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Stats command
+// ═══════════════════════════════════════════════════════════════════════
+
+static async Task<int> RunStatsAsync(IServiceProvider services, IConfiguration configuration, bool jsonOutput)
+{
+    var endpoint = configuration["Daemon:Endpoint"]
+        ?? Environment.GetEnvironmentVariable("NETCLAW_DAEMON_ENDPOINT")
+        ?? "http://127.0.0.1:5199";
+
+    var url = $"{endpoint.TrimEnd('/')}/api/stats";
+    var httpClientFactory = services.GetRequiredService<IHttpClientFactory>();
+    var client = httpClientFactory.CreateClient();
+
+    try
+    {
+        using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        using var response = await client.GetAsync(url, timeoutCts.Token);
+
+        if (!response.IsSuccessStatusCode)
+        {
+            Console.WriteLine($"[FAIL] stats: daemon returned {(int)response.StatusCode} from {url}");
+            Console.WriteLine("       fix: run `netclaw daemon start` and retry.");
+            return 1;
+        }
+
+        var payload = await response.Content.ReadAsStreamAsync(timeoutCts.Token);
+        var stats = await JsonSerializer.DeserializeAsync<DaemonStats.Response>(
+            payload,
+            new JsonSerializerOptions(JsonSerializerDefaults.Web),
+            timeoutCts.Token);
+
+        if (stats is null)
+        {
+            Console.WriteLine("[FAIL] stats: daemon returned an empty stats payload.");
+            return 1;
+        }
+
+        if (jsonOutput)
+        {
+            Console.WriteLine(JsonSerializer.Serialize(stats, new JsonSerializerOptions
+            {
+                WriteIndented = true,
+                PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+            }));
+        }
+        else
+        {
+            WriteStatsResult(stats);
+        }
+
+        return 0;
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"[FAIL] stats: unable to reach daemon at {url}: {ex.Message}");
+        Console.WriteLine("       fix: run `netclaw daemon start` and retry.");
+        return 1;
+    }
+}
+
+static void WriteStatsResult(DaemonStats.Response stats)
+{
+    Console.WriteLine($"netclaw stats — usage since daemon started ({FormatUptime(stats.Process.UptimeSeconds)} ago)");
+    Console.WriteLine();
+
+    Console.WriteLine("tokens (this process):");
+    Console.WriteLine($"  input: {stats.Tokens.InputTokensTotal:N0}    output: {stats.Tokens.OutputTokensTotal:N0}    cached: {stats.Tokens.CachedInputTokensTotal:N0}");
+    Console.WriteLine($"  turns completed: {stats.Tokens.TurnsCompletedTotal:N0}");
+    Console.WriteLine();
+
+    Console.WriteLine("sessions:");
+    Console.WriteLine($"  total: {stats.Sessions.TotalSessions}    active: {stats.Sessions.ActiveSessions}    turns (all-time): {stats.Sessions.TotalTurns:N0}");
+    Console.WriteLine();
+
+    Console.WriteLine($"memory ({stats.Memory.Status}):");
+    if (stats.Memory.Status is not "unavailable")
+    {
+        Console.WriteLine($"  anchors: {stats.Memory.AnchorCount}    documents: {stats.Memory.DocumentCount}    records: {stats.Memory.RecordCount}    edges: {stats.Memory.EdgeCount}");
+        Console.WriteLine($"  pending checkpoints: {stats.Memory.PendingCheckpoints}");
+    }
+    Console.WriteLine();
+
+    Console.WriteLine("skills:");
+    Console.WriteLine($"  available: {stats.Skills.TotalAvailable}    indexed: {stats.Skills.WithEnrichedKeywords}");
+    Console.WriteLine();
+
+    Console.WriteLine("slack:");
+    Console.WriteLine($"  events: recv={stats.SlackActivity.EventsReceived} routed={stats.SlackActivity.EventsRouted} dropped={stats.SlackActivity.EventsDropped}");
+    Console.WriteLine($"  replies: posted={stats.SlackActivity.RepliesPosted} failed={stats.SlackActivity.RepliesFailed}");
+
+    if (stats.Reminders is { } reminders)
+    {
+        Console.WriteLine();
+        Console.WriteLine("reminders:");
+        Console.WriteLine($"  scheduled: {reminders.ScheduledCount}    active: {reminders.ActiveExecutions}    failed: {reminders.FailedCount}");
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════
