@@ -18,4 +18,12 @@ public interface IProviderProbe
     Task<ProviderProbeResult> ProbeAsync(
         string providerType, string? endpoint, string? apiKey,
         CancellationToken ct = default);
+
+    /// <summary>
+    /// Probe using a full <see cref="ProviderEntry"/> which preserves the distinction
+    /// between API keys and OAuth tokens. Prefer this overload when the entry is
+    /// already loaded from config.
+    /// </summary>
+    Task<ProviderProbeResult> ProbeAsync(
+        ProviderEntry entry, CancellationToken ct = default);
 }

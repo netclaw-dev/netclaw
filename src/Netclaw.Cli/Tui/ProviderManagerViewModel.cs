@@ -244,11 +244,10 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
         {
             try
             {
-                var result = await _probe.ProbeAsync(
-                    item.ProviderType,
-                    item.Entry?.Endpoint,
-                    GetProbeCredential(item.Entry),
-                    CancellationToken.None);
+                var result = item.Entry is not null
+                    ? await _probe.ProbeAsync(item.Entry, CancellationToken.None)
+                    : await _probe.ProbeAsync(item.ProviderType, item.Entry?.Endpoint,
+                        GetProbeCredential(item.Entry), CancellationToken.None);
 
                 item.ProbeResult = result;
                 item.Health = result.Success
@@ -527,11 +526,10 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
     {
         try
         {
-            var result = await _probe.ProbeAsync(
-                item.ProviderType,
-                item.Entry?.Endpoint,
-                GetProbeCredential(item.Entry),
-                CancellationToken.None);
+            var result = item.Entry is not null
+                ? await _probe.ProbeAsync(item.Entry, CancellationToken.None)
+                : await _probe.ProbeAsync(item.ProviderType, item.Entry?.Endpoint,
+                    GetProbeCredential(item.Entry), CancellationToken.None);
 
             item.ProbeResult = result;
             item.Health = result.Success

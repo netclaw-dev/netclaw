@@ -306,11 +306,7 @@ public sealed class ModelManagerViewModel : ReactiveViewModel
         var result = new ProviderProbeResult(false, "Validation failed before probe completed.", []);
         try
         {
-            result = await _probe.ProbeAsync(
-                    providerType,
-                    string.IsNullOrWhiteSpace(provider.Entry.Endpoint) ? null : provider.Entry.Endpoint,
-                    provider.Entry.ApiKey?.Value ?? provider.Entry.OAuthAccessToken?.Value,
-                    ct)
+            result = await _probe.ProbeAsync(provider.Entry, ct)
                 .WaitAsync(ProbeHardTimeout, ct);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
