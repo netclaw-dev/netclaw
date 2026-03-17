@@ -717,13 +717,26 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
                 var status = statusResponse.GetProperty("status").GetString();
                 if (status is "Completed")
                 {
-                    // Get the token result from the service
+                    // Extract token from status response
+                    var accessToken = statusResponse.TryGetProperty("accessToken", out var atProp)
+                        ? atProp.GetString() : null;
+                    var refreshToken = statusResponse.TryGetProperty("refreshToken", out var rtProp)
+                        ? rtProp.GetString() : null;
+                    var expiresAt = statusResponse.TryGetProperty("expiresAt", out var expProp)
+                        ? expProp.GetString() : null;
+
+                    if (!string.IsNullOrEmpty(accessToken))
+                    {
+                        NewApiKey = accessToken;
+                        OAuthResult = new OAuthDeviceFlowResult(
+                            new SensitiveString(accessToken),
+                            refreshToken is not null ? new SensitiveString(refreshToken) : null,
+                            expiresAt is not null ? DateTimeOffset.Parse(expiresAt) : null);
+                    }
+
                     OAuthFlowState.Value = DeviceFlowState.Succeeded;
                     NotifyStateChanged();
 
-                    // Retrieve token — the daemon stored it in OAuthPkceService
-                    // We need to get it via a separate call or extract from the flow
-                    // For now, transition to probe with the daemon handling token persistence
                     CurrentState.Value = ProviderManagerState.AddValidating;
                     NotifyStateChanged();
                     StartProbe();

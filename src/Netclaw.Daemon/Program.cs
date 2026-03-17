@@ -212,7 +212,10 @@ static async Task RunDaemonAsync(string[] args, DaemonRestartSignal restartSigna
         return Results.Ok(new
         {
             status = status.ToString(),
-            hasToken = result is not null
+            hasToken = result is not null,
+            accessToken = result?.AccessToken.Value,
+            refreshToken = result?.RefreshToken?.Value,
+            expiresAt = result?.ExpiresAt?.ToString("o"),
         });
     });
 

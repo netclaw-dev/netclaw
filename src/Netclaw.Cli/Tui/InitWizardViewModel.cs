@@ -528,6 +528,22 @@ public partial class InitWizardViewModel : ReactiveViewModel
                 var status = statusResponse.GetProperty("status").GetString();
                 if (status is "Completed")
                 {
+                    var accessToken = statusResponse.TryGetProperty("accessToken", out var atProp)
+                        ? atProp.GetString() : null;
+                    var refreshToken = statusResponse.TryGetProperty("refreshToken", out var rtProp)
+                        ? rtProp.GetString() : null;
+                    var expiresAt = statusResponse.TryGetProperty("expiresAt", out var expProp)
+                        ? expProp.GetString() : null;
+
+                    if (!string.IsNullOrEmpty(accessToken))
+                    {
+                        ApiKeyInput = accessToken;
+                        OAuthResult = new OAuthDeviceFlowResult(
+                            new SensitiveString(accessToken),
+                            refreshToken is not null ? new SensitiveString(refreshToken) : null,
+                            expiresAt is not null ? DateTimeOffset.Parse(expiresAt) : null);
+                    }
+
                     OAuthFlowState.Value = DeviceFlowState.Succeeded;
                     RequestRedraw();
                     return;
