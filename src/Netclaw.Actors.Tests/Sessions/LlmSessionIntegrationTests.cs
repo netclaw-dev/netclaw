@@ -131,6 +131,97 @@ public class LlmSessionIntegrationTests : TestKit
     }
 
     [Fact]
+    public async Task Repeated_pre_tool_empty_responses_fail_turn_and_allow_followup_prompt()
+    {
+        _fakeChatClient.PlannedResponses.Enqueue([]);
+        _fakeChatClient.PlannedResponses.Enqueue([]);
+        _fakeChatClient.PlannedResponses.Enqueue([]);
+
+        var sessionId = new SessionId("test-channel/pre-tool-empty");
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("pre-tool-empty-sub");
+
+        await sessionManager.Ask<SessionJoined>(new JoinSession
+        {
+            SessionId = sessionId,
+            Subscriber = subscriber,
+            Filter = OutputFilter.Full
+        }, TimeSpan.FromSeconds(3));
+        await subscriber.ExpectMsgAsync<SessionJoined>();
+
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Please answer"
+        }, TimeSpan.FromSeconds(3));
+
+        var error = await subscriber.ExpectMsgAsync<ErrorOutput>(TimeSpan.FromSeconds(6));
+        Assert.Equal(sessionId, error.SessionId);
+        Assert.Equal(ErrorCategory.ProviderFailure, error.Category);
+        Assert.Contains("Please try rephrasing", error.Message, StringComparison.OrdinalIgnoreCase);
+
+        var completed = await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
+        Assert.Equal(sessionId, completed.SessionId);
+
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Try again"
+        }, TimeSpan.FromSeconds(3));
+
+        var text = await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3));
+        Assert.Contains("[fake] Response #4", text.Text, StringComparison.OrdinalIgnoreCase);
+        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
+    }
+
+    [Fact]
+    public async Task Empty_response_after_tool_nudge_fails_turn_and_allows_followup_prompt()
+    {
+        _fakeChatClient.ToolCallsOnFirstCall =
+        [
+            new FunctionCallContent("call-1", "web_search",
+                new Dictionary<string, object?> { ["query"] = "test" })
+        ];
+        _fakeChatClient.PlannedResponses.Enqueue([]);
+        _fakeChatClient.PlannedResponses.Enqueue([]);
+
+        var sessionId = new SessionId("test-channel/post-tool-empty");
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("post-tool-empty-sub");
+
+        await sessionManager.Ask<SessionJoined>(new JoinSession
+        {
+            SessionId = sessionId,
+            Subscriber = subscriber,
+            Filter = OutputFilter.Full
+        }, TimeSpan.FromSeconds(3));
+        await subscriber.ExpectMsgAsync<SessionJoined>();
+
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Search for something"
+        }, TimeSpan.FromSeconds(3));
+
+        await subscriber.ExpectMsgAsync<ToolCallOutput>(TimeSpan.FromSeconds(3));
+        var error = await subscriber.ExpectMsgAsync<ErrorOutput>(TimeSpan.FromSeconds(6));
+        Assert.Equal(sessionId, error.SessionId);
+        Assert.Equal(ErrorCategory.ProviderFailure, error.Category);
+
+        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
+
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Try again after the failure"
+        }, TimeSpan.FromSeconds(3));
+
+        var text = await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3));
+        Assert.Contains("[fake] Response #4", text.Text, StringComparison.OrdinalIgnoreCase);
+        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
+    }
+
+    [Fact]
     public async Task Sidecar_observation_promotes_strong_user_assertion_into_memory()
     {
         var gate = new MemoryProposalGate();
@@ -492,6 +583,12 @@ internal sealed class FakeChatClient : IChatClient
     /// </summary>
     public UsageDetails? UsageOverride { get; set; }
 
+    /// <summary>
+    /// When populated, responses are dequeued in order before falling back to the
+    /// default fake text response. Each entry is used as the assistant message contents.
+    /// </summary>
+    public Queue<IReadOnlyList<AIContent>> PlannedResponses { get; } = new();
+
     public async Task<ChatResponse> GetResponseAsync(
         IEnumerable<ChatMessage> messages,
         ChatOptions? options = null,
@@ -628,6 +725,17 @@ internal sealed class FakeChatClient : IChatClient
                     toolResponse.Usage = UsageOverride;
                 return toolResponse;
             }
+        }
+
+        if (PlannedResponses.Count > 0)
+        {
+            var plannedContents = PlannedResponses.Dequeue();
+            var plannedResponse = new ChatResponse(new ChatMessage(
+                Microsoft.Extensions.AI.ChatRole.Assistant,
+                new List<AIContent>(plannedContents)));
+            if (UsageOverride is not null)
+                plannedResponse.Usage = UsageOverride;
+            return plannedResponse;
         }
 
         var contents = new List<AIContent>();

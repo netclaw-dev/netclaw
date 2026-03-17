@@ -23,8 +23,10 @@ internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStas
     private readonly ILoggingAdapter _log;
 
     private readonly StringBuilder _buffer = new();
+    private const string EmptyTurnFallbackText = ":warning: I didn't manage to produce a reply. Please try rephrasing or sending your message again.";
     private bool _sawTextDelta;
     private bool _postedThisTurn;
+    private bool _uploadedFileThisTurn;
 
     private ActorMaterializer? _materializer;
     private MaterializedSession? _session;
@@ -426,9 +428,16 @@ internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStas
                         _log.Debug("Turn completed with no buffered reply text");
                 }
 
+                if (!_postedThisTurn && !_uploadedFileThisTurn)
+                {
+                    _log.Warning("Turn completed without visible Slack output; posting fallback reply");
+                    await SafePostAsync(EmptyTurnFallbackText);
+                }
+
                 _buffer.Clear();
                 _sawTextDelta = false;
                 _postedThisTurn = false;
+                _uploadedFileThisTurn = false;
 
                 break;
         }
@@ -470,6 +479,7 @@ internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStas
                 file.FilePath,
                 file.FileName);
 
+            _uploadedFileThisTurn = true;
             _log.Info("Uploaded file to Slack thread: {FileName}", file.FileName);
         }
         catch (Exception ex)
