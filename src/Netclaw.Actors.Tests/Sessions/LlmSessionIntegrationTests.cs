@@ -175,7 +175,7 @@ public class LlmSessionIntegrationTests : TestKit
     }
 
     [Fact]
-    public async Task Empty_response_after_tool_nudge_fails_turn_and_allows_followup_prompt()
+    public async Task Persistent_empty_response_after_tool_work_synthesizes_evidence_backed_reply()
     {
         _fakeChatClient.ToolCallsOnFirstCall =
         [
@@ -184,6 +184,8 @@ public class LlmSessionIntegrationTests : TestKit
         ];
         _fakeChatClient.PlannedResponses.Enqueue([]);
         _fakeChatClient.PlannedResponses.Enqueue([]);
+        _fakeChatClient.PlannedResponses.Enqueue([]);
+        _fakeToolExecutor.Results["web_search"] = "Found 3 results for test";
 
         var sessionId = new SessionId("test-channel/post-tool-empty");
         var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
@@ -204,11 +206,59 @@ public class LlmSessionIntegrationTests : TestKit
         }, TimeSpan.FromSeconds(3));
 
         await subscriber.ExpectMsgAsync<ToolCallOutput>(TimeSpan.FromSeconds(3));
+        var text = await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(6));
+        Assert.Equal(sessionId, text.SessionId);
+        Assert.Contains("best-effort answer", text.Text, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("web_search", text.Text, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Found 3 results for test", text.Text, StringComparison.OrdinalIgnoreCase);
+        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
+        await subscriber.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(250));
+
+        Assert.Equal(4, _fakeChatClient.CallCount);
+        Assert.Empty(_fakeChatClient.ReceivedToolNames[3]);
+    }
+
+    [Fact]
+    public async Task Persistent_empty_response_after_tool_work_without_usable_evidence_preserves_provider_failure()
+    {
+        _fakeChatClient.ToolCallsOnFirstCall =
+        [
+            new FunctionCallContent("call-1", "web_search",
+                new Dictionary<string, object?> { ["query"] = "test" })
+        ];
+        _fakeChatClient.PlannedResponses.Enqueue([]);
+        _fakeChatClient.PlannedResponses.Enqueue([]);
+        _fakeChatClient.PlannedResponses.Enqueue([]);
+        _fakeToolExecutor.Results["web_search"] = "   \n   ";
+
+        var sessionId = new SessionId("test-channel/post-tool-empty-no-evidence");
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("post-tool-empty-no-evidence-sub");
+
+        await sessionManager.Ask<SessionJoined>(new JoinSession
+        {
+            SessionId = sessionId,
+            Subscriber = subscriber,
+            Filter = OutputFilter.Full
+        }, TimeSpan.FromSeconds(3));
+        await subscriber.ExpectMsgAsync<SessionJoined>();
+
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Search for something"
+        }, TimeSpan.FromSeconds(3));
+
+        await subscriber.ExpectMsgAsync<ToolCallOutput>(TimeSpan.FromSeconds(3));
         var error = await subscriber.ExpectMsgAsync<ErrorOutput>(TimeSpan.FromSeconds(6));
         Assert.Equal(sessionId, error.SessionId);
         Assert.Equal(ErrorCategory.ProviderFailure, error.Category);
-
+        Assert.Contains("Please try rephrasing", error.Message, StringComparison.OrdinalIgnoreCase);
         await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
+        await subscriber.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(250));
+
+        Assert.Equal(4, _fakeChatClient.CallCount);
+        Assert.Empty(_fakeChatClient.ReceivedToolNames[3]);
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
@@ -217,7 +267,7 @@ public class LlmSessionIntegrationTests : TestKit
         }, TimeSpan.FromSeconds(3));
 
         var text = await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3));
-        Assert.Contains("[fake] Response #4", text.Text, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("[fake] Response #5", text.Text, StringComparison.OrdinalIgnoreCase);
         await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
     }
 

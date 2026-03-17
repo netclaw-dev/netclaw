@@ -22,6 +22,7 @@ Netclaw v0.6.2 — Reminder history, onboarding chat, and turn recovery hardenin
 **Stability**
 
 * Fixed agent turn recovery for empty LLM responses, forced no-tools turns, and hang scenarios — the session actor now reliably recovers and continues rather than stalling or silently dropping turns in these edge cases. ([#260](https://github.com/Aaronontheweb/netclaw/pull/260), [#269](https://github.com/Aaronontheweb/netclaw/pull/269), [#271](https://github.com/Aaronontheweb/netclaw/pull/271))
+* Fixed persistent post-tool empty completions to degrade into a deterministic evidence-backed assistant reply when successful tool results exist, while preserving the existing generic provider failure when the turn has no usable evidence to show.
 
 #### 0.6.1 2026-03-15 ####
 

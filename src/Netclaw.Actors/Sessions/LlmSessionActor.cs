@@ -67,6 +67,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     private int _toolIterationCount;
 
     private const int MaxPreToolEmptyResponseRetries = 2;
+    private const int MaxPostToolEmptyResponseRetries = 2;
+    private const int MaxFallbackEvidenceItems = 4;
+    private const int MaxFallbackEvidenceChars = 280;
     private const string EmptyResponseFallbackMessage = "I didn't manage to produce a reply. Please try rephrasing or sending your request again.";
     private const string ToolBudgetFallbackMessage = "I hit my tool-use limit before I could finish. Please narrow the request or tell me what to focus on next, and I'll continue from there.";
     private const string TurnBudgetFallbackMessage = "I spent too long working on that turn and had to stop. Please try again with a narrower follow-up.";
@@ -74,8 +77,13 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     // Whether we already sent a post-tool empty-response nudge in this tool chain
     private bool _postToolNudgeSent;
 
+    // Number of consecutive empty responses observed after successful tool work
+    private int _postToolEmptyResponseCount;
+
     // Number of consecutive empty responses observed before any tool work happened
     private int _preToolEmptyResponseCount;
+
+    private readonly List<ToolEvidence> _successfulToolEvidence = [];
 
     // Whether the current LLM call intentionally disabled tool use after a circuit breaker fired.
     private bool _forceNoToolsActive;
@@ -367,6 +375,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 _log.Debug("LLM produced empty response after {ToolIterations} tool iteration(s) — nudging",
                     _toolIterationCount);
                 _postToolNudgeSent = true;
+                _postToolEmptyResponseCount = 1;
                 _state = _state.AddSystemNudge(
                     "You received tool results but did not respond. "
                     + "Continue working or answer the user's question.");
@@ -376,13 +385,22 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
             if (!hasText && _toolIterationCount > 0 && _postToolNudgeSent)
             {
-                _log.Warning(
-                    "LLM produced empty response after tool work and post-tool nudge; failing turn after {ToolIterations} tool iteration(s)",
-                    _toolIterationCount);
-                FailCurrentTurn(
-                    EmptyResponseFallbackMessage,
-                    new InvalidOperationException("LLM produced an empty response after tool execution and follow-up nudge."),
-                    ErrorCategory.ProviderFailure);
+                _postToolEmptyResponseCount++;
+
+                if (_postToolEmptyResponseCount <= MaxPostToolEmptyResponseRetries)
+                {
+                    _log.Warning(
+                        "LLM produced empty response after tool work; retrying degraded finalization attempt {Attempt}/{MaxAttempts}",
+                        _postToolEmptyResponseCount,
+                        MaxPostToolEmptyResponseRetries);
+                    _state = _state.AddSystemNudge(
+                        "Your previous response was still empty after tool work. "
+                        + "Return a concise final answer to the user now, using the completed tool results.");
+                    FireLlmCall(forceNoTools: true);
+                    return;
+                }
+
+                CompleteCurrentTurnFromPostToolEvidenceOrFail();
                 return;
             }
 
@@ -540,6 +558,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 _log.Info("Tool [{ToolName}] (call={CallId}) result: {Result}",
                     result.Name ?? "unknown", result.ToolCallId ?? "?", preview);
             }
+
+            CaptureSuccessfulToolEvidence(msg.ToolResults, msg.SuccessfulToolCallIds, _toolIterationCount + 1);
 
             // Dynamic tool loading: if search_tools was called, load discovered tools
             // into the available tools list so they can be called in subsequent turns
@@ -1122,6 +1142,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         // Model produced tool calls — reset post-tool nudge so it can fire again
         // if the model stalls later in the chain.
         _postToolNudgeSent = false;
+        _postToolEmptyResponseCount = 0;
         _preToolEmptyResponseCount = 0;
         _forceNoToolsActive = false;
 
@@ -1580,9 +1601,11 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     {
         _toolIterationCount = 0;
         _postToolNudgeSent = false;
+        _postToolEmptyResponseCount = 0;
         _preToolEmptyResponseCount = 0;
         _forceNoToolsActive = false;
         _activeBufferedReplayMessage = null;
+        _successfulToolEvidence.Clear();
         PrepareDiscoveredToolsForNewTurn();
     }
 
@@ -2032,9 +2055,17 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     private sealed record ToolCallResult(
         SerializableChatMessage Message,
+        bool Success,
         IReadOnlyList<FileAttachmentInfo> FileAttachments,
         IReadOnlyList<CompletedSubAgentRun> CompletedSubAgentRuns,
         IReadOnlyList<AcceptedSubAgentFinding> AcceptedSubAgentFindings);
+
+    private sealed record ToolEvidence(
+        string ToolName,
+        string ToolCallId,
+        string Excerpt,
+        int Iteration,
+        int Ordinal);
 
     private static async Task ExecuteToolsAsync(
         IToolExecutor executor,
@@ -2073,6 +2104,10 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             {
                 OperationId = operationId,
                 ToolResults = results.Select(r => r.Message).ToList(),
+                SuccessfulToolCallIds = results
+                    .Where(r => r.Success && !string.IsNullOrWhiteSpace(r.Message.ToolCallId))
+                    .Select(r => r.Message.ToolCallId!)
+                    .ToList(),
                 FileAttachments = fileAttachments,
                 CompletedSubAgentRuns = results
                     .SelectMany(r => r.CompletedSubAgentRuns)
@@ -2199,6 +2234,21 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 Allowed = true,
                 Duration = sw.Elapsed
             });
+
+            var message = new SerializableChatMessage
+            {
+                Role = Protocol.ChatRole.Tool,
+                Content = ClampToolResult(resultText, maxInlineToolResultChars),
+                ToolCallId = tc.CallId,
+                Name = tc.Name
+            };
+
+            return new ToolCallResult(
+                message,
+                true,
+                context.FileAttachments,
+                completedRuns,
+                acceptedFindings);
         }
         catch (Exception ex)
         {
@@ -2214,23 +2264,22 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 Allowed = true,
                 Duration = sw.Elapsed
             });
+
+            var failedMessage = new SerializableChatMessage
+            {
+                Role = Protocol.ChatRole.Tool,
+                Content = ClampToolResult(resultText, maxInlineToolResultChars),
+                ToolCallId = tc.CallId,
+                Name = tc.Name
+            };
+
+            return new ToolCallResult(
+                failedMessage,
+                false,
+                context.FileAttachments,
+                completedRuns,
+                acceptedFindings);
         }
-
-        resultText = ClampToolResult(resultText, maxInlineToolResultChars);
-
-        var message = new SerializableChatMessage
-        {
-            Role = Protocol.ChatRole.Tool,
-            Content = resultText,
-            ToolCallId = tc.CallId,
-            Name = tc.Name
-        };
-
-        return new ToolCallResult(
-            message,
-            context.FileAttachments,
-            completedRuns,
-            acceptedFindings);
     }
 
     internal static SubAgentFindingReviewResult ReviewSubAgentFinding(
@@ -2617,6 +2666,95 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             ContextWindowTokens = contextWindow,
             UsagePercent = usagePercent
         }, OutputFilter.Usage);
+    }
+
+    private void CaptureSuccessfulToolEvidence(
+        IReadOnlyList<SerializableChatMessage> toolResults,
+        IReadOnlyCollection<string> successfulToolCallIds,
+        int iteration)
+    {
+        if (successfulToolCallIds.Count == 0)
+            return;
+
+        var successfulIds = successfulToolCallIds.ToHashSet(StringComparer.Ordinal);
+        var ordinal = _successfulToolEvidence.Count;
+
+        foreach (var result in toolResults)
+        {
+            if (string.IsNullOrWhiteSpace(result.ToolCallId) || !successfulIds.Contains(result.ToolCallId))
+                continue;
+
+            var excerpt = BuildToolEvidenceExcerpt(result.Content);
+            if (string.IsNullOrWhiteSpace(excerpt))
+                continue;
+
+            ordinal++;
+            _successfulToolEvidence.Add(new ToolEvidence(
+                result.Name ?? "unknown",
+                result.ToolCallId,
+                excerpt,
+                iteration,
+                ordinal));
+        }
+
+        if (_successfulToolEvidence.Count > MaxFallbackEvidenceItems)
+        {
+            _successfulToolEvidence.RemoveRange(0, _successfulToolEvidence.Count - MaxFallbackEvidenceItems);
+        }
+    }
+
+    private static string? BuildToolEvidenceExcerpt(string? content)
+    {
+        if (string.IsNullOrWhiteSpace(content))
+            return null;
+
+        var normalized = string.Join(
+            " ",
+            content.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+
+        if (normalized.StartsWith("Error executing tool:", StringComparison.OrdinalIgnoreCase))
+            return null;
+
+        if (normalized.Length > MaxFallbackEvidenceChars)
+            normalized = normalized[..MaxFallbackEvidenceChars].TrimEnd() + "...";
+
+        return string.IsNullOrWhiteSpace(normalized) ? null : normalized;
+    }
+
+    private void CompleteCurrentTurnFromPostToolEvidenceOrFail()
+    {
+        if (_successfulToolEvidence.Count == 0)
+        {
+            _log.Warning(
+                "LLM produced repeated empty responses after tool work but no successful evidence was retained; failing turn");
+            FailCurrentTurn(
+                EmptyResponseFallbackMessage,
+                new InvalidOperationException("LLM produced repeated empty responses after tool execution and no usable evidence existed for fallback synthesis."),
+                ErrorCategory.ProviderFailure);
+            return;
+        }
+
+        var fallbackReply = BuildDeterministicToolEvidenceReply();
+        _log.Warning(
+            "LLM produced repeated empty responses after tool work; emitting deterministic evidence-backed fallback using {EvidenceCount} retained item(s)",
+            _successfulToolEvidence.Count);
+        CompleteCurrentTurnWithDeterministicText(fallbackReply);
+    }
+
+    private string BuildDeterministicToolEvidenceReply()
+    {
+        var builder = new StringBuilder();
+        builder.AppendLine("I couldn't get the model to produce a final response, but here's a best-effort answer based on the tool work I completed:");
+
+        foreach (var evidence in _successfulToolEvidence)
+        {
+            builder.Append("- ");
+            builder.Append(evidence.ToolName);
+            builder.Append(": ");
+            builder.AppendLine(evidence.Excerpt);
+        }
+
+        return builder.ToString().TrimEnd();
     }
 
     private long StartProcessingWatchdog(string operationName, TimeSpan timeout)

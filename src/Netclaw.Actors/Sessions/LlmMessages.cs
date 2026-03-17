@@ -50,6 +50,7 @@ internal sealed record ToolExecutionCompleted
     public required long OperationId { get; init; }
 
     public required List<Protocol.SerializableChatMessage> ToolResults { get; init; }
+    public List<string> SuccessfulToolCallIds { get; init; } = [];
     public List<FileAttachmentInfo> FileAttachments { get; init; } = [];
     public List<CompletedSubAgentRun> CompletedSubAgentRuns { get; init; } = [];
     public List<AcceptedSubAgentFinding> AcceptedSubAgentFindings { get; init; } = [];

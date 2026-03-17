@@ -138,6 +138,37 @@ public sealed class SlackThreadAckIntegrationTests(ITestOutputHelper output) : T
         Assert.DoesNotContain("didn't manage to produce a reply", _replyClient.PostedMessages[0].Text, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public async Task Post_tool_empty_recovery_is_rendered_as_normal_visible_text_in_slack()
+    {
+        _replyClient.PostedMessages.Clear();
+        _chatClient.ToolCallsBeforeText = 1;
+        _chatClient.EmptyResponsesAfterTools = 3;
+        _toolExecutor.Results["web_search"] = "Found a deterministic result";
+
+        var gateway = CreateGateway("slack-gw-post-tool-empty-recovery");
+
+        gateway.Tell(new SlackInboundMessage(
+            Kind: SlackInboundKind.Message,
+            EventId: new SlackEventId("D10:10000"),
+            ChannelId: new SlackChannelId("D10"),
+            ThreadTs: null,
+            EventTs: new SlackEventTs("10000.1"),
+            UserId: new SlackUserId("U_HUMAN"),
+            BotId: null,
+            Text: "recover from empty tool replies",
+            Subtype: null,
+            Hidden: false,
+            IsDirectMessage: true,
+            Files: null));
+
+        await AwaitAssertAsync(() => Assert.Single(_replyClient.PostedMessages), TimeSpan.FromSeconds(10));
+        var posted = Assert.Single(_replyClient.PostedMessages);
+        Assert.Contains("best-effort answer", posted.Text, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Found a deterministic result", posted.Text, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Working on it.", posted.Text, StringComparison.OrdinalIgnoreCase);
+    }
+
     private IActorRef CreateGateway(string name)
     {
         var pipeline = Host.Services.GetRequiredService<SessionPipeline>();
@@ -181,10 +212,13 @@ public sealed class SlackThreadAckIntegrationTests(ITestOutputHelper output) : T
     private sealed class ToolLoopChatClient : IChatClient
     {
         private int _callCount;
+        private int _emptyResponsesServed;
 
         public int ToolCallsBeforeText { get; set; }
 
         public bool StreamTextDeltas { get; set; }
+
+        public int EmptyResponsesAfterTools { get; set; }
 
         public Task<ChatResponse> GetResponseAsync(
             IEnumerable<ChatMessage> messages,
@@ -203,6 +237,14 @@ public sealed class SlackThreadAckIntegrationTests(ITestOutputHelper output) : T
                 return Task.FromResult(new ChatResponse(new ChatMessage(
                     Microsoft.Extensions.AI.ChatRole.Assistant,
                     [toolCall])));
+            }
+
+            if (EmptyResponsesAfterTools > 0 && _emptyResponsesServed < EmptyResponsesAfterTools)
+            {
+                _emptyResponsesServed++;
+                return Task.FromResult(new ChatResponse(new ChatMessage(
+                    Microsoft.Extensions.AI.ChatRole.Assistant,
+                    [])));
             }
 
             var text = StreamTextDeltas ? "Hello world" : $"[final] call #{callNumber}";
