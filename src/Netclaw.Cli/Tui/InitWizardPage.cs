@@ -1586,7 +1586,10 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             {
                 if (ViewModel.CurrentStep.Value == WizardStep.Provider
                     && (_providerSubStep == 3 || _providerSubStep == 5))
+                {
                     _stepContentNode?.Invalidate();
+                    ViewModel.RequestRedraw();
+                }
             })
             .DisposeWith(Subscriptions);
 

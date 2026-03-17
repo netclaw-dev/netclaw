@@ -14,14 +14,14 @@
 
 ## 3. Provider Descriptor Changes
 
-- [ ] 3.1 Add `OAuthAuthorizationEndpoint` and `OAuthRedirectUri` default interface members to `IProviderDescriptor` (both `=> null`)
-- [ ] 3.2 Update `OpenAiDescriptor`: set `SupportedAuthMethods` to `[OAuthPkce, ApiKey]`, set `OAuthAuthorizationEndpoint` to `https://auth.openai.com/oauth/authorize`, set `OAuthRedirectUri` to `http://127.0.0.1:5199/api/provider/oauth/callback`, set `OAuthScope` to `openid profile email offline_access`
+- [x] 3.1 Add `OAuthAuthorizationEndpoint` and `OAuthRedirectUri` default interface members to `IProviderDescriptor` (both `=> null`)
+- [x] 3.2 Update `OpenAiDescriptor`: set `SupportedAuthMethods` to `[OAuthPkce, ApiKey]`, set `OAuthAuthorizationEndpoint` to `https://auth.openai.com/oauth/authorize`, set `OAuthRedirectUri` to `http://127.0.0.1:5199/api/provider/oauth/callback`, set `OAuthScope` to `openid profile email offline_access`
 
 ## 4. Daemon Callback Endpoints
 
-- [ ] 4.1 Add `GET /api/provider/oauth/callback` endpoint in daemon `Program.cs` — accept `code` and `state` params, validate state, exchange code for tokens, return HTML success/error page
-- [ ] 4.2 Add `POST /api/provider/oauth/start` endpoint — accept provider type, generate PKCE + auth URL using `OAuthPkceService`, store pending flow, return `{ authorizationUrl, state }`
-- [ ] 4.3 Add `GET /api/provider/oauth/status/{state}` endpoint — return `Completed`, `Pending`, or `Failed` for a pending flow
+- [x] 4.1 Add `GET /api/provider/oauth/callback` endpoint in daemon `Program.cs` — accept `code` and `state` params, validate state, exchange code for tokens, return HTML success/error page
+- [x] 4.2 Add `POST /api/provider/oauth/start` endpoint — accept provider type, generate PKCE + auth URL using `OAuthPkceService`, store pending flow, return `{ authorizationUrl, state }`
+- [x] 4.3 Add `GET /api/provider/oauth/status/{state}` endpoint — return `Completed`, `Pending`, or `Failed` for a pending flow
 - [ ] 4.4 Write integration tests for daemon callback endpoints using `WebApplicationFactory`
 
 ## 5. CLI/TUI Browser OAuth Flow
@@ -31,7 +31,7 @@
 - [ ] 5.3 Build browser OAuth TUI sub-step in `ProviderManagerPage` — spinner while waiting, `CopyableTextNode` for auth URL on browser failure, `TextInputNode` for redirect URL paste, `ToastOverlayNode` for clipboard feedback
 - [ ] 5.4 Build browser OAuth TUI sub-step in `InitWizardPage` — matching UX from `ProviderManagerPage`
 - [ ] 5.5 Wire auth method selection to route `OAuthPkce` to browser flow and `OAuthDevice` to existing device flow in both view models
-- [ ] 5.6 Add redirect URL parsing utility — extract `code` and `state` from pasted URL, validate format, return clear error on malformed input
+- [x] 5.6 Add redirect URL parsing utility — extract `code` and `state` from pasted URL, validate format, return clear error on malformed input
 
 ## 6. MCP OAuth Improvements
 
@@ -43,7 +43,7 @@
 
 ## 7. Cleanup and Verification
 
-- [ ] 7.1 Update `OAuthDeviceFlowConfig.FromDescriptor` to handle `OAuthPkce` providers (skip device flow config for providers that use browser OAuth)
+- [x] 7.1 Update `OAuthDeviceFlowConfig.FromDescriptor` to handle `OAuthPkce` providers (skip device flow config for providers that use browser OAuth)
 - [ ] 7.2 Run `dotnet slopwatch analyze` — no new violations
 - [ ] 7.3 Run full test suite — all tests pass
 - [ ] 7.4 Manual test: `netclaw provider add openai` with browser OAuth — complete flow, verify probe succeeds, verify token persisted to `secrets.json`

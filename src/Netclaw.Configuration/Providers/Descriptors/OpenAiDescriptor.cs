@@ -16,7 +16,7 @@ public sealed class OpenAiDescriptor : IProviderDescriptor
 
     public string TypeKey => "openai";
     public string DisplayName => "OpenAI";
-    public IReadOnlyList<AuthMethod> SupportedAuthMethods => [AuthMethod.OAuthDevice, AuthMethod.ApiKey];
+    public IReadOnlyList<AuthMethod> SupportedAuthMethods => [AuthMethod.OAuthPkce, AuthMethod.ApiKey];
     public string DefaultEndpoint => "https://api.openai.com";
     public string ModelListingPath => "/v1/models";
     public CredentialInputMode CredentialMode => CredentialInputMode.ApiKey;
@@ -26,7 +26,9 @@ public sealed class OpenAiDescriptor : IProviderDescriptor
     public string? OAuthDefaultClientId => "app_EMoamEEZ73f0CkXaXp7hrann";
     public string? OAuthPollingEndpoint => "https://auth.openai.com/api/accounts/deviceauth/token";
     public bool UseProprietaryDeviceFlow => true;
-    public string? OAuthScope => "openid profile email offline_access model.request api.model.read";
+    public string? OAuthScope => "openid profile email offline_access";
+    public string? OAuthAuthorizationEndpoint => "https://auth.openai.com/oauth/authorize";
+    public string? OAuthRedirectUri => "http://127.0.0.1:5199/api/provider/oauth/callback";
 
     public Task<ProviderProbeResult> ProbeAsync(
         ProviderEntry entry, CancellationToken ct = default)

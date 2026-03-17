@@ -140,6 +140,78 @@ static async Task RunDaemonAsync(string[] args, DaemonRestartSignal restartSigna
         return Results.Ok(new { status = status.ToString() });
     });
 
+    // Provider OAuth endpoints (browser-based Authorization Code + PKCE)
+    app.MapPost("/api/provider/oauth/start", (
+        HttpContext context,
+        Netclaw.Configuration.Providers.OAuth.OAuthPkceService pkceService,
+        ProviderDescriptorRegistry registry) =>
+    {
+        var providerType = context.Request.Query["provider"].ToString();
+        if (string.IsNullOrEmpty(providerType))
+            return Results.BadRequest(new { error = "Missing 'provider' query parameter" });
+
+        if (!registry.TryGet(providerType, out var descriptor))
+            return Results.NotFound(new { error = $"Unknown provider type: {providerType}" });
+
+        if (descriptor.OAuthAuthorizationEndpoint is null || descriptor.OAuthTokenEndpoint is null
+            || descriptor.OAuthDefaultClientId is null || descriptor.OAuthRedirectUri is null)
+            return Results.BadRequest(new { error = $"Provider '{providerType}' does not support browser OAuth" });
+
+        var (authUrl, state) = pkceService.StartAuthorizationFlow(
+            descriptor.OAuthAuthorizationEndpoint,
+            descriptor.OAuthTokenEndpoint,
+            descriptor.OAuthDefaultClientId,
+            descriptor.OAuthRedirectUri,
+            descriptor.OAuthScope);
+
+        return Results.Ok(new { authorizationUrl = authUrl, state });
+    });
+
+    app.MapGet("/api/provider/oauth/callback", async (
+        HttpContext context,
+        Netclaw.Configuration.Providers.OAuth.OAuthPkceService pkceService,
+        CancellationToken ct) =>
+    {
+        var code = context.Request.Query["code"].ToString();
+        var state = context.Request.Query["state"].ToString();
+
+        if (string.IsNullOrEmpty(code) || string.IsNullOrEmpty(state))
+        {
+            context.Response.ContentType = "text/html";
+            await context.Response.WriteAsync(
+                "<html><body><h2>Authorization failed</h2><p>Missing code or state parameter.</p></body></html>", ct);
+            return;
+        }
+
+        try
+        {
+            await pkceService.CompleteAuthorizationAsync(code, state, ct);
+            context.Response.ContentType = "text/html";
+            await context.Response.WriteAsync(
+                "<html><body><h2>Authorization complete</h2><p>You may close this tab and return to the terminal.</p></body></html>", ct);
+        }
+        catch (Exception ex)
+        {
+            context.Response.StatusCode = 500;
+            context.Response.ContentType = "text/html";
+            await context.Response.WriteAsync(
+                $"<html><body><h2>Authorization failed</h2><p>{System.Net.WebUtility.HtmlEncode(ex.Message)}</p></body></html>", ct);
+        }
+    });
+
+    app.MapGet("/api/provider/oauth/status/{state}", (
+        string state,
+        Netclaw.Configuration.Providers.OAuth.OAuthPkceService pkceService) =>
+    {
+        var status = pkceService.GetFlowStatus(state);
+        var result = pkceService.GetFlowResult(state);
+        return Results.Ok(new
+        {
+            status = status.ToString(),
+            hasToken = result is not null
+        });
+    });
+
     // Register channel-specific tools after DI is built (tools need resolved services).
     ChannelToolRegistration.RegisterChannelTools(app.Services);
 
@@ -357,6 +429,8 @@ static void ConfigureDaemonServices(
     services.AddSingleton(mcpServers);
     services.AddHttpClient<McpOAuthService>();
     services.AddSingleton<McpOAuthService>();
+    services.AddHttpClient<Netclaw.Configuration.Providers.OAuth.OAuthPkceService>();
+    services.AddSingleton<Netclaw.Configuration.Providers.OAuth.OAuthPkceService>();
     services.AddSingleton<McpClientManager>();
     services.AddHostedService(sp => sp.GetRequiredService<McpClientManager>());
 

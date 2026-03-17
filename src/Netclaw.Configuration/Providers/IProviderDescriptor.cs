@@ -61,6 +61,18 @@ public interface IProviderDescriptor
     string? OAuthScope => null;
 
     /// <summary>
+    /// OAuth authorization endpoint URL for browser-based Authorization Code + PKCE flow.
+    /// Null for providers that don't support browser OAuth.
+    /// </summary>
+    string? OAuthAuthorizationEndpoint => null;
+
+    /// <summary>
+    /// OAuth redirect URI for browser-based flow callback.
+    /// Null for providers that don't support browser OAuth.
+    /// </summary>
+    string? OAuthRedirectUri => null;
+
+    /// <summary>
     /// Polling endpoint for proprietary device flows (e.g. OpenAI's
     /// <c>/api/accounts/deviceauth/token</c>). Null for standard RFC 8628 flows
     /// where polling goes to <see cref="OAuthTokenEndpoint"/>.
