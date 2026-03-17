@@ -25,7 +25,10 @@ public sealed class OpenAiDescriptor : IProviderDescriptor
     public string? OAuthTokenEndpoint => "https://auth.openai.com/oauth/token";
     public string? OAuthPollingEndpoint => "https://auth.openai.com/api/accounts/deviceauth/token";
     public bool UseProprietaryDeviceFlow => true;
-    public string? OAuthScope => "openid profile email offline_access";
+    // Identity scopes + API scopes. Without model.request and api.model.read,
+    // the token cannot list models or make completions requests.
+    // See: https://github.com/openclaw/openclaw/issues/24720
+    public string? OAuthScope => "openid profile email offline_access model.request api.model.read";
     public string? OAuthAuthorizationEndpoint => "https://auth.openai.com/oauth/authorize";
 
     // The Codex CLI public client ID. All third-party tools (OpenCode, OpenClaw, etc.) reuse
