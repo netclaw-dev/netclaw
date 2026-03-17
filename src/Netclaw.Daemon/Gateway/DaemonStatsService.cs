@@ -13,12 +13,18 @@ internal sealed class DaemonStatsService(
     TimeProvider timeProvider,
     SessionCatalogService sessionCatalog,
     SkillRegistry skillRegistry,
+    DailyStatsRecorder dailyStatsRecorder,
     SQLiteMemoryStore? sqliteMemoryStore = null,
     IRequiredActor<ReminderManagerActorKey>? reminderManagerActor = null)
 {
     private readonly DateTimeOffset _startedAt = timeProvider.GetUtcNow();
 
-    public async Task<DaemonStats.Response> GetStatsAsync(CancellationToken ct = default)
+    /// <summary>
+    /// Get aggregated stats. When <paramref name="days"/> is positive, includes
+    /// a trailing N-day breakdown. When 0, includes all-time daily rows.
+    /// When null, no daily breakdown is included.
+    /// </summary>
+    public async Task<DaemonStats.Response> GetStatsAsync(int? days = null, CancellationToken ct = default)
     {
         var now = timeProvider.GetUtcNow();
         var uptime = now - _startedAt;
@@ -28,6 +34,22 @@ internal sealed class DaemonStatsService(
         var sessionStats = sessionCatalog.GetStats();
         var allSkills = skillRegistry.GetAll();
         var enrichedKeywords = skillRegistry.GetEnrichedKeywords();
+
+        var dailyBreakdown = days.HasValue
+            ? dailyStatsRecorder.Query(days.Value)
+                .Select(r => new DaemonStats.DailyRow
+                {
+                    Date = r.DateKey,
+                    InputTokens = r.InputTokens,
+                    OutputTokens = r.OutputTokens,
+                    Turns = r.Turns,
+                    Sessions = r.Sessions,
+                    MemoriesFormed = r.MemoriesFormed,
+                    MemoriesRecalled = r.MemoriesRecalled,
+                    SkillsLoaded = r.SkillsLoaded
+                })
+                .ToList()
+            : [];
 
         return new DaemonStats.Response
         {
@@ -40,8 +62,10 @@ internal sealed class DaemonStatsService(
             {
                 InputTokensTotal = tokenSnapshot.InputTokensTotal,
                 OutputTokensTotal = tokenSnapshot.OutputTokensTotal,
-                CachedInputTokensTotal = tokenSnapshot.CachedInputTokensTotal,
-                TurnsCompletedTotal = tokenSnapshot.TurnsCompletedTotal
+                TurnsCompletedTotal = tokenSnapshot.TurnsCompletedTotal,
+                MemoriesFormedTotal = tokenSnapshot.MemoriesFormedTotal,
+                MemoriesRecalledTotal = tokenSnapshot.MemoriesRecalledTotal,
+                SkillsLoadedTotal = tokenSnapshot.SkillsLoadedTotal
             },
             Sessions = new DaemonStats.Sessions
             {
@@ -63,7 +87,8 @@ internal sealed class DaemonStatsService(
                 RepliesPosted = slackSnapshot.SlackRepliesPosted,
                 RepliesFailed = slackSnapshot.SlackRepliesFailed
             },
-            Reminders = await BuildReminderStatsAsync(ct)
+            Reminders = await BuildReminderStatsAsync(ct),
+            DailyBreakdown = dailyBreakdown
         };
     }
 

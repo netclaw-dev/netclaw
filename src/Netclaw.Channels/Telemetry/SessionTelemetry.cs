@@ -20,20 +20,23 @@ public static class SessionTelemetry
 
     private static long _inputTokensTotal;
     private static long _outputTokensTotal;
-    private static long _cachedInputTokensTotal;
     private static long _turnsCompletedTotal;
+    private static long _memoriesFormedTotal;
+    private static long _memoriesRecalledTotal;
+    private static long _skillsLoadedTotal;
 
     public sealed record Snapshot(
         long InputTokensTotal,
         long OutputTokensTotal,
-        long CachedInputTokensTotal,
-        long TurnsCompletedTotal);
+        long TurnsCompletedTotal,
+        long MemoriesFormedTotal,
+        long MemoriesRecalledTotal,
+        long SkillsLoadedTotal);
 
-    public static void RecordUsage(long inputTokens, long outputTokens, long cachedInputTokens)
+    public static void RecordUsage(long inputTokens, long outputTokens)
     {
         Interlocked.Add(ref _inputTokensTotal, inputTokens);
         Interlocked.Add(ref _outputTokensTotal, outputTokens);
-        Interlocked.Add(ref _cachedInputTokensTotal, cachedInputTokens);
         InputTokensConsumed.Add(inputTokens);
         OutputTokensConsumed.Add(outputTokens);
     }
@@ -44,18 +47,37 @@ public static class SessionTelemetry
         TurnsCompleted.Add(1);
     }
 
+    public static void RecordMemoriesFormed(int count)
+    {
+        Interlocked.Add(ref _memoriesFormedTotal, count);
+    }
+
+    public static void RecordMemoriesRecalled(int count)
+    {
+        Interlocked.Add(ref _memoriesRecalledTotal, count);
+    }
+
+    public static void RecordSkillsLoaded(int count)
+    {
+        Interlocked.Add(ref _skillsLoadedTotal, count);
+    }
+
     public static Snapshot GetSnapshot()
         => new(
             InputTokensTotal: Interlocked.Read(ref _inputTokensTotal),
             OutputTokensTotal: Interlocked.Read(ref _outputTokensTotal),
-            CachedInputTokensTotal: Interlocked.Read(ref _cachedInputTokensTotal),
-            TurnsCompletedTotal: Interlocked.Read(ref _turnsCompletedTotal));
+            TurnsCompletedTotal: Interlocked.Read(ref _turnsCompletedTotal),
+            MemoriesFormedTotal: Interlocked.Read(ref _memoriesFormedTotal),
+            MemoriesRecalledTotal: Interlocked.Read(ref _memoriesRecalledTotal),
+            SkillsLoadedTotal: Interlocked.Read(ref _skillsLoadedTotal));
 
     internal static void ResetForTests()
     {
         Interlocked.Exchange(ref _inputTokensTotal, 0);
         Interlocked.Exchange(ref _outputTokensTotal, 0);
-        Interlocked.Exchange(ref _cachedInputTokensTotal, 0);
         Interlocked.Exchange(ref _turnsCompletedTotal, 0);
+        Interlocked.Exchange(ref _memoriesFormedTotal, 0);
+        Interlocked.Exchange(ref _memoriesRecalledTotal, 0);
+        Interlocked.Exchange(ref _skillsLoadedTotal, 0);
     }
 }

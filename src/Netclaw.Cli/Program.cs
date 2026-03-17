@@ -288,12 +288,34 @@ static async Task RunAsync(string[] args)
         }
 
         var statsAsJson = false;
+        int? statsDays = null;
         for (var i = 1; i < args.Length; i++)
         {
             var arg = args[i];
             if (arg is "--json")
             {
                 statsAsJson = true;
+                continue;
+            }
+
+            if (arg is "--all")
+            {
+                statsDays = 0;
+                continue;
+            }
+
+            if (arg is "--days")
+            {
+                if (i + 1 >= args.Length || !int.TryParse(args[i + 1], out var d) || d < 1)
+                {
+                    Console.WriteLine("[FAIL] stats options: --days requires a positive integer.");
+                    WriteStatsHelp();
+                    Environment.ExitCode = 1;
+                    return;
+                }
+
+                i++;
+                statsDays = d;
                 continue;
             }
 
@@ -351,7 +373,7 @@ static async Task RunAsync(string[] args)
 
         using var host = builder.Build();
         using var scope = host.Services.CreateScope();
-        var exitCode = await RunStatsAsync(scope.ServiceProvider, builder.Configuration, statsAsJson);
+        var exitCode = await RunStatsAsync(scope.ServiceProvider, builder.Configuration, statsAsJson, statsDays);
         Environment.ExitCode = exitCode;
         return;
     }
@@ -794,14 +816,17 @@ static void WriteStatsHelp()
     Console.WriteLine("Usage: netclaw stats [options]");
     Console.WriteLine();
     Console.WriteLine("Shows usage activity statistics from the running daemon:");
-    Console.WriteLine("  - token consumption (input, output, cached)");
+    Console.WriteLine("  - token consumption (input, output)");
     Console.WriteLine("  - session and turn counts");
+    Console.WriteLine("  - memory formation and recall counts");
+    Console.WriteLine("  - skill auto-load counts");
     Console.WriteLine("  - memory store statistics");
-    Console.WriteLine("  - skill availability");
     Console.WriteLine("  - Slack activity counters");
     Console.WriteLine("  - reminder statistics");
     Console.WriteLine();
     Console.WriteLine("Options:");
+    Console.WriteLine("  --days <N>             Show trailing N-day daily breakdown");
+    Console.WriteLine("  --all                  Show all-time daily breakdown");
     Console.WriteLine("  --json                 Alias for --format json");
     Console.WriteLine("  --format <text|json>   Output format (default: text)");
 }
@@ -1120,13 +1145,16 @@ static string FormatUptime(long uptimeSeconds)
 // Stats command
 // ═══════════════════════════════════════════════════════════════════════
 
-static async Task<int> RunStatsAsync(IServiceProvider services, IConfiguration configuration, bool jsonOutput)
+static async Task<int> RunStatsAsync(IServiceProvider services, IConfiguration configuration, bool jsonOutput, int? days = null)
 {
     var endpoint = configuration["Daemon:Endpoint"]
         ?? Environment.GetEnvironmentVariable("NETCLAW_DAEMON_ENDPOINT")
         ?? "http://127.0.0.1:5199";
 
     var url = $"{endpoint.TrimEnd('/')}/api/stats";
+    if (days.HasValue)
+        url += $"?days={days.Value}";
+
     var httpClientFactory = services.GetRequiredService<IHttpClientFactory>();
     var client = httpClientFactory.CreateClient();
 
@@ -1164,7 +1192,7 @@ static async Task<int> RunStatsAsync(IServiceProvider services, IConfiguration c
         }
         else
         {
-            WriteStatsResult(stats);
+            WriteStatsResult(stats, days);
         }
 
         return 0;
@@ -1177,16 +1205,31 @@ static async Task<int> RunStatsAsync(IServiceProvider services, IConfiguration c
     }
 }
 
-static void WriteStatsResult(DaemonStats.Response stats)
+static void WriteStatsResult(DaemonStats.Response stats, int? days)
 {
-    Console.WriteLine($"netclaw stats — usage since daemon started ({FormatUptime(stats.Process.UptimeSeconds)} ago)");
+    // Header
+    if (days is > 0)
+        Console.WriteLine($"netclaw stats — last {days} days");
+    else if (days == 0)
+        Console.WriteLine("netclaw stats — all time");
+    else
+        Console.WriteLine($"netclaw stats — usage since daemon started ({FormatUptime(stats.Process.UptimeSeconds)} ago)");
     Console.WriteLine();
 
-    Console.WriteLine("tokens (this process):");
-    Console.WriteLine($"  input: {stats.Tokens.InputTokensTotal:N0}    output: {stats.Tokens.OutputTokensTotal:N0}    cached: {stats.Tokens.CachedInputTokensTotal:N0}");
-    Console.WriteLine($"  turns completed: {stats.Tokens.TurnsCompletedTotal:N0}");
+    // Process-lifetime counters
+    Console.WriteLine("this process:");
+    Console.WriteLine($"  tokens: in={stats.Tokens.InputTokensTotal:N0} out={stats.Tokens.OutputTokensTotal:N0}");
+    Console.WriteLine($"  turns: {stats.Tokens.TurnsCompletedTotal:N0}    memories: formed={stats.Tokens.MemoriesFormedTotal:N0} recalled={stats.Tokens.MemoriesRecalledTotal:N0}    skills loaded: {stats.Tokens.SkillsLoadedTotal:N0}");
     Console.WriteLine();
 
+    // Daily breakdown table (when requested)
+    if (stats.DailyBreakdown is { Count: > 0 })
+    {
+        WriteDailyTable(stats.DailyBreakdown);
+        Console.WriteLine();
+    }
+
+    // Snapshot data
     Console.WriteLine("sessions:");
     Console.WriteLine($"  total: {stats.Sessions.TotalSessions}    active: {stats.Sessions.ActiveSessions}    turns (all-time): {stats.Sessions.TotalTurns:N0}");
     Console.WriteLine();
@@ -1212,6 +1255,37 @@ static void WriteStatsResult(DaemonStats.Response stats)
         Console.WriteLine();
         Console.WriteLine("reminders:");
         Console.WriteLine($"  scheduled: {reminders.ScheduledCount}    active: {reminders.ActiveExecutions}    failed: {reminders.FailedCount}");
+    }
+}
+
+static void WriteDailyTable(List<DaemonStats.DailyRow> rows)
+{
+    // Header
+    Console.WriteLine("date          in tokens    out tokens   turns   sessions   mem formed   mem recalled   skills");
+    Console.WriteLine("----------   ----------   ----------   -----   --------   ---------   ------------   ------");
+
+    long totalIn = 0, totalOut = 0, totalTurns = 0, totalSessions = 0;
+    long totalFormed = 0, totalRecalled = 0, totalSkills = 0;
+
+    foreach (var row in rows)
+    {
+        Console.WriteLine(
+            $"{row.Date}   {row.InputTokens,10:N0}   {row.OutputTokens,10:N0}   {row.Turns,5:N0}   {row.Sessions,8:N0}   {row.MemoriesFormed,9:N0}   {row.MemoriesRecalled,12:N0}   {row.SkillsLoaded,6:N0}");
+
+        totalIn += row.InputTokens;
+        totalOut += row.OutputTokens;
+        totalTurns += row.Turns;
+        totalSessions += row.Sessions;
+        totalFormed += row.MemoriesFormed;
+        totalRecalled += row.MemoriesRecalled;
+        totalSkills += row.SkillsLoaded;
+    }
+
+    if (rows.Count > 1)
+    {
+        Console.WriteLine("----------   ----------   ----------   -----   --------   ---------   ------------   ------");
+        Console.WriteLine(
+            $"{"totals",-10}   {totalIn,10:N0}   {totalOut,10:N0}   {totalTurns,5:N0}   {totalSessions,8:N0}   {totalFormed,9:N0}   {totalRecalled,12:N0}   {totalSkills,6:N0}");
     }
 }
 

@@ -1606,6 +1606,15 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         InjectAutomaticRecall(messages, _activeRecall);
 
+        if (_activeRecall.Items.Count > 0)
+        {
+            EmitOutput(new MemoryRecallOutput
+            {
+                SessionId = _sessionId,
+                ItemCount = _activeRecall.Items.Count
+            });
+        }
+
         // Skill auto-load: deterministic keyword matching against enriched skill index.
         // Injects matched skill content as transient system messages before the LLM decides.
         var userMessage = _state.FindLastUserMessage()?.Content;
@@ -1768,6 +1777,12 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 string.Join(",", newMatches.Select(m => m.TokenHits)),
                 string.Join(",", newMatches.Select(m => m.PhraseHits)),
                 details);
+
+            EmitOutput(new SkillAutoLoadOutput
+            {
+                SessionId = _sessionId,
+                NewCount = newMatches.Count
+            });
         }
     }
 

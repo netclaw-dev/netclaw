@@ -28,11 +28,13 @@ public sealed class SessionCatalogService : ISessionLifecycleObserver
     private readonly NetclawPaths _paths;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<SessionCatalogService> _logger;
+    private readonly DailyStatsRecorder? _dailyStats;
 
     public SessionCatalogService(
         NetclawPaths paths,
         TimeProvider timeProvider,
-        ILogger<SessionCatalogService> logger)
+        ILogger<SessionCatalogService> logger,
+        DailyStatsRecorder? dailyStats = null)
     {
         _paths = paths;
         _connectionString = new SqliteConnectionStringBuilder
@@ -42,6 +44,7 @@ public sealed class SessionCatalogService : ISessionLifecycleObserver
         }.ToString();
         _timeProvider = timeProvider;
         _logger = logger;
+        _dailyStats = dailyStats;
     }
 
     /// <inheritdoc />
@@ -77,6 +80,8 @@ public sealed class SessionCatalogService : ISessionLifecycleObserver
             cmd.Parameters.AddWithValue("$path", logPath);
             cmd.Parameters.AddWithValue("$now", nowMs);
             cmd.ExecuteNonQuery();
+
+            _dailyStats?.RecordSessionCreated();
         }
         catch (Exception ex)
         {
@@ -110,6 +115,7 @@ public sealed class SessionCatalogService : ISessionLifecycleObserver
                             """;
                     });
                     SessionTelemetry.RecordTurnCompleted();
+                    _dailyStats?.RecordTurnCompleted();
                     break;
 
                 case UsageOutput usage when usage.InputTokens.HasValue:
@@ -126,8 +132,10 @@ public sealed class SessionCatalogService : ISessionLifecycleObserver
                     });
                     SessionTelemetry.RecordUsage(
                         usage.InputTokens ?? 0,
-                        usage.OutputTokens ?? 0,
-                        usage.CachedInputTokens ?? 0);
+                        usage.OutputTokens ?? 0);
+                    _dailyStats?.RecordTokenUsage(
+                        usage.InputTokens ?? 0,
+                        usage.OutputTokens ?? 0);
                     break;
 
                 case SessionTitleOutput title:
@@ -142,6 +150,16 @@ public sealed class SessionCatalogService : ISessionLifecycleObserver
                             """;
                         cmd.Parameters.AddWithValue("$title", title.Title);
                     });
+                    break;
+
+                case MemoryRecallOutput recall:
+                    SessionTelemetry.RecordMemoriesRecalled(recall.ItemCount);
+                    _dailyStats?.RecordMemoriesRecalled(recall.ItemCount);
+                    break;
+
+                case SkillAutoLoadOutput skillLoad:
+                    SessionTelemetry.RecordSkillsLoaded(skillLoad.NewCount);
+                    _dailyStats?.RecordSkillsLoaded(skillLoad.NewCount);
                     break;
 
                 case CompactionOutput:
