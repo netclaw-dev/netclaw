@@ -91,6 +91,23 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
             .Subscribe(_ => _contentNode.Invalidate())
             .DisposeWith(Subscriptions);
 
+        // Animate spinners during loading, validation, and OAuth flows
+        ViewModel.ProbeElapsedSeconds
+            .Subscribe(_ =>
+            {
+                _contentNode.Invalidate();
+                ViewModel.RequestRedraw();
+            })
+            .DisposeWith(Subscriptions);
+
+        ViewModel.EagerProbeElapsedSeconds
+            .Subscribe(_ =>
+            {
+                _contentNode.Invalidate();
+                ViewModel.RequestRedraw();
+            })
+            .DisposeWith(Subscriptions);
+
         return _contentNode;
     }
 
@@ -213,15 +230,7 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
     {
         var providerType = ViewModel.NewProviderType ?? "unknown";
         var descriptor = ViewModel.Registry.Get(providerType);
-        var supportedMethods = descriptor.SupportedAuthMethods
-            .Where(m => m != AuthMethod.None)
-            .Select(m => m switch
-            {
-                AuthMethod.ApiKey => "API Key",
-                AuthMethod.OAuthDevice => "OAuth Device Flow (recommended)",
-                _ => m.ToString()
-            })
-            .ToList();
+        var supportedMethods = OAuthFlowViews.BuildAuthMethodLabels(descriptor.SupportedAuthMethods);
 
         _authList = Layouts.SelectionList(supportedMethods)
             .WithMode(SelectionMode.Single)
@@ -235,10 +244,7 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
             {
                 if (selected.Count > 0)
                 {
-                    var method = selected[0].StartsWith("API", StringComparison.Ordinal)
-                        ? AuthMethod.ApiKey
-                        : AuthMethod.OAuthDevice;
-                    ViewModel.SelectAuthMethod(method);
+                    ViewModel.SelectAuthMethod(OAuthFlowViews.ParseAuthMethodLabel(selected[0]));
                 }
             })
             .DisposeWith(_stepSubs);
@@ -393,94 +399,15 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
 
     private ILayoutNode BuildBrowserOAuthFlowView()
     {
-        var children = Layouts.Vertical();
-        var providerType = ViewModel.NewProviderType ?? "unknown";
-        var flowState = ViewModel.OAuthFlowState.Value;
-
-        children.WithChild(new TextNode($"  OAuth Login for {providerType}")
-            .WithForeground(Color.White).Bold());
-        children.WithChild(new TextNode("").Height(1));
-
-        switch (flowState)
-        {
-            case DeviceFlowState.NotStarted:
-                children.WithChild(new TextNode("  Starting authorization...")
-                    .WithForeground(Color.Yellow));
-                break;
-
-            case DeviceFlowState.WaitingForUser:
-            case DeviceFlowState.Polling:
-            {
-                var elapsed = ViewModel.ProbeElapsedSeconds.Value;
-                var frame = SpinnerFrames[elapsed % SpinnerFrames.Length];
-
-                if (!ViewModel.BrowserOpenFailed)
-                {
-                    children.WithChild(new TextNode($"  {frame} Opening browser for authorization...")
-                        .WithForeground(Color.Yellow));
-                }
-                else
-                {
-                    children.WithChild(new TextNode("  Could not open browser automatically.")
-                        .WithForeground(Color.Red));
-                    children.WithChild(new TextNode("").Height(1));
-                    children.WithChild(new TextNode("  Open this URL to authorize:")
-                        .WithForeground(Color.White));
-
-                    if (ViewModel.OAuthVerificationUri is not null)
-                    {
-                        children.WithChild(new TextNode($"  {ViewModel.OAuthVerificationUri}")
-                            .WithForeground(Color.Cyan));
-                    }
-
-                    children.WithChild(new TextNode("").Height(1));
-                    children.WithChild(new TextNode($"  {frame} Waiting for callback...  ({elapsed}s)")
-                        .WithForeground(Color.Yellow));
-                }
-
-                children.WithChild(new TextNode("").Height(1));
-                children.WithChild(new TextNode("  Can't receive the callback? Paste the redirect URL:")
-                    .WithForeground(Color.BrightBlack));
-
-                if (_redirectUrlInput is null)
-                {
-                    _redirectUrlInput = new TextInputNode()
-                        .WithPlaceholder("Paste redirect URL here...");
-                    _redirectUrlInput.Submitted
-                        .Subscribe(text => _ = ViewModel.SubmitRedirectUrlAsync(text))
-                        .DisposeWith(_stepSubs);
-                }
-
-                children.WithChild(new PanelNode()
-                    .WithBorderColor(Color.Gray)
-                    .WithContent(_redirectUrlInput)
-                    .Height(3));
-
-                break;
-            }
-
-            case DeviceFlowState.Succeeded:
-                children.WithChild(new TextNode("  \u2714 Authorization successful!")
-                    .WithForeground(Color.Green));
-                break;
-
-            case DeviceFlowState.Denied:
-            case DeviceFlowState.Expired:
-            case DeviceFlowState.Error:
-                children.WithChild(new TextNode($"  \u2718 {ViewModel.OAuthErrorMessage ?? "Authorization failed."}")
-                    .WithForeground(Color.Red));
-                children.WithChild(new TextNode("").Height(1));
-                children.WithChild(new TextNode("  Press [Esc] to go back and try again.")
-                    .WithForeground(Color.Gray));
-                break;
-
-            case DeviceFlowState.Cancelled:
-                children.WithChild(new TextNode("  Authorization cancelled.")
-                    .WithForeground(Color.Yellow));
-                break;
-        }
-
-        return children;
+        return OAuthFlowViews.BuildBrowserOAuthFlow(
+            ViewModel.NewProviderType ?? "unknown",
+            ViewModel.OAuthFlowState.Value,
+            ViewModel.BrowserOpenFailed,
+            ViewModel.OAuthVerificationUri,
+            ViewModel.ProbeElapsedSeconds.Value,
+            ViewModel.OAuthErrorMessage,
+            ref _redirectUrlInput,
+            text => _ = ViewModel.SubmitRedirectUrlAsync(text));
     }
 
     private TextInputNode? _redirectUrlInput;
