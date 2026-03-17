@@ -15,18 +15,6 @@ namespace Netclaw.Cli.Tests.Cli;
 public sealed class DaemonClientSessionTests
 {
     [Fact]
-    public async Task ListSessionsAsync_returns_empty_list_when_daemon_unreachable()
-    {
-        // Point at a port with nothing listening
-        var port = GetFreeTcpPort();
-        await using var client = new DaemonClient($"http://127.0.0.1:{port}");
-
-        var sessions = await client.ListSessionsAsync();
-
-        Assert.Empty(sessions);
-    }
-
-    [Fact]
     public async Task ResumeSessionAsync_reattaches_to_existing_session_via_EnsureSession()
     {
         var port = GetFreeTcpPort();

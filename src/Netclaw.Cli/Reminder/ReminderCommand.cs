@@ -1,13 +1,13 @@
-using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Netclaw.Actors.Reminders;
+using Netclaw.Cli.Daemon;
 
 namespace Netclaw.Cli.Reminder;
 
 /// <summary>
 /// Handles <c>netclaw reminder</c> CLI subcommands.
-/// All commands require the daemon to be running (HTTP to REST API).
+/// All commands require the daemon to be running (HTTP to REST API via <see cref="DaemonApi"/>).
 /// </summary>
 internal static class ReminderCommand
 {
@@ -17,7 +17,7 @@ internal static class ReminderCommand
         Converters = { new JsonStringEnumConverter() }
     };
 
-    public static async Task<int> RunAsync(string[] args)
+    public static async Task<int> RunAsync(string[] args, DaemonApi api)
     {
         if (args.Length == 1)
         {
@@ -32,32 +32,26 @@ internal static class ReminderCommand
             return 0;
         }
 
-        var endpoint = Environment.GetEnvironmentVariable("NETCLAW_DAEMON_ENDPOINT")
-            ?? "http://127.0.0.1:5199";
-        var baseUrl = $"{endpoint.TrimEnd('/')}/api/reminders";
-
-        using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
-
         return subcommand switch
         {
-            "list" => await RunListAsync(client, baseUrl),
-            "create" => await RunCreateAsync(client, baseUrl, args),
-            "cancel" or "delete" => await RunDeleteAsync(client, baseUrl, args),
-            "disable" => await RunDisableAsync(client, baseUrl, args),
-            "enable" => await RunEnableAsync(client, baseUrl, args),
-            "import" => await RunImportAsync(client, baseUrl, args),
+            "list" => await RunListAsync(api),
+            "create" => await RunCreateAsync(api, args),
+            "cancel" or "delete" => await RunDeleteAsync(api, args),
+            "disable" => await RunDisableAsync(api, args),
+            "enable" => await RunEnableAsync(api, args),
+            "import" => await RunImportAsync(api, args),
             "validate" => RunValidate(args),
-            "show" => await RunShowAsync(client, baseUrl, args),
-            "history" => await RunHistoryAsync(client, baseUrl, args),
+            "show" => await RunShowAsync(api, args),
+            "history" => await RunHistoryAsync(api, args),
             _ => WriteHelp()
         };
     }
 
-    private static async Task<int> RunListAsync(HttpClient client, string baseUrl)
+    private static async Task<int> RunListAsync(DaemonApi api)
     {
         try
         {
-            var response = await client.GetAsync(baseUrl);
+            using var response = await api.ListRemindersAsync();
             if (!response.IsSuccessStatusCode)
             {
                 Console.Error.WriteLine($"[FAIL] daemon returned {(int)response.StatusCode}");
@@ -84,7 +78,7 @@ internal static class ReminderCommand
         }
     }
 
-    private static async Task<int> RunCreateAsync(HttpClient client, string baseUrl, string[] args)
+    private static async Task<int> RunCreateAsync(DaemonApi api, string[] args)
     {
         // netclaw reminder create <id> <scheduleType> <schedule> "<prompt>" [--name <title>] [--target <#channel|@user|id>] [--channel <id>]
         if (args.Length < 6)
@@ -139,7 +133,7 @@ internal static class ReminderCommand
 
         try
         {
-            var response = await client.PostAsJsonAsync(baseUrl, body);
+            using var response = await api.CreateReminderAsync(body);
             var json = await response.Content.ReadAsStringAsync();
             var result = JsonSerializer.Deserialize<JsonElement>(json);
 
@@ -165,7 +159,7 @@ internal static class ReminderCommand
         }
     }
 
-    private static async Task<int> RunDeleteAsync(HttpClient client, string baseUrl, string[] args)
+    private static async Task<int> RunDeleteAsync(DaemonApi api, string[] args)
     {
         if (args.Length < 3)
         {
@@ -176,7 +170,7 @@ internal static class ReminderCommand
         var id = args[2];
         try
         {
-            var response = await client.DeleteAsync($"{baseUrl}/{id}");
+            using var response = await api.DeleteReminderAsync(id);
             var json = await response.Content.ReadAsStringAsync();
             var result = JsonSerializer.Deserialize<JsonElement>(json);
 
@@ -193,7 +187,7 @@ internal static class ReminderCommand
                 Console.Error.WriteLine($"[FAIL] {err.GetString()}");
             else
                 Console.Error.WriteLine($"[FAIL] {json}");
-            return response.StatusCode == System.Net.HttpStatusCode.NotFound ? 1 : 1;
+            return 1;
         }
         catch (Exception ex)
         {
@@ -202,7 +196,7 @@ internal static class ReminderCommand
         }
     }
 
-    private static async Task<int> RunDisableAsync(HttpClient client, string baseUrl, string[] args)
+    private static async Task<int> RunDisableAsync(DaemonApi api, string[] args)
     {
         if (args.Length < 3)
         {
@@ -210,10 +204,10 @@ internal static class ReminderCommand
             return 1;
         }
 
-        return await RunSimplePostByIdAsync(client, baseUrl, args[2], "disable");
+        return await RunToggleAsync(api, args[2], enable: false);
     }
 
-    private static async Task<int> RunEnableAsync(HttpClient client, string baseUrl, string[] args)
+    private static async Task<int> RunEnableAsync(DaemonApi api, string[] args)
     {
         if (args.Length < 3)
         {
@@ -221,14 +215,16 @@ internal static class ReminderCommand
             return 1;
         }
 
-        return await RunSimplePostByIdAsync(client, baseUrl, args[2], "enable");
+        return await RunToggleAsync(api, args[2], enable: true);
     }
 
-    private static async Task<int> RunSimplePostByIdAsync(HttpClient client, string baseUrl, string id, string action)
+    private static async Task<int> RunToggleAsync(DaemonApi api, string id, bool enable)
     {
         try
         {
-            var response = await client.PostAsync($"{baseUrl}/{id}/{action}", content: null);
+            using var response = enable
+                ? await api.EnableReminderAsync(id)
+                : await api.DisableReminderAsync(id);
             var json = await response.Content.ReadAsStringAsync();
             var result = JsonSerializer.Deserialize<JsonElement>(json);
 
@@ -254,7 +250,7 @@ internal static class ReminderCommand
         }
     }
 
-    private static async Task<int> RunImportAsync(HttpClient client, string baseUrl, string[] args)
+    private static async Task<int> RunImportAsync(DaemonApi api, string[] args)
     {
         if (args.Length < 3)
         {
@@ -303,7 +299,7 @@ internal static class ReminderCommand
 
         try
         {
-            var response = await client.PostAsJsonAsync($"{baseUrl}/import", new
+            using var response = await api.ImportReminderAsync(new
             {
                 definition,
                 writeMode = mode
@@ -404,7 +400,7 @@ internal static class ReminderCommand
         }
     }
 
-    private static async Task<int> RunShowAsync(HttpClient client, string baseUrl, string[] args)
+    private static async Task<int> RunShowAsync(DaemonApi api, string[] args)
     {
         if (args.Length < 3)
         {
@@ -415,7 +411,7 @@ internal static class ReminderCommand
         var id = args[2];
         try
         {
-            var response = await client.GetAsync($"{baseUrl}/{id}");
+            using var response = await api.GetReminderAsync(id);
             var json = await response.Content.ReadAsStringAsync();
 
             if (response.IsSuccessStatusCode)
@@ -439,7 +435,7 @@ internal static class ReminderCommand
         }
     }
 
-    private static async Task<int> RunHistoryAsync(HttpClient client, string baseUrl, string[] args)
+    private static async Task<int> RunHistoryAsync(DaemonApi api, string[] args)
     {
         if (args.Length < 3)
         {
@@ -461,7 +457,7 @@ internal static class ReminderCommand
 
         try
         {
-            var response = await client.GetAsync($"{baseUrl}/{id}/history?last={last}");
+            using var response = await api.GetReminderHistoryAsync(id, last);
 
             if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
             {

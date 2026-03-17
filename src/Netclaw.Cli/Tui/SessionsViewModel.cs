@@ -12,7 +12,7 @@ namespace Netclaw.Cli.Tui;
 /// </summary>
 public sealed class SessionsViewModel : ReactiveViewModel
 {
-    private readonly DaemonClient _daemonClient;
+    private readonly DaemonApi _daemonApi;
     private readonly ChatNavigationState _navigationState;
     private readonly TimeProvider _timeProvider;
 
@@ -22,11 +22,11 @@ public sealed class SessionsViewModel : ReactiveViewModel
     public ReactiveProperty<int> SelectedIndex { get; } = new(0);
 
     public SessionsViewModel(
-        DaemonClient daemonClient,
+        DaemonApi daemonApi,
         ChatNavigationState navigationState,
         TimeProvider timeProvider)
     {
-        _daemonClient = daemonClient;
+        _daemonApi = daemonApi;
         _navigationState = navigationState;
         _timeProvider = timeProvider;
     }
@@ -46,7 +46,7 @@ public sealed class SessionsViewModel : ReactiveViewModel
     {
         try
         {
-            var sessions = await _daemonClient.ListSessionsAsync();
+            var sessions = await _daemonApi.ListSessionsAsync();
             Sessions.Clear();
             Sessions.AddRange(sessions);
 

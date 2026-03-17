@@ -58,7 +58,7 @@ public partial class InitWizardViewModel : ReactiveViewModel
     /// </summary>
     public ProviderDescriptorRegistry Registry => _registry;
     private readonly DaemonManager? _daemonManager;
-    private readonly string _daemonEndpoint;
+    private readonly DaemonApi? _daemonApi;
     private CancellationTokenSource? _probeCts;
 
     public ReactiveProperty<WizardStep> CurrentStep { get; } = new(WizardStep.Provider);
@@ -152,8 +152,8 @@ public partial class InitWizardViewModel : ReactiveViewModel
         ChatNavigationState? navigationState = null,
         DeviceFlowServiceFactory? oauthFactory = null,
         DaemonManager? daemonManager = null,
-        string? daemonEndpoint = null)
-        : this(paths, registry, registry, slackProbe, null, navigationState, oauthFactory, daemonManager, daemonEndpoint)
+        DaemonApi? daemonApi = null)
+        : this(paths, registry, registry, slackProbe, null, navigationState, oauthFactory, daemonManager, daemonApi)
     {
     }
 
@@ -169,7 +169,7 @@ public partial class InitWizardViewModel : ReactiveViewModel
         ChatNavigationState? navigationState = null,
         DeviceFlowServiceFactory? oauthFactory = null,
         DaemonManager? daemonManager = null,
-        string? daemonEndpoint = null)
+        DaemonApi? daemonApi = null)
     {
         _paths = paths;
         _probe = probe;
@@ -179,7 +179,7 @@ public partial class InitWizardViewModel : ReactiveViewModel
         _browserBootstrapper = browserBootstrapper ?? new BrowserAutomationBootstrapper();
         _oauthFactory = oauthFactory;
         _daemonManager = daemonManager;
-        _daemonEndpoint = daemonEndpoint ?? "http://127.0.0.1:5199";
+        _daemonApi = daemonApi;
 
         var chromeDetection = BrowserAutomationRuntimeDetector.DetectChrome();
         IsChromeDevToolsAvailable = chromeDetection.IsInstalled;
@@ -811,16 +811,12 @@ public partial class InitWizardViewModel : ReactiveViewModel
         if (!result.Success && !result.Message.Contains("already running", StringComparison.OrdinalIgnoreCase))
             return false;
 
-        using var httpClient = new HttpClient { Timeout = DaemonPollRequestTimeout };
-        var healthUrl = $"{_daemonEndpoint}/api/health/ready";
-
         for (var i = 0; i < 30; i++)
         {
             ct.ThrowIfCancellationRequested();
             try
             {
-                var response = await httpClient.GetAsync(healthUrl, ct);
-                if (response.IsSuccessStatusCode)
+                if (_daemonApi is not null && await _daemonApi.IsHealthyAsync(ct))
                     return true;
             }
             catch (HttpRequestException)

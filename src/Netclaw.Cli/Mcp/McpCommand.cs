@@ -4,6 +4,7 @@ using System.Net.Sockets;
 using System.Text.Json;
 using ModelContextProtocol.Client;
 using Netclaw.Cli.Config;
+using Netclaw.Cli.Daemon;
 using Netclaw.Configuration;
 
 namespace Netclaw.Cli.Mcp;
@@ -31,7 +32,7 @@ internal static class McpCommand
 {
     private static JsonSerializerOptions JsonOptions => ConfigFileHelper.JsonOptions;
 
-    public static async Task<int> RunAsync(string[] args, NetclawPaths paths, TextWriter? output = null)
+    public static async Task<int> RunAsync(string[] args, NetclawPaths paths, DaemonApi? daemonApi = null, TextWriter? output = null)
     {
         var writer = output ?? Console.Out;
         var subcommand = args.Length > 1 ? args[1] : "help";
@@ -39,7 +40,7 @@ internal static class McpCommand
         return subcommand switch
         {
             "add" => RunAdd(args, paths, writer),
-            "auth" => await RunAuthAsync(args, paths, writer),
+            "auth" => await RunAuthAsync(args, paths, daemonApi, writer),
             "list" => await RunListAsync(paths, writer),
             "get" => RunGet(args, paths, writer),
             "remove" => RunRemove(args, paths, writer),
@@ -209,11 +210,17 @@ internal static class McpCommand
         return 0;
     }
 
-    private static async Task<int> RunAuthAsync(string[] args, NetclawPaths paths, TextWriter writer)
+    private static async Task<int> RunAuthAsync(string[] args, NetclawPaths paths, DaemonApi? daemonApi, TextWriter writer)
     {
         if (args.Length < 3)
         {
             writer.WriteLine("Usage: netclaw mcp auth <name>");
+            return 1;
+        }
+
+        if (daemonApi is null)
+        {
+            writer.WriteLine("Error: DaemonApi not available. Is the daemon configured?");
             return 1;
         }
 
@@ -232,17 +239,13 @@ internal static class McpCommand
             return 1;
         }
 
-        const string daemonEndpoint = "http://127.0.0.1:5199";
-        using var httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
-
         // 1. Start the OAuth flow via daemon
         writer.WriteLine($"Starting OAuth authorization for '{name}'...");
 
         HttpResponseMessage startResponse;
         try
         {
-            startResponse = await httpClient.PostAsync(
-                $"{daemonEndpoint}/api/mcp/oauth/start/{Uri.EscapeDataString(name)}", null);
+            startResponse = await daemonApi.StartMcpOAuthAsync(name);
         }
         catch (HttpRequestException)
         {
@@ -289,8 +292,7 @@ internal static class McpCommand
 
             try
             {
-                var statusResponse = await httpClient.GetFromJsonAsync<JsonElement>(
-                    $"{daemonEndpoint}/api/mcp/oauth/status/{Uri.EscapeDataString(name)}");
+                var statusResponse = await daemonApi.GetMcpOAuthStatusAsync(name);
 
                 var status = statusResponse.GetProperty("status").GetString();
                 if (status is "Completed")

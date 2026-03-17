@@ -136,14 +136,10 @@ static async Task RunAsync(string[] args)
             builder.Services.AddSingleton<DaemonManager>();
             builder.Services.AddSingleton<IBrowserAutomationBootstrapper, BrowserAutomationBootstrapper>();
 
-            var daemonEndpoint =
-                Environment.GetEnvironmentVariable("NETCLAW_DAEMON_ENDPOINT")
-                ?? "http://127.0.0.1:5199";
-
             // Register DaemonClient, ChatNavigationState, and SessionConfig for ChatPage
             // (uses freshly-written config from the wizard's WriteConfig)
             builder.Services.AddSingleton(new ChatNavigationState());
-            builder.Services.AddSingleton(new DaemonClient(daemonEndpoint));
+            builder.Services.AddSingleton(sp => new DaemonClient(sp.GetRequiredService<DaemonApi>().Endpoint));
             builder.Services.AddSingleton(sp =>
             {
                 // Read the just-written config files for session settings
@@ -272,14 +268,13 @@ static async Task RunAsync(string[] args)
 
         var builder = Host.CreateApplicationBuilder(args);
         ConfigureConfigServices(builder.Services, builder.Configuration);
-        builder.Services.AddHttpClient();
 
         builder.Logging.ClearProviders();
         builder.Logging.SetMinimumLevel(LogLevel.Warning);
 
         using var host = builder.Build();
         using var scope = host.Services.CreateScope();
-        var exitCode = await RunStatusAsync(scope.ServiceProvider, builder.Configuration, statusAsJson);
+        var exitCode = await RunStatusAsync(scope.ServiceProvider, statusAsJson);
         Environment.ExitCode = exitCode;
         return;
     }
@@ -331,12 +326,17 @@ static async Task RunAsync(string[] args)
         }
     }
 
-    // ── MCP server management (offline) ──
+    // ── MCP server management (offline, except auth which needs daemon) ──
     if (mode is "mcp")
     {
-        var paths = new NetclawPaths();
-        paths.EnsureDirectoriesExist();
-        Environment.ExitCode = await McpCommand.RunAsync(args, paths);
+        var builder = Host.CreateApplicationBuilder(args);
+        ConfigureConfigServices(builder.Services, builder.Configuration);
+        builder.Logging.ClearProviders();
+        builder.Logging.SetMinimumLevel(LogLevel.Warning);
+        using var mcpHost = builder.Build();
+        var mcpPaths = mcpHost.Services.GetRequiredService<NetclawPaths>();
+        var mcpDaemonApi = mcpHost.Services.GetRequiredService<DaemonApi>();
+        Environment.ExitCode = await McpCommand.RunAsync(args, mcpPaths, mcpDaemonApi);
         return;
     }
 
@@ -417,10 +417,6 @@ static async Task RunAsync(string[] args)
             ConfigureConfigServices(builder.Services, builder.Configuration);
             builder.Logging.ClearProviders();
             builder.Logging.SetMinimumLevel(LogLevel.Warning);
-            builder.Services.AddHttpClient("ReminderApi", client =>
-            {
-                client.Timeout = TimeSpan.FromSeconds(10);
-            });
 
             var traceFile = Path.Combine(Path.GetTempPath(), "netclaw-reminder-trace.log");
             builder.Services.AddTerminaFileTracing(traceFile, TerminaTraceCategory.All, TerminaTraceLevel.Trace);
@@ -432,7 +428,14 @@ static async Task RunAsync(string[] args)
             return;
         }
 
-        Environment.ExitCode = await ReminderCommand.RunAsync(args);
+        {
+            var builder = Host.CreateApplicationBuilder(args);
+            ConfigureConfigServices(builder.Services, builder.Configuration);
+            builder.Logging.ClearProviders();
+            builder.Logging.SetMinimumLevel(LogLevel.Warning);
+            using var host = builder.Build();
+            Environment.ExitCode = await ReminderCommand.RunAsync(args, host.Services.GetRequiredService<DaemonApi>());
+        }
         return;
     }
 
@@ -487,14 +490,12 @@ static async Task RunAsync(string[] args)
         {
             var builder = Host.CreateApplicationBuilder(args);
             ConfigureConfigServices(builder.Services, builder.Configuration);
-            builder.Services.AddHttpClient();
             builder.Logging.ClearProviders();
             builder.Logging.SetMinimumLevel(LogLevel.Warning);
 
             using var host = builder.Build();
             using var scope = host.Services.CreateScope();
-            Environment.ExitCode = await RunSessionsOnceAsync(
-                scope.ServiceProvider, builder.Configuration, sessionsJsonOutput);
+            Environment.ExitCode = await RunSessionsOnceAsync(scope.ServiceProvider, sessionsJsonOutput);
             return;
         }
     }
@@ -793,40 +794,19 @@ static void WriteSimpleDiff(string original, string updated)
     }
 }
 
-static async Task<int> RunStatusAsync(IServiceProvider services, IConfiguration configuration, bool jsonOutput)
+static async Task<int> RunStatusAsync(IServiceProvider services, bool jsonOutput)
 {
-    var endpoint = configuration["Daemon:Endpoint"]
-        ?? Environment.GetEnvironmentVariable("NETCLAW_DAEMON_ENDPOINT")
-        ?? "http://127.0.0.1:5199";
-
-    var url = $"{endpoint.TrimEnd('/')}/api/health/status";
+    var api = services.GetRequiredService<DaemonApi>();
     var httpClientFactory = services.GetRequiredService<IHttpClientFactory>();
-    var client = httpClientFactory.CreateClient();
 
     // Start CLI update check concurrently with daemon status fetch (3s timeout, non-blocking).
-    // Use a shared CTS so early-return paths can cancel it promptly.
     using var updateCts = new CancellationTokenSource();
     var updateClient = httpClientFactory.CreateClient();
     var updateTask = StatusUpdateChecker.CheckAsync(updateClient, BuildInfo.Version, updateCts.Token);
 
     try
     {
-        using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-        using var response = await client.GetAsync(url, timeoutCts.Token);
-
-        if (!response.IsSuccessStatusCode)
-        {
-            await updateCts.CancelAsync();
-            Console.WriteLine($"[FAIL] status: daemon returned {(int)response.StatusCode} from {url}");
-            Console.WriteLine("       fix: run `netclaw daemon status` and `netclaw daemon start`.");
-            return 1;
-        }
-
-        var payload = await response.Content.ReadAsStreamAsync(timeoutCts.Token);
-        var status = await JsonSerializer.DeserializeAsync<DaemonRuntimeStatus.Response>(
-            payload,
-            new JsonSerializerOptions(JsonSerializerDefaults.Web),
-            timeoutCts.Token);
+        var status = await api.GetStatusAsync();
 
         if (status is null)
         {
@@ -835,12 +815,10 @@ static async Task<int> RunStatusAsync(IServiceProvider services, IConfiguration 
             return 1;
         }
 
-        // Await the CLI update check (it has its own 3s timeout so this should be fast)
         var cliUpdate = await updateTask;
 
         if (jsonOutput)
         {
-            // Merge CLI update result into the JSON output so consumers always see a fresh State.
             var node = JsonSerializer.SerializeToNode(
                 status, new JsonSerializerOptions(JsonSerializerDefaults.Web))!;
             var updateNode = (node["update"] as JsonObject) ?? new JsonObject();
@@ -855,7 +833,7 @@ static async Task<int> RunStatusAsync(IServiceProvider services, IConfiguration 
         }
         else
         {
-            WriteStatusResult(status, endpoint, cliUpdate);
+            WriteStatusResult(status, api.Endpoint, cliUpdate);
         }
 
         return status.Overall.ToLowerInvariant() switch
@@ -868,42 +846,19 @@ static async Task<int> RunStatusAsync(IServiceProvider services, IConfiguration 
     catch (Exception ex)
     {
         await updateCts.CancelAsync();
-        Console.WriteLine($"[FAIL] status: unable to reach daemon at {url}: {ex.Message}");
+        Console.WriteLine($"[FAIL] status: unable to reach daemon at {api.Endpoint}: {ex.Message}");
         Console.WriteLine("       fix: run `netclaw daemon start` and retry.");
         return 1;
     }
 }
 
-static async Task<int> RunSessionsOnceAsync(
-    IServiceProvider services,
-    IConfiguration configuration,
-    bool jsonOutput)
+static async Task<int> RunSessionsOnceAsync(IServiceProvider services, bool jsonOutput)
 {
-    var endpoint = configuration["Daemon:Endpoint"]
-        ?? Environment.GetEnvironmentVariable("NETCLAW_DAEMON_ENDPOINT")
-        ?? "http://127.0.0.1:5199";
-
-    var url = $"{endpoint.TrimEnd('/')}/api/sessions";
-    var httpClientFactory = services.GetRequiredService<IHttpClientFactory>();
-    var client = httpClientFactory.CreateClient();
+    var api = services.GetRequiredService<DaemonApi>();
 
     try
     {
-        using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-        using var response = await client.GetAsync(url, timeoutCts.Token);
-
-        if (!response.IsSuccessStatusCode)
-        {
-            Console.WriteLine($"[FAIL] sessions: daemon returned {(int)response.StatusCode} from {url}");
-            Console.WriteLine("       fix: run `netclaw daemon status` and `netclaw daemon start`.");
-            return 1;
-        }
-
-        var stream = await response.Content.ReadAsStreamAsync(timeoutCts.Token);
-        var sessions = await JsonSerializer.DeserializeAsync<List<SessionCatalogEntryDto>>(
-            stream,
-            new JsonSerializerOptions(JsonSerializerDefaults.Web),
-            timeoutCts.Token) ?? [];
+        var sessions = await api.ListSessionsAsync();
 
         if (jsonOutput)
         {
@@ -935,7 +890,7 @@ static async Task<int> RunSessionsOnceAsync(
     }
     catch (Exception ex)
     {
-        Console.WriteLine($"[FAIL] sessions: unable to reach daemon at {url}: {ex.Message}");
+        Console.WriteLine($"[FAIL] sessions: unable to reach daemon at {api.Endpoint}: {ex.Message}");
         Console.WriteLine("       fix: run `netclaw daemon start` and retry.");
         return 1;
     }
@@ -1062,6 +1017,10 @@ static NetclawPaths ConfigureConfigServices(IServiceCollection services, IConfig
     // TimeProvider (virtualized for testing)
     services.AddSingleton(TimeProvider.System);
 
+    // Shared daemon HTTP API client — single endpoint resolution for all commands
+    services.AddHttpClient();
+    services.AddSingleton<DaemonApi>();
+
     return paths;
 }
 
@@ -1084,9 +1043,6 @@ static void ConfigureCliChatServices(IServiceCollection services, IConfiguration
         CompactionModelId = models.Compaction?.ModelId,
     });
 
-    var daemonEndpoint =
-        configuration["Daemon:Endpoint"]
-        ?? Environment.GetEnvironmentVariable("NETCLAW_DAEMON_ENDPOINT")
-        ?? "http://127.0.0.1:5199";
-    services.AddSingleton(new DaemonClient(daemonEndpoint));
+    // DaemonClient uses the endpoint from DaemonApi (already registered in ConfigureConfigServices)
+    services.AddSingleton(sp => new DaemonClient(sp.GetRequiredService<DaemonApi>().Endpoint));
 }

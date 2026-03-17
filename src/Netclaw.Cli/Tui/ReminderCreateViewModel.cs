@@ -1,5 +1,6 @@
 using System.Net.Http.Json;
 using System.Text.Json;
+using Netclaw.Cli.Daemon;
 using R3;
 using Termina.Reactive;
 
@@ -18,8 +19,7 @@ public enum ReminderCreateState
 
 public sealed class ReminderCreateViewModel : ReactiveViewModel
 {
-    private readonly IHttpClientFactory _httpClientFactory;
-    private readonly string _baseUrl;
+    private readonly DaemonApi _api;
 
     public ReactiveProperty<ReminderCreateState> CurrentState { get; } = new(ReminderCreateState.Title);
     public ReactiveProperty<string> StatusMessage { get; } = new("Enter a short reminder title.");
@@ -32,11 +32,9 @@ public sealed class ReminderCreateViewModel : ReactiveViewModel
     public string Instructions { get; private set; } = string.Empty;
     public string NotifyInstructions { get; private set; } = string.Empty;
 
-    public ReminderCreateViewModel(IHttpClientFactory httpClientFactory)
+    public ReminderCreateViewModel(DaemonApi api)
     {
-        _httpClientFactory = httpClientFactory;
-        var endpoint = Environment.GetEnvironmentVariable("NETCLAW_DAEMON_ENDPOINT") ?? "http://127.0.0.1:5199";
-        _baseUrl = $"{endpoint.TrimEnd('/')}/api/reminders";
+        _api = api;
     }
 
     public void SetTitle(string value)
@@ -114,16 +112,16 @@ public sealed class ReminderCreateViewModel : ReactiveViewModel
 
         try
         {
-            using var client = _httpClientFactory.CreateClient("ReminderApi");
-
-            var validate = await client.PostAsJsonAsync($"{_baseUrl}/validate", new
+            var payload = new
             {
                 name = Title,
                 prompt = Instructions,
                 scheduleType = ScheduleType,
                 schedule = Schedule,
                 notifyInstructions = NotifyInstructions
-            }, ct);
+            };
+
+            using var validate = await _api.ValidateReminderAsync(payload, ct);
 
             if (!validate.IsSuccessStatusCode)
             {
@@ -136,14 +134,7 @@ public sealed class ReminderCreateViewModel : ReactiveViewModel
             StatusMessage.Value = "Creating reminder...";
             RequestRedraw();
 
-            var create = await client.PostAsJsonAsync(_baseUrl, new
-            {
-                name = Title,
-                prompt = Instructions,
-                scheduleType = ScheduleType,
-                schedule = Schedule,
-                notifyInstructions = NotifyInstructions
-            }, ct);
+            using var create = await _api.CreateReminderAsync(payload, ct);
 
             if (!create.IsSuccessStatusCode)
             {
