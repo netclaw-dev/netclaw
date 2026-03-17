@@ -66,4 +66,30 @@ public sealed class ProviderDescriptorRegistry : IProviderProbe
 
         return descriptor.ProbeAsync(entry, ct);
     }
+
+    /// <summary>
+    /// Probe with explicit auth method. When the auth method is OAuth, the credential
+    /// is set as <see cref="ProviderEntry.OAuthAccessToken"/> instead of <see cref="ProviderEntry.ApiKey"/>.
+    /// This allows descriptors to distinguish OAuth tokens from API keys.
+    /// </summary>
+    public Task<ProviderProbeResult> ProbeAsync(
+        string providerType, string? endpoint, string? credential,
+        AuthMethod authMethod, CancellationToken ct = default)
+    {
+        if (!TryGet(providerType, out var descriptor))
+            return Task.FromResult(new ProviderProbeResult(false,
+                $"Unknown provider type: {providerType}", []));
+
+        var sensitive = credential is not null ? new SensitiveString(credential) : null;
+        var entry = new ProviderEntry
+        {
+            Type = providerType,
+            Endpoint = endpoint ?? "",
+            AuthMethod = authMethod,
+            ApiKey = authMethod is AuthMethod.OAuthPkce or AuthMethod.OAuthDevice ? null : sensitive,
+            OAuthAccessToken = authMethod is AuthMethod.OAuthPkce or AuthMethod.OAuthDevice ? sensitive : null,
+        };
+
+        return descriptor.ProbeAsync(entry, ct);
+    }
 }

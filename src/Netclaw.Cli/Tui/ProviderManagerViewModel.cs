@@ -728,6 +728,7 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
                     if (!string.IsNullOrEmpty(accessToken))
                     {
                         NewApiKey = accessToken;
+                        NewAuthMethod = AuthMethod.OAuthPkce;
                         OAuthResult = new OAuthDeviceFlowResult(
                             new SensitiveString(accessToken),
                             refreshToken is not null ? new SensitiveString(refreshToken) : null,
@@ -952,10 +953,11 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
         var result = new ProviderProbeResult(false, "Validation failed before probe completed.", []);
         try
         {
-            result = await _probe.ProbeAsync(
+            result = await _registry.ProbeAsync(
                     providerType,
                     NewEndpoint,
                     NewApiKey,
+                    NewAuthMethod,
                     ct)
                 .WaitAsync(ProbeHardTimeout, ct);
         }
