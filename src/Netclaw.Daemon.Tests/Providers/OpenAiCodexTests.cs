@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using Microsoft.Extensions.Time.Testing;
 using Netclaw.Configuration;
 using Netclaw.Providers;
 using Netclaw.Providers.OpenAi;
@@ -169,15 +170,19 @@ public sealed class OpenAiCodexTests
         [Fact]
         public async Task ProbeAsync_WithExpiredToken_ReturnsFailure()
         {
+            var now = new DateTimeOffset(2026, 3, 18, 12, 0, 0, TimeSpan.Zero);
+            var fakeTime = new FakeTimeProvider(now);
+            var descriptor = new OpenAiCodexDescriptor(fakeTime);
+
             var entry = new ProviderEntry
             {
                 Type = "openai-codex",
                 AuthMethod = AuthMethod.OAuthPkce,
                 OAuthAccessToken = new SensitiveString("fake-oauth-token"),
-                OAuthTokenExpiry = DateTimeOffset.UtcNow.AddHours(-1),
+                OAuthTokenExpiry = now.AddHours(-1),
             };
 
-            var result = await _descriptor.ProbeAsync(entry);
+            var result = await descriptor.ProbeAsync(entry);
 
             Assert.False(result.Success);
             Assert.Contains("expired", result.ErrorMessage);
@@ -188,15 +193,19 @@ public sealed class OpenAiCodexTests
         [Fact]
         public async Task ProbeAsync_WithFutureExpiry_ReturnsSuccess()
         {
+            var now = new DateTimeOffset(2026, 3, 18, 12, 0, 0, TimeSpan.Zero);
+            var fakeTime = new FakeTimeProvider(now);
+            var descriptor = new OpenAiCodexDescriptor(fakeTime);
+
             var entry = new ProviderEntry
             {
                 Type = "openai-codex",
                 AuthMethod = AuthMethod.OAuthPkce,
                 OAuthAccessToken = new SensitiveString("fake-oauth-token"),
-                OAuthTokenExpiry = DateTimeOffset.UtcNow.AddHours(1),
+                OAuthTokenExpiry = now.AddHours(1),
             };
 
-            var result = await _descriptor.ProbeAsync(entry);
+            var result = await descriptor.ProbeAsync(entry);
 
             Assert.True(result.Success);
             Assert.NotEmpty(result.Models);

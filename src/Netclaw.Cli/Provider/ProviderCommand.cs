@@ -435,6 +435,12 @@ internal static class ProviderCommand
             return;
         }
 
+        if (descriptor.CredentialMode == CredentialInputMode.OAuthOnly)
+        {
+            writer.WriteLine($"{descriptor.DisplayName} uses OAuth. Run `netclaw provider` to authenticate.");
+            return;
+        }
+
         if (descriptor.ApiKeyGuidanceUrl is { } url)
         {
             var oauthNote = descriptor.SupportedAuthMethods.Contains(AuthMethod.OAuthDevice)

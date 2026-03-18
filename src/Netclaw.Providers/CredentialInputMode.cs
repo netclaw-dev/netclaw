@@ -10,4 +10,7 @@ public enum CredentialInputMode
 
     /// <summary>Show endpoint field, no auth (Ollama).</summary>
     EndpointOnly,
+
+    /// <summary>No manual credential input — auth is handled entirely via OAuth flow.</summary>
+    OAuthOnly,
 }

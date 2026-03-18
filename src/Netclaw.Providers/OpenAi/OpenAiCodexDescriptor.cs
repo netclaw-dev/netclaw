@@ -27,12 +27,19 @@ namespace Netclaw.Providers.OpenAi;
 /// </remarks>
 public sealed class OpenAiCodexDescriptor : IProviderDescriptor
 {
+    private readonly TimeProvider _timeProvider;
+
+    public OpenAiCodexDescriptor(TimeProvider? timeProvider = null)
+    {
+        _timeProvider = timeProvider ?? TimeProvider.System;
+    }
+
     public string TypeKey => "openai-codex";
     public string DisplayName => "OpenAI (Codex OAuth)";
     public IReadOnlyList<AuthMethod> SupportedAuthMethods => [AuthMethod.OAuthPkce];
     public string DefaultEndpoint => "https://chatgpt.com/backend-api/codex";
     public string ModelListingPath => string.Empty; // no model listing endpoint
-    public CredentialInputMode CredentialMode => CredentialInputMode.ApiKey; // reuses OAuth token field
+    public CredentialInputMode CredentialMode => CredentialInputMode.OAuthOnly;
     public string? ApiKeyGuidanceUrl => null; // no API key — OAuth only
 
     // OAuth configuration (same Codex CLI client)
@@ -87,7 +94,7 @@ public sealed class OpenAiCodexDescriptor : IProviderDescriptor
             return Task.FromResult(new ProviderProbeResult(false,
                 "OAuth token is required for OpenAI Codex. Run 'netclaw provider add' with OAuth.", []));
 
-        if (entry.OAuthTokenExpiry is { } expiry && expiry < DateTimeOffset.UtcNow)
+        if (entry.OAuthTokenExpiry is { } expiry && expiry < _timeProvider.GetUtcNow())
             return Task.FromResult(new ProviderProbeResult(false,
                 $"OAuth token expired {expiry:g}. Re-authenticate with 'netclaw provider fix <name>'.", []));
 

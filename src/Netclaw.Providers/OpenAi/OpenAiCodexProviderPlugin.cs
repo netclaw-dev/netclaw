@@ -22,8 +22,8 @@ public sealed class OpenAiCodexProviderPlugin : ProviderPluginBase<OpenAiCodexDe
 
     public override IChatClient CreateChatClient(ProviderEntry entry, ModelReference model)
     {
-        var token = entry.OAuthAccessToken?.Value;
-        if (string.IsNullOrWhiteSpace(token))
+        var token = entry.OAuthAccessToken;
+        if (token is null || string.IsNullOrWhiteSpace(token.Value))
             throw new InvalidOperationException(
                 "OpenAI Codex requires an OAuth token. Run 'netclaw provider add' with OAuth.");
 

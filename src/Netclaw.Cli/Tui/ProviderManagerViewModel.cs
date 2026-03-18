@@ -346,7 +346,7 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
 
     /// <summary>
     /// Start OAuth re-authentication for an OAuth-only provider in fix-credentials flow.
-    /// Reuses the existing add-flow OAuth machinery.
+    /// Sets up fix-flow state and delegates to <see cref="SelectAuthMethod"/>.
     /// </summary>
     public void StartOAuthReAuth()
     {
@@ -359,39 +359,10 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
         NewProviderName = DetailProvider.ConfiguredName;
         IsFixFlow = true;
 
-        // Pick the first supported OAuth method
         var oauthMethod = descriptor.SupportedAuthMethods
             .FirstOrDefault(m => m is AuthMethod.OAuthPkce or AuthMethod.OAuthDevice);
 
-        if (oauthMethod == AuthMethod.OAuthPkce)
-        {
-            CurrentState.Value = ProviderManagerState.AddBrowserOAuthFlow;
-            NotifyStateChanged();
-            ProbeElapsedSeconds.Value = 0;
-            var ct = OAuth.StartBrowserFlow(type, result =>
-            {
-                NewApiKey = result.AccessToken.Value;
-                NewAuthMethod = AuthMethod.OAuthPkce;
-                CurrentState.Value = ProviderManagerState.AddValidating;
-                NotifyStateChanged();
-                StartProbe();
-            });
-            _ = RunProbeTimerAsync(ct);
-        }
-        else if (oauthMethod == AuthMethod.OAuthDevice)
-        {
-            CurrentState.Value = ProviderManagerState.AddOAuthDeviceFlow;
-            NotifyStateChanged();
-            ProbeElapsedSeconds.Value = 0;
-            var ct = OAuth.StartDeviceFlow(type, result =>
-            {
-                NewApiKey = result.AccessToken.Value;
-                CurrentState.Value = ProviderManagerState.AddValidating;
-                NotifyStateChanged();
-                StartProbe();
-            });
-            _ = RunProbeTimerAsync(ct);
-        }
+        SelectAuthMethod(oauthMethod);
     }
 
     /// <summary>

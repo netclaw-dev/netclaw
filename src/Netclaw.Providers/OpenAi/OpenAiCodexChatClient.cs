@@ -27,17 +27,17 @@ public sealed class OpenAiCodexChatClient : IChatClient
 {
     private readonly HttpClient _httpClient;
     private readonly string _model;
-    private readonly string _accessToken;
+    private readonly SensitiveString _accessToken;
     private readonly string? _accountId;
 
     private const string CodexResponsesEndpoint = "https://chatgpt.com/backend-api/codex/responses";
 
-    public OpenAiCodexChatClient(HttpClient httpClient, string model, string accessToken)
+    public OpenAiCodexChatClient(HttpClient httpClient, string model, SensitiveString accessToken)
     {
         _httpClient = httpClient;
         _model = model;
         _accessToken = accessToken;
-        _accountId = JwtAccountIdExtractor.Extract(accessToken);
+        _accountId = JwtAccountIdExtractor.Extract(accessToken.Value);
     }
 
     public async Task<ChatResponse> GetResponseAsync(
@@ -100,6 +100,8 @@ public sealed class OpenAiCodexChatClient : IChatClient
 
     public void Dispose() { }
 
+    private const string ProviderLabel = "OpenAI Codex";
+
     private async Task EnsureSuccessAsync(HttpResponseMessage response, CancellationToken cancellationToken)
     {
         if (response.IsSuccessStatusCode)
@@ -119,42 +121,10 @@ public sealed class OpenAiCodexChatClient : IChatClient
 
     internal static string ExtractUserMessage(string? responseBody, int statusCode)
     {
-        if (!string.IsNullOrWhiteSpace(responseBody))
-        {
-            try
-            {
-                using var doc = JsonDocument.Parse(responseBody);
-                if (doc.RootElement.TryGetProperty("error", out var error))
-                {
-                    if (error.ValueKind == JsonValueKind.Object
-                        && error.TryGetProperty("message", out var msg)
-                        && msg.ValueKind == JsonValueKind.String
-                        && msg.GetString() is { Length: > 0 } errorMessage)
-                    {
-                        return $"OpenAI Codex error ({statusCode}): {errorMessage}";
-                    }
-
-                    if (error.ValueKind == JsonValueKind.String
-                        && error.GetString() is { Length: > 0 } simpleError)
-                    {
-                        return $"OpenAI Codex error ({statusCode}): {simpleError}";
-                    }
-                }
-            }
-            catch (JsonException)
-            {
-                return $"OpenAI Codex returned an error (HTTP {statusCode}). Response was not valid JSON.";
-            }
-        }
-
-        return statusCode switch
-        {
-            401 => "OpenAI Codex token is expired or invalid. Re-authenticate with 'netclaw provider fix <name>'.",
-            403 => "OpenAI Codex rejected the request — check credentials.",
-            429 => "OpenAI Codex is rate-limiting requests. Try again shortly.",
-            >= 500 => $"OpenAI Codex returned a server error ({statusCode}). The provider may be experiencing issues.",
-            _ => $"OpenAI Codex returned an error (HTTP {statusCode}). Please try again."
-        };
+        return ProviderErrorHelper.ExtractUserMessage(responseBody, statusCode, ProviderLabel,
+            code => code == 401
+                ? "OpenAI Codex token is expired or invalid. Re-authenticate with 'netclaw provider fix <name>'."
+                : null);
     }
 
     private HttpRequestMessage CreateRequest(string jsonBody)
@@ -163,7 +133,7 @@ public sealed class OpenAiCodexChatClient : IChatClient
         {
             Content = new StringContent(jsonBody, Encoding.UTF8, "application/json")
         };
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _accessToken);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _accessToken.Value);
         if (_accountId is not null)
             request.Headers.Add("ChatGPT-Account-Id", _accountId);
         return request;

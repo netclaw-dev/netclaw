@@ -535,8 +535,7 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
                 .WithForeground(Color.Red));
         }
 
-        if (!descriptor.SupportedAuthMethods.Contains(AuthMethod.ApiKey)
-            && descriptor.SupportedAuthMethods.Any(m => m is AuthMethod.OAuthPkce or AuthMethod.OAuthDevice))
+        if (descriptor.CredentialMode == CredentialInputMode.OAuthOnly)
         {
             // OAuth-only provider: route to re-authentication flow
             children.WithChild(new TextNode("").Height(1));
