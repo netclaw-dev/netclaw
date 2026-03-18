@@ -63,28 +63,32 @@ public sealed class OpenAiCodexDescriptor : IProviderDescriptor
 
     /// <summary>
     /// Curated model list — Codex tokens cannot call /v1/models.
+    /// Includes context window sizes and modality metadata so the runtime
+    /// doesn't fall back to the 32K default.
     /// </summary>
-    // Last updated: 2026-03-17 from https://developers.openai.com/api/docs/models/all
+    // Last updated: 2026-03-18 from https://developers.openai.com/api/docs/models/all
     // Run /update-openai-models skill to refresh this list when new models ship.
     internal static readonly DiscoveredModel[] CuratedModels =
     [
-        // Frontier
-        new() { ModelId = "gpt-5.4" },
-        new() { ModelId = "gpt-5" },
-        new() { ModelId = "gpt-5-mini" },
-        new() { ModelId = "gpt-5-nano" },
-        new() { ModelId = "gpt-4.1" },
-        new() { ModelId = "gpt-4.1-mini" },
-        new() { ModelId = "gpt-4.1-nano" },
-        // Reasoning
-        new() { ModelId = "o3" },
-        new() { ModelId = "o3-mini" },
-        new() { ModelId = "o4-mini" },
-        // Codex (coding-optimized)
-        new() { ModelId = "gpt-5.3-codex" },
-        new() { ModelId = "gpt-5.2-codex" },
-        new() { ModelId = "gpt-5-codex" },
+        // Frontier — all accept text+image input, produce text output
+        new() { ModelId = "gpt-5.4",      ContextWindowTokens = 256_000, InputModalities = TextImage, OutputModalities = ModelModality.Text },
+        new() { ModelId = "gpt-5",        ContextWindowTokens = 256_000, InputModalities = TextImage, OutputModalities = ModelModality.Text },
+        new() { ModelId = "gpt-5-mini",   ContextWindowTokens = 1_047_576, InputModalities = TextImage, OutputModalities = ModelModality.Text },
+        new() { ModelId = "gpt-5-nano",   ContextWindowTokens = 1_047_576, InputModalities = TextImage, OutputModalities = ModelModality.Text },
+        new() { ModelId = "gpt-4.1",      ContextWindowTokens = 1_047_576, InputModalities = TextImage, OutputModalities = ModelModality.Text },
+        new() { ModelId = "gpt-4.1-mini", ContextWindowTokens = 1_047_576, InputModalities = TextImage, OutputModalities = ModelModality.Text },
+        new() { ModelId = "gpt-4.1-nano", ContextWindowTokens = 1_047_576, InputModalities = TextImage, OutputModalities = ModelModality.Text },
+        // Reasoning — text+image input, text output
+        new() { ModelId = "o3",           ContextWindowTokens = 200_000, InputModalities = TextImage, OutputModalities = ModelModality.Text },
+        new() { ModelId = "o3-mini",      ContextWindowTokens = 200_000, InputModalities = TextImage, OutputModalities = ModelModality.Text },
+        new() { ModelId = "o4-mini",      ContextWindowTokens = 200_000, InputModalities = TextImage, OutputModalities = ModelModality.Text },
+        // Codex (coding-optimized) — text+image input, text output
+        new() { ModelId = "gpt-5.3-codex", ContextWindowTokens = 256_000, InputModalities = TextImage, OutputModalities = ModelModality.Text },
+        new() { ModelId = "gpt-5.2-codex", ContextWindowTokens = 256_000, InputModalities = TextImage, OutputModalities = ModelModality.Text },
+        new() { ModelId = "gpt-5-codex",   ContextWindowTokens = 256_000, InputModalities = TextImage, OutputModalities = ModelModality.Text },
     ];
+
+    private const ModelModality TextImage = ModelModality.Text | ModelModality.Image;
 
     public Task<ProviderProbeResult> ProbeAsync(
         ProviderEntry entry, CancellationToken ct = default)

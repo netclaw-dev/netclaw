@@ -149,6 +149,16 @@ public sealed class OpenAiCodexTests
             Assert.Null(result.ErrorMessage);
             Assert.NotEmpty(result.Models);
             Assert.Contains(result.Models, m => m.ModelId == "o3");
+
+            // All curated models should have context windows and modalities populated
+            Assert.All(result.Models, m =>
+            {
+                Assert.NotNull(m.ContextWindowTokens);
+                Assert.True(m.ContextWindowTokens > 32_768,
+                    $"{m.ModelId} should have context window > 32K, got {m.ContextWindowTokens}");
+                Assert.True(m.InputModalities.HasFlag(ModelModality.Text | ModelModality.Image),
+                    $"{m.ModelId} should accept text+image input");
+            });
         }
 
         [Fact]
@@ -209,6 +219,46 @@ public sealed class OpenAiCodexTests
 
             Assert.True(result.Success);
             Assert.NotEmpty(result.Models);
+        }
+    }
+
+    // ────────────────────────────────────────────────────────────────────
+    //  OpenAiCodexCapabilityResolver
+    // ────────────────────────────────────────────────────────────────────
+
+    public sealed class CodexCapabilityResolverTests
+    {
+        private readonly OpenAiCodexCapabilityResolver _resolver = new();
+
+        [Fact]
+        public async Task ResolveAsync_KnownCodexModel_ReturnsCapabilities()
+        {
+            var result = await _resolver.ResolveAsync("gpt-5.3-codex");
+
+            Assert.NotNull(result);
+            Assert.Equal(256_000, result.ContextWindowTokens);
+            Assert.True(result.InputModalities.HasFlag(ModelModality.Text | ModelModality.Image));
+            Assert.Equal(ModelModality.Text, result.OutputModalities);
+        }
+
+        [Fact]
+        public async Task ResolveAsync_UnknownModel_ReturnsNull()
+        {
+            var result = await _resolver.ResolveAsync("claude-3-opus");
+
+            Assert.Null(result);
+        }
+
+        [Fact]
+        public async Task ResolveAsync_AllCuratedModels_HaveContextWindow()
+        {
+            foreach (var model in OpenAiCodexDescriptor.CuratedModels)
+            {
+                var result = await _resolver.ResolveAsync(model.ModelId);
+                Assert.NotNull(result);
+                Assert.NotNull(result.ContextWindowTokens);
+                Assert.True(result.ContextWindowTokens > 32_768);
+            }
         }
     }
 

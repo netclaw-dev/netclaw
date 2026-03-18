@@ -523,9 +523,12 @@ static void ConfigureDaemonServices(
     services.AddSingleton<SchemaMigrationHostedService>();
     services.AddSingleton<IHostedService>(sp => sp.GetRequiredService<SchemaMigrationHostedService>());
 
-    // Model capability resolution chain: [Ollama →] OpenRouter oracle → HuggingFace → text-only default
-    // When the main provider is Ollama, query it first — it knows the true context window
+    // Model capability resolution chain:
+    // Codex static catalog → [Ollama →] [OpenAI-compat →] OpenRouter oracle → HuggingFace → text-only default
+    // Codex resolver is first: authoritative for Codex models, zero network cost.
+    // When the main provider is Ollama, query it next — it knows the true context window
     // for locally hosted models that may not be indexed by external oracles.
+    services.AddSingleton<OpenAiCodexCapabilityResolver>();
     services.AddHttpClient<OpenRouterOracleResolver>();
     services.AddHttpClient<HuggingFaceCapabilityResolver>();
     if (ollamaEndpoint is not null)
@@ -550,6 +553,7 @@ static void ConfigureDaemonServices(
     services.AddSingleton<IModelCapabilityResolver>(sp =>
     {
         var resolvers = new List<IModelCapabilityResolver>();
+        resolvers.Add(sp.GetRequiredService<OpenAiCodexCapabilityResolver>());
         if (ollamaEndpoint is not null)
             resolvers.Add(sp.GetRequiredService<OllamaCapabilityResolver>());
         if (openAiCompatibleEndpoint is not null)
