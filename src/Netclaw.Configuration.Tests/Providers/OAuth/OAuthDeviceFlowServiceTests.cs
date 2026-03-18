@@ -1,6 +1,6 @@
 using System.Net;
 using Microsoft.Extensions.Time.Testing;
-using Netclaw.Configuration.Providers.OAuth;
+using Netclaw.Providers.OAuth;
 using Xunit;
 using static Netclaw.Configuration.Tests.Providers.OAuth.OAuthTestHelpers;
 

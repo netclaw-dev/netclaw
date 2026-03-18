@@ -1,5 +1,5 @@
-using Netclaw.Configuration.Providers;
-using Netclaw.Configuration.Providers.OAuth;
+using Netclaw.Providers;
+using Netclaw.Providers.OAuth;
 using Xunit;
 
 namespace Netclaw.Configuration.Tests.Providers.OAuth;

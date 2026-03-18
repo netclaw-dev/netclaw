@@ -2,7 +2,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Netclaw.Cli.Provider;
 using Netclaw.Cli.Tui;
 using Netclaw.Configuration;
-using Netclaw.Configuration.Providers;
+using Netclaw.Providers;
 using Termina;
 using Termina.Hosting;
 using Termina.Input;

@@ -2,7 +2,7 @@ using System.ClientModel;
 using System.ClientModel.Primitives;
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using Netclaw.Daemon.Providers;
+using Netclaw.Providers.OpenRouter;
 using Xunit;
 
 namespace Netclaw.Daemon.Tests.Providers;

@@ -1,8 +1,11 @@
 using Microsoft.Extensions.AI;
 using Netclaw.Configuration;
-using Netclaw.Configuration.Providers.Descriptors;
 using Netclaw.Daemon.Configuration;
-using Netclaw.Daemon.Providers;
+using Netclaw.Providers;
+using Netclaw.Providers.Anthropic;
+using Netclaw.Providers.OpenAi;
+using Netclaw.Providers.OpenRouter;
+using Netclaw.Providers.SelfHosted;
 using Xunit;
 
 namespace Netclaw.Daemon.Tests.Configuration;

@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <!-- OpenAI Responses API (ResponsesClient) is still marked experimental -->
+    <NoWarn>$(NoWarn);OPENAI001</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Netclaw.Providers.Tests" />
+    <InternalsVisibleTo Include="Netclaw.Configuration.Tests" />
+    <InternalsVisibleTo Include="Netclaw.Daemon.Tests" />
+    <InternalsVisibleTo Include="Netclaw.Cli.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Netclaw.Configuration\Netclaw.Configuration.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Anthropic" />
+    <PackageReference Include="Microsoft.Extensions.AI.OpenAI" />
+    <PackageReference Include="OllamaSharp" />
+  </ItemGroup>
+
+</Project>

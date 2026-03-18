@@ -3,7 +3,7 @@ using System.Text.Json.Serialization;
 using Netclaw.Cli.Config;
 using Netclaw.Cli.Provider;
 using Netclaw.Configuration;
-using Netclaw.Configuration.Providers;
+using Netclaw.Providers;
 
 namespace Netclaw.Cli.Model;
 

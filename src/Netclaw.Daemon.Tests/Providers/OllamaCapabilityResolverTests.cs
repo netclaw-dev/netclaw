@@ -1,5 +1,5 @@
 using Netclaw.Configuration;
-using Netclaw.Daemon.Providers;
+using Netclaw.Providers.SelfHosted;
 using Xunit;
 
 namespace Netclaw.Daemon.Tests.Providers;

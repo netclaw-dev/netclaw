@@ -4,8 +4,8 @@ using Netclaw.Cli.Mcp;
 using Netclaw.Cli.Provider;
 using Netclaw.Cli.Tui;
 using Netclaw.Configuration;
-using Netclaw.Configuration.Providers;
-using Netclaw.Configuration.Providers.OAuth;
+using Netclaw.Providers;
+using Netclaw.Providers.OAuth;
 using Xunit;
 
 namespace Netclaw.Cli.Tests.Tui;

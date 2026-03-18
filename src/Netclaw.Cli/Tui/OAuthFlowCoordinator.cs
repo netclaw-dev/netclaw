@@ -2,8 +2,8 @@ using System.Diagnostics;
 using System.Text.Json;
 using Netclaw.Cli.Daemon;
 using Netclaw.Configuration;
-using Netclaw.Configuration.Providers;
-using Netclaw.Configuration.Providers.OAuth;
+using Netclaw.Providers;
+using Netclaw.Providers.OAuth;
 using R3;
 
 namespace Netclaw.Cli.Tui;

@@ -2,7 +2,7 @@ using System.ClientModel;
 using System.ClientModel.Primitives;
 using System.Text.Json;
 using Microsoft.Extensions.AI;
-using Netclaw.Daemon.Providers;
+using Netclaw.Providers.OpenRouter;
 using OpenAI;
 using Xunit;
 using Xunit.Abstractions;

@@ -1,5 +1,5 @@
 using Netclaw.Configuration;
-using Netclaw.Daemon.Providers;
+using Netclaw.Providers.OpenRouter;
 using Xunit;
 
 namespace Netclaw.Daemon.Tests.Providers;

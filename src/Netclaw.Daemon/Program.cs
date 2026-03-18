@@ -17,7 +17,11 @@ using Netclaw.Actors.Skills;
 using Netclaw.Actors.SubAgents;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
-using Netclaw.Configuration.Providers;
+using Netclaw.Providers;
+using Netclaw.Providers.OAuth;
+using Netclaw.Providers.OpenAi;
+using Netclaw.Providers.OpenRouter;
+using Netclaw.Providers.SelfHosted;
 using Netclaw.Configuration.Secrets;
 using Netclaw.Configuration.Feeds;
 using Netclaw.Daemon;
@@ -148,7 +152,7 @@ static async Task RunDaemonAsync(string[] args, DaemonRestartSignal restartSigna
     // Provider OAuth endpoints (browser-based Authorization Code + PKCE)
     app.MapPost("/api/provider/oauth/start", (
         HttpContext context,
-        Netclaw.Configuration.Providers.OAuth.OAuthPkceService pkceService,
+        OAuthPkceService pkceService,
         ProviderDescriptorRegistry registry) =>
     {
         var providerType = context.Request.Query["provider"].ToString();
@@ -178,7 +182,7 @@ static async Task RunDaemonAsync(string[] args, DaemonRestartSignal restartSigna
 
     app.MapGet("/api/provider/oauth/callback", async (
         HttpContext context,
-        Netclaw.Configuration.Providers.OAuth.OAuthPkceService pkceService,
+        OAuthPkceService pkceService,
         CancellationToken ct) =>
     {
         var code = context.Request.Query["code"].ToString();
@@ -210,7 +214,7 @@ static async Task RunDaemonAsync(string[] args, DaemonRestartSignal restartSigna
 
     app.MapGet("/api/provider/oauth/status/{state}", (
         string state,
-        Netclaw.Configuration.Providers.OAuth.OAuthPkceService pkceService) =>
+        OAuthPkceService pkceService) =>
     {
         var status = pkceService.GetFlowStatus(state);
         var result = pkceService.GetFlowResult(state);
@@ -268,6 +272,9 @@ static NetclawPaths ConfigureConfigServices(IServiceCollection services, IConfig
     // TimeProvider (virtualized for testing)
     services.AddSingleton(TimeProvider.System);
 
+    // One-time migration: openai + OAuthPkce → openai-codex
+    OpenAiCodexConfigMigration.MigrateIfNeeded(paths);
+
     // Providers and model resolution via plugin architecture
     var providers = configuration.GetSection("Providers")
         .Get<Dictionary<string, ProviderEntry>>()
@@ -275,7 +282,7 @@ static NetclawPaths ConfigureConfigServices(IServiceCollection services, IConfig
     var models = configuration.GetSection("Models")
         .Get<ModelSelection>() ?? new ModelSelection();
 
-    services.AddLlmProviders(providers, models);
+    services.AddDaemonLlmProviders(providers, models);
 
     return paths;
 }
@@ -325,7 +332,7 @@ static void ConfigureDaemonServices(
         : null;
     var ollamaEndpoint = mainProviderType?.Equals("ollama", StringComparison.OrdinalIgnoreCase) == true
         ? (string.IsNullOrWhiteSpace(mainProvider!.Endpoint)
-            ? Netclaw.Configuration.Providers.Descriptors.OllamaDescriptor.DefaultEndpointValue
+            ? OllamaDescriptor.DefaultEndpointValue
             : mainProvider.Endpoint)
         : null;
     var openAiCompatibleEndpoint = mainProviderType?.Equals("openai-compatible", StringComparison.OrdinalIgnoreCase) == true
@@ -444,7 +451,7 @@ static void ConfigureDaemonServices(
     services.AddSingleton(sp =>
     {
         var httpClient = sp.GetRequiredService<IHttpClientFactory>().CreateClient("ProviderOAuth");
-        return new Netclaw.Configuration.Providers.OAuth.OAuthPkceService(httpClient);
+        return new OAuthPkceService(httpClient);
     });
     services.AddHttpClient("ProviderOAuth");
     services.AddSingleton<McpClientManager>();
@@ -717,7 +724,7 @@ static ResolvedModelCapabilities? ResolveStartupCapabilities(
         }
 
         // Fallback: OpenRouter public catalog (works for models from any provider)
-        var openRouterDescriptor = new Netclaw.Configuration.Providers.Descriptors.OpenRouterDescriptor(httpClient);
+        var openRouterDescriptor = new OpenRouterDescriptor(httpClient);
         var registry = new ProviderDescriptorRegistry([openRouterDescriptor]);
         var resolver = new OpenRouterOracleResolver(
             httpClient, loggerFactory.CreateLogger<OpenRouterOracleResolver>(), registry);

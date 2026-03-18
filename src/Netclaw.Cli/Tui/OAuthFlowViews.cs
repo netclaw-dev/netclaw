@@ -1,5 +1,5 @@
 using Netclaw.Configuration;
-using Netclaw.Configuration.Providers.OAuth;
+using Netclaw.Providers.OAuth;
 using R3;
 using Termina.Clipboard;
 using Termina.Layout;

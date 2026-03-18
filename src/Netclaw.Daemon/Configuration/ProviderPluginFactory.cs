@@ -1,7 +1,6 @@
 using Microsoft.Extensions.AI;
 using Netclaw.Configuration;
-using Netclaw.Configuration.Providers;
-using Netclaw.Daemon.Providers;
+using Netclaw.Providers;
 
 namespace Netclaw.Daemon.Configuration;
 

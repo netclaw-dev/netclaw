@@ -3,7 +3,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.Extensions.AI;
-using Netclaw.OpenAICompatible;
+using Netclaw.Providers.SelfHosted;
 using Xunit;
 
 namespace Netclaw.Daemon.Tests.Configuration;
