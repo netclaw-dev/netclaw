@@ -213,58 +213,6 @@ public sealed class OpenAiCodexTests
     }
 
     // ────────────────────────────────────────────────────────────────────
-    //  OpenAiCodexChatClient error extraction
-    // ────────────────────────────────────────────────────────────────────
-
-    public sealed class CodexChatClientErrorTests
-    {
-        [Fact]
-        public void ExtractUserMessage_401_WithNoBody_ReturnsExpiryMessage()
-        {
-            var msg = OpenAiCodexChatClient.ExtractUserMessage(null, 401);
-
-            Assert.Contains("expired or invalid", msg);
-            Assert.Contains("netclaw provider fix", msg);
-        }
-
-        [Fact]
-        public void ExtractUserMessage_ParsesErrorMessageObject()
-        {
-            var body = """{"error": {"message": "Invalid token", "type": "auth_error"}}""";
-
-            var msg = OpenAiCodexChatClient.ExtractUserMessage(body, 401);
-
-            Assert.Contains("Invalid token", msg);
-        }
-
-        [Fact]
-        public void ExtractUserMessage_ParsesSimpleErrorString()
-        {
-            var body = """{"error": "Something went wrong"}""";
-
-            var msg = OpenAiCodexChatClient.ExtractUserMessage(body, 500);
-
-            Assert.Contains("Something went wrong", msg);
-        }
-
-        [Fact]
-        public void ExtractUserMessage_429_ReturnsRateLimitMessage()
-        {
-            var msg = OpenAiCodexChatClient.ExtractUserMessage(null, 429);
-
-            Assert.Contains("rate-limiting", msg);
-        }
-
-        [Fact]
-        public void ExtractUserMessage_InvalidJson_ReturnsFallback()
-        {
-            var msg = OpenAiCodexChatClient.ExtractUserMessage("<html>error</html>", 502);
-
-            Assert.Contains("not valid JSON", msg);
-        }
-    }
-
-    // ────────────────────────────────────────────────────────────────────
     //  OpenAiDescriptor (post-bifurcation)
     // ────────────────────────────────────────────────────────────────────
 

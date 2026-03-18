@@ -34,7 +34,6 @@ public static class LlmProviderServiceExtensions
         services.AddSingleton<DeviceFlowServiceFactory>();
 
         // Register daemon-specific plugins
-        services.AddHttpClient("OpenAiCodex");
         services.AddSingleton<OllamaProviderPlugin>();
         services.AddSingleton<OpenAiCompatibleProviderPlugin>();
         services.AddSingleton<OpenAiProviderPlugin>();
