@@ -46,11 +46,13 @@ public sealed record SessionConfig
     public int KeepRecentToolResults { get; init; } = 3;
 
     /// <summary>
-    /// Maximum number of tool execution iterations allowed per turn.
-    /// When the limit is reached, the next LLM call omits tools to force a text response.
-    /// Prevents unbounded agentic loops from runaway tool chains.
+    /// Maximum number of individual tool calls allowed per turn.
+    /// Each tool call in a batch counts separately (e.g., 3 parallel calls = 3).
+    /// At ~75% of this limit, a budget-awareness nudge is injected so the model
+    /// can start wrapping up. At 100%, tools are stripped and the model is asked
+    /// to summarize its work.
     /// </summary>
-    public int MaxToolIterationsPerTurn { get; init; } = 10;
+    public int MaxToolCallsPerTurn { get; init; } = 30;
 
     /// <summary>
     /// Maximum number of characters from a single tool result that may be

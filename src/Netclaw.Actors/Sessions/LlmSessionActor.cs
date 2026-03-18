@@ -64,11 +64,20 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     // Last observed input token count from LLM response (for compaction trigger)
     private long _lastInputTokenCount;
 
-    // Tool iteration counter (reset per turn, incremented on each ToolExecutionCompleted)
+    // Tool call counter (reset per turn, incremented by the number of tool calls in each batch)
+    private int _toolCallCount;
+
+    // Tool iteration counter (reset per turn, incremented once per ToolExecutionCompleted batch — for logging)
     private int _toolIterationCount;
+
+    // Whether the budget-awareness nudge has been injected for this turn
+    private bool _budgetNudgeSent;
 
     private const int MaxPreToolEmptyResponseRetries = 2;
     private const string EmptyResponseFallbackMessage = "I didn't manage to produce a reply. Please try rephrasing or sending your request again.";
+    private const string ToolBudgetExhaustedMessage =
+        "I used all available tool calls for this turn and couldn't produce a final summary. "
+        + "You can ask me to summarize what was done, or rephrase your request.";
 
     // Whether we already sent a post-tool empty-response nudge in this tool chain
     private bool _postToolNudgeSent;
@@ -234,7 +243,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 cmd.Content?.Length ?? 0);
             _logActor?.Tell(cmd);
 
+            _toolCallCount = 0;
             _toolIterationCount = 0;
+            _budgetNudgeSent = false;
             _postToolNudgeSent = false;
             _preToolEmptyResponseCount = 0;
             _forceNoToolsActive = false;
@@ -314,11 +325,12 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             if (toolCalls.Count > 0 && _forceNoToolsActive)
             {
                 TurnLog().Warning(
-                    "turn_force_no_tools_violation toolCallCount={ToolCallCount} max={Max}",
+                    "turn_force_no_tools_violation toolCallCount={ToolCallCount} budgetUsed={BudgetUsed} max={Max}",
                     toolCalls.Count,
-                    _config.MaxToolIterationsPerTurn);
+                    _toolCallCount,
+                    _config.MaxToolCallsPerTurn);
                 FailCurrentTurn(
-                    EmptyResponseFallbackMessage,
+                    ToolBudgetExhaustedMessage,
                     new InvalidOperationException("LLM continued requesting tools after tool execution was disabled for this turn."),
                     ErrorCategory.ProviderFailure);
                 return;
@@ -558,20 +570,39 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 }, OutputFilter.Files);
             }
 
+            _toolCallCount += msg.ToolResults.Count;
             _toolIterationCount++;
 
-            // Safety circuit breaker: force text response when tool iteration limit reached
-            if (_toolIterationCount >= _config.MaxToolIterationsPerTurn)
+            // Safety circuit breaker: force text response when tool call budget exhausted
+            if (_toolCallCount >= _config.MaxToolCallsPerTurn)
             {
-                TurnLog().Warning("turn_tool_iteration_limit_reached count={Count} max={Max}",
-                    _toolIterationCount, _config.MaxToolIterationsPerTurn);
+                TurnLog().Warning("turn_tool_call_limit_reached callCount={CallCount} max={Max} iteration={Iteration}",
+                    _toolCallCount, _config.MaxToolCallsPerTurn, _toolIterationCount);
+                _state = _state.AddSystemNudge(
+                    "You have reached the tool call limit for this turn. "
+                    + "Do NOT request any more tools. "
+                    + "Summarize the work you completed and answer the user's question "
+                    + "based on the information you have gathered so far. "
+                    + "If you could not complete the task, explain what you found and what remains.");
                 FireLlmCall(forceNoTools: true);
                 return;
             }
 
+            // Budget-awareness nudge: warn the model when approaching the limit
+            var budgetThreshold = (int)(_config.MaxToolCallsPerTurn * 0.75);
+            if (_toolCallCount >= budgetThreshold && !_budgetNudgeSent)
+            {
+                var remaining = _config.MaxToolCallsPerTurn - _toolCallCount;
+                _state = _state.AddSystemNudge(
+                    $"You have used {_toolCallCount} of {_config.MaxToolCallsPerTurn} tool calls for this turn. "
+                    + $"You have approximately {remaining} tool calls remaining. "
+                    + "Start wrapping up your tool usage and prepare to answer the user's question.");
+                _budgetNudgeSent = true;
+            }
+
             // Fire follow-up LLM call with tool results in context
-            TurnLog().Info("turn_tool_execution_complete iteration={Iteration} max={Max} resultCount={ResultCount}",
-                _toolIterationCount, _config.MaxToolIterationsPerTurn, msg.ToolResults.Count);
+            TurnLog().Info("turn_tool_execution_complete iteration={Iteration} callCount={CallCount} max={Max} resultCount={ResultCount}",
+                _toolIterationCount, _toolCallCount, _config.MaxToolCallsPerTurn, msg.ToolResults.Count);
             FireLlmCall();
         });
 
@@ -1218,7 +1249,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         bool streamedThinking,
         AutomaticRecallResult? recallResult)
     {
-        _toolIterationCount = 0; // Reset for potential buffer drain (new logical turn)
+        _toolCallCount = 0; // Reset for potential buffer drain (new logical turn)
+        _toolIterationCount = 0;
 
         var reply = ChatMessageConverter.FromAiMessage(lastMessage);
         var userMsg = _state.FindLastUserMessage();
