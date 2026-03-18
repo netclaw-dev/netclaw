@@ -285,8 +285,7 @@ public sealed class OAuthFlowCoordinator : IDisposable
         }
 
         var descriptor = _registry.Get(providerType);
-        if (descriptor.OAuthDeviceEndpoint is null || descriptor.OAuthTokenEndpoint is null
-            || descriptor.OAuthDefaultClientId is null)
+        if (descriptor.Auth is not OAuthAuth oauth || oauth.DeviceEndpoint is null)
         {
             ErrorMessage = "Provider does not support OAuth device flow.";
             FlowState.Value = DeviceFlowState.Error;
@@ -294,8 +293,8 @@ public sealed class OAuthFlowCoordinator : IDisposable
             return;
         }
 
-        var service = _deviceFlowFactory.GetFor(descriptor);
-        var config = OAuthDeviceFlowConfig.FromDescriptor(descriptor);
+        var service = _deviceFlowFactory.GetFor(oauth);
+        var config = OAuthDeviceFlowConfig.FromOAuth(oauth);
 
         try
         {

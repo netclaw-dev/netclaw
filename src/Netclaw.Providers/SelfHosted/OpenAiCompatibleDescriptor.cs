@@ -17,14 +17,9 @@ public sealed class OpenAiCompatibleDescriptor : IProviderDescriptor
 
     public string TypeKey => "openai-compatible";
     public string DisplayName => "OpenAI-Compatible";
-    public IReadOnlyList<AuthMethod> SupportedAuthMethods => [AuthMethod.None];
     public string DefaultEndpoint => "http://localhost:11434";
     public string ModelListingPath => "/v1/models";
-    public CredentialInputMode CredentialMode => CredentialInputMode.EndpointOnly;
-    public string? ApiKeyGuidanceUrl => null;
-    public string? OAuthDeviceEndpoint => null;
-    public string? OAuthTokenEndpoint => null;
-    public string? OAuthDefaultClientId => null;
+    public IProviderAuth Auth { get; } = new EndpointOnlyAuth();
 
     public Task<ProviderProbeResult> ProbeAsync(
         ProviderEntry entry, CancellationToken ct = default)

@@ -343,7 +343,7 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
                 {
                     ViewModel.SelectedProviderType = selected[0];
                     var descriptor = registry.Get(selected[0]);
-                    if (descriptor.SupportedAuthMethods is [AuthMethod.None])
+                    if (descriptor.Auth.SupportedAuthMethods is [AuthMethod.None])
                     {
                         ViewModel.SelectedAuthMethod = AuthMethod.None;
                         SetProviderSubStep(2);
@@ -365,7 +365,7 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
     {
         var providerType = ViewModel.SelectedProviderType ?? "unknown";
         var descriptor = ViewModel.Registry.Get(providerType);
-        var supportedMethods = OAuthFlowViews.BuildAuthMethodLabels(descriptor.SupportedAuthMethods);
+        var supportedMethods = OAuthFlowViews.BuildAuthMethodLabels(descriptor.Auth.SupportedAuthMethods);
 
         _authMethodList = Layouts.SelectionList(supportedMethods)
             .WithMode(SelectionMode.Single)
@@ -417,7 +417,7 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
         var providerType = ViewModel.SelectedProviderType ?? "unknown";
 
         var credDescriptor = ViewModel.Registry.Get(providerType);
-        if (credDescriptor.CredentialMode == CredentialInputMode.EndpointOnly)
+        if (credDescriptor.Auth is EndpointOnlyAuth)
         {
             var defaultEndpoint = credDescriptor.DefaultEndpoint;
             _endpointInput = new TextInputNode()

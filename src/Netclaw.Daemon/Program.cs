@@ -162,20 +162,20 @@ static async Task RunDaemonAsync(string[] args, DaemonRestartSignal restartSigna
         if (!registry.TryGet(providerType, out var descriptor))
             return Results.NotFound(new { error = $"Unknown provider type: {providerType}" });
 
-        if (descriptor.OAuthAuthorizationEndpoint is null || descriptor.OAuthTokenEndpoint is null
-            || descriptor.OAuthDefaultClientId is null || descriptor.OAuthRedirectUri is null)
+        if (descriptor.Auth is not OAuthAuth oauth
+            || oauth.AuthorizationEndpoint is null || oauth.RedirectUri is null)
             return Results.BadRequest(new { error = $"Provider '{providerType}' does not support browser OAuth" });
 
         var (authUrl, state) = pkceService.StartAuthorizationFlow(
-            descriptor.OAuthAuthorizationEndpoint,
-            descriptor.OAuthTokenEndpoint,
-            descriptor.OAuthDefaultClientId,
-            descriptor.OAuthRedirectUri,
-            descriptor.OAuthScope,
-            descriptor.OAuthExtraAuthParams);
+            oauth.AuthorizationEndpoint.AbsoluteUri,
+            oauth.TokenEndpoint.AbsoluteUri,
+            oauth.ClientId,
+            oauth.RedirectUri.AbsoluteUri,
+            oauth.Scope,
+            oauth.ExtraAuthParams);
 
         // Start temporary callback listener on the redirect URI's port
-        _ = pkceService.ListenForCallbackAsync(descriptor.OAuthRedirectUri, state);
+        _ = pkceService.ListenForCallbackAsync(oauth.RedirectUri.AbsoluteUri, state);
 
         return Results.Ok(new { authorizationUrl = authUrl, state });
     });

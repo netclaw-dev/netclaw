@@ -117,7 +117,7 @@ internal static class ProviderCommand
             }
         }
 
-        var supportedAuth = descriptor.SupportedAuthMethods;
+        var supportedAuth = descriptor.Auth.SupportedAuthMethods;
 
         // Handle --auth oauth-device explicitly
         if (requestedAuthMethod == AuthMethod.OAuthDevice)
@@ -208,10 +208,16 @@ internal static class ProviderCommand
     {
         endpoint ??= descriptor.DefaultEndpoint;
 
+        if (descriptor.Auth is not OAuthAuth oauth)
+        {
+            writer.WriteLine($"Error: Provider '{type}' does not support OAuth.");
+            return 1;
+        }
+
         OAuthDeviceFlowConfig config;
         try
         {
-            config = OAuthDeviceFlowConfig.FromDescriptor(descriptor);
+            config = OAuthDeviceFlowConfig.FromOAuth(oauth);
         }
         catch (ArgumentException)
         {
@@ -220,7 +226,7 @@ internal static class ProviderCommand
         }
 
         using var httpClient = new HttpClient();
-        IDeviceFlowService service = descriptor.UseProprietaryDeviceFlow
+        IDeviceFlowService service = oauth.UseProprietaryDeviceFlow
             ? new OpenAiDeviceFlowService(httpClient)
             : new OAuthDeviceFlowService(httpClient);
 
@@ -429,24 +435,24 @@ internal static class ProviderCommand
 
     private static void WriteProviderGuidance(IProviderDescriptor descriptor, TextWriter writer)
     {
-        if (descriptor.CredentialMode == CredentialInputMode.EndpointOnly)
+        if (descriptor.Auth is EndpointOnlyAuth)
         {
             writer.WriteLine($"{descriptor.DisplayName} runs locally. No authentication required.");
             return;
         }
 
-        if (descriptor.CredentialMode == CredentialInputMode.OAuthOnly)
+        if (descriptor.Auth is OAuthAuth)
         {
             writer.WriteLine($"{descriptor.DisplayName} uses OAuth. Run `netclaw provider` to authenticate.");
             return;
         }
 
-        if (descriptor.ApiKeyGuidanceUrl is { } url)
+        if (descriptor.Auth is ApiKeyAuth { GuidanceUrl: { } guidanceUrl })
         {
-            var oauthNote = descriptor.SupportedAuthMethods.Contains(AuthMethod.OAuthDevice)
+            var oauthNote = descriptor.Auth.SupportedAuthMethods.Contains(AuthMethod.OAuthDevice)
                 ? " or use `netclaw provider` for OAuth device flow"
                 : "";
-            writer.WriteLine($"Get your API key at {url}{oauthNote}");
+            writer.WriteLine($"Get your API key at {guidanceUrl}{oauthNote}");
         }
     }
 

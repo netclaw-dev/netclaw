@@ -237,7 +237,7 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
     {
         var providerType = ViewModel.NewProviderType ?? "unknown";
         var descriptor = ViewModel.Registry.Get(providerType);
-        var supportedMethods = OAuthFlowViews.BuildAuthMethodLabels(descriptor.SupportedAuthMethods);
+        var supportedMethods = OAuthFlowViews.BuildAuthMethodLabels(descriptor.Auth.SupportedAuthMethods);
 
         _authList = Layouts.SelectionList(supportedMethods)
             .WithMode(SelectionMode.Single)
@@ -271,7 +271,7 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
         children.WithChild(new TextNode($"  Provider: {providerType} (name: {ViewModel.NewProviderName})")
             .WithForeground(Color.White));
 
-        if (descriptor.CredentialMode == CredentialInputMode.ApiKey)
+        if (descriptor.Auth is ApiKeyAuth apiKeyAuth)
         {
             children.WithChild(new TextNode("").Height(1));
             children.WithChild(new TextNode("  API Key:").WithForeground(Color.White));
@@ -297,14 +297,14 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
                 .WithContent(_apiKeyInput)
                 .Height(3));
 
-            if (descriptor.ApiKeyGuidanceUrl is { } guidanceUrl)
+            if (apiKeyAuth.GuidanceUrl is { } guidanceUrl)
             {
                 children.WithChild(new TextNode("").Height(1));
                 children.WithChild(new TextNode($"  Get your API key at {guidanceUrl}")
                     .WithForeground(Color.Gray));
             }
         }
-        else if (descriptor.CredentialMode == CredentialInputMode.EndpointOnly)
+        else if (descriptor.Auth is EndpointOnlyAuth)
         {
             children.WithChild(new TextNode("").Height(1));
             children.WithChild(new TextNode($"  Endpoint (default: {descriptor.DefaultEndpoint}):")
@@ -535,7 +535,7 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
                 .WithForeground(Color.Red));
         }
 
-        if (descriptor.CredentialMode == CredentialInputMode.OAuthOnly)
+        if (descriptor.Auth is OAuthAuth)
         {
             // OAuth-only provider: route to re-authentication flow
             children.WithChild(new TextNode("").Height(1));
@@ -560,7 +560,7 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
             children.WithChild(new TextNode("").Height(1));
             children.WithChild(reAuthList);
         }
-        else if (descriptor.CredentialMode == CredentialInputMode.EndpointOnly)
+        else if (descriptor.Auth is EndpointOnlyAuth)
         {
             children.WithChild(new TextNode("").Height(1));
             children.WithChild(new TextNode("  Endpoint:").WithForeground(Color.White));
@@ -587,7 +587,7 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
                 .WithContent(_endpointInput)
                 .Height(3));
         }
-        else if (descriptor.SupportedAuthMethods.Contains(AuthMethod.ApiKey))
+        else if (descriptor.Auth is ApiKeyAuth fixApiKeyAuth)
         {
             children.WithChild(new TextNode("").Height(1));
             children.WithChild(new TextNode("  New API Key:").WithForeground(Color.White));
@@ -613,7 +613,7 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
                 .WithContent(_apiKeyInput)
                 .Height(3));
 
-            if (descriptor.ApiKeyGuidanceUrl is { } guidanceUrl)
+            if (fixApiKeyAuth.GuidanceUrl is { } guidanceUrl)
             {
                 children.WithChild(new TextNode("").Height(1));
                 children.WithChild(new TextNode($"  Get your API key at {guidanceUrl}")

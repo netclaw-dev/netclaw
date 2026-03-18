@@ -17,14 +17,12 @@ public sealed class OpenRouterDescriptor : IProviderDescriptor
 
     public string TypeKey => "openrouter";
     public string DisplayName => "OpenRouter";
-    public IReadOnlyList<AuthMethod> SupportedAuthMethods => [AuthMethod.ApiKey];
     public string DefaultEndpoint => "https://openrouter.ai/api/v1";
     public string ModelListingPath => "/models";
-    public CredentialInputMode CredentialMode => CredentialInputMode.ApiKey;
-    public string? ApiKeyGuidanceUrl => "https://openrouter.ai/keys";
-    public string? OAuthDeviceEndpoint => null;
-    public string? OAuthTokenEndpoint => null;
-    public string? OAuthDefaultClientId => null;
+    public IProviderAuth Auth { get; } = new ApiKeyAuth
+    {
+        GuidanceUrl = new Uri("https://openrouter.ai/keys"),
+    };
 
     public Task<ProviderProbeResult> ProbeAsync(
         ProviderEntry entry, CancellationToken ct = default)

@@ -36,22 +36,10 @@ public sealed class OpenAiCodexDescriptor : IProviderDescriptor
 
     public string TypeKey => "openai-codex";
     public string DisplayName => "OpenAI (Codex OAuth)";
-    public IReadOnlyList<AuthMethod> SupportedAuthMethods => [AuthMethod.OAuthPkce];
     public string DefaultEndpoint => "https://chatgpt.com/backend-api/codex";
     public string ModelListingPath => string.Empty; // no model listing endpoint
-    public CredentialInputMode CredentialMode => CredentialInputMode.OAuthOnly;
-    public string? ApiKeyGuidanceUrl => null; // no API key — OAuth only
 
-    // OAuth configuration (same Codex CLI client)
-    public string? OAuthDeviceEndpoint => "https://auth.openai.com/api/accounts/deviceauth/usercode";
-    public string? OAuthTokenEndpoint => "https://auth.openai.com/oauth/token";
-    public string? OAuthPollingEndpoint => "https://auth.openai.com/api/accounts/deviceauth/token";
-    public bool UseProprietaryDeviceFlow => true;
-    public string? OAuthScope => "openid profile email offline_access";
-    public string? OAuthAuthorizationEndpoint => "https://auth.openai.com/oauth/authorize";
-    public string? OAuthDefaultClientId => "app_EMoamEEZ73f0CkXaXp7hrann";
-    public string? OAuthRedirectUri => "http://localhost:1455/auth/callback";
-    private static readonly IReadOnlyDictionary<string, string> ExtraAuthParams =
+    private static readonly IReadOnlyDictionary<string, string> CodexExtraAuthParams =
         new Dictionary<string, string>
         {
             ["id_token_add_organizations"] = "true",
@@ -59,7 +47,19 @@ public sealed class OpenAiCodexDescriptor : IProviderDescriptor
             ["originator"] = "netclaw",
         };
 
-    public IReadOnlyDictionary<string, string>? OAuthExtraAuthParams => ExtraAuthParams;
+    public IProviderAuth Auth { get; } = new OAuthAuth
+    {
+        SupportedAuthMethods = [AuthMethod.OAuthPkce],
+        TokenEndpoint = new Uri("https://auth.openai.com/oauth/token"),
+        ClientId = "app_EMoamEEZ73f0CkXaXp7hrann",
+        DeviceEndpoint = new Uri("https://auth.openai.com/api/accounts/deviceauth/usercode"),
+        AuthorizationEndpoint = new Uri("https://auth.openai.com/oauth/authorize"),
+        RedirectUri = new Uri("http://localhost:1455/auth/callback"),
+        Scope = "openid profile email offline_access",
+        PollingEndpoint = new Uri("https://auth.openai.com/api/accounts/deviceauth/token"),
+        ExtraAuthParams = CodexExtraAuthParams,
+        UseProprietaryDeviceFlow = true,
+    };
 
     /// <summary>
     /// Curated model list — Codex tokens cannot call /v1/models.

@@ -16,14 +16,12 @@ public sealed class AnthropicDescriptor : IProviderDescriptor
 
     public string TypeKey => "anthropic";
     public string DisplayName => "Anthropic";
-    public IReadOnlyList<AuthMethod> SupportedAuthMethods => [AuthMethod.OAuthDevice, AuthMethod.ApiKey];
     public string DefaultEndpoint => "https://api.anthropic.com";
     public string ModelListingPath => "/v1/models";
-    public CredentialInputMode CredentialMode => CredentialInputMode.ApiKey;
-    public string? ApiKeyGuidanceUrl => "https://console.anthropic.com/settings/keys";
-    public string? OAuthDeviceEndpoint => null;
-    public string? OAuthTokenEndpoint => null;
-    public string? OAuthDefaultClientId => null;
+    public IProviderAuth Auth { get; } = new ApiKeyAuth
+    {
+        GuidanceUrl = new Uri("https://console.anthropic.com/settings/keys"),
+    };
 
     public Task<ProviderProbeResult> ProbeAsync(
         ProviderEntry entry, CancellationToken ct = default)

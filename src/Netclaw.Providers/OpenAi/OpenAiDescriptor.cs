@@ -24,16 +24,13 @@ public sealed class OpenAiDescriptor : IProviderDescriptor
 
     public string TypeKey => "openai";
     public string DisplayName => "OpenAI";
-    public IReadOnlyList<AuthMethod> SupportedAuthMethods => [AuthMethod.ApiKey];
     public string DefaultEndpoint => "https://api.openai.com";
     public string ModelListingPath => "/v1/models";
-    public CredentialInputMode CredentialMode => CredentialInputMode.ApiKey;
-    public string? ApiKeyGuidanceUrl => "https://platform.openai.com/api-keys";
-
     // No OAuth — see OpenAiCodexDescriptor
-    public string? OAuthDeviceEndpoint => null;
-    public string? OAuthTokenEndpoint => null;
-    public string? OAuthDefaultClientId => null;
+    public IProviderAuth Auth { get; } = new ApiKeyAuth
+    {
+        GuidanceUrl = new Uri("https://platform.openai.com/api-keys"),
+    };
 
     public Task<ProviderProbeResult> ProbeAsync(
         ProviderEntry entry, CancellationToken ct = default)

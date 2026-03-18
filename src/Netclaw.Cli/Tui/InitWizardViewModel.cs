@@ -807,7 +807,7 @@ public partial class InitWizardViewModel : ReactiveViewModel
             if (!string.IsNullOrWhiteSpace(EndpointInput))
                 providerEntry["Endpoint"] = EndpointInput;
             else if (_registry.TryGet(providerName, out var desc)
-                     && desc.CredentialMode == CredentialInputMode.EndpointOnly)
+                     && desc.Auth is EndpointOnlyAuth)
                 providerEntry["Endpoint"] = desc.DefaultEndpoint;
 
             providers[providerName] = providerEntry;

@@ -17,6 +17,6 @@ public sealed class DeviceFlowServiceFactory
         _openAi = openAi;
     }
 
-    public IDeviceFlowService GetFor(IProviderDescriptor descriptor) =>
-        descriptor.UseProprietaryDeviceFlow ? _openAi : _standard;
+    public IDeviceFlowService GetFor(OAuthAuth oauth) =>
+        oauth.UseProprietaryDeviceFlow ? _openAi : _standard;
 }

@@ -318,7 +318,7 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
         NewProviderName = GenerateProviderName(type);
 
         var descriptor = _registry.Get(type);
-        if (descriptor.SupportedAuthMethods is [AuthMethod.None])
+        if (descriptor.Auth.SupportedAuthMethods is [AuthMethod.None])
         {
             NewAuthMethod = AuthMethod.None;
             CurrentState.Value = ProviderManagerState.AddCredentials;
@@ -359,7 +359,7 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
         NewProviderName = DetailProvider.ConfiguredName;
         IsFixFlow = true;
 
-        var oauthMethod = descriptor.SupportedAuthMethods
+        var oauthMethod = descriptor.Auth.SupportedAuthMethods
             .FirstOrDefault(m => m is AuthMethod.OAuthPkce or AuthMethod.OAuthDevice);
 
         SelectAuthMethod(oauthMethod);
@@ -436,7 +436,7 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
         var type = DetailProvider.ProviderType;
         var descriptor = _registry.Get(type);
 
-        if (descriptor.SupportedAuthMethods.Contains(AuthMethod.ApiKey) && string.IsNullOrWhiteSpace(FixApiKey))
+        if (descriptor.Auth.SupportedAuthMethods.Contains(AuthMethod.ApiKey) && string.IsNullOrWhiteSpace(FixApiKey))
         {
             StatusMessage.Value = "API key is required.";
             RequestRedraw();
@@ -620,7 +620,7 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
                 break;
             case ProviderManagerState.AddCredentials:
                 var descriptor = _registry.Get(NewProviderType ?? "");
-                if (descriptor.SupportedAuthMethods is [AuthMethod.None])
+                if (descriptor.Auth.SupportedAuthMethods is [AuthMethod.None])
                     GoBackToList();
                 else
                     CurrentState.Value = ProviderManagerState.AddSelectAuth;

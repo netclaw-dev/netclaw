@@ -123,8 +123,8 @@ public sealed class OpenAiCodexTests
         [Fact]
         public void SupportedAuthMethods_ContainsOnlyOAuthPkce()
         {
-            Assert.Single(_descriptor.SupportedAuthMethods);
-            Assert.Equal(AuthMethod.OAuthPkce, _descriptor.SupportedAuthMethods[0]);
+            Assert.Single(_descriptor.Auth.SupportedAuthMethods);
+            Assert.Equal(AuthMethod.OAuthPkce, _descriptor.Auth.SupportedAuthMethods[0]);
         }
 
         [Fact]
@@ -281,14 +281,14 @@ public sealed class OpenAiCodexTests
         [Fact]
         public void SupportedAuthMethods_ContainsOnlyApiKey()
         {
-            Assert.Single(_descriptor.SupportedAuthMethods);
-            Assert.Equal(AuthMethod.ApiKey, _descriptor.SupportedAuthMethods[0]);
+            Assert.Single(_descriptor.Auth.SupportedAuthMethods);
+            Assert.Equal(AuthMethod.ApiKey, _descriptor.Auth.SupportedAuthMethods[0]);
         }
 
         [Fact]
-        public void OAuthDeviceEndpoint_IsNull()
+        public void Auth_IsApiKeyAuth()
         {
-            Assert.Null(_descriptor.OAuthDeviceEndpoint);
+            Assert.IsType<ApiKeyAuth>(_descriptor.Auth);
         }
 
         [Fact]

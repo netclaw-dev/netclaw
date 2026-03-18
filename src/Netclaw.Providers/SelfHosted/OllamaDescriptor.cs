@@ -20,14 +20,9 @@ public sealed class OllamaDescriptor : IProviderDescriptor
 
     public string TypeKey => "ollama";
     public string DisplayName => "Ollama";
-    public IReadOnlyList<AuthMethod> SupportedAuthMethods => [AuthMethod.None];
     public string DefaultEndpoint => DefaultEndpointValue;
     public string ModelListingPath => "/api/tags";
-    public CredentialInputMode CredentialMode => CredentialInputMode.EndpointOnly;
-    public string? ApiKeyGuidanceUrl => null;
-    public string? OAuthDeviceEndpoint => null;
-    public string? OAuthTokenEndpoint => null;
-    public string? OAuthDefaultClientId => null;
+    public IProviderAuth Auth { get; } = new EndpointOnlyAuth();
 
     public Task<ProviderProbeResult> ProbeAsync(
         ProviderEntry entry, CancellationToken ct = default)
