@@ -184,6 +184,10 @@ public static partial class SlackBlockConverter
             remaining = remaining[(matchIndex + matchLength)..];
         }
 
+        // Guard: remove any elements with empty text — Slack rejects blocks
+        // containing text elements with 0 characters (invalid_blocks error).
+        elements.RemoveAll(e => e is RichTextText rt && string.IsNullOrEmpty(rt.Text));
+
         return elements;
     }
 

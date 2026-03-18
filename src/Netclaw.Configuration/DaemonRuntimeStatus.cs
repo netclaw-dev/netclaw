@@ -87,6 +87,8 @@ public static class DaemonRuntimeStatus
         public long RepliesPosted { get; init; }
 
         public long RepliesFailed { get; init; }
+
+        public long RepliesPlainTextFallback { get; init; }
     }
 
     public sealed class Model : IWireType

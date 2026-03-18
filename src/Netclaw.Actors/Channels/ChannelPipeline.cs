@@ -93,6 +93,13 @@ public interface ISessionPipeline
         SessionPipelineOptions options,
         IMaterializer? materializer = null,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Sends a feedback message (e.g. <see cref="DeliveryFailed"/>) back to the
+    /// session actor. Routes via <see cref="IWithSessionId"/> — no changes to
+    /// routing infrastructure needed.
+    /// </summary>
+    Task SendFeedbackAsync(IWithSessionId feedback, CancellationToken ct = default);
 }
 
 /// <summary>
@@ -194,6 +201,13 @@ public sealed class SessionPipeline : ISessionPipeline
             inputSink,
             outputSource,
             killSwitch);
+    }
+
+    /// <inheritdoc />
+    public async Task SendFeedbackAsync(IWithSessionId feedback, CancellationToken ct = default)
+    {
+        var sessionManager = await _sessionManagerProvider.GetAsync(ct);
+        sessionManager.Tell(feedback, ActorRefs.NoSender);
     }
 
     private static SendUserMessage MapToCommand(

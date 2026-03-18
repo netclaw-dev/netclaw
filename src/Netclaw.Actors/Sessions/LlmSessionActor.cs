@@ -88,6 +88,11 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     // Whether the current LLM call intentionally disabled tool use after a circuit breaker fired.
     private bool _forceNoToolsActive;
 
+    // Channel delivery failure: if a DeliveryFailed message arrives during Processing,
+    // the nudge is added to state immediately but the LLM retry is deferred until
+    // DrainBufferedMessagesOrBecomeReady runs.
+    private bool _deliveryFailurePending;
+
     // Child actor for per-session log file (created when session logs directory is configured)
     private IActorRef? _logActor;
 
@@ -232,6 +237,23 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         Command<CompactionWorkFailed>(_ => { });
         Command<SpawnChildActorRequest>(msg => Sender.Tell(Context.ActorOf(msg.Props, msg.ActorName)));
 
+        Command<DeliveryFailed>(msg =>
+        {
+            _log.Warning(
+                "delivery_failed channel={Channel} turn={Turn} error={Error}",
+                msg.ChannelType, msg.TurnNumber, msg.ErrorMessage);
+
+            _state = _state.AddSystemNudge(
+                $"Your last response could not be delivered to the user via {msg.ChannelType}. "
+                + $"The channel returned this error: {msg.ErrorMessage}\n"
+                + "The user did NOT see your response. Please produce a corrected response "
+                + "that avoids the formatting issue described in the error.");
+
+            _deliveryFailurePending = false;
+            FireLlmCall();
+            Become(Processing);
+        });
+
         Command<SendUserMessage>(cmd =>
         {
             BindTurnTelemetry(cmd.Source);
@@ -302,6 +324,21 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         Context.SetReceiveTimeout(null);
         CommandSubscriptionMessages();
         CommandSnapshotMessages();
+
+        Command<DeliveryFailed>(msg =>
+        {
+            _log.Warning(
+                "delivery_failed_during_processing channel={Channel} turn={Turn} error={Error}",
+                msg.ChannelType, msg.TurnNumber, msg.ErrorMessage);
+
+            _state = _state.AddSystemNudge(
+                $"Your last response could not be delivered to the user via {msg.ChannelType}. "
+                + $"The channel returned this error: {msg.ErrorMessage}\n"
+                + "The user did NOT see your response. Please produce a corrected response "
+                + "that avoids the formatting issue described in the error.");
+
+            _deliveryFailurePending = true;
+        });
 
         Command<SendUserMessage>(cmd =>
         {
@@ -1339,6 +1376,16 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             }
 
             _buffer.Clear();
+            _deliveryFailurePending = false;
+            FireLlmCall();
+            Become(Processing);
+            return;
+        }
+
+        if (_deliveryFailurePending)
+        {
+            _deliveryFailurePending = false;
+            TurnLog().Info("turn_delivery_failure_retry");
             FireLlmCall();
             Become(Processing);
             return;

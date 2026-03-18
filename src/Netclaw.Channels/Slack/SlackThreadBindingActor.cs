@@ -27,6 +27,7 @@ internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStas
     private bool _sawTextDelta;
     private bool _postedThisTurn;
     private bool _uploadedFileThisTurn;
+    private PostResult? _lastFailedPost;
 
     private ActorMaterializer? _materializer;
     private MaterializedSession? _session;
@@ -402,8 +403,11 @@ internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStas
                     var fullText = text.Text?.Trim();
                     if (!string.IsNullOrWhiteSpace(fullText))
                     {
-                        await SafePostAsync(fullText);
-                        _postedThisTurn = true;
+                        var result = await SafePostAsync(fullText);
+                        if (result.Success)
+                            _postedThisTurn = true;
+                        else
+                            _lastFailedPost = result;
                     }
                 }
 
@@ -419,8 +423,11 @@ internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStas
                     var preamble = _buffer.ToString().Trim();
                     if (!string.IsNullOrWhiteSpace(preamble))
                     {
-                        await SafePostAsync(preamble);
-                        _postedThisTurn = true;
+                        var result = await SafePostAsync(preamble);
+                        if (result.Success)
+                            _postedThisTurn = true;
+                        else
+                            _lastFailedPost = result;
                     }
                 }
                 _buffer.Clear();
@@ -429,19 +436,23 @@ internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStas
 
             case ErrorOutput err:
                 var refId = err.CorrelationId.ToString("N")[..8];
-                await SafePostAsync($":warning: {err.Message} (ref: {refId})");
-                _postedThisTurn = true;
+                var errResult = await SafePostAsync($":warning: {err.Message} (ref: {refId})");
+                if (errResult.Success)
+                    _postedThisTurn = true;
                 _buffer.Clear();
                 break;
 
-            case TurnCompleted:
+            case TurnCompleted tc:
                 if (_sawTextDelta && !_postedThisTurn)
                 {
                     var reply = _buffer.ToString().Trim();
                     if (!string.IsNullOrWhiteSpace(reply))
                     {
-                        await SafePostAsync(reply);
-                        _postedThisTurn = true;
+                        var result = await SafePostAsync(reply);
+                        if (result.Success)
+                            _postedThisTurn = true;
+                        else
+                            _lastFailedPost = result;
                     }
                     else
                         _log.Debug("Turn completed with no buffered reply text");
@@ -449,20 +460,35 @@ internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStas
 
                 if (!_postedThisTurn && !_uploadedFileThisTurn)
                 {
-                    _log.Warning("Turn completed without visible Slack output; posting fallback reply");
-                    await SafePostAsync(EmptyTurnFallbackText);
+                    if (_lastFailedPost is { IsContentError: true })
+                    {
+                        // Channel rejected the LLM's output — feed error back so LLM can retry
+                        _log.Warning("Turn completed with content delivery failure; notifying session");
+                        await NotifyDeliveryFailedAsync(tc.TurnNumber, _lastFailedPost.ErrorMessage!);
+                    }
+                    else if (_lastFailedPost is not null)
+                    {
+                        // Transport failure (timeout, network) — LLM can't fix this
+                        _log.Warning("Turn completed with transport failure: {Error}", _lastFailedPost.ErrorMessage);
+                    }
+                    else
+                    {
+                        _log.Warning("Turn completed without visible Slack output; posting fallback reply");
+                        await SafePostAsync(EmptyTurnFallbackText);
+                    }
                 }
 
                 _buffer.Clear();
                 _sawTextDelta = false;
                 _postedThisTurn = false;
                 _uploadedFileThisTurn = false;
+                _lastFailedPost = null;
 
                 break;
         }
     }
 
-    private async Task SafePostAsync(string text)
+    private async Task<PostResult> SafePostAsync(string text)
     {
         var startedAt = _dependencies.TimeProvider.GetTimestamp();
         try
@@ -475,17 +501,62 @@ internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStas
 
             _log.Info("Posted Slack reply message");
             ChannelTelemetry.RecordSlackReplyPosted(_dependencies.TimeProvider.GetElapsedTime(startedAt).TotalMilliseconds);
+            return PostResult.Ok;
         }
         catch (OperationCanceledException ex)
         {
+            // Transport failure — LLM can't fix a timeout by producing different output
             _log.Error(ex, "Timed out posting Slack reply for session {0}", _sessionId.Value);
             ChannelTelemetry.RecordSlackReplyFailed(_dependencies.TimeProvider.GetElapsedTime(startedAt).TotalMilliseconds);
+            return new PostResult($"Timed out posting reply: {ex.Message}", IsContentError: false);
+        }
+        catch (SlackNet.SlackException ex)
+        {
+            // Slack rejected the content — LLM might fix this by producing different output
+            _log.Error(ex, "Slack rejected reply for session {0}: {1}", _sessionId.Value, ex.ErrorCode);
+            ChannelTelemetry.RecordSlackReplyFailed(_dependencies.TimeProvider.GetElapsedTime(startedAt).TotalMilliseconds);
+            return new PostResult(ex.Message, IsContentError: true);
         }
         catch (Exception ex)
         {
+            // Unknown/transport failure — don't assume the LLM can fix it
             _log.Error(ex, "Failed posting Slack reply for session {0}", _sessionId.Value);
             ChannelTelemetry.RecordSlackReplyFailed(_dependencies.TimeProvider.GetElapsedTime(startedAt).TotalMilliseconds);
+            return new PostResult(ex.Message, IsContentError: false);
         }
+    }
+
+    private async Task NotifyDeliveryFailedAsync(int turnNumber, string errorMessage)
+    {
+        try
+        {
+            await _dependencies.Pipeline.SendFeedbackAsync(new DeliveryFailed
+            {
+                SessionId = _sessionId,
+                TurnNumber = turnNumber,
+                ChannelType = "slack",
+                ErrorMessage = errorMessage
+            });
+        }
+        catch (Exception ex)
+        {
+            _log.Error(ex, "Failed to send delivery feedback to session");
+        }
+    }
+
+    /// <summary>
+    /// Result of a channel post attempt. Carries the error message on failure
+    /// so it can be fed back to the LLM session.
+    /// </summary>
+    /// <param name="ErrorMessage">The error message, or null on success.</param>
+    /// <param name="IsContentError">True if the channel rejected the content itself
+    /// (e.g. invalid_blocks) — the LLM can fix this by producing different output.
+    /// False for transport failures (timeouts, network) — retrying with different
+    /// LLM output won't help.</param>
+    private sealed record PostResult(string? ErrorMessage = null, bool IsContentError = false)
+    {
+        public static readonly PostResult Ok = new();
+        public bool Success => ErrorMessage is null;
     }
 
     private async Task SafeUploadFileAsync(FileOutput file)

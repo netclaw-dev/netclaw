@@ -172,7 +172,7 @@ public sealed class StatsPage : ReactivePage<StatsViewModel>
         var sl = stats.SlackActivity;
         var content = Layouts.Vertical();
         content.WithChild(new TextNode($"  Events: recv={sl.EventsReceived} routed={sl.EventsRouted} dropped={sl.EventsDropped}").WithForeground(Color.White).Height(1));
-        content.WithChild(new TextNode($"  Replies: posted={sl.RepliesPosted} failed={sl.RepliesFailed}").WithForeground(sl.RepliesFailed > 0 ? Color.Yellow : Color.White).Height(1));
+        content.WithChild(new TextNode($"  Replies: posted={sl.RepliesPosted} failed={sl.RepliesFailed} plain_text_fallback={sl.RepliesPlainTextFallback}").WithForeground(sl.RepliesFailed > 0 ? Color.Yellow : Color.White).Height(1));
         return content;
     }
 
