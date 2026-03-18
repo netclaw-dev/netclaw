@@ -476,6 +476,54 @@ public class LlmSessionIntegrationTests : TestKit
     }
 
     [Fact]
+    public async Task Preamble_text_surfaces_before_tool_calls()
+    {
+        // Configure: LLM returns preamble text alongside tool calls
+        _fakeChatClient.PreambleText = "Let me search for that...";
+        _fakeChatClient.ToolCallsOnFirstCall =
+        [
+            new FunctionCallContent("call-p1", "browser_chrome_devtools/navigate_page",
+                new Dictionary<string, object?> { ["url"] = "https://example.com" })
+        ];
+        _fakeToolExecutor.Results["browser_chrome_devtools/navigate_page"] = "page loaded";
+
+        var sessionId = new SessionId("test-channel/preamble-test");
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("preamble-sub");
+
+        await sessionManager.Ask<SessionJoined>(new JoinSession
+        {
+            SessionId = sessionId,
+            Subscriber = subscriber,
+            Filter = OutputFilter.Full
+        }, TimeSpan.FromSeconds(3));
+        await subscriber.ExpectMsgAsync<SessionJoined>();
+
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Search for something"
+        }, TimeSpan.FromSeconds(3));
+
+        // Preamble text should arrive before tool calls
+        var preamble = await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(5));
+        Assert.Equal("Let me search for that...", preamble.Text);
+
+        // BufferFlush should arrive after preamble text
+        await subscriber.ExpectMsgAsync<BufferFlush>(TimeSpan.FromSeconds(3));
+
+        // Then tool call
+        var toolCall = await subscriber.ExpectMsgAsync<ToolCallOutput>(TimeSpan.FromSeconds(3));
+        Assert.Equal("browser_chrome_devtools/navigate_page", toolCall.ToolName);
+
+        // After tool execution and follow-up LLM call, final text response
+        var finalText = await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(5));
+        Assert.Contains("fake", finalText.Text, StringComparison.OrdinalIgnoreCase);
+
+        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
+    }
+
+    [Fact]
     public async Task Session_recovers_state_after_actor_is_killed()
     {
         var sessionId = new SessionId("test-channel/recovery-test");
@@ -582,6 +630,13 @@ internal sealed class FakeChatClient : IChatClient
     /// Simulates providers that hallucinate tool calls after the circuit breaker fires.
     /// </summary>
     public bool IgnoreToolAvailability { get; set; }
+
+    /// <summary>
+    /// When set, tool-call responses include this text as a preamble alongside the
+    /// <see cref="FunctionCallContent"/> items. Simulates the model producing
+    /// user-facing text (e.g., "Let me search for that...") before executing tools.
+    /// </summary>
+    public string? PreambleText { get; set; }
 
     /// <summary>
     /// When set, all responses include this usage data.
@@ -756,7 +811,10 @@ internal sealed class FakeChatClient : IChatClient
 
             if (returnToolCalls)
             {
-                var toolCallContents = new List<AIContent>(ToolCallsOnFirstCall);
+                var toolCallContents = new List<AIContent>();
+                if (!string.IsNullOrWhiteSpace(PreambleText))
+                    toolCallContents.Add(new TextContent(PreambleText));
+                toolCallContents.AddRange(ToolCallsOnFirstCall);
                 var toolCallMessage = new ChatMessage(
                     Microsoft.Extensions.AI.ChatRole.Assistant,
                     toolCallContents);

@@ -1118,6 +1118,31 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         var assistantMsg = ChatMessageConverter.FromAiMessage(lastMessage);
         _state = _state with { History = _state.History.Add(assistantMsg) };
 
+        // Surface preamble text immediately before tool execution starts.
+        // TextOutput handles the non-streaming (single-delta) path where no
+        // TextDeltaOutput was emitted to subscribers.
+        // BufferFlush tells streaming adapters to flush their accumulated buffer
+        // so the preamble is visible to users before the potentially long tool phase.
+        var hasPreambleText = lastMessage.Contents
+            .OfType<TextContent>()
+            .Any(t => !string.IsNullOrWhiteSpace(t.Text));
+
+        if (hasPreambleText)
+        {
+            foreach (var content in lastMessage.Contents)
+            {
+                if (content is TextContent text && !string.IsNullOrWhiteSpace(text.Text))
+                {
+                    EmitOutput(new TextOutput
+                    {
+                        SessionId = _sessionId,
+                        Text = text.Text
+                    }, OutputFilter.Text);
+                }
+            }
+            EmitOutput(new BufferFlush { SessionId = _sessionId });
+        }
+
         // Emit tool call outputs to subscribers
         foreach (var tc in toolCalls)
         {

@@ -124,6 +124,13 @@ public static class SessionOutputDtoMapper
             FindingsCount = msg.FindingsCount
         },
 
+        BufferFlush msg => new SessionOutputDto
+        {
+            Type = "buffer_flush",
+            SessionId = msg.SessionId.Value,
+            TimestampMs = msg.TimestampMs
+        },
+
         CompactionOutput msg => new SessionOutputDto
         {
             Type = "compaction",
@@ -258,6 +265,11 @@ public static class SessionOutputDtoMapper
                 MemoryDecision = dto.MemoryDecision,
                 MemoryDecisionReason = dto.MemoryDecisionReason,
                 FindingsCount = dto.FindingsCount ?? 0
+            },
+            "buffer_flush" => new BufferFlush
+            {
+                SessionId = sessionId,
+                TimestampMs = dto.TimestampMs
             },
             "compaction" => new CompactionOutput
             {
