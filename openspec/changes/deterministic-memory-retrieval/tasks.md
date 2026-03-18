@@ -3,6 +3,7 @@
 - [x] 1.1 Add deterministic retrieval planning types and runtime hard-scope resolution for automatic recall.
 - [x] 1.2 Implement conversation-owned soft-scope derivation, retrieval-mode selection, and request-plan logging behind a feature flag.
 - [x] 1.3 Add structured observability and degraded reason codes for scope resolution, planning, and fallback stages.
+- [ ] 1.4 Replace raw channel-derived hard scope with security-boundary + subject-scope resolution so reusable project memories can cross channels inside the same authorized boundary.
 
 ## 2. Write-time retrieval metadata
 
@@ -12,7 +13,7 @@
 
 ## 3. Deterministic recall execution
 
-- [ ] 3.1 Implement SQLite candidate selection with hard-scope, policy, sensitivity, recall-mode, and expiry filters.
+- [ ] 3.1 Implement SQLite candidate selection with security-boundary, subject-scope, policy, sensitivity, recall-mode, and expiry filters.
 - [ ] 3.2 Implement deterministic reranking and bounded bundle assembly using stored aliases, facets, anchors, and slots.
 - [ ] 3.3 Replace automatic recall sidecar planning in `LlmSessionActor` with the deterministic pipeline and minimal in-scope fallback behavior.
 

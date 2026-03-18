@@ -25,6 +25,20 @@ The system SHALL use a shared audience ladder across channels, memories, tools, 
 - **THEN** the runtime may expose `public` and `team` resources that also satisfy other policy checks
 - **AND** the runtime excludes `personal` resources unless an explicit approval flow widens them
 
+### Requirement: Security boundary is a runtime-owned partition distinct from audience
+The system SHALL derive and carry a runtime-owned security boundary for each turn and durable memory item. The security boundary SHALL determine which memories may be reused across channels or sessions, while `domain` continues to describe what the memory is about.
+
+#### Scenario: Personal boundary allows cross-channel project recall
+- **GIVEN** durable Netclaw repository memories were formed in an owner DM and marked with the same `personal` security boundary as a later private Slack channel session
+- **WHEN** the owner asks about the Netclaw repository in that private channel
+- **THEN** automatic recall may reuse the DM-formed project memories inside the shared boundary
+- **AND** channel/session identity alone does not hide the reusable knowledge
+
+#### Scenario: Team boundary does not expose personal-boundary memories
+- **GIVEN** a memory is stored under a `personal` security boundary
+- **WHEN** a `team` turn searches for the same subject domain
+- **THEN** the personal-boundary memory is excluded even if the subject/domain matches
+
 ### Requirement: Trust context can auto-downgrade but not auto-upgrade
 The system SHALL allow trust context to narrow automatically as the bot enters risky working contexts, but SHALL NOT widen authority automatically after a downgrade.
 

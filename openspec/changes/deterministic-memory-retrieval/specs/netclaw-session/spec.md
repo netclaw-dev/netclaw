@@ -4,7 +4,7 @@
 
 The session system SHALL run automatic durable-memory recall before each
 user-facing model turn using a deterministic retrieval pipeline. The recall
-pipeline SHALL resolve runtime-owned hard scope, derive conversation-owned soft
+pipeline SHALL resolve runtime-owned security boundary and subject scope, derive conversation-owned soft
 scope, build a deterministic request plan, execute bounded candidate selection
 against SQLite, and inject a bounded ranked or bundle-shaped recall set before
 the model call. If planning, query, or ranking exceeds its latency budget or
@@ -24,9 +24,9 @@ without blocking on recall.
 - **AND** records degraded memory status for diagnostics and observability
 
 #### Scenario: Hard scope is resolved before memory search
-- **GIVEN** the session has channel, thread, or direct-message runtime context
+- **GIVEN** the session has channel, thread, direct-message, project-binding, or operator runtime context
 - **WHEN** automatic recall begins
-- **THEN** the session resolves the legal memory boundary from runtime metadata and policy before searching
+- **THEN** the session resolves the legal memory boundary from runtime-owned security boundary, subject bindings, and policy before searching
 - **AND** later planning and ranking stages do not widen that boundary
 
 #### Scenario: Planner failure falls back to minimal deterministic recall

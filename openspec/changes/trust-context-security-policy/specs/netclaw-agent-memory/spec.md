@@ -2,7 +2,7 @@
 
 ### Requirement: Durable memory policy envelope
 
-Every durable anchor, document, record, and edge SHALL carry policy metadata including `audience`, `domain`, `sensitivity`, `recallMode`, `confidence`, `freshness`, and `updateSemantics`. The write path SHALL assign or reject these values before persistence, and the recall path SHALL filter by them before prompt injection.
+Every durable anchor, document, record, and edge SHALL carry policy metadata including `audience`, `boundary`, `domain`, `sensitivity`, `recallMode`, `confidence`, `freshness`, and `updateSemantics`. The write path SHALL assign or reject these values before persistence, and the recall path SHALL filter by them before prompt injection.
 
 #### Scenario: Sensitive memory is blocked from auto recall
 
@@ -16,6 +16,14 @@ Every durable anchor, document, record, and edge SHALL carry policy metadata inc
 - **GIVEN** a stored memory item is marked `audience=personal`
 - **WHEN** a `public` turn runs recall
 - **THEN** the item is excluded from both automatic recall and inline retrieval unless a higher-trust approval flow authorizes it
+
+#### Scenario: Boundary allows project recall across channels without widening exposure
+
+- **GIVEN** two durable memories share `domain=project:netclaw`
+- **AND** both are stored inside the same `personal` security boundary even though they were formed in different Slack channels or local sessions
+- **WHEN** a later `personal` turn recalls project context
+- **THEN** the runtime may retrieve both memories through the shared boundary
+- **AND** it does not require channel/session identity to match the formation source
 
 ### Requirement: Automatic pre-turn recall
 
@@ -41,4 +49,4 @@ The system SHALL execute automatic recall before each user-facing model turn usi
 - **AND** one is marked `audience=public` while the other is marked `audience=team`
 - **WHEN** a public-facing turn recalls project context
 - **THEN** only the `public` memory may be injected
-- **AND** shared project scope does not widen visibility beyond the active audience
+- **AND** shared project scope does not widen visibility beyond the active audience or boundary

@@ -16,7 +16,7 @@ This change is cross-cutting because it touches inbound source metadata, ACL eva
 **Goals:**
 - Introduce a trust-context abstraction that computes an effective audience and capability envelope per turn.
 - Keep audience cross-cutting across channels, memories, tools, MCP servers, and output effects.
-- Preserve existing project/domain memory scoping while separating visibility (`audience`) from topic scope (`domain`) and disclosure risk (`sensitivity`).
+- Preserve existing project/entity memory scoping while separating visibility (`audience`), subject scope (`domain`), security partition (`boundary`), and disclosure risk (`sensitivity`).
 - Ensure trust can automatically narrow as the bot handles riskier content, but cannot automatically widen.
 - Make incomplete or invalid policy resolve to less capability.
 - Support explainability through diagnostics, doctor checks, and auditable allow/deny decisions.
@@ -61,6 +61,20 @@ Operator authority remains important, but it belongs in principal classification
 Rationale: project memory may exist at multiple exposure levels; overloading domain or sensitivity would blur scope and visibility.
 
 Alternative considered: extend only `sensitivity`. Rejected because non-secret team memory and non-secret public memory still need different visibility semantics.
+
+### Decision: Memory security boundary is distinct from domain and audience
+
+Durable memory needs a runtime-owned `boundary` concept separate from both `domain` and `audience`.
+
+- `audience` answers the maximum exposure level a turn may use
+- `domain` answers what the memory is about (`project:netclaw`, `repo:textforge`, `person:aaron`)
+- `boundary` answers which trusted partition the memory belongs to (`personal:owner`, `team:workspace`, `public:community`)
+
+The legal retrieval universe comes from the active trust boundary and policy. Subject lookup then uses `domain`, anchors, aliases, and project/entity bindings inside that boundary. Channel or session identity is only one hint for deriving a boundary and SHALL NOT be the durable scope for reusable project facts when a broader project/entity binding is known.
+
+Rationale: issue #203 shows that channel-derived project domains cause the bot to forget its own repository across DM and private-channel sessions, even when the knowledge should have been reusable inside the same personal or private-team trust boundary.
+
+Alternative considered: keep using channel/session-derived domains as the primary segregation mechanism. Rejected because it hides reusable knowledge behind connector-local IDs and creates both UX failures and brittle policy semantics.
 
 ### Decision: Trust automatically downgrades, never automatically upgrades
 
@@ -150,7 +164,7 @@ Alternative considered: require fully explicit user-authored policy for all inst
 - [Risk] Audience, sensitivity, domain, and grants may feel overlapping to operators. -> Mitigation: keep audience small and cross-cutting, preserve domain for subject scope only, and surface effective policy explanations in doctor/CLI.
 - [Risk] Trust-context derivation could become too implicit and hard to debug. -> Mitigation: log the derived context, the narrowing inputs, and the deny reasons for recall/tool decisions.
 - [Risk] `host-allowed` shell in personal posture leaves residual blast radius until sandboxing exists. -> Mitigation: keep it owner-context only, default team/public to `off`, and track sandbox execution as a follow-up issue.
-- [Risk] Existing memory rows lack audience metadata. -> Mitigation: define migration defaults conservatively (for example, derive from current deployment posture/domain) and require doctor warnings until data is reclassified.
+- [Risk] Existing memory rows lack audience and boundary metadata. -> Mitigation: define migration defaults conservatively, warn operators until rows are reclassified, and never widen legacy rows past the active boundary without explicit remapping.
 - [Risk] Public bots may become too constrained to feel useful. -> Mitigation: allow public-safe memory and future isolated-execution capability without exposing host shell or sensitive-read tools.
 
 ## Migration Plan
@@ -158,9 +172,10 @@ Alternative considered: require fully explicit user-authored policy for all inst
 1. Introduce trust-context and audience types in planning/specs first, with strict-default semantics.
 2. Extend config schema and options to express posture, source/channel audience, shell mode, and capability classifications while defaulting absent values conservatively.
 3. Propagate richer source metadata through input adapters and session command contracts.
-4. Update ACL/tool/MCP/memory policy evaluation to derive and consume `EffectiveTrustContext`.
-5. Add doctor/explain surfaces so operators can see effective policy and unsafe combinations before enabling broader exposure.
-6. Defer sandbox execution to a separate implementation issue while preserving `sandbox-only` in the policy model.
+4. Add runtime-owned security boundary derivation so memories can be partitioned by trust boundary instead of raw channel/session identity.
+5. Update ACL/tool/MCP/memory policy evaluation to derive and consume `EffectiveTrustContext` plus the active boundary.
+6. Add doctor/explain surfaces so operators can see effective policy, active boundary, and unsafe combinations before enabling broader exposure.
+7. Defer sandbox execution to a separate implementation issue while preserving `sandbox-only` in the policy model.
 
 Rollback strategy:
 
@@ -170,6 +185,6 @@ Rollback strategy:
 ## Open Questions
 
 - Should especially sensitive operator-only actions be modeled purely through principal classification and approval policy, or do we still need a separate audience later?
-- How should existing durable memories be backfilled with an initial audience without forcing immediate manual reclassification?
+- How should existing durable memories be backfilled with an initial boundary without forcing immediate manual reclassification?
 - Do we want a policy explain simulator in the first implementation slice, or is doctor output sufficient for MVP?
 - Which built-in tools besides shell need explicit effect-class metadata in v1 of the config schema, versus inferred defaults from tool registration?
