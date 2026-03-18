@@ -53,6 +53,7 @@ public sealed class SQLiteMemoryRecallCoordinator(
                     deterministicPlan.HardScope,
                     deterministicPlan.AllowedMemoryClasses,
                     deterministicPlan.CandidateLimit,
+                    request.Audience,
                     allowExpiredEvidence: false,
                     ct);
 
@@ -63,6 +64,7 @@ public sealed class SQLiteMemoryRecallCoordinator(
                         deterministicPlan.LexicalTerms.Count > 0 ? deterministicPlan.LexicalTerms : [request.Query],
                         deterministicPlan.AllowedMemoryClasses,
                         deterministicPlan.CandidateLimit,
+                        request.Audience,
                         allowExpiredEvidence: false,
                         ct);
                     widened = true;
@@ -139,6 +141,7 @@ public sealed class SQLiteMemoryRecallCoordinator(
                 domain,
                 plan.MemoryClasses,
                 Math.Max(maxItems * 3, 12),
+                request.Audience,
                 plan.AllowExpiredEvidence,
                 ct);
 
@@ -152,6 +155,7 @@ public sealed class SQLiteMemoryRecallCoordinator(
                     domain,
                     plan.MemoryClasses,
                     Math.Max(maxItems * 3, 12),
+                    request.Audience,
                     plan.AllowExpiredEvidence,
                     ct);
             }

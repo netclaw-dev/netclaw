@@ -58,6 +58,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     private readonly List<SendUserMessage> _buffer = new();
     private readonly Dictionary<IActorRef, OutputFilter> _subscribers = new();
     private readonly List<AITool> _availableTools = new();
+    private MessageSource? _currentTurnSource;
     private readonly ToolRegistry? _fullRegistry;
     private int _baseToolCount; // count of always-loaded tools; dynamic tools appended after this
     private readonly List<string> _discoveredToolOrder = new();
@@ -273,6 +274,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         Command<SendUserMessage>(cmd =>
         {
             ClearDeliveryRetryState();
+            _currentTurnSource = cmd.Source;
             BindTurnTelemetry(cmd.Source);
             TurnLog().Info(
                 "turn_received channel={ChannelType} sender={SenderId} hasMedia={HasMedia} textChars={TextLength}",
@@ -531,6 +533,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                         IsCompactionBoundary: false,
                         HasAcceptedSubAgentFinding: true,
                         Domain: finding.Domain,
+                        Audience: CurrentMemoryAudience(),
                         Sensitivity: finding.Sensitivity,
                         RecallMode: finding.RecallMode,
                         Confidence: finding.Confidence,
@@ -845,6 +848,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                         IsCompactionBoundary: true,
                         HasAcceptedSubAgentFinding: false,
                         Domain: _sessionId.ToMemoryDomain(),
+                        Audience: CurrentMemoryAudience(),
                         Sensitivity: Memory.MemorySensitivity.Normal.ToWireValue(),
                         RecallMode: Memory.MemoryRecallMode.Auto.ToWireValue(),
                         Confidence: 0.8,
@@ -1405,6 +1409,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                     IsCompactionBoundary: false,
                     HasAcceptedSubAgentFinding: false,
                     Domain: _sessionId.ToMemoryDomain(),
+                    Audience: CurrentMemoryAudience(),
                     Sensitivity: Memory.MemorySensitivity.Normal.ToWireValue(),
                     RecallMode: Memory.MemoryRecallMode.Auto.ToWireValue(),
                     Confidence: 0.7,
@@ -2002,6 +2007,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             query,
             recentUser,
             3,
+            Audience: _currentTurnSource?.Audience ?? TrustAudience.Public,
             RecentAssistantMessages: _state.History
                 .Where(x => x.Role == Protocol.ChatRole.Assistant)
                 .Select(x => x.Content)
@@ -2054,6 +2060,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         var index = messages.FindLastIndex(m => m.Role == Microsoft.Extensions.AI.ChatRole.System);
         messages.Insert(index >= 0 ? index + 1 : 0, recallMessage);
     }
+
+    private string CurrentMemoryAudience()
+        => (_currentTurnSource?.Audience ?? TrustAudience.Public).ToWireValue();
 
     private static string FormatRecallForHistory(AutomaticRecallResult recall)
     {

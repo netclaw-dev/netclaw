@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Netclaw.Actors.Sessions;
+using Netclaw.Configuration;
 
 namespace Netclaw.Actors.Memory;
 
@@ -261,6 +262,7 @@ public sealed class MemoryProposalGate
             Relations: BuildRelations(proposal, memoryClass),
             UpdateSemantics: updateSemantics.ToWireValue(),
             Domain: domain,
+            Audience: Netclaw.Configuration.TrustAudience.Public.ToWireValue(),
             Sensitivity: sensitivity,
             RecallMode: recallMode.ToWireValue(),
             Confidence: Math.Clamp(proposal.Confidence, 0.0, 1.0),

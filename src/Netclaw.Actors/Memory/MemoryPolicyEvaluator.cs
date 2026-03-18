@@ -1,3 +1,5 @@
+using Netclaw.Configuration;
+
 namespace Netclaw.Actors.Memory;
 
 public sealed record MemoryPolicyDecision(bool Allowed, string? Reason = null);
@@ -9,10 +11,15 @@ public sealed class MemoryPolicyEvaluator
         string sensitivity,
         string recallMode,
         double confidence,
-        bool isExplicitRequest)
+        bool isExplicitRequest,
+        string? audience = null)
     {
         if (string.IsNullOrWhiteSpace(domain))
             return new MemoryPolicyDecision(false, "missing-domain");
+
+        if (!string.IsNullOrWhiteSpace(audience)
+            && !SecurityPolicyDefaults.TryParseAudience(audience, out _))
+            return new MemoryPolicyDecision(false, "invalid-audience");
 
         if (!MemoryDomainEnumExtensions.TryFromWireValue(recallMode, out MemoryRecallMode parsedMode)
             || parsedMode == MemoryRecallMode.Searchable)
@@ -28,4 +35,17 @@ public sealed class MemoryPolicyEvaluator
 
         return new MemoryPolicyDecision(true);
     }
+
+    public static string ResolveAudience(string? audience, TrustAudience fallback)
+        => SecurityPolicyDefaults.TryParseAudience(audience, out var parsed)
+            ? parsed.ToWireValue()
+            : fallback.ToWireValue();
+
+    public static IReadOnlyList<string> AllowedAudienceWireValues(TrustAudience audience) => audience switch
+    {
+        TrustAudience.Public => [TrustAudience.Public.ToWireValue()],
+        TrustAudience.Team => [TrustAudience.Public.ToWireValue(), TrustAudience.Team.ToWireValue()],
+        TrustAudience.Personal => [TrustAudience.Public.ToWireValue(), TrustAudience.Team.ToWireValue(), TrustAudience.Personal.ToWireValue()],
+        _ => [TrustAudience.Public.ToWireValue()]
+    };
 }

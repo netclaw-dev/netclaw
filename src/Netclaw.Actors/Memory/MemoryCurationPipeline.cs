@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using Netclaw.Configuration;
 
 namespace Netclaw.Actors.Memory;
 
@@ -27,7 +28,8 @@ public sealed record MemoryCheckpointPayload(
     string? UpdateSemantics = null,
     IReadOnlyList<string>? Evidence = null,
     string? SupersedesRecordId = null,
-    long? FreshnessAtMs = null);
+    long? FreshnessAtMs = null,
+    string? Audience = null);
 
 public sealed record MemoryCheckpointCandidate(
     MemoryKind Kind,
@@ -47,7 +49,8 @@ public sealed record MemoryCheckpointCandidate(
     long? FreshnessAtMs,
     long? ExpiresAtMs,
     string? MemoryId,
-    string? SupersedesRecordId = null);
+    string? SupersedesRecordId = null,
+    string Audience = "public");
 
 public sealed class MemoryRulesFirstExtractor(MemoryPolicyEvaluator policy)
 {
@@ -78,7 +81,8 @@ public sealed class MemoryRulesFirstExtractor(MemoryPolicyEvaluator policy)
             payload.Sensitivity,
             payload.RecallMode,
             payload.Confidence,
-            payload.IsExplicitRequest);
+            payload.IsExplicitRequest,
+            payload.Audience);
         if (!decision.Allowed)
             return results;
 
@@ -115,6 +119,7 @@ public sealed class MemoryRulesFirstExtractor(MemoryPolicyEvaluator policy)
             Content: content,
             UpdateSemantics: updateSemantics,
             Domain: payload.Domain,
+            Audience: MemoryPolicyEvaluator.ResolveAudience(payload.Audience, Netclaw.Configuration.TrustAudience.Public),
             Sensitivity: payload.Sensitivity,
             RecallMode: ResolveRecallMode(payload, memoryClass),
             Confidence: payload.Confidence,
@@ -290,6 +295,7 @@ public sealed class MemoryRulesFirstExtractor(MemoryPolicyEvaluator policy)
                 Content: normalizedObject,
                 UpdateSemantics: MemoryUpdateSemantics.MergeDocument,
                 Domain: payload.Domain,
+                Audience: MemoryPolicyEvaluator.ResolveAudience(payload.Audience, Netclaw.Configuration.TrustAudience.Public),
                 Sensitivity: payload.Sensitivity,
                 RecallMode: MemoryDomainEnumExtensions.TryFromWireValue(payload.RecallMode, out MemoryRecallMode rm)
                     ? rm : MemoryRecallMode.Auto,
@@ -347,6 +353,7 @@ public sealed class MemoryRulesFirstExtractor(MemoryPolicyEvaluator policy)
             Content: normalizedContent,
             UpdateSemantics: MemoryUpdateSemantics.MergeDocument,
             Domain: domain,
+            Audience: Netclaw.Configuration.TrustAudience.Public.ToWireValue(),
             Sensitivity: MemorySensitivity.Normal.ToWireValue(),
             RecallMode: MemoryRecallMode.Auto,
             Confidence: 0.88,
@@ -438,7 +445,7 @@ public sealed class MemoryCurationEngine(SQLiteMemoryStore store, MemoryRulesFir
         if (payload is null)
             return [];
 
-        var existing = await store.SearchMemoriesAsync(payload.Content, 8, ct);
+        var existing = await store.SearchMemoriesAsync(payload.Content, 8, TrustAudience.Public, ct);
         var fingerprints = existing
             .Select(x => MemoryRulesFirstExtractor.BuildFingerprint(x.Kind, x.Domain, x.Title, x.Snippet))
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -458,6 +465,7 @@ public sealed class MemoryCurationEngine(SQLiteMemoryStore store, MemoryRulesFir
             Relations: null,
             UpdateSemantics: c.UpdateSemantics.ToWireValue(),
             Domain: c.Domain,
+            Audience: c.Audience,
             Sensitivity: c.Sensitivity,
             RecallMode: c.RecallMode.ToWireValue(),
             Confidence: c.Confidence,

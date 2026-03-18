@@ -91,6 +91,38 @@ public sealed record EffectivePolicyDefaults(
 
 public static class SecurityPolicyDefaults
 {
+    public static string ToWireValue(this TrustAudience audience) => audience switch
+    {
+        TrustAudience.Public => "public",
+        TrustAudience.Team => "team",
+        TrustAudience.Personal => "personal",
+        _ => throw new ArgumentOutOfRangeException(nameof(audience), audience, null)
+    };
+
+    public static bool TryParseAudience(string? wire, out TrustAudience audience)
+    {
+        if (string.Equals(wire, "public", StringComparison.OrdinalIgnoreCase))
+        {
+            audience = TrustAudience.Public;
+            return true;
+        }
+
+        if (string.Equals(wire, "team", StringComparison.OrdinalIgnoreCase))
+        {
+            audience = TrustAudience.Team;
+            return true;
+        }
+
+        if (string.Equals(wire, "personal", StringComparison.OrdinalIgnoreCase))
+        {
+            audience = TrustAudience.Personal;
+            return true;
+        }
+
+        audience = default;
+        return false;
+    }
+
     public static EffectivePolicyDefaults Resolve(SecurityPolicyConfig? config)
     {
         var strictDefaults = config?.StrictDefaults ?? true;
