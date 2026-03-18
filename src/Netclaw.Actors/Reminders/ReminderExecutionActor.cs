@@ -161,6 +161,10 @@ internal sealed class ReminderExecutionActor : ReceiveActor
                 TrackNotificationResult(toolResult);
                 break;
 
+            case BufferFlush:
+                // Reminder accumulates full text for final result -- no mid-turn flush needed.
+                break;
+
             case TurnCompleted:
                 var result = _buffer.ToString().Trim();
                 var notifyFailureMessage = BuildNotifyFailureMessage();

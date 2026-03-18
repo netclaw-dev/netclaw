@@ -74,6 +74,9 @@ static async Task RunDaemonAsync(string[] args, DaemonRestartSignal restartSigna
     builder.Services.AddSingleton<ISessionLifecycleObserver>(sp => sp.GetRequiredService<SessionCatalogService>());
     builder.Services.AddSingleton<SessionRegistry>();
     builder.Services.AddSingleton<DaemonRuntimeStatusService>();
+    builder.Services.AddSingleton<DailyStatsPublisher>();
+    builder.Services.AddSingleton<Netclaw.Actors.Telemetry.ISessionMetrics>(sp => sp.GetRequiredService<DailyStatsPublisher>());
+    builder.Services.AddSingleton<DaemonStatsService>();
 
     var app = builder.Build();
 
@@ -84,6 +87,8 @@ static async Task RunDaemonAsync(string[] args, DaemonRestartSignal restartSigna
         Results.Ok(await statusService.GetStatusAsync(cancellationToken)));
     app.MapGet("/api/sessions", (SessionCatalogService catalog) =>
         Results.Ok(catalog.ListRecent(limit: 50)));
+    app.MapGet("/api/stats", async (DaemonStatsService statsService, int? days, CancellationToken ct) =>
+        Results.Ok(await statsService.GetStatsAsync(days, ct)));
 
     // MCP OAuth 2.1 endpoints
     app.MapPost("/api/mcp/oauth/start/{name}", async (
@@ -591,6 +596,7 @@ static void ConfigureDaemonServices(
 
         akkaBuilder.WithNetclawActors(reminderStorage);
         akkaBuilder.WithSignalRGateway();
+        akkaBuilder.WithDailyStatsActor();
 
         // Register reminder tools after actors start (needs ReminderManagerActor ref)
         akkaBuilder.StartActors((system, registry, _) =>

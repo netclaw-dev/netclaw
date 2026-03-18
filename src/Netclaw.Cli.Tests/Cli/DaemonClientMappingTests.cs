@@ -229,6 +229,26 @@ public sealed class DaemonClientMappingTests
     }
 
     [Fact]
+    public void BufferFlush_roundtrips_through_dto()
+    {
+        var original = new BufferFlush
+        {
+            SessionId = new SessionId("signalr/test"),
+            TimestampMs = 777
+        };
+
+        var dto = SessionOutputDtoMapper.ToDto(original);
+        Assert.Equal("buffer_flush", dto.Type);
+        Assert.Equal("signalr/test", dto.SessionId);
+        Assert.Equal(777, dto.TimestampMs);
+
+        var roundTripped = DaemonClient.FromDto(dto);
+        var result = Assert.IsType<BufferFlush>(roundTripped);
+        Assert.Equal("signalr/test", result.SessionId.Value);
+        Assert.Equal(777, result.TimestampMs);
+    }
+
+    [Fact]
     public void ErrorOutput_defaults_to_unknown_category_when_dto_field_missing()
     {
         var dto = new SessionOutputDto

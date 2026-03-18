@@ -15,3 +15,8 @@ public sealed class ModelCapabilityActorKey;
 /// Marker type for ActorRegistry lookup of the reminder manager actor.
 /// </summary>
 public sealed class ReminderManagerActorKey;
+
+/// <summary>
+/// Marker type for ActorRegistry lookup of the daily stats buffering actor.
+/// </summary>
+public sealed class DailyStatsActorKey;

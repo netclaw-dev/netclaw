@@ -97,6 +97,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     private readonly HashSet<string> _autoLoadedSkills = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, string> _autoLoadedSkillContent = new(StringComparer.OrdinalIgnoreCase);
     private readonly SkillRegistry? _skillRegistry;
+    private readonly Telemetry.ISessionMetrics? _sessionMetrics;
 
     // Persistent state (immutable — replaced on each event)
     private SessionState _state = SessionState.Empty;
@@ -121,10 +122,12 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         TimeProvider? timeProvider = null,
         IReadOnlyList<IContextLayerProvider>? contextLayers = null,
         NetclawPaths? paths = null,
-        SkillRegistry? skillRegistry = null)
+        SkillRegistry? skillRegistry = null,
+        Telemetry.ISessionMetrics? sessionMetrics = null)
     {
         _sessionId = new SessionId(entityId);
         _skillRegistry = skillRegistry;
+        _sessionMetrics = sessionMetrics;
         _chatClient = clientProvider.GetClient(ModelRole.Main);
         _compactionClient = config.CompactionModelId is not null
             ? clientProvider.GetClient(ModelRole.Compaction)
@@ -1115,6 +1118,31 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         var assistantMsg = ChatMessageConverter.FromAiMessage(lastMessage);
         _state = _state with { History = _state.History.Add(assistantMsg) };
 
+        // Surface preamble text immediately before tool execution starts.
+        // TextOutput handles the non-streaming (single-delta) path where no
+        // TextDeltaOutput was emitted to subscribers.
+        // BufferFlush tells streaming adapters to flush their accumulated buffer
+        // so the preamble is visible to users before the potentially long tool phase.
+        var hasPreambleText = lastMessage.Contents
+            .OfType<TextContent>()
+            .Any(t => !string.IsNullOrWhiteSpace(t.Text));
+
+        if (hasPreambleText)
+        {
+            foreach (var content in lastMessage.Contents)
+            {
+                if (content is TextContent text && !string.IsNullOrWhiteSpace(text.Text))
+                {
+                    EmitOutput(new TextOutput
+                    {
+                        SessionId = _sessionId,
+                        Text = text.Text
+                    }, OutputFilter.Text);
+                }
+            }
+            EmitOutput(new BufferFlush { SessionId = _sessionId });
+        }
+
         // Emit tool call outputs to subscribers
         foreach (var tc in toolCalls)
         {
@@ -1606,6 +1634,11 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         InjectAutomaticRecall(messages, _activeRecall);
 
+        if (_activeRecall.Items.Count > 0)
+        {
+            _sessionMetrics?.RecordMemoriesRecalled(_activeRecall.Items.Count);
+        }
+
         // Skill auto-load: deterministic keyword matching against enriched skill index.
         // Injects matched skill content as transient system messages before the LLM decides.
         var userMessage = _state.FindLastUserMessage()?.Content;
@@ -1768,6 +1801,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 string.Join(",", newMatches.Select(m => m.TokenHits)),
                 string.Join(",", newMatches.Select(m => m.PhraseHits)),
                 details);
+
+            _sessionMetrics?.RecordSkillsLoaded(newMatches.Count);
         }
     }
 

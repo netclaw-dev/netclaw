@@ -2,6 +2,7 @@ using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
+using Netclaw.Actors.Telemetry;
 using Netclaw.Configuration;
 
 namespace Netclaw.Daemon.Gateway;
@@ -27,11 +28,13 @@ public sealed class SessionCatalogService : ISessionLifecycleObserver
     private readonly NetclawPaths _paths;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<SessionCatalogService> _logger;
+    private readonly ISessionMetrics? _metrics;
 
     public SessionCatalogService(
         NetclawPaths paths,
         TimeProvider timeProvider,
-        ILogger<SessionCatalogService> logger)
+        ILogger<SessionCatalogService> logger,
+        ISessionMetrics? metrics = null)
     {
         _paths = paths;
         _connectionString = new SqliteConnectionStringBuilder
@@ -41,6 +44,7 @@ public sealed class SessionCatalogService : ISessionLifecycleObserver
         }.ToString();
         _timeProvider = timeProvider;
         _logger = logger;
+        _metrics = metrics;
     }
 
     /// <inheritdoc />
@@ -76,6 +80,8 @@ public sealed class SessionCatalogService : ISessionLifecycleObserver
             cmd.Parameters.AddWithValue("$path", logPath);
             cmd.Parameters.AddWithValue("$now", nowMs);
             cmd.ExecuteNonQuery();
+
+            _metrics?.RecordSessionCreated();
         }
         catch (Exception ex)
         {
@@ -108,6 +114,7 @@ public sealed class SessionCatalogService : ISessionLifecycleObserver
                             WHERE persistence_id = $pid
                             """;
                     });
+                    _metrics?.RecordTurnCompleted();
                     break;
 
                 case UsageOutput usage when usage.InputTokens.HasValue:
@@ -122,6 +129,9 @@ public sealed class SessionCatalogService : ISessionLifecycleObserver
                             """;
                         cmd.Parameters.AddWithValue("$tokens", usage.InputTokens.Value);
                     });
+                    _metrics?.RecordTokenUsage(
+                        usage.InputTokens ?? 0,
+                        usage.OutputTokens ?? 0);
                     break;
 
                 case SessionTitleOutput title:
@@ -148,6 +158,46 @@ public sealed class SessionCatalogService : ISessionLifecycleObserver
         {
             _logger.LogDebug(ex, "Failed to handle output for session {SessionId}", output.SessionId.Value);
         }
+    }
+
+    public sealed record SessionStats(
+        int TotalSessions,
+        int ActiveSessions,
+        long TotalTurns);
+
+    public SessionStats GetStats()
+    {
+        try
+        {
+            using var conn = new SqliteConnection(_connectionString);
+            conn.Open();
+
+            EnsureSchemaUpToDate(conn, _logger);
+
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText =
+                """
+                SELECT
+                    COUNT(*),
+                    SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END),
+                    SUM(turn_count)
+                FROM sessions
+                """;
+            using var reader = cmd.ExecuteReader();
+            if (reader.Read())
+            {
+                return new SessionStats(
+                    TotalSessions: reader.IsDBNull(0) ? 0 : reader.GetInt32(0),
+                    ActiveSessions: reader.IsDBNull(1) ? 0 : reader.GetInt32(1),
+                    TotalTurns: reader.IsDBNull(2) ? 0 : reader.GetInt64(2));
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to get session stats");
+        }
+
+        return new SessionStats(0, 0, 0);
     }
 
     /// <summary>

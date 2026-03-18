@@ -413,6 +413,20 @@ internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStas
                 await SafeUploadFileAsync(file);
                 break;
 
+            case BufferFlush:
+                if (_sawTextDelta)
+                {
+                    var preamble = _buffer.ToString().Trim();
+                    if (!string.IsNullOrWhiteSpace(preamble))
+                    {
+                        await SafePostAsync(preamble);
+                        _postedThisTurn = true;
+                    }
+                }
+                _buffer.Clear();
+                _sawTextDelta = false;
+                break;
+
             case ErrorOutput err:
                 var refId = err.CorrelationId.ToString("N")[..8];
                 await SafePostAsync($":warning: {err.Message} (ref: {refId})");
@@ -425,7 +439,10 @@ internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStas
                 {
                     var reply = _buffer.ToString().Trim();
                     if (!string.IsNullOrWhiteSpace(reply))
+                    {
                         await SafePostAsync(reply);
+                        _postedThisTurn = true;
+                    }
                     else
                         _log.Debug("Turn completed with no buffered reply text");
                 }

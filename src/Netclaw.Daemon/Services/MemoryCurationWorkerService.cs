@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Netclaw.Actors.Memory;
+using Netclaw.Actors.Telemetry;
 
 namespace Netclaw.Daemon.Services;
 
@@ -8,7 +9,8 @@ internal sealed class MemoryCurationWorkerService(
     SQLiteMemoryStore store,
     MemoryCurationEngine engine,
     TimeProvider timeProvider,
-    ILogger<MemoryCurationWorkerService> logger) : IHostedService, IDisposable
+    ILogger<MemoryCurationWorkerService> logger,
+    ISessionMetrics? metrics = null) : IHostedService, IDisposable
 {
     private readonly CancellationTokenSource _cts = new();
     private Task? _worker;
@@ -58,6 +60,11 @@ internal sealed class MemoryCurationWorkerService(
                         leased.TriggerType,
                         operations.Count,
                         ended - started);
+
+                    if (operations.Count > 0)
+                    {
+                        metrics?.RecordMemoriesFormed(operations.Count);
+                    }
                 }
                 catch (OperationCanceledException)
                 {

@@ -58,6 +58,21 @@ public sealed class DaemonApi
         return await JsonSerializer.DeserializeAsync<List<SessionCatalogEntryDto>>(stream, WebJsonOptions, cts.Token) ?? [];
     }
 
+    // ── Stats ─────────────────────────────────────────────────────────
+
+    public async Task<DaemonStats.Response?> GetStatsAsync(int? days = null, CancellationToken ct = default)
+    {
+        using var cts = CreateTimeoutCts(DefaultTimeout, ct);
+        var url = $"{_endpoint}/api/stats";
+        if (days.HasValue)
+            url += $"?days={days.Value}";
+        var client = _factory.CreateClient();
+        using var response = await client.GetAsync(url, cts.Token);
+        response.EnsureSuccessStatusCode();
+        var stream = await response.Content.ReadAsStreamAsync(cts.Token);
+        return await JsonSerializer.DeserializeAsync<DaemonStats.Response>(stream, WebJsonOptions, cts.Token);
+    }
+
     // ── Reminders ─────────────────────────────────────────────────────
 
     public async Task<HttpResponseMessage> ListRemindersAsync(CancellationToken ct = default)

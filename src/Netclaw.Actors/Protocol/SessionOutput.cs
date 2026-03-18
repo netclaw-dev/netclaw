@@ -234,6 +234,14 @@ public sealed record SubAgentOutput : SessionOutput
 }
 
 /// <summary>
+/// Signals that subscribers should flush any buffered streamed text immediately.
+/// Emitted before tool execution begins when the model produces text alongside
+/// tool calls, so preamble text is visible to users before tools run.
+/// Lifecycle — always delivered regardless of <see cref="OutputFilter"/>.
+/// </summary>
+public sealed record BufferFlush : SessionOutput;
+
+/// <summary>
 /// Session context was compacted to stay within the context window.
 /// Lifecycle — always delivered regardless of <see cref="OutputFilter"/>.
 /// </summary>
