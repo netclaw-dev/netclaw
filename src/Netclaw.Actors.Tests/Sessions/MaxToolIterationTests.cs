@@ -37,7 +37,7 @@ public class MaxToolIterationTests : TestKit
             ModelId = "fake-model",
             ContextWindowTokens = 128_000,
             SnapshotInterval = 5,
-            MaxToolIterationsPerTurn = 3, // Low limit for testing
+            MaxToolCallsPerTurn = 3, // Low limit for testing
             TitleGenerationInterval = 0
         });
         services.AddSingleton<ISystemPromptProvider>(new StaticSystemPromptProvider(
@@ -145,7 +145,7 @@ public class MaxToolIterationTests : TestKit
 
         var error = await subscriber.ExpectMsgAsync<ErrorOutput>(TimeSpan.FromSeconds(5));
         Assert.Equal(ErrorCategory.ProviderFailure, error.Category);
-        Assert.Contains("Please try rephrasing", error.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("tool calls", error.Message, StringComparison.OrdinalIgnoreCase);
 
         await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
 
