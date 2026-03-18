@@ -57,12 +57,10 @@ public static class OpenAiCodexConfigMigration
             if (!migrated)
                 return false;
 
-            var options = new JsonSerializerOptions
+            File.WriteAllText(configPath, root.ToJsonString(new JsonSerializerOptions
             {
                 WriteIndented = true,
-                DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,
-            };
-            File.WriteAllText(configPath, root.ToJsonString(options));
+            }));
             return true;
         }
         catch (Exception)

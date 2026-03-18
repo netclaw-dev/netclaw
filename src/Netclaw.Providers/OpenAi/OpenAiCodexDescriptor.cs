@@ -44,12 +44,15 @@ public sealed class OpenAiCodexDescriptor : IProviderDescriptor
     public string? OAuthAuthorizationEndpoint => "https://auth.openai.com/oauth/authorize";
     public string? OAuthDefaultClientId => "app_EMoamEEZ73f0CkXaXp7hrann";
     public string? OAuthRedirectUri => "http://localhost:1455/auth/callback";
-    public IReadOnlyDictionary<string, string>? OAuthExtraAuthParams => new Dictionary<string, string>
-    {
-        ["id_token_add_organizations"] = "true",
-        ["codex_cli_simplified_flow"] = "true",
-        ["originator"] = "netclaw",
-    };
+    private static readonly IReadOnlyDictionary<string, string> ExtraAuthParams =
+        new Dictionary<string, string>
+        {
+            ["id_token_add_organizations"] = "true",
+            ["codex_cli_simplified_flow"] = "true",
+            ["originator"] = "netclaw",
+        };
+
+    public IReadOnlyDictionary<string, string>? OAuthExtraAuthParams => ExtraAuthParams;
 
     /// <summary>
     /// Curated model list — Codex tokens cannot call /v1/models.
@@ -83,6 +86,10 @@ public sealed class OpenAiCodexDescriptor : IProviderDescriptor
         if (string.IsNullOrWhiteSpace(token))
             return Task.FromResult(new ProviderProbeResult(false,
                 "OAuth token is required for OpenAI Codex. Run 'netclaw provider add' with OAuth.", []));
+
+        if (entry.OAuthTokenExpiry is { } expiry && expiry < DateTimeOffset.UtcNow)
+            return Task.FromResult(new ProviderProbeResult(false,
+                $"OAuth token expired {expiry:g}. Re-authenticate with 'netclaw provider fix <name>'.", []));
 
         // Codex tokens can't probe — return curated models
         return Task.FromResult(new ProviderProbeResult(true, null, CuratedModels));

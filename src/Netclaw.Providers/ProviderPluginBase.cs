@@ -29,6 +29,12 @@ public abstract class ProviderPluginBase<TDescriptor> : ILlmProviderPlugin
     public string? OAuthDeviceEndpoint => Descriptor.OAuthDeviceEndpoint;
     public string? OAuthTokenEndpoint => Descriptor.OAuthTokenEndpoint;
     public string? OAuthDefaultClientId => Descriptor.OAuthDefaultClientId;
+    public string? OAuthScope => Descriptor.OAuthScope;
+    public string? OAuthAuthorizationEndpoint => Descriptor.OAuthAuthorizationEndpoint;
+    public string? OAuthRedirectUri => Descriptor.OAuthRedirectUri;
+    public IReadOnlyDictionary<string, string>? OAuthExtraAuthParams => Descriptor.OAuthExtraAuthParams;
+    public string? OAuthPollingEndpoint => Descriptor.OAuthPollingEndpoint;
+    public bool UseProprietaryDeviceFlow => Descriptor.UseProprietaryDeviceFlow;
 
     public Task<ProviderProbeResult> ProbeAsync(ProviderEntry entry, CancellationToken ct = default)
         => Descriptor.ProbeAsync(entry, ct);

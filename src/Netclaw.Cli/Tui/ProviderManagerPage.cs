@@ -535,7 +535,33 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
                 .WithForeground(Color.Red));
         }
 
-        if (descriptor.CredentialMode == CredentialInputMode.EndpointOnly)
+        if (!descriptor.SupportedAuthMethods.Contains(AuthMethod.ApiKey)
+            && descriptor.SupportedAuthMethods.Any(m => m is AuthMethod.OAuthPkce or AuthMethod.OAuthDevice))
+        {
+            // OAuth-only provider: route to re-authentication flow
+            children.WithChild(new TextNode("").Height(1));
+            children.WithChild(new TextNode("  This provider uses OAuth authentication.")
+                .WithForeground(Color.White));
+            children.WithChild(new TextNode("  Press [Enter] to re-authenticate.")
+                .WithForeground(Color.Gray));
+
+            // Wire Enter key to start OAuth re-auth via a confirmation list
+            var reAuthItems = new List<string> { "Re-authenticate" };
+            var reAuthList = Layouts.SelectionList(reAuthItems)
+                .WithMode(SelectionMode.Single)
+                .WithHighlightColors(Color.Black, Color.Cyan);
+
+            reAuthList.OnFocused();
+            _lastFocusedList = reAuthList;
+
+            reAuthList.SelectionConfirmed
+                .Subscribe(_ => ViewModel.StartOAuthReAuth())
+                .DisposeWith(_stepSubs);
+
+            children.WithChild(new TextNode("").Height(1));
+            children.WithChild(reAuthList);
+        }
+        else if (descriptor.CredentialMode == CredentialInputMode.EndpointOnly)
         {
             children.WithChild(new TextNode("").Height(1));
             children.WithChild(new TextNode("  Endpoint:").WithForeground(Color.White));

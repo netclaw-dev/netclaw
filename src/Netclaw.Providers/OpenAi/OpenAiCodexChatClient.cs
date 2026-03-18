@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.Extensions.AI;
+using Netclaw.Configuration;
 
 namespace Netclaw.Providers.OpenAi;
 
@@ -48,7 +49,7 @@ public sealed class OpenAiCodexChatClient : IChatClient
         using var request = CreateRequest(requestBody);
 
         using var response = await _httpClient.SendAsync(request, cancellationToken);
-        response.EnsureSuccessStatusCode();
+        await EnsureSuccessAsync(response, cancellationToken);
 
         var json = await response.Content.ReadAsStringAsync(cancellationToken);
         using var doc = JsonDocument.Parse(json);
@@ -65,7 +66,7 @@ public sealed class OpenAiCodexChatClient : IChatClient
 
         using var response = await _httpClient.SendAsync(
             request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
-        response.EnsureSuccessStatusCode();
+        await EnsureSuccessAsync(response, cancellationToken);
 
         using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
         using var reader = new StreamReader(stream);
@@ -98,6 +99,63 @@ public sealed class OpenAiCodexChatClient : IChatClient
     public object? GetService(Type serviceType, object? serviceKey = null) => null;
 
     public void Dispose() { }
+
+    private async Task EnsureSuccessAsync(HttpResponseMessage response, CancellationToken cancellationToken)
+    {
+        if (response.IsSuccessStatusCode)
+            return;
+
+        var responseBody = response.Content is null
+            ? null
+            : await response.Content.ReadAsStringAsync(cancellationToken);
+
+        var statusCode = (int)response.StatusCode;
+        var technicalMessage =
+            $"OpenAI Codex request failed: status={statusCode} endpoint={CodexResponsesEndpoint} response={responseBody}";
+        var userMessage = ExtractUserMessage(responseBody, statusCode);
+
+        throw new ProviderException(userMessage, technicalMessage, statusCode);
+    }
+
+    internal static string ExtractUserMessage(string? responseBody, int statusCode)
+    {
+        if (!string.IsNullOrWhiteSpace(responseBody))
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(responseBody);
+                if (doc.RootElement.TryGetProperty("error", out var error))
+                {
+                    if (error.ValueKind == JsonValueKind.Object
+                        && error.TryGetProperty("message", out var msg)
+                        && msg.ValueKind == JsonValueKind.String
+                        && msg.GetString() is { Length: > 0 } errorMessage)
+                    {
+                        return $"OpenAI Codex error ({statusCode}): {errorMessage}";
+                    }
+
+                    if (error.ValueKind == JsonValueKind.String
+                        && error.GetString() is { Length: > 0 } simpleError)
+                    {
+                        return $"OpenAI Codex error ({statusCode}): {simpleError}";
+                    }
+                }
+            }
+            catch (JsonException)
+            {
+                return $"OpenAI Codex returned an error (HTTP {statusCode}). Response was not valid JSON.";
+            }
+        }
+
+        return statusCode switch
+        {
+            401 => "OpenAI Codex token is expired or invalid. Re-authenticate with 'netclaw provider fix <name>'.",
+            403 => "OpenAI Codex rejected the request — check credentials.",
+            429 => "OpenAI Codex is rate-limiting requests. Try again shortly.",
+            >= 500 => $"OpenAI Codex returned a server error ({statusCode}). The provider may be experiencing issues.",
+            _ => $"OpenAI Codex returned an error (HTTP {statusCode}). Please try again."
+        };
+    }
 
     private HttpRequestMessage CreateRequest(string jsonBody)
     {
