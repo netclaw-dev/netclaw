@@ -129,9 +129,12 @@ public sealed class OpenAiCodexChatClient : IChatClient
 
     private HttpRequestMessage CreateRequest(string jsonBody)
     {
+        var content = new StringContent(jsonBody, Encoding.UTF8, "application/json");
+        // Codex backend rejects "application/json; charset=utf-8" — strip the charset
+        content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/json");
         var request = new HttpRequestMessage(HttpMethod.Post, CodexResponsesEndpoint)
         {
-            Content = new StringContent(jsonBody, Encoding.UTF8, "application/json")
+            Content = content
         };
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _accessToken.Value);
         if (_accountId is not null)
@@ -149,14 +152,22 @@ public sealed class OpenAiCodexChatClient : IChatClient
             ["stream"] = stream,
         };
 
-        // Convert chat messages to Responses API input format
+        // Responses API: system messages go in top-level "instructions",
+        // everything else goes in "input" array
         var input = new JsonArray();
+        string? instructions = null;
         foreach (var msg in messages)
         {
-            var role = msg.Role == ChatRole.System ? "developer"
-                : msg.Role == ChatRole.Assistant ? "assistant"
-                : "user";
+            if (msg.Role == ChatRole.System)
+            {
+                // Concatenate multiple system messages (rare but possible)
+                instructions = instructions is null
+                    ? msg.Text ?? string.Empty
+                    : $"{instructions}\n{msg.Text}";
+                continue;
+            }
 
+            var role = msg.Role == ChatRole.Assistant ? "assistant" : "user";
             var item = new JsonObject
             {
                 ["role"] = role,
@@ -164,6 +175,10 @@ public sealed class OpenAiCodexChatClient : IChatClient
             };
             input.Add(item);
         }
+
+        if (instructions is not null)
+            body["instructions"] = instructions;
+
         body["input"] = input;
 
         if (options?.MaxOutputTokens is > 0)
