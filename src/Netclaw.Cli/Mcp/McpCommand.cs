@@ -361,9 +361,9 @@ internal static class McpCommand
             {
                 break;
             }
-            catch
+            catch (Exception)
             {
-                // Transient poll error — keep trying
+                writer.Write("!"); // transient poll error — keep trying
             }
         }
 
