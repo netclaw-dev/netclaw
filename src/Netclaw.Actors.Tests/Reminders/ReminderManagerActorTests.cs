@@ -16,6 +16,7 @@ namespace Netclaw.Actors.Tests.Reminders;
 public class ReminderManagerActorTests : TestKit
 {
     private readonly string _basePath = Path.Combine(Path.GetTempPath(), $"netclaw-reminder-tests-{Guid.NewGuid():N}");
+    private ReminderDefinitionStore _definitionStore = null!;
 
     public ReminderManagerActorTests(ITestOutputHelper output) : base(output: output) { }
 
@@ -28,7 +29,8 @@ public class ReminderManagerActorTests : TestKit
         var paths = new NetclawPaths(_basePath);
         paths.EnsureDirectoriesExist();
         var reminderConfig = new ReminderConfig();
-        var definitionStore = new ReminderDefinitionStore(paths);
+        _definitionStore = new ReminderDefinitionStore(paths);
+        var definitionStore = _definitionStore;
         var historyStore = new ReminderHistoryStore(paths, reminderConfig);
 
         // Wire local reminders with in-memory storage
@@ -147,6 +149,58 @@ public class ReminderManagerActorTests : TestKit
         Assert.Equal(0, health.ScheduledCount);
         Assert.Equal(0, health.ActiveExecutions);
         Assert.Equal(0, health.FailedCount);
+    }
+
+    [Fact]
+    public async Task Reconcile_disables_zombie_oneshot_reminders()
+    {
+        var manager = await GetManagerAsync();
+        var now = TimeProvider.System.GetUtcNow();
+
+        // Ensure the actor is fully started and initial reconcile has completed
+        await manager.Ask<ReminderHealthResponse>(
+            GetReminderHealthQuery.Instance, TimeSpan.FromSeconds(5));
+
+        // Write a zombie one-shot directly to the store AFTER startup reconcile:
+        // fire time in the past, still enabled, no Akka.Reminders schedule
+        var zombie = new ReminderDefinition
+        {
+            Id = "zombie-oneshot",
+            Title = "Expired one-shot",
+            Instructions = "This already fired",
+            NotifyInstructions = "n/a",
+            Schedule = new ReminderSchedule
+            {
+                Type = ReminderScheduleType.OneShot,
+                FireAt = now.AddHours(-1)
+            },
+            Enabled = true,
+            CreatedBy = "test",
+            CreatedAt = now.AddHours(-2),
+            UpdatedAt = now.AddHours(-2)
+        };
+        _definitionStore.Save(zombie);
+
+        // Confirm it shows up as scheduled
+        var healthBefore = await manager.Ask<ReminderHealthResponse>(
+            GetReminderHealthQuery.Instance, TimeSpan.FromSeconds(5));
+        Assert.Equal(1, healthBefore.ScheduledCount);
+
+        // Trigger reconciliation
+        manager.Tell(ReminderManagerActor.ReconcileReminders.Instance);
+
+        // Wait for the zombie to be disabled
+        await AwaitAssertAsync(() =>
+        {
+            var health = manager.Ask<ReminderHealthResponse>(
+                GetReminderHealthQuery.Instance, TimeSpan.FromSeconds(5)).Result;
+            Assert.Equal(0, health.ScheduledCount);
+        }, TimeSpan.FromSeconds(10));
+
+        // Verify definition still exists but is now disabled
+        var afterReconcile = _definitionStore.Get(new ReminderId("zombie-oneshot"));
+        Assert.NotNull(afterReconcile);
+        Assert.False(afterReconcile.Enabled);
     }
 
     private static ReminderDefinition CreateDefinition(string name, string instructions)
