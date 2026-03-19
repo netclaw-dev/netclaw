@@ -102,6 +102,13 @@ If discovery artifacts conflict with each other, update them before implementing
 - no north-star/deferred features in MVP without explicit PRD update
 - actor boundaries remain transport-agnostic (pub/sub over direct transport asks)
 - persistence types remain framework-owned and serialization-safe
+- **No fallback paths.** Do not add silent retries, plain-text downgrades, or
+  graceful degradation that hides errors. When the LLM produces output a channel
+  can't deliver, feed the full error back to the LLM session so it can
+  understand what went wrong and retry with corrected output. The only acceptable
+  error-handling pattern is: error occurs → error details propagated back to the
+  LLM → LLM retries with that context. If you believe a fallback is genuinely
+  needed, stop and ask for explicit approval first.
 - no new Slopwatch violations: run `/dotnet-skills:slopwatch` after code changes
 - use `TimeProvider` (not `DateTime.UtcNow` / `DateTimeOffset.UtcNow`) so time
   can be virtualized in tests. Inject `TimeProvider` via DI; default to

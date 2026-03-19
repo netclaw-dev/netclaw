@@ -222,6 +222,194 @@ public class LlmSessionIntegrationTests : TestKit
     }
 
     [Fact]
+    public async Task Delivery_failed_for_latest_turn_retries_once_with_structured_nudge()
+    {
+        var sessionId = new SessionId("test-channel/delivery-retry");
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("delivery-retry-sub");
+
+        await sessionManager.Ask<SessionJoined>(new JoinSession
+        {
+            SessionId = sessionId,
+            Subscriber = subscriber,
+            Filter = OutputFilter.TextOnly
+        }, TimeSpan.FromSeconds(3));
+        await subscriber.ExpectMsgAsync<SessionJoined>();
+
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Say hello"
+        }, TimeSpan.FromSeconds(3));
+
+        await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3));
+        var completed = await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
+
+        sessionManager.Tell(new DeliveryFailed
+        {
+            SessionId = sessionId,
+            TurnNumber = completed.TurnNumber,
+            ChannelType = "slack",
+            FailureKind = DeliveryFailureKind.MessageTooLarge,
+            ErrorMessage = "msg_too_long"
+        });
+
+        var retried = await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3));
+        Assert.Contains("Response #2", retried.Text, StringComparison.OrdinalIgnoreCase);
+        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
+
+        Assert.Contains(_fakeChatClient.ReceivedMessages[^1], msg =>
+            msg.Role == Microsoft.Extensions.AI.ChatRole.User
+            && msg.Text is not null
+            && msg.Text.Contains("msg_too_long", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task Stale_delivery_failed_is_ignored_after_new_user_turn_starts()
+    {
+        var sessionId = new SessionId("test-channel/stale-delivery-failure");
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("stale-delivery-sub");
+
+        await sessionManager.Ask<SessionJoined>(new JoinSession
+        {
+            SessionId = sessionId,
+            Subscriber = subscriber,
+            Filter = OutputFilter.TextOnly
+        }, TimeSpan.FromSeconds(3));
+        await subscriber.ExpectMsgAsync<SessionJoined>();
+
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "first"
+        }, TimeSpan.FromSeconds(3));
+
+        await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3));
+        var firstCompleted = await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
+
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "second"
+        }, TimeSpan.FromSeconds(3));
+
+        await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3));
+        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
+
+        sessionManager.Tell(new DeliveryFailed
+        {
+            SessionId = sessionId,
+            TurnNumber = firstCompleted.TurnNumber,
+            ChannelType = "slack",
+            FailureKind = DeliveryFailureKind.ContentRejected,
+            ErrorMessage = "invalid_blocks"
+        });
+
+        await subscriber.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(300));
+    }
+
+    [Fact]
+    public async Task Delivery_failed_while_processing_newer_turn_is_ignored()
+    {
+        var sessionId = new SessionId("test-channel/processing-delivery-failure");
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("processing-delivery-sub");
+
+        await sessionManager.Ask<SessionJoined>(new JoinSession
+        {
+            SessionId = sessionId,
+            Subscriber = subscriber,
+            Filter = OutputFilter.TextOnly
+        }, TimeSpan.FromSeconds(3));
+        await subscriber.ExpectMsgAsync<SessionJoined>();
+
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "first"
+        }, TimeSpan.FromSeconds(3));
+
+        await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3));
+        var firstCompleted = await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
+
+        _fakeChatClient.NextResponseGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "second"
+        }, TimeSpan.FromSeconds(3));
+
+        sessionManager.Tell(new DeliveryFailed
+        {
+            SessionId = sessionId,
+            TurnNumber = firstCompleted.TurnNumber,
+            ChannelType = "slack",
+            FailureKind = DeliveryFailureKind.ContentRejected,
+            ErrorMessage = "invalid_blocks"
+        });
+
+        _fakeChatClient.NextResponseGate.TrySetResult();
+
+        var secondText = await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3));
+        Assert.Contains("Response #2", secondText.Text, StringComparison.OrdinalIgnoreCase);
+        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
+        await subscriber.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(300));
+    }
+
+    [Fact]
+    public async Task Delivery_retry_budget_stops_after_two_failed_corrections()
+    {
+        var sessionId = new SessionId("test-channel/delivery-retry-budget");
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("delivery-budget-sub");
+
+        await sessionManager.Ask<SessionJoined>(new JoinSession
+        {
+            SessionId = sessionId,
+            Subscriber = subscriber,
+            Filter = OutputFilter.TextOnly
+        }, TimeSpan.FromSeconds(3));
+        await subscriber.ExpectMsgAsync<SessionJoined>();
+
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "first"
+        }, TimeSpan.FromSeconds(3));
+
+        await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3));
+        var completed = await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
+
+        for (var attempt = 0; attempt < 2; attempt++)
+        {
+            sessionManager.Tell(new DeliveryFailed
+            {
+                SessionId = sessionId,
+                TurnNumber = completed.TurnNumber,
+                ChannelType = "slack",
+                FailureKind = DeliveryFailureKind.ContentRejected,
+                ErrorMessage = "invalid_blocks"
+            });
+
+            await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3));
+            completed = await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
+        }
+
+        sessionManager.Tell(new DeliveryFailed
+        {
+            SessionId = sessionId,
+            TurnNumber = completed.TurnNumber,
+            ChannelType = "slack",
+            FailureKind = DeliveryFailureKind.ContentRejected,
+            ErrorMessage = "invalid_blocks"
+        });
+
+        await subscriber.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(300));
+    }
+
+    [Fact]
     public async Task Sidecar_observation_promotes_strong_user_assertion_into_memory()
     {
         var gate = new MemoryProposalGate();
@@ -662,6 +850,8 @@ internal sealed class FakeChatClient : IChatClient
     /// </summary>
     public Queue<IReadOnlyList<AIContent>> PlannedResponses { get; } = new();
 
+    public TaskCompletionSource? NextResponseGate { get; set; }
+
     public async Task<ChatResponse> GetResponseAsync(
         IEnumerable<ChatMessage> messages,
         ChatOptions? options = null,
@@ -677,6 +867,13 @@ internal sealed class FakeChatClient : IChatClient
 
         if (Delay > TimeSpan.Zero)
             await Task.Delay(Delay, cancellationToken);
+
+        if (NextResponseGate is { } nextResponseGate)
+        {
+            NextResponseGate = null;
+            using var registration = cancellationToken.Register(() => nextResponseGate.TrySetCanceled(cancellationToken));
+            await nextResponseGate.Task;
+        }
 
         var systemText = messageList.FirstOrDefault(m => m.Role == Microsoft.Extensions.AI.ChatRole.System)?.Text ?? string.Empty;
         var userText = messageList.LastOrDefault(m => m.Role == Microsoft.Extensions.AI.ChatRole.User)?.Text ?? string.Empty;

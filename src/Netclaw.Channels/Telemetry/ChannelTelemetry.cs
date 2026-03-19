@@ -27,6 +27,9 @@ public static class ChannelTelemetry
     private static readonly Counter<long> SlackRepliesFailed =
         Meter.CreateCounter<long>("netclaw.slack.replies.failed");
 
+    private static readonly Counter<long> SlackRepliesPlainTextFallback =
+        Meter.CreateCounter<long>("netclaw.slack.replies.plain_text_fallback");
+
     private static readonly Histogram<double> SlackReplyDurationMs =
         Meter.CreateHistogram<double>("netclaw.slack.reply.duration.ms", unit: "ms");
 
@@ -36,6 +39,7 @@ public static class ChannelTelemetry
     private static long _slackMessagesEnqueuedTotal;
     private static long _slackRepliesPostedTotal;
     private static long _slackRepliesFailedTotal;
+    private static long _slackRepliesPlainTextFallbackTotal;
 
     public sealed record Snapshot(
         long SlackEventsReceived,
@@ -43,7 +47,8 @@ public static class ChannelTelemetry
         long SlackEventsRouted,
         long SlackMessagesEnqueued,
         long SlackRepliesPosted,
-        long SlackRepliesFailed);
+        long SlackRepliesFailed,
+        long SlackRepliesPlainTextFallback);
 
     public static void RecordSlackEventReceived(string kind)
     {
@@ -83,6 +88,12 @@ public static class ChannelTelemetry
         SlackReplyDurationMs.Record(durationMs);
     }
 
+    public static void RecordSlackReplyPlainTextFallback()
+    {
+        Interlocked.Increment(ref _slackRepliesPlainTextFallbackTotal);
+        SlackRepliesPlainTextFallback.Add(1);
+    }
+
     public static Snapshot GetSnapshot()
         => new(
             SlackEventsReceived: Interlocked.Read(ref _slackEventsReceivedTotal),
@@ -90,7 +101,8 @@ public static class ChannelTelemetry
             SlackEventsRouted: Interlocked.Read(ref _slackEventsRoutedTotal),
             SlackMessagesEnqueued: Interlocked.Read(ref _slackMessagesEnqueuedTotal),
             SlackRepliesPosted: Interlocked.Read(ref _slackRepliesPostedTotal),
-            SlackRepliesFailed: Interlocked.Read(ref _slackRepliesFailedTotal));
+            SlackRepliesFailed: Interlocked.Read(ref _slackRepliesFailedTotal),
+            SlackRepliesPlainTextFallback: Interlocked.Read(ref _slackRepliesPlainTextFallbackTotal));
 
     internal static void ResetForTests()
     {
@@ -100,5 +112,6 @@ public static class ChannelTelemetry
         Interlocked.Exchange(ref _slackMessagesEnqueuedTotal, 0);
         Interlocked.Exchange(ref _slackRepliesPostedTotal, 0);
         Interlocked.Exchange(ref _slackRepliesFailedTotal, 0);
+        Interlocked.Exchange(ref _slackRepliesPlainTextFallbackTotal, 0);
     }
 }

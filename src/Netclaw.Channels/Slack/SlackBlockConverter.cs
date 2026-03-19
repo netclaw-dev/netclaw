@@ -184,6 +184,8 @@ public static partial class SlackBlockConverter
             remaining = remaining[(matchIndex + matchLength)..];
         }
 
+        elements.RemoveAll(e => e is RichTextText textElement && string.IsNullOrEmpty(textElement.Text));
+
         return elements;
     }
 

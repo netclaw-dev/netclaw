@@ -190,6 +190,9 @@ public class ReminderExecutionActorTests : TestKit, IDisposable
             IMaterializer? materializer = null,
             CancellationToken cancellationToken = default) =>
             throw exception;
+
+        public Task SendFeedbackAsync(IWithSessionId feedback, CancellationToken ct = default) =>
+            Task.CompletedTask;
     }
 
     private sealed class ScriptedSessionPipeline(
@@ -211,6 +214,9 @@ public class ReminderExecutionActorTests : TestKit, IDisposable
 
             return Task.FromResult(new MaterializedSession(input, output, killSwitch));
         }
+
+        public Task SendFeedbackAsync(IWithSessionId feedback, CancellationToken ct = default) =>
+            Task.CompletedTask;
     }
 
     // ── History integration tests ─────────────────────────────────────────────

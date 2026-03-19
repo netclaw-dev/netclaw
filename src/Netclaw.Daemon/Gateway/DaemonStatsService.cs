@@ -75,7 +75,8 @@ internal sealed class DaemonStatsService(
                 EventsRouted = slackSnapshot.SlackEventsRouted,
                 EventsDropped = slackSnapshot.SlackEventsDropped,
                 RepliesPosted = slackSnapshot.SlackRepliesPosted,
-                RepliesFailed = slackSnapshot.SlackRepliesFailed
+                RepliesFailed = slackSnapshot.SlackRepliesFailed,
+                RepliesPlainTextFallback = slackSnapshot.SlackRepliesPlainTextFallback
             },
             Reminders = await BuildReminderStatsAsync(ct),
             DailyBreakdown = dailyBreakdown

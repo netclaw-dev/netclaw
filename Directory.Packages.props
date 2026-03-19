@@ -9,7 +9,7 @@
     <SlackNetVersion>0.17.9</SlackNetVersion>
     <MimeDetectiveVersion>25.8.1</MimeDetectiveVersion>
     <MicrosoftExtensionsAIVersion>10.3.0</MicrosoftExtensionsAIVersion>
-    <MicrosoftAspNetCoreVersion>10.0.3</MicrosoftAspNetCoreVersion>
+    <MicrosoftAspNetCoreVersion>10.0.5</MicrosoftAspNetCoreVersion>
   </PropertyGroup>
   <!-- App dependencies -->
   <ItemGroup>

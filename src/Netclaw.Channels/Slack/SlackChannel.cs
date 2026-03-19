@@ -12,7 +12,7 @@ namespace Netclaw.Channels.Slack;
 
 public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEventHandler<AppMention>
 {
-    private readonly SessionPipeline _pipeline;
+    private readonly ISessionPipeline _pipeline;
     private readonly ActorSystem _system;
     private readonly ISlackApiClient _slack;
     private readonly ISlackSocketModeClient _socketModeClient;
@@ -30,7 +30,7 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
     private volatile bool _connected;
 
     public SlackChannel(
-        SessionPipeline pipeline,
+        ISessionPipeline pipeline,
         ActorSystem system,
         ISlackApiClient slack,
         ISlackSocketModeClient socketModeClient,

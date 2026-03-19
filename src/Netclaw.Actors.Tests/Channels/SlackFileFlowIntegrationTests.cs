@@ -1,9 +1,12 @@
 using System.Net;
 using System.Net.Http.Headers;
 using Akka.Actor;
+using Akka;
 using Akka.Hosting;
 using Akka.Hosting.TestKit;
 using Akka.Persistence.Hosting;
+using Akka.Streams;
+using Akka.Streams.Dsl;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -444,6 +447,119 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
         }, duration: TimeSpan.FromSeconds(10));
     }
 
+    [Fact]
+    public async Task Retryable_slack_content_rejection_is_fed_back_to_session_for_correction()
+    {
+        var pipeline = Host.Services.GetRequiredService<SessionPipeline>();
+        _replyClient.PostFailures.Enqueue(new SlackMessageDeliveryException(
+            errorCode: "invalid_blocks",
+            failureKind: DeliveryFailureKind.ContentRejected,
+            message: "invalid_blocks"));
+
+        var deps = new SlackGatewayDependencies(
+            Pipeline: pipeline,
+            ActorSystem: Sys,
+            TimeProvider: TimeProvider.System,
+            Options: new SlackChannelOptions
+            {
+                Enabled = true,
+                MentionOnly = false,
+                AllowDirectMessages = true,
+                BotToken = new SensitiveString("xoxb-fake-token")
+            },
+            BotUserId: new SlackUserId("UBOT"),
+            DefaultChannelId: null,
+            ReplyClient: _replyClient,
+            ContentScanner: new NullContentScanner());
+
+        var gateway = Sys.ActorOf(SlackGatewayActor.CreateProps(deps), "slack-gw-delivery-feedback-test");
+
+        gateway.Tell(new SlackInboundMessage(
+            Kind: SlackInboundKind.Message,
+            EventId: new SlackEventId("D6:7000"),
+            ChannelId: new SlackChannelId("D6"),
+            ThreadTs: null,
+            EventTs: new SlackEventTs("7000.1"),
+            UserId: new SlackUserId("U_HUMAN"),
+            BotId: null,
+            Text: "first message",
+            Subtype: null,
+            Hidden: false,
+            IsDirectMessage: true,
+            Files: null));
+
+        await AwaitAssertAsync(() =>
+        {
+            Assert.Contains(_replyClient.PostedMessages,
+                message => message.Text.Contains("call #2", StringComparison.OrdinalIgnoreCase));
+        }, duration: TimeSpan.FromSeconds(10));
+
+        Assert.DoesNotContain(_replyClient.PostedMessages,
+            message => message.Text.Contains("call #1", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task Retryable_slack_file_upload_rejection_is_fed_back_to_session()
+    {
+        var tempFile = Path.Combine(_paths.BasePath, $"upload-{Guid.NewGuid():N}.txt");
+        await File.WriteAllTextAsync(tempFile, "test file");
+
+        var feedbackPipeline = new RecordingSessionPipeline([
+            new FileOutput
+            {
+                SessionId = new SessionId("D7/8000.1"),
+                TimestampMs = TimeProvider.System.GetUtcNow().ToUnixTimeMilliseconds(),
+                FilePath = tempFile,
+                FileName = "test.txt",
+                MimeType = "text/plain"
+            },
+            new TurnCompleted
+            {
+                SessionId = new SessionId("D7/8000.1"),
+                TurnNumber = 1
+            }
+        ]);
+
+        _replyClient.UploadFailures.Enqueue(new SlackMessageDeliveryException(
+            errorCode: "too_many_attachments",
+            failureKind: DeliveryFailureKind.UnsupportedContent,
+            message: "too_many_attachments"));
+
+        var deps = new SlackGatewayDependencies(
+            Pipeline: feedbackPipeline,
+            ActorSystem: Sys,
+            TimeProvider: TimeProvider.System,
+            Options: new SlackChannelOptions
+            {
+                Enabled = true,
+                MentionOnly = false,
+                AllowDirectMessages = true,
+                BotToken = new SensitiveString("xoxb-fake-token")
+            },
+            BotUserId: new SlackUserId("UBOT"),
+            DefaultChannelId: null,
+            ReplyClient: _replyClient,
+            ContentScanner: new NullContentScanner());
+
+        var actor = Sys.ActorOf(SlackThreadBindingActor.CreateProps(
+            new SessionId("D7/8000.1"),
+            new SlackChannelId("D7"),
+            new SlackThreadTs("8000.1"),
+            deps), "slack-thread-file-feedback-test");
+
+        await AwaitAssertAsync(() =>
+        {
+            var feedback = Assert.Single(feedbackPipeline.Feedback);
+            var failure = Assert.IsType<DeliveryFailed>(feedback);
+            Assert.Equal(DeliveryFailureKind.UnsupportedContent, failure.FailureKind);
+            Assert.Equal(1, failure.TurnNumber);
+        }, duration: TimeSpan.FromSeconds(10));
+
+        Watch(actor);
+        Sys.Stop(actor);
+        await ExpectTerminatedAsync(actor);
+    }
+
     /// <summary>
     /// Fake HTTP handler that serves canned image bytes for Slack file download requests.
     /// </summary>
@@ -476,6 +592,8 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
     {
         public List<SlackPostMessage> PostedMessages { get; } = [];
         public List<(SlackChannelId ChannelId, SlackThreadTs ThreadTs, string FilePath, string? FileName)> UploadedFiles { get; } = [];
+        public Queue<Exception> PostFailures { get; } = new();
+        public Queue<Exception> UploadFailures { get; } = new();
         public volatile bool BlockPostsUntilCanceled;
         private int _canceledPostCount;
 
@@ -483,6 +601,9 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
 
         public async Task PostThreadReplyAsync(SlackPostMessage message, CancellationToken cancellationToken = default)
         {
+            if (PostFailures.Count > 0)
+                throw PostFailures.Dequeue();
+
             if (BlockPostsUntilCanceled)
             {
                 var waitForCancellation = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -506,7 +627,38 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
             SlackChannelId channelId, SlackThreadTs threadTs, string filePath,
             string? filename = null, CancellationToken cancellationToken = default)
         {
+            if (UploadFailures.Count > 0)
+                throw UploadFailures.Dequeue();
+
             UploadedFiles.Add((channelId, threadTs, filePath, filename));
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class RecordingSessionPipeline(IReadOnlyList<SessionOutput> outputs) : ISessionPipeline
+    {
+        public List<IWithSessionId> Feedback { get; } = [];
+
+        public Task<MaterializedSession> CreateAsync(
+            SessionId sessionId,
+            SessionPipelineOptions options,
+            IMaterializer? materializer = null,
+            CancellationToken cancellationToken = default)
+        {
+            var killSwitch = KillSwitches.Shared($"recording-{sessionId.Value}");
+            var input = Sink.Ignore<ChannelInput>()
+                .MapMaterializedValue<NotUsed>(_ => NotUsed.Instance);
+
+            var output = Source.From(outputs)
+                .Concat(Source.Maybe<SessionOutput>().MapMaterializedValue(_ => NotUsed.Instance))
+                .Via(killSwitch.Flow<SessionOutput>());
+
+            return Task.FromResult(new MaterializedSession(input, output, killSwitch));
+        }
+
+        public Task SendFeedbackAsync(IWithSessionId feedback, CancellationToken ct = default)
+        {
+            Feedback.Add(feedback);
             return Task.CompletedTask;
         }
     }

@@ -27,6 +27,7 @@ internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStas
     private bool _sawTextDelta;
     private bool _postedThisTurn;
     private bool _uploadedFileThisTurn;
+    private PostResult? _lastFailedPost;
 
     private ActorMaterializer? _materializer;
     private MaterializedSession? _session;
@@ -402,15 +403,20 @@ internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStas
                     var fullText = text.Text?.Trim();
                     if (!string.IsNullOrWhiteSpace(fullText))
                     {
-                        await SafePostAsync(fullText);
-                        _postedThisTurn = true;
+                        var result = await SafePostAsync(fullText);
+                        if (result.Success)
+                            _postedThisTurn = true;
+                        else
+                            _lastFailedPost = result;
                     }
                 }
 
                 break;
 
             case FileOutput file:
-                await SafeUploadFileAsync(file);
+                var uploadResult = await SafeUploadFileAsync(file);
+                if (!uploadResult.Success)
+                    _lastFailedPost = uploadResult;
                 break;
 
             case BufferFlush:
@@ -419,8 +425,11 @@ internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStas
                     var preamble = _buffer.ToString().Trim();
                     if (!string.IsNullOrWhiteSpace(preamble))
                     {
-                        await SafePostAsync(preamble);
-                        _postedThisTurn = true;
+                        var result = await SafePostAsync(preamble);
+                        if (result.Success)
+                            _postedThisTurn = true;
+                        else
+                            _lastFailedPost = result;
                     }
                 }
                 _buffer.Clear();
@@ -429,19 +438,23 @@ internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStas
 
             case ErrorOutput err:
                 var refId = err.CorrelationId.ToString("N")[..8];
-                await SafePostAsync($":warning: {err.Message} (ref: {refId})");
-                _postedThisTurn = true;
+                var errorResult = await SafePostAsync($":warning: {err.Message} (ref: {refId})");
+                if (errorResult.Success)
+                    _postedThisTurn = true;
                 _buffer.Clear();
                 break;
 
-            case TurnCompleted:
+            case TurnCompleted completed:
                 if (_sawTextDelta && !_postedThisTurn)
                 {
                     var reply = _buffer.ToString().Trim();
                     if (!string.IsNullOrWhiteSpace(reply))
                     {
-                        await SafePostAsync(reply);
-                        _postedThisTurn = true;
+                        var result = await SafePostAsync(reply);
+                        if (result.Success)
+                            _postedThisTurn = true;
+                        else
+                            _lastFailedPost = result;
                     }
                     else
                         _log.Debug("Turn completed with no buffered reply text");
@@ -449,20 +462,35 @@ internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStas
 
                 if (!_postedThisTurn && !_uploadedFileThisTurn)
                 {
-                    _log.Warning("Turn completed without visible Slack output; posting fallback reply");
-                    await SafePostAsync(EmptyTurnFallbackText);
+                    if (_lastFailedPost is { ShouldNotifySession: true, FailureKind: { } failureKind, ErrorMessage: { } errorMessage })
+                    {
+                        _log.Warning(
+                            "Turn completed with retryable Slack delivery failure kind={FailureKind}; notifying session",
+                            failureKind);
+                        await NotifyDeliveryFailedAsync(completed.TurnNumber, failureKind, errorMessage);
+                    }
+                    else if (_lastFailedPost is not null)
+                    {
+                        _log.Warning("Turn completed with non-retryable Slack delivery failure: {Error}", _lastFailedPost.ErrorMessage);
+                    }
+                    else
+                    {
+                        _log.Warning("Turn completed without visible Slack output; posting fallback reply");
+                        await SafePostAsync(EmptyTurnFallbackText);
+                    }
                 }
 
                 _buffer.Clear();
                 _sawTextDelta = false;
                 _postedThisTurn = false;
                 _uploadedFileThisTurn = false;
+                _lastFailedPost = null;
 
                 break;
         }
     }
 
-    private async Task SafePostAsync(string text)
+    private async Task<PostResult> SafePostAsync(string text)
     {
         var startedAt = _dependencies.TimeProvider.GetTimestamp();
         try
@@ -475,20 +503,59 @@ internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStas
 
             _log.Info("Posted Slack reply message");
             ChannelTelemetry.RecordSlackReplyPosted(_dependencies.TimeProvider.GetElapsedTime(startedAt).TotalMilliseconds);
+            return PostResult.Ok;
         }
         catch (OperationCanceledException ex)
         {
             _log.Error(ex, "Timed out posting Slack reply for session {0}", _sessionId.Value);
             ChannelTelemetry.RecordSlackReplyFailed(_dependencies.TimeProvider.GetElapsedTime(startedAt).TotalMilliseconds);
+            return new PostResult($"Timed out posting reply: {ex.Message}");
+        }
+        catch (SlackMessageDeliveryException ex)
+        {
+            _log.Error(ex, "Slack rejected reply for session {0} with error code {1}", _sessionId.Value, ex.ErrorCode ?? "unknown");
+            ChannelTelemetry.RecordSlackReplyFailed(_dependencies.TimeProvider.GetElapsedTime(startedAt).TotalMilliseconds);
+            return new PostResult(ex.Message, ex.FailureKind);
         }
         catch (Exception ex)
         {
             _log.Error(ex, "Failed posting Slack reply for session {0}", _sessionId.Value);
             ChannelTelemetry.RecordSlackReplyFailed(_dependencies.TimeProvider.GetElapsedTime(startedAt).TotalMilliseconds);
+            return new PostResult(ex.Message);
         }
     }
 
-    private async Task SafeUploadFileAsync(FileOutput file)
+    private async Task NotifyDeliveryFailedAsync(int turnNumber, DeliveryFailureKind failureKind, string errorMessage)
+    {
+        try
+        {
+            await _dependencies.Pipeline.SendFeedbackAsync(new DeliveryFailed
+            {
+                SessionId = _sessionId,
+                TurnNumber = turnNumber,
+                ChannelType = "slack",
+                FailureKind = failureKind,
+                ErrorMessage = errorMessage
+            });
+        }
+        catch (Exception ex)
+        {
+            _log.Error(ex, "Failed to send Slack delivery feedback to session");
+        }
+    }
+
+    private sealed record PostResult(string? ErrorMessage = null, DeliveryFailureKind? FailureKind = null)
+    {
+        public static readonly PostResult Ok = new();
+
+        public bool Success => ErrorMessage is null;
+
+        public bool ShouldNotifySession => FailureKind is DeliveryFailureKind.ContentRejected
+            or DeliveryFailureKind.MessageTooLarge
+            or DeliveryFailureKind.UnsupportedContent;
+    }
+
+    private async Task<PostResult> SafeUploadFileAsync(FileOutput file)
     {
         var startedAt = _dependencies.TimeProvider.GetTimestamp();
         try
@@ -496,7 +563,7 @@ internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStas
             if (!File.Exists(file.FilePath))
             {
                 _log.Warning("File not found for upload: {Path}", file.FilePath);
-                return;
+                return new PostResult($"File not found for upload: {file.FilePath}");
             }
 
             using var cts = new CancellationTokenSource(ReplyOperationTimeout);
@@ -509,16 +576,28 @@ internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStas
 
             _uploadedFileThisTurn = true;
             _log.Info("Uploaded file to Slack thread: {FileName}", file.FileName);
+            return PostResult.Ok;
         }
         catch (OperationCanceledException ex)
         {
             _log.Error(ex, "Timed out uploading file {FileName} to Slack thread", file.FileName);
             ChannelTelemetry.RecordSlackReplyFailed(_dependencies.TimeProvider.GetElapsedTime(startedAt).TotalMilliseconds);
+            return new PostResult($"Timed out uploading file: {ex.Message}");
+        }
+        catch (SlackMessageDeliveryException ex)
+        {
+            _log.Error(ex, "Slack rejected file upload {FileName} for session {SessionId} with error code {ErrorCode}",
+                file.FileName,
+                _sessionId.Value,
+                ex.ErrorCode ?? "unknown");
+            ChannelTelemetry.RecordSlackReplyFailed(_dependencies.TimeProvider.GetElapsedTime(startedAt).TotalMilliseconds);
+            return new PostResult(ex.Message, ex.FailureKind);
         }
         catch (Exception ex)
         {
             _log.Error(ex, "Failed to upload file {FileName} to Slack thread", file.FileName);
             ChannelTelemetry.RecordSlackReplyFailed(_dependencies.TimeProvider.GetElapsedTime(startedAt).TotalMilliseconds);
+            return new PostResult(ex.Message);
         }
     }
 
