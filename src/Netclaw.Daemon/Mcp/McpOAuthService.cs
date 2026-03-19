@@ -272,23 +272,30 @@ internal sealed class McpOAuthService
         if (!_stateToContext.TryGetValue(state, out var context))
             throw new InvalidOperationException($"Unknown OAuth state: {state}");
 
-        var result = await _pkceService.CompleteAuthorizationAsync(code, state, ct);
-
-        // Convert OAuthDeviceFlowResult → McpOAuthTokenSet for persistence
-        var tokenSet = new McpOAuthTokenSet
+        try
         {
-            AccessToken = result.AccessToken,
-            RefreshToken = result.RefreshToken,
-            ExpiresAt = result.ExpiresAt,
-            ClientId = context.ClientId,
-            McpServerUrl = context.ResourceIndicator,
-        };
+            var result = await _pkceService.CompleteAuthorizationAsync(code, state, ct);
 
-        _tokens[context.ServerName] = tokenSet;
-        PersistTokens();
+            // Convert OAuthDeviceFlowResult → McpOAuthTokenSet for persistence
+            var tokenSet = new McpOAuthTokenSet
+            {
+                AccessToken = result.AccessToken,
+                RefreshToken = result.RefreshToken,
+                ExpiresAt = result.ExpiresAt,
+                ClientId = context.ClientId,
+                McpServerUrl = context.ResourceIndicator,
+            };
 
-        _stateToContext.TryRemove(state, out _);
-        _logger.LogInformation("OAuth flow completed for MCP server '{Name}'", context.ServerName);
+            _tokens[context.ServerName] = tokenSet;
+            PersistTokens();
+
+            _logger.LogInformation("OAuth flow completed for MCP server '{Name}'", context.ServerName);
+        }
+        finally
+        {
+            // Always clean up context — whether success or failure
+            _stateToContext.TryRemove(state, out _);
+        }
     }
 
     // ── Token Access ───────────────────────────────────────────────────
@@ -414,11 +421,6 @@ internal sealed class McpOAuthService
             _ => McpOAuthFlowStatus.NotStarted,
         };
     }
-
-    /// <summary>
-    /// Get the completed flow result by PKCE state. Returns null if not complete.
-    /// </summary>
-    public OAuthDeviceFlowResult? GetFlowResult(string state) => _pkceService.GetFlowResult(state);
 
     // ── Private Helpers ────────────────────────────────────────────────
 

@@ -152,14 +152,8 @@ static async Task RunDaemonAsync(string[] args, DaemonRestartSignal restartSigna
     app.MapGet("/api/mcp/oauth/status-by-state/{state}", (string state, McpOAuthService oauthService) =>
     {
         var status = oauthService.GetFlowStatusByState(state);
-        var result = oauthService.GetFlowResult(state);
-        return Results.Ok(new
-        {
-            status = status.ToString(),
-            accessToken = result?.AccessToken.Value,
-            refreshToken = result?.RefreshToken?.Value,
-            expiresAt = result?.ExpiresAt?.ToString("o"),
-        });
+        // Tokens are persisted daemon-side — never expose them over HTTP.
+        return Results.Ok(new { status = status.ToString() });
     });
 
     // Provider OAuth endpoints (browser-based Authorization Code + PKCE)
@@ -481,7 +475,7 @@ static void ConfigureDaemonServices(
         var httpClient = sp.GetRequiredService<IHttpClientFactory>().CreateClient("ProviderOAuth");
         return new OAuthPkceService(httpClient);
     });
-    services.AddHttpClient<McpOAuthService>();
+    services.AddHttpClient(nameof(McpOAuthService));
     services.AddSingleton(sp => new McpOAuthService(
         sp.GetRequiredService<IHttpClientFactory>().CreateClient(nameof(McpOAuthService)),
         paths,

@@ -296,8 +296,9 @@ internal static class McpCommand
         writer.WriteLine();
 
         // 3. Start polling + listen for paste concurrently
+        writer.Write("Waiting for authorization");
         using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(5));
-        var pollTask = PollMcpOAuthStatusAsync(daemonApi, flowState, cts.Token);
+        var pollTask = PollMcpOAuthStatusAsync(daemonApi, flowState, writer, cts.Token);
         var pasteTask = ReadPasteRedirectAsync(daemonApi, writer, cts.Token);
 
         var completedTask = await Task.WhenAny(pollTask, pasteTask);
@@ -330,7 +331,7 @@ internal static class McpCommand
     }
 
     private static async Task<bool> PollMcpOAuthStatusAsync(
-        DaemonApi daemonApi, string state, CancellationToken ct)
+        DaemonApi daemonApi, string state, TextWriter writer, CancellationToken ct)
     {
         var pollInterval = TimeSpan.FromSeconds(2);
 
@@ -339,13 +340,22 @@ internal static class McpCommand
             try
             {
                 await Task.Delay(pollInterval, ct);
+                writer.Write(".");
+
                 var statusResponse = await daemonApi.GetMcpOAuthStatusByStateAsync(state, ct);
                 var status = statusResponse.GetProperty("status").GetString();
 
                 if (status is "Completed")
+                {
+                    writer.WriteLine();
                     return true;
+                }
+
                 if (status is "Failed")
+                {
+                    writer.WriteLine();
                     return false;
+                }
             }
             catch (OperationCanceledException)
             {
@@ -357,31 +367,25 @@ internal static class McpCommand
             }
         }
 
+        writer.WriteLine();
         return false;
     }
 
     private static async Task<bool> ReadPasteRedirectAsync(
         DaemonApi daemonApi, TextWriter writer, CancellationToken ct)
     {
+        // Skip paste fallback when stdin is redirected (CI, piped input)
+        if (Console.IsInputRedirected)
+            return false;
+
         try
         {
-            // Read from stdin on a background thread (Console.ReadLine blocks)
-            var line = await Task.Run(() =>
-            {
-                while (!ct.IsCancellationRequested)
-                {
-                    if (Console.KeyAvailable || !Console.IsInputRedirected)
-                    {
-                        var input = Console.ReadLine();
-                        if (!string.IsNullOrWhiteSpace(input))
-                            return input;
-                    }
-                }
+            // Read from stdin on a background thread (Console.ReadLine blocks
+            // and does not respect cancellation, so the thread will outlive
+            // the CancellationToken — this is acceptable for a CLI command).
+            var line = await Task.Run(Console.ReadLine, ct);
 
-                return null;
-            }, ct);
-
-            if (line is null)
+            if (string.IsNullOrWhiteSpace(line))
                 return false;
 
             if (!OAuthRedirectParser.TryParse(line, out var code, out var state, out var error))

@@ -127,11 +127,7 @@ public sealed class OAuthPkceService
             ["redirect_uri"] = redirectUri,
         };
 
-        if (extraParams is not null)
-        {
-            foreach (var (key, value) in extraParams)
-                tokenParams[key] = value;
-        }
+        MergeExtraParams(tokenParams, extraParams);
 
         var response = await _httpClient.PostAsync(
             tokenEndpoint,
@@ -163,11 +159,7 @@ public sealed class OAuthPkceService
             ["refresh_token"] = refreshToken.Value,
         };
 
-        if (extraParams is not null)
-        {
-            foreach (var (key, value) in extraParams)
-                tokenParams[key] = value;
-        }
+        MergeExtraParams(tokenParams, extraParams);
 
         var response = await _httpClient.PostAsync(
             tokenEndpoint,
@@ -283,6 +275,25 @@ public sealed class OAuthPkceService
     public OAuthDeviceFlowResult? GetFlowResult(string state)
     {
         return _completedFlows.TryGetValue(state, out var result) ? result : null;
+    }
+
+    // ── Extra Params ──────────────────────────────────────────────────
+
+    // OAuth grant parameters that must not be overridden by extraParams.
+    private static readonly HashSet<string> ReservedTokenParamKeys = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "grant_type", "client_id", "code", "code_verifier", "redirect_uri", "refresh_token",
+    };
+
+    private static void MergeExtraParams(
+        Dictionary<string, string> target, IReadOnlyDictionary<string, string>? extraParams)
+    {
+        if (extraParams is null) return;
+        foreach (var (key, value) in extraParams)
+        {
+            if (!ReservedTokenParamKeys.Contains(key))
+                target[key] = value;
+        }
     }
 
     // ── PKCE Helpers ───────────────────────────────────────────────────

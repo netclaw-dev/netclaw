@@ -176,8 +176,56 @@ public sealed class OAuthFlowCoordinator : IDisposable
 
     // ── Browser Authorization Code + PKCE flow ───────────────────────
 
-    private async Task RunBrowserFlowAsync(
+    private Task RunBrowserFlowAsync(
         string providerType, Action<OAuthDeviceFlowResult>? onSuccess, CancellationToken ct)
+    {
+        return RunBrowserFlowCoreAsync(
+            startFlow: async token => await _daemonApi!.StartProviderOAuthAsync(providerType, token),
+            pollStatus: (state, token) => _daemonApi!.GetProviderOAuthStatusAsync(state, token),
+            parseResult: statusResponse =>
+            {
+                var accessToken = statusResponse.TryGetProperty("accessToken", out var atProp)
+                    ? atProp.GetString() : null;
+                var refreshToken = statusResponse.TryGetProperty("refreshToken", out var rtProp)
+                    ? rtProp.GetString() : null;
+                var expiresAt = statusResponse.TryGetProperty("expiresAt", out var expProp)
+                    ? expProp.GetString() : null;
+
+                if (!string.IsNullOrEmpty(accessToken))
+                {
+                    return new OAuthDeviceFlowResult(
+                        new SensitiveString(accessToken),
+                        refreshToken is not null ? new SensitiveString(refreshToken) : null,
+                        expiresAt is not null ? DateTimeOffset.Parse(expiresAt) : null);
+                }
+
+                return null;
+            },
+            onSuccess,
+            ct);
+    }
+
+    private Task RunMcpBrowserFlowAsync(
+        string serverName, Action<OAuthDeviceFlowResult>? onSuccess, CancellationToken ct)
+    {
+        return RunBrowserFlowCoreAsync(
+            startFlow: async token => await _daemonApi!.StartMcpOAuthAsync(serverName, token),
+            pollStatus: (state, token) => _daemonApi!.GetMcpOAuthStatusByStateAsync(state, token),
+            parseResult: _ => null, // MCP tokens are persisted daemon-side
+            onSuccess,
+            ct);
+    }
+
+    /// <summary>
+    /// Shared browser PKCE flow: start → open browser → poll for completion.
+    /// Parameterized by delegates so provider and MCP flows share the same logic.
+    /// </summary>
+    private async Task RunBrowserFlowCoreAsync(
+        Func<CancellationToken, Task<HttpResponseMessage>> startFlow,
+        Func<string, CancellationToken, Task<JsonElement>> pollStatus,
+        Func<JsonElement, OAuthDeviceFlowResult?> parseResult,
+        Action<OAuthDeviceFlowResult>? onSuccess,
+        CancellationToken ct)
     {
         if (_daemonApi is null)
         {
@@ -190,7 +238,7 @@ public sealed class OAuthFlowCoordinator : IDisposable
         try
         {
             // Step 1: Ask daemon to start the OAuth flow
-            var startResponse = await _daemonApi.StartProviderOAuthAsync(providerType, ct);
+            var startResponse = await startFlow(ct);
 
             if (!startResponse.IsSuccessStatusCode)
             {
@@ -235,149 +283,12 @@ public sealed class OAuthFlowCoordinator : IDisposable
                 await Task.Delay(pollInterval, ct);
                 elapsed += pollInterval;
 
-                var statusResponse = await _daemonApi.GetProviderOAuthStatusAsync(flowState, ct);
+                var statusResponse = await pollStatus(flowState, ct);
 
                 var status = statusResponse.GetProperty("status").GetString();
                 if (status is "Completed")
                 {
-                    var accessToken = statusResponse.TryGetProperty("accessToken", out var atProp)
-                        ? atProp.GetString() : null;
-                    var refreshToken = statusResponse.TryGetProperty("refreshToken", out var rtProp)
-                        ? rtProp.GetString() : null;
-                    var expiresAt = statusResponse.TryGetProperty("expiresAt", out var expProp)
-                        ? expProp.GetString() : null;
-
-                    if (!string.IsNullOrEmpty(accessToken))
-                    {
-                        Result = new OAuthDeviceFlowResult(
-                            new SensitiveString(accessToken),
-                            refreshToken is not null ? new SensitiveString(refreshToken) : null,
-                            expiresAt is not null ? DateTimeOffset.Parse(expiresAt) : null);
-                    }
-
-                    FlowState.Value = DeviceFlowState.Succeeded;
-                    _requestRedraw();
-                    onSuccess?.Invoke(Result!);
-                    return;
-                }
-
-                if (status is "Failed")
-                {
-                    ErrorMessage = "Authorization failed.";
-                    FlowState.Value = DeviceFlowState.Error;
-                    _requestRedraw();
-                    return;
-                }
-            }
-
-            ErrorMessage = "Authorization timed out after 5 minutes.";
-            FlowState.Value = DeviceFlowState.Expired;
-            _requestRedraw();
-        }
-        catch (OperationCanceledException)
-        {
-            FlowState.Value = DeviceFlowState.Cancelled;
-            _requestRedraw();
-        }
-        catch (HttpRequestException)
-        {
-            ErrorMessage = "Could not reach the daemon. Is it running?";
-            FlowState.Value = DeviceFlowState.Error;
-            _requestRedraw();
-        }
-        catch (Exception ex)
-        {
-            ErrorMessage = ex.Message;
-            FlowState.Value = DeviceFlowState.Error;
-            _requestRedraw();
-        }
-        finally
-        {
-            Cancel();
-        }
-    }
-
-    // ── MCP Browser Authorization Code + PKCE flow ────────────────────
-
-    private async Task RunMcpBrowserFlowAsync(
-        string serverName, Action<OAuthDeviceFlowResult>? onSuccess, CancellationToken ct)
-    {
-        if (_daemonApi is null)
-        {
-            ErrorMessage = "Daemon API not available.";
-            FlowState.Value = DeviceFlowState.Error;
-            _requestRedraw();
-            return;
-        }
-
-        try
-        {
-            // Step 1: Ask daemon to start the MCP OAuth flow
-            var startResponse = await _daemonApi.StartMcpOAuthAsync(serverName, ct);
-
-            if (!startResponse.IsSuccessStatusCode)
-            {
-                var errorBody = await startResponse.Content.ReadAsStringAsync(ct);
-                ErrorMessage = $"Failed to start OAuth flow: {errorBody}";
-                FlowState.Value = DeviceFlowState.Error;
-                _requestRedraw();
-                return;
-            }
-
-            var startResult = await startResponse.Content.ReadFromJsonAsync<JsonElement>(ct);
-            var authUrl = startResult.GetProperty("authorizationUrl").GetString()!;
-            var flowState = startResult.GetProperty("state").GetString()!;
-
-            // Step 2: Try to open browser (detect headless first)
-            VerificationUri = authUrl;
-            BrowserOpenFailed = !BrowserDetection.CanOpenBrowser();
-            FlowState.Value = DeviceFlowState.WaitingForUser;
-            _requestRedraw();
-
-            if (!BrowserOpenFailed)
-            {
-                try
-                {
-                    Process.Start(new ProcessStartInfo(authUrl) { UseShellExecute = true });
-                }
-                catch
-                {
-                    BrowserOpenFailed = true;
-                    _requestRedraw();
-                }
-            }
-
-            // Step 3: Poll daemon for completion (state-based)
-            var pollTimeout = TimeSpan.FromMinutes(5);
-            var pollInterval = TimeSpan.FromSeconds(2);
-            var elapsed = TimeSpan.Zero;
-
-            while (elapsed < pollTimeout)
-            {
-                ct.ThrowIfCancellationRequested();
-                await Task.Delay(pollInterval, ct);
-                elapsed += pollInterval;
-
-                var statusResponse = await _daemonApi.GetMcpOAuthStatusByStateAsync(flowState, ct);
-
-                var status = statusResponse.GetProperty("status").GetString();
-                if (status is "Completed")
-                {
-                    var accessToken = statusResponse.TryGetProperty("accessToken", out var atProp)
-                        ? atProp.GetString() : null;
-                    var refreshToken = statusResponse.TryGetProperty("refreshToken", out var rtProp)
-                        ? rtProp.GetString() : null;
-                    var expiresAt = statusResponse.TryGetProperty("expiresAt", out var expProp)
-                        ? expProp.GetString() : null;
-
-                    if (!string.IsNullOrEmpty(accessToken))
-                    {
-                        Result = new OAuthDeviceFlowResult(
-                            new SensitiveString(accessToken),
-                            refreshToken is not null ? new SensitiveString(refreshToken) : null,
-                            expiresAt is not null ? DateTimeOffset.Parse(expiresAt) : null);
-                    }
-
+                    Result = parseResult(statusResponse);
                     FlowState.Value = DeviceFlowState.Succeeded;
                     _requestRedraw();
                     onSuccess?.Invoke(Result!);
