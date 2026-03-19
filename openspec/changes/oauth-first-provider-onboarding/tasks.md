@@ -1,14 +1,14 @@
 ## 1. Onboarding Decision Tree Foundation
 
-- [ ] 1.1 Add provider onboarding branch state model for Termina wizard (provider selection, auth method, model discovery path)
-- [ ] 1.2 Implement branch transition guards so back-navigation recalculates and clears invalid downstream values
-- [ ] 1.3 Render branch context indicators in Termina (`provider`, `auth method`, `model source`) and verify updates on branch changes
+- [x] 1.1 Add provider onboarding branch state model for Termina wizard (provider selection, auth method, model discovery path)
+- [x] 1.2 Implement branch transition guards so back-navigation recalculates and clears invalid downstream values
+- [x] 1.3 Render branch context indicators in Termina (`provider`, `auth method`, `model source`) and verify updates on branch changes
 
 ## 2. OAuth Device Flow Branch
 
-- [ ] 2.1 Add OAuth-capable provider profile metadata and auth-method resolver (`oauth-device` vs `api-key`)
-- [ ] 2.2 Implement OAuth device flow sequence (`start`, `show code`, `poll`, `success`, `denied/expired/cancel`) with retry and branch-switch actions
-- [ ] 2.3 Persist OAuth auth artifacts through existing secret-safe config pipeline and verify redaction in logs/output
+- [x] 2.1 Add OAuth-capable provider profile metadata and auth-method resolver (`oauth-device` vs `api-key`)
+- [x] 2.2 Implement OAuth device flow sequence (`start`, `show code`, `poll`, `success`, `denied/expired/cancel`) with retry and branch-switch actions
+- [x] 2.3 Persist OAuth auth artifacts through existing secret-safe config pipeline and verify redaction in logs/output
 
 ## 3. Model Discovery Fallback Paths
 
