@@ -60,6 +60,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     private readonly List<AITool> _availableTools = new();
     private MessageSource? _currentTurnSource;
     private readonly ToolRegistry? _fullRegistry;
+    private readonly ToolAccessPolicy? _toolAccessPolicy;
+    private readonly TrustContextDeriver? _trustContextDeriver;
     private int _baseToolCount; // count of always-loaded tools; dynamic tools appended after this
     private readonly List<string> _discoveredToolOrder = new();
     private readonly Dictionary<string, int> _discoveredToolLeases = new(StringComparer.Ordinal);
@@ -117,6 +119,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     private string? _activeMessageId;
     private Channels.ChannelType? _activeChannelType;
     private AutomaticRecallResult? _activeRecall;
+    private EffectiveTrustContext? _currentTrustContext;
 
     // Startup context layers: injected on first LLM call, re-injected after compaction
     private bool _startupContextInjected;
@@ -144,6 +147,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         IToolExecutor? toolExecutor = null,
         IToolAuditLogger? auditLogger = null,
         ToolRegistry? toolRegistry = null,
+        ToolAccessPolicy? toolAccessPolicy = null,
         IMemoryExtractor? memoryExtractor = null,
         IMemoryRecallCoordinator? memoryRecallCoordinator = null,
         IMemoryCheckpointSink? memoryCheckpointSink = null,
@@ -151,6 +155,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         IReadOnlyList<IContextLayerProvider>? contextLayers = null,
         NetclawPaths? paths = null,
         Telemetry.ISessionMetrics? sessionMetrics = null,
+        TrustContextDeriver? trustContextDeriver = null,
         ISessionLifecycleObserver? lifecycleObserver = null,
         Memory.SQLiteMemoryStore? memoryStore = null)
     {
@@ -167,6 +172,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         _contextLayers = contextLayers ?? [];
         _toolExecutor = toolExecutor;
         _auditLogger = auditLogger;
+        _toolAccessPolicy = toolAccessPolicy;
         _memoryExtractor = memoryExtractor ?? NullMemoryExtractor.Instance;
         _memoryRecallCoordinator = memoryRecallCoordinator ?? NullMemoryRecallCoordinator.Instance;
         _memoryCheckpointSink = memoryCheckpointSink ?? NullMemoryCheckpointSink.Instance;
@@ -174,6 +180,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         _timeProvider = timeProvider ?? TimeProvider.System;
         _sessionsBasePath = paths?.SessionsDirectory;
         _sessionLogsBasePath = paths?.SessionsDirectory;
+        _trustContextDeriver = trustContextDeriver;
         PersistenceId = $"session-{entityId}";
 
         // Enrich logger with session context — all log messages automatically include SessionId
@@ -275,6 +282,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         {
             ClearDeliveryRetryState();
             _currentTurnSource = cmd.Source;
+            _currentTrustContext = _trustContextDeriver?.Derive(cmd.Source);
             BindTurnTelemetry(cmd.Source);
             TurnLog().Info(
                 "turn_received channel={ChannelType} sender={SenderId} hasMedia={HasMedia} textChars={TextLength}",
@@ -1342,7 +1350,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 timeout: toolExecutionTimeout,
                 cancellationToken: ct);
 
-        _ = ExecuteToolsAsync(executor, toolCalls, sessionId, auditLogger, tp, sessionDir, maxInlineToolResultChars, toolExecutionTimeout, self, emitSubAgentOutput, spawnChildActor);
+        _ = ExecuteToolsAsync(executor, toolCalls, sessionId, _currentTurnSource, auditLogger, tp, sessionDir, maxInlineToolResultChars, toolExecutionTimeout, self, emitSubAgentOutput, spawnChildActor);
     }
 
     private void HandleTextResponse(
@@ -1970,12 +1978,13 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         var client = _chatClient;
         var timeout = TimeSpan.FromSeconds(Math.Max(1, _config.TurnLlmTimeoutSeconds));
 
+        var exposedTools = ResolveExposedToolsForCurrentTurn();
         ChatOptions? options = null;
-        if (!forceNoTools && _availableTools.Count > 0)
+        if (!forceNoTools && exposedTools.Count > 0)
         {
             options = new ChatOptions
             {
-                Tools = _availableTools.ToList()
+                Tools = exposedTools.ToList()
             };
         }
 
@@ -2071,6 +2080,14 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     private string CurrentMemoryBoundary()
         => _currentTurnSource?.Boundary
            ?? SecurityPolicyDefaults.ResolveBoundaryFromSessionId(_sessionId.Value, _currentTurnSource?.Audience ?? TrustAudience.Public);
+
+    private IReadOnlyList<AITool> ResolveExposedToolsForCurrentTurn()
+    {
+        if (_toolAccessPolicy is null || _fullRegistry is null || _availableTools.Count == 0)
+            return _availableTools;
+
+        return _toolAccessPolicy.FilterExposedTools(_availableTools, _fullRegistry, _currentTrustContext);
+    }
 
     private static string FormatRecallForHistory(AutomaticRecallResult recall)
     {
@@ -2269,6 +2286,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         IToolExecutor executor,
         List<FunctionCallContent> toolCalls,
         SessionId sessionId,
+        MessageSource? source,
         IToolAuditLogger? auditLogger,
         TimeProvider timeProvider,
         string sessionDir,
@@ -2287,6 +2305,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 executor,
                 tc,
                 sessionId,
+                source,
                 auditLogger,
                 timeProvider,
                 sessionDir,
@@ -2328,6 +2347,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         IToolExecutor executor,
         FunctionCallContent tc,
         SessionId sessionId,
+        MessageSource? source,
         IToolAuditLogger? auditLogger,
         TimeProvider timeProvider,
         string sessionDir,
@@ -2339,6 +2359,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         var sw = Stopwatch.StartNew();
         string resultText;
         var context = new Netclaw.Tools.ToolExecutionContext(sessionId.Value, sessionDir);
+        context.Audience = source is null ? null : source.Audience.ToWireValue();
+        context.Boundary = source?.Boundary;
+        context.ChannelType = source is null ? null : source.ChannelType.ToWireValue();
         context.SpawnChildActor = spawnChildActor;
         var completedRuns = new List<CompletedSubAgentRun>();
         var acceptedFindings = new List<AcceptedSubAgentFinding>();
@@ -2423,6 +2446,22 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 CallId = tc.CallId,
                 Timestamp = timeProvider.GetUtcNow(),
                 Allowed = true,
+                Duration = sw.Elapsed
+            });
+        }
+        catch (ToolAccessDeniedException ex)
+        {
+            sw.Stop();
+            resultText = $"Tool access denied: {ex.DenyReason}";
+
+            auditLogger?.Log(new ToolAuditEntry
+            {
+                SessionId = sessionId.Value,
+                ToolName = tc.Name,
+                CallId = tc.CallId,
+                Timestamp = timeProvider.GetUtcNow(),
+                Allowed = false,
+                DenyReason = ex.DenyReason,
                 Duration = sw.Elapsed
             });
         }

@@ -57,6 +57,12 @@ public sealed class ToolExecutionContext
         SessionDirectory = sessionDirectory;
     }
 
+    public string? Audience { get; set; }
+
+    public string? Boundary { get; set; }
+
+    public string? ChannelType { get; set; }
+
     /// <summary>
     /// Optional callback for tools that spawn subagents.
     /// The session wires this to relay notifications as <c>SubAgentOutput</c> events.

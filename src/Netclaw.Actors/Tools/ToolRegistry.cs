@@ -51,6 +51,9 @@ public sealed class ToolRegistry
     public INetclawTool? GetByName(string name) =>
         _tools.FirstOrDefault(t => t.Tool.Name == name)?.Tool;
 
+    public ToolRegistration? GetRegistrationByToolName(string name) =>
+        _tools.FirstOrDefault(t => t.Tool.Name == name);
+
     /// <summary>
     /// Returns tools that should always be loaded into the LLM context.
     /// All non-MCP tools are always loaded; MCP tools use dynamic discovery via search_tools.

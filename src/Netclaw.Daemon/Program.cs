@@ -419,8 +419,12 @@ static void ConfigureDaemonServices(
     services.AddSingleton<IMemoryExtractor>(NullMemoryExtractor.Instance);
 
     services.AddSingleton(toolRegistry);
+    services.AddSingleton<ToolAccessPolicy>();
     services.AddSingleton<IToolExecutor>(sp =>
-        new DispatchingToolExecutor(toolRegistry, sp.GetRequiredService<ILogger<DispatchingToolExecutor>>()));
+        new DispatchingToolExecutor(
+            toolRegistry,
+            sp.GetRequiredService<ToolAccessPolicy>(),
+            sp.GetRequiredService<ILogger<DispatchingToolExecutor>>()));
 
     // Operational notification webhooks
     var notificationsConfig = configuration.GetSection("Notifications")
