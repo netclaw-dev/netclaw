@@ -1,5 +1,6 @@
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
+using Netclaw.Configuration;
 
 namespace Netclaw.Daemon.Configuration;
 
@@ -8,21 +9,31 @@ namespace Netclaw.Daemon.Configuration;
 /// then fails over to a fallback if the primary throws after all retries
 /// are exhausted. Both primary and fallback should already be wrapped
 /// in their own retry/logging decorators.
+///
+/// Emits <c>provider.failover</c> alerts when the primary fails and we
+/// switch to the fallback, and <c>provider.unreachable</c> alerts when
+/// the fallback also fails.
 /// </summary>
 public sealed class FailoverChatClient : IChatClient
 {
     private readonly IChatClient _primary;
     private readonly IChatClient _fallback;
     private readonly ILogger _logger;
+    private readonly IOperationalNotificationSink _notificationSink;
+    private readonly TimeProvider _timeProvider;
 
     public FailoverChatClient(
         IChatClient primary,
         IChatClient fallback,
-        ILogger logger)
+        ILogger logger,
+        IOperationalNotificationSink notificationSink,
+        TimeProvider timeProvider)
     {
         _primary = primary;
         _fallback = fallback;
         _logger = logger;
+        _notificationSink = notificationSink;
+        _timeProvider = timeProvider;
     }
 
     public async Task<ChatResponse> GetResponseAsync(
@@ -38,7 +49,19 @@ public sealed class FailoverChatClient : IChatClient
         {
             _logger.LogWarning(ex,
                 "Primary LLM failed, failing over to fallback provider");
-            return await _fallback.GetResponseAsync(messages, options, cancellationToken);
+            EmitFailoverAlert(ex);
+
+            try
+            {
+                return await _fallback.GetResponseAsync(messages, options, cancellationToken);
+            }
+            catch (Exception fallbackEx) when (!cancellationToken.IsCancellationRequested)
+            {
+                _logger.LogError(fallbackEx,
+                    "Fallback LLM also failed — all providers unreachable");
+                EmitUnreachableAlert(fallbackEx);
+                throw;
+            }
         }
     }
 
@@ -66,7 +89,20 @@ public sealed class FailoverChatClient : IChatClient
         catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
         {
             primaryInitiationFailure = ex;
-            stream = _fallback.GetStreamingResponseAsync(messages, options, cancellationToken);
+            EmitFailoverAlert(ex);
+
+            IAsyncEnumerable<ChatResponseUpdate> fallbackStream;
+            try
+            {
+                fallbackStream = _fallback.GetStreamingResponseAsync(messages, options, cancellationToken);
+            }
+            catch (Exception fallbackEx) when (!cancellationToken.IsCancellationRequested)
+            {
+                EmitUnreachableAlert(fallbackEx);
+                throw;
+            }
+
+            stream = fallbackStream;
         }
 
         if (primaryInitiationFailure is not null)
@@ -111,9 +147,49 @@ public sealed class FailoverChatClient : IChatClient
 
         _logger.LogWarning(primaryPreFirstChunkFailure,
             "Primary LLM streaming failed before first chunk, failing over to fallback");
+        EmitFailoverAlert(primaryPreFirstChunkFailure);
 
-        await foreach (var fallbackUpdate in _fallback.GetStreamingResponseAsync(messages, options, cancellationToken))
+        IAsyncEnumerable<ChatResponseUpdate> preChunkFallbackStream;
+        try
+        {
+            preChunkFallbackStream = _fallback.GetStreamingResponseAsync(messages, options, cancellationToken);
+        }
+        catch (Exception fallbackEx) when (!cancellationToken.IsCancellationRequested)
+        {
+            EmitUnreachableAlert(fallbackEx);
+            throw;
+        }
+
+        await foreach (var fallbackUpdate in preChunkFallbackStream)
             yield return fallbackUpdate;
+    }
+
+    private void EmitFailoverAlert(Exception ex)
+    {
+        _notificationSink.Emit(new OperationalAlert
+        {
+            AlertId = Guid.NewGuid().ToString("N")[..12],
+            Type = "provider.failover",
+            Category = AlertType.ProviderFailover,
+            Summary = "Primary LLM provider failed, failing over to fallback",
+            Timestamp = _timeProvider.GetUtcNow(),
+            Severity = "warning",
+            Context = new Dictionary<string, string> { ["error"] = ex.Message }
+        });
+    }
+
+    private void EmitUnreachableAlert(Exception ex)
+    {
+        _notificationSink.Emit(new OperationalAlert
+        {
+            AlertId = Guid.NewGuid().ToString("N")[..12],
+            Type = "provider.unreachable",
+            Category = AlertType.ProviderUnreachable,
+            Summary = "All LLM providers failed — primary and fallback both unreachable",
+            Timestamp = _timeProvider.GetUtcNow(),
+            Severity = "critical",
+            Context = new Dictionary<string, string> { ["error"] = ex.Message }
+        });
     }
 
     public object? GetService(Type serviceType, object? serviceKey = null)

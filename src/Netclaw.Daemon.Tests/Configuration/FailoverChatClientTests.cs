@@ -1,5 +1,6 @@
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging.Abstractions;
+using Netclaw.Configuration;
 using Netclaw.Daemon.Configuration;
 using Xunit;
 
@@ -15,7 +16,7 @@ public sealed class FailoverChatClientTests
         var fallback = new FakeChatClient((_,_,_) =>
             Task.FromResult(new ChatResponse([new ChatMessage(ChatRole.Assistant, "fallback")])));
 
-        var client = new FailoverChatClient(primary, fallback, NullLogger.Instance);
+        var client = new FailoverChatClient(primary, fallback, NullLogger.Instance, NullNotificationSink.Instance, TimeProvider.System);
         var response = await client.GetResponseAsync([new ChatMessage(ChatRole.User, "hi")]);
 
         Assert.Equal("primary", response.Messages[0].Text);
@@ -29,7 +30,7 @@ public sealed class FailoverChatClientTests
         var fallback = new FakeChatClient((_,_,_) =>
             Task.FromResult(new ChatResponse([new ChatMessage(ChatRole.Assistant, "fallback")])));
 
-        var client = new FailoverChatClient(primary, fallback, NullLogger.Instance);
+        var client = new FailoverChatClient(primary, fallback, NullLogger.Instance, NullNotificationSink.Instance, TimeProvider.System);
         var response = await client.GetResponseAsync([new ChatMessage(ChatRole.User, "hi")]);
 
         Assert.Equal("fallback", response.Messages[0].Text);
@@ -43,7 +44,7 @@ public sealed class FailoverChatClientTests
         var fallback = new FakeChatClient((_,_,_) =>
             throw new HttpRequestException("fallback down"));
 
-        var client = new FailoverChatClient(primary, fallback, NullLogger.Instance);
+        var client = new FailoverChatClient(primary, fallback, NullLogger.Instance, NullNotificationSink.Instance, TimeProvider.System);
 
         var ex = await Assert.ThrowsAsync<HttpRequestException>(() =>
             client.GetResponseAsync([new ChatMessage(ChatRole.User, "hi")]));
@@ -61,7 +62,7 @@ public sealed class FailoverChatClientTests
         var fallback = new FakeChatClient((_,_,_) =>
             Task.FromResult(new ChatResponse([new ChatMessage(ChatRole.Assistant, "fallback")])));
 
-        var client = new FailoverChatClient(primary, fallback, NullLogger.Instance);
+        var client = new FailoverChatClient(primary, fallback, NullLogger.Instance, NullNotificationSink.Instance, TimeProvider.System);
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
             client.GetResponseAsync([new ChatMessage(ChatRole.User, "hi")],
@@ -74,7 +75,7 @@ public sealed class FailoverChatClientTests
         var primary = new FakeChatClient(streaming: true);
         var fallback = new FakeChatClient(streaming: true);
 
-        var client = new FailoverChatClient(primary, fallback, NullLogger.Instance);
+        var client = new FailoverChatClient(primary, fallback, NullLogger.Instance, NullNotificationSink.Instance, TimeProvider.System);
 
         var updates = new List<ChatResponseUpdate>();
         await foreach (var u in client.GetStreamingResponseAsync(
@@ -100,7 +101,7 @@ public sealed class FailoverChatClientTests
             return SingleTextUpdateAsync("fallback", ct);
         });
 
-        var client = new FailoverChatClient(primary, fallback, NullLogger.Instance);
+        var client = new FailoverChatClient(primary, fallback, NullLogger.Instance, NullNotificationSink.Instance, TimeProvider.System);
 
         var updates = new List<ChatResponseUpdate>();
         await foreach (var u in client.GetStreamingResponseAsync(
@@ -127,7 +128,7 @@ public sealed class FailoverChatClientTests
             return SingleTextUpdateAsync("fallback", ct);
         });
 
-        var client = new FailoverChatClient(primary, fallback, NullLogger.Instance);
+        var client = new FailoverChatClient(primary, fallback, NullLogger.Instance, NullNotificationSink.Instance, TimeProvider.System);
         var updates = new List<ChatResponseUpdate>();
 
         var ex = await Assert.ThrowsAsync<HttpRequestException>(async () =>

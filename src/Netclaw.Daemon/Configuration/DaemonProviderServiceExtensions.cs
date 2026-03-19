@@ -30,7 +30,7 @@ public static class DaemonProviderServiceExtensions
         // Retry policy (TODO: make configurable via netclaw.json Resilience section)
         services.AddSingleton(new RetryPolicy());
 
-        // Raw provider → Resilient decorator (Logging → Retry → Failover)
+        // Raw provider → Resilient decorator (Logging → Retry → Failover → Alerting)
         services.AddSingleton<IChatClientProvider>(sp =>
         {
             var raw = new NetclawChatClientProvider(
@@ -40,6 +40,7 @@ public static class DaemonProviderServiceExtensions
                 sp.GetRequiredService<RetryPolicy>(),
                 models,
                 sp.GetRequiredService<ILoggerFactory>(),
+                sp.GetRequiredService<IOperationalNotificationSink>(),
                 sp.GetService<TimeProvider>());
         });
 

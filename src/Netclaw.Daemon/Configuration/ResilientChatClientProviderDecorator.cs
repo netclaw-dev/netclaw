@@ -7,7 +7,8 @@ namespace Netclaw.Daemon.Configuration;
 /// <summary>
 /// Wraps an <see cref="IChatClientProvider"/> and decorates each client with
 /// logging and retry. For the <see cref="ModelRole.Main"/> role, additionally
-/// wraps in <see cref="FailoverChatClient"/> if a distinct fallback is configured.
+/// wraps in <see cref="FailoverChatClient"/> if a distinct fallback is configured,
+/// or <see cref="AlertingChatClientDecorator"/> for single-provider setups.
 /// </summary>
 public sealed class ResilientChatClientProviderDecorator : IChatClientProvider
 {
@@ -19,6 +20,7 @@ public sealed class ResilientChatClientProviderDecorator : IChatClientProvider
         RetryPolicy retryPolicy,
         ModelSelection models,
         ILoggerFactory loggerFactory,
+        IOperationalNotificationSink notificationSink,
         TimeProvider? timeProvider = null)
     {
         var tp = timeProvider ?? TimeProvider.System;
@@ -38,16 +40,17 @@ public sealed class ResilientChatClientProviderDecorator : IChatClientProvider
             if (!ReferenceEquals(rawFallback, rawMain))
             {
                 var decoratedFallback = Decorate(rawFallback, retryPolicy, retryLogger, loggingLogger, tp);
-                _main = new FailoverChatClient(decoratedMain, decoratedFallback, failoverLogger);
+                _main = new FailoverChatClient(
+                    decoratedMain, decoratedFallback, failoverLogger, notificationSink, tp);
             }
             else
             {
-                _main = decoratedMain;
+                _main = new AlertingChatClientDecorator(decoratedMain, notificationSink, tp);
             }
         }
         else
         {
-            _main = decoratedMain;
+            _main = new AlertingChatClientDecorator(decoratedMain, notificationSink, tp);
         }
 
         // Decorate compaction

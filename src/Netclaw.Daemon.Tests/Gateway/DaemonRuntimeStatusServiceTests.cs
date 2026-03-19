@@ -159,6 +159,7 @@ public sealed class DaemonRuntimeStatusServiceTests : IAsyncLifetime
             mcpServers,
             new ToolRegistry(),
             oauthService,
+            NullNotificationSink.Instance,
             TimeProvider.System,
             NullLogger<McpClientManager>.Instance);
 

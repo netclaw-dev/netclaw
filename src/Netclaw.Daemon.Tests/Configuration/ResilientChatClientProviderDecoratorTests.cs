@@ -31,7 +31,8 @@ public sealed class ResilientChatClientProviderDecoratorTests
             inner,
             Policy,
             models,
-            NullLoggerFactory.Instance);
+            NullLoggerFactory.Instance,
+            NullNotificationSink.Instance);
 
         var main = decorated.GetClient(ModelRole.Main);
         var fallbackRole = decorated.GetClient(ModelRole.Fallback);
@@ -58,11 +59,12 @@ public sealed class ResilientChatClientProviderDecoratorTests
             inner,
             Policy,
             models,
-            NullLoggerFactory.Instance);
+            NullLoggerFactory.Instance,
+            NullNotificationSink.Instance);
 
         var main = decorated.GetClient(ModelRole.Main);
 
-        Assert.IsType<LoggingChatClient>(main);
+        Assert.IsType<AlertingChatClientDecorator>(main);
         Assert.IsNotType<FailoverChatClient>(main);
         Assert.Same(main, decorated.GetClient(ModelRole.Fallback));
     }
@@ -84,12 +86,13 @@ public sealed class ResilientChatClientProviderDecoratorTests
             inner,
             Policy,
             models,
-            NullLoggerFactory.Instance);
+            NullLoggerFactory.Instance,
+            NullNotificationSink.Instance);
 
         var main = decorated.GetClient(ModelRole.Main);
         var compaction = decorated.GetClient(ModelRole.Compaction);
 
-        Assert.IsType<LoggingChatClient>(main);
+        Assert.IsType<AlertingChatClientDecorator>(main);
         Assert.IsType<LoggingChatClient>(compaction);
         Assert.NotSame(main, compaction);
     }

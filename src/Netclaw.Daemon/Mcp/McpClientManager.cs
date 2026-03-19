@@ -16,6 +16,7 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
     private readonly Dictionary<string, McpServerEntry> _serverEntries;
     private readonly ToolRegistry _toolRegistry;
     private readonly McpOAuthService _oauthService;
+    private readonly IOperationalNotificationSink _notificationSink;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<McpClientManager> _logger;
 
@@ -43,12 +44,14 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         Dictionary<string, McpServerEntry> serverEntries,
         ToolRegistry toolRegistry,
         McpOAuthService oauthService,
+        IOperationalNotificationSink notificationSink,
         TimeProvider timeProvider,
         ILogger<McpClientManager> logger)
     {
         _serverEntries = serverEntries;
         _toolRegistry = toolRegistry;
         _oauthService = oauthService;
+        _notificationSink = notificationSink;
         _timeProvider = timeProvider;
         _logger = logger;
     }
@@ -401,6 +404,19 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
             _sessionScopedServers.TryRemove(name, out _);
             _statuses[name] = new McpServerStatus(name, McpConnectionState.Error, 0, ex.Message);
             _logger.LogWarning(ex, "Failed to connect to MCP server '{Name}'", name);
+
+            _notificationSink.Emit(new OperationalAlert
+            {
+                AlertId = Guid.NewGuid().ToString("N")[..12],
+                Type = "mcp.server.disconnected",
+                Category = AlertType.McpServerDisconnected,
+                Summary = $"MCP server '{name}' connection failed: {ex.Message}",
+                Timestamp = _timeProvider.GetUtcNow(),
+                Severity = "warning",
+                Source = name,
+                Context = new Dictionary<string, string> { ["serverName"] = name }
+            });
+
             return false;
         }
     }
@@ -431,6 +447,19 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
                     _statuses[name] = new McpServerStatus(name, McpConnectionState.AwaitingAuth, 0,
                         "OAuth required. Run: netclaw mcp auth " + name);
                     _logger.LogWarning("MCP server '{Name}' requires OAuth authorization", name);
+
+                    _notificationSink.Emit(new OperationalAlert
+                    {
+                        AlertId = Guid.NewGuid().ToString("N")[..12],
+                        Type = "mcp.auth.expired",
+                        Category = AlertType.McpAuthExpired,
+                        Summary = $"MCP server '{name}' requires OAuth authorization. Run: netclaw mcp auth {name}",
+                        Timestamp = _timeProvider.GetUtcNow(),
+                        Severity = "warning",
+                        Source = name,
+                        Context = new Dictionary<string, string> { ["serverName"] = name }
+                    });
+
                     return null;
                 }
             }

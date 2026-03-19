@@ -59,8 +59,10 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
     private SelectionListNode<string>? _browserAutomationBackendList;
     private int _browserAutomationSubStep; // 0=enable/disable, 1=backend selection
 
-    // Step 7: Exposure
+    // Step 7: Exposure + Notifications
     private SelectionListNode<string>? _exposureList;
+    private TextInputNode? _webhookUrlInput;
+    private int _exposureSubStep; // 0=exposure mode, 1=webhook URL
 
     // Step 8: Identity
     private TextInputNode? _agentNameInput;
@@ -257,8 +259,10 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
                 WizardStep.BrowserAutomation when _browserAutomationSubStep == 1 =>
                     "  Playwright MCP is the default no-sudo path. Chrome DevTools is enabled only when a local Chrome executable is detected.",
 
-                WizardStep.Exposure =>
+                WizardStep.Exposure when _exposureSubStep == 0 =>
                     "  Local-only is recommended for homelab use.",
+                WizardStep.Exposure when _exposureSubStep == 1 =>
+                    "  Optional. Receive alerts when MCP servers disconnect or LLM providers fail. Press Enter to skip.",
                 WizardStep.Identity when _identitySubStep == 0 =>
                     "  Give your assistant a name, or keep the default.",
                 WizardStep.Identity when _identitySubStep == 1 =>
@@ -1138,6 +1142,16 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
 
     private ILayoutNode BuildExposureStep()
     {
+        return _exposureSubStep switch
+        {
+            0 => BuildExposureModeSubStep(),
+            1 => BuildWebhookUrlSubStep(),
+            _ => Layouts.Empty()
+        };
+    }
+
+    private ILayoutNode BuildExposureModeSubStep()
+    {
         _exposureList = Layouts.SelectionList(
                 "Local only (recommended for homelab)",
                 "Tailscale (configure later)",
@@ -1154,7 +1168,7 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
                 if (selected.Count > 0)
                 {
                     ViewModel.ExposureMode = selected[0];
-                    ViewModel.GoNext();
+                    SetExposureSubStep(1);
                 }
             })
             .DisposeWith(_stepSubs);
@@ -1162,6 +1176,43 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
         return Layouts.Vertical()
             .WithChild(new TextNode("  Network exposure:").WithForeground(Color.White))
             .WithChild(_exposureList);
+    }
+
+    private ILayoutNode BuildWebhookUrlSubStep()
+    {
+        _webhookUrlInput = new TextInputNode()
+            .WithPlaceholder("https://hooks.slack.com/services/...");
+
+        if (!string.IsNullOrWhiteSpace(ViewModel.WebhookUrl))
+            _webhookUrlInput.Text = ViewModel.WebhookUrl;
+
+        _webhookUrlInput.OnFocused();
+        _lastFocusedInput = _webhookUrlInput;
+
+        _webhookUrlInput.Submitted
+            .Subscribe(text =>
+            {
+                ViewModel.WebhookUrl = string.IsNullOrWhiteSpace(text) ? null : text;
+                ViewModel.GoNext();
+            })
+            .DisposeWith(_stepSubs);
+
+        return Layouts.Vertical()
+            .WithChild(new TextNode("  Notification webhook URL (optional):").WithForeground(Color.White))
+            .WithChild(new PanelNode()
+                .WithTitle("Webhook")
+                .WithBorder(BorderStyle.Rounded)
+                .WithBorderColor(Color.Gray)
+                .WithContent(_webhookUrlInput)
+                .Height(3));
+    }
+
+    private void SetExposureSubStep(int step)
+    {
+        _exposureSubStep = step;
+        _stepContentNode?.Invalidate();
+        _helpTextNode?.Invalidate();
+        ViewModel.RequestRedraw();
     }
 
     private ILayoutNode BuildIdentityStep()
@@ -1411,6 +1462,12 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             return true;
         }
 
+        if (ViewModel.CurrentStep.Value == WizardStep.Exposure && _exposureSubStep > 0)
+        {
+            SetExposureSubStep(_exposureSubStep - 1);
+            return true;
+        }
+
         if (ViewModel.CurrentStep.Value == WizardStep.Identity && _identitySubStep > 0)
         {
             SetIdentitySubStep(_identitySubStep - 1);
@@ -1514,7 +1571,7 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             WizardStep.Search when _searchSubStep == 0 => _searchBackendList,
             WizardStep.BrowserAutomation when _browserAutomationSubStep == 0 => _browserAutomationEnabledList,
             WizardStep.BrowserAutomation when _browserAutomationSubStep == 1 => _browserAutomationBackendList,
-            WizardStep.Exposure => _exposureList,
+            WizardStep.Exposure when _exposureSubStep == 0 => _exposureList,
             WizardStep.Identity when _identitySubStep == 1 => _commStyleList,
             _ => null
         };
@@ -1535,6 +1592,7 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             WizardStep.Search when _searchSubStep == 1 && _braveApiKeyInput is not null => _braveApiKeyInput,
             WizardStep.Search when _searchSubStep == 1 => _searxngEndpointInput,
             WizardStep.Acl => _ownerIdentityInput,
+            WizardStep.Exposure when _exposureSubStep == 1 => _webhookUrlInput,
             WizardStep.Identity when _identitySubStep == 0 => _agentNameInput,
             WizardStep.Identity when _identitySubStep == 2 => _userNameInput,
             WizardStep.Identity when _identitySubStep == 3 => _timezoneInput,
@@ -1604,6 +1662,8 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
                     _searchSubStep = 0;
                 if (step == WizardStep.BrowserAutomation)
                     _browserAutomationSubStep = 0;
+                if (step == WizardStep.Exposure)
+                    _exposureSubStep = 0;
                 if (step == WizardStep.Identity)
                     _identitySubStep = 0;
 

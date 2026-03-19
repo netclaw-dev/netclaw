@@ -119,8 +119,9 @@ public partial class InitWizardViewModel : ReactiveViewModel
     public bool IsChromeDevToolsAvailable { get; }
     public string ChromeDevToolsUnavailableReason { get; }
 
-    // ── Step 7: Exposure ──
+    // ── Step 7: Exposure + Notifications ──
     public string? ExposureMode { get; set; }
+    public string? WebhookUrl { get; set; }
 
     // ── Step 8: Identity ──
     public string AgentName { get; set; } = "Netclaw";
@@ -906,6 +907,18 @@ public partial class InitWizardViewModel : ReactiveViewModel
 
         if (mcpServers.Count > 0)
             config["McpServers"] = mcpServers;
+
+        // Notifications section (optional webhook)
+        if (!string.IsNullOrWhiteSpace(WebhookUrl))
+        {
+            config["Notifications"] = new Dictionary<string, object>
+            {
+                ["Webhooks"] = new object[]
+                {
+                    new Dictionary<string, object> { ["Url"] = WebhookUrl }
+                }
+            };
+        }
 
         // Write identity files
         WriteIdentityFiles();

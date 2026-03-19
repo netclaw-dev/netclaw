@@ -439,6 +439,25 @@ static void ConfigureDaemonServices(
     services.AddSingleton<IToolExecutor>(sp =>
         new DispatchingToolExecutor(toolRegistry, sp.GetRequiredService<ILogger<DispatchingToolExecutor>>()));
 
+    // Operational notification webhooks
+    var notificationsConfig = configuration.GetSection("Notifications")
+        .Get<NotificationsConfig>() ?? new NotificationsConfig();
+    services.AddSingleton(notificationsConfig);
+
+    if (notificationsConfig.Webhooks.Count > 0)
+    {
+        services.AddHttpClient("Notifications");
+        services.AddSingleton<WebhookNotificationService>();
+        services.AddSingleton<IOperationalNotificationSink>(sp =>
+            sp.GetRequiredService<WebhookNotificationService>());
+        services.AddHostedService(sp =>
+            sp.GetRequiredService<WebhookNotificationService>());
+    }
+    else
+    {
+        services.AddSingleton<IOperationalNotificationSink>(NullNotificationSink.Instance);
+    }
+
     // MCP server lifecycle management
     var mcpServers = configuration.GetSection("McpServers")
         .Get<Dictionary<string, McpServerEntry>>() ?? new();

@@ -154,6 +154,51 @@
       },
       "additionalProperties": false
     },
+    "Notifications": {
+      "type": "object",
+      "description": "Operational alert notification configuration.",
+      "properties": {
+        "Webhooks": {
+          "type": "array",
+          "description": "Webhook targets for operational notifications. Empty = logging only.",
+          "items": {
+            "type": "object",
+            "properties": {
+              "Url": { "type": "string", "format": "uri" },
+              "Name": { "type": ["string", "null"] },
+              "Headers": {
+                "type": ["object", "null"],
+                "additionalProperties": { "type": "string" }
+              }
+            },
+            "required": ["Url"],
+            "additionalProperties": false
+          }
+        },
+        "DeduplicationWindowSeconds": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 3600,
+          "default": 300,
+          "description": "Minimum interval in seconds between duplicate alerts of the same type."
+        },
+        "MaxRetries": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10,
+          "default": 2,
+          "description": "Number of delivery retries per webhook target before giving up."
+        },
+        "TimeoutSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 60,
+          "default": 10,
+          "description": "HTTP timeout in seconds for each webhook POST attempt."
+        }
+      },
+      "additionalProperties": false
+    },
     "McpServers": {
       "type": "object",
       "description": "MCP server profiles keyed by name.",

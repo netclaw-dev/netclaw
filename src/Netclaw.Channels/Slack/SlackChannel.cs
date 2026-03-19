@@ -3,6 +3,7 @@ using Akka.Pattern;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Netclaw.Actors.Channels;
+using Netclaw.Configuration;
 using Netclaw.Security;
 using SlackNet;
 using SlackNet.Events;
@@ -20,6 +21,7 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
     private readonly IContentScanner _contentScanner;
     private readonly IPromptInjectionDetector _promptInjectionDetector;
     private readonly IHttpClientFactory _httpClientFactory;
+    private readonly IOperationalNotificationSink _notificationSink;
     private readonly TimeProvider _timeProvider;
     private readonly SlackChannelOptions _options;
     private readonly ILogger<SlackChannel> _logger;
@@ -38,6 +40,7 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
         IContentScanner contentScanner,
         IPromptInjectionDetector? promptInjectionDetector,
         IHttpClientFactory httpClientFactory,
+        IOperationalNotificationSink notificationSink,
         TimeProvider timeProvider,
         SlackChannelOptions options,
         ILogger<SlackChannel> logger)
@@ -50,6 +53,7 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
         _contentScanner = contentScanner;
         _promptInjectionDetector = promptInjectionDetector ?? new NullPromptInjectionDetector();
         _httpClientFactory = httpClientFactory;
+        _notificationSink = notificationSink;
         _timeProvider = timeProvider;
         _options = options;
         _logger = logger;
@@ -93,31 +97,49 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
         if (!_options.SocketMode)
             throw new InvalidOperationException("Slack channel currently supports Socket Mode only.");
 
-        var auth = await _slack.Auth.Test(cancellationToken);
-        _botUserId = !string.IsNullOrWhiteSpace(auth.UserId) ? new SlackUserId(auth.UserId) : null;
-        var resolvedChannelId = await ResolveDefaultChannelIdAsync(cancellationToken);
-        _defaultChannelId = resolvedChannelId is not null ? new SlackChannelId(resolvedChannelId) : null;
+        try
+        {
+            var auth = await _slack.Auth.Test(cancellationToken);
+            _botUserId = !string.IsNullOrWhiteSpace(auth.UserId) ? new SlackUserId(auth.UserId) : null;
+            var resolvedChannelId = await ResolveDefaultChannelIdAsync(cancellationToken);
+            _defaultChannelId = resolvedChannelId is not null ? new SlackChannelId(resolvedChannelId) : null;
 
-        var httpClient = _httpClientFactory.CreateClient("slack-files");
+            var httpClient = _httpClientFactory.CreateClient("slack-files");
 
-        _gateway = _system.ActorOf(
-            SlackGatewayActor.CreateProps(new SlackGatewayDependencies(
-                Pipeline: _pipeline,
-                ActorSystem: _system,
-                TimeProvider: _timeProvider,
-                Options: _options,
-                BotUserId: _botUserId,
-                DefaultChannelId: _defaultChannelId,
-                ReplyClient: _replyClient,
-                ContentScanner: _contentScanner,
-                HttpClient: httpClient,
-                PromptInjectionDetector: _promptInjectionDetector)),
-            "slack-gateway");
+            _gateway = _system.ActorOf(
+                SlackGatewayActor.CreateProps(new SlackGatewayDependencies(
+                    Pipeline: _pipeline,
+                    ActorSystem: _system,
+                    TimeProvider: _timeProvider,
+                    Options: _options,
+                    BotUserId: _botUserId,
+                    DefaultChannelId: _defaultChannelId,
+                    ReplyClient: _replyClient,
+                    ContentScanner: _contentScanner,
+                    HttpClient: httpClient,
+                    PromptInjectionDetector: _promptInjectionDetector)),
+                "slack-gateway");
 
-        await _socketModeClient.Connect(cancellationToken: cancellationToken);
-        _connected = true;
+            await _socketModeClient.Connect(cancellationToken: cancellationToken);
+            _connected = true;
 
-        _logger.LogInformation("Slack channel connected as user {BotUserId}.", _botUserId);
+            _logger.LogInformation("Slack channel connected as user {BotUserId}.", _botUserId);
+        }
+        catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+        {
+            _notificationSink.Emit(new OperationalAlert
+            {
+                AlertId = Guid.NewGuid().ToString("N")[..12],
+                Type = "channel.disconnected",
+                Category = AlertType.ChannelDisconnected,
+                Summary = $"Slack channel failed to connect: {ex.Message}",
+                Timestamp = _timeProvider.GetUtcNow(),
+                Severity = "warning",
+                Source = "slack",
+                Context = new Dictionary<string, string> { ["channel"] = "slack" }
+            });
+            throw;
+        }
     }
 
     public async Task StopAsync(CancellationToken cancellationToken)

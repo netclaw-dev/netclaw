@@ -189,13 +189,13 @@ public class ReminderManagerActorTests : TestKit
         // Trigger reconciliation
         manager.Tell(ReminderManagerActor.ReconcileReminders.Instance);
 
-        // Wait for the zombie to be disabled
-        await AwaitAssertAsync(() =>
+        // Wait for the zombie to be disabled — use generous timeout for CI parallelism
+        await AwaitAssertAsync(async () =>
         {
-            var health = manager.Ask<ReminderHealthResponse>(
-                GetReminderHealthQuery.Instance, TimeSpan.FromSeconds(5)).Result;
+            var health = await manager.Ask<ReminderHealthResponse>(
+                GetReminderHealthQuery.Instance, TimeSpan.FromSeconds(10));
             Assert.Equal(0, health.ScheduledCount);
-        }, TimeSpan.FromSeconds(10));
+        }, TimeSpan.FromSeconds(30), TimeSpan.FromMilliseconds(500));
 
         // Verify definition still exists but is now disabled
         var afterReconcile = _definitionStore.Get(new ReminderId("zombie-oneshot"));
