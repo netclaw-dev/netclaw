@@ -91,6 +91,14 @@ public sealed record EffectivePolicyDefaults(
 
 public static class SecurityPolicyDefaults
 {
+    public const string PublicBoundary = "boundary:public";
+    public const string TeamBoundary = "boundary:team";
+    public const string PersonalBoundary = "boundary:personal";
+    public const string TrustedInstanceBoundary = "boundary:trusted-instance";
+    public const string SlackWorkspaceBoundary = TrustedInstanceBoundary;
+    public const string LocalDaemonBoundary = TrustedInstanceBoundary;
+    public const string LegacyRestrictedBoundary = "boundary:legacy-restricted";
+
     public static string ToWireValue(this TrustAudience audience) => audience switch
     {
         TrustAudience.Public => "public",
@@ -122,6 +130,72 @@ public static class SecurityPolicyDefaults
         audience = default;
         return false;
     }
+
+    public static string ResolveBoundary(string? boundary, string? channelType, TrustAudience audience)
+    {
+        if (!string.IsNullOrWhiteSpace(boundary))
+            return boundary.Trim();
+
+        return ResolveBoundaryFromChannelType(channelType, audience);
+    }
+
+    public static string ResolveBoundaryFromChannelType(string? channelType, TrustAudience audience)
+    {
+        if (!string.IsNullOrWhiteSpace(channelType))
+        {
+            switch (channelType.Trim().ToLowerInvariant())
+            {
+                case "slack":
+                    return TrustedInstanceBoundary;
+                case "signalr":
+                case "tui":
+                case "headless":
+                case "console":
+                case "reminder":
+                case "timer":
+                case "manual":
+                    return TrustedInstanceBoundary;
+            }
+        }
+
+        return ResolveBoundaryFromAudience(audience);
+    }
+
+    public static string ResolveBoundaryFromSessionId(string? sessionId, TrustAudience audience = TrustAudience.Public)
+    {
+        if (string.IsNullOrWhiteSpace(sessionId))
+            return ResolveBoundaryFromAudience(audience);
+
+        var slash = sessionId.IndexOf('/', StringComparison.Ordinal);
+        var prefix = slash > 0 ? sessionId[..slash] : sessionId;
+        return ResolveBoundaryFromChannelType(prefix, audience);
+    }
+
+    public static string InferLegacyBoundaryFromDomain(string? domain)
+    {
+        if (string.IsNullOrWhiteSpace(domain))
+            return LegacyRestrictedBoundary;
+
+        var normalized = domain.Trim().ToLowerInvariant();
+        if (normalized is "project:signalr" or "project:tui" or "project:headless" or "project:manual" or "project:default")
+            return TrustedInstanceBoundary;
+
+        if (normalized.StartsWith("user:", StringComparison.Ordinal) || normalized.StartsWith("person:", StringComparison.Ordinal))
+            return TrustedInstanceBoundary;
+
+        if (normalized.StartsWith("project:", StringComparison.Ordinal))
+            return TrustedInstanceBoundary;
+
+        return LegacyRestrictedBoundary;
+    }
+
+    public static string ResolveBoundaryFromAudience(TrustAudience audience) => audience switch
+    {
+        TrustAudience.Public => PublicBoundary,
+        TrustAudience.Team => TeamBoundary,
+        TrustAudience.Personal => PersonalBoundary,
+        _ => PublicBoundary
+    };
 
     public static EffectivePolicyDefaults Resolve(SecurityPolicyConfig? config)
     {

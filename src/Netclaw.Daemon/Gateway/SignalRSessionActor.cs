@@ -181,6 +181,7 @@ internal sealed class SignalRSessionActor : ReceiveActor, IWithUnboundedStash, I
             {
                 ChannelType = _channelType,
                 DefaultAudience = TrustAudience.Personal,
+                DefaultBoundary = SecurityPolicyDefaults.LocalDaemonBoundary,
                 DefaultPrincipal = PrincipalClassification.Operator,
                 DefaultProvenance = new SourceProvenance
                 {

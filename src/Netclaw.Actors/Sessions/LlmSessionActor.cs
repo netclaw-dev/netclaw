@@ -533,6 +533,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                         IsCompactionBoundary: false,
                         HasAcceptedSubAgentFinding: true,
                         Domain: finding.Domain,
+                        Boundary: CurrentMemoryBoundary(),
                         Audience: CurrentMemoryAudience(),
                         Sensitivity: finding.Sensitivity,
                         RecallMode: finding.RecallMode,
@@ -848,6 +849,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                         IsCompactionBoundary: true,
                         HasAcceptedSubAgentFinding: false,
                         Domain: _sessionId.ToMemoryDomain(),
+                        Boundary: CurrentMemoryBoundary(),
                         Audience: CurrentMemoryAudience(),
                         Sensitivity: Memory.MemorySensitivity.Normal.ToWireValue(),
                         RecallMode: Memory.MemoryRecallMode.Auto.ToWireValue(),
@@ -1405,10 +1407,11 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                         UserContent: evt.UserMessage.Content,
                         AssistantContent: evt.AssistantReply.Content,
                         IsExplicitRequest: false,
-                        HasVerifiedToolFinding: false,
+                    HasVerifiedToolFinding: false,
                     IsCompactionBoundary: false,
                     HasAcceptedSubAgentFinding: false,
                     Domain: _sessionId.ToMemoryDomain(),
+                    Boundary: CurrentMemoryBoundary(),
                     Audience: CurrentMemoryAudience(),
                     Sensitivity: Memory.MemorySensitivity.Normal.ToWireValue(),
                     RecallMode: Memory.MemoryRecallMode.Auto.ToWireValue(),
@@ -2008,6 +2011,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             recentUser,
             3,
             Audience: _currentTurnSource?.Audience ?? TrustAudience.Public,
+            Boundary: CurrentMemoryBoundary(),
             RecentAssistantMessages: _state.History
                 .Where(x => x.Role == Protocol.ChatRole.Assistant)
                 .Select(x => x.Content)
@@ -2063,6 +2067,10 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     private string CurrentMemoryAudience()
         => (_currentTurnSource?.Audience ?? TrustAudience.Public).ToWireValue();
+
+    private string CurrentMemoryBoundary()
+        => _currentTurnSource?.Boundary
+           ?? SecurityPolicyDefaults.ResolveBoundaryFromSessionId(_sessionId.Value, _currentTurnSource?.Audience ?? TrustAudience.Public);
 
     private static string FormatRecallForHistory(AutomaticRecallResult recall)
     {

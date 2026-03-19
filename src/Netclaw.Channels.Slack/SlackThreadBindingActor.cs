@@ -335,6 +335,7 @@ internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStas
             {
                 ChannelType = Actors.Channels.ChannelType.Slack,
                 DefaultAudience = TrustAudience.Public,
+                DefaultBoundary = SecurityPolicyDefaults.SlackWorkspaceBoundary,
                 DefaultPrincipal = PrincipalClassification.UntrustedExternal,
                 DefaultProvenance = new SourceProvenance
                 {

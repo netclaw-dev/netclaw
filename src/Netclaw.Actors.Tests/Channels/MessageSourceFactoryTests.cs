@@ -25,6 +25,7 @@ public sealed class MessageSourceFactoryTests
         var result = MessageSourceFactory.Create(input, options, "turn-1");
 
         Assert.Equal(TrustAudience.Public, result.Audience);
+        Assert.Equal(SecurityPolicyDefaults.SlackWorkspaceBoundary, result.Boundary);
         Assert.Equal(PrincipalClassification.UntrustedExternal, result.Principal);
         Assert.Equal(TransportAuthenticity.Unverified, result.Provenance.TransportAuthenticity);
         Assert.Equal(PayloadTaint.Public, result.Provenance.PayloadTaint);
@@ -37,6 +38,7 @@ public sealed class MessageSourceFactoryTests
         {
             SenderId = "user-1",
             Audience = TrustAudience.Team,
+            Boundary = SecurityPolicyDefaults.TeamBoundary,
             Principal = PrincipalClassification.TrustedInternal,
             Provenance = new SourceProvenance
             {
@@ -59,6 +61,7 @@ public sealed class MessageSourceFactoryTests
         var result = MessageSourceFactory.Create(input, options, "turn-1");
 
         Assert.Equal(TrustAudience.Team, result.Audience);
+        Assert.Equal(SecurityPolicyDefaults.TeamBoundary, result.Boundary);
         Assert.Equal(PrincipalClassification.TrustedInternal, result.Principal);
         Assert.Equal(TransportAuthenticity.Verified, result.Provenance.TransportAuthenticity);
         Assert.Equal(PayloadTaint.Community, result.Provenance.PayloadTaint);

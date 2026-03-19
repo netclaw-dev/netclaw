@@ -266,6 +266,7 @@ public sealed class SQLiteMemoryStoreTests : IAsyncLifetime
             "project:test",
             [MemoryClass.DurableFact.ToWireValue()],
             10,
+            SecurityPolicyDefaults.InferLegacyBoundaryFromDomain("project:test"),
             TrustAudience.Public,
             false);
 
@@ -274,6 +275,7 @@ public sealed class SQLiteMemoryStoreTests : IAsyncLifetime
             "project:test",
             [MemoryClass.DurableFact.ToWireValue()],
             10,
+            SecurityPolicyDefaults.InferLegacyBoundaryFromDomain("project:test"),
             TrustAudience.Personal,
             false);
 

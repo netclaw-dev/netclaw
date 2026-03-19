@@ -102,6 +102,7 @@ internal sealed class ReminderExecutionActor : ReceiveActor
             {
                 ChannelType = Channels.ChannelType.Reminder,
                 DefaultAudience = TrustAudience.Team,
+                DefaultBoundary = SecurityPolicyDefaults.LocalDaemonBoundary,
                 DefaultPrincipal = PrincipalClassification.VerifiedAutomation,
                 DefaultProvenance = new SourceProvenance
                 {

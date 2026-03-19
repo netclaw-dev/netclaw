@@ -206,6 +206,7 @@ public sealed class SessionRegistry
             SenderId = "signalr-user",
             MessageId = signalrMessageId,
             Audience = TrustAudience.Personal,
+            Boundary = SecurityPolicyDefaults.LocalDaemonBoundary,
             Principal = PrincipalClassification.Operator,
             Provenance = new SourceProvenance
             {

@@ -42,6 +42,12 @@ public sealed record MessageSource
     public TrustAudience Audience { get; init; } = TrustAudience.Public;
 
     /// <summary>
+    /// Runtime-owned security boundary used to partition durable memory and other
+    /// reusable state across trust domains.
+    /// </summary>
+    public string Boundary { get; init; } = SecurityPolicyDefaults.PublicBoundary;
+
+    /// <summary>
     /// Principal classification hint for the inbound sender.
     /// </summary>
     public PrincipalClassification Principal { get; init; } = PrincipalClassification.UntrustedExternal;

@@ -262,6 +262,7 @@ public sealed class MemoryProposalGate
             Relations: BuildRelations(proposal, memoryClass),
             UpdateSemantics: updateSemantics.ToWireValue(),
             Domain: domain,
+            Boundary: SecurityPolicyDefaults.InferLegacyBoundaryFromDomain(domain),
             Audience: Netclaw.Configuration.TrustAudience.Public.ToWireValue(),
             Sensitivity: sensitivity,
             RecallMode: recallMode.ToWireValue(),

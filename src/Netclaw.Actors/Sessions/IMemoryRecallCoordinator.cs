@@ -19,6 +19,7 @@ public sealed record AutomaticRecallRequest(
     IReadOnlyList<string> RecentUserMessages,
     int MaxItems,
     TrustAudience Audience = TrustAudience.Public,
+    string? Boundary = null,
     IReadOnlyList<string>? RecentAssistantMessages = null,
     IReadOnlyList<string>? RecentEntities = null,
     string? HardScopeOverride = null,

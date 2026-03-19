@@ -32,6 +32,12 @@ public sealed record ChannelInput
     public TrustAudience? Audience { get; init; }
 
     /// <summary>
+    /// Optional trust boundary hint carried from the inbound adapter.
+    /// When omitted, the channel pipeline applies adapter defaults.
+    /// </summary>
+    public string? Boundary { get; init; }
+
+    /// <summary>
     /// Optional principal classification for the sender.
     /// When omitted, the channel pipeline applies strict defaults.
     /// </summary>

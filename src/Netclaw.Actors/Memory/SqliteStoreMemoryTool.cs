@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Netclaw.Configuration;
 using Netclaw.Tools;
 
 namespace Netclaw.Actors.Memory;
@@ -47,9 +48,11 @@ public sealed partial class SqliteStoreMemoryTool : NetclawTool<SqliteStoreMemor
             IsCompactionBoundary: false,
             HasAcceptedSubAgentFinding: false,
             Domain: new Protocol.SessionId(sessionId).ToMemoryDomain(),
+            Boundary: ResolveBoundary(sessionId),
             Sensitivity: MemorySensitivity.Normal.ToWireValue(),
             RecallMode: MemoryRecallMode.Auto.ToWireValue(),
             Confidence: 0.95,
+            Audience: TrustAudience.Personal.ToWireValue(),
             Title: args.Title,
             UpdateSemantics: MemoryUpdateSemantics.MergeDocument.ToWireValue(),
             Kind: MemoryKind.Document.ToWireValue());
@@ -68,4 +71,7 @@ public sealed partial class SqliteStoreMemoryTool : NetclawTool<SqliteStoreMemor
 
     protected override Task<string> ExecuteAsync(Params args, CancellationToken ct)
         => ExecuteAsync(args, ToolExecutionContext.Empty, ct);
+
+    private static string ResolveBoundary(string? sessionId)
+        => SecurityPolicyDefaults.ResolveBoundaryFromSessionId(sessionId, TrustAudience.Personal);
 }

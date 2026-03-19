@@ -29,6 +29,7 @@ public sealed record MemoryCheckpointPayload(
     IReadOnlyList<string>? Evidence = null,
     string? SupersedesRecordId = null,
     long? FreshnessAtMs = null,
+    string? Boundary = null,
     string? Audience = null);
 
 public sealed record MemoryCheckpointCandidate(
@@ -40,6 +41,7 @@ public sealed record MemoryCheckpointCandidate(
     string Content,
     MemoryUpdateSemantics UpdateSemantics,
     string Domain,
+    string Boundary,
     string Sensitivity,
     MemoryRecallMode RecallMode,
     double Confidence,
@@ -101,6 +103,12 @@ public sealed class MemoryRulesFirstExtractor(MemoryPolicyEvaluator policy)
         if (memoryClass == MemoryClass.Trace && !payload.IsExplicitRequest)
             return results;
 
+        var resolvedAudience = MemoryPolicyEvaluator.ResolveAudience(payload.Audience, TrustAudience.Public);
+        SecurityPolicyDefaults.TryParseAudience(resolvedAudience, out var parsedAudience);
+        var resolvedBoundary = !string.IsNullOrWhiteSpace(payload.Boundary)
+            ? payload.Boundary!
+            : SecurityPolicyDefaults.InferLegacyBoundaryFromDomain(payload.Domain);
+
         var kind = ResolveKind(payload);
         var title = ResolveTitle(payload, kind, content);
         var updateSemantics = ResolveUpdateSemantics(payload, kind, memoryClass);
@@ -119,7 +127,8 @@ public sealed class MemoryRulesFirstExtractor(MemoryPolicyEvaluator policy)
             Content: content,
             UpdateSemantics: updateSemantics,
             Domain: payload.Domain,
-            Audience: MemoryPolicyEvaluator.ResolveAudience(payload.Audience, Netclaw.Configuration.TrustAudience.Public),
+            Boundary: resolvedBoundary,
+            Audience: resolvedAudience,
             Sensitivity: payload.Sensitivity,
             RecallMode: ResolveRecallMode(payload, memoryClass),
             Confidence: payload.Confidence,
@@ -295,6 +304,9 @@ public sealed class MemoryRulesFirstExtractor(MemoryPolicyEvaluator policy)
                 Content: normalizedObject,
                 UpdateSemantics: MemoryUpdateSemantics.MergeDocument,
                 Domain: payload.Domain,
+                Boundary: !string.IsNullOrWhiteSpace(payload.Boundary)
+                    ? payload.Boundary!
+                    : SecurityPolicyDefaults.InferLegacyBoundaryFromDomain(payload.Domain),
                 Audience: MemoryPolicyEvaluator.ResolveAudience(payload.Audience, Netclaw.Configuration.TrustAudience.Public),
                 Sensitivity: payload.Sensitivity,
                 RecallMode: MemoryDomainEnumExtensions.TryFromWireValue(payload.RecallMode, out MemoryRecallMode rm)
@@ -353,6 +365,7 @@ public sealed class MemoryRulesFirstExtractor(MemoryPolicyEvaluator policy)
             Content: normalizedContent,
             UpdateSemantics: MemoryUpdateSemantics.MergeDocument,
             Domain: domain,
+            Boundary: SecurityPolicyDefaults.InferLegacyBoundaryFromDomain(domain),
             Audience: Netclaw.Configuration.TrustAudience.Public.ToWireValue(),
             Sensitivity: MemorySensitivity.Normal.ToWireValue(),
             RecallMode: MemoryRecallMode.Auto,
@@ -445,7 +458,13 @@ public sealed class MemoryCurationEngine(SQLiteMemoryStore store, MemoryRulesFir
         if (payload is null)
             return [];
 
-        var existing = await store.SearchMemoriesAsync(payload.Content, 8, TrustAudience.Public, ct);
+        var resolvedAudience = MemoryPolicyEvaluator.ResolveAudience(payload.Audience, TrustAudience.Public);
+        SecurityPolicyDefaults.TryParseAudience(resolvedAudience, out var parsedAudience);
+        var resolvedBoundary = !string.IsNullOrWhiteSpace(payload.Boundary)
+            ? payload.Boundary!
+            : SecurityPolicyDefaults.InferLegacyBoundaryFromDomain(payload.Domain);
+
+        var existing = await store.SearchMemoriesAsync(payload.Content, 8, resolvedBoundary, parsedAudience, ct);
         var fingerprints = existing
             .Select(x => MemoryRulesFirstExtractor.BuildFingerprint(x.Kind, x.Domain, x.Title, x.Snippet))
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -465,6 +484,7 @@ public sealed class MemoryCurationEngine(SQLiteMemoryStore store, MemoryRulesFir
             Relations: null,
             UpdateSemantics: c.UpdateSemantics.ToWireValue(),
             Domain: c.Domain,
+            Boundary: c.Boundary,
             Audience: c.Audience,
             Sensitivity: c.Sensitivity,
             RecallMode: c.RecallMode.ToWireValue(),

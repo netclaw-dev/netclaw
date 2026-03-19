@@ -27,6 +27,11 @@ public sealed record SessionPipelineOptions
     public TrustAudience DefaultAudience { get; init; } = TrustAudience.Public;
 
     /// <summary>
+    /// Adapter-owned default trust boundary used when inbound adapters do not provide one.
+    /// </summary>
+    public string DefaultBoundary { get; init; } = string.Empty;
+
+    /// <summary>
     /// Strict-default principal classification used when inbound adapters do not provide one.
     /// </summary>
     public PrincipalClassification DefaultPrincipal { get; init; } = PrincipalClassification.UntrustedExternal;
@@ -53,6 +58,7 @@ public static class MessageSourceFactory
             MessageId = input.MessageId,
             TurnId = turnId,
             Audience = input.Audience ?? options.DefaultAudience,
+            Boundary = SecurityPolicyDefaults.ResolveBoundary(input.Boundary ?? options.DefaultBoundary, options.ChannelType, input.Audience ?? options.DefaultAudience),
             Principal = input.Principal ?? options.DefaultPrincipal,
             Provenance = input.Provenance ?? options.DefaultProvenance,
             ReceivedAt = input.ReceivedAt

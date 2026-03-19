@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Netclaw.Configuration;
 using Netclaw.Tools;
 
 namespace Netclaw.Actors.Memory;
@@ -99,9 +100,11 @@ public sealed partial class SqliteUpdateMemoryTool : NetclawTool<SqliteUpdateMem
             IsCompactionBoundary: false,
             HasAcceptedSubAgentFinding: false,
             Domain: new Protocol.SessionId(sessionId).ToMemoryDomain(),
+            Boundary: ResolveBoundary(sessionId),
             Sensitivity: MemorySensitivity.Normal.ToWireValue(),
             RecallMode: MemoryRecallMode.Manual.ToWireValue(),
             Confidence: 0.95,
+            Audience: TrustAudience.Personal.ToWireValue(),
             MemoryId: MemoryTypedId.Parse(args.Id).Id,
             UpdateOldText: args.OldText,
             UpdateNewText: args.NewText,
@@ -119,4 +122,7 @@ public sealed partial class SqliteUpdateMemoryTool : NetclawTool<SqliteUpdateMem
 
         _logger.LogInformation("SQLite update_memory audit checkpoint={CheckpointId} memory={MemoryId}", result.CheckpointId, args.Id);
     }
+
+    private static string ResolveBoundary(string? sessionId)
+        => SecurityPolicyDefaults.ResolveBoundaryFromSessionId(sessionId, TrustAudience.Personal);
 }

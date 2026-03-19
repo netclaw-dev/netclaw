@@ -18,6 +18,7 @@ public sealed record EffectiveTrustContext(
     TrustAudience DeploymentAudience,
     TrustAudience SourceAudience,
     TrustAudience EffectiveAudience,
+    string Boundary,
     PrincipalClassification Principal,
     TransportAuthenticity TransportAuthenticity,
     PayloadTaint PayloadTaint,
@@ -39,6 +40,7 @@ public sealed class TrustContextDeriver
     public EffectiveTrustContext Derive(MessageSource? source, WorkingContextOverride? workingContext = null)
     {
         var sourceAudience = source?.Audience ?? _defaults.Audience;
+        var boundary = source?.Boundary ?? SecurityPolicyDefaults.ResolveBoundaryFromAudience(sourceAudience);
         var principal = source?.Principal ?? PrincipalClassification.UntrustedExternal;
         var provenance = source?.Provenance ?? SourceProvenance.StrictDefault();
 
@@ -62,6 +64,7 @@ public sealed class TrustContextDeriver
             _defaults.Audience,
             sourceAudience,
             effectiveAudience,
+            boundary,
             principal,
             provenance.TransportAuthenticity,
             provenance.PayloadTaint,
