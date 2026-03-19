@@ -25,19 +25,18 @@ public static class ProviderDescriptorServiceExtensions
 
         services.AddSingleton(sp =>
             ProviderDescriptorCatalog.Create(
-                sp.GetRequiredService<IHttpClientFactory>().CreateClient(HttpClientName)));
+                sp.GetRequiredService<IHttpClientFactory>().CreateClient(HttpClientName),
+                sp.GetService<TimeProvider>()));
 
         services.AddSingleton(sp => sp.GetRequiredService<ProviderDescriptorCatalog>().Ollama);
         services.AddSingleton(sp => sp.GetRequiredService<ProviderDescriptorCatalog>().OpenAiCompatible);
         services.AddSingleton(sp => sp.GetRequiredService<ProviderDescriptorCatalog>().OpenAi);
-        services.AddSingleton(sp => sp.GetRequiredService<ProviderDescriptorCatalog>().OpenAiCodex);
         services.AddSingleton(sp => sp.GetRequiredService<ProviderDescriptorCatalog>().Anthropic);
         services.AddSingleton(sp => sp.GetRequiredService<ProviderDescriptorCatalog>().OpenRouter);
 
         services.AddSingleton<IProviderDescriptor>(sp => sp.GetRequiredService<ProviderDescriptorCatalog>().Ollama);
         services.AddSingleton<IProviderDescriptor>(sp => sp.GetRequiredService<ProviderDescriptorCatalog>().OpenAiCompatible);
         services.AddSingleton<IProviderDescriptor>(sp => sp.GetRequiredService<ProviderDescriptorCatalog>().OpenAi);
-        services.AddSingleton<IProviderDescriptor>(sp => sp.GetRequiredService<ProviderDescriptorCatalog>().OpenAiCodex);
         services.AddSingleton<IProviderDescriptor>(sp => sp.GetRequiredService<ProviderDescriptorCatalog>().Anthropic);
         services.AddSingleton<IProviderDescriptor>(sp => sp.GetRequiredService<ProviderDescriptorCatalog>().OpenRouter);
 

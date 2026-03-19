@@ -50,8 +50,8 @@ public sealed class ProviderManagerViewModelTests : IDisposable
         using var vm = CreateViewModel();
         vm.RefreshDisplayProviders();
 
-        Assert.Equal(6, vm.DisplayProviders.Count);
-        foreach (var type in new[] { "ollama", "openai", "openai-codex", "anthropic", "openrouter", "openai-compatible" })
+        Assert.Equal(5, vm.DisplayProviders.Count);
+        foreach (var type in new[] { "ollama", "openai", "anthropic", "openrouter", "openai-compatible" })
         {
             Assert.Contains(vm.DisplayProviders, p => p.ProviderType == type);
         }
@@ -93,7 +93,7 @@ public sealed class ProviderManagerViewModelTests : IDisposable
         vm.RefreshDisplayProviders();
 
         // All known types present
-        Assert.Equal(6, vm.DisplayProviders.Count);
+        Assert.Equal(5, vm.DisplayProviders.Count);
 
         // openrouter is configured
         var openrouter = vm.DisplayProviders.First(p => p.ProviderType == "openrouter");

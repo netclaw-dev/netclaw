@@ -102,7 +102,11 @@ public sealed class OAuthFlowCoordinator : IDisposable
 
             if (response.IsSuccessStatusCode)
             {
-                FlowState.Value = DeviceFlowState.Succeeded;
+                // Don't set FlowState = Succeeded here. The poll loop in
+                // RunBrowserFlowAsync will see "Completed" on the next poll
+                // (within ~2s) and properly set Result + FlowState + invoke
+                // the onSuccess callback with the token. Setting Succeeded
+                // here triggers UI subscriptions before the token is available.
                 _requestRedraw();
             }
             else
@@ -285,7 +289,8 @@ public sealed class OAuthFlowCoordinator : IDisposable
         }
 
         var descriptor = _registry.Get(providerType);
-        if (descriptor.Auth is not OAuthAuth oauth || oauth.DeviceEndpoint is null)
+        var oauth = descriptor.Auth.GetOAuthConfig();
+        if (oauth is null || oauth.DeviceEndpoint is null)
         {
             ErrorMessage = "Provider does not support OAuth device flow.";
             FlowState.Value = DeviceFlowState.Error;

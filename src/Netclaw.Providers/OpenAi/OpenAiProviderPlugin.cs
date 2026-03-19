@@ -1,12 +1,15 @@
+using System.ClientModel;
+using System.ClientModel.Primitives;
 using Microsoft.Extensions.AI;
 using Netclaw.Configuration;
 using Netclaw.Providers;
+using OpenAI;
 
 namespace Netclaw.Providers.OpenAi;
 
 /// <summary>
-/// Daemon-side plugin for OpenAI. Wraps <see cref="OpenAiDescriptor"/>
-/// and adds SDK client construction.
+/// Daemon-side plugin for OpenAI. Handles both API key and OAuth (Codex) authentication.
+/// OAuth tokens route to the Codex backend; API keys use the standard endpoint.
 /// </summary>
 public sealed class OpenAiProviderPlugin : ProviderPluginBase<OpenAiDescriptor>
 {
@@ -14,13 +17,28 @@ public sealed class OpenAiProviderPlugin : ProviderPluginBase<OpenAiDescriptor>
 
     public override IChatClient CreateChatClient(ProviderEntry entry, ModelReference model)
     {
+        if (entry.AuthMethod is AuthMethod.OAuthPkce or AuthMethod.OAuthDevice)
+        {
+            // OAuth path → Codex backend
+            var token = entry.OAuthAccessToken;
+            if (token is null || string.IsNullOrWhiteSpace(token.Value))
+                throw new InvalidOperationException(
+                    "OpenAI OAuth requires an access token. Run 'netclaw provider fix <name>'.");
+
+            var accountId = JwtAccountIdExtractor.Extract(token.Value);
+            var options = new OpenAIClientOptions
+            {
+                Endpoint = new Uri("https://chatgpt.com/backend-api/codex")
+            };
+            options.AddPolicy(new OpenAiCodexRequestPolicy(accountId), PipelinePosition.PerCall);
+
+            return new OpenAI.Responses.ResponsesClient(
+                    model.ModelId, new ApiKeyCredential(token.Value), options)
+                .AsIChatClient();
+        }
+
+        // API key path → standard endpoint
         var apiKey = GetRequiredApiKey(entry, TypeKey);
-        // Use the Responses API for all OpenAI requests — works with both OAuth tokens
-        // and API keys. Codex OAuth tokens were never granted Chat Completions access;
-        // calling /v1/chat/completions with them returns 429 "insufficient_quota".
-        // The Responses API (/v1/responses) is the only completions endpoint authorized
-        // for these tokens. API keys work with both endpoints.
-        // See: https://developers.openai.com/docs/guides/migrate-to-responses
         return new OpenAI.Responses.ResponsesClient(model.ModelId, apiKey)
             .AsIChatClient();
     }

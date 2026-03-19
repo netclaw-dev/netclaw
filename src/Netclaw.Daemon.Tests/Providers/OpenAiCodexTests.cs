@@ -107,30 +107,56 @@ public sealed class OpenAiCodexTests
     }
 
     // ────────────────────────────────────────────────────────────────────
-    //  OpenAiCodexDescriptor
+    //  OpenAiDescriptor (merged — supports both API key and OAuth)
     // ────────────────────────────────────────────────────────────────────
 
-    public sealed class CodexDescriptorTests
+    public sealed class OpenAiDescriptorTests
     {
-        private readonly OpenAiCodexDescriptor _descriptor = new();
+        private readonly OpenAiDescriptor _descriptor = new(new HttpClient());
 
         [Fact]
-        public void TypeKey_IsOpenAiCodex()
+        public void TypeKey_IsOpenAi()
         {
-            Assert.Equal("openai-codex", _descriptor.TypeKey);
+            Assert.Equal("openai", _descriptor.TypeKey);
         }
 
         [Fact]
-        public void SupportedAuthMethods_ContainsOnlyOAuthPkce()
+        public void Auth_IsMultiAuth()
         {
-            Assert.Single(_descriptor.Auth.SupportedAuthMethods);
-            Assert.Equal(AuthMethod.OAuthPkce, _descriptor.Auth.SupportedAuthMethods[0]);
+            Assert.IsType<MultiAuth>(_descriptor.Auth);
         }
 
         [Fact]
-        public void DefaultEndpoint_IsCodexBackend()
+        public void SupportedAuthMethods_ContainsBothOAuthAndApiKey()
         {
-            Assert.Equal("https://chatgpt.com/backend-api/codex", _descriptor.DefaultEndpoint);
+            Assert.Contains(AuthMethod.OAuthPkce, _descriptor.Auth.SupportedAuthMethods);
+            Assert.Contains(AuthMethod.ApiKey, _descriptor.Auth.SupportedAuthMethods);
+        }
+
+        [Fact]
+        public void MultiAuth_HasCustomLabels()
+        {
+            var multi = Assert.IsType<MultiAuth>(_descriptor.Auth);
+            Assert.NotNull(multi.AuthMethodLabels);
+            Assert.True(multi.AuthMethodLabels.ContainsKey(AuthMethod.OAuthPkce));
+            Assert.True(multi.AuthMethodLabels.ContainsKey(AuthMethod.ApiKey));
+        }
+
+        [Fact]
+        public void GetOAuthConfig_ReturnsOAuthAuth()
+        {
+            var oauth = _descriptor.Auth.GetOAuthConfig();
+            Assert.NotNull(oauth);
+            Assert.NotNull(oauth.AuthorizationEndpoint);
+            Assert.NotNull(oauth.TokenEndpoint);
+        }
+
+        [Fact]
+        public void GetApiKeyGuidanceUrl_ReturnsUrl()
+        {
+            var url = _descriptor.Auth.GetApiKeyGuidanceUrl();
+            Assert.NotNull(url);
+            Assert.Contains("platform.openai.com", url.AbsoluteUri);
         }
 
         [Fact]
@@ -138,7 +164,7 @@ public sealed class OpenAiCodexTests
         {
             var entry = new ProviderEntry
             {
-                Type = "openai-codex",
+                Type = "openai",
                 AuthMethod = AuthMethod.OAuthPkce,
                 OAuthAccessToken = new SensitiveString("fake-oauth-token"),
             };
@@ -166,7 +192,7 @@ public sealed class OpenAiCodexTests
         {
             var entry = new ProviderEntry
             {
-                Type = "openai-codex",
+                Type = "openai",
                 AuthMethod = AuthMethod.OAuthPkce,
             };
 
@@ -182,11 +208,11 @@ public sealed class OpenAiCodexTests
         {
             var now = new DateTimeOffset(2026, 3, 18, 12, 0, 0, TimeSpan.Zero);
             var fakeTime = new FakeTimeProvider(now);
-            var descriptor = new OpenAiCodexDescriptor(fakeTime);
+            var descriptor = new OpenAiDescriptor(new HttpClient(), fakeTime);
 
             var entry = new ProviderEntry
             {
-                Type = "openai-codex",
+                Type = "openai",
                 AuthMethod = AuthMethod.OAuthPkce,
                 OAuthAccessToken = new SensitiveString("fake-oauth-token"),
                 OAuthTokenExpiry = now.AddHours(-1),
@@ -205,11 +231,11 @@ public sealed class OpenAiCodexTests
         {
             var now = new DateTimeOffset(2026, 3, 18, 12, 0, 0, TimeSpan.Zero);
             var fakeTime = new FakeTimeProvider(now);
-            var descriptor = new OpenAiCodexDescriptor(fakeTime);
+            var descriptor = new OpenAiDescriptor(new HttpClient(), fakeTime);
 
             var entry = new ProviderEntry
             {
-                Type = "openai-codex",
+                Type = "openai",
                 AuthMethod = AuthMethod.OAuthPkce,
                 OAuthAccessToken = new SensitiveString("fake-oauth-token"),
                 OAuthTokenExpiry = now.AddHours(1),
@@ -219,6 +245,22 @@ public sealed class OpenAiCodexTests
 
             Assert.True(result.Success);
             Assert.NotEmpty(result.Models);
+        }
+
+        [Fact]
+        public async Task ProbeAsync_WithoutApiKey_ReturnsFailure()
+        {
+            var entry = new ProviderEntry
+            {
+                Type = "openai",
+                AuthMethod = AuthMethod.ApiKey,
+            };
+
+            var result = await _descriptor.ProbeAsync(entry);
+
+            Assert.False(result.Success);
+            Assert.NotNull(result.ErrorMessage);
+            Assert.Empty(result.Models);
         }
     }
 
@@ -252,7 +294,7 @@ public sealed class OpenAiCodexTests
         [Fact]
         public async Task ResolveAsync_AllCuratedModels_HaveContextWindow()
         {
-            foreach (var model in OpenAiCodexDescriptor.CuratedModels)
+            foreach (var model in OpenAiDescriptor.CuratedModels)
             {
                 var result = await _resolver.ResolveAsync(model.ModelId);
                 Assert.NotNull(result);
@@ -262,174 +304,4 @@ public sealed class OpenAiCodexTests
         }
     }
 
-    // ────────────────────────────────────────────────────────────────────
-    //  OpenAiDescriptor (post-bifurcation)
-    // ────────────────────────────────────────────────────────────────────
-
-    public sealed class OpenAiDescriptorTests
-    {
-        private readonly OpenAiDescriptor _descriptor = new(new HttpClient());
-
-        [Fact]
-        public void TypeKey_IsOpenAi()
-        {
-            Assert.Equal("openai", _descriptor.TypeKey);
-        }
-
-        [Fact]
-        public void SupportedAuthMethods_ContainsOnlyApiKey()
-        {
-            Assert.Single(_descriptor.Auth.SupportedAuthMethods);
-            Assert.Equal(AuthMethod.ApiKey, _descriptor.Auth.SupportedAuthMethods[0]);
-        }
-
-        [Fact]
-        public void Auth_IsApiKeyAuth()
-        {
-            Assert.IsType<ApiKeyAuth>(_descriptor.Auth);
-        }
-
-        [Fact]
-        public async Task ProbeAsync_WithoutApiKey_ReturnsFailure()
-        {
-            var entry = new ProviderEntry
-            {
-                Type = "openai",
-                AuthMethod = AuthMethod.ApiKey,
-            };
-
-            var result = await _descriptor.ProbeAsync(entry);
-
-            Assert.False(result.Success);
-            Assert.NotNull(result.ErrorMessage);
-            Assert.Empty(result.Models);
-        }
-    }
-
-    // ────────────────────────────────────────────────────────────────────
-    //  OpenAiCodexConfigMigration
-    // ────────────────────────────────────────────────────────────────────
-
-    public sealed class ConfigMigrationTests : IDisposable
-    {
-        private readonly string _tempDir;
-        private readonly NetclawPaths _paths;
-
-        public ConfigMigrationTests()
-        {
-            _tempDir = Path.Combine(Path.GetTempPath(), $"netclaw-test-{Guid.NewGuid():N}");
-            _paths = new NetclawPaths(_tempDir);
-            Directory.CreateDirectory(_paths.ConfigDirectory);
-        }
-
-        public void Dispose()
-        {
-            if (Directory.Exists(_tempDir))
-                Directory.Delete(_tempDir, recursive: true);
-        }
-
-        [Fact]
-        public void MigrateIfNeeded_OpenAiWithOAuthPkce_MigratesToOpenAiCodex()
-        {
-            WriteConfig("""
-            {
-              "Providers": {
-                "my-openai": {
-                  "Type": "openai",
-                  "Endpoint": "https://api.openai.com",
-                  "AuthMethod": "OAuthPkce"
-                }
-              }
-            }
-            """);
-
-            var migrated = OpenAiCodexConfigMigration.MigrateIfNeeded(_paths);
-
-            Assert.True(migrated);
-
-            var json = File.ReadAllText(_paths.NetclawConfigPath);
-            using var doc = JsonDocument.Parse(json);
-            var type = doc.RootElement
-                .GetProperty("Providers")
-                .GetProperty("my-openai")
-                .GetProperty("Type")
-                .GetString();
-
-            Assert.Equal("openai-codex", type);
-        }
-
-        [Fact]
-        public void MigrateIfNeeded_OpenAiWithApiKey_DoesNotMigrate()
-        {
-            WriteConfig("""
-            {
-              "Providers": {
-                "my-openai": {
-                  "Type": "openai",
-                  "Endpoint": "https://api.openai.com",
-                  "AuthMethod": "ApiKey"
-                }
-              }
-            }
-            """);
-
-            var migrated = OpenAiCodexConfigMigration.MigrateIfNeeded(_paths);
-
-            Assert.False(migrated);
-
-            var json = File.ReadAllText(_paths.NetclawConfigPath);
-            using var doc = JsonDocument.Parse(json);
-            var type = doc.RootElement
-                .GetProperty("Providers")
-                .GetProperty("my-openai")
-                .GetProperty("Type")
-                .GetString();
-
-            Assert.Equal("openai", type);
-        }
-
-        [Fact]
-        public void MigrateIfNeeded_AnthropicWithOAuthDevice_DoesNotMigrate()
-        {
-            WriteConfig("""
-            {
-              "Providers": {
-                "my-anthropic": {
-                  "Type": "anthropic",
-                  "Endpoint": "https://api.anthropic.com",
-                  "AuthMethod": "OAuthDevice"
-                }
-              }
-            }
-            """);
-
-            var migrated = OpenAiCodexConfigMigration.MigrateIfNeeded(_paths);
-
-            Assert.False(migrated);
-
-            var json = File.ReadAllText(_paths.NetclawConfigPath);
-            using var doc = JsonDocument.Parse(json);
-            var type = doc.RootElement
-                .GetProperty("Providers")
-                .GetProperty("my-anthropic")
-                .GetProperty("Type")
-                .GetString();
-
-            Assert.Equal("anthropic", type);
-        }
-
-        [Fact]
-        public void MigrateIfNeeded_MissingConfigFile_ReturnsFalse()
-        {
-            // Don't write any config file — directory exists but file does not
-            var migrated = OpenAiCodexConfigMigration.MigrateIfNeeded(_paths);
-
-            Assert.False(migrated);
-        }
-
-        private void WriteConfig(string json)
-        {
-            File.WriteAllText(_paths.NetclawConfigPath, json);
-        }
-    }
 }

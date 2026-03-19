@@ -90,3 +90,39 @@ public sealed class OAuthAuth : IProviderAuth
     /// </summary>
     public bool UseProprietaryDeviceFlow { get; init; }
 }
+
+/// <summary>
+/// Provider supports both API key and OAuth authentication.
+/// Composes an <see cref="OAuthAuth"/> for OAuth config and carries
+/// a <see cref="GuidanceUrl"/> for the API key path.
+/// </summary>
+public sealed class MultiAuth : IProviderAuth
+{
+    public required IReadOnlyList<AuthMethod> SupportedAuthMethods { get; init; }
+    public Uri? GuidanceUrl { get; init; }
+    public required OAuthAuth OAuth { get; init; }
+
+    /// <summary>
+    /// Optional per-method display labels for the TUI auth selection screen.
+    /// Keys are <see cref="AuthMethod"/> values, values are human-readable labels.
+    /// When null, falls back to generic labels in OAuthFlowViews.
+    /// </summary>
+    public IReadOnlyDictionary<AuthMethod, string>? AuthMethodLabels { get; init; }
+}
+
+public static class ProviderAuthExtensions
+{
+    public static OAuthAuth? GetOAuthConfig(this IProviderAuth auth) => auth switch
+    {
+        OAuthAuth o => o,
+        MultiAuth m => m.OAuth,
+        _ => null,
+    };
+
+    public static Uri? GetApiKeyGuidanceUrl(this IProviderAuth auth) => auth switch
+    {
+        ApiKeyAuth a => a.GuidanceUrl,
+        MultiAuth m => m.GuidanceUrl,
+        _ => null,
+    };
+}

@@ -353,6 +353,7 @@ public partial class InitWizardViewModel : ReactiveViewModel
                     providerType,
                     EndpointInput,
                     credential,
+                    SelectedAuthMethod,
                     ct)
                 .WaitAsync(ProbeHardTimeout, ct);
         }
@@ -442,6 +443,7 @@ public partial class InitWizardViewModel : ReactiveViewModel
         var ct = OAuth.StartDeviceFlow(SelectedProviderType, result =>
         {
             ApiKeyInput = result.AccessToken.Value;
+            StartProbe();
         });
         _ = RunProbeTimerAsync(ct);
     }
@@ -456,6 +458,7 @@ public partial class InitWizardViewModel : ReactiveViewModel
         var ct = OAuth.StartBrowserFlow(SelectedProviderType, result =>
         {
             ApiKeyInput = result.AccessToken.Value;
+            StartProbe();
         });
         _ = RunProbeTimerAsync(ct);
     }
@@ -810,6 +813,11 @@ public partial class InitWizardViewModel : ReactiveViewModel
                      && desc.Auth is EndpointOnlyAuth)
                 providerEntry["Endpoint"] = desc.DefaultEndpoint;
 
+            // OAuthTokenExpiry must go in netclaw.json (not secrets.json) because
+            // encrypted DateTimeOffset values break IConfiguration binding.
+            if (OAuth.Result?.ExpiresAt is { } expiresAt)
+                providerEntry["OAuthTokenExpiry"] = expiresAt.ToString("o");
+
             providers[providerName] = providerEntry;
         }
 
@@ -927,8 +935,6 @@ public partial class InitWizardViewModel : ReactiveViewModel
                 };
                 if (OAuth.Result.RefreshToken is not null)
                     providerSecrets["OAuthRefreshToken"] = OAuth.Result.RefreshToken.Value;
-                if (OAuth.Result.ExpiresAt.HasValue)
-                    providerSecrets["OAuthTokenExpiry"] = OAuth.Result.ExpiresAt.Value.ToString("o");
 
                 secrets["Providers"] = new Dictionary<string, object>
                 {

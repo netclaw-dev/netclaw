@@ -30,4 +30,12 @@ public interface IProviderProbe
     /// </summary>
     Task<ProviderProbeResult> ProbeAsync(
         ProviderEntry entry, CancellationToken ct = default);
+
+    /// <summary>
+    /// Probe with explicit auth method. When the auth method is OAuth, the credential
+    /// is set as <see cref="ProviderEntry.OAuthAccessToken"/> instead of <see cref="ProviderEntry.ApiKey"/>.
+    /// </summary>
+    Task<ProviderProbeResult> ProbeAsync(
+        string providerType, string? endpoint, string? credential,
+        AuthMethod authMethod, CancellationToken ct = default);
 }

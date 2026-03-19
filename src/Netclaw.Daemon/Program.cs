@@ -162,8 +162,8 @@ static async Task RunDaemonAsync(string[] args, DaemonRestartSignal restartSigna
         if (!registry.TryGet(providerType, out var descriptor))
             return Results.NotFound(new { error = $"Unknown provider type: {providerType}" });
 
-        if (descriptor.Auth is not OAuthAuth oauth
-            || oauth.AuthorizationEndpoint is null || oauth.RedirectUri is null)
+        var oauth = descriptor.Auth.GetOAuthConfig();
+        if (oauth is null || oauth.AuthorizationEndpoint is null || oauth.RedirectUri is null)
             return Results.BadRequest(new { error = $"Provider '{providerType}' does not support browser OAuth" });
 
         var (authUrl, state) = pkceService.StartAuthorizationFlow(
@@ -271,9 +271,6 @@ static NetclawPaths ConfigureConfigServices(IServiceCollection services, IConfig
 
     // TimeProvider (virtualized for testing)
     services.AddSingleton(TimeProvider.System);
-
-    // One-time migration: openai + OAuthPkce → openai-codex
-    OpenAiCodexConfigMigration.MigrateIfNeeded(paths);
 
     // Providers and model resolution via plugin architecture
     var providers = configuration.GetSection("Providers")

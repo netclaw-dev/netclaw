@@ -365,7 +365,7 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
     {
         var providerType = ViewModel.SelectedProviderType ?? "unknown";
         var descriptor = ViewModel.Registry.Get(providerType);
-        var supportedMethods = OAuthFlowViews.BuildAuthMethodLabels(descriptor.Auth.SupportedAuthMethods);
+        var supportedMethods = OAuthFlowViews.BuildAuthMethodLabels(descriptor.Auth);
 
         _authMethodList = Layouts.SelectionList(supportedMethods)
             .WithMode(SelectionMode.Single)
@@ -379,7 +379,7 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             {
                 if (selected.Count > 0)
                 {
-                    var method = OAuthFlowViews.ParseAuthMethodLabel(selected[0]);
+                    var method = OAuthFlowViews.ParseAuthMethodLabel(selected[0], descriptor.Auth);
                     ViewModel.SelectedAuthMethod = method;
 
                     if (method == AuthMethod.OAuthPkce)
@@ -1332,6 +1332,18 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             return;
         }
 
+        // Browser OAuth: "C" to copy URL to clipboard
+        if (ViewModel.CurrentStep.Value == WizardStep.Provider
+            && _providerSubStep == 6
+            && keyInfo.Key == ConsoleKey.C
+            && ViewModel.OAuth.BrowserOpenFailed
+            && ViewModel.OAuth.VerificationUri is not null)
+        {
+            if (OAuthFlowViews.TryCopyToClipboard(_clipboardService, ViewModel.OAuth.VerificationUri))
+                ViewModel.StatusMessage.Value = "\u2714 URL copied to clipboard";
+            return;
+        }
+
         // Route input to active component
         RouteInputToActiveComponent(keyInfo);
     }
@@ -1365,9 +1377,16 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             }
             if (_providerSubStep == 3)
             {
-                // Going back from validation to credentials — cancel in-flight probe
+                // Going back from validation — cancel in-flight probe and return
+                // to the correct sub-step based on how we got here
                 ViewModel.CancelProbe();
-                SetProviderSubStep(2);
+                var backTo = ViewModel.SelectedAuthMethod switch
+                {
+                    AuthMethod.OAuthPkce => 6,   // browser OAuth
+                    AuthMethod.OAuthDevice => 5, // device flow
+                    _ => 2                       // API key / endpoint input
+                };
+                SetProviderSubStep(backTo);
                 return true;
             }
             SetProviderSubStep(_providerSubStep - 1);
@@ -1508,6 +1527,7 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             WizardStep.Provider when _providerSubStep == 2 && _endpointInput is not null => _endpointInput,
             WizardStep.Provider when _providerSubStep == 2 => _apiKeyInput,
             WizardStep.Provider when _providerSubStep == 4 && _manualModelEntry => _manualModelInput,
+            WizardStep.Provider when _providerSubStep == 6 => _redirectUrlInput,
             WizardStep.ChatServices when _chatServicesSubStep == 1 => _slackBotTokenInput,
             WizardStep.ChatServices when _chatServicesSubStep == 2 => _slackAppTokenInput,
             WizardStep.ChatServices when _chatServicesSubStep == 3 => _slackChannelNamesInput,

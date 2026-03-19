@@ -208,7 +208,8 @@ internal static class ProviderCommand
     {
         endpoint ??= descriptor.DefaultEndpoint;
 
-        if (descriptor.Auth is not OAuthAuth oauth)
+        var oauth = descriptor.Auth.GetOAuthConfig();
+        if (oauth is null)
         {
             writer.WriteLine($"Error: Provider '{type}' does not support OAuth.");
             return 1;
@@ -447,10 +448,10 @@ internal static class ProviderCommand
             return;
         }
 
-        if (descriptor.Auth is ApiKeyAuth { GuidanceUrl: { } guidanceUrl })
+        if (descriptor.Auth.GetApiKeyGuidanceUrl() is { } guidanceUrl)
         {
-            var oauthNote = descriptor.Auth.SupportedAuthMethods.Contains(AuthMethod.OAuthDevice)
-                ? " or use `netclaw provider` for OAuth device flow"
+            var oauthNote = descriptor.Auth.GetOAuthConfig() is not null
+                ? " or use `netclaw provider` for OAuth setup"
                 : "";
             writer.WriteLine($"Get your API key at {guidanceUrl}{oauthNote}");
         }

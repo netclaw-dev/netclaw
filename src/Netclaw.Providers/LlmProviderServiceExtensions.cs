@@ -37,14 +37,12 @@ public static class LlmProviderServiceExtensions
         services.AddSingleton<OllamaProviderPlugin>();
         services.AddSingleton<OpenAiCompatibleProviderPlugin>();
         services.AddSingleton<OpenAiProviderPlugin>();
-        services.AddSingleton<OpenAiCodexProviderPlugin>();
         services.AddSingleton<AnthropicProviderPlugin>();
         services.AddSingleton<OpenRouterProviderPlugin>();
 
         services.AddSingleton<ILlmProviderPlugin>(sp => sp.GetRequiredService<OllamaProviderPlugin>());
         services.AddSingleton<ILlmProviderPlugin>(sp => sp.GetRequiredService<OpenAiCompatibleProviderPlugin>());
         services.AddSingleton<ILlmProviderPlugin>(sp => sp.GetRequiredService<OpenAiProviderPlugin>());
-        services.AddSingleton<ILlmProviderPlugin>(sp => sp.GetRequiredService<OpenAiCodexProviderPlugin>());
         services.AddSingleton<ILlmProviderPlugin>(sp => sp.GetRequiredService<AnthropicProviderPlugin>());
         services.AddSingleton<ILlmProviderPlugin>(sp => sp.GetRequiredService<OpenRouterProviderPlugin>());
 

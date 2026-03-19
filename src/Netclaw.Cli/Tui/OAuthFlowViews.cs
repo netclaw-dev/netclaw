@@ -1,4 +1,5 @@
 using Netclaw.Configuration;
+using Netclaw.Providers;
 using Netclaw.Providers.OAuth;
 using R3;
 using Termina.Clipboard;
@@ -16,31 +17,48 @@ internal static class OAuthFlowViews
 
     /// <summary>
     /// Map auth methods to user-friendly display labels for selection lists.
+    /// Uses custom per-provider labels from <see cref="MultiAuth.AuthMethodLabels"/> when available.
     /// </summary>
-    public static List<string> BuildAuthMethodLabels(IReadOnlyList<AuthMethod> methods)
+    public static List<string> BuildAuthMethodLabels(IProviderAuth auth)
     {
-        return methods
+        var customLabels = (auth as MultiAuth)?.AuthMethodLabels;
+        return auth.SupportedAuthMethods
             .Where(m => m != AuthMethod.None)
-            .Select(m => m switch
-            {
-                AuthMethod.ApiKey => "API Key",
-                AuthMethod.OAuthPkce => "OAuth Login (recommended)",
-                AuthMethod.OAuthDevice => "OAuth Device Flow",
-                _ => m.ToString()
-            })
+            .Select(m => customLabels?.TryGetValue(m, out var label) == true
+                ? label
+                : m switch
+                {
+                    AuthMethod.ApiKey => "API Key",
+                    AuthMethod.OAuthPkce => "OAuth Login (recommended)",
+                    AuthMethod.OAuthDevice => "OAuth Device Flow",
+                    _ => m.ToString()
+                })
             .ToList();
     }
 
     /// <summary>
     /// Parse a selected label back to an AuthMethod.
+    /// Checks custom labels from <see cref="MultiAuth"/> before falling back to generic labels.
     /// </summary>
-    public static AuthMethod ParseAuthMethodLabel(string label) => label switch
+    public static AuthMethod ParseAuthMethodLabel(string label, IProviderAuth? auth = null)
     {
-        "API Key" => AuthMethod.ApiKey,
-        "OAuth Login (recommended)" => AuthMethod.OAuthPkce,
-        "OAuth Device Flow" => AuthMethod.OAuthDevice,
-        _ => AuthMethod.ApiKey
-    };
+        // Check custom labels first
+        if (auth is MultiAuth { AuthMethodLabels: { } labels })
+        {
+            foreach (var (method, methodLabel) in labels)
+            {
+                if (methodLabel == label) return method;
+            }
+        }
+
+        return label switch
+        {
+            "API Key" => AuthMethod.ApiKey,
+            "OAuth Login (recommended)" => AuthMethod.OAuthPkce,
+            "OAuth Device Flow" => AuthMethod.OAuthDevice,
+            _ => AuthMethod.ApiKey
+        };
+    }
 
     /// <summary>
     /// Get a spinner frame for the given tick count.

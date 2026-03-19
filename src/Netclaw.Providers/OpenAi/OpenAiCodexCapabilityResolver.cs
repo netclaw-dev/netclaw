@@ -4,13 +4,13 @@ namespace Netclaw.Providers.OpenAi;
 
 /// <summary>
 /// Resolves model capabilities for OpenAI Codex models from the static
-/// <see cref="OpenAiCodexDescriptor.CuratedModels"/> catalog. No network
+/// <see cref="OpenAiDescriptor.CuratedModels"/> catalog. No network
 /// calls — Codex OAuth tokens cannot query <c>/v1/models</c>.
 /// </summary>
 public sealed class OpenAiCodexCapabilityResolver : IModelCapabilityResolver
 {
     private static readonly Dictionary<string, ResolvedModelCapabilities> Catalog =
-        OpenAiCodexDescriptor.CuratedModels.ToDictionary(
+        OpenAiDescriptor.CuratedModels.ToDictionary(
             m => m.ModelId,
             m => new ResolvedModelCapabilities(
                 m.ModelId,

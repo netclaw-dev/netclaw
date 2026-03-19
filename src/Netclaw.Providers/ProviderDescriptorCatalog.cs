@@ -15,17 +15,15 @@ public sealed class ProviderDescriptorCatalog
         OllamaDescriptor ollama,
         OpenAiCompatibleDescriptor openAiCompatible,
         OpenAiDescriptor openAi,
-        OpenAiCodexDescriptor openAiCodex,
         AnthropicDescriptor anthropic,
         OpenRouterDescriptor openRouter)
     {
         Ollama = ollama;
         OpenAiCompatible = openAiCompatible;
         OpenAi = openAi;
-        OpenAiCodex = openAiCodex;
         Anthropic = anthropic;
         OpenRouter = openRouter;
-        All = [Ollama, OpenAiCompatible, OpenAi, OpenAiCodex, Anthropic, OpenRouter];
+        All = [Ollama, OpenAiCompatible, OpenAi, Anthropic, OpenRouter];
     }
 
     public OllamaDescriptor Ollama { get; }
@@ -34,23 +32,20 @@ public sealed class ProviderDescriptorCatalog
 
     public OpenAiDescriptor OpenAi { get; }
 
-    public OpenAiCodexDescriptor OpenAiCodex { get; }
-
     public AnthropicDescriptor Anthropic { get; }
 
     public OpenRouterDescriptor OpenRouter { get; }
 
     public IReadOnlyList<IProviderDescriptor> All { get; }
 
-    public static ProviderDescriptorCatalog Create(HttpClient httpClient)
+    public static ProviderDescriptorCatalog Create(HttpClient httpClient, TimeProvider? timeProvider = null)
     {
         ArgumentNullException.ThrowIfNull(httpClient);
 
         return new ProviderDescriptorCatalog(
             new OllamaDescriptor(httpClient),
             new OpenAiCompatibleDescriptor(httpClient),
-            new OpenAiDescriptor(httpClient),
-            new OpenAiCodexDescriptor(),
+            new OpenAiDescriptor(httpClient, timeProvider),
             new AnthropicDescriptor(httpClient),
             new OpenRouterDescriptor(httpClient));
     }

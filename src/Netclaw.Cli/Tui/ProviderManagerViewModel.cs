@@ -721,6 +721,7 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
                     providerType,
                     NewEndpoint,
                     NewApiKey,
+                    NewAuthMethod,
                     ct)
                 .WaitAsync(ProbeHardTimeout, ct);
         }
