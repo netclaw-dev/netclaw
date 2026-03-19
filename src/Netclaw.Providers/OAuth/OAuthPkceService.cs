@@ -37,7 +37,8 @@ public sealed class OAuthPkceService
         string clientId,
         string redirectUri,
         string? scope = null,
-        IReadOnlyDictionary<string, string>? extraParams = null)
+        IReadOnlyDictionary<string, string>? extraParams = null,
+        IReadOnlyDictionary<string, string>? extraTokenParams = null)
     {
         var codeVerifier = GenerateCodeVerifier();
         var codeChallenge = ComputeCodeChallenge(codeVerifier);
@@ -71,6 +72,7 @@ public sealed class OAuthPkceService
             RedirectUri: redirectUri,
             ClientId: clientId,
             TokenEndpoint: tokenEndpoint,
+            ExtraTokenParams: extraTokenParams,
             Completion: new TaskCompletionSource<OAuthDeviceFlowResult>());
 
         _pendingFlows[state] = pendingFlow;
@@ -91,7 +93,7 @@ public sealed class OAuthPkceService
         {
             var result = await ExchangeCodeForTokensAsync(
                 flow.TokenEndpoint, flow.ClientId, code,
-                flow.CodeVerifier, flow.RedirectUri, ct);
+                flow.CodeVerifier, flow.RedirectUri, flow.ExtraTokenParams, ct);
 
             _completedFlows[state] = result;
             flow.Completion.TrySetResult(result);
@@ -113,6 +115,7 @@ public sealed class OAuthPkceService
         string code,
         string codeVerifier,
         string redirectUri,
+        IReadOnlyDictionary<string, string>? extraParams = null,
         CancellationToken ct = default)
     {
         var tokenParams = new Dictionary<string, string>
@@ -123,6 +126,12 @@ public sealed class OAuthPkceService
             ["code_verifier"] = codeVerifier,
             ["redirect_uri"] = redirectUri,
         };
+
+        if (extraParams is not null)
+        {
+            foreach (var (key, value) in extraParams)
+                tokenParams[key] = value;
+        }
 
         var response = await _httpClient.PostAsync(
             tokenEndpoint,
@@ -144,6 +153,7 @@ public sealed class OAuthPkceService
         string tokenEndpoint,
         string clientId,
         SensitiveString refreshToken,
+        IReadOnlyDictionary<string, string>? extraParams = null,
         CancellationToken ct = default)
     {
         var tokenParams = new Dictionary<string, string>
@@ -152,6 +162,12 @@ public sealed class OAuthPkceService
             ["client_id"] = clientId,
             ["refresh_token"] = refreshToken.Value,
         };
+
+        if (extraParams is not null)
+        {
+            foreach (var (key, value) in extraParams)
+                tokenParams[key] = value;
+        }
 
         var response = await _httpClient.PostAsync(
             tokenEndpoint,
@@ -328,6 +344,7 @@ public sealed record OAuthPkcePendingFlow(
     string RedirectUri,
     string ClientId,
     string TokenEndpoint,
+    IReadOnlyDictionary<string, string>? ExtraTokenParams,
     TaskCompletionSource<OAuthDeviceFlowResult> Completion);
 
 /// <summary>

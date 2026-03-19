@@ -149,6 +149,19 @@ static async Task RunDaemonAsync(string[] args, DaemonRestartSignal restartSigna
         return Results.Ok(new { status = status.ToString() });
     });
 
+    app.MapGet("/api/mcp/oauth/status-by-state/{state}", (string state, McpOAuthService oauthService) =>
+    {
+        var status = oauthService.GetFlowStatusByState(state);
+        var result = oauthService.GetFlowResult(state);
+        return Results.Ok(new
+        {
+            status = status.ToString(),
+            accessToken = result?.AccessToken.Value,
+            refreshToken = result?.RefreshToken?.Value,
+            expiresAt = result?.ExpiresAt?.ToString("o"),
+        });
+    });
+
     // Provider OAuth endpoints (browser-based Authorization Code + PKCE)
     app.MapPost("/api/provider/oauth/start", (
         HttpContext context,
@@ -462,14 +475,20 @@ static void ConfigureDaemonServices(
     var mcpServers = configuration.GetSection("McpServers")
         .Get<Dictionary<string, McpServerEntry>>() ?? new();
     services.AddSingleton(mcpServers);
-    services.AddHttpClient<McpOAuthService>();
-    services.AddSingleton<McpOAuthService>();
+    services.AddHttpClient("ProviderOAuth");
     services.AddSingleton(sp =>
     {
         var httpClient = sp.GetRequiredService<IHttpClientFactory>().CreateClient("ProviderOAuth");
         return new OAuthPkceService(httpClient);
     });
-    services.AddHttpClient("ProviderOAuth");
+    services.AddHttpClient<McpOAuthService>();
+    services.AddSingleton(sp => new McpOAuthService(
+        sp.GetRequiredService<IHttpClientFactory>().CreateClient(nameof(McpOAuthService)),
+        paths,
+        sp.GetRequiredService<TimeProvider>(),
+        sp.GetRequiredService<ILogger<McpOAuthService>>(),
+        sp.GetRequiredService<OAuthPkceService>(),
+        sp.GetService<ISecretsProtector>()));
     services.AddSingleton<McpClientManager>();
     services.AddHostedService(sp => sp.GetRequiredService<McpClientManager>());
 

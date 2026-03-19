@@ -157,6 +157,22 @@ public sealed class DaemonApi
             $"{_endpoint}/api/mcp/oauth/status/{Uri.EscapeDataString(name)}", cts.Token);
     }
 
+    public async Task<JsonElement> GetMcpOAuthStatusByStateAsync(string state, CancellationToken ct = default)
+    {
+        using var cts = CreateTimeoutCts(DefaultTimeout, ct);
+        var client = _factory.CreateClient();
+        return await client.GetFromJsonAsync<JsonElement>(
+            $"{_endpoint}/api/mcp/oauth/status-by-state/{Uri.EscapeDataString(state)}", cts.Token);
+    }
+
+    public async Task<HttpResponseMessage> McpOAuthCallbackAsync(string code, string state, CancellationToken ct = default)
+    {
+        using var cts = CreateTimeoutCts(LongTimeout, ct);
+        var client = _factory.CreateClient();
+        return await client.GetAsync(
+            $"{_endpoint}/api/mcp/oauth/callback?code={Uri.EscapeDataString(code)}&state={Uri.EscapeDataString(state)}", cts.Token);
+    }
+
     // ── Provider OAuth ─────────────────────────────────────────────────
 
     public async Task<HttpResponseMessage> StartProviderOAuthAsync(string providerType, CancellationToken ct = default)
