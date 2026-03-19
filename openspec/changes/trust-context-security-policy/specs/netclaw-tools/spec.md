@@ -110,3 +110,19 @@ The system SHALL check grants, posture policy, effective trust context, and capa
 - **GIVEN** a tool is classified as publish-external or exfiltration-capable
 - **WHEN** the active trust context is `public` or a downgraded sensitive-read subtask without approval
 - **THEN** the runtime denies invocation even if the tool is configured and registered
+
+#### Scenario: Public-context file reads are limited to session artifacts
+
+- **GIVEN** the active trust context is `public`
+- **AND** the model requests `file_read`
+- **WHEN** the requested path is outside the current session directory
+- **THEN** the runtime denies the read
+- **AND** the denial explains that public-context file access is limited to the session directory
+
+#### Scenario: Public-context file writes are limited to session artifacts
+
+- **GIVEN** the active trust context is `public`
+- **AND** the model requests `file_write`
+- **WHEN** the requested path is outside the current session directory
+- **THEN** the runtime denies the write
+- **AND** the denial explains that public-context file access is limited to the session directory

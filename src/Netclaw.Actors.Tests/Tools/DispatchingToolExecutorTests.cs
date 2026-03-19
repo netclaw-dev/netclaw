@@ -56,7 +56,14 @@ public class DispatchingToolExecutorTests
             "call-2", "file_read",
             new Dictionary<string, object?> { ["Path"] = "/nonexistent/file.txt" });
 
-        var result = await _executor.ExecuteAsync(toolCall);
+        var context = new Netclaw.Tools.ToolExecutionContext("signalr/thread-1", Path.GetTempPath())
+        {
+            Audience = TrustAudience.Personal.ToWireValue(),
+            Boundary = SecurityPolicyDefaults.TrustedInstanceBoundary,
+            ChannelType = "signalr"
+        };
+
+        var result = await _executor.ExecuteAsync(toolCall, context);
 
         Assert.Contains("File not found", result);
     }
@@ -98,6 +105,74 @@ public class DispatchingToolExecutorTests
     }
 
     [Fact]
+    public async Task File_read_is_denied_outside_session_directory_in_public_context()
+    {
+        var filePath = Path.Combine(Path.GetTempPath(), $"netclaw-public-read-{Guid.NewGuid():N}.txt");
+        await File.WriteAllTextAsync(filePath, "secret");
+
+        try
+        {
+            var toolCall = new FunctionCallContent(
+                "call-file-read-deny", "file_read",
+                new Dictionary<string, object?> { ["Path"] = filePath });
+
+            var sessionDir = Path.Combine(Path.GetTempPath(), $"netclaw-public-session-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(sessionDir);
+
+            var context = new Netclaw.Tools.ToolExecutionContext("slack/thread-1", sessionDir)
+            {
+                Audience = TrustAudience.Public.ToWireValue(),
+                Boundary = SecurityPolicyDefaults.PublicBoundary,
+                ChannelType = "slack"
+            };
+
+            var result = await _restrictedExecutor.ExecuteAsync(toolCall, context);
+            Assert.Contains("Public trust context", result);
+            Assert.Contains("session directory", result);
+        }
+        finally
+        {
+            File.Delete(filePath);
+        }
+    }
+
+    [Fact]
+    public async Task File_write_is_denied_outside_session_directory_in_public_context()
+    {
+        var filePath = Path.Combine(Path.GetTempPath(), $"netclaw-public-write-{Guid.NewGuid():N}.txt");
+
+        try
+        {
+            var toolCall = new FunctionCallContent(
+                "call-file-write-deny", "file_write",
+                new Dictionary<string, object?>
+                {
+                    ["Path"] = filePath,
+                    ["Content"] = "blocked"
+                });
+
+            var sessionDir = Path.Combine(Path.GetTempPath(), $"netclaw-public-session-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(sessionDir);
+
+            var context = new Netclaw.Tools.ToolExecutionContext("slack/thread-1", sessionDir)
+            {
+                Audience = TrustAudience.Public.ToWireValue(),
+                Boundary = SecurityPolicyDefaults.PublicBoundary,
+                ChannelType = "slack"
+            };
+
+            var result = await _restrictedExecutor.ExecuteAsync(toolCall, context);
+            Assert.Contains("Public trust context", result);
+            Assert.Contains("session directory", result);
+            Assert.False(File.Exists(filePath));
+        }
+        finally
+        {
+            File.Delete(filePath);
+        }
+    }
+
+    [Fact]
     public async Task Routes_file_write()
     {
         var filePath = Path.Combine(Path.GetTempPath(), $"netclaw-dispatch-{Guid.NewGuid():N}.txt");
@@ -111,7 +186,17 @@ public class DispatchingToolExecutorTests
                     ["Content"] = "dispatch test"
                 });
 
-            var result = await _executor.ExecuteAsync(toolCall);
+            var sessionDir = Path.Combine(Path.GetTempPath(), $"netclaw-dispatch-session-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(sessionDir);
+
+            var context = new Netclaw.Tools.ToolExecutionContext("signalr/thread-1", sessionDir)
+            {
+                Audience = TrustAudience.Personal.ToWireValue(),
+                Boundary = SecurityPolicyDefaults.TrustedInstanceBoundary,
+                ChannelType = "signalr"
+            };
+
+            var result = await _executor.ExecuteAsync(toolCall, context);
 
             Assert.Contains("Successfully wrote", result);
         }

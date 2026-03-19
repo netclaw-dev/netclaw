@@ -1,6 +1,7 @@
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 using Netclaw.Security;
+using Netclaw.Tools;
 using Xunit;
 
 namespace Netclaw.Actors.Tests.Tools;
@@ -9,11 +10,14 @@ public class FileReadToolTests : IDisposable
 {
     private readonly string _tempDir;
     private readonly FileReadTool _tool = new(new ToolConfig());
+    private readonly string _sessionDir;
 
     public FileReadToolTests()
     {
         _tempDir = Path.Combine(Path.GetTempPath(), $"netclaw-test-{Guid.NewGuid():N}");
         Directory.CreateDirectory(_tempDir);
+        _sessionDir = Path.Combine(_tempDir, "session");
+        Directory.CreateDirectory(_sessionDir);
     }
 
     public void Dispose()
@@ -29,7 +33,7 @@ public class FileReadToolTests : IDisposable
         await File.WriteAllTextAsync(filePath, "hello world");
 
         var args = new Dictionary<string, object?> { ["Path"] = filePath };
-        var result = await _tool.ExecuteAsync(args, CancellationToken.None);
+        var result = await _tool.ExecuteAsync(args, CreatePersonalContext(), CancellationToken.None);
 
         Assert.Equal("hello world", result);
     }
@@ -40,7 +44,7 @@ public class FileReadToolTests : IDisposable
         var filePath = Path.Combine(_tempDir, "nonexistent.txt");
         var args = new Dictionary<string, object?> { ["Path"] = filePath };
 
-        var result = await _tool.ExecuteAsync(args, CancellationToken.None);
+        var result = await _tool.ExecuteAsync(args, CreatePersonalContext(), CancellationToken.None);
 
         Assert.Contains("File not found", result);
     }
@@ -59,7 +63,7 @@ public class FileReadToolTests : IDisposable
             ["Limit"] = 2
         };
 
-        var result = await _tool.ExecuteAsync(args, CancellationToken.None);
+        var result = await _tool.ExecuteAsync(args, CreatePersonalContext(), CancellationToken.None);
 
         Assert.Contains("Line 3", result);
         Assert.Contains("Line 4", result);
@@ -75,7 +79,7 @@ public class FileReadToolTests : IDisposable
         await File.WriteAllTextAsync(filePath, new string('x', 500));
 
         var args = new Dictionary<string, object?> { ["Path"] = filePath };
-        var result = await tool.ExecuteAsync(args, CancellationToken.None);
+        var result = await tool.ExecuteAsync(args, CreatePersonalContext(), CancellationToken.None);
 
         Assert.Contains("[output truncated]", result);
     }
@@ -107,9 +111,51 @@ public class FileReadToolTests : IDisposable
         var tool = new FileReadTool(new ToolConfig(), policy);
         var args = new Dictionary<string, object?> { ["Path"] = filePath };
 
-        var result = await tool.ExecuteAsync(args, CancellationToken.None);
+        var result = await tool.ExecuteAsync(args, CreatePersonalContext(), CancellationToken.None);
 
         Assert.Contains("Access denied", result);
         Assert.DoesNotContain("value", result);
     }
+
+    [Fact]
+    public async Task Public_context_can_read_file_inside_session_directory()
+    {
+        var filePath = Path.Combine(_sessionDir, "public-note.txt");
+        await File.WriteAllTextAsync(filePath, "session scoped");
+
+        var args = new Dictionary<string, object?> { ["Path"] = filePath };
+        var result = await _tool.ExecuteAsync(args, CreatePublicContext(), CancellationToken.None);
+
+        Assert.Equal("session scoped", result);
+    }
+
+    [Fact]
+    public async Task Public_context_cannot_read_file_outside_session_directory()
+    {
+        var filePath = Path.Combine(_tempDir, "host-secret.txt");
+        await File.WriteAllTextAsync(filePath, "do not read");
+
+        var args = new Dictionary<string, object?> { ["Path"] = filePath };
+        var result = await _tool.ExecuteAsync(args, CreatePublicContext(), CancellationToken.None);
+
+        Assert.Contains("Public trust context", result);
+        Assert.Contains("session directory", result);
+        Assert.DoesNotContain("do not read", result);
+    }
+
+    private ToolExecutionContext CreatePersonalContext()
+        => new("signalr/thread-1", _sessionDir)
+        {
+            Audience = TrustAudience.Personal.ToWireValue(),
+            Boundary = SecurityPolicyDefaults.TrustedInstanceBoundary,
+            ChannelType = "signalr"
+        };
+
+    private ToolExecutionContext CreatePublicContext()
+        => new("slack/thread-1", _sessionDir)
+        {
+            Audience = TrustAudience.Public.ToWireValue(),
+            Boundary = SecurityPolicyDefaults.PublicBoundary,
+            ChannelType = "slack"
+        };
 }

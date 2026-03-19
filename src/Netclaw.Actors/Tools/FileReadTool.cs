@@ -28,16 +28,22 @@ public sealed partial class FileReadTool : NetclawTool<FileReadTool.Params>
         _pathPolicy = pathPolicy;
     }
 
-    protected override async Task<string> ExecuteAsync(Params args, CancellationToken ct)
+    protected override Task<string> ExecuteAsync(Params args, CancellationToken ct)
+        => ExecuteAsync(args, ToolExecutionContext.Empty, ct);
+
+    protected override async Task<string> ExecuteAsync(Params args, ToolExecutionContext context, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(args.Path))
             return "Error: 'path' parameter is required.";
 
-        if (_pathPolicy?.IsDenied(args.Path) == true)
+        if (!SessionScopedFileAccess.TryResolveAuthorizedPath(args.Path, context, out var authorizedPath, out var accessError))
+            return accessError;
+
+        if (_pathPolicy?.IsDenied(authorizedPath) == true)
             return "Error: Access denied — this file is protected by security policy.";
 
-        if (!File.Exists(args.Path))
-            return $"Error: File not found: {args.Path}";
+        if (!File.Exists(authorizedPath))
+            return $"Error: File not found: {authorizedPath}";
 
         // Treat 0 or negative as "not specified"
         int? offset = args.Offset > 0 ? args.Offset : null;
@@ -47,15 +53,15 @@ public sealed partial class FileReadTool : NetclawTool<FileReadTool.Params>
         {
             if (offset.HasValue || limit.HasValue)
             {
-                return await ReadLinesAsync(args.Path, offset ?? 1, limit, _config.MaxOutputChars, ct);
+                return await ReadLinesAsync(authorizedPath, offset ?? 1, limit, _config.MaxOutputChars, ct);
             }
 
-            var content = await File.ReadAllTextAsync(args.Path, Encoding.UTF8, ct);
+            var content = await File.ReadAllTextAsync(authorizedPath, Encoding.UTF8, ct);
             return ShellTool.TruncateOutput(content, _config.MaxOutputChars);
         }
         catch (UnauthorizedAccessException)
         {
-            return $"Error: Permission denied: {args.Path}";
+            return $"Error: Permission denied: {authorizedPath}";
         }
         catch (IOException ex)
         {

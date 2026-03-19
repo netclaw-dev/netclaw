@@ -24,28 +24,34 @@ public sealed partial class FileWriteTool : NetclawTool<FileWriteTool.Params>
         _pathPolicy = pathPolicy;
     }
 
-    protected override async Task<string> ExecuteAsync(Params args, CancellationToken ct)
+    protected override Task<string> ExecuteAsync(Params args, CancellationToken ct)
+        => ExecuteAsync(args, ToolExecutionContext.Empty, ct);
+
+    protected override async Task<string> ExecuteAsync(Params args, ToolExecutionContext context, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(args.Path))
             return "Error: 'path' parameter is required.";
 
-        if (_pathPolicy?.IsDenied(args.Path) == true)
+        if (!SessionScopedFileAccess.TryResolveAuthorizedPath(args.Path, context, out var authorizedPath, out var accessError))
+            return accessError;
+
+        if (_pathPolicy?.IsDenied(authorizedPath) == true)
             return "Error: Access denied — this file is protected by security policy.";
 
         try
         {
-            var directory = System.IO.Path.GetDirectoryName(args.Path);
+            var directory = System.IO.Path.GetDirectoryName(authorizedPath);
             if (!string.IsNullOrEmpty(directory))
                 Directory.CreateDirectory(directory);
 
             var bytes = Encoding.UTF8.GetBytes(args.Content);
-            await File.WriteAllBytesAsync(args.Path, bytes, ct);
+            await File.WriteAllBytesAsync(authorizedPath, bytes, ct);
 
-            return $"Successfully wrote {bytes.Length} bytes to {args.Path}";
+            return $"Successfully wrote {bytes.Length} bytes to {authorizedPath}";
         }
         catch (UnauthorizedAccessException)
         {
-            return $"Error: Permission denied: {args.Path}";
+            return $"Error: Permission denied: {authorizedPath}";
         }
         catch (IOException ex)
         {

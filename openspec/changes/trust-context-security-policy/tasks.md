@@ -11,6 +11,7 @@
 - [x] 2.2.1 Add runtime-owned memory security boundaries so reusable project/entity memories can cross channels inside the same authorized boundary without depending on channel-derived domains.
 - [x] 2.2.2 Add secret-content detection/redaction to memory formation so raw credentials, keys, and tokens are never persisted as durable memory.
 - [ ] 2.3 Update built-in tool exposure and invocation policy to honor effective trust context, capability classes, and shell mode.
+  - [x] Restrict `file_read` and `file_write` to the current session directory when the active trust context is `public`.
 - [ ] 2.4 Update MCP server policy handling to support capability classification and trust-context-aware exposure/invocation.
 
 ## 3. Diagnostics and configuration UX
