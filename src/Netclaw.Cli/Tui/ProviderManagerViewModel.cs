@@ -799,50 +799,15 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
 
     private void WriteProviderConfig()
     {
-        _paths.EnsureDirectoriesExist();
-
-        var (config, secrets) = ConfigFileHelper.LoadConfigFiles(_paths);
-
-        var providers = ConfigFileHelper.GetOrCreateSection(config, "Providers");
-        var providerEntry = new Dictionary<string, object>
-        {
-            ["Type"] = NewProviderType!
-        };
-
-        if (NewAuthMethod != AuthMethod.None)
-            providerEntry["AuthMethod"] = NewAuthMethod.ToString();
-
-        var endpoint = NewEndpoint;
-        if (string.IsNullOrWhiteSpace(endpoint) && NewProviderType is not null)
-        {
-            var descriptor = _registry.Get(NewProviderType);
-            endpoint = descriptor.DefaultEndpoint;
-        }
-        endpoint ??= "";
-
-        providerEntry["Endpoint"] = endpoint;
-        providers[NewProviderName!] = providerEntry;
-        ConfigFileHelper.WriteConfigFile(_paths.NetclawConfigPath, config);
-
-        // Write secrets via SecretsFileWriter for encryption-at-rest
-        if (OAuth.Result is not null)
-        {
-            // OAuth flow: persist tokens only after user confirms add
-            OAuthTokenPersistence.PersistTokens(
-                _paths,
-                NewProviderName!,
-                OAuth.Result,
-                SecretsProtection.CreateProtector(_paths));
-        }
-        else if (!string.IsNullOrWhiteSpace(NewApiKey))
-        {
-            var secretProviders = ConfigFileHelper.GetOrCreateSection(secrets, "Providers");
-            secretProviders[NewProviderName!] = new Dictionary<string, object>
-            {
-                ["ApiKey"] = NewApiKey
-            };
-            ConfigFileHelper.WriteSecretsFile(_paths, secrets);
-        }
+        ProviderCredentialWriter.WriteProvider(
+            _paths,
+            NewProviderName!,
+            NewProviderType!,
+            NewAuthMethod,
+            NewEndpoint,
+            OAuth.Result,
+            NewApiKey,
+            _registry);
     }
 
     // ── Helpers ──

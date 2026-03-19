@@ -170,31 +170,9 @@ internal static class ProviderCommand
             authMethod = AuthMethod.ApiKey;
         }
 
-        endpoint ??= descriptor.DefaultEndpoint;
-
-        // Write to netclaw.json
-        var (config, secrets) = ConfigFileHelper.LoadConfigFiles(paths);
-
-        var providers = ConfigFileHelper.GetOrCreateSection(config, "Providers");
-        var providerEntry = new Dictionary<string, object>
-        {
-            ["Type"] = type,
-            ["Endpoint"] = endpoint,
-            ["AuthMethod"] = authMethod.ToString()
-        };
-        providers[name] = providerEntry;
-        ConfigFileHelper.WriteConfigFile(paths.NetclawConfigPath, config);
-
-        // Write secret to secrets.json via SecretsFileWriter for encryption-at-rest
-        if (!string.IsNullOrWhiteSpace(apiKey))
-        {
-            var secretProviders = ConfigFileHelper.GetOrCreateSection(secrets, "Providers");
-            secretProviders[name] = new Dictionary<string, object>
-            {
-                ["ApiKey"] = apiKey
-            };
-            ConfigFileHelper.WriteSecretsFile(paths, secrets);
-        }
+        ProviderCredentialWriter.WriteProvider(
+            paths, name, type, authMethod, endpoint,
+            oauthResult: null, apiKey: apiKey, registry);
 
         writer.WriteLine($"Added provider '{name}' ({type})");
         WriteProviderGuidance(descriptor, writer);
@@ -254,19 +232,9 @@ internal static class ProviderCommand
             writer.WriteLine();
             writer.WriteLine("Authorization successful!");
 
-            // Write config to netclaw.json
-            var (configDict, _) = ConfigFileHelper.LoadConfigFiles(paths);
-            var providers = ConfigFileHelper.GetOrCreateSection(configDict, "Providers");
-            providers[name] = new Dictionary<string, object>
-            {
-                ["Type"] = type,
-                ["Endpoint"] = endpoint,
-                ["AuthMethod"] = AuthMethod.OAuthDevice.ToString()
-            };
-            ConfigFileHelper.WriteConfigFile(paths.NetclawConfigPath, configDict);
-
-            // Persist tokens to secrets.json with encryption
-            OAuthTokenPersistence.PersistTokens(paths, name, result, SecretsProtection.CreateProtector(paths));
+            ProviderCredentialWriter.WriteProvider(
+                paths, name, type, AuthMethod.OAuthDevice, endpoint,
+                oauthResult: result, apiKey: null);
 
             writer.WriteLine($"Added provider '{name}' ({type}) with OAuth authentication.");
             return 0;

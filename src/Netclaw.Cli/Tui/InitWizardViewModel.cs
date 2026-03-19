@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text.Json;
 using Netclaw.Channels.Slack;
+using Netclaw.Cli.Config;
 using Netclaw.Cli.Daemon;
 using Netclaw.Cli.Mcp;
 using Netclaw.Configuration;
@@ -813,11 +814,6 @@ public partial class InitWizardViewModel : ReactiveViewModel
                      && desc.Auth is EndpointOnlyAuth)
                 providerEntry["Endpoint"] = desc.DefaultEndpoint;
 
-            // OAuthTokenExpiry must go in netclaw.json (not secrets.json) because
-            // encrypted DateTimeOffset values break IConfiguration binding.
-            if (OAuth.Result?.ExpiresAt is { } expiresAt)
-                providerEntry["OAuthTokenExpiry"] = expiresAt.ToString("o");
-
             providers[providerName] = providerEntry;
         }
 
@@ -922,36 +918,23 @@ public partial class InitWizardViewModel : ReactiveViewModel
         File.WriteAllText(_paths.NetclawConfigPath,
             JsonSerializer.Serialize(config, jsonOptions));
 
-        // Build secrets.json (sensitive values)
-        var secrets = new Dictionary<string, object>();
-
+        // Provider credentials — use shared writer (handles OAuthTokenExpiry placement)
         if (!string.IsNullOrWhiteSpace(SelectedProviderType))
         {
-            if (OAuth.Result is not null)
-            {
-                var providerSecrets = new Dictionary<string, object>
-                {
-                    ["OAuthAccessToken"] = OAuth.Result.AccessToken.Value
-                };
-                if (OAuth.Result.RefreshToken is not null)
-                    providerSecrets["OAuthRefreshToken"] = OAuth.Result.RefreshToken.Value;
-
-                secrets["Providers"] = new Dictionary<string, object>
-                {
-                    [SelectedProviderType.ToLowerInvariant()] = providerSecrets
-                };
-            }
-            else if (!string.IsNullOrWhiteSpace(ApiKeyInput))
-            {
-                secrets["Providers"] = new Dictionary<string, object>
-                {
-                    [SelectedProviderType.ToLowerInvariant()] = new Dictionary<string, object>
-                    {
-                        ["ApiKey"] = ApiKeyInput
-                    }
-                };
-            }
+            ProviderCredentialWriter.WriteProvider(
+                _paths,
+                SelectedProviderType.ToLowerInvariant(),
+                SelectedProviderType.ToLowerInvariant(),
+                SelectedAuthMethod,
+                EndpointInput,
+                OAuth.Result,
+                ApiKeyInput,
+                _registry,
+                SensitiveStringTypeConverter.Protector);
         }
+
+        // Non-provider secrets (Slack, Search)
+        var secrets = new Dictionary<string, object>();
 
         if (SlackEnabled)
         {

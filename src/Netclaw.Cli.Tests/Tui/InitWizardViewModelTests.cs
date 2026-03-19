@@ -314,15 +314,20 @@ public sealed class InitWizardViewModelTests : IDisposable
         await vm.HealthCheckCompletion!.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.True(vm.IsComplete.Value);
 
-        // secrets.json contains the API key
+        // secrets.json contains the API key (encrypted at rest)
         Assert.True(File.Exists(_paths.SecretsPath));
         var secrets = JsonDocument.Parse(File.ReadAllText(_paths.SecretsPath));
         Assert.True(secrets.RootElement.TryGetProperty("Providers", out var providers));
         Assert.True(providers.TryGetProperty("openrouter", out var entry));
-        Assert.Equal("sk-or-test-1234567890", entry.GetProperty("ApiKey").GetString());
+        var encryptedKey = entry.GetProperty("ApiKey").GetString();
+        Assert.StartsWith("ENC:", encryptedKey);
 
         // netclaw.json must NOT contain the API key
         Assert.DoesNotContain("sk-or-test", File.ReadAllText(_paths.NetclawConfigPath));
+
+        // Verify decryption round-trips correctly
+        var loaded = Netclaw.Cli.Provider.ProviderCommand.LoadProviders(_paths);
+        Assert.Equal("sk-or-test-1234567890", loaded["openrouter"].ApiKey?.Value);
     }
 
     [Fact]
