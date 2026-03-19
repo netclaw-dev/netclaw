@@ -20,7 +20,8 @@ public sealed class SkillRegistry
             ["netclaw-manual"] = 2.5,
             ["netclaw-memory"] = 3.0,
             ["netclaw-identity"] = 3.0,
-            ["skill-authoring"] = 3.0
+            ["skill-authoring"] = 3.0,
+            ["search-citation"] = 1.5 // Lower: search intent is often implicit in natural language
         };
 
     public void Register(SkillEntry skill)

@@ -14,6 +14,25 @@ public interface ISystemPromptProvider
 }
 
 /// <summary>
+/// Controls when a context layer is injected into LLM calls.
+/// </summary>
+public enum ContextLayerTiming
+{
+    /// <summary>
+    /// Injected on every LLM call. Use for content that changes between turns
+    /// (e.g. current time).
+    /// </summary>
+    EveryTurn,
+
+    /// <summary>
+    /// Injected on the first LLM call and again after compaction resets context.
+    /// Use for catalogs that are static for the session lifetime (e.g. tool index,
+    /// skill index, subagent catalog).
+    /// </summary>
+    OnceAtStart
+}
+
+/// <summary>
 /// Provides a dynamic context layer that is injected into LLM calls
 /// but NOT persisted as part of <c>SystemPromptSet</c>. This allows
 /// transient data (e.g. tool index) to be refreshed on every call
@@ -25,6 +44,12 @@ public interface IContextLayerProvider
     /// Returns the context layer content, or empty string if nothing to inject.
     /// </summary>
     string GetContextLayer();
+
+    /// <summary>
+    /// Controls injection frequency. Defaults to <see cref="ContextLayerTiming.EveryTurn"/>
+    /// for backward compatibility.
+    /// </summary>
+    ContextLayerTiming Timing => ContextLayerTiming.EveryTurn;
 }
 
 /// <summary>
@@ -50,24 +75,6 @@ public sealed class NullSystemPromptProvider : ISystemPromptProvider
     public static readonly NullSystemPromptProvider Instance = new();
 
     public string GetSystemPrompt() => string.Empty;
-}
-
-/// <summary>
-/// Dynamic context layer that provides the compressed tool index.
-/// Updated by <see cref="ToolIndexContextLayer.Update"/> after MCP discovery completes.
-/// Content is NOT persisted — rebuilt on every LLM call so rehydrated sessions
-/// always see the current tool set.
-/// </summary>
-public sealed class ToolIndexContextLayer : IContextLayerProvider
-{
-    private volatile string _index = string.Empty;
-
-    /// <summary>
-    /// Replace the tool index content. Thread-safe via volatile write.
-    /// </summary>
-    public void Update(string index) => _index = index;
-
-    public string GetContextLayer() => _index;
 }
 
 /// <summary>
@@ -98,11 +105,15 @@ public sealed class CurrentTimeContextLayer(TimeProvider timeProvider) : IContex
 public sealed class FileContextLayerProvider : IContextLayerProvider
 {
     private readonly string _filePath;
+    private readonly ContextLayerTiming _timing;
 
-    public FileContextLayerProvider(string filePath)
+    public FileContextLayerProvider(string filePath, ContextLayerTiming timing = ContextLayerTiming.EveryTurn)
     {
         _filePath = filePath;
+        _timing = timing;
     }
+
+    public ContextLayerTiming Timing => _timing;
 
     public string GetContextLayer()
     {

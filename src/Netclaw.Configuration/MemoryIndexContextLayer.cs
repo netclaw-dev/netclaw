@@ -24,6 +24,8 @@ public sealed class MemoryIndexContextLayer : IContextLayerProvider
 {
     private volatile string _status = string.Empty;
 
+    public ContextLayerTiming Timing => ContextLayerTiming.OnceAtStart;
+
     /// <summary>
     /// Update the memory context layer based on the resolved state.
     /// </summary>
