@@ -440,6 +440,14 @@ public sealed partial class ReminderManagerActor : ReceiveActor
             }
         }
 
+        // One-shot reminders cannot fire again — disable after execution
+        var definition = _definitionStore.Get(completed.Id);
+        if (definition is { Enabled: true, Schedule.Type: ReminderScheduleType.OneShot })
+        {
+            _log.Info("One-shot reminder '{0}' completed, disabling", completed.Id.Value);
+            await DisableReminderInternalAsync(completed.Id);
+        }
+
         await ProcessDeferredQueueAsync();
     }
 
@@ -472,11 +480,26 @@ public sealed partial class ReminderManagerActor : ReceiveActor
                     restoredSchedules++;
             }
 
-            if (cancelledOrphans > 0 || restoredSchedules > 0)
+            // Disable zombie one-shots: enabled definitions with fire time in the past
+            // and no active Akka.Reminders schedule (already fired, never cleaned up).
+            var now = _timeProvider.GetUtcNow();
+            var disabledZombies = 0;
+            foreach (var definition in definitions.Where(d =>
+                         d.Enabled &&
+                         d.Schedule.Type == ReminderScheduleType.OneShot &&
+                         d.Schedule.FireAt <= now &&
+                         !scheduled.ContainsKey(d.Id)))
             {
-                _log.Info("Reminder reconcile complete: cancelled_orphans={0}, restored={1}",
+                await DisableReminderInternalAsync(new ReminderId(definition.Id));
+                disabledZombies++;
+            }
+
+            if (cancelledOrphans > 0 || restoredSchedules > 0 || disabledZombies > 0)
+            {
+                _log.Info("Reminder reconcile complete: cancelled_orphans={0}, restored={1}, disabled_zombies={2}",
                     cancelledOrphans,
-                    restoredSchedules);
+                    restoredSchedules,
+                    disabledZombies);
             }
         }
         catch (Exception ex)
@@ -675,7 +698,7 @@ public sealed partial class ReminderManagerActor : ReceiveActor
         public static ScheduleAttempt Fail(string message) => new(false, null, message);
     }
 
-    private sealed record ReconcileReminders
+    internal sealed record ReconcileReminders
     {
         public static readonly ReconcileReminders Instance = new();
     }
