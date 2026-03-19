@@ -333,7 +333,8 @@ public class LlmSessionIntegrationTests : TestKit
         await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3));
         var firstCompleted = await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
 
-        _fakeChatClient.NextResponseGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _fakeChatClient.NextResponseGate = gate;
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
@@ -350,7 +351,7 @@ public class LlmSessionIntegrationTests : TestKit
             ErrorMessage = "invalid_blocks"
         });
 
-        _fakeChatClient.NextResponseGate.TrySetResult();
+        gate.TrySetResult();
 
         var secondText = await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3));
         Assert.Contains("Response #2", secondText.Text, StringComparison.OrdinalIgnoreCase);
