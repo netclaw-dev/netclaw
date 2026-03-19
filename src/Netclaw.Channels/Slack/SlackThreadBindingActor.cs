@@ -414,7 +414,9 @@ internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStas
                 break;
 
             case FileOutput file:
-                await SafeUploadFileAsync(file);
+                var uploadResult = await SafeUploadFileAsync(file);
+                if (!uploadResult.Success)
+                    _lastFailedPost = uploadResult;
                 break;
 
             case BufferFlush:
@@ -436,13 +438,13 @@ internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStas
 
             case ErrorOutput err:
                 var refId = err.CorrelationId.ToString("N")[..8];
-                var errResult = await SafePostAsync($":warning: {err.Message} (ref: {refId})");
-                if (errResult.Success)
+                var errorResult = await SafePostAsync($":warning: {err.Message} (ref: {refId})");
+                if (errorResult.Success)
                     _postedThisTurn = true;
                 _buffer.Clear();
                 break;
 
-            case TurnCompleted tc:
+            case TurnCompleted completed:
                 if (_sawTextDelta && !_postedThisTurn)
                 {
                     var reply = _buffer.ToString().Trim();
@@ -460,16 +462,16 @@ internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStas
 
                 if (!_postedThisTurn && !_uploadedFileThisTurn)
                 {
-                    if (_lastFailedPost is { IsContentError: true })
+                    if (_lastFailedPost is { ShouldNotifySession: true, FailureKind: { } failureKind, ErrorMessage: { } errorMessage })
                     {
-                        // Channel rejected the LLM's output — feed error back so LLM can retry
-                        _log.Warning("Turn completed with content delivery failure; notifying session");
-                        await NotifyDeliveryFailedAsync(tc.TurnNumber, _lastFailedPost.ErrorMessage!);
+                        _log.Warning(
+                            "Turn completed with retryable Slack delivery failure kind={FailureKind}; notifying session",
+                            failureKind);
+                        await NotifyDeliveryFailedAsync(completed.TurnNumber, failureKind, errorMessage);
                     }
                     else if (_lastFailedPost is not null)
                     {
-                        // Transport failure (timeout, network) — LLM can't fix this
-                        _log.Warning("Turn completed with transport failure: {Error}", _lastFailedPost.ErrorMessage);
+                        _log.Warning("Turn completed with non-retryable Slack delivery failure: {Error}", _lastFailedPost.ErrorMessage);
                     }
                     else
                     {
@@ -505,28 +507,25 @@ internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStas
         }
         catch (OperationCanceledException ex)
         {
-            // Transport failure — LLM can't fix a timeout by producing different output
             _log.Error(ex, "Timed out posting Slack reply for session {0}", _sessionId.Value);
             ChannelTelemetry.RecordSlackReplyFailed(_dependencies.TimeProvider.GetElapsedTime(startedAt).TotalMilliseconds);
-            return new PostResult($"Timed out posting reply: {ex.Message}", IsContentError: false);
+            return new PostResult($"Timed out posting reply: {ex.Message}");
         }
-        catch (SlackNet.SlackException ex)
+        catch (SlackMessageDeliveryException ex)
         {
-            // Slack rejected the content — LLM might fix this by producing different output
-            _log.Error(ex, "Slack rejected reply for session {0}: {1}", _sessionId.Value, ex.ErrorCode);
+            _log.Error(ex, "Slack rejected reply for session {0} with error code {1}", _sessionId.Value, ex.ErrorCode ?? "unknown");
             ChannelTelemetry.RecordSlackReplyFailed(_dependencies.TimeProvider.GetElapsedTime(startedAt).TotalMilliseconds);
-            return new PostResult(ex.Message, IsContentError: true);
+            return new PostResult(ex.Message, ex.FailureKind);
         }
         catch (Exception ex)
         {
-            // Unknown/transport failure — don't assume the LLM can fix it
             _log.Error(ex, "Failed posting Slack reply for session {0}", _sessionId.Value);
             ChannelTelemetry.RecordSlackReplyFailed(_dependencies.TimeProvider.GetElapsedTime(startedAt).TotalMilliseconds);
-            return new PostResult(ex.Message, IsContentError: false);
+            return new PostResult(ex.Message);
         }
     }
 
-    private async Task NotifyDeliveryFailedAsync(int turnNumber, string errorMessage)
+    private async Task NotifyDeliveryFailedAsync(int turnNumber, DeliveryFailureKind failureKind, string errorMessage)
     {
         try
         {
@@ -535,31 +534,28 @@ internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStas
                 SessionId = _sessionId,
                 TurnNumber = turnNumber,
                 ChannelType = "slack",
+                FailureKind = failureKind,
                 ErrorMessage = errorMessage
             });
         }
         catch (Exception ex)
         {
-            _log.Error(ex, "Failed to send delivery feedback to session");
+            _log.Error(ex, "Failed to send Slack delivery feedback to session");
         }
     }
 
-    /// <summary>
-    /// Result of a channel post attempt. Carries the error message on failure
-    /// so it can be fed back to the LLM session.
-    /// </summary>
-    /// <param name="ErrorMessage">The error message, or null on success.</param>
-    /// <param name="IsContentError">True if the channel rejected the content itself
-    /// (e.g. invalid_blocks) — the LLM can fix this by producing different output.
-    /// False for transport failures (timeouts, network) — retrying with different
-    /// LLM output won't help.</param>
-    private sealed record PostResult(string? ErrorMessage = null, bool IsContentError = false)
+    private sealed record PostResult(string? ErrorMessage = null, DeliveryFailureKind? FailureKind = null)
     {
         public static readonly PostResult Ok = new();
+
         public bool Success => ErrorMessage is null;
+
+        public bool ShouldNotifySession => FailureKind is DeliveryFailureKind.ContentRejected
+            or DeliveryFailureKind.MessageTooLarge
+            or DeliveryFailureKind.UnsupportedContent;
     }
 
-    private async Task SafeUploadFileAsync(FileOutput file)
+    private async Task<PostResult> SafeUploadFileAsync(FileOutput file)
     {
         var startedAt = _dependencies.TimeProvider.GetTimestamp();
         try
@@ -567,7 +563,7 @@ internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStas
             if (!File.Exists(file.FilePath))
             {
                 _log.Warning("File not found for upload: {Path}", file.FilePath);
-                return;
+                return new PostResult($"File not found for upload: {file.FilePath}");
             }
 
             using var cts = new CancellationTokenSource(ReplyOperationTimeout);
@@ -580,16 +576,28 @@ internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStas
 
             _uploadedFileThisTurn = true;
             _log.Info("Uploaded file to Slack thread: {FileName}", file.FileName);
+            return PostResult.Ok;
         }
         catch (OperationCanceledException ex)
         {
             _log.Error(ex, "Timed out uploading file {FileName} to Slack thread", file.FileName);
             ChannelTelemetry.RecordSlackReplyFailed(_dependencies.TimeProvider.GetElapsedTime(startedAt).TotalMilliseconds);
+            return new PostResult($"Timed out uploading file: {ex.Message}");
+        }
+        catch (SlackMessageDeliveryException ex)
+        {
+            _log.Error(ex, "Slack rejected file upload {FileName} for session {SessionId} with error code {ErrorCode}",
+                file.FileName,
+                _sessionId.Value,
+                ex.ErrorCode ?? "unknown");
+            ChannelTelemetry.RecordSlackReplyFailed(_dependencies.TimeProvider.GetElapsedTime(startedAt).TotalMilliseconds);
+            return new PostResult(ex.Message, ex.FailureKind);
         }
         catch (Exception ex)
         {
             _log.Error(ex, "Failed to upload file {FileName} to Slack thread", file.FileName);
             ChannelTelemetry.RecordSlackReplyFailed(_dependencies.TimeProvider.GetElapsedTime(startedAt).TotalMilliseconds);
+            return new PostResult(ex.Message);
         }
     }
 

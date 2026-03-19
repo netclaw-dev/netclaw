@@ -95,9 +95,7 @@ public interface ISessionPipeline
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Sends a feedback message (e.g. <see cref="DeliveryFailed"/>) back to the
-    /// session actor. Routes via <see cref="IWithSessionId"/> — no changes to
-    /// routing infrastructure needed.
+    /// Sends delivery feedback back to the owning session actor.
     /// </summary>
     Task SendFeedbackAsync(IWithSessionId feedback, CancellationToken ct = default);
 }
@@ -203,7 +201,6 @@ public sealed class SessionPipeline : ISessionPipeline
             killSwitch);
     }
 
-    /// <inheritdoc />
     public async Task SendFeedbackAsync(IWithSessionId feedback, CancellationToken ct = default)
     {
         var sessionManager = await _sessionManagerProvider.GetAsync(ct);

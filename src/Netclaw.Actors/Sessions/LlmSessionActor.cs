@@ -74,6 +74,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     private bool _budgetNudgeSent;
 
     private const int MaxPreToolEmptyResponseRetries = 2;
+    private const int MaxDeliveryFailureRetries = 2;
     private const string EmptyResponseFallbackMessage = "I didn't manage to produce a reply. Please try rephrasing or sending your request again.";
     private const string ToolBudgetExhaustedMessage =
         "I used all available tool calls for this turn and couldn't produce a final summary. "
@@ -88,10 +89,10 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     // Whether the current LLM call intentionally disabled tool use after a circuit breaker fired.
     private bool _forceNoToolsActive;
 
-    // Channel delivery failure: if a DeliveryFailed message arrives during Processing,
-    // the nudge is added to state immediately but the LLM retry is deferred until
-    // DrainBufferedMessagesOrBecomeReady runs.
-    private bool _deliveryFailurePending;
+    // Delivery retry state. A completed turn remains eligible until a new user turn starts.
+    private int? _deliveryRetryEligibleTurnNumber;
+    private int _deliveryRetryCount;
+    private bool _deliveryRetryChainActive;
 
     // Child actor for per-session log file (created when session logs directory is configured)
     private IActorRef? _logActor;
@@ -236,26 +237,11 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         Command<CompactionWorkCompleted>(_ => { });
         Command<CompactionWorkFailed>(_ => { });
         Command<SpawnChildActorRequest>(msg => Sender.Tell(Context.ActorOf(msg.Props, msg.ActorName)));
-
-        Command<DeliveryFailed>(msg =>
-        {
-            _log.Warning(
-                "delivery_failed channel={Channel} turn={Turn} error={Error}",
-                msg.ChannelType, msg.TurnNumber, msg.ErrorMessage);
-
-            _state = _state.AddSystemNudge(
-                $"Your last response could not be delivered to the user via {msg.ChannelType}. "
-                + $"The channel returned this error: {msg.ErrorMessage}\n"
-                + "The user did NOT see your response. Please produce a corrected response "
-                + "that avoids the formatting issue described in the error.");
-
-            _deliveryFailurePending = false;
-            FireLlmCall();
-            Become(Processing);
-        });
+        Command<DeliveryFailed>(HandleDeliveryFailedWhenReady);
 
         Command<SendUserMessage>(cmd =>
         {
+            ClearDeliveryRetryState();
             BindTurnTelemetry(cmd.Source);
             TurnLog().Info(
                 "turn_received channel={ChannelType} sender={SenderId} hasMedia={HasMedia} textChars={TextLength}",
@@ -325,26 +311,31 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         CommandSubscriptionMessages();
         CommandSnapshotMessages();
 
-        Command<DeliveryFailed>(msg =>
-        {
-            _log.Warning(
-                "delivery_failed_during_processing channel={Channel} turn={Turn} error={Error}",
-                msg.ChannelType, msg.TurnNumber, msg.ErrorMessage);
-
-            _state = _state.AddSystemNudge(
-                $"Your last response could not be delivered to the user via {msg.ChannelType}. "
-                + $"The channel returned this error: {msg.ErrorMessage}\n"
-                + "The user did NOT see your response. Please produce a corrected response "
-                + "that avoids the formatting issue described in the error.");
-
-            _deliveryFailurePending = true;
-        });
-
         Command<SendUserMessage>(cmd =>
         {
+            ClearDeliveryRetryState();
             _log.Info("Buffering user message (LLM call in progress)");
             _buffer.Add(cmd);
             TryReplyAck();
+        });
+
+        Command<DeliveryFailed>(msg =>
+        {
+            if (!IsRetryableDeliveryFailure(msg))
+            {
+                _log.Warning(
+                    "Ignoring non-retryable delivery feedback while processing channel={Channel} turn={Turn} kind={FailureKind}",
+                    msg.ChannelType,
+                    msg.TurnNumber,
+                    msg.FailureKind);
+                return;
+            }
+
+            _log.Warning(
+                "Ignoring stale delivery feedback while processing channel={Channel} turn={Turn} eligibleTurn={EligibleTurn}",
+                msg.ChannelType,
+                msg.TurnNumber,
+                _deliveryRetryEligibleTurnNumber?.ToString() ?? "none");
         });
 
         Command<CompactionWorkCompleted>(_ => { });
@@ -1350,6 +1341,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                     Title: "turn-completion",
                     UpdateSemantics: "append-document")));
 
+            MarkTurnEligibleForDeliveryRetry(_state.TurnCount);
+
             // Check if compaction should trigger
             if (ShouldCompact())
             {
@@ -1376,22 +1369,95 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             }
 
             _buffer.Clear();
-            _deliveryFailurePending = false;
-            FireLlmCall();
-            Become(Processing);
-            return;
-        }
-
-        if (_deliveryFailurePending)
-        {
-            _deliveryFailurePending = false;
-            TurnLog().Info("turn_delivery_failure_retry");
             FireLlmCall();
             Become(Processing);
             return;
         }
 
         Become(Ready);
+    }
+
+    private void HandleDeliveryFailedWhenReady(DeliveryFailed msg)
+    {
+        if (!IsRetryableDeliveryFailure(msg))
+        {
+            _log.Warning(
+                "Ignoring non-retryable delivery feedback channel={Channel} turn={Turn} kind={FailureKind}",
+                msg.ChannelType,
+                msg.TurnNumber,
+                msg.FailureKind);
+            return;
+        }
+
+        if (_deliveryRetryEligibleTurnNumber != msg.TurnNumber)
+        {
+            _log.Warning(
+                "Ignoring stale delivery feedback channel={Channel} turn={Turn} eligibleTurn={EligibleTurn}",
+                msg.ChannelType,
+                msg.TurnNumber,
+                _deliveryRetryEligibleTurnNumber?.ToString() ?? "none");
+            return;
+        }
+
+        if (_deliveryRetryCount >= MaxDeliveryFailureRetries)
+        {
+            _log.Warning(
+                "Delivery retry budget exhausted channel={Channel} turn={Turn} kind={FailureKind}",
+                msg.ChannelType,
+                msg.TurnNumber,
+                msg.FailureKind);
+            _deliveryRetryEligibleTurnNumber = null;
+            _deliveryRetryChainActive = false;
+            return;
+        }
+
+        _deliveryRetryCount++;
+        _deliveryRetryChainActive = true;
+
+        _log.Warning(
+            "Retrying after delivery failure channel={Channel} turn={Turn} kind={FailureKind} attempt={Attempt}",
+            msg.ChannelType,
+            msg.TurnNumber,
+            msg.FailureKind,
+            _deliveryRetryCount);
+
+        _state = _state.AddSystemNudge(BuildDeliveryFailureNudge(msg));
+        FireLlmCall();
+        Become(Processing);
+    }
+
+    private static bool IsRetryableDeliveryFailure(DeliveryFailed msg)
+        => msg.FailureKind is DeliveryFailureKind.ContentRejected
+            or DeliveryFailureKind.MessageTooLarge
+            or DeliveryFailureKind.UnsupportedContent;
+
+    private static string BuildDeliveryFailureNudge(DeliveryFailed msg)
+    {
+        var guidance = msg.FailureKind switch
+        {
+            DeliveryFailureKind.ContentRejected => "Produce a simpler channel-safe response and avoid the content pattern the channel rejected.",
+            DeliveryFailureKind.MessageTooLarge => "Produce a shorter response that fits the channel's length limits.",
+            DeliveryFailureKind.UnsupportedContent => "Avoid unsupported formatting or content types for this channel.",
+            _ => "Produce a corrected response that avoids the reported delivery issue."
+        };
+
+        return $"Your last response could not be delivered to the user via {msg.ChannelType}. "
+            + $"The user did not receive it. Delivery failure kind: {msg.FailureKind}. "
+            + $"Channel error: {msg.ErrorMessage}\n{guidance}";
+    }
+
+    private void ClearDeliveryRetryState()
+    {
+        _deliveryRetryEligibleTurnNumber = null;
+        _deliveryRetryCount = 0;
+        _deliveryRetryChainActive = false;
+    }
+
+    private void MarkTurnEligibleForDeliveryRetry(int turnNumber)
+    {
+        _deliveryRetryEligibleTurnNumber = turnNumber;
+        if (!_deliveryRetryChainActive)
+            _deliveryRetryCount = 0;
     }
 
     private bool ShouldCompact()
@@ -2678,6 +2744,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     private void FailCurrentTurn(string errorMessage, Exception cause, ErrorCategory category = ErrorCategory.Unknown)
     {
+        ClearDeliveryRetryState();
         _state = _state.AddErrorReply(errorMessage);
 
         var correlationId = Guid.NewGuid();

@@ -81,7 +81,7 @@ public sealed class SlackGatewayActor : ReceiveActor
 }
 
 public sealed record SlackGatewayDependencies(
-    SessionPipeline Pipeline,
+    ISessionPipeline Pipeline,
     ActorSystem ActorSystem,
     TimeProvider TimeProvider,
     SlackChannelOptions Options,

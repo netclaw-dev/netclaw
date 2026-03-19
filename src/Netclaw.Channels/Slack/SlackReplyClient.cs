@@ -1,22 +1,44 @@
 using SlackNet;
 using SlackNet.WebApi;
+using Netclaw.Actors.Protocol;
 
 namespace Netclaw.Channels.Slack;
 
 public sealed class SlackReplyClient(ISlackApiClient slackApiClient) : ISlackReplyClient
 {
-    public Task PostThreadReplyAsync(SlackPostMessage message, CancellationToken cancellationToken = default)
+    public async Task PostThreadReplyAsync(SlackPostMessage message, CancellationToken cancellationToken = default)
     {
         var blocks = SlackBlockConverter.Convert(message.Text);
 
-        return slackApiClient.Chat.PostMessage(new Message
+        try
         {
-            Channel = message.ChannelId.Value,
-            ThreadTs = message.ThreadTs.Value,
-            Text = message.Text, // fallback for notifications
-            Blocks = blocks
-        }, cancellationToken);
+            await slackApiClient.Chat.PostMessage(new Message
+            {
+                Channel = message.ChannelId.Value,
+                ThreadTs = message.ThreadTs.Value,
+                Text = message.Text,
+                Blocks = blocks
+            }, cancellationToken);
+        }
+        catch (SlackException ex)
+        {
+            throw new SlackMessageDeliveryException(
+                ex.ErrorCode,
+                MapFailureKind(ex.ErrorCode),
+                ex.Message,
+                ex);
+        }
     }
+
+    private static DeliveryFailureKind MapFailureKind(string? errorCode)
+        => errorCode switch
+        {
+            "invalid_blocks" or "invalid_arguments" => DeliveryFailureKind.ContentRejected,
+            "msg_too_long" => DeliveryFailureKind.MessageTooLarge,
+            "too_many_attachments" => DeliveryFailureKind.UnsupportedContent,
+            "not_in_channel" or "channel_not_found" or "missing_scope" or "no_permission" => DeliveryFailureKind.PermissionDenied,
+            _ => DeliveryFailureKind.Unknown
+        };
 
     public async Task UploadFileToThreadAsync(
         SlackChannelId channelId,
@@ -25,15 +47,26 @@ public sealed class SlackReplyClient(ISlackApiClient slackApiClient) : ISlackRep
         string? filename = null,
         CancellationToken cancellationToken = default)
     {
-        var resolvedFilename = filename ?? Path.GetFileName(filePath);
-        await using var stream = System.IO.File.OpenRead(filePath);
-        var upload = new FileUpload(resolvedFilename, stream);
+        try
+        {
+            var resolvedFilename = filename ?? Path.GetFileName(filePath);
+            await using var stream = System.IO.File.OpenRead(filePath);
+            var upload = new FileUpload(resolvedFilename, stream);
 
-        await slackApiClient.Files.Upload(
-            upload,
-            channelId.Value,
-            threadTs.Value,
-            initialComment: null,
-            cancellationToken);
+            await slackApiClient.Files.Upload(
+                upload,
+                channelId.Value,
+                threadTs.Value,
+                initialComment: null,
+                cancellationToken);
+        }
+        catch (SlackException ex)
+        {
+            throw new SlackMessageDeliveryException(
+                ex.ErrorCode,
+                MapFailureKind(ex.ErrorCode),
+                ex.Message,
+                ex);
+        }
     }
 }
