@@ -34,6 +34,13 @@ The CLI SHALL provide guided setup through `netclaw init`. The onboarding wizard
 - **THEN** the generated configuration uses strict-default policy behavior
 - **AND** diagnostics explain which capabilities remain disabled until explicitly enabled
 
+#### Scenario: Onboarding writes recommended audience profiles
+
+- **WHEN** onboarding generates a baseline configuration
+- **THEN** the configuration includes recommended resolved audience profiles for `public`, `team`, and `personal`
+- **AND** the recommended `public` profile limits filesystem access to `{session_dir}` and disables shell
+- **AND** the recommended `team` profile remains conservative unless the operator opts into broader scopes
+
 ### Requirement: Config and ACL validation
 
 The CLI SHALL validate configuration and return actionable errors. Validation SHALL treat missing or ambiguous security policy as a strict-default configuration state and SHALL warn or fail on unsafe combinations.
@@ -50,6 +57,18 @@ The CLI SHALL validate configuration and return actionable errors. Validation SH
 - **THEN** validation fails or emits a blocking doctor issue
 - **AND** output explains that public-safe policy requires shell to be off until isolated execution exists
 
+#### Scenario: Unrestricted personal profile is warned
+
+- **WHEN** validation detects a `personal` audience profile with `tools = all` and unrestricted filesystem scope
+- **THEN** validation emits a high-severity warning
+- **AND** output explains that the operator intentionally granted full local authority to the personal profile
+
+#### Scenario: Non-personal profile cannot use unrestricted all mode
+
+- **WHEN** validation detects `tools = all` or unrestricted filesystem mode on a `public` or `team` audience profile
+- **THEN** validation fails or emits a blocking doctor issue
+- **AND** output explains that unrestricted profile modes are only supported for `personal`
+
 ### Requirement: Security diagnostics
 
 The CLI SHALL report exposure mode, policy health, and effective trust-context diagnostics.
@@ -64,3 +83,9 @@ The CLI SHALL report exposure mode, policy health, and effective trust-context d
 - **WHEN** no explicit trust-context policy is configured
 - **THEN** doctor output reports that strict defaults are active
 - **AND** lists the capabilities that were reduced because policy was missing or incomplete
+
+#### Scenario: Doctor explains effective audience profile
+
+- **WHEN** operator runs `netclaw gateway doctor`
+- **THEN** output includes the resolved tool/resource scopes for each audience profile
+- **AND** output highlights where stricter fallback values were applied because configuration was omitted or partial

@@ -2,7 +2,7 @@
 
 ### Requirement: Tool registration with MEAI
 
-All first-party tools SHALL be registered as `Microsoft.Extensions.AI` tool definitions at startup. Tool metadata (name, description, parameters) SHALL be defined at registration. Available tools presented to the LLM SHALL be filtered per turn based on grants, posture policy, effective trust context, and capability classification.
+All first-party tools SHALL be registered as `Microsoft.Extensions.AI` tool definitions at startup. Tool metadata (name, description, parameters) SHALL be defined at registration. Available tools presented to the LLM SHALL be filtered per turn based on grants, posture policy, the resolved audience profile, effective trust context, and capability classification.
 
 #### Scenario: Tools registered at startup
 
@@ -80,7 +80,7 @@ The system SHALL provide a shell execution tool with explicit policy modes `off`
 
 ### Requirement: Policy-gated tool invocation
 
-The system SHALL check grants, posture policy, effective trust context, and capability classification before every tool execution. Tool invocations SHALL be logged with audit records including tool name, invoking session, timestamp, and allow/deny result.
+The system SHALL check grants, posture policy, the resolved audience profile, effective trust context, and capability classification before every tool execution. Tool invocations SHALL be logged with audit records including tool name, invoking session, timestamp, and allow/deny result.
 
 #### Scenario: Granted tool executes successfully
 
@@ -110,6 +110,34 @@ The system SHALL check grants, posture policy, effective trust context, and capa
 - **GIVEN** a tool is classified as publish-external or exfiltration-capable
 - **WHEN** the active trust context is `public` or a downgraded sensitive-read subtask without approval
 - **THEN** the runtime denies invocation even if the tool is configured and registered
+
+### Requirement: Audience profiles define tool and resource scope
+
+The system SHALL support operator-configurable audience profiles for `public`, `team`, and `personal`. Each profile SHALL resolve to explicit tool visibility and resource scopes rather than relying on runtime path guessing.
+
+#### Scenario: Public profile limits file access to session directory
+
+- **GIVEN** the active trust context is `public`
+- **AND** the resolved `public` audience profile grants local file access
+- **WHEN** the model requests `file_read` or `file_write`
+- **THEN** the runtime applies the `public` profile's configured roots
+- **AND** the recommended default roots are limited to `{session_dir}`
+
+#### Scenario: Personal profile may explicitly allow all tools and directories
+
+- **GIVEN** the operator configures the `personal` audience profile with `tool mode = all`
+- **AND** the filesystem mode for that profile is set to `all`
+- **WHEN** a `personal` turn runs without downgrade
+- **THEN** the runtime may expose all granted tools and unrestricted local filesystem access for that profile
+- **AND** doctor output warns that the personal profile is effectively unrestricted
+
+#### Scenario: Broader profile does not leak into narrower audience
+
+- **GIVEN** the `personal` audience profile allows all tools and directories
+- **AND** the `public` audience profile allows only session-scoped file access
+- **WHEN** a turn is evaluated as `public`
+- **THEN** the runtime uses only the resolved `public` profile
+- **AND** the broader personal settings do not apply through inheritance or fallback
 
 #### Scenario: Public-context file reads are limited to session artifacts
 

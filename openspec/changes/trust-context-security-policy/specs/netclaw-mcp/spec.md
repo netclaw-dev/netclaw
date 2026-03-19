@@ -2,7 +2,7 @@
 
 ### Requirement: MCP server profile configuration
 
-The system SHALL support named MCP server profiles in configuration. Each profile SHALL specify a transport type (`stdio` or `SSE`), the command or URL for the server, optional environment variables to pass to the server process, and a capability classification used by trust-context policy.
+The system SHALL support named MCP server profiles in configuration. Each profile SHALL specify a transport type (`stdio` or `SSE`), the command or URL for the server, optional environment variables to pass to the server process, and a capability classification used by trust-context policy. Audience profiles SHALL be able to allow or deny MCP servers and tools independently of transport configuration.
 
 #### Scenario: Disabled by default
 
@@ -35,7 +35,7 @@ The system SHALL support named MCP server profiles in configuration. Each profil
 
 ### Requirement: Policy-gated MCP invocation
 
-The system SHALL apply ACL, trust-context policy, and MCP capability classification before invoking MCP tools.
+The system SHALL apply ACL, the resolved audience profile, trust-context policy, and MCP capability classification before invoking MCP tools.
 
 #### Scenario: Missing grant denies MCP tool
 
@@ -54,3 +54,17 @@ The system SHALL apply ACL, trust-context policy, and MCP capability classificat
 - **AND** the session has the matching `mcp:{server}` grant
 - **WHEN** a `team` turn invokes a tool from that server
 - **THEN** the invocation may proceed subject to the active trust context and memory policy
+
+#### Scenario: Personal profile allows all MCP tools explicitly
+
+- **GIVEN** the operator configures the `personal` audience profile to allow all MCP servers
+- **AND** a specific session has the necessary ACL grant for one of those servers
+- **WHEN** a non-downgraded `personal` turn evaluates tool visibility
+- **THEN** the runtime may expose tools from that MCP server subject to capability classification and runtime trust checks
+
+#### Scenario: Public profile blocks MCP server despite broader personal allowance
+
+- **GIVEN** the `personal` audience profile allows an MCP server
+- **AND** the resolved `public` audience profile does not allow that server
+- **WHEN** a `public` turn evaluates MCP discovery or invocation
+- **THEN** the runtime hides and denies the server's tools regardless of the broader personal configuration

@@ -25,6 +25,20 @@ The system SHALL use a shared audience ladder across channels, memories, tools, 
 - **THEN** the runtime may expose `public` and `team` resources that also satisfy other policy checks
 - **AND** the runtime excludes `personal` resources unless an explicit approval flow widens them
 
+### Requirement: Audience selects a resolved policy profile
+The system SHALL map each effective audience to a resolved policy profile that defines the maximum resource scope available to the turn. Trust downgrades SHALL switch evaluation to the narrower audience profile rather than partially widening a broader profile.
+
+#### Scenario: Public downgrade switches to public profile
+- **GIVEN** a session started from a `personal` audience with a broader personal profile
+- **WHEN** the working context narrows to `public`
+- **THEN** tool and resource authorization are evaluated against the resolved `public` profile
+- **AND** personal-only filesystem roots, publish destinations, and tools are no longer available during the downgraded context
+
+#### Scenario: Missing audience profile falls back to stricter resolved policy
+- **WHEN** a configured audience profile is missing or incomplete
+- **THEN** the runtime resolves the effective profile to the strictest compatible defaults for that audience
+- **AND** the missing fields do not inherit hidden permissive access from broader audiences
+
 ### Requirement: Security boundary is a runtime-owned partition distinct from audience
 The system SHALL derive and carry a runtime-owned security boundary for each turn and durable memory item. The security boundary SHALL determine which memories may be reused across channels or sessions, while `domain` continues to describe what the memory is about.
 

@@ -16,6 +16,7 @@ This change is cross-cutting because it touches inbound source metadata, ACL eva
 **Goals:**
 - Introduce a trust-context abstraction that computes an effective audience and capability envelope per turn.
 - Keep audience cross-cutting across channels, memories, tools, MCP servers, and output effects.
+- Make operator-authored audience profiles the primary way to define filesystem, tool, and destination scope rather than relying on guessed runtime heuristics.
 - Preserve existing project/entity memory scoping while separating visibility (`audience`), subject scope (`domain`), security partition (`boundary`), and disclosure risk (`sensitivity`).
 - Ensure trust can automatically narrow as the bot handles riskier content, but cannot automatically widen.
 - Make incomplete or invalid policy resolve to less capability.
@@ -61,6 +62,36 @@ Operator authority remains important, but it belongs in principal classification
 Rationale: project memory may exist at multiple exposure levels; overloading domain or sensitivity would blur scope and visibility.
 
 Alternative considered: extend only `sensitivity`. Rejected because non-secret team memory and non-secret public memory still need different visibility semantics.
+
+### Decision: Audience profiles define resolved capability scope; trust context selects and narrows them
+
+Each audience level (`public`, `team`, `personal`) gets a resolved policy profile that defines what resources a turn may touch. Profiles cover at least:
+
+- tool allow mode (`allowlist` or `all`)
+- explicit built-in and MCP tool allowlists where applicable
+- filesystem scopes for local-read/local-write/search/attach behaviors
+- publish/external destination constraints
+- shell mode and shell working-directory constraints
+
+The runtime selects the effective profile by taking the narrowest applicable audience for the turn and then applying the matching resolved profile for that audience. A downgrade from `personal` to `public` does not merely hide some tools; it switches evaluation to the `public` profile ceiling.
+
+Rationale: audience answers how trusted the turn is, while the profile answers what that trust level is allowed to touch. Keeping those concepts separate makes policy more explicit and operator-controlled.
+
+Alternative considered: infer filesystem and tool scope from connector type or tool metadata alone. Rejected because ambient authority over host files and external destinations is too important to leave to guessed defaults once Netclaw is exposed beyond private owner usage.
+
+### Decision: v1 runtime uses flattened profiles, not user-authored inheritance
+
+Profiles may be authored internally from cumulative defaults, but runtime behavior SHALL use flattened, explicit per-audience profiles rather than inheritance rules. Operators edit the resolved profile for each audience they care about.
+
+This means:
+
+- `public` profile is explicit and narrow
+- `team` profile is explicit and may be broader than `public`
+- `personal` profile is explicit and may allow `all` modes when the operator intentionally chooses that risk
+
+Rationale: inheritance makes security config harder to reason about and easier to misconfigure. Flattened profiles are easier to explain in doctor output and easier to validate.
+
+Alternative considered: support full profile inheritance in config from the beginning. Rejected because subtle merge behavior would complicate MVP policy UX and diagnostics.
 
 ### Decision: Memory security boundary is distinct from domain and audience
 
@@ -127,6 +158,26 @@ Rationale: pre-exposure reduces attack surface; execution-time authorization cat
 
 Alternative considered: keep grant filtering only at invocation time. Rejected because offering dangerous tools to the model in low-trust contexts increases prompt-injection pressure and reasoning noise.
 
+### Decision: Filesystem and publish access are controlled by explicit operator scope, not by inferred trust alone
+
+For capabilities with ambient authority over the host or external systems, the runtime SHALL require explicit policy scope in addition to trust context and ACL grants.
+
+Examples:
+
+- `file_read`, `file_write`, search, and attach behaviors use configured roots such as `{session_dir}` or operator-specified repository paths
+- publish/external tools use configured destination constraints such as allowed channels, recipients, or endpoint groups
+- shell execution uses configured enablement plus working-directory and mode constraints
+
+Recommended defaults remain audience-specific:
+
+- `public` -> session directory only for local file access; no publish; no shell
+- `team` -> conservative defaults, preferably session directory only unless widened explicitly
+- `personal` -> may use broader defaults, but operator-authored roots and destinations are still preferred over implicit full-host access
+
+Rationale: for public or mixed-trust deployments, guessed filesystem reach is both hard to explain and too risky. Explicit scope gives operators a clear contract and makes future public exposure safer.
+
+Alternative considered: derive safe paths from session metadata or connector type with optional deny lists. Rejected because deny lists are incomplete and inferred scope is brittle once users start attaching real host data.
+
 ### Decision: Shell execution policy is modeled now, even though sandbox execution is deferred
 
 Shell execution gets an explicit mode enum:
@@ -144,6 +195,8 @@ Recommended posture defaults in the model:
 - `public` -> `off`
 
 Regardless of deployment ceiling, shell remains denied for public-tainted, teammate-DM, or sensitive-read working contexts unless a later approved policy explicitly allows it.
+
+`host-allowed` shell may still be combined with an unrestricted personal profile, but that choice must be explicit and doctor output should flag it as a high-blast-radius configuration.
 
 Rationale: preserves current utility for owner-operated bots without blocking future safer execution infrastructure.
 
@@ -167,6 +220,7 @@ Alternative considered: one trust score per connector. Rejected because it hides
 The config schema will define policy shape, but the effective safety net is:
 
 - posture presets and guided onboarding
+- recommended audience profiles (`public`, `team`, `personal`) with resolved defaults
 - strict runtime defaults when policy is absent or partial
 - doctor checks for unsafe combinations
 - explain/simulate diagnostics that show effective policy
@@ -180,6 +234,7 @@ Alternative considered: require fully explicit user-authored policy for all inst
 ## Risks / Trade-offs
 
 - [Risk] Audience, sensitivity, domain, and grants may feel overlapping to operators. -> Mitigation: keep audience small and cross-cutting, preserve domain for subject scope only, and surface effective policy explanations in doctor/CLI.
+- [Risk] Operators may expect profile inheritance or wildcard behavior to work intuitively when it hides important scope edges. -> Mitigation: flatten profiles before runtime, prefer explicit `mode: all` over path wildcards for unrestricted access, and explain effective roots/destinations in doctor output.
 - [Risk] Trust-context derivation could become too implicit and hard to debug. -> Mitigation: log the derived context, the narrowing inputs, and the deny reasons for recall/tool decisions.
 - [Risk] `host-allowed` shell in personal posture leaves residual blast radius until sandboxing exists. -> Mitigation: keep it owner-context only, default team/public to `off`, and track sandbox execution as a follow-up issue.
 - [Risk] Existing memory rows lack audience and boundary metadata. -> Mitigation: define migration defaults conservatively, warn operators until rows are reclassified, and never widen legacy rows past the active boundary without explicit remapping.
@@ -188,11 +243,11 @@ Alternative considered: require fully explicit user-authored policy for all inst
 ## Migration Plan
 
 1. Introduce trust-context and audience types in planning/specs first, with strict-default semantics.
-2. Extend config schema and options to express posture, source/channel audience, shell mode, and capability classifications while defaulting absent values conservatively.
+2. Extend config schema and options to express posture, source/channel audience, audience-scoped policy profiles, shell mode, filesystem roots, publish scopes, and capability classifications while defaulting absent values conservatively.
 3. Propagate richer source metadata through input adapters and session command contracts.
 4. Add runtime-owned security boundary derivation so memories can be partitioned by trust boundary instead of raw channel/session identity.
 5. Update ACL/tool/MCP/memory policy evaluation to derive and consume `EffectiveTrustContext` plus the active boundary.
-6. Add doctor/explain surfaces so operators can see effective policy, active boundary, and unsafe combinations before enabling broader exposure.
+6. Add doctor/explain surfaces so operators can see effective profiles, active boundary, effective roots/destinations, and unsafe combinations before enabling broader exposure.
 7. Defer sandbox execution to a separate implementation issue while preserving `sandbox-only` in the policy model.
 
 Rollback strategy:
@@ -206,3 +261,4 @@ Rollback strategy:
 - How should existing durable memories be backfilled with an initial boundary without forcing immediate manual reclassification?
 - Do we want a policy explain simulator in the first implementation slice, or is doctor output sufficient for MVP?
 - Which built-in tools besides shell need explicit effect-class metadata in v1 of the config schema, versus inferred defaults from tool registration?
+- Do we need a separate profile authoring shortcut format later, or are flattened audience profiles sufficient for the first operator UX?
