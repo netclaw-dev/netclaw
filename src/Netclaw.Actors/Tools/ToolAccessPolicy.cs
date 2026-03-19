@@ -32,13 +32,31 @@ public sealed class ToolAccessPolicy
             })
             .ToList();
 
+    public IReadOnlyList<INetclawTool> FilterDiscoverableTools(
+        IEnumerable<INetclawTool> tools,
+        ToolExecutionContext? context)
+        => tools.Where(tool => IsToolExposed(tool, context)).ToList();
+
     public bool IsToolExposed(ToolRegistration registration, EffectiveTrustContext? trustContext)
     {
-        if (!IsShellTool(registration))
-            return true;
+        return IsToolExposed(registration.Tool, ResolveAudience(trustContext));
+    }
 
-        return ResolveShellMode() == ShellExecutionMode.HostAllowed
-               && ResolveAudience(trustContext) == TrustAudience.Personal;
+    public bool IsToolExposed(INetclawTool tool, EffectiveTrustContext? trustContext)
+        => IsToolExposed(tool, ResolveAudience(trustContext));
+
+    public bool IsToolExposed(INetclawTool tool, ToolExecutionContext? context)
+        => IsToolExposed(tool, ResolveAudience(context));
+
+    private bool IsToolExposed(INetclawTool tool, TrustAudience audience)
+    {
+        if (IsShellTool(tool))
+            return ResolveShellMode() == ShellExecutionMode.HostAllowed && audience == TrustAudience.Personal;
+
+        if (tool is McpToolAdapter mcp)
+            return IsMcpToolExposed(mcp.CapabilityClass, audience);
+
+        return true;
     }
 
     public ToolAccessDecision AuthorizeInvocation(INetclawTool tool, ToolExecutionContext? context)
@@ -75,6 +93,17 @@ public sealed class ToolAccessPolicy
 
     private static bool IsShellTool(INetclawTool tool)
         => string.Equals(tool.Name, "shell_execute", StringComparison.Ordinal);
+
+    private static bool IsMcpToolExposed(McpCapabilityClass capabilityClass, TrustAudience audience)
+        => capabilityClass switch
+        {
+            McpCapabilityClass.Information => true,
+            McpCapabilityClass.MemorySafe => audience is TrustAudience.Team or TrustAudience.Personal,
+            McpCapabilityClass.SensitiveRead => audience == TrustAudience.Personal,
+            McpCapabilityClass.PublishExternal => audience == TrustAudience.Personal,
+            McpCapabilityClass.HighImpact => audience == TrustAudience.Personal,
+            _ => audience == TrustAudience.Personal
+        };
 
     private static string? GetToolName(AITool tool)
         => tool is AIFunction function ? function.Name : null;

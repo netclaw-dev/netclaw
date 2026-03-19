@@ -2602,6 +2602,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             if (tool is null)
                 continue;
 
+            if (_toolAccessPolicy is not null && !_toolAccessPolicy.IsToolExposed(tool, _currentTrustContext))
+                continue;
+
             RememberDiscoveredTool(toolName, tool);
             AddAvailableToolIfMissing(toolName, tool.ToAITool());
         }

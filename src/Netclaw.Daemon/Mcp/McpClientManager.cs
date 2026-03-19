@@ -393,7 +393,7 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
             _sharedToolFunctions[name] = CreateFunctionMap(tools);
             _sessionScopedServers[name] = RequiresSessionScopedClient(name, entry);
 
-            _toolRegistry.WithMcpTools(name, tools, entry.GrantCategory, this);
+            _toolRegistry.WithMcpTools(name, tools, entry.GrantCategory, entry.CapabilityClass, this);
             _statuses[name] = new McpServerStatus(name, McpConnectionState.Connected, tools.Count, null);
 
             _logger.LogInformation("MCP server '{Name}' connected ({ToolCount} tools)", name, tools.Count);

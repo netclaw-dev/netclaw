@@ -16,6 +16,7 @@ namespace Netclaw.Actors.Tools;
 public sealed partial class SearchToolsTool : NetclawTool<SearchToolsTool.Params>
 {
     private readonly ToolRegistry _registry;
+    private readonly ToolAccessPolicy? _policy;
     private const int MaxSearchResults = 10;
     private const int MaxServerBrowseResults = 30;
 
@@ -25,31 +26,33 @@ public sealed partial class SearchToolsTool : NetclawTool<SearchToolsTool.Params
         [property: Description("Optional MCP server name to filter results (e.g., 'memorizer')")]
         string? Server = null);
 
-    public SearchToolsTool(ToolRegistry registry)
+    public SearchToolsTool(ToolRegistry registry, ToolAccessPolicy? policy = null)
     {
         _registry = registry;
+        _policy = policy;
     }
 
-    protected override Task<string> ExecuteAsync(Params args, CancellationToken ct)
+    protected override Task<string> ExecuteAsync(Params args, ToolExecutionContext context, CancellationToken ct)
     {
         var query = args.Query.Trim();
         var serverFilter = NormalizeServerFilter(args.Server);
 
         if (IsServerCatalogQuery(query))
-            return Task.FromResult(BuildServerCatalog());
+            return Task.FromResult(BuildServerCatalog(context));
 
         if (IsListAllQuery(query))
         {
             if (serverFilter is null)
             {
                 return Task.FromResult(BuildServerCatalog(
+                    context,
                     "To browse tools, call search_tools(query: \"all\", server: \"<server_name>\")."));
             }
 
-            var serverTools = _registry.GetToolsForServer(serverFilter, MaxServerBrowseResults);
+            var serverTools = FilterVisible(_registry.GetToolsForServer(serverFilter, MaxServerBrowseResults), context);
             if (serverTools.Count == 0)
             {
-                return Task.FromResult($"No tools found for server '{serverFilter}'.");
+                return Task.FromResult($"No tools found for server '{serverFilter}' in the current trust context.");
             }
 
             return Task.FromResult(BuildToolList(
@@ -57,11 +60,11 @@ public sealed partial class SearchToolsTool : NetclawTool<SearchToolsTool.Params
                 $"Found {serverTools.Count} tool(s) in server '{serverFilter}':"));
         }
 
-        var results = _registry.SearchTools(query, serverFilter, MaxSearchResults);
+        var results = FilterVisible(_registry.SearchTools(query, serverFilter, MaxSearchResults), context);
 
         if (results.Count == 0)
         {
-            var suggestions = _registry.SuggestTools(query, serverFilter, MaxSearchResults);
+            var suggestions = FilterVisible(_registry.SuggestTools(query, serverFilter, MaxSearchResults), context);
             if (suggestions.Count == 0)
             {
                 if (serverFilter is null)
@@ -97,9 +100,14 @@ public sealed partial class SearchToolsTool : NetclawTool<SearchToolsTool.Params
         return Task.FromResult(BuildToolList(results, $"Found {results.Count} tool(s):"));
     }
 
-    private string BuildServerCatalog(string? trailingHint = null)
+    protected override Task<string> ExecuteAsync(Params args, CancellationToken ct)
+        => ExecuteAsync(args, ToolExecutionContext.Empty, ct);
+
+    private string BuildServerCatalog(ToolExecutionContext context, string? trailingHint = null)
     {
-        var summaries = _registry.GetMcpServerSummaries();
+        var summaries = _registry.GetMcpServerSummaries()
+            .Where(summary => FilterVisible(_registry.GetToolsForServer(summary.ServerName, int.MaxValue), context).Count > 0)
+            .ToList();
         if (summaries.Count == 0)
             return "No MCP servers are currently registered.";
 
@@ -125,6 +133,9 @@ public sealed partial class SearchToolsTool : NetclawTool<SearchToolsTool.Params
 
         return sb.ToString();
     }
+
+    private IReadOnlyList<INetclawTool> FilterVisible(IReadOnlyList<INetclawTool> tools, ToolExecutionContext context)
+        => _policy?.FilterDiscoverableTools(tools, context) ?? tools;
 
     private static string BuildToolList(IReadOnlyList<INetclawTool> tools, string heading)
     {

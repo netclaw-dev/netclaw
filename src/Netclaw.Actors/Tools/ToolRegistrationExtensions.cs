@@ -18,7 +18,8 @@ public static class ToolRegistrationExtensions
         this ToolRegistry registry,
         ToolConfig config,
         ISearchBackend? searchBackend = null,
-        ToolPathPolicy? pathPolicy = null)
+        ToolPathPolicy? pathPolicy = null,
+        ToolAccessPolicy? toolAccessPolicy = null)
     {
         registry.Register(new ShellTool(config, pathPolicy));
         registry.Register(new FileReadTool(config, pathPolicy));
@@ -29,7 +30,7 @@ public static class ToolRegistrationExtensions
         registry.Register(new WebFetchTool());
 
         // Register search_tools meta-tool (always loaded, "builtin" grant)
-        registry.Register(new SearchToolsTool(registry));
+        registry.Register(new SearchToolsTool(registry, toolAccessPolicy));
 
         return registry;
     }
@@ -61,10 +62,11 @@ public static class ToolRegistrationExtensions
         string serverName,
         IList<McpClientTool> tools,
         string? grantCategory = null,
+        McpCapabilityClass capabilityClass = McpCapabilityClass.Unknown,
         IMcpToolInvoker? invoker = null)
     {
         foreach (var tool in tools)
-            registry.Register(new McpToolAdapter(tool, serverName, tool.Name, grantCategory, invoker));
+            registry.Register(new McpToolAdapter(tool, serverName, tool.Name, grantCategory, capabilityClass, invoker));
 
         return registry;
     }

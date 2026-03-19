@@ -363,8 +363,11 @@ static void ConfigureDaemonServices(
     var toolPathPolicy = new ToolPathPolicy([paths.SecretsPath, paths.KeysDirectory]);
     services.AddSingleton(toolPathPolicy);
 
+    var toolAccessPolicy = new ToolAccessPolicy(toolConfig, effectivePolicyDefaults);
+    services.AddSingleton(toolAccessPolicy);
+
     var toolRegistry = new ToolRegistry();
-    toolRegistry.WithFirstPartyTools(toolConfig, searchBackend, toolPathPolicy);
+    toolRegistry.WithFirstPartyTools(toolConfig, searchBackend, toolPathPolicy, toolAccessPolicy);
 
     // Skills system: seed built-in skills to .system/, register sync service
     CopyBuiltInSkills(paths.SystemSkillsDirectory);
@@ -419,11 +422,10 @@ static void ConfigureDaemonServices(
     services.AddSingleton<IMemoryExtractor>(NullMemoryExtractor.Instance);
 
     services.AddSingleton(toolRegistry);
-    services.AddSingleton<ToolAccessPolicy>();
     services.AddSingleton<IToolExecutor>(sp =>
         new DispatchingToolExecutor(
             toolRegistry,
-            sp.GetRequiredService<ToolAccessPolicy>(),
+            toolAccessPolicy,
             sp.GetRequiredService<ILogger<DispatchingToolExecutor>>()));
 
     // Operational notification webhooks
