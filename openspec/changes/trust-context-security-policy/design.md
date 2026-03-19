@@ -76,6 +76,24 @@ Rationale: issue #203 shows that channel-derived project domains cause the bot t
 
 Alternative considered: keep using channel/session-derived domains as the primary segregation mechanism. Rejected because it hides reusable knowledge behind connector-local IDs and creates both UX failures and brittle policy semantics.
 
+### Decision: Raw secrets are never eligible for durable memory persistence
+
+Memory formation must treat raw credentials, private keys, bearer tokens, API secrets, and similar highly sensitive values as non-persistable content.
+
+- `audience` does not widen this rule
+- `boundary` does not widen this rule
+- explicit user requests do not permit raw secret persistence
+
+Permitted behaviors are:
+
+- drop the candidate entirely
+- persist a sanitized/redacted summary with the sensitive value removed
+- emit audit or diagnostic evidence that a secret-bearing candidate was rejected
+
+Rationale: durable memory exists to improve future reasoning, not to become a second secrets store. Retaining raw secrets in durable memory would expand blast radius across recall, tools, exports, and future integrations.
+
+Alternative considered: allow `personal` or `manual` secret storage. Rejected because even correctly scoped secret memories create unacceptable recall and exfiltration risk compared with existing secret/config storage paths.
+
 ### Decision: Trust automatically downgrades, never automatically upgrades
 
 Trust-context transitions may narrow authority whenever the bot crosses into higher-risk content or sources, such as:

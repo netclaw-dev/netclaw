@@ -37,4 +37,17 @@ public sealed class SecretOutputRedactorTests
 
         Assert.Equal("Authorization: Bearer ***REDACTED***", redacted);
     }
+
+    [Fact]
+    public void ContainsSecretLikeContent_detects_private_key_blocks()
+    {
+        const string input = """
+            -----BEGIN OPENSSH PRIVATE KEY-----
+            abcdefghijklmnop
+            -----END OPENSSH PRIVATE KEY-----
+            """;
+
+        Assert.True(SecretOutputRedactor.ContainsSecretLikeContent(input));
+        Assert.Equal("***REDACTED***", SecretOutputRedactor.Redact(input));
+    }
 }

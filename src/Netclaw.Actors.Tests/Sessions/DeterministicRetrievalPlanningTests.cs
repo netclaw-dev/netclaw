@@ -46,6 +46,19 @@ public sealed class DeterministicRetrievalPlanningTests
     }
 
     [Fact]
+    public void Planner_does_not_turn_transport_session_prefix_into_project_scope()
+    {
+        var planner = new DeterministicRetrievalRequestPlanner();
+        var plan = planner.Plan(new AutomaticRecallRequest(
+            SessionId: "signalr/thread-transport",
+            Query: "what is TextForge",
+            RecentUserMessages: ["what is TextForge"],
+            MaxItems: 3));
+
+        Assert.Equal("project:default", plan.HardScope);
+    }
+
+    [Fact]
     public async Task Coordinator_keeps_stage_empty_when_deterministic_planning_succeeds_but_sidecars_are_disabled()
     {
         var dir = Path.Combine(Path.GetTempPath(), "netclaw-deterministic-planning-tests", Guid.NewGuid().ToString("N"));

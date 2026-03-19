@@ -674,7 +674,11 @@ public sealed class SQLiteMemoryStore
         }, ct);
     }
 
-    public async Task<IReadOnlyList<SQLiteMemoryHydratedItem>> GetMemoriesByIdsAsync(IReadOnlyList<string> ids, CancellationToken ct = default)
+    public async Task<IReadOnlyList<SQLiteMemoryHydratedItem>> GetMemoriesByIdsAsync(
+        IReadOnlyList<string> ids,
+        string boundary,
+        TrustAudience audience,
+        CancellationToken ct = default)
     {
         if (ids.Count == 0)
             return [];
@@ -694,6 +698,8 @@ public sealed class SQLiteMemoryStore
             .ToArray();
 
         var output = new List<SQLiteMemoryHydratedItem>();
+        var allowedAudiences = MemoryPolicyEvaluator.AllowedAudienceWireValues(audience)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
         return await WithConnectionAsync(async (conn, ct) =>
         {
@@ -726,6 +732,12 @@ public sealed class SQLiteMemoryStore
                     UpdateSemantics: reader.GetString(12),
                     ExpiresAtMs: reader.IsDBNull(13) ? null : reader.GetInt64(13),
                     UpdatedAtMs: reader.GetInt64(14)));
+
+                if (!string.Equals(output[^1].Boundary, boundary, StringComparison.OrdinalIgnoreCase)
+                    || !allowedAudiences.Contains(output[^1].Audience))
+                {
+                    output.RemoveAt(output.Count - 1);
+                }
             }
         }
 
@@ -758,6 +770,12 @@ public sealed class SQLiteMemoryStore
                     UpdateSemantics: reader.GetString(12),
                     ExpiresAtMs: reader.IsDBNull(13) ? null : reader.GetInt64(13),
                     UpdatedAtMs: reader.GetInt64(14)));
+
+                if (!string.Equals(output[^1].Boundary, boundary, StringComparison.OrdinalIgnoreCase)
+                    || !allowedAudiences.Contains(output[^1].Audience))
+                {
+                    output.RemoveAt(output.Count - 1);
+                }
             }
         }
 

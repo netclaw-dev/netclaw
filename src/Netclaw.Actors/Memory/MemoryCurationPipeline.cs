@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Netclaw.Configuration;
+using Netclaw.Security;
 
 namespace Netclaw.Actors.Memory;
 
@@ -76,6 +77,9 @@ public sealed class MemoryRulesFirstExtractor(MemoryPolicyEvaluator policy)
             return results;
 
         if (IsEphemeral(content))
+            return results;
+
+        if (SecretOutputRedactor.ContainsSecretLikeContent(content))
             return results;
 
         var decision = policy.EvaluateWrite(

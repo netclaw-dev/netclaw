@@ -35,6 +35,7 @@ public sealed partial class SqliteStoreMemoryTool : NetclawTool<SqliteStoreMemor
         var sessionId = string.IsNullOrWhiteSpace(context.SessionId)
             ? "manual/tool"
             : context.SessionId!;
+        var audience = ResolveAudience(sessionId);
 
         var payload = new MemoryCheckpointPayload(
             SessionId: sessionId,
@@ -49,6 +50,7 @@ public sealed partial class SqliteStoreMemoryTool : NetclawTool<SqliteStoreMemor
             HasAcceptedSubAgentFinding: false,
             Domain: new Protocol.SessionId(sessionId).ToMemoryDomain(),
             Boundary: ResolveBoundary(sessionId),
+            Audience: audience.ToWireValue(),
             Sensitivity: MemorySensitivity.Normal.ToWireValue(),
             RecallMode: MemoryRecallMode.Auto.ToWireValue(),
             Confidence: 0.95,
@@ -73,5 +75,8 @@ public sealed partial class SqliteStoreMemoryTool : NetclawTool<SqliteStoreMemor
         => ExecuteAsync(args, ToolExecutionContext.Empty, ct);
 
     private static string ResolveBoundary(string? sessionId)
-        => SecurityPolicyDefaults.ResolveBoundaryFromSessionId(sessionId, TrustAudience.Personal);
+        => SecurityPolicyDefaults.ResolveBoundaryFromSessionId(sessionId, ResolveAudience(sessionId));
+
+    private static TrustAudience ResolveAudience(string? sessionId)
+        => SecurityPolicyDefaults.ResolveAudienceFromSessionId(sessionId);
 }

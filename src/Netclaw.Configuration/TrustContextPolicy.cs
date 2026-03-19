@@ -171,6 +171,29 @@ public static class SecurityPolicyDefaults
         return ResolveBoundaryFromChannelType(prefix, audience);
     }
 
+    public static TrustAudience ResolveAudienceFromChannelType(string? channelType)
+    {
+        if (string.IsNullOrWhiteSpace(channelType))
+            return TrustAudience.Public;
+
+        return channelType.Trim().ToLowerInvariant() switch
+        {
+            "signalr" or "tui" or "headless" or "console" or "manual" => TrustAudience.Personal,
+            "slack" or "reminder" or "timer" => TrustAudience.Team,
+            _ => TrustAudience.Public
+        };
+    }
+
+    public static TrustAudience ResolveAudienceFromSessionId(string? sessionId)
+    {
+        if (string.IsNullOrWhiteSpace(sessionId))
+            return TrustAudience.Public;
+
+        var slash = sessionId.IndexOf('/', StringComparison.Ordinal);
+        var prefix = slash > 0 ? sessionId[..slash] : sessionId;
+        return ResolveAudienceFromChannelType(prefix);
+    }
+
     public static string InferLegacyBoundaryFromDomain(string? domain)
     {
         if (string.IsNullOrWhiteSpace(domain))

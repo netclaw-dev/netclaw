@@ -9,6 +9,7 @@
 - [x] 2.1 Update ACL evaluation so admission returns both allow/deny and initial trust-context/audience decisions.
 - [x] 2.2 Extend durable memory policy with audience-aware filtering and conservative migration/default rules for existing memory rows.
 - [x] 2.2.1 Add runtime-owned memory security boundaries so reusable project/entity memories can cross channels inside the same authorized boundary without depending on channel-derived domains.
+- [x] 2.2.2 Add secret-content detection/redaction to memory formation so raw credentials, keys, and tokens are never persisted as durable memory.
 - [ ] 2.3 Update built-in tool exposure and invocation policy to honor effective trust context, capability classes, and shell mode.
 - [ ] 2.4 Update MCP server policy handling to support capability classification and trust-context-aware exposure/invocation.
 

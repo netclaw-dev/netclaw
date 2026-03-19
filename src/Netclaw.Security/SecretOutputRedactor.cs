@@ -10,6 +10,14 @@ public static partial class SecretOutputRedactor
 {
     private const string Redacted = "***REDACTED***";
 
+    public static bool ContainsSecretLikeContent(string output)
+    {
+        if (string.IsNullOrEmpty(output))
+            return false;
+
+        return !string.Equals(Redact(output), output, StringComparison.Ordinal);
+    }
+
     public static string Redact(string output)
     {
         if (string.IsNullOrEmpty(output))
@@ -28,6 +36,8 @@ public static partial class SecretOutputRedactor
 
         sanitized = ProviderTokenRegex().Replace(sanitized, Redacted);
 
+        sanitized = PrivateKeyBlockRegex().Replace(sanitized, Redacted);
+
         return sanitized;
     }
 
@@ -42,4 +52,7 @@ public static partial class SecretOutputRedactor
 
     [GeneratedRegex("\\b(sk-[A-Za-z0-9_-]{8,}|xox[baprs]-[A-Za-z0-9-]{8,}|ghp_[A-Za-z0-9]{20,})\\b")]
     private static partial Regex ProviderTokenRegex();
+
+    [GeneratedRegex("-----BEGIN [A-Z ]*PRIVATE KEY-----[\\s\\S]+?-----END [A-Z ]*PRIVATE KEY-----", RegexOptions.IgnoreCase)]
+    private static partial Regex PrivateKeyBlockRegex();
 }

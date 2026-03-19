@@ -88,6 +88,7 @@ public sealed partial class SqliteUpdateMemoryTool : NetclawTool<SqliteUpdateMem
     private async Task EnqueueAuditCheckpoint(Params args, ToolExecutionContext context, MemoryKind kind, MemoryUpdateSemantics semantics, CancellationToken ct)
     {
         var sessionId = string.IsNullOrWhiteSpace(context.SessionId) ? "manual/tool" : context.SessionId!;
+        var audience = ResolveAudience(sessionId);
         var payload = new MemoryCheckpointPayload(
             SessionId: sessionId,
             TriggerType: CheckpointTriggerType.ExplicitMemoryRequest.ToWireValue(),
@@ -101,6 +102,7 @@ public sealed partial class SqliteUpdateMemoryTool : NetclawTool<SqliteUpdateMem
             HasAcceptedSubAgentFinding: false,
             Domain: new Protocol.SessionId(sessionId).ToMemoryDomain(),
             Boundary: ResolveBoundary(sessionId),
+            Audience: audience.ToWireValue(),
             Sensitivity: MemorySensitivity.Normal.ToWireValue(),
             RecallMode: MemoryRecallMode.Manual.ToWireValue(),
             Confidence: 0.95,
@@ -124,5 +126,8 @@ public sealed partial class SqliteUpdateMemoryTool : NetclawTool<SqliteUpdateMem
     }
 
     private static string ResolveBoundary(string? sessionId)
-        => SecurityPolicyDefaults.ResolveBoundaryFromSessionId(sessionId, TrustAudience.Personal);
+        => SecurityPolicyDefaults.ResolveBoundaryFromSessionId(sessionId, ResolveAudience(sessionId));
+
+    private static TrustAudience ResolveAudience(string? sessionId)
+        => SecurityPolicyDefaults.ResolveAudienceFromSessionId(sessionId);
 }

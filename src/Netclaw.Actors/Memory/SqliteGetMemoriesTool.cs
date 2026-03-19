@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Text;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Netclaw.Configuration;
 using Netclaw.Tools;
 
 namespace Netclaw.Actors.Memory;
@@ -27,7 +28,7 @@ public sealed partial class SqliteGetMemoriesTool : NetclawTool<SqliteGetMemorie
         _logger = logger ?? (ILogger)NullLogger.Instance;
     }
 
-    protected override async Task<string> ExecuteAsync(Params args, CancellationToken ct)
+    protected override async Task<string> ExecuteAsync(Params args, ToolExecutionContext context, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(args.Ids))
             return "No memory IDs provided.";
@@ -36,7 +37,9 @@ public sealed partial class SqliteGetMemoriesTool : NetclawTool<SqliteGetMemorie
         if (ids.Length == 0)
             return "No memory IDs provided.";
 
-        var entries = await _store.GetMemoriesByIdsAsync(ids, ct);
+        var audience = ResolveAudience(context.SessionId);
+        var boundary = ResolveBoundary(context.SessionId, audience);
+        var entries = await _store.GetMemoriesByIdsAsync(ids, boundary, audience, ct);
         if (entries.Count == 0)
             return $"No memories found for IDs: {string.Join(", ", ids)}";
 
@@ -58,4 +61,13 @@ public sealed partial class SqliteGetMemoriesTool : NetclawTool<SqliteGetMemorie
         _logger.LogInformation("SQLite memory get completed: requested={Requested}, found={Found}", ids.Length, entries.Count);
         return sb.ToString().TrimEnd();
     }
+
+    protected override Task<string> ExecuteAsync(Params args, CancellationToken ct)
+        => ExecuteAsync(args, ToolExecutionContext.Empty, ct);
+
+    private static TrustAudience ResolveAudience(string? sessionId)
+        => SecurityPolicyDefaults.ResolveAudienceFromSessionId(sessionId);
+
+    private static string ResolveBoundary(string? sessionId, TrustAudience audience)
+        => SecurityPolicyDefaults.ResolveBoundaryFromSessionId(sessionId, audience);
 }

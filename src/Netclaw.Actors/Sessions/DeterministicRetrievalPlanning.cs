@@ -64,10 +64,23 @@ public sealed class DeterministicRetrievalRequestPlanner
             return "project:default";
 
         var prefix = sessionId[..slash].Trim();
+        if (IsTransportScopedSession(prefix))
+            return "project:default";
+
         return string.IsNullOrWhiteSpace(prefix)
             ? "project:default"
             : $"project:{prefix.ToLowerInvariant()}";
     }
+
+    private static bool IsTransportScopedSession(string prefix)
+        => prefix.Equals("signalr", StringComparison.OrdinalIgnoreCase)
+           || prefix.Equals("slack", StringComparison.OrdinalIgnoreCase)
+           || prefix.Equals("reminder", StringComparison.OrdinalIgnoreCase)
+           || prefix.Equals("timer", StringComparison.OrdinalIgnoreCase)
+           || prefix.Equals("tui", StringComparison.OrdinalIgnoreCase)
+           || prefix.Equals("headless", StringComparison.OrdinalIgnoreCase)
+           || prefix.Equals("console", StringComparison.OrdinalIgnoreCase)
+           || prefix.Equals("manual", StringComparison.OrdinalIgnoreCase);
 
     private static IEnumerable<string> InferAnchorHints(AutomaticRecallRequest request, string prompt, IReadOnlyList<string> tokens)
     {

@@ -17,6 +17,20 @@ Every durable anchor, document, record, and edge SHALL carry policy metadata inc
 - **WHEN** a `public` turn runs recall
 - **THEN** the item is excluded from both automatic recall and inline retrieval unless a higher-trust approval flow authorizes it
 
+#### Scenario: Raw secret material is rejected during memory formation
+
+- **GIVEN** memory formation receives content containing a raw credential, private key, bearer token, API key, or similarly sensitive secret value
+- **WHEN** the write path evaluates the candidate
+- **THEN** the candidate is rejected or sanitized before persistence
+- **AND** the raw secret value is never stored as durable memory regardless of audience, boundary, or explicit request
+
+#### Scenario: Sanitized summary may survive secret rejection
+
+- **GIVEN** a turn includes sensitive material plus a useful non-secret operational fact
+- **WHEN** the memory formation pipeline can safely separate the fact from the secret value
+- **THEN** the system may persist a sanitized summary of the fact
+- **AND** the secret value itself is omitted or redacted
+
 #### Scenario: Boundary allows project recall across channels without widening exposure
 
 - **GIVEN** two durable memories share `domain=project:netclaw`

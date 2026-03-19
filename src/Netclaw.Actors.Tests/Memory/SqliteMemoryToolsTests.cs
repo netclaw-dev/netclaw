@@ -1,4 +1,5 @@
 using Netclaw.Actors.Memory;
+using Netclaw.Configuration;
 using Netclaw.Tools;
 using Xunit;
 
@@ -138,6 +139,7 @@ public sealed class SqliteMemoryToolsTests : IDisposable
         var tool = new SqliteGetMemoriesTool(_store, _timeProvider);
         var result = await tool.ExecuteAsync(
             new Dictionary<string, object?> { ["Ids"] = "rec:rec-stale" },
+            new ToolExecutionContext("slack/thread-1", sessionDirectory: null),
             CancellationToken.None);
 
         Assert.Contains("class=evidence", result);
@@ -199,6 +201,70 @@ public sealed class SqliteMemoryToolsTests : IDisposable
         Assert.Equal("No memories found.", normal);
         Assert.Contains("Old venue note", debug);
         Assert.Contains("stale=true", debug);
+    }
+
+    [Fact]
+    public async Task GetMemories_respects_active_boundary_and_audience()
+    {
+        await _store.InitializeAsync();
+        var now = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
+
+        await _store.ApplyCurationBatchAsync(
+            "cp-4",
+            [
+                new SQLiteMemoryCurationOperation(
+                    Kind: "document",
+                    MemoryClass: "durable_fact",
+                    MemoryId: "doc-team",
+                    AnchorCanonicalName: "netclaw-repo",
+                    AnchorType: "project",
+                    Title: "Repository name",
+                    Content: "This repository is Netclaw.",
+                    AliasesJson: "[\"netclaw\"]",
+                    FacetsJson: "[\"project_fact\"]",
+                    SlotsJson: null,
+                    Relations: null,
+                    UpdateSemantics: "merge-document",
+                    Domain: "project:netclaw",
+                    Sensitivity: "normal",
+                    RecallMode: "auto",
+                    Confidence: 0.9,
+                    FreshnessAtMs: now,
+                    ExpiresAtMs: null,
+                    Boundary: SecurityPolicyDefaults.TrustedInstanceBoundary,
+                    Audience: TrustAudience.Team.ToWireValue()),
+                new SQLiteMemoryCurationOperation(
+                    Kind: "document",
+                    MemoryClass: "durable_fact",
+                    MemoryId: "doc-personal",
+                    AnchorCanonicalName: "netclaw-security-note",
+                    AnchorType: "project",
+                    Title: "Security issue",
+                    Content: "Investigating a private security issue in Netclaw.",
+                    AliasesJson: "[\"security issue\"]",
+                    FacetsJson: "[\"project_fact\"]",
+                    SlotsJson: null,
+                    Relations: null,
+                    UpdateSemantics: "merge-document",
+                    Domain: "project:netclaw",
+                    Sensitivity: "normal",
+                    RecallMode: "auto",
+                    Confidence: 0.9,
+                    FreshnessAtMs: now,
+                    ExpiresAtMs: null,
+                    Boundary: SecurityPolicyDefaults.TrustedInstanceBoundary,
+                    Audience: TrustAudience.Personal.ToWireValue())
+            ],
+            CancellationToken.None);
+
+        var tool = new SqliteGetMemoriesTool(_store);
+        var result = await tool.ExecuteAsync(
+            new Dictionary<string, object?> { ["Ids"] = "doc:doc-team,doc:doc-personal" },
+            new ToolExecutionContext("slack/thread-1", sessionDirectory: null),
+            CancellationToken.None);
+
+        Assert.Contains("Repository name", result);
+        Assert.DoesNotContain("Security issue", result);
     }
 
     public void Dispose()
