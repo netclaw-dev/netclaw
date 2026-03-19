@@ -196,6 +196,23 @@ public class SkillRegistryMatchTests
     }
 
     [Fact]
+    public void MatchByKeywords_search_citation_uses_lower_threshold()
+    {
+        var registry = new SkillRegistry();
+        registry.Register(MakeEntry("search-citation"));
+        // Single keyword — would score ~1.0, below the default 2.0 threshold
+        // but search-citation has a 1.5 override so it should match
+        registry.SetEnrichedKeywords("search-citation",
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "competitor", "price", "flight", "hotel" });
+
+        var results = registry.MatchByKeywords("who are the main competitors in this market");
+
+        Assert.Single(results);
+        Assert.Equal("search-citation", results[0].Skill.Name);
+        Assert.Equal(1.5, results[0].Threshold);
+    }
+
+    [Fact]
     public void Clear_also_clears_enriched_keywords()
     {
         var registry = new SkillRegistry();

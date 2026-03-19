@@ -459,7 +459,7 @@ static void ConfigureDaemonServices(
     // discoverable and inspectable across daemon restarts.
     services.AddSingleton<McpShadowCatalogWriter>();
     services.AddSingleton<IContextLayerProvider>(_ =>
-        new FileContextLayerProvider(paths.ToolIndexShadowPath));
+        new FileContextLayerProvider(paths.ToolIndexShadowPath, ContextLayerTiming.OnceAtStart));
 
     // Skill index context layer
     var skillIndexLayer = new SkillIndexContextLayer();
