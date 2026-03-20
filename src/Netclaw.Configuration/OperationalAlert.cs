@@ -11,6 +11,8 @@ public enum AlertType
     ProviderAuthExpired,
     ProviderFailover,
     ProviderUnreachable,
+    ReminderExecutionFailed,
+    ReminderAutoDisabled,
 }
 
 /// <summary>

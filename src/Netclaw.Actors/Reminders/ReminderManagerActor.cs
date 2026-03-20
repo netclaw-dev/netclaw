@@ -22,6 +22,7 @@ public sealed partial class ReminderManagerActor : ReceiveActor
     private readonly TimeProvider _timeProvider;
     private readonly ReminderDefinitionStore _definitionStore;
     private readonly ReminderHistoryStore _historyStore;
+    private readonly IOperationalNotificationSink _notificationSink;
     private readonly ILoggingAdapter _log;
 
     private IReminderClient? _client;
@@ -35,13 +36,15 @@ public sealed partial class ReminderManagerActor : ReceiveActor
         ISessionPipeline pipeline,
         TimeProvider timeProvider,
         ReminderDefinitionStore definitionStore,
-        ReminderHistoryStore historyStore)
+        ReminderHistoryStore historyStore,
+        IOperationalNotificationSink notificationSink)
     {
         _config = config;
         _pipeline = pipeline;
         _timeProvider = timeProvider;
         _definitionStore = definitionStore;
         _historyStore = historyStore;
+        _notificationSink = notificationSink;
         _log = Context.GetLogger();
 
         ReceiveAsync<SaveReminderCommand>(HandleSaveAsync);
@@ -413,6 +416,9 @@ public sealed partial class ReminderManagerActor : ReceiveActor
         if (!_activeExecutionIds.Remove(completed.ExecutionId))
             return;
 
+        var definition = _definitionStore.Get(completed.Id);
+        var title = definition?.Title ?? completed.Id.Value;
+
         if (completed.Success)
         {
             _failureCounts.Remove(completed.Id);
@@ -429,11 +435,45 @@ public sealed partial class ReminderManagerActor : ReceiveActor
                 _config.FailurePauseThreshold,
                 completed.ErrorMessage);
 
+            _notificationSink.Emit(new OperationalAlert
+            {
+                AlertId = Guid.NewGuid().ToString("N")[..12],
+                Type = "reminder.execution.failed",
+                Category = AlertType.ReminderExecutionFailed,
+                Summary = $"Reminder '{title}' execution failed: {completed.ErrorMessage}",
+                Timestamp = _timeProvider.GetUtcNow(),
+                Severity = "warning",
+                Source = completed.Id.Value,
+                Context = new Dictionary<string, string>
+                {
+                    ["reminderId"] = completed.Id.Value,
+                    ["title"] = title,
+                    ["error"] = completed.ErrorMessage ?? "unknown",
+                }
+            });
+
             if (count >= _config.FailurePauseThreshold)
             {
                 _log.Warning("Reminder '{0}' hit failure threshold ({1}), disabling",
                     completed.Id.Value,
                     _config.FailurePauseThreshold);
+
+                _notificationSink.Emit(new OperationalAlert
+                {
+                    AlertId = Guid.NewGuid().ToString("N")[..12],
+                    Type = "reminder.auto_disabled",
+                    Category = AlertType.ReminderAutoDisabled,
+                    Summary = $"Reminder '{title}' disabled after {count} consecutive failures",
+                    Timestamp = _timeProvider.GetUtcNow(),
+                    Severity = "critical",
+                    Source = completed.Id.Value,
+                    Context = new Dictionary<string, string>
+                    {
+                        ["reminderId"] = completed.Id.Value,
+                        ["title"] = title,
+                        ["failureCount"] = count.ToString(),
+                    }
+                });
 
                 await DisableReminderInternalAsync(completed.Id);
                 _failureCounts.Remove(completed.Id);
@@ -441,7 +481,6 @@ public sealed partial class ReminderManagerActor : ReceiveActor
         }
 
         // One-shot reminders cannot fire again — disable after execution
-        var definition = _definitionStore.Get(completed.Id);
         if (definition is { Enabled: true, Schedule.Type: ReminderScheduleType.OneShot })
         {
             _log.Info("One-shot reminder '{0}' completed, disabling", completed.Id.Value);
@@ -453,6 +492,7 @@ public sealed partial class ReminderManagerActor : ReceiveActor
 
     private async Task HandleReconcileAsync()
     {
+        var sender = Sender; // capture before any await
         try
         {
             var scheduled = await ListScheduledRemindersAsync();
@@ -501,6 +541,10 @@ public sealed partial class ReminderManagerActor : ReceiveActor
                     restoredSchedules,
                     disabledZombies);
             }
+
+            // Only ack external callers — skip Self.Tell from PreStart
+            if (!sender.Equals(Self))
+                sender.Tell(new ReconcileCompleted(cancelledOrphans, restoredSchedules, disabledZombies));
         }
         catch (Exception ex)
         {
@@ -702,4 +746,10 @@ public sealed partial class ReminderManagerActor : ReceiveActor
     {
         public static readonly ReconcileReminders Instance = new();
     }
+
+    /// <summary>
+    /// Ack sent back to <see cref="ReconcileReminders"/> callers so they can
+    /// synchronize on reconcile completion instead of polling.
+    /// </summary>
+    internal sealed record ReconcileCompleted(int CancelledOrphans, int RestoredSchedules, int DisabledZombies);
 }
