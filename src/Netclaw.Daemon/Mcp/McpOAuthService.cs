@@ -3,6 +3,7 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.Logging;
+using ModelContextProtocol.Authentication;
 using Netclaw.Configuration;
 using Netclaw.Configuration.Secrets;
 using Netclaw.Providers.OAuth;
@@ -442,6 +443,35 @@ internal sealed class McpOAuthService
         }
     }
 
+    // ── SDK Token Cache Bridge ──────────────────────────────────────────
+
+    /// <summary>
+    /// Creates an <see cref="ITokenCache"/> adapter that bridges the SDK's
+    /// token management to Netclaw's existing <see cref="McpOAuthTokenSet"/>
+    /// persistence for the given server.
+    /// </summary>
+    internal ITokenCache CreateTokenCache(string serverName)
+        => new McpTokenCacheAdapter(serverName, _tokens, PersistTokens, _timeProvider);
+
+    /// <summary>Returns the cached token set for the given server, or null.</summary>
+    internal McpOAuthTokenSet? GetTokenSet(string serverName)
+        => _tokens.TryGetValue(serverName, out var ts) ? ts : null;
+
+    /// <summary>Returns the cached OAuth metadata for the given server, or null.</summary>
+    internal McpOAuthServerMetadata? GetCachedMetadata(string serverName)
+        => _metadata.TryGetValue(serverName, out var m) ? m : null;
+
+    /// <summary>Persists a DCR-issued client_id into the metadata cache.</summary>
+    internal void UpdateMetadataClientId(string serverName, string clientId)
+    {
+        if (_metadata.TryGetValue(serverName, out var meta))
+        {
+            meta.ClientId = clientId;
+            _metadata[serverName] = meta;
+            PersistMetadata();
+        }
+    }
+
     // ── Flow Status (for CLI polling) ──────────────────────────────────
 
     public McpOAuthFlowStatus GetFlowStatus(string serverName)
@@ -558,7 +588,7 @@ internal sealed class McpOAuthService
         }
     }
 
-    private void PersistTokens()
+    internal void PersistTokens()
     {
         try
         {

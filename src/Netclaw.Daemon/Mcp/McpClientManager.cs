@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using ModelContextProtocol.Authentication;
 using ModelContextProtocol.Client;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
@@ -402,20 +403,43 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         {
             _sharedToolFunctions.TryRemove(name, out _);
             _sessionScopedServers.TryRemove(name, out _);
-            _statuses[name] = new McpServerStatus(name, McpConnectionState.Error, 0, ex.Message);
-            _logger.LogWarning(ex, "Failed to connect to MCP server '{Name}'", name);
 
-            _notificationSink.Emit(new OperationalAlert
+            // Detect auth failures and surface as AwaitingAuth rather than generic Error
+            if (IsAuthFailure(ex))
             {
-                AlertId = Guid.NewGuid().ToString("N")[..12],
-                Type = "mcp.server.disconnected",
-                Category = AlertType.McpServerDisconnected,
-                Summary = $"MCP server '{name}' connection failed: {ex.Message}",
-                Timestamp = _timeProvider.GetUtcNow(),
-                Severity = "warning",
-                Source = name,
-                Context = new Dictionary<string, string> { ["serverName"] = name }
-            });
+                _statuses[name] = new McpServerStatus(name, McpConnectionState.AwaitingAuth, 0,
+                    "OAuth required. Run: netclaw mcp auth " + name);
+                _logger.LogWarning(ex, "MCP server '{Name}' requires OAuth authorization", name);
+
+                _notificationSink.Emit(new OperationalAlert
+                {
+                    AlertId = Guid.NewGuid().ToString("N")[..12],
+                    Type = "mcp.auth.expired",
+                    Category = AlertType.McpAuthExpired,
+                    Summary = $"MCP server '{name}' requires OAuth authorization. Run: netclaw mcp auth {name}",
+                    Timestamp = _timeProvider.GetUtcNow(),
+                    Severity = "warning",
+                    Source = name,
+                    Context = new Dictionary<string, string> { ["serverName"] = name }
+                });
+            }
+            else
+            {
+                _statuses[name] = new McpServerStatus(name, McpConnectionState.Error, 0, ex.Message);
+                _logger.LogWarning(ex, "Failed to connect to MCP server '{Name}'", name);
+
+                _notificationSink.Emit(new OperationalAlert
+                {
+                    AlertId = Guid.NewGuid().ToString("N")[..12],
+                    Type = "mcp.server.disconnected",
+                    Category = AlertType.McpServerDisconnected,
+                    Summary = $"MCP server '{name}' connection failed: {ex.Message}",
+                    Timestamp = _timeProvider.GetUtcNow(),
+                    Severity = "warning",
+                    Source = name,
+                    Context = new Dictionary<string, string> { ["serverName"] = name }
+                });
+            }
 
             return false;
         }
@@ -427,19 +451,12 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         CancellationToken ct,
         bool updateStatusOnAuthFailure)
     {
-        Dictionary<string, string>? headers = entry.Headers is { Count: > 0 }
-            ? new Dictionary<string, string>(entry.Headers)
-            : null;
-
-        if (entry.Transport is not "stdio")
+        // For HTTP transports without cached tokens, check if OAuth is needed
+        // before attempting a connection that would fail with 401.
+        if (entry.Transport is not "stdio" && updateStatusOnAuthFailure && entry.Url is not null)
         {
-            var token = await _oauthService.GetValidTokenAsync(name, entry, ct);
-            if (token is not null)
-            {
-                headers ??= new Dictionary<string, string>();
-                headers["Authorization"] = $"Bearer {token}";
-            }
-            else if (updateStatusOnAuthFailure && entry.Url is not null)
+            var hasTokens = _oauthService.GetTokenSet(name) is not null;
+            if (!hasTokens)
             {
                 var metadata = await _oauthService.TryDiscoverMetadataAsync(name, entry.Url, ct);
                 if (metadata is not null)
@@ -465,7 +482,7 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
             }
         }
 
-        var transport = CreateTransport(name, entry, headers);
+        var transport = CreateTransport(name, entry);
 
         return await McpClient.CreateAsync(transport, new McpClientOptions
         {
@@ -473,10 +490,7 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         }, cancellationToken: ct);
     }
 
-    private IClientTransport CreateTransport(
-        string serverName,
-        McpServerEntry entry,
-        Dictionary<string, string>? headers)
+    private IClientTransport CreateTransport(string serverName, McpServerEntry entry)
     {
         if (entry.Transport is "stdio")
         {
@@ -497,6 +511,10 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
             });
         }
 
+        Dictionary<string, string>? headers = entry.Headers is { Count: > 0 }
+            ? new Dictionary<string, string>(entry.Headers)
+            : null;
+
         return new HttpClientTransport(new HttpClientTransportOptions
         {
             Endpoint = new Uri(entry.Url!),
@@ -505,7 +523,63 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
             TransportMode = entry.Transport is "sse"
                 ? HttpTransportMode.Sse
                 : HttpTransportMode.AutoDetect,
+            OAuth = BuildOAuthOptions(serverName, entry),
         });
+    }
+
+    private ClientOAuthOptions? BuildOAuthOptions(string serverName, McpServerEntry entry)
+    {
+        var metadata = _oauthService.GetCachedMetadata(serverName);
+
+        // Only wire OAuth if server is known to need it (has metadata or static config)
+        if (metadata is null && string.IsNullOrWhiteSpace(entry.OAuthClientId))
+            return null;
+
+        var serverNameCapture = serverName;
+        return new ClientOAuthOptions
+        {
+            RedirectUri = new Uri("http://127.0.0.1:5199/api/mcp/oauth/callback"),
+            ClientId = metadata?.ClientId ?? entry.OAuthClientId,
+            Scopes = ParseScopes(entry.OAuthScope),
+            TokenCache = _oauthService.CreateTokenCache(serverName),
+            // Return null to suppress the SDK's default browser-open behavior;
+            // Netclaw handles interactive auth via `netclaw mcp auth`.
+            AuthorizationRedirectDelegate = static (_, _, _) => Task.FromResult<string?>(null),
+            DynamicClientRegistration = new DynamicClientRegistrationOptions
+            {
+                ClientName = "netclaw",
+                ResponseDelegate = (response, _) =>
+                {
+                    _oauthService.UpdateMetadataClientId(serverNameCapture, response.ClientId);
+                    return Task.CompletedTask;
+                },
+            },
+        };
+    }
+
+    private static IEnumerable<string>? ParseScopes(string? scopeString)
+    {
+        if (string.IsNullOrWhiteSpace(scopeString))
+            return null;
+
+        return scopeString.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+    }
+
+    private static bool IsAuthFailure(Exception ex)
+    {
+        // HttpRequestException with 401/403
+        if (ex is HttpRequestException { StatusCode: System.Net.HttpStatusCode.Unauthorized or System.Net.HttpStatusCode.Forbidden })
+            return true;
+
+        // SDK wraps auth failures in InvalidOperationException with "unauthorized" message
+        if (ex is InvalidOperationException && ex.Message.Contains("unauthorized", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        // Check inner exceptions for auth failures
+        if (ex.InnerException is not null)
+            return IsAuthFailure(ex.InnerException);
+
+        return false;
     }
 
     private static string[] BuildStdioArguments(string serverName, McpServerEntry entry)

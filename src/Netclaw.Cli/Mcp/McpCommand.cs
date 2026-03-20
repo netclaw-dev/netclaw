@@ -666,6 +666,10 @@ internal static class McpCommand
         catch (HttpRequestException ex) when (ex.StatusCode is System.Net.HttpStatusCode.Unauthorized
             or System.Net.HttpStatusCode.Forbidden)
         {
+            // If the server has OAuth config hints, report AwaitingAuth instead of AuthFailed
+            if (!string.IsNullOrWhiteSpace(entry.OAuthClientId) || !string.IsNullOrWhiteSpace(entry.OAuthScope))
+                return new McpProbeResult(McpProbeStatus.AwaitingAuth, 0, null);
+
             var statusText = ex.StatusCode switch
             {
                 System.Net.HttpStatusCode.Unauthorized => "401 Unauthorized",
