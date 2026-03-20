@@ -884,6 +884,150 @@ public class LlmSessionIntegrationTests : TestKit
         var completed = await recoverSub.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
         Assert.Equal(3, completed.TurnNumber); // Continues from recovered state
     }
+
+    [Fact]
+    public async Task Rejoin_suppresses_duplicate_SessionJoined_on_subscriber()
+    {
+        var sessionId = new SessionId("test-channel/rejoin-suppress");
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("rejoin-sub");
+
+        // First join — subscriber receives SessionJoined
+        await sessionManager.Ask<SessionJoined>(new JoinSession
+        {
+            SessionId = sessionId,
+            Subscriber = subscriber,
+            Filter = OutputFilter.TextOnly
+        }, TimeSpan.FromSeconds(3));
+        await subscriber.ExpectMsgAsync<SessionJoined>();
+
+        // Re-join via Tell (piggybacked path) — subscriber should NOT get a duplicate
+        sessionManager.Tell(new JoinSession
+        {
+            SessionId = sessionId,
+            Subscriber = subscriber,
+            Filter = OutputFilter.TextOnly
+        }, ActorRefs.NoSender);
+
+        await subscriber.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(300));
+
+        // Re-join via Ask still returns SessionJoined to the caller (not the subscriber)
+        var rejoined = await sessionManager.Ask<SessionJoined>(new JoinSession
+        {
+            SessionId = sessionId,
+            Subscriber = subscriber,
+            Filter = OutputFilter.TextOnly
+        }, TimeSpan.FromSeconds(3));
+        Assert.Equal(sessionId, rejoined.SessionId);
+
+        // Subscriber still should not have received a duplicate
+        await subscriber.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(300));
+    }
+
+    [Fact]
+    public async Task Session_does_not_passivate_with_active_subscribers()
+    {
+        var sessionId = new SessionId("test-channel/no-passivate-sub");
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("active-sub");
+
+        await sessionManager.Ask<SessionJoined>(new JoinSession
+        {
+            SessionId = sessionId,
+            Subscriber = subscriber,
+            Filter = OutputFilter.TextOnly
+        }, TimeSpan.FromSeconds(3));
+        await subscriber.ExpectMsgAsync<SessionJoined>();
+
+        // Resolve session actor
+        var escapedId = Uri.EscapeDataString(sessionId.Value);
+        var childPath = $"/user/session-manager/{escapedId}";
+        var child = await Sys.ActorSelection(childPath).ResolveOne(TimeSpan.FromSeconds(3));
+        Watch(child);
+
+        // Send ReceiveTimeout directly — with active subscriber, should be deferred
+        child.Tell(ReceiveTimeout.Instance);
+
+        // Actor should still be alive
+        await ExpectNoMsgAsync(TimeSpan.FromMilliseconds(300));
+
+        // Session should still process messages
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Still alive?"
+        }, TimeSpan.FromSeconds(3));
+
+        await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3));
+        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
+    }
+
+    [Fact]
+    public async Task Subscriber_survives_session_actor_passivation_via_piggyback_rejoin()
+    {
+        var sessionId = new SessionId("test-channel/passivation-rejoin");
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriberA = CreateTestProbe("sub-a");
+
+        // Phase 1: Join with subscriber A, complete a turn
+        await sessionManager.Ask<SessionJoined>(new JoinSession
+        {
+            SessionId = sessionId,
+            Subscriber = subscriberA,
+            Filter = OutputFilter.TextOnly
+        }, TimeSpan.FromSeconds(3));
+        await subscriberA.ExpectMsgAsync<SessionJoined>();
+
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "First message"
+        }, TimeSpan.FromSeconds(3));
+        await subscriberA.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3));
+        await subscriberA.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
+
+        // Phase 2: Kill session actor (simulating passivation)
+        var escapedId = Uri.EscapeDataString(sessionId.Value);
+        var childPath = $"/user/session-manager/{escapedId}";
+        var child = await Sys.ActorSelection(childPath).ResolveOne(TimeSpan.FromSeconds(3));
+        Watch(child);
+        Sys.Stop(child);
+        await ExpectTerminatedAsync(child);
+
+        // Phase 3: Join with subscriber B (triggers re-creation)
+        var subscriberB = CreateTestProbe("sub-b");
+        await sessionManager.Ask<SessionJoined>(new JoinSession
+        {
+            SessionId = sessionId,
+            Subscriber = subscriberB,
+            Filter = OutputFilter.TextOnly
+        }, TimeSpan.FromSeconds(5));
+        await subscriberB.ExpectMsgAsync<SessionJoined>();
+
+        // Phase 4: Piggybacked JoinSession for A + SendUserMessage
+        // This simulates what ChannelPipeline does on each inbound message
+        sessionManager.Tell(new JoinSession
+        {
+            SessionId = sessionId,
+            Subscriber = subscriberA,
+            Filter = OutputFilter.TextOnly
+        }, ActorRefs.NoSender);
+
+        await subscriberA.ExpectMsgAsync<SessionJoined>(TimeSpan.FromSeconds(3));
+
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "After passivation"
+        }, TimeSpan.FromSeconds(3));
+
+        // Both subscribers should receive output
+        await subscriberA.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3));
+        await subscriberA.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
+
+        await subscriberB.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3));
+        await subscriberB.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
+    }
 }
 
 /// <summary>

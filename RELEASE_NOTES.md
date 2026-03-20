@@ -1,3 +1,20 @@
+#### 0.7.1 2026-03-20 ####
+
+Netclaw v0.7.1 — Delivery feedback hardening, token stats, MCP OAuth reconnect, and init race fix
+
+**Stability**
+
+* Fixed Slack delivery failures silently disappearing — transport errors (timeouts, permission denials) now propagate back to the LLM session so the agent can acknowledge the failure on the next turn and operators can see what went wrong. Previously these failures were swallowed and the agent appeared non-responsive. ([#311](https://github.com/Aaronontheweb/netclaw/pull/311))
+* Fixed `netclaw init` triggering an uncontrolled daemon restart when run on an existing installation — the daemon is now stopped before config files are written, preventing the file watcher from firing mid-initialization and causing a reconnect loop or lost system prompt. ([#300](https://github.com/Aaronontheweb/netclaw/pull/300))
+
+**CLI**
+
+* Fixed `netclaw stats` reporting zero tokens in/out for OpenAI-compatible providers — the provider now parses the `usage` field from API responses and requests streaming usage data so token counts are accurate. ([#303](https://github.com/Aaronontheweb/netclaw/pull/303))
+
+**MCP**
+
+* Fixed MCP OAuth servers (e.g., Notion) requiring a manual daemon restart after completing OAuth authorization — the daemon now reconnects automatically after a successful token exchange. Fixed `mcp list` to prefer daemon-side statuses for OAuth-protected servers instead of probing directly without credentials. ([#301](https://github.com/Aaronontheweb/netclaw/pull/301))
+
 #### 0.7.0 2026-03-20 ####
 
 Netclaw v0.7.0 — Behavioral directives, webhook alerts, tool budgets, and provider consolidation
