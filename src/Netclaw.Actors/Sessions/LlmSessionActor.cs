@@ -794,8 +794,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 _state = _state.Apply(evt);
                 _lastInputTokenCount = 0; // Reset — next LLM call will provide fresh count
                 _startupContextInjected = false; // Re-inject static layers on next LLM call
-                _autoLoadedSkills.Clear();
-                _autoLoadedSkillContent.Clear();
+                // NOTE: do NOT clear _autoLoadedSkills or _autoLoadedSkillContent here.
+                // Skills loaded during this session are still relevant after compaction.
+                // They will be re-injected on the next LLM call from the cache.
 
                 EnqueueCheckpointFireAndForget(new MemoryCheckpointRequest(
                     SessionId: _sessionId,
@@ -1983,7 +1984,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         {
             try
             {
-                _autoLoadedSkillContent[match.Skill.Name] = File.ReadAllText(match.Skill.FilePath);
+                var raw = File.ReadAllText(match.Skill.FilePath);
+                _autoLoadedSkillContent[match.Skill.Name] = Skills.SkillScanner.ExtractBody(raw);
             }
             catch (IOException ex)
             {
