@@ -22,7 +22,7 @@
 - [x] 4.1 Add `GET /api/provider/oauth/callback` endpoint in daemon `Program.cs` — accept `code` and `state` params, validate state, exchange code for tokens, return HTML success/error page
 - [x] 4.2 Add `POST /api/provider/oauth/start` endpoint — accept provider type, generate PKCE + auth URL using `OAuthPkceService`, store pending flow, return `{ authorizationUrl, state }`
 - [x] 4.3 Add `GET /api/provider/oauth/status/{state}` endpoint — return `Completed`, `Pending`, or `Failed` for a pending flow
-- [ ] 4.4 Write integration tests for daemon callback endpoints using `WebApplicationFactory`
+- [x] 4.4 Write integration tests for daemon callback endpoints using ASP.NET Core test host coverage around the mapped routes
 
 ## 5. CLI/TUI Browser OAuth Flow
 
