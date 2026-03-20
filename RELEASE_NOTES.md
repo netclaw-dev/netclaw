@@ -1,3 +1,27 @@
+#### 0.7.2 2026-03-20 ####
+
+Netclaw v0.7.2 — Session passivation recovery, memory recall activation, skill loading fixes, and per-session log directories
+
+**Stability**
+
+* Fixed sessions going silent after idle passivation — when a session actor passivated due to inactivity and was later re-created, its subscriber list was empty so channels never received output. Channels now re-assert their subscription on each inbound message, recovering transparently. Passivation is also deferred while active subscribers exist. ([#325](https://github.com/Aaronontheweb/netclaw/pull/325))
+
+**Memory**
+
+* Enabled memory recall in production — `MemorySidecarsEnabled` and `DeterministicRetrievalEnabled` were both defaulting to `false` since initial development, which meant `store_memory` wrote to SQLite but nothing read it back automatically. Every session received zero recalled memories on every turn. Both flags now default to `true`. ([#334](https://github.com/Aaronontheweb/netclaw/pull/334))
+
+**Identity**
+
+* Added bot identity grounding to the SOUL.md template — the system prompt now starts with "You are {name}" so the LLM knows its own identity from the first turn instead of confabulating a different persona. Also adds the Netclaw GitHub repo URL to TOOLING.md so the agent can file issues and check releases without web searching. ([#334](https://github.com/Aaronontheweb/netclaw/pull/334))
+
+**Skills**
+
+* Fixed skill auto-loading failures for identity queries — "netclaw" was in the keyword blacklist so queries like "What version of Netclaw?" could not trigger `netclaw-manual`. TF-IDF weighting already handles common tokens, so the blacklist entry was unnecessary. Also fixed a startup race where skills had zero keywords until LLM enrichment completed, and stale keyword cache files are now purged during rescan. ([#333](https://github.com/Aaronontheweb/netclaw/pull/333))
+
+**Diagnostics**
+
+* Moved session logs into per-session directories — logs now live at `{sessionsBase}/{session_id}/logs/` instead of the shared global `~/.netclaw/logs/sessions/` directory. Multiple log files within a session directory clearly show passivation and rehydration cycles. ([#332](https://github.com/Aaronontheweb/netclaw/pull/332))
+
 #### 0.7.1 2026-03-20 ####
 
 Netclaw v0.7.1 — Delivery feedback hardening, token stats, MCP OAuth reconnect, and init race fix

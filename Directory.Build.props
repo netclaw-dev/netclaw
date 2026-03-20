@@ -7,21 +7,28 @@
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
-    <VersionPrefix>0.7.1</VersionPrefix>
-    <PackageReleaseNotes>Netclaw v0.7.1 — Delivery feedback hardening, token stats, MCP OAuth reconnect, and init race fix
+    <VersionPrefix>0.7.2</VersionPrefix>
+    <PackageReleaseNotes>Netclaw v0.7.2 — Session passivation recovery, memory recall activation, skill loading fixes, and per-session log directories
 
 **Stability**
 
-* Fixed Slack delivery failures silently disappearing — transport errors (timeouts, permission denials) now propagate back to the LLM session so the agent can acknowledge the failure on the next turn and operators can see what went wrong. Previously these failures were swallowed and the agent appeared non-responsive. ([#311](https://github.com/Aaronontheweb/netclaw/pull/311))
-* Fixed `netclaw init` triggering an uncontrolled daemon restart when run on an existing installation — the daemon is now stopped before config files are written, preventing the file watcher from firing mid-initialization and causing a reconnect loop or lost system prompt. ([#300](https://github.com/Aaronontheweb/netclaw/pull/300))
+* Fixed sessions going silent after idle passivation — when a session actor passivated due to inactivity and was later re-created, its subscriber list was empty so channels never received output. Channels now re-assert their subscription on each inbound message, recovering transparently. Passivation is also deferred while active subscribers exist. ([#325](https://github.com/Aaronontheweb/netclaw/pull/325))
 
-**CLI**
+**Memory**
 
-* Fixed `netclaw stats` reporting zero tokens in/out for OpenAI-compatible providers — the provider now parses the `usage` field from API responses and requests streaming usage data so token counts are accurate. ([#303](https://github.com/Aaronontheweb/netclaw/pull/303))
+* Enabled memory recall in production — `MemorySidecarsEnabled` and `DeterministicRetrievalEnabled` were both defaulting to `false` since initial development, which meant `store_memory` wrote to SQLite but nothing read it back automatically. Every session received zero recalled memories on every turn. Both flags now default to `true`. ([#334](https://github.com/Aaronontheweb/netclaw/pull/334))
 
-**MCP**
+**Identity**
 
-* Fixed MCP OAuth servers (e.g., Notion) requiring a manual daemon restart after completing OAuth authorization — the daemon now reconnects automatically after a successful token exchange. Fixed `mcp list` to prefer daemon-side statuses for OAuth-protected servers instead of probing directly without credentials. ([#301](https://github.com/Aaronontheweb/netclaw/pull/301))</PackageReleaseNotes>
+* Added bot identity grounding to the SOUL.md template — the system prompt now starts with "You are {name}" so the LLM knows its own identity from the first turn instead of confabulating a different persona. Also adds the Netclaw GitHub repo URL to TOOLING.md so the agent can file issues and check releases without web searching. ([#334](https://github.com/Aaronontheweb/netclaw/pull/334))
+
+**Skills**
+
+* Fixed skill auto-loading failures for identity queries — "netclaw" was in the keyword blacklist so queries like "What version of Netclaw?" could not trigger `netclaw-manual`. TF-IDF weighting already handles common tokens, so the blacklist entry was unnecessary. Also fixed a startup race where skills had zero keywords until LLM enrichment completed, and stale keyword cache files are now purged during rescan. ([#333](https://github.com/Aaronontheweb/netclaw/pull/333))
+
+**Diagnostics**
+
+* Moved session logs into per-session directories — logs now live at `{sessionsBase}/{session_id}/logs/` instead of the shared global `~/.netclaw/logs/sessions/` directory. Multiple log files within a session directory clearly show passivation and rehydration cycles. ([#332](https://github.com/Aaronontheweb/netclaw/pull/332))</PackageReleaseNotes>
   </PropertyGroup>
   <PropertyGroup>
     <NetCoreTestVersion>net10.0</NetCoreTestVersion>
