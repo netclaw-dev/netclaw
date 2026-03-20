@@ -412,6 +412,112 @@ public class LlmSessionIntegrationTests : TestKit
     }
 
     [Fact]
+    public async Task Transport_failure_injects_nudge_without_triggering_retry()
+    {
+        var sessionId = new SessionId("test-channel/transport-failure");
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("transport-failure-sub");
+
+        await sessionManager.Ask<SessionJoined>(new JoinSession
+        {
+            SessionId = sessionId,
+            Subscriber = subscriber,
+            Filter = OutputFilter.TextOnly
+        }, TimeSpan.FromSeconds(3));
+        await subscriber.ExpectMsgAsync<SessionJoined>();
+
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Say hello"
+        }, TimeSpan.FromSeconds(3));
+
+        await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3));
+        var completed = await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
+
+        // Send non-retryable transport failure — should NOT trigger LLM retry
+        sessionManager.Tell(new DeliveryFailed
+        {
+            SessionId = sessionId,
+            TurnNumber = completed.TurnNumber,
+            ChannelType = ChannelType.Slack,
+            FailureKind = DeliveryFailureKind.TransportFailure,
+            ErrorMessage = "Timed out posting reply"
+        });
+
+        // No retry should occur — transport failures can't be fixed by changing output
+        await subscriber.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(300));
+
+        // On the next user message, the LLM should see the transport failure nudge
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Are you there?"
+        }, TimeSpan.FromSeconds(3));
+
+        await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3));
+        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
+
+        Assert.Contains(_fakeChatClient.ReceivedMessages[^1], msg =>
+            msg.Role == Microsoft.Extensions.AI.ChatRole.User
+            && msg.Text is not null
+            && msg.Text.Contains("transport error", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task Unknown_delivery_failure_injects_nudge_without_triggering_retry()
+    {
+        var sessionId = new SessionId("test-channel/unknown-failure");
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("unknown-failure-sub");
+
+        await sessionManager.Ask<SessionJoined>(new JoinSession
+        {
+            SessionId = sessionId,
+            Subscriber = subscriber,
+            Filter = OutputFilter.TextOnly
+        }, TimeSpan.FromSeconds(3));
+        await subscriber.ExpectMsgAsync<SessionJoined>();
+
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Say hello"
+        }, TimeSpan.FromSeconds(3));
+
+        await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3));
+        var completed = await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
+
+        // Send non-retryable unknown failure — should NOT trigger LLM retry
+        sessionManager.Tell(new DeliveryFailed
+        {
+            SessionId = sessionId,
+            TurnNumber = completed.TurnNumber,
+            ChannelType = ChannelType.Slack,
+            FailureKind = DeliveryFailureKind.Unknown,
+            ErrorMessage = "Unexpected Slack error"
+        });
+
+        // No retry should occur
+        await subscriber.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(300));
+
+        // On the next user message, the nudge should be visible in LLM context
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Are you there?"
+        }, TimeSpan.FromSeconds(3));
+
+        await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3));
+        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
+
+        Assert.Contains(_fakeChatClient.ReceivedMessages[^1], msg =>
+            msg.Role == Microsoft.Extensions.AI.ChatRole.User
+            && msg.Text is not null
+            && msg.Text.Contains("unknown delivery error", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public async Task Sidecar_observation_promotes_strong_user_assertion_into_memory()
     {
         var gate = new MemoryProposalGate();

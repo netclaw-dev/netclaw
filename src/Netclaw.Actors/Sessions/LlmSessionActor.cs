@@ -327,18 +327,18 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             if (!IsRetryableDeliveryFailure(msg))
             {
                 _log.Warning(
-                    "Ignoring non-retryable delivery feedback while processing channel={Channel} turn={Turn} kind={FailureKind}",
+                    "Non-retryable delivery feedback while processing channel={Channel} turn={Turn} kind={FailureKind}; injecting context",
                     msg.ChannelType,
                     msg.TurnNumber,
                     msg.FailureKind);
+                _state = _state.AddSystemNudge(BuildDeliveryFailureNudge(msg));
                 return;
             }
 
             _log.Warning(
-                "Ignoring stale delivery feedback while processing channel={Channel} turn={Turn} eligibleTurn={EligibleTurn}",
+                "Ignoring retryable delivery feedback while processing channel={Channel} turn={Turn}",
                 msg.ChannelType,
-                msg.TurnNumber,
-                _deliveryRetryEligibleTurnNumber?.ToString() ?? "none");
+                msg.TurnNumber);
         });
 
         Command<CompactionWorkCompleted>(_ => { });
@@ -1383,16 +1383,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     private void HandleDeliveryFailedWhenReady(DeliveryFailed msg)
     {
-        if (!IsRetryableDeliveryFailure(msg))
-        {
-            _log.Warning(
-                "Ignoring non-retryable delivery feedback channel={Channel} turn={Turn} kind={FailureKind}",
-                msg.ChannelType,
-                msg.TurnNumber,
-                msg.FailureKind);
-            return;
-        }
-
         if (_deliveryRetryEligibleTurnNumber != msg.TurnNumber)
         {
             _log.Warning(
@@ -1400,6 +1390,17 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 msg.ChannelType,
                 msg.TurnNumber,
                 _deliveryRetryEligibleTurnNumber?.ToString() ?? "none");
+            return;
+        }
+
+        if (!IsRetryableDeliveryFailure(msg))
+        {
+            _log.Warning(
+                "Non-retryable delivery failure channel={Channel} turn={Turn} kind={FailureKind}; injecting context for next turn",
+                msg.ChannelType,
+                msg.TurnNumber,
+                msg.FailureKind);
+            _state = _state.AddSystemNudge(BuildDeliveryFailureNudge(msg));
             return;
         }
 
@@ -1442,7 +1443,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             DeliveryFailureKind.ContentRejected => "Produce a simpler channel-safe response and avoid the content pattern the channel rejected.",
             DeliveryFailureKind.MessageTooLarge => "Produce a shorter response that fits the channel's length limits.",
             DeliveryFailureKind.UnsupportedContent => "Avoid unsupported formatting or content types for this channel.",
-            _ => "Produce a corrected response that avoids the reported delivery issue."
+            DeliveryFailureKind.TransportFailure => "The channel experienced a transport error. Your response content was likely fine. Acknowledge to the user that delivery failed due to a technical issue and offer to retry.",
+            DeliveryFailureKind.PermissionDenied => "The bot lacks permission to post in this channel. Inform the user that a permissions issue prevented delivery.",
+            DeliveryFailureKind.Unknown or _ => "An unknown delivery error occurred. Acknowledge the issue to the user."
         };
 
         return $"Your last response could not be delivered to the user via {msg.ChannelType}. "
