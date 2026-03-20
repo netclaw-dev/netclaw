@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Net.Http.Json;
 using System.Net.Sockets;
+using System.Text;
 using System.Text.Json;
 using ModelContextProtocol.Client;
 using Netclaw.Cli.Config;
@@ -289,6 +290,8 @@ internal static class McpCommand
 
         writer.WriteLine();
         writer.WriteLine($"Authorization URL: {authUrl}");
+        if (TryEmitOsc52Copy(writer, authUrl))
+            writer.WriteLine("Copied authorization URL to clipboard via OSC 52.");
         writer.WriteLine();
         writer.WriteLine("Complete the authorization in your browser, then either:");
         writer.WriteLine("  1. Wait for the callback to be received automatically");
@@ -449,6 +452,23 @@ internal static class McpCommand
         }
 
         return false;
+    }
+
+    internal static bool TryEmitOsc52Copy(TextWriter writer, string text)
+    {
+        if (string.IsNullOrEmpty(text)
+            || !ReferenceEquals(writer, Console.Out)
+            || Console.IsOutputRedirected)
+            return false;
+
+        var term = Environment.GetEnvironmentVariable("TERM");
+        if (string.IsNullOrWhiteSpace(term)
+            || string.Equals(term, "dumb", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        var payload = Convert.ToBase64String(Encoding.UTF8.GetBytes(text));
+        writer.Write($"\u001b]52;c;{payload}\u0007");
+        return true;
     }
 
     private static async Task<int> RunListAsync(NetclawPaths paths, TextWriter writer)

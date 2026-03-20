@@ -284,6 +284,17 @@ public sealed class McpCommandTests : IDisposable
         Assert.Contains("Redirect URL was rejected", output.ToString());
     }
 
+    [Fact]
+    public void TryEmitOsc52Copy_StringWriter_ReturnsFalse()
+    {
+        var output = new StringWriter();
+
+        var copied = McpCommand.TryEmitOsc52Copy(output, "https://example.com/oauth");
+
+        Assert.False(copied);
+        Assert.Equal(string.Empty, output.ToString());
+    }
+
     private static JsonDocument ReadConfigFile(string path)
     {
         return JsonDocument.Parse(File.ReadAllText(path));
