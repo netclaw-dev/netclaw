@@ -182,6 +182,27 @@ public class OAuthPkceServiceTests
     }
 
     [Fact]
+    public async Task CompleteAuthorizationAsync_TokenExchangeFailure_MarksFlowFailed()
+    {
+        var handler = new FakeHttpMessageHandler(_ =>
+            JsonResponse(new { error = "invalid_request" }, HttpStatusCode.BadRequest));
+
+        var service = new OAuthPkceService(new HttpClient(handler));
+
+        var (_, state) = service.StartAuthorizationFlow(
+            "https://auth.example.com/authorize",
+            "https://auth.example.com/token",
+            "test-client",
+            "http://127.0.0.1:5199/callback",
+            "openid");
+
+        await Assert.ThrowsAsync<HttpRequestException>(
+            () => service.CompleteAuthorizationAsync("callback-code", state));
+
+        Assert.Equal(OAuthPkceFlowStatus.Failed, service.GetFlowStatus(state));
+    }
+
+    [Fact]
     public async Task RefreshToken_Success_ReturnsNewTokenPreservingRefresh()
     {
         var handler = new FakeHttpMessageHandler(_ =>

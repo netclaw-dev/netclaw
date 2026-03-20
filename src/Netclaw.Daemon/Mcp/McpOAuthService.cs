@@ -389,16 +389,16 @@ internal sealed class McpOAuthService
 
     public McpOAuthFlowStatus GetFlowStatus(string serverName)
     {
-        // Check if there's a completed token
-        if (_tokens.ContainsKey(serverName))
-            return McpOAuthFlowStatus.Completed;
-
-        // Check if there's a pending flow via state context
+        // An active flow takes precedence over any previously stored token.
         foreach (var ctx in _stateToContext.Values)
         {
             if (ctx.ServerName == serverName)
                 return McpOAuthFlowStatus.Pending;
         }
+
+        // Check if there's a completed token
+        if (_tokens.ContainsKey(serverName))
+            return McpOAuthFlowStatus.Completed;
 
         return McpOAuthFlowStatus.NotStarted;
     }
@@ -408,10 +408,6 @@ internal sealed class McpOAuthService
     /// </summary>
     public McpOAuthFlowStatus GetFlowStatusByState(string state)
     {
-        // If we already persisted tokens for this state, it's completed
-        if (_stateToContext.TryGetValue(state, out var ctx) && _tokens.ContainsKey(ctx.ServerName))
-            return McpOAuthFlowStatus.Completed;
-
         var pkceStatus = _pkceService.GetFlowStatus(state);
         return pkceStatus switch
         {

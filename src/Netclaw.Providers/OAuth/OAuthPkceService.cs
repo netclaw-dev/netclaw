@@ -20,6 +20,7 @@ public sealed class OAuthPkceService
     private readonly TimeProvider _timeProvider;
     private readonly ConcurrentDictionary<string, OAuthPkcePendingFlow> _pendingFlows = new();
     private readonly ConcurrentDictionary<string, OAuthDeviceFlowResult> _completedFlows = new();
+    private readonly ConcurrentDictionary<string, string> _failedFlows = new();
 
     public OAuthPkceService(HttpClient httpClient, TimeProvider? timeProvider = null)
     {
@@ -101,6 +102,7 @@ public sealed class OAuthPkceService
         }
         catch (Exception ex)
         {
+            _failedFlows[state] = ex.Message;
             flow.Completion.TrySetException(ex);
             throw;
         }
@@ -260,6 +262,9 @@ public sealed class OAuthPkceService
     {
         if (_completedFlows.ContainsKey(state))
             return OAuthPkceFlowStatus.Completed;
+
+        if (_failedFlows.ContainsKey(state))
+            return OAuthPkceFlowStatus.Failed;
 
         if (!_pendingFlows.TryGetValue(state, out var flow))
             return OAuthPkceFlowStatus.NotStarted;

@@ -74,7 +74,7 @@ public sealed class OAuthFlowCoordinator : IDisposable
     /// Returns a <see cref="CancellationToken"/> that fires when the flow ends.
     /// </summary>
     public CancellationToken StartMcpBrowserFlow(
-        string serverName, Action<OAuthDeviceFlowResult>? onSuccess = null)
+        string serverName, Action? onSuccess = null)
     {
         Cancel();
         _cts = new CancellationTokenSource();
@@ -201,18 +201,24 @@ public sealed class OAuthFlowCoordinator : IDisposable
 
                 return null;
             },
-            onSuccess,
+            onSuccess: result =>
+            {
+                if (result is null)
+                    throw new InvalidOperationException("Provider OAuth completed without token payload.");
+
+                onSuccess?.Invoke(result);
+            },
             ct);
     }
 
     private Task RunMcpBrowserFlowAsync(
-        string serverName, Action<OAuthDeviceFlowResult>? onSuccess, CancellationToken ct)
+        string serverName, Action? onSuccess, CancellationToken ct)
     {
         return RunBrowserFlowCoreAsync(
             startFlow: async token => await _daemonApi!.StartMcpOAuthAsync(serverName, token),
             pollStatus: (state, token) => _daemonApi!.GetMcpOAuthStatusByStateAsync(state, token),
             parseResult: _ => null, // MCP tokens are persisted daemon-side
-            onSuccess,
+            onSuccess: _ => onSuccess?.Invoke(),
             ct);
     }
 
@@ -224,7 +230,7 @@ public sealed class OAuthFlowCoordinator : IDisposable
         Func<CancellationToken, Task<HttpResponseMessage>> startFlow,
         Func<string, CancellationToken, Task<JsonElement>> pollStatus,
         Func<JsonElement, OAuthDeviceFlowResult?> parseResult,
-        Action<OAuthDeviceFlowResult>? onSuccess,
+        Action<OAuthDeviceFlowResult?>? onSuccess,
         CancellationToken ct)
     {
         if (_daemonApi is null)
@@ -288,10 +294,11 @@ public sealed class OAuthFlowCoordinator : IDisposable
                 var status = statusResponse.GetProperty("status").GetString();
                 if (status is "Completed")
                 {
-                    Result = parseResult(statusResponse);
+                    var result = parseResult(statusResponse);
+                    onSuccess?.Invoke(result);
+                    Result = result;
                     FlowState.Value = DeviceFlowState.Succeeded;
                     _requestRedraw();
-                    onSuccess?.Invoke(Result!);
                     return;
                 }
 

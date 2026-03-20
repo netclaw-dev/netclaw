@@ -376,31 +376,79 @@ internal static class McpCommand
     {
         // Skip paste fallback when stdin is redirected (CI, piped input)
         if (Console.IsInputRedirected)
-            return false;
+            return await WaitUntilCancelledAsync(ct);
 
-        try
+        return await ReadPasteRedirectAsync(
+            writer,
+            token => Task.Run(Console.ReadLine, token),
+            (code, state, token) => daemonApi.McpOAuthCallbackAsync(code, state, token),
+            ct);
+    }
+
+    internal static async Task<bool> ReadPasteRedirectAsync(
+        TextWriter writer,
+        Func<CancellationToken, Task<string?>> readLineAsync,
+        Func<string, string, CancellationToken, Task<HttpResponseMessage>> submitRedirectAsync,
+        CancellationToken ct)
+    {
+        while (!ct.IsCancellationRequested)
         {
-            // Read from stdin on a background thread (Console.ReadLine blocks
-            // and does not respect cancellation, so the thread will outlive
-            // the CancellationToken — this is acceptable for a CLI command).
-            var line = await Task.Run(Console.ReadLine, ct);
+            string? line;
+            try
+            {
+                line = await readLineAsync(ct);
+            }
+            catch (OperationCanceledException)
+            {
+                return false;
+            }
+
+            // End-of-input means paste fallback is unavailable; keep polling alive.
+            if (line is null)
+                return await WaitUntilCancelledAsync(ct);
 
             if (string.IsNullOrWhiteSpace(line))
-                return false;
+                continue;
 
             if (!OAuthRedirectParser.TryParse(line, out var code, out var state, out var error))
             {
                 writer.WriteLine($"Invalid redirect URL: {error}");
-                return false;
+                continue;
             }
 
-            var response = await daemonApi.McpOAuthCallbackAsync(code, state, ct);
-            return response.IsSuccessStatusCode;
+            try
+            {
+                using var response = await submitRedirectAsync(code, state, ct);
+                if (response.IsSuccessStatusCode)
+                    return true;
+
+                writer.WriteLine("Redirect URL was rejected. Paste the latest redirect URL or wait for automatic completion.");
+            }
+            catch (OperationCanceledException)
+            {
+                return false;
+            }
+            catch (Exception ex)
+            {
+                writer.WriteLine($"Failed to submit redirect URL: {ex.Message}");
+            }
+        }
+
+        return false;
+    }
+
+    private static async Task<bool> WaitUntilCancelledAsync(CancellationToken ct)
+    {
+        try
+        {
+            await Task.Delay(Timeout.InfiniteTimeSpan, ct);
         }
         catch (OperationCanceledException)
         {
             return false;
         }
+
+        return false;
     }
 
     private static async Task<int> RunListAsync(NetclawPaths paths, TextWriter writer)
