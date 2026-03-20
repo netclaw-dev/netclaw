@@ -173,6 +173,21 @@ public sealed class DaemonApi
             $"{_endpoint}/api/mcp/oauth/callback?code={Uri.EscapeDataString(code)}&state={Uri.EscapeDataString(state)}", cts.Token);
     }
 
+    public async Task<JsonElement?> GetMcpServerStatusesAsync(CancellationToken ct = default)
+    {
+        using var cts = CreateTimeoutCts(DefaultTimeout, ct);
+        var client = _factory.CreateClient();
+        try
+        {
+            return await client.GetFromJsonAsync<JsonElement>(
+                $"{_endpoint}/api/mcp/statuses", cts.Token);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
     // ── Provider OAuth ─────────────────────────────────────────────────
 
     public async Task<HttpResponseMessage> StartProviderOAuthAsync(string providerType, CancellationToken ct = default)
