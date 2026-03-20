@@ -152,6 +152,11 @@ public sealed class OpenAiCompatibleChatClient : IChatClient
             ["stream"] = stream
         };
 
+        if (stream)
+        {
+            body["stream_options"] = new JsonObject { ["include_usage"] = true };
+        }
+
         if (options?.Temperature is { } temperature)
             body["temperature"] = temperature;
         if (options?.TopP is { } topP)
@@ -454,7 +459,8 @@ public sealed class OpenAiCompatibleChatClient : IChatClient
         {
             ModelId = root.TryGetProperty("model", out var model) ? model.GetString() : null,
             ResponseId = root.TryGetProperty("id", out var id) ? id.GetString() : null,
-            FinishReason = finishReason
+            FinishReason = finishReason,
+            Usage = ParseUsage(root)
         };
     }
 
@@ -539,6 +545,11 @@ public sealed class OpenAiCompatibleChatClient : IChatClient
             pendingToolCalls.Clear();
         }
 
+        // Usage may appear in the final streaming chunk (when stream_options.include_usage is set)
+        var usage = ParseUsage(root);
+        if (usage is not null)
+            contents.Add(new UsageContent(usage));
+
         if (contents.Count == 0 && finishReason is null)
             yield break;
 
@@ -563,6 +574,33 @@ public sealed class OpenAiCompatibleChatClient : IChatClient
         {
             return null;
         }
+    }
+
+    /// <summary>
+    /// Parses the <c>usage</c> object from an OpenAI-compatible response or streaming chunk.
+    /// Returns null when the field is absent or not an object.
+    /// </summary>
+    internal static UsageDetails? ParseUsage(JsonElement root)
+    {
+        if (!root.TryGetProperty("usage", out var usage) || usage.ValueKind != JsonValueKind.Object)
+            return null;
+
+        long? promptTokens = usage.TryGetProperty("prompt_tokens", out var pt) && pt.ValueKind == JsonValueKind.Number
+            ? pt.GetInt64() : null;
+        long? completionTokens = usage.TryGetProperty("completion_tokens", out var ct) && ct.ValueKind == JsonValueKind.Number
+            ? ct.GetInt64() : null;
+        long? totalTokens = usage.TryGetProperty("total_tokens", out var tt) && tt.ValueKind == JsonValueKind.Number
+            ? tt.GetInt64() : null;
+
+        if (promptTokens is null && completionTokens is null && totalTokens is null)
+            return null;
+
+        return new UsageDetails
+        {
+            InputTokenCount = promptTokens,
+            OutputTokenCount = completionTokens,
+            TotalTokenCount = totalTokens ?? (promptTokens ?? 0) + (completionTokens ?? 0)
+        };
     }
 
     private static ChatFinishReason? ParseFinishReason(JsonElement choice)
