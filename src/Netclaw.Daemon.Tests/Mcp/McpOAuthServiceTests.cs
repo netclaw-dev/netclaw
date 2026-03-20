@@ -64,7 +64,8 @@ public sealed class McpOAuthServiceTests : IDisposable
             new NetclawPaths(_tempDir),
             TimeProvider.System,
             NullLogger<McpOAuthService>.Instance,
-            pkceService);
+            pkceService,
+            NullNotificationSink.Instance);
     }
 
     private static McpServerEntry CreateHttpEntry()

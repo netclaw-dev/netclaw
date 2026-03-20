@@ -158,7 +158,8 @@ public class McpStdioSmokeTests : IAsyncDisposable
             new NetclawPaths(Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString())),
             TimeProvider.System,
             NullLogger<McpOAuthService>.Instance,
-            pkceService);
+            pkceService,
+            NullNotificationSink.Instance);
         var manager = new McpClientManager(serverEntries, registry, oauthService, NullNotificationSink.Instance, TimeProvider.System, logger);
 
         try

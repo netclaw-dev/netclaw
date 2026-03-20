@@ -406,6 +406,7 @@ static void ConfigureDaemonServices(
         sp.GetRequiredService<TimeProvider>(),
         sp.GetRequiredService<ILogger<McpOAuthService>>(),
         sp.GetRequiredService<OAuthPkceService>(),
+        sp.GetRequiredService<IOperationalNotificationSink>(),
         sp.GetService<ISecretsProtector>()));
     services.AddSingleton<McpClientManager>();
     services.AddHostedService(sp => sp.GetRequiredService<McpClientManager>());

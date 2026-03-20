@@ -157,7 +157,8 @@ public sealed class DaemonRuntimeStatusServiceTests : IAsyncLifetime
             new NetclawPaths(Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString())),
             TimeProvider.System,
             NullLogger<McpOAuthService>.Instance,
-            pkceService);
+            pkceService,
+            NullNotificationSink.Instance);
         var manager = new McpClientManager(
             mcpServers,
             new ToolRegistry(),
