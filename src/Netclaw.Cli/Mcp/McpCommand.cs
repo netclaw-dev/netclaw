@@ -43,7 +43,7 @@ internal static class McpCommand
         {
             "add" => RunAdd(args, paths, writer),
             "auth" => await RunAuthAsync(args, paths, daemonApi, writer),
-            "list" => await RunListAsync(paths, writer),
+            "list" => await RunListAsync(paths, daemonApi, writer),
             "get" => RunGet(args, paths, writer),
             "remove" => RunRemove(args, paths, writer),
             "enable" => RunToggle(args, paths, enabled: true, writer),
@@ -313,7 +313,6 @@ internal static class McpCommand
             if (pollResult)
             {
                 writer.WriteLine($"Authorization complete for '{name}'.");
-                writer.WriteLine("Run: netclaw daemon restart");
                 return 0;
             }
         }
@@ -323,7 +322,6 @@ internal static class McpCommand
             if (pasteResult)
             {
                 writer.WriteLine($"Authorization complete for '{name}'.");
-                writer.WriteLine("Run: netclaw daemon restart");
                 return 0;
             }
         }
@@ -471,7 +469,7 @@ internal static class McpCommand
         return true;
     }
 
-    private static async Task<int> RunListAsync(NetclawPaths paths, TextWriter writer)
+    private static async Task<int> RunListAsync(NetclawPaths paths, DaemonApi? daemonApi, TextWriter writer)
     {
         var servers = LoadMcpServers(paths);
 
@@ -482,15 +480,50 @@ internal static class McpCommand
             return 0;
         }
 
+        // Prefer daemon statuses — they include OAuth tokens and live connection state
+        var daemonStatuses = daemonApi is not null
+            ? await daemonApi.GetMcpServerStatusesAsync()
+            : null;
+
         writer.WriteLine($"{"Name",-20} {"Transport",-10} {"Enabled",-8} {"Status"}");
         foreach (var (name, entry) in servers)
         {
             var enabled = entry.Enabled ? "yes" : "no";
-            var probe = await ProbeServerAsync(name, entry);
-            writer.WriteLine($"{name,-20} {entry.Transport,-10} {enabled,-8} {probe.FormatStatus()}");
+            var statusText = FormatDaemonStatus(daemonStatuses, name);
+
+            if (statusText is null)
+            {
+                // Daemon unavailable or server not tracked — fall back to direct probe
+                var probe = await ProbeServerAsync(name, entry);
+                statusText = probe.FormatStatus();
+            }
+
+            writer.WriteLine($"{name,-20} {entry.Transport,-10} {enabled,-8} {statusText}");
         }
 
         return 0;
+    }
+
+    private static string? FormatDaemonStatus(JsonElement? daemonStatuses, string serverName)
+    {
+        if (daemonStatuses is null)
+            return null;
+
+        if (!daemonStatuses.Value.TryGetProperty(serverName, out var entry))
+            return null;
+
+        var state = entry.GetProperty("state").GetString();
+        var toolCount = entry.GetProperty("toolCount").GetInt32();
+        var error = entry.TryGetProperty("error", out var errProp) ? errProp.GetString() : null;
+
+        return state switch
+        {
+            "Connected" => $"connected ({toolCount} tools)",
+            "AwaitingAuth" => "awaiting auth — run: netclaw mcp auth " + serverName,
+            "Disabled" => "disabled",
+            "Error" => $"error — {error ?? "unknown"}",
+            _ => state,
+        };
     }
 
     private static int RunGet(string[] args, NetclawPaths paths, TextWriter writer)

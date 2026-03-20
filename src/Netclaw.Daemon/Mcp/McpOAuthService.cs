@@ -38,6 +38,9 @@ internal sealed class McpOAuthService
     // Maps PKCE state → flow context for token persistence after callback
     private readonly ConcurrentDictionary<string, McpOAuthFlowContext> _stateToContext = new();
 
+    // Maps PKCE state → server name for recently completed flows (for auto-reconnect)
+    private readonly ConcurrentDictionary<string, string> _lastCompletedServerName = new();
+
     public McpOAuthService(
         HttpClient httpClient,
         NetclawPaths paths,
@@ -296,6 +299,9 @@ internal sealed class McpOAuthService
             _tokens[context.ServerName] = tokenSet;
             PersistTokens();
 
+            // Cache the server name so callers can trigger reconnect after cleanup
+            _lastCompletedServerName[state] = context.ServerName;
+
             _logger.LogInformation("OAuth flow completed for MCP server '{Name}'", context.ServerName);
         }
         finally
@@ -303,6 +309,16 @@ internal sealed class McpOAuthService
             // Always clean up context — whether success or failure
             _stateToContext.TryRemove(state, out _);
         }
+    }
+
+    /// <summary>
+    /// Returns the server name for a recently completed OAuth flow (by state).
+    /// Used to trigger auto-reconnect after token acquisition.
+    /// </summary>
+    public string? GetServerNameForState(string state)
+    {
+        _lastCompletedServerName.TryRemove(state, out var name);
+        return name;
     }
 
     // ── Token Access ───────────────────────────────────────────────────

@@ -130,6 +130,20 @@ static async Task RunDaemonAsync(string[] args, DaemonRestartSignal restartSigna
         try
         {
             await oauthService.CompleteAuthorizationAsync(code, state, ct);
+
+            // Auto-reconnect the MCP server now that we have a valid token
+            var serverName = oauthService.GetServerNameForState(state);
+            if (serverName is not null)
+            {
+                var mcpManager = context.RequestServices.GetRequiredService<McpClientManager>();
+                var reconnectLogger = context.RequestServices.GetRequiredService<ILogger<McpClientManager>>();
+                _ = Task.Run(async () =>
+                {
+                    try { await mcpManager.TryReconnectAsync(serverName, CancellationToken.None); }
+                    catch (Exception ex) { reconnectLogger.LogWarning(ex, "Post-OAuth reconnect failed for MCP server '{Name}'", serverName); }
+                }, CancellationToken.None);
+            }
+
             context.Response.ContentType = "text/html";
             await context.Response.WriteAsync(
                 "<html><body><h2>Authorization complete</h2><p>You may close this tab.</p></body></html>", ct);
@@ -141,6 +155,20 @@ static async Task RunDaemonAsync(string[] args, DaemonRestartSignal restartSigna
             await context.Response.WriteAsync(
                 $"<html><body><h2>Authorization failed</h2><p>{System.Net.WebUtility.HtmlEncode(ex.Message)}</p></body></html>", ct);
         }
+    });
+
+    app.MapGet("/api/mcp/statuses", (McpClientManager mcpManager) =>
+    {
+        var statuses = mcpManager.GetServerStatuses();
+        var result = statuses.ToDictionary(
+            kvp => kvp.Key,
+            kvp => new
+            {
+                state = kvp.Value.State.ToString(),
+                toolCount = kvp.Value.ToolCount,
+                error = kvp.Value.ErrorMessage,
+            });
+        return Results.Ok(result);
     });
 
     app.MapGet("/api/mcp/oauth/status/{name}", (string name, McpOAuthService oauthService) =>

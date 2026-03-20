@@ -1,3 +1,37 @@
+#### 0.7.0 2026-03-20 ####
+
+Netclaw v0.7.0 — Behavioral directives, webhook alerts, tool budgets, and provider consolidation
+
+**Agents**
+
+* Added deterministic behavioral directives to the system prompt — operators can now place a `DIRECTIVES.md` file in their Netclaw config directory to inject stable, unconditional instructions that are always prepended to the agent's system prompt, independent of skills or personality files. ([#290](https://github.com/Aaronontheweb/netclaw/pull/290))
+
+**Notifications**
+
+* Added operational webhook alerts for daemon events — operators can configure HTTP webhook endpoints to receive structured JSON payloads when key daemon lifecycle events occur (startup, shutdown, error). Useful for integrating Netclaw status into external monitoring and alerting pipelines. ([#292](https://github.com/Aaronontheweb/netclaw/pull/292))
+
+**CLI**
+
+* Added `netclaw stats` command — displays live daemon statistics including uptime, session count, memory usage, reminder count, and provider health in a single glanceable output. ([#272](https://github.com/Aaronontheweb/netclaw/pull/272))
+* Unified MCP OAuth behind a shared PKCE flow — the `netclaw mcp auth` command now uses the same PKCE authorization code exchange path for all MCP OAuth providers, eliminating divergent code paths and making headless auth more predictable. ([#293](https://github.com/Aaronontheweb/netclaw/pull/293))
+
+**Session**
+
+* Reworked tool budget to use per-call counting with a budget nudge and graceful wind-down — the agent now tracks individual tool calls rather than turn-level counts, receives a soft warning as it approaches the limit, and transitions to a clean wrap-up phase instead of abruptly stopping. ([#277](https://github.com/Aaronontheweb/netclaw/pull/277), [#280](https://github.com/Aaronontheweb/netclaw/pull/280))
+
+**Reminders**
+
+* Fixed one-shot reminders firing repeatedly after their scheduled time — reminders with `repeat: false` are now disabled immediately after first execution, preventing zombie entries from re-inflating the reminder registry. ([#289](https://github.com/Aaronontheweb/netclaw/pull/289))
+
+**Providers**
+
+* Merged the `openai-codex` provider into the unified OpenAI provider — operators previously using the `openai-codex` provider type will have their configuration automatically migrated. The separate provider type is removed. ([#251](https://github.com/Aaronontheweb/netclaw/pull/251))
+
+**Stability**
+
+* Implemented the delivery feedback contract for LLM error correction — when a channel cannot deliver an LLM response (e.g., Slack formatting rejection), the full error is now fed back into the LLM session so the agent can understand what went wrong and retry with corrected output. Silent failures and fallback downgrades are eliminated. ([#283](https://github.com/Aaronontheweb/netclaw/pull/283))
+* Fixed false "fallback" warning logs in Slack and ensured preamble text is surfaced correctly during tool-use turns — preamble content emitted before the first tool call is now delivered to Slack rather than silently dropped. ([#278](https://github.com/Aaronontheweb/netclaw/pull/278))
+
 #### 0.6.2 2026-03-17 ####
 
 Netclaw v0.6.2 — Reminder history, onboarding chat, and turn recovery hardening
