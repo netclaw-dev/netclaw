@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -39,24 +40,36 @@ public sealed class WebhookNotificationService : BackgroundService, IOperational
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<WebhookNotificationService> _logger;
+    private readonly Func<int, TimeSpan> _retryDelayFactory;
 
     private readonly Channel<OperationalAlert> _channel;
     private readonly ConcurrentDictionary<string, long> _lastEmittedAtMs = new(StringComparer.Ordinal);
+    private long _droppedAlertCount;
 
     public WebhookNotificationService(
         NotificationsConfig config,
         IHttpClientFactory httpClientFactory,
         TimeProvider timeProvider,
-        ILogger<WebhookNotificationService> logger)
+        ILogger<WebhookNotificationService> logger,
+        Func<int, TimeSpan>? retryDelayFactory = null)
     {
+        var validation = NotificationConfigValidator.Validate(config);
+        if (!validation.IsValid)
+        {
+            var details = string.Join(" ", validation.Issues.Select(static issue =>
+                $"{issue.FieldPath}: {issue.Message}"));
+            throw new InvalidOperationException($"Webhook notification service requires valid notification config. {details}");
+        }
+
         _config = config;
         _httpClientFactory = httpClientFactory;
         _timeProvider = timeProvider;
         _logger = logger;
+        _retryDelayFactory = retryDelayFactory ?? GetRetryDelay;
 
         _channel = Channel.CreateBounded<OperationalAlert>(new BoundedChannelOptions(ChannelCapacity)
         {
-            FullMode = BoundedChannelFullMode.DropOldest,
+            FullMode = BoundedChannelFullMode.DropWrite,
             SingleReader = true,
             SingleWriter = false,
         });
@@ -64,7 +77,14 @@ public sealed class WebhookNotificationService : BackgroundService, IOperational
 
     public void Emit(OperationalAlert alert)
     {
-        _channel.Writer.TryWrite(alert);
+        if (_channel.Writer.TryWrite(alert))
+            return;
+
+        var droppedCount = Interlocked.Increment(ref _droppedAlertCount);
+        _logger.LogWarning(
+            "Dropping operational alert {AlertType} because the notification queue is full (dropped count: {DroppedCount})",
+            alert.Type,
+            droppedCount);
     }
 
     public override async Task StopAsync(CancellationToken cancellationToken)
@@ -93,8 +113,9 @@ public sealed class WebhookNotificationService : BackgroundService, IOperational
                     continue;
                 }
 
-                RecordEmission(alert);
-                await DeliverToAllTargetsAsync(alert, stoppingToken);
+                var delivered = await DeliverToAllTargetsAsync(alert, stoppingToken);
+                if (delivered)
+                    RecordEmission(alert);
 
                 // Periodically prune expired dedup entries to prevent unbounded growth
                 if (++alertsProcessed % 50 == 0)
@@ -141,23 +162,28 @@ public sealed class WebhookNotificationService : BackgroundService, IOperational
         }
     }
 
-    private async Task DeliverToAllTargetsAsync(OperationalAlert alert, CancellationToken ct)
+    private async Task<bool> DeliverToAllTargetsAsync(OperationalAlert alert, CancellationToken ct)
     {
         var payload = BuildPayload(alert);
+        var deliveredAny = false;
 
         foreach (var target in _config.Webhooks)
         {
-            await DeliverToTargetAsync(target, payload, alert, ct);
+            deliveredAny |= await DeliverToTargetAsync(target, payload, alert, ct);
         }
+
+        return deliveredAny;
     }
 
-    private async Task DeliverToTargetAsync(
+    private async Task<bool> DeliverToTargetAsync(
         WebhookTarget target,
         WebhookPayload payload,
         OperationalAlert alert,
         CancellationToken ct)
     {
-        var targetName = target.Name ?? target.Url;
+        var targetName = GetTargetIdentity(target, _config.Webhooks.IndexOf(target));
+        var redactedHeaders = NotificationConfigValidator.FormatRedactedHeaders(target.Headers);
+        var targetUrl = target.Url?.Value ?? string.Empty;
 
         for (var attempt = 0; attempt <= _config.MaxRetries; attempt++)
         {
@@ -165,23 +191,23 @@ public sealed class WebhookNotificationService : BackgroundService, IOperational
             {
                 if (attempt > 0)
                 {
-                    var delay = GetRetryDelay(attempt);
+                    var delay = _retryDelayFactory(attempt);
                     _logger.LogDebug(
-                        "Retrying webhook delivery to {Target} (attempt {Attempt}/{Max}, delay {Delay}ms)",
-                        targetName, attempt + 1, _config.MaxRetries + 1, delay.TotalMilliseconds);
+                        "Retrying webhook delivery to {Target} with headers {Headers} (attempt {Attempt}/{Max}, delay {Delay}ms)",
+                        targetName, redactedHeaders, attempt + 1, _config.MaxRetries + 1, delay.TotalMilliseconds);
                     await Task.Delay(delay, ct);
                 }
 
                 using var client = _httpClientFactory.CreateClient("Notifications");
                 client.Timeout = TimeSpan.FromSeconds(_config.TimeoutSeconds);
 
-                using var request = new HttpRequestMessage(HttpMethod.Post, target.Url);
+                using var request = new HttpRequestMessage(HttpMethod.Post, targetUrl);
                 request.Content = JsonContent.Create(payload, options: JsonOptions);
 
                 if (target.Headers is { Count: > 0 })
                 {
                     foreach (var (key, value) in target.Headers)
-                        request.Headers.TryAddWithoutValidation(key, value);
+                        request.Headers.TryAddWithoutValidation(key, value.Value);
                 }
 
                 using var response = await client.SendAsync(request, ct);
@@ -189,18 +215,17 @@ public sealed class WebhookNotificationService : BackgroundService, IOperational
                 if (response.IsSuccessStatusCode)
                 {
                     _logger.LogDebug(
-                        "Webhook delivered: {AlertType} → {Target} ({StatusCode})",
-                        alert.Type, targetName, (int)response.StatusCode);
-                    return;
+                        "Webhook delivered: {AlertType} → {Target} with headers {Headers} ({StatusCode})",
+                        alert.Type, targetName, redactedHeaders, (int)response.StatusCode);
+                    return true;
                 }
 
                 _logger.LogWarning(
-                    "Webhook delivery failed: {AlertType} → {Target} ({StatusCode})",
-                    alert.Type, targetName, (int)response.StatusCode);
+                    "Webhook delivery failed: {AlertType} → {Target} with headers {Headers} ({StatusCode})",
+                    alert.Type, targetName, redactedHeaders, (int)response.StatusCode);
 
-                // Don't retry on 4xx (client errors) — only retry on 5xx / transient
-                if ((int)response.StatusCode < 500)
-                    return;
+                if (!ShouldRetry(response.StatusCode, attempt))
+                    return false;
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
@@ -209,13 +234,20 @@ public sealed class WebhookNotificationService : BackgroundService, IOperational
             catch (Exception ex)
             {
                 _logger.LogWarning(ex,
-                    "Webhook delivery error: {AlertType} → {Target} (attempt {Attempt}/{Max})",
-                    alert.Type, targetName, attempt + 1, _config.MaxRetries + 1);
+                    "Webhook delivery error: {AlertType} → {Target} with headers {Headers} (attempt {Attempt}/{Max})",
+                    alert.Type, targetName, redactedHeaders, attempt + 1, _config.MaxRetries + 1);
 
                 if (attempt >= _config.MaxRetries)
-                    return; // Exhausted retries, give up on this target
+                    return false;
             }
         }
+
+        return false;
+    }
+
+    internal static string GetTargetIdentity(WebhookTarget target, int index)
+    {
+        return NotificationConfigValidator.FormatTargetIdentity(target, index);
     }
 
     private static WebhookPayload BuildPayload(OperationalAlert alert) => new()
@@ -238,6 +270,17 @@ public sealed class WebhookNotificationService : BackgroundService, IOperational
         var capped = exponential > TimeSpan.FromSeconds(30) ? TimeSpan.FromSeconds(30) : exponential;
         var jitter = 0.75 + Random.Shared.NextDouble() * 0.5;
         return TimeSpan.FromTicks((long)(capped.Ticks * jitter));
+    }
+
+    private bool ShouldRetry(HttpStatusCode statusCode, int attempt)
+    {
+        if (attempt >= _config.MaxRetries)
+            return false;
+
+        if ((int)statusCode >= 500)
+            return true;
+
+        return statusCode == HttpStatusCode.TooManyRequests;
     }
 
     /// <summary>

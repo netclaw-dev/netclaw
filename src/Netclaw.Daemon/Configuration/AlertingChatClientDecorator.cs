@@ -68,8 +68,25 @@ public sealed class AlertingChatClientDecorator : IChatClient
             throw;
         }
 
-        await foreach (var update in stream)
+        await using var enumerator = stream.GetAsyncEnumerator(cancellationToken);
+        while (true)
+        {
+            ChatResponseUpdate update;
+            try
+            {
+                if (!await enumerator.MoveNextAsync())
+                    yield break;
+
+                update = enumerator.Current;
+            }
+            catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+            {
+                EmitUnreachableAlert(ex);
+                throw;
+            }
+
             yield return update;
+        }
     }
 
     private void EmitUnreachableAlert(Exception ex)

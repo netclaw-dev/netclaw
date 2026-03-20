@@ -222,6 +222,63 @@ Akka.NET logger integration.
 | `LogLevel:Default` | string | `Warning` | Minimum log level (`Debug`, `Information`, `Warning`, `Error`, etc.) shared by MEL and Akka.NET. |
 | `Console:Enabled` | bool | `false` | Enables console logger provider output for daemon debugging. |
 
+### Notifications
+
+Outbound operational alert delivery over HTTP webhooks. This section is optional.
+If `Notifications` is absent or `Notifications.Webhooks` is empty, Netclaw keeps
+the no-op notification sink and does not start webhook delivery.
+
+Webhook targets must use absolute `https://` URLs by default. Plaintext
+`http://` is allowed only for explicit loopback development endpoints:
+`localhost`, `127.0.0.1`, and `::1`. URLs with fragments are rejected.
+
+```json
+{
+  "Notifications": {
+    "Webhooks": [
+      {
+        "Name": "ops-primary"
+      },
+      {
+        "Name": "local-dev"
+      }
+    ],
+    "DeduplicationWindowSeconds": 300,
+    "MaxRetries": 2,
+    "TimeoutSeconds": 10
+  }
+}
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `Webhooks` | object[] | `[]` | Webhook targets for operational notifications. Empty disables outbound delivery. |
+| `Webhooks[].Url` | string | required in `secrets.json` / env | Absolute webhook target URL. Use `https://` except for loopback-only local development. |
+| `Webhooks[].Name` | string? | `null` | Optional display name shown in logs and diagnostics. |
+| `Webhooks[].Headers` | object? | `null` in `secrets.json` / env | Optional static headers sent with each POST. Values are redacted in logs and diagnostics. |
+| `DeduplicationWindowSeconds` | int | `300` | Duplicate suppression window. Must be between `0` and `86400`. |
+| `MaxRetries` | int | `2` | Retry attempts for retryable failures. Must be between `0` and `5`. 4xx responses are not retried. |
+| `TimeoutSeconds` | int | `10` | Timeout per delivery attempt. Must be between `1` and `60`. |
+
+Store webhook URLs and auth-like notification headers such as `Authorization`,
+`X-Api-Key`, and `Api-Key` in `secrets.json` or `NETCLAW_` environment
+variables, not `netclaw.json`. `netclaw doctor` warns when those values are
+found in base config.
+
+Operators can manage this section without editing JSON directly:
+
+```bash
+netclaw notification webhook list
+netclaw notification webhook add --url https://alerts.example/hooks/netclaw --name ops-primary --header "Authorization: Bearer ..."
+netclaw notification webhook remove --index 0
+netclaw notification webhook test --name ops-primary
+```
+
+CLI-managed writes keep only non-secret target identity such as `Name` in
+`netclaw.json` and move `Url` plus static header values to the matching
+`Notifications.Webhooks[n]` entry in `secrets.json`. `list` and `test` show only
+safe identity details and redacted header names.
+
 ### Telemetry
 
 Optional OpenTelemetry export for logs and metrics.
@@ -257,6 +314,15 @@ paths as `netclaw.json`. The configuration system merges them automatically.
     "openrouter": {
       "ApiKey": "sk-or-v1-your-key-here"
     }
+  },
+  "Notifications": {
+    "Webhooks": [
+      {
+        "Headers": {
+          "Authorization": "Bearer your-webhook-token"
+        }
+      }
+    ]
   }
 }
 ```
@@ -280,6 +346,9 @@ export NETCLAW_Providers__openrouter__ApiKey="sk-or-v1-..."
 # Set Slack tokens
 export NETCLAW_Slack__BotToken="xoxb-..."
 export NETCLAW_Slack__AppToken="xapp-..."
+
+# Set notification auth header via environment override
+export NETCLAW_Notifications__Webhooks__0__Headers__Authorization="Bearer ..."
 
 # Enable OTLP telemetry
 export NETCLAW_Telemetry__Enabled="true"

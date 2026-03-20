@@ -14,6 +14,7 @@ using Netclaw.Cli.Reminder;
 using Netclaw.Cli.Secrets;
 using Netclaw.Cli.Model;
 using Netclaw.Cli.Provider;
+using Netclaw.Cli.Notification;
 using Netclaw.Cli.Tui;
 using Netclaw.Cli.Update;
 using Netclaw.Configuration;
@@ -603,6 +604,15 @@ static async Task RunAsync(string[] args)
         return;
     }
 
+    // ── Notification management ──
+    if (mode is "notification")
+    {
+        var paths = new NetclawPaths();
+        paths.EnsureDirectoriesExist();
+        Environment.ExitCode = await NotificationCommand.RunAsync(args, paths);
+        return;
+    }
+
     // ── Sessions single-shot mode ──
     if (mode is "sessions")
     {
@@ -764,6 +774,7 @@ static void WriteGeneralHelp()
     Console.WriteLine("  model                    Manage model assignments (TUI) or use subcommands");
     Console.WriteLine("  reminder                 Manage scheduled reminders (daemon-required)");
     Console.WriteLine("  secrets                  Manage encrypted secrets (set key/value pairs)");
+    Console.WriteLine("  notification             Manage operational notification webhooks (plain CLI)");
     Console.WriteLine("  init                     First-run setup wizard");
     Console.WriteLine("  update                   Check for and install updates");
     Console.WriteLine("  version, --version       Show CLI version");

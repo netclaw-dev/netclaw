@@ -3,7 +3,7 @@ name: netclaw-diagnostics
 description: "Netclaw diagnostics and session debugging. Read when the user wants to understand what happened in a Netclaw session, why a tool failed, why capabilities are missing, or whether daemon/memory/config health is degraded."
 metadata:
   author: netclaw
-  version: "0.6.0"
+  version: "0.9.0"
   triggers: what happened in this session | debug this session | why did netclaw do that | why did this tool fail | missing tools in this session | session timeout | daemon unhealthy | memory degraded | inspect netclaw logs
 ---
 
@@ -73,6 +73,13 @@ Important memory checks include:
 
 - SQLite provisioning check
 - Memory checkpoint health check (pending checkpoint backlog)
+
+Important notification checks include:
+
+- shared `Notifications` config validation used by daemon startup and doctor
+- HTTPS-by-default webhook enforcement with loopback-only HTTP exceptions
+- warnings when notification webhook URLs or auth-like headers live in `netclaw.json` instead of `secrets.json` or `NETCLAW_` environment variables
+- offline `netclaw notification webhook list|add|remove|test` commands for safe config inspection and one-shot probes
 
 ## Session-First Debug Flow
 

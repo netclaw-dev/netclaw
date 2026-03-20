@@ -442,6 +442,15 @@ static void ConfigureDaemonServices(
     // Operational notification webhooks
     var notificationsConfig = configuration.GetSection("Notifications")
         .Get<NotificationsConfig>() ?? new NotificationsConfig();
+    var notificationValidation = NotificationConfigValidator.Validate(notificationsConfig);
+    if (!notificationValidation.IsValid)
+    {
+        var details = string.Join(Environment.NewLine, notificationValidation.Issues.Select(static issue =>
+            $"- {issue.FieldPath}: {issue.Message} Fix: {issue.Remediation}"));
+        throw new InvalidOperationException(
+            $"Invalid Notifications configuration. Fix the following before starting the daemon:{Environment.NewLine}{details}");
+    }
+
     services.AddSingleton(notificationsConfig);
 
     if (notificationsConfig.Webhooks.Count > 0)

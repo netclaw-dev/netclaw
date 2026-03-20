@@ -9,6 +9,27 @@ namespace Netclaw.Daemon.Tests.Configuration;
 public sealed class FailoverChatClientTests
 {
     [Fact]
+    public async Task Streaming_EmitsUnreachableAlert_WhenSingleProviderEnumerationFails()
+    {
+        var sink = new CapturingNotificationSink();
+        var client = new AlertingChatClientDecorator(
+            new FakeChatClient(streamHandler: (_, _, ct) => ThrowBeforeFirstChunkAsync(ct)),
+            sink,
+            TimeProvider.System);
+
+        var ex = await Assert.ThrowsAsync<HttpRequestException>(async () =>
+        {
+            await foreach (var _ in client.GetStreamingResponseAsync([new ChatMessage(ChatRole.User, "hi")]))
+            {
+            }
+        });
+
+        Assert.Contains("before first chunk", ex.Message);
+        Assert.Single(sink.Alerts);
+        Assert.Equal(AlertType.ProviderUnreachable, sink.Alerts[0].Category);
+    }
+
+    [Fact]
     public async Task UsesPrimary_WhenHealthy()
     {
         var primary = new FakeChatClient((_,_,_) =>
@@ -116,6 +137,29 @@ public sealed class FailoverChatClientTests
     }
 
     [Fact]
+    public async Task Streaming_EmitsUnreachableAlert_WhenFallbackEnumerationFails()
+    {
+        var sink = new CapturingNotificationSink();
+
+        var primary = new FakeChatClient(streamHandler: (_, _, ct) =>
+            ThrowBeforeFirstChunkAsync(ct));
+        var fallback = new FakeChatClient(streamHandler: (_, _, ct) =>
+            ThrowBeforeFirstChunkAsync(ct));
+
+        var client = new FailoverChatClient(primary, fallback, NullLogger.Instance, sink, TimeProvider.System);
+
+        await Assert.ThrowsAsync<HttpRequestException>(async () =>
+        {
+            await foreach (var _ in client.GetStreamingResponseAsync([new ChatMessage(ChatRole.User, "hi")]))
+            {
+            }
+        });
+
+        Assert.Contains(sink.Alerts, static alert => alert.Category == AlertType.ProviderFailover);
+        Assert.Contains(sink.Alerts, static alert => alert.Category == AlertType.ProviderUnreachable);
+    }
+
+    [Fact]
     public async Task Streaming_DoesNotFallback_AfterPrimaryAlreadyYielded()
     {
         var fallbackStreamCalls = 0;
@@ -185,5 +229,15 @@ public sealed class FailoverChatClientTests
             Role = ChatRole.Assistant,
             Contents = [new TextContent(text)]
         };
+    }
+
+    private sealed class CapturingNotificationSink : IOperationalNotificationSink
+    {
+        public List<OperationalAlert> Alerts { get; } = [];
+
+        public void Emit(OperationalAlert alert)
+        {
+            Alerts.Add(alert);
+        }
     }
 }

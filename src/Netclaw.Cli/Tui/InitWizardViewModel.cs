@@ -915,7 +915,7 @@ public partial class InitWizardViewModel : ReactiveViewModel
             {
                 ["Webhooks"] = new object[]
                 {
-                    new Dictionary<string, object> { ["Url"] = WebhookUrl }
+                    new Dictionary<string, object>()
                 }
             };
         }
@@ -948,6 +948,15 @@ public partial class InitWizardViewModel : ReactiveViewModel
 
         // Non-provider secrets (Slack, Search)
         var secrets = new Dictionary<string, object>();
+
+        if (!string.IsNullOrWhiteSpace(WebhookUrl))
+            secrets["Notifications"] = new Dictionary<string, object>
+            {
+                ["Webhooks"] = new object[]
+                {
+                    new Dictionary<string, object> { ["Url"] = WebhookUrl }
+                }
+            };
 
         if (SlackEnabled)
         {

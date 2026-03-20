@@ -33,11 +33,17 @@ Guided setup sequence:
 
 - `netclaw config show [--format text|json]`
 - `netclaw config validate [--strict]`
+- `netclaw notification webhook list`
+- `netclaw notification webhook add --url <url> [--name <name>] [--header "Name: Value"]...`
+- `netclaw notification webhook remove (--index <n> | --name <name>)`
+- `netclaw notification webhook test (--index <n> | --name <name>)`
 
 Behavior:
 
 - structured validation with property path and remediation hints
 - non-zero exit code on validation failure
+- notification webhook commands are plain CLI, offline, and safe for automation
+- webhook URLs and header values are written to `secrets.json` and never echoed in output
 
 ### 3) ACL and Policy
 

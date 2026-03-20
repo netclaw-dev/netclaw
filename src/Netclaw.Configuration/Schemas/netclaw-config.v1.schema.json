@@ -164,28 +164,22 @@
           "items": {
             "type": "object",
             "properties": {
-              "Url": { "type": "string", "format": "uri" },
               "Name": { "type": ["string", "null"] },
-              "Headers": {
-                "type": ["object", "null"],
-                "additionalProperties": { "type": "string" }
-              }
             },
-            "required": ["Url"],
             "additionalProperties": false
           }
         },
         "DeduplicationWindowSeconds": {
           "type": "integer",
           "minimum": 0,
-          "maximum": 3600,
+          "maximum": 86400,
           "default": 300,
           "description": "Minimum interval in seconds between duplicate alerts of the same type."
         },
         "MaxRetries": {
           "type": "integer",
           "minimum": 0,
-          "maximum": 10,
+          "maximum": 5,
           "default": 2,
           "description": "Number of delivery retries per webhook target before giving up."
         },

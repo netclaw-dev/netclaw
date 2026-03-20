@@ -30,7 +30,7 @@ public static class CliArgsParser
     {
         "chat", "sessions", "init", "doctor", "status", "stats",
         "daemon", "mcp", "provider", "model", "reminder",
-        "secrets", "config", "update",
+        "secrets", "config", "update", "notification",
     };
 
     public static CliParseResult Parse(string[] args)

@@ -36,7 +36,7 @@ public sealed class WebhookTarget
     /// <summary>
     /// HTTP(S) endpoint to POST alerts to.
     /// </summary>
-    public string Url { get; set; } = "";
+    public SensitiveString? Url { get; set; }
 
     /// <summary>
     /// Optional display name for this target (used in logs).
@@ -46,5 +46,5 @@ public sealed class WebhookTarget
     /// <summary>
     /// Optional static headers to include with every POST (e.g. Authorization).
     /// </summary>
-    public Dictionary<string, string>? Headers { get; set; }
+    public Dictionary<string, SensitiveString>? Headers { get; set; }
 }

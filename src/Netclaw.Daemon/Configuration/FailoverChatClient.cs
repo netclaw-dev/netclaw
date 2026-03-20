@@ -110,10 +110,26 @@ public sealed class FailoverChatClient : IChatClient
             _logger.LogWarning(primaryInitiationFailure,
                 "Primary LLM streaming failed on initiation, failing over to fallback");
 
-            await foreach (var fallbackUpdate in stream)
-                yield return fallbackUpdate;
+            await using var fallbackEnumerator = stream.GetAsyncEnumerator(cancellationToken);
+            while (true)
+            {
+                ChatResponseUpdate fallbackUpdate;
+                try
+                {
+                    if (!await fallbackEnumerator.MoveNextAsync())
+                        yield break;
 
-            yield break;
+                    fallbackUpdate = fallbackEnumerator.Current;
+                }
+                catch (Exception fallbackEx) when (!cancellationToken.IsCancellationRequested)
+                {
+                    EmitUnreachableAlert(fallbackEx);
+                    throw;
+                }
+
+                yield return fallbackUpdate;
+            }
+
         }
 
         // Primary stream started. If the first MoveNextAsync fails, fail over.
@@ -160,8 +176,25 @@ public sealed class FailoverChatClient : IChatClient
             throw;
         }
 
-        await foreach (var fallbackUpdate in preChunkFallbackStream)
+        await using var preChunkFallbackEnumerator = preChunkFallbackStream.GetAsyncEnumerator(cancellationToken);
+        while (true)
+        {
+            ChatResponseUpdate fallbackUpdate;
+            try
+            {
+                if (!await preChunkFallbackEnumerator.MoveNextAsync())
+                    yield break;
+
+                fallbackUpdate = preChunkFallbackEnumerator.Current;
+            }
+            catch (Exception fallbackEx) when (!cancellationToken.IsCancellationRequested)
+            {
+                EmitUnreachableAlert(fallbackEx);
+                throw;
+            }
+
             yield return fallbackUpdate;
+        }
     }
 
     private void EmitFailoverAlert(Exception ex)

@@ -223,6 +223,52 @@ console output.
 - **THEN** the command handler writes to standard output
 - **AND** no Termina TUI is launched
 
+### Requirement: Notification webhook management command surface
+
+The CLI SHALL provide a plain-console `netclaw notification webhook` command
+group for offline notification webhook management. The command group SHALL
+support `list`, `add`, `remove`, and `test` subcommands, SHALL emit
+automation-friendly exit codes, and SHALL provide remediation-first error output
+for invalid selectors, invalid configuration, and probe failures.
+
+#### Scenario: Help text shows notification webhook subcommands
+
+- **WHEN** the operator runs `netclaw notification webhook --help`
+- **THEN** the CLI prints usage for `list`, `add`, `remove`, and `test`
+- **AND** the help text identifies the command group as plain CLI, not TUI
+
+#### Scenario: Invalid subcommand returns usage error
+
+- **WHEN** the operator runs `netclaw notification webhook rotate`
+- **THEN** the CLI prints a usage error for the unsupported subcommand
+- **AND** the command exits with a usage-error status code
+
+### Requirement: Notification webhook commands preserve secret redaction
+
+Operator-facing output from notification webhook commands SHALL NOT print static
+header values or other secret-bearing notification fields. When reporting target
+details, the CLI SHALL show only safe identity data such as target index, name,
+redacted URL identity, configured header names, and validation field paths.
+
+#### Scenario: Add command does not echo secret header value
+
+- **WHEN** the operator runs `netclaw notification webhook add` with `--header "Authorization: Bearer secret-token"`
+- **THEN** command output may mention the `Authorization` header name
+- **AND** command output does not include `secret-token`
+
+#### Scenario: Probe failure output remains redacted
+
+- **WHEN** the operator runs `netclaw notification webhook test` for a target with static headers and the request fails
+- **THEN** the CLI reports the failure using target identity and safe diagnostics
+- **AND** no configured header value appears in the output
+
+#### Scenario: List output does not reveal full webhook URL
+
+- **WHEN** the operator runs `netclaw notification webhook list` for a target
+  whose webhook URL path contains a secret token
+- **THEN** command output shows only redacted URL identity for that target
+- **AND** the full webhook path does not appear in output
+
 ### Requirement: Interactive chat command
 
 The CLI SHALL provide `netclaw chat` as an interactive agent prompt that
@@ -322,6 +368,47 @@ exit with code 0 (all pass), 1 (errors), or 2 (warnings only).
 - **AND** a startup check fails
 - **THEN** output shows the failure with a remediation command
 - **AND** exit code is 1
+
+### Requirement: Notification configuration diagnostics
+
+The `netclaw doctor` command SHALL validate outbound operational notification
+configuration before daemon startup. It SHALL use the same target URL and
+numeric-range rules as daemon startup validation, and it SHALL provide
+field-level remediation guidance when notification config is invalid. The doctor
+command SHALL also warn when webhook URLs or auth-like webhook headers are
+defined in base config instead of the secrets overlay.
+
+#### Scenario: Invalid webhook URL reported with remediation
+
+- **WHEN** the operator runs `netclaw doctor` with
+  `Notifications.Webhooks[0].Url` set to a non-loopback `http://` URL
+- **THEN** doctor reports the notification config as invalid
+- **AND** the output tells the operator to switch to `https://` or use a
+  loopback-only local-development endpoint
+
+#### Scenario: Invalid numeric tuning reported with field path
+
+- **WHEN** the operator runs `netclaw doctor` with
+  `Notifications.MaxRetries` set above the supported range
+- **THEN** doctor reports a notification config failure
+- **AND** the output identifies the `Notifications.MaxRetries` field and the
+  supported range
+
+#### Scenario: Auth-like headers in base config produce warning
+
+- **WHEN** the operator runs `netclaw doctor` and `netclaw.json` contains a
+  notification header named `Authorization`
+- **THEN** doctor emits a warning for notification config hygiene
+- **AND** the remediation tells the operator to move the secret to
+  `secrets.json` or `NETCLAW_` environment variables
+
+#### Scenario: Webhook URL in base config produces warning
+
+- **WHEN** the operator runs `netclaw doctor` and `netclaw.json` contains
+  `Notifications.Webhooks[0].Url`
+- **THEN** doctor emits a warning for notification config hygiene
+- **AND** the remediation tells the operator to move the webhook URL to
+  `secrets.json` or `NETCLAW_` environment variables
 
 ### Requirement: Memory provider in status output
 

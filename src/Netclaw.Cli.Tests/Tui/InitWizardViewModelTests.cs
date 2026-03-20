@@ -358,6 +358,36 @@ public sealed class InitWizardViewModelTests : IDisposable
     }
 
     [Fact]
+    public async Task HealthCheck_WritesNotificationWebhookUrlToSecrets()
+    {
+        using var vm = CreateViewModel();
+
+        vm.SelectedProviderType = "ollama";
+        vm.SlackEnabled = false;
+        vm.WebhookUrl = "https://alerts.example/hooks/netclaw";
+
+        vm.CurrentStep.Value = WizardStep.HealthCheck;
+        vm.GoNext();
+
+        await vm.HealthCheckCompletion!.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.True(vm.IsComplete.Value);
+
+        var config = JsonDocument.Parse(File.ReadAllText(_paths.NetclawConfigPath));
+        Assert.True(config.RootElement.TryGetProperty("Notifications", out var notifications));
+        var configWebhook = notifications.GetProperty("Webhooks")[0];
+        Assert.False(configWebhook.TryGetProperty("Url", out _));
+
+        var secrets = JsonDocument.Parse(File.ReadAllText(_paths.SecretsPath));
+        var encryptedUrl = secrets.RootElement
+            .GetProperty("Notifications")
+            .GetProperty("Webhooks")[0]
+            .GetProperty("Url")
+            .GetString();
+        Assert.Equal("https://alerts.example/hooks/netclaw", encryptedUrl);
+        Assert.DoesNotContain("https://alerts.example/hooks/netclaw", File.ReadAllText(_paths.NetclawConfigPath), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task HealthCheck_WritesModelIdToConfig()
     {
         using var vm = CreateViewModel();

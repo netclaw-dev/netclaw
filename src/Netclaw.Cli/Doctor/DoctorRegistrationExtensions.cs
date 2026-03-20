@@ -9,6 +9,7 @@ public static class DoctorRegistrationExtensions
         services.AddSingleton<DoctorRunner>();
         services.AddSingleton<DoctorFixService>();
         services.AddSingleton<IDoctorCheck, ConfigSchemaDoctorCheck>();
+        services.AddSingleton<IDoctorCheck, NotificationConfigDoctorCheck>();
         services.AddSingleton<IDoctorCheck, SlackAclDoctorCheck>();
         services.AddSingleton<IDoctorCheck, TelemetryDoctorCheck>();
         services.AddSingleton<IDoctorCheck, SecretsJsonDoctorCheck>();
