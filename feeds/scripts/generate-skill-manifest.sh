@@ -93,9 +93,16 @@ build_entry() {
     # Build files array for resource files (non-SKILL.md files)
     local files_json=""
     local files_first=true
+    # Normalize skill_dir to ensure consistent path prefix stripping
+    local norm_skill_dir
+    norm_skill_dir="$(cd "$skill_dir" && pwd)"
     while IFS= read -r -d '' resource_file; do
-        local rel_path="${resource_file#"$skill_dir/"}"
+        local abs_resource
+        abs_resource="$(cd "$(dirname "$resource_file")" && pwd)/$(basename "$resource_file")"
+        local rel_path="${abs_resource#"$norm_skill_dir/"}"
         [ "$rel_path" = "SKILL.md" ] && continue
+        # Skip versioned subdirectory copies (e.g., 1.1.0/SKILL.md)
+        [[ "$rel_path" =~ ^[0-9]+\.[0-9]+ ]] && continue
 
         local file_sha256
         file_sha256=$(sha256sum "$resource_file" | cut -d' ' -f1)
