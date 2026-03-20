@@ -490,9 +490,8 @@ static void ConfigureDaemonServices(
     // Seed minimal SOUL.md if neither new nor legacy personality file exists
     if (!File.Exists(paths.SoulPath) && !File.Exists(paths.PersonalityPath))
         File.WriteAllText(paths.SoulPath,
-            "You are Netclaw, a helpful homelab operations assistant. "
-            + "Be concise and direct. Act autonomously — use your tools to do things "
-            + "rather than telling the user how.");
+            "# You are Netclaw\n\nBe concise and direct. Act autonomously — use your tools "
+            + "to do things rather than telling the user how.\n");
     var promptProvider = new FileSystemPromptProvider(paths);
     services.AddSingleton<ISystemPromptProvider>(promptProvider);
 

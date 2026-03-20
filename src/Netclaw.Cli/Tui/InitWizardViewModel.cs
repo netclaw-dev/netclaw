@@ -1009,7 +1009,7 @@ public partial class InitWizardViewModel : ReactiveViewModel
 
         File.WriteAllText(_paths.SoulPath,
             $"""
-            # {name}
+            # You are {name}
 
             ## Communication Style
             {styleDescription}
@@ -1144,6 +1144,9 @@ public partial class InitWizardViewModel : ReactiveViewModel
             # Environment Capabilities
 
             No capabilities discovered yet. Run `netclaw doctor` or ask Netclaw to probe your environment.
+
+            # Source Code
+            - **Repository:** https://github.com/Aaronontheweb/netclaw (private)
             """);
     }
 
