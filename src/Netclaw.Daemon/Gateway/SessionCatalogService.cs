@@ -117,18 +117,22 @@ public sealed class SessionCatalogService : ISessionLifecycleObserver
                     _metrics?.RecordTurnCompleted();
                     break;
 
-                case UsageOutput usage when usage.InputTokens.HasValue:
-                    UpdateSession(conn, persistenceId, cmd =>
+                case UsageOutput usage
+                    when usage.InputTokens.HasValue || usage.OutputTokens.HasValue:
+                    if (usage.InputTokens.HasValue)
                     {
-                        cmd.CommandText =
-                            """
-                            UPDATE sessions SET
-                                last_input_tokens = $tokens,
-                                last_activity = $now
-                            WHERE persistence_id = $pid
-                            """;
-                        cmd.Parameters.AddWithValue("$tokens", usage.InputTokens.Value);
-                    });
+                        UpdateSession(conn, persistenceId, cmd =>
+                        {
+                            cmd.CommandText =
+                                """
+                                UPDATE sessions SET
+                                    last_input_tokens = $tokens,
+                                    last_activity = $now
+                                WHERE persistence_id = $pid
+                                """;
+                            cmd.Parameters.AddWithValue("$tokens", usage.InputTokens.Value);
+                        });
+                    }
                     _metrics?.RecordTokenUsage(
                         usage.InputTokens ?? 0,
                         usage.OutputTokens ?? 0);

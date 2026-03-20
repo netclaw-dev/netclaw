@@ -1,6 +1,8 @@
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging.Abstractions;
 using Netclaw.Actors.Channels;
+using Netclaw.Actors.Protocol;
+using Netclaw.Actors.Telemetry;
 using Netclaw.Configuration;
 using Netclaw.Daemon.Gateway;
 using Xunit;
@@ -18,8 +20,8 @@ public sealed class SessionCatalogServiceTests : IDisposable
         return paths;
     }
 
-    private SessionCatalogService CreateService(NetclawPaths paths)
-        => new(paths, TimeProvider.System, NullLogger<SessionCatalogService>.Instance);
+    private SessionCatalogService CreateService(NetclawPaths paths, ISessionMetrics? metrics = null)
+        => new(paths, TimeProvider.System, NullLogger<SessionCatalogService>.Instance, metrics);
 
     public void Dispose()
     {
@@ -257,6 +259,94 @@ public sealed class SessionCatalogServiceTests : IDisposable
         Assert.Equal(0, stats.TotalSessions);
         Assert.Equal(0, stats.ActiveSessions);
         Assert.Equal(0, stats.TotalTurns);
+    }
+
+    [Fact]
+    public void OnOutput_RecordsTokenUsage_WhenOnlyOutputTokensPresent()
+    {
+        var paths = CreatePaths();
+        var metrics = new FakeMetrics();
+        var service = CreateService(paths, metrics);
+        var sessionId = new SessionId("signalr/test-usage-1");
+
+        service.OnSessionCreated(sessionId, ChannelType.SignalR);
+
+        // Simulate streaming response: InputTokens is null (Anthropic SDK bug),
+        // but OutputTokens has a value.
+        service.OnOutput(new UsageOutput
+        {
+            SessionId = sessionId,
+            InputTokens = null,
+            OutputTokens = 500
+        });
+
+        Assert.Single(metrics.TokenUsageCalls);
+        Assert.Equal(0, metrics.TokenUsageCalls[0].Input);
+        Assert.Equal(500, metrics.TokenUsageCalls[0].Output);
+    }
+
+    [Fact]
+    public void OnOutput_RecordsTokenUsage_WhenBothTokenFieldsPresent()
+    {
+        var paths = CreatePaths();
+        var metrics = new FakeMetrics();
+        var service = CreateService(paths, metrics);
+        var sessionId = new SessionId("signalr/test-usage-2");
+
+        service.OnSessionCreated(sessionId, ChannelType.SignalR);
+
+        service.OnOutput(new UsageOutput
+        {
+            SessionId = sessionId,
+            InputTokens = 1000,
+            OutputTokens = 250
+        });
+
+        Assert.Single(metrics.TokenUsageCalls);
+        Assert.Equal(1000, metrics.TokenUsageCalls[0].Input);
+        Assert.Equal(250, metrics.TokenUsageCalls[0].Output);
+
+        // Verify last_input_tokens was updated in SQLite
+        using var conn = OpenConn(paths);
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT last_input_tokens FROM sessions WHERE persistence_id = $pid";
+        cmd.Parameters.AddWithValue("$pid", $"session-{sessionId.Value}");
+        var result = cmd.ExecuteScalar();
+        Assert.Equal(1000L, result);
+    }
+
+    [Fact]
+    public void OnOutput_DoesNotRecord_WhenBothTokenFieldsNull()
+    {
+        var paths = CreatePaths();
+        var metrics = new FakeMetrics();
+        var service = CreateService(paths, metrics);
+        var sessionId = new SessionId("signalr/test-usage-3");
+
+        service.OnSessionCreated(sessionId, ChannelType.SignalR);
+
+        service.OnOutput(new UsageOutput
+        {
+            SessionId = sessionId,
+            InputTokens = null,
+            OutputTokens = null
+        });
+
+        Assert.Empty(metrics.TokenUsageCalls);
+    }
+
+    private sealed class FakeMetrics : ISessionMetrics
+    {
+        public List<(long Input, long Output)> TokenUsageCalls { get; } = [];
+
+        public void RecordTokenUsage(long inputTokens, long outputTokens)
+            => TokenUsageCalls.Add((inputTokens, outputTokens));
+
+        public void RecordTurnCompleted() { }
+        public void RecordSessionCreated() { }
+        public void RecordMemoriesFormed(int count) { }
+        public void RecordMemoriesRecalled(int count) { }
+        public void RecordSkillsLoaded(int count) { }
     }
 
     private static SqliteConnection OpenConn(NetclawPaths paths)
