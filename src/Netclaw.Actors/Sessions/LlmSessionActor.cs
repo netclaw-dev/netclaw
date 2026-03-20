@@ -658,6 +658,28 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         Command<LlmCallFailed>(msg =>
         {
             StopProcessingWatchdog();
+
+            // Context overflow: compact and recover instead of failing the turn
+            if (IsContextOverflowError(msg.Cause))
+            {
+                TurnLog().Warning(msg.Cause, "turn_context_overflow — triggering emergency compaction");
+
+                EmitOutput(new ErrorOutput
+                {
+                    SessionId = _sessionId,
+                    Message = "Context window exceeded — compacting session history. Please resend your last message.",
+                    Category = ErrorCategory.ProviderFailure,
+                    CorrelationId = Guid.NewGuid(),
+                    Cause = msg.Cause
+                });
+
+                // Use the configured context window as the token count estimate since
+                // the provider rejected the request without returning usage stats.
+                Self.Tell(new CompactionTriggered { InputTokenCount = _config.ContextWindowTokens });
+                Become(Compacting);
+                return;
+            }
+
             TurnLog().Error(msg.Cause, "turn_llm_call_failed");
 
             var errorMessage = ExtractLlmErrorMessage(msg.Cause);
@@ -1669,22 +1691,44 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     /// <summary>
     /// Detect context-length overflow errors from LLM providers.
-    /// Ollama: "context length exceeded", OpenAI-compatible: "maximum context length".
+    /// Uses two signals: (1) ProviderException with HTTP 400 + overflow keywords,
+    /// (2) fallback keyword scan of the full exception chain for providers that
+    /// don't use ProviderException.
     /// </summary>
-    private static bool IsContextOverflowError(Exception? ex)
+    internal static bool IsContextOverflowError(Exception? ex)
     {
         if (ex is null) return false;
-        var message = ex.Message;
-        // Walk inner exceptions too — provider SDKs often wrap
-        while (ex.InnerException is not null)
+
+        // Preferred path: ProviderException carries structured status code
+        var providerEx = FindException<Configuration.ProviderException>(ex);
+        if (providerEx is { StatusCode: 400 } && ContainsOverflowKeyword(providerEx.Message))
+            return true;
+
+        // Fallback: walk the full exception chain for keyword matches
+        var current = ex;
+        while (current is not null)
         {
-            ex = ex.InnerException;
-            message = string.Concat(message, " ", ex.Message);
+            if (ContainsOverflowKeyword(current.Message))
+                return true;
+            current = current.InnerException;
         }
-        return message.Contains("context length", StringComparison.OrdinalIgnoreCase)
-            || message.Contains("maximum context", StringComparison.OrdinalIgnoreCase)
-            || message.Contains("context_length_exceeded", StringComparison.OrdinalIgnoreCase);
+
+        return false;
     }
+
+    // This is inherently brittle — there is no standard error format for context
+    // overflow across LLM providers. Each returns different messages. We cast a wide
+    // net with keyword matching and rely on the ContextOverflowDetectionTests to
+    // verify coverage across known provider formats.
+    private static bool ContainsOverflowKeyword(string message) =>
+        message.Contains("context length", StringComparison.OrdinalIgnoreCase)
+        || message.Contains("context_length", StringComparison.OrdinalIgnoreCase)
+        || message.Contains("maximum context", StringComparison.OrdinalIgnoreCase)
+        || message.Contains("exceeds", StringComparison.OrdinalIgnoreCase)
+            && message.Contains("context", StringComparison.OrdinalIgnoreCase)
+        || message.Contains("prompt is too long", StringComparison.OrdinalIgnoreCase)
+        || message.Contains("token", StringComparison.OrdinalIgnoreCase)
+            && message.Contains("exceed", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// Naive token estimation: total character count / 4.
