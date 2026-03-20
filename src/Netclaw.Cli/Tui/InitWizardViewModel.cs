@@ -682,6 +682,23 @@ public partial class InitWizardViewModel : ReactiveViewModel
             }
         }
 
+        // Stop daemon before writing config to prevent ConfigWatcherService restart race
+        if (_daemonManager is not null)
+        {
+            var status = _daemonManager.GetStatus();
+            if (status.IsRunning)
+            {
+                HealthCheckResults.Add(new HealthCheckItem("Stopping daemon for config update", null));
+                NotifyHealthCheckChanged();
+
+                var stopResult = await _daemonManager.StopAsync();
+                HealthCheckResults[^1] = stopResult.Success
+                    ? new HealthCheckItem("Daemon stopped", true)
+                    : new HealthCheckItem($"Daemon stop failed: {stopResult.Message}", false);
+                NotifyHealthCheckChanged();
+            }
+        }
+
         // Config write
         HealthCheckResults.Add(new HealthCheckItem("Writing configuration", null));
         NotifyHealthCheckChanged();
