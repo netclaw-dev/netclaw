@@ -59,7 +59,8 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
             SnapshotInterval = 5,
             InputModalities = ModelModality.Text | ModelModality.Image,
             OutputModalities = ModelModality.Text,
-            TitleGenerationInterval = 0
+            TitleGenerationInterval = 0,
+            MemorySidecarsEnabled = false
         });
         services.AddSingleton<ISystemPromptProvider>(new StaticSystemPromptProvider(
             "You are a test assistant."));

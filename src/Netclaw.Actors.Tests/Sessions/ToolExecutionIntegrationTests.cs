@@ -38,7 +38,8 @@ public class ToolExecutionIntegrationTests : TestKit
             ContextWindowTokens = 128_000,
             SnapshotInterval = 5,
             TitleGenerationInterval = 0,
-            MaxInlineToolResultChars = 120
+            MaxInlineToolResultChars = 120,
+            MemorySidecarsEnabled = false
         });
         services.AddSingleton<ISystemPromptProvider>(new StaticSystemPromptProvider(
             "You are a test assistant with tools."));

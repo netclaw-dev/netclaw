@@ -34,7 +34,8 @@ public sealed class ErrorCorrelationTests(ITestOutputHelper output) : TestKit(ou
             TitleGenerationInterval = 0,
             TurnLlmTimeoutSeconds = 10,
             ToolExecutionTimeoutSeconds = 10,
-            SidecarLlmTimeoutSeconds = 10
+            SidecarLlmTimeoutSeconds = 10,
+            MemorySidecarsEnabled = false
         });
         services.AddSingleton<ISystemPromptProvider>(new StaticSystemPromptProvider("You are a test assistant."));
         services.AddSingleton<IModelCapabilityResolver>(new FakeCapabilityResolver());

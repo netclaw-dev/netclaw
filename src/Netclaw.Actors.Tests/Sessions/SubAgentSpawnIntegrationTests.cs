@@ -35,7 +35,8 @@ public class SubAgentSpawnIntegrationTests : TestKit
             ContextWindowTokens = 128_000,
             SnapshotInterval = 5,
             TitleGenerationInterval = 0,
-            ToolExecutionTimeoutSeconds = 10
+            ToolExecutionTimeoutSeconds = 10,
+            MemorySidecarsEnabled = false
         });
         services.AddSingleton<ISystemPromptProvider>(new StaticSystemPromptProvider(
             "You are a test assistant with subagent support."));

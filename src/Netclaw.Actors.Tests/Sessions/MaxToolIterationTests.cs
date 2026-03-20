@@ -38,7 +38,8 @@ public class MaxToolIterationTests : TestKit
             ContextWindowTokens = 128_000,
             SnapshotInterval = 5,
             MaxToolCallsPerTurn = 3, // Low limit for testing
-            TitleGenerationInterval = 0
+            TitleGenerationInterval = 0,
+            MemorySidecarsEnabled = false
         });
         services.AddSingleton<ISystemPromptProvider>(new StaticSystemPromptProvider(
             "You are a test assistant with tools."));
