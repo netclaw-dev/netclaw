@@ -80,7 +80,7 @@ public class SubAgentFindingReviewTests
         Assert.Contains("domain mismatch", result.Reason);
     }
 
-    private static SubAgentFindingCandidate CreateFinding()
+    private static SubAgentFinding CreateFinding()
         => new()
         {
             Title = "subagent:research-assistant",

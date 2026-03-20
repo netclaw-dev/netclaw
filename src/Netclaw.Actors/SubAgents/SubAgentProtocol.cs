@@ -79,22 +79,3 @@ public sealed record SubAgentResult
     public int FindingsCount { get; init; }
 }
 
-/// <summary>
-/// A structured durable-memory candidate emitted by a subagent.
-/// </summary>
-public sealed record SubAgentFinding
-{
-    public SubAgentFindingShape Shape { get; init; } = SubAgentFindingShape.Conclusion;
-    public required string Title { get; init; }
-    public required string Content { get; init; }
-    public string Kind { get; init; } = "record";
-    public string Domain { get; init; } = "project:default";
-    public SubAgentFindingSensitivity Sensitivity { get; init; } = SubAgentFindingSensitivity.Normal;
-    public SubAgentFindingRecallMode RecallMode { get; init; } = SubAgentFindingRecallMode.Auto;
-    public string UpdateSemantics { get; init; } = "append-document";
-    public double Confidence { get; init; } = 0.7;
-    public SubAgentFindingDurability Durability { get; init; } = SubAgentFindingDurability.Durable;
-    public SubAgentFindingReusability Reusability { get; init; } = SubAgentFindingReusability.Reusable;
-    public IReadOnlyList<string> Evidence { get; init; } = [];
-    public long? FreshnessAtMs { get; init; }
-}

@@ -18,13 +18,13 @@ public sealed record SubAgentNotificationInfo
     public int ToolCount { get; init; }
     public bool Success { get; init; }
     public TimeSpan Duration { get; init; }
-    public IReadOnlyList<SubAgentFindingCandidate> Findings { get; init; } = [];
+    public IReadOnlyList<SubAgentFinding> Findings { get; init; } = [];
 }
 
 /// <summary>
 /// Structured candidate surfaced by a subagent for parent-session durable-memory review.
 /// </summary>
-public sealed record SubAgentFindingCandidate
+public sealed record SubAgentFinding
 {
     public SubAgentFindingShape Shape { get; init; } = SubAgentFindingShape.Conclusion;
     public required string Title { get; init; }

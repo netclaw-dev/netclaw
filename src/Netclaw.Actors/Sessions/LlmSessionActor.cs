@@ -2332,7 +2332,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     }
 
     internal static SubAgentFindingReviewResult ReviewSubAgentFinding(
-        SubAgentFindingCandidate finding,
+        SubAgentFinding finding,
         string sessionId)
     {
         if (string.IsNullOrWhiteSpace(finding.Title))

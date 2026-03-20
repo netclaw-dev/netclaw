@@ -19,9 +19,8 @@ public sealed class SQLiteMemoryStore
 
     public async Task InitializeAsync(CancellationToken ct = default)
     {
-        await using var conn = new SqliteConnection(_connectionString);
-        await conn.OpenAsync(ct);
-
+        await WithConnectionAsync(async (conn, ct) =>
+        {
         var schemaSql = """
             PRAGMA journal_mode = WAL;
 
@@ -180,13 +179,13 @@ public sealed class SQLiteMemoryStore
               );
             """;
         await metadataCmd.ExecuteNonQueryAsync(ct);
+        }, ct);
     }
 
     public async Task UpsertDocumentAsync(SQLiteMemoryDocument document, CancellationToken ct = default)
     {
-        await using var conn = new SqliteConnection(_connectionString);
-        await conn.OpenAsync(ct);
-
+        await WithConnectionAsync(async (conn, ct) =>
+        {
         await using var tx = (SqliteTransaction)await conn.BeginTransactionAsync(ct);
 
         await EnsureAnchorAsync(conn, tx, document.Anchor, ct);
@@ -237,6 +236,7 @@ public sealed class SQLiteMemoryStore
         await cmd.ExecuteNonQueryAsync(ct);
 
         await tx.CommitAsync(ct);
+        }, ct);
     }
 
     public async Task<IReadOnlyList<SQLiteMemoryDocument>> SearchAutoRecallDocumentsAsync(
@@ -252,9 +252,8 @@ public sealed class SQLiteMemoryStore
         if (tokens.Count == 0)
             return [];
 
-        await using var conn = new SqliteConnection(_connectionString);
-        await conn.OpenAsync(ct);
-
+        return await WithConnectionAsync(async (conn, ct) =>
+        {
         await using var cmd = conn.CreateCommand();
         var termClauses = new List<string>();
         for (var i = 0; i < tokens.Count; i++)
@@ -344,6 +343,7 @@ public sealed class SQLiteMemoryStore
         }
 
         return results;
+        }, ct);
     }
 
     private static List<string> TokenizeQuery(string query)
@@ -379,12 +379,13 @@ public sealed class SQLiteMemoryStore
 
     public async Task<int> GetPendingCheckpointCountAsync(CancellationToken ct = default)
     {
-        await using var conn = new SqliteConnection(_connectionString);
-        await conn.OpenAsync(ct);
-        await using var cmd = conn.CreateCommand();
-        cmd.CommandText = "SELECT COUNT(*) FROM memory_checkpoints WHERE status = 'pending';";
-        var value = await cmd.ExecuteScalarAsync(ct);
-        return value is long l ? (int)l : Convert.ToInt32(value ?? 0);
+        return await WithConnectionAsync(async (conn, ct) =>
+        {
+            await using var cmd = conn.CreateCommand();
+            cmd.CommandText = "SELECT COUNT(*) FROM memory_checkpoints WHERE status = 'pending';";
+            var value = await cmd.ExecuteScalarAsync(ct);
+            return value is long l ? (int)l : Convert.ToInt32(value ?? 0);
+        }, ct);
     }
 
     public sealed record MemoryStats(
@@ -396,86 +397,87 @@ public sealed class SQLiteMemoryStore
 
     public async Task<MemoryStats> GetStatsAsync(CancellationToken ct = default)
     {
-        await using var conn = new SqliteConnection(_connectionString);
-        await conn.OpenAsync(ct);
-        await using var cmd = conn.CreateCommand();
-        cmd.CommandText = """
-            SELECT
-                (SELECT COUNT(*) FROM memory_anchors),
-                (SELECT COUNT(*) FROM memory_documents),
-                (SELECT COUNT(*) FROM memory_records),
-                (SELECT COUNT(*) FROM memory_edges),
-                (SELECT COUNT(*) FROM memory_checkpoints WHERE status = 'pending')
-            """;
-        await using var reader = await cmd.ExecuteReaderAsync(ct);
-        if (await reader.ReadAsync(ct))
+        return await WithConnectionAsync(async (conn, ct) =>
         {
-            return new MemoryStats(
-                AnchorCount: reader.GetInt32(0),
-                DocumentCount: reader.GetInt32(1),
-                RecordCount: reader.GetInt32(2),
-                EdgeCount: reader.GetInt32(3),
-                PendingCheckpoints: reader.GetInt32(4));
-        }
+            await using var cmd = conn.CreateCommand();
+            cmd.CommandText = """
+                SELECT
+                    (SELECT COUNT(*) FROM memory_anchors),
+                    (SELECT COUNT(*) FROM memory_documents),
+                    (SELECT COUNT(*) FROM memory_records),
+                    (SELECT COUNT(*) FROM memory_edges),
+                    (SELECT COUNT(*) FROM memory_checkpoints WHERE status = 'pending')
+                """;
+            await using var reader = await cmd.ExecuteReaderAsync(ct);
+            if (await reader.ReadAsync(ct))
+            {
+                return new MemoryStats(
+                    AnchorCount: reader.GetInt32(0),
+                    DocumentCount: reader.GetInt32(1),
+                    RecordCount: reader.GetInt32(2),
+                    EdgeCount: reader.GetInt32(3),
+                    PendingCheckpoints: reader.GetInt32(4));
+            }
 
-        return new MemoryStats(0, 0, 0, 0, 0);
+            return new MemoryStats(0, 0, 0, 0, 0);
+        }, ct);
     }
 
     public async Task EnqueueCheckpointAsync(SQLiteMemoryCheckpoint checkpoint, CancellationToken ct = default)
     {
-        await using var conn = new SqliteConnection(_connectionString);
-        await conn.OpenAsync(ct);
-
-        await using var cmd = conn.CreateCommand();
-        cmd.CommandText = """
-            INSERT INTO memory_checkpoints(
-              checkpoint_id, session_id, turn_id, trigger_type, priority,
-              status, payload_json, retry_count, created_at, updated_at)
-            VALUES($id, $sessionId, $turnId, $triggerType, $priority,
-              $status, $payload, $retryCount, $createdAt, $updatedAt)
-            ON CONFLICT(checkpoint_id) DO UPDATE SET
-              session_id=excluded.session_id,
-              turn_id=excluded.turn_id,
-              trigger_type=excluded.trigger_type,
-              priority=excluded.priority,
-              status=excluded.status,
-              payload_json=excluded.payload_json,
-              retry_count=excluded.retry_count,
-              updated_at=excluded.updated_at;
-            """;
-        cmd.Parameters.AddWithValue("$id", checkpoint.CheckpointId);
-        cmd.Parameters.AddWithValue("$sessionId", checkpoint.SessionId);
-        cmd.Parameters.AddWithValue("$turnId", (object?)checkpoint.TurnId ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("$triggerType", checkpoint.TriggerType);
-        cmd.Parameters.AddWithValue("$priority", checkpoint.Priority);
-        cmd.Parameters.AddWithValue("$status", checkpoint.Status);
-        cmd.Parameters.AddWithValue("$payload", checkpoint.PayloadJson);
-        cmd.Parameters.AddWithValue("$retryCount", checkpoint.RetryCount);
-        cmd.Parameters.AddWithValue("$createdAt", checkpoint.CreatedAtMs);
-        cmd.Parameters.AddWithValue("$updatedAt", checkpoint.UpdatedAtMs);
-        await cmd.ExecuteNonQueryAsync(ct);
+        await WithConnectionAsync(async (conn, ct) =>
+        {
+            await using var cmd = conn.CreateCommand();
+            cmd.CommandText = """
+                INSERT INTO memory_checkpoints(
+                  checkpoint_id, session_id, turn_id, trigger_type, priority,
+                  status, payload_json, retry_count, created_at, updated_at)
+                VALUES($id, $sessionId, $turnId, $triggerType, $priority,
+                  $status, $payload, $retryCount, $createdAt, $updatedAt)
+                ON CONFLICT(checkpoint_id) DO UPDATE SET
+                  session_id=excluded.session_id,
+                  turn_id=excluded.turn_id,
+                  trigger_type=excluded.trigger_type,
+                  priority=excluded.priority,
+                  status=excluded.status,
+                  payload_json=excluded.payload_json,
+                  retry_count=excluded.retry_count,
+                  updated_at=excluded.updated_at;
+                """;
+            cmd.Parameters.AddWithValue("$id", checkpoint.CheckpointId);
+            cmd.Parameters.AddWithValue("$sessionId", checkpoint.SessionId);
+            cmd.Parameters.AddWithValue("$turnId", (object?)checkpoint.TurnId ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("$triggerType", checkpoint.TriggerType);
+            cmd.Parameters.AddWithValue("$priority", checkpoint.Priority);
+            cmd.Parameters.AddWithValue("$status", checkpoint.Status);
+            cmd.Parameters.AddWithValue("$payload", checkpoint.PayloadJson);
+            cmd.Parameters.AddWithValue("$retryCount", checkpoint.RetryCount);
+            cmd.Parameters.AddWithValue("$createdAt", checkpoint.CreatedAtMs);
+            cmd.Parameters.AddWithValue("$updatedAt", checkpoint.UpdatedAtMs);
+            await cmd.ExecuteNonQueryAsync(ct);
+        }, ct);
     }
 
     public async Task ResetProcessingCheckpointsAsync(CancellationToken ct = default)
     {
-        await using var conn = new SqliteConnection(_connectionString);
-        await conn.OpenAsync(ct);
-
-        await using var cmd = conn.CreateCommand();
-        cmd.CommandText = """
-            UPDATE memory_checkpoints
-            SET status = 'pending',
-                updated_at = $updatedAt
-            WHERE status = 'processing';
-            """;
-        cmd.Parameters.AddWithValue("$updatedAt", _timeProvider.GetUtcNow().ToUnixTimeMilliseconds());
-        await cmd.ExecuteNonQueryAsync(ct);
+        await WithConnectionAsync(async (conn, ct) =>
+        {
+            await using var cmd = conn.CreateCommand();
+            cmd.CommandText = """
+                UPDATE memory_checkpoints
+                SET status = 'pending',
+                    updated_at = $updatedAt
+                WHERE status = 'processing';
+                """;
+            cmd.Parameters.AddWithValue("$updatedAt", _timeProvider.GetUtcNow().ToUnixTimeMilliseconds());
+            await cmd.ExecuteNonQueryAsync(ct);
+        }, ct);
     }
 
     public async Task<SQLiteMemoryCheckpoint?> LeaseNextPendingCheckpointAsync(CancellationToken ct = default)
     {
-        await using var conn = new SqliteConnection(_connectionString);
-        await conn.OpenAsync(ct);
+        return await WithConnectionAsync(async (conn, ct) =>
+        {
         await using var tx = (SqliteTransaction)await conn.BeginTransactionAsync(ct);
 
         await using var select = conn.CreateCommand();
@@ -531,25 +533,26 @@ public sealed class SQLiteMemoryStore
 
         await tx.CommitAsync(ct);
         return checkpoint with { Status = "processing" };
+        }, ct);
     }
 
     public async Task MarkCheckpointRetryAsync(string checkpointId, int maxRetries, CancellationToken ct = default)
     {
-        await using var conn = new SqliteConnection(_connectionString);
-        await conn.OpenAsync(ct);
-
-        await using var cmd = conn.CreateCommand();
-        cmd.CommandText = """
-            UPDATE memory_checkpoints
-            SET retry_count = retry_count + 1,
-                status = CASE WHEN retry_count + 1 >= $maxRetries THEN 'failed' ELSE 'pending' END,
-                updated_at = $updatedAt
-            WHERE checkpoint_id = $id;
-            """;
-        cmd.Parameters.AddWithValue("$id", checkpointId);
-        cmd.Parameters.AddWithValue("$maxRetries", maxRetries);
-        cmd.Parameters.AddWithValue("$updatedAt", _timeProvider.GetUtcNow().ToUnixTimeMilliseconds());
-        await cmd.ExecuteNonQueryAsync(ct);
+        await WithConnectionAsync(async (conn, ct) =>
+        {
+            await using var cmd = conn.CreateCommand();
+            cmd.CommandText = """
+                UPDATE memory_checkpoints
+                SET retry_count = retry_count + 1,
+                    status = CASE WHEN retry_count + 1 >= $maxRetries THEN 'failed' ELSE 'pending' END,
+                    updated_at = $updatedAt
+                WHERE checkpoint_id = $id;
+                """;
+            cmd.Parameters.AddWithValue("$id", checkpointId);
+            cmd.Parameters.AddWithValue("$maxRetries", maxRetries);
+            cmd.Parameters.AddWithValue("$updatedAt", _timeProvider.GetUtcNow().ToUnixTimeMilliseconds());
+            await cmd.ExecuteNonQueryAsync(ct);
+        }, ct);
     }
 
     public async Task<IReadOnlyList<SQLiteMemorySearchResult>> SearchMemoriesAsync(string query, int limit, CancellationToken ct = default)
@@ -557,9 +560,8 @@ public sealed class SQLiteMemoryStore
         if (string.IsNullOrWhiteSpace(query) || limit <= 0)
             return [];
 
-        await using var conn = new SqliteConnection(_connectionString);
-        await conn.OpenAsync(ct);
-
+        return await WithConnectionAsync(async (conn, ct) =>
+        {
         await using var cmd = conn.CreateCommand();
         cmd.CommandText = """
             SELECT id, kind, memory_class, title, body, domain, sensitivity, recall_mode, confidence, sort_ts
@@ -620,6 +622,7 @@ public sealed class SQLiteMemoryStore
         }
 
         return results;
+        }, ct);
     }
 
     public async Task<IReadOnlyList<SQLiteMemoryHydratedItem>> GetMemoriesByIdsAsync(IReadOnlyList<string> ids, CancellationToken ct = default)
@@ -643,9 +646,8 @@ public sealed class SQLiteMemoryStore
 
         var output = new List<SQLiteMemoryHydratedItem>();
 
-        await using var conn = new SqliteConnection(_connectionString);
-        await conn.OpenAsync(ct);
-
+        return await WithConnectionAsync(async (conn, ct) =>
+        {
         foreach (var id in documents)
         {
             await using var cmd = conn.CreateCommand();
@@ -707,6 +709,7 @@ public sealed class SQLiteMemoryStore
         }
 
         return output;
+        }, ct);
     }
 
     public async Task<IReadOnlyList<SQLiteMemoryHydratedItem>> SearchByPlanAsync(
@@ -737,9 +740,8 @@ public sealed class SQLiteMemoryStore
         if (queryTerms.Count == 0 || limit <= 0)
             return [];
 
-        await using var conn = new SqliteConnection(_connectionString);
-        await conn.OpenAsync(ct);
-
+        return await WithConnectionAsync(async (conn, ct) =>
+        {
         var now = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
         await using var cmd = conn.CreateCommand();
 
@@ -853,12 +855,13 @@ public sealed class SQLiteMemoryStore
         }
 
         return output;
+        }, ct);
     }
 
     public async Task<bool> UpdateDocumentTextAsync(string documentId, string oldText, string newText, CancellationToken ct = default)
     {
-        await using var conn = new SqliteConnection(_connectionString);
-        await conn.OpenAsync(ct);
+        return await WithConnectionAsync(async (conn, ct) =>
+        {
 
         await using var read = conn.CreateCommand();
         read.CommandText = "SELECT markdown_body FROM memory_documents WHERE document_id = $id;";
@@ -884,13 +887,13 @@ public sealed class SQLiteMemoryStore
         write.Parameters.AddWithValue("$updatedAt", _timeProvider.GetUtcNow().ToUnixTimeMilliseconds());
         var affected = await write.ExecuteNonQueryAsync(ct);
         return affected > 0;
+        }, ct);
     }
 
     public async Task<bool> TombstoneDocumentAsync(string documentId, CancellationToken ct = default)
     {
-        await using var conn = new SqliteConnection(_connectionString);
-        await conn.OpenAsync(ct);
-
+        return await WithConnectionAsync(async (conn, ct) =>
+        {
         await using var cmd = conn.CreateCommand();
         cmd.CommandText = """
             UPDATE memory_documents
@@ -903,13 +906,13 @@ public sealed class SQLiteMemoryStore
         cmd.Parameters.AddWithValue("$updatedAt", _timeProvider.GetUtcNow().ToUnixTimeMilliseconds());
         var affected = await cmd.ExecuteNonQueryAsync(ct);
         return affected > 0;
+        }, ct);
     }
 
     public async Task<bool> SupersedeRecordAsync(string recordId, string payloadJson, CancellationToken ct = default)
     {
-        await using var conn = new SqliteConnection(_connectionString);
-        await conn.OpenAsync(ct);
-
+        return await WithConnectionAsync(async (conn, ct) =>
+        {
         await using var read = conn.CreateCommand();
         read.CommandText = """
             SELECT anchor_id, record_type, domain, sensitivity, recall_mode, confidence, freshness_at
@@ -955,6 +958,7 @@ public sealed class SQLiteMemoryStore
         insert.Parameters.AddWithValue("$createdAt", now);
         await insert.ExecuteNonQueryAsync(ct);
         return true;
+        }, ct);
     }
 
     public async Task<bool> TombstoneRecordAsync(string recordId, CancellationToken ct = default)
@@ -967,8 +971,8 @@ public sealed class SQLiteMemoryStore
         IReadOnlyList<SQLiteMemoryCurationOperation> operations,
         CancellationToken ct = default)
     {
-        await using var conn = new SqliteConnection(_connectionString);
-        await conn.OpenAsync(ct);
+        await WithConnectionAsync(async (conn, ct) =>
+        {
         await using var tx = (SqliteTransaction)await conn.BeginTransactionAsync(ct);
 
         foreach (var operation in operations)
@@ -1087,6 +1091,25 @@ public sealed class SQLiteMemoryStore
         await markDone.ExecuteNonQueryAsync(ct);
 
         await tx.CommitAsync(ct);
+        }, ct);
+    }
+
+    private async Task<T> WithConnectionAsync<T>(
+        Func<SqliteConnection, CancellationToken, Task<T>> work,
+        CancellationToken ct)
+    {
+        await using var conn = new SqliteConnection(_connectionString);
+        await conn.OpenAsync(ct);
+        return await work(conn, ct);
+    }
+
+    private async Task WithConnectionAsync(
+        Func<SqliteConnection, CancellationToken, Task> work,
+        CancellationToken ct)
+    {
+        await using var conn = new SqliteConnection(_connectionString);
+        await conn.OpenAsync(ct);
+        await work(conn, ct);
     }
 
     private static MemoryTypedId ParseTypedId(string raw) => MemoryTypedId.Parse(raw);
