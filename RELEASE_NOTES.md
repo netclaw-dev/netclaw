@@ -1,3 +1,11 @@
+#### 0.7.3 2026-03-20 ####
+
+Netclaw v0.7.3 — Skill feed sync fix
+
+**Skills**
+
+* Fixed skill feed sync returning 404s for all resources — the manifest generator leaked CI runner absolute paths (e.g., `/home/runner/_work/...`) into resource file URLs, causing every skill sync to fail. Skills were only available from the built-in seed copy and never updated from the feed. Path normalization now uses `pwd` before prefix stripping, and versioned subdirectories are excluded from the resource list. ([#336](https://github.com/Aaronontheweb/netclaw/pull/336))
+
 #### 0.7.2 2026-03-20 ####
 
 Netclaw v0.7.2 — Session passivation recovery, memory recall activation, skill loading fixes, and per-session log directories
