@@ -562,7 +562,7 @@ internal sealed class SystemSkillSyncService : IHostedService
             if (!currentKeys.Contains(Path.GetFileName(file)))
             {
                 try { File.Delete(file); purged++; }
-                catch (IOException) { /* best-effort cleanup */ }
+                catch (IOException ex) { _logger.LogDebug(ex, "Could not delete stale cache file {File}", file); }
             }
         }
 
