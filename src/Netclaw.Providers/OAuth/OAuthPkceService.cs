@@ -16,10 +16,13 @@ namespace Netclaw.Providers.OAuth;
 /// </summary>
 public sealed class OAuthPkceService
 {
+    private static readonly TimeSpan CompletedFlowTtl = TimeSpan.FromMinutes(10);
+
     private readonly HttpClient _httpClient;
     private readonly TimeProvider _timeProvider;
     private readonly ConcurrentDictionary<string, OAuthPkcePendingFlow> _pendingFlows = new();
-    private readonly ConcurrentDictionary<string, OAuthDeviceFlowResult> _completedFlows = new();
+    private readonly ConcurrentDictionary<string, (OAuthDeviceFlowResult Result, DateTimeOffset CompletedAt)> _completedFlows = new();
+    private readonly ConcurrentDictionary<string, (string Error, DateTimeOffset FailedAt)> _failedFlows = new();
 
     public OAuthPkceService(HttpClient httpClient, TimeProvider? timeProvider = null)
     {
@@ -37,7 +40,8 @@ public sealed class OAuthPkceService
         string clientId,
         string redirectUri,
         string? scope = null,
-        IReadOnlyDictionary<string, string>? extraParams = null)
+        IReadOnlyDictionary<string, string>? extraParams = null,
+        IReadOnlyDictionary<string, string>? extraTokenParams = null)
     {
         var codeVerifier = GenerateCodeVerifier();
         var codeChallenge = ComputeCodeChallenge(codeVerifier);
@@ -71,9 +75,12 @@ public sealed class OAuthPkceService
             RedirectUri: redirectUri,
             ClientId: clientId,
             TokenEndpoint: tokenEndpoint,
+            ExtraTokenParams: extraTokenParams,
             Completion: new TaskCompletionSource<OAuthDeviceFlowResult>());
 
         _pendingFlows[state] = pendingFlow;
+
+        PruneStaleFlows();
 
         return (authUrl, state);
     }
@@ -91,14 +98,15 @@ public sealed class OAuthPkceService
         {
             var result = await ExchangeCodeForTokensAsync(
                 flow.TokenEndpoint, flow.ClientId, code,
-                flow.CodeVerifier, flow.RedirectUri, ct);
+                flow.CodeVerifier, flow.RedirectUri, flow.ExtraTokenParams, ct);
 
-            _completedFlows[state] = result;
+            _completedFlows[state] = (result, _timeProvider.GetUtcNow());
             flow.Completion.TrySetResult(result);
             return result;
         }
         catch (Exception ex)
         {
+            _failedFlows[state] = (ex.Message, _timeProvider.GetUtcNow());
             flow.Completion.TrySetException(ex);
             throw;
         }
@@ -113,6 +121,7 @@ public sealed class OAuthPkceService
         string code,
         string codeVerifier,
         string redirectUri,
+        IReadOnlyDictionary<string, string>? extraParams = null,
         CancellationToken ct = default)
     {
         var tokenParams = new Dictionary<string, string>
@@ -123,6 +132,8 @@ public sealed class OAuthPkceService
             ["code_verifier"] = codeVerifier,
             ["redirect_uri"] = redirectUri,
         };
+
+        MergeExtraParams(tokenParams, extraParams);
 
         var response = await _httpClient.PostAsync(
             tokenEndpoint,
@@ -144,6 +155,7 @@ public sealed class OAuthPkceService
         string tokenEndpoint,
         string clientId,
         SensitiveString refreshToken,
+        IReadOnlyDictionary<string, string>? extraParams = null,
         CancellationToken ct = default)
     {
         var tokenParams = new Dictionary<string, string>
@@ -152,6 +164,8 @@ public sealed class OAuthPkceService
             ["client_id"] = clientId,
             ["refresh_token"] = refreshToken.Value,
         };
+
+        MergeExtraParams(tokenParams, extraParams);
 
         var response = await _httpClient.PostAsync(
             tokenEndpoint,
@@ -253,6 +267,9 @@ public sealed class OAuthPkceService
         if (_completedFlows.ContainsKey(state))
             return OAuthPkceFlowStatus.Completed;
 
+        if (_failedFlows.ContainsKey(state))
+            return OAuthPkceFlowStatus.Failed;
+
         if (!_pendingFlows.TryGetValue(state, out var flow))
             return OAuthPkceFlowStatus.NotStarted;
 
@@ -266,7 +283,51 @@ public sealed class OAuthPkceService
     /// </summary>
     public OAuthDeviceFlowResult? GetFlowResult(string state)
     {
-        return _completedFlows.TryGetValue(state, out var result) ? result : null;
+        return _completedFlows.TryGetValue(state, out var entry) ? entry.Result : null;
+    }
+
+    // ── Flow Cleanup ──────────────────────────────────────────────────
+
+    private void PruneStaleFlows()
+    {
+        var cutoff = _timeProvider.GetUtcNow() - CompletedFlowTtl;
+
+        foreach (var (state, entry) in _completedFlows)
+        {
+            if (entry.CompletedAt < cutoff)
+                _completedFlows.TryRemove(state, out _);
+        }
+
+        foreach (var (state, entry) in _failedFlows)
+        {
+            if (entry.FailedAt < cutoff)
+                _failedFlows.TryRemove(state, out _);
+        }
+
+        foreach (var (state, flow) in _pendingFlows)
+        {
+            if (flow.Completion.Task.IsCompleted)
+                _pendingFlows.TryRemove(state, out _);
+        }
+    }
+
+    // ── Extra Params ──────────────────────────────────────────────────
+
+    // OAuth grant parameters that must not be overridden by extraParams.
+    private static readonly HashSet<string> ReservedTokenParamKeys = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "grant_type", "client_id", "code", "code_verifier", "redirect_uri", "refresh_token",
+    };
+
+    private static void MergeExtraParams(
+        Dictionary<string, string> target, IReadOnlyDictionary<string, string>? extraParams)
+    {
+        if (extraParams is null) return;
+        foreach (var (key, value) in extraParams)
+        {
+            if (!ReservedTokenParamKeys.Contains(key))
+                target[key] = value;
+        }
     }
 
     // ── PKCE Helpers ───────────────────────────────────────────────────
@@ -328,6 +389,7 @@ public sealed record OAuthPkcePendingFlow(
     string RedirectUri,
     string ClientId,
     string TokenEndpoint,
+    IReadOnlyDictionary<string, string>? ExtraTokenParams,
     TaskCompletionSource<OAuthDeviceFlowResult> Completion);
 
 /// <summary>

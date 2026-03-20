@@ -4,6 +4,7 @@ using ModelContextProtocol.Client;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 using Netclaw.Daemon.Mcp;
+using Netclaw.Providers.OAuth;
 using Xunit;
 
 namespace Netclaw.Daemon.Tests.Mcp;
@@ -151,11 +152,14 @@ public class McpStdioSmokeTests : IAsyncDisposable
 
         var registry = new ToolRegistry();
         var logger = NullLogger<McpClientManager>.Instance;
+        var pkceService = new OAuthPkceService(new HttpClient());
         var oauthService = new McpOAuthService(
             new HttpClient(),
             new NetclawPaths(Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString())),
             TimeProvider.System,
-            NullLogger<McpOAuthService>.Instance);
+            NullLogger<McpOAuthService>.Instance,
+            pkceService,
+            NullNotificationSink.Instance);
         var manager = new McpClientManager(serverEntries, registry, oauthService, NullNotificationSink.Instance, TimeProvider.System, logger);
 
         try

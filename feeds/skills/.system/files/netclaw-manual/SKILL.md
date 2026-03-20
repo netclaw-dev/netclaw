@@ -3,7 +3,7 @@ name: netclaw-manual
 description: "Netclaw Manual. Read when the user is asking what Netclaw can do, which command/tool to use, how to schedule work, switch models, manage providers, or discover available capabilities."
 metadata:
   author: netclaw
-  version: "0.8.0"
+  version: "0.8.2"
   triggers: what can netclaw do | what command should I use | can you schedule a cron job | schedule a reminder | switch models | change model | manage providers | manage mcp servers | list available tools | how do I do this in netclaw
 ---
 
@@ -212,6 +212,16 @@ result, and LLM response from that run. Use this when a reminder shows
 | `netclaw model` | Manage model assignments (TUI or subcommands) |
 | `netclaw mcp` | Manage MCP servers (`add`, `auth`, `list`, `get`, `remove`, `enable`, `disable`) |
 | `netclaw secrets` | Manage encrypted secrets |
+
+## MCP OAuth Auth Flow
+
+Use `netclaw mcp auth <name>` for HTTP/SSE MCP servers that require OAuth.
+
+- Netclaw starts the OAuth flow through the daemon and polls by flow `state` until it completes or times out.
+- It tries to open the browser automatically, but always prints the authorization URL for manual use.
+- When running in a compatible terminal, Netclaw also emits an OSC 52 clipboard copy for the authorization URL.
+- In headless or callback-unreachable environments, paste the full redirect URL from the browser address bar back into the CLI.
+- Empty or malformed pasted URLs do not cancel the flow; Netclaw keeps polling and lets the operator try again.
 
 ### Reminders
 

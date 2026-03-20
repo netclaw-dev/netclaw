@@ -1,19 +1,19 @@
 using System.Collections.Concurrent;
 using System.Net.Http.Json;
-using System.Security.Cryptography;
-using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.Logging;
 using Netclaw.Configuration;
 using Netclaw.Configuration.Secrets;
+using Netclaw.Providers.OAuth;
 
 namespace Netclaw.Daemon.Mcp;
 
 /// <summary>
 /// Orchestrates the OAuth 2.1 Authorization Code + PKCE lifecycle for MCP servers.
-/// Handles discovery, PKCE generation, auth flow coordination, token persistence,
-/// and automatic token refresh.
+/// Handles discovery, DCR, token persistence, and automatic token refresh.
+/// Delegates PKCE generation, authorization URL construction, and token exchange
+/// to <see cref="OAuthPkceService"/>.
 /// </summary>
 internal sealed class McpOAuthService
 {
@@ -27,24 +27,32 @@ internal sealed class McpOAuthService
     private readonly NetclawPaths _paths;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<McpOAuthService> _logger;
+    private readonly OAuthPkceService _pkceService;
+    private readonly IOperationalNotificationSink _notificationSink;
     private readonly ISecretsProtector? _protector;
 
     // In-memory caches, loaded from disk at construction
     private readonly ConcurrentDictionary<string, McpOAuthTokenSet> _tokens = new();
     private readonly ConcurrentDictionary<string, McpOAuthServerMetadata> _metadata = new();
-    private readonly ConcurrentDictionary<string, McpOAuthPendingFlow> _pendingFlows = new();
+
+    // Maps PKCE state → flow context for token persistence after callback
+    private readonly ConcurrentDictionary<string, McpOAuthFlowContext> _stateToContext = new();
 
     public McpOAuthService(
         HttpClient httpClient,
         NetclawPaths paths,
         TimeProvider timeProvider,
         ILogger<McpOAuthService> logger,
+        OAuthPkceService pkceService,
+        IOperationalNotificationSink notificationSink,
         ISecretsProtector? protector = null)
     {
         _httpClient = httpClient;
         _paths = paths;
         _timeProvider = timeProvider;
         _logger = logger;
+        _pkceService = pkceService;
+        _notificationSink = notificationSink;
         _protector = protector;
 
         LoadTokensFromDisk();
@@ -117,9 +125,10 @@ internal sealed class McpOAuthService
                 if (resourceMeta.TryGetProperty("resource", out var resProp))
                     resourceIndicator = resProp.GetString();
             }
-            catch
+            catch (Exception ex)
             {
                 // No OAuth metadata found — server doesn't require OAuth
+                _logger.LogDebug(ex, "No OAuth metadata at {Url} — server does not require OAuth", wellKnownUrl);
                 return null;
             }
         }
@@ -205,8 +214,8 @@ internal sealed class McpOAuthService
     // ── Start Authorization Flow ───────────────────────────────────────
 
     /// <summary>
-    /// Generate PKCE parameters, build the authorization URL, and store
-    /// the pending flow. Returns the URL the user should open in their browser.
+    /// Discover metadata, ensure client registration, then delegate to
+    /// <see cref="OAuthPkceService"/> for PKCE generation and URL construction.
     /// </summary>
     public async Task<(string AuthorizationUrl, string State)> StartAuthorizationFlowAsync(
         string serverName, McpServerEntry entry, CancellationToken ct)
@@ -217,45 +226,43 @@ internal sealed class McpOAuthService
                 "No /.well-known/oauth-protected-resource was found.");
         var clientId = await EnsureClientRegisteredAsync(serverName, entry, metadata, ct);
 
-        // PKCE: generate code_verifier and code_challenge
-        var codeVerifier = GenerateCodeVerifier();
-        var codeChallenge = ComputeCodeChallenge(codeVerifier);
-        var state = Guid.NewGuid().ToString("N");
-
         var redirectUri = "http://127.0.0.1:5199/api/mcp/oauth/callback";
 
-        var queryParams = new Dictionary<string, string>
-        {
-            ["response_type"] = "code",
-            ["client_id"] = clientId,
-            ["redirect_uri"] = redirectUri,
-            ["code_challenge"] = codeChallenge,
-            ["code_challenge_method"] = "S256",
-            ["state"] = state,
-        };
-
+        // Build extra params for authorization URL (resource indicator)
+        Dictionary<string, string>? extraAuthParams = null;
         if (!string.IsNullOrWhiteSpace(metadata.ResourceIndicator))
-            queryParams["resource"] = metadata.ResourceIndicator;
-
-        if (!string.IsNullOrWhiteSpace(entry.OAuthScope))
-            queryParams["scope"] = entry.OAuthScope;
-
-        var authUrl = metadata.AuthorizationEndpoint + "?" + string.Join("&",
-            queryParams.Select(kv => $"{Uri.EscapeDataString(kv.Key)}={Uri.EscapeDataString(kv.Value)}"));
-
-        var pendingFlow = new McpOAuthPendingFlow
         {
-            ServerName = serverName,
-            CodeVerifier = codeVerifier,
-            State = state,
-            RedirectUri = redirectUri,
-            ClientId = clientId,
-            TokenEndpoint = metadata.TokenEndpoint,
-            ResourceIndicator = metadata.ResourceIndicator,
-            Completion = new TaskCompletionSource<bool>(),
-        };
+            extraAuthParams = new Dictionary<string, string>
+            {
+                ["resource"] = metadata.ResourceIndicator,
+            };
+        }
 
-        _pendingFlows[state] = pendingFlow;
+        // Build extra params for token exchange/refresh (resource indicator per RFC 8707)
+        Dictionary<string, string>? extraTokenParams = null;
+        if (!string.IsNullOrWhiteSpace(metadata.ResourceIndicator))
+        {
+            extraTokenParams = new Dictionary<string, string>
+            {
+                ["resource"] = metadata.ResourceIndicator,
+            };
+        }
+
+        var (authUrl, state) = _pkceService.StartAuthorizationFlow(
+            metadata.AuthorizationEndpoint,
+            metadata.TokenEndpoint,
+            clientId,
+            redirectUri,
+            entry.OAuthScope,
+            extraAuthParams,
+            extraTokenParams);
+
+        // Store context so we can persist tokens when the callback arrives
+        _stateToContext[state] = new McpOAuthFlowContext(
+            serverName, clientId, metadata.ResourceIndicator, _timeProvider.GetUtcNow());
+
+        // Prune abandoned flows older than 10 minutes
+        PruneStaleFlowContexts();
 
         _logger.LogInformation("Started OAuth flow for MCP server '{Name}' (state={State})", serverName, state);
         return (authUrl, state);
@@ -264,36 +271,37 @@ internal sealed class McpOAuthService
     // ── Complete Authorization Flow (callback) ─────────────────────────
 
     /// <summary>
-    /// Exchange the authorization code for tokens. Called when the browser
-    /// redirects back to our callback endpoint.
+    /// Exchange the authorization code for tokens via <see cref="OAuthPkceService"/>,
+    /// then persist the result as an <see cref="McpOAuthTokenSet"/>.
     /// </summary>
     public async Task CompleteAuthorizationAsync(string code, string state, CancellationToken ct)
     {
-        if (!_pendingFlows.TryRemove(state, out var flow))
+        if (!_stateToContext.TryGetValue(state, out var context))
             throw new InvalidOperationException($"Unknown OAuth state: {state}");
 
         try
         {
-            var tokenRequest = new FormUrlEncodedContent(BuildTokenRequestParams(
-                "authorization_code", flow.ClientId, flow.RedirectUri,
-                flow.ResourceIndicator, code: code, codeVerifier: flow.CodeVerifier));
+            var result = await _pkceService.CompleteAuthorizationAsync(code, state, ct);
 
-            var response = await _httpClient.PostAsync(flow.TokenEndpoint, tokenRequest, ct);
-            response.EnsureSuccessStatusCode();
+            // Convert OAuthDeviceFlowResult → McpOAuthTokenSet for persistence
+            var tokenSet = new McpOAuthTokenSet
+            {
+                AccessToken = result.AccessToken,
+                RefreshToken = result.RefreshToken,
+                ExpiresAt = result.ExpiresAt,
+                ClientId = context.ClientId,
+                McpServerUrl = context.ResourceIndicator,
+            };
 
-            var tokenResponse = await response.Content.ReadFromJsonAsync<JsonElement>(ct);
-
-            var tokenSet = ParseTokenResponse(tokenResponse, flow.ClientId, flow.ResourceIndicator);
-            _tokens[flow.ServerName] = tokenSet;
+            _tokens[context.ServerName] = tokenSet;
             PersistTokens();
 
-            flow.Completion.TrySetResult(true);
-            _logger.LogInformation("OAuth flow completed for MCP server '{Name}'", flow.ServerName);
+            _logger.LogInformation("OAuth flow completed for MCP server '{Name}'", context.ServerName);
         }
-        catch (Exception ex)
+        finally
         {
-            flow.Completion.TrySetException(ex);
-            throw;
+            // Always clean up context — whether success or failure
+            _stateToContext.TryRemove(state, out _);
         }
     }
 
@@ -318,6 +326,23 @@ internal sealed class McpOAuthService
         if (tokenSet.RefreshToken is null)
         {
             _logger.LogWarning("Access token expired for MCP server '{Name}' with no refresh token", serverName);
+
+            _notificationSink.Emit(new OperationalAlert
+            {
+                AlertId = Guid.NewGuid().ToString("N")[..12],
+                Type = "mcp.auth.expired",
+                Category = AlertType.McpAuthExpired,
+                Summary = $"MCP server '{serverName}' access token expired with no refresh token. Run: netclaw mcp auth {serverName}",
+                Timestamp = _timeProvider.GetUtcNow(),
+                Severity = "warning",
+                Source = serverName,
+                Context = new Dictionary<string, string>
+                {
+                    ["serverName"] = serverName,
+                    ["reason"] = "no_refresh_token",
+                }
+            });
+
             return null;
         }
 
@@ -337,32 +362,56 @@ internal sealed class McpOAuthService
 
         try
         {
-            var refreshRequest = new FormUrlEncodedContent(BuildTokenRequestParams(
-                "refresh_token", tokenSet.ClientId ?? entry.OAuthClientId ?? "",
-                resourceIndicator: metadata.ResourceIndicator,
-                refreshToken: tokenSet.RefreshToken!.Value));
-
-            var response = await _httpClient.PostAsync(metadata.TokenEndpoint, refreshRequest, ct);
-
-            if (!response.IsSuccessStatusCode)
+            // Build extra params for resource indicator
+            Dictionary<string, string>? extraParams = null;
+            if (!string.IsNullOrWhiteSpace(metadata.ResourceIndicator))
             {
-                var errorBody = await response.Content.ReadAsStringAsync(ct);
-                if (errorBody.Contains("invalid_grant", StringComparison.Ordinal))
+                extraParams = new Dictionary<string, string>
                 {
-                    _logger.LogWarning("Refresh token rejected for MCP server '{Name}' (invalid_grant). Re-authorization required.", serverName);
-                    _tokens.TryRemove(serverName, out _);
-                    PersistTokens();
-                    return null;
-                }
-
-                response.EnsureSuccessStatusCode(); // throw for other errors
+                    ["resource"] = metadata.ResourceIndicator,
+                };
             }
 
-            var tokenResponse = await response.Content.ReadFromJsonAsync<JsonElement>(ct);
-            var newTokenSet = ParseTokenResponse(tokenResponse, tokenSet.ClientId, tokenSet.McpServerUrl);
+            var result = await _pkceService.RefreshTokenAsync(
+                metadata.TokenEndpoint,
+                tokenSet.ClientId ?? entry.OAuthClientId ?? "",
+                tokenSet.RefreshToken!,
+                extraParams,
+                ct);
 
-            // Preserve the existing refresh token if the server didn't issue a new one
-            newTokenSet.RefreshToken ??= tokenSet.RefreshToken;
+            if (result is null)
+            {
+                _logger.LogWarning("Refresh token rejected for MCP server '{Name}' (invalid_grant). Re-authorization required.", serverName);
+                _tokens.TryRemove(serverName, out _);
+                PersistTokens();
+
+                _notificationSink.Emit(new OperationalAlert
+                {
+                    AlertId = Guid.NewGuid().ToString("N")[..12],
+                    Type = "mcp.auth.expired",
+                    Category = AlertType.McpAuthExpired,
+                    Summary = $"MCP server '{serverName}' refresh token rejected (invalid_grant). Run: netclaw mcp auth {serverName}",
+                    Timestamp = _timeProvider.GetUtcNow(),
+                    Severity = "warning",
+                    Source = serverName,
+                    Context = new Dictionary<string, string>
+                    {
+                        ["serverName"] = serverName,
+                        ["reason"] = "invalid_grant",
+                    }
+                });
+
+                return null;
+            }
+
+            var newTokenSet = new McpOAuthTokenSet
+            {
+                AccessToken = result.AccessToken,
+                RefreshToken = result.RefreshToken ?? tokenSet.RefreshToken,
+                ExpiresAt = result.ExpiresAt,
+                ClientId = tokenSet.ClientId,
+                McpServerUrl = tokenSet.McpServerUrl,
+            };
 
             _tokens[serverName] = newTokenSet;
             PersistTokens();
@@ -381,90 +430,53 @@ internal sealed class McpOAuthService
 
     public McpOAuthFlowStatus GetFlowStatus(string serverName)
     {
+        // An active flow takes precedence over any previously stored token.
+        foreach (var ctx in _stateToContext.Values)
+        {
+            if (ctx.ServerName == serverName)
+                return McpOAuthFlowStatus.Pending;
+        }
+
         // Check if there's a completed token
         if (_tokens.ContainsKey(serverName))
             return McpOAuthFlowStatus.Completed;
 
-        // Check if there's a pending flow
-        foreach (var flow in _pendingFlows.Values)
-        {
-            if (flow.ServerName == serverName)
-                return McpOAuthFlowStatus.Pending;
-        }
-
         return McpOAuthFlowStatus.NotStarted;
     }
 
-    // ── PKCE Helpers ───────────────────────────────────────────────────
-
-    internal static string GenerateCodeVerifier()
+    /// <summary>
+    /// Get flow status by PKCE state value. Delegates to <see cref="OAuthPkceService"/>.
+    /// </summary>
+    public McpOAuthFlowStatus GetFlowStatusByState(string state)
     {
-        var bytes = RandomNumberGenerator.GetBytes(32);
-        return Base64UrlEncode(bytes);
+        var pkceStatus = _pkceService.GetFlowStatus(state);
+        return pkceStatus switch
+        {
+            OAuthPkceFlowStatus.Completed => McpOAuthFlowStatus.Completed,
+            OAuthPkceFlowStatus.Pending => McpOAuthFlowStatus.Pending,
+            OAuthPkceFlowStatus.Failed => McpOAuthFlowStatus.Failed,
+            _ => McpOAuthFlowStatus.NotStarted,
+        };
     }
 
-    internal static string ComputeCodeChallenge(string codeVerifier)
-    {
-        var hash = SHA256.HashData(Encoding.ASCII.GetBytes(codeVerifier));
-        return Base64UrlEncode(hash);
-    }
+    // ── Flow Cleanup ───────────────────────────────────────────────────
 
-    private static string Base64UrlEncode(byte[] data)
+    private static readonly TimeSpan FlowContextTtl = TimeSpan.FromMinutes(10);
+
+    private void PruneStaleFlowContexts()
     {
-        return Convert.ToBase64String(data)
-            .TrimEnd('=')
-            .Replace('+', '-')
-            .Replace('/', '_');
+        var cutoff = _timeProvider.GetUtcNow() - FlowContextTtl;
+        foreach (var (state, ctx) in _stateToContext)
+        {
+            if (ctx.CreatedAt < cutoff)
+            {
+                if (_stateToContext.TryRemove(state, out _))
+                    _logger.LogDebug("Pruned abandoned OAuth flow context (state={State}, server={Server})", state, ctx.ServerName);
+            }
+        }
     }
 
     // ── Private Helpers ────────────────────────────────────────────────
-
-    private static Dictionary<string, string> BuildTokenRequestParams(
-        string grantType, string? clientId, string? redirectUri = null,
-        string? resourceIndicator = null, string? code = null,
-        string? codeVerifier = null, string? refreshToken = null)
-    {
-        var parameters = new Dictionary<string, string>
-        {
-            ["grant_type"] = grantType,
-        };
-
-        if (!string.IsNullOrWhiteSpace(clientId))
-            parameters["client_id"] = clientId;
-        if (!string.IsNullOrWhiteSpace(redirectUri))
-            parameters["redirect_uri"] = redirectUri;
-        if (!string.IsNullOrWhiteSpace(resourceIndicator))
-            parameters["resource"] = resourceIndicator;
-        if (!string.IsNullOrWhiteSpace(code))
-            parameters["code"] = code;
-        if (!string.IsNullOrWhiteSpace(codeVerifier))
-            parameters["code_verifier"] = codeVerifier;
-        if (!string.IsNullOrWhiteSpace(refreshToken))
-            parameters["refresh_token"] = refreshToken;
-
-        return parameters;
-    }
-
-    private McpOAuthTokenSet ParseTokenResponse(
-        JsonElement response, string? clientId, string? mcpServerUrl)
-    {
-        var accessToken = response.GetProperty("access_token").GetString()!;
-        string? refreshToken = response.TryGetProperty("refresh_token", out var rtProp)
-            ? rtProp.GetString() : null;
-        int? expiresIn = response.TryGetProperty("expires_in", out var expProp)
-            ? expProp.GetInt32() : null;
-
-        return new McpOAuthTokenSet
-        {
-            AccessToken = new SensitiveString(accessToken),
-            RefreshToken = refreshToken is not null ? new SensitiveString(refreshToken) : null,
-            ExpiresAt = expiresIn is not null
-                ? _timeProvider.GetUtcNow().AddSeconds(expiresIn.Value)
-                : null,
-            ClientId = clientId,
-            McpServerUrl = mcpServerUrl,
-        };
-    }
 
     private static string? ExtractQuotedParam(string headerValue, string paramName)
     {
@@ -582,14 +594,12 @@ internal enum McpOAuthFlowStatus
     Failed,
 }
 
-internal sealed class McpOAuthPendingFlow
-{
-    public required string ServerName { get; init; }
-    public required string CodeVerifier { get; init; }
-    public required string State { get; init; }
-    public required string RedirectUri { get; init; }
-    public required string ClientId { get; init; }
-    public required string TokenEndpoint { get; init; }
-    public string? ResourceIndicator { get; init; }
-    public required TaskCompletionSource<bool> Completion { get; init; }
-}
+/// <summary>
+/// Tracks per-flow context needed to convert <see cref="OAuthDeviceFlowResult"/>
+/// into a persistable <see cref="McpOAuthTokenSet"/> after callback.
+/// </summary>
+internal sealed record McpOAuthFlowContext(
+    string ServerName,
+    string ClientId,
+    string? ResourceIndicator,
+    DateTimeOffset CreatedAt);

@@ -1,11 +1,13 @@
 using System.Diagnostics;
 using System.Net.Http.Json;
 using System.Net.Sockets;
+using System.Text;
 using System.Text.Json;
 using ModelContextProtocol.Client;
 using Netclaw.Cli.Config;
 using Netclaw.Cli.Daemon;
 using Netclaw.Configuration;
+using Netclaw.Providers.OAuth;
 
 namespace Netclaw.Cli.Mcp;
 
@@ -262,63 +264,211 @@ internal static class McpCommand
 
         var startResult = await startResponse.Content.ReadFromJsonAsync<JsonElement>();
         var authUrl = startResult.GetProperty("authorizationUrl").GetString()!;
+        var flowState = startResult.GetProperty("state").GetString()!;
 
-        // 2. Open browser (best-effort)
+        // 2. Open browser (detect headless first)
+        var canOpenBrowser = BrowserDetection.CanOpenBrowser();
         writer.WriteLine();
-        writer.WriteLine("Opening browser for authorization...");
-        writer.WriteLine($"If it doesn't open, visit: {authUrl}");
-        writer.WriteLine();
 
-        try
+        if (canOpenBrowser)
         {
-            Process.Start(new ProcessStartInfo(authUrl) { UseShellExecute = true });
-        }
-        catch (Exception ex)
-        {
-            writer.WriteLine($"Could not open browser automatically: {ex.Message}");
-        }
-
-        // 3. Poll for completion
-        writer.Write("Waiting for authorization");
-        var pollTimeout = TimeSpan.FromMinutes(5);
-        var pollInterval = TimeSpan.FromSeconds(2);
-        var elapsed = TimeSpan.Zero;
-
-        while (elapsed < pollTimeout)
-        {
-            await Task.Delay(pollInterval);
-            elapsed += pollInterval;
-            writer.Write(".");
-
+            writer.WriteLine("Opening browser for authorization...");
             try
             {
-                var statusResponse = await daemonApi.GetMcpOAuthStatusAsync(name);
+                Process.Start(new ProcessStartInfo(authUrl) { UseShellExecute = true });
+            }
+            catch
+            {
+                canOpenBrowser = false;
+            }
+        }
 
+        if (!canOpenBrowser)
+        {
+            writer.WriteLine("Could not open browser automatically (headless environment detected).");
+        }
+
+        writer.WriteLine();
+        writer.WriteLine($"Authorization URL: {authUrl}");
+        if (TryEmitOsc52Copy(writer, authUrl))
+            writer.WriteLine("Copied authorization URL to clipboard via OSC 52.");
+        writer.WriteLine();
+        writer.WriteLine("Complete the authorization in your browser, then either:");
+        writer.WriteLine("  1. Wait for the callback to be received automatically");
+        writer.WriteLine("  2. Paste the redirect URL below if the callback can't reach this machine");
+        writer.WriteLine();
+
+        // 3. Start polling + listen for paste concurrently
+        writer.Write("Waiting for authorization");
+        using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(5));
+        var pollTask = PollMcpOAuthStatusAsync(daemonApi, flowState, writer, cts.Token);
+        var pasteTask = ReadPasteRedirectAsync(daemonApi, writer, cts.Token);
+
+        var completedTask = await Task.WhenAny(pollTask, pasteTask);
+        cts.Cancel();
+
+        if (completedTask == pollTask)
+        {
+            var pollResult = await pollTask;
+            if (pollResult)
+            {
+                writer.WriteLine($"Authorization complete for '{name}'.");
+                writer.WriteLine("Run: netclaw daemon restart");
+                return 0;
+            }
+        }
+        else if (completedTask == pasteTask)
+        {
+            var pasteResult = await pasteTask;
+            if (pasteResult)
+            {
+                writer.WriteLine($"Authorization complete for '{name}'.");
+                writer.WriteLine("Run: netclaw daemon restart");
+                return 0;
+            }
+        }
+
+        writer.WriteLine($"Authorization failed or timed out for '{name}'.");
+        writer.WriteLine("Try again with: netclaw mcp auth " + name);
+        return 1;
+    }
+
+    private static async Task<bool> PollMcpOAuthStatusAsync(
+        DaemonApi daemonApi, string state, TextWriter writer, CancellationToken ct)
+    {
+        var pollInterval = TimeSpan.FromSeconds(2);
+
+        while (!ct.IsCancellationRequested)
+        {
+            try
+            {
+                await Task.Delay(pollInterval, ct);
+                writer.Write(".");
+
+                var statusResponse = await daemonApi.GetMcpOAuthStatusByStateAsync(state, ct);
                 var status = statusResponse.GetProperty("status").GetString();
+
                 if (status is "Completed")
                 {
                     writer.WriteLine();
-                    writer.WriteLine($"Authorization complete for '{name}'.");
-                    writer.WriteLine("Run: netclaw daemon restart");
-                    return 0;
+                    return true;
                 }
 
                 if (status is "Failed")
                 {
                     writer.WriteLine();
-                    writer.WriteLine($"Authorization failed for '{name}'.");
-                    return 1;
+                    return false;
                 }
             }
-            catch (Exception ex)
+            catch (OperationCanceledException)
             {
-                writer.Write($"(poll error: {ex.Message})");
+                break;
+            }
+            catch (Exception)
+            {
+                writer.Write("!"); // transient poll error — keep trying
             }
         }
 
         writer.WriteLine();
-        writer.WriteLine("Timed out waiting for authorization. Try again with: netclaw mcp auth " + name);
-        return 1;
+        return false;
+    }
+
+    private static async Task<bool> ReadPasteRedirectAsync(
+        DaemonApi daemonApi, TextWriter writer, CancellationToken ct)
+    {
+        // Skip paste fallback when stdin is redirected (CI, piped input)
+        if (Console.IsInputRedirected)
+            return await WaitUntilCancelledAsync(ct);
+
+        return await ReadPasteRedirectAsync(
+            writer,
+            token => Task.Run(Console.ReadLine, token),
+            (code, state, token) => daemonApi.McpOAuthCallbackAsync(code, state, token),
+            ct);
+    }
+
+    internal static async Task<bool> ReadPasteRedirectAsync(
+        TextWriter writer,
+        Func<CancellationToken, Task<string?>> readLineAsync,
+        Func<string, string, CancellationToken, Task<HttpResponseMessage>> submitRedirectAsync,
+        CancellationToken ct)
+    {
+        while (!ct.IsCancellationRequested)
+        {
+            string? line;
+            try
+            {
+                line = await readLineAsync(ct);
+            }
+            catch (OperationCanceledException)
+            {
+                return false;
+            }
+
+            // End-of-input means paste fallback is unavailable; keep polling alive.
+            if (line is null)
+                return await WaitUntilCancelledAsync(ct);
+
+            if (string.IsNullOrWhiteSpace(line))
+                continue;
+
+            if (!OAuthRedirectParser.TryParse(line, out var code, out var state, out var error))
+            {
+                writer.WriteLine($"Invalid redirect URL: {error}");
+                continue;
+            }
+
+            try
+            {
+                using var response = await submitRedirectAsync(code, state, ct);
+                if (response.IsSuccessStatusCode)
+                    return true;
+
+                writer.WriteLine("Redirect URL was rejected. Paste the latest redirect URL or wait for automatic completion.");
+            }
+            catch (OperationCanceledException)
+            {
+                return false;
+            }
+            catch (Exception ex)
+            {
+                writer.WriteLine($"Failed to submit redirect URL: {ex.Message}");
+            }
+        }
+
+        return false;
+    }
+
+    private static async Task<bool> WaitUntilCancelledAsync(CancellationToken ct)
+    {
+        try
+        {
+            await Task.Delay(Timeout.InfiniteTimeSpan, ct);
+        }
+        catch (OperationCanceledException)
+        {
+            return false;
+        }
+
+        return false;
+    }
+
+    internal static bool TryEmitOsc52Copy(TextWriter writer, string text)
+    {
+        if (string.IsNullOrEmpty(text)
+            || !ReferenceEquals(writer, Console.Out)
+            || Console.IsOutputRedirected)
+            return false;
+
+        var term = Environment.GetEnvironmentVariable("TERM");
+        if (string.IsNullOrWhiteSpace(term)
+            || string.Equals(term, "dumb", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        var payload = Convert.ToBase64String(Encoding.UTF8.GetBytes(text));
+        writer.Write($"\u001b]52;c;{payload}\u0007");
+        return true;
     }
 
     private static async Task<int> RunListAsync(NetclawPaths paths, TextWriter writer)

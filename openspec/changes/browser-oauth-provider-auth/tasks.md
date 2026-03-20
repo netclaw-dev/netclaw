@@ -10,7 +10,7 @@
 - [x] 2.2 Add token exchange method to `OAuthPkceService` (POST authorization code + code_verifier to token endpoint, return `OAuthDeviceFlowResult`)
 - [x] 2.3 Add token refresh method to `OAuthPkceService` (POST refresh_token, handle `invalid_grant`)
 - [x] 2.4 Write unit tests for `OAuthPkceService` — PKCE generation, URL construction, token exchange with mock HTTP, refresh with mock HTTP
-- [ ] 2.5 Refactor `McpOAuthService` to delegate PKCE generation and token exchange to `OAuthPkceService` (verify MCP OAuth still works via existing tests)
+- [x] 2.5 Refactor `McpOAuthService` to delegate PKCE generation and token exchange to `OAuthPkceService` (verify MCP OAuth still works via existing tests)
 
 ## 3. Provider Descriptor Changes
 
@@ -22,7 +22,7 @@
 - [x] 4.1 Add `GET /api/provider/oauth/callback` endpoint in daemon `Program.cs` — accept `code` and `state` params, validate state, exchange code for tokens, return HTML success/error page
 - [x] 4.2 Add `POST /api/provider/oauth/start` endpoint — accept provider type, generate PKCE + auth URL using `OAuthPkceService`, store pending flow, return `{ authorizationUrl, state }`
 - [x] 4.3 Add `GET /api/provider/oauth/status/{state}` endpoint — return `Completed`, `Pending`, or `Failed` for a pending flow
-- [ ] 4.4 Write integration tests for daemon callback endpoints using `WebApplicationFactory`
+- [x] 4.4 Write integration tests for daemon callback endpoints using ASP.NET Core test host coverage around the mapped routes
 
 ## 5. CLI/TUI Browser OAuth Flow
 
@@ -35,11 +35,11 @@
 
 ## 6. MCP OAuth Improvements
 
-- [ ] 6.1 Refactor `McpCommand` OAuth flow to use `OAuthPkceService` for state tracking instead of polling by server name
+- [x] 6.1 Refactor `McpCommand` OAuth flow to use `OAuthPkceService` for state tracking instead of polling by server name
 - [ ] 6.2 Add `CopyableTextNode` for auth URL display in MCP OAuth (replace plain text `"If it doesn't open, visit:"`)
 - [ ] 6.3 Add redirect URL paste fallback `TextInputNode` to MCP OAuth flow for headless environments
 - [ ] 6.4 Add `ToastOverlayNode` clipboard feedback when auth URL is copied via OSC 52
-- [ ] 6.5 Refactor MCP callback endpoint to delegate token exchange to `OAuthPkceService`
+- [x] 6.5 Refactor MCP callback endpoint to delegate token exchange to `OAuthPkceService`
 
 ## 7. Cleanup and Verification
 

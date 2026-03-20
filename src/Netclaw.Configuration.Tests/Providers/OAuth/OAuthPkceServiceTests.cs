@@ -182,6 +182,27 @@ public class OAuthPkceServiceTests
     }
 
     [Fact]
+    public async Task CompleteAuthorizationAsync_TokenExchangeFailure_MarksFlowFailed()
+    {
+        var handler = new FakeHttpMessageHandler(_ =>
+            JsonResponse(new { error = "invalid_request" }, HttpStatusCode.BadRequest));
+
+        var service = new OAuthPkceService(new HttpClient(handler));
+
+        var (_, state) = service.StartAuthorizationFlow(
+            "https://auth.example.com/authorize",
+            "https://auth.example.com/token",
+            "test-client",
+            "http://127.0.0.1:5199/callback",
+            "openid");
+
+        await Assert.ThrowsAsync<HttpRequestException>(
+            () => service.CompleteAuthorizationAsync("callback-code", state));
+
+        Assert.Equal(OAuthPkceFlowStatus.Failed, service.GetFlowStatus(state));
+    }
+
+    [Fact]
     public async Task RefreshToken_Success_ReturnsNewTokenPreservingRefresh()
     {
         var handler = new FakeHttpMessageHandler(_ =>
@@ -219,5 +240,125 @@ public class OAuthPkceServiceTests
             new SensitiveString("expired-refresh"));
 
         Assert.Null(result);
+    }
+
+    [Fact]
+    public void StartAuthorizationFlow_WithExtraParams_IncludesThemInUrl()
+    {
+        var service = new OAuthPkceService(new HttpClient());
+
+        var extraParams = new Dictionary<string, string>
+        {
+            ["resource"] = "https://mcp.example.com/mcp",
+        };
+
+        var (url, _) = service.StartAuthorizationFlow(
+            "https://auth.example.com/authorize",
+            "https://auth.example.com/token",
+            "test-client",
+            "http://127.0.0.1:5199/callback",
+            extraParams: extraParams);
+
+        Assert.Contains("resource=https%3A%2F%2Fmcp.example.com%2Fmcp", url);
+    }
+
+    [Fact]
+    public async Task ExchangeCodeForTokens_WithExtraParams_MergesIntoRequest()
+    {
+        string? capturedBody = null;
+        var handler = new FakeHttpMessageHandler(request =>
+        {
+            capturedBody = request.Content?.ReadAsStringAsync().GetAwaiter().GetResult();
+            return JsonResponse(new
+            {
+                access_token = "at-secret",
+                expires_in = 3600
+            });
+        });
+
+        var service = new OAuthPkceService(new HttpClient(handler));
+
+        var extraParams = new Dictionary<string, string>
+        {
+            ["resource"] = "https://mcp.example.com/mcp",
+        };
+
+        await service.ExchangeCodeForTokensAsync(
+            "https://auth.example.com/token",
+            "test-client",
+            "auth-code",
+            "verifier",
+            "http://127.0.0.1:5199/callback",
+            extraParams);
+
+        Assert.NotNull(capturedBody);
+        Assert.Contains("resource=https%3A%2F%2Fmcp.example.com%2Fmcp", capturedBody);
+        Assert.Contains("grant_type=authorization_code", capturedBody);
+    }
+
+    [Fact]
+    public async Task RefreshToken_WithExtraParams_MergesIntoRequest()
+    {
+        string? capturedBody = null;
+        var handler = new FakeHttpMessageHandler(request =>
+        {
+            capturedBody = request.Content?.ReadAsStringAsync().GetAwaiter().GetResult();
+            return JsonResponse(new
+            {
+                access_token = "new-at",
+                expires_in = 3600
+            });
+        });
+
+        var service = new OAuthPkceService(new HttpClient(handler));
+
+        var extraParams = new Dictionary<string, string>
+        {
+            ["resource"] = "https://mcp.example.com/mcp",
+        };
+
+        await service.RefreshTokenAsync(
+            "https://auth.example.com/token",
+            "test-client",
+            new SensitiveString("old-refresh"),
+            extraParams);
+
+        Assert.NotNull(capturedBody);
+        Assert.Contains("resource=https%3A%2F%2Fmcp.example.com%2Fmcp", capturedBody);
+        Assert.Contains("grant_type=refresh_token", capturedBody);
+    }
+
+    [Fact]
+    public async Task CompleteAuthorization_WithExtraTokenParams_PassesToExchange()
+    {
+        string? capturedBody = null;
+        var handler = new FakeHttpMessageHandler(request =>
+        {
+            capturedBody = request.Content?.ReadAsStringAsync().GetAwaiter().GetResult();
+            return JsonResponse(new
+            {
+                access_token = "at-from-callback",
+                expires_in = 3600
+            });
+        });
+
+        var service = new OAuthPkceService(new HttpClient(handler));
+
+        var extraTokenParams = new Dictionary<string, string>
+        {
+            ["resource"] = "https://mcp.example.com/mcp",
+        };
+
+        var (_, state) = service.StartAuthorizationFlow(
+            "https://auth.example.com/authorize",
+            "https://auth.example.com/token",
+            "test-client",
+            "http://127.0.0.1:5199/callback",
+            extraTokenParams: extraTokenParams);
+
+        await service.CompleteAuthorizationAsync("callback-code", state);
+
+        Assert.NotNull(capturedBody);
+        Assert.Contains("resource=https%3A%2F%2Fmcp.example.com%2Fmcp", capturedBody);
     }
 }

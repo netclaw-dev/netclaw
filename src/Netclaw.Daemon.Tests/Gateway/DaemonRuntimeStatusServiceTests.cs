@@ -10,6 +10,7 @@ using Netclaw.Configuration;
 using Netclaw.Daemon.Configuration;
 using Netclaw.Daemon.Gateway;
 using Netclaw.Daemon.Mcp;
+using Netclaw.Providers.OAuth;
 using Xunit;
 
 namespace Netclaw.Daemon.Tests.Gateway;
@@ -150,11 +151,14 @@ public sealed class DaemonRuntimeStatusServiceTests : IAsyncLifetime
             }
         };
 
+        var pkceService = new OAuthPkceService(new HttpClient());
         var oauthService = new McpOAuthService(
             new HttpClient(),
             new NetclawPaths(Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString())),
             TimeProvider.System,
-            NullLogger<McpOAuthService>.Instance);
+            NullLogger<McpOAuthService>.Instance,
+            pkceService,
+            NullNotificationSink.Instance);
         var manager = new McpClientManager(
             mcpServers,
             new ToolRegistry(),

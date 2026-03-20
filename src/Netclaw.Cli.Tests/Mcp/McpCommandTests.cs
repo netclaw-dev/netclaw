@@ -1,3 +1,4 @@
+using System.Net;
 using System.Text.Json;
 using Netclaw.Cli.Mcp;
 using Netclaw.Configuration;
@@ -224,6 +225,74 @@ public sealed class McpCommandTests : IDisposable
 
         var servers = McpCommand.LoadMcpServers(_paths);
         Assert.True(servers["memorizer"].Enabled);
+    }
+
+    [Fact]
+    public async Task ReadPasteRedirectAsync_InvalidUrl_AllowsRetryUntilSuccess()
+    {
+        var lines = new Queue<string?>([
+            "not-a-url",
+            "http://127.0.0.1:5199/api/mcp/oauth/callback?code=auth-code&state=flow-state"
+        ]);
+
+        var submissions = 0;
+        var output = new StringWriter();
+
+        var result = await McpCommand.ReadPasteRedirectAsync(
+            output,
+            _ => Task.FromResult(lines.Dequeue()),
+            (code, state, _) =>
+            {
+                submissions++;
+                Assert.Equal("auth-code", code);
+                Assert.Equal("flow-state", state);
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK));
+            },
+            CancellationToken.None);
+
+        Assert.True(result);
+        Assert.Equal(1, submissions);
+        Assert.Contains("Invalid redirect URL", output.ToString());
+    }
+
+    [Fact]
+    public async Task ReadPasteRedirectAsync_RejectedRedirect_AllowsRetry()
+    {
+        var lines = new Queue<string?>([
+            "http://127.0.0.1:5199/api/mcp/oauth/callback?code=bad-code&state=flow-state",
+            "http://127.0.0.1:5199/api/mcp/oauth/callback?code=good-code&state=flow-state"
+        ]);
+
+        var submissions = 0;
+        var output = new StringWriter();
+
+        var result = await McpCommand.ReadPasteRedirectAsync(
+            output,
+            _ => Task.FromResult(lines.Dequeue()),
+            (code, _, _) =>
+            {
+                submissions++;
+                var status = code == "bad-code"
+                    ? HttpStatusCode.BadRequest
+                    : HttpStatusCode.OK;
+                return Task.FromResult(new HttpResponseMessage(status));
+            },
+            CancellationToken.None);
+
+        Assert.True(result);
+        Assert.Equal(2, submissions);
+        Assert.Contains("Redirect URL was rejected", output.ToString());
+    }
+
+    [Fact]
+    public void TryEmitOsc52Copy_StringWriter_ReturnsFalse()
+    {
+        var output = new StringWriter();
+
+        var copied = McpCommand.TryEmitOsc52Copy(output, "https://example.com/oauth");
+
+        Assert.False(copied);
+        Assert.Equal(string.Empty, output.ToString());
     }
 
     private static JsonDocument ReadConfigFile(string path)

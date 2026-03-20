@@ -149,84 +149,14 @@ static async Task RunDaemonAsync(string[] args, DaemonRestartSignal restartSigna
         return Results.Ok(new { status = status.ToString() });
     });
 
-    // Provider OAuth endpoints (browser-based Authorization Code + PKCE)
-    app.MapPost("/api/provider/oauth/start", (
-        HttpContext context,
-        OAuthPkceService pkceService,
-        ProviderDescriptorRegistry registry) =>
+    app.MapGet("/api/mcp/oauth/status-by-state/{state}", (string state, McpOAuthService oauthService) =>
     {
-        var providerType = context.Request.Query["provider"].ToString();
-        if (string.IsNullOrEmpty(providerType))
-            return Results.BadRequest(new { error = "Missing 'provider' query parameter" });
-
-        if (!registry.TryGet(providerType, out var descriptor))
-            return Results.NotFound(new { error = $"Unknown provider type: {providerType}" });
-
-        var oauth = descriptor.Auth.GetOAuthConfig();
-        if (oauth is null || oauth.AuthorizationEndpoint is null || oauth.RedirectUri is null)
-            return Results.BadRequest(new { error = $"Provider '{providerType}' does not support browser OAuth" });
-
-        var (authUrl, state) = pkceService.StartAuthorizationFlow(
-            oauth.AuthorizationEndpoint.AbsoluteUri,
-            oauth.TokenEndpoint.AbsoluteUri,
-            oauth.ClientId,
-            oauth.RedirectUri.AbsoluteUri,
-            oauth.Scope,
-            oauth.ExtraAuthParams);
-
-        // Start temporary callback listener on the redirect URI's port
-        _ = pkceService.ListenForCallbackAsync(oauth.RedirectUri.AbsoluteUri, state);
-
-        return Results.Ok(new { authorizationUrl = authUrl, state });
+        var status = oauthService.GetFlowStatusByState(state);
+        // Tokens are persisted daemon-side — never expose them over HTTP.
+        return Results.Ok(new { status = status.ToString() });
     });
 
-    app.MapGet("/api/provider/oauth/callback", async (
-        HttpContext context,
-        OAuthPkceService pkceService,
-        CancellationToken ct) =>
-    {
-        var code = context.Request.Query["code"].ToString();
-        var state = context.Request.Query["state"].ToString();
-
-        if (string.IsNullOrEmpty(code) || string.IsNullOrEmpty(state))
-        {
-            context.Response.ContentType = "text/html";
-            await context.Response.WriteAsync(
-                "<html><body><h2>Authorization failed</h2><p>Missing code or state parameter.</p></body></html>", ct);
-            return;
-        }
-
-        try
-        {
-            await pkceService.CompleteAuthorizationAsync(code, state, ct);
-            context.Response.ContentType = "text/html";
-            await context.Response.WriteAsync(
-                "<html><body><h2>Authorization complete</h2><p>You may close this tab and return to the terminal.</p></body></html>", ct);
-        }
-        catch (Exception ex)
-        {
-            context.Response.StatusCode = 500;
-            context.Response.ContentType = "text/html";
-            await context.Response.WriteAsync(
-                $"<html><body><h2>Authorization failed</h2><p>{System.Net.WebUtility.HtmlEncode(ex.Message)}</p></body></html>", ct);
-        }
-    });
-
-    app.MapGet("/api/provider/oauth/status/{state}", (
-        string state,
-        OAuthPkceService pkceService) =>
-    {
-        var status = pkceService.GetFlowStatus(state);
-        var result = pkceService.GetFlowResult(state);
-        return Results.Ok(new
-        {
-            status = status.ToString(),
-            hasToken = result is not null,
-            accessToken = result?.AccessToken.Value,
-            refreshToken = result?.RefreshToken?.Value,
-            expiresAt = result?.ExpiresAt?.ToString("o"),
-        });
-    });
+    app.MapProviderOAuthEndpoints();
 
     // Register channel-specific tools after DI is built (tools need resolved services).
     ChannelToolRegistration.RegisterChannelTools(app.Services);
@@ -462,14 +392,22 @@ static void ConfigureDaemonServices(
     var mcpServers = configuration.GetSection("McpServers")
         .Get<Dictionary<string, McpServerEntry>>() ?? new();
     services.AddSingleton(mcpServers);
-    services.AddHttpClient<McpOAuthService>();
-    services.AddSingleton<McpOAuthService>();
+    services.AddHttpClient("ProviderOAuth");
     services.AddSingleton(sp =>
     {
         var httpClient = sp.GetRequiredService<IHttpClientFactory>().CreateClient("ProviderOAuth");
         return new OAuthPkceService(httpClient);
     });
-    services.AddHttpClient("ProviderOAuth");
+    services.AddSingleton<IProviderOAuthCallbackListener, ProviderOAuthCallbackListener>();
+    services.AddHttpClient(nameof(McpOAuthService));
+    services.AddSingleton(sp => new McpOAuthService(
+        sp.GetRequiredService<IHttpClientFactory>().CreateClient(nameof(McpOAuthService)),
+        paths,
+        sp.GetRequiredService<TimeProvider>(),
+        sp.GetRequiredService<ILogger<McpOAuthService>>(),
+        sp.GetRequiredService<OAuthPkceService>(),
+        sp.GetRequiredService<IOperationalNotificationSink>(),
+        sp.GetService<ISecretsProtector>()));
     services.AddSingleton<McpClientManager>();
     services.AddHostedService(sp => sp.GetRequiredService<McpClientManager>());
 
@@ -1078,3 +1016,5 @@ sealed record ImportReminderRequest
     public required ReminderDefinition Definition { get; init; }
     public string? WriteMode { get; init; }
 }
+
+public partial class Program;
