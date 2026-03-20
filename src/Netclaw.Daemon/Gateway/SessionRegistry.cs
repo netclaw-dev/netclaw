@@ -214,22 +214,50 @@ public sealed class SessionRegistry
 
     /// <summary>
     /// Cleans up session state when a SignalR connection disconnects.
-    /// Session is intentionally preserved for reconnection.
+    /// Shuts down the <see cref="SignalRSessionActor"/> so its subscriber is stopped,
+    /// triggering <c>WatchWith</c> → <c>LeaveSession</c> on the LLM session actor.
+    /// Removes the session from <c>_knownSessions</c> so that reconnection via
+    /// <see cref="EnsureSessionAsync"/> takes the "unknown session" path and sends
+    /// <see cref="StartSignalRSession"/> — required because a new child actor starts
+    /// in <c>Initializing</c> and will only transition to <c>Active</c> on that message.
     /// </summary>
-    public Task OnDisconnectedAsync(string connectionId)
+    public async Task OnDisconnectedAsync(string connectionId)
     {
         var parsed = ParseConnectionId(connectionId);
 
-        if (_connections.TryGetSessionForConnection(parsed, out var sessionId))
+        await _sessionMutationGate.WaitAsync();
+        try
         {
-            _logger.LogDebug(
-                "Connection {ConnectionId} disconnected; detached from session {SessionId}.",
-                connectionId, sessionId.Value);
+            if (_connections.TryGetSessionForConnection(parsed, out var sessionId))
+            {
+                _logger.LogDebug(
+                    "Connection {ConnectionId} disconnected; shutting down SignalR session {SessionId}.",
+                    connectionId, sessionId.Value);
+
+                _connections.Disconnect(parsed);
+                _knownSessions.Remove(sessionId);
+
+                try
+                {
+                    var gateway = await _gatewayProvider.GetAsync();
+                    gateway.Tell(new ShutdownSignalRSession(sessionId));
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex,
+                        "Failed to send shutdown to SignalR session {SessionId}.",
+                        sessionId.Value);
+                }
+            }
+            else
+            {
+                _connections.Disconnect(parsed);
+            }
         }
-
-        _connections.Disconnect(parsed);
-
-        return Task.CompletedTask;
+        finally
+        {
+            _sessionMutationGate.Release();
+        }
     }
 
     public async Task ShutdownAsync(CancellationToken cancellationToken)

@@ -163,10 +163,28 @@ public sealed class SessionPipeline : ISessionPipeline
                 .PreMaterialize(_system);
 
         // Inbound: ChannelInput → SendUserMessage → session manager (direct Tell)
+        // Re-assert subscription before each message to recover from session actor
+        // passivation/re-creation (JoinSession is idempotent).
+        var joinMsg = new JoinSession
+        {
+            SessionId = sessionId,
+            Subscriber = subscriber,
+            Filter = options.Filter
+        };
+
+        // Ordering safety: both Tell calls target the same SessionId, so
+        // GenericChildPerEntityParent routes them to the same child actor.
+        // Akka guarantees FIFO delivery from a single sender (this stream
+        // stage thread), so JoinSession is always processed before the
+        // SendUserMessage that follows it.
         var inputSink = Flow.Create<ChannelInput>()
             .Select(input => MapToCommand(input, sessionId, options, _paths))
             .Via(killSwitch.Flow<SendUserMessage>())
-            .To(Sink.ForEach<SendUserMessage>(cmd => sessionManager.Tell(cmd, ActorRefs.NoSender)));
+            .To(Sink.ForEach<SendUserMessage>(cmd =>
+            {
+                sessionManager.Tell(joinMsg, ActorRefs.NoSender);
+                sessionManager.Tell(cmd, ActorRefs.NoSender);
+            }));
 
         // Outbound: pre-materialized subscriber → kill switch → exposed Source
         // When a lifecycle observer is registered, tap the stream so every output
