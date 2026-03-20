@@ -7,13 +7,14 @@ using Netclaw.Tools;
 namespace Netclaw.Actors.Tools;
 
 /// <summary>
-/// Fetches a web page, extracts readable text, and saves it to a local file.
-/// Returns a summary with the file path so the agent can use file_read or
-/// shell_execute (grep) to selectively read the content without blowing
-/// out the context window.
+/// Fetches a web page and saves its content to a local file.
+/// Default format preserves HTML (links, images, structure); text mode
+/// extracts plain text only. Returns a summary with the file path so the
+/// agent can use file_read or shell_execute (grep) to selectively read
+/// the content without blowing out the context window.
 /// </summary>
 [NetclawTool("web_fetch",
-    "Fetch a web page URL, save its text content to a local file, and return the file path with a preview. Use file_read or shell_execute with grep to read specific sections.",
+    "Fetch a web page URL and save its content to a local file. Default format='raw' preserves HTML (links, images, structure); format='text' extracts plain text. Returns file path with preview. Use file_read to examine the full content.",
     Grant = "web")]
 public sealed partial class WebFetchTool : NetclawTool<WebFetchTool.Params>
 {
@@ -33,7 +34,9 @@ public sealed partial class WebFetchTool : NetclawTool<WebFetchTool.Params>
     private readonly Random _random = new();
 
     public record Params(
-        [property: Description("The URL to fetch")] string Url);
+        [property: Description("The URL to fetch")] string Url,
+        [property: Description("Output format: 'raw' (default) preserves HTML structure (links, images, tables); 'text' extracts plain text only")]
+        string? Format = null);
 
     public WebFetchTool(HttpClient? httpClient = null, string? fetchDirectory = null, TimeProvider? timeProvider = null)
     {
@@ -66,31 +69,50 @@ public sealed partial class WebFetchTool : NetclawTool<WebFetchTool.Params>
             var content = await ReadWithLimitAsync(response, ct);
             var contentType = response.Content.Headers.ContentType?.MediaType ?? "";
 
-            string text;
+            // Determine format: null or "raw" → raw HTML; "text" → text extraction
+            var useTextMode = string.Equals(args.Format, "text", StringComparison.OrdinalIgnoreCase);
+
+            string savedContent;
             string title;
+            string extension;
+            string previewText;
+
             if (contentType.Contains("html", StringComparison.OrdinalIgnoreCase))
             {
                 title = ExtractTitle(content) ?? uri.Host;
-                text = ExtractTextFromHtml(content);
+                if (useTextMode)
+                {
+                    savedContent = ExtractTextFromHtml(content);
+                    extension = ".txt";
+                    previewText = savedContent;
+                }
+                else
+                {
+                    savedContent = SanitizeHtml(content);
+                    extension = ".html";
+                    previewText = ExtractMetadataSummary(content);
+                }
             }
             else
             {
                 title = uri.Host;
-                text = content;
+                savedContent = content;
+                extension = ".txt";
+                previewText = content;
             }
 
-            if (string.IsNullOrWhiteSpace(text))
-                return $"Fetched {args.Url} but the page contained no extractable text content.";
+            if (string.IsNullOrWhiteSpace(savedContent))
+                return $"Fetched {args.Url} but the page contained no extractable content.";
 
             // Use session-scoped directory if available, otherwise fall back to shared temp
             var fetchDir = context.SessionDirectory ?? _fetchDirectory;
 
             // Save to disk
-            var filePath = SaveToFile(text, uri, fetchDir);
-            var lineCount = text.Count(c => c == '\n') + 1;
+            var filePath = SaveToFile(savedContent, uri, fetchDir, extension);
+            var lineCount = savedContent.Count(c => c == '\n') + 1;
 
             // Build summary with preview
-            return FormatSummary(uri.ToString(), title, filePath, text.Length, lineCount, text);
+            return FormatSummary(uri.ToString(), title, filePath, savedContent.Length, lineCount, previewText);
         }
         catch (HttpRequestException ex)
         {
@@ -111,16 +133,16 @@ public sealed partial class WebFetchTool : NetclawTool<WebFetchTool.Params>
         return Encoding.UTF8.GetString(bytes);
     }
 
-    private string SaveToFile(string text, Uri uri, string directory)
+    private string SaveToFile(string content, Uri uri, string directory, string extension = ".txt")
     {
         Directory.CreateDirectory(directory);
 
         // Generate a filename from the URL host + path + timestamp
         var sanitized = SanitizeForFilename(uri);
-        var filename = $"{sanitized}-{_timeProvider.GetUtcNow().ToUnixTimeSeconds()}.txt";
+        var filename = $"{sanitized}-{_timeProvider.GetUtcNow().ToUnixTimeSeconds()}{extension}";
         var filePath = Path.Combine(directory, filename);
 
-        File.WriteAllText(filePath, text, Encoding.UTF8);
+        File.WriteAllText(filePath, content, Encoding.UTF8);
         return filePath;
     }
 
@@ -175,6 +197,57 @@ public sealed partial class WebFetchTool : NetclawTool<WebFetchTool.Params>
             return null;
         var title = WebUtility.HtmlDecode(titleNode.InnerText).Trim();
         return string.IsNullOrEmpty(title) ? null : title;
+    }
+
+    /// <summary>
+    /// Remove script and style elements from HTML but preserve all other structure.
+    /// Used in raw mode to reduce noise while keeping links, images, and layout.
+    /// </summary>
+    internal static string SanitizeHtml(string html)
+    {
+        var doc = new HtmlDocument();
+        doc.LoadHtml(html);
+
+        var nodesToRemove = doc.DocumentNode.SelectNodes("//script|//style");
+        if (nodesToRemove is not null)
+        {
+            foreach (var node in nodesToRemove)
+                node.Remove();
+        }
+
+        return doc.DocumentNode.OuterHtml;
+    }
+
+    /// <summary>
+    /// Extract a brief metadata summary for raw-mode preview.
+    /// Shows meta description and top headings instead of raw HTML.
+    /// </summary>
+    internal static string ExtractMetadataSummary(string html)
+    {
+        var doc = new HtmlDocument();
+        doc.LoadHtml(html);
+        var sb = new StringBuilder();
+
+        var metaDesc = doc.DocumentNode.SelectSingleNode("//meta[@name='description']");
+        if (metaDesc?.GetAttributeValue("content", "") is { Length: > 0 } desc)
+            sb.AppendLine($"Description: {WebUtility.HtmlDecode(desc)}");
+
+        var headings = doc.DocumentNode.SelectNodes("//h1|//h2|//h3");
+        if (headings is { Count: > 0 })
+        {
+            var shown = 0;
+            foreach (var h in headings)
+            {
+                var text = WebUtility.HtmlDecode(h.InnerText).Trim();
+                if (!string.IsNullOrEmpty(text))
+                {
+                    sb.AppendLine($"  {h.Name.ToUpperInvariant()}: {text}");
+                    if (++shown >= 5) break;
+                }
+            }
+        }
+
+        return sb.ToString().TrimEnd();
     }
 
     /// <summary>

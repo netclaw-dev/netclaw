@@ -3,7 +3,7 @@ name: search-citation
 description: "Guides when to use web search vs. training data and how to cite sources. Ensures specific factual claims include source URLs and the agent does not hallucinate verifiable information."
 metadata:
   author: netclaw
-  version: "0.7.0"
+  version: "0.7.1"
   triggers: web search needed | cite sources | link results | price check | product search | find near me | verify facts | compare competitors | current information | find flights | find hotels | latest news | what costs | how much does | where to buy | who sells
 ---
 
@@ -93,6 +93,13 @@ If a search returns no useful results:
 - Do not guess or fabricate specifics to fill the gap
 - Offer alternative approaches if possible (different search terms, checking
   a specific site with `web_fetch`, trying later)
+
+## web_fetch Usage Notes
+
+`web_fetch` defaults to raw HTML mode, preserving page structure including links
+and images. This is ideal for crawling and extracting specific information. Use
+`format='text'` only when you need plain text without markup (e.g., for
+summarization of article body text).
 
 ## Cross-References
 

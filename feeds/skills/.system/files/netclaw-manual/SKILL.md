@@ -3,7 +3,7 @@ name: netclaw-manual
 description: "Netclaw Manual. Read when the user is asking what Netclaw can do, which command/tool to use, how to schedule work, switch models, manage providers, or discover available capabilities."
 metadata:
   author: netclaw
-  version: "0.8.2"
+  version: "0.8.3"
   triggers: what can netclaw do | what command should I use | can you schedule a cron job | schedule a reminder | switch models | change model | manage providers | manage mcp servers | list available tools | how do I do this in netclaw
 ---
 
@@ -59,7 +59,7 @@ prompt. Use the session ID to:
 | Tool | Purpose |
 |------|---------|
 | `web_search` | Search the web, returns titles/URLs/snippets |
-| `web_fetch` | Fetch URL, save text to local file, return preview |
+| `web_fetch` | Fetch URL, save content to local file, return preview. Default preserves HTML; use `format='text'` for plain text |
 
 ### file
 
