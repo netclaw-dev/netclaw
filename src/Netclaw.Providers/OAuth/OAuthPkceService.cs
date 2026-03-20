@@ -16,11 +16,13 @@ namespace Netclaw.Providers.OAuth;
 /// </summary>
 public sealed class OAuthPkceService
 {
+    private static readonly TimeSpan CompletedFlowTtl = TimeSpan.FromMinutes(10);
+
     private readonly HttpClient _httpClient;
     private readonly TimeProvider _timeProvider;
     private readonly ConcurrentDictionary<string, OAuthPkcePendingFlow> _pendingFlows = new();
-    private readonly ConcurrentDictionary<string, OAuthDeviceFlowResult> _completedFlows = new();
-    private readonly ConcurrentDictionary<string, string> _failedFlows = new();
+    private readonly ConcurrentDictionary<string, (OAuthDeviceFlowResult Result, DateTimeOffset CompletedAt)> _completedFlows = new();
+    private readonly ConcurrentDictionary<string, (string Error, DateTimeOffset FailedAt)> _failedFlows = new();
 
     public OAuthPkceService(HttpClient httpClient, TimeProvider? timeProvider = null)
     {
@@ -78,6 +80,8 @@ public sealed class OAuthPkceService
 
         _pendingFlows[state] = pendingFlow;
 
+        PruneStaleFlows();
+
         return (authUrl, state);
     }
 
@@ -96,13 +100,13 @@ public sealed class OAuthPkceService
                 flow.TokenEndpoint, flow.ClientId, code,
                 flow.CodeVerifier, flow.RedirectUri, flow.ExtraTokenParams, ct);
 
-            _completedFlows[state] = result;
+            _completedFlows[state] = (result, _timeProvider.GetUtcNow());
             flow.Completion.TrySetResult(result);
             return result;
         }
         catch (Exception ex)
         {
-            _failedFlows[state] = ex.Message;
+            _failedFlows[state] = (ex.Message, _timeProvider.GetUtcNow());
             flow.Completion.TrySetException(ex);
             throw;
         }
@@ -279,7 +283,32 @@ public sealed class OAuthPkceService
     /// </summary>
     public OAuthDeviceFlowResult? GetFlowResult(string state)
     {
-        return _completedFlows.TryGetValue(state, out var result) ? result : null;
+        return _completedFlows.TryGetValue(state, out var entry) ? entry.Result : null;
+    }
+
+    // ── Flow Cleanup ──────────────────────────────────────────────────
+
+    private void PruneStaleFlows()
+    {
+        var cutoff = _timeProvider.GetUtcNow() - CompletedFlowTtl;
+
+        foreach (var (state, entry) in _completedFlows)
+        {
+            if (entry.CompletedAt < cutoff)
+                _completedFlows.TryRemove(state, out _);
+        }
+
+        foreach (var (state, entry) in _failedFlows)
+        {
+            if (entry.FailedAt < cutoff)
+                _failedFlows.TryRemove(state, out _);
+        }
+
+        foreach (var (state, flow) in _pendingFlows)
+        {
+            if (flow.Completion.Task.IsCompleted)
+                _pendingFlows.TryRemove(state, out _);
+        }
     }
 
     // ── Extra Params ──────────────────────────────────────────────────

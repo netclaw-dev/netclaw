@@ -122,9 +122,10 @@ internal sealed class McpOAuthService
                 if (resourceMeta.TryGetProperty("resource", out var resProp))
                     resourceIndicator = resProp.GetString();
             }
-            catch
+            catch (Exception ex)
             {
                 // No OAuth metadata found — server doesn't require OAuth
+                _logger.LogDebug(ex, "No OAuth metadata at {Url} — server does not require OAuth", wellKnownUrl);
                 return null;
             }
         }
@@ -255,7 +256,10 @@ internal sealed class McpOAuthService
 
         // Store context so we can persist tokens when the callback arrives
         _stateToContext[state] = new McpOAuthFlowContext(
-            serverName, clientId, metadata.ResourceIndicator);
+            serverName, clientId, metadata.ResourceIndicator, _timeProvider.GetUtcNow());
+
+        // Prune abandoned flows older than 10 minutes
+        PruneStaleFlowContexts();
 
         _logger.LogInformation("Started OAuth flow for MCP server '{Name}' (state={State})", serverName, state);
         return (authUrl, state);
@@ -418,6 +422,23 @@ internal sealed class McpOAuthService
         };
     }
 
+    // ── Flow Cleanup ───────────────────────────────────────────────────
+
+    private static readonly TimeSpan FlowContextTtl = TimeSpan.FromMinutes(10);
+
+    private void PruneStaleFlowContexts()
+    {
+        var cutoff = _timeProvider.GetUtcNow() - FlowContextTtl;
+        foreach (var (state, ctx) in _stateToContext)
+        {
+            if (ctx.CreatedAt < cutoff)
+            {
+                if (_stateToContext.TryRemove(state, out _))
+                    _logger.LogDebug("Pruned abandoned OAuth flow context (state={State}, server={Server})", state, ctx.ServerName);
+            }
+        }
+    }
+
     // ── Private Helpers ────────────────────────────────────────────────
 
     private static string? ExtractQuotedParam(string headerValue, string paramName)
@@ -543,4 +564,5 @@ internal enum McpOAuthFlowStatus
 internal sealed record McpOAuthFlowContext(
     string ServerName,
     string ClientId,
-    string? ResourceIndicator);
+    string? ResourceIndicator,
+    DateTimeOffset CreatedAt);
