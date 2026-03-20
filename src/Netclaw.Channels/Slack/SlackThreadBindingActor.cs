@@ -441,6 +441,8 @@ internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStas
                 var errorResult = await SafePostAsync($":warning: {err.Message} (ref: {refId})");
                 if (errorResult.Success)
                     _postedThisTurn = true;
+                else
+                    _lastFailedPost = errorResult;
                 _buffer.Clear();
                 break;
 
@@ -465,13 +467,9 @@ internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStas
                     if (_lastFailedPost is { ShouldNotifySession: true, FailureKind: { } failureKind, ErrorMessage: { } errorMessage })
                     {
                         _log.Warning(
-                            "Turn completed with retryable Slack delivery failure kind={FailureKind}; notifying session",
+                            "Turn completed with Slack delivery failure kind={FailureKind}; notifying session",
                             failureKind);
                         await NotifyDeliveryFailedAsync(completed.TurnNumber, failureKind, errorMessage);
-                    }
-                    else if (_lastFailedPost is not null)
-                    {
-                        _log.Warning("Turn completed with non-retryable Slack delivery failure: {Error}", _lastFailedPost.ErrorMessage);
                     }
                     else
                     {
@@ -509,7 +507,7 @@ internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStas
         {
             _log.Error(ex, "Timed out posting Slack reply for session {0}", _sessionId.Value);
             ChannelTelemetry.RecordSlackReplyFailed(_dependencies.TimeProvider.GetElapsedTime(startedAt).TotalMilliseconds);
-            return new PostResult($"Timed out posting reply: {ex.Message}");
+            return new PostResult($"Timed out posting reply: {ex.Message}", DeliveryFailureKind.TransportFailure);
         }
         catch (SlackMessageDeliveryException ex)
         {
@@ -521,7 +519,7 @@ internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStas
         {
             _log.Error(ex, "Failed posting Slack reply for session {0}", _sessionId.Value);
             ChannelTelemetry.RecordSlackReplyFailed(_dependencies.TimeProvider.GetElapsedTime(startedAt).TotalMilliseconds);
-            return new PostResult(ex.Message);
+            return new PostResult(ex.Message, DeliveryFailureKind.Unknown);
         }
     }
 
@@ -540,7 +538,8 @@ internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStas
         }
         catch (Exception ex)
         {
-            _log.Error(ex, "Failed to send Slack delivery feedback to session");
+            _log.Error(ex, "Failed to send delivery feedback to session; propagating to trigger pipeline reinit");
+            throw;
         }
     }
 
@@ -550,9 +549,7 @@ internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStas
 
         public bool Success => ErrorMessage is null;
 
-        public bool ShouldNotifySession => FailureKind is DeliveryFailureKind.ContentRejected
-            or DeliveryFailureKind.MessageTooLarge
-            or DeliveryFailureKind.UnsupportedContent;
+        public bool ShouldNotifySession => FailureKind is not null;
     }
 
     private async Task<PostResult> SafeUploadFileAsync(FileOutput file)
@@ -563,7 +560,7 @@ internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStas
             if (!File.Exists(file.FilePath))
             {
                 _log.Warning("File not found for upload: {Path}", file.FilePath);
-                return new PostResult($"File not found for upload: {file.FilePath}");
+                return new PostResult($"File not found for upload: {file.FilePath}", DeliveryFailureKind.Unknown);
             }
 
             using var cts = new CancellationTokenSource(ReplyOperationTimeout);
@@ -582,7 +579,7 @@ internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStas
         {
             _log.Error(ex, "Timed out uploading file {FileName} to Slack thread", file.FileName);
             ChannelTelemetry.RecordSlackReplyFailed(_dependencies.TimeProvider.GetElapsedTime(startedAt).TotalMilliseconds);
-            return new PostResult($"Timed out uploading file: {ex.Message}");
+            return new PostResult($"Timed out uploading file: {ex.Message}", DeliveryFailureKind.TransportFailure);
         }
         catch (SlackMessageDeliveryException ex)
         {
@@ -597,7 +594,7 @@ internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStas
         {
             _log.Error(ex, "Failed to upload file {FileName} to Slack thread", file.FileName);
             ChannelTelemetry.RecordSlackReplyFailed(_dependencies.TimeProvider.GetElapsedTime(startedAt).TotalMilliseconds);
-            return new PostResult(ex.Message);
+            return new PostResult(ex.Message, DeliveryFailureKind.Unknown);
         }
     }
 

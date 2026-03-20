@@ -560,6 +560,114 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
         await ExpectTerminatedAsync(actor);
     }
 
+    [Fact]
+    public async Task Timeout_during_post_sends_transport_failure_feedback_to_session()
+    {
+        var feedbackPipeline = new RecordingSessionPipeline([
+            new TextOutput
+            {
+                SessionId = new SessionId("D7/9000.1"),
+                TimestampMs = TimeProvider.System.GetUtcNow().ToUnixTimeMilliseconds(),
+                Text = "Hello from the LLM"
+            },
+            new TurnCompleted
+            {
+                SessionId = new SessionId("D7/9000.1"),
+                TurnNumber = 1
+            }
+        ]);
+
+        _replyClient.PostFailures.Enqueue(new OperationCanceledException("The operation was canceled."));
+
+        var deps = new SlackGatewayDependencies(
+            Pipeline: feedbackPipeline,
+            ActorSystem: Sys,
+            TimeProvider: TimeProvider.System,
+            Options: new SlackChannelOptions
+            {
+                Enabled = true,
+                MentionOnly = false,
+                AllowDirectMessages = true,
+                BotToken = new SensitiveString("xoxb-fake-token")
+            },
+            BotUserId: new SlackUserId("UBOT"),
+            DefaultChannelId: null,
+            ReplyClient: _replyClient,
+            ContentScanner: new NullContentScanner());
+
+        var actor = Sys.ActorOf(SlackThreadBindingActor.CreateProps(
+            new SessionId("D7/9000.1"),
+            new SlackChannelId("D7"),
+            new SlackThreadTs("9000.1"),
+            deps), "slack-thread-timeout-feedback-test");
+
+        await AwaitAssertAsync(() =>
+        {
+            var feedback = Assert.Single(feedbackPipeline.Feedback);
+            var failure = Assert.IsType<DeliveryFailed>(feedback);
+            Assert.Equal(DeliveryFailureKind.TransportFailure, failure.FailureKind);
+            Assert.Equal(1, failure.TurnNumber);
+        }, duration: TimeSpan.FromSeconds(10));
+
+        Watch(actor);
+        Sys.Stop(actor);
+        await ExpectTerminatedAsync(actor);
+    }
+
+    [Fact]
+    public async Task Generic_exception_during_post_sends_unknown_failure_feedback_to_session()
+    {
+        var feedbackPipeline = new RecordingSessionPipeline([
+            new TextOutput
+            {
+                SessionId = new SessionId("D7/9100.1"),
+                TimestampMs = TimeProvider.System.GetUtcNow().ToUnixTimeMilliseconds(),
+                Text = "Hello from the LLM"
+            },
+            new TurnCompleted
+            {
+                SessionId = new SessionId("D7/9100.1"),
+                TurnNumber = 1
+            }
+        ]);
+
+        _replyClient.PostFailures.Enqueue(new InvalidOperationException("Unexpected Slack error"));
+
+        var deps = new SlackGatewayDependencies(
+            Pipeline: feedbackPipeline,
+            ActorSystem: Sys,
+            TimeProvider: TimeProvider.System,
+            Options: new SlackChannelOptions
+            {
+                Enabled = true,
+                MentionOnly = false,
+                AllowDirectMessages = true,
+                BotToken = new SensitiveString("xoxb-fake-token")
+            },
+            BotUserId: new SlackUserId("UBOT"),
+            DefaultChannelId: null,
+            ReplyClient: _replyClient,
+            ContentScanner: new NullContentScanner());
+
+        var actor = Sys.ActorOf(SlackThreadBindingActor.CreateProps(
+            new SessionId("D7/9100.1"),
+            new SlackChannelId("D7"),
+            new SlackThreadTs("9100.1"),
+            deps), "slack-thread-generic-failure-feedback-test");
+
+        await AwaitAssertAsync(() =>
+        {
+            var feedback = Assert.Single(feedbackPipeline.Feedback);
+            var failure = Assert.IsType<DeliveryFailed>(feedback);
+            Assert.Equal(DeliveryFailureKind.Unknown, failure.FailureKind);
+            Assert.Equal(1, failure.TurnNumber);
+        }, duration: TimeSpan.FromSeconds(10));
+
+        Watch(actor);
+        Sys.Stop(actor);
+        await ExpectTerminatedAsync(actor);
+    }
+
     /// <summary>
     /// Fake HTTP handler that serves canned image bytes for Slack file download requests.
     /// </summary>
