@@ -231,6 +231,14 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         Command<ReceiveTimeout>(_ =>
         {
+            if (_subscribers.Count > 0)
+            {
+                _log.Info(
+                    "Session idle but {SubscriberCount} subscriber(s) active; deferring passivation",
+                    _subscribers.Count);
+                return;
+            }
+
             _log.Info("Session idle, passivating (timeout={Timeout})", _config.IdleTimeout);
             SaveSnapshot(_state.ToSnapshot());
             Context.Stop(Self);
@@ -1544,11 +1552,18 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         Command<JoinSession>(cmd =>
         {
-            _subscribers[cmd.Subscriber] = cmd.Filter;
-            Context.WatchWith(cmd.Subscriber,
-                new LeaveSession { SessionId = _sessionId, Subscriber = cmd.Subscriber });
+            // Detect re-join: same subscriber already registered with same filter.
+            var isReJoin = _subscribers.TryGetValue(cmd.Subscriber, out var existingFilter)
+                           && existingFilter == cmd.Filter;
 
-            _log.Info("{Subscriber} joined (filter={Filter})", cmd.Subscriber, cmd.Filter);
+            if (!isReJoin)
+            {
+                _subscribers[cmd.Subscriber] = cmd.Filter;
+                Context.WatchWith(cmd.Subscriber,
+                    new LeaveSession { SessionId = _sessionId, Subscriber = cmd.Subscriber });
+
+                _log.Info("{Subscriber} joined (filter={Filter})", cmd.Subscriber, cmd.Filter);
+            }
 
             var joined = new SessionJoined
             {
@@ -1557,6 +1572,18 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 TurnCount = _state.TurnCount,
                 RecentMessages = ExtractRecentMessages(_state.History)
             };
+
+            // On re-join, only reply to the Sender (for Ask callers) — don't
+            // push a duplicate SessionJoined to the subscriber's output stream.
+            if (isReJoin)
+            {
+                if (!Sender.IsNobody() && !Equals(Sender, Context.System.DeadLetters))
+                {
+                    Sender.Tell(joined);
+                }
+
+                return;
+            }
 
             cmd.Subscriber.Tell(joined);
 
