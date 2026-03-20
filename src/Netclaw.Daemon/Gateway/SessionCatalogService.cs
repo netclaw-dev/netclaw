@@ -55,10 +55,10 @@ public sealed class SessionCatalogService : ISessionLifecycleObserver
 
         try
         {
-            // Compute expected log path deterministically — the child SessionLogActor
-            // independently creates the file at this same path.
+            // Compute expected log directory deterministically — the child SessionLogActor
+            // independently creates timestamped log files at this same directory.
             var sanitized = SessionDirectoryHelper.SanitizeSessionId(sessionId.Value);
-            var logPath = Path.Combine(_paths.SessionLogsDirectory, $"{sanitized}.log");
+            var logPath = Path.Combine(_paths.SessionsDirectory, sanitized, "logs");
 
             using var conn = new SqliteConnection(_connectionString);
             conn.Open();

@@ -160,7 +160,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         _memoryCheckpointSink = memoryCheckpointSink ?? NullMemoryCheckpointSink.Instance;
         _timeProvider = timeProvider ?? TimeProvider.System;
         _sessionsBasePath = paths?.SessionsDirectory;
-        _sessionLogsBasePath = paths?.SessionLogsDirectory;
+        _sessionLogsBasePath = paths?.SessionsDirectory;
         PersistenceId = $"session-{entityId}";
 
         // Enrich logger with session context — all log messages automatically include SessionId

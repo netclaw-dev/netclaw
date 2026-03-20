@@ -56,7 +56,12 @@ public sealed class NetclawPaths
     public string NetclawConfigPath => Path.Combine(ConfigDirectory, "netclaw.json");
     public string SecretsPath => Path.Combine(ConfigDirectory, "secrets.json");
     public string LogsDirectory => Path.Combine(BasePath, "logs");
-    public string SessionLogsDirectory => Path.Combine(LogsDirectory, "sessions");
+    /// <summary>
+    /// Legacy path. Session logs now live inside each session's directory:
+    /// <c>{SessionsDirectory}/{sanitized_id}/logs/</c>.
+    /// Kept for migration detection and backward-compatible log search.
+    /// </summary>
+    public string LegacySessionLogsDirectory => Path.Combine(LogsDirectory, "sessions");
     public string DaemonLogPath => Path.Combine(LogsDirectory, "daemon.log");
     public string SessionsDirectory => Path.Combine(BasePath, "sessions");
     public string PidFilePath => Path.Combine(BasePath, "netclaw.pid");
@@ -91,7 +96,8 @@ public sealed class NetclawPaths
         Directory.CreateDirectory(RemindersDirectory);
         Directory.CreateDirectory(ConfigDirectory);
         Directory.CreateDirectory(LogsDirectory);
-        Directory.CreateDirectory(SessionLogsDirectory);
+        // Note: per-session log directories (sessions/{id}/logs/) are created
+        // on-demand by SessionLogActor, not pre-created here.
         Directory.CreateDirectory(AgentsDirectory);
         Directory.CreateDirectory(SessionsDirectory);
         Directory.CreateDirectory(BinDirectory);
