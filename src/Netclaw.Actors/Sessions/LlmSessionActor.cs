@@ -1939,7 +1939,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         {
             try
             {
-                _autoLoadedSkillContent[match.Skill.Name] = File.ReadAllText(match.Skill.FilePath);
+                var raw = File.ReadAllText(match.Skill.FilePath);
+                _autoLoadedSkillContent[match.Skill.Name] = Skills.SkillScanner.ExtractBody(raw);
             }
             catch (IOException ex)
             {
