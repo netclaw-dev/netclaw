@@ -59,10 +59,30 @@ internal sealed class ToolAudienceProfileResolver
         return profile.AllowedTools.Contains(toolName, StringComparer.Ordinal);
     }
 
+    public bool IsMcpServerAllowed(string serverName, ToolExecutionContext? context)
+    {
+        var profile = ResolveProfile(context);
+        return IsMcpServerAllowed(serverName, profile);
+    }
+
+    public bool IsMcpServerAllowed(string serverName, TrustAudience audience)
+    {
+        var profile = ResolveProfile(audience);
+        return IsMcpServerAllowed(serverName, profile);
+    }
+
     private static TrustAudience ResolveAudience(ToolExecutionContext? context)
         => SecurityPolicyDefaults.TryParseAudience(context?.Audience, out var parsed)
             ? parsed
             : SecurityPolicyDefaults.ResolveAudienceFromSessionId(context?.SessionId);
+
+    private static bool IsMcpServerAllowed(string serverName, ToolAudienceProfile profile)
+    {
+        if (profile.McpServersMode == ToolProfileMode.All)
+            return true;
+
+        return profile.AllowedMcpServers.Contains(serverName, StringComparer.OrdinalIgnoreCase);
+    }
 
     private static bool IsProfileManagedTool(string toolName)
         => toolName is "shell_execute" or "file_read" or "file_write" or "attach_file";

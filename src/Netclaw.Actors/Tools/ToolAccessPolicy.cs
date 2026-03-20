@@ -52,20 +52,32 @@ public sealed class ToolAccessPolicy
 
     private bool IsToolExposed(INetclawTool tool, TrustAudience audience)
     {
+        if (tool is McpToolAdapter mcp)
+            return _profileResolver.IsMcpServerAllowed(mcp.ServerName, audience)
+                && IsMcpToolExposed(mcp.CapabilityClass, audience);
+
         if (!_profileResolver.IsToolAllowed(tool.Name, CreateContext(audience)))
             return false;
 
         if (IsShellTool(tool))
             return ResolveShellMode() == ShellExecutionMode.HostAllowed && audience == TrustAudience.Personal;
 
-        if (tool is McpToolAdapter mcp)
-            return IsMcpToolExposed(mcp.CapabilityClass, audience);
-
         return true;
     }
 
     public ToolAccessDecision AuthorizeInvocation(INetclawTool tool, ToolExecutionContext? context)
     {
+        if (tool is McpToolAdapter mcp)
+        {
+            var audience = ResolveAudience(context);
+            if (!_profileResolver.IsMcpServerAllowed(mcp.ServerName, context))
+                return ToolAccessDecision.Deny("mcp_server_not_allowed_for_audience_profile");
+
+            return IsMcpToolExposed(mcp.CapabilityClass, audience)
+                ? ToolAccessDecision.Allow()
+                : ToolAccessDecision.Deny("mcp_capability_denied_for_audience");
+        }
+
         if (!_profileResolver.IsToolAllowed(tool.Name, context))
             return ToolAccessDecision.Deny("tool_not_allowed_for_audience_profile");
 
@@ -79,8 +91,8 @@ public sealed class ToolAccessPolicy
         if (shellMode == ShellExecutionMode.SandboxOnly)
             return ToolAccessDecision.Deny("shell_requires_sandbox_backend");
 
-        var audience = ResolveAudience(context);
-        return audience == TrustAudience.Personal
+        var shellAudience = ResolveAudience(context);
+        return shellAudience == TrustAudience.Personal
             ? ToolAccessDecision.Allow()
             : ToolAccessDecision.Deny("shell_requires_personal_context");
     }

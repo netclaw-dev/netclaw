@@ -156,6 +156,14 @@ Tuning parameters for LLM session behavior.
 
 Configuration for first-party tool execution.
 
+`netclaw init` now scaffolds recommended audience profiles here, and `netclaw doctor`
+validates unsafe profile combinations such as unrestricted `public` or `team`
+settings.
+
+Use `netclaw doctor` when you want to inspect the effective audience-profile
+shape, confirm that strict-default fallback is active, or verify that
+`SandboxOnly` shell mode is still blocked until a sandbox backend is configured.
+
 ```json
 {
   "Tools": {
@@ -166,6 +174,8 @@ Configuration for first-party tool execution.
       "Public": {
         "ToolsMode": "Allowlist",
         "AllowedTools": ["file_read", "file_write", "attach_file"],
+        "McpServersMode": "Allowlist",
+        "AllowedMcpServers": [],
         "ReadFiles": { "Mode": "Roots", "Roots": ["{session_dir}"] },
         "WriteFiles": { "Mode": "Roots", "Roots": ["{session_dir}"] },
         "AttachFiles": { "Mode": "Roots", "Roots": ["{session_dir}"] }
@@ -173,12 +183,15 @@ Configuration for first-party tool execution.
       "Team": {
         "ToolsMode": "Allowlist",
         "AllowedTools": ["file_read", "attach_file"],
+        "McpServersMode": "Allowlist",
+        "AllowedMcpServers": [],
         "ReadFiles": { "Mode": "Roots", "Roots": ["{session_dir}"] },
         "WriteFiles": { "Mode": "Roots", "Roots": ["{session_dir}"] },
         "AttachFiles": { "Mode": "Roots", "Roots": ["{session_dir}"] }
       },
       "Personal": {
         "ToolsMode": "All",
+        "McpServersMode": "All",
         "ReadFiles": { "Mode": "All" },
         "WriteFiles": { "Mode": "All" },
         "AttachFiles": { "Mode": "All" }
@@ -193,7 +206,7 @@ Configuration for first-party tool execution.
 | `ShellMode` | string? | `null` | Optional shell mode override (`Off`, `SandboxOnly`, `HostAllowed`). Falls back to security posture defaults when omitted. |
 | `ShellTimeoutSeconds` | int | `60` | Timeout for shell command execution. |
 | `MaxOutputChars` | int | `32000` | Maximum characters captured from tool output. |
-| `AudienceProfiles` | object | built-in defaults | Per-audience tool and filesystem scopes. `public` and `team` default to session-scoped file access, while `personal` defaults to unrestricted tool/file access unless customized. |
+| `AudienceProfiles` | object | built-in defaults | Per-audience tool, MCP server, and filesystem scopes. `public` and `team` default to session-scoped file access with no MCP servers allowed until the operator opts in, while `personal` defaults to unrestricted tool/file access and all MCP servers unless customized. |
 
 ### MCP Servers
 

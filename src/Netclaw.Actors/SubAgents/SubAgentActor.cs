@@ -6,6 +6,7 @@ using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Sessions;
 using Netclaw.Actors.Tools;
 using Netclaw.Actors.Memory;
+using Netclaw.Configuration;
 using Netclaw.Tools;
 using AiChatMessage = Microsoft.Extensions.AI.ChatMessage;
 
@@ -75,6 +76,9 @@ public sealed class SubAgentActor : ReceiveActor
                 ? msg.SessionScopeId!
                 : $"subagent/{_definition.Name}/{Guid.NewGuid():N}";
             _toolExecutionContext = new ToolExecutionContext(scopeId, null);
+            _toolExecutionContext.Audience = msg.Audience ?? TrustAudience.Personal.ToWireValue();
+            _toolExecutionContext.Boundary = msg.Boundary;
+            _toolExecutionContext.ChannelType = msg.ChannelType;
             _executionCts = new CancellationTokenSource();
             _externalCancellationRegistration = msg.Cancellation.Register(() => Self.Tell(SubAgentCancelled.Instance));
 

@@ -80,4 +80,33 @@ public sealed class TrustContextDeriverTests
         Assert.True(result.WasDowngraded);
         Assert.Equal("sensitive-read", result.DowngradeReason);
     }
+
+    [Fact]
+    public void Derive_does_not_upgrade_when_working_context_is_broader_than_effective_audience()
+    {
+        var deriver = new TrustContextDeriver(new EffectivePolicyDefaults(
+            DeploymentPosture.Personal,
+            TrustAudience.Personal,
+            ShellExecutionMode.HostAllowed,
+            UsedStrictFallback: false));
+
+        var result = deriver.Derive(new MessageSource
+        {
+            ChannelType = "slack",
+            SenderId = "U123",
+            Audience = TrustAudience.Team,
+            Principal = PrincipalClassification.TrustedInternal,
+            Provenance = new SourceProvenance
+            {
+                TransportAuthenticity = TransportAuthenticity.Verified,
+                PayloadTaint = PayloadTaint.Community,
+                SourceKind = "slack"
+            },
+            ReceivedAt = DateTimeOffset.UtcNow
+        }, new WorkingContextOverride(TrustAudience.Personal, "broader-than-source"));
+
+        Assert.Equal(TrustAudience.Team, result.EffectiveAudience);
+        Assert.True(result.WasDowngraded);
+        Assert.Null(result.DowngradeReason);
+    }
 }

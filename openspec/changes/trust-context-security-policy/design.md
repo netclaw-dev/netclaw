@@ -277,3 +277,7 @@ Rollback strategy:
 - Do we want a policy explain simulator in the first implementation slice, or is doctor output sufficient for MVP?
 - Which built-in tools besides shell need explicit effect-class metadata in v1 of the config schema, versus inferred defaults from tool registration?
 - Do we need a separate profile authoring shortcut format later, or are flattened audience profiles sufficient for the first operator UX?
+
+## Follow-up Change Links
+
+- `openspec/changes/sandbox-shell-execution/` implements the deferred execution path for `sandbox-only` shell mode while preserving the no-fallback security rule.

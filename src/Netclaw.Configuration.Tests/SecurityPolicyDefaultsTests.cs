@@ -50,6 +50,8 @@ public sealed class SecurityPolicyDefaultsTests
         Assert.Equal([ToolAudienceProfileDefaults.SessionDirectoryToken], defaults.Public.ReadFiles.Roots);
         Assert.Equal(ToolFilesystemMode.Roots, defaults.Team.WriteFiles.Mode);
         Assert.Equal([ToolAudienceProfileDefaults.SessionDirectoryToken], defaults.Team.WriteFiles.Roots);
+        Assert.Equal(ToolProfileMode.Allowlist, defaults.Public.McpServersMode);
+        Assert.Empty(defaults.Team.AllowedMcpServers);
     }
 
     [Fact]
@@ -58,6 +60,7 @@ public sealed class SecurityPolicyDefaultsTests
         var defaults = ToolAudienceProfileDefaults.CreateProfiles();
 
         Assert.Equal(ToolProfileMode.All, defaults.Personal.ToolsMode);
+        Assert.Equal(ToolProfileMode.All, defaults.Personal.McpServersMode);
         Assert.Equal(ToolFilesystemMode.All, defaults.Personal.ReadFiles.Mode);
         Assert.Equal(ToolFilesystemMode.All, defaults.Personal.WriteFiles.Mode);
         Assert.Equal(ToolFilesystemMode.All, defaults.Personal.AttachFiles.Mode);

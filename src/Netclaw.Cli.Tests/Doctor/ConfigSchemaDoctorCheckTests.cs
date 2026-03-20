@@ -99,6 +99,56 @@ public sealed class ConfigSchemaDoctorCheckTests
     }
 
     [Fact]
+    public async Task ReturnsPass_WhenToolsAudienceProfilesAndMcpCapabilityValid()
+    {
+        var basePath = CreateTempBasePath();
+        var paths = new NetclawPaths(basePath);
+        paths.EnsureDirectoriesExist();
+
+        await File.WriteAllTextAsync(paths.NetclawConfigPath,
+            """
+            {
+              "configVersion": 1,
+              "Tools": {
+                "ShellMode": "HostAllowed",
+                "AudienceProfiles": {
+                  "Public": {
+                    "ToolsMode": "Allowlist",
+                    "AllowedTools": ["file_read", "file_write", "attach_file"],
+                    "McpServersMode": "Allowlist",
+                    "AllowedMcpServers": [],
+                    "ReadFiles": { "Mode": "Roots", "Roots": ["{session_dir}"] },
+                    "WriteFiles": { "Mode": "Roots", "Roots": ["{session_dir}"] },
+                    "AttachFiles": { "Mode": "Roots", "Roots": ["{session_dir}"] }
+                  },
+                  "Personal": {
+                    "ToolsMode": "All",
+                    "McpServersMode": "All",
+                    "ReadFiles": { "Mode": "All" },
+                    "WriteFiles": { "Mode": "All" },
+                    "AttachFiles": { "Mode": "All" }
+                  }
+                }
+              },
+              "McpServers": {
+                "memorizer": {
+                  "Transport": "stdio",
+                  "Command": "uvx",
+                  "Arguments": ["memorizer-mcp"],
+                  "CapabilityClass": "MemorySafe",
+                  "Enabled": false
+                }
+              }
+            }
+            """);
+
+        var check = new ConfigSchemaDoctorCheck(paths);
+        var result = await check.RunAsync();
+
+        Assert.Equal(DoctorSeverity.Pass, result.Severity);
+    }
+
+    [Fact]
     public async Task ReturnsError_WhenMemoryProviderInvalid()
     {
         var basePath = CreateTempBasePath();

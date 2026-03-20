@@ -69,7 +69,7 @@ The CLI SHALL report exposure mode and policy health.
 
 #### Scenario: Doctor output
 
-- **WHEN** operator runs `netclaw gateway doctor`
+- **WHEN** operator runs `netclaw doctor`
 - **THEN** output includes exposure mode, policy status, and prioritized issues
 
 ### Requirement: Optional smoke test command

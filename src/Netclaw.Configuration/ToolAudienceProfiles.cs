@@ -23,6 +23,8 @@ public sealed class ToolAudienceProfile
 {
     public ToolProfileMode ToolsMode { get; set; } = ToolProfileMode.Allowlist;
     public List<string> AllowedTools { get; set; } = [];
+    public ToolProfileMode McpServersMode { get; set; } = ToolProfileMode.Allowlist;
+    public List<string> AllowedMcpServers { get; set; } = [];
     public ToolFilesystemAccessProfile ReadFiles { get; set; } = new();
     public ToolFilesystemAccessProfile WriteFiles { get; set; } = new();
     public ToolFilesystemAccessProfile AttachFiles { get; set; } = new();
@@ -65,6 +67,7 @@ public static class ToolAudienceProfileDefaults
     public static ToolAudienceProfile CreatePersonal() => new()
     {
         ToolsMode = ToolProfileMode.All,
+        McpServersMode = ToolProfileMode.All,
         ReadFiles = new ToolFilesystemAccessProfile { Mode = ToolFilesystemMode.All },
         WriteFiles = new ToolFilesystemAccessProfile { Mode = ToolFilesystemMode.All },
         AttachFiles = new ToolFilesystemAccessProfile { Mode = ToolFilesystemMode.All }

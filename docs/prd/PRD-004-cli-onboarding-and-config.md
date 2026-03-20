@@ -114,7 +114,8 @@ don't exist. It can also be re-triggered via CLI (`netclaw personality reset`).
 ### Diagnostics (Plain CLI, offline)
 
 - `netclaw doctor` — validate config files, check daemon reachability, test
-  provider connectivity, report system health
+  provider connectivity, report system health, and flag unsafe trust-policy
+  combinations such as unrestricted `public` or `team` audience profiles
 
 ### Security and Policy (daemon required)
 
@@ -171,8 +172,15 @@ and property location.
 
 ### CLI-004 Runtime Diagnostics
 
-`gateway status` and `gateway doctor` summarize connectivity, persistence,
-policy health, MCP server health, and scheduled task status.
+`status` and `doctor` summarize connectivity, persistence, policy health, MCP
+server health, trust-context policy readiness, and scheduled task status.
+
+When trust-context policy is configured, diagnostics SHALL surface:
+
+- whether strict-default trust-policy fallback is active
+- the resolved `public`, `team`, and `personal` audience-profile scopes
+- unsafe unrestricted profile combinations
+- sandbox-shell readiness when `ShellMode` resolves to `SandboxOnly`
 
 ### CLI-005 Session Operations
 

@@ -75,7 +75,7 @@ The CLI SHALL report exposure mode, policy health, and effective trust-context d
 
 #### Scenario: Doctor output
 
-- **WHEN** operator runs `netclaw gateway doctor`
+- **WHEN** operator runs `netclaw doctor`
 - **THEN** output includes exposure mode, policy status, and prioritized issues
 
 #### Scenario: Doctor reports implicit strict defaults
@@ -86,6 +86,6 @@ The CLI SHALL report exposure mode, policy health, and effective trust-context d
 
 #### Scenario: Doctor explains effective audience profile
 
-- **WHEN** operator runs `netclaw gateway doctor`
+- **WHEN** operator runs `netclaw doctor`
 - **THEN** output includes the resolved tool/resource scopes for each audience profile
 - **AND** output highlights where stricter fallback values were applied because configuration was omitted or partial

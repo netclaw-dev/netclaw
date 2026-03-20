@@ -216,7 +216,7 @@ public class SearchToolsToolTests
         var tool = new SearchToolsTool(
             registry,
             new ToolAccessPolicy(
-                CreateProfileAwareToolConfig(),
+                CreateProfileAwareToolConfig(allowedTeamServers: ["memorizer", "textforge"]),
                 new EffectivePolicyDefaults(
                     DeploymentPosture.Personal,
                     TrustAudience.Personal,
@@ -251,7 +251,7 @@ public class SearchToolsToolTests
         var tool = new SearchToolsTool(
             registry,
             new ToolAccessPolicy(
-                CreateProfileAwareToolConfig(),
+                CreateProfileAwareToolConfig("memorizer"),
                 new EffectivePolicyDefaults(
                     DeploymentPosture.Personal,
                     TrustAudience.Personal,
@@ -271,6 +271,42 @@ public class SearchToolsToolTests
             CancellationToken.None);
 
         Assert.Contains("memorizer/search_memories", result);
+    }
+
+    [Fact]
+    public async Task Search_HidesMcpServer_WhenAudienceProfileDoesNotAllowServer()
+    {
+        var registry = new ToolRegistry();
+        registry.Register(new McpToolAdapter(
+            CreateFakeAIFunction("search_memories", "Find stored memories"),
+            "memorizer",
+            "search_memories",
+            capabilityClass: McpCapabilityClass.MemorySafe));
+
+        var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
+        var tool = new SearchToolsTool(
+            registry,
+            new ToolAccessPolicy(
+                config,
+                new EffectivePolicyDefaults(
+                    DeploymentPosture.Personal,
+                    TrustAudience.Personal,
+                    ShellExecutionMode.HostAllowed,
+                    UsedStrictFallback: false)));
+
+        var context = new Netclaw.Tools.ToolExecutionContext("slack/thread-1", null)
+        {
+            Audience = TrustAudience.Team.ToWireValue(),
+            Boundary = SecurityPolicyDefaults.TrustedInstanceBoundary,
+            ChannelType = "slack"
+        };
+
+        var result = await tool.ExecuteAsync(
+            new Dictionary<string, object?> { ["Query"] = "servers" },
+            context,
+            CancellationToken.None);
+
+        Assert.DoesNotContain("memorizer", result);
     }
 
     private static ToolRegistry CreateRegistryWithMcpTools()
@@ -297,10 +333,13 @@ public class SearchToolsToolTests
         return AIFunctionFactory.Create(() => "result", name, description);
     }
 
-    private static ToolConfig CreateProfileAwareToolConfig()
+    private static ToolConfig CreateProfileAwareToolConfig(params string[] allowedTeamServers)
     {
         var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
-        config.AudienceProfiles.Team.AllowedTools.Add("memorizer/search_memories");
+        foreach (var server in allowedTeamServers)
+        {
+            config.AudienceProfiles.Team.AllowedMcpServers.Add(server);
+        }
         return config;
     }
 }
