@@ -48,7 +48,7 @@ public sealed class SessionCatalogService : ISessionLifecycleObserver
     }
 
     /// <inheritdoc />
-    public void OnSessionCreated(SessionId sessionId, string channelType)
+    public void OnSessionCreated(SessionId sessionId, Actors.Channels.ChannelType channelType)
     {
         var nowMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
         var persistenceId = $"session-{sessionId.Value}";
@@ -76,7 +76,7 @@ public sealed class SessionCatalogService : ISessionLifecycleObserver
                     log_path = $path
                 """;
             cmd.Parameters.AddWithValue("$pid", persistenceId);
-            cmd.Parameters.AddWithValue("$channel", channelType);
+            cmd.Parameters.AddWithValue("$channel", channelType.ToWireValue());
             cmd.Parameters.AddWithValue("$path", logPath);
             cmd.Parameters.AddWithValue("$now", nowMs);
             cmd.ExecuteNonQuery();

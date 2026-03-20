@@ -29,9 +29,9 @@ public sealed record DeliveryFailed : IWithSessionId
     public required int TurnNumber { get; init; }
 
     /// <summary>
-    /// Channel adapter identifier (for example: slack, discord, teams).
+    /// Channel adapter identifier.
     /// </summary>
-    public required string ChannelType { get; init; }
+    public required Channels.ChannelType ChannelType { get; init; }
 
     /// <summary>
     /// Structured reason for the failure.

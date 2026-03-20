@@ -27,7 +27,7 @@ public sealed class SessionRegistry
     private readonly ILogger<SessionRegistry> _logger;
 
     // session ID → channel type (retained for re-create on re-materialization)
-    private readonly Dictionary<SessionId, string> _knownSessions = new();
+    private readonly Dictionary<SessionId, Actors.Channels.ChannelType> _knownSessions = new();
     private readonly SemaphoreSlim _sessionMutationGate = new(1, 1);
 
     private readonly SessionConnectionMap _connections = new();
@@ -48,11 +48,12 @@ public sealed class SessionRegistry
     public async Task<string> CreateSessionAsync(string connectionId, string channelType)
     {
         var callerConnectionId = ParseConnectionId(connectionId);
+        var ct = ParseChannelType(channelType);
 
         await _sessionMutationGate.WaitAsync();
         try
         {
-            return await CreateSessionCoreAsync(callerConnectionId, channelType);
+            return await CreateSessionCoreAsync(callerConnectionId, ct);
         }
         finally
         {
@@ -62,7 +63,7 @@ public sealed class SessionRegistry
 
     private async Task<string> CreateSessionCoreAsync(
         SignalRConnectionId callerConnectionId,
-        string channelType)
+        Actors.Channels.ChannelType channelType)
     {
         var sessionId = new SessionId($"signalr/{Guid.NewGuid():N}");
 
@@ -93,6 +94,7 @@ public sealed class SessionRegistry
         string channelType)
     {
         var callerConnectionId = ParseConnectionId(connectionId);
+        var ct = ParseChannelType(channelType);
 
         await _sessionMutationGate.WaitAsync();
         try
@@ -121,11 +123,11 @@ public sealed class SessionRegistry
                 }
 
                 // Session ID provided but unknown — create a fresh session binding
-                _knownSessions[requestedSessionId] = channelType;
+                _knownSessions[requestedSessionId] = ct;
                 _connections.BindNewSession(requestedSessionId, callerConnectionId);
 
                 var gw2 = await _gatewayProvider.GetAsync();
-                gw2.Tell(new StartSignalRSession(requestedSessionId, channelType, callerConnectionId));
+                gw2.Tell(new StartSignalRSession(requestedSessionId, ct, callerConnectionId));
 
                 return new SessionEnsureResultDto
                 {
@@ -134,7 +136,7 @@ public sealed class SessionRegistry
                 };
             }
 
-            var createdSessionId = await CreateSessionCoreAsync(callerConnectionId, channelType);
+            var createdSessionId = await CreateSessionCoreAsync(callerConnectionId, ct);
             return new SessionEnsureResultDto
             {
                 SessionId = createdSessionId,
@@ -282,5 +284,13 @@ public sealed class SessionRegistry
             throw new HubException("Session ID cannot be empty.");
 
         return new SessionId(sessionId);
+    }
+
+    private static Actors.Channels.ChannelType ParseChannelType(string channelType)
+    {
+        if (ChannelTypeExtensions.TryFromWireValue(channelType, out var parsed))
+            return parsed;
+
+        throw new HubException($"Unknown channel type: '{channelType}'.");
     }
 }

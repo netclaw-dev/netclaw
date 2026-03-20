@@ -30,7 +30,7 @@ internal sealed class SignalRSessionActor : ReceiveActor, IWithUnboundedStash, I
     private MaterializedSession? _session;
     private ChannelWriter<ChannelInput>? _inputQueue;
     private SignalRConnectionId _currentConnectionId;
-    private string _channelType = "tui";
+    private Actors.Channels.ChannelType _channelType = Actors.Channels.ChannelType.Tui;
     private int _pipelineGeneration;
     private bool _isReinitializing;
 
@@ -262,7 +262,7 @@ internal interface ISignalRSessionMessage
 /// <summary>Creates (or re-creates) a SignalR session binding actor.</summary>
 internal sealed record StartSignalRSession(
     SessionId SessionId,
-    string ChannelType,
+    Actors.Channels.ChannelType ChannelType,
     SignalRConnectionId ConnectionId) : ISignalRSessionMessage;
 
 /// <summary>Updates the active connection ID for an existing session.</summary>

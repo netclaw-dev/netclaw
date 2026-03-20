@@ -116,7 +116,7 @@ internal sealed class DaemonRuntimeStatusService(
         }
 
         var slackChannel = channels.FirstOrDefault(c =>
-            string.Equals(c.ChannelType, "slack", StringComparison.OrdinalIgnoreCase));
+            c.ChannelType == Actors.Channels.ChannelType.Slack);
 
         if (slackChannel is null)
         {

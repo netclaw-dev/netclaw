@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Hosting;
+using Netclaw.Actors.Channels;
 
 namespace Netclaw.Channels;
 
@@ -8,7 +9,7 @@ namespace Netclaw.Channels;
 /// </summary>
 public interface IChannel : IHostedService
 {
-    string ChannelType { get; }
+    Actors.Channels.ChannelType ChannelType { get; }
 
     string DisplayName { get; }
 

@@ -247,7 +247,7 @@ public sealed class SubAgentActor : ReceiveActor
             ? content
             : content[..1800];
 
-        var domain = ResolveDomain(sessionId);
+        var domain = new Protocol.SessionId(sessionId ?? string.Empty).ToMemoryDomain();
         var confidence = 0.65;
         var policy = _policyEvaluator.EvaluateWrite(
             domain,
@@ -277,21 +277,6 @@ public sealed class SubAgentActor : ReceiveActor
                 Evidence = []
             }
         ];
-    }
-
-    private static string ResolveDomain(string? sessionId)
-    {
-        if (string.IsNullOrWhiteSpace(sessionId))
-            return "project:default";
-
-        var slash = sessionId.IndexOf('/', StringComparison.Ordinal);
-        if (slash <= 0)
-            return "project:default";
-
-        var prefix = sessionId[..slash].Trim();
-        return string.IsNullOrWhiteSpace(prefix)
-            ? "project:default"
-            : $"project:{prefix.ToLowerInvariant()}";
     }
 
     private static string ExtractText(AiChatMessage message)

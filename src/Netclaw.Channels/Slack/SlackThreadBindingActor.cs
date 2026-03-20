@@ -318,7 +318,7 @@ internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStas
             _sessionId,
             new SessionPipelineOptions
             {
-                ChannelType = "slack",
+                ChannelType = Actors.Channels.ChannelType.Slack,
                 Filter = OutputFilter.Text | OutputFilter.Files
             },
             materializer: _materializer,
@@ -533,7 +533,7 @@ internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStas
             {
                 SessionId = _sessionId,
                 TurnNumber = turnNumber,
-                ChannelType = "slack",
+                ChannelType = Actors.Channels.ChannelType.Slack,
                 FailureKind = failureKind,
                 ErrorMessage = errorMessage
             });

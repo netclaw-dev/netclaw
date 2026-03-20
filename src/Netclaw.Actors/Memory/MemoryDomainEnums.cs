@@ -60,7 +60,9 @@ public enum CheckpointTriggerType
     TurnComplete,
     ExplicitMemoryRequest,
     SubagentFindings,
-    ObservedMemoryProposals
+    ObservedMemoryProposals,
+    VerifiedToolFinding,
+    CompactionBoundary
 }
 
 /// <summary>
@@ -199,6 +201,8 @@ public static class MemoryDomainEnumExtensions
         CheckpointTriggerType.ExplicitMemoryRequest => "explicit-memory-request",
         CheckpointTriggerType.SubagentFindings => "subagent-findings",
         CheckpointTriggerType.ObservedMemoryProposals => "observed-memory-proposals",
+        CheckpointTriggerType.VerifiedToolFinding => "verified-tool-finding",
+        CheckpointTriggerType.CompactionBoundary => "compaction-boundary",
         _ => throw new ArgumentOutOfRangeException(nameof(value), value, null)
     };
 
@@ -212,6 +216,10 @@ public static class MemoryDomainEnumExtensions
         { value = CheckpointTriggerType.SubagentFindings; return true; }
         if (string.Equals(wire, "observed-memory-proposals", StringComparison.OrdinalIgnoreCase))
         { value = CheckpointTriggerType.ObservedMemoryProposals; return true; }
+        if (string.Equals(wire, "verified-tool-finding", StringComparison.OrdinalIgnoreCase))
+        { value = CheckpointTriggerType.VerifiedToolFinding; return true; }
+        if (string.Equals(wire, "compaction-boundary", StringComparison.OrdinalIgnoreCase))
+        { value = CheckpointTriggerType.CompactionBoundary; return true; }
         value = default;
         return false;
     }

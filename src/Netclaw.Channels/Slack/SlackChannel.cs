@@ -59,7 +59,7 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
         _logger = logger;
     }
 
-    public string ChannelType => "slack";
+    public Actors.Channels.ChannelType ChannelType => Actors.Channels.ChannelType.Slack;
 
     public string DisplayName => "Slack";
 

@@ -1,6 +1,31 @@
 namespace Netclaw.Actors.Protocol;
 
 /// <summary>
+/// Wire discriminator strings for <see cref="SessionOutputDto.Type"/>.
+/// Used by <see cref="SessionOutputDtoMapper"/> and any consumers
+/// that pattern-match on the Type field.
+/// </summary>
+public static class SessionOutputTypes
+{
+    public const string Text = "text";
+    public const string TextDelta = "text_delta";
+    public const string Thinking = "thinking";
+    public const string ThinkingDelta = "thinking_delta";
+    public const string ToolCall = "tool_call";
+    public const string ToolResult = "tool_result";
+    public const string Usage = "usage";
+    public const string TurnCompleted = "turn_completed";
+    public const string SessionTitle = "session_title";
+    public const string Error = "error";
+    public const string File = "file";
+    public const string SubAgent = "subagent";
+    public const string BufferFlush = "buffer_flush";
+    public const string Compaction = "compaction";
+    public const string SessionJoined = "session_joined";
+    public const string Unknown = "unknown";
+}
+
+/// <summary>
 /// Lightweight DTO for a chat message carried on the wire (role + content only).
 /// Used to replay recent history when resuming a session.
 /// </summary>

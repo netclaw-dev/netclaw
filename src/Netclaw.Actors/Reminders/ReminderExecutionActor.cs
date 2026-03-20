@@ -100,7 +100,7 @@ internal sealed class ReminderExecutionActor : ReceiveActor
 
             var materialized = await _pipeline.CreateAsync(sessionId, new SessionPipelineOptions
             {
-                ChannelType = "reminder",
+                ChannelType = Channels.ChannelType.Reminder,
                 Filter = OutputFilter.Text
             }, materializer: _materializer);
 

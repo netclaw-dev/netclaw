@@ -9,6 +9,7 @@ using Microsoft.Extensions.Hosting;
 using Netclaw.Configuration;
 using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Memory;
+using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Sessions;
 using Netclaw.Actors.Tools;
@@ -249,7 +250,7 @@ public class LlmSessionIntegrationTests : TestKit
         {
             SessionId = sessionId,
             TurnNumber = completed.TurnNumber,
-            ChannelType = "slack",
+            ChannelType = ChannelType.Slack,
             FailureKind = DeliveryFailureKind.MessageTooLarge,
             ErrorMessage = "msg_too_long"
         });
@@ -301,7 +302,7 @@ public class LlmSessionIntegrationTests : TestKit
         {
             SessionId = sessionId,
             TurnNumber = firstCompleted.TurnNumber,
-            ChannelType = "slack",
+            ChannelType = ChannelType.Slack,
             FailureKind = DeliveryFailureKind.ContentRejected,
             ErrorMessage = "invalid_blocks"
         });
@@ -346,7 +347,7 @@ public class LlmSessionIntegrationTests : TestKit
         {
             SessionId = sessionId,
             TurnNumber = firstCompleted.TurnNumber,
-            ChannelType = "slack",
+            ChannelType = ChannelType.Slack,
             FailureKind = DeliveryFailureKind.ContentRejected,
             ErrorMessage = "invalid_blocks"
         });
@@ -389,7 +390,7 @@ public class LlmSessionIntegrationTests : TestKit
             {
                 SessionId = sessionId,
                 TurnNumber = completed.TurnNumber,
-                ChannelType = "slack",
+                ChannelType = ChannelType.Slack,
                 FailureKind = DeliveryFailureKind.ContentRejected,
                 ErrorMessage = "invalid_blocks"
             });
@@ -402,7 +403,7 @@ public class LlmSessionIntegrationTests : TestKit
         {
             SessionId = sessionId,
             TurnNumber = completed.TurnNumber,
-            ChannelType = "slack",
+            ChannelType = ChannelType.Slack,
             FailureKind = DeliveryFailureKind.ContentRejected,
             ErrorMessage = "invalid_blocks"
         });

@@ -227,7 +227,7 @@ public sealed class WebhookNotificationServiceTests : IAsyncDisposable
 
         // Service should still be alive for a second alert
         service.Emit(CreateAlert(source: "b"));
-        await WaitForDeliveryAsync(handler, expectedCount: 2, timeoutMs: 2000);
+        await WaitForDeliveryAsync(handler, expectedCount: 1, timeoutMs: 2000);
 
         Assert.Equal(2, handler.Requests.Count);
     }
@@ -258,24 +258,23 @@ public sealed class WebhookNotificationServiceTests : IAsyncDisposable
         int expectedCount,
         int timeoutMs = 5000)
     {
-        var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
-        while (handler.Requests.Count < expectedCount && DateTime.UtcNow < deadline)
+        using var cts = new CancellationTokenSource(timeoutMs);
+        for (var i = 0; i < expectedCount; i++)
         {
-            await Task.Delay(50);
+            await handler.DeliverySemaphore.WaitAsync(cts.Token);
         }
-
-        // Small grace period for processing
-        await Task.Delay(100);
     }
 
     private sealed class RecordingHandler : HttpMessageHandler
     {
         private readonly HttpStatusCode _statusCode;
+        private readonly SemaphoreSlim _deliverySemaphore = new(0);
 
         public RecordingHandler(HttpStatusCode statusCode) => _statusCode = statusCode;
 
         public List<HttpRequestMessage> Requests { get; } = [];
         public List<string> RequestBodies { get; } = [];
+        public SemaphoreSlim DeliverySemaphore => _deliverySemaphore;
 
         protected override async Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
@@ -291,6 +290,7 @@ public sealed class WebhookNotificationServiceTests : IAsyncDisposable
                 RequestBodies.Add(body);
             }
 
+            _deliverySemaphore.Release();
             return new HttpResponseMessage(_statusCode);
         }
     }

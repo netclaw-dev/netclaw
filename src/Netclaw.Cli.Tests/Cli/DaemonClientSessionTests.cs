@@ -23,7 +23,7 @@ public sealed class DaemonClientSessionTests
         await using var client = new DaemonClient($"http://127.0.0.1:{port}");
 
         // Create an initial session to get a known session ID
-        var originalSessionId = await client.CreateSessionAsync("tui");
+        var originalSessionId = await client.CreateSessionAsync(Netclaw.Actors.Channels.ChannelType.Tui);
         Assert.StartsWith("signalr/", originalSessionId);
 
         // Simulate a "new client" by creating a fresh DaemonClient

@@ -41,7 +41,7 @@ public sealed partial class SqliteFindMemoriesTool : NetclawTool<SqliteFindMemor
         var sessionId = string.IsNullOrWhiteSpace(context.SessionId)
             ? "manual/tool"
             : context.SessionId!;
-        var domain = ResolveDomain(sessionId);
+        var domain = new Protocol.SessionId(sessionId).ToMemoryDomain();
 
         var request = _planner.BuildRequest(
             sessionId,
@@ -90,14 +90,6 @@ public sealed partial class SqliteFindMemoriesTool : NetclawTool<SqliteFindMemor
 
     protected override Task<string> ExecuteAsync(Params args, CancellationToken ct)
         => ExecuteAsync(args, ToolExecutionContext.Empty, ct);
-
-    private static string ResolveDomain(string sessionId)
-    {
-        var slash = sessionId.IndexOf('/', StringComparison.Ordinal);
-        if (slash > 0)
-            return $"project:{sessionId[..slash].ToLowerInvariant()}";
-        return "project:default";
-    }
 
     private static string BuildSnippet(string content)
         => content.Length <= 160 ? content : content[..160] + "...";

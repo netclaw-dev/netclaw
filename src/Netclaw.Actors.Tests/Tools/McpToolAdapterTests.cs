@@ -9,48 +9,19 @@ namespace Netclaw.Actors.Tests.Tools;
 public class McpToolAdapterTests
 {
     [Fact]
-    public void Name_IsNamespaced()
+    public void Construction_produces_correct_shaped_adapter()
     {
         var fakeTool = AIFunctionFactory.Create(() => "result", "store");
         var adapter = new McpToolAdapter(fakeTool, "memorizer", "store");
 
         Assert.Equal("memorizer/store", adapter.Name);
-    }
-
-    [Fact]
-    public void BareToolName_ReturnsUnprefixedName()
-    {
-        var fakeTool = AIFunctionFactory.Create(() => "result", "store");
-        var adapter = new McpToolAdapter(fakeTool, "memorizer", "store");
-
         Assert.Equal("store", adapter.BareToolName);
-    }
-
-    [Fact]
-    public void GrantCategory_DefaultsToMcpPrefix()
-    {
-        var fakeTool = AIFunctionFactory.Create(() => "result", "store");
-        var adapter = new McpToolAdapter(fakeTool, "memorizer", "store");
-
         Assert.Equal("mcp:memorizer", adapter.GrantCategory);
-    }
-
-    [Fact]
-    public void GrantCategory_UsesExplicitOverride()
-    {
-        var fakeTool = AIFunctionFactory.Create(() => "result", "store");
-        var adapter = new McpToolAdapter(fakeTool, "memorizer", "store", "custom:grant");
-
-        Assert.Equal("custom:grant", adapter.GrantCategory);
-    }
-
-    [Fact]
-    public void ServerName_IsSet()
-    {
-        var fakeTool = AIFunctionFactory.Create(() => "result", "store");
-        var adapter = new McpToolAdapter(fakeTool, "memorizer", "store");
-
         Assert.Equal("memorizer", adapter.ServerName);
+
+        // Explicit grant override exercises the branch
+        var withOverride = new McpToolAdapter(fakeTool, "memorizer", "store", "custom:grant");
+        Assert.Equal("custom:grant", withOverride.GrantCategory);
     }
 
     [Fact]

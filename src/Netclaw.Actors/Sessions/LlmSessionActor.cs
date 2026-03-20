@@ -105,7 +105,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     // Per-turn diagnostic correlation (ephemeral)
     private string? _activeTurnId;
     private string? _activeMessageId;
-    private string? _activeChannelType;
+    private Channels.ChannelType? _activeChannelType;
     private AutomaticRecallResult? _activeRecall;
 
     // Startup context layers: injected on first LLM call, re-injected after compaction
@@ -248,7 +248,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             BindTurnTelemetry(cmd.Source);
             TurnLog().Info(
                 "turn_received channel={ChannelType} sender={SenderId} hasMedia={HasMedia} textChars={TextLength}",
-                cmd.Source?.ChannelType ?? "unknown",
+                cmd.Source?.ChannelType.ToWireValue() ?? "unknown",
                 cmd.Source?.SenderId ?? "unknown",
                 cmd.MediaReferences.Count > 0,
                 cmd.Content?.Length ?? 0);
@@ -468,9 +468,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                     .Select(r => $"[{r.Name}] {r.Content}"));
 
                 EnqueueCheckpointFireAndForget(new MemoryCheckpointRequest(
-                    SessionId: _sessionId.Value,
+                    SessionId: _sessionId,
                     TurnId: _activeTurnId,
-                    TriggerType: "verified-tool-finding",
+                    TriggerType: Memory.CheckpointTriggerType.VerifiedToolFinding,
                     Priority: 60,
                     Payload: new MemoryCheckpointPayload(
                         SessionId: _sessionId.Value,
@@ -483,7 +483,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                         HasVerifiedToolFinding: true,
                         IsCompactionBoundary: false,
                         HasAcceptedSubAgentFinding: false,
-                        Domain: ResolveDomainFromSession(_sessionId.Value),
+                        Domain: _sessionId.ToMemoryDomain(),
                         Sensitivity: Memory.MemorySensitivity.Normal.ToWireValue(),
                         RecallMode: Memory.MemoryRecallMode.Auto.ToWireValue(),
                         Confidence: 0.85,
@@ -518,9 +518,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                     continue;
 
                 EnqueueCheckpointFireAndForget(new MemoryCheckpointRequest(
-                    SessionId: _sessionId.Value,
+                    SessionId: _sessionId,
                     TurnId: _activeTurnId,
-                    TriggerType: "subagent-findings",
+                    TriggerType: Memory.CheckpointTriggerType.SubagentFindings,
                     Priority: 80,
                     Payload: new MemoryCheckpointPayload(
                         SessionId: _sessionId.Value,
@@ -768,9 +768,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 _autoLoadedSkillContent.Clear();
 
                 EnqueueCheckpointFireAndForget(new MemoryCheckpointRequest(
-                    SessionId: _sessionId.Value,
+                    SessionId: _sessionId,
                     TurnId: _activeTurnId,
-                    TriggerType: "compaction-boundary",
+                    TriggerType: Memory.CheckpointTriggerType.CompactionBoundary,
                     Priority: 90,
                     Payload: new MemoryCheckpointPayload(
                         SessionId: _sessionId.Value,
@@ -785,7 +785,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                         HasVerifiedToolFinding: false,
                         IsCompactionBoundary: true,
                         HasAcceptedSubAgentFinding: false,
-                        Domain: ResolveDomainFromSession(_sessionId.Value),
+                        Domain: _sessionId.ToMemoryDomain(),
                         Sensitivity: Memory.MemorySensitivity.Normal.ToWireValue(),
                         RecallMode: Memory.MemoryRecallMode.Auto.ToWireValue(),
                         Confidence: 0.8,
@@ -1322,9 +1322,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 ObserveTurnForMemory(evt.UserMessage, evt.AssistantReply);
 
             EnqueueCheckpointFireAndForget(new MemoryCheckpointRequest(
-                SessionId: _sessionId.Value,
+                SessionId: _sessionId,
                 TurnId: _activeTurnId,
-                TriggerType: Memory.CheckpointTriggerType.TurnComplete.ToWireValue(),
+                TriggerType: Memory.CheckpointTriggerType.TurnComplete,
                 Priority: 40,
                     Payload: new MemoryCheckpointPayload(
                         SessionId: _sessionId.Value,
@@ -1337,7 +1337,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                         HasVerifiedToolFinding: false,
                     IsCompactionBoundary: false,
                     HasAcceptedSubAgentFinding: false,
-                    Domain: ResolveDomainFromSession(_sessionId.Value),
+                    Domain: _sessionId.ToMemoryDomain(),
                     Sensitivity: Memory.MemorySensitivity.Normal.ToWireValue(),
                     RecallMode: Memory.MemoryRecallMode.Auto.ToWireValue(),
                     Confidence: 0.7,
@@ -1488,7 +1488,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             TurnLog().Info("memory_observation_sidecar_completed proposalCount={ProposalCount}", msg.Proposals.Count);
             var gateResult = _memoryProposalGate.Evaluate(
                 msg.Proposals,
-                ResolveDomainFromSession(_sessionId.Value),
+                _sessionId.ToMemoryDomain(),
                 Memory.MemorySensitivity.Normal.ToWireValue(),
                 NowMs());
             var accepted = gateResult.MemoryOperations;
@@ -1522,14 +1522,14 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                     $"title={x.Title};anchor={x.AnchorCanonicalName};class={x.MemoryClass};aliases={(x.AliasesJson ?? "-")};facets={(x.FacetsJson ?? "-")};slots={(x.SlotsJson ?? "-")}")));
 
             EnqueueCheckpointFireAndForget(new MemoryCheckpointRequest(
-                SessionId: _sessionId.Value,
+                SessionId: _sessionId,
                 TurnId: _activeTurnId,
-                TriggerType: Memory.CheckpointTriggerType.ObservedMemoryProposals.ToWireValue(),
+                TriggerType: Memory.CheckpointTriggerType.ObservedMemoryProposals,
                 Priority: 60,
                 Payload: new ObservedMemoryCheckpointPayload(
                     _sessionId.Value,
                     Memory.CheckpointTriggerType.ObservedMemoryProposals.ToWireValue(),
-                    ResolveDomainFromSession(_sessionId.Value),
+                    _sessionId.ToMemoryDomain(),
                     Memory.MemorySensitivity.Normal.ToWireValue(),
                     accepted)));
         });
@@ -1848,7 +1848,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 .TakeLast(3)
                 .ToArray(),
             RecentEntities: [],
-            HardScopeOverride: ResolveDomainFromSession(_sessionId.Value),
+            HardScopeOverride: _sessionId.ToMemoryDomain(),
             ThreadTitle: _state.Title);
 
         try
@@ -2361,7 +2361,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             && finding.RecallMode == SubAgentFindingRecallMode.Auto)
             return new(SubAgentFindingReviewDecision.Rejected, "secret cannot auto-recall");
 
-        var expectedDomain = ResolveDomainFromSession(sessionId);
+        var expectedDomain = new SessionId(sessionId).ToMemoryDomain();
         if (!string.Equals(finding.Domain, expectedDomain, StringComparison.OrdinalIgnoreCase))
             return new(SubAgentFindingReviewDecision.Deferred, $"domain mismatch: expected {expectedDomain}");
 
@@ -2409,21 +2409,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 _log.Warning(ex, "Failed to enqueue memory checkpoint trigger={TriggerType}", request.TriggerType);
             }
         });
-    }
-
-    private static string ResolveDomainFromSession(string sessionId)
-    {
-        if (string.IsNullOrWhiteSpace(sessionId))
-            return "project:default";
-
-        var slash = sessionId.IndexOf('/', StringComparison.Ordinal);
-        if (slash <= 0)
-            return "project:default";
-
-        var prefix = sessionId[..slash].Trim();
-        return string.IsNullOrWhiteSpace(prefix)
-            ? "project:default"
-            : $"project:{prefix.ToLowerInvariant()}";
     }
 
     /// <summary>
@@ -2644,7 +2629,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             _sessionId.Value,
             _activeTurnId ?? $"{_sessionId.Value}:{NowMs()}",
             "turn_completed",
-            ResolveDomainFromSession(_sessionId.Value),
+            _sessionId.ToMemoryDomain(),
             Memory.MemorySensitivity.Normal.ToWireValue(),
             userText,
             assistantReply.Content ?? string.Empty,
@@ -2821,8 +2806,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         if (!string.IsNullOrWhiteSpace(_activeMessageId))
             log = log.WithContext("MessageId", _activeMessageId);
 
-        if (!string.IsNullOrWhiteSpace(_activeChannelType))
-            log = log.WithContext("ChannelType", _activeChannelType);
+        if (_activeChannelType is { } act)
+            log = log.WithContext("ChannelType", act.ToWireValue());
 
         return log;
     }

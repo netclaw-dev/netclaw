@@ -135,7 +135,7 @@ public sealed class SqliteMemoryToolsTests : IDisposable
             ],
             CancellationToken.None);
 
-        var tool = new SqliteGetMemoriesTool(_store);
+        var tool = new SqliteGetMemoriesTool(_store, _timeProvider);
         var result = await tool.ExecuteAsync(
             new Dictionary<string, object?> { ["Ids"] = "rec:rec-stale" },
             CancellationToken.None);

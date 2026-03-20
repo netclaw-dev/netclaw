@@ -16,10 +16,10 @@ namespace Netclaw.Actors.Channels;
 public sealed record SessionPipelineOptions
 {
     /// <summary>
-    /// Channel type identifier (e.g. "console", "headless", "slack").
+    /// Channel type identifier.
     /// Used to populate <see cref="MessageSource.ChannelType"/> on inbound messages.
     /// </summary>
-    public required string ChannelType { get; init; }
+    public required ChannelType ChannelType { get; init; }
 
     /// <summary>
     /// Which output categories the channel wants to receive.

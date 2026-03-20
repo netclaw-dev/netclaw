@@ -7,9 +7,9 @@ namespace Netclaw.Actors.Channels;
 public sealed record MessageSource
 {
     /// <summary>
-    /// Channel type identifier (e.g. "console", "headless", "slack").
+    /// Channel type identifier.
     /// </summary>
-    public required string ChannelType { get; init; }
+    public required ChannelType ChannelType { get; init; }
 
     /// <summary>
     /// Identity of the sender within the channel (e.g. Slack user ID, "local-user").

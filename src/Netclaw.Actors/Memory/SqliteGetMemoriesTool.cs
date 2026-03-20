@@ -13,15 +13,17 @@ namespace Netclaw.Actors.Memory;
 public sealed partial class SqliteGetMemoriesTool : NetclawTool<SqliteGetMemoriesTool.Params>
 {
     private readonly SQLiteMemoryStore _store;
+    private readonly TimeProvider _timeProvider;
     private readonly ILogger _logger;
 
     public record Params(
         [property: Description("Comma-separated memory IDs to load (e.g. \"doc:abc, rec:def\")")]
         string Ids);
 
-    public SqliteGetMemoriesTool(SQLiteMemoryStore store, ILogger<SqliteGetMemoriesTool>? logger = null)
+    public SqliteGetMemoriesTool(SQLiteMemoryStore store, TimeProvider? timeProvider = null, ILogger<SqliteGetMemoriesTool>? logger = null)
     {
         _store = store;
+        _timeProvider = timeProvider ?? TimeProvider.System;
         _logger = logger ?? (ILogger)NullLogger.Instance;
     }
 
@@ -46,7 +48,7 @@ public sealed partial class SqliteGetMemoriesTool : NetclawTool<SqliteGetMemorie
                 entry.Id);
             var isStaleEvidence = string.Equals(entry.MemoryClass, MemoryClass.Evidence.ToWireValue(), StringComparison.OrdinalIgnoreCase)
                 && entry.ExpiresAtMs is long expiresAt
-                && expiresAt <= DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                && expiresAt <= _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
             sb.AppendLine($"━━━ {entry.Title} [{typedId.ToWireValue()}] ━━━");
             sb.AppendLine($"kind={entry.Kind} class={entry.MemoryClass} domain={entry.Domain} sensitivity={entry.Sensitivity} recall={entry.RecallMode} semantics={entry.UpdateSemantics}{(isStaleEvidence ? " stale=true" : string.Empty)}");
             sb.AppendLine(entry.Content);

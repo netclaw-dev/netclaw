@@ -46,7 +46,7 @@ public sealed class DaemonClientReconnectIntegrationTests
                 reconnectedOutput.TrySetResult();
         });
 
-        var sessionId = await client.CreateSessionAsync("tui");
+        var sessionId = await client.CreateSessionAsync(ChannelType.Tui);
 
         try
         {
@@ -65,7 +65,7 @@ public sealed class DaemonClientReconnectIntegrationTests
         await WaitFor(disconnected.Task, TimeSpan.FromSeconds(5));
         await WaitFor(reconnected.Task, TimeSpan.FromSeconds(10));
 
-        var ensured = await client.EnsureSessionAsync("tui");
+        var ensured = await client.EnsureSessionAsync(ChannelType.Tui);
         Assert.Equal(sessionId, ensured);
 
         await client.SendAsync(new ChannelInput
@@ -126,7 +126,7 @@ public sealed class DaemonClientReconnectIntegrationTests
                 secondResponseReceived.TrySetResult();
         });
 
-        await client.CreateSessionAsync("tui");
+        await client.CreateSessionAsync(ChannelType.Tui);
         await client.SendAsync(new ChannelInput
         {
             SenderId = "test",
@@ -152,7 +152,7 @@ public sealed class DaemonClientReconnectIntegrationTests
 
         await WaitFor(reconnectedAfterRestart.Task, TimeSpan.FromSeconds(15));
 
-        await client.EnsureSessionAsync("tui");
+        await client.EnsureSessionAsync(ChannelType.Tui);
         await client.SendAsync(new ChannelInput
         {
             SenderId = "test",

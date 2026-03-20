@@ -27,7 +27,7 @@ public sealed class HeadlessChannel : IChannel
     private bool _receivedTextDeltaInCurrentTurn;
     private bool _receivedThinkingDeltaInCurrentTurn;
 
-    public string ChannelType => "headless";
+    public Actors.Channels.ChannelType ChannelType => Actors.Channels.ChannelType.Headless;
     public string DisplayName => "Headless Prompt";
 
     public ValueTask<ChannelHealth> GetHealthAsync(CancellationToken cancellationToken = default)

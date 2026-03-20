@@ -1,11 +1,12 @@
 using System.Text.Json;
+using Netclaw.Actors.Protocol;
 
 namespace Netclaw.Actors.Memory;
 
 public sealed record MemoryCheckpointRequest(
-    string SessionId,
+    SessionId SessionId,
     string? TurnId,
-    string TriggerType,
+    CheckpointTriggerType TriggerType,
     int Priority,
     object Payload);
 
@@ -20,11 +21,20 @@ public interface IMemoryCheckpointSink
 
 public sealed class NullMemoryCheckpointSink : IMemoryCheckpointSink
 {
-    public static readonly NullMemoryCheckpointSink Instance = new();
+    public static readonly NullMemoryCheckpointSink Instance = new(TimeProvider.System);
+
+    private readonly TimeProvider _timeProvider;
+
+    public NullMemoryCheckpointSink() : this(TimeProvider.System) { }
+
+    public NullMemoryCheckpointSink(TimeProvider timeProvider)
+    {
+        _timeProvider = timeProvider;
+    }
 
     public Task<MemoryCheckpointEnqueueResult> EnqueueAsync(MemoryCheckpointRequest request, CancellationToken ct = default)
     {
-        var now = TimeProvider.System.GetUtcNow().ToUnixTimeMilliseconds();
+        var now = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
         return Task.FromResult(new MemoryCheckpointEnqueueResult($"noop-{Guid.NewGuid():N}", now));
     }
 }
@@ -44,9 +54,9 @@ public sealed class SQLiteMemoryCheckpointSink(
 
         await store.EnqueueCheckpointAsync(new SQLiteMemoryCheckpoint(
             CheckpointId: checkpointId,
-            SessionId: request.SessionId,
+            SessionId: request.SessionId.Value,
             TurnId: request.TurnId,
-            TriggerType: request.TriggerType,
+            TriggerType: request.TriggerType.ToWireValue(),
             Priority: request.Priority,
             Status: "pending",
             PayloadJson: payloadJson,

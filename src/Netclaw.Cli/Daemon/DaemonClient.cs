@@ -13,7 +13,7 @@ namespace Netclaw.Cli.Daemon;
 /// </summary>
 public sealed class DaemonClient : IAsyncDisposable
 {
-    public const string TuiChannelType = "tui";
+    public static readonly Actors.Channels.ChannelType TuiChannelType = Actors.Channels.ChannelType.Tui;
 
     internal static readonly TimeSpan[] DefaultReconnectDelays =
     [
@@ -36,7 +36,7 @@ public sealed class DaemonClient : IAsyncDisposable
     private readonly object _reconnectCtsLock = new();
 
     private string? _sessionId;
-    private string? _channelType;
+    private Actors.Channels.ChannelType? _channelType;
     private bool _hasConnected;
     private bool _disposed;
     private CancellationTokenSource? _reconnectCts;
@@ -70,8 +70,8 @@ public sealed class DaemonClient : IAsyncDisposable
 
         _connection.Reconnected += async _ =>
         {
-            if (!string.IsNullOrWhiteSpace(_channelType))
-                await EnsureSessionInternalAsync(_channelType!, CancellationToken.None);
+            if (_channelType is { } ct)
+                await EnsureSessionInternalAsync(ct, CancellationToken.None);
 
             _connectionSubject.OnNext(new DaemonConnectionEvent(
                 DaemonConnectionState.Connected,
@@ -213,19 +213,16 @@ public sealed class DaemonClient : IAsyncDisposable
     }
 
     public async Task<string> CreateSessionAsync(
-        string channelType,
+        Actors.Channels.ChannelType channelType,
         CancellationToken cancellationToken = default)
     {
-        if (string.IsNullOrWhiteSpace(channelType))
-            throw new ArgumentException("Channel type cannot be empty.", nameof(channelType));
-
         _channelType = channelType;
         _sessionId = null;
         return await EnsureSessionInternalAsync(channelType, cancellationToken);
     }
 
     public async Task<string> EnsureSessionAsync(
-        string channelType,
+        Actors.Channels.ChannelType channelType,
         CancellationToken cancellationToken = default)
     {
         _channelType = channelType;
@@ -351,8 +348,8 @@ public sealed class DaemonClient : IAsyncDisposable
                 // here eliminates the race window where a test (or other caller)
                 // observes Connected and calls EnsureSessionAsync concurrently
                 // with this still-running EnsureSessionInternalAsync call.
-                if (!string.IsNullOrWhiteSpace(_channelType))
-                    await EnsureSessionInternalAsync(_channelType!, token);
+                if (_channelType is { } ct2)
+                    await EnsureSessionInternalAsync(ct2, token);
 
                 _connectionSubject.OnNext(new DaemonConnectionEvent(
                     DaemonConnectionState.Connected,
@@ -475,7 +472,7 @@ public sealed class DaemonClient : IAsyncDisposable
     }
 
     private async Task<string> EnsureSessionInternalAsync(
-        string channelType,
+        Actors.Channels.ChannelType channelType,
         CancellationToken cancellationToken)
     {
         await _sessionGate.WaitAsync(cancellationToken);
@@ -485,7 +482,7 @@ public sealed class DaemonClient : IAsyncDisposable
 
             var result = await _connection.InvokeCoreAsync<SessionEnsureResultDto>(
                 "EnsureSession",
-                [_sessionId, channelType],
+                [_sessionId, channelType.ToWireValue()],
                 cancellationToken);
 
             _sessionId = result.SessionId;

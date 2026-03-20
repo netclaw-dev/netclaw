@@ -95,7 +95,7 @@ public sealed class SQLiteMemoryRecallCoordinator(
             if (!_sessionConfig.MemorySidecarsEnabled)
                 return new AutomaticRecallResult([]);
 
-            var domain = ResolveDomain(request.SessionId);
+            var domain = new Protocol.SessionId(request.SessionId).ToMemoryDomain();
             var maxItems = request.MaxItems <= 0 ? 3 : request.MaxItems;
             var effectiveQuery = string.IsNullOrWhiteSpace(request.Query)
                 ? request.RecentUserMessages.LastOrDefault() ?? string.Empty
@@ -184,21 +184,6 @@ public sealed class SQLiteMemoryRecallCoordinator(
             logger.LogWarning(ex, "memory_recall_degraded stage=execution reason={Reason}", ex.Message);
             return new AutomaticRecallResult([], true, ex.Message, "execution");
         }
-    }
-
-    private static string ResolveDomain(string sessionId)
-    {
-        if (string.IsNullOrWhiteSpace(sessionId))
-            return "project:default";
-
-        var slash = sessionId.IndexOf('/', StringComparison.Ordinal);
-        if (slash <= 0)
-            return "project:default";
-
-        var prefix = sessionId[..slash].Trim();
-        return string.IsNullOrWhiteSpace(prefix)
-            ? "project:default"
-            : $"project:{prefix.ToLowerInvariant()}";
     }
 
     private static bool ShouldWidenAcrossDomains(DeterministicRetrievalRequestPlan plan)

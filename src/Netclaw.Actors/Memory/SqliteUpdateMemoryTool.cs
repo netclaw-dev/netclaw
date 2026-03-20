@@ -98,7 +98,7 @@ public sealed partial class SqliteUpdateMemoryTool : NetclawTool<SqliteUpdateMem
             HasVerifiedToolFinding: false,
             IsCompactionBoundary: false,
             HasAcceptedSubAgentFinding: false,
-            Domain: ResolveDomain(sessionId),
+            Domain: new Protocol.SessionId(sessionId).ToMemoryDomain(),
             Sensitivity: MemorySensitivity.Normal.ToWireValue(),
             RecallMode: MemoryRecallMode.Manual.ToWireValue(),
             Confidence: 0.95,
@@ -111,20 +111,12 @@ public sealed partial class SqliteUpdateMemoryTool : NetclawTool<SqliteUpdateMem
             Title: args.Id);
 
         var result = await _checkpointSink.EnqueueAsync(new MemoryCheckpointRequest(
-            SessionId: sessionId,
+            SessionId: new Protocol.SessionId(sessionId),
             TurnId: null,
-            TriggerType: payload.TriggerType,
+            TriggerType: CheckpointTriggerType.ExplicitMemoryRequest,
             Priority: 95,
             Payload: payload), ct);
 
         _logger.LogInformation("SQLite update_memory audit checkpoint={CheckpointId} memory={MemoryId}", result.CheckpointId, args.Id);
-    }
-
-    private static string ResolveDomain(string sessionId)
-    {
-        var slash = sessionId.IndexOf('/', StringComparison.Ordinal);
-        if (slash > 0)
-            return $"project:{sessionId[..slash].ToLowerInvariant()}";
-        return "project:default";
     }
 }

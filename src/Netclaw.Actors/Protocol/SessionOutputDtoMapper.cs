@@ -10,7 +10,7 @@ public static class SessionOutputDtoMapper
     {
         TextOutput msg => new SessionOutputDto
         {
-            Type = "text",
+            Type = SessionOutputTypes.Text,
             SessionId = msg.SessionId.Value,
             TimestampMs = msg.TimestampMs,
             Text = msg.Text
@@ -18,7 +18,7 @@ public static class SessionOutputDtoMapper
 
         TextDeltaOutput msg => new SessionOutputDto
         {
-            Type = "text_delta",
+            Type = SessionOutputTypes.TextDelta,
             SessionId = msg.SessionId.Value,
             TimestampMs = msg.TimestampMs,
             Text = msg.Delta
@@ -26,7 +26,7 @@ public static class SessionOutputDtoMapper
 
         ThinkingOutput msg => new SessionOutputDto
         {
-            Type = "thinking",
+            Type = SessionOutputTypes.Thinking,
             SessionId = msg.SessionId.Value,
             TimestampMs = msg.TimestampMs,
             Text = msg.Text
@@ -34,7 +34,7 @@ public static class SessionOutputDtoMapper
 
         ThinkingDeltaOutput msg => new SessionOutputDto
         {
-            Type = "thinking_delta",
+            Type = SessionOutputTypes.ThinkingDelta,
             SessionId = msg.SessionId.Value,
             TimestampMs = msg.TimestampMs,
             Text = msg.Delta
@@ -42,7 +42,7 @@ public static class SessionOutputDtoMapper
 
         ToolCallOutput msg => new SessionOutputDto
         {
-            Type = "tool_call",
+            Type = SessionOutputTypes.ToolCall,
             SessionId = msg.SessionId.Value,
             TimestampMs = msg.TimestampMs,
             CallId = msg.CallId,
@@ -52,7 +52,7 @@ public static class SessionOutputDtoMapper
 
         ToolResultOutput msg => new SessionOutputDto
         {
-            Type = "tool_result",
+            Type = SessionOutputTypes.ToolResult,
             SessionId = msg.SessionId.Value,
             TimestampMs = msg.TimestampMs,
             CallId = msg.CallId,
@@ -62,7 +62,7 @@ public static class SessionOutputDtoMapper
 
         UsageOutput msg => new SessionOutputDto
         {
-            Type = "usage",
+            Type = SessionOutputTypes.Usage,
             SessionId = msg.SessionId.Value,
             TimestampMs = msg.TimestampMs,
             InputTokens = msg.InputTokens,
@@ -74,7 +74,7 @@ public static class SessionOutputDtoMapper
 
         TurnCompleted msg => new SessionOutputDto
         {
-            Type = "turn_completed",
+            Type = SessionOutputTypes.TurnCompleted,
             SessionId = msg.SessionId.Value,
             TimestampMs = msg.TimestampMs,
             TurnNumber = msg.TurnNumber
@@ -82,7 +82,7 @@ public static class SessionOutputDtoMapper
 
         SessionTitleOutput msg => new SessionOutputDto
         {
-            Type = "session_title",
+            Type = SessionOutputTypes.SessionTitle,
             SessionId = msg.SessionId.Value,
             TimestampMs = msg.TimestampMs,
             Title = msg.Title
@@ -90,7 +90,7 @@ public static class SessionOutputDtoMapper
 
         ErrorOutput msg => new SessionOutputDto
         {
-            Type = "error",
+            Type = SessionOutputTypes.Error,
             SessionId = msg.SessionId.Value,
             TimestampMs = msg.TimestampMs,
             ErrorMessage = msg.Message,
@@ -101,7 +101,7 @@ public static class SessionOutputDtoMapper
 
         FileOutput msg => new SessionOutputDto
         {
-            Type = "file",
+            Type = SessionOutputTypes.File,
             SessionId = msg.SessionId.Value,
             TimestampMs = msg.TimestampMs,
             FilePath = msg.FilePath,
@@ -111,7 +111,7 @@ public static class SessionOutputDtoMapper
 
         SubAgentOutput msg => new SessionOutputDto
         {
-            Type = "subagent",
+            Type = SessionOutputTypes.SubAgent,
             SessionId = msg.SessionId.Value,
             TimestampMs = msg.TimestampMs,
             AgentName = msg.AgentName,
@@ -126,14 +126,14 @@ public static class SessionOutputDtoMapper
 
         BufferFlush msg => new SessionOutputDto
         {
-            Type = "buffer_flush",
+            Type = SessionOutputTypes.BufferFlush,
             SessionId = msg.SessionId.Value,
             TimestampMs = msg.TimestampMs
         },
 
         CompactionOutput msg => new SessionOutputDto
         {
-            Type = "compaction",
+            Type = SessionOutputTypes.Compaction,
             SessionId = msg.SessionId.Value,
             TimestampMs = msg.TimestampMs,
             MessagesBefore = msg.MessagesBefore,
@@ -145,7 +145,7 @@ public static class SessionOutputDtoMapper
 
         SessionJoined msg => new SessionOutputDto
         {
-            Type = "session_joined",
+            Type = SessionOutputTypes.SessionJoined,
             SessionId = msg.SessionId.Value,
             TimestampMs = msg.TimestampMs,
             Title = msg.Title,
@@ -159,7 +159,7 @@ public static class SessionOutputDtoMapper
 
         _ => new SessionOutputDto
         {
-            Type = "unknown",
+            Type = SessionOutputTypes.Unknown,
             SessionId = output.SessionId.Value,
             TimestampMs = output.TimestampMs
         }
@@ -171,31 +171,31 @@ public static class SessionOutputDtoMapper
 
         return dto.Type switch
         {
-            "text" => new TextOutput
+            SessionOutputTypes.Text => new TextOutput
             {
                 SessionId = sessionId,
                 TimestampMs = dto.TimestampMs,
                 Text = dto.Text ?? string.Empty
             },
-            "text_delta" => new TextDeltaOutput
+            SessionOutputTypes.TextDelta => new TextDeltaOutput
             {
                 SessionId = sessionId,
                 TimestampMs = dto.TimestampMs,
                 Delta = dto.Text ?? string.Empty
             },
-            "thinking" => new ThinkingOutput
+            SessionOutputTypes.Thinking => new ThinkingOutput
             {
                 SessionId = sessionId,
                 TimestampMs = dto.TimestampMs,
                 Text = dto.Text ?? string.Empty
             },
-            "thinking_delta" => new ThinkingDeltaOutput
+            SessionOutputTypes.ThinkingDelta => new ThinkingDeltaOutput
             {
                 SessionId = sessionId,
                 TimestampMs = dto.TimestampMs,
                 Delta = dto.Text ?? string.Empty
             },
-            "tool_call" => new ToolCallOutput
+            SessionOutputTypes.ToolCall => new ToolCallOutput
             {
                 SessionId = sessionId,
                 TimestampMs = dto.TimestampMs,
@@ -203,7 +203,7 @@ public static class SessionOutputDtoMapper
                 ToolName = dto.ToolName ?? "unknown",
                 ArgumentsJson = dto.ArgumentsJson
             },
-            "tool_result" => new ToolResultOutput
+            SessionOutputTypes.ToolResult => new ToolResultOutput
             {
                 SessionId = sessionId,
                 TimestampMs = dto.TimestampMs,
@@ -211,7 +211,7 @@ public static class SessionOutputDtoMapper
                 ToolName = dto.ToolName ?? "unknown",
                 Result = dto.Result ?? string.Empty
             },
-            "usage" => new UsageOutput
+            SessionOutputTypes.Usage => new UsageOutput
             {
                 SessionId = sessionId,
                 TimestampMs = dto.TimestampMs,
@@ -221,19 +221,19 @@ public static class SessionOutputDtoMapper
                 ContextWindowTokens = dto.ContextWindowTokens ?? 0,
                 UsagePercent = dto.UsagePercent
             },
-            "turn_completed" => new TurnCompleted
+            SessionOutputTypes.TurnCompleted => new TurnCompleted
             {
                 SessionId = sessionId,
                 TimestampMs = dto.TimestampMs,
                 TurnNumber = dto.TurnNumber ?? 0
             },
-            "session_title" => new SessionTitleOutput
+            SessionOutputTypes.SessionTitle => new SessionTitleOutput
             {
                 SessionId = sessionId,
                 TimestampMs = dto.TimestampMs,
                 Title = dto.Title ?? string.Empty
             },
-            "error" => new ErrorOutput
+            SessionOutputTypes.Error => new ErrorOutput
             {
                 SessionId = sessionId,
                 TimestampMs = dto.TimestampMs,
@@ -243,7 +243,7 @@ public static class SessionOutputDtoMapper
                 Cause = dto.ErrorDetail is not null
                     ? new Exception(dto.ErrorDetail) : null
             },
-            "file" => new FileOutput
+            SessionOutputTypes.File => new FileOutput
             {
                 SessionId = sessionId,
                 TimestampMs = dto.TimestampMs,
@@ -251,7 +251,7 @@ public static class SessionOutputDtoMapper
                 FileName = dto.FileName ?? "file",
                 MimeType = dto.MimeType ?? "application/octet-stream"
             },
-            "subagent" => new SubAgentOutput
+            SessionOutputTypes.SubAgent => new SubAgentOutput
             {
                 SessionId = sessionId,
                 TimestampMs = dto.TimestampMs,
@@ -266,12 +266,12 @@ public static class SessionOutputDtoMapper
                 MemoryDecisionReason = dto.MemoryDecisionReason,
                 FindingsCount = dto.FindingsCount ?? 0
             },
-            "buffer_flush" => new BufferFlush
+            SessionOutputTypes.BufferFlush => new BufferFlush
             {
                 SessionId = sessionId,
                 TimestampMs = dto.TimestampMs
             },
-            "compaction" => new CompactionOutput
+            SessionOutputTypes.Compaction => new CompactionOutput
             {
                 SessionId = sessionId,
                 TimestampMs = dto.TimestampMs,
@@ -281,7 +281,7 @@ public static class SessionOutputDtoMapper
                 PreCompactionInputTokens = dto.PreCompactionInputTokens ?? 0,
                 KeepCountUsed = dto.KeepCountUsed ?? 0
             },
-            "session_joined" => new SessionJoined
+            SessionOutputTypes.SessionJoined => new SessionJoined
             {
                 SessionId = sessionId,
                 TimestampMs = dto.TimestampMs,

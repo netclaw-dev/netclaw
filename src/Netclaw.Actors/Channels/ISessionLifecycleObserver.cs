@@ -13,7 +13,7 @@ public interface ISessionLifecycleObserver
     /// <summary>
     /// Called when a new session is created (or re-materialized).
     /// </summary>
-    void OnSessionCreated(SessionId sessionId, string channelType);
+    void OnSessionCreated(SessionId sessionId, ChannelType channelType);
 
     /// <summary>
     /// Called for every <see cref="SessionOutput"/> emitted by the session.

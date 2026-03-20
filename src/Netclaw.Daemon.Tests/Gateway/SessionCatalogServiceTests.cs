@@ -1,5 +1,6 @@
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging.Abstractions;
+using Netclaw.Actors.Channels;
 using Netclaw.Configuration;
 using Netclaw.Daemon.Gateway;
 using Xunit;
@@ -53,7 +54,7 @@ public sealed class SessionCatalogServiceTests : IDisposable
         var paths = CreatePaths();
         var service = CreateService(paths);
 
-        service.OnSessionCreated(new Netclaw.Actors.Protocol.SessionId("signalr/test-123"), "signalr");
+        service.OnSessionCreated(new Netclaw.Actors.Protocol.SessionId("signalr/test-123"), ChannelType.SignalR);
 
         using var conn = OpenConn(paths);
         Assert.True(TableExists(conn, "sessions"));

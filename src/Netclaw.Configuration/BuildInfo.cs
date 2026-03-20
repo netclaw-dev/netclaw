@@ -49,7 +49,7 @@ public static class BuildInfo
     public static string GetVersion(Assembly assembly) =>
         assembly.GetName().Version?.ToString(3) ?? "0.0.0";
 
-    private static string ResolveCommitHash(Assembly assembly)
+    public static string ResolveCommitHash(Assembly assembly)
     {
         var informational = assembly
             .GetCustomAttribute<AssemblyInformationalVersionAttribute>()
