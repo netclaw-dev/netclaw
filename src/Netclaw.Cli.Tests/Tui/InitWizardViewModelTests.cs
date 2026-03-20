@@ -1049,7 +1049,9 @@ internal sealed class FakeBrowserAutomationBootstrapper : IBrowserAutomationBoot
     {
         CallCount++;
         if (DelayBeforeResult.HasValue)
+#pragma warning disable SW004 // Intentional: fake service simulates latency for timeout testing
             await Task.Delay(DelayBeforeResult.Value, ct);
+#pragma warning restore SW004
         return NextResult;
     }
 }
