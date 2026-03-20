@@ -158,9 +158,15 @@ public class ReminderManagerActorTests : TestKit
         var manager = await GetManagerAsync();
         var now = TimeProvider.System.GetUtcNow();
 
-        // Ensure the actor is fully started and initial reconcile has completed
-        await manager.Ask<ReminderHealthResponse>(
-            GetReminderHealthQuery.Instance, TimeSpan.FromSeconds(5));
+        // Drain PreStart's Self.Tell(ReconcileReminders) AND confirm with our own.
+        // ActorOf does not block until PreStart completes — the test's Ask can
+        // arrive before PreStart's Self.Tell enqueues the reconcile. Sending two
+        // reconcile Asks guarantees that both PreStart's reconcile and our barrier
+        // have processed before we write the zombie to the store.
+        await manager.Ask<ReminderManagerActor.ReconcileCompleted>(
+            ReminderManagerActor.ReconcileReminders.Instance, TimeSpan.FromSeconds(5));
+        await manager.Ask<ReminderManagerActor.ReconcileCompleted>(
+            ReminderManagerActor.ReconcileReminders.Instance, TimeSpan.FromSeconds(5));
 
         // Write a zombie one-shot directly to the store AFTER startup reconcile:
         // fire time in the past, still enabled, no Akka.Reminders schedule
