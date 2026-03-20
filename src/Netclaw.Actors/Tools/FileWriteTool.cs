@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Text;
+using Netclaw.Configuration;
 using Netclaw.Security;
 using Netclaw.Tools;
 
@@ -14,6 +15,7 @@ namespace Netclaw.Actors.Tools;
 public sealed partial class FileWriteTool : NetclawTool<FileWriteTool.Params>
 {
     private readonly ToolPathPolicy? _pathPolicy;
+    private readonly ScopedFileAccessPolicy _fileAccessPolicy;
 
     public record Params(
         [property: Description("Absolute path to the file to write")] string Path,
@@ -22,6 +24,13 @@ public sealed partial class FileWriteTool : NetclawTool<FileWriteTool.Params>
     public FileWriteTool(ToolPathPolicy? pathPolicy = null)
     {
         _pathPolicy = pathPolicy;
+        _fileAccessPolicy = new ScopedFileAccessPolicy(new ToolConfig());
+    }
+
+    public FileWriteTool(ToolConfig config, ToolPathPolicy? pathPolicy = null)
+    {
+        _pathPolicy = pathPolicy;
+        _fileAccessPolicy = new ScopedFileAccessPolicy(config);
     }
 
     protected override Task<string> ExecuteAsync(Params args, CancellationToken ct)
@@ -32,7 +41,7 @@ public sealed partial class FileWriteTool : NetclawTool<FileWriteTool.Params>
         if (string.IsNullOrWhiteSpace(args.Path))
             return "Error: 'path' parameter is required.";
 
-        if (!SessionScopedFileAccess.TryResolveAuthorizedPath(args.Path, context, out var authorizedPath, out var accessError))
+        if (!_fileAccessPolicy.TryResolveWritePath(args.Path, context, out var authorizedPath, out var accessError))
             return accessError;
 
         if (_pathPolicy?.IsDenied(authorizedPath) == true)

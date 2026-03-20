@@ -216,7 +216,7 @@ public class SearchToolsToolTests
         var tool = new SearchToolsTool(
             registry,
             new ToolAccessPolicy(
-                new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed },
+                CreateProfileAwareToolConfig(),
                 new EffectivePolicyDefaults(
                     DeploymentPosture.Personal,
                     TrustAudience.Personal,
@@ -251,7 +251,7 @@ public class SearchToolsToolTests
         var tool = new SearchToolsTool(
             registry,
             new ToolAccessPolicy(
-                new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed },
+                CreateProfileAwareToolConfig(),
                 new EffectivePolicyDefaults(
                     DeploymentPosture.Personal,
                     TrustAudience.Personal,
@@ -295,5 +295,12 @@ public class SearchToolsToolTests
     private static AITool CreateFakeToolInRegistry(string name, string description)
     {
         return AIFunctionFactory.Create(() => "result", name, description);
+    }
+
+    private static ToolConfig CreateProfileAwareToolConfig()
+    {
+        var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
+        config.AudienceProfiles.Team.AllowedTools.Add("memorizer/search_memories");
+        return config;
     }
 }

@@ -9,7 +9,7 @@ namespace Netclaw.Actors.Tests.Tools;
 public class FileWriteToolTests : IDisposable
 {
     private readonly string _tempDir;
-    private readonly FileWriteTool _tool = new();
+    private readonly FileWriteTool _tool = new(new ToolConfig());
     private readonly string _sessionDir;
 
     public FileWriteToolTests()
@@ -109,7 +109,7 @@ public class FileWriteToolTests : IDisposable
     {
         var filePath = Path.Combine(_tempDir, "secrets.json");
         var policy = new ToolPathPolicy([filePath]);
-        var tool = new FileWriteTool(policy);
+        var tool = new FileWriteTool(new ToolConfig(), policy);
 
         var args = new Dictionary<string, object?>
         {

@@ -8,4 +8,5 @@ public sealed class ToolConfig
     public ShellExecutionMode? ShellMode { get; set; }
     public int ShellTimeoutSeconds { get; set; } = 60;
     public int MaxOutputChars { get; set; } = 32_000;
+    public ToolAudienceProfiles AudienceProfiles { get; set; } = new();
 }

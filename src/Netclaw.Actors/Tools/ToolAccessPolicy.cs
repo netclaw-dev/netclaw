@@ -9,11 +9,13 @@ public sealed class ToolAccessPolicy
 {
     private readonly ToolConfig _toolConfig;
     private readonly EffectivePolicyDefaults _defaults;
+    private readonly ToolAudienceProfileResolver _profileResolver;
 
     public ToolAccessPolicy(ToolConfig toolConfig, EffectivePolicyDefaults defaults)
     {
         _toolConfig = toolConfig;
         _defaults = defaults;
+        _profileResolver = new ToolAudienceProfileResolver(toolConfig);
     }
 
     public IReadOnlyList<AITool> FilterExposedTools(
@@ -50,6 +52,9 @@ public sealed class ToolAccessPolicy
 
     private bool IsToolExposed(INetclawTool tool, TrustAudience audience)
     {
+        if (!_profileResolver.IsToolAllowed(tool.Name, CreateContext(audience)))
+            return false;
+
         if (IsShellTool(tool))
             return ResolveShellMode() == ShellExecutionMode.HostAllowed && audience == TrustAudience.Personal;
 
@@ -61,6 +66,9 @@ public sealed class ToolAccessPolicy
 
     public ToolAccessDecision AuthorizeInvocation(INetclawTool tool, ToolExecutionContext? context)
     {
+        if (!_profileResolver.IsToolAllowed(tool.Name, context))
+            return ToolAccessDecision.Deny("tool_not_allowed_for_audience_profile");
+
         if (!IsShellTool(tool))
             return ToolAccessDecision.Allow();
 
@@ -87,6 +95,9 @@ public sealed class ToolAccessPolicy
         => SecurityPolicyDefaults.TryParseAudience(context?.Audience, out var parsed)
             ? parsed
             : SecurityPolicyDefaults.ResolveAudienceFromSessionId(context?.SessionId);
+
+    private static ToolExecutionContext CreateContext(TrustAudience audience)
+        => new(null, null) { Audience = audience.ToWireValue() };
 
     private static bool IsShellTool(ToolRegistration registration)
         => registration.GrantCategory == "shell" || IsShellTool(registration.Tool);

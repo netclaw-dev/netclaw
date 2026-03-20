@@ -14,7 +14,7 @@
   - [x] Restrict `file_read` and `file_write` to the current session directory when the active trust context is `public`.
   - [ ] Replace hardcoded file/tool scope heuristics with audience-scoped policy profiles that define explicit tool visibility and filesystem roots.
 - [ ] 2.4 Update MCP server policy handling to support capability classification and trust-context-aware exposure/invocation.
-  - [ ] Add audience-profile allow/deny handling for MCP discovery and invocation so broader personal settings do not leak into `team` or `public` contexts.
+  - [ ] Add server-level audience-profile allow/deny handling for MCP discovery and invocation so broader personal settings do not leak into `team` or `public` contexts.
 
 ## 3. Diagnostics and configuration UX
 

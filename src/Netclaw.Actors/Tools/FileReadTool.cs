@@ -16,6 +16,7 @@ public sealed partial class FileReadTool : NetclawTool<FileReadTool.Params>
 {
     private readonly ToolConfig _config;
     private readonly ToolPathPolicy? _pathPolicy;
+    private readonly ScopedFileAccessPolicy _fileAccessPolicy;
 
     public record Params(
         [property: Description("Absolute path to the file to read")] string Path,
@@ -26,6 +27,7 @@ public sealed partial class FileReadTool : NetclawTool<FileReadTool.Params>
     {
         _config = config;
         _pathPolicy = pathPolicy;
+        _fileAccessPolicy = new ScopedFileAccessPolicy(config);
     }
 
     protected override Task<string> ExecuteAsync(Params args, CancellationToken ct)
@@ -36,7 +38,7 @@ public sealed partial class FileReadTool : NetclawTool<FileReadTool.Params>
         if (string.IsNullOrWhiteSpace(args.Path))
             return "Error: 'path' parameter is required.";
 
-        if (!SessionScopedFileAccess.TryResolveAuthorizedPath(args.Path, context, out var authorizedPath, out var accessError))
+        if (!_fileAccessPolicy.TryResolveReadPath(args.Path, context, out var authorizedPath, out var accessError))
             return accessError;
 
         if (_pathPolicy?.IsDenied(authorizedPath) == true)

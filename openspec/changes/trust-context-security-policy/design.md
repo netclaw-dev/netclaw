@@ -178,6 +178,21 @@ Rationale: for public or mixed-trust deployments, guessed filesystem reach is bo
 
 Alternative considered: derive safe paths from session metadata or connector type with optional deny lists. Rejected because deny lists are incomplete and inferred scope is brittle once users start attaching real host data.
 
+### Decision: MCP audience policy is expressed at the server level
+
+Remote MCP servers may change their advertised tool catalogs over time as the remote operator deploys new server versions, changes entitlements, or updates dynamic registration behavior. Because of that, Netclaw SHALL treat the MCP server as the stable policy boundary for operator-facing trust configuration.
+
+This means:
+
+- operators classify an MCP server once with an audience ceiling and capability class
+- audience profiles allow or deny whole servers, not individual remote tools, as the primary security model
+- runtime may still apply internal filtering or caching behavior per tool, but those details do not replace the server-level security boundary
+- if a remote server's tool catalog changes, the audience ceiling for that server still applies without requiring a policy rewrite to stay safe
+
+Rationale: tool-level permissions for dynamic remote catalogs create a false sense of stability and are easy to invalidate overnight. Server-level audience policy is more durable, easier to explain, and fail-closed when remote catalogs evolve.
+
+Alternative considered: operator-authored remote tool allowlists as the main policy model. Rejected for MVP because dynamic catalogs make them brittle and easy to misunderstand. Fine-grained per-tool restrictions may still exist later as an optional refinement, but not as the core safety boundary.
+
 ### Decision: Shell execution policy is modeled now, even though sandbox execution is deferred
 
 Shell execution gets an explicit mode enum:

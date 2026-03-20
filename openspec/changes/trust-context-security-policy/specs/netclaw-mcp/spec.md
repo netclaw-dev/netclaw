@@ -2,7 +2,7 @@
 
 ### Requirement: MCP server profile configuration
 
-The system SHALL support named MCP server profiles in configuration. Each profile SHALL specify a transport type (`stdio` or `SSE`), the command or URL for the server, optional environment variables to pass to the server process, and a capability classification used by trust-context policy. Audience profiles SHALL be able to allow or deny MCP servers and tools independently of transport configuration.
+The system SHALL support named MCP server profiles in configuration. Each profile SHALL specify a transport type (`stdio` or `SSE`), the command or URL for the server, optional environment variables to pass to the server process, and a capability classification used by trust-context policy. Audience profiles SHALL be able to allow or deny whole MCP servers independently of transport configuration.
 
 #### Scenario: Disabled by default
 
@@ -55,9 +55,9 @@ The system SHALL apply ACL, the resolved audience profile, trust-context policy,
 - **WHEN** a `team` turn invokes a tool from that server
 - **THEN** the invocation may proceed subject to the active trust context and memory policy
 
-#### Scenario: Personal profile allows all MCP tools explicitly
+#### Scenario: Personal profile allows whole MCP server explicitly
 
-- **GIVEN** the operator configures the `personal` audience profile to allow all MCP servers
+- **GIVEN** the operator configures the `personal` audience profile to allow an MCP server
 - **AND** a specific session has the necessary ACL grant for one of those servers
 - **WHEN** a non-downgraded `personal` turn evaluates tool visibility
 - **THEN** the runtime may expose tools from that MCP server subject to capability classification and runtime trust checks
@@ -68,3 +68,16 @@ The system SHALL apply ACL, the resolved audience profile, trust-context policy,
 - **AND** the resolved `public` audience profile does not allow that server
 - **WHEN** a `public` turn evaluates MCP discovery or invocation
 - **THEN** the runtime hides and denies the server's tools regardless of the broader personal configuration
+
+#### Scenario: Newly added remote tool remains bounded by server audience policy
+
+- **GIVEN** an MCP server is allowed only for `personal`
+- **AND** the remote operator adds a new tool to that server overnight
+- **WHEN** a `team` or `public` turn evaluates discovery or invocation after reconnect
+- **THEN** the runtime still hides and denies the new tool because the server itself is not allowed for that audience
+
+#### Scenario: Missing server audience policy fails closed
+
+- **WHEN** an MCP server is enabled without explicit audience-profile allowance
+- **THEN** the runtime does not expose the server outside the strictest compatible defaults
+- **AND** remote tool catalog changes do not widen access implicitly

@@ -16,12 +16,15 @@ public class DispatchingToolExecutorTests
         registry.WithFirstPartyTools(new ToolConfig());
         _executor = new DispatchingToolExecutor(registry);
 
+        var restrictedConfig = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
+        restrictedConfig.AudienceProfiles.Team.AllowedTools = ["file_read", "attach_file", "shell_execute"];
+        restrictedConfig.AudienceProfiles.Public.AllowedTools = ["file_read", "file_write", "attach_file"];
         var restrictedRegistry = new ToolRegistry();
-        restrictedRegistry.WithFirstPartyTools(new ToolConfig());
+        restrictedRegistry.WithFirstPartyTools(restrictedConfig);
         _restrictedExecutor = new DispatchingToolExecutor(
             restrictedRegistry,
             new ToolAccessPolicy(
-                new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed },
+                restrictedConfig,
                 new EffectivePolicyDefaults(
                     DeploymentPosture.Personal,
                     TrustAudience.Personal,
@@ -216,5 +219,35 @@ public class DispatchingToolExecutorTests
         var result = await _executor.ExecuteAsync(toolCall);
 
         Assert.Equal("Unknown tool: unknown_tool", result);
+    }
+
+    [Fact]
+    public void Team_profile_hides_shell_and_write_tools()
+    {
+        var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
+        config.AudienceProfiles.Team.AllowedTools = ["file_read", "attach_file"];
+
+        var policy = new ToolAccessPolicy(
+            config,
+            new EffectivePolicyDefaults(
+                DeploymentPosture.Personal,
+                TrustAudience.Personal,
+                ShellExecutionMode.HostAllowed,
+                UsedStrictFallback: false));
+
+        var registry = new ToolRegistry();
+        registry.WithFirstPartyTools(config, toolAccessPolicy: policy);
+
+        var teamContext = new Netclaw.Tools.ToolExecutionContext("slack/thread-1", Path.GetTempPath())
+        {
+            Audience = TrustAudience.Team.ToWireValue(),
+            Boundary = SecurityPolicyDefaults.TeamBoundary,
+            ChannelType = "slack"
+        };
+
+        Assert.False(policy.IsToolExposed(registry.GetByName("shell_execute")!, teamContext));
+        Assert.False(policy.IsToolExposed(registry.GetByName("file_write")!, teamContext));
+        Assert.True(policy.IsToolExposed(registry.GetByName("file_read")!, teamContext));
+        Assert.True(policy.IsToolExposed(registry.GetByName("attach_file")!, teamContext));
     }
 }

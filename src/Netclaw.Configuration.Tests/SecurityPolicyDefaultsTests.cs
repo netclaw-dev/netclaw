@@ -40,4 +40,26 @@ public sealed class SecurityPolicyDefaultsTests
 
         Assert.Equal(ShellExecutionMode.SandboxOnly, result.ShellExecutionMode);
     }
+
+    [Fact]
+    public void Tool_profile_defaults_keep_public_and_team_session_scoped()
+    {
+        var defaults = ToolAudienceProfileDefaults.CreateProfiles();
+
+        Assert.Equal(ToolFilesystemMode.Roots, defaults.Public.ReadFiles.Mode);
+        Assert.Equal([ToolAudienceProfileDefaults.SessionDirectoryToken], defaults.Public.ReadFiles.Roots);
+        Assert.Equal(ToolFilesystemMode.Roots, defaults.Team.WriteFiles.Mode);
+        Assert.Equal([ToolAudienceProfileDefaults.SessionDirectoryToken], defaults.Team.WriteFiles.Roots);
+    }
+
+    [Fact]
+    public void Tool_profile_defaults_allow_personal_all_mode()
+    {
+        var defaults = ToolAudienceProfileDefaults.CreateProfiles();
+
+        Assert.Equal(ToolProfileMode.All, defaults.Personal.ToolsMode);
+        Assert.Equal(ToolFilesystemMode.All, defaults.Personal.ReadFiles.Mode);
+        Assert.Equal(ToolFilesystemMode.All, defaults.Personal.WriteFiles.Mode);
+        Assert.Equal(ToolFilesystemMode.All, defaults.Personal.AttachFiles.Mode);
+    }
 }

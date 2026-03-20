@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using Netclaw.Configuration;
 using Netclaw.Security;
 using Netclaw.Tools;
 
@@ -15,9 +16,21 @@ namespace Netclaw.Actors.Tools;
     Grant = "file")]
 public sealed partial class AttachFileTool : NetclawTool<AttachFileTool.Params>
 {
+    private readonly ScopedFileAccessPolicy _fileAccessPolicy;
+
     public record Params(
         [property: Description("Absolute path to the file to attach")] string Path,
         [property: Description("Optional display name for the file")] string? DisplayName = null);
+
+    public AttachFileTool()
+        : this(new ToolConfig())
+    {
+    }
+
+    public AttachFileTool(ToolConfig config)
+    {
+        _fileAccessPolicy = new ScopedFileAccessPolicy(config);
+    }
 
     protected override Task<string> ExecuteAsync(Params args, CancellationToken ct)
         => Task.FromResult("Error: attach_file requires a session context.");
@@ -30,9 +43,11 @@ public sealed partial class AttachFileTool : NetclawTool<AttachFileTool.Params>
         if (string.IsNullOrWhiteSpace(context.SessionDirectory))
             return Task.FromResult("Error: No session directory available.");
 
+        if (!_fileAccessPolicy.TryResolveAttachPath(args.Path, context, out var requestedPath, out var accessError))
+            return Task.FromResult(accessError);
+
         var sessionDir = NormalizeDirectoryPath(context.SessionDirectory);
         var sessionRoot = TryGetSessionRootDirectory(sessionDir);
-        var requestedPath = Path.GetFullPath(args.Path);
 
         var requestedInCurrentSession = IsPathWithinDirectory(requestedPath, sessionDir);
         var requestedInSessionRoot = sessionRoot is not null && IsPathWithinDirectory(requestedPath, sessionRoot);
