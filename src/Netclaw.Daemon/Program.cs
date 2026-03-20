@@ -136,10 +136,11 @@ static async Task RunDaemonAsync(string[] args, DaemonRestartSignal restartSigna
             if (serverName is not null)
             {
                 var mcpManager = context.RequestServices.GetRequiredService<McpClientManager>();
+                var reconnectLogger = context.RequestServices.GetRequiredService<ILogger<McpClientManager>>();
                 _ = Task.Run(async () =>
                 {
                     try { await mcpManager.TryReconnectAsync(serverName, CancellationToken.None); }
-                    catch { /* best-effort reconnect */ }
+                    catch (Exception ex) { reconnectLogger.LogWarning(ex, "Post-OAuth reconnect failed for MCP server '{Name}'", serverName); }
                 }, CancellationToken.None);
             }
 
