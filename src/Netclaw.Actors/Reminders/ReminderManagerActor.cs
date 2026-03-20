@@ -549,6 +549,10 @@ public sealed partial class ReminderManagerActor : ReceiveActor
         catch (Exception ex)
         {
             _log.Error(ex, "Reminder reconcile failed");
+
+            // Reply with a zero-result ack so external Ask callers don't hang until timeout
+            if (!sender.Equals(Self))
+                sender.Tell(new ReconcileCompleted(0, 0, 0));
         }
     }
 

@@ -43,7 +43,8 @@ public class CompactionIntegrationTests : TestKit
             KeepRecentMessages = 0,
             TitleGenerationInterval = 0,
             TurnLlmTimeoutSeconds = 1,
-            SidecarLlmTimeoutSeconds = 1
+            SidecarLlmTimeoutSeconds = 1,
+            MemorySidecarsEnabled = false
         });
         services.AddSingleton<ISystemPromptProvider>(new StaticSystemPromptProvider(
             "You are a test assistant."));

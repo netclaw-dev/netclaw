@@ -120,23 +120,6 @@ public sealed class SubAgentSpawner
                 Success = result.Success,
                 Duration = sw.Elapsed,
                 Findings = result.Findings
-                    .Select(f => new SubAgentFindingCandidate
-                    {
-                        Shape = f.Shape,
-                        Title = f.Title,
-                        Content = f.Content,
-                        Kind = f.Kind,
-                        Domain = f.Domain,
-                        Sensitivity = f.Sensitivity,
-                        RecallMode = f.RecallMode,
-                        UpdateSemantics = f.UpdateSemantics,
-                        Confidence = f.Confidence,
-                        Durability = f.Durability,
-                        Reusability = f.Reusability,
-                        Evidence = f.Evidence,
-                        FreshnessAtMs = f.FreshnessAtMs
-                    })
-                    .ToArray()
             });
 
             _logger.LogInformation(

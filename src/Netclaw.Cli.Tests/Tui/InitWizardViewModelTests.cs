@@ -1008,7 +1008,7 @@ public sealed class InitWizardViewModelTests : IDisposable
         // SOUL.md
         Assert.True(File.Exists(_paths.SoulPath));
         var soul = File.ReadAllText(_paths.SoulPath);
-        Assert.Contains("# Hal", soul, StringComparison.Ordinal);
+        Assert.Contains("# You are Hal", soul, StringComparison.Ordinal);
         Assert.Contains("concise and casual", soul, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("Dave", soul, StringComparison.Ordinal);
         Assert.Contains("America/Chicago", soul, StringComparison.Ordinal);

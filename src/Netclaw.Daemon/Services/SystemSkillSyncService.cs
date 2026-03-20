@@ -35,8 +35,7 @@ internal sealed class SystemSkillSyncService : IHostedService
     {
         "check", "checking", "status", "support", "supported", "new", "good", "best",
         "help", "use", "using", "work", "working", "change", "changes", "run", "running",
-        "view", "show", "find", "look", "issue", "issues", "problem", "problems",
-        "netclaw"
+        "view", "show", "find", "look", "issue", "issues", "problem", "problems"
     };
 
     private static readonly HashSet<string> GenericPhraseTokens = new(StringComparer.OrdinalIgnoreCase)
@@ -322,9 +321,18 @@ internal sealed class SystemSkillSyncService : IHostedService
         _skillIndexLayer.Update(_skillRegistry.GenerateCompressedIndex());
         _logger.LogInformation("Skill index updated ({SkillCount} skills)", _skillRegistry.GetAll().Count);
 
-        // Enrich keywords for deterministic skill auto-loading (fire and forget).
-        // Requires a chat client provider for LLM-based enrichment; skipped in tests
-        // that use the internal constructor without a provider.
+        // Always apply fallback keywords first so skills are matchable immediately.
+        // LLM-enriched keywords replace these when enrichment completes.
+        foreach (var skill in _skillRegistry.GetAll())
+            ApplyFallbackKeywords(skill);
+
+        _logger.LogInformation(
+            "Fallback keyword index loaded for {SkillCount} skills", _skillRegistry.GetEnrichedKeywords().Count);
+
+        PurgeStaleKeywordCache();
+
+        // Enrich keywords via LLM sidecar (fire and forget).
+        // Enriched keywords replace the fallback set when they arrive.
         if (_chatClientProvider is not null)
         {
             _ = Task.Run(async () =>
@@ -338,15 +346,6 @@ internal sealed class SystemSkillSyncService : IHostedService
                     _logger.LogWarning(ex, "Skill keyword enrichment failed");
                 }
             });
-        }
-        else
-        {
-            foreach (var skill in _skillRegistry.GetAll())
-                ApplyFallbackKeywords(skill);
-
-            _logger.LogInformation(
-                "Skill keyword enrichment provider unavailable; loaded fallback keyword index for {SkillCount} skills",
-                _skillRegistry.GetEnrichedKeywords().Count);
         }
     }
 
@@ -542,6 +541,33 @@ internal sealed class SystemSkillSyncService : IHostedService
 
         if (keywords.Count > 0 || phrases.Count > 0)
             _skillRegistry.SetEnrichedKeywords(skill.Name, keywords, phrases);
+    }
+
+    /// <summary>
+    /// Removes keyword cache files for skill versions that no longer match any
+    /// registered skill. Prevents stale caches from accumulating after upgrades.
+    /// </summary>
+    private void PurgeStaleKeywordCache()
+    {
+        if (!Directory.Exists(_paths.SkillKeywordCacheDirectory))
+            return;
+
+        var currentKeys = _skillRegistry.GetAll()
+            .Select(s => Path.GetFileName(GetKeywordCachePath(s.Name, s.Version)))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        var purged = 0;
+        foreach (var file in Directory.GetFiles(_paths.SkillKeywordCacheDirectory, "*.json"))
+        {
+            if (!currentKeys.Contains(Path.GetFileName(file)))
+            {
+                try { File.Delete(file); purged++; }
+                catch (IOException ex) { _logger.LogDebug(ex, "Could not delete stale cache file {File}", file); }
+            }
+        }
+
+        if (purged > 0)
+            _logger.LogInformation("Purged {Count} stale keyword cache file(s)", purged);
     }
 
     // ── Keyword cache I/O ──

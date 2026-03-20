@@ -3,6 +3,9 @@ namespace Netclaw.Configuration;
 /// <summary>
 /// Configuration for an LLM session. Carries model identity and context
 /// window size so sessions can make compaction decisions.
+/// Bound from the <c>Session</c> section in <c>netclaw.json</c> at startup
+/// (see <c>Program.cs</c>). Model-derived values (ModelId, ContextWindowTokens,
+/// modalities) are overlaid after capability resolution.
 /// </summary>
 public sealed record SessionConfig
 {
@@ -99,16 +102,15 @@ public sealed record SessionConfig
 
     /// <summary>
     /// Enables structured memory sidecars for recall planning and post-turn
-    /// observation. Disabled by default until rollout gates are satisfied.
+    /// observation.
     /// </summary>
-    public bool MemorySidecarsEnabled { get; init; } = false;
+    public bool MemorySidecarsEnabled { get; init; } = true;
 
     /// <summary>
-    /// Enables deterministic retrieval request planning and request-plan
-    /// observability without requiring the full deterministic recall pipeline
-    /// to replace the legacy path yet.
+    /// Enables deterministic retrieval request planning for automatic
+    /// memory recall on each turn.
     /// </summary>
-    public bool DeterministicRetrievalEnabled { get; init; } = false;
+    public bool DeterministicRetrievalEnabled { get; init; } = true;
 
     /// <summary>
     /// Timeout in seconds for the primary per-turn LLM streaming call.

@@ -7,30 +7,44 @@ namespace Netclaw.Actors.Sessions;
 
 /// <summary>
 /// Per-session child actor that owns the log file lifecycle.
-/// Created by <see cref="LlmSessionActor"/> when a session logs directory is configured.
+/// Created by <see cref="LlmSessionActor"/> when a sessions base directory is configured.
 /// Not persistent — log files are best-effort observability.
 /// The actor opens the log file in <see cref="PreStart"/> and disposes it in <see cref="PostStop"/>,
 /// ensuring the file handle is properly released when the session actor passivates.
+///
+/// Log files are stored inside the session's own directory:
+/// <c>{sessionsBase}/{sanitized_id}/logs/{timestamp}.log</c>
+/// Multiple log files in the same directory indicate passivation/rehydration cycles.
 /// </summary>
 public sealed class SessionLogActor : ReceiveActor
 {
     private readonly SessionId _sessionId;
-    private readonly string _logDirectory;
+    private readonly string _sessionsBasePath;
     private readonly TimeProvider _timeProvider;
     private readonly ILoggingAdapter _log = Context.GetLogger();
     private StreamWriter? _writer;
 
-    public static Props CreateProps(SessionId sessionId, string logDirectory, TimeProvider timeProvider) =>
-        Props.Create(() => new SessionLogActor(sessionId, logDirectory, timeProvider));
+    public static Props CreateProps(SessionId sessionId, string sessionsBasePath, TimeProvider timeProvider) =>
+        Props.Create(() => new SessionLogActor(sessionId, sessionsBasePath, timeProvider));
 
-    public SessionLogActor(SessionId sessionId, string logDirectory, TimeProvider timeProvider)
+    public SessionLogActor(SessionId sessionId, string sessionsBasePath, TimeProvider timeProvider)
     {
         _sessionId = sessionId;
-        _logDirectory = logDirectory;
+        _sessionsBasePath = sessionsBasePath;
         _timeProvider = timeProvider;
 
         Receive<SendUserMessage>(OnUserMessage);
         Receive<SessionOutput>(OnOutput);
+    }
+
+    /// <summary>
+    /// Computes the logs directory for this session:
+    /// <c>{sessionsBase}/{sanitized_id}/logs/</c>
+    /// </summary>
+    internal static string GetSessionLogsDirectory(SessionId sessionId, string sessionsBasePath)
+    {
+        var sanitized = SessionDirectoryHelper.SanitizeSessionId(sessionId.Value);
+        return Path.Combine(sessionsBasePath, sanitized, "logs");
     }
 
     protected override void PreStart()
@@ -38,9 +52,9 @@ public sealed class SessionLogActor : ReceiveActor
         try
         {
             var now = _timeProvider.GetUtcNow();
-            var sanitized = SessionDirectoryHelper.SanitizeSessionId(_sessionId.Value);
-            var logPath = Path.Combine(_logDirectory, $"{now:yyyyMMdd-HHmmss}_{sanitized}.log");
-            Directory.CreateDirectory(_logDirectory);
+            var logsDir = GetSessionLogsDirectory(_sessionId, _sessionsBasePath);
+            var logPath = Path.Combine(logsDir, $"{now:yyyyMMdd-HHmmss}.log");
+            Directory.CreateDirectory(logsDir);
             _writer = new StreamWriter(logPath, append: true) { AutoFlush = true };
             _writer.WriteLine($"[{now:o}] Session log started: {_sessionId.Value}");
         }

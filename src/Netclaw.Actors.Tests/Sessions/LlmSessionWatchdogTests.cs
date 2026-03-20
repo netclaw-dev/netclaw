@@ -29,7 +29,8 @@ public sealed class LlmSessionWatchdogTests(ITestOutputHelper output) : TestKit(
             TitleGenerationInterval = 0,
             TurnLlmTimeoutSeconds = 1,
             ToolExecutionTimeoutSeconds = 1,
-            SidecarLlmTimeoutSeconds = 1
+            SidecarLlmTimeoutSeconds = 1,
+            MemorySidecarsEnabled = false
         });
         services.AddSingleton<ISystemPromptProvider>(new StaticSystemPromptProvider("You are a test assistant."));
         services.AddSingleton<IModelCapabilityResolver>(new FakeCapabilityResolver());
