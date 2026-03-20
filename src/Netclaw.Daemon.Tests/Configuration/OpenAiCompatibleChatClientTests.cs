@@ -479,6 +479,96 @@ data: [DONE]
         Assert.Equal(404, ex.StatusCode);
     }
 
+    [Fact]
+    public async Task GetResponseAsync_ParsesUsageFromResponse()
+    {
+        const string json = """
+            {"id":"1","model":"test","choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"hi"}}],
+             "usage":{"prompt_tokens":100,"completion_tokens":25,"total_tokens":125}}
+            """;
+
+        using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(json, Encoding.UTF8, "application/json")
+        });
+        using var httpClient = new HttpClient(handler) { BaseAddress = new Uri("http://localhost:8000") };
+        var endpoint = OpenAiCompatibleEndpoint.FromBaseUrl("http://localhost:8000");
+        var client = new OpenAiCompatibleChatClient(httpClient, endpoint, "test-model");
+
+        var response = await client.GetResponseAsync([new ChatMessage(ChatRole.User, "hello")]);
+
+        Assert.NotNull(response.Usage);
+        Assert.Equal(100, response.Usage!.InputTokenCount);
+        Assert.Equal(25, response.Usage.OutputTokenCount);
+        Assert.Equal(125, response.Usage.TotalTokenCount);
+    }
+
+    [Fact]
+    public async Task StreamingResponse_EmitsUsageContent_WhenPresent()
+    {
+        const string sse = """
+            data: {"id":"abc","model":"test","choices":[{"index":0,"delta":{"role":"assistant","content":"hi"}}]}
+
+            data: {"id":"abc","model":"test","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":50,"completion_tokens":10,"total_tokens":60}}
+
+            data: [DONE]
+
+            """;
+
+        using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(sse, Encoding.UTF8, "text/event-stream")
+        });
+        using var httpClient = new HttpClient(handler) { BaseAddress = new Uri("http://localhost:8000") };
+        var endpoint = OpenAiCompatibleEndpoint.FromBaseUrl("http://localhost:8000");
+        var client = new OpenAiCompatibleChatClient(httpClient, endpoint, "test-model");
+
+        var updates = new List<ChatResponseUpdate>();
+        await foreach (var update in client.GetStreamingResponseAsync([new ChatMessage(ChatRole.User, "hello")]))
+            updates.Add(update);
+
+        var usageContents = updates.SelectMany(u => u.Contents.OfType<UsageContent>()).ToList();
+        Assert.Single(usageContents);
+        Assert.Equal(50, usageContents[0].Details.InputTokenCount);
+        Assert.Equal(10, usageContents[0].Details.OutputTokenCount);
+    }
+
+    [Fact]
+    public void ParseUsage_ReturnsNull_WhenUsageFieldMissing()
+    {
+        using var doc = JsonDocument.Parse("""{"id":"1","model":"test","choices":[]}""");
+        Assert.Null(OpenAiCompatibleChatClient.ParseUsage(doc.RootElement));
+    }
+
+    [Fact]
+    public async Task StreamingRequest_IncludesStreamOptions()
+    {
+        const string sse = """
+            data: {"id":"abc","model":"test","choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":"stop"}]}
+
+            data: [DONE]
+
+            """;
+
+        using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(sse, Encoding.UTF8, "text/event-stream")
+        });
+        using var httpClient = new HttpClient(handler) { BaseAddress = new Uri("http://localhost:8000") };
+        var endpoint = OpenAiCompatibleEndpoint.FromBaseUrl("http://localhost:8000");
+        var client = new OpenAiCompatibleChatClient(httpClient, endpoint, "test-model");
+
+        await foreach (var _ in client.GetStreamingResponseAsync([new ChatMessage(ChatRole.User, "hello")]))
+        {
+            // consume
+        }
+
+        using var doc = JsonDocument.Parse(handler.RequestBodies.Single());
+        var root = doc.RootElement;
+        Assert.True(root.GetProperty("stream").GetBoolean());
+        Assert.True(root.GetProperty("stream_options").GetProperty("include_usage").GetBoolean());
+    }
+
     private sealed class RecordingHandler : HttpMessageHandler
     {
         private readonly Func<HttpRequestMessage, HttpResponseMessage> _handler;
@@ -489,11 +579,14 @@ data: [DONE]
         }
 
         public List<HttpRequestMessage> Requests { get; } = [];
+        public List<string> RequestBodies { get; } = [];
 
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             Requests.Add(request);
-            return Task.FromResult(_handler(request));
+            if (request.Content is not null)
+                RequestBodies.Add(await request.Content.ReadAsStringAsync(cancellationToken));
+            return _handler(request);
         }
     }
 }
