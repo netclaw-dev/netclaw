@@ -777,7 +777,7 @@ static void MapReminderEndpoints(WebApplication app)
     {
         var manager = await actor.GetAsync(ct);
         var response = await manager.Ask<Netclaw.Actors.Reminders.ReminderListResponse>(
-            new Netclaw.Actors.Reminders.ListRemindersCommand(), TimeSpan.FromSeconds(10), ct);
+            new Netclaw.Actors.Reminders.ListRemindersCommand(IncludeDisabled: false), TimeSpan.FromSeconds(10), ct);
         var projected = response.Reminders.Select(r => new
         {
             id = r.Id.Value,
