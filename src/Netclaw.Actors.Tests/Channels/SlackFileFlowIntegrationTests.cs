@@ -669,6 +669,136 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
         await ExpectTerminatedAsync(actor);
     }
 
+    [Fact]
+    public async Task Inbound_image_with_real_scanner_flows_to_llm()
+    {
+        // Uses the production MagicByteContentScanner instead of NullContentScanner
+        // to verify the real scanner doesn't reject valid PNG images.
+        var pipeline = Host.Services.GetRequiredService<SessionPipeline>();
+        var httpClient = new HttpClient(_httpHandler);
+
+        var deps = new SlackGatewayDependencies(
+            Pipeline: pipeline,
+            ActorSystem: Sys,
+            TimeProvider: TimeProvider.System,
+            Options: new SlackChannelOptions
+            {
+                Enabled = true,
+                MentionOnly = false,
+                AllowDirectMessages = true,
+                BotToken = new SensitiveString("xoxb-fake-token")
+            },
+            BotUserId: new SlackUserId("UBOT"),
+            DefaultChannelId: null,
+            ReplyClient: _replyClient,
+            ContentScanner: new MagicByteContentScanner(new ContentPolicy()),
+            HttpClient: httpClient);
+
+        var gateway = Sys.ActorOf(SlackGatewayActor.CreateProps(deps), "slack-gw-real-scanner-test");
+
+        var files = new List<SlackFileReference>
+        {
+            new("F_REAL", "photo.png", "image/png", FakePngBytes.Length,
+                "https://files.slack.com/files-pri/T1234-F_REAL/photo.png")
+        };
+
+        gateway.Tell(new SlackInboundMessage(
+            Kind: SlackInboundKind.Message,
+            EventId: new SlackEventId("D_RS:10000"),
+            ChannelId: new SlackChannelId("D_RS"),
+            ThreadTs: null,
+            EventTs: new SlackEventTs("10000.1"),
+            UserId: new SlackUserId("U_HUMAN"),
+            BotId: null,
+            Text: "check this image",
+            Subtype: null,
+            Hidden: false,
+            IsDirectMessage: true,
+            Files: files));
+
+        await AwaitAssertAsync(() =>
+        {
+            Assert.True(_replyClient.PostedMessages.Count > 0,
+                "Expected at least one Slack reply to be posted");
+        }, duration: TimeSpan.FromSeconds(10));
+
+        Assert.True(_chatClient.ReceivedImageContent,
+            "Expected LLM to receive DataContent (image) via real MagicByteContentScanner");
+    }
+
+    [Fact]
+    public async Task Scanner_failure_does_not_silently_drop_image()
+    {
+        // When the content scanner itself is broken (e.g. TypeInitializationException),
+        // images should still flow through to the LLM rather than being silently dropped.
+        var pipeline = Host.Services.GetRequiredService<SessionPipeline>();
+        var httpClient = new HttpClient(_httpHandler);
+
+        var deps = new SlackGatewayDependencies(
+            Pipeline: pipeline,
+            ActorSystem: Sys,
+            TimeProvider: TimeProvider.System,
+            Options: new SlackChannelOptions
+            {
+                Enabled = true,
+                MentionOnly = false,
+                AllowDirectMessages = true,
+                BotToken = new SensitiveString("xoxb-fake-token")
+            },
+            BotUserId: new SlackUserId("UBOT"),
+            DefaultChannelId: null,
+            ReplyClient: _replyClient,
+            ContentScanner: new FailingContentScanner(),
+            HttpClient: httpClient);
+
+        var gateway = Sys.ActorOf(SlackGatewayActor.CreateProps(deps), "slack-gw-failing-scanner-test");
+
+        var files = new List<SlackFileReference>
+        {
+            new("F_FAIL", "drawing.png", "image/png", FakePngBytes.Length,
+                "https://files.slack.com/files-pri/T1234-F_FAIL/drawing.png")
+        };
+
+        gateway.Tell(new SlackInboundMessage(
+            Kind: SlackInboundKind.Message,
+            EventId: new SlackEventId("D_FS:11000"),
+            ChannelId: new SlackChannelId("D_FS"),
+            ThreadTs: null,
+            EventTs: new SlackEventTs("11000.1"),
+            UserId: new SlackUserId("U_HUMAN"),
+            BotId: null,
+            Text: "my daughter made this",
+            Subtype: null,
+            Hidden: false,
+            IsDirectMessage: true,
+            Files: files));
+
+        await AwaitAssertAsync(() =>
+        {
+            Assert.True(_replyClient.PostedMessages.Count > 0,
+                "Expected at least one Slack reply to be posted");
+        }, duration: TimeSpan.FromSeconds(10));
+
+        Assert.True(_chatClient.ReceivedImageContent,
+            "Expected LLM to receive image even when scanner is broken");
+    }
+
+    /// <summary>
+    /// Content scanner that simulates a broken scanner returning ScanFailure,
+    /// matching what happens when MagicByteValidator's type initializer fails.
+    /// </summary>
+    private sealed class FailingContentScanner : IContentScanner
+    {
+        public Task<ContentScanResult> ScanAsync(
+            ReadOnlyMemory<byte> content, string filename, string declaredMimeType,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(ContentScanResult.Rejected(
+                ContentScanError.ScanFailure,
+                "Content scan failed: The type initializer for 'Netclaw.Security.MagicByteValidator' threw an exception."));
+        }
+    }
+
     /// <summary>
     /// Fake HTTP handler that serves canned image bytes for Slack file download requests.
     /// </summary>

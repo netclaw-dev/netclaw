@@ -166,4 +166,23 @@ public sealed class MagicByteValidatorTests
         Assert.False(MagicByteValidator.HasExecutableSignature(PngHeader));
         Assert.False(MagicByteValidator.HasExecutableSignature(JpegHeader));
     }
+
+    [Fact]
+    public void Validate_still_works_when_DetectMimeType_returns_null()
+    {
+        // Core validation uses direct byte checks, not MimeDetective.
+        // Even if DetectMimeType returns null, Validate should still allow
+        // valid images through — the detected MIME type is diagnostic only.
+        var result = MagicByteValidator.Validate(PngHeader, "image/png", "photo.png");
+        Assert.True(result.IsAllowed);
+
+        result = MagicByteValidator.Validate(JpegHeader, "image/jpeg", "photo.jpg");
+        Assert.True(result.IsAllowed);
+
+        result = MagicByteValidator.Validate(GifHeader, "image/gif", "animation.gif");
+        Assert.True(result.IsAllowed);
+
+        result = MagicByteValidator.Validate(WebpHeader, "image/webp", "photo.webp");
+        Assert.True(result.IsAllowed);
+    }
 }
