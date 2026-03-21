@@ -47,4 +47,9 @@ public sealed class WebhookTarget
     /// Optional static headers to include with every POST (e.g. Authorization).
     /// </summary>
     public Dictionary<string, string>? Headers { get; set; }
+
+    /// <summary>
+    /// Payload format: "generic" (default, current JSON envelope) or "slack" (Slack Block Kit).
+    /// </summary>
+    public string Format { get; set; } = "generic";
 }
