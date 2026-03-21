@@ -108,13 +108,9 @@ public sealed partial class DaemonManager
                 $"{endpoint}/api/lifecycle/shutdown?reason={Uri.EscapeDataString(reason)}",
                 null);
         }
-        catch (HttpRequestException)
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
         {
-            // Daemon HTTP endpoint unreachable — proceed with signal
-        }
-        catch (TaskCanceledException)
-        {
-            // Timed out reaching daemon — proceed with signal
+            Console.Error.WriteLine($"Note: could not notify daemon of shutdown reason: {ex.Message}");
         }
 
         // Graceful shutdown: SIGTERM on Unix, Kill on Windows (no SIGTERM equivalent)
