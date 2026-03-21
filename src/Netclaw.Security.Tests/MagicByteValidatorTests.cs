@@ -167,22 +167,37 @@ public sealed class MagicByteValidatorTests
         Assert.False(MagicByteValidator.HasExecutableSignature(JpegHeader));
     }
 
-    [Fact]
-    public void Validate_still_works_when_DetectMimeType_returns_null()
+    [Theory]
+    [InlineData(nameof(PngHeader), "image/png")]
+    [InlineData(nameof(JpegHeader), "image/jpeg")]
+    [InlineData(nameof(GifHeader), "image/gif")]
+    [InlineData(nameof(WebpHeader), "image/webp")]
+    public void DetectMimeType_identifies_supported_image_types(string headerField, string expectedMime)
     {
-        // Core validation uses direct byte checks, not MimeDetective.
-        // Even if DetectMimeType returns null, Validate should still allow
-        // valid images through — the detected MIME type is diagnostic only.
-        var result = MagicByteValidator.Validate(PngHeader, "image/png", "photo.png");
-        Assert.True(result.IsAllowed);
+        var header = headerField switch
+        {
+            nameof(PngHeader) => PngHeader,
+            nameof(JpegHeader) => JpegHeader,
+            nameof(GifHeader) => GifHeader,
+            nameof(WebpHeader) => WebpHeader,
+            _ => throw new ArgumentException(headerField)
+        };
 
-        result = MagicByteValidator.Validate(JpegHeader, "image/jpeg", "photo.jpg");
-        Assert.True(result.IsAllowed);
+        Assert.Equal(expectedMime, MagicByteValidator.DetectMimeType(header));
+    }
 
-        result = MagicByteValidator.Validate(GifHeader, "image/gif", "animation.gif");
-        Assert.True(result.IsAllowed);
+    [Fact]
+    public void DetectMimeType_returns_null_for_unknown_content()
+    {
+        byte[] randomBytes = [0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D];
+        Assert.Null(MagicByteValidator.DetectMimeType(randomBytes));
+    }
 
-        result = MagicByteValidator.Validate(WebpHeader, "image/webp", "photo.webp");
-        Assert.True(result.IsAllowed);
+    [Fact]
+    public void DetectMimeType_returns_null_for_empty_or_short_content()
+    {
+        Assert.Null(MagicByteValidator.DetectMimeType(ReadOnlySpan<byte>.Empty));
+        Assert.Null(MagicByteValidator.DetectMimeType(new byte[] { 0xFF }));
+        Assert.Null(MagicByteValidator.DetectMimeType(new byte[] { 0xFF, 0xD8 }));
     }
 }

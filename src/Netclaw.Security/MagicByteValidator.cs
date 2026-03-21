@@ -1,22 +1,13 @@
 using System.Collections.Frozen;
-using MimeDetective;
 
 namespace Netclaw.Security;
 
 /// <summary>
 /// Validates file content using magic byte (file signature) analysis.
 /// Narrowed to image types for Netclaw's multimodal pipeline.
-/// Adapted from TextForge's MagicByteValidator.
 /// </summary>
 public static class MagicByteValidator
 {
-    // Lazily initialized inside DetectMimeType() — NOT a static field initializer.
-    // Keeping MimeDetective out of the static constructor prevents a transient
-    // MimeDetective loading failure from poisoning the entire type via
-    // TypeInitializationException (which .NET caches permanently).
-    private static IContentInspector? s_inspector;
-    private static bool s_inspectorResolved;
-
     private static readonly FrozenSet<string> AllowedImageMimeTypes =
         new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
@@ -116,49 +107,36 @@ public static class MagicByteValidator
         return ValidateImageContent(content, declaredMimeType);
     }
 
+    /// <summary>
+    /// Detects MIME type from magic bytes for the supported image types.
+    /// Returns null for unrecognized content.
+    /// </summary>
     public static string? DetectMimeType(ReadOnlySpan<byte> content)
     {
-        if (content.Length == 0)
-            return null;
+        if (content.Length >= 8 &&
+            content[0] == 0x89 && content[1] == 0x50 &&
+            content[2] == 0x4E && content[3] == 0x47 &&
+            content[4] == 0x0D && content[5] == 0x0A &&
+            content[6] == 0x1A && content[7] == 0x0A)
+            return "image/png";
 
-        try
-        {
-            var inspector = GetOrCreateInspector();
-            if (inspector is null)
-                return null;
+        if (content.Length >= 3 &&
+            content[0] == 0xFF && content[1] == 0xD8 && content[2] == 0xFF)
+            return "image/jpeg";
 
-            var results = inspector.Inspect(content);
-            var topMatch = results.OrderByDescending(r => r.Points).FirstOrDefault();
-            return topMatch?.Definition.File.MimeType;
-        }
-        catch
-        {
-            return null;
-        }
-    }
+        if (content.Length >= 4 &&
+            content[0] == 0x47 && content[1] == 0x49 &&
+            content[2] == 0x46 && content[3] == 0x38)
+            return "image/gif";
 
-    private static IContentInspector? GetOrCreateInspector()
-    {
-        if (s_inspectorResolved)
-            return s_inspector;
+        if (content.Length >= 12 &&
+            content[0] == 0x52 && content[1] == 0x49 &&
+            content[2] == 0x46 && content[3] == 0x46 &&
+            content[8] == 0x57 && content[9] == 0x45 &&
+            content[10] == 0x42 && content[11] == 0x50)
+            return "image/webp";
 
-        try
-        {
-            s_inspector = new ContentInspectorBuilder()
-            {
-                Definitions = MimeDetective.Definitions.DefaultDefinitions.All()
-            }.Build();
-        }
-        catch (Exception)
-        {
-            // MimeDetective failed to initialize — detection unavailable.
-            // This is purely diagnostic; core validation uses direct byte checks.
-            // Swallow intentionally: s_inspector stays null, DetectMimeType returns null.
-            s_inspector = null;
-        }
-
-        s_inspectorResolved = true;
-        return s_inspector;
+        return null;
     }
 
     public static bool HasExecutableSignature(ReadOnlySpan<byte> content)
