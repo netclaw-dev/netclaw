@@ -95,6 +95,13 @@ Before coding a capability, discover in this order:
 If planning and implementation artifacts conflict, fix planning artifacts first.
 If discovery artifacts conflict with each other, update them before implementing.
 
+## Configuration Schema Sync Rule
+
+When adding or changing properties on any `*Config` type in `Netclaw.Configuration`,
+update `src/Netclaw.Configuration/Schemas/netclaw-config.v1.schema.json` in the same PR.
+The schema uses `"additionalProperties": false` throughout — any new property that is
+missing from the schema will be rejected by `ConfigSchemaDoctorCheck` at runtime.
+
 ## Universal Quality Bar
 
 - secure-by-default behavior for gateway and tools
