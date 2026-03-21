@@ -20,4 +20,10 @@ public interface ISessionLifecycleObserver
     /// Implementations must be fast — this runs synchronously in the Akka.Streams pipeline.
     /// </summary>
     void OnOutput(SessionOutput output);
+
+    /// <summary>
+    /// Called when a session's output stream terminates (e.g. channel actor passivation).
+    /// Used to mark sessions as idle in the catalog.
+    /// </summary>
+    void OnSessionEnded(SessionId sessionId);
 }

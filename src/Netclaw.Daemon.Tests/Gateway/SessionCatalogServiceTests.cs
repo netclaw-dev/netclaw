@@ -262,31 +262,7 @@ public sealed class SessionCatalogServiceTests : IDisposable
     }
 
     [Fact]
-    public void OnOutput_RecordsTokenUsage_WhenOnlyOutputTokensPresent()
-    {
-        var paths = CreatePaths();
-        var metrics = new FakeMetrics();
-        var service = CreateService(paths, metrics);
-        var sessionId = new SessionId("signalr/test-usage-1");
-
-        service.OnSessionCreated(sessionId, ChannelType.SignalR);
-
-        // Simulate streaming response: InputTokens is null (Anthropic SDK bug),
-        // but OutputTokens has a value.
-        service.OnOutput(new UsageOutput
-        {
-            SessionId = sessionId,
-            InputTokens = null,
-            OutputTokens = 500
-        });
-
-        Assert.Single(metrics.TokenUsageCalls);
-        Assert.Equal(0, metrics.TokenUsageCalls[0].Input);
-        Assert.Equal(500, metrics.TokenUsageCalls[0].Output);
-    }
-
-    [Fact]
-    public void OnOutput_RecordsTokenUsage_WhenBothTokenFieldsPresent()
+    public void OnOutput_UpdatesLastInputTokens_WhenInputTokensPresent()
     {
         var paths = CreatePaths();
         var metrics = new FakeMetrics();
@@ -302,9 +278,8 @@ public sealed class SessionCatalogServiceTests : IDisposable
             OutputTokens = 250
         });
 
-        Assert.Single(metrics.TokenUsageCalls);
-        Assert.Equal(1000, metrics.TokenUsageCalls[0].Input);
-        Assert.Equal(250, metrics.TokenUsageCalls[0].Output);
+        // Token recording is now done by LlmSessionActor, not SessionCatalogService
+        Assert.Empty(metrics.TokenUsageCalls);
 
         // Verify last_input_tokens was updated in SQLite
         using var conn = OpenConn(paths);
@@ -316,7 +291,7 @@ public sealed class SessionCatalogServiceTests : IDisposable
     }
 
     [Fact]
-    public void OnOutput_DoesNotRecord_WhenBothTokenFieldsNull()
+    public void OnOutput_DoesNotUpdateLastInputTokens_WhenInputTokensNull()
     {
         var paths = CreatePaths();
         var metrics = new FakeMetrics();
@@ -329,10 +304,57 @@ public sealed class SessionCatalogServiceTests : IDisposable
         {
             SessionId = sessionId,
             InputTokens = null,
-            OutputTokens = null
+            OutputTokens = 500
         });
 
         Assert.Empty(metrics.TokenUsageCalls);
+
+        // last_input_tokens should remain null
+        using var conn = OpenConn(paths);
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT last_input_tokens FROM sessions WHERE persistence_id = $pid";
+        cmd.Parameters.AddWithValue("$pid", $"session-{sessionId.Value}");
+        var result = cmd.ExecuteScalar();
+        Assert.Equal(DBNull.Value, result);
+    }
+
+    [Fact]
+    public void OnSessionEnded_SetsStatusToIdle()
+    {
+        var paths = CreatePaths();
+        var service = CreateService(paths);
+        var sessionId = new SessionId("signalr/test-end-1");
+
+        service.OnSessionCreated(sessionId, ChannelType.SignalR);
+
+        // Verify initially active
+        var stats = service.GetStats();
+        Assert.Equal(1, stats.ActiveSessions);
+
+        service.OnSessionEnded(sessionId);
+
+        // Should now be idle
+        stats = service.GetStats();
+        Assert.Equal(1, stats.TotalSessions);
+        Assert.Equal(0, stats.ActiveSessions);
+    }
+
+    [Fact]
+    public void OnSessionCreated_ResetsIdleToActive()
+    {
+        var paths = CreatePaths();
+        var service = CreateService(paths);
+        var sessionId = new SessionId("signalr/test-resume-1");
+
+        service.OnSessionCreated(sessionId, ChannelType.SignalR);
+        service.OnSessionEnded(sessionId);
+
+        // Resume — should set back to active
+        service.OnSessionCreated(sessionId, ChannelType.SignalR);
+
+        var stats = service.GetStats();
+        Assert.Equal(1, stats.TotalSessions);
+        Assert.Equal(1, stats.ActiveSessions);
     }
 
     private sealed class FakeMetrics : ISessionMetrics

@@ -2814,6 +2814,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     private void EmitUsageOutput(UsageDetails usage)
     {
+        _sessionMetrics?.RecordTokenUsage(usage.InputTokenCount ?? 0, usage.OutputTokenCount ?? 0);
+
         var contextWindow = _config.ContextWindowTokens;
         double? usagePercent = usage.InputTokenCount.HasValue && contextWindow > 0
             ? (double)usage.InputTokenCount.Value / contextWindow

@@ -90,6 +90,37 @@ public sealed class SessionCatalogService : ISessionLifecycleObserver
     }
 
     /// <inheritdoc />
+    public void OnSessionEnded(SessionId sessionId)
+    {
+        var persistenceId = $"session-{sessionId.Value}";
+        var nowMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
+
+        try
+        {
+            using var conn = new SqliteConnection(_connectionString);
+            conn.Open();
+
+            EnsureSchemaUpToDate(conn, _logger);
+
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText =
+                """
+                UPDATE sessions SET
+                    status = 'idle',
+                    last_activity = $now
+                WHERE persistence_id = $pid
+                """;
+            cmd.Parameters.AddWithValue("$pid", persistenceId);
+            cmd.Parameters.AddWithValue("$now", nowMs);
+            cmd.ExecuteNonQuery();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Failed to mark session {SessionId} as idle", sessionId.Value);
+        }
+    }
+
+    /// <inheritdoc />
     public void OnOutput(SessionOutput output)
     {
         var persistenceId = $"session-{output.SessionId.Value}";
@@ -118,24 +149,18 @@ public sealed class SessionCatalogService : ISessionLifecycleObserver
                     break;
 
                 case UsageOutput usage
-                    when usage.InputTokens.HasValue || usage.OutputTokens.HasValue:
-                    if (usage.InputTokens.HasValue)
+                    when usage.InputTokens.HasValue:
+                    UpdateSession(conn, persistenceId, cmd =>
                     {
-                        UpdateSession(conn, persistenceId, cmd =>
-                        {
-                            cmd.CommandText =
-                                """
-                                UPDATE sessions SET
-                                    last_input_tokens = $tokens,
-                                    last_activity = $now
-                                WHERE persistence_id = $pid
-                                """;
-                            cmd.Parameters.AddWithValue("$tokens", usage.InputTokens.Value);
-                        });
-                    }
-                    _metrics?.RecordTokenUsage(
-                        usage.InputTokens ?? 0,
-                        usage.OutputTokens ?? 0);
+                        cmd.CommandText =
+                            """
+                            UPDATE sessions SET
+                                last_input_tokens = $tokens,
+                                last_activity = $now
+                            WHERE persistence_id = $pid
+                            """;
+                        cmd.Parameters.AddWithValue("$tokens", usage.InputTokens.Value);
+                    });
                     break;
 
                 case SessionTitleOutput title:

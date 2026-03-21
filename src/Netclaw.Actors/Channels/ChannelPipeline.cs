@@ -195,10 +195,15 @@ public sealed class SessionPipeline : ISessionPipeline
         if (_lifecycleObserver is not null)
         {
             var observer = _lifecycleObserver;
+            var sid = sessionId;
             outputSource = outputSource.Select(output =>
             {
                 observer.OnOutput(output);
                 return output;
+            }).WatchTermination((notUsed, done) =>
+            {
+                done.ContinueWith(_ => observer.OnSessionEnded(sid));
+                return notUsed;
             });
         }
 
