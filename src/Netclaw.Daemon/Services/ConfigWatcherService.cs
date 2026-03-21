@@ -23,6 +23,7 @@ public sealed class ConfigWatcherService : IHostedService, IDisposable
     private readonly TimeProvider _timeProvider;
     private readonly IHostApplicationLifetime _appLifetime;
     private readonly DaemonRestartSignal _restartSignal;
+    private readonly DaemonLifecycleNotifier _lifecycleNotifier;
     private readonly ILogger<ConfigWatcherService> _logger;
 
     private FileSystemWatcher? _watcher;
@@ -34,12 +35,14 @@ public sealed class ConfigWatcherService : IHostedService, IDisposable
         TimeProvider timeProvider,
         IHostApplicationLifetime appLifetime,
         DaemonRestartSignal restartSignal,
+        DaemonLifecycleNotifier lifecycleNotifier,
         ILogger<ConfigWatcherService> logger)
     {
         _paths = paths;
         _timeProvider = timeProvider;
         _appLifetime = appLifetime;
         _restartSignal = restartSignal;
+        _lifecycleNotifier = lifecycleNotifier;
         _logger = logger;
     }
 
@@ -131,6 +134,7 @@ public sealed class ConfigWatcherService : IHostedService, IDisposable
             }
 
             _logger.LogInformation("Config valid. Requesting daemon restart.");
+            _lifecycleNotifier.NotifyShutdown("config-reload");
             _restartSignal.RequestRestart();
             _appLifetime.StopApplication();
         }

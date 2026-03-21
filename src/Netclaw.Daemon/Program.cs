@@ -186,11 +186,29 @@ static async Task RunDaemonAsync(string[] args, DaemonRestartSignal restartSigna
 
     app.MapProviderOAuthEndpoints();
 
+    // Daemon lifecycle endpoint — CLI calls this before sending SIGTERM.
+    // Future #326 hook: add session drain before returning.
+    app.MapPost("/api/lifecycle/shutdown", (
+        DaemonLifecycleNotifier notifier,
+        HttpRequest request) =>
+    {
+        var reason = request.Query["reason"].ToString();
+        if (string.IsNullOrEmpty(reason))
+            return Results.BadRequest(new { error = "reason query parameter is required" });
+
+        notifier.NotifyShutdown(reason);
+        return Results.Ok(new { reason, pid = Environment.ProcessId });
+    });
+
     // Register channel-specific tools after DI is built (tools need resolved services).
     ChannelToolRegistration.RegisterChannelTools(app.Services);
 
     // Reminder REST API
     MapReminderEndpoints(app);
+
+    // Fire startup notification after all hosted services are ready
+    app.Lifetime.ApplicationStarted.Register(() =>
+        app.Services.GetRequiredService<DaemonLifecycleNotifier>().NotifyStarted());
 
     await app.RunAsync();
 }
@@ -415,6 +433,9 @@ static void ConfigureDaemonServices(
     {
         services.AddSingleton<IOperationalNotificationSink>(NullNotificationSink.Instance);
     }
+
+    // Daemon lifecycle notifier (startup/shutdown webhooks + logging)
+    services.AddSingleton<DaemonLifecycleNotifier>();
 
     // MCP server lifecycle management
     var mcpServers = configuration.GetSection("McpServers")

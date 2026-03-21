@@ -13,6 +13,8 @@ public enum AlertType
     ProviderUnreachable,
     ReminderExecutionFailed,
     ReminderAutoDisabled,
+    DaemonStarted,
+    DaemonStopping,
 }
 
 /// <summary>

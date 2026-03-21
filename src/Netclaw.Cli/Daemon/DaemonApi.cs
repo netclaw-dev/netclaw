@@ -20,12 +20,26 @@ public sealed class DaemonApi
     private readonly IHttpClientFactory _factory;
     private readonly string _endpoint;
 
+    /// <summary>
+    /// Default daemon endpoint when no override is configured.
+    /// </summary>
+    public const string DefaultEndpoint = "http://127.0.0.1:5199";
+
     public DaemonApi(IHttpClientFactory factory, IConfiguration configuration)
     {
         _factory = factory;
-        _endpoint = (configuration["Daemon:Endpoint"]
+        _endpoint = ResolveEndpoint(configuration);
+    }
+
+    /// <summary>
+    /// Resolves the daemon endpoint from config, environment, or default.
+    /// Usable without DI for callers that don't have <see cref="IConfiguration"/>.
+    /// </summary>
+    public static string ResolveEndpoint(IConfiguration? configuration = null)
+    {
+        return (configuration?["Daemon:Endpoint"]
             ?? Environment.GetEnvironmentVariable("NETCLAW_DAEMON_ENDPOINT")
-            ?? "http://127.0.0.1:5199").TrimEnd('/');
+            ?? DefaultEndpoint).TrimEnd('/');
     }
 
     /// <summary>
