@@ -331,17 +331,13 @@ public sealed class McpServersDoctorCheckTests : IDisposable
         public void Dispose()
         {
             _listener.Close();
-            try
+
+            var task = _serverTask;
+            if (task.IsFaulted)
             {
-                _serverTask.GetAwaiter().GetResult();
-            }
-            catch (HttpListenerException)
-            {
-                // Listener shutdown races are expected during test cleanup.
-            }
-            catch (ObjectDisposedException)
-            {
-                // Listener disposal can win the race with the background loop.
+                var exception = task.Exception?.GetBaseException();
+                if (exception is not HttpListenerException and not ObjectDisposedException)
+                    throw exception ?? task.Exception!;
             }
         }
 
