@@ -216,9 +216,20 @@ internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStas
 
                         if (!scanResult.IsAllowed)
                         {
-                            _log.Warning("Content scan rejected file {Name}: {Message}",
-                                file.Name, scanResult.Message ?? scanResult.Error?.ToString());
-                            continue;
+                            if (scanResult.Error == ContentScanError.ScanFailure)
+                            {
+                                // Scanner itself is broken — allow the file through rather
+                                // than silently dropping valid images. The LLM provider
+                                // will still validate content on its end.
+                                _log.Error("Content scanner failed for file {Name}: {Message} — allowing file through",
+                                    file.Name, scanResult.Message);
+                            }
+                            else
+                            {
+                                _log.Warning("Content scan rejected file {Name}: {Message}",
+                                    file.Name, scanResult.Message ?? scanResult.Error?.ToString());
+                                continue;
+                            }
                         }
 
                         contents.Add(new DataContent(bytes.ToArray(), file.MimeType));
