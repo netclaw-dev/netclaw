@@ -259,6 +259,27 @@ public sealed partial class ReminderManagerActor : ReceiveActor
         return new ReminderStateResponse(id, Found: true, Enabled: false);
     }
 
+    /// <summary>
+    /// Permanently removes a reminder definition, its schedule, history, and any
+    /// in-memory tracking state. Used for automatic cleanup of fired one-shot reminders.
+    /// </summary>
+    private async Task DeleteReminderInternalAsync(ReminderId id)
+    {
+        _definitionStore.Delete(id);
+        await CancelScheduleOnlyAsync(id);
+        _failureCounts.Remove(id);
+        RemoveFromDeferredQueue(id);
+
+        try
+        {
+            _historyStore.DeleteHistory(id);
+        }
+        catch (Exception ex)
+        {
+            _log.Warning(ex, "Failed to delete history for reminder '{0}'", id.Value);
+        }
+    }
+
     private async Task<ReminderStateResponse> EnableReminderInternalAsync(ReminderId id)
     {
         var definition = _definitionStore.Get(id);
@@ -480,11 +501,11 @@ public sealed partial class ReminderManagerActor : ReceiveActor
             }
         }
 
-        // One-shot reminders cannot fire again — disable after execution
-        if (definition is { Enabled: true, Schedule.Type: ReminderScheduleType.OneShot })
+        // One-shot reminders cannot fire again — delete after execution
+        if (definition is { Schedule.Type: ReminderScheduleType.OneShot })
         {
-            _log.Info("One-shot reminder '{0}' completed, disabling", completed.Id.Value);
-            await DisableReminderInternalAsync(completed.Id);
+            _log.Info("One-shot reminder '{0}' completed, deleting", completed.Id.Value);
+            await DeleteReminderInternalAsync(completed.Id);
         }
 
         await ProcessDeferredQueueAsync();
@@ -520,31 +541,31 @@ public sealed partial class ReminderManagerActor : ReceiveActor
                     restoredSchedules++;
             }
 
-            // Disable zombie one-shots: enabled definitions with fire time in the past
+            // Delete stale one-shots: definitions with fire time in the past
             // and no active Akka.Reminders schedule (already fired, never cleaned up).
+            // Includes both enabled zombies and already-disabled leftovers.
             var now = _timeProvider.GetUtcNow();
-            var disabledZombies = 0;
+            var deletedOneShots = 0;
             foreach (var definition in definitions.Where(d =>
-                         d.Enabled &&
                          d.Schedule.Type == ReminderScheduleType.OneShot &&
                          d.Schedule.FireAt <= now &&
                          !scheduled.ContainsKey(d.Id)))
             {
-                await DisableReminderInternalAsync(new ReminderId(definition.Id));
-                disabledZombies++;
+                await DeleteReminderInternalAsync(new ReminderId(definition.Id));
+                deletedOneShots++;
             }
 
-            if (cancelledOrphans > 0 || restoredSchedules > 0 || disabledZombies > 0)
+            if (cancelledOrphans > 0 || restoredSchedules > 0 || deletedOneShots > 0)
             {
-                _log.Info("Reminder reconcile complete: cancelled_orphans={0}, restored={1}, disabled_zombies={2}",
+                _log.Info("Reminder reconcile complete: cancelled_orphans={0}, restored={1}, deleted_oneshots={2}",
                     cancelledOrphans,
                     restoredSchedules,
-                    disabledZombies);
+                    deletedOneShots);
             }
 
             // Only ack external callers — skip Self.Tell from PreStart
             if (!sender.Equals(Self))
-                sender.Tell(new ReconcileCompleted(cancelledOrphans, restoredSchedules, disabledZombies));
+                sender.Tell(new ReconcileCompleted(cancelledOrphans, restoredSchedules, deletedOneShots));
         }
         catch (Exception ex)
         {
@@ -755,5 +776,5 @@ public sealed partial class ReminderManagerActor : ReceiveActor
     /// Ack sent back to <see cref="ReconcileReminders"/> callers so they can
     /// synchronize on reconcile completion instead of polling.
     /// </summary>
-    internal sealed record ReconcileCompleted(int CancelledOrphans, int RestoredSchedules, int DisabledZombies);
+    internal sealed record ReconcileCompleted(int CancelledOrphans, int RestoredSchedules, int DeletedOneShots);
 }
