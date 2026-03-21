@@ -1,3 +1,11 @@
+#### 0.7.8 2026-03-21 ####
+
+Netclaw v0.7.8 — CLI packaging fix for installed binaries
+
+**CLI**
+
+* Fixed installed CLI binaries crashing on the `MemoryCheckpointHealth` doctor check — `libe_sqlite3.so` was missing from shipped single-file CLI binaries because `IncludeNativeLibrariesForSelfExtract=true` was set on the daemon publish but not the CLI. The release packaging step now bundles native libs correctly, and the PR validation smoke test now runs against a published binary (matching the exact release artifact) instead of via `dotnet run`. ([#365](https://github.com/Aaronontheweb/netclaw/pull/365))
+
 #### 0.7.7 2026-03-21 ####
 
 Netclaw v0.7.7 — Slack library extraction, lifecycle webhooks, reminder history preservation, and Slack token tracking
