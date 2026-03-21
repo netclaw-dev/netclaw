@@ -58,12 +58,32 @@ jobs:
         shell: bash
         run: dotnet test -c Release
 
+      - name: "Publish CLI (single-file, self-contained)"
+        if: runner.os == 'Linux'
+        run: >
+          dotnet publish src/Netclaw.Cli/Netclaw.Cli.csproj
+          -c Release
+          -r linux-x64
+          --self-contained true
+          /p:PublishSingleFile=true
+          /p:EnableCompressionInSingleFile=true
+          /p:IncludeNativeLibrariesForSelfExtract=true
+          -o ./publish/cli
+
+      - name: "Package and stage CLI binary (simulate release install)"
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          mkdir -p ./archives ./install-test
+          tar czf ./archives/netclaw-test.tar.gz -C ./publish/cli netclaw
+          tar xzf ./archives/netclaw-test.tar.gz -C ./install-test
+
       - name: "CLI smoke tests"
         if: runner.os == 'Linux'
         shell: bash
         run: bash scripts/smoke/cli-smoke.sh
         env:
-          BUILD_CONFIG: Release
+          NETCLAW_CLI: ./install-test/netclaw
 
   slopwatch:
     name: Slopwatch
