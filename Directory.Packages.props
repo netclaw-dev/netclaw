@@ -7,7 +7,6 @@
     <AkkaRemindersVersion>0.5.1</AkkaRemindersVersion>
     <OpenTelemetryVersion>1.13.1</OpenTelemetryVersion>
     <SlackNetVersion>0.17.9</SlackNetVersion>
-    <MimeDetectiveVersion>25.8.1</MimeDetectiveVersion>
     <MicrosoftExtensionsAIVersion>10.3.0</MicrosoftExtensionsAIVersion>
     <MicrosoftAspNetCoreVersion>10.0.5</MicrosoftAspNetCoreVersion>
   </PropertyGroup>
@@ -44,8 +43,6 @@
     <PackageVersion Include="SlackNet.Extensions.DependencyInjection" Version="$(SlackNetVersion)" />
     <PackageVersion Include="Cronos" Version="0.8.4" />
     <PackageVersion Include="Termina" Version="0.8.0" />
-    <PackageVersion Include="Mime-Detective" Version="$(MimeDetectiveVersion)" />
-    <PackageVersion Include="Mime-Detective.Definitions.Condensed" Version="$(MimeDetectiveVersion)" />
   </ItemGroup>
   <!-- Serialization -->
   <ItemGroup>

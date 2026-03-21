@@ -7,8 +7,6 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Mime-Detective" />
-    <PackageReference Include="Mime-Detective.Definitions.Condensed" />
     <PackageReference Include="Microsoft.Extensions.Hosting" />
   </ItemGroup>
 
