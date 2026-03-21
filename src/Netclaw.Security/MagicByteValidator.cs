@@ -149,10 +149,12 @@ public static class MagicByteValidator
                 Definitions = MimeDetective.Definitions.DefaultDefinitions.All()
             }.Build();
         }
-        catch
+        catch (Exception)
         {
             // MimeDetective failed to initialize — detection unavailable.
             // This is purely diagnostic; core validation uses direct byte checks.
+            // Swallow intentionally: s_inspector stays null, DetectMimeType returns null.
+            s_inspector = null;
         }
 
         s_inspectorResolved = true;
