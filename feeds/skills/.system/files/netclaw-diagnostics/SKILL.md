@@ -3,7 +3,7 @@ name: netclaw-diagnostics
 description: "Netclaw diagnostics and session debugging. Read when the user wants to understand what happened in a Netclaw session, why a tool failed, why capabilities are missing, or whether daemon/memory/config health is degraded."
 metadata:
   author: netclaw
-  version: "0.6.0"
+  version: "0.8.0"
   triggers: what happened in this session | debug this session | why did netclaw do that | why did this tool fail | missing tools in this session | session timeout | daemon unhealthy | memory degraded | inspect netclaw logs
 ---
 
@@ -41,7 +41,7 @@ Read and follow this skill proactively when ANY of these occur:
 | Health endpoint | `curl http://127.0.0.1:5199/api/health/ready` |
 | Full status JSON | `curl http://127.0.0.1:5199/api/health/status` |
 | Active sessions | `curl http://127.0.0.1:5199/api/sessions` |
-| MCP server status | `netclaw mcp list` |
+| MCP server status | `netclaw mcp list` (daemon required) |
 | Provider list | `netclaw provider list` |
 | Model configuration | `netclaw model list` |
 | Memory runbook | `docs/runbooks/memory-health-and-evals.md` |
@@ -60,7 +60,7 @@ Use `file_read` to inspect these files. Never log/display API keys.
 
 ## netclaw doctor
 
-Primary offline diagnostic tool. Runs without daemon.
+Primary diagnostic tool. It always validates local config and, when the daemon is reachable, prefers daemon-reported MCP auth/connectivity state over offline guesses.
 
 ```bash
 netclaw doctor
@@ -111,7 +111,7 @@ worker activity.
 | Symptom | Check |
 |---------|-------|
 | No LLM responses | `netclaw doctor`; verify provider credentials |
-| Missing tools | `netclaw mcp list`; inspect daemon logs |
+| Missing tools | `netclaw mcp list`; if auth state is unknown, restore daemon connectivity first, then inspect daemon logs |
 | Memory recall degraded | `netclaw status` memory section; run `netclaw doctor` |
 | Pending checkpoints keep rising | `Memory Checkpoint Health` warning + daemon logs |
 | Daemon won't start | stale PID, crash logs, config JSON validity |

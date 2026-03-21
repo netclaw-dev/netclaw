@@ -148,15 +148,16 @@ daemon is running.
 | `netclaw daemon install` | Register systemd user service |
 | `netclaw daemon uninstall` | Remove service registration |
 
-### Offline Commands (no daemon required)
+### Offline Commands (daemon optional)
 
 These commands read/write local files in `~/.netclaw/` and scan the local
-system. They never connect to the daemon.
+system. They do not require the daemon to be running, but some commands may use
+daemon state opportunistically when it is available.
 
 | Command | Behavior |
 |---------|----------|
 | `netclaw init` | TUI onboarding wizard (config file I/O) |
-| `netclaw doctor` | Validate config, probe services |
+| `netclaw doctor` | Validate config and prefer daemon-backed MCP auth/connectivity status when available |
 | `netclaw config show` | Dump merged config to stdout |
 | `netclaw config validate` | Check config for errors |
 | `netclaw project list\|add\|remove` | Manage project registry (local files) |

@@ -36,3 +36,5 @@ for MCP server integration.
 - report server state: healthy | degraded | unavailable
 - include discovered tool count per server
 - include last error and timestamp
+- distinguish auth-required, auth-failed, and unreachable states on the daemon runtime path
+- never claim OAuth auth failure from an offline-only probe when daemon truth is unavailable

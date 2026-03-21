@@ -94,4 +94,27 @@ public sealed class McpTokenCacheAdapterTests
         Assert.Equal("my-client-id", tokenSet.ClientId);
         Assert.Equal("https://mcp.example.com", tokenSet.McpServerUrl);
     }
+
+    [Fact]
+    public async Task StoreTokensAsync_PreservesExistingRefreshTokenWhenResponseOmitsIt()
+    {
+        _tokens["test-server"] = new McpOAuthTokenSet
+        {
+            AccessToken = new SensitiveString("old-token"),
+            RefreshToken = new SensitiveString("existing-refresh"),
+        };
+
+        var adapter = CreateAdapter();
+
+        await adapter.StoreTokensAsync(new TokenContainer
+        {
+            TokenType = "Bearer",
+            AccessToken = "new-token",
+            ObtainedAt = DateTimeOffset.UtcNow,
+        }, CancellationToken.None);
+
+        var tokenSet = _tokens["test-server"];
+        Assert.Equal("new-token", tokenSet.AccessToken.Value);
+        Assert.Equal("existing-refresh", tokenSet.RefreshToken?.Value);
+    }
 }

@@ -159,7 +159,7 @@ internal sealed class DaemonRuntimeStatusService(
             .ToList();
     }
 
-    private static DaemonRuntimeStatus.Connector ToConnector(string name, McpServerStatus status)
+    internal static DaemonRuntimeStatus.Connector ToConnector(string name, McpServerStatus status)
     {
         var key = $"mcp:{name}";
         var displayName = $"MCP/{name}";
@@ -191,6 +191,39 @@ internal sealed class DaemonRuntimeStatusService(
                 Enabled = true,
                 Status = "degraded",
                 Message = "Connected but no tools were discovered."
+            },
+
+            McpConnectionState.AwaitingAuth => new DaemonRuntimeStatus.Connector
+            {
+                Key = key,
+                DisplayName = displayName,
+                Enabled = true,
+                Status = "auth-required",
+                Message = string.IsNullOrWhiteSpace(status.ErrorMessage)
+                    ? "OAuth authorization is required."
+                    : status.ErrorMessage
+            },
+
+            McpConnectionState.AuthFailed => new DaemonRuntimeStatus.Connector
+            {
+                Key = key,
+                DisplayName = displayName,
+                Enabled = true,
+                Status = "auth-failed",
+                Message = string.IsNullOrWhiteSpace(status.ErrorMessage)
+                    ? "Authentication to the MCP server failed."
+                    : status.ErrorMessage
+            },
+
+            McpConnectionState.Unreachable => new DaemonRuntimeStatus.Connector
+            {
+                Key = key,
+                DisplayName = displayName,
+                Enabled = true,
+                Status = "disconnected",
+                Message = string.IsNullOrWhiteSpace(status.ErrorMessage)
+                    ? "Failed to reach MCP server."
+                    : status.ErrorMessage
             },
 
             _ => new DaemonRuntimeStatus.Connector
@@ -286,9 +319,9 @@ internal sealed class DaemonRuntimeStatusService(
         }
     }
 
-    private static string ResolveOverallStatus(IReadOnlyList<DaemonRuntimeStatus.Connector> connectors)
+    internal static string ResolveOverallStatus(IReadOnlyList<DaemonRuntimeStatus.Connector> connectors)
     {
-        if (connectors.Any(c => c.Enabled && c.Status is "disconnected"))
+        if (connectors.Any(c => c.Enabled && c.Status is "disconnected" or "auth-failed" or "auth-required"))
             return "degraded";
 
         if (connectors.Any(c => c.Enabled && c.Status is "degraded"))

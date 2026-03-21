@@ -404,41 +404,35 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
             _sharedToolFunctions.TryRemove(name, out _);
             _sessionScopedServers.TryRemove(name, out _);
 
-            // Detect auth failures and surface as AwaitingAuth rather than generic Error
-            if (IsAuthFailure(ex))
-            {
-                _statuses[name] = new McpServerStatus(name, McpConnectionState.AwaitingAuth, 0,
-                    "OAuth required. Run: netclaw mcp auth " + name);
-                _logger.LogWarning(ex, "MCP server '{Name}' requires OAuth authorization", name);
+            var hasCachedTokens = _oauthService.GetTokenSet(name) is not null;
+            var hasOAuthRuntimeHints = HasOAuthRuntimeHints(name, entry);
+            var failureStatus = BuildConnectionFailureStatus(name, entry, ex, hasCachedTokens, hasOAuthRuntimeHints);
+            _statuses[name] = failureStatus;
 
-                _notificationSink.Emit(new OperationalAlert
+            if (failureStatus.State is McpConnectionState.AwaitingAuth)
+            {
+                _logger.LogWarning(ex, "MCP server '{Name}' requires OAuth authorization", name);
+                EmitAuthAlert(name, $"MCP server '{name}' requires OAuth authorization. Run: netclaw mcp auth {name}", "authorization_required");
+            }
+            else if (failureStatus.State is McpConnectionState.AuthFailed)
+            {
+                _logger.LogWarning(ex, "MCP server '{Name}' authentication failed", name);
+
+                if (hasOAuthRuntimeHints || hasCachedTokens)
                 {
-                    AlertId = Guid.NewGuid().ToString("N")[..12],
-                    Type = "mcp.auth.expired",
-                    Category = AlertType.McpAuthExpired,
-                    Summary = $"MCP server '{name}' requires OAuth authorization. Run: netclaw mcp auth {name}",
-                    Timestamp = _timeProvider.GetUtcNow(),
-                    Severity = "warning",
-                    Source = name,
-                    Context = new Dictionary<string, string> { ["serverName"] = name }
-                });
+                    EmitAuthAlert(name,
+                        $"MCP server '{name}' authentication failed. Run: netclaw mcp auth {name}",
+                        hasCachedTokens ? "token_rejected" : "credentials_rejected");
+                }
+                else
+                {
+                    EmitDisconnectedAlert(name, $"MCP server '{name}' authentication failed: {failureStatus.ErrorMessage}");
+                }
             }
             else
             {
-                _statuses[name] = new McpServerStatus(name, McpConnectionState.Error, 0, ex.Message);
                 _logger.LogWarning(ex, "Failed to connect to MCP server '{Name}'", name);
-
-                _notificationSink.Emit(new OperationalAlert
-                {
-                    AlertId = Guid.NewGuid().ToString("N")[..12],
-                    Type = "mcp.server.disconnected",
-                    Category = AlertType.McpServerDisconnected,
-                    Summary = $"MCP server '{name}' connection failed: {ex.Message}",
-                    Timestamp = _timeProvider.GetUtcNow(),
-                    Severity = "warning",
-                    Source = name,
-                    Context = new Dictionary<string, string> { ["serverName"] = name }
-                });
+                EmitDisconnectedAlert(name, $"MCP server '{name}' connection failed: {failureStatus.ErrorMessage}");
             }
 
             return false;
@@ -461,21 +455,9 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
                 var metadata = await _oauthService.TryDiscoverMetadataAsync(name, entry.Url, ct);
                 if (metadata is not null)
                 {
-                    _statuses[name] = new McpServerStatus(name, McpConnectionState.AwaitingAuth, 0,
-                        "OAuth required. Run: netclaw mcp auth " + name);
+                    _statuses[name] = CreateAwaitingAuthStatus(name);
                     _logger.LogWarning("MCP server '{Name}' requires OAuth authorization", name);
-
-                    _notificationSink.Emit(new OperationalAlert
-                    {
-                        AlertId = Guid.NewGuid().ToString("N")[..12],
-                        Type = "mcp.auth.expired",
-                        Category = AlertType.McpAuthExpired,
-                        Summary = $"MCP server '{name}' requires OAuth authorization. Run: netclaw mcp auth {name}",
-                        Timestamp = _timeProvider.GetUtcNow(),
-                        Severity = "warning",
-                        Source = name,
-                        Context = new Dictionary<string, string> { ["serverName"] = name }
-                    });
+                    EmitAuthAlert(name, $"MCP server '{name}' requires OAuth authorization. Run: netclaw mcp auth {name}", "authorization_required");
 
                     return null;
                 }
@@ -557,6 +539,83 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         };
     }
 
+    private bool HasOAuthRuntimeHints(string serverName, McpServerEntry entry)
+        => !string.IsNullOrWhiteSpace(entry.OAuthClientId)
+           || !string.IsNullOrWhiteSpace(entry.OAuthScope)
+           || _oauthService.GetCachedMetadata(serverName) is not null;
+
+    internal static McpServerStatus BuildConnectionFailureStatus(
+        string serverName,
+        McpServerEntry entry,
+        Exception ex,
+        bool hasCachedTokens,
+        bool hasOAuthRuntimeHints)
+    {
+        if (IsAuthFailure(ex))
+        {
+            if (!hasCachedTokens && entry.Transport is not "stdio" && hasOAuthRuntimeHints)
+                return CreateAwaitingAuthStatus(serverName);
+
+            return CreateAuthFailedStatus(serverName, ex, oauthManaged: hasCachedTokens || hasOAuthRuntimeHints);
+        }
+
+        return CreateUnreachableStatus(serverName, ex);
+    }
+
+    internal static McpServerStatus CreateAwaitingAuthStatus(string serverName)
+        => new(serverName, McpConnectionState.AwaitingAuth, 0,
+            $"OAuth authorization required. Run: netclaw mcp auth {serverName}");
+
+    internal static McpServerStatus CreateAuthFailedStatus(string serverName, Exception ex, bool oauthManaged)
+    {
+        var statusText = GetHttpStatusText(ex);
+        var detail = string.IsNullOrWhiteSpace(statusText)
+            ? "Authentication rejected by server."
+            : $"Authentication rejected by server ({statusText}).";
+        var guidance = oauthManaged
+            ? $" Run: netclaw mcp auth {serverName}"
+            : " Check configured credentials or headers.";
+        return new(serverName, McpConnectionState.AuthFailed, 0, detail + guidance);
+    }
+
+    internal static McpServerStatus CreateUnreachableStatus(string serverName, Exception ex)
+        => new(serverName, McpConnectionState.Unreachable, 0,
+            string.IsNullOrWhiteSpace(ex.Message) ? "Failed to reach MCP server." : ex.Message);
+
+    private void EmitAuthAlert(string serverName, string summary, string reason)
+    {
+        _notificationSink.Emit(new OperationalAlert
+        {
+            AlertId = Guid.NewGuid().ToString("N")[..12],
+            Type = "mcp.auth.expired",
+            Category = AlertType.McpAuthExpired,
+            Summary = summary,
+            Timestamp = _timeProvider.GetUtcNow(),
+            Severity = "warning",
+            Source = serverName,
+            Context = new Dictionary<string, string>
+            {
+                ["serverName"] = serverName,
+                ["reason"] = reason,
+            }
+        });
+    }
+
+    private void EmitDisconnectedAlert(string serverName, string summary)
+    {
+        _notificationSink.Emit(new OperationalAlert
+        {
+            AlertId = Guid.NewGuid().ToString("N")[..12],
+            Type = "mcp.server.disconnected",
+            Category = AlertType.McpServerDisconnected,
+            Summary = summary,
+            Timestamp = _timeProvider.GetUtcNow(),
+            Severity = "warning",
+            Source = serverName,
+            Context = new Dictionary<string, string> { ["serverName"] = serverName }
+        });
+    }
+
     private static IEnumerable<string>? ParseScopes(string? scopeString)
     {
         if (string.IsNullOrWhiteSpace(scopeString))
@@ -571,8 +630,9 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         if (ex is HttpRequestException { StatusCode: System.Net.HttpStatusCode.Unauthorized or System.Net.HttpStatusCode.Forbidden })
             return true;
 
-        // SDK wraps auth failures in InvalidOperationException with "unauthorized" message
-        if (ex is InvalidOperationException && ex.Message.Contains("unauthorized", StringComparison.OrdinalIgnoreCase))
+        if (ex.Message.Contains("unauthorized", StringComparison.OrdinalIgnoreCase)
+            || ex.Message.Contains("forbidden", StringComparison.OrdinalIgnoreCase)
+            || ex.Message.Contains("invalid_grant", StringComparison.OrdinalIgnoreCase))
             return true;
 
         // Check inner exceptions for auth failures
@@ -580,6 +640,24 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
             return IsAuthFailure(ex.InnerException);
 
         return false;
+    }
+
+    private static string? GetHttpStatusText(Exception ex)
+    {
+        if (ex is HttpRequestException { StatusCode: var statusCode } && statusCode is not null)
+        {
+            return statusCode switch
+            {
+                System.Net.HttpStatusCode.Unauthorized => "401 Unauthorized",
+                System.Net.HttpStatusCode.Forbidden => "403 Forbidden",
+                _ => $"{(int)statusCode} {statusCode}"
+            };
+        }
+
+        if (ex.InnerException is not null)
+            return GetHttpStatusText(ex.InnerException);
+
+        return null;
     }
 
     private static string[] BuildStdioArguments(string serverName, McpServerEntry entry)
@@ -732,8 +810,9 @@ internal enum McpConnectionState
 {
     Disabled,
     Connected,
-    Error,
     AwaitingAuth,
+    AuthFailed,
+    Unreachable,
 }
 
 internal sealed record McpServerStatus(

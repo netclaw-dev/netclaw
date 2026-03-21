@@ -43,11 +43,12 @@ internal sealed class McpTokenCacheAdapter : ITokenCache
             ExpiresAt = expiresAt,
         };
 
-        // Preserve existing ClientId and McpServerUrl from any prior token set
+        // Preserve existing metadata and refresh token when the auth server omits it.
         if (_tokens.TryGetValue(_serverName, out var existing))
         {
             tokenSet.ClientId = existing.ClientId;
             tokenSet.McpServerUrl = existing.McpServerUrl;
+            tokenSet.RefreshToken ??= existing.RefreshToken;
         }
 
         _tokens[_serverName] = tokenSet;

@@ -67,6 +67,21 @@ The system SHALL expose MCP server health in diagnostics.
 - **WHEN** a configured MCP server is unreachable
 - **THEN** diagnostics mark it degraded or unavailable with last error timestamp
 
+#### Scenario: Daemon reports MCP auth failure
+
+- **GIVEN** the daemon can reach the MCP server but authentication is rejected on the live runtime path
+- **WHEN** the operator runs `netclaw mcp list` or `netclaw doctor`
+- **THEN** the CLI reports `auth failed`
+- **AND** remediation points to `netclaw mcp auth <name>` when OAuth is in use
+
+#### Scenario: Doctor cannot verify OAuth auth offline
+
+- **GIVEN** an HTTP/SSE MCP server uses OAuth
+- **AND** the daemon is unavailable
+- **WHEN** the operator runs `netclaw doctor`
+- **THEN** doctor may report offline connectivity evidence
+- **BUT** it SHALL not claim the server is unauthorized unless the daemon runtime path has verified that auth failure
+
 ### Requirement: Memorizer as external memory tier
 
 The Memorizer MCP server SHALL be the recommended first MCP server for Netclaw
