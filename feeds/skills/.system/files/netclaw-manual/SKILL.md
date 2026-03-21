@@ -59,7 +59,7 @@ prompt. Use the session ID to:
 | Tool | Purpose |
 |------|---------|
 | `web_search` | Search the web, returns titles/URLs/snippets |
-| `web_fetch` | Fetch URL, save text to local file, return preview |
+| `web_fetch` | Fetch URL, save content to local file, return preview. Default preserves HTML; use `format='text'` for plain text |
 
 ### file
 

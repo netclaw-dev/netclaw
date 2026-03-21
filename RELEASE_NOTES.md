@@ -1,3 +1,16 @@
+#### 0.7.4 2026-03-20 ####
+
+Netclaw v0.7.4 — Context overflow recovery, skill compaction durability, and frontmatter stripping
+
+**Sessions**
+
+* Fixed sessions failing the turn on context overflow — when the LLM provider rejects a request because the context window is full, the session now triggers emergency compaction and retries instead of surfacing an error. Context overflow detection is hardened across Anthropic, OpenAI, Ollama, and vLLM error formats with 16 new tests. ([#314](https://github.com/Aaronontheweb/netclaw/issues/314), [#340](https://github.com/Aaronontheweb/netclaw/pull/340))
+
+**Skills**
+
+* Fixed auto-loaded skills disappearing after context compaction — skill content injected into the system prompt was not preserved through the compaction pipeline, causing the agent to lose all skill knowledge mid-conversation. Skills are now re-injected after compaction completes. ([#339](https://github.com/Aaronontheweb/netclaw/pull/339))
+* Fixed YAML frontmatter leaking into LLM context from auto-loaded skills — skill files include metadata like version numbers in their YAML frontmatter, which the LLM could mistake for its own runtime version. Frontmatter is now stripped before injection so only the skill body reaches the model. ([#324](https://github.com/Aaronontheweb/netclaw/issues/324), [#339](https://github.com/Aaronontheweb/netclaw/pull/339))
+
 #### 0.7.3 2026-03-20 ####
 
 Netclaw v0.7.3 — Skill feed sync fix

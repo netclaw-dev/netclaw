@@ -176,6 +176,66 @@ public class WebFetchToolTests : IDisposable
     }
 
     [Fact]
+    public void SanitizeHtml_removes_scripts_preserves_structure()
+    {
+        var html = """
+            <html><body>
+                <script>alert('xss');</script>
+                <style>body { color: red; }</style>
+                <nav><a href="/">Home</a></nav>
+                <p>Content with <a href="/link">a link</a>.</p>
+                <img src="photo.jpg" alt="Photo" />
+                <footer>Copyright</footer>
+            </body></html>
+            """;
+
+        var result = WebFetchTool.SanitizeHtml(html);
+
+        Assert.DoesNotContain("<script>", result);
+        Assert.DoesNotContain("alert", result);
+        Assert.DoesNotContain("<style>", result);
+        Assert.DoesNotContain("color: red", result);
+        Assert.Contains("<nav>", result);
+        Assert.Contains("<a href=", result);
+        Assert.Contains("<img src=", result);
+        Assert.Contains("<footer>", result);
+    }
+
+    [Fact]
+    public void ExtractMetadataSummary_extracts_description_and_headings()
+    {
+        var html = """
+            <html>
+            <head>
+                <meta name="description" content="A test page about things." />
+            </head>
+            <body>
+                <h1>Main Title</h1>
+                <h2>Section One</h2>
+                <h3>Subsection</h3>
+            </body>
+            </html>
+            """;
+
+        var result = WebFetchTool.ExtractMetadataSummary(html);
+
+        Assert.Contains("Description: A test page about things.", result);
+        Assert.Contains("H1: Main Title", result);
+        Assert.Contains("H2: Section One", result);
+        Assert.Contains("H3: Subsection", result);
+    }
+
+    [Fact]
+    public void ExtractMetadataSummary_handles_no_metadata()
+    {
+        var html = "<html><body><p>Just text.</p></body></html>";
+
+        var result = WebFetchTool.ExtractMetadataSummary(html);
+
+        Assert.Equal("", result);
+    }
+
+    [Fact]
     public void SanitizeForFilename_replaces_special_chars()
     {
         var uri = new Uri("https://example.com/path/to/page?q=hello");
@@ -206,6 +266,7 @@ public class WebFetchToolTests : IDisposable
                 <h1>Welcome</h1>
                 <p>This is the first paragraph of content.</p>
                 <p>This is the second paragraph with more details.</p>
+                <script>alert('xss');</script>
             </body>
             </html>
             """;
@@ -222,19 +283,81 @@ public class WebFetchToolTests : IDisposable
         Assert.Contains("Fetched: https://example.com/test", result);
         Assert.Contains("Title: Test Page", result);
         Assert.Contains("Saved to:", result);
-        Assert.Contains(".txt", result);
+        Assert.Contains(".html", result);
         Assert.Contains("Preview", result);
-        Assert.Contains("Welcome", result);
 
-        // File should exist on disk
+        // File should exist on disk as .html (raw mode is default)
+        var files = Directory.GetFiles(_tempDir, "*.html");
+        Assert.Single(files);
+
+        // File content should preserve HTML structure but strip scripts
+        var fileContent = await File.ReadAllTextAsync(files[0]);
+        Assert.Contains("<h1>Welcome</h1>", fileContent);
+        Assert.Contains("<p>", fileContent);
+        Assert.DoesNotContain("<script>", fileContent);
+        Assert.DoesNotContain("alert", fileContent);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_text_mode_saves_extracted_text()
+    {
+        var html = """
+            <html>
+            <head><title>Test Page</title></head>
+            <body>
+                <h1>Welcome</h1>
+                <p>This is the first paragraph of content.</p>
+            </body>
+            </html>
+            """;
+
+        var handler = new FakeHttpHandler(html, "text/html");
+        var httpClient = new HttpClient(handler);
+        var tool = new WebFetchTool(httpClient, _tempDir);
+
+        var result = await tool.ExecuteAsync(
+            new Dictionary<string, object?> { ["Url"] = "https://example.com/test", ["Format"] = "text" },
+            CancellationToken.None);
+
+        Assert.Contains(".txt", result);
+
         var files = Directory.GetFiles(_tempDir, "*.txt");
         Assert.Single(files);
 
-        // File content should be the extracted text
         var fileContent = await File.ReadAllTextAsync(files[0]);
         Assert.Contains("Welcome", fileContent);
         Assert.Contains("first paragraph", fileContent);
         Assert.DoesNotContain("<html>", fileContent);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_raw_mode_preserves_links_and_images()
+    {
+        var html = """
+            <html><body>
+                <nav><a href="/home">Home</a></nav>
+                <p>Check out <a href="https://example.com">this link</a>.</p>
+                <img src="https://example.com/photo.jpg" alt="Photo" />
+                <footer>Copyright 2025</footer>
+            </body></html>
+            """;
+
+        var handler = new FakeHttpHandler(html, "text/html");
+        var httpClient = new HttpClient(handler);
+        var tool = new WebFetchTool(httpClient, _tempDir);
+
+        var result = await tool.ExecuteAsync(
+            new Dictionary<string, object?> { ["Url"] = "https://example.com/page" },
+            CancellationToken.None);
+
+        var files = Directory.GetFiles(_tempDir, "*.html");
+        Assert.Single(files);
+
+        var fileContent = await File.ReadAllTextAsync(files[0]);
+        Assert.Contains("<a href=", fileContent);
+        Assert.Contains("<img src=", fileContent);
+        Assert.Contains("<nav>", fileContent);
+        Assert.Contains("<footer>", fileContent);
     }
 
     [Fact]

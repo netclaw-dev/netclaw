@@ -10,11 +10,12 @@ namespace Netclaw.Security;
 /// </summary>
 public static class MagicByteValidator
 {
-    private static readonly Lazy<IContentInspector> Inspector = new(() =>
-        new ContentInspectorBuilder()
-        {
-            Definitions = MimeDetective.Definitions.DefaultDefinitions.All()
-        }.Build());
+    // Lazily initialized inside DetectMimeType() — NOT a static field initializer.
+    // Keeping MimeDetective out of the static constructor prevents a transient
+    // MimeDetective loading failure from poisoning the entire type via
+    // TypeInitializationException (which .NET caches permanently).
+    private static IContentInspector? s_inspector;
+    private static bool s_inspectorResolved;
 
     private static readonly FrozenSet<string> AllowedImageMimeTypes =
         new HashSet<string>(StringComparer.OrdinalIgnoreCase)
@@ -122,7 +123,11 @@ public static class MagicByteValidator
 
         try
         {
-            var results = Inspector.Value.Inspect(content);
+            var inspector = GetOrCreateInspector();
+            if (inspector is null)
+                return null;
+
+            var results = inspector.Inspect(content);
             var topMatch = results.OrderByDescending(r => r.Points).FirstOrDefault();
             return topMatch?.Definition.File.MimeType;
         }
@@ -130,6 +135,30 @@ public static class MagicByteValidator
         {
             return null;
         }
+    }
+
+    private static IContentInspector? GetOrCreateInspector()
+    {
+        if (s_inspectorResolved)
+            return s_inspector;
+
+        try
+        {
+            s_inspector = new ContentInspectorBuilder()
+            {
+                Definitions = MimeDetective.Definitions.DefaultDefinitions.All()
+            }.Build();
+        }
+        catch (Exception)
+        {
+            // MimeDetective failed to initialize — detection unavailable.
+            // This is purely diagnostic; core validation uses direct byte checks.
+            // Swallow intentionally: s_inspector stays null, DetectMimeType returns null.
+            s_inspector = null;
+        }
+
+        s_inspectorResolved = true;
+        return s_inspector;
     }
 
     public static bool HasExecutableSignature(ReadOnlySpan<byte> content)

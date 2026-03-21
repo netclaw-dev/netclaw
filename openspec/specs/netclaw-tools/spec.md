@@ -77,31 +77,45 @@ remain identical regardless of which backend is configured.
 
 ### Requirement: Web fetch tool
 
-The system SHALL provide a web fetch tool that retrieves content from URLs,
-extracts text from HTML, and truncates output to a configurable limit to
-prevent context flooding.
+The system SHALL provide a web fetch tool that retrieves content from URLs and
+saves it to a local file. The tool SHALL support two output formats: `raw`
+(default) preserves HTML structure after removing script and style elements,
+and `text` extracts plain text. Output is saved to disk and a preview summary
+returned to prevent context flooding.
 
-#### Scenario: Fetch and extract text from URL
+#### Scenario: Fetch URL in raw mode (default)
 
 - **GIVEN** the web fetch tool is available
-- **WHEN** the agent invokes the tool with a URL
+- **WHEN** the agent invokes the tool with a URL (no format or format='raw')
 - **THEN** the tool retrieves the page content via HTTP
-- **AND** extracts text from HTML (removing markup)
-- **AND** returns the extracted text to the LLM
+- **AND** removes `<script>` and `<style>` elements
+- **AND** preserves all other HTML structure (links, images, nav, etc.)
+- **AND** saves the sanitized HTML to a `.html` file
+- **AND** returns a summary with file path and metadata preview
 
-#### Scenario: Output truncated to configured limit
+#### Scenario: Fetch URL in text mode
 
-- **GIVEN** the fetched page content exceeds the configured output limit
+- **GIVEN** the web fetch tool is available
+- **WHEN** the agent invokes the tool with a URL and format='text'
+- **THEN** the tool retrieves the page content via HTTP
+- **AND** extracts plain text from HTML (removing all markup)
+- **AND** saves the extracted text to a `.txt` file
+- **AND** returns a summary with file path and text preview
+
+#### Scenario: Output saved to disk to prevent context flooding
+
+- **GIVEN** the fetched page content is large
 - **WHEN** the tool processes the content
-- **THEN** the output is truncated to the configured character limit
-- **AND** a truncation indicator is appended to the result
+- **THEN** the full content is saved to disk
+- **AND** only a preview summary is returned to the LLM
+- **AND** the agent can use file_read to access specific sections
 
 #### Scenario: Non-HTML content returned as-is
 
 - **GIVEN** the fetched URL returns plain text or JSON content
 - **WHEN** the tool processes the response
-- **THEN** the content is returned without HTML extraction
-- **AND** output truncation still applies
+- **THEN** the content is saved without HTML processing
+- **AND** a preview summary is returned
 
 #### Scenario: Unreachable URL returns error
 
