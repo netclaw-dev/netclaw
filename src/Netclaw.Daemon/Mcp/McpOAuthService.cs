@@ -569,6 +569,8 @@ internal sealed class McpOAuthService
             {
                 foreach (var (key, value) in tokens)
                     _tokens[key] = value;
+
+                _logger.LogDebug("Loaded OAuth tokens for {Count} server(s) from {Path}", tokens.Count, _paths.SecretsPath);
             }
         }
         catch (Exception ex)
