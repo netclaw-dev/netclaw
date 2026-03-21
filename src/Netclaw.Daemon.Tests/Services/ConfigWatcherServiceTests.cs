@@ -45,12 +45,27 @@ public sealed class ConfigWatcherServiceTests : IDisposable
     public void ValidConfigChange_TriggersRestart()
     {
         File.WriteAllText(_paths.NetclawConfigPath, """{ "Providers": {} }""");
-        File.WriteAllText(_paths.SecretsPath, """{ "ApiKeys": {} }""");
 
         _sut.ApplyReload();
 
         Assert.True(_restartSignal.RestartRequested);
         Assert.True(_lifetime.StopRequested);
+    }
+
+    [Theory]
+    [InlineData("secrets.json")]
+    [InlineData("mcp-oauth-metadata.json")]
+    [InlineData("random.txt")]
+    [InlineData(null)]
+    public void NonConfigFiles_AreNotWatched(string? fileName)
+    {
+        Assert.False(ConfigWatcherService.IsWatchedFile(fileName));
+    }
+
+    [Fact]
+    public void NetclawJson_IsWatched()
+    {
+        Assert.True(ConfigWatcherService.IsWatchedFile("netclaw.json"));
     }
 
     [Fact]
