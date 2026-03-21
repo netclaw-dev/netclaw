@@ -337,9 +337,11 @@ public sealed class McpServersDoctorCheckTests : IDisposable
             }
             catch (HttpListenerException)
             {
+                // Listener shutdown races are expected during test cleanup.
             }
             catch (ObjectDisposedException)
             {
+                // Listener disposal can win the race with the background loop.
             }
         }
 
