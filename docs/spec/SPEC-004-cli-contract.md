@@ -86,7 +86,8 @@ Behavior:
 
 - prompt validation checks required opening/zero clause sections
 - tools policy command reports effective grant state
-- mcp commands report per-server connectivity and discovered tools
+- `netclaw mcp list` reports daemon-backed per-server runtime status and discovered tools
+- `netclaw doctor` may include daemon-backed MCP auth/connectivity truth when available, and must label offline-only OAuth checks as non-authoritative
 - smoke test command runs optional live integration checks outside CI-required
   test suite
 

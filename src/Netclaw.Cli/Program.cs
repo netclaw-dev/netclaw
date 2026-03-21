@@ -444,14 +444,14 @@ static async Task RunAsync(string[] args)
         }
     }
 
-    // ── MCP server management (offline, except auth which needs daemon) ──
+    // ── MCP server management (list/auth use daemon for live status/OAuth) ──
     if (mode is "mcp")
     {
         var mcpSubcommand = args.Length > 1 ? args[1] : "help";
 
-        if (mcpSubcommand is "auth")
+        if (mcpSubcommand is "auth" or "list")
         {
-            // auth needs the daemon — spin up DI to get DaemonApi
+            // auth/list need the daemon — spin up DI to get DaemonApi
             var builder = Host.CreateApplicationBuilder(args);
             ConfigureConfigServices(builder.Services, builder.Configuration);
             builder.Logging.ClearProviders();
@@ -788,9 +788,11 @@ static void WriteDoctorHelp()
 {
     Console.WriteLine("Usage: netclaw doctor");
     Console.WriteLine();
-    Console.WriteLine("Runs offline configuration diagnostics:");
+    Console.WriteLine("Runs configuration diagnostics and daemon-backed MCP verification when available:");
     Console.WriteLine("  - netclaw.json schema validation (versioned by configVersion)");
     Console.WriteLine("  - secrets.json syntax validation");
+    Console.WriteLine("  - MCP runtime auth/connectivity status from the daemon");
+    Console.WriteLine("  - explicit offline MCP connectivity checks when daemon status is unavailable");
     Console.WriteLine();
     Console.WriteLine("Options:");
     Console.WriteLine("  --format <text|json>   Output format (default: text)");
