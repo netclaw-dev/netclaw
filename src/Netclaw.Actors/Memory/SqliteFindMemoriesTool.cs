@@ -43,7 +43,7 @@ public sealed partial class SqliteFindMemoriesTool : NetclawTool<SqliteFindMemor
             ? "manual/tool"
             : context.SessionId!;
         var domain = new Protocol.SessionId(sessionId).ToMemoryDomain();
-        var audience = ResolveAudience(context.SessionId);
+        var audience = MemoryPolicyScopeResolver.ResolveAudience(context.Audience, sessionId);
 
         var request = _planner.BuildRequest(
             sessionId,
@@ -62,7 +62,7 @@ public sealed partial class SqliteFindMemoriesTool : NetclawTool<SqliteFindMemor
             domain,
             plan.MemoryClasses,
             limit,
-            ResolveBoundary(context.SessionId),
+            MemoryPolicyScopeResolver.ResolveBoundary(context.Boundary, audience, sessionId, domain),
             audience,
             allowExpiredEvidence: includeStale,
             ct);
@@ -95,11 +95,6 @@ public sealed partial class SqliteFindMemoriesTool : NetclawTool<SqliteFindMemor
     protected override Task<string> ExecuteAsync(Params args, CancellationToken ct)
         => ExecuteAsync(args, ToolExecutionContext.Empty, ct);
 
-    private static string ResolveBoundary(string? sessionId)
-        => SecurityPolicyDefaults.ResolveBoundaryFromSessionId(sessionId, ResolveAudience(sessionId));
-
-    private static TrustAudience ResolveAudience(string? sessionId)
-        => SecurityPolicyDefaults.ResolveAudienceFromSessionId(sessionId);
     private static string BuildSnippet(string content)
         => content.Length <= 160 ? content : content[..160] + "...";
 }

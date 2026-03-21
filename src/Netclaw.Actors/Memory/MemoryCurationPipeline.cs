@@ -109,9 +109,7 @@ public sealed class MemoryRulesFirstExtractor(MemoryPolicyEvaluator policy)
 
         var resolvedAudience = MemoryPolicyEvaluator.ResolveAudience(payload.Audience, TrustAudience.Public);
         SecurityPolicyDefaults.TryParseAudience(resolvedAudience, out var parsedAudience);
-        var resolvedBoundary = !string.IsNullOrWhiteSpace(payload.Boundary)
-            ? payload.Boundary!
-            : SecurityPolicyDefaults.InferLegacyBoundaryFromDomain(payload.Domain);
+        var resolvedBoundary = MemoryPolicyScopeResolver.ResolveBoundary(payload.Boundary, parsedAudience, sessionId: null, payload.Domain);
 
         var kind = ResolveKind(payload);
         var title = ResolveTitle(payload, kind, content);
@@ -275,7 +273,13 @@ public sealed class MemoryRulesFirstExtractor(MemoryPolicyEvaluator policy)
             return fingerprintSet.Contains(completedFingerprint) ? null : completedCandidate;
         }
 
-        if (!TryMatchProjectStatement(userText, payload.Domain, payload.FreshnessAtMs, out var candidate))
+        if (!TryMatchProjectStatement(
+                userText,
+                payload.Domain,
+                payload.FreshnessAtMs,
+                payload.Boundary,
+                payload.Audience,
+                out var candidate))
             return null;
 
         var fingerprint = BuildFingerprint(candidate.Kind.ToWireValue(), candidate.Domain, candidate.Title, candidate.Content);
@@ -326,7 +330,13 @@ public sealed class MemoryRulesFirstExtractor(MemoryPolicyEvaluator policy)
         }
     }
 
-    private static bool TryMatchProjectStatement(string text, string domain, long? freshnessAtMs, out MemoryCheckpointCandidate candidate)
+    private static bool TryMatchProjectStatement(
+        string text,
+        string domain,
+        long? freshnessAtMs,
+        string? boundary,
+        string? audience,
+        out MemoryCheckpointCandidate candidate)
     {
         var match = ProjectStatementPattern.Match(text);
         if (!match.Success)
@@ -369,8 +379,12 @@ public sealed class MemoryRulesFirstExtractor(MemoryPolicyEvaluator policy)
             Content: normalizedContent,
             UpdateSemantics: MemoryUpdateSemantics.MergeDocument,
             Domain: domain,
-            Boundary: SecurityPolicyDefaults.InferLegacyBoundaryFromDomain(domain),
-            Audience: Netclaw.Configuration.TrustAudience.Public.ToWireValue(),
+            Boundary: MemoryPolicyScopeResolver.ResolveBoundary(
+                boundary,
+                MemoryPolicyScopeResolver.ResolveAudience(audience, sessionId: null),
+                sessionId: null,
+                domain),
+            Audience: MemoryPolicyEvaluator.ResolveAudience(audience, Netclaw.Configuration.TrustAudience.Public),
             Sensitivity: MemorySensitivity.Normal.ToWireValue(),
             RecallMode: MemoryRecallMode.Auto,
             Confidence: 0.88,

@@ -3,7 +3,7 @@ name: netclaw-memory
 description: "REQUIRED before using find_memories, get_memories, store_memory, or update_memory. Read this first when the user asks what you remember, wants something saved, or asks about past conversations."
 metadata:
   author: netclaw
-  version: "1.0.0"
+  version: "1.1.0"
 ---
 
 # Netclaw Memory
@@ -13,10 +13,18 @@ when to use each tool.
 
 ## How Memory Works
 
-- **Automatic recall** runs before each user turn — injects relevant
-  `durable_fact` memories into the conversation automatically.
+- **Automatic recall** runs before each user turn and injects relevant
+  `durable_fact` memories into the conversation.
+- Recall is **policy-aware**: `audience` and `boundary` still govern what
+  can be surfaced for the current turn.
+- Recall resolves once at turn start and the same bundle is reused during
+  tool-loop follow-ups.
+- Recalled memories may persist into session history for ongoing context, so
+  per-turn policy is **first-contact gating**, not a way to retroactively
+  scrub information already surfaced earlier in the session.
 - **Explicit tools** are a manual-control layer on top of automatic recall.
-- Memory is SQLite-backed and cross-session within the same domain.
+- Memory is SQLite-backed and cross-session only within the active
+  domain/boundary policy envelope.
 
 ## When to Use Explicit Tools
 
@@ -27,7 +35,13 @@ Use when:
 - Automatic recall seems insufficient for the question
 - You need targeted retrieval beyond the injected bundle
 
-Pattern: `find_memories("query")` → scan results → `get_memories("id1,id2")`
+Pattern: `find_memories("query")` -> scan results -> `get_memories("id1,id2")`
+
+Normal `find_memories` behavior:
+- searches `durable_fact` plus current `evidence`
+- excludes `trace`
+- hides expired evidence by default
+- respects the current turn's effective `audience` and `boundary`
 
 ### `store_memory`
 
@@ -35,8 +49,13 @@ Use only for deliberate save requests:
 - User explicitly says "remember this" or "save this for later"
 - Pinning a high-value fact, decision, or preference
 
-Do NOT call `store_memory` reflexively on routine turns — the observation
+Do NOT call `store_memory` reflexively on routine turns - the observation
 sidecar handles background memory formation automatically.
+
+Policy rules for explicit writes:
+- explicit writes still inherit the current turn's `audience` and `boundary`
+- explicit writes may narrow policy scope, but must never widen it
+- raw secrets, credentials, tokens, and private keys are never durable memory
 
 ### `update_memory`
 
@@ -50,10 +69,47 @@ Use only to correct or supersede an existing memory.
 | `evidence` | Search only (`find_memories`) | Expires after 30 days |
 | `trace` | Not searchable | Expires after 72 hours |
 
+## Policy Envelope
+
+Every durable memory item should be understood as carrying:
+
+- `memory_class`
+- `audience`
+- `boundary`
+- `domain`
+- `sensitivity`
+- `recall_mode`
+
+Write-time and read-time policy both matter. Correct classification alone is
+not enough - recall and intentional search must also honor the active trust
+context.
+
 ## Identity vs Memory
 
 Do not put project facts, research, or tool findings in identity files.
 `SOUL.md` is only for narrow identity/profile updates. Everything else
 goes through the memory pipeline.
 
-If unsure, load `netclaw-operations` for the identity vs memory triage guide.
+If unsure, load `netclaw-operations` for the identity-vs-memory triage guide.
+
+## Diagnostics
+
+When memory behavior looks wrong:
+
+1. `netclaw status`
+2. `netclaw doctor`
+3. load `netclaw-operations`
+4. read `docs/runbooks/memory-health-and-evals.md`
+
+Useful log events:
+
+- `memory_recall_plan_resolved`
+- `memory_recall_plan_fallback`
+- `memory_observation_sidecar_completed`
+- `memory_observation_gate_result`
+- `turn_memory_recall`
+
+## Eval Gate
+
+Before rollout, run the redesigned provider-independent eval suites first,
+then optional live smoke checks with local Ollama models.

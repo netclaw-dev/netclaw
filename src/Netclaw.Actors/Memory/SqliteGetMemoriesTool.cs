@@ -37,8 +37,9 @@ public sealed partial class SqliteGetMemoriesTool : NetclawTool<SqliteGetMemorie
         if (ids.Length == 0)
             return "No memory IDs provided.";
 
-        var audience = ResolveAudience(context.SessionId);
-        var boundary = ResolveBoundary(context.SessionId, audience);
+        var sessionId = string.IsNullOrWhiteSpace(context.SessionId) ? "manual/tool" : context.SessionId!;
+        var audience = MemoryPolicyScopeResolver.ResolveAudience(context.Audience, sessionId);
+        var boundary = MemoryPolicyScopeResolver.ResolveBoundary(context.Boundary, audience, sessionId);
         var entries = await _store.GetMemoriesByIdsAsync(ids, boundary, audience, ct);
         if (entries.Count == 0)
             return $"No memories found for IDs: {string.Join(", ", ids)}";
@@ -64,10 +65,4 @@ public sealed partial class SqliteGetMemoriesTool : NetclawTool<SqliteGetMemorie
 
     protected override Task<string> ExecuteAsync(Params args, CancellationToken ct)
         => ExecuteAsync(args, ToolExecutionContext.Empty, ct);
-
-    private static TrustAudience ResolveAudience(string? sessionId)
-        => SecurityPolicyDefaults.ResolveAudienceFromSessionId(sessionId);
-
-    private static string ResolveBoundary(string? sessionId, TrustAudience audience)
-        => SecurityPolicyDefaults.ResolveBoundaryFromSessionId(sessionId, audience);
 }

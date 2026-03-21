@@ -1578,7 +1578,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 msg.Proposals,
                 _sessionId.ToMemoryDomain(),
                 Memory.MemorySensitivity.Normal.ToWireValue(),
-                NowMs());
+                NowMs(),
+                boundary: CurrentMemoryBoundary(),
+                audience: _currentTurnSource?.Audience ?? TrustAudience.Public);
             var accepted = gateResult.MemoryOperations;
 
             TurnLog().Info(
@@ -2598,13 +2600,14 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             if (string.IsNullOrEmpty(toolName))
                 continue;
 
-            var tool = _fullRegistry.GetByName(toolName);
-            if (tool is null)
+            var registration = _fullRegistry.GetRegistrationByToolName(toolName);
+            if (registration is null)
                 continue;
 
-            if (_toolAccessPolicy is not null && !_toolAccessPolicy.IsToolExposed(tool, _currentTrustContext))
+            if (_toolAccessPolicy is not null && !_toolAccessPolicy.IsToolExposed(registration, _currentTrustContext))
                 continue;
 
+            var tool = registration.Tool;
             RememberDiscoveredTool(toolName, tool);
             AddAvailableToolIfMissing(toolName, tool.ToAITool());
         }
