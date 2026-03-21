@@ -152,6 +152,29 @@ blocks, hardcoded values, TODO-as-done comments. Baseline is in
 `.slopwatch/baseline.json` — existing entries are accepted, new violations
 must be fixed or explicitly baselined with justification.
 
+## Eval Suite
+
+Run the behavioral eval suite (`./evals/run-evals.sh`) when changing:
+
+- Identity file templates (`SOUL.md`, `AGENTS.md`, `TOOLING.md` in init wizard)
+- System prompt assembly (`SystemPromptAssembler`, `FileSystemPromptProvider`)
+- Skill content (any `SKILL.md` under `feeds/skills/.system/files/`)
+- Skill matching logic (`SkillRegistry`, `SystemSkillSyncService` keyword handling)
+- Memory pipeline (`SQLiteMemoryRecallCoordinator`, `MemoryProposalGate`,
+  checkpoint triggers)
+- Compaction logic (`ObservationPromptBuilder`, `ExtractiveSessionReducer`,
+  compaction behavior)
+- Tool definitions (new tools, changed tool schemas, grant categories)
+- Model/provider changes (switching models, changing context window config)
+- `SessionConfig` defaults
+
+Update eval cases when:
+
+- Adding a new system skill — add a skill auto-load case
+- Adding a new tool — add a tool discovery/use case
+- Changing identity grounding rules — update identity assertion patterns
+- A production session exhibits a new failure pattern — add a regression case
+
 ## System Skills Sync Rule
 
 System skills in `feeds/skills/.system/files/` are the agent's operational
@@ -191,6 +214,8 @@ Done means all of the following are true:
 - operational impact is documented (runbooks or CLI help)
 - OpenSpec artifacts are updated or archived appropriately
 - system skills updated if a mapped feature area was changed (see table above)
+- eval suite passes for changes to identity, skills, memory, or tools (see
+  Eval Suite section)
 
 ## Agent Guidance: dotnet-skills
 
