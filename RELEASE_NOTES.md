@@ -1,3 +1,27 @@
+#### 0.7.7 2026-03-21 ####
+
+Netclaw v0.7.7 — Slack library extraction, lifecycle webhooks, reminder history preservation, and Slack token tracking
+
+**Slack**
+
+* Extracted all Slack-specific infrastructure into a dedicated `Netclaw.Channels.Slack` library — `Netclaw.Channels` is now a thin channel abstractions layer (`IChannel` + `SessionTelemetry`), isolating the SlackNet dependency and establishing the pattern for future channel-specific libraries. Also added a per-target `Format` property to `WebhookTarget` (`"generic"` default, `"slack"` for Block Kit) so the `WebhookNotificationService` renders Slack-compatible payloads with the required `text` field and structured blocks, fixing Slack incoming webhooks. ([#363](https://github.com/Aaronontheweb/netclaw/pull/363))
+
+**Lifecycle**
+
+* Added daemon startup and shutdown webhook notifications — the daemon now posts operational webhooks when it starts and stops, and `netclaw daemon stop` sends a shutdown reason (`"cli-stop"`) to a new `POST /api/lifecycle/shutdown` endpoint before issuing SIGTERM, giving the daemon a chance to fire the webhook before exiting. Shutdown reasons are logged for diagnostics. ([#361](https://github.com/Aaronontheweb/netclaw/pull/361))
+
+**Reminders**
+
+* Fixed one-shot reminder history being lost after execution — the previous auto-delete removed the reminder definition entirely, causing history queries to return 404. One-shot reminders are now soft-deleted after firing so the history API can still return `fired_at`. The list API excludes disabled reminders by default so completed one-shots no longer clutter the visible list. ([#362](https://github.com/Aaronontheweb/netclaw/pull/362))
+
+**Sessions**
+
+* Fixed token usage always showing zero for Slack sessions — `UsageOutput` requires `OutputFilter.Usage`, but Slack channel subscriptions used `Text|Files` only, so the lifecycle observer never saw usage events. Token recording is now performed directly inside the session actor, matching the pattern used by memory and skill recording. ([#354](https://github.com/Aaronontheweb/netclaw/pull/354))
+
+**Evals / Operations**
+
+* Reduced the default per-prompt eval timeout from 180s to 60s — most prompts complete in 15–30s, so the previous timeout wasted minutes on hung calls. Added a daemon health check before each eval case so a mid-run daemon crash aborts immediately with partial results rather than burning through timeouts for all remaining cases. ([#360](https://github.com/Aaronontheweb/netclaw/pull/360))
+
 #### 0.7.6 2026-03-21 ####
 
 Netclaw v0.7.6 — MCP OAuth wiring, session loop hardening, security cleanup, reminder auto-cleanup, and eval suite
