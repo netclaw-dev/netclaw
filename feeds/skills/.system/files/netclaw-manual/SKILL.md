@@ -3,7 +3,7 @@ name: netclaw-manual
 description: "Netclaw Manual. Read when the user is asking what Netclaw can do, which command/tool to use, how to schedule work, switch models, manage providers, or discover available capabilities."
 metadata:
   author: netclaw
-  version: "0.8.3"
+  version: "0.10.0"
   triggers: what can netclaw do | what command should I use | can you schedule a cron job | schedule a reminder | switch models | change model | manage providers | manage mcp servers | list available tools | how do I do this in netclaw
 ---
 
@@ -222,6 +222,10 @@ Use `netclaw mcp auth <name>` for HTTP/SSE MCP servers that require OAuth.
 - When running in a compatible terminal, Netclaw also emits an OSC 52 clipboard copy for the authorization URL.
 - In headless or callback-unreachable environments, paste the full redirect URL from the browser address bar back into the CLI.
 - Empty or malformed pasted URLs do not cancel the flow; Netclaw keeps polling and lets the operator try again.
+
+`netclaw mcp list` is daemon-backed for live status. It does not fall back to a direct probe when the daemon is unavailable, because daemon state is the authoritative source for live MCP connections, OAuth tokens, and discovered tools.
+
+`netclaw doctor` uses the same rule for MCP auth status: if the daemon is reachable, doctor reports daemon truth (`connected`, `awaiting auth`, `auth failed`, `unreachable`). If the daemon is unavailable, doctor may still run explicit offline connectivity checks, but it must label OAuth auth state as unverifiable instead of claiming a false 401/auth failure.
 
 ### Reminders
 

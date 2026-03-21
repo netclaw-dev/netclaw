@@ -1,3 +1,4 @@
+using System.Net;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -196,6 +197,32 @@ public sealed class DaemonRuntimeStatusServiceTests : IAsyncLifetime
         {
             await manager.StopAsync(CancellationToken.None);
         }
+    }
+
+    [Fact]
+    public async Task IncludesAuthRequiredAndAuthFailedMcpConnectorStatuses()
+    {
+        var authRequired = McpClientManager.CreateAwaitingAuthStatus("textforge");
+        var authFailed = McpClientManager.CreateAuthFailedStatus(
+            "notion",
+            new HttpRequestException(httpRequestError: HttpRequestError.Unknown, "Unauthorized", null, HttpStatusCode.Unauthorized),
+            oauthManaged: true);
+
+        var connectors = new[]
+        {
+            DaemonRuntimeStatusService.ToConnector("textforge", authRequired),
+            DaemonRuntimeStatusService.ToConnector("notion", authFailed),
+        };
+
+        var authRequiredConnector = connectors.Single(c => c.Key == "mcp:textforge");
+        Assert.Equal("auth-required", authRequiredConnector.Status);
+        Assert.Contains("netclaw mcp auth textforge", authRequiredConnector.Message);
+
+        var authFailedConnector = connectors.Single(c => c.Key == "mcp:notion");
+        Assert.Equal("auth-failed", authFailedConnector.Status);
+        Assert.Contains("netclaw mcp auth notion", authFailedConnector.Message);
+
+        Assert.Equal("degraded", DaemonRuntimeStatusService.ResolveOverallStatus(connectors));
     }
 
     [Fact]
