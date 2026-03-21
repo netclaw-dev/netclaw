@@ -261,7 +261,8 @@ public sealed partial class ReminderManagerActor : ReceiveActor
 
     /// <summary>
     /// Permanently removes a reminder definition, its schedule, history, and any
-    /// in-memory tracking state. Used for automatic cleanup of fired one-shot reminders.
+    /// in-memory tracking state. Used during startup reconciliation to clean up
+    /// stale one-shot reminders whose fire time has passed.
     /// </summary>
     private async Task DeleteReminderInternalAsync(ReminderId id)
     {
@@ -501,11 +502,13 @@ public sealed partial class ReminderManagerActor : ReceiveActor
             }
         }
 
-        // One-shot reminders cannot fire again — delete after execution
+        // One-shot reminders cannot fire again — soft-delete by disabling.
+        // The definition stays on disk so history remains queryable.
+        // Startup reconciliation will hard-delete stale disabled one-shots.
         if (definition is { Schedule.Type: ReminderScheduleType.OneShot })
         {
-            _log.Info("One-shot reminder '{0}' completed, deleting", completed.Id.Value);
-            await DeleteReminderInternalAsync(completed.Id);
+            _log.Info("One-shot reminder '{0}' completed, disabling (soft-delete)", completed.Id.Value);
+            await DisableReminderInternalAsync(completed.Id);
         }
 
         await ProcessDeferredQueueAsync();
