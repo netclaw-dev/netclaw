@@ -6,9 +6,9 @@ using Netclaw.Configuration;
 namespace Netclaw.Daemon.Services;
 
 /// <summary>
-/// Monitors <c>~/.netclaw/config/</c> for changes to <c>netclaw.json</c> and
-/// <c>secrets.json</c>. Debounces file system events and validates new config
-/// before applying. See SPEC-011 §Configuration Hot-Reload.
+/// Monitors <c>~/.netclaw/config/</c> for changes to <c>netclaw.json</c>.
+/// Debounces file system events and validates new config before applying.
+/// See SPEC-011 §Configuration Hot-Reload.
 ///
 /// <para>
 /// Single reload trigger: all config changes go to disk first (TUI wizard,
@@ -126,8 +126,7 @@ public sealed class ConfigWatcherService : IHostedService, IDisposable
 
             // Validate JSON structure of both config files before triggering restart.
             // Full semantic validation happens during the next startup cycle.
-            if (!ValidateConfigJson(_paths.NetclawConfigPath) ||
-                !ValidateConfigJson(_paths.SecretsPath))
+            if (!ValidateConfigJson(_paths.NetclawConfigPath))
             {
                 _logger.LogWarning("Config validation failed. Keeping current config — no restart.");
                 return;
@@ -163,8 +162,8 @@ public sealed class ConfigWatcherService : IHostedService, IDisposable
         }
     }
 
-    private static bool IsWatchedFile(string? fileName) =>
-        fileName is "netclaw.json" or "secrets.json";
+    internal static bool IsWatchedFile(string? fileName) =>
+        fileName is "netclaw.json";
 
     public void Dispose()
     {
