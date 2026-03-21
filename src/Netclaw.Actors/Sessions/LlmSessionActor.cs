@@ -89,6 +89,10 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     // Whether the current LLM call intentionally disabled tool use after a circuit breaker fired.
     private bool _forceNoToolsActive;
 
+    // Duplicate tool call detection: tracks hash(toolName:argsJson) within a turn
+    private readonly Dictionary<string, int> _toolCallHashes = new(StringComparer.Ordinal);
+    private bool _duplicateNudgeSent;
+
     // Delivery retry state. A completed turn remains eligible until a new user turn starts.
     private int? _deliveryRetryEligibleTurnNumber;
     private int _deliveryRetryCount;
@@ -268,6 +272,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             _postToolNudgeSent = false;
             _preToolEmptyResponseCount = 0;
             _forceNoToolsActive = false;
+            _toolCallHashes.Clear();
+            _duplicateNudgeSent = false;
             PrepareDiscoveredToolsForNewTurn();
 
             // Modality gate: strip unsupported media references
@@ -611,6 +617,46 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
             _toolCallCount += msg.ToolResults.Count;
             _toolIterationCount++;
+
+            // Duplicate tool call detection: warn model if identical tool+args calls repeat.
+            // Hashes are tracked in HandleToolCallResponse where args are available.
+            const int duplicateToolThreshold = 3;
+            if (!_duplicateNudgeSent)
+            {
+                foreach (var (callHash, dupCount) in _toolCallHashes)
+                {
+                    if (dupCount >= duplicateToolThreshold)
+                    {
+                        // Extract tool name from the hash key (format: "toolName:{args}")
+                        var toolName = callHash.AsSpan(0, callHash.IndexOf(':', StringComparison.Ordinal)).ToString();
+                        TurnLog().Warning(
+                            "turn_duplicate_tool_detected tool={ToolName} count={Count} iteration={Iteration}",
+                            toolName, dupCount, _toolIterationCount);
+                        _state = _state.AddSystemNudge(
+                            $"You have called the tool '{toolName}' with the same arguments {dupCount} times this turn. "
+                            + "This strongly indicates you are repeating work you already completed. "
+                            + "Review your prior tool results — the information you need is already in the conversation. "
+                            + "If the task is complete, produce your final response to the user.");
+                        _duplicateNudgeSent = true;
+                        break;
+                    }
+                }
+            }
+
+            // Mid-loop user message injection: if the user sent messages while tools were
+            // running, inject them into the conversation now so the LLM can see corrections
+            // like "stop" or "that's already done" before the next iteration.
+            if (_buffer.Count > 0)
+            {
+                TurnLog().Info("turn_mid_loop_buffer_drain count={BufferCount} iteration={Iteration}",
+                    _buffer.Count, _toolIterationCount);
+                foreach (var buffered in _buffer)
+                {
+                    var refs = buffered.MediaReferences.Count > 0 ? buffered.MediaReferences : null;
+                    _state = _state.AddUserMessage(buffered.Content, refs);
+                }
+                _buffer.Clear();
+            }
 
             // Safety circuit breaker: force text response when tool call budget exhausted
             if (_toolCallCount >= _config.MaxToolCallsPerTurn)
@@ -1237,18 +1283,24 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             EmitOutput(new BufferFlush { SessionId = _sessionId });
         }
 
-        // Emit tool call outputs to subscribers
+        // Emit tool call outputs to subscribers and track for duplicate detection
         foreach (var tc in toolCalls)
         {
+            var argsJson = tc.Arguments is not null
+                ? JsonSerializer.Serialize(tc.Arguments)
+                : null;
             EmitOutput(new ToolCallOutput
             {
                 SessionId = _sessionId,
                 CallId = tc.CallId,
                 ToolName = tc.Name,
-                ArgumentsJson = tc.Arguments is not null
-                    ? JsonSerializer.Serialize(tc.Arguments)
-                    : null
+                ArgumentsJson = argsJson
             }, OutputFilter.ToolCalls);
+
+            // Duplicate tool call detection: hash tool name + args
+            var hashKey = $"{tc.Name}:{argsJson ?? "{}"}";
+            _toolCallHashes.TryGetValue(hashKey, out var dupCount);
+            _toolCallHashes[hashKey] = dupCount + 1;
         }
 
         // Emit usage if present (intermediate turn)
@@ -1314,6 +1366,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     {
         _toolCallCount = 0; // Reset for potential buffer drain (new logical turn)
         _toolIterationCount = 0;
+        _toolCallHashes.Clear();
+        _duplicateNudgeSent = false;
 
         var reply = ChatMessageConverter.FromAiMessage(lastMessage);
         var userMsg = _state.FindLastUserMessage();
