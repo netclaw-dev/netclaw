@@ -7,12 +7,21 @@
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
-    <VersionPrefix>0.7.8</VersionPrefix>
-    <PackageReleaseNotes>Netclaw v0.7.8 — CLI packaging fix for installed binaries
+    <VersionPrefix>0.7.9</VersionPrefix>
+    <PackageReleaseNotes>Netclaw v0.7.9 — Slack delivery hardening, config watcher fix, webhook schema fix, and token usage fix
 
-**CLI**
+**Slack**
 
-* Fixed installed CLI binaries crashing on the `MemoryCheckpointHealth` doctor check — `libe_sqlite3.so` was missing from shipped single-file CLI binaries because `IncludeNativeLibrariesForSelfExtract=true` was set on the daemon publish but not the CLI. The release packaging step now bundles native libs correctly, and the PR validation smoke test now runs against a published binary (matching the exact release artifact) instead of via `dotnet run`. ([#365](https://github.com/Aaronontheweb/netclaw/pull/365))</PackageReleaseNotes>
+* Fixed Slack delivery failures being silently swallowed — `SlackReplyClient` was discarding the return value of `Chat.PostMessage()` and relying on SlackNet to throw on `ok:false`. A bug in SlackNet 0.17.9 causes phantom `Ok=true` responses when the HTTP body is empty, so delivery failures were counted as successes. Responses are now validated — null or empty `Ts` throws `SlackMessageDeliveryException` with a `phantom_success` error code, and the full error is fed back to the LLM session. Added `SlackException` catch and response validation to `SlackOutboundClient`, which previously had zero error handling. `netclaw stats` now shows `posted`/`rejected`/`failed` counters instead of the old `posted`/`failed`/`plain_text_fallback` columns. ([#375](https://github.com/Aaronontheweb/netclaw/pull/375))
+
+**Config**
+
+* Fixed OAuth token refreshes causing daemon restarts mid-session — `ConfigWatcherService` was watching both `netclaw.json` and `secrets.json`, so writing a refreshed OAuth token triggered a full daemon restart, killing active turns. The watcher now monitors only `netclaw.json`; secret changes are loaded on-demand and never require a restart. ([#373](https://github.com/Aaronontheweb/netclaw/pull/373))
+* Fixed `netclaw doctor` rejecting configs with `"Format": "Slack"` on webhook targets — the `Format` field was added to `WebhookTarget` but omitted from `netclaw-config.v1.schema.json`, which uses `"additionalProperties": false` throughout. Any `netclaw.json` that set `"Format": "Slack"` on a webhook was flagged as invalid by the schema doctor check. The schema now includes the `Format` enum and the field is optional (defaults to `Generic`). ([#369](https://github.com/Aaronontheweb/netclaw/pull/369))
+
+**Stats**
+
+* Fixed `netclaw stats` always showing zero token usage — OpenAI-compatible providers send token counts in a final SSE chunk that has an empty `choices` array. `ParseStreamingUpdates` returned early on empty choices before reaching `ParseUsage`, silently discarding all token data. Usage-only chunks are now processed before the early return so token statistics flow through to `DailyStatsActor`. ([#367](https://github.com/Aaronontheweb/netclaw/pull/367))</PackageReleaseNotes>
   </PropertyGroup>
   <PropertyGroup>
     <NetCoreTestVersion>net10.0</NetCoreTestVersion>
