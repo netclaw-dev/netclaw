@@ -467,7 +467,13 @@ public sealed class OpenAiCompatibleChatClient : IChatClient
     private static IEnumerable<ChatResponseUpdate> ParseStreamingUpdates(JsonElement root, Dictionary<int, PendingToolCall> pendingToolCalls)
     {
         if (!root.TryGetProperty("choices", out var choices) || choices.GetArrayLength() == 0)
+        {
+            // The final usage-only chunk has an empty choices array — still parse usage
+            var usageOnly = ParseUsage(root);
+            if (usageOnly is not null)
+                yield return new ChatResponseUpdate(ChatRole.Assistant, [new UsageContent(usageOnly)]);
             yield break;
+        }
 
         var choice = choices[0];
         if (!choice.TryGetProperty("delta", out var delta))
