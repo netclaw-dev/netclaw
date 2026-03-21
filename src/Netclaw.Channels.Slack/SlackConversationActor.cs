@@ -38,7 +38,7 @@ public sealed class SlackConversationActor : ReceiveActor
             if (IsBotMessage(message))
             {
                 _log.Debug("Ignoring Slack event {0}: bot/self message", message.EventId);
-                ChannelTelemetry.RecordSlackEventDropped("bot_message");
+                ChannelTelemetry.RecordSlackEventFiltered("bot_message");
                 return;
             }
 
@@ -66,7 +66,7 @@ public sealed class SlackConversationActor : ReceiveActor
             if (decision is SlackRoutingDecision.Ignore)
             {
                 _log.Debug("Ignoring Slack event {0}: routing policy decision ignore", message.EventId);
-                ChannelTelemetry.RecordSlackEventDropped("routing_policy_ignore");
+                ChannelTelemetry.RecordSlackEventFiltered("routing_policy_ignore");
                 return;
             }
 

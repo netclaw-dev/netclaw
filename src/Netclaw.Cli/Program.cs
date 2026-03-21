@@ -1108,7 +1108,7 @@ static void WriteStatusResult(DaemonRuntimeStatus.Response status, string endpoi
     if (status.Telemetry.SlackCounters is { } counters)
     {
         Console.WriteLine(
-            $"slack counters: recv={counters.EventsReceived} routed={counters.EventsRouted} dropped={counters.EventsDropped} enqueued={counters.MessagesEnqueued} replied={counters.RepliesPosted} reply_failed={counters.RepliesFailed} plain_text_fallback={counters.RepliesPlainTextFallback}");
+            $"slack counters: recv={counters.EventsReceived} routed={counters.EventsRouted} dropped={counters.EventsDropped} enqueued={counters.MessagesEnqueued} replied={counters.RepliesPosted} rejected={counters.RepliesRejected} reply_failed={counters.RepliesFailed}");
     }
 
     if (status.Model is { } model)
@@ -1253,7 +1253,7 @@ static void WriteStatsResult(DaemonStats.Response stats, int? days)
 
     Console.WriteLine("slack:");
     Console.WriteLine($"  events: recv={stats.SlackActivity.EventsReceived} routed={stats.SlackActivity.EventsRouted} dropped={stats.SlackActivity.EventsDropped}");
-    Console.WriteLine($"  replies: posted={stats.SlackActivity.RepliesPosted} failed={stats.SlackActivity.RepliesFailed} plain_text_fallback={stats.SlackActivity.RepliesPlainTextFallback}");
+    Console.WriteLine($"  replies: posted={stats.SlackActivity.RepliesPosted} rejected={stats.SlackActivity.RepliesRejected} failed={stats.SlackActivity.RepliesFailed}");
 
     if (stats.Reminders is { } reminders)
     {

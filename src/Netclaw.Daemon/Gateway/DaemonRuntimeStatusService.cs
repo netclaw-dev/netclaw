@@ -96,8 +96,8 @@ internal sealed class DaemonRuntimeStatusService(
             EventsRouted = snapshot.SlackEventsRouted,
             MessagesEnqueued = snapshot.SlackMessagesEnqueued,
             RepliesPosted = snapshot.SlackRepliesPosted,
-            RepliesFailed = snapshot.SlackRepliesFailed,
-            RepliesPlainTextFallback = snapshot.SlackRepliesPlainTextFallback
+            RepliesRejected = snapshot.SlackRepliesRejected,
+            RepliesFailed = snapshot.SlackRepliesFailed
         };
     }
 

@@ -98,9 +98,9 @@ public static class DaemonStats
 
         public long RepliesPosted { get; init; }
 
-        public long RepliesFailed { get; init; }
+        public long RepliesRejected { get; init; }
 
-        public long RepliesPlainTextFallback { get; init; }
+        public long RepliesFailed { get; init; }
     }
 
     public sealed class Reminders : IWireType

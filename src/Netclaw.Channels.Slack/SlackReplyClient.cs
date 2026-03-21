@@ -12,13 +12,21 @@ public sealed class SlackReplyClient(ISlackApiClient slackApiClient) : ISlackRep
 
         try
         {
-            await slackApiClient.Chat.PostMessage(new Message
+            var response = await slackApiClient.Chat.PostMessage(new Message
             {
                 Channel = message.ChannelId.Value,
                 ThreadTs = message.ThreadTs.Value,
                 Text = message.Text,
                 Blocks = blocks
             }, cancellationToken);
+
+            if (response is null || string.IsNullOrEmpty(response.Ts))
+            {
+                throw new SlackMessageDeliveryException(
+                    "phantom_success",
+                    DeliveryFailureKind.TransportFailure,
+                    "Slack returned no message timestamp — the message was not delivered");
+            }
         }
         catch (SlackException ex)
         {
@@ -30,13 +38,14 @@ public sealed class SlackReplyClient(ISlackApiClient slackApiClient) : ISlackRep
         }
     }
 
-    private static DeliveryFailureKind MapFailureKind(string? errorCode)
+    internal static DeliveryFailureKind MapFailureKind(string? errorCode)
         => errorCode switch
         {
             "invalid_blocks" or "invalid_arguments" => DeliveryFailureKind.ContentRejected,
             "msg_too_long" => DeliveryFailureKind.MessageTooLarge,
             "too_many_attachments" => DeliveryFailureKind.UnsupportedContent,
             "not_in_channel" or "channel_not_found" or "missing_scope" or "no_permission" => DeliveryFailureKind.PermissionDenied,
+            "rate_limited" => DeliveryFailureKind.TransportFailure,
             _ => DeliveryFailureKind.Unknown
         };
 
@@ -53,12 +62,20 @@ public sealed class SlackReplyClient(ISlackApiClient slackApiClient) : ISlackRep
             await using var stream = System.IO.File.OpenRead(filePath);
             var upload = new FileUpload(resolvedFilename, stream);
 
-            await slackApiClient.Files.Upload(
+            var response = await slackApiClient.Files.Upload(
                 upload,
                 channelId.Value,
                 threadTs.Value,
                 initialComment: null,
                 cancellationToken);
+
+            if (response is null)
+            {
+                throw new SlackMessageDeliveryException(
+                    "phantom_success",
+                    DeliveryFailureKind.TransportFailure,
+                    "Slack returned no file reference — the upload was not delivered");
+            }
         }
         catch (SlackException ex)
         {

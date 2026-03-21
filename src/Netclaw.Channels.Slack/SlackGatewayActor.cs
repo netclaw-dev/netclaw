@@ -28,7 +28,7 @@ public sealed class SlackGatewayActor : ReceiveActor
             if (!TryMarkEventProcessed(message.EventId))
             {
                 _log.Debug("Dropping duplicate Slack event {0}", message.EventId);
-                ChannelTelemetry.RecordSlackEventDropped("duplicate_event");
+                ChannelTelemetry.RecordSlackEventFiltered("duplicate_event");
                 return;
             }
 

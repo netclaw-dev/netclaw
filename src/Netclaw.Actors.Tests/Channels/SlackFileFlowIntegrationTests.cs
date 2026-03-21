@@ -670,6 +670,122 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
     }
 
     [Fact]
+    public async Task Content_rejection_msg_too_long_sends_message_too_large_feedback()
+    {
+        var feedbackPipeline = new RecordingSessionPipeline([
+            new TextOutput
+            {
+                SessionId = new SessionId("D7/9200.1"),
+                TimestampMs = TimeProvider.System.GetUtcNow().ToUnixTimeMilliseconds(),
+                Text = new string('x', 50_000)
+            },
+            new TurnCompleted
+            {
+                SessionId = new SessionId("D7/9200.1"),
+                TurnNumber = 1
+            }
+        ]);
+
+        _replyClient.PostFailures.Enqueue(new SlackMessageDeliveryException(
+            errorCode: "msg_too_long",
+            failureKind: DeliveryFailureKind.MessageTooLarge,
+            message: "msg_too_long"));
+
+        var deps = new SlackGatewayDependencies(
+            Pipeline: feedbackPipeline,
+            ActorSystem: Sys,
+            TimeProvider: TimeProvider.System,
+            Options: new SlackChannelOptions
+            {
+                Enabled = true,
+                MentionOnly = false,
+                AllowDirectMessages = true,
+                BotToken = new SensitiveString("xoxb-fake-token")
+            },
+            BotUserId: new SlackUserId("UBOT"),
+            DefaultChannelId: null,
+            ReplyClient: _replyClient,
+            ContentScanner: new NullContentScanner());
+
+        var actor = Sys.ActorOf(SlackThreadBindingActor.CreateProps(
+            new SessionId("D7/9200.1"),
+            new SlackChannelId("D7"),
+            new SlackThreadTs("9200.1"),
+            deps), "slack-thread-msg-too-long-test");
+
+        await AwaitAssertAsync(() =>
+        {
+            var feedback = Assert.Single(feedbackPipeline.Feedback);
+            var failure = Assert.IsType<DeliveryFailed>(feedback);
+            Assert.Equal(DeliveryFailureKind.MessageTooLarge, failure.FailureKind);
+            Assert.Equal(1, failure.TurnNumber);
+            Assert.Contains("msg_too_long", failure.ErrorMessage);
+        }, duration: TimeSpan.FromSeconds(10));
+
+        Watch(actor);
+        Sys.Stop(actor);
+        await ExpectTerminatedAsync(actor);
+    }
+
+    [Fact]
+    public async Task Content_rejection_invalid_blocks_sends_content_rejected_feedback()
+    {
+        var feedbackPipeline = new RecordingSessionPipeline([
+            new TextOutput
+            {
+                SessionId = new SessionId("D7/9300.1"),
+                TimestampMs = TimeProvider.System.GetUtcNow().ToUnixTimeMilliseconds(),
+                Text = "Some text with bad formatting"
+            },
+            new TurnCompleted
+            {
+                SessionId = new SessionId("D7/9300.1"),
+                TurnNumber = 1
+            }
+        ]);
+
+        _replyClient.PostFailures.Enqueue(new SlackMessageDeliveryException(
+            errorCode: "invalid_blocks",
+            failureKind: DeliveryFailureKind.ContentRejected,
+            message: "invalid_blocks"));
+
+        var deps = new SlackGatewayDependencies(
+            Pipeline: feedbackPipeline,
+            ActorSystem: Sys,
+            TimeProvider: TimeProvider.System,
+            Options: new SlackChannelOptions
+            {
+                Enabled = true,
+                MentionOnly = false,
+                AllowDirectMessages = true,
+                BotToken = new SensitiveString("xoxb-fake-token")
+            },
+            BotUserId: new SlackUserId("UBOT"),
+            DefaultChannelId: null,
+            ReplyClient: _replyClient,
+            ContentScanner: new NullContentScanner());
+
+        var actor = Sys.ActorOf(SlackThreadBindingActor.CreateProps(
+            new SessionId("D7/9300.1"),
+            new SlackChannelId("D7"),
+            new SlackThreadTs("9300.1"),
+            deps), "slack-thread-invalid-blocks-test");
+
+        await AwaitAssertAsync(() =>
+        {
+            var feedback = Assert.Single(feedbackPipeline.Feedback);
+            var failure = Assert.IsType<DeliveryFailed>(feedback);
+            Assert.Equal(DeliveryFailureKind.ContentRejected, failure.FailureKind);
+            Assert.Equal(1, failure.TurnNumber);
+            Assert.Contains("invalid_blocks", failure.ErrorMessage);
+        }, duration: TimeSpan.FromSeconds(10));
+
+        Watch(actor);
+        Sys.Stop(actor);
+        await ExpectTerminatedAsync(actor);
+    }
+
+    [Fact]
     public async Task Inbound_image_with_real_scanner_flows_to_llm()
     {
         // Uses the production MagicByteContentScanner instead of NullContentScanner
