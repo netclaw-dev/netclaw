@@ -17,7 +17,7 @@ set -euo pipefail
 
 RUNS="${NETCLAW_EVAL_RUNS:-5}"
 THRESHOLD="${NETCLAW_EVAL_THRESHOLD:-0.80}"
-PROMPT_TIMEOUT="${NETCLAW_EVAL_TIMEOUT:-180}"
+PROMPT_TIMEOUT="${NETCLAW_EVAL_TIMEOUT:-60}"
 NETCLAW_BIN="${NETCLAW_BIN:-netclaw}"
 NETCLAW_HOME="${NETCLAW_HOME:-$HOME/.netclaw}"
 DAEMON_LOG="${NETCLAW_EVAL_DAEMON_LOG:-$NETCLAW_HOME/logs/daemon-$(date +%F).log}"
@@ -137,6 +137,25 @@ pick_variant() {
 
 # ─── Prompt Runner ────────────────────────────────────────────────────────────
 
+check_daemon_alive() {
+    if ! "$NETCLAW_BIN" daemon status >/dev/null 2>&1; then
+        echo ""
+        echo "ERROR: Daemon died mid-run. Aborting eval." >&2
+        # Finalize whatever results we have so far
+        finalize_db
+        local overall_score
+        overall_score=$(awk "BEGIN {printf \"%.1f\", ($PASSED_CASES / ($TOTAL_CASES > 0 ? $TOTAL_CASES : 1)) * 100}")
+        echo ""
+        echo "─────────────────────────────────────────────────"
+        echo "ABORTED: Daemon not running. Partial results: $PASSED_CASES/$TOTAL_CASES ($overall_score%)"
+        if [[ -n "$RESULTS_DB" ]]; then
+            echo "Results: $RESULTS_DB (run_id: $RUN_ID)"
+        fi
+        echo "─────────────────────────────────────────────────"
+        exit 2
+    fi
+}
+
 run_prompt() {
     local prompt="$1"
     STDOUT_FILE="$TMPDIR_EVAL/stdout_$(date +%s%N).txt"
@@ -191,7 +210,8 @@ assert_identity_repo() {
 }
 
 assert_identity_session() {
-    stdout_contains 'headless/'
+    # Daemon assigns signalr/ session IDs to headless sessions, not headless/
+    stdout_contains 'signalr/' || stdout_contains 'headless/'
 }
 
 # Category 2: Skill Auto-Loading
@@ -314,6 +334,9 @@ run_case() {
     local description="$1"; shift
     local -a prompts=("$@")
     local assert_fn="assert_${case_name}"
+
+    # Bail early if daemon died
+    check_daemon_alive
 
     # Verify assertion function exists
     if ! declare -f "$assert_fn" >/dev/null 2>&1; then
