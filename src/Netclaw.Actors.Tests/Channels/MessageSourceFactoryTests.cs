@@ -19,7 +19,7 @@ public sealed class MessageSourceFactoryTests
 
         var options = new SessionPipelineOptions
         {
-            ChannelType = "slack"
+            ChannelType = ChannelType.Slack
         };
 
         var result = MessageSourceFactory.Create(input, options, "turn-1");
@@ -52,7 +52,7 @@ public sealed class MessageSourceFactoryTests
 
         var options = new SessionPipelineOptions
         {
-            ChannelType = "slack",
+            ChannelType = ChannelType.Slack,
             DefaultAudience = TrustAudience.Public,
             DefaultPrincipal = PrincipalClassification.UntrustedExternal,
             DefaultProvenance = SourceProvenance.StrictDefault()

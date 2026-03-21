@@ -58,7 +58,7 @@ public static class MessageSourceFactory
             MessageId = input.MessageId,
             TurnId = turnId,
             Audience = input.Audience ?? options.DefaultAudience,
-            Boundary = SecurityPolicyDefaults.ResolveBoundary(input.Boundary ?? options.DefaultBoundary, options.ChannelType, input.Audience ?? options.DefaultAudience),
+            Boundary = SecurityPolicyDefaults.ResolveBoundary(input.Boundary ?? options.DefaultBoundary, options.ChannelType.ToWireValue(), input.Audience ?? options.DefaultAudience),
             Principal = input.Principal ?? options.DefaultPrincipal,
             Provenance = input.Provenance ?? options.DefaultProvenance,
             ReceivedAt = input.ReceivedAt

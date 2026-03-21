@@ -106,7 +106,6 @@ public sealed partial class SqliteUpdateMemoryTool : NetclawTool<SqliteUpdateMem
             Sensitivity: MemorySensitivity.Normal.ToWireValue(),
             RecallMode: MemoryRecallMode.Manual.ToWireValue(),
             Confidence: 0.95,
-            Audience: TrustAudience.Personal.ToWireValue(),
             MemoryId: MemoryTypedId.Parse(args.Id).Id,
             UpdateOldText: args.OldText,
             UpdateNewText: args.NewText,

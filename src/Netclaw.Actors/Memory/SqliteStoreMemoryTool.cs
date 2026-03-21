@@ -54,7 +54,6 @@ public sealed partial class SqliteStoreMemoryTool : NetclawTool<SqliteStoreMemor
             Sensitivity: MemorySensitivity.Normal.ToWireValue(),
             RecallMode: MemoryRecallMode.Auto.ToWireValue(),
             Confidence: 0.95,
-            Audience: TrustAudience.Personal.ToWireValue(),
             Title: args.Title,
             UpdateSemantics: MemoryUpdateSemantics.MergeDocument.ToWireValue(),
             Kind: MemoryKind.Document.ToWireValue());

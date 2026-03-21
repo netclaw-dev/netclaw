@@ -35,7 +35,7 @@ public sealed class TrustContextDeriverTests
 
         var result = deriver.Derive(new MessageSource
         {
-            ChannelType = "slack",
+            ChannelType = ChannelType.Slack,
             SenderId = "U123",
             Audience = TrustAudience.Public,
             Principal = PrincipalClassification.TrustedInternal,
@@ -63,7 +63,7 @@ public sealed class TrustContextDeriverTests
 
         var result = deriver.Derive(new MessageSource
         {
-            ChannelType = "signalr",
+            ChannelType = ChannelType.SignalR,
             SenderId = "local-user",
             Audience = TrustAudience.Personal,
             Principal = PrincipalClassification.Operator,
@@ -92,7 +92,7 @@ public sealed class TrustContextDeriverTests
 
         var result = deriver.Derive(new MessageSource
         {
-            ChannelType = "slack",
+            ChannelType = ChannelType.Slack,
             SenderId = "U123",
             Audience = TrustAudience.Team,
             Principal = PrincipalClassification.TrustedInternal,
