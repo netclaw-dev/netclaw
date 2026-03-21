@@ -8,6 +8,7 @@ namespace Netclaw.Channels.Slack.Webhooks;
 /// </summary>
 public static class SlackWebhookPayloadBuilder
 {
+    private static readonly string Hostname = Environment.MachineName;
     /// <summary>
     /// Build a Slack-compatible webhook payload with a required <c>text</c> fallback
     /// and a <c>blocks</c> array for rich formatting.
@@ -61,7 +62,7 @@ public static class SlackWebhookPayloadBuilder
             new { type = "mrkdwn", text = $"*Severity:*\n{alert.Severity}" },
             new { type = "mrkdwn", text = $"*Type:*\n{alert.Type}" },
             new { type = "mrkdwn", text = $"*Timestamp:*\n{alert.Timestamp:u}" },
-            new { type = "mrkdwn", text = $"*Hostname:*\n{Environment.MachineName}" },
+            new { type = "mrkdwn", text = $"*Hostname:*\n{Hostname}" },
         };
 
         if (alert.Source is not null)

@@ -49,7 +49,19 @@ public sealed class WebhookTarget
     public Dictionary<string, string>? Headers { get; set; }
 
     /// <summary>
-    /// Payload format: "generic" (default, current JSON envelope) or "slack" (Slack Block Kit).
+    /// Payload format for this webhook target.
     /// </summary>
-    public string Format { get; set; } = "generic";
+    public WebhookFormat Format { get; set; } = WebhookFormat.Generic;
+}
+
+/// <summary>
+/// Supported webhook payload formats.
+/// </summary>
+public enum WebhookFormat
+{
+    /// <summary>Default JSON envelope with alertId, type, severity, summary, etc.</summary>
+    Generic = 0,
+
+    /// <summary>Slack Block Kit format with required text field and structured blocks.</summary>
+    Slack = 1,
 }

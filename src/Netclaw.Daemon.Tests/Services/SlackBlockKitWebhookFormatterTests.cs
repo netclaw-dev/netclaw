@@ -143,7 +143,7 @@ public sealed class SlackBlockKitWebhookFormatterTests : IAsyncDisposable
 
     private WebhookNotificationService CreateService(
         NotificationsConfig config,
-        HttpMessageHandler handler)
+        RecordingHandler handler)
     {
         var factory = new TestHttpClientFactory(handler);
         var service = new WebhookNotificationService(
@@ -169,7 +169,7 @@ public sealed class SlackBlockKitWebhookFormatterTests : IAsyncDisposable
         var handler = new RecordingHandler(HttpStatusCode.OK);
         var config = new NotificationsConfig
         {
-            Webhooks = [new WebhookTarget { Url = "https://hooks.slack.com/test", Format = "slack" }],
+            Webhooks = [new WebhookTarget { Url = "https://hooks.slack.com/test", Format = WebhookFormat.Slack }],
             DeduplicationWindowSeconds = 0
         };
 
@@ -225,8 +225,8 @@ public sealed class SlackBlockKitWebhookFormatterTests : IAsyncDisposable
         {
             Webhooks =
             [
-                new WebhookTarget { Url = "https://example.com/generic", Format = "generic" },
-                new WebhookTarget { Url = "https://hooks.slack.com/slack", Format = "slack" },
+                new WebhookTarget { Url = "https://example.com/generic", Format = WebhookFormat.Generic },
+                new WebhookTarget { Url = "https://hooks.slack.com/slack", Format = WebhookFormat.Slack },
             ],
             DeduplicationWindowSeconds = 0
         };
@@ -254,54 +254,9 @@ public sealed class SlackBlockKitWebhookFormatterTests : IAsyncDisposable
 
     #endregion
 
-    #region Test infrastructure
-
-    private static async Task WaitForDeliveryAsync(
+    private static Task WaitForDeliveryAsync(
         RecordingHandler handler,
         int expectedCount,
         int timeoutMs = 5000)
-    {
-        using var cts = new CancellationTokenSource(timeoutMs);
-        for (var i = 0; i < expectedCount; i++)
-            await handler.DeliverySemaphore.WaitAsync(cts.Token);
-    }
-
-    private sealed class RecordingHandler : HttpMessageHandler
-    {
-        private readonly HttpStatusCode _statusCode;
-        private readonly SemaphoreSlim _deliverySemaphore = new(0);
-
-        public RecordingHandler(HttpStatusCode statusCode) => _statusCode = statusCode;
-
-        public List<HttpRequestMessage> Requests { get; } = [];
-        public List<string> RequestBodies { get; } = [];
-        public SemaphoreSlim DeliverySemaphore => _deliverySemaphore;
-
-        protected override async Task<HttpResponseMessage> SendAsync(
-            HttpRequestMessage request,
-            CancellationToken cancellationToken)
-        {
-            var body = request.Content is not null
-                ? await request.Content.ReadAsStringAsync(cancellationToken)
-                : "";
-
-            lock (Requests)
-            {
-                Requests.Add(request);
-                RequestBodies.Add(body);
-            }
-
-            _deliverySemaphore.Release();
-            return new HttpResponseMessage(_statusCode);
-        }
-    }
-
-    private sealed class TestHttpClientFactory : IHttpClientFactory
-    {
-        private readonly HttpMessageHandler _handler;
-        public TestHttpClientFactory(HttpMessageHandler handler) => _handler = handler;
-        public HttpClient CreateClient(string name) => new(_handler, disposeHandler: false);
-    }
-
-    #endregion
+        => WebhookTestInfrastructure.WaitForDeliveryAsync(handler, expectedCount, timeoutMs);
 }

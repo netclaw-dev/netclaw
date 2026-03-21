@@ -218,10 +218,12 @@ public sealed class WebhookNotificationService : BackgroundService, IOperational
 
     private static JsonContent BuildContent(WebhookTarget target, OperationalAlert alert)
     {
-        if (target.Format.Equals("slack", StringComparison.OrdinalIgnoreCase))
-            return JsonContent.Create(SlackWebhookPayloadBuilder.Build(alert), options: JsonOptions);
-
-        return JsonContent.Create(BuildGenericPayload(alert), options: JsonOptions);
+        return target.Format switch
+        {
+            WebhookFormat.Slack => JsonContent.Create(
+                SlackWebhookPayloadBuilder.Build(alert), options: JsonOptions),
+            _ => JsonContent.Create(BuildGenericPayload(alert), options: JsonOptions),
+        };
     }
 
     private static WebhookPayload BuildGenericPayload(OperationalAlert alert) => new()
