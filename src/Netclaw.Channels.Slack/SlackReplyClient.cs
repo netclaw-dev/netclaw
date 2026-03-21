@@ -8,10 +8,10 @@ public sealed class SlackReplyClient(ISlackApiClient slackApiClient) : ISlackRep
 {
     public async Task PostThreadReplyAsync(SlackPostMessage message, CancellationToken cancellationToken = default)
     {
-        var blocks = SlackBlockConverter.Convert(message.Text);
-
         try
         {
+            var blocks = SlackBlockConverter.Convert(message.Text);
+
             var response = await slackApiClient.Chat.PostMessage(new Message
             {
                 Channel = message.ChannelId.Value,

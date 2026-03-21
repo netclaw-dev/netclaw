@@ -25,10 +25,10 @@ public sealed class SlackOutboundClient(ISlackApiClient slackApiClient) : ISlack
 
     public async Task<SlackNewThread> PostNewThreadAsync(SlackChannelId channelId, string text, CancellationToken ct = default)
     {
-        var blocks = SlackBlockConverter.Convert(text);
-
         try
         {
+            var blocks = SlackBlockConverter.Convert(text);
+
             var response = await slackApiClient.Chat.PostMessage(new Message
             {
                 Channel = channelId.Value,

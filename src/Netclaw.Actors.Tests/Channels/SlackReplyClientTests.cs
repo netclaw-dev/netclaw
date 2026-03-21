@@ -101,6 +101,8 @@ public sealed class SlackReplyClientTests
     [InlineData("too_many_attachments", DeliveryFailureKind.UnsupportedContent)]
     [InlineData("not_in_channel", DeliveryFailureKind.PermissionDenied)]
     [InlineData("channel_not_found", DeliveryFailureKind.PermissionDenied)]
+    [InlineData("missing_scope", DeliveryFailureKind.PermissionDenied)]
+    [InlineData("no_permission", DeliveryFailureKind.PermissionDenied)]
     [InlineData("rate_limited", DeliveryFailureKind.TransportFailure)]
     [InlineData("some_unknown_error", DeliveryFailureKind.Unknown)]
     public void MapFailureKind_classifies_error_codes_correctly(string errorCode, DeliveryFailureKind expected)
