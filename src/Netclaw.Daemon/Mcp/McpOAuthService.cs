@@ -554,8 +554,17 @@ internal sealed class McpOAuthService
             if (!doc.RootElement.TryGetProperty(TokensSectionKey, out var section))
                 return;
 
+            var sectionJson = section.GetRawText();
+
+            // Pre-decrypt all ENC: leaves so STJ can parse non-SensitiveString
+            // types (DateTimeOffset?, string?) that were blanket-encrypted by
+            // SecretsFileWriter. SensitiveStringJsonConverter already checks for
+            // ENC: prefix and skips decryption on plaintext — no double-decrypt.
+            if (_protector is not null)
+                sectionJson = SecretsFileWriter.DecryptJsonLeaves(sectionJson, _protector);
+
             var tokens = JsonSerializer.Deserialize<Dictionary<string, McpOAuthTokenSet>>(
-                section.GetRawText(), JsonOptions);
+                sectionJson, JsonOptions);
             if (tokens is not null)
             {
                 foreach (var (key, value) in tokens)

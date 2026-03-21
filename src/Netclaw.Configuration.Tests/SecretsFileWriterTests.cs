@@ -90,6 +90,43 @@ public sealed class SecretsFileWriterTests : IDisposable
     }
 
     [Fact]
+    public void DecryptJsonLeaves_round_trips_with_encrypt()
+    {
+        var paths = new NetclawPaths(_tempDir);
+        paths.EnsureDirectoriesExist();
+        var protector = SecretsProtection.CreateProtector(paths);
+
+        var json = """{"ApiKey": "sk-secret123", "Nested": {"Token": "tok-abc", "Expiry": "2026-03-21"}}""";
+
+        // Encrypt via Write
+        SecretsFileWriter.Write(_secretsPath, json, protector);
+        var encrypted = File.ReadAllText(_secretsPath);
+        Assert.Contains("ENC:", encrypted, StringComparison.Ordinal);
+        Assert.DoesNotContain("sk-secret123", encrypted, StringComparison.Ordinal);
+
+        // Decrypt
+        var decrypted = SecretsFileWriter.DecryptJsonLeaves(encrypted, protector);
+        Assert.Contains("sk-secret123", decrypted, StringComparison.Ordinal);
+        Assert.Contains("tok-abc", decrypted, StringComparison.Ordinal);
+        Assert.Contains("2026-03-21", decrypted, StringComparison.Ordinal);
+        Assert.DoesNotContain("ENC:", decrypted, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void DecryptJsonLeaves_leaves_plaintext_untouched()
+    {
+        var paths = new NetclawPaths(_tempDir);
+        paths.EnsureDirectoriesExist();
+        var protector = SecretsProtection.CreateProtector(paths);
+
+        var json = """{"plain": "hello", "nested": {"also_plain": "world"}}""";
+        var result = SecretsFileWriter.DecryptJsonLeaves(json, protector);
+
+        Assert.Contains("hello", result, StringComparison.Ordinal);
+        Assert.Contains("world", result, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void CountEncryptionStatus_counts_correctly()
     {
         var json = """{"plain": "hello", "encrypted": "ENC:abc123", "nested": {"also_plain": "world"}}""";
