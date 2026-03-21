@@ -9,8 +9,8 @@ namespace Netclaw.Daemon.Gateway;
 
 /// <summary>
 /// Singleton service maintaining the <c>sessions</c> table in the SQLite database.
-/// Implements <see cref="ISessionLifecycleObserver"/> so <see cref="SessionPipeline"/>
-/// automatically reports all session events regardless of channel type.
+/// Implements <see cref="ISessionLifecycleObserver"/> so session activation,
+/// deactivation, and output events update the SQLite-backed catalog.
 ///
 /// Per-session log file I/O is handled by <see cref="Netclaw.Actors.Sessions.SessionLogActor"/>
 /// (a child of each session actor), not this service.
@@ -48,7 +48,7 @@ public sealed class SessionCatalogService : ISessionLifecycleObserver
     }
 
     /// <inheritdoc />
-    public void OnSessionCreated(SessionId sessionId, Actors.Channels.ChannelType channelType)
+    public void OnSessionActivated(SessionId sessionId, Actors.Channels.ChannelType channelType)
     {
         var nowMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
         var persistenceId = $"session-{sessionId.Value}";
@@ -72,7 +72,6 @@ public sealed class SessionCatalogService : ISessionLifecycleObserver
                 VALUES ($pid, $channel, $now, $now, 'active', 0, $path)
                 ON CONFLICT(persistence_id) DO UPDATE SET
                     status = 'active',
-                    last_activity = $now,
                     log_path = $path
                 """;
             cmd.Parameters.AddWithValue("$pid", persistenceId);
@@ -85,7 +84,35 @@ public sealed class SessionCatalogService : ISessionLifecycleObserver
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Failed to record session creation for {SessionId}", sessionId.Value);
+            _logger.LogWarning(ex, "Failed to mark session {SessionId} active", sessionId.Value);
+        }
+    }
+
+    /// <inheritdoc />
+    public void OnSessionDeactivated(SessionId sessionId)
+    {
+        var persistenceId = $"session-{sessionId.Value}";
+
+        try
+        {
+            using var conn = new SqliteConnection(_connectionString);
+            conn.Open();
+
+            EnsureSchemaUpToDate(conn, _logger);
+
+            using var cmd = conn.CreateCommand();
+                cmd.CommandText =
+                    """
+                    UPDATE sessions SET
+                    status = 'inactive'
+                WHERE persistence_id = $pid
+                """;
+            cmd.Parameters.AddWithValue("$pid", persistenceId);
+            cmd.ExecuteNonQuery();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Failed to mark session {SessionId} inactive", sessionId.Value);
         }
     }
 
@@ -118,24 +145,18 @@ public sealed class SessionCatalogService : ISessionLifecycleObserver
                     break;
 
                 case UsageOutput usage
-                    when usage.InputTokens.HasValue || usage.OutputTokens.HasValue:
-                    if (usage.InputTokens.HasValue)
+                    when usage.InputTokens.HasValue:
+                    UpdateSession(conn, persistenceId, cmd =>
                     {
-                        UpdateSession(conn, persistenceId, cmd =>
-                        {
-                            cmd.CommandText =
-                                """
-                                UPDATE sessions SET
-                                    last_input_tokens = $tokens,
-                                    last_activity = $now
-                                WHERE persistence_id = $pid
-                                """;
-                            cmd.Parameters.AddWithValue("$tokens", usage.InputTokens.Value);
-                        });
-                    }
-                    _metrics?.RecordTokenUsage(
-                        usage.InputTokens ?? 0,
-                        usage.OutputTokens ?? 0);
+                        cmd.CommandText =
+                            """
+                            UPDATE sessions SET
+                                last_input_tokens = $tokens,
+                                last_activity = $now
+                            WHERE persistence_id = $pid
+                            """;
+                        cmd.Parameters.AddWithValue("$tokens", usage.InputTokens.Value);
+                    });
                     break;
 
                 case SessionTitleOutput title:
@@ -238,7 +259,7 @@ public sealed class SessionCatalogService : ISessionLifecycleObserver
                     Channel = reader.GetString(1),
                     Title = reader.IsDBNull(2) ? null : reader.GetString(2),
                     Description = reader.IsDBNull(3) ? null : reader.GetString(3),
-                    Status = reader.GetString(4),
+                    Status = NormalizeStatus(reader.GetString(4)),
                     TurnCount = reader.GetInt32(5),
                     CreatedAt = reader.GetInt64(6),
                     LastActivity = reader.GetInt64(7),
@@ -276,6 +297,11 @@ public sealed class SessionCatalogService : ISessionLifecycleObserver
             cmd.CommandText = "UPDATE sessions SET last_activity = $now WHERE persistence_id = $pid";
         });
     }
+
+    private static string NormalizeStatus(string status)
+        => string.Equals(status, "idle", StringComparison.OrdinalIgnoreCase)
+            ? "inactive"
+            : status;
 
     // Shared DDL for the current sessions schema (used in both Missing and Legacy migration paths).
     private const string SessionsCreateTableDdl =

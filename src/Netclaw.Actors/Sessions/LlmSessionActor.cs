@@ -50,6 +50,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     private readonly TimeProvider _timeProvider;
     private readonly string? _sessionsBasePath;
     private readonly string? _sessionLogsBasePath;
+    private readonly ISessionLifecycleObserver? _lifecycleObserver;
     private readonly ILoggingAdapter _log;
 
     // Transient state (not persisted)
@@ -145,11 +146,13 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         IReadOnlyList<IContextLayerProvider>? contextLayers = null,
         NetclawPaths? paths = null,
         SkillRegistry? skillRegistry = null,
-        Telemetry.ISessionMetrics? sessionMetrics = null)
+        Telemetry.ISessionMetrics? sessionMetrics = null,
+        ISessionLifecycleObserver? lifecycleObserver = null)
     {
         _sessionId = new SessionId(entityId);
         _skillRegistry = skillRegistry;
         _sessionMetrics = sessionMetrics;
+        _lifecycleObserver = lifecycleObserver;
         _chatClient = clientProvider.GetClient(ModelRole.Main);
         _compactionClient = config.CompactionModelId is not null
             ? clientProvider.GetClient(ModelRole.Compaction)
@@ -244,6 +247,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             }
 
             _log.Info("Session idle, passivating (timeout={Timeout})", _config.IdleTimeout);
+            _lifecycleObserver?.OnSessionDeactivated(_sessionId);
             SaveSnapshot(_state.ToSnapshot());
             Context.Stop(Self);
         });
@@ -2814,6 +2818,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     private void EmitUsageOutput(UsageDetails usage)
     {
+        _sessionMetrics?.RecordTokenUsage(usage.InputTokenCount ?? 0, usage.OutputTokenCount ?? 0);
+
         var contextWindow = _config.ContextWindowTokens;
         double? usagePercent = usage.InputTokenCount.HasValue && contextWindow > 0
             ? (double)usage.InputTokenCount.Value / contextWindow

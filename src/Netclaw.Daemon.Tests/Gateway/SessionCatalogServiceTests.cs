@@ -20,8 +20,8 @@ public sealed class SessionCatalogServiceTests : IDisposable
         return paths;
     }
 
-    private SessionCatalogService CreateService(NetclawPaths paths, ISessionMetrics? metrics = null)
-        => new(paths, TimeProvider.System, NullLogger<SessionCatalogService>.Instance, metrics);
+    private SessionCatalogService CreateService(NetclawPaths paths, ISessionMetrics? metrics = null, TimeProvider? timeProvider = null)
+        => new(paths, timeProvider ?? TimeProvider.System, NullLogger<SessionCatalogService>.Instance, metrics);
 
     public void Dispose()
     {
@@ -51,12 +51,12 @@ public sealed class SessionCatalogServiceTests : IDisposable
     }
 
     [Fact]
-    public void OnSessionCreated_AutoCreatesTable_WhenTableIsMissing()
+    public void OnSessionActivated_AutoCreatesTable_WhenTableIsMissing()
     {
         var paths = CreatePaths();
         var service = CreateService(paths);
 
-        service.OnSessionCreated(new Netclaw.Actors.Protocol.SessionId("signalr/test-123"), ChannelType.SignalR);
+        service.OnSessionActivated(new Netclaw.Actors.Protocol.SessionId("signalr/test-123"), ChannelType.SignalR);
 
         using var conn = OpenConn(paths);
         Assert.True(TableExists(conn, "sessions"));
@@ -262,38 +262,14 @@ public sealed class SessionCatalogServiceTests : IDisposable
     }
 
     [Fact]
-    public void OnOutput_RecordsTokenUsage_WhenOnlyOutputTokensPresent()
-    {
-        var paths = CreatePaths();
-        var metrics = new FakeMetrics();
-        var service = CreateService(paths, metrics);
-        var sessionId = new SessionId("signalr/test-usage-1");
-
-        service.OnSessionCreated(sessionId, ChannelType.SignalR);
-
-        // Simulate streaming response: InputTokens is null (Anthropic SDK bug),
-        // but OutputTokens has a value.
-        service.OnOutput(new UsageOutput
-        {
-            SessionId = sessionId,
-            InputTokens = null,
-            OutputTokens = 500
-        });
-
-        Assert.Single(metrics.TokenUsageCalls);
-        Assert.Equal(0, metrics.TokenUsageCalls[0].Input);
-        Assert.Equal(500, metrics.TokenUsageCalls[0].Output);
-    }
-
-    [Fact]
-    public void OnOutput_RecordsTokenUsage_WhenBothTokenFieldsPresent()
+    public void OnOutput_UpdatesLastInputTokens_WhenInputTokensPresent()
     {
         var paths = CreatePaths();
         var metrics = new FakeMetrics();
         var service = CreateService(paths, metrics);
         var sessionId = new SessionId("signalr/test-usage-2");
 
-        service.OnSessionCreated(sessionId, ChannelType.SignalR);
+        service.OnSessionActivated(sessionId, ChannelType.SignalR);
 
         service.OnOutput(new UsageOutput
         {
@@ -302,9 +278,8 @@ public sealed class SessionCatalogServiceTests : IDisposable
             OutputTokens = 250
         });
 
-        Assert.Single(metrics.TokenUsageCalls);
-        Assert.Equal(1000, metrics.TokenUsageCalls[0].Input);
-        Assert.Equal(250, metrics.TokenUsageCalls[0].Output);
+        // Token recording is now done by LlmSessionActor, not SessionCatalogService
+        Assert.Empty(metrics.TokenUsageCalls);
 
         // Verify last_input_tokens was updated in SQLite
         using var conn = OpenConn(paths);
@@ -316,23 +291,97 @@ public sealed class SessionCatalogServiceTests : IDisposable
     }
 
     [Fact]
-    public void OnOutput_DoesNotRecord_WhenBothTokenFieldsNull()
+    public void OnOutput_DoesNotUpdateLastInputTokens_WhenInputTokensNull()
     {
         var paths = CreatePaths();
         var metrics = new FakeMetrics();
         var service = CreateService(paths, metrics);
         var sessionId = new SessionId("signalr/test-usage-3");
 
-        service.OnSessionCreated(sessionId, ChannelType.SignalR);
+        service.OnSessionActivated(sessionId, ChannelType.SignalR);
 
         service.OnOutput(new UsageOutput
         {
             SessionId = sessionId,
             InputTokens = null,
-            OutputTokens = null
+            OutputTokens = 500
         });
 
         Assert.Empty(metrics.TokenUsageCalls);
+
+        // last_input_tokens should remain null
+        using var conn = OpenConn(paths);
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT last_input_tokens FROM sessions WHERE persistence_id = $pid";
+        cmd.Parameters.AddWithValue("$pid", $"session-{sessionId.Value}");
+        var result = cmd.ExecuteScalar();
+        Assert.Equal(DBNull.Value, result);
+    }
+
+    [Fact]
+    public void OnSessionDeactivated_SetsStatusToInactive()
+    {
+        var paths = CreatePaths();
+        var service = CreateService(paths);
+        var sessionId = new SessionId("signalr/test-end-1");
+
+        service.OnSessionActivated(sessionId, ChannelType.SignalR);
+
+        // Verify initially active
+        var stats = service.GetStats();
+        Assert.Equal(1, stats.ActiveSessions);
+
+        service.OnSessionDeactivated(sessionId);
+
+        // Should now be inactive
+        stats = service.GetStats();
+        Assert.Equal(1, stats.TotalSessions);
+        Assert.Equal(0, stats.ActiveSessions);
+        Assert.Equal("inactive", service.ListRecent().Single().Status);
+    }
+
+    [Fact]
+    public void OnSessionActivated_ResetsInactiveToActive()
+    {
+        var paths = CreatePaths();
+        var service = CreateService(paths);
+        var sessionId = new SessionId("signalr/test-resume-1");
+
+        service.OnSessionActivated(sessionId, ChannelType.SignalR);
+        service.OnSessionDeactivated(sessionId);
+
+        // Resume — should set back to active
+        service.OnSessionActivated(sessionId, ChannelType.SignalR);
+
+        var stats = service.GetStats();
+        Assert.Equal(1, stats.TotalSessions);
+        Assert.Equal(1, stats.ActiveSessions);
+    }
+
+    [Fact]
+    public void OnSessionActivated_DoesNotRewriteLastActivity_ForExistingSession()
+    {
+        var paths = CreatePaths();
+        var fakeTime = new AdjustableTimeProvider(DateTimeOffset.Parse("2026-03-21T10:00:00Z"));
+        var service = CreateService(paths, timeProvider: fakeTime);
+        var sessionId = new SessionId("signalr/test-active-last-activity");
+
+        service.OnSessionActivated(sessionId, ChannelType.SignalR);
+        service.OnOutput(new TurnCompleted
+        {
+            SessionId = sessionId,
+            TurnNumber = 1
+        });
+
+        var beforeResume = service.ListRecent().Single().LastActivity;
+
+        fakeTime.Advance(TimeSpan.FromMinutes(10));
+        service.OnSessionDeactivated(sessionId);
+        service.OnSessionActivated(sessionId, ChannelType.SignalR);
+
+        var entry = service.ListRecent().Single();
+        Assert.Equal("active", entry.Status);
+        Assert.Equal(beforeResume, entry.LastActivity);
     }
 
     private sealed class FakeMetrics : ISessionMetrics
@@ -347,6 +396,15 @@ public sealed class SessionCatalogServiceTests : IDisposable
         public void RecordMemoriesFormed(int count) { }
         public void RecordMemoriesRecalled(int count) { }
         public void RecordSkillsLoaded(int count) { }
+    }
+
+    private sealed class AdjustableTimeProvider(DateTimeOffset utcNow) : TimeProvider
+    {
+        private DateTimeOffset _utcNow = utcNow;
+
+        public override DateTimeOffset GetUtcNow() => _utcNow;
+
+        public void Advance(TimeSpan by) => _utcNow = _utcNow.Add(by);
     }
 
     private static SqliteConnection OpenConn(NetclawPaths paths)

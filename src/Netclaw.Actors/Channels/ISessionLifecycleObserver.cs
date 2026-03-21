@@ -3,21 +3,25 @@ using Netclaw.Actors.Protocol;
 namespace Netclaw.Actors.Channels;
 
 /// <summary>
-/// Observer for session lifecycle events. Implemented by infrastructure services
-/// (e.g. session catalog) that need to track all sessions regardless of channel type.
-/// Injected into <see cref="SessionPipeline"/> via DI — every materialized session
-/// automatically reports creation and output events.
+/// Observer for session activation, deactivation, and output events.
+/// Implemented by infrastructure services (e.g. session catalog) that need to
+/// track all sessions regardless of channel type.
 /// </summary>
 public interface ISessionLifecycleObserver
 {
     /// <summary>
-    /// Called when a new session is created (or re-materialized).
+    /// Called when a session becomes active through pipeline materialization.
     /// </summary>
-    void OnSessionCreated(SessionId sessionId, ChannelType channelType);
+    void OnSessionActivated(SessionId sessionId, ChannelType channelType);
 
     /// <summary>
     /// Called for every <see cref="SessionOutput"/> emitted by the session.
     /// Implementations must be fast — this runs synchronously in the Akka.Streams pipeline.
     /// </summary>
     void OnOutput(SessionOutput output);
+
+    /// <summary>
+    /// Called when the owning session actor deactivates and is about to stop.
+    /// </summary>
+    void OnSessionDeactivated(SessionId sessionId);
 }
