@@ -20,8 +20,8 @@ public sealed class SessionCatalogServiceTests : IDisposable
         return paths;
     }
 
-    private SessionCatalogService CreateService(NetclawPaths paths, ISessionMetrics? metrics = null)
-        => new(paths, TimeProvider.System, NullLogger<SessionCatalogService>.Instance, metrics);
+    private SessionCatalogService CreateService(NetclawPaths paths, ISessionMetrics? metrics = null, TimeProvider? timeProvider = null)
+        => new(paths, timeProvider ?? TimeProvider.System, NullLogger<SessionCatalogService>.Instance, metrics);
 
     public void Dispose()
     {
@@ -51,12 +51,12 @@ public sealed class SessionCatalogServiceTests : IDisposable
     }
 
     [Fact]
-    public void OnSessionCreated_AutoCreatesTable_WhenTableIsMissing()
+    public void OnSessionActivated_AutoCreatesTable_WhenTableIsMissing()
     {
         var paths = CreatePaths();
         var service = CreateService(paths);
 
-        service.OnSessionCreated(new Netclaw.Actors.Protocol.SessionId("signalr/test-123"), ChannelType.SignalR);
+        service.OnSessionActivated(new Netclaw.Actors.Protocol.SessionId("signalr/test-123"), ChannelType.SignalR);
 
         using var conn = OpenConn(paths);
         Assert.True(TableExists(conn, "sessions"));
@@ -269,7 +269,7 @@ public sealed class SessionCatalogServiceTests : IDisposable
         var service = CreateService(paths, metrics);
         var sessionId = new SessionId("signalr/test-usage-2");
 
-        service.OnSessionCreated(sessionId, ChannelType.SignalR);
+        service.OnSessionActivated(sessionId, ChannelType.SignalR);
 
         service.OnOutput(new UsageOutput
         {
@@ -298,7 +298,7 @@ public sealed class SessionCatalogServiceTests : IDisposable
         var service = CreateService(paths, metrics);
         var sessionId = new SessionId("signalr/test-usage-3");
 
-        service.OnSessionCreated(sessionId, ChannelType.SignalR);
+        service.OnSessionActivated(sessionId, ChannelType.SignalR);
 
         service.OnOutput(new UsageOutput
         {
@@ -319,42 +319,100 @@ public sealed class SessionCatalogServiceTests : IDisposable
     }
 
     [Fact]
-    public void OnSessionEnded_SetsStatusToIdle()
+    public void OnSessionDeactivated_SetsStatusToInactive()
     {
         var paths = CreatePaths();
         var service = CreateService(paths);
         var sessionId = new SessionId("signalr/test-end-1");
 
-        service.OnSessionCreated(sessionId, ChannelType.SignalR);
+        service.OnSessionActivated(sessionId, ChannelType.SignalR);
 
         // Verify initially active
         var stats = service.GetStats();
         Assert.Equal(1, stats.ActiveSessions);
 
-        service.OnSessionEnded(sessionId);
+        service.OnSessionDeactivated(sessionId);
 
-        // Should now be idle
+        // Should now be inactive
         stats = service.GetStats();
         Assert.Equal(1, stats.TotalSessions);
         Assert.Equal(0, stats.ActiveSessions);
+        Assert.Equal("inactive", service.ListRecent().Single().Status);
     }
 
     [Fact]
-    public void OnSessionCreated_ResetsIdleToActive()
+    public void OnSessionActivated_ResetsInactiveToActive()
     {
         var paths = CreatePaths();
         var service = CreateService(paths);
         var sessionId = new SessionId("signalr/test-resume-1");
 
-        service.OnSessionCreated(sessionId, ChannelType.SignalR);
-        service.OnSessionEnded(sessionId);
+        service.OnSessionActivated(sessionId, ChannelType.SignalR);
+        service.OnSessionDeactivated(sessionId);
 
         // Resume — should set back to active
-        service.OnSessionCreated(sessionId, ChannelType.SignalR);
+        service.OnSessionActivated(sessionId, ChannelType.SignalR);
 
         var stats = service.GetStats();
         Assert.Equal(1, stats.TotalSessions);
         Assert.Equal(1, stats.ActiveSessions);
+    }
+
+    [Fact]
+    public void OnSessionActivated_DoesNotRewriteLastActivity_ForExistingSession()
+    {
+        var paths = CreatePaths();
+        var fakeTime = new AdjustableTimeProvider(DateTimeOffset.Parse("2026-03-21T10:00:00Z"));
+        var service = CreateService(paths, timeProvider: fakeTime);
+        var sessionId = new SessionId("signalr/test-active-last-activity");
+
+        service.OnSessionActivated(sessionId, ChannelType.SignalR);
+        service.OnOutput(new TurnCompleted
+        {
+            SessionId = sessionId,
+            TurnNumber = 1
+        });
+
+        var beforeResume = service.ListRecent().Single().LastActivity;
+
+        fakeTime.Advance(TimeSpan.FromMinutes(10));
+        service.OnSessionDeactivated(sessionId);
+        service.OnSessionActivated(sessionId, ChannelType.SignalR);
+
+        var entry = service.ListRecent().Single();
+        Assert.Equal("active", entry.Status);
+        Assert.Equal(beforeResume, entry.LastActivity);
+    }
+
+    [Fact]
+    public void ListRecent_NormalizesLegacyIdleStatus_ToInactive()
+    {
+        var paths = CreatePaths();
+
+        using (var conn = OpenConn(paths))
+        {
+            RunSql(conn,
+                """
+                CREATE TABLE sessions (
+                    persistence_id    TEXT NOT NULL PRIMARY KEY,
+                    channel           TEXT NOT NULL,
+                    created_at        INTEGER NOT NULL,
+                    last_activity     INTEGER NOT NULL,
+                    status            TEXT NOT NULL DEFAULT 'active',
+                    turn_count        INTEGER NOT NULL DEFAULT 0,
+                    title             TEXT,
+                    description       TEXT,
+                    last_input_tokens INTEGER,
+                    log_path          TEXT,
+                    metadata          TEXT
+                )
+                """);
+            RunSql(conn,
+                "INSERT INTO sessions (persistence_id, channel, created_at, last_activity, status, turn_count) VALUES ('session-signalr/legacy-idle', 'signalr', 100, 200, 'idle', 1)");
+        }
+
+        var service = CreateService(paths);
+        Assert.Equal("inactive", service.ListRecent().Single().Status);
     }
 
     private sealed class FakeMetrics : ISessionMetrics
@@ -369,6 +427,15 @@ public sealed class SessionCatalogServiceTests : IDisposable
         public void RecordMemoriesFormed(int count) { }
         public void RecordMemoriesRecalled(int count) { }
         public void RecordSkillsLoaded(int count) { }
+    }
+
+    private sealed class AdjustableTimeProvider(DateTimeOffset utcNow) : TimeProvider
+    {
+        private DateTimeOffset _utcNow = utcNow;
+
+        public override DateTimeOffset GetUtcNow() => _utcNow;
+
+        public void Advance(TimeSpan by) => _utcNow = _utcNow.Add(by);
     }
 
     private static SqliteConnection OpenConn(NetclawPaths paths)

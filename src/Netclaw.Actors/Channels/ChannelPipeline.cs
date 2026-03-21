@@ -186,7 +186,7 @@ public sealed class SessionPipeline : ISessionPipeline
                 sessionManager.Tell(cmd, ActorRefs.NoSender);
             }));
 
-        // Outbound: pre-materialized subscriber → kill switch → exposed Source
+        // Outbound: pre-materialized subscriber → kill switch → exposed Source.
         // When a lifecycle observer is registered, tap the stream so every output
         // is reported regardless of which channel materializes the session.
         var outputSource = responseSource
@@ -195,20 +195,15 @@ public sealed class SessionPipeline : ISessionPipeline
         if (_lifecycleObserver is not null)
         {
             var observer = _lifecycleObserver;
-            var sid = sessionId;
             outputSource = outputSource.Select(output =>
             {
                 observer.OnOutput(output);
                 return output;
-            }).WatchTermination((notUsed, done) =>
-            {
-                done.ContinueWith(_ => observer.OnSessionEnded(sid));
-                return notUsed;
             });
         }
 
-        // Notify observer of session creation
-        _lifecycleObserver?.OnSessionCreated(sessionId, options.ChannelType);
+        // Notify observer that the session is active again (or newly created).
+        _lifecycleObserver?.OnSessionActivated(sessionId, options.ChannelType);
 
         // Join the session — subscriber starts receiving output
         sessionManager.Tell(new JoinSession

@@ -6,6 +6,7 @@ using System.Text.Json;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Time.Testing;
 using Netclaw.Configuration;
 using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Memory;
@@ -28,6 +29,8 @@ public class LlmSessionIntegrationTests : TestKit
 {
     private readonly FakeChatClient _fakeChatClient = new();
     private readonly FakeToolExecutor _fakeToolExecutor = new();
+    private readonly FakeTimeProvider _timeProvider = new(DateTimeOffset.Parse("2026-03-21T12:00:00Z"));
+    private readonly RecordingSessionLifecycleObserver _lifecycleObserver = new();
 
     public LlmSessionIntegrationTests(ITestOutputHelper output) : base(output: output)
     {
@@ -41,6 +44,7 @@ public class LlmSessionIntegrationTests : TestKit
             ModelId = "fake-model",
             ContextWindowTokens = 128_000,
             SnapshotInterval = 5,
+            IdleTimeout = TimeSpan.FromMinutes(1),
             TitleGenerationInterval = 0,
             MemorySidecarsEnabled = false,
             DiscoveredToolRetentionTurns = 3,
@@ -71,6 +75,8 @@ public class LlmSessionIntegrationTests : TestKit
         services.AddSingleton(registry);
         services.AddSingleton<IToolExecutor>(_fakeToolExecutor);
         services.AddSingleton<IModelCapabilityResolver>(new FakeCapabilityResolver());
+        services.AddSingleton<TimeProvider>(_timeProvider);
+        services.AddSingleton<ISessionLifecycleObserver>(_lifecycleObserver);
     }
 
     protected override void ConfigureAkka(AkkaConfigurationBuilder builder, IServiceProvider provider)
@@ -963,6 +969,42 @@ public class LlmSessionIntegrationTests : TestKit
     }
 
     [Fact]
+    public async Task Session_idle_timeout_deactivates_only_when_actor_passivates()
+    {
+        var sessionId = new SessionId("test-channel/deactivate-on-passivate");
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("deactivate-passivate-sub");
+
+        await sessionManager.Ask<SessionJoined>(new JoinSession
+        {
+            SessionId = sessionId,
+            Subscriber = subscriber,
+            Filter = OutputFilter.TextOnly
+        }, TimeSpan.FromSeconds(3));
+        await subscriber.ExpectMsgAsync<SessionJoined>();
+
+        var escapedId = Uri.EscapeDataString(sessionId.Value);
+        var childPath = $"/user/session-manager/{escapedId}";
+        var child = await Sys.ActorSelection(childPath).ResolveOne(TimeSpan.FromSeconds(3));
+        Watch(child);
+
+        child.Tell(ReceiveTimeout.Instance);
+        await ExpectNoMsgAsync(TimeSpan.FromMilliseconds(300));
+        Assert.DoesNotContain(sessionId.Value, _lifecycleObserver.DeactivatedSessionIds);
+
+        child.Tell(new LeaveSession
+        {
+            SessionId = sessionId,
+            Subscriber = subscriber
+        });
+
+        child.Tell(ReceiveTimeout.Instance);
+        await ExpectTerminatedAsync(child, TimeSpan.FromSeconds(5));
+
+        Assert.Contains(sessionId.Value, _lifecycleObserver.DeactivatedSessionIds);
+    }
+
+    [Fact]
     public async Task Subscriber_survives_session_actor_passivation_via_piggyback_rejoin()
     {
         var sessionId = new SessionId("test-channel/passivation-rejoin");
@@ -1350,4 +1392,20 @@ internal sealed class FakeRecallCoordinator : IMemoryRecallCoordinator
 
     public Task<AutomaticRecallResult> RecallAsync(AutomaticRecallRequest request, CancellationToken ct = default)
         => Task.FromResult(Result);
+}
+
+internal sealed class RecordingSessionLifecycleObserver : ISessionLifecycleObserver
+{
+    public List<string> ActivatedSessionIds { get; } = [];
+    public List<string> DeactivatedSessionIds { get; } = [];
+
+    public void OnSessionActivated(SessionId sessionId, ChannelType channelType)
+        => ActivatedSessionIds.Add(sessionId.Value);
+
+    public void OnOutput(SessionOutput output)
+    {
+    }
+
+    public void OnSessionDeactivated(SessionId sessionId)
+        => DeactivatedSessionIds.Add(sessionId.Value);
 }
