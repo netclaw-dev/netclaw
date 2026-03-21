@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Logging.Abstractions;
 using Netclaw.Configuration;
+using Netclaw.Configuration.Secrets;
 using Netclaw.Daemon.Mcp;
 using Netclaw.Providers.OAuth;
 using Xunit;
@@ -51,13 +52,62 @@ public sealed class McpOAuthServiceTests : IDisposable
         Assert.Equal(McpOAuthFlowStatus.Failed, service.GetFlowStatusByState(state));
     }
 
+    [Fact]
+    public async Task LoadTokensFromDisk_survives_encrypted_round_trip()
+    {
+        var paths = new NetclawPaths(_tempDir);
+        paths.EnsureDirectoriesExist();
+        var protector = SecretsProtection.CreateProtector(paths);
+        SensitiveStringTypeConverter.Protector = protector;
+
+        try
+        {
+            // First service: complete auth flow → persist tokens (encrypted)
+            var service1 = CreateService(CreateDiscoveryClient(),
+                CreatePkceService(JsonResponse(new
+                {
+                    access_token = "access-tok",
+                    refresh_token = "refresh-tok",
+                    expires_in = 3600
+                })),
+                protector);
+
+            var entry = CreateHttpEntry();
+            var (_, state) = await service1.StartAuthorizationFlowAsync("notion", entry, CancellationToken.None);
+            await service1.CompleteAuthorizationAsync("auth-code", state, CancellationToken.None);
+
+            // Verify tokens were encrypted on disk
+            var onDisk = File.ReadAllText(paths.SecretsPath);
+            Assert.Contains("ENC:", onDisk, StringComparison.Ordinal);
+            Assert.DoesNotContain("access-tok", onDisk, StringComparison.Ordinal);
+
+            // Second service: simulates daemon restart — must load encrypted tokens
+            var service2 = CreateService(CreateDiscoveryClient(),
+                CreatePkceService(JsonResponse(new { access_token = "unused" })),
+                protector);
+
+            var tokenSet = service2.GetTokenSet("notion");
+            Assert.NotNull(tokenSet);
+            Assert.Equal("access-tok", tokenSet.AccessToken.Value);
+            Assert.NotNull(tokenSet.RefreshToken);
+            Assert.Equal("refresh-tok", tokenSet.RefreshToken.Value);
+            Assert.NotNull(tokenSet.ExpiresAt);
+            Assert.True(tokenSet.ExpiresAt > DateTimeOffset.UtcNow);
+        }
+        finally
+        {
+            SensitiveStringTypeConverter.Protector = null;
+        }
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_tempDir))
             Directory.Delete(_tempDir, true);
     }
 
-    private McpOAuthService CreateService(HttpClient discoveryClient, OAuthPkceService pkceService)
+    private McpOAuthService CreateService(HttpClient discoveryClient, OAuthPkceService pkceService,
+        ISecretsProtector? protector = null)
     {
         return new McpOAuthService(
             discoveryClient,
@@ -65,7 +115,8 @@ public sealed class McpOAuthServiceTests : IDisposable
             TimeProvider.System,
             NullLogger<McpOAuthService>.Instance,
             pkceService,
-            NullNotificationSink.Instance);
+            NullNotificationSink.Instance,
+            protector);
     }
 
     private static McpServerEntry CreateHttpEntry()

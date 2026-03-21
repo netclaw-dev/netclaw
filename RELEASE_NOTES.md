@@ -1,3 +1,27 @@
+#### 0.7.6 2026-03-21 ####
+
+Netclaw v0.7.6 — MCP OAuth wiring, session loop hardening, security cleanup, reminder auto-cleanup, and eval suite
+
+**MCP**
+
+* Fixed MCP OAuth connections requiring manual Bearer header injection — the daemon now wires the SDK's built-in OAuth token provider instead of manually inserting the `Authorization` header, eliminating a class of auth failures when tokens refresh mid-session. ([#331](https://github.com/Aaronontheweb/netclaw/pull/331))
+
+**Security**
+
+* Removed the MimeDetective dependency from `MagicByteValidator` — magic byte detection is now handled with a lightweight inline implementation, eliminating a third-party library whose static initializer could poison the validator for the process lifetime. ([#348](https://github.com/Aaronontheweb/netclaw/pull/348))
+
+**Sessions**
+
+* Fixed session loops missing mid-conversation user messages — messages injected while the LLM tool loop was in-flight were previously dropped. The actor now processes these injected messages as follow-up turns. Also added duplicate tool call detection to guard against infinite tool loops where the LLM repeats the same call without making progress. ([#350](https://github.com/Aaronontheweb/netclaw/issues/350), [#351](https://github.com/Aaronontheweb/netclaw/pull/351))
+
+**Reminders**
+
+* Fixed single-shot reminders persisting after firing — one-time reminders were scheduled, delivered, and then left in the store, causing spurious re-deliveries on actor restart. Reminders are now auto-deleted immediately after a one-shot fires. ([#349](https://github.com/Aaronontheweb/netclaw/issues/349), [#353](https://github.com/Aaronontheweb/netclaw/pull/353))
+
+**Identity / Evals**
+
+* Added behavioral grounding rules to the `AGENTS.md` init wizard template and introduced a behavioral eval suite for session pipeline regression testing — operators can now run `./evals/run-evals.sh` to verify that identity grounding, skill loading, memory recall, and tool execution behave correctly end-to-end. ([#347](https://github.com/Aaronontheweb/netclaw/pull/347))
+
 #### 0.7.5 2026-03-21 ####
 
 Netclaw v0.7.5 — Slack image delivery fix and init wizard grounding rules

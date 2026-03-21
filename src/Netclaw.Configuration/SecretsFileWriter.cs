@@ -61,6 +61,20 @@ public static class SecretsFileWriter
     }
 
     /// <summary>
+    /// Walk a JSON tree and decrypt all <c>ENC:</c>-prefixed string leaf values.
+    /// Non-encrypted values are left untouched (idempotent).
+    /// </summary>
+    public static string DecryptJsonLeaves(string json, ISecretsProtector protector)
+    {
+        var node = JsonNode.Parse(json);
+        if (node is null)
+            return json;
+
+        DecryptNode(node, protector);
+        return node.ToJsonString(DefaultJsonOptions);
+    }
+
+    /// <summary>
     /// Count encrypted vs plaintext string leaf values in a JSON document.
     /// </summary>
     public static (int Encrypted, int Plaintext) CountEncryptionStatus(string json)
@@ -105,6 +119,43 @@ public static class SecretsFileWriter
                     else if (item is not null)
                     {
                         EncryptNode(item, protector);
+                    }
+                }
+                break;
+        }
+    }
+
+    private static void DecryptNode(JsonNode node, ISecretsProtector protector)
+    {
+        switch (node)
+        {
+            case JsonObject obj:
+                foreach (var (key, child) in obj.ToArray())
+                {
+                    if (child is JsonValue val && val.TryGetValue<string>(out var s))
+                    {
+                        if (ISecretsProtector.IsEncrypted(s))
+                            obj[key] = protector.Unprotect(s);
+                    }
+                    else if (child is not null)
+                    {
+                        DecryptNode(child, protector);
+                    }
+                }
+                break;
+
+            case JsonArray arr:
+                for (var i = 0; i < arr.Count; i++)
+                {
+                    var item = arr[i];
+                    if (item is JsonValue val && val.TryGetValue<string>(out var s))
+                    {
+                        if (ISecretsProtector.IsEncrypted(s))
+                            arr[i] = protector.Unprotect(s);
+                    }
+                    else if (item is not null)
+                    {
+                        DecryptNode(item, protector);
                     }
                 }
                 break;
