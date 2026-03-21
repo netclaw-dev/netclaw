@@ -12,6 +12,7 @@ public sealed class ConfigWatcherServiceTests : IDisposable
     private readonly NetclawPaths _paths;
     private readonly DaemonRestartSignal _restartSignal;
     private readonly FakeApplicationLifetime _lifetime;
+    private readonly RecordingSink _sink;
     private readonly ConfigWatcherService _sut;
 
     public ConfigWatcherServiceTests()
@@ -24,12 +25,19 @@ public sealed class ConfigWatcherServiceTests : IDisposable
 
         _restartSignal = new DaemonRestartSignal();
         _lifetime = new FakeApplicationLifetime();
+        _sink = new RecordingSink();
+
+        var notifier = new DaemonLifecycleNotifier(
+            _sink,
+            TimeProvider.System,
+            NullLogger<DaemonLifecycleNotifier>.Instance);
 
         _sut = new ConfigWatcherService(
             _paths,
             TimeProvider.System,
             _lifetime,
             _restartSignal,
+            notifier,
             NullLogger<ConfigWatcherService>.Instance);
     }
 
@@ -70,6 +78,19 @@ public sealed class ConfigWatcherServiceTests : IDisposable
         Assert.True(_lifetime.StopRequested);
     }
 
+    [Fact]
+    public void ValidConfigChange_NotifiesShutdown()
+    {
+        File.WriteAllText(_paths.NetclawConfigPath, """{ "Providers": {} }""");
+
+        _sut.ApplyReload();
+
+        var alert = Assert.Single(_sink.Alerts);
+        Assert.Equal(AlertType.DaemonStopping, alert.Category);
+        Assert.NotNull(alert.Context);
+        Assert.Equal("config-reload", alert.Context["reason"]);
+    }
+
     public void Dispose()
     {
         _sut.Dispose();
@@ -86,5 +107,12 @@ public sealed class ConfigWatcherServiceTests : IDisposable
         public CancellationToken ApplicationStopped => CancellationToken.None;
 
         public void StopApplication() => StopRequested = true;
+    }
+
+    private sealed class RecordingSink : IOperationalNotificationSink
+    {
+        public List<OperationalAlert> Alerts { get; } = [];
+
+        public void Emit(OperationalAlert alert) => Alerts.Add(alert);
     }
 }

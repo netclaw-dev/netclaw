@@ -119,7 +119,7 @@ internal static class UpdateCommand
             if (daemonWasRunning)
             {
                 Console.Write("Stopping daemon...");
-                var stopResult = await manager.StopAsync();
+                var stopResult = await manager.StopAsync("update");
                 if (!stopResult.Success)
                 {
                     Console.WriteLine($" failed: {stopResult.Message}");
