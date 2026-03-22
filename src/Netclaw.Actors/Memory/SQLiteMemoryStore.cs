@@ -966,6 +966,271 @@ public sealed class SQLiteMemoryStore
         return await SupersedeRecordAsync(recordId, "{\"status\":\"tombstone\"}", ct);
     }
 
+    /// <summary>
+    /// Find existing anchors in a domain whose names fuzzy-match the proposed anchor name.
+    /// Returns candidates including the most recent document under each matching anchor.
+    /// </summary>
+    public async Task<IReadOnlyList<ExistingMemoryCandidate>> FindFuzzyAnchorMatchesAsync(
+        string proposedAnchorName,
+        string domain,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(proposedAnchorName))
+            return [];
+
+        return await WithConnectionAsync(async (conn, ct) =>
+        {
+        // Query all active anchors in the domain with their most recent document
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = $"""
+            SELECT a.anchor_id, a.canonical_name,
+                   d.document_id, d.markdown_body, d.freshness_at, d.confidence
+            FROM memory_anchors a
+            LEFT JOIN (
+                SELECT anchor_id, document_id, markdown_body, freshness_at, confidence,
+                       ROW_NUMBER() OVER (PARTITION BY anchor_id ORDER BY updated_at DESC) AS rn
+                FROM memory_documents
+                WHERE update_semantics != '{MemoryUpdateSemantics.Tombstone.ToWireValue()}'
+            ) d ON d.anchor_id = a.anchor_id AND d.rn = 1
+            WHERE a.domain = $domain
+              AND a.status = 'active';
+            """;
+        cmd.Parameters.AddWithValue("$domain", domain);
+
+        var allAnchors = new List<(string AnchorId, string CanonicalName, string? DocId, string? Content, long? FreshnessAt, double Confidence)>();
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            allAnchors.Add((
+                AnchorId: reader.GetString(0),
+                CanonicalName: reader.GetString(1),
+                DocId: reader.IsDBNull(2) ? null : reader.GetString(2),
+                Content: reader.IsDBNull(3) ? null : reader.GetString(3),
+                FreshnessAt: reader.IsDBNull(4) ? null : reader.GetInt64(4),
+                Confidence: reader.IsDBNull(5) ? 0.0 : reader.GetDouble(5)));
+        }
+
+        // Build the expected anchor ID for exact match detection
+        var normalizedProposedId = $"anchor:{proposedAnchorName.Trim().ToLowerInvariant().Replace(' ', '-')}";
+        var proposedTokens = AnchorNameMatcher.Tokenize(proposedAnchorName);
+
+        var candidates = new List<ExistingMemoryCandidate>();
+        foreach (var anchor in allAnchors)
+        {
+            if (anchor.DocId is null || anchor.Content is null)
+                continue;
+
+            var isExact = string.Equals(anchor.AnchorId, normalizedProposedId, StringComparison.OrdinalIgnoreCase);
+            var isFuzzy = !isExact && AnchorNameMatcher.IsFuzzyMatch(
+                proposedTokens,
+                AnchorNameMatcher.Tokenize(anchor.CanonicalName));
+
+            if (isExact || isFuzzy)
+            {
+                candidates.Add(new ExistingMemoryCandidate(
+                    DocumentId: anchor.DocId,
+                    AnchorId: anchor.AnchorId,
+                    AnchorCanonicalName: anchor.CanonicalName,
+                    Content: anchor.Content,
+                    FreshnessAtMs: anchor.FreshnessAt,
+                    Confidence: anchor.Confidence,
+                    IsExactAnchorMatch: isExact));
+            }
+        }
+
+        return candidates;
+        }, ct);
+    }
+
+    /// <summary>
+    /// Tombstone an anchor by setting its status to 'tombstoned'.
+    /// Documents under this anchor are NOT affected — they should be re-anchored first.
+    /// </summary>
+    public async Task<bool> TombstoneAnchorAsync(string anchorId, CancellationToken ct = default)
+    {
+        return await WithConnectionAsync(async (conn, ct) =>
+        {
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            UPDATE memory_anchors
+            SET status = 'tombstoned',
+                updated_at = $updatedAt
+            WHERE anchor_id = $id;
+            """;
+        cmd.Parameters.AddWithValue("$id", anchorId);
+        cmd.Parameters.AddWithValue("$updatedAt", _timeProvider.GetUtcNow().ToUnixTimeMilliseconds());
+        var affected = await cmd.ExecuteNonQueryAsync(ct);
+        return affected > 0;
+        }, ct);
+    }
+
+    /// <summary>
+    /// Move a document from one anchor to another (re-anchor).
+    /// </summary>
+    public async Task<bool> ReanchorDocumentAsync(string documentId, string newAnchorId, CancellationToken ct = default)
+    {
+        return await WithConnectionAsync(async (conn, ct) =>
+        {
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            UPDATE memory_documents
+            SET anchor_id = $newAnchorId,
+                updated_at = $updatedAt
+            WHERE document_id = $id;
+            """;
+        cmd.Parameters.AddWithValue("$id", documentId);
+        cmd.Parameters.AddWithValue("$newAnchorId", newAnchorId);
+        cmd.Parameters.AddWithValue("$updatedAt", _timeProvider.GetUtcNow().ToUnixTimeMilliseconds());
+        var affected = await cmd.ExecuteNonQueryAsync(ct);
+        return affected > 0;
+        }, ct);
+    }
+
+    /// <summary>
+    /// Write a batch of curation operations without an associated checkpoint.
+    /// Used by the inline curation actor path where proposals are sent directly
+    /// from the session actor rather than through the checkpoint queue.
+    /// </summary>
+    public async Task ApplyInlineCurationBatchAsync(
+        IReadOnlyList<SQLiteMemoryCurationOperation> operations,
+        CancellationToken ct = default)
+    {
+        await WithConnectionAsync(async (conn, ct) =>
+        {
+        await using var tx = (SqliteTransaction)await conn.BeginTransactionAsync(ct);
+
+        foreach (var operation in operations)
+        {
+            var now = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
+            var canonicalName = string.IsNullOrWhiteSpace(operation.AnchorCanonicalName)
+                ? operation.Title
+                : operation.AnchorCanonicalName;
+            var anchor = CreateDefaultAnchor(canonicalName, operation.Domain) with
+            {
+                AnchorType = operation.AnchorType,
+                Sensitivity = operation.Sensitivity,
+                RecallMode = operation.RecallMode,
+                Confidence = operation.Confidence,
+                FreshnessAtMs = now,
+                CreatedAtMs = now,
+                UpdatedAtMs = now
+            };
+
+            await EnsureAnchorAsync(conn, tx, anchor, ct);
+
+            if (operation.Kind == MemoryKind.Record.ToWireValue())
+            {
+                await using var recordCmd = conn.CreateCommand();
+                recordCmd.Transaction = tx;
+                recordCmd.CommandText = """
+                    INSERT INTO memory_records(
+                      record_id, anchor_id, memory_class, record_type, payload_json, aliases_json, facets_json, slots_json, supersedes_record_id,
+                      update_semantics, domain, sensitivity, recall_mode, confidence,
+                      freshness_at, expires_at, created_at)
+                    VALUES($id, $anchorId, $memoryClass, $recordType, $payloadJson, $aliasesJson, $facetsJson, $slotsJson, $supersedes,
+                      $semantics, $domain, $sensitivity, $recallMode, $confidence,
+                      $freshnessAt, $expiresAt, $createdAt);
+                    """;
+                recordCmd.Parameters.AddWithValue("$id", string.IsNullOrWhiteSpace(operation.MemoryId) ? $"rec-{Guid.NewGuid():N}" : operation.MemoryId);
+                recordCmd.Parameters.AddWithValue("$anchorId", anchor.AnchorId);
+                recordCmd.Parameters.AddWithValue("$memoryClass", operation.MemoryClass);
+                recordCmd.Parameters.AddWithValue("$recordType", operation.Title);
+                recordCmd.Parameters.AddWithValue("$payloadJson", operation.Content);
+                recordCmd.Parameters.AddWithValue("$aliasesJson", (object?)operation.AliasesJson ?? DBNull.Value);
+                recordCmd.Parameters.AddWithValue("$facetsJson", (object?)operation.FacetsJson ?? DBNull.Value);
+                recordCmd.Parameters.AddWithValue("$slotsJson", (object?)operation.SlotsJson ?? DBNull.Value);
+                recordCmd.Parameters.AddWithValue("$supersedes", (object?)operation.SupersedesRecordId ?? DBNull.Value);
+                recordCmd.Parameters.AddWithValue("$semantics", operation.UpdateSemantics);
+                recordCmd.Parameters.AddWithValue("$domain", operation.Domain);
+                recordCmd.Parameters.AddWithValue("$sensitivity", operation.Sensitivity);
+                recordCmd.Parameters.AddWithValue("$recallMode", operation.RecallMode);
+                recordCmd.Parameters.AddWithValue("$confidence", operation.Confidence);
+                recordCmd.Parameters.AddWithValue("$freshnessAt", (object?)operation.FreshnessAtMs ?? DBNull.Value);
+                recordCmd.Parameters.AddWithValue("$expiresAt", (object?)operation.ExpiresAtMs ?? DBNull.Value);
+                recordCmd.Parameters.AddWithValue("$createdAt", now);
+                await recordCmd.ExecuteNonQueryAsync(ct);
+                continue;
+            }
+
+            var resolvedRecallMode = string.Equals(operation.MemoryClass, MemoryClass.Trace.ToWireValue(), StringComparison.OrdinalIgnoreCase)
+                ? MemoryRecallMode.Never.ToWireValue()
+                : operation.RecallMode;
+
+            // Anchor-based dedup: same logic as ApplyCurationBatchAsync
+            string documentId;
+            if (!string.IsNullOrWhiteSpace(operation.MemoryId))
+            {
+                documentId = operation.MemoryId;
+            }
+            else if (string.Equals(operation.UpdateSemantics, MemoryUpdateSemantics.MergeDocument.ToWireValue(), StringComparison.OrdinalIgnoreCase))
+            {
+                await using var lookupCmd = conn.CreateCommand();
+                lookupCmd.Transaction = tx;
+                lookupCmd.CommandText = """
+                    SELECT document_id FROM memory_documents
+                    WHERE anchor_id = $anchorId
+                    ORDER BY updated_at DESC
+                    LIMIT 1;
+                    """;
+                lookupCmd.Parameters.AddWithValue("$anchorId", anchor.AnchorId);
+                documentId = (string?)await lookupCmd.ExecuteScalarAsync(ct)
+                    ?? $"doc-{Guid.NewGuid():N}";
+            }
+            else
+            {
+                documentId = $"doc-{Guid.NewGuid():N}";
+            }
+
+            await using var documentCmd = conn.CreateCommand();
+            documentCmd.Transaction = tx;
+            documentCmd.CommandText = """
+                INSERT INTO memory_documents(
+                  document_id, anchor_id, memory_class, title, markdown_body, aliases_json, facets_json, slots_json, update_semantics,
+                  domain, sensitivity, recall_mode, confidence, freshness_at,
+                  expires_at, created_at, updated_at)
+                VALUES($id, $anchorId, $memoryClass, $title, $body, $aliasesJson, $facetsJson, $slotsJson, $semantics,
+                  $domain, $sensitivity, $recallMode, $confidence, $freshnessAt,
+                  $expiresAt, $createdAt, $updatedAt)
+                ON CONFLICT(document_id) DO UPDATE SET
+                  memory_class=excluded.memory_class,
+                  title=excluded.title,
+                  markdown_body=excluded.markdown_body,
+                  aliases_json=excluded.aliases_json,
+                  facets_json=excluded.facets_json,
+                  slots_json=excluded.slots_json,
+                  update_semantics=excluded.update_semantics,
+                  domain=excluded.domain,
+                  sensitivity=excluded.sensitivity,
+                  recall_mode=excluded.recall_mode,
+                  confidence=excluded.confidence,
+                  freshness_at=excluded.freshness_at,
+                  expires_at=excluded.expires_at,
+                  updated_at=excluded.updated_at;
+                """;
+            documentCmd.Parameters.AddWithValue("$id", documentId);
+            documentCmd.Parameters.AddWithValue("$anchorId", anchor.AnchorId);
+            documentCmd.Parameters.AddWithValue("$memoryClass", operation.MemoryClass);
+            documentCmd.Parameters.AddWithValue("$title", operation.Title);
+            documentCmd.Parameters.AddWithValue("$body", operation.Content);
+            documentCmd.Parameters.AddWithValue("$aliasesJson", (object?)operation.AliasesJson ?? DBNull.Value);
+            documentCmd.Parameters.AddWithValue("$facetsJson", (object?)operation.FacetsJson ?? DBNull.Value);
+            documentCmd.Parameters.AddWithValue("$slotsJson", (object?)operation.SlotsJson ?? DBNull.Value);
+            documentCmd.Parameters.AddWithValue("$semantics", operation.UpdateSemantics);
+            documentCmd.Parameters.AddWithValue("$domain", operation.Domain);
+            documentCmd.Parameters.AddWithValue("$sensitivity", operation.Sensitivity);
+            documentCmd.Parameters.AddWithValue("$recallMode", resolvedRecallMode);
+            documentCmd.Parameters.AddWithValue("$confidence", operation.Confidence);
+            documentCmd.Parameters.AddWithValue("$freshnessAt", (object?)operation.FreshnessAtMs ?? DBNull.Value);
+            documentCmd.Parameters.AddWithValue("$expiresAt", (object?)operation.ExpiresAtMs ?? DBNull.Value);
+            documentCmd.Parameters.AddWithValue("$createdAt", now);
+            documentCmd.Parameters.AddWithValue("$updatedAt", now);
+            await documentCmd.ExecuteNonQueryAsync(ct);
+        }
+
+        await tx.CommitAsync(ct);
+        }, ct);
+    }
+
     public async Task ApplyCurationBatchAsync(
         string checkpointId,
         IReadOnlyList<SQLiteMemoryCurationOperation> operations,

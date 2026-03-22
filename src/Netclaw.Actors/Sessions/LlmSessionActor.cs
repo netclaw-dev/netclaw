@@ -50,6 +50,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     private readonly string? _sessionsBasePath;
     private readonly string? _sessionLogsBasePath;
     private readonly ISessionLifecycleObserver? _lifecycleObserver;
+    private readonly Memory.SQLiteMemoryStore? _memoryStore;
+    private readonly IChatClientProvider _clientProvider;
     private readonly ILoggingAdapter _log;
 
     // Transient state (not persisted)
@@ -101,6 +103,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     // Child actor for per-session log file (created when session logs directory is configured)
     private IActorRef? _logActor;
 
+    // Child actor for per-session memory curation (evaluate-before-write pipeline)
+    private IActorRef? _curationActor;
+
     // Processing watchdog state (non-persistent)
     private static readonly object ProcessingWatchdogTimerKey = new();
     private long _processingOperationId;
@@ -145,11 +150,13 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         IReadOnlyList<IContextLayerProvider>? contextLayers = null,
         NetclawPaths? paths = null,
         Telemetry.ISessionMetrics? sessionMetrics = null,
-        ISessionLifecycleObserver? lifecycleObserver = null)
+        ISessionLifecycleObserver? lifecycleObserver = null,
+        Memory.SQLiteMemoryStore? memoryStore = null)
     {
         _sessionId = new SessionId(entityId);
         _sessionMetrics = sessionMetrics;
         _lifecycleObserver = lifecycleObserver;
+        _clientProvider = clientProvider;
         _chatClient = clientProvider.GetClient(ModelRole.Main);
         _compactionClient = config.CompactionModelId is not null
             ? clientProvider.GetClient(ModelRole.Compaction)
@@ -162,6 +169,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         _memoryExtractor = memoryExtractor ?? NullMemoryExtractor.Instance;
         _memoryRecallCoordinator = memoryRecallCoordinator ?? NullMemoryRecallCoordinator.Instance;
         _memoryCheckpointSink = memoryCheckpointSink ?? NullMemoryCheckpointSink.Instance;
+        _memoryStore = memoryStore;
         _timeProvider = timeProvider ?? TimeProvider.System;
         _sessionsBasePath = paths?.SessionsDirectory;
         _sessionLogsBasePath = paths?.SessionsDirectory;
@@ -216,6 +224,13 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 _logActor = Context.ActorOf(
                     SessionLogActor.CreateProps(_sessionId, _sessionLogsBasePath, _timeProvider),
                     "session-log");
+            }
+
+            if (_memoryStore is not null)
+            {
+                _curationActor = Context.ActorOf(
+                    Memory.MemoryCurationActor.CreateProps(_memoryStore, _clientProvider),
+                    "memory-curation");
             }
         });
     }
@@ -1578,22 +1593,48 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 string.Join(" | ", accepted.Select(x =>
                     $"title={x.Title};anchor={x.AnchorCanonicalName};class={x.MemoryClass};aliases={(x.AliasesJson ?? "-")};facets={(x.FacetsJson ?? "-")};slots={(x.SlotsJson ?? "-")}")));
 
-            EnqueueCheckpointFireAndForget(new MemoryCheckpointRequest(
-                SessionId: _sessionId,
-                TurnId: _activeTurnId,
-                TriggerType: Memory.CheckpointTriggerType.ObservedMemoryProposals,
-                Priority: 60,
-                Payload: new ObservedMemoryCheckpointPayload(
-                    _sessionId.Value,
-                    Memory.CheckpointTriggerType.ObservedMemoryProposals.ToWireValue(),
-                    _sessionId.ToMemoryDomain(),
-                    Memory.MemorySensitivity.Normal.ToWireValue(),
-                    accepted)));
+            // Send accepted proposals to the curation actor for evaluate-before-write.
+            // If the curation actor is not available (no SQLiteMemoryStore configured),
+            // fall back to the checkpoint queue for the worker service to process.
+            if (_curationActor is not null)
+            {
+                _curationActor.Tell(new Memory.EvaluateProposals(accepted, _sessionId.ToMemoryDomain()));
+            }
+            else
+            {
+                EnqueueCheckpointFireAndForget(new MemoryCheckpointRequest(
+                    SessionId: _sessionId,
+                    TurnId: _activeTurnId,
+                    TriggerType: Memory.CheckpointTriggerType.ObservedMemoryProposals,
+                    Priority: 60,
+                    Payload: new ObservedMemoryCheckpointPayload(
+                        _sessionId.Value,
+                        Memory.CheckpointTriggerType.ObservedMemoryProposals.ToWireValue(),
+                        _sessionId.ToMemoryDomain(),
+                        Memory.MemorySensitivity.Normal.ToWireValue(),
+                        accepted)));
+            }
         });
 
         Command<MemoryObservationFailed>(msg =>
         {
             TurnLog().Warning("memory_observation_sidecar_failed reason={Reason}", msg.Reason);
+        });
+
+        Command<Memory.CurationCompleted>(msg =>
+        {
+            TurnLog().Info(
+                "memory_curation_completed evaluated={Evaluated} skipped={Skipped} updated={Updated} consolidated={Consolidated} created={Created}",
+                msg.Evaluated,
+                msg.Skipped,
+                msg.Updated,
+                msg.Consolidated,
+                msg.Created);
+        });
+
+        Command<Memory.CurationFailed>(msg =>
+        {
+            TurnLog().Warning("memory_curation_failed reason={Reason}", msg.Reason);
         });
 
         Command<JoinSession>(cmd =>
