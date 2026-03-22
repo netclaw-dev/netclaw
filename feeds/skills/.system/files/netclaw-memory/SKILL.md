@@ -1,122 +1,59 @@
 ---
 name: netclaw-memory
-description: "REQUIRED before using find_memories, get_memories, or any memory tool. Read this first when the user asks what you remember, wants something saved, or asks about past conversations. Contains memory search strategies and recall policies."
+description: "REQUIRED before using find_memories, get_memories, store_memory, or update_memory. Read this first when the user asks what you remember, wants something saved, or asks about past conversations."
 metadata:
   author: netclaw
-  version: "0.7.0"
-  triggers: what do you remember about me | remember this for later | save this for future sessions | recall prior details | search memory | fix an incorrect memory | memory seems wrong
+  version: "1.0.0"
 ---
 
 # Netclaw Memory
 
-Use this skill when the user's intent is about Netclaw memory behavior:
+Read this before using any memory tool. It defines how memory works and
+when to use each tool.
 
-- asking what Netclaw remembers
-- asking to remember or save something for later
-- needing prior context beyond the automatic recall bundle
-- correcting or superseding an existing memory
-- deciding whether information belongs in memory or identity files
+## How Memory Works
 
-If the user is updating long-lived preferences or identity/profile behavior,
-consider `netclaw-identity` instead.
+- **Automatic recall** runs before each user turn — injects relevant
+  `durable_fact` memories into the conversation automatically.
+- **Explicit tools** are a manual-control layer on top of automatic recall.
+- Memory is SQLite-backed and cross-session within the same domain.
 
-## Default Model
+## When to Use Explicit Tools
 
-Netclaw memory is SQLite-first.
+### `find_memories` + `get_memories`
 
-- Automatic recall runs before each user-facing turn.
-- Automatic recall injects `durable_fact` only.
-- Explicit tools are a deliberate manual-control layer.
+Use when:
+- The user explicitly asks what you remember
+- Automatic recall seems insufficient for the question
+- You need targeted retrieval beyond the injected bundle
 
-Available tools:
-
-- `find_memories`
-- `get_memories`
-- `store_memory`
-- `update_memory`
-
-## Automatic Recall
-
-- Runs before each user-facing turn.
-- Uses bounded recall planning plus deterministic gates.
-- Injects `durable_fact` only.
-- Never injects `evidence` or `trace` into the automatic recall bundle.
-- If degraded, continue the turn and treat memory as partial for that turn.
-
-## Intentional Search
-
-Use `find_memories` + `get_memories` when:
-
-- the user explicitly asks what Netclaw remembers
-- the automatic recall bundle seems insufficient
-- you need targeted retrieval beyond the injected bundle
-
-Normal `find_memories` behavior:
-
-- searches `durable_fact` plus current `evidence`
-- excludes `trace`
-- hides expired evidence by default
-
-Audit/debug search:
-
-- `find_memories(query, include_stale: true)` may surface expired evidence
-- stale evidence is clearly marked with `stale=true`
-
-Two-phase retrieval pattern:
-
-1. `find_memories("query")`
-2. `get_memories("id1, id2")`
-
-## Explicit Writes
+Pattern: `find_memories("query")` → scan results → `get_memories("id1,id2")`
 
 ### `store_memory`
 
-Use only for deliberate remember/save actions:
+Use only for deliberate save requests:
+- User explicitly says "remember this" or "save this for later"
+- Pinning a high-value fact, decision, or preference
 
-- explicit remember requests
-- intentionally pinning a high-value durable fact, decision, or preference
-
-Do not call `store_memory` reflexively on routine turns.
+Do NOT call `store_memory` reflexively on routine turns — the observation
+sidecar handles background memory formation automatically.
 
 ### `update_memory`
 
-Use only to correct or supersede existing memory.
+Use only to correct or supersede an existing memory.
 
-## What The System Stores
+## Memory Classes
 
-- `durable_fact`: stable facts and preferences
-- `evidence`: supporting research, tool findings, and time-bound notes
-- `trace`: short-lived execution breadcrumbs
+| Class | Recall | Expiry |
+|-------|--------|--------|
+| `durable_fact` | Auto-recalled each turn | Never expires |
+| `evidence` | Search only (`find_memories`) | Expires after 30 days |
+| `trace` | Not searchable | Expires after 72 hours |
 
-Freshness rules:
+## Identity vs Memory
 
-- `durable_fact` is non-expiring by default
-- `evidence` expires and is excluded from auto recall after expiry
-- `trace` is short-lived and never part of normal recall/search behavior
+Do not put project facts, research, or tool findings in identity files.
+`SOUL.md` is only for narrow identity/profile updates. Everything else
+goes through the memory pipeline.
 
-## Identity Boundary
-
-Do not use identity files as a sink for project facts, research passages, tool
-findings, or evidence. `SOUL.md` is only for narrow identity/profile updates.
-
-## Diagnostics
-
-When memory behavior looks wrong:
-
-1. `netclaw status`
-2. `netclaw doctor`
-3. read `netclaw-diagnostics`
-4. read `docs/runbooks/memory-health-and-evals.md`
-
-Useful log events:
-
-- `memory_recall_plan_resolved`
-- `memory_recall_plan_fallback`
-- `memory_observation_sidecar_completed`
-- `memory_observation_gate_result`
-- `turn_memory_recall`
-
-## Eval Gate
-
-Before rollout, run the redesigned provider-independent eval suites first, then
-optional live smoke checks with local Ollama models.
+If unsure, load `netclaw-operations` for the identity vs memory triage guide.

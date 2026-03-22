@@ -215,12 +215,12 @@ assert_identity_session() {
 }
 
 # Category 2: Skill Discovery (LLM-driven via file_read)
-assert_skill_manual() {
-    stdout_contains '\[tool:call\] file_read' && stdout_contains 'netclaw-manual'
+assert_skill_operations_scheduling() {
+    stdout_contains '\[tool:call\] file_read' && stdout_contains 'netclaw-operations'
 }
 
-assert_skill_diagnostics() {
-    stdout_contains '\[tool:call\] file_read' && stdout_contains 'netclaw-diagnostics'
+assert_skill_operations_diagnostics() {
+    stdout_contains '\[tool:call\] file_read' && stdout_contains 'netclaw-operations'
 }
 
 assert_skill_memory() {
@@ -414,10 +414,10 @@ run_all() {
     # ── Category 2: Skill Discovery ──
     print_category "Skill Discovery"
 
-    run_case skill_manual "netclaw-manual read via file_read" \
+    run_case skill_operations_scheduling "netclaw-operations loaded for scheduling" \
         "Can you schedule reminders for me?"
 
-    run_case skill_diagnostics "netclaw-diagnostics read via file_read" \
+    run_case skill_operations_diagnostics "netclaw-operations loaded for diagnostics" \
         "Something is wrong with my session, can you diagnose it?"
 
     run_case skill_memory "netclaw-memory read via file_read" \
