@@ -64,6 +64,8 @@ public sealed class SkillRegistry
         sb.AppendLine("project-specific rules, required citation formats, memory policies, and");
         sb.AppendLine("operational constraints that override your defaults. Skipping a skill");
         sb.AppendLine("means you will miss required behavior and produce incorrect output.");
+        sb.AppendLine("When a skill references additional files (in references/ or scripts/),");
+        sb.AppendLine("load those too if they match the user's specific request.");
         sb.AppendLine();
         foreach (var skill in _skills)
         {

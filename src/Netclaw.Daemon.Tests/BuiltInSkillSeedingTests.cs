@@ -25,12 +25,9 @@ public sealed class BuiltInSkillSeedingTests : IDisposable
     }
 
     [Theory]
-    [InlineData("netclaw-diagnostics")]
-    [InlineData("netclaw-identity")]
-    [InlineData("netclaw-manual")]
+    [InlineData("netclaw-operations")]
     [InlineData("netclaw-memory")]
     [InlineData("search-citation")]
-    [InlineData("skill-authoring")]
     public void BuiltInSkills_contains_SKILL_md_for_each_system_skill(string skillName)
     {
         var skillPath = Path.Combine(AppContext.BaseDirectory, "BuiltInSkills", skillName, "SKILL.md");
@@ -60,13 +57,13 @@ public sealed class BuiltInSkillSeedingTests : IDisposable
         // Invoke the seeding method
         CopyBuiltInSkillsHelper(skillsDir);
 
-        // Verify all 6 skills were seeded
+        // Verify all 3 skills were seeded
         var seededSkills = Directory.GetDirectories(skillsDir)
             .Select(Path.GetFileName)
             .OrderBy(n => n)
             .ToList();
 
-        Assert.Contains("netclaw-diagnostics", seededSkills);
+        Assert.Contains("netclaw-operations", seededSkills);
         Assert.Contains("netclaw-memory", seededSkills);
         Assert.Contains("search-citation", seededSkills);
 
