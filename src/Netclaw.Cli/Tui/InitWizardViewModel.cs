@@ -529,8 +529,9 @@ public partial class InitWizardViewModel : ReactiveViewModel
         await Task.Delay(200, ct); // simulate validation
 
         var providerOk = !string.IsNullOrWhiteSpace(SelectedProviderType);
+        var providerLabel = providerOk ? Registry.Get(SelectedProviderType!).DisplayName : "none";
         HealthCheckResults[^1] = new HealthCheckItem(
-            $"LLM provider configured ({SelectedProviderType ?? "none"})",
+            $"LLM provider configured ({providerLabel})",
             providerOk);
         NotifyHealthCheckChanged();
 

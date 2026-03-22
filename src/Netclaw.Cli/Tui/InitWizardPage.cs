@@ -332,8 +332,13 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
     private ILayoutNode BuildProviderSelectionSubStep()
     {
         var registry = ViewModel.Registry;
+
+        // Map display names back to type keys for selection resolution
+        var displayToTypeKey = registry.KnownTypeKeys
+            .ToDictionary(k => registry.Get(k).DisplayName, k => k);
+
         _providerList = Layouts.SelectionList(
-                registry.KnownTypeKeys.ToList())
+                displayToTypeKey.Keys.ToList())
             .WithMode(SelectionMode.Single)
             .WithHighlightColors(Color.Black, Color.Cyan);
 
@@ -343,10 +348,10 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
         _providerList.SelectionConfirmed
             .Subscribe(selected =>
             {
-                if (selected.Count > 0)
+                if (selected.Count > 0 && displayToTypeKey.TryGetValue(selected[0], out var typeKey))
                 {
-                    ViewModel.SelectedProviderType = selected[0];
-                    var descriptor = registry.Get(selected[0]);
+                    ViewModel.SelectedProviderType = typeKey;
+                    var descriptor = registry.Get(typeKey);
                     if (descriptor.Auth.SupportedAuthMethods is [AuthMethod.None])
                     {
                         ViewModel.SelectedAuthMethod = AuthMethod.None;
@@ -412,15 +417,16 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             .DisposeWith(_stepSubs);
 
         return Layouts.Vertical()
-            .WithChild(new TextNode($"  Authentication for {providerType}:").WithForeground(Color.White))
+            .WithChild(new TextNode($"  Authentication for {descriptor.DisplayName}:").WithForeground(Color.White))
             .WithChild(_authMethodList);
     }
 
     private ILayoutNode BuildCredentialInputSubStep()
     {
         var providerType = ViewModel.SelectedProviderType ?? "unknown";
-
         var credDescriptor = ViewModel.Registry.Get(providerType);
+        var displayName = credDescriptor.DisplayName;
+
         if (credDescriptor.Auth is EndpointOnlyAuth)
         {
             var defaultEndpoint = credDescriptor.DefaultEndpoint;
@@ -443,7 +449,7 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
                 .DisposeWith(_stepSubs);
 
             return Layouts.Vertical()
-                .WithChild(new TextNode($"  {providerType} endpoint:").WithForeground(Color.White))
+                .WithChild(new TextNode($"  {displayName} endpoint:").WithForeground(Color.White))
                 .WithChild(new PanelNode()
                     .WithTitle("Endpoint")
                     .WithBorder(BorderStyle.Rounded)
@@ -454,7 +460,7 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
 
         _apiKeyInput = new TextInputNode()
             .AsPassword()
-            .WithPlaceholder($"Enter {providerType} API key...");
+            .WithPlaceholder($"Enter {displayName} API key...");
 
         if (!string.IsNullOrWhiteSpace(ViewModel.ApiKeyInput))
             _apiKeyInput.Text = ViewModel.ApiKeyInput;
@@ -474,7 +480,7 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             .DisposeWith(_stepSubs);
 
         return Layouts.Vertical()
-            .WithChild(new TextNode($"  {providerType} API key:").WithForeground(Color.White))
+            .WithChild(new TextNode($"  {displayName} API key:").WithForeground(Color.White))
             .WithChild(new PanelNode()
                 .WithTitle("API Key")
                 .WithBorder(BorderStyle.Rounded)
@@ -615,9 +621,10 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
     {
         var children = Layouts.Vertical();
         var providerType = ViewModel.SelectedProviderType ?? "unknown";
+        var descriptor = ViewModel.Registry.Get(providerType);
         var flowState = ViewModel.OAuth.FlowState.Value;
 
-        children.WithChild(new TextNode($"  OAuth Device Flow for {providerType}")
+        children.WithChild(new TextNode($"  OAuth Device Flow for {descriptor.DisplayName}")
             .WithForeground(Color.White).Bold());
         children.WithChild(new TextNode("").Height(1));
 
@@ -681,8 +688,9 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
 
     private ILayoutNode BuildBrowserOAuthFlowSubStep()
     {
+        var wizardProviderType = ViewModel.SelectedProviderType ?? "unknown";
         var result = OAuthFlowViews.BuildBrowserOAuthFlow(
-            ViewModel.SelectedProviderType ?? "unknown",
+            ViewModel.Registry.Get(wizardProviderType).DisplayName,
             ViewModel.OAuth.FlowState.Value,
             ViewModel.OAuth.BrowserOpenFailed,
             ViewModel.OAuth.VerificationUri,

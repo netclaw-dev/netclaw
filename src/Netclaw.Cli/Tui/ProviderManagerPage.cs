@@ -181,7 +181,7 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
                 _ => (SpinnerFrames[elapsed % SpinnerFrames.Length], Color.Yellow)
             };
 
-            children.WithChild(new TextNode($"  {statusChar} {item.ProviderType}")
+            children.WithChild(new TextNode($"  {statusChar} {item.DisplayName}")
                 .WithForeground(color));
         }
 
@@ -201,7 +201,7 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
                     _ => " "
                 };
 
-                return $"{statusChar} {p.ProviderType,-16} {p.DisplayAuth,-12} {p.DisplayEndpoint}";
+                return $"{statusChar} {p.DisplayName,-20} {p.DisplayAuth,-12} {p.DisplayEndpoint}";
             })
             .ToList();
 
@@ -228,7 +228,7 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
             .DisposeWith(_stepSubs);
 
         return Layouts.Vertical()
-            .WithChild(new TextNode($"  {"",2}{"Type",-16} {"Auth",-12} Endpoint")
+            .WithChild(new TextNode($"  {"",2}{"Provider",-20} {"Auth",-12} Endpoint")
                 .WithForeground(Color.White).Bold())
             .WithChild(_providerList);
     }
@@ -257,7 +257,7 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
             .DisposeWith(_stepSubs);
 
         return Layouts.Vertical()
-            .WithChild(new TextNode($"  Authentication for {providerType}:")
+            .WithChild(new TextNode($"  Authentication for {descriptor.DisplayName}:")
                 .WithForeground(Color.White))
             .WithChild(_authList);
     }
@@ -268,7 +268,7 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
         var providerType = ViewModel.NewProviderType ?? "unknown";
         var descriptor = ViewModel.Registry.Get(providerType);
 
-        children.WithChild(new TextNode($"  Provider: {providerType} (name: {ViewModel.NewProviderName})")
+        children.WithChild(new TextNode($"  Provider: {descriptor.DisplayName} (name: {ViewModel.NewProviderName})")
             .WithForeground(Color.White));
 
         if (descriptor.Auth is ApiKeyAuth or MultiAuth)
@@ -344,7 +344,7 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
         var providerType = ViewModel.NewProviderType ?? "unknown";
         var flowState = ViewModel.OAuth.FlowState.Value;
 
-        children.WithChild(new TextNode($"  OAuth Device Flow for {providerType}")
+        children.WithChild(new TextNode($"  OAuth Device Flow for {ViewModel.Registry.Get(providerType).DisplayName}")
             .WithForeground(Color.White).Bold());
         children.WithChild(new TextNode("").Height(1));
 
@@ -406,8 +406,9 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
 
     private ILayoutNode BuildBrowserOAuthFlowView()
     {
+        var oauthProviderType = ViewModel.NewProviderType ?? "unknown";
         var result = OAuthFlowViews.BuildBrowserOAuthFlow(
-            ViewModel.NewProviderType ?? "unknown",
+            ViewModel.Registry.Get(oauthProviderType).DisplayName,
             ViewModel.OAuth.FlowState.Value,
             ViewModel.OAuth.BrowserOpenFailed,
             ViewModel.OAuth.VerificationUri,
@@ -472,7 +473,7 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
         return Layouts.Vertical()
             .WithChild(new TextNode($"  \u2714 Provider '{ViewModel.NewProviderName}' ready to save")
                 .WithForeground(Color.Green))
-            .WithChild(new TextNode($"    Type: {ViewModel.NewProviderType}")
+            .WithChild(new TextNode($"    Type: {ViewModel.Registry.Get(ViewModel.NewProviderType ?? "unknown").DisplayName}")
                 .WithForeground(Color.White))
             .WithChild(new TextNode($"    Auth: {ViewModel.NewAuthMethod}")
                 .WithForeground(Color.White))
@@ -509,7 +510,7 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
         return Layouts.Vertical()
             .WithChild(new TextNode($"  Provider: {item.ConfiguredName}").WithForeground(Color.White).Bold())
             .WithChild(new TextNode("").Height(1))
-            .WithChild(new TextNode($"    Type:     {item.ProviderType}").WithForeground(Color.White))
+            .WithChild(new TextNode($"    Type:     {item.DisplayName}").WithForeground(Color.White))
             .WithChild(new TextNode($"    Auth:     {item.DisplayAuth}").WithForeground(Color.White))
             .WithChild(new TextNode($"    Endpoint: {item.DisplayEndpoint}").WithForeground(Color.White))
             .WithChild(new TextNode($"    Status:   {healthStr}").WithForeground(healthColor))
@@ -525,7 +526,7 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
         var descriptor = ViewModel.Registry.Get(item.ProviderType);
         var children = Layouts.Vertical();
 
-        children.WithChild(new TextNode($"  Fix credentials for: {item.ConfiguredName} ({item.ProviderType})")
+        children.WithChild(new TextNode($"  Fix credentials for: {item.ConfiguredName} ({item.DisplayName})")
             .WithForeground(Color.White).Bold());
 
         if (item.ProbeResult is { Success: false, ErrorMessage: not null })
@@ -596,7 +597,7 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
 
             _apiKeyInput = new TextInputNode()
                 .AsPassword()
-                .WithPlaceholder($"Enter new {item.ProviderType} API key...");
+                .WithPlaceholder($"Enter new {item.DisplayName} API key...");
             _apiKeyInput.OnFocused();
             _lastFocusedInput = _apiKeyInput;
 

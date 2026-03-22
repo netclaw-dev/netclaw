@@ -4,7 +4,8 @@ using Netclaw.Configuration;
 namespace Netclaw.Providers.SelfHosted;
 
 /// <summary>
-/// Provider descriptor for OpenAI-compatible endpoints such as vLLM or Lemonade.
+/// Provider descriptor for OpenAI-compatible endpoints such as llama.cpp,
+/// llama-server, vLLM, or Lemonade.
 /// </summary>
 public sealed class OpenAiCompatibleDescriptor : IProviderDescriptor
 {
@@ -16,7 +17,7 @@ public sealed class OpenAiCompatibleDescriptor : IProviderDescriptor
     }
 
     public string TypeKey => "openai-compatible";
-    public string DisplayName => "OpenAI-Compatible";
+    public string DisplayName => "llama.cpp / vLLM";
     public string DefaultEndpoint => "http://localhost:11434";
     public string ModelListingPath => "/v1/models";
     public IProviderAuth Auth { get; } = new EndpointOnlyAuth();
