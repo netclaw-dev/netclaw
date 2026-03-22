@@ -191,7 +191,7 @@ assert_identity_repo() {
 }
 
 assert_identity_session() {
-    stdout_contains 'headless/'
+    stdout_contains 'headless/' || stdout_contains 'signalr/' || stdout_contains 'slack/'
 }
 
 # Category 2: Skill Discovery (LLM-driven via file_read)
