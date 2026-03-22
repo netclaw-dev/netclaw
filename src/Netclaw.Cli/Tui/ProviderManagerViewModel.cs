@@ -47,6 +47,7 @@ public enum ProviderHealthStatus
 public sealed class ProviderDisplayItem
 {
     public string ProviderType { get; init; } = "";
+    public string DisplayName { get; init; } = "";
     public bool IsConfigured { get; init; }
     public string? ConfiguredName { get; init; }
     public ProviderEntry? Entry { get; init; }
@@ -190,6 +191,7 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
                 DisplayProviders.Add(new ProviderDisplayItem
                 {
                     ProviderType = typeKey,
+                    DisplayName = descriptor.DisplayName,
                     IsConfigured = true,
                     ConfiguredName = configured.Key,
                     Entry = configured.Value,
@@ -202,6 +204,7 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
                 DisplayProviders.Add(new ProviderDisplayItem
                 {
                     ProviderType = typeKey,
+                    DisplayName = descriptor.DisplayName,
                     IsConfigured = false,
                     DisplayEndpoint = $"({descriptor.DefaultEndpoint})",
                     DisplayAuth = "\u2014"
