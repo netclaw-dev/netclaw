@@ -1032,6 +1032,34 @@ public sealed class SQLiteMemoryStore
                 ? MemoryRecallMode.Never.ToWireValue()
                 : operation.RecallMode;
 
+            // Anchor-based dedup: for merge-document semantics, find existing document
+            // by anchor_id and reuse its ID so the ON CONFLICT UPDATE fires instead of
+            // creating a duplicate. This catches same-anchor duplicates like 10 copies
+            // of "favorite color is blue" under the same anchor.
+            string documentId;
+            if (!string.IsNullOrWhiteSpace(operation.MemoryId))
+            {
+                documentId = operation.MemoryId;
+            }
+            else if (string.Equals(operation.UpdateSemantics, MemoryUpdateSemantics.MergeDocument.ToWireValue(), StringComparison.OrdinalIgnoreCase))
+            {
+                await using var lookupCmd = conn.CreateCommand();
+                lookupCmd.Transaction = tx;
+                lookupCmd.CommandText = """
+                    SELECT document_id FROM memory_documents
+                    WHERE anchor_id = $anchorId
+                    ORDER BY updated_at DESC
+                    LIMIT 1;
+                    """;
+                lookupCmd.Parameters.AddWithValue("$anchorId", anchor.AnchorId);
+                documentId = (string?)await lookupCmd.ExecuteScalarAsync(ct)
+                    ?? $"doc-{Guid.NewGuid():N}";
+            }
+            else
+            {
+                documentId = $"doc-{Guid.NewGuid():N}";
+            }
+
             await using var documentCmd = conn.CreateCommand();
             documentCmd.Transaction = tx;
             documentCmd.CommandText = """
@@ -1058,7 +1086,7 @@ public sealed class SQLiteMemoryStore
                   expires_at=excluded.expires_at,
                   updated_at=excluded.updated_at;
                 """;
-            documentCmd.Parameters.AddWithValue("$id", string.IsNullOrWhiteSpace(operation.MemoryId) ? $"doc-{Guid.NewGuid():N}" : operation.MemoryId);
+            documentCmd.Parameters.AddWithValue("$id", documentId);
             documentCmd.Parameters.AddWithValue("$anchorId", anchor.AnchorId);
             documentCmd.Parameters.AddWithValue("$memoryClass", operation.MemoryClass);
             documentCmd.Parameters.AddWithValue("$title", operation.Title);
