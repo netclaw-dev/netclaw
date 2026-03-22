@@ -14,7 +14,7 @@ namespace Netclaw.Actors.Skills;
 public static partial class SkillScanner
 {
     private const int MaxDescriptionLength = 1024; // AgentSkills.io spec limit
-    private const int MaxTriggersLength = 300;
+
     private const string SkillFileName = "SKILL.md";
 
     /// <summary>
@@ -184,11 +184,6 @@ public static partial class SkillScanner
         if (!string.IsNullOrEmpty(parentOfSkillDir) && parentOfSkillDir != ".")
             category = parentOfSkillDir.Replace(Path.DirectorySeparatorChar, '/');
 
-        // Extract triggers from metadata
-        string? triggers = null;
-        if (fm.Metadata is not null && fm.Metadata.TryGetValue("triggers", out var triggersValue))
-            triggers = Truncate(triggersValue, MaxTriggersLength);
-
         // Extract version from metadata
         string? version = null;
         if (fm.Metadata is not null && fm.Metadata.TryGetValue("version", out var versionValue))
@@ -202,7 +197,6 @@ public static partial class SkillScanner
             SkillDirectory: skillDirectory,
             Category: category)
         {
-            Triggers = triggers,
             Version = version,
             License = fm.License,
             Compatibility = fm.Compatibility,

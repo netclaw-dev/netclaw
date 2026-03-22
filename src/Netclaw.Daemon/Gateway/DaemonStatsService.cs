@@ -39,7 +39,6 @@ internal sealed class DaemonStatsService(
         var slackSnapshot = ChannelTelemetry.GetSnapshot();
         var sessionStats = sessionCatalog.GetStats();
         var allSkills = skillRegistry.GetAll();
-        var enrichedKeywords = skillRegistry.GetEnrichedKeywords();
 
         return new DaemonStats.Response
         {
@@ -66,8 +65,7 @@ internal sealed class DaemonStatsService(
             Memory = await BuildMemoryStatsAsync(ct),
             Skills = new DaemonStats.Skills
             {
-                TotalAvailable = allSkills.Count,
-                WithEnrichedKeywords = enrichedKeywords.Count
+                TotalAvailable = allSkills.Count
             },
             SlackActivity = new DaemonStats.SlackActivity
             {

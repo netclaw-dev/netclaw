@@ -6,8 +6,8 @@ namespace Netclaw.Actors.Tests.Skills;
 
 public class SkillRegistryTests
 {
-    private static SkillEntry MakeEntry(string name, string description = "desc", string? triggers = null) =>
-        new(name, name, description, $"/skills/{name}/SKILL.md", $"/skills/{name}", null) { Triggers = triggers };
+    private static SkillEntry MakeEntry(string name, string description = "desc") =>
+        new(name, name, description, $"/skills/{name}/SKILL.md", $"/skills/{name}", null);
 
     [Fact]
     public void Search_matches_by_name()
@@ -68,65 +68,53 @@ public class SkillRegistryTests
     }
 
     [Fact]
-    public void GenerateCompressedIndex_lists_skills_with_paths_and_descriptions()
+    public void GenerateDescriptionMenu_lists_skills_with_paths_and_descriptions()
     {
         var registry = new SkillRegistry();
         registry.Register(MakeEntry("netclaw-identity", "How to edit identity files"));
         registry.Register(MakeEntry("netclaw-diagnostics", "Check Netclaw configuration"));
 
-        var index = registry.GenerateCompressedIndex();
+        var menu = registry.GenerateDescriptionMenu();
 
-        Assert.Contains("netclaw-identity", index);
-        Assert.Contains("/skills/netclaw-identity/SKILL.md", index);
-        Assert.Contains("How to edit identity files", index);
-        Assert.Contains("netclaw-diagnostics", index);
-        Assert.Contains("/skills/netclaw-diagnostics/SKILL.md", index);
-        Assert.Contains("Check Netclaw configuration", index);
-        Assert.Contains("LOAD these with file_read when your current situation matches a trigger", index);
-        Assert.DoesNotContain("search_skills", index);
+        Assert.Contains("[available-skills]", menu);
+        Assert.Contains("load it with file_read BEFORE responding", menu);
+        Assert.Contains("- netclaw-identity: How to edit identity files", menu);
+        Assert.Contains("path: /skills/netclaw-identity/SKILL.md", menu);
+        Assert.Contains("- netclaw-diagnostics: Check Netclaw configuration", menu);
+        Assert.Contains("path: /skills/netclaw-diagnostics/SKILL.md", menu);
     }
 
     [Fact]
-    public void GenerateCompressedIndex_returns_empty_when_no_skills()
+    public void GenerateDescriptionMenu_returns_empty_when_no_skills()
     {
         var registry = new SkillRegistry();
-        Assert.Equal(string.Empty, registry.GenerateCompressedIndex());
+        Assert.Equal(string.Empty, registry.GenerateDescriptionMenu());
     }
 
     [Fact]
-    public void GenerateCompressedIndex_includes_triggers_when_present()
+    public void GenerateDescriptionMenu_includes_resource_count_when_present()
     {
         var registry = new SkillRegistry();
-        registry.Register(MakeEntry("netclaw-diagnostics", "Check health",
-            triggers: "connection failure | session timeout"));
+        var entry = new SkillEntry("web-search", "Web Search", "Search the web",
+            "/skills/web-search/SKILL.md", "/skills/web-search", null)
+        {
+            ResourcePaths = ["references/a.md", "references/b.md"]
+        };
+        registry.Register(entry);
 
-        var index = registry.GenerateCompressedIndex();
+        var menu = registry.GenerateDescriptionMenu();
 
-        Assert.Contains("LOAD WHEN: connection failure | session timeout", index);
+        Assert.Contains("resources: [2 files in /skills/web-search]", menu);
     }
 
     [Fact]
-    public void GenerateCompressedIndex_omits_load_when_for_skills_without_triggers()
+    public void GenerateDescriptionMenu_omits_resources_when_none()
     {
         var registry = new SkillRegistry();
-        registry.Register(MakeEntry("plain-skill", "No triggers here"));
+        registry.Register(MakeEntry("plain-skill", "No resources here"));
 
-        var index = registry.GenerateCompressedIndex();
+        var menu = registry.GenerateDescriptionMenu();
 
-        Assert.DoesNotContain("LOAD WHEN:", index);
-    }
-
-    [Fact]
-    public void Search_matches_by_triggers()
-    {
-        var registry = new SkillRegistry();
-        registry.Register(MakeEntry("diagnostics", "Check health",
-            triggers: "connection failure | session timeout"));
-        registry.Register(MakeEntry("other-skill", "Unrelated"));
-
-        var results = registry.Search("session timeout");
-
-        Assert.Single(results);
-        Assert.Equal("diagnostics", results[0].Name);
+        Assert.DoesNotContain("resources:", menu);
     }
 }

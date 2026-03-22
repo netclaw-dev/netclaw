@@ -33,9 +33,8 @@ public sealed class NetclawPaths
     public string SystemSkillsDirectory => Path.Combine(SkillsDirectory, ".system");
     public string SkillSyncStatePath => Path.Combine(SystemSkillsDirectory, ".sync-state.json");
 
-    // ── Cache directory (generated artifacts, e.g. enriched skill keywords) ──
+    // ── Cache directory ──
     public string CacheDirectory => Path.Combine(BasePath, "cache");
-    public string SkillKeywordCacheDirectory => Path.Combine(CacheDirectory, "skill-keywords");
 
     // ── Memory ──
     public string MemorySqliteDbPath => SqliteDbPath;
@@ -103,6 +102,5 @@ public sealed class NetclawPaths
         Directory.CreateDirectory(BinDirectory);
         Directory.CreateDirectory(KeysDirectory);
         Directory.CreateDirectory(CacheDirectory);
-        Directory.CreateDirectory(SkillKeywordCacheDirectory);
     }
 }

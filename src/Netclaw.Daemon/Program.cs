@@ -448,7 +448,7 @@ static void ConfigureDaemonServices(
 
     // Skill index context layer
     var skillIndexLayer = new SkillIndexContextLayer();
-    skillIndexLayer.Update(skillRegistry.GenerateCompressedIndex());
+    skillIndexLayer.Update(skillRegistry.GenerateDescriptionMenu());
     services.AddSingleton(skillIndexLayer);
     services.AddSingleton<IContextLayerProvider>(skillIndexLayer);
 

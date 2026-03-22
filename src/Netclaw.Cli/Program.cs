@@ -1246,7 +1246,7 @@ static void WriteStatsResult(DaemonStats.Response stats, int? days)
     Console.WriteLine();
 
     Console.WriteLine("skills:");
-    Console.WriteLine($"  available: {stats.Skills.TotalAvailable}    indexed: {stats.Skills.WithEnrichedKeywords}");
+    Console.WriteLine($"  available: {stats.Skills.TotalAvailable}");
     Console.WriteLine();
 
     Console.WriteLine("slack:");

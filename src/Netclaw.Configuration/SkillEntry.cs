@@ -15,12 +15,6 @@ public sealed record SkillEntry(
     string? Category)       // parent subdirectory name, or null if in root
 {
     /// <summary>
-    /// Activation triggers from YAML frontmatter <c>metadata.triggers</c>.
-    /// Pipe-separated conditions indicating when the agent should load this skill.
-    /// </summary>
-    public string? Triggers { get; init; }
-
-    /// <summary>
     /// Skill version from YAML frontmatter <c>metadata.version</c>.
     /// </summary>
     public string? Version { get; init; }

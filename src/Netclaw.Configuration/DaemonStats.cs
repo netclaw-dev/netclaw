@@ -84,8 +84,6 @@ public static class DaemonStats
     public sealed class Skills : IWireType
     {
         public int TotalAvailable { get; init; }
-
-        public int WithEnrichedKeywords { get; init; }
     }
 
     public sealed class SlackActivity : IWireType

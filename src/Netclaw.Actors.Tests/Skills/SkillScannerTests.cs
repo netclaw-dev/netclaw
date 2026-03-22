@@ -60,28 +60,6 @@ public class SkillScannerTests : IDisposable
     }
 
     [Fact]
-    public void Extracts_triggers_from_metadata()
-    {
-        WriteSkill("diagnostics", """
-            ---
-            name: diagnostics
-            description: Check system health and diagnose errors.
-            metadata:
-              triggers: connection failure | session timeout | missing tools
-            ---
-
-            # Diagnostics
-
-            Run diagnostics when things break.
-            """);
-
-        var result = SkillScanner.Scan(_skillsDir);
-
-        Assert.Single(result);
-        Assert.Equal("connection failure | session timeout | missing tools", result[0].Triggers);
-    }
-
-    [Fact]
     public void Extracts_optional_fields_from_frontmatter()
     {
         WriteSkill("pdf-processing", """
@@ -304,24 +282,6 @@ public class SkillScannerTests : IDisposable
         Assert.Single(result);
         Assert.Equal("diagnostics", result[0].Name);
         Assert.Equal(".system", result[0].Category);
-    }
-
-    [Fact]
-    public void Triggers_null_when_not_in_metadata()
-    {
-        WriteSkill("simple", """
-            ---
-            name: simple
-            description: A simple skill without triggers.
-            ---
-
-            # Simple Skill
-            """);
-
-        var result = SkillScanner.Scan(_skillsDir);
-
-        Assert.Single(result);
-        Assert.Null(result[0].Triggers);
     }
 
     [Fact]

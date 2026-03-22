@@ -194,21 +194,21 @@ assert_identity_session() {
     stdout_contains 'headless/'
 }
 
-# Category 2: Skill Auto-Loading
+# Category 2: Skill Discovery (LLM-driven via file_read)
 assert_skill_manual() {
-    daemon_log_contains 'turn_skill_auto_load.*netclaw-manual'
+    stdout_contains '\[tool:call\] file_read' && stdout_contains 'netclaw-manual'
 }
 
 assert_skill_diagnostics() {
-    daemon_log_contains 'turn_skill_auto_load.*netclaw-diagnostics'
+    stdout_contains '\[tool:call\] file_read' && stdout_contains 'netclaw-diagnostics'
 }
 
 assert_skill_memory() {
-    daemon_log_contains 'turn_skill_auto_load.*netclaw-memory'
+    stdout_contains '\[tool:call\] file_read' && stdout_contains 'netclaw-memory'
 }
 
 assert_skill_citation() {
-    daemon_log_contains 'turn_skill_auto_load.*search-citation'
+    stdout_contains '\[tool:call\] file_read' && stdout_contains 'search-citation'
 }
 
 # Category 3: Memory Pipeline
@@ -386,19 +386,19 @@ run_all() {
 
     end_category
 
-    # ── Category 2: Skill Auto-Loading ──
-    print_category "Skill Auto-Loading"
+    # ── Category 2: Skill Discovery ──
+    print_category "Skill Discovery"
 
-    run_case skill_manual "netclaw-manual loaded" \
+    run_case skill_manual "netclaw-manual read via file_read" \
         "Can you schedule reminders for me?"
 
-    run_case skill_diagnostics "netclaw-diagnostics loaded" \
+    run_case skill_diagnostics "netclaw-diagnostics read via file_read" \
         "Something is wrong with my session, can you diagnose it?"
 
-    run_case skill_memory "netclaw-memory loaded" \
+    run_case skill_memory "netclaw-memory read via file_read" \
         "What do you remember about our previous conversations?"
 
-    run_case skill_citation "search-citation loaded" \
+    run_case skill_citation "search-citation read via file_read" \
         "Search the web for the latest Akka.NET release"
 
     end_category
