@@ -279,7 +279,7 @@ assert_grounding_action_verification() {
 
 # Category 6: Autonomy & Execution
 assert_autonomy_execute() {
-    stdout_contains '\[tool:call\]'
+    stdout_contains '\[tool:call\] shell_execute'
 }
 
 assert_autonomy_web_fetch() {
@@ -290,7 +290,8 @@ assert_autonomy_web_fetch() {
 assert_complex_write_and_run() {
     stdout_contains '\[tool:call\] file_write' && \
         stdout_contains '\[tool:call\] shell_execute' && \
-        stdout_contains '55'
+        # Accept either convention: 10th Fibonacci from 0 is 34, from 1 is 55
+        (stdout_contains '34' || stdout_contains '55')
 }
 
 assert_complex_gh_issues() {
@@ -472,8 +473,8 @@ run_all() {
     # ── Category 6: Autonomy & Execution ──
     print_category "Autonomy & Execution"
 
-    run_case autonomy_execute "uses a tool" \
-        "What time is it?"
+    run_case autonomy_execute "uses shell_execute autonomously" \
+        "How much free disk space is on this machine?"
 
     run_case autonomy_web_fetch "web_search or web_fetch called" \
         "What's on the front page of Hacker News right now?"
