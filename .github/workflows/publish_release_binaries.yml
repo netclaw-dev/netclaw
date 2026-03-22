@@ -106,6 +106,7 @@ jobs:
         --self-contained true
         /p:PublishSingleFile=true
         /p:EnableCompressionInSingleFile=true
+        /p:IncludeNativeLibrariesForSelfExtract=true
         /p:Version=${{ github.ref_name }}
         -o ./publish/cli
 

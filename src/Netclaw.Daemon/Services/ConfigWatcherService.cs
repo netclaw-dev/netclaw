@@ -6,9 +6,9 @@ using Netclaw.Configuration;
 namespace Netclaw.Daemon.Services;
 
 /// <summary>
-/// Monitors <c>~/.netclaw/config/</c> for changes to <c>netclaw.json</c> and
-/// <c>secrets.json</c>. Debounces file system events and validates new config
-/// before applying. See SPEC-011 §Configuration Hot-Reload.
+/// Monitors <c>~/.netclaw/config/</c> for changes to <c>netclaw.json</c>.
+/// Debounces file system events and validates new config before applying.
+/// See SPEC-011 §Configuration Hot-Reload.
 ///
 /// <para>
 /// Single reload trigger: all config changes go to disk first (TUI wizard,
@@ -23,6 +23,7 @@ public sealed class ConfigWatcherService : IHostedService, IDisposable
     private readonly TimeProvider _timeProvider;
     private readonly IHostApplicationLifetime _appLifetime;
     private readonly DaemonRestartSignal _restartSignal;
+    private readonly DaemonLifecycleNotifier _lifecycleNotifier;
     private readonly ILogger<ConfigWatcherService> _logger;
 
     private FileSystemWatcher? _watcher;
@@ -34,12 +35,14 @@ public sealed class ConfigWatcherService : IHostedService, IDisposable
         TimeProvider timeProvider,
         IHostApplicationLifetime appLifetime,
         DaemonRestartSignal restartSignal,
+        DaemonLifecycleNotifier lifecycleNotifier,
         ILogger<ConfigWatcherService> logger)
     {
         _paths = paths;
         _timeProvider = timeProvider;
         _appLifetime = appLifetime;
         _restartSignal = restartSignal;
+        _lifecycleNotifier = lifecycleNotifier;
         _logger = logger;
     }
 
@@ -123,14 +126,14 @@ public sealed class ConfigWatcherService : IHostedService, IDisposable
 
             // Validate JSON structure of both config files before triggering restart.
             // Full semantic validation happens during the next startup cycle.
-            if (!ValidateConfigJson(_paths.NetclawConfigPath) ||
-                !ValidateConfigJson(_paths.SecretsPath))
+            if (!ValidateConfigJson(_paths.NetclawConfigPath))
             {
                 _logger.LogWarning("Config validation failed. Keeping current config — no restart.");
                 return;
             }
 
             _logger.LogInformation("Config valid. Requesting daemon restart.");
+            _lifecycleNotifier.NotifyShutdown("config-reload");
             _restartSignal.RequestRestart();
             _appLifetime.StopApplication();
         }
@@ -159,8 +162,8 @@ public sealed class ConfigWatcherService : IHostedService, IDisposable
         }
     }
 
-    private static bool IsWatchedFile(string? fileName) =>
-        fileName is "netclaw.json" or "secrets.json";
+    internal static bool IsWatchedFile(string? fileName) =>
+        fileName is "netclaw.json";
 
     public void Dispose()
     {

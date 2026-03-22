@@ -166,4 +166,38 @@ public sealed class MagicByteValidatorTests
         Assert.False(MagicByteValidator.HasExecutableSignature(PngHeader));
         Assert.False(MagicByteValidator.HasExecutableSignature(JpegHeader));
     }
+
+    [Theory]
+    [InlineData(nameof(PngHeader), "image/png")]
+    [InlineData(nameof(JpegHeader), "image/jpeg")]
+    [InlineData(nameof(GifHeader), "image/gif")]
+    [InlineData(nameof(WebpHeader), "image/webp")]
+    public void DetectMimeType_identifies_supported_image_types(string headerField, string expectedMime)
+    {
+        var header = headerField switch
+        {
+            nameof(PngHeader) => PngHeader,
+            nameof(JpegHeader) => JpegHeader,
+            nameof(GifHeader) => GifHeader,
+            nameof(WebpHeader) => WebpHeader,
+            _ => throw new ArgumentException(headerField)
+        };
+
+        Assert.Equal(expectedMime, MagicByteValidator.DetectMimeType(header));
+    }
+
+    [Fact]
+    public void DetectMimeType_returns_null_for_unknown_content()
+    {
+        byte[] randomBytes = [0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D];
+        Assert.Null(MagicByteValidator.DetectMimeType(randomBytes));
+    }
+
+    [Fact]
+    public void DetectMimeType_returns_null_for_empty_or_short_content()
+    {
+        Assert.Null(MagicByteValidator.DetectMimeType(ReadOnlySpan<byte>.Empty));
+        Assert.Null(MagicByteValidator.DetectMimeType(new byte[] { 0xFF }));
+        Assert.Null(MagicByteValidator.DetectMimeType(new byte[] { 0xFF, 0xD8 }));
+    }
 }

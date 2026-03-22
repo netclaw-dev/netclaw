@@ -1,21 +1,13 @@
 using System.Collections.Frozen;
-using MimeDetective;
 
 namespace Netclaw.Security;
 
 /// <summary>
 /// Validates file content using magic byte (file signature) analysis.
 /// Narrowed to image types for Netclaw's multimodal pipeline.
-/// Adapted from TextForge's MagicByteValidator.
 /// </summary>
 public static class MagicByteValidator
 {
-    private static readonly Lazy<IContentInspector> Inspector = new(() =>
-        new ContentInspectorBuilder()
-        {
-            Definitions = MimeDetective.Definitions.DefaultDefinitions.All()
-        }.Build());
-
     private static readonly FrozenSet<string> AllowedImageMimeTypes =
         new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
@@ -115,21 +107,36 @@ public static class MagicByteValidator
         return ValidateImageContent(content, declaredMimeType);
     }
 
+    /// <summary>
+    /// Detects MIME type from magic bytes for the supported image types.
+    /// Returns null for unrecognized content.
+    /// </summary>
     public static string? DetectMimeType(ReadOnlySpan<byte> content)
     {
-        if (content.Length == 0)
-            return null;
+        if (content.Length >= 8 &&
+            content[0] == 0x89 && content[1] == 0x50 &&
+            content[2] == 0x4E && content[3] == 0x47 &&
+            content[4] == 0x0D && content[5] == 0x0A &&
+            content[6] == 0x1A && content[7] == 0x0A)
+            return "image/png";
 
-        try
-        {
-            var results = Inspector.Value.Inspect(content);
-            var topMatch = results.OrderByDescending(r => r.Points).FirstOrDefault();
-            return topMatch?.Definition.File.MimeType;
-        }
-        catch
-        {
-            return null;
-        }
+        if (content.Length >= 3 &&
+            content[0] == 0xFF && content[1] == 0xD8 && content[2] == 0xFF)
+            return "image/jpeg";
+
+        if (content.Length >= 4 &&
+            content[0] == 0x47 && content[1] == 0x49 &&
+            content[2] == 0x46 && content[3] == 0x38)
+            return "image/gif";
+
+        if (content.Length >= 12 &&
+            content[0] == 0x52 && content[1] == 0x49 &&
+            content[2] == 0x46 && content[3] == 0x46 &&
+            content[8] == 0x57 && content[9] == 0x45 &&
+            content[10] == 0x42 && content[11] == 0x50)
+            return "image/webp";
+
+        return null;
     }
 
     public static bool HasExecutableSignature(ReadOnlySpan<byte> content)

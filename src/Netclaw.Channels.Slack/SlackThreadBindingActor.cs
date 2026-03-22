@@ -216,9 +216,20 @@ internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStas
 
                         if (!scanResult.IsAllowed)
                         {
-                            _log.Warning("Content scan rejected file {Name}: {Message}",
-                                file.Name, scanResult.Message ?? scanResult.Error?.ToString());
-                            continue;
+                            if (scanResult.Error == ContentScanError.ScanFailure)
+                            {
+                                // Scanner itself is broken — allow the file through rather
+                                // than silently dropping valid images. The LLM provider
+                                // will still validate content on its end.
+                                _log.Error("Content scanner failed for file {Name}: {Message} — allowing file through",
+                                    file.Name, scanResult.Message);
+                            }
+                            else
+                            {
+                                _log.Warning("Content scan rejected file {Name}: {Message}",
+                                    file.Name, scanResult.Message ?? scanResult.Error?.ToString());
+                                continue;
+                            }
                         }
 
                         contents.Add(new DataContent(bytes.ToArray(), file.MimeType));
@@ -511,8 +522,9 @@ internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStas
         }
         catch (SlackMessageDeliveryException ex)
         {
-            _log.Error(ex, "Slack rejected reply for session {0} with error code {1}", _sessionId.Value, ex.ErrorCode ?? "unknown");
-            ChannelTelemetry.RecordSlackReplyFailed(_dependencies.TimeProvider.GetElapsedTime(startedAt).TotalMilliseconds);
+            _log.Warning("Slack delivery rejected for session {SessionId} error={ErrorCode} kind={FailureKind}",
+                _sessionId.Value, ex.ErrorCode ?? "unknown", ex.FailureKind);
+            ChannelTelemetry.RecordSlackReplyRejected(ex.ErrorCode);
             return new PostResult(ex.Message, ex.FailureKind);
         }
         catch (Exception ex)
@@ -583,11 +595,9 @@ internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStas
         }
         catch (SlackMessageDeliveryException ex)
         {
-            _log.Error(ex, "Slack rejected file upload {FileName} for session {SessionId} with error code {ErrorCode}",
-                file.FileName,
-                _sessionId.Value,
-                ex.ErrorCode ?? "unknown");
-            ChannelTelemetry.RecordSlackReplyFailed(_dependencies.TimeProvider.GetElapsedTime(startedAt).TotalMilliseconds);
+            _log.Warning("Slack delivery rejected for file upload {FileName} session={SessionId} error={ErrorCode} kind={FailureKind}",
+                file.FileName, _sessionId.Value, ex.ErrorCode ?? "unknown", ex.FailureKind);
+            ChannelTelemetry.RecordSlackReplyRejected(ex.ErrorCode);
             return new PostResult(ex.Message, ex.FailureKind);
         }
         catch (Exception ex)

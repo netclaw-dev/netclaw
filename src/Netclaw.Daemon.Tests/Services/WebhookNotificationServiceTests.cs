@@ -33,7 +33,7 @@ public sealed class WebhookNotificationServiceTests : IAsyncDisposable
 
     private WebhookNotificationService CreateService(
         NotificationsConfig config,
-        HttpMessageHandler handler,
+        RecordingHandler handler,
         TimeProvider? timeProvider = null)
     {
         var factory = new TestHttpClientFactory(handler);
@@ -253,54 +253,9 @@ public sealed class WebhookNotificationServiceTests : IAsyncDisposable
         Assert.Single(handler.Requests);
     }
 
-    private static async Task WaitForDeliveryAsync(
+    private static Task WaitForDeliveryAsync(
         RecordingHandler handler,
         int expectedCount,
         int timeoutMs = 5000)
-    {
-        using var cts = new CancellationTokenSource(timeoutMs);
-        for (var i = 0; i < expectedCount; i++)
-        {
-            await handler.DeliverySemaphore.WaitAsync(cts.Token);
-        }
-    }
-
-    private sealed class RecordingHandler : HttpMessageHandler
-    {
-        private readonly HttpStatusCode _statusCode;
-        private readonly SemaphoreSlim _deliverySemaphore = new(0);
-
-        public RecordingHandler(HttpStatusCode statusCode) => _statusCode = statusCode;
-
-        public List<HttpRequestMessage> Requests { get; } = [];
-        public List<string> RequestBodies { get; } = [];
-        public SemaphoreSlim DeliverySemaphore => _deliverySemaphore;
-
-        protected override async Task<HttpResponseMessage> SendAsync(
-            HttpRequestMessage request,
-            CancellationToken cancellationToken)
-        {
-            var body = request.Content is not null
-                ? await request.Content.ReadAsStringAsync(cancellationToken)
-                : "";
-
-            lock (Requests)
-            {
-                Requests.Add(request);
-                RequestBodies.Add(body);
-            }
-
-            _deliverySemaphore.Release();
-            return new HttpResponseMessage(_statusCode);
-        }
-    }
-
-    private sealed class TestHttpClientFactory : IHttpClientFactory
-    {
-        private readonly HttpMessageHandler _handler;
-
-        public TestHttpClientFactory(HttpMessageHandler handler) => _handler = handler;
-
-        public HttpClient CreateClient(string name) => new(_handler, disposeHandler: false);
-    }
+        => WebhookTestInfrastructure.WaitForDeliveryAsync(handler, expectedCount, timeoutMs);
 }

@@ -480,28 +480,55 @@ internal static class McpCommand
             return 0;
         }
 
-        // Prefer daemon statuses — they include OAuth tokens and live connection state
-        var daemonStatuses = daemonApi is not null
-            ? await daemonApi.GetMcpServerStatusesAsync()
-            : null;
+        JsonElement? daemonStatuses = null;
+        string? daemonError = null;
+
+        if (daemonApi is null)
+        {
+            daemonError = "daemon API not configured";
+        }
+        else
+        {
+            try
+            {
+                daemonStatuses = await daemonApi.GetMcpServerStatusesAsync();
+            }
+            catch (HttpRequestException)
+            {
+                daemonError = $"could not reach daemon at {daemonApi.Endpoint}";
+            }
+            catch (OperationCanceledException)
+            {
+                daemonError = $"daemon timed out at {daemonApi.Endpoint}";
+            }
+            catch (Exception ex)
+            {
+                daemonError = $"daemon status request failed: {ex.Message}";
+            }
+        }
+
+        if (daemonError is not null)
+        {
+            writer.WriteLine($"Live MCP status unavailable: {daemonError}");
+            writer.WriteLine("Start the daemon with `netclaw daemon start` or `netclaw run`.");
+            writer.WriteLine();
+        }
 
         writer.WriteLine($"{"Name",-20} {"Transport",-10} {"Enabled",-8} {"Status"}");
         foreach (var (name, entry) in servers)
         {
             var enabled = entry.Enabled ? "yes" : "no";
-            var statusText = FormatDaemonStatus(daemonStatuses, name);
-
-            if (statusText is null)
-            {
-                // Daemon unavailable or server not tracked — fall back to direct probe
-                var probe = await ProbeServerAsync(name, entry);
-                statusText = probe.FormatStatus();
-            }
+            var statusText = !entry.Enabled
+                ? "disabled"
+                : daemonStatuses is not null
+                    ? FormatDaemonStatus(daemonStatuses, name)
+                        ?? "status unavailable — restart daemon to load this config"
+                    : "status unavailable — daemon unavailable";
 
             writer.WriteLine($"{name,-20} {entry.Transport,-10} {enabled,-8} {statusText}");
         }
 
-        return 0;
+        return daemonError is null ? 0 : 1;
     }
 
     private static string? FormatDaemonStatus(JsonElement? daemonStatuses, string serverName)
@@ -520,8 +547,9 @@ internal static class McpCommand
         {
             "Connected" => $"connected ({toolCount} tools)",
             "AwaitingAuth" => "awaiting auth — run: netclaw mcp auth " + serverName,
+            "AuthFailed" => $"auth failed ({error ?? "authentication rejected"})",
+            "Unreachable" => $"unreachable — {error ?? "connection failed"}",
             "Disabled" => "disabled",
-            "Error" => $"error — {error ?? "unknown"}",
             _ => state,
         };
     }
@@ -666,6 +694,10 @@ internal static class McpCommand
         catch (HttpRequestException ex) when (ex.StatusCode is System.Net.HttpStatusCode.Unauthorized
             or System.Net.HttpStatusCode.Forbidden)
         {
+            // If the server has OAuth config hints, report AwaitingAuth instead of AuthFailed
+            if (!string.IsNullOrWhiteSpace(entry.OAuthClientId) || !string.IsNullOrWhiteSpace(entry.OAuthScope))
+                return new McpProbeResult(McpProbeStatus.AwaitingAuth, 0, null);
+
             var statusText = ex.StatusCode switch
             {
                 System.Net.HttpStatusCode.Unauthorized => "401 Unauthorized",
@@ -812,7 +844,7 @@ internal static class McpCommand
         writer.WriteLine("Subcommands:");
         writer.WriteLine("  add        Add an MCP server profile");
         writer.WriteLine("  auth       Authorize an OAuth-enabled MCP server");
-        writer.WriteLine("  list       List configured MCP servers");
+        writer.WriteLine("  list       List configured MCP servers with daemon-reported status");
         writer.WriteLine("  get        Show details for an MCP server");
         writer.WriteLine("  remove     Remove an MCP server profile");
         writer.WriteLine("  enable     Enable a disabled MCP server");

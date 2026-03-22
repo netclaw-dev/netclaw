@@ -5,6 +5,7 @@ using System.Text.Json.Serialization;
 using System.Threading.Channels;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Netclaw.Channels.Slack.Webhooks;
 using Netclaw.Configuration;
 
 namespace Netclaw.Daemon.Services;
@@ -143,17 +144,14 @@ public sealed class WebhookNotificationService : BackgroundService, IOperational
 
     private async Task DeliverToAllTargetsAsync(OperationalAlert alert, CancellationToken ct)
     {
-        var payload = BuildPayload(alert);
-
         foreach (var target in _config.Webhooks)
         {
-            await DeliverToTargetAsync(target, payload, alert, ct);
+            await DeliverToTargetAsync(target, alert, ct);
         }
     }
 
     private async Task DeliverToTargetAsync(
         WebhookTarget target,
-        WebhookPayload payload,
         OperationalAlert alert,
         CancellationToken ct)
     {
@@ -176,7 +174,7 @@ public sealed class WebhookNotificationService : BackgroundService, IOperational
                 client.Timeout = TimeSpan.FromSeconds(_config.TimeoutSeconds);
 
                 using var request = new HttpRequestMessage(HttpMethod.Post, target.Url);
-                request.Content = JsonContent.Create(payload, options: JsonOptions);
+                request.Content = BuildContent(target, alert);
 
                 if (target.Headers is { Count: > 0 })
                 {
@@ -218,7 +216,17 @@ public sealed class WebhookNotificationService : BackgroundService, IOperational
         }
     }
 
-    private static WebhookPayload BuildPayload(OperationalAlert alert) => new()
+    private static JsonContent BuildContent(WebhookTarget target, OperationalAlert alert)
+    {
+        return target.Format switch
+        {
+            WebhookFormat.Slack => JsonContent.Create(
+                SlackWebhookPayloadBuilder.Build(alert), options: JsonOptions),
+            _ => JsonContent.Create(BuildGenericPayload(alert), options: JsonOptions),
+        };
+    }
+
+    private static WebhookPayload BuildGenericPayload(OperationalAlert alert) => new()
     {
         AlertId = alert.AlertId,
         Type = alert.Type,

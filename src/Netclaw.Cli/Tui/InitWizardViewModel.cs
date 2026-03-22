@@ -691,7 +691,7 @@ public partial class InitWizardViewModel : ReactiveViewModel
                 HealthCheckResults.Add(new HealthCheckItem("Stopping daemon for config update", null));
                 NotifyHealthCheckChanged();
 
-                var stopResult = await _daemonManager.StopAsync();
+                var stopResult = await _daemonManager.StopAsync("config-update");
                 HealthCheckResults[^1] = stopResult.Success
                     ? new HealthCheckItem("Daemon stopped", true)
                     : new HealthCheckItem($"Daemon stop failed: {stopResult.Message}", false);

@@ -65,9 +65,15 @@ public sealed partial class DaemonManager
     }
 
     /// <summary>
-    /// Stops the daemon gracefully (SIGTERM on Unix, Kill on Windows).
+    /// Stops the daemon gracefully. Posts the shutdown reason to the daemon's
+    /// lifecycle endpoint before sending SIGTERM, so the daemon can fire
+    /// webhook notifications and (in the future) drain active sessions.
     /// </summary>
-    public async Task<DaemonResult> StopAsync()
+    /// <param name="reason">
+    /// Why the daemon is being stopped (e.g., "cli-stop", "update").
+    /// Included in the shutdown webhook notification.
+    /// </param>
+    public async Task<DaemonResult> StopAsync(string reason)
     {
         if (!TryReadPid(out var pid))
             return new DaemonResult(false, "Daemon is not running (no PID file).");
@@ -90,6 +96,21 @@ public sealed partial class DaemonManager
             return new DaemonResult(false,
                 $"PID {pid} is not a netclawd process (was '{process.ProcessName}'). " +
                 "Stale PID file cleaned up.");
+        }
+
+        // Notify the daemon of the shutdown reason before sending the signal.
+        // Best-effort — the daemon may already be unreachable.
+        try
+        {
+            var endpoint = DaemonApi.ResolveEndpoint();
+            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
+            await http.PostAsync(
+                $"{endpoint}/api/lifecycle/shutdown?reason={Uri.EscapeDataString(reason)}",
+                null);
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+        {
+            Console.Error.WriteLine($"Note: could not notify daemon of shutdown reason: {ex.Message}");
         }
 
         // Graceful shutdown: SIGTERM on Unix, Kill on Windows (no SIGTERM equivalent)
@@ -197,6 +218,10 @@ public sealed partial class DaemonManager
             ".config", "systemd", "user");
         Directory.CreateDirectory(unitDir);
 
+        // CLI binary is in the same directory as the daemon binary
+        var installDir = Path.GetDirectoryName(binaryPath)!;
+        var cliBinaryPath = Path.Combine(installDir, "netclaw");
+
         var unitPath = Path.Combine(unitDir, "netclaw.service");
         var unitContent = $"""
             [Unit]
@@ -206,6 +231,7 @@ public sealed partial class DaemonManager
             [Service]
             Type=simple
             ExecStart={binaryPath}
+            ExecStop={cliBinaryPath} daemon stop
             Restart=always
             RestartSec=5
             Environment=DOTNET_ENVIRONMENT=Production

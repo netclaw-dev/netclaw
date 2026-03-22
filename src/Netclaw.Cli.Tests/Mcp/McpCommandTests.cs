@@ -1,5 +1,8 @@
+using System.Text;
 using System.Net;
 using System.Text.Json;
+using Microsoft.Extensions.Configuration;
+using Netclaw.Cli.Daemon;
 using Netclaw.Cli.Mcp;
 using Netclaw.Configuration;
 using Xunit;
@@ -107,21 +110,73 @@ public sealed class McpCommandTests : IDisposable
     }
 
     [Fact]
-    public async Task List_ShowsConfiguredServersWithStatus()
+    public async Task List_ShowsConfiguredServersWithDaemonReportedStatus()
     {
-        // Add a server first
+        await McpCommand.RunAsync(
+            new[] { "mcp", "add", "--transport", "stdio", "memorizer", "--", "npx", "-y", "@memorizer/mcp" },
+            _paths, output: _output);
+
+        var daemonApi = CreateDaemonApi(request => request.RequestUri!.AbsolutePath switch
+        {
+            "/api/mcp/statuses" => JsonResponse(new
+            {
+                memorizer = new
+                {
+                    state = "Connected",
+                    toolCount = 4,
+                    error = (string?)null,
+                }
+            }),
+            _ => new HttpResponseMessage(HttpStatusCode.NotFound)
+        });
+
+        var listOutput = new StringWriter();
+        var exitCode = await McpCommand.RunAsync(new[] { "mcp", "list" }, _paths, daemonApi, listOutput);
+        var output = listOutput.ToString();
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("memorizer", output);
+        Assert.Contains("stdio", output);
+        Assert.Contains("connected (4 tools)", output);
+    }
+
+    [Fact]
+    public async Task List_WithoutDaemon_ShowsExplicitUnavailableStatus()
+    {
         await McpCommand.RunAsync(
             new[] { "mcp", "add", "--transport", "stdio", "memorizer", "--", "npx", "-y", "@memorizer/mcp" },
             _paths, output: _output);
 
         var listOutput = new StringWriter();
-        await McpCommand.RunAsync(new[] { "mcp", "list" }, _paths, output: listOutput);
+        var exitCode = await McpCommand.RunAsync(new[] { "mcp", "list" }, _paths, output: listOutput);
         var output = listOutput.ToString();
 
-        Assert.Contains("memorizer", output);
-        Assert.Contains("stdio", output);
-        // Server is unreachable in test environment — status column should reflect that
-        Assert.Contains("unreachable", output);
+        Assert.Equal(1, exitCode);
+        Assert.Contains("Live MCP status unavailable", output);
+        Assert.Contains("status unavailable", output);
+        Assert.DoesNotContain("unreachable", output);
+    }
+
+    [Fact]
+    public async Task List_WhenDaemonDoesNotTrackServer_ShowsRestartHint()
+    {
+        await McpCommand.RunAsync(
+            new[] { "mcp", "add", "--transport", "http", "textforge", "https://textforge.net/mcp" },
+            _paths, output: _output);
+
+        var daemonApi = CreateDaemonApi(request => request.RequestUri!.AbsolutePath switch
+        {
+            "/api/mcp/statuses" => JsonResponse(new { }),
+            _ => new HttpResponseMessage(HttpStatusCode.NotFound)
+        });
+
+        var listOutput = new StringWriter();
+        var exitCode = await McpCommand.RunAsync(new[] { "mcp", "list" }, _paths, daemonApi, listOutput);
+        var output = listOutput.ToString();
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("status unavailable", output);
+        Assert.Contains("restart daemon to load this config", output);
     }
 
     [Fact]
@@ -298,5 +353,54 @@ public sealed class McpCommandTests : IDisposable
     private static JsonDocument ReadConfigFile(string path)
     {
         return JsonDocument.Parse(File.ReadAllText(path));
+    }
+
+    private static DaemonApi CreateDaemonApi(Func<HttpRequestMessage, HttpResponseMessage> handler)
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Daemon:Endpoint"] = "http://127.0.0.1:5199"
+            })
+            .Build();
+
+        return new DaemonApi(new StubHttpClientFactory(handler), configuration);
+    }
+
+    private static HttpResponseMessage JsonResponse(object body, HttpStatusCode status = HttpStatusCode.OK)
+    {
+        return new HttpResponseMessage(status)
+        {
+            Content = new StringContent(JsonSerializer.Serialize(body), Encoding.UTF8, "application/json")
+        };
+    }
+
+    private sealed class StubHttpClientFactory : IHttpClientFactory
+    {
+        private readonly Func<HttpRequestMessage, HttpResponseMessage> _handler;
+
+        public StubHttpClientFactory(Func<HttpRequestMessage, HttpResponseMessage> handler)
+        {
+            _handler = handler;
+        }
+
+        public HttpClient CreateClient(string name)
+            => new(new StubHttpMessageHandler(_handler));
+    }
+
+    private sealed class StubHttpMessageHandler : HttpMessageHandler
+    {
+        private readonly Func<HttpRequestMessage, HttpResponseMessage> _handler;
+
+        public StubHttpMessageHandler(Func<HttpRequestMessage, HttpResponseMessage> handler)
+        {
+            _handler = handler;
+        }
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult(_handler(request));
+        }
     }
 }

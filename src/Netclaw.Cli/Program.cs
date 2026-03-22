@@ -416,7 +416,7 @@ static async Task RunAsync(string[] args)
                 return;
 
             case "stop":
-                var stopResult = await manager.StopAsync();
+                var stopResult = await manager.StopAsync("cli-stop");
                 WriteDaemonResult(stopResult);
                 return;
 
@@ -444,14 +444,14 @@ static async Task RunAsync(string[] args)
         }
     }
 
-    // ── MCP server management (offline, except auth which needs daemon) ──
+    // ── MCP server management (list/auth use daemon for live status/OAuth) ──
     if (mode is "mcp")
     {
         var mcpSubcommand = args.Length > 1 ? args[1] : "help";
 
-        if (mcpSubcommand is "auth")
+        if (mcpSubcommand is "auth" or "list")
         {
-            // auth needs the daemon — spin up DI to get DaemonApi
+            // auth/list need the daemon — spin up DI to get DaemonApi
             var builder = Host.CreateApplicationBuilder(args);
             ConfigureConfigServices(builder.Services, builder.Configuration);
             builder.Logging.ClearProviders();
@@ -788,9 +788,11 @@ static void WriteDoctorHelp()
 {
     Console.WriteLine("Usage: netclaw doctor");
     Console.WriteLine();
-    Console.WriteLine("Runs offline configuration diagnostics:");
+    Console.WriteLine("Runs configuration diagnostics and daemon-backed MCP verification when available:");
     Console.WriteLine("  - netclaw.json schema validation (versioned by configVersion)");
     Console.WriteLine("  - secrets.json syntax validation");
+    Console.WriteLine("  - MCP runtime auth/connectivity status from the daemon");
+    Console.WriteLine("  - explicit offline MCP connectivity checks when daemon status is unavailable");
     Console.WriteLine();
     Console.WriteLine("Options:");
     Console.WriteLine("  --format <text|json>   Output format (default: text)");
@@ -1106,7 +1108,7 @@ static void WriteStatusResult(DaemonRuntimeStatus.Response status, string endpoi
     if (status.Telemetry.SlackCounters is { } counters)
     {
         Console.WriteLine(
-            $"slack counters: recv={counters.EventsReceived} routed={counters.EventsRouted} dropped={counters.EventsDropped} enqueued={counters.MessagesEnqueued} replied={counters.RepliesPosted} reply_failed={counters.RepliesFailed} plain_text_fallback={counters.RepliesPlainTextFallback}");
+            $"slack counters: recv={counters.EventsReceived} routed={counters.EventsRouted} dropped={counters.EventsDropped} enqueued={counters.MessagesEnqueued} replied={counters.RepliesPosted} rejected={counters.RepliesRejected} reply_failed={counters.RepliesFailed}");
     }
 
     if (status.Model is { } model)
@@ -1251,7 +1253,7 @@ static void WriteStatsResult(DaemonStats.Response stats, int? days)
 
     Console.WriteLine("slack:");
     Console.WriteLine($"  events: recv={stats.SlackActivity.EventsReceived} routed={stats.SlackActivity.EventsRouted} dropped={stats.SlackActivity.EventsDropped}");
-    Console.WriteLine($"  replies: posted={stats.SlackActivity.RepliesPosted} failed={stats.SlackActivity.RepliesFailed} plain_text_fallback={stats.SlackActivity.RepliesPlainTextFallback}");
+    Console.WriteLine($"  replies: posted={stats.SlackActivity.RepliesPosted} rejected={stats.SlackActivity.RepliesRejected} failed={stats.SlackActivity.RepliesFailed}");
 
     if (stats.Reminders is { } reminders)
     {

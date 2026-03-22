@@ -153,7 +153,7 @@ public class ReminderManagerActorTests : TestKit
     }
 
     [Fact]
-    public async Task Reconcile_disables_zombie_oneshot_reminders()
+    public async Task Reconcile_deletes_zombie_oneshot_reminders()
     {
         var manager = await GetManagerAsync();
         var now = TimeProvider.System.GetUtcNow();
@@ -196,12 +196,11 @@ public class ReminderManagerActorTests : TestKit
         // Trigger reconciliation and wait for completion ack
         var reconcileResult = await manager.Ask<ReminderManagerActor.ReconcileCompleted>(
             ReminderManagerActor.ReconcileReminders.Instance, TimeSpan.FromSeconds(30));
-        Assert.Equal(1, reconcileResult.DisabledZombies);
+        Assert.Equal(1, reconcileResult.DeletedOneShots);
 
-        // Verify definition still exists but is now disabled
+        // Verify definition has been deleted from the store
         var afterReconcile = _definitionStore.Get(new ReminderId("zombie-oneshot"));
-        Assert.NotNull(afterReconcile);
-        Assert.False(afterReconcile.Enabled);
+        Assert.Null(afterReconcile);
     }
 
     private static ReminderDefinition CreateDefinition(string name, string instructions)

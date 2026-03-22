@@ -47,4 +47,21 @@ public sealed class WebhookTarget
     /// Optional static headers to include with every POST (e.g. Authorization).
     /// </summary>
     public Dictionary<string, string>? Headers { get; set; }
+
+    /// <summary>
+    /// Payload format for this webhook target.
+    /// </summary>
+    public WebhookFormat Format { get; set; } = WebhookFormat.Generic;
+}
+
+/// <summary>
+/// Supported webhook payload formats.
+/// </summary>
+public enum WebhookFormat
+{
+    /// <summary>Default JSON envelope with alertId, type, severity, summary, etc.</summary>
+    Generic = 0,
+
+    /// <summary>Slack Block Kit format with required text field and structured blocks.</summary>
+    Slack = 1,
 }

@@ -1,3 +1,88 @@
+#### 0.7.9 2026-03-21 ####
+
+Netclaw v0.7.9 — Slack delivery hardening, config watcher fix, webhook schema fix, and token usage fix
+
+**Slack**
+
+* Fixed Slack delivery failures being silently swallowed — `SlackReplyClient` was discarding the return value of `Chat.PostMessage()` and relying on SlackNet to throw on `ok:false`. A bug in SlackNet 0.17.9 causes phantom `Ok=true` responses when the HTTP body is empty, so delivery failures were counted as successes. Responses are now validated — null or empty `Ts` throws `SlackMessageDeliveryException` with a `phantom_success` error code, and the full error is fed back to the LLM session. Added `SlackException` catch and response validation to `SlackOutboundClient`, which previously had zero error handling. `netclaw stats` now shows `posted`/`rejected`/`failed` counters instead of the old `posted`/`failed`/`plain_text_fallback` columns. ([#375](https://github.com/Aaronontheweb/netclaw/pull/375))
+
+**Config**
+
+* Fixed OAuth token refreshes causing daemon restarts mid-session — `ConfigWatcherService` was watching both `netclaw.json` and `secrets.json`, so writing a refreshed OAuth token triggered a full daemon restart, killing active turns. The watcher now monitors only `netclaw.json`; secret changes are loaded on-demand and never require a restart. ([#373](https://github.com/Aaronontheweb/netclaw/pull/373))
+* Fixed `netclaw doctor` rejecting configs with `"Format": "Slack"` on webhook targets — the `Format` field was added to `WebhookTarget` but omitted from `netclaw-config.v1.schema.json`, which uses `"additionalProperties": false` throughout. Any `netclaw.json` that set `"Format": "Slack"` on a webhook was flagged as invalid by the schema doctor check. The schema now includes the `Format` enum and the field is optional (defaults to `Generic`). ([#369](https://github.com/Aaronontheweb/netclaw/pull/369))
+
+**Stats**
+
+* Fixed `netclaw stats` always showing zero token usage — OpenAI-compatible providers send token counts in a final SSE chunk that has an empty `choices` array. `ParseStreamingUpdates` returned early on empty choices before reaching `ParseUsage`, silently discarding all token data. Usage-only chunks are now processed before the early return so token statistics flow through to `DailyStatsActor`. ([#367](https://github.com/Aaronontheweb/netclaw/pull/367))
+
+#### 0.7.8 2026-03-21 ####
+
+Netclaw v0.7.8 — CLI packaging fix for installed binaries
+
+**CLI**
+
+* Fixed installed CLI binaries crashing on the `MemoryCheckpointHealth` doctor check — `libe_sqlite3.so` was missing from shipped single-file CLI binaries because `IncludeNativeLibrariesForSelfExtract=true` was set on the daemon publish but not the CLI. The release packaging step now bundles native libs correctly, and the PR validation smoke test now runs against a published binary (matching the exact release artifact) instead of via `dotnet run`. ([#365](https://github.com/Aaronontheweb/netclaw/pull/365))
+
+#### 0.7.7 2026-03-21 ####
+
+Netclaw v0.7.7 — Slack library extraction, lifecycle webhooks, reminder history preservation, and Slack token tracking
+
+**Slack**
+
+* Extracted all Slack-specific infrastructure into a dedicated `Netclaw.Channels.Slack` library — `Netclaw.Channels` is now a thin channel abstractions layer (`IChannel` + `SessionTelemetry`), isolating the SlackNet dependency and establishing the pattern for future channel-specific libraries. Also added a per-target `Format` property to `WebhookTarget` (`"generic"` default, `"slack"` for Block Kit) so the `WebhookNotificationService` renders Slack-compatible payloads with the required `text` field and structured blocks, fixing Slack incoming webhooks. ([#363](https://github.com/Aaronontheweb/netclaw/pull/363))
+
+**Lifecycle**
+
+* Added daemon startup and shutdown webhook notifications — the daemon now posts operational webhooks when it starts and stops, and `netclaw daemon stop` sends a shutdown reason (`"cli-stop"`) to a new `POST /api/lifecycle/shutdown` endpoint before issuing SIGTERM, giving the daemon a chance to fire the webhook before exiting. Shutdown reasons are logged for diagnostics. ([#361](https://github.com/Aaronontheweb/netclaw/pull/361))
+
+**Reminders**
+
+* Fixed one-shot reminder history being lost after execution — the previous auto-delete removed the reminder definition entirely, causing history queries to return 404. One-shot reminders are now soft-deleted after firing so the history API can still return `fired_at`. The list API excludes disabled reminders by default so completed one-shots no longer clutter the visible list. ([#362](https://github.com/Aaronontheweb/netclaw/pull/362))
+
+**Sessions**
+
+* Fixed token usage always showing zero for Slack sessions — `UsageOutput` requires `OutputFilter.Usage`, but Slack channel subscriptions used `Text|Files` only, so the lifecycle observer never saw usage events. Token recording is now performed directly inside the session actor, matching the pattern used by memory and skill recording. ([#354](https://github.com/Aaronontheweb/netclaw/pull/354))
+
+**Evals / Operations**
+
+* Reduced the default per-prompt eval timeout from 180s to 60s — most prompts complete in 15–30s, so the previous timeout wasted minutes on hung calls. Added a daemon health check before each eval case so a mid-run daemon crash aborts immediately with partial results rather than burning through timeouts for all remaining cases. ([#360](https://github.com/Aaronontheweb/netclaw/pull/360))
+
+#### 0.7.6 2026-03-21 ####
+
+Netclaw v0.7.6 — MCP OAuth wiring, session loop hardening, security cleanup, reminder auto-cleanup, and eval suite
+
+**MCP**
+
+* Fixed MCP OAuth connections requiring manual Bearer header injection — the daemon now wires the SDK's built-in OAuth token provider instead of manually inserting the `Authorization` header, eliminating a class of auth failures when tokens refresh mid-session. ([#331](https://github.com/Aaronontheweb/netclaw/pull/331))
+
+**Security**
+
+* Removed the MimeDetective dependency from `MagicByteValidator` — magic byte detection is now handled with a lightweight inline implementation, eliminating a third-party library whose static initializer could poison the validator for the process lifetime. ([#348](https://github.com/Aaronontheweb/netclaw/pull/348))
+
+**Sessions**
+
+* Fixed session loops missing mid-conversation user messages — messages injected while the LLM tool loop was in-flight were previously dropped. The actor now processes these injected messages as follow-up turns. Also added duplicate tool call detection to guard against infinite tool loops where the LLM repeats the same call without making progress. ([#350](https://github.com/Aaronontheweb/netclaw/issues/350), [#351](https://github.com/Aaronontheweb/netclaw/pull/351))
+
+**Reminders**
+
+* Fixed single-shot reminders persisting after firing — one-time reminders were scheduled, delivered, and then left in the store, causing spurious re-deliveries on actor restart. Reminders are now auto-deleted immediately after a one-shot fires. ([#349](https://github.com/Aaronontheweb/netclaw/issues/349), [#353](https://github.com/Aaronontheweb/netclaw/pull/353))
+
+**Identity / Evals**
+
+* Added behavioral grounding rules to the `AGENTS.md` init wizard template and introduced a behavioral eval suite for session pipeline regression testing — operators can now run `./evals/run-evals.sh` to verify that identity grounding, skill loading, memory recall, and tool execution behave correctly end-to-end. ([#347](https://github.com/Aaronontheweb/netclaw/pull/347))
+
+#### 0.7.5 2026-03-21 ####
+
+Netclaw v0.7.5 — Slack image delivery fix and init wizard grounding rules
+
+**Security**
+
+* Fixed Slack images being silently dropped when `MagicByteValidator` type initialization failed — a transient assembly load error during startup could permanently poison the static inspector, causing all image validation to fail for the process lifetime. The scanner failure is now isolated so valid images flow through with a logged warning instead of being discarded. New installs and restarts are no longer affected by one-time startup contention. ([#345](https://github.com/Aaronontheweb/netclaw/pull/345))
+
+**Identity**
+
+* Added behavioral grounding rules to the `AGENTS.md` template generated by `netclaw init` — new installations now start with rules that prevent the agent from stating unverified facts, claiming actions it did not perform, or silently substituting a different answer when the primary task fails. Previously these rules existed only in production deployments that were manually updated. ([#324](https://github.com/Aaronontheweb/netclaw/issues/324), [#344](https://github.com/Aaronontheweb/netclaw/pull/344))
+
 #### 0.7.4 2026-03-20 ####
 
 Netclaw v0.7.4 — Context overflow recovery, skill compaction durability, and frontmatter stripping

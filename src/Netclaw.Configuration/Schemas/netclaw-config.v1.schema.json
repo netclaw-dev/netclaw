@@ -169,6 +169,12 @@
               "Headers": {
                 "type": ["object", "null"],
                 "additionalProperties": { "type": "string" }
+              },
+              "Format": {
+                "type": "string",
+                "enum": ["Generic", "Slack"],
+                "default": "Generic",
+                "description": "Payload format for this webhook target. Generic = JSON envelope; Slack = Block Kit format."
               }
             },
             "required": ["Url"],
