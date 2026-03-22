@@ -57,11 +57,13 @@ public sealed class SkillRegistry
             return string.Empty;
 
         var sb = new StringBuilder();
-        sb.AppendLine("[available-skills]");
-        sb.AppendLine("These skills contain detailed guidance for specific tasks. When a user's request");
-        sb.AppendLine("matches a skill's description, load it with file_read BEFORE responding — the");
-        sb.AppendLine("skill content will help you give a better answer. Skills may reference additional");
-        sb.AppendLine("resource files (scripts, references, templates) — load those too when relevant.");
+        sb.AppendLine("[available-skills — MANDATORY FIRST STEP]");
+        sb.AppendLine("Before using ANY tool or generating a response, you MUST check this list.");
+        sb.AppendLine("If the user's request touches a skill's domain, call file_read on its path");
+        sb.AppendLine("as your FIRST action. Do NOT call other tools first. Skills contain");
+        sb.AppendLine("project-specific rules, required citation formats, memory policies, and");
+        sb.AppendLine("operational constraints that override your defaults. Skipping a skill");
+        sb.AppendLine("means you will miss required behavior and produce incorrect output.");
         sb.AppendLine();
         foreach (var skill in _skills)
         {

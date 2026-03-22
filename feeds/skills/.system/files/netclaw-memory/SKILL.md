@@ -1,9 +1,9 @@
 ---
 name: netclaw-memory
-description: "Netclaw memory usage. Read when the user asks what Netclaw remembers, wants something saved for later, or when you need to decide between automatic recall, explicit memory search, and identity-file updates."
+description: "REQUIRED before using find_memories, get_memories, or any memory tool. Read this first when the user asks what you remember, wants something saved, or asks about past conversations. Contains memory search strategies and recall policies."
 metadata:
   author: netclaw
-  version: "0.6.0"
+  version: "0.7.0"
   triggers: what do you remember about me | remember this for later | save this for future sessions | recall prior details | search memory | fix an incorrect memory | memory seems wrong
 ---
 

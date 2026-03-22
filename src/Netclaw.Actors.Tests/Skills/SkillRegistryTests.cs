@@ -76,8 +76,8 @@ public class SkillRegistryTests
 
         var menu = registry.GenerateDescriptionMenu();
 
-        Assert.Contains("[available-skills]", menu);
-        Assert.Contains("load it with file_read BEFORE responding", menu);
+        Assert.Contains("[available-skills", menu);
+        Assert.Contains("MUST", menu);
         Assert.Contains("- netclaw-identity: How to edit identity files", menu);
         Assert.Contains("path: /skills/netclaw-identity/SKILL.md", menu);
         Assert.Contains("- netclaw-diagnostics: Check Netclaw configuration", menu);

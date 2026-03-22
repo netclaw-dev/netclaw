@@ -1,9 +1,9 @@
 ---
 name: netclaw-manual
-description: "Netclaw Manual. Read when the user is asking what Netclaw can do, which command/tool to use, how to schedule work, switch models, manage providers, or discover available capabilities."
+description: "REQUIRED before using set_reminder, list_reminders, or any scheduling/CLI tool. Read this first when the user asks about reminders, scheduling, model switching, provider management, or Netclaw capabilities. Contains correct tool parameters and operational rules."
 metadata:
   author: netclaw
-  version: "0.8.3"
+  version: "0.8.4"
   triggers: what can netclaw do | what command should I use | can you schedule a cron job | schedule a reminder | switch models | change model | manage providers | manage mcp servers | list available tools | how do I do this in netclaw
 ---
 

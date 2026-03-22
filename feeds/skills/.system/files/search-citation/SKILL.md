@@ -1,9 +1,9 @@
 ---
 name: search-citation
-description: "Guides when to use web search vs. training data and how to cite sources. Ensures specific factual claims include source URLs and the agent does not hallucinate verifiable information."
+description: "REQUIRED before any web_search or web_fetch call. Read this first when the user asks you to search, look up, verify, price-check, or find anything online. Contains citation format rules and source-handling policies."
 metadata:
   author: netclaw
-  version: "0.7.1"
+  version: "0.8.0"
   triggers: web search needed | cite sources | link results | price check | product search | find near me | verify facts | compare competitors | current information | find flights | find hotels | latest news | what costs | how much does | where to buy | who sells
 ---
 
