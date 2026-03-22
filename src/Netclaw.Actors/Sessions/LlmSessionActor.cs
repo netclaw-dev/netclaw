@@ -1927,6 +1927,16 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             foreach (var item in resolved.Items)
                 _injectedMemoryIds.Add(item.Id);
 
+            // Persist recalled memories into session history so they survive
+            // across turns. Without this, recalled memories are transient system
+            // messages that vanish after one turn, and the exclusion set prevents
+            // re-injection — making the memory invisible for the rest of the session.
+            if (resolved.Items.Count > 0)
+            {
+                var recallContent = FormatRecallForHistory(resolved);
+                _state = _state.AddSystemNudge(recallContent);
+            }
+
             var recallIds = resolved.Items.Count == 0
                 ? "-"
                 : string.Join(",", resolved.Items.Select(i => i.Id));
@@ -2043,6 +2053,17 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         var recallMessage = new AiChatMessage(Microsoft.Extensions.AI.ChatRole.System, sb.ToString().TrimEnd());
         var index = messages.FindLastIndex(m => m.Role == Microsoft.Extensions.AI.ChatRole.System);
         messages.Insert(index >= 0 ? index + 1 : 0, recallMessage);
+    }
+
+    private static string FormatRecallForHistory(AutomaticRecallResult recall)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("[recalled-memories]");
+        foreach (var item in recall.Items)
+        {
+            sb.AppendLine($"- {item.Title}: {item.Content}");
+        }
+        return sb.ToString().TrimEnd();
     }
 
     /// <summary>
