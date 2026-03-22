@@ -1043,6 +1043,70 @@ public sealed class SQLiteMemoryStore
     }
 
     /// <summary>
+    /// Content-based candidate search: finds existing documents whose content matches
+    /// the given terms, joined with their anchors. Uses the same per-term scoring strategy
+    /// as the recall pipeline's SearchByPlanAsync. Returns ExistingMemoryCandidate records
+    /// for direct use by the curation actor's evaluation pipeline.
+    /// </summary>
+    public async Task<IReadOnlyList<ExistingMemoryCandidate>> FindCandidatesByContentAsync(
+        IReadOnlyList<string> contentTerms,
+        string domain,
+        int limit = 5,
+        CancellationToken ct = default)
+    {
+        if (contentTerms.Count == 0 || limit <= 0)
+            return [];
+
+        return await WithConnectionAsync(async (conn, ct) =>
+        {
+        await using var cmd = conn.CreateCommand();
+
+        var termClauses = new List<string>();
+        for (var i = 0; i < contentTerms.Count; i++)
+        {
+            termClauses.Add($"(d.title LIKE $t{i} OR d.markdown_body LIKE $t{i})");
+            cmd.Parameters.AddWithValue($"$t{i}", $"%{contentTerms[i]}%");
+        }
+
+        var scoredTerms = string.Join(" + ", termClauses.Select(c => $"(CASE WHEN {c} THEN 1 ELSE 0 END)"));
+        var whereTerms = string.Join(" OR ", termClauses);
+
+        cmd.CommandText = $"""
+            SELECT a.anchor_id, a.canonical_name,
+                   d.document_id, d.markdown_body, d.freshness_at, d.confidence,
+                   ({scoredTerms}) AS score
+            FROM memory_documents d
+            JOIN memory_anchors a ON d.anchor_id = a.anchor_id
+            WHERE a.domain = $domain
+              AND a.status = 'active'
+              AND d.memory_class = '{MemoryClass.DurableFact.ToWireValue()}'
+              AND d.update_semantics != '{MemoryUpdateSemantics.Tombstone.ToWireValue()}'
+              AND ({whereTerms})
+            ORDER BY score DESC, d.confidence DESC, d.updated_at DESC
+            LIMIT $limit;
+            """;
+        cmd.Parameters.AddWithValue("$domain", domain);
+        cmd.Parameters.AddWithValue("$limit", limit);
+
+        var results = new List<ExistingMemoryCandidate>();
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            results.Add(new ExistingMemoryCandidate(
+                DocumentId: reader.GetString(2),
+                AnchorId: reader.GetString(0),
+                AnchorCanonicalName: reader.GetString(1),
+                Content: reader.GetString(3),
+                FreshnessAtMs: reader.IsDBNull(4) ? null : reader.GetInt64(4),
+                Confidence: reader.IsDBNull(5) ? 0.0 : reader.GetDouble(5),
+                IsExactAnchorMatch: false));
+        }
+
+        return results;
+        }, ct);
+    }
+
+    /// <summary>
     /// Tombstone an anchor by setting its status to 'tombstoned'.
     /// Documents under this anchor are NOT affected — they should be re-anchored first.
     /// </summary>

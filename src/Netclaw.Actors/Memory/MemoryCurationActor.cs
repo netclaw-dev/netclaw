@@ -189,10 +189,36 @@ public sealed class MemoryCurationActor : ReceiveActor, IWithUnboundedStash
             return new CurationDecision(CurationDecisionKind.Create, null, null, null, "immutable record bypass");
         }
 
-        // Query existing anchors for matches
+        // Query existing anchors for matches (by name)
         var candidates = await _store.FindFuzzyAnchorMatchesAsync(
             operation.AnchorCanonicalName,
             domain);
+
+        // If anchor-based search found nothing, fall back to content-based search
+        // using the same per-term scoring strategy the recall system uses.
+        // This catches "favorite color is blue" under anchor "favorite" when the
+        // existing copy is under "user-preferred-color" — different names, same content.
+        if (candidates.Count == 0 && !string.IsNullOrWhiteSpace(operation.Content))
+        {
+            var contentTerms = operation.Content
+                .Split([' ', '\t', '\n', '\r', '.', ',', ':', ';', '!', '?', '"', '\''],
+                    StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Where(t => t.Length >= 3)
+                .Select(t => t.ToLowerInvariant())
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Take(8)
+                .ToArray();
+
+            if (contentTerms.Length > 0)
+            {
+                var contentCandidates = await _store.FindCandidatesByContentAsync(
+                    contentTerms,
+                    domain);
+
+                if (contentCandidates.Count > 0)
+                    candidates = contentCandidates;
+            }
+        }
 
         // Apply rules tier
         var rulesDecision = CurationRulesEvaluator.Evaluate(operation, candidates);
