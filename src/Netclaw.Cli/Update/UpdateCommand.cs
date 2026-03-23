@@ -39,8 +39,27 @@ internal static class UpdateCommand
         var currentVersion = BuildInfo.Version;
 
         using var httpClient = new HttpClient();
-        var result = await UpdateCheckService.CheckForUpdateAsync(
-            httpClient, currentVersion);
+
+        // Fetch manifest with signature verification
+        var fetchResult = await UpdateCheckService.FetchVerifiedManifestAsync(
+            httpClient);
+
+        if (!fetchResult.IsSuccess)
+        {
+            if (fetchResult.Status == ManifestFetchStatus.SignatureFailure)
+            {
+                Console.Error.WriteLine($"Error: {fetchResult.ErrorMessage}");
+                Console.Error.WriteLine("The update manifest could not be verified. This may indicate tampering.");
+                Console.Error.WriteLine("If this persists, report the issue at https://github.com/stannardlabs/netclaw/issues");
+                return 1;
+            }
+
+            // Network failure — could be transient
+            Console.Error.WriteLine($"Could not check for updates: {fetchResult.ErrorMessage}");
+            return 1;
+        }
+
+        var result = UpdateCheckService.EvaluateManifest(fetchResult.Manifest!, currentVersion);
 
         if (!result.IsUpdateAvailable)
         {

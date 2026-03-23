@@ -8,6 +8,8 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="Netclaw.Configuration.Tests" />
+    <InternalsVisibleTo Include="Netclaw.Daemon.Tests" />
+    <InternalsVisibleTo Include="Netclaw.Cli.Tests" />
   </ItemGroup>
 
   <ItemGroup>
@@ -15,6 +17,7 @@
     <PackageReference Include="Microsoft.AspNetCore.DataProtection.Extensions" />
     <PackageReference Include="Microsoft.Extensions.AI.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.Http" />
+    <PackageReference Include="NSec.Cryptography" />
   </ItemGroup>
 
   <ItemGroup>

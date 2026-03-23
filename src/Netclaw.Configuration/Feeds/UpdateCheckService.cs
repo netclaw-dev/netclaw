@@ -1,5 +1,7 @@
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Text.Json;
+using Netclaw.Configuration.Security;
 
 namespace Netclaw.Configuration.Feeds;
 
@@ -13,6 +15,31 @@ public sealed class UpdateCheckResult
     public string LatestVersion { get; init; } = "";
     public string? ReleaseNotesUrl { get; init; }
     public List<BinaryAsset> MatchingAssets { get; init; } = [];
+}
+
+/// <summary>
+/// Result of fetching the binary feed manifest, distinguishing success from
+/// different failure modes so callers can display appropriate messages.
+/// </summary>
+public sealed class ManifestFetchResult
+{
+    public BinaryFeedManifest? Manifest { get; init; }
+    public ManifestFetchStatus Status { get; init; }
+    public string? ErrorMessage { get; init; }
+
+    public bool IsSuccess => Status == ManifestFetchStatus.Success && Manifest is not null;
+}
+
+public enum ManifestFetchStatus
+{
+    /// <summary>Manifest fetched, signature verified, deserialized successfully.</summary>
+    Success,
+
+    /// <summary>Network error, timeout, or HTTP error fetching manifest or signature.</summary>
+    NetworkFailure,
+
+    /// <summary>Manifest signature verification failed — possible tampering.</summary>
+    SignatureFailure,
 }
 
 /// <summary>
@@ -56,14 +83,14 @@ public static class UpdateCheckService
 
         try
         {
-            var manifest = await FetchManifestAsync(httpClient, cancellationToken);
-            if (manifest is null)
+            var fetchResult = await FetchVerifiedManifestAsync(httpClient, cancellationToken);
+            if (!fetchResult.IsSuccess)
             {
                 CacheResult(noUpdate);
                 return noUpdate;
             }
 
-            var result = EvaluateManifest(manifest, currentVersion);
+            var result = EvaluateManifest(fetchResult.Manifest!, currentVersion);
             CacheResult(result);
             return result;
         }
@@ -72,6 +99,93 @@ public static class UpdateCheckService
             CacheResult(noUpdate);
             return noUpdate;
         }
+    }
+
+    /// <summary>
+    /// Fetches the binary manifest with signature verification and returns a detailed result.
+    /// Used by <see cref="Netclaw.Cli.Update.UpdateCommand"/> to display appropriate error messages.
+    /// </summary>
+    public static async Task<ManifestFetchResult> FetchVerifiedManifestAsync(
+        HttpClient httpClient,
+        CancellationToken cancellationToken = default)
+    {
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        cts.CancelAfter(FeedConstants.BinaryFeedHttpTimeout);
+
+        string json;
+        try
+        {
+            var response = await httpClient.GetAsync(
+                FeedConstants.BinaryManifestUrl, cts.Token);
+            response.EnsureSuccessStatusCode();
+            json = await response.Content.ReadAsStringAsync(cts.Token);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return new ManifestFetchResult
+            {
+                Status = ManifestFetchStatus.NetworkFailure,
+                ErrorMessage = $"Failed to fetch manifest: {ex.Message}",
+            };
+        }
+
+        // Fetch and verify signature
+        string signatureContent;
+        try
+        {
+            var sigResponse = await httpClient.GetAsync(
+                FeedConstants.BinaryManifestSignatureUrl, cts.Token);
+            sigResponse.EnsureSuccessStatusCode();
+            signatureContent = await sigResponse.Content.ReadAsStringAsync(cts.Token);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return new ManifestFetchResult
+            {
+                Status = ManifestFetchStatus.SignatureFailure,
+                ErrorMessage = $"Failed to fetch manifest signature: {ex.Message}",
+            };
+        }
+
+        var verifyResult = MinisignVerifier.Verify(
+            Encoding.UTF8.GetBytes(json), signatureContent);
+
+        if (verifyResult != MinisignVerifier.VerifyResult.Valid)
+        {
+            return new ManifestFetchResult
+            {
+                Status = ManifestFetchStatus.SignatureFailure,
+                ErrorMessage = verifyResult switch
+                {
+                    MinisignVerifier.VerifyResult.MalformedSignature =>
+                        "Manifest signature file is malformed",
+                    MinisignVerifier.VerifyResult.UnsupportedAlgorithm =>
+                        "Manifest signature uses an unsupported algorithm",
+                    MinisignVerifier.VerifyResult.KeyMismatch =>
+                        "Manifest was signed by an unrecognized key",
+                    MinisignVerifier.VerifyResult.InvalidSignature =>
+                        "Manifest signature is invalid — the manifest may have been tampered with",
+                    _ => "Manifest signature verification failed",
+                },
+            };
+        }
+
+        // Signature verified — safe to deserialize
+        var manifest = JsonSerializer.Deserialize<BinaryFeedManifest>(json);
+        if (manifest is null || manifest.SchemaVersion != 1)
+        {
+            return new ManifestFetchResult
+            {
+                Status = ManifestFetchStatus.NetworkFailure,
+                ErrorMessage = "Manifest deserialization failed or unsupported schema version",
+            };
+        }
+
+        return new ManifestFetchResult
+        {
+            Manifest = manifest,
+            Status = ManifestFetchStatus.Success,
+        };
     }
 
     private static void CacheResult(UpdateCheckResult result)
@@ -87,30 +201,6 @@ public static class UpdateCheckService
     {
         s_cachedResult = null;
         s_cachedAt = default;
-    }
-
-    /// <summary>
-    /// Fetches and deserializes the binary feed manifest.
-    /// Returns null on any failure (timeout, HTTP error, deserialization error).
-    /// </summary>
-    public static async Task<BinaryFeedManifest?> FetchManifestAsync(
-        HttpClient httpClient,
-        CancellationToken cancellationToken = default)
-    {
-        using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        cts.CancelAfter(FeedConstants.BinaryFeedHttpTimeout);
-
-        var response = await httpClient.GetAsync(
-            FeedConstants.BinaryManifestUrl, cts.Token);
-        response.EnsureSuccessStatusCode();
-
-        var json = await response.Content.ReadAsStringAsync(cts.Token);
-        var manifest = JsonSerializer.Deserialize<BinaryFeedManifest>(json);
-
-        if (manifest is null || manifest.SchemaVersion != 1)
-            return null;
-
-        return manifest;
     }
 
     /// <summary>

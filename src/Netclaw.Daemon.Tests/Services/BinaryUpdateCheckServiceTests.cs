@@ -3,7 +3,9 @@ using System.Text.Json;
 using Microsoft.Extensions.Logging.Abstractions;
 using Netclaw.Configuration;
 using Netclaw.Configuration.Feeds;
+using Netclaw.Configuration.Security;
 using Netclaw.Daemon.Services;
+using NSec.Cryptography;
 using Xunit;
 
 namespace Netclaw.Daemon.Tests.Services;
@@ -12,12 +14,29 @@ public sealed class BinaryUpdateCheckServiceTests : IDisposable
 {
     private readonly string _tempDir;
     private readonly NetclawPaths _paths;
+    private readonly Key _testSigningKey;
+    private readonly byte[] _testPublicKeyBlob;
 
     public BinaryUpdateCheckServiceTests()
     {
         _tempDir = Path.Combine(Path.GetTempPath(), $"netclaw-test-{Guid.NewGuid():N}");
         _paths = new NetclawPaths(_tempDir);
         _paths.EnsureDirectoriesExist();
+
+        // Generate a test signing keypair for each test
+        _testSigningKey = Key.Create(SignatureAlgorithm.Ed25519,
+            new KeyCreationParameters { ExportPolicy = KeyExportPolicies.AllowPlaintextExport });
+
+        var pubKeyRaw = _testSigningKey.Export(KeyBlobFormat.RawPublicKey);
+        _testPublicKeyBlob = new byte[42];
+        _testPublicKeyBlob[0] = 0x45; _testPublicKeyBlob[1] = 0x64; // "Ed"
+        // Key ID: test bytes
+        byte[] testKeyId = [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08];
+        Array.Copy(testKeyId, 0, _testPublicKeyBlob, 2, 8);
+        Array.Copy(pubKeyRaw, 0, _testPublicKeyBlob, 10, 32);
+
+        // Set test key override so MinisignVerifier uses our test key
+        MinisignVerifier.TestPublicKeyOverride = _testPublicKeyBlob;
 
         // Clear static cache between tests to avoid cross-test interference
         UpdateCheckService.ResetCache();
@@ -28,44 +47,72 @@ public sealed class BinaryUpdateCheckServiceTests : IDisposable
     // ═══════════════════════════════════════════════════════════════
 
     [Fact]
-    public async Task StartAsync_LogsWarningWhenUpdateAvailable()
+    public async Task CheckAndNotify_CachesResultWhenUpdateAvailable()
     {
         var manifest = CreateManifest("0.2.0", UpdateCheckService.GetCurrentRid());
-        var handler = new FakeHttpHandler();
-        handler.AddJsonResponse(FeedConstants.BinaryManifestUrl, manifest);
+        var handler = CreateSignedHandler(manifest);
 
         var sut = CreateDaemonService(handler, currentVersion: "0.1.0");
-        await sut.StartAsync(CancellationToken.None);
+        await sut.CheckAndNotifyAsync(CancellationToken.None);
 
-        // Static cache should be populated
         var cached = UpdateCheckService.GetLastResult();
         Assert.NotNull(cached);
         Assert.True(cached!.IsUpdateAvailable);
     }
 
     [Fact]
-    public async Task StartAsync_GracefullyHandlesNetworkFailure()
+    public async Task CheckAndNotify_EmitsUpdateAvailableAlert()
+    {
+        var manifest = CreateManifest("0.2.0", UpdateCheckService.GetCurrentRid());
+        var handler = CreateSignedHandler(manifest);
+        var sink = new FakeNotificationSink();
+
+        var sut = CreateDaemonService(handler, currentVersion: "0.1.0", sink: sink);
+        await sut.CheckAndNotifyAsync(CancellationToken.None);
+
+        Assert.Single(sink.Alerts);
+        var alert = sink.Alerts[0];
+        Assert.Equal(AlertType.UpdateAvailable, alert.Category);
+        Assert.Equal("update.available", alert.Type);
+        Assert.Equal("info", alert.Severity);
+        Assert.Contains("0.2.0", alert.Summary);
+    }
+
+    [Fact]
+    public async Task CheckAndNotify_DoesNotEmitAlertWhenUpToDate()
+    {
+        var manifest = CreateManifest("0.1.0", UpdateCheckService.GetCurrentRid());
+        var handler = CreateSignedHandler(manifest);
+        var sink = new FakeNotificationSink();
+
+        var sut = CreateDaemonService(handler, currentVersion: "0.1.0", sink: sink);
+        await sut.CheckAndNotifyAsync(CancellationToken.None);
+
+        Assert.Empty(sink.Alerts);
+    }
+
+    [Fact]
+    public async Task CheckAndNotify_GracefullyHandlesNetworkFailure()
     {
         var handler = new FakeHttpHandler();
         handler.AddErrorResponse(FeedConstants.BinaryManifestUrl, HttpStatusCode.ServiceUnavailable);
 
         var sut = CreateDaemonService(handler, currentVersion: "0.1.0");
-        await sut.StartAsync(CancellationToken.None);
+        await sut.CheckAndNotifyAsync(CancellationToken.None);
 
-        // UpdateCheckService never throws — returns "no update" on failure.
         var cached = UpdateCheckService.GetLastResult();
         Assert.NotNull(cached);
         Assert.False(cached!.IsUpdateAvailable);
     }
 
     [Fact]
-    public async Task StartAsync_HandlesTimeoutGracefully()
+    public async Task CheckAndNotify_HandlesTimeoutGracefully()
     {
         var handler = new FakeHttpHandler();
         // No response configured → 404, which triggers HttpRequestException
 
         var sut = CreateDaemonService(handler, currentVersion: "0.1.0");
-        await sut.StartAsync(CancellationToken.None);
+        await sut.CheckAndNotifyAsync(CancellationToken.None);
     }
 
     // ═══════════════════════════════════════════════════════════════
@@ -76,8 +123,7 @@ public sealed class BinaryUpdateCheckServiceTests : IDisposable
     public async Task CheckForUpdateAsync_ReturnsUpdateWhenNewerVersionAvailable()
     {
         var manifest = CreateManifest("0.2.0", UpdateCheckService.GetCurrentRid());
-        var handler = new FakeHttpHandler();
-        handler.AddJsonResponse(FeedConstants.BinaryManifestUrl, manifest);
+        var handler = CreateSignedHandler(manifest);
 
         using var httpClient = new HttpClient(handler);
         var result = await UpdateCheckService.CheckForUpdateAsync(
@@ -93,8 +139,7 @@ public sealed class BinaryUpdateCheckServiceTests : IDisposable
     public async Task CheckForUpdateAsync_ReturnsNoUpdateWhenAlreadyLatest()
     {
         var manifest = CreateManifest("0.1.0", "linux-x64");
-        var handler = new FakeHttpHandler();
-        handler.AddJsonResponse(FeedConstants.BinaryManifestUrl, manifest);
+        var handler = CreateSignedHandler(manifest);
 
         using var httpClient = new HttpClient(handler);
         var result = await UpdateCheckService.CheckForUpdateAsync(
@@ -107,8 +152,7 @@ public sealed class BinaryUpdateCheckServiceTests : IDisposable
     public async Task CheckForUpdateAsync_ReturnsNoUpdateWhenNewerThanManifest()
     {
         var manifest = CreateManifest("0.1.0", "linux-x64");
-        var handler = new FakeHttpHandler();
-        handler.AddJsonResponse(FeedConstants.BinaryManifestUrl, manifest);
+        var handler = CreateSignedHandler(manifest);
 
         using var httpClient = new HttpClient(handler);
         var result = await UpdateCheckService.CheckForUpdateAsync(
@@ -135,8 +179,7 @@ public sealed class BinaryUpdateCheckServiceTests : IDisposable
     public async Task CheckForUpdateAsync_UsesDedicatedReleasesManifestEndpoint()
     {
         var manifest = CreateManifest("0.2.0", UpdateCheckService.GetCurrentRid());
-        var handler = new FakeHttpHandler();
-        handler.AddJsonResponse("https://releases.netclaw.dev/manifest.json", manifest);
+        var handler = CreateSignedHandler(manifest);
 
         using var httpClient = new HttpClient(handler);
         var result = await UpdateCheckService.CheckForUpdateAsync(
@@ -144,6 +187,57 @@ public sealed class BinaryUpdateCheckServiceTests : IDisposable
 
         Assert.True(result.IsUpdateAvailable);
         Assert.Equal("0.2.0", result.LatestVersion);
+    }
+
+    [Fact]
+    public async Task CheckForUpdateAsync_ReturnsNoUpdateOnMissingSignature()
+    {
+        var manifest = CreateManifest("0.2.0", UpdateCheckService.GetCurrentRid());
+        var handler = new FakeHttpHandler();
+        handler.AddJsonResponse(FeedConstants.BinaryManifestUrl, manifest);
+        // No signature configured — will 404
+
+        using var httpClient = new HttpClient(handler);
+        var result = await UpdateCheckService.CheckForUpdateAsync(
+            httpClient, "0.1.0");
+
+        // Signature failure treated as network failure → no update
+        Assert.False(result.IsUpdateAvailable);
+    }
+
+    [Fact]
+    public async Task FetchVerifiedManifestAsync_ReturnsSignatureFailureOnMissingSignature()
+    {
+        var manifest = CreateManifest("0.2.0", UpdateCheckService.GetCurrentRid());
+        var handler = new FakeHttpHandler();
+        handler.AddJsonResponse(FeedConstants.BinaryManifestUrl, manifest);
+        // No signature URL → 404
+
+        using var httpClient = new HttpClient(handler);
+        var result = await UpdateCheckService.FetchVerifiedManifestAsync(httpClient);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(ManifestFetchStatus.SignatureFailure, result.Status);
+    }
+
+    [Fact]
+    public async Task FetchVerifiedManifestAsync_ReturnsSignatureFailureOnTamperedManifest()
+    {
+        var manifest = CreateManifest("0.2.0", UpdateCheckService.GetCurrentRid());
+        var handler = new FakeHttpHandler();
+
+        // Return the manifest but sign different content
+        var json = JsonSerializer.Serialize(manifest);
+        handler.AddResponse(FeedConstants.BinaryManifestUrl, HttpStatusCode.OK, json, "application/json");
+
+        var wrongSig = SignContent("different content");
+        handler.AddResponse(FeedConstants.BinaryManifestSignatureUrl, HttpStatusCode.OK, wrongSig, "text/plain");
+
+        using var httpClient = new HttpClient(handler);
+        var result = await UpdateCheckService.FetchVerifiedManifestAsync(httpClient);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(ManifestFetchStatus.SignatureFailure, result.Status);
     }
 
     [Fact]
@@ -300,7 +394,9 @@ public sealed class BinaryUpdateCheckServiceTests : IDisposable
 
     public void Dispose()
     {
+        MinisignVerifier.TestPublicKeyOverride = null;
         UpdateCheckService.ResetCache();
+        _testSigningKey.Dispose();
         if (Directory.Exists(_tempDir))
             Directory.Delete(_tempDir, recursive: true);
     }
@@ -310,13 +406,48 @@ public sealed class BinaryUpdateCheckServiceTests : IDisposable
     // ═══════════════════════════════════════════════════════════════
 
     private static BinaryUpdateCheckService CreateDaemonService(
-        FakeHttpHandler handler, string currentVersion = "0.1.0")
+        FakeHttpHandler handler,
+        string currentVersion = "0.1.0",
+        FakeNotificationSink? sink = null)
     {
         var httpClient = new HttpClient(handler);
         return new BinaryUpdateCheckService(
             httpClient,
             NullLogger<BinaryUpdateCheckService>.Instance,
-            currentVersion);
+            currentVersion,
+            sink);
+    }
+
+    /// <summary>
+    /// Creates a FakeHttpHandler that returns a properly signed manifest.
+    /// </summary>
+    private FakeHttpHandler CreateSignedHandler(BinaryFeedManifest manifest)
+    {
+        var handler = new FakeHttpHandler();
+        var json = JsonSerializer.Serialize(manifest);
+        handler.AddResponse(FeedConstants.BinaryManifestUrl, HttpStatusCode.OK, json, "application/json");
+
+        var sigContent = SignContent(json);
+        handler.AddResponse(FeedConstants.BinaryManifestSignatureUrl, HttpStatusCode.OK, sigContent, "text/plain");
+
+        return handler;
+    }
+
+    /// <summary>
+    /// Signs content with the test key and returns minisign signature file content.
+    /// </summary>
+    private string SignContent(string content)
+    {
+        var data = System.Text.Encoding.UTF8.GetBytes(content);
+        var signature = SignatureAlgorithm.Ed25519.Sign(_testSigningKey, data);
+
+        // Build minisign signature blob: "ED" (2) + keyId (8) + signature (64) = 74 bytes
+        var sigBlob = new byte[74];
+        sigBlob[0] = 0x45; sigBlob[1] = 0x44; // "ED" (standard)
+        Array.Copy(_testPublicKeyBlob, 2, sigBlob, 2, 8); // Copy key ID
+        Array.Copy(signature, 0, sigBlob, 10, 64);
+
+        return $"untrusted comment: test signature\n{Convert.ToBase64String(sigBlob)}\ntrusted comment: test\ndGVzdA==\n";
     }
 
     private static BinaryFeedManifest CreateManifest(string version, string rid)
@@ -356,10 +487,16 @@ public sealed class BinaryUpdateCheckServiceTests : IDisposable
         };
     }
 
+    private sealed class FakeNotificationSink : IOperationalNotificationSink
+    {
+        public List<OperationalAlert> Alerts { get; } = [];
+        public void Emit(OperationalAlert alert) => Alerts.Add(alert);
+    }
+
     /// <summary>
     /// Reuses the same FakeHttpHandler pattern from <see cref="SystemSkillSyncServiceTests"/>.
     /// </summary>
-    private sealed class FakeHttpHandler : HttpMessageHandler
+    internal sealed class FakeHttpHandler : HttpMessageHandler
     {
         private readonly Dictionary<string, (HttpStatusCode Status, string Content, string ContentType)> _responses = new();
 
@@ -367,6 +504,11 @@ public sealed class BinaryUpdateCheckServiceTests : IDisposable
         {
             var json = JsonSerializer.Serialize(body);
             _responses[url] = (HttpStatusCode.OK, json, "application/json");
+        }
+
+        public void AddResponse(string url, HttpStatusCode status, string content, string contentType)
+        {
+            _responses[url] = (status, content, contentType);
         }
 
         public void AddErrorResponse(string url, HttpStatusCode status)
