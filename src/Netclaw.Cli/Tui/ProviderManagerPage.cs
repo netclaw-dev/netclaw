@@ -81,6 +81,7 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
             {
                 ProviderManagerState.Loading => BuildLoadingView(),
                 ProviderManagerState.List => BuildProviderListView(),
+                ProviderManagerState.AddSelectType => BuildAddSelectTypeView(),
                 ProviderManagerState.AddSelectAuth => BuildAddAuthView(),
                 ProviderManagerState.AddCredentials => BuildCredentialsView(),
                 ProviderManagerState.AddOAuthDeviceFlow => BuildOAuthDeviceFlowView(),
@@ -139,6 +140,8 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
                         " Checking providers...  [Ctrl+Q] Quit",
                     ProviderManagerState.List =>
                         " [\u2191/\u2193] Navigate  [Enter] Select  [Esc] Quit  [Ctrl+Q] Quit",
+                    ProviderManagerState.AddSelectType =>
+                        " [\u2191/\u2193] Navigate  [Enter] Select  [Esc] Back  [Ctrl+Q] Quit",
                     ProviderManagerState.Details =>
                         " [K] Update key  [R] Remove  [V] Re-validate  [Esc] Back  [Ctrl+Q] Quit",
                     ProviderManagerState.RemoveConfirm =>
@@ -181,29 +184,42 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
                 _ => (SpinnerFrames[elapsed % SpinnerFrames.Length], Color.Yellow)
             };
 
-            children.WithChild(new TextNode($"  {statusChar} {item.DisplayName}")
+            var label = item.ConfiguredName is not null
+                ? $"{item.ConfiguredName} ({item.DisplayName})"
+                : item.DisplayName;
+            children.WithChild(new TextNode($"  {statusChar} {label}")
                 .WithForeground(color));
         }
 
         return children;
     }
 
+    private const string AddNewProviderSentinel = "  + Add new provider...";
+
     private ILayoutNode BuildProviderListView()
     {
         var items = ViewModel.DisplayProviders
             .Select(p =>
             {
-                var statusChar = p switch
+                if (p.IsConfigured)
                 {
-                    { IsConfigured: true, Health: ProviderHealthStatus.Healthy } => "\u2713",
-                    { IsConfigured: true, Health: ProviderHealthStatus.Unhealthy } => "\u26a0",
-                    { IsConfigured: true, Health: ProviderHealthStatus.Probing } => "\u2026",
-                    _ => " "
-                };
+                    var statusChar = p.Health switch
+                    {
+                        ProviderHealthStatus.Healthy => "\u2713",
+                        ProviderHealthStatus.Unhealthy => "\u26a0",
+                        ProviderHealthStatus.Probing => "\u2026",
+                        _ => " "
+                    };
 
-                return $"{statusChar} {p.DisplayName,-20} {p.DisplayAuth,-12} {p.DisplayEndpoint}";
+                    var nameLabel = $"{p.ConfiguredName} ({p.DisplayName})";
+                    return $"{statusChar} {nameLabel,-36} {p.DisplayAuth,-12} {p.DisplayEndpoint}";
+                }
+
+                return $"  {p.DisplayName,-36} {"(not configured)",-12}";
             })
             .ToList();
+
+        items.Add(AddNewProviderSentinel);
 
         _providerList = Layouts.SelectionList(items)
             .WithMode(SelectionMode.Single)
@@ -217,19 +233,54 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
             {
                 if (selected.Count > 0)
                 {
-                    var idx = items.IndexOf(selected[0]);
-                    if (idx >= 0)
+                    if (selected[0] == AddNewProviderSentinel)
                     {
-                        ViewModel.SelectedProviderIndex = idx;
-                        ViewModel.ActivateSelectedProvider();
+                        ViewModel.StartAddNewProvider();
+                    }
+                    else
+                    {
+                        var idx = items.IndexOf(selected[0]);
+                        if (idx >= 0)
+                        {
+                            ViewModel.SelectedProviderIndex = idx;
+                            ViewModel.ActivateSelectedProvider();
+                        }
                     }
                 }
             })
             .DisposeWith(_stepSubs);
 
         return Layouts.Vertical()
-            .WithChild(new TextNode($"  {"",2}{"Provider",-20} {"Auth",-12} Endpoint")
+            .WithChild(new TextNode($"  {"",2}{"Provider",-36} {"Auth",-12} Endpoint")
                 .WithForeground(Color.White).Bold())
+            .WithChild(_providerList);
+    }
+
+    private ILayoutNode BuildAddSelectTypeView()
+    {
+        var registry = ViewModel.Registry;
+        var displayToTypeKey = registry.KnownTypeKeys
+            .ToDictionary(k => registry.Get(k).DisplayName, k => k);
+
+        _providerList = Layouts.SelectionList(displayToTypeKey.Keys.ToList())
+            .WithMode(SelectionMode.Single)
+            .WithHighlightColors(Color.Black, Color.Cyan);
+
+        _providerList.OnFocused();
+        _lastFocusedList = _providerList;
+
+        _providerList.SelectionConfirmed
+            .Subscribe(selected =>
+            {
+                if (selected.Count > 0 && displayToTypeKey.TryGetValue(selected[0], out var typeKey))
+                {
+                    ViewModel.StartAddForType(typeKey);
+                }
+            })
+            .DisposeWith(_stepSubs);
+
+        return Layouts.Vertical()
+            .WithChild(new TextNode("  Select provider type to add:").WithForeground(Color.White))
             .WithChild(_providerList);
     }
 

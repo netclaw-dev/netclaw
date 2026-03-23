@@ -18,6 +18,7 @@ public enum ProviderManagerState
 {
     Loading,
     List,
+    AddSelectType,
     AddSelectAuth,
     AddCredentials,
     AddOAuthDeviceFlow,
@@ -168,48 +169,54 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
 
     /// <summary>
     /// Build DisplayProviders from known types merged with loaded config.
+    /// Shows all configured instances (including multiple of the same type),
+    /// followed by unconfigured type placeholders for types with no instances.
     /// </summary>
     public void RefreshDisplayProviders()
     {
         DisplayProviders.Clear();
         var loaded = Provider.ProviderCommand.LoadProviders(_paths);
 
+        // Pass 1: Add all configured instances
+        var configuredTypes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (name, entry) in loaded.OrderBy(p => p.Key, StringComparer.OrdinalIgnoreCase))
+        {
+            configuredTypes.Add(entry.Type);
+            var displayName = _registry.TryGet(entry.Type, out var descriptor)
+                ? descriptor.DisplayName
+                : entry.Type;
+
+            var authStr = entry.AuthMethod == AuthMethod.None
+                ? "\u2014"
+                : entry.AuthMethod.ToString();
+
+            DisplayProviders.Add(new ProviderDisplayItem
+            {
+                ProviderType = entry.Type,
+                DisplayName = displayName,
+                IsConfigured = true,
+                ConfiguredName = name,
+                Entry = entry,
+                DisplayEndpoint = entry.Endpoint,
+                DisplayAuth = authStr
+            });
+        }
+
+        // Pass 2: Add unconfigured placeholders for types with no instances
         foreach (var typeKey in _registry.KnownTypeKeys)
         {
+            if (configuredTypes.Contains(typeKey))
+                continue;
+
             var descriptor = _registry.Get(typeKey);
-
-            // Find configured provider of this type
-            var configured = loaded
-                .FirstOrDefault(p => string.Equals(p.Value.Type, typeKey, StringComparison.OrdinalIgnoreCase));
-
-            if (configured.Key is not null)
+            DisplayProviders.Add(new ProviderDisplayItem
             {
-                var authStr = configured.Value.AuthMethod == AuthMethod.None
-                    ? "\u2014"
-                    : configured.Value.AuthMethod.ToString();
-
-                DisplayProviders.Add(new ProviderDisplayItem
-                {
-                    ProviderType = typeKey,
-                    DisplayName = descriptor.DisplayName,
-                    IsConfigured = true,
-                    ConfiguredName = configured.Key,
-                    Entry = configured.Value,
-                    DisplayEndpoint = configured.Value.Endpoint,
-                    DisplayAuth = authStr
-                });
-            }
-            else
-            {
-                DisplayProviders.Add(new ProviderDisplayItem
-                {
-                    ProviderType = typeKey,
-                    DisplayName = descriptor.DisplayName,
-                    IsConfigured = false,
-                    DisplayEndpoint = $"({descriptor.DefaultEndpoint})",
-                    DisplayAuth = "\u2014"
-                });
-            }
+                ProviderType = typeKey,
+                DisplayName = descriptor.DisplayName,
+                IsConfigured = false,
+                DisplayEndpoint = $"({descriptor.DefaultEndpoint})",
+                DisplayAuth = "\u2014"
+            });
         }
     }
 
@@ -309,6 +316,17 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
 
             // Probing or Unchecked — no-op
         }
+    }
+
+    /// <summary>
+    /// Start the add-new-provider flow by showing the type selection screen.
+    /// Called when the user selects the "+ Add new provider" sentinel row.
+    /// </summary>
+    public void StartAddNewProvider()
+    {
+        ClearAddState();
+        CurrentState.Value = ProviderManagerState.AddSelectType;
+        NotifyStateChanged();
     }
 
     /// <summary>
@@ -612,6 +630,9 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
     {
         switch (CurrentState.Value)
         {
+            case ProviderManagerState.AddSelectType:
+                GoBackToList();
+                break;
             case ProviderManagerState.AddSelectAuth:
                 GoBackToList();
                 break;

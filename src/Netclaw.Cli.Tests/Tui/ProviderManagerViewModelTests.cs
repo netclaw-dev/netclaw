@@ -626,6 +626,72 @@ public sealed class ProviderManagerViewModelTests : IDisposable
         vm.GoBack();
     }
 
+    [Fact]
+    public void DisplayProviders_ShowsMultipleInstancesOfSameType()
+    {
+        WriteConfig(new Dictionary<string, object>
+        {
+            ["configVersion"] = 1,
+            ["Providers"] = new Dictionary<string, object>
+            {
+                ["my-vllm-local"] = new Dictionary<string, object>
+                {
+                    ["Type"] = "openai-compatible",
+                    ["Endpoint"] = "http://localhost:8080"
+                },
+                ["my-vllm-remote"] = new Dictionary<string, object>
+                {
+                    ["Type"] = "openai-compatible",
+                    ["Endpoint"] = "http://192.168.1.50:8080"
+                }
+            }
+        });
+
+        using var vm = CreateViewModel();
+        vm.RefreshDisplayProviders();
+
+        // Both instances should appear
+        var compatible = vm.DisplayProviders.Where(p => p.ProviderType == "openai-compatible").ToList();
+        Assert.Equal(2, compatible.Count);
+        Assert.Contains(compatible, p => p.ConfiguredName == "my-vllm-local");
+        Assert.Contains(compatible, p => p.ConfiguredName == "my-vllm-remote");
+        Assert.All(compatible, p => Assert.True(p.IsConfigured));
+
+        // openai-compatible should NOT appear as an unconfigured placeholder
+        Assert.DoesNotContain(vm.DisplayProviders,
+            p => p.ProviderType == "openai-compatible" && !p.IsConfigured);
+
+        // Other unconfigured types should still be present
+        Assert.Contains(vm.DisplayProviders, p => p.ProviderType == "ollama" && !p.IsConfigured);
+
+        // Total: 2 configured + 4 unconfigured types = 6
+        Assert.Equal(6, vm.DisplayProviders.Count);
+    }
+
+    [Fact]
+    public void StartAddNewProvider_TransitionsToAddSelectType()
+    {
+        using var vm = CreateViewModel();
+        vm.RefreshDisplayProviders();
+        vm.CurrentState.Value = ProviderManagerState.List;
+
+        vm.StartAddNewProvider();
+
+        Assert.Equal(ProviderManagerState.AddSelectType, vm.CurrentState.Value);
+    }
+
+    [Fact]
+    public void GoBack_FromAddSelectType_ReturnsToList()
+    {
+        using var vm = CreateViewModel();
+        vm.RefreshDisplayProviders();
+        vm.CurrentState.Value = ProviderManagerState.AddSelectType;
+
+        vm.GoBack();
+
+        Assert.Equal(ProviderManagerState.List, vm.CurrentState.Value);
+    }
+
     private ProviderManagerViewModel CreateViewModel()
     {
         return new ProviderManagerViewModel(_paths, ProviderCommand.CreateDefaultRegistry(), _fakeProbe);

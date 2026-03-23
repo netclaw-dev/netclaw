@@ -291,6 +291,54 @@ public sealed class ModelManagerViewModelTests : IDisposable
         Assert.Equal(ModelManagerState.RoleOverview, vm.CurrentState.Value);
     }
 
+    [Fact]
+    public void Refresh_PopulatesDisplayNameFromRegistry()
+    {
+        WriteConfig(new Dictionary<string, object>
+        {
+            ["configVersion"] = 1,
+            ["Providers"] = new Dictionary<string, object>
+            {
+                ["my-vllm"] = new Dictionary<string, object>
+                {
+                    ["Type"] = "openai-compatible",
+                    ["Endpoint"] = "http://localhost:8080"
+                }
+            }
+        });
+
+        var registry = Netclaw.Cli.Provider.ProviderCommand.CreateDefaultRegistry();
+        using var vm = new ModelManagerViewModel(_paths, _fakeProbe, registry);
+        vm.Refresh();
+
+        Assert.Single(vm.Providers);
+        Assert.Equal("my-vllm", vm.Providers[0].Name);
+        Assert.Equal("llama.cpp / vLLM", vm.Providers[0].DisplayName);
+    }
+
+    [Fact]
+    public void Refresh_FallsBackToTypeWhenNoRegistry()
+    {
+        WriteConfig(new Dictionary<string, object>
+        {
+            ["configVersion"] = 1,
+            ["Providers"] = new Dictionary<string, object>
+            {
+                ["my-ollama"] = new Dictionary<string, object>
+                {
+                    ["Type"] = "ollama",
+                    ["Endpoint"] = "http://localhost:11434"
+                }
+            }
+        });
+
+        using var vm = CreateViewModel();
+        vm.Refresh();
+
+        Assert.Single(vm.Providers);
+        Assert.Equal("ollama", vm.Providers[0].DisplayName);
+    }
+
     private ModelManagerViewModel CreateViewModel()
     {
         return new ModelManagerViewModel(_paths, _fakeProbe);

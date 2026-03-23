@@ -23,7 +23,7 @@ internal static class ProviderCommand
 
         return subcommand switch
         {
-            "list" => Task.FromResult(RunList(paths, writer)),
+            "list" => Task.FromResult(RunList(paths, registry, writer)),
             "add" => RunAddAsync(args, paths, registry, writer),
             "remove" => Task.FromResult(RunRemove(args, paths, writer)),
             "help" or "-h" or "--help" => Task.FromResult(WriteHelp(registry, writer)),
@@ -31,7 +31,7 @@ internal static class ProviderCommand
         };
     }
 
-    private static int RunList(NetclawPaths paths, TextWriter writer)
+    private static int RunList(NetclawPaths paths, ProviderDescriptorRegistry registry, TextWriter writer)
     {
         var providers = LoadProviders(paths);
 
@@ -42,10 +42,13 @@ internal static class ProviderCommand
             return 0;
         }
 
-        writer.WriteLine($"{"Name",-20} {"Type",-12} {"Auth",-10} {"Endpoint"}");
+        writer.WriteLine($"{"Name",-20} {"Provider",-22} {"Auth",-10} {"Endpoint"}");
         foreach (var (name, entry) in providers.OrderBy(p => p.Key, StringComparer.OrdinalIgnoreCase))
         {
-            writer.WriteLine($"{name,-20} {entry.Type,-12} {entry.AuthMethod,-10} {entry.Endpoint}");
+            var displayName = registry.TryGet(entry.Type, out var descriptor)
+                ? descriptor.DisplayName
+                : entry.Type;
+            writer.WriteLine($"{name,-20} {displayName,-22} {entry.AuthMethod,-10} {entry.Endpoint}");
         }
 
         return 0;

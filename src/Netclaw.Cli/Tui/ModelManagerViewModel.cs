@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Diagnostics;
 using Netclaw.Cli.Config;
 using Netclaw.Configuration;
+using Netclaw.Providers;
 using R3;
 using Termina.Input;
 using Termina.Reactive;
@@ -30,6 +31,7 @@ public sealed class ModelManagerViewModel : ReactiveViewModel
 
     private readonly NetclawPaths _paths;
     private readonly IProviderProbe _probe;
+    private readonly ProviderDescriptorRegistry? _registry;
     private CancellationTokenSource? _probeCts;
 
     public ReactiveProperty<ModelManagerState> CurrentState { get; } = new(ModelManagerState.RoleOverview);
@@ -45,7 +47,7 @@ public sealed class ModelManagerViewModel : ReactiveViewModel
 
     // ── Loaded state ──
     public ModelSelection? Models { get; private set; }
-    public List<(string Name, ProviderEntry Entry)> Providers { get; } = [];
+    public List<(string Name, string DisplayName, ProviderEntry Entry)> Providers { get; } = [];
 
     // ── Assignment flow ──
     public string? SelectedRole { get; set; }
@@ -59,10 +61,12 @@ public sealed class ModelManagerViewModel : ReactiveViewModel
     /// </summary>
     internal Task? ProbeCompletion { get; private set; }
 
-    public ModelManagerViewModel(NetclawPaths paths, IProviderProbe probe)
+    public ModelManagerViewModel(NetclawPaths paths, IProviderProbe probe,
+        ProviderDescriptorRegistry? registry = null)
     {
         _paths = paths;
         _probe = probe;
+        _registry = registry;
     }
 
     public override void OnActivated()
@@ -81,7 +85,12 @@ public sealed class ModelManagerViewModel : ReactiveViewModel
         Providers.Clear();
         var loaded = Provider.ProviderCommand.LoadProviders(_paths);
         foreach (var (name, entry) in loaded.OrderBy(p => p.Key, StringComparer.OrdinalIgnoreCase))
-            Providers.Add((name, entry));
+        {
+            var displayName = _registry is not null && _registry.TryGet(entry.Type, out var descriptor)
+                ? descriptor.DisplayName
+                : entry.Type;
+            Providers.Add((name, displayName, entry));
+        }
     }
 
     /// <summary>

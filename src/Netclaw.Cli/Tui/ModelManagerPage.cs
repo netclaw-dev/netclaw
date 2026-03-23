@@ -148,7 +148,7 @@ public sealed class ModelManagerPage : ReactivePage<ModelManagerViewModel>
 
         return Layouts.Vertical()
             .WithChild(new TextNode("  Model Role Assignments").WithForeground(Color.White).Bold())
-            .WithChild(new TextNode($"  {"Role",-12} {"Provider",-18} {"Model ID",-28} Status")
+            .WithChild(new TextNode($"  {"Role",-12} {"Provider",-28} {"Model ID",-28} Status")
                 .WithForeground(Color.Gray))
             .WithChild(_roleList)
             .WithChild(new TextNode("").Height(1))
@@ -156,17 +156,25 @@ public sealed class ModelManagerPage : ReactivePage<ModelManagerViewModel>
                 .WithForeground(Color.Gray));
     }
 
-    private static string FormatRoleItem(string role, ModelReference? model)
+    private string FormatRoleItem(string role, ModelReference? model)
     {
         if (model is null)
-            return $"{role,-12} {"(not set)",-18} {"\u2014",-28} \u2014";
+            return $"{role,-12} {"(not set)",-28} {"\u2014",-28} \u2014";
 
-        return $"{role,-12} {model.Provider,-18} {model.ModelId,-28} {(model.Provenance?.ToString() ?? "unknown")}";
+        var providerLabel = model.Provider;
+        var match = ViewModel.Providers.FirstOrDefault(p =>
+            string.Equals(p.Name, model.Provider, StringComparison.OrdinalIgnoreCase));
+        if (match.Name is not null)
+            providerLabel = $"{match.Name} ({match.DisplayName})";
+
+        return $"{role,-12} {providerLabel,-28} {model.ModelId,-28} {(model.Provenance?.ToString() ?? "unknown")}";
     }
 
     private ILayoutNode BuildProviderSelection()
     {
-        var items = ViewModel.Providers.Select(p => p.Name).ToList();
+        var items = ViewModel.Providers
+            .Select(p => $"{p.Name} ({p.DisplayName})")
+            .ToList();
 
         _providerList = Layouts.SelectionList(items)
             .WithMode(SelectionMode.Single)
@@ -179,7 +187,11 @@ public sealed class ModelManagerPage : ReactivePage<ModelManagerViewModel>
             .Subscribe(selected =>
             {
                 if (selected.Count > 0)
-                    ViewModel.SelectProvider(selected[0]);
+                {
+                    var idx = items.IndexOf(selected[0]);
+                    if (idx >= 0 && idx < ViewModel.Providers.Count)
+                        ViewModel.SelectProvider(ViewModel.Providers[idx].Name);
+                }
             })
             .DisposeWith(_stepSubs);
 
@@ -286,9 +298,15 @@ public sealed class ModelManagerPage : ReactivePage<ModelManagerViewModel>
             })
             .DisposeWith(_stepSubs);
 
+        var discoverProviderLabel = ViewModel.SelectedProvider ?? "";
+        var discoverMatch = ViewModel.Providers.FirstOrDefault(p =>
+            string.Equals(p.Name, ViewModel.SelectedProvider, StringComparison.OrdinalIgnoreCase));
+        if (discoverMatch.Name is not null)
+            discoverProviderLabel = $"{discoverMatch.Name} ({discoverMatch.DisplayName})";
+
         var title = ViewModel.SelectedRole is not null
-            ? $"  Select model for {ViewModel.SelectedRole} (from '{ViewModel.SelectedProvider}'):"
-            : $"  Models from '{ViewModel.SelectedProvider}' ({ViewModel.DiscoveredModels.Count} found):";
+            ? $"  Select model for {ViewModel.SelectedRole} (from '{discoverProviderLabel}'):"
+            : $"  Models from '{discoverProviderLabel}' ({ViewModel.DiscoveredModels.Count} found):";
 
         return Layouts.Vertical()
             .WithChild(new TextNode(title).WithForeground(Color.White))
@@ -315,10 +333,16 @@ public sealed class ModelManagerPage : ReactivePage<ModelManagerViewModel>
             })
             .DisposeWith(_stepSubs);
 
+        var providerLabel = ViewModel.SelectedProvider ?? "";
+        var providerMatch = ViewModel.Providers.FirstOrDefault(p =>
+            string.Equals(p.Name, ViewModel.SelectedProvider, StringComparison.OrdinalIgnoreCase));
+        if (providerMatch.Name is not null)
+            providerLabel = $"{providerMatch.Name} ({providerMatch.DisplayName})";
+
         return Layouts.Vertical()
             .WithChild(new TextNode($"  Assign {ViewModel.SelectedRole} model?")
                 .WithForeground(Color.White).Bold())
-            .WithChild(new TextNode($"    Provider: {ViewModel.SelectedProvider}")
+            .WithChild(new TextNode($"    Provider: {providerLabel}")
                 .WithForeground(Color.White))
             .WithChild(new TextNode($"    Model:    {ViewModel.SelectedModelId}")
                 .WithForeground(Color.White))
