@@ -65,4 +65,94 @@ public sealed class SlackAclPolicyTests
         Assert.Equal("user_not_allowed", result.DenyReason);
         Assert.Equal(TrustAudience.Public, result.Audience);
     }
+
+    [Fact]
+    public void EvaluateInbound_dm_with_channel_audiences_dm_personal_returns_personal()
+    {
+        var message = CreateDm("U123");
+        var options = new SlackChannelOptions
+        {
+            AllowDirectMessages = true,
+            ChannelAudiences = new Dictionary<string, string> { ["dm"] = "personal" }
+        };
+
+        var result = SlackAclPolicy.EvaluateInbound(message, options, null);
+
+        Assert.True(result.IsAllowed);
+        Assert.Equal(TrustAudience.Personal, result.Audience);
+    }
+
+    [Fact]
+    public void EvaluateInbound_explicit_channel_id_override_takes_precedence()
+    {
+        var message = CreateChannelMessage("C456", "U123");
+        var options = new SlackChannelOptions
+        {
+            AllowedChannelIds = ["C456"],
+            ChannelAudiences = new Dictionary<string, string> { ["C456"] = "personal" }
+        };
+
+        var result = SlackAclPolicy.EvaluateInbound(message, options, null);
+
+        Assert.True(result.IsAllowed);
+        Assert.Equal(TrustAudience.Personal, result.Audience);
+    }
+
+    [Fact]
+    public void EvaluateInbound_missing_channel_audience_falls_back_to_heuristic()
+    {
+        var message = CreateChannelMessage("C789", "U123");
+        var options = new SlackChannelOptions
+        {
+            AllowedChannelIds = ["C789"],
+            ChannelAudiences = new Dictionary<string, string> { ["dm"] = "personal" }
+        };
+
+        var result = SlackAclPolicy.EvaluateInbound(message, options, null);
+
+        Assert.True(result.IsAllowed);
+        // Explicit channel → Team via heuristic fallback
+        Assert.Equal(TrustAudience.Team, result.Audience);
+    }
+
+    [Fact]
+    public void EvaluateInbound_dm_without_channel_audiences_returns_team()
+    {
+        var message = CreateDm("U123");
+        var options = new SlackChannelOptions
+        {
+            AllowDirectMessages = true
+        };
+
+        var result = SlackAclPolicy.EvaluateInbound(message, options, null);
+
+        Assert.True(result.IsAllowed);
+        Assert.Equal(TrustAudience.Team, result.Audience);
+    }
+
+    private static SlackInboundMessage CreateDm(string userId) => new(
+        SlackInboundKind.Message,
+        new SlackEventId("evt-1"),
+        new SlackChannelId("D123"),
+        null,
+        new SlackEventTs("1708531200.000100"),
+        new SlackUserId(userId),
+        null,
+        "hello",
+        null,
+        false,
+        true);
+
+    private static SlackInboundMessage CreateChannelMessage(string channelId, string userId) => new(
+        SlackInboundKind.Message,
+        new SlackEventId("evt-1"),
+        new SlackChannelId(channelId),
+        null,
+        new SlackEventTs("1708531200.000100"),
+        new SlackUserId(userId),
+        null,
+        "hello",
+        null,
+        false,
+        false);
 }

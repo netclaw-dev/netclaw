@@ -35,11 +35,25 @@ public sealed class ToolAudienceProfiles
     public ToolAudienceProfile Public { get; set; } = ToolAudienceProfileDefaults.CreatePublic();
     public ToolAudienceProfile Team { get; set; } = ToolAudienceProfileDefaults.CreateTeam();
     public ToolAudienceProfile Personal { get; set; } = ToolAudienceProfileDefaults.CreatePersonal();
+
+    /// <summary>
+    /// Filesystem roots that are always readable regardless of audience profile.
+    /// Supports tokens: <c>{skills_dir}</c>, <c>{identity_dir}</c>.
+    /// Defaults to skills and identity directories so skill loading and identity
+    /// file reads work even under Team/Public audiences.
+    /// </summary>
+    public List<string> GlobalReadRoots { get; set; } =
+    [
+        ToolAudienceProfileDefaults.SkillsDirectoryToken,
+        ToolAudienceProfileDefaults.IdentityDirectoryToken
+    ];
 }
 
 public static class ToolAudienceProfileDefaults
 {
     public const string SessionDirectoryToken = "{session_dir}";
+    public const string SkillsDirectoryToken = "{skills_dir}";
+    public const string IdentityDirectoryToken = "{identity_dir}";
 
     public static ToolAudienceProfiles CreateProfiles() => new()
     {

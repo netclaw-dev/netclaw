@@ -30,4 +30,12 @@ public sealed class SlackChannelOptions
     public string[] AllowedChannelIds { get; init; } = [];
 
     public string[] AllowedUserIds { get; init; } = [];
+
+    /// <summary>
+    /// Per-channel audience overrides. Keys are Slack channel IDs or the special
+    /// key <c>"dm"</c> for direct messages. Values are audience strings:
+    /// <c>"personal"</c>, <c>"team"</c>, or <c>"public"</c>.
+    /// When a channel/DM is not mapped, the existing ACL heuristic applies.
+    /// </summary>
+    public Dictionary<string, string> ChannelAudiences { get; init; } = new(StringComparer.OrdinalIgnoreCase);
 }

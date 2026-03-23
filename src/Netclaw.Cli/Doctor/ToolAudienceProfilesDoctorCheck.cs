@@ -26,9 +26,9 @@ public sealed class ToolAudienceProfilesDoctorCheck(NetclawPaths paths) : IDocto
 
         if (root["Tools"] is not JsonObject toolsObject)
         {
-            return Task.FromResult(DoctorCheckResult.Warning(
+            return Task.FromResult(DoctorCheckResult.Error(
                 "Tool Audience Profiles",
-                "Tools section is missing; strict tool trust defaults are active.",
+                "Tools section is missing; tool trust policy cannot be evaluated.",
                 "Add a Tools section with AudienceProfiles or run `netclaw init` again."));
         }
 

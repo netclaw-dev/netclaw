@@ -7,9 +7,9 @@ internal sealed class ScopedFileAccessPolicy
 {
     private readonly ToolAudienceProfileResolver _profileResolver;
 
-    public ScopedFileAccessPolicy(ToolConfig toolConfig)
+    public ScopedFileAccessPolicy(ToolConfig toolConfig, NetclawPaths? paths = null)
     {
-        _profileResolver = new ToolAudienceProfileResolver(toolConfig);
+        _profileResolver = new ToolAudienceProfileResolver(toolConfig, paths);
     }
 
     public bool TryResolveReadPath(string rawPath, ToolExecutionContext context, out string fullPath, out string error)
@@ -32,10 +32,18 @@ internal sealed class ScopedFileAccessPolicy
             _ => profile.ReadFiles
         };
 
-        return _profileResolver.ResolveRoots(access, context)
+        var roots = _profileResolver.ResolveRoots(access, context)
             .Select(NormalizeDirectoryPath)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToArray();
+            .ToList();
+
+        // Merge global read roots for read access
+        if (accessKind == AccessKind.Read)
+        {
+            foreach (var globalRoot in _profileResolver.ResolveGlobalReadRoots().Select(NormalizeDirectoryPath))
+                roots.Add(globalRoot);
+        }
+
+        return roots.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
     }
 
     private bool TryResolvePath(
@@ -79,16 +87,24 @@ internal sealed class ScopedFileAccessPolicy
 
         var roots = _profileResolver.ResolveRoots(access, context)
             .Select(NormalizeDirectoryPath)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToArray();
+            .ToList();
 
-        if (roots.Length == 0)
+        // Merge global read roots for read access
+        if (accessKind == AccessKind.Read)
+        {
+            foreach (var globalRoot in _profileResolver.ResolveGlobalReadRoots().Select(NormalizeDirectoryPath))
+                roots.Add(globalRoot);
+        }
+
+        var distinctRoots = roots.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+
+        if (distinctRoots.Length == 0)
         {
             error = $"Error: {GetAudienceLabel(context)} trust context does not have any configured local file roots for {accessKind.ToString().ToLowerInvariant()} access.";
             return false;
         }
 
-        foreach (var root in roots)
+        foreach (var root in distinctRoots)
         {
             if (!IsPathWithinDirectory(fullPath, root))
                 continue;
@@ -103,7 +119,7 @@ internal sealed class ScopedFileAccessPolicy
             return true;
         }
 
-        error = $"Error: {GetAudienceLabel(context)} trust context may only access files inside the current session directory or configured roots: {string.Join(", ", roots)}.";
+        error = $"Error: {GetAudienceLabel(context)} trust context may only access files inside the current session directory or configured roots: {string.Join(", ", distinctRoots)}.";
         return false;
     }
 

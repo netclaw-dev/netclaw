@@ -26,6 +26,14 @@
         "AllowedUserIds": {
           "type": "array",
           "items": { "type": "string" }
+        },
+        "ChannelAudiences": {
+          "type": "object",
+          "description": "Per-channel audience overrides. Keys are channel IDs or 'dm'. Values are 'personal', 'team', or 'public'.",
+          "additionalProperties": {
+            "type": "string",
+            "enum": ["personal", "team", "public"]
+          }
         }
       },
       "additionalProperties": false
@@ -74,6 +82,25 @@
     "Session": {
       "type": "object",
       "additionalProperties": true
+    },
+    "Security": {
+      "type": "object",
+      "description": "Trust-context security policy defaults.",
+      "properties": {
+        "DeploymentPosture": {
+          "type": ["string", "null"],
+          "enum": ["Public", "Team", "Personal", null]
+        },
+        "ShellExecutionMode": {
+          "type": ["string", "null"],
+          "enum": ["Off", "SandboxOnly", "HostAllowed", null]
+        },
+        "StrictDefaults": {
+          "type": "boolean",
+          "default": true
+        }
+      },
+      "additionalProperties": false
     },
     "Tools": {
       "type": "object",
@@ -308,7 +335,12 @@
       "properties": {
         "Public": { "$ref": "#/$defs/ToolAudienceProfile" },
         "Team": { "$ref": "#/$defs/ToolAudienceProfile" },
-        "Personal": { "$ref": "#/$defs/ToolAudienceProfile" }
+        "Personal": { "$ref": "#/$defs/ToolAudienceProfile" },
+        "GlobalReadRoots": {
+          "type": "array",
+          "description": "Filesystem roots readable by all audiences. Supports tokens: {skills_dir}, {identity_dir}.",
+          "items": { "type": "string" }
+        }
       },
       "additionalProperties": false
     },

@@ -30,9 +30,8 @@ public static class SlackAclPolicy
 
         var isExplicitUser = options.AllowedUserIds.Contains(userId.Value, StringComparer.Ordinal);
         var isExplicitChannel = options.AllowedChannelIds.Contains(message.ChannelId.Value, StringComparer.Ordinal);
-        var audience = (message.IsDirectMessage || isExplicitUser || isExplicitChannel)
-            ? TrustAudience.Team
-            : TrustAudience.Public;
+
+        var audience = ResolveAudience(message, options, isExplicitUser, isExplicitChannel);
 
         var principal = isExplicitUser
             ? PrincipalClassification.TrustedInternal
@@ -63,6 +62,36 @@ public static class SlackAclPolicy
             return true;
 
         return options.AllowedChannelIds.Contains(channelId.Value, StringComparer.Ordinal);
+    }
+
+    /// <summary>
+    /// Resolves audience via: explicit channel ID → "dm" key → existing heuristic fallback.
+    /// </summary>
+    internal static TrustAudience ResolveAudience(
+        SlackInboundMessage message,
+        SlackChannelOptions options,
+        bool isExplicitUser,
+        bool isExplicitChannel)
+    {
+        // 1. Explicit channel ID mapping
+        if (options.ChannelAudiences.TryGetValue(message.ChannelId.Value, out var channelOverride)
+            && SecurityPolicyDefaults.TryParseAudience(channelOverride, out var channelAudience))
+        {
+            return channelAudience;
+        }
+
+        // 2. DM key mapping
+        if (message.IsDirectMessage
+            && options.ChannelAudiences.TryGetValue("dm", out var dmOverride)
+            && SecurityPolicyDefaults.TryParseAudience(dmOverride, out var dmAudience))
+        {
+            return dmAudience;
+        }
+
+        // 3. Existing heuristic fallback
+        return (message.IsDirectMessage || isExplicitUser || isExplicitChannel)
+            ? TrustAudience.Team
+            : TrustAudience.Public;
     }
 
     /// <summary>

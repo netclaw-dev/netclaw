@@ -19,10 +19,11 @@ public static class ToolRegistrationExtensions
         ToolConfig config,
         ISearchBackend? searchBackend = null,
         ToolPathPolicy? pathPolicy = null,
-        ToolAccessPolicy? toolAccessPolicy = null)
+        ToolAccessPolicy? toolAccessPolicy = null,
+        NetclawPaths? paths = null)
     {
         registry.Register(new ShellTool(config, pathPolicy));
-        registry.Register(new FileReadTool(config, pathPolicy));
+        registry.Register(new FileReadTool(config, pathPolicy, paths));
         registry.Register(new FileWriteTool(config, pathPolicy));
         registry.Register(new AttachFileTool(config));
         if (searchBackend is not null)

@@ -6,10 +6,12 @@ namespace Netclaw.Actors.Tools;
 internal sealed class ToolAudienceProfileResolver
 {
     private readonly ToolConfig _toolConfig;
+    private readonly NetclawPaths? _paths;
 
-    public ToolAudienceProfileResolver(ToolConfig toolConfig)
+    public ToolAudienceProfileResolver(ToolConfig toolConfig, NetclawPaths? paths = null)
     {
         _toolConfig = toolConfig;
+        _paths = paths;
     }
 
     public ToolAudienceProfile ResolveProfile(ToolExecutionContext? context)
@@ -30,17 +32,44 @@ internal sealed class ToolAudienceProfileResolver
         var roots = new List<string>();
         foreach (var root in access.Roots)
         {
+            var resolved = ResolveToken(root, context);
+            if (resolved is not null)
+                roots.Add(resolved);
+        }
+
+        return roots;
+    }
+
+    /// <summary>
+    /// Resolves <see cref="ToolAudienceProfiles.GlobalReadRoots"/> tokens into absolute paths.
+    /// Returns empty if paths are not available or no roots are configured.
+    /// </summary>
+    public IReadOnlyList<string> ResolveGlobalReadRoots()
+    {
+        if (_paths is null)
+            return [];
+
+        var profiles = _toolConfig.AudienceProfiles;
+        var roots = new List<string>();
+        foreach (var root in profiles.GlobalReadRoots)
+        {
             if (string.IsNullOrWhiteSpace(root))
                 continue;
 
-            if (string.Equals(root.Trim(), ToolAudienceProfileDefaults.SessionDirectoryToken, StringComparison.OrdinalIgnoreCase))
+            var trimmed = root.Trim();
+            if (string.Equals(trimmed, ToolAudienceProfileDefaults.SkillsDirectoryToken, StringComparison.OrdinalIgnoreCase))
             {
-                if (!string.IsNullOrWhiteSpace(context.SessionDirectory))
-                    roots.Add(context.SessionDirectory!);
-                continue;
+                roots.Add(_paths.SkillsDirectory);
             }
-
-            roots.Add(root.Trim());
+            else if (string.Equals(trimmed, ToolAudienceProfileDefaults.IdentityDirectoryToken, StringComparison.OrdinalIgnoreCase))
+            {
+                roots.Add(_paths.IdentityDirectory);
+            }
+            else
+            {
+                // Literal path
+                roots.Add(trimmed);
+            }
         }
 
         return roots;
@@ -69,6 +98,31 @@ internal sealed class ToolAudienceProfileResolver
     {
         var profile = ResolveProfile(audience);
         return IsMcpServerAllowed(serverName, profile);
+    }
+
+    private string? ResolveToken(string root, ToolExecutionContext context)
+    {
+        if (string.IsNullOrWhiteSpace(root))
+            return null;
+
+        var trimmed = root.Trim();
+
+        if (string.Equals(trimmed, ToolAudienceProfileDefaults.SessionDirectoryToken, StringComparison.OrdinalIgnoreCase))
+        {
+            return string.IsNullOrWhiteSpace(context.SessionDirectory) ? null : context.SessionDirectory;
+        }
+
+        if (string.Equals(trimmed, ToolAudienceProfileDefaults.SkillsDirectoryToken, StringComparison.OrdinalIgnoreCase))
+        {
+            return _paths?.SkillsDirectory;
+        }
+
+        if (string.Equals(trimmed, ToolAudienceProfileDefaults.IdentityDirectoryToken, StringComparison.OrdinalIgnoreCase))
+        {
+            return _paths?.IdentityDirectory;
+        }
+
+        return trimmed;
     }
 
     private static TrustAudience ResolveAudience(ToolExecutionContext? context)

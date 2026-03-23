@@ -124,6 +124,13 @@ public partial class InitWizardViewModel : ReactiveViewModel
     public string? ExposureMode { get; set; }
     public string? WebhookUrl { get; set; }
 
+    // ── Channel trust (derived from exposure + Slack channels) ──
+    /// <summary>
+    /// Per-channel audience overrides generated from the wizard.
+    /// Keys: channel IDs or "dm". Values: "personal", "team", "public".
+    /// </summary>
+    public Dictionary<string, string> ChannelAudiences { get; } = new(StringComparer.OrdinalIgnoreCase);
+
     // ── Step 8: Identity ──
     public string AgentName { get; set; } = "Netclaw";
     public string? CommunicationStyle { get; set; }
@@ -884,6 +891,11 @@ public partial class InitWizardViewModel : ReactiveViewModel
                 slackSection["AllowedUserIds"] = userIds.ToArray();
             }
 
+            // Generate smart channel audience defaults
+            PopulateChannelAudiences();
+            if (ChannelAudiences.Count > 0)
+                slackSection["ChannelAudiences"] = new Dictionary<string, string>(ChannelAudiences);
+
             config["Slack"] = slackSection;
         }
 
@@ -900,6 +912,14 @@ public partial class InitWizardViewModel : ReactiveViewModel
 
             config["Search"] = searchSection;
         }
+
+        // Security section — deployment posture derived from exposure mode
+        config["Security"] = new Dictionary<string, object>
+        {
+            ["DeploymentPosture"] = ResolveDeploymentPosture().ToString(),
+            ["ShellExecutionMode"] = ResolveRecommendedShellMode().ToString(),
+            ["StrictDefaults"] = true
+        };
 
         config["Tools"] = BuildRecommendedToolConfig();
 
@@ -1290,15 +1310,50 @@ public partial class InitWizardViewModel : ReactiveViewModel
         };
     }
 
-    private ShellExecutionMode ResolveRecommendedShellMode()
+    private DeploymentPosture ResolveDeploymentPosture()
     {
         if (string.IsNullOrWhiteSpace(ExposureMode)
             || ExposureMode.StartsWith("Local only", StringComparison.OrdinalIgnoreCase))
+            return DeploymentPosture.Personal;
+
+        if (ExposureMode.StartsWith("Private", StringComparison.OrdinalIgnoreCase))
+            return DeploymentPosture.Team;
+
+        return DeploymentPosture.Public;
+    }
+
+    private ShellExecutionMode ResolveRecommendedShellMode()
+    {
+        return ResolveDeploymentPosture() == DeploymentPosture.Personal
+            ? ShellExecutionMode.HostAllowed
+            : ShellExecutionMode.Off;
+    }
+
+    /// <summary>
+    /// Derives smart channel audience defaults from deployment posture.
+    /// DMs → Personal (if posture is Personal), Team otherwise.
+    /// Explicitly-added channels → Team.
+    /// </summary>
+    internal void PopulateChannelAudiences()
+    {
+        ChannelAudiences.Clear();
+        var posture = ResolveDeploymentPosture();
+
+        if (SlackAllowDirectMessages)
         {
-            return ShellExecutionMode.HostAllowed;
+            ChannelAudiences["dm"] = posture == DeploymentPosture.Personal
+                ? TrustAudience.Personal.ToWireValue()
+                : TrustAudience.Team.ToWireValue();
         }
 
-        return ShellExecutionMode.Off;
+        if (LastChannelResolution is { Resolved.Count: > 0 })
+        {
+            foreach (var channel in LastChannelResolution.Resolved)
+            {
+                // Don't override if already set (shouldn't happen, but defensive)
+                ChannelAudiences.TryAdd(channel.Id, TrustAudience.Team.ToWireValue());
+            }
+        }
     }
 
     public override void Dispose()

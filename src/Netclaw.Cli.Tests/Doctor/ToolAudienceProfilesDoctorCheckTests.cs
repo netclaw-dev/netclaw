@@ -24,15 +24,15 @@ public sealed class ToolAudienceProfilesDoctorCheckTests : IDisposable
     }
 
     [Fact]
-    public async Task MissingToolsSection_WarnsAboutStrictDefaults()
+    public async Task MissingToolsSection_IsError()
     {
         WriteConfig(new { configVersion = 1 });
         var check = new ToolAudienceProfilesDoctorCheck(_paths);
 
         var result = await check.RunAsync();
 
-        Assert.Equal(DoctorSeverity.Warning, result.Severity);
-        Assert.Contains("strict", result.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(DoctorSeverity.Error, result.Severity);
+        Assert.Contains("Tools section is missing", result.Message);
     }
 
     [Fact]

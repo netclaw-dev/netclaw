@@ -23,11 +23,11 @@ public sealed partial class FileReadTool : NetclawTool<FileReadTool.Params>
         [property: Description("Line number to start reading from (1-based, optional)")] int? Offset = null,
         [property: Description("Maximum number of lines to read (optional)")] int? Limit = null);
 
-    public FileReadTool(ToolConfig config, ToolPathPolicy? pathPolicy = null)
+    public FileReadTool(ToolConfig config, ToolPathPolicy? pathPolicy = null, NetclawPaths? paths = null)
     {
         _config = config;
         _pathPolicy = pathPolicy;
-        _fileAccessPolicy = new ScopedFileAccessPolicy(config);
+        _fileAccessPolicy = new ScopedFileAccessPolicy(config, paths);
     }
 
     protected override Task<string> ExecuteAsync(Params args, CancellationToken ct)
