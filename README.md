@@ -1,7 +1,7 @@
 # Netclaw
 
-Netclaw is a Slack-connected homelab assistant built on top of a minimal
-actor-driven session framework called Akka.Agents.
+Netclaw is an open-source, self-hosted autonomous operations agent built on top
+of a minimal actor-driven session framework called Akka.Agents.
 
 ## Architecture
 

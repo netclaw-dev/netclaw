@@ -2,18 +2,23 @@
 
 ## What Netclaw Is
 
-Netclaw is an **always-on autonomous operations agent** running on homelab
-infrastructure (pi1). It is a single-process .NET 10 application built on
-Akka.Agents, communicating primarily through Slack. It is NOT just a chat
-assistant — it is an autonomous operations platform that can monitor, react,
-investigate, delegate work, and manage its own schedule.
+Netclaw is an **always-on autonomous operations agent** that runs anywhere —
+from a Raspberry Pi to a cloud VM. It is a single-process .NET 10 application
+built on Akka.Agents, communicating primarily through Slack. It is NOT just a
+chat assistant — it is an autonomous operations platform that can monitor,
+react, investigate, delegate work, and manage its own schedule.
 
-## Primary User
+Netclaw is open source and designed for hobbyists, small teams, and businesses
+who want a self-hosted AI operations agent with strong safety defaults.
 
-- owner-operator running Netclaw on homelab hardware (pi1)
-- interacts primarily through Slack (including mobile, on the go)
-- needs predictable behavior, persistence, and strong safety defaults
-- wants to pop off background tasks and have them run autonomously
+## Primary Users
+
+- **Hobbyist / self-hoster** — running Netclaw on homelab or personal infrastructure
+- **Small team** — shared Slack workspace with team-scoped access controls
+- **Business operator** — deploying on managed infrastructure with audit and policy requirements
+- Interacts primarily through Slack (including mobile, on the go)
+- Needs predictable behavior, persistence, and strong safety defaults
+- Wants to pop off background tasks and have them run autonomously
 
 ## Full Product Vision
 
@@ -46,8 +51,8 @@ irrelevant — the differentiator is the instructions attached to the context.
 
 ## MVP Outcome
 
-Netclaw runs on `pi1`, answers Slack messages in thread, persists session state
-across restarts, compacts long threads, has local memory (project registry,
+Netclaw answers Slack messages in thread, persists session state across
+restarts, compacts long threads, has local memory (project registry,
 environment inventory, agent personality), integrates with MCP (Memorizer),
 provides basic tool access (web search, shell, GitHub), and supports
 chat-driven scheduling.

@@ -28,4 +28,4 @@
 - [x] 4.1 Add tests covering trust-context derivation, downgrade-only transitions, audience-aware memory filtering, and tool/MCP denial behavior.
 - [x] 4.2 Update repository docs/spec references affected by the new trust-context model and operator-facing diagnostics.
 - [x] 4.3 File or link a follow-up issue/change for sandboxed/isolated execution so `sandbox-only` shell mode has an implementation path after this planning slice.
-  - [ ] Decide whether flattened audience profiles remain the long-term operator model or whether a later shortcut/inheritance format needs a separate change.
+  - [x] Decided: flattened audience profiles are the long-term operator model. No inheritance format planned.
