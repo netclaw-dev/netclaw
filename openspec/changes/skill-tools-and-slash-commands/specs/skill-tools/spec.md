@@ -1,0 +1,135 @@
+# skill-tools Specification
+
+## Purpose
+
+Define the `skill_load`, `skill_read_resource`, and `skill_manage` tools for
+structured skill access and management.
+
+## Requirements
+
+### Requirement: skill_load tool
+
+The system SHALL provide a `skill_load` tool with `Grant = "builtin"` that
+loads a skill by name, returning the body (frontmatter stripped) and a
+resource manifest.
+
+#### Scenario: Load existing skill by name
+
+- **GIVEN** a skill named `search-citation` is registered
+- **WHEN** the agent calls `skill_load(name: "search-citation")`
+- **THEN** the tool returns the skill body with frontmatter stripped
+- **AND** includes the skill version
+- **AND** includes a list of resource file relative paths
+
+#### Scenario: Load unknown skill
+
+- **WHEN** the agent calls `skill_load(name: "nonexistent")`
+- **THEN** the tool returns an error message listing available skill names
+
+#### Scenario: Available in all audiences
+
+- **GIVEN** a session with `TrustAudience.Public`
+- **WHEN** the agent calls `skill_load`
+- **THEN** the tool is available (Grant = "builtin")
+
+### Requirement: skill_read_resource tool
+
+The system SHALL provide a `skill_read_resource` tool with
+`Grant = "builtin"` that reads resource files within a skill's directory.
+
+#### Scenario: Read valid resource file
+
+- **GIVEN** a skill `netclaw-memory` with `references/recall-policy.md`
+- **WHEN** the agent calls `skill_read_resource(skillName: "netclaw-memory", resourcePath: "references/recall-policy.md")`
+- **THEN** the tool returns the file content
+
+#### Scenario: Reject path traversal
+
+- **WHEN** the agent calls `skill_read_resource(resourcePath: "../../etc/passwd")`
+- **THEN** the tool returns an error rejecting the path
+
+#### Scenario: Reject paths outside standard subdirectories
+
+- **WHEN** the agent calls `skill_read_resource(resourcePath: "SKILL.md")`
+- **THEN** the tool returns an error — only `references/`, `scripts/`, `assets/` allowed
+
+#### Scenario: Reject absolute paths
+
+- **WHEN** the agent calls `skill_read_resource(resourcePath: "/etc/passwd")`
+- **THEN** the tool returns an error rejecting absolute paths
+
+#### Scenario: Reject symlinks
+
+- **GIVEN** a resource path that resolves through a symlink
+- **WHEN** the agent calls `skill_read_resource` with that path
+- **THEN** the tool returns an error rejecting symlink traversal
+
+### Requirement: skill_manage tool
+
+The system SHALL provide a `skill_manage` tool with `Grant = "builtin"` that
+supports 6 actions for skill CRUD and resource file management. All writes
+SHALL target the user skills area only, never `.system/`.
+
+#### Scenario: Create new skill
+
+- **WHEN** the agent calls `skill_manage(action: "create", name: "my-workflow", content: "---\nname: my-workflow\ndescription: ...\n---\n# My Workflow\n...")`
+- **THEN** the tool creates `~/.netclaw/skills/my-workflow/SKILL.md`
+- **AND** validates frontmatter (name format, description required, description <= 1024 chars)
+- **AND** uses atomic write (temp file + rename)
+- **AND** sets `SkillTrustTier.Agent` on the created skill
+- **AND** re-scans the skills directory and rebuilds the registry
+
+#### Scenario: Create skill with invalid frontmatter
+
+- **WHEN** the agent calls `skill_manage(action: "create", content: "no frontmatter")`
+- **THEN** the tool returns an error describing the validation failure
+- **AND** no files are created
+
+#### Scenario: Create skill with invalid name
+
+- **WHEN** the agent calls `skill_manage(action: "create", name: "Invalid Name!")`
+- **THEN** the tool returns an error — name must be lowercase alphanumeric + hyphens
+
+#### Scenario: Edit existing skill
+
+- **WHEN** the agent calls `skill_manage(action: "edit", name: "my-workflow", content: "...")`
+- **THEN** the tool overwrites `SKILL.md` with validated content
+- **AND** uses atomic write
+
+#### Scenario: Patch skill content
+
+- **WHEN** the agent calls `skill_manage(action: "patch", name: "my-workflow", oldString: "old text", newString: "new text")`
+- **THEN** the tool replaces the first occurrence of `oldString` with `newString`
+- **AND** fails if `oldString` is not found or not unique (unless `replaceAll: true`)
+
+#### Scenario: Delete skill
+
+- **WHEN** the agent calls `skill_manage(action: "delete", name: "my-workflow")`
+- **THEN** the tool removes the `my-workflow/` directory
+- **AND** cleans empty parent category directories
+- **AND** re-scans and rebuilds registry
+
+#### Scenario: Write resource file
+
+- **WHEN** the agent calls `skill_manage(action: "write_file", name: "my-workflow", filePath: "references/checklist.md", fileContent: "...")`
+- **THEN** the tool creates the file within the skill's directory
+- **AND** validates path is within `references/`, `scripts/`, or `assets/`
+- **AND** rejects path traversal attempts
+
+#### Scenario: Remove resource file
+
+- **WHEN** the agent calls `skill_manage(action: "remove_file", name: "my-workflow", filePath: "references/old-doc.md")`
+- **THEN** the tool deletes the file
+- **AND** cleans empty subdirectories
+
+#### Scenario: Reject write to system skills
+
+- **WHEN** the agent calls `skill_manage(action: "edit", name: "netclaw-memory")`
+- **AND** `netclaw-memory` is in the `.system/` directory
+- **THEN** the tool returns an error — system skills are read-only
+
+#### Scenario: Content scanner integration point
+
+- **WHEN** the agent calls `skill_manage(action: "create")` or `skill_manage(action: "edit")`
+- **THEN** `ISkillContentScanner.ScanAsync()` is called on the content before writing
+- **AND** if the scanner returns `IsAllowed = false`, the write is rejected
