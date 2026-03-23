@@ -1,4 +1,5 @@
 using Netclaw.Actors.Tools;
+using Netclaw.Configuration;
 using Netclaw.Tools;
 using Xunit;
 
@@ -7,7 +8,7 @@ namespace Netclaw.Actors.Tests.Tools;
 public class AttachFileToolTests : IDisposable
 {
     private readonly string _tempDir;
-    private readonly AttachFileTool _tool = new();
+    private readonly AttachFileTool _tool = new(new ToolConfig());
 
     public AttachFileToolTests()
     {
@@ -251,7 +252,12 @@ public class AttachFileToolTests : IDisposable
         var sourcePath = Path.Combine(siblingSessionDir, "report.png");
         await File.WriteAllBytesAsync(sourcePath, [0x89, 0x50, 0x4E, 0x47]);
 
-        var context = new ToolExecutionContext("test-session", currentSessionDir);
+        var context = new ToolExecutionContext("signalr/thread-1", currentSessionDir)
+        {
+            Audience = TrustAudience.Personal.ToWireValue(),
+            Boundary = SecurityPolicyDefaults.TrustedInstanceBoundary,
+            ChannelType = "signalr"
+        };
         var args = new Dictionary<string, object?>
         {
             ["Path"] = sourcePath,
@@ -271,6 +277,33 @@ public class AttachFileToolTests : IDisposable
     }
 
     [Fact]
+    public async Task Public_context_cannot_attach_file_outside_session_directory()
+    {
+        var outsidePath = Path.Combine(_tempDir, "outside.txt");
+        await File.WriteAllTextAsync(outsidePath, "secret");
+
+        var sessionDir = Path.Combine(_tempDir, "session");
+        Directory.CreateDirectory(sessionDir);
+
+        var context = new ToolExecutionContext("slack/thread-1", sessionDir)
+        {
+            Audience = TrustAudience.Public.ToWireValue(),
+            Boundary = SecurityPolicyDefaults.PublicBoundary,
+            ChannelType = "slack"
+        };
+
+        var args = new Dictionary<string, object?>
+        {
+            ["Path"] = outsidePath
+        };
+
+        var result = await _tool.ExecuteAsync(args, context, CancellationToken.None);
+
+        Assert.Contains("configured roots", result);
+        Assert.Empty(context.FileAttachments);
+    }
+
+    [Fact]
     public async Task Symlink_from_sibling_session_to_outside_root_is_rejected()
     {
         var sessionsRoot = Path.Combine(_tempDir, "sessions");
@@ -287,7 +320,12 @@ public class AttachFileToolTests : IDisposable
         {
             File.CreateSymbolicLink(symlinkPath, outsidePath);
 
-            var context = new ToolExecutionContext("test-session", currentSessionDir);
+            var context = new ToolExecutionContext("signalr/thread-1", currentSessionDir)
+            {
+                Audience = TrustAudience.Personal.ToWireValue(),
+                Boundary = SecurityPolicyDefaults.TrustedInstanceBoundary,
+                ChannelType = "signalr"
+            };
             var args = new Dictionary<string, object?>
             {
                 ["Path"] = symlinkPath

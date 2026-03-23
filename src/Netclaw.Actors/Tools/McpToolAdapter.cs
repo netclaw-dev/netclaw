@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Microsoft.Extensions.AI;
+using Netclaw.Configuration;
 using Netclaw.Tools;
 
 namespace Netclaw.Actors.Tools;
@@ -22,6 +23,7 @@ public sealed class McpToolAdapter : INetclawTool
         string serverName,
         string toolName,
         string? grantCategory = null,
+        McpCapabilityClass capabilityClass = McpCapabilityClass.Unknown,
         IMcpToolInvoker? invoker = null)
     {
         _mcpTool = mcpTool;
@@ -30,6 +32,7 @@ public sealed class McpToolAdapter : INetclawTool
         ServerName = serverName;
         Name = $"{serverName}/{toolName}";
         GrantCategory = grantCategory ?? $"mcp:{serverName}";
+        CapabilityClass = capabilityClass;
 
         // Extract description and schema from the underlying AITool
         if (mcpTool is AIFunction func)
@@ -51,6 +54,7 @@ public sealed class McpToolAdapter : INetclawTool
     public string Description { get; }
     public string GrantCategory { get; }
     public string ServerName { get; }
+    public McpCapabilityClass CapabilityClass { get; }
     public JsonElement ParameterSchema { get; }
 
     /// <summary>The bare tool name without the server prefix.</summary>

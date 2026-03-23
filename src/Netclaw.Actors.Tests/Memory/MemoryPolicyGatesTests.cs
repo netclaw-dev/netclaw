@@ -1,5 +1,6 @@
 using Netclaw.Actors.Memory;
 using Netclaw.Actors.Sessions;
+using Netclaw.Configuration;
 using Xunit;
 
 namespace Netclaw.Actors.Tests.Memory;
@@ -308,5 +309,44 @@ public sealed class MemoryPolicyGatesTests
         Assert.Equal(["durable_fact"], plan.MemoryClasses);
         Assert.False(plan.AllowExpiredEvidence);
         Assert.True(plan.MaxResults <= 3);
+    }
+
+    [Fact]
+    public void ProposalGate_applies_supplied_audience_and_boundary_to_operations()
+    {
+        var gate = new MemoryProposalGate();
+        var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+        var result = gate.Evaluate(
+        [
+            new MemoryProposal(
+                "upsert_document",
+                "durable_fact",
+                "user",
+                "self",
+                new MemoryAnchor("user-travel-airline", "preference"),
+                "Preferred Airline",
+                "Preferred airline: United",
+                ["preferred airline", "united airlines"],
+                ["travel_profile", "user_preference"],
+                null,
+                null,
+                "auto",
+                "normal",
+                0.95,
+                now,
+                null,
+                null,
+                "stable preference")
+        ],
+        "user:aaron",
+        "normal",
+        now,
+        boundary: SecurityPolicyDefaults.PersonalBoundary,
+        audience: TrustAudience.Personal);
+
+        var operation = Assert.Single(result.MemoryOperations);
+        Assert.Equal(SecurityPolicyDefaults.PersonalBoundary, operation.Boundary);
+        Assert.Equal(TrustAudience.Personal.ToWireValue(), operation.Audience);
     }
 }

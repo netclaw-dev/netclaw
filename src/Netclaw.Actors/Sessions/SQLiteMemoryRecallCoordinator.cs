@@ -25,12 +25,14 @@ public sealed class SQLiteMemoryRecallCoordinator(
     {
         try
         {
+            var normalizedRequest = NormalizeRequest(request);
+
             if (_sessionConfig.DeterministicRetrievalEnabled)
             {
                 DeterministicRetrievalRequestPlan deterministicPlan;
                 try
                 {
-                    deterministicPlan = _deterministicPlanner.Plan(request);
+                    deterministicPlan = _deterministicPlanner.Plan(normalizedRequest);
                 }
                 catch (Exception ex)
                 {
@@ -48,11 +50,15 @@ public sealed class SQLiteMemoryRecallCoordinator(
                     string.Join("|", deterministicPlan.AnchorHints),
                     string.Join("|", deterministicPlan.LexicalTerms));
 
+                var effectiveBoundary = ResolveBoundary(normalizedRequest, deterministicPlan.HardScope);
+
                 var rawCandidates = await store.SearchByPlanAsync(
-                    deterministicPlan.LexicalTerms.Count > 0 ? deterministicPlan.LexicalTerms : [request.Query],
+                    deterministicPlan.LexicalTerms.Count > 0 ? deterministicPlan.LexicalTerms : [normalizedRequest.Query],
                     deterministicPlan.HardScope,
                     deterministicPlan.AllowedMemoryClasses,
                     deterministicPlan.CandidateLimit,
+                    effectiveBoundary,
+                    normalizedRequest.Audience,
                     allowExpiredEvidence: false,
                     ct);
 
@@ -63,6 +69,8 @@ public sealed class SQLiteMemoryRecallCoordinator(
                         deterministicPlan.LexicalTerms.Count > 0 ? deterministicPlan.LexicalTerms : [request.Query],
                         deterministicPlan.AllowedMemoryClasses,
                         deterministicPlan.CandidateLimit,
+                        effectiveBoundary,
+                        normalizedRequest.Audience,
                         allowExpiredEvidence: false,
                         ct);
                     widened = true;
@@ -79,7 +87,7 @@ public sealed class SQLiteMemoryRecallCoordinator(
 
                 var deterministicItems = candidates
                     .OrderByDescending(RecallRank)
-                    .Take(request.MaxItems <= 0 ? 3 : request.MaxItems)
+                    .Take(normalizedRequest.MaxItems <= 0 ? 3 : normalizedRequest.MaxItems)
                     .Select(d => new AutomaticRecallItem(
                         d.Id,
                         d.Title,
@@ -95,30 +103,33 @@ public sealed class SQLiteMemoryRecallCoordinator(
             if (!_sessionConfig.MemorySidecarsEnabled)
                 return new AutomaticRecallResult([]);
 
-            var domain = new Protocol.SessionId(request.SessionId).ToMemoryDomain();
-            var maxItems = request.MaxItems <= 0 ? 3 : request.MaxItems;
-            var effectiveQuery = string.IsNullOrWhiteSpace(request.Query)
-                ? request.RecentUserMessages.LastOrDefault() ?? string.Empty
-                : request.Query;
+            var domain = string.IsNullOrWhiteSpace(normalizedRequest.HardScopeOverride)
+                ? new Protocol.SessionId(normalizedRequest.SessionId).ToMemoryDomain()
+                : normalizedRequest.HardScopeOverride!;
+            var fallbackBoundary = ResolveBoundary(normalizedRequest, domain);
+            var maxItems = normalizedRequest.MaxItems <= 0 ? 3 : normalizedRequest.MaxItems;
+            var effectiveQuery = string.IsNullOrWhiteSpace(normalizedRequest.Query)
+                ? normalizedRequest.RecentUserMessages.LastOrDefault() ?? string.Empty
+                : normalizedRequest.Query;
 
             var fallbackRequest = _sidecarPlanner.BuildRequest(
-                request.SessionId,
+                normalizedRequest.SessionId,
                 domain,
                 effectiveQuery,
-                request.RecentUserMessages,
-                request.RecentAssistantMessages ?? [],
-                request.RecentEntities ?? [],
+                normalizedRequest.RecentUserMessages,
+                normalizedRequest.RecentAssistantMessages ?? [],
+                normalizedRequest.RecentEntities ?? [],
                 "automatic",
                 8,
                 maxItems);
 
-            var plan = await BuildPlanAsync(request, domain, effectiveQuery, maxItems, ct)
+            var plan = await BuildPlanAsync(normalizedRequest, domain, effectiveQuery, maxItems, ct)
                 ?? _recallPlanGate.Clamp(new RecallQueryPlan(
                     "automatic",
                     "fallback",
-                    request.RecentEntities ?? [],
+                    normalizedRequest.RecentEntities ?? [],
                     [],
-                    FallbackSearchTerms(effectiveQuery, request.RecentUserMessages),
+                    FallbackSearchTerms(effectiveQuery, normalizedRequest.RecentUserMessages),
                     [Memory.MemoryClass.DurableFact.ToWireValue()],
                     maxItems,
                     false),
@@ -139,19 +150,23 @@ public sealed class SQLiteMemoryRecallCoordinator(
                 domain,
                 plan.MemoryClasses,
                 Math.Max(maxItems * 3, 12),
+                fallbackBoundary,
+                normalizedRequest.Audience,
                 plan.AllowExpiredEvidence,
                 ct);
 
             var documents = primary;
             string? fallbackQuery = null;
-            if (documents.Count == 0 && request.RecentUserMessages.Count > 0)
+            if (documents.Count == 0 && normalizedRequest.RecentUserMessages.Count > 0)
             {
-                fallbackQuery = request.RecentUserMessages[^1];
+                fallbackQuery = normalizedRequest.RecentUserMessages[^1];
                 documents = await store.SearchByPlanAsync(
                     fallbackQuery.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries),
                     domain,
                     plan.MemoryClasses,
                     Math.Max(maxItems * 3, 12),
+                    fallbackBoundary,
+                    normalizedRequest.Audience,
                     plan.AllowExpiredEvidence,
                     ct);
             }
@@ -186,6 +201,22 @@ public sealed class SQLiteMemoryRecallCoordinator(
         }
     }
 
+    private static AutomaticRecallRequest NormalizeRequest(AutomaticRecallRequest request)
+    {
+        if (!string.IsNullOrWhiteSpace(request.HardScopeOverride))
+            return request;
+
+        var hardScope = string.IsNullOrWhiteSpace(request.SessionId)
+            ? "project:default"
+            : new Protocol.SessionId(request.SessionId).ToMemoryDomain();
+
+        return request with { HardScopeOverride = hardScope };
+    }
+
+    private static string ResolveBoundary(AutomaticRecallRequest request, string domain)
+        => !string.IsNullOrWhiteSpace(request.Boundary)
+            ? request.Boundary!
+            : SecurityPolicyDefaults.InferLegacyBoundaryFromDomain(domain);
     private static bool ShouldWidenAcrossDomains(DeterministicRetrievalRequestPlan plan)
         => plan.AnchorHints.Count > 0
            || plan.Facets.Contains("project_fact", StringComparer.OrdinalIgnoreCase);

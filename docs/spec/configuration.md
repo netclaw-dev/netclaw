@@ -156,19 +156,97 @@ Tuning parameters for LLM session behavior.
 
 Configuration for first-party tool execution.
 
+`netclaw init` now scaffolds recommended audience profiles here, and `netclaw doctor`
+validates unsafe profile combinations such as unrestricted `public` or `team`
+settings.
+
+Use `netclaw doctor` when you want to inspect the effective audience-profile
+shape, confirm that strict-default fallback is active, or verify that
+`SandboxOnly` shell mode is still blocked until a sandbox backend is configured.
+
 ```json
 {
   "Tools": {
+    "ShellMode": "HostAllowed",
     "ShellTimeoutSeconds": 60,
-    "MaxOutputChars": 32000
+    "MaxOutputChars": 32000,
+    "AudienceProfiles": {
+      "Public": {
+        "ToolsMode": "Allowlist",
+        "AllowedTools": ["file_read", "file_write", "attach_file"],
+        "McpServersMode": "Allowlist",
+        "AllowedMcpServers": [],
+        "ReadFiles": { "Mode": "Roots", "Roots": ["{session_dir}"] },
+        "WriteFiles": { "Mode": "Roots", "Roots": ["{session_dir}"] },
+        "AttachFiles": { "Mode": "Roots", "Roots": ["{session_dir}"] }
+      },
+      "Team": {
+        "ToolsMode": "Allowlist",
+        "AllowedTools": ["file_read", "attach_file"],
+        "McpServersMode": "Allowlist",
+        "AllowedMcpServers": [],
+        "ReadFiles": { "Mode": "Roots", "Roots": ["{session_dir}"] },
+        "WriteFiles": { "Mode": "Roots", "Roots": ["{session_dir}"] },
+        "AttachFiles": { "Mode": "Roots", "Roots": ["{session_dir}"] }
+      },
+      "Personal": {
+        "ToolsMode": "All",
+        "McpServersMode": "All",
+        "ReadFiles": { "Mode": "All" },
+        "WriteFiles": { "Mode": "All" },
+        "AttachFiles": { "Mode": "All" }
+      }
+    }
   }
 }
 ```
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
+| `ShellMode` | string? | `null` | Optional shell mode override (`Off`, `SandboxOnly`, `HostAllowed`). Falls back to security posture defaults when omitted. |
 | `ShellTimeoutSeconds` | int | `60` | Timeout for shell command execution. |
 | `MaxOutputChars` | int | `32000` | Maximum characters captured from tool output. |
+| `AudienceProfiles` | object | built-in defaults | Per-audience tool, MCP server, and filesystem scopes. `public` and `team` default to session-scoped file access with no MCP servers allowed until the operator opts in, while `personal` defaults to unrestricted tool/file access and all MCP servers unless customized. |
+
+### MCP Servers
+
+```json
+{
+  "McpServers": {
+    "memorizer": {
+      "Transport": "stdio",
+      "Command": "uvx",
+      "Arguments": ["memorizer-mcp"],
+      "Enabled": true,
+      "GrantCategory": "mcp:memorizer",
+      "CapabilityClass": "MemorySafe"
+    },
+    "github": {
+      "Transport": "http",
+      "Url": "https://example.com/mcp",
+      "Headers": {
+        "Authorization": "Bearer ${GITHUB_TOKEN}"
+      },
+      "Enabled": true,
+      "CapabilityClass": "PublishExternal"
+    }
+  }
+}
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `Transport` | string | `"stdio"` | MCP transport (`"stdio"`, `"sse"`, or `"http"`). |
+| `Command` | string? | `null` | Executable to launch for stdio transport. |
+| `Arguments` | string[]? | `null` | Arguments passed to the stdio command. |
+| `Url` | string? | `null` | Endpoint for `sse` or `http` transport. |
+| `EnvironmentVariables` | object? | `null` | Environment overlay for stdio-launched MCP processes. |
+| `Headers` | object? | `null` | Additional headers for remote HTTP/SSE MCP servers. |
+| `Enabled` | bool | `true` | Whether the server is loaded at startup. |
+| `GrantCategory` | string? | `null` | Optional ACL grant category. Defaults to `mcp:{serverName}` when omitted. |
+| `CapabilityClass` | string | `"Unknown"` | Server-level trust classification (`Unknown`, `Information`, `MemorySafe`, `SensitiveRead`, `PublishExternal`, `HighImpact`). |
+| `OAuthClientId` | string? | `null` | Static OAuth client ID for servers without dynamic client registration. |
+| `OAuthScope` | string? | `null` | Optional OAuth scope override. |
 
 ### Slack
 

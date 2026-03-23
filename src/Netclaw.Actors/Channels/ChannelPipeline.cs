@@ -22,9 +22,47 @@ public sealed record SessionPipelineOptions
     public required ChannelType ChannelType { get; init; }
 
     /// <summary>
+    /// Strict-default audience used when inbound adapters do not provide one.
+    /// </summary>
+    public TrustAudience DefaultAudience { get; init; } = TrustAudience.Public;
+
+    /// <summary>
+    /// Adapter-owned default trust boundary used when inbound adapters do not provide one.
+    /// </summary>
+    public string DefaultBoundary { get; init; } = string.Empty;
+
+    /// <summary>
+    /// Strict-default principal classification used when inbound adapters do not provide one.
+    /// </summary>
+    public PrincipalClassification DefaultPrincipal { get; init; } = PrincipalClassification.UntrustedExternal;
+
+    /// <summary>
+    /// Strict-default provenance used when inbound adapters do not provide one.
+    /// </summary>
+    public SourceProvenance DefaultProvenance { get; init; } = SourceProvenance.StrictDefault();
+
+    /// <summary>
     /// Which output categories the channel wants to receive.
     /// </summary>
     public OutputFilter Filter { get; init; } = OutputFilter.Full;
+}
+
+public static class MessageSourceFactory
+{
+    public static MessageSource Create(ChannelInput input, SessionPipelineOptions options, string turnId)
+        => new()
+        {
+            ChannelType = options.ChannelType,
+            SenderId = input.SenderId,
+            ChannelId = input.ChannelId,
+            MessageId = input.MessageId,
+            TurnId = turnId,
+            Audience = input.Audience ?? options.DefaultAudience,
+            Boundary = SecurityPolicyDefaults.ResolveBoundary(input.Boundary ?? options.DefaultBoundary, options.ChannelType.ToWireValue(), input.Audience ?? options.DefaultAudience),
+            Principal = input.Principal ?? options.DefaultPrincipal,
+            Provenance = input.Provenance ?? options.DefaultProvenance,
+            ReceivedAt = input.ReceivedAt
+        };
 }
 
 /// <summary>
@@ -276,15 +314,7 @@ public sealed class SessionPipeline : ISessionPipeline
             SessionId = sessionId,
             Content = content,
             MediaReferences = mediaRefs,
-            Source = new MessageSource
-            {
-                ChannelType = options.ChannelType,
-                SenderId = input.SenderId,
-                ChannelId = input.ChannelId,
-                MessageId = input.MessageId,
-                TurnId = turnId,
-                ReceivedAt = input.ReceivedAt
-            }
+            Source = MessageSourceFactory.Create(input, options, turnId)
         };
     }
 }

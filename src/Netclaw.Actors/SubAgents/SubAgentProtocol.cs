@@ -52,6 +52,12 @@ public sealed record RunSubAgent
     /// When omitted, the subagent runtime assigns a unique transient scope.
     /// </summary>
     public string? SessionScopeId { get; init; }
+
+    public string? Audience { get; init; }
+
+    public string? Boundary { get; init; }
+
+    public string? ChannelType { get; init; }
 }
 
 /// <summary>

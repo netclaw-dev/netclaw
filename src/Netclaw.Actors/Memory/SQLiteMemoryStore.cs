@@ -1,4 +1,5 @@
 using Microsoft.Data.Sqlite;
+using Netclaw.Configuration;
 
 namespace Netclaw.Actors.Memory;
 
@@ -53,6 +54,8 @@ public sealed class SQLiteMemoryStore
               slots_json TEXT NULL,
               update_semantics TEXT NOT NULL,
               domain TEXT NOT NULL,
+              boundary TEXT NULL,
+              audience TEXT NULL,
               sensitivity TEXT NOT NULL,
               recall_mode TEXT NOT NULL,
               confidence REAL NOT NULL,
@@ -81,6 +84,8 @@ public sealed class SQLiteMemoryStore
               supersedes_record_id TEXT NULL,
               update_semantics TEXT NOT NULL,
               domain TEXT NOT NULL,
+              boundary TEXT NULL,
+              audience TEXT NULL,
               sensitivity TEXT NOT NULL,
               recall_mode TEXT NOT NULL,
               confidence REAL NOT NULL,
@@ -144,11 +149,17 @@ public sealed class SQLiteMemoryStore
         await EnsureColumnExistsAsync(conn, "memory_documents", "aliases_json", "TEXT NULL", ct);
         await EnsureColumnExistsAsync(conn, "memory_documents", "facets_json", "TEXT NULL", ct);
         await EnsureColumnExistsAsync(conn, "memory_documents", "slots_json", "TEXT NULL", ct);
+        await EnsureColumnExistsAsync(conn, "memory_documents", "boundary", "TEXT NULL", ct);
+        await EnsureColumnExistsAsync(conn, "memory_documents", "audience", "TEXT NULL", ct);
         await EnsureColumnExistsAsync(conn, "memory_records", "memory_class", "TEXT NOT NULL DEFAULT 'evidence'", ct);
         await EnsureColumnExistsAsync(conn, "memory_records", "expires_at", "INTEGER NULL", ct);
         await EnsureColumnExistsAsync(conn, "memory_records", "aliases_json", "TEXT NULL", ct);
         await EnsureColumnExistsAsync(conn, "memory_records", "facets_json", "TEXT NULL", ct);
         await EnsureColumnExistsAsync(conn, "memory_records", "slots_json", "TEXT NULL", ct);
+        await EnsureColumnExistsAsync(conn, "memory_records", "boundary", "TEXT NULL", ct);
+        await EnsureColumnExistsAsync(conn, "memory_records", "audience", "TEXT NULL", ct);
+
+        await NormalizeLegacyBoundariesAsync(conn, ct);
 
         // Phase A hygiene: conversation turn snapshots are diagnostic trace, not
         // durable auto-recall memory. This repo is prototype-only; normalize any
@@ -190,15 +201,19 @@ public sealed class SQLiteMemoryStore
 
         await EnsureAnchorAsync(conn, tx, document.Anchor, ct);
 
+        var resolvedBoundary = string.Equals(document.Boundary, SecurityPolicyDefaults.LegacyRestrictedBoundary, StringComparison.Ordinal)
+            ? SecurityPolicyDefaults.InferLegacyBoundaryFromDomain(document.Domain)
+            : document.Boundary;
+
         await using var cmd = conn.CreateCommand();
         cmd.Transaction = tx;
         cmd.CommandText = """
             INSERT INTO memory_documents(
               document_id, anchor_id, memory_class, title, markdown_body, aliases_json, facets_json, slots_json, update_semantics,
-              domain, sensitivity, recall_mode, confidence, freshness_at,
+              domain, boundary, audience, sensitivity, recall_mode, confidence, freshness_at,
               expires_at, created_at, updated_at)
             VALUES($id, $anchorId, $memoryClass, $title, $body, $aliasesJson, $facetsJson, $slotsJson, $semantics,
-              $domain, $sensitivity, $recallMode, $confidence, $freshnessAt,
+              $domain, $boundary, $audience, $sensitivity, $recallMode, $confidence, $freshnessAt,
               $expiresAt, $createdAt, $updatedAt)
             ON CONFLICT(document_id) DO UPDATE SET
               memory_class=excluded.memory_class,
@@ -209,6 +224,8 @@ public sealed class SQLiteMemoryStore
               slots_json=excluded.slots_json,
               update_semantics=excluded.update_semantics,
               domain=excluded.domain,
+              boundary=excluded.boundary,
+              audience=excluded.audience,
               sensitivity=excluded.sensitivity,
               recall_mode=excluded.recall_mode,
               confidence=excluded.confidence,
@@ -226,6 +243,8 @@ public sealed class SQLiteMemoryStore
         cmd.Parameters.AddWithValue("$slotsJson", (object?)document.SlotsJson ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$semantics", document.UpdateSemantics);
         cmd.Parameters.AddWithValue("$domain", document.Domain);
+        cmd.Parameters.AddWithValue("$boundary", resolvedBoundary);
+        cmd.Parameters.AddWithValue("$audience", document.Audience);
         cmd.Parameters.AddWithValue("$sensitivity", document.Sensitivity);
         cmd.Parameters.AddWithValue("$recallMode", document.RecallMode);
         cmd.Parameters.AddWithValue("$confidence", document.Confidence);
@@ -243,6 +262,7 @@ public sealed class SQLiteMemoryStore
         string query,
         string domain,
         int maxResults,
+        string? boundary = null,
         CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(query) || maxResults <= 0)
@@ -280,6 +300,8 @@ public sealed class SQLiteMemoryStore
               d.slots_json,
               d.update_semantics,
               d.domain,
+              d.boundary,
+              d.audience,
               d.sensitivity,
               d.recall_mode,
               d.confidence,
@@ -293,6 +315,7 @@ public sealed class SQLiteMemoryStore
             WHERE d.recall_mode = '{MemoryRecallMode.Auto.ToWireValue()}'
               AND d.sensitivity != '{MemorySensitivity.Secret.ToWireValue()}'
               AND d.domain = $domain
+              AND ($boundary IS NULL OR COALESCE(d.boundary, '{SecurityPolicyDefaults.LegacyRestrictedBoundary}') = $boundary)
               AND (d.expires_at IS NULL OR d.expires_at > $now)
               AND d.title != 'turn-completion'
               AND d.update_semantics != '{MemoryUpdateSemantics.ConversationTrace.ToWireValue()}'
@@ -301,6 +324,7 @@ public sealed class SQLiteMemoryStore
             LIMIT $limit;
             """;
         cmd.Parameters.AddWithValue("$domain", domain);
+        cmd.Parameters.AddWithValue("$boundary", (object?)boundary ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$now", _timeProvider.GetUtcNow().ToUnixTimeMilliseconds());
         cmd.Parameters.AddWithValue("$limit", Math.Max(maxResults, 1));
 
@@ -313,14 +337,14 @@ public sealed class SQLiteMemoryStore
                 reader.GetString(2),
                 reader.GetString(3),
                 reader.IsDBNull(4) ? null : reader.GetString(4),
-                reader.GetString(11),
                 reader.GetString(12),
-                reader.GetString(13),
-                reader.GetDouble(14),
-                reader.IsDBNull(15) ? null : reader.GetInt64(15),
+                reader.GetString(15),
+                reader.GetString(16),
+                reader.GetDouble(17),
+                reader.IsDBNull(18) ? null : reader.GetInt64(18),
                 "active",
-                reader.GetInt64(18),
-                reader.GetInt64(19));
+                reader.GetInt64(20),
+                reader.GetInt64(21));
 
             results.Add(new SQLiteMemoryDocument(
                 DocumentId: reader.GetString(0),
@@ -333,13 +357,15 @@ public sealed class SQLiteMemoryStore
                 SlotsJson: reader.IsDBNull(10) ? null : reader.GetString(10),
                 UpdateSemantics: reader.GetString(11),
                 Domain: reader.GetString(12),
-                Sensitivity: reader.GetString(13),
-                RecallMode: reader.GetString(14),
-                Confidence: reader.GetDouble(15),
-                FreshnessAtMs: reader.IsDBNull(16) ? null : reader.GetInt64(16),
-                ExpiresAtMs: reader.IsDBNull(17) ? null : reader.GetInt64(17),
-                CreatedAtMs: reader.GetInt64(18),
-                UpdatedAtMs: reader.GetInt64(19)));
+                Boundary: reader.IsDBNull(13) ? SecurityPolicyDefaults.LegacyRestrictedBoundary : reader.GetString(13),
+                Audience: reader.IsDBNull(14) ? TrustAudience.Public.ToWireValue() : reader.GetString(14),
+                Sensitivity: reader.GetString(15),
+                RecallMode: reader.GetString(16),
+                Confidence: reader.GetDouble(17),
+                FreshnessAtMs: reader.IsDBNull(18) ? null : reader.GetInt64(18),
+                ExpiresAtMs: reader.IsDBNull(19) ? null : reader.GetInt64(19),
+                CreatedAtMs: reader.GetInt64(20),
+                UpdatedAtMs: reader.GetInt64(21)));
         }
 
         return results;
@@ -555,7 +581,7 @@ public sealed class SQLiteMemoryStore
         }, ct);
     }
 
-    public async Task<IReadOnlyList<SQLiteMemorySearchResult>> SearchMemoriesAsync(string query, int limit, CancellationToken ct = default)
+    public async Task<IReadOnlyList<SQLiteMemorySearchResult>> SearchMemoriesAsync(string query, int limit, string boundary, TrustAudience audience = TrustAudience.Public, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(query) || limit <= 0)
             return [];
@@ -563,8 +589,18 @@ public sealed class SQLiteMemoryStore
         return await WithConnectionAsync(async (conn, ct) =>
         {
         await using var cmd = conn.CreateCommand();
-        cmd.CommandText = """
-            SELECT id, kind, memory_class, title, body, domain, sensitivity, recall_mode, confidence, sort_ts
+        var allowedAudiences = MemoryPolicyEvaluator.AllowedAudienceWireValues(audience);
+        var audienceClauses = new List<string>();
+        for (var i = 0; i < allowedAudiences.Count; i++)
+        {
+            audienceClauses.Add($"$a{i}");
+            cmd.Parameters.AddWithValue($"$a{i}", allowedAudiences[i]);
+        }
+
+        var whereAudiences = string.Join(",", audienceClauses);
+
+        cmd.CommandText = $"""
+            SELECT id, kind, memory_class, title, body, domain, boundary, audience, sensitivity, recall_mode, confidence, sort_ts
             FROM (
                 SELECT
                     d.document_id AS id,
@@ -573,6 +609,8 @@ public sealed class SQLiteMemoryStore
                     d.title AS title,
                     d.markdown_body AS body,
                     d.domain AS domain,
+                    COALESCE(d.boundary, $legacyBoundary) AS boundary,
+                    COALESCE(d.audience, $fallbackAudience) AS audience,
                     d.sensitivity AS sensitivity,
                     d.recall_mode AS recall_mode,
                     d.confidence AS confidence,
@@ -580,6 +618,8 @@ public sealed class SQLiteMemoryStore
                 FROM memory_documents d
                 WHERE (d.title LIKE $query OR d.markdown_body LIKE $query)
                   AND d.recall_mode IN ('{MemoryRecallMode.Auto.ToWireValue()}', '{MemoryRecallMode.Searchable.ToWireValue()}')
+                  AND COALESCE(d.boundary, $legacyBoundary) = $boundary
+                  AND COALESCE(d.audience, $fallbackAudience) IN ({whereAudiences})
 
                 UNION ALL
 
@@ -590,6 +630,8 @@ public sealed class SQLiteMemoryStore
                     r.record_type AS title,
                     r.payload_json AS body,
                     r.domain AS domain,
+                    COALESCE(r.boundary, $legacyBoundary) AS boundary,
+                    COALESCE(r.audience, $fallbackAudience) AS audience,
                     r.sensitivity AS sensitivity,
                     r.recall_mode AS recall_mode,
                     r.confidence AS confidence,
@@ -597,11 +639,16 @@ public sealed class SQLiteMemoryStore
                 FROM memory_records r
                 WHERE (r.record_type LIKE $query OR r.payload_json LIKE $query)
                   AND r.recall_mode IN ('{MemoryRecallMode.Auto.ToWireValue()}', '{MemoryRecallMode.Searchable.ToWireValue()}')
+                  AND COALESCE(r.boundary, $legacyBoundary) = $boundary
+                  AND COALESCE(r.audience, $fallbackAudience) IN ({whereAudiences})
             ) all_memories
             ORDER BY confidence DESC, sort_ts DESC
             LIMIT $limit;
             """;
         cmd.Parameters.AddWithValue("$query", $"%{query}%");
+        cmd.Parameters.AddWithValue("$boundary", boundary);
+        cmd.Parameters.AddWithValue("$legacyBoundary", SecurityPolicyDefaults.LegacyRestrictedBoundary);
+        cmd.Parameters.AddWithValue("$fallbackAudience", audience.ToWireValue());
         cmd.Parameters.AddWithValue("$limit", limit);
 
         var results = new List<SQLiteMemorySearchResult>();
@@ -615,17 +662,23 @@ public sealed class SQLiteMemoryStore
                 MemoryClass: reader.GetString(2),
                 Title: reader.GetString(3),
                 Snippet: body.Length <= 160 ? body : body[..160] + "...",
-                Score: reader.GetDouble(8),
+                Score: reader.GetDouble(10),
                 Domain: reader.GetString(5),
-                Sensitivity: reader.GetString(6),
-                RecallMode: reader.GetString(7)));
+                Boundary: reader.GetString(6),
+                Audience: reader.GetString(7),
+                Sensitivity: reader.GetString(8),
+                RecallMode: reader.GetString(9)));
         }
 
         return results;
         }, ct);
     }
 
-    public async Task<IReadOnlyList<SQLiteMemoryHydratedItem>> GetMemoriesByIdsAsync(IReadOnlyList<string> ids, CancellationToken ct = default)
+    public async Task<IReadOnlyList<SQLiteMemoryHydratedItem>> GetMemoriesByIdsAsync(
+        IReadOnlyList<string> ids,
+        string boundary,
+        TrustAudience audience,
+        CancellationToken ct = default)
     {
         if (ids.Count == 0)
             return [];
@@ -645,6 +698,8 @@ public sealed class SQLiteMemoryStore
             .ToArray();
 
         var output = new List<SQLiteMemoryHydratedItem>();
+        var allowedAudiences = MemoryPolicyEvaluator.AllowedAudienceWireValues(audience)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
         return await WithConnectionAsync(async (conn, ct) =>
         {
@@ -652,7 +707,7 @@ public sealed class SQLiteMemoryStore
         {
             await using var cmd = conn.CreateCommand();
             cmd.CommandText = """
-                SELECT document_id, memory_class, title, markdown_body, aliases_json, facets_json, slots_json, domain, sensitivity, recall_mode, update_semantics, expires_at, updated_at
+                SELECT document_id, memory_class, title, markdown_body, aliases_json, facets_json, slots_json, domain, boundary, audience, sensitivity, recall_mode, update_semantics, expires_at, updated_at
                 FROM memory_documents
                 WHERE document_id = $id;
                 """;
@@ -670,11 +725,19 @@ public sealed class SQLiteMemoryStore
                     FacetsJson: reader.IsDBNull(5) ? null : reader.GetString(5),
                     SlotsJson: reader.IsDBNull(6) ? null : reader.GetString(6),
                     Domain: reader.GetString(7),
-                    Sensitivity: reader.GetString(8),
-                    RecallMode: reader.GetString(9),
-                    UpdateSemantics: reader.GetString(10),
-                    ExpiresAtMs: reader.IsDBNull(11) ? null : reader.GetInt64(11),
-                    UpdatedAtMs: reader.GetInt64(12)));
+                    Boundary: reader.IsDBNull(8) ? SecurityPolicyDefaults.LegacyRestrictedBoundary : reader.GetString(8),
+                    Audience: reader.IsDBNull(9) ? TrustAudience.Public.ToWireValue() : reader.GetString(9),
+                    Sensitivity: reader.GetString(10),
+                    RecallMode: reader.GetString(11),
+                    UpdateSemantics: reader.GetString(12),
+                    ExpiresAtMs: reader.IsDBNull(13) ? null : reader.GetInt64(13),
+                    UpdatedAtMs: reader.GetInt64(14)));
+
+                if (!string.Equals(output[^1].Boundary, boundary, StringComparison.OrdinalIgnoreCase)
+                    || !allowedAudiences.Contains(output[^1].Audience))
+                {
+                    output.RemoveAt(output.Count - 1);
+                }
             }
         }
 
@@ -682,7 +745,7 @@ public sealed class SQLiteMemoryStore
         {
             await using var cmd = conn.CreateCommand();
             cmd.CommandText = """
-                SELECT record_id, memory_class, record_type, payload_json, aliases_json, facets_json, slots_json, domain, sensitivity, recall_mode, update_semantics, expires_at, created_at
+                SELECT record_id, memory_class, record_type, payload_json, aliases_json, facets_json, slots_json, domain, boundary, audience, sensitivity, recall_mode, update_semantics, expires_at, created_at
                 FROM memory_records
                 WHERE record_id = $id;
                 """;
@@ -700,11 +763,19 @@ public sealed class SQLiteMemoryStore
                     FacetsJson: reader.IsDBNull(5) ? null : reader.GetString(5),
                     SlotsJson: reader.IsDBNull(6) ? null : reader.GetString(6),
                     Domain: reader.GetString(7),
-                    Sensitivity: reader.GetString(8),
-                    RecallMode: reader.GetString(9),
-                    UpdateSemantics: reader.GetString(10),
-                    ExpiresAtMs: reader.IsDBNull(11) ? null : reader.GetInt64(11),
-                    UpdatedAtMs: reader.GetInt64(12)));
+                    Boundary: reader.IsDBNull(8) ? SecurityPolicyDefaults.LegacyRestrictedBoundary : reader.GetString(8),
+                    Audience: reader.IsDBNull(9) ? TrustAudience.Public.ToWireValue() : reader.GetString(9),
+                    Sensitivity: reader.GetString(10),
+                    RecallMode: reader.GetString(11),
+                    UpdateSemantics: reader.GetString(12),
+                    ExpiresAtMs: reader.IsDBNull(13) ? null : reader.GetInt64(13),
+                    UpdatedAtMs: reader.GetInt64(14)));
+
+                if (!string.Equals(output[^1].Boundary, boundary, StringComparison.OrdinalIgnoreCase)
+                    || !allowedAudiences.Contains(output[^1].Audience))
+                {
+                    output.RemoveAt(output.Count - 1);
+                }
             }
         }
 
@@ -717,23 +788,29 @@ public sealed class SQLiteMemoryStore
         string domain,
         IReadOnlyList<string> memoryClasses,
         int limit,
+        string boundary,
+        TrustAudience audience,
         bool allowExpiredEvidence,
         CancellationToken ct = default)
-        => await SearchByPlanInternalAsync(queryTerms, domain, memoryClasses, limit, allowExpiredEvidence, ct);
+        => await SearchByPlanInternalAsync(queryTerms, domain, memoryClasses, limit, boundary, audience, allowExpiredEvidence, ct);
 
     public async Task<IReadOnlyList<SQLiteMemoryHydratedItem>> SearchAcrossDomainsByPlanAsync(
         IReadOnlyList<string> queryTerms,
         IReadOnlyList<string> memoryClasses,
         int limit,
+        string boundary,
+        TrustAudience audience,
         bool allowExpiredEvidence,
         CancellationToken ct = default)
-        => await SearchByPlanInternalAsync(queryTerms, null, memoryClasses, limit, allowExpiredEvidence, ct);
+        => await SearchByPlanInternalAsync(queryTerms, null, memoryClasses, limit, boundary, audience, allowExpiredEvidence, ct);
 
     private async Task<IReadOnlyList<SQLiteMemoryHydratedItem>> SearchByPlanInternalAsync(
         IReadOnlyList<string> queryTerms,
         string? domain,
         IReadOnlyList<string> memoryClasses,
         int limit,
+        string boundary,
+        TrustAudience audience,
         bool allowExpiredEvidence,
         CancellationToken ct)
     {
@@ -766,11 +843,20 @@ public sealed class SQLiteMemoryStore
         var documentWhereTerms = string.Join(" OR ", documentTermClauses);
         var recordWhereTerms = string.Join(" OR ", recordTermClauses);
         var whereClasses = string.Join(",", classClauses);
+        var allowedAudiencesForPlan = MemoryPolicyEvaluator.AllowedAudienceWireValues(audience);
+        var audiencePlanClauses = new List<string>();
+        for (var i = 0; i < allowedAudiencesForPlan.Count; i++)
+        {
+            audiencePlanClauses.Add($"$pa{i}");
+            cmd.Parameters.AddWithValue($"$pa{i}", allowedAudiencesForPlan[i]);
+        }
+
+        var whereAudiences = string.Join(",", audiencePlanClauses);
         var documentDomainClause = domain is null ? string.Empty : "AND d.domain = $domain";
         var recordDomainClause = domain is null ? string.Empty : "AND r.domain = $domain";
 
         cmd.CommandText = $"""
-            SELECT id, kind, memory_class, title, body, aliases_json, facets_json, slots_json, domain, sensitivity, recall_mode, update_semantics, expires_at, updated_at, score
+            SELECT id, kind, memory_class, title, body, aliases_json, facets_json, slots_json, domain, boundary, audience, sensitivity, recall_mode, update_semantics, expires_at, updated_at, score
             FROM (
                 SELECT
                     d.document_id AS id,
@@ -782,6 +868,8 @@ public sealed class SQLiteMemoryStore
                     d.facets_json AS facets_json,
                     d.slots_json AS slots_json,
                     d.domain AS domain,
+                    COALESCE(d.boundary, $planLegacyBoundary) AS boundary,
+                    COALESCE(d.audience, $planFallbackAudience) AS audience,
                     d.sensitivity AS sensitivity,
                     d.recall_mode AS recall_mode,
                     d.update_semantics AS update_semantics,
@@ -792,6 +880,8 @@ public sealed class SQLiteMemoryStore
                 WHERE 1 = 1
                   {documentDomainClause}
                   AND d.recall_mode IN ('{MemoryRecallMode.Auto.ToWireValue()}', '{MemoryRecallMode.Searchable.ToWireValue()}')
+                  AND COALESCE(d.boundary, $planLegacyBoundary) = $boundary
+                  AND COALESCE(d.audience, $planFallbackAudience) IN ({whereAudiences})
                   AND d.sensitivity != '{MemorySensitivity.Secret.ToWireValue()}'
                   AND d.memory_class IN ({whereClasses})
                   AND ({documentWhereTerms})
@@ -809,6 +899,8 @@ public sealed class SQLiteMemoryStore
                     r.facets_json AS facets_json,
                     r.slots_json AS slots_json,
                     r.domain AS domain,
+                    COALESCE(r.boundary, $planLegacyBoundary) AS boundary,
+                    COALESCE(r.audience, $planFallbackAudience) AS audience,
                     r.sensitivity AS sensitivity,
                     r.recall_mode AS recall_mode,
                     r.update_semantics AS update_semantics,
@@ -819,6 +911,8 @@ public sealed class SQLiteMemoryStore
                 WHERE 1 = 1
                   {recordDomainClause}
                   AND r.recall_mode IN ('{MemoryRecallMode.Auto.ToWireValue()}', '{MemoryRecallMode.Searchable.ToWireValue()}')
+                  AND COALESCE(r.boundary, $planLegacyBoundary) = $boundary
+                  AND COALESCE(r.audience, $planFallbackAudience) IN ({whereAudiences})
                   AND r.sensitivity != '{MemorySensitivity.Secret.ToWireValue()}'
                   AND r.memory_class IN ({whereClasses})
                   AND ({recordWhereTerms})
@@ -829,6 +923,9 @@ public sealed class SQLiteMemoryStore
             """;
         if (domain is not null)
             cmd.Parameters.AddWithValue("$domain", domain);
+        cmd.Parameters.AddWithValue("$boundary", boundary);
+        cmd.Parameters.AddWithValue("$planLegacyBoundary", SecurityPolicyDefaults.LegacyRestrictedBoundary);
+        cmd.Parameters.AddWithValue("$planFallbackAudience", audience.ToWireValue());
         cmd.Parameters.AddWithValue("$now", now);
         cmd.Parameters.AddWithValue("$allowExpiredEvidence", allowExpiredEvidence ? 1 : 0);
         cmd.Parameters.AddWithValue("$limit", limit);
@@ -847,11 +944,13 @@ public sealed class SQLiteMemoryStore
                 FacetsJson: reader.IsDBNull(6) ? null : reader.GetString(6),
                 SlotsJson: reader.IsDBNull(7) ? null : reader.GetString(7),
                 Domain: reader.GetString(8),
-                Sensitivity: reader.GetString(9),
-                RecallMode: reader.GetString(10),
-                UpdateSemantics: reader.GetString(11),
-                ExpiresAtMs: reader.IsDBNull(12) ? null : reader.GetInt64(12),
-                UpdatedAtMs: reader.GetInt64(13)));
+                Boundary: reader.GetString(9),
+                Audience: reader.GetString(10),
+                Sensitivity: reader.GetString(11),
+                RecallMode: reader.GetString(12),
+                UpdateSemantics: reader.GetString(13),
+                ExpiresAtMs: reader.IsDBNull(14) ? null : reader.GetInt64(14),
+                UpdatedAtMs: reader.GetInt64(15)));
         }
 
         return output;
@@ -1307,6 +1406,9 @@ public sealed class SQLiteMemoryStore
         foreach (var operation in operations)
         {
             var now = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
+            var resolvedBoundary = string.Equals(operation.Boundary, SecurityPolicyDefaults.LegacyRestrictedBoundary, StringComparison.Ordinal)
+                ? SecurityPolicyDefaults.InferLegacyBoundaryFromDomain(operation.Domain)
+                : operation.Boundary;
             var canonicalName = string.IsNullOrWhiteSpace(operation.AnchorCanonicalName)
                 ? operation.Title
                 : operation.AnchorCanonicalName;
@@ -1330,10 +1432,10 @@ public sealed class SQLiteMemoryStore
                 recordCmd.CommandText = """
                     INSERT INTO memory_records(
                       record_id, anchor_id, memory_class, record_type, payload_json, aliases_json, facets_json, slots_json, supersedes_record_id,
-                      update_semantics, domain, sensitivity, recall_mode, confidence,
+                      update_semantics, domain, boundary, audience, sensitivity, recall_mode, confidence,
                       freshness_at, expires_at, created_at)
                     VALUES($id, $anchorId, $memoryClass, $recordType, $payloadJson, $aliasesJson, $facetsJson, $slotsJson, $supersedes,
-                      $semantics, $domain, $sensitivity, $recallMode, $confidence,
+                      $semantics, $domain, $boundary, $audience, $sensitivity, $recallMode, $confidence,
                       $freshnessAt, $expiresAt, $createdAt);
                     """;
                 recordCmd.Parameters.AddWithValue("$id", string.IsNullOrWhiteSpace(operation.MemoryId) ? $"rec-{Guid.NewGuid():N}" : operation.MemoryId);
@@ -1347,6 +1449,8 @@ public sealed class SQLiteMemoryStore
                 recordCmd.Parameters.AddWithValue("$supersedes", (object?)operation.SupersedesRecordId ?? DBNull.Value);
                 recordCmd.Parameters.AddWithValue("$semantics", operation.UpdateSemantics);
                 recordCmd.Parameters.AddWithValue("$domain", operation.Domain);
+                recordCmd.Parameters.AddWithValue("$boundary", resolvedBoundary);
+                recordCmd.Parameters.AddWithValue("$audience", operation.Audience);
                 recordCmd.Parameters.AddWithValue("$sensitivity", operation.Sensitivity);
                 recordCmd.Parameters.AddWithValue("$recallMode", operation.RecallMode);
                 recordCmd.Parameters.AddWithValue("$confidence", operation.Confidence);
@@ -1394,10 +1498,10 @@ public sealed class SQLiteMemoryStore
             documentCmd.CommandText = """
                 INSERT INTO memory_documents(
                   document_id, anchor_id, memory_class, title, markdown_body, aliases_json, facets_json, slots_json, update_semantics,
-                  domain, sensitivity, recall_mode, confidence, freshness_at,
+                  domain, boundary, audience, sensitivity, recall_mode, confidence, freshness_at,
                   expires_at, created_at, updated_at)
                 VALUES($id, $anchorId, $memoryClass, $title, $body, $aliasesJson, $facetsJson, $slotsJson, $semantics,
-                  $domain, $sensitivity, $recallMode, $confidence, $freshnessAt,
+                  $domain, $boundary, $audience, $sensitivity, $recallMode, $confidence, $freshnessAt,
                   $expiresAt, $createdAt, $updatedAt)
                 ON CONFLICT(document_id) DO UPDATE SET
                   memory_class=excluded.memory_class,
@@ -1408,6 +1512,8 @@ public sealed class SQLiteMemoryStore
                   slots_json=excluded.slots_json,
                   update_semantics=excluded.update_semantics,
                   domain=excluded.domain,
+                  boundary=excluded.boundary,
+                  audience=excluded.audience,
                   sensitivity=excluded.sensitivity,
                   recall_mode=excluded.recall_mode,
                   confidence=excluded.confidence,
@@ -1425,6 +1531,8 @@ public sealed class SQLiteMemoryStore
             documentCmd.Parameters.AddWithValue("$slotsJson", (object?)operation.SlotsJson ?? DBNull.Value);
             documentCmd.Parameters.AddWithValue("$semantics", operation.UpdateSemantics);
             documentCmd.Parameters.AddWithValue("$domain", operation.Domain);
+            documentCmd.Parameters.AddWithValue("$boundary", resolvedBoundary);
+            documentCmd.Parameters.AddWithValue("$audience", operation.Audience);
             documentCmd.Parameters.AddWithValue("$sensitivity", operation.Sensitivity);
             documentCmd.Parameters.AddWithValue("$recallMode", resolvedRecallMode);
             documentCmd.Parameters.AddWithValue("$confidence", operation.Confidence);
@@ -1535,6 +1643,33 @@ public sealed class SQLiteMemoryStore
         await alter.ExecuteNonQueryAsync(ct);
     }
 
+    private static async Task NormalizeLegacyBoundariesAsync(SqliteConnection conn, CancellationToken ct)
+    {
+        await using var docs = conn.CreateCommand();
+        docs.CommandText = $"""
+            UPDATE memory_documents
+            SET boundary = CASE
+                WHEN lower(domain) IN ('project:signalr', 'project:tui', 'project:headless', 'project:manual', 'project:default') THEN '{SecurityPolicyDefaults.LocalDaemonBoundary}'
+                WHEN lower(domain) GLOB 'project:[cdg]*' THEN '{SecurityPolicyDefaults.SlackWorkspaceBoundary}'
+                ELSE '{SecurityPolicyDefaults.LegacyRestrictedBoundary}'
+            END
+            WHERE boundary IS NULL OR trim(boundary) = '';
+            """;
+        await docs.ExecuteNonQueryAsync(ct);
+
+        await using var records = conn.CreateCommand();
+        records.CommandText = $"""
+            UPDATE memory_records
+            SET boundary = CASE
+                WHEN lower(domain) IN ('project:signalr', 'project:tui', 'project:headless', 'project:manual', 'project:default') THEN '{SecurityPolicyDefaults.LocalDaemonBoundary}'
+                WHEN lower(domain) GLOB 'project:[cdg]*' THEN '{SecurityPolicyDefaults.SlackWorkspaceBoundary}'
+                ELSE '{SecurityPolicyDefaults.LegacyRestrictedBoundary}'
+            END
+            WHERE boundary IS NULL OR trim(boundary) = '';
+            """;
+        await records.ExecuteNonQueryAsync(ct);
+    }
+
     public SQLiteMemoryAnchor CreateDefaultAnchor(string canonicalName, string domain = "project:default")
     {
         var nowMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
@@ -1585,7 +1720,9 @@ public sealed record SQLiteMemoryDocument(
     long? FreshnessAtMs,
     long? ExpiresAtMs,
     long CreatedAtMs,
-    long UpdatedAtMs);
+    long UpdatedAtMs,
+    string Boundary = SecurityPolicyDefaults.LegacyRestrictedBoundary,
+    string Audience = "public");
 
 public sealed record SQLiteMemoryCheckpoint(
     string CheckpointId,
@@ -1608,7 +1745,9 @@ public sealed record SQLiteMemorySearchResult(
     double Score,
     string Domain,
     string Sensitivity,
-    string RecallMode);
+    string RecallMode,
+    string Boundary = SecurityPolicyDefaults.LegacyRestrictedBoundary,
+    string Audience = "public");
 
 public sealed record SQLiteMemoryHydratedItem(
     string Id,
@@ -1624,7 +1763,9 @@ public sealed record SQLiteMemoryHydratedItem(
     string RecallMode,
     string UpdateSemantics,
     long? ExpiresAtMs,
-    long UpdatedAtMs);
+    long UpdatedAtMs,
+    string Boundary = SecurityPolicyDefaults.LegacyRestrictedBoundary,
+    string Audience = "public");
 
 public sealed record SQLiteMemoryCurationOperation(
     string Kind,
@@ -1645,7 +1786,9 @@ public sealed record SQLiteMemoryCurationOperation(
     double Confidence,
     long? FreshnessAtMs,
     long? ExpiresAtMs,
-    string? SupersedesRecordId = null);
+    string? SupersedesRecordId = null,
+    string Boundary = SecurityPolicyDefaults.LegacyRestrictedBoundary,
+    string Audience = "public");
 
 public sealed record SQLiteMemoryRelationOperation(
     string RelationType,

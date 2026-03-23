@@ -3,6 +3,7 @@ using System.Text;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Netclaw.Actors.Sessions;
+using Netclaw.Configuration;
 using Netclaw.Tools;
 
 namespace Netclaw.Actors.Memory;
@@ -42,6 +43,7 @@ public sealed partial class SqliteFindMemoriesTool : NetclawTool<SqliteFindMemor
             ? "manual/tool"
             : context.SessionId!;
         var domain = new Protocol.SessionId(sessionId).ToMemoryDomain();
+        var audience = MemoryPolicyScopeResolver.ResolveAudience(context.Audience, sessionId);
 
         var request = _planner.BuildRequest(
             sessionId,
@@ -60,6 +62,8 @@ public sealed partial class SqliteFindMemoriesTool : NetclawTool<SqliteFindMemor
             domain,
             plan.MemoryClasses,
             limit,
+            MemoryPolicyScopeResolver.ResolveBoundary(context.Boundary, audience, sessionId, domain),
+            audience,
             allowExpiredEvidence: includeStale,
             ct);
 

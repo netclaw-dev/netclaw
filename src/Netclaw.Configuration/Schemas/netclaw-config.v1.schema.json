@@ -77,7 +77,26 @@
     },
     "Tools": {
       "type": "object",
-      "additionalProperties": true
+      "properties": {
+        "ShellMode": {
+          "type": ["string", "null"],
+          "enum": ["Off", "SandboxOnly", "HostAllowed", null]
+        },
+        "ShellTimeoutSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 60
+        },
+        "MaxOutputChars": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 32000
+        },
+        "AudienceProfiles": {
+          "$ref": "#/$defs/ToolAudienceProfiles"
+        }
+      },
+      "additionalProperties": false
     },
     "Providers": {
       "type": "object",
@@ -232,6 +251,11 @@
           },
           "Enabled": { "type": "boolean", "default": true },
           "GrantCategory": { "type": ["string", "null"] },
+          "CapabilityClass": {
+            "type": "string",
+            "enum": ["Unknown", "Information", "MemorySafe", "SensitiveRead", "PublishExternal", "HighImpact"],
+            "default": "Unknown"
+          },
           "OAuthClientId": { "type": ["string", "null"] },
           "OAuthScope": { "type": ["string", "null"] }
         },
@@ -241,6 +265,53 @@
   },
   "additionalProperties": true,
   "$defs": {
+    "ToolProfileMode": {
+      "type": "string",
+      "enum": ["Allowlist", "All"]
+    },
+    "ToolFilesystemMode": {
+      "type": "string",
+      "enum": ["None", "Roots", "All"]
+    },
+    "ToolFilesystemAccessProfile": {
+      "type": "object",
+      "properties": {
+        "Mode": { "$ref": "#/$defs/ToolFilesystemMode" },
+        "Roots": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "ToolAudienceProfile": {
+      "type": "object",
+      "properties": {
+        "ToolsMode": { "$ref": "#/$defs/ToolProfileMode" },
+        "AllowedTools": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "McpServersMode": { "$ref": "#/$defs/ToolProfileMode" },
+        "AllowedMcpServers": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "ReadFiles": { "$ref": "#/$defs/ToolFilesystemAccessProfile" },
+        "WriteFiles": { "$ref": "#/$defs/ToolFilesystemAccessProfile" },
+        "AttachFiles": { "$ref": "#/$defs/ToolFilesystemAccessProfile" }
+      },
+      "additionalProperties": false
+    },
+    "ToolAudienceProfiles": {
+      "type": "object",
+      "properties": {
+        "Public": { "$ref": "#/$defs/ToolAudienceProfile" },
+        "Team": { "$ref": "#/$defs/ToolAudienceProfile" },
+        "Personal": { "$ref": "#/$defs/ToolAudienceProfile" }
+      },
+      "additionalProperties": false
+    },
     "ModelModality": {
       "type": "string",
       "enum": ["Text", "Image", "Audio", "Video"],

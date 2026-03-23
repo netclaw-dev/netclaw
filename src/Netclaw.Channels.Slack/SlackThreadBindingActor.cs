@@ -9,6 +9,7 @@ using Microsoft.Extensions.AI;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
 using Netclaw.Channels.Telemetry;
+using Netclaw.Configuration;
 using Netclaw.Security;
 
 namespace Netclaw.Channels.Slack;
@@ -269,6 +270,9 @@ internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStas
                     SenderId = message.SenderId,
                     ChannelId = _channelId.Value,
                     MessageId = message.EventId.Value,
+                    Audience = message.Audience,
+                    Principal = message.Principal,
+                    Provenance = message.Provenance,
                     Contents = contents,
                     ReceivedAt = message.ReceivedAt
                 }, queueWriteCts.Token);
@@ -330,6 +334,15 @@ internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStas
             new SessionPipelineOptions
             {
                 ChannelType = Actors.Channels.ChannelType.Slack,
+                DefaultAudience = TrustAudience.Public,
+                DefaultBoundary = SecurityPolicyDefaults.SlackWorkspaceBoundary,
+                DefaultPrincipal = PrincipalClassification.UntrustedExternal,
+                DefaultProvenance = new SourceProvenance
+                {
+                    TransportAuthenticity = TransportAuthenticity.Verified,
+                    PayloadTaint = PayloadTaint.Public,
+                    SourceKind = "slack"
+                },
                 Filter = OutputFilter.Text | OutputFilter.Files
             },
             materializer: _materializer,

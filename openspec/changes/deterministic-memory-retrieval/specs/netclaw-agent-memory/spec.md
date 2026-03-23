@@ -4,7 +4,7 @@
 
 Memory retrieval SHALL run in two modes: automatic pre-turn recall and explicit
 two-phase retrieval. Automatic recall SHALL use a deterministic retrieval plan
-derived from runtime-owned hard scope, conversation-owned soft scope, and
+derived from runtime-owned security boundary and subject scope, conversation-owned soft scope, and
 write-time memory metadata stored in the SQLite memory graph. Explicit
 retrieval SHALL continue to use `find_memories` for lightweight search and
 `get_memories` for full hydration when manual follow-up is needed. Explicit
@@ -40,7 +40,7 @@ explicit retrieval is a deliberate manual-control path.
 
 The system SHALL execute automatic recall before each user-facing model turn
 using a deterministic retrieval pipeline over the latest user message, recent
-session context, active anchors, runtime-owned hard scope, and policy scope.
+session context, active anchors, runtime-owned security boundary and subject scope, and policy scope.
 Automatic recall SHALL resolve legal scope before search, build a deterministic
 request plan, perform cheap candidate selection in SQLite, and rerank or bundle
 the resulting candidates without requiring an LLM planner on the hot path.
@@ -59,10 +59,11 @@ when the memory substrate is unavailable.
 - **THEN** the user-facing turn continues without durable recall injection
 - **AND** the session records degraded memory status for diagnostics
 
-#### Scenario: Runtime metadata owns the hard retrieval boundary
+#### Scenario: Security boundary owns the hard retrieval boundary
 - **GIVEN** the current session is bound to a specific Slack or operator context
 - **WHEN** automatic recall plans a retrieval request
-- **THEN** the legal memory scope comes from runtime metadata and policy configuration
+- **THEN** the legal memory scope comes from runtime-owned security boundary, subject bindings, and policy configuration
+- **AND** raw channel/session identity alone does not become the durable scope for reusable project knowledge
 - **AND** prompt semantics only influence soft narrowing within that boundary
 
 #### Scenario: Automatic recall uses write-time retrieval metadata

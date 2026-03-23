@@ -403,7 +403,7 @@ public sealed class MemoryRedesignedEvalSuiteTests : IDisposable
         now);
 
         await _store.ApplyCurationBatchAsync("cp-eval-3", accepted, CancellationToken.None);
-        var items = await _store.SearchByPlanAsync(["deploys", "east-2"], "project:ops", ["durable_fact"], 5, false);
+        var items = await _store.SearchByPlanAsync(["deploys", "east-2"], "project:ops", ["durable_fact"], 5, SecurityPolicyDefaults.InferLegacyBoundaryFromDomain("project:ops"), TrustAudience.Public, false);
 
         Assert.Single(items);
         Assert.Equal("Deployment region", items[0].Title);

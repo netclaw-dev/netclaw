@@ -1,3 +1,5 @@
+using Netclaw.Configuration;
+
 namespace Netclaw.Actors.Sessions;
 
 /// <summary>
@@ -16,6 +18,8 @@ public sealed record AutomaticRecallRequest(
     string Query,
     IReadOnlyList<string> RecentUserMessages,
     int MaxItems,
+    TrustAudience Audience = TrustAudience.Public,
+    string? Boundary = null,
     IReadOnlyList<string>? RecentAssistantMessages = null,
     IReadOnlyList<string>? RecentEntities = null,
     string? HardScopeOverride = null,

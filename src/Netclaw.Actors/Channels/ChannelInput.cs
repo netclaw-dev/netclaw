@@ -1,4 +1,5 @@
 using Microsoft.Extensions.AI;
+using Netclaw.Configuration;
 
 namespace Netclaw.Actors.Channels;
 
@@ -23,6 +24,29 @@ public sealed record ChannelInput
     /// Optional message ID for correlation and deduplication.
     /// </summary>
     public string? MessageId { get; init; }
+
+    /// <summary>
+    /// Optional source audience hint carried from the inbound adapter.
+    /// When omitted, the channel pipeline applies strict defaults.
+    /// </summary>
+    public TrustAudience? Audience { get; init; }
+
+    /// <summary>
+    /// Optional trust boundary hint carried from the inbound adapter.
+    /// When omitted, the channel pipeline applies adapter defaults.
+    /// </summary>
+    public string? Boundary { get; init; }
+
+    /// <summary>
+    /// Optional principal classification for the sender.
+    /// When omitted, the channel pipeline applies strict defaults.
+    /// </summary>
+    public PrincipalClassification? Principal { get; init; }
+
+    /// <summary>
+    /// Provenance markers that distinguish transport verification from content taint.
+    /// </summary>
+    public SourceProvenance? Provenance { get; init; }
 
     /// <summary>
     /// Message content. Supports text (<see cref="TextContent"/>),

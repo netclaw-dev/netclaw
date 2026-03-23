@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Netclaw.Actors.Sessions;
+using Netclaw.Configuration;
 
 namespace Netclaw.Actors.Memory;
 
@@ -41,14 +42,18 @@ public sealed class MemoryProposalGate
         IReadOnlyList<MemoryProposal> proposals,
         string domain,
         string defaultSensitivity,
-        long nowMs)
-        => Evaluate(proposals, domain, defaultSensitivity, nowMs).MemoryOperations;
+        long nowMs,
+        string? boundary = null,
+        TrustAudience audience = TrustAudience.Public)
+        => Evaluate(proposals, domain, defaultSensitivity, nowMs, boundary, audience).MemoryOperations;
 
     public MemoryProposalGateResult Evaluate(
         IReadOnlyList<MemoryProposal> proposals,
         string domain,
         string defaultSensitivity,
-        long nowMs)
+        long nowMs,
+        string? boundary = null,
+        TrustAudience audience = TrustAudience.Public)
     {
         var accepted = new List<SQLiteMemoryCurationOperation>();
         var identityUpdates = new List<IdentityProfileUpdate>();
@@ -94,7 +99,7 @@ public sealed class MemoryProposalGate
                     proposal.Content,
                     proposal.Rationale));
 
-                var mirrorOperation = TryBuildIdentityMirrorOperation(proposal, operation, memoryClass, domain, defaultSensitivity, nowMs);
+                var mirrorOperation = TryBuildIdentityMirrorOperation(proposal, operation, memoryClass, domain, defaultSensitivity, nowMs, boundary, audience);
                 if (mirrorOperation is not null)
                     accepted.Add(mirrorOperation);
 
@@ -123,7 +128,7 @@ public sealed class MemoryProposalGate
                 content = JsonSerializer.Serialize(envelope);
             }
 
-            accepted.Add(BuildMemoryOperation(proposal, operation, memoryClass, domain, sensitivity, recallMode, freshnessAt, expiry, content));
+            accepted.Add(BuildMemoryOperation(proposal, operation, memoryClass, domain, sensitivity, recallMode, freshnessAt, expiry, content, boundary, audience));
         }
 
         return new MemoryProposalGateResult(
@@ -197,7 +202,9 @@ public sealed class MemoryProposalGate
         MemoryClass memoryClass,
         string domain,
         string defaultSensitivity,
-        long nowMs)
+        long nowMs,
+        string? boundary,
+        TrustAudience audience)
     {
         if (!MemoryDomainEnumExtensions.TryFromWireValue(proposal.SubjectKind, out SubjectKind subjectKind)
             || subjectKind != SubjectKind.User)
@@ -222,7 +229,7 @@ public sealed class MemoryProposalGate
         var freshnessAt = proposal.FreshUntilMs ?? nowMs;
         var expiry = ResolveExpiry(memoryClass, proposal.ExpiresAtMs, freshnessAt);
         var recallMode = ResolveRecallMode(memoryClass, sensitivity);
-        return BuildMemoryOperation(proposal, operation, memoryClass, domain, sensitivity, recallMode, freshnessAt, expiry, proposal.Content);
+        return BuildMemoryOperation(proposal, operation, memoryClass, domain, sensitivity, recallMode, freshnessAt, expiry, proposal.Content, boundary, audience);
     }
 
     private static SQLiteMemoryCurationOperation BuildMemoryOperation(
@@ -234,7 +241,9 @@ public sealed class MemoryProposalGate
         MemoryRecallMode recallMode,
         long freshnessAt,
         long? expiry,
-        string content)
+        string content,
+        string? boundary,
+        TrustAudience audience)
     {
         var kind = operation == MemoryProposalOperation.AppendRecord ? MemoryKind.Record : MemoryKind.Document;
         var updateSemantics = memoryClass == MemoryClass.Trace
@@ -261,6 +270,8 @@ public sealed class MemoryProposalGate
             Relations: BuildRelations(proposal, memoryClass),
             UpdateSemantics: updateSemantics.ToWireValue(),
             Domain: domain,
+            Boundary: MemoryPolicyScopeResolver.ResolveBoundary(boundary, audience, sessionId: null, domain),
+            Audience: audience.ToWireValue(),
             Sensitivity: sensitivity,
             RecallMode: recallMode.ToWireValue(),
             Confidence: Math.Clamp(proposal.Confidence, 0.0, 1.0),

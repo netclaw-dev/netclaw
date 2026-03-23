@@ -214,9 +214,9 @@ Panels:
 
 ## CLI Parity Matrix
 
-- Overview health <-> `netclaw gateway status`
+- Overview health <-> `netclaw status`
 - Policy simulator <-> `netclaw acl test` / `netclaw acl explain`
-- Diagnostics panel <-> `netclaw gateway doctor`
+- Diagnostics panel <-> `netclaw doctor`
 - Session inspector <-> `netclaw session inspect`
 - Memory & Config <-> `netclaw memory show` / `netclaw project list` / `netclaw environment show`
 - Scheduling <-> `netclaw schedule list` / `netclaw schedule show`

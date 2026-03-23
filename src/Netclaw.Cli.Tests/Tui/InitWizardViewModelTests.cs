@@ -299,6 +299,61 @@ public sealed class InitWizardViewModelTests : IDisposable
     }
 
     [Fact]
+    public async Task HealthCheck_WritesRecommendedAudienceProfiles()
+    {
+        using var vm = CreateViewModel();
+
+        vm.SelectedProviderType = "ollama";
+        vm.SlackEnabled = false;
+        vm.ExposureMode = "Local only (recommended for homelab)";
+
+        vm.CurrentStep.Value = WizardStep.HealthCheck;
+        vm.GoNext();
+
+        await vm.HealthCheckCompletion!.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.True(vm.IsComplete.Value);
+
+        var config = JsonDocument.Parse(File.ReadAllText(_paths.NetclawConfigPath));
+        var tools = config.RootElement.GetProperty("Tools");
+        Assert.Equal("HostAllowed", tools.GetProperty("ShellMode").GetString());
+
+        var profiles = tools.GetProperty("AudienceProfiles");
+        var publicProfile = profiles.GetProperty("Public");
+        Assert.Equal("Allowlist", publicProfile.GetProperty("ToolsMode").GetString());
+        Assert.Equal("Allowlist", publicProfile.GetProperty("McpServersMode").GetString());
+        Assert.Empty(publicProfile.GetProperty("AllowedMcpServers").EnumerateArray());
+        Assert.Equal("Roots", publicProfile.GetProperty("ReadFiles").GetProperty("Mode").GetString());
+
+        var teamProfile = profiles.GetProperty("Team");
+        Assert.Empty(teamProfile.GetProperty("AllowedMcpServers").EnumerateArray());
+
+        var personalProfile = profiles.GetProperty("Personal");
+        Assert.Equal("All", personalProfile.GetProperty("ToolsMode").GetString());
+        Assert.Equal("All", personalProfile.GetProperty("McpServersMode").GetString());
+        Assert.Equal("All", personalProfile.GetProperty("ReadFiles").GetProperty("Mode").GetString());
+    }
+
+    [Fact]
+    public async Task HealthCheck_RemoteExposure_DisablesHostShellByDefault()
+    {
+        using var vm = CreateViewModel();
+
+        vm.SelectedProviderType = "ollama";
+        vm.SlackEnabled = false;
+        vm.ExposureMode = "Cloudflare Tunnel (configure later)";
+
+        vm.CurrentStep.Value = WizardStep.HealthCheck;
+        vm.GoNext();
+
+        await vm.HealthCheckCompletion!.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.True(vm.IsComplete.Value);
+
+        var config = JsonDocument.Parse(File.ReadAllText(_paths.NetclawConfigPath));
+        var tools = config.RootElement.GetProperty("Tools");
+        Assert.Equal("Off", tools.GetProperty("ShellMode").GetString());
+    }
+
+    [Fact]
     public async Task HealthCheck_WritesApiKeyToSecrets()
     {
         using var vm = CreateViewModel();

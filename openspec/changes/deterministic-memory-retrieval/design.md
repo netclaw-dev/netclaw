@@ -35,13 +35,15 @@ Rationale: this keeps the hot path explainable, bounded, and independent of side
 
 Alternative considered: keep `RecallPlanningSidecar` on the hot path with a stronger fallback. Rejected because planner timeout and schema drift remain first-order failure modes, and fallback quality is still too weak.
 
-### Decision: Hard scope is runtime-owned; soft scope is conversation-owned
+### Decision: Hard scope is security-boundary-owned; subject scope is runtime/project-owned; soft scope is conversation-owned
 
-The legal retrieval universe comes from runtime metadata such as workspace/channel/thread/session identity, configured project bindings, and policy envelope. The conversation can only influence soft narrowing signals such as named entities, thread title, recent topic, active anchors, and speaker profile.
+The legal retrieval universe comes from a runtime-owned security boundary plus policy envelope. Subject scope then comes from configured project bindings, anchor mappings, known repo/entity identities, and other runtime metadata. Channel/session identity is only a hint for deriving the boundary or subject scope and SHALL NOT be the durable hard scope for reusable project knowledge. The conversation can only influence soft narrowing signals such as named entities, thread title, recent topic, active anchors, and speaker profile.
 
 Rationale: this preserves fail-closed behavior and prevents the model from inferring itself into unauthorized memory domains.
 
 Alternative considered: infer scope entirely from prompt semantics. Rejected because it weakens policy guarantees and makes recall behavior harder to debug.
+
+Additional evidence: issue #203 shows that deriving hard scope from raw Slack channel identity hides DM-learned Netclaw repository memories from later private-channel sessions, even though both contexts should have been able to reuse the knowledge inside the same personal/private boundary.
 
 ### Decision: Write-time metadata becomes a required contract for durable memory
 
@@ -80,7 +82,7 @@ Alternative considered: log only final injected memories. Rejected because it hi
 - [Risk] Deterministic planning may miss useful recall on ambiguous prompts. -> Mitigation: keep intentional search available, invest in write-time aliases/facets, and gate rollout on realistic eval suites.
 - [Risk] Metadata extraction quality may become the new bottleneck. -> Mitigation: make the extractor contract explicit, validate it independently, and keep fields small and testable.
 - [Risk] Bundle retrieval adds hot-path complexity. -> Mitigation: keep activation conservative, clamp candidate and token budgets, and allow ranked-only fallback.
-- [Risk] Strong hard-scope rules could hide cross-domain facts the operator expects in DMs. -> Mitigation: allow broader DM hard scopes while using soft scopes and policy filters for narrowing.
+- [Risk] Strong hard-scope rules could hide reusable project facts behind channel-local scope IDs. -> Mitigation: derive hard scope from security boundary and subject bindings, then use soft scopes and policy filters for narrowing.
 - [Risk] Debug surfaces could leak sensitive retrieval context. -> Mitigation: apply the same policy and redaction rules to diagnostics, and keep sensitive bodies out of routine logs.
 
 ## Migration Plan

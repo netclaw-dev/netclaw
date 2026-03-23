@@ -50,16 +50,18 @@ Behavior:
 - produces effective decision and reasons
 - includes deny reason codes suitable for automation
 
-### 4) Gateway Diagnostics
+### 4) Diagnostics
 
-- `netclaw gateway status`
-- `netclaw gateway doctor`
-- `netclaw gateway pair [--approve <code>]`
+- `netclaw status`
+- `netclaw doctor`
 
 Behavior:
 
-- status summarizes Slack connectivity, persistence reachability, and policy mode
-- doctor emits actionable diagnostics in priority order
+- status summarizes connector health, persistence reachability, active shell mode,
+  and runtime policy state
+- doctor emits actionable diagnostics in priority order, including strict-default
+  trust-policy checks, unsafe audience-profile combinations, and sandbox-shell
+  readiness when applicable
 
 ### 5) Session Operations
 
@@ -85,7 +87,8 @@ Behavior:
 Behavior:
 
 - prompt validation checks required opening/zero clause sections
-- tools policy command reports effective grant state
+- tools policy command reports effective grant state and the resolved
+  audience-profile scope when policy limits apply
 - `netclaw mcp list` reports daemon-backed per-server runtime status and discovered tools
 - `netclaw doctor` may include daemon-backed MCP auth/connectivity truth when available, and must label offline-only OAuth checks as non-authoritative
 - smoke test command runs optional live integration checks outside CI-required

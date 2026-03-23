@@ -5,6 +5,7 @@ using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
+using Netclaw.Configuration;
 
 namespace Netclaw.Daemon.Gateway;
 
@@ -204,6 +205,15 @@ public sealed class SessionRegistry
         {
             SenderId = "signalr-user",
             MessageId = signalrMessageId,
+            Audience = TrustAudience.Personal,
+            Boundary = SecurityPolicyDefaults.LocalDaemonBoundary,
+            Principal = PrincipalClassification.Operator,
+            Provenance = new SourceProvenance
+            {
+                TransportAuthenticity = TransportAuthenticity.LocalProcess,
+                PayloadTaint = PayloadTaint.Trusted,
+                SourceKind = "signalr"
+            },
             Contents = [new TextContent(text)],
             ReceivedAt = _timeProvider.GetUtcNow()
         };

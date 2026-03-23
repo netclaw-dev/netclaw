@@ -96,6 +96,35 @@ public sealed class MemoryEvalSeedSuiteTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Formation_seeded_fixture_rejects_raw_secret_content_even_for_explicit_memory_requests()
+    {
+        await _store.InitializeAsync();
+        var policy = new MemoryPolicyEvaluator();
+        var extractor = new MemoryRulesFirstExtractor(policy);
+
+        var payload = new MemoryCheckpointPayload(
+            SessionId: "signalr/thread-secret",
+            TriggerType: CheckpointTriggerType.ExplicitMemoryRequest.ToWireValue(),
+            Source: "store_memory",
+            Content: "API_KEY=secret123",
+            UserContent: "API_KEY=secret123",
+            AssistantContent: null,
+            IsExplicitRequest: true,
+            HasVerifiedToolFinding: false,
+            IsCompactionBoundary: false,
+            HasAcceptedSubAgentFinding: false,
+            Domain: "project:default",
+            Sensitivity: "normal",
+            RecallMode: "auto",
+            Confidence: 0.99,
+            Title: "save this key");
+
+        var candidates = extractor.Extract(payload, new HashSet<string>(StringComparer.OrdinalIgnoreCase));
+
+        Assert.Empty(candidates);
+    }
+
+    [Fact]
     public async Task NoiseSuppression_seeded_fixture_drops_trivial_checkpoint_candidate()
     {
         await _store.InitializeAsync();

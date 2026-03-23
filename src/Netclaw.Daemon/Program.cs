@@ -340,6 +340,13 @@ static void ConfigureDaemonServices(
         .Get<ToolConfig>() ?? new ToolConfig();
     services.AddSingleton(toolConfig);
 
+    var securityPolicyConfig = configuration.GetSection("Security")
+        .Get<SecurityPolicyConfig>() ?? new SecurityPolicyConfig();
+    services.AddSingleton(securityPolicyConfig);
+    var effectivePolicyDefaults = SecurityPolicyDefaults.Resolve(securityPolicyConfig);
+    services.AddSingleton(effectivePolicyDefaults);
+    services.AddSingleton<TrustContextDeriver>();
+
     // Reminders
     var reminderConfig = configuration.GetSection("Reminders")
         .Get<ReminderConfig>() ?? new ReminderConfig();
@@ -356,8 +363,11 @@ static void ConfigureDaemonServices(
     var toolPathPolicy = new ToolPathPolicy([paths.SecretsPath, paths.KeysDirectory]);
     services.AddSingleton(toolPathPolicy);
 
+    var toolAccessPolicy = new ToolAccessPolicy(toolConfig, effectivePolicyDefaults);
+    services.AddSingleton(toolAccessPolicy);
+
     var toolRegistry = new ToolRegistry();
-    toolRegistry.WithFirstPartyTools(toolConfig, searchBackend, toolPathPolicy);
+    toolRegistry.WithFirstPartyTools(toolConfig, searchBackend, toolPathPolicy, toolAccessPolicy);
 
     // Skills system: seed built-in skills to .system/, register sync service
     CopyBuiltInSkills(paths.SystemSkillsDirectory);
@@ -413,7 +423,10 @@ static void ConfigureDaemonServices(
 
     services.AddSingleton(toolRegistry);
     services.AddSingleton<IToolExecutor>(sp =>
-        new DispatchingToolExecutor(toolRegistry, sp.GetRequiredService<ILogger<DispatchingToolExecutor>>()));
+        new DispatchingToolExecutor(
+            toolRegistry,
+            toolAccessPolicy,
+            sp.GetRequiredService<ILogger<DispatchingToolExecutor>>()));
 
     // Operational notification webhooks
     var notificationsConfig = configuration.GetSection("Notifications")

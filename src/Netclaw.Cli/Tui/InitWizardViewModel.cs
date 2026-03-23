@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Netclaw.Channels.Slack;
 using Netclaw.Cli.Config;
 using Netclaw.Cli.Daemon;
@@ -894,11 +895,13 @@ public partial class InitWizardViewModel : ReactiveViewModel
                 ["Backend"] = SelectedSearchBackend
             };
 
-            if (SelectedSearchBackend == "searxng" && !string.IsNullOrWhiteSpace(SearXngEndpointInput))
-                searchSection["SearXngEndpoint"] = SearXngEndpointInput;
+        if (SelectedSearchBackend == "searxng" && !string.IsNullOrWhiteSpace(SearXngEndpointInput))
+            searchSection["SearXngEndpoint"] = SearXngEndpointInput;
 
             config["Search"] = searchSection;
         }
+
+        config["Tools"] = BuildRecommendedToolConfig();
 
         // Skill sync section
         config["SkillSync"] = new Dictionary<string, object>
@@ -946,6 +949,7 @@ public partial class InitWizardViewModel : ReactiveViewModel
 
         // Write netclaw.json
         var jsonOptions = new JsonSerializerOptions { WriteIndented = true };
+        jsonOptions.Converters.Add(new JsonStringEnumConverter());
         File.WriteAllText(_paths.NetclawConfigPath,
             JsonSerializer.Serialize(config, jsonOptions));
 
@@ -1275,6 +1279,26 @@ public partial class InitWizardViewModel : ReactiveViewModel
             return; // Do not overwrite operator customizations
 
         File.WriteAllText(path, content);
+    }
+
+    private ToolConfig BuildRecommendedToolConfig()
+    {
+        return new ToolConfig
+        {
+            ShellMode = ResolveRecommendedShellMode(),
+            AudienceProfiles = ToolAudienceProfileDefaults.CreateProfiles()
+        };
+    }
+
+    private ShellExecutionMode ResolveRecommendedShellMode()
+    {
+        if (string.IsNullOrWhiteSpace(ExposureMode)
+            || ExposureMode.StartsWith("Local only", StringComparison.OrdinalIgnoreCase))
+        {
+            return ShellExecutionMode.HostAllowed;
+        }
+
+        return ShellExecutionMode.Off;
     }
 
     public override void Dispose()

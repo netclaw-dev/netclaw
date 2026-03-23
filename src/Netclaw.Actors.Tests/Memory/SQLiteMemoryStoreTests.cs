@@ -1,5 +1,6 @@
 using Microsoft.Data.Sqlite;
 using Netclaw.Actors.Memory;
+using Netclaw.Configuration;
 using Xunit;
 
 namespace Netclaw.Actors.Tests.Memory;
@@ -210,6 +211,78 @@ public sealed class SQLiteMemoryStoreTests : IAsyncLifetime
         Assert.True(await reader.ReadAsync());
         Assert.Equal("searchable", reader.GetString(0));
         Assert.Contains("needs_metadata_enrichment", reader.GetString(1), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task SearchByPlan_filters_results_by_allowed_audience()
+    {
+        await _store.InitializeAsync();
+
+        var anchor = _store.CreateDefaultAnchor("netclaw", "project:test");
+        var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+        await _store.UpsertDocumentAsync(new SQLiteMemoryDocument(
+            DocumentId: "doc-public",
+            Anchor: anchor,
+            MemoryClass: "durable_fact",
+            Title: "Public note",
+            MarkdownBody: "Visible to everyone.",
+            AliasesJson: null,
+            FacetsJson: "[\"project_fact\"]",
+            SlotsJson: null,
+            UpdateSemantics: "merge-document",
+            Domain: "project:test",
+            Sensitivity: "normal",
+            RecallMode: "auto",
+            Confidence: 0.9,
+            FreshnessAtMs: now,
+            ExpiresAtMs: null,
+            CreatedAtMs: now,
+            UpdatedAtMs: now,
+            Audience: TrustAudience.Public.ToWireValue()));
+
+        await _store.UpsertDocumentAsync(new SQLiteMemoryDocument(
+            DocumentId: "doc-personal",
+            Anchor: anchor,
+            MemoryClass: "durable_fact",
+            Title: "Personal note",
+            MarkdownBody: "Visible only in personal contexts.",
+            AliasesJson: null,
+            FacetsJson: "[\"project_fact\"]",
+            SlotsJson: null,
+            UpdateSemantics: "merge-document",
+            Domain: "project:test",
+            Sensitivity: "normal",
+            RecallMode: "auto",
+            Confidence: 0.95,
+            FreshnessAtMs: now,
+            ExpiresAtMs: null,
+            CreatedAtMs: now,
+            UpdatedAtMs: now,
+            Audience: TrustAudience.Personal.ToWireValue()));
+
+        var publicResults = await _store.SearchByPlanAsync(
+            ["visible"],
+            "project:test",
+            [MemoryClass.DurableFact.ToWireValue()],
+            10,
+            SecurityPolicyDefaults.InferLegacyBoundaryFromDomain("project:test"),
+            TrustAudience.Public,
+            false);
+
+        var personalResults = await _store.SearchByPlanAsync(
+            ["visible"],
+            "project:test",
+            [MemoryClass.DurableFact.ToWireValue()],
+            10,
+            SecurityPolicyDefaults.InferLegacyBoundaryFromDomain("project:test"),
+            TrustAudience.Personal,
+            false);
+
+        Assert.Contains(publicResults, x => x.Id == "doc-public");
+        Assert.DoesNotContain(publicResults, x => x.Id == "doc-personal");
+        Assert.Contains(personalResults, x => x.Id == "doc-public");
+        Assert.Contains(personalResults, x => x.Id == "doc-personal");
     }
 
     public Task InitializeAsync() => Task.CompletedTask;

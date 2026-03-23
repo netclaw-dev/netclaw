@@ -105,6 +105,9 @@ public sealed class SubAgentSpawner
                     Task = task,
                     Timeout = subAgentTimeout,
                     SessionScopeId = subAgentScopeId,
+                    Audience = context.Audience,
+                    Boundary = context.Boundary,
+                    ChannelType = context.ChannelType,
                     Cancellation = ct
                 },
                 timeout: subAgentTimeout.Add(TimeSpan.FromSeconds(5)),

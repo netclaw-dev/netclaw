@@ -6,6 +6,7 @@ using Akka.Streams.Dsl;
 using Microsoft.AspNetCore.SignalR;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
+using Netclaw.Configuration;
 
 namespace Netclaw.Daemon.Gateway;
 
@@ -176,7 +177,19 @@ internal sealed class SignalRSessionActor : ReceiveActor, IWithUnboundedStash, I
         using var initCts = new CancellationTokenSource(PipelineInitTimeout);
         var materialized = await _pipeline.CreateAsync(
             _sessionId,
-            new SessionPipelineOptions { ChannelType = _channelType },
+            new SessionPipelineOptions
+            {
+                ChannelType = _channelType,
+                DefaultAudience = TrustAudience.Personal,
+                DefaultBoundary = SecurityPolicyDefaults.LocalDaemonBoundary,
+                DefaultPrincipal = PrincipalClassification.Operator,
+                DefaultProvenance = new SourceProvenance
+                {
+                    TransportAuthenticity = TransportAuthenticity.LocalProcess,
+                    PayloadTaint = PayloadTaint.Trusted,
+                    SourceKind = "signalr"
+                }
+            },
             materializer: _materializer,
             cancellationToken: initCts.Token);
 
