@@ -138,7 +138,23 @@ Returning to a broader capability envelope requires either explicit operator app
 
 Rationale: this addresses prompt injection as privilege containment rather than pure text filtering.
 
+Important limitation with the current memory injection model: durable memories may persist into session history once surfaced. That means a later downgrade still narrows future tool access, future recall, and future intentional retrieval, but it does not retroactively hide information already introduced earlier in the same session.
+
 Alternative considered: session-wide trust fixed for the session lifetime. Rejected because owner-initiated sensitive-read subtasks would still inherit too much authority.
+
+### Decision: Persisted recall makes per-turn memory policy first-contact gating
+
+With the current memory model, recalled durable facts may be persisted into the active session history after they are first injected. Therefore:
+
+- per-turn trust policy still governs whether a memory may be introduced into the session
+- per-turn trust policy still governs future explicit retrieval and future automatic recall
+- per-turn trust policy does **not** retroactively redact facts already surfaced in an earlier higher-trust turn
+
+This means the current memory policy should be described as first-contact gating and blast-radius limitation, not as a full confidentiality barrier across mid-session trust degradation.
+
+Rationale: this matches the runtime behavior after the memory injection overhaul and avoids claiming stronger secrecy than the system can actually provide.
+
+Follow-up direction: if we later need stronger confidentiality across trust changes, the likely mechanism is session-scoped trust or session fork/termination on downgrade rather than attempting to scrub previously surfaced memory from history.
 
 ### Decision: Tool policy has separate exposure and invocation gates
 

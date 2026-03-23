@@ -14,8 +14,16 @@ Every durable anchor, document, record, and edge SHALL carry policy metadata inc
 #### Scenario: Audience blocks broader memory from public turn
 
 - **GIVEN** a stored memory item is marked `audience=personal`
+- **AND** the item has not already been surfaced into the current session history
 - **WHEN** a `public` turn runs recall
-- **THEN** the item is excluded from both automatic recall and inline retrieval unless a higher-trust approval flow authorizes it
+- **THEN** the item is excluded from future automatic recall and inline retrieval unless a higher-trust approval flow authorizes it
+
+#### Scenario: Mid-session downgrade limits future recall but does not unsurface prior memory
+
+- **GIVEN** a higher-trust turn has already surfaced a `personal` durable fact into the current session history
+- **WHEN** the active trust context later downgrades to `public`
+- **THEN** future automatic recall and inline retrieval MUST exclude additional `personal` memories unless a higher-trust approval flow authorizes them
+- **AND** the runtime does not rely on per-turn recall filtering to retroactively remove the already surfaced fact from session history
 
 #### Scenario: Raw secret material is rejected during memory formation
 
@@ -39,9 +47,9 @@ Every durable anchor, document, record, and edge SHALL carry policy metadata inc
 - **THEN** the runtime may retrieve both memories through the shared boundary
 - **AND** it does not require channel/session identity to match the formation source
 
-### Requirement: Automatic pre-turn recall
+### Requirement: Automatic pre-turn recall is admission control, not retroactive redaction
 
-The system SHALL execute automatic recall before each user-facing model turn using the latest user message, recent session context, active anchors, and policy scope. Automatic recall SHALL be bounded by a latency budget, SHALL degrade safely when the memory substrate is unavailable, and SHALL respect the active trust context's audience and sensitivity ceiling.
+The system SHALL execute automatic recall before each user-facing model turn using the latest user message, recent session context, active anchors, and policy scope. Automatic recall SHALL be bounded by a latency budget, SHALL degrade safely when the memory substrate is unavailable, and SHALL respect the active trust context's audience and sensitivity ceiling for memories that have not yet been surfaced into the active session. The runtime SHALL treat recall filtering as admission control for new memory disclosure, not as a retroactive redaction mechanism for content already persisted in the session history.
 
 #### Scenario: Recall completes within budget
 
