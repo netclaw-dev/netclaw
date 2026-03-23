@@ -11,7 +11,7 @@ Keep it small. Keep it durable. Keep it routing-focused.
 
 ## Current Product Direction
 
-- Netclaw is a Slack-connected homelab assistant built on Akka.Agents.
+- Netclaw is an open-source, self-hosted autonomous operations agent built on Akka.Agents.
 - MVP is single process, actor-driven, and persistence-backed.
 - Session identity is Slack thread: `{channelId}/{threadTs}`.
 - Security posture is default deny.

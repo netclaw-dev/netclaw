@@ -53,7 +53,7 @@
 ## Working Assumptions
 
 - single-process architecture during MVP
-- owner-controlled host and credentials
+- operator-controlled host and credentials
 - default-deny policy with explicit per-channel and per-sender allow rules
 - required CI tests do not depend on live model providers
 - `big-gpu` Ollama access is local-dev only and not available in CI/CD
