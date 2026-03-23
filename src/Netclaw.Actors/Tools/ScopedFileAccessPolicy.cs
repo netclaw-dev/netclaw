@@ -6,10 +6,16 @@ namespace Netclaw.Actors.Tools;
 internal sealed class ScopedFileAccessPolicy
 {
     private readonly ToolAudienceProfileResolver _profileResolver;
+    private readonly Lazy<IReadOnlyList<string>> _cachedGlobalReadRoots;
 
     public ScopedFileAccessPolicy(ToolConfig toolConfig, NetclawPaths? paths = null)
     {
         _profileResolver = new ToolAudienceProfileResolver(toolConfig, paths);
+        _cachedGlobalReadRoots = new Lazy<IReadOnlyList<string>>(() =>
+            _profileResolver.ResolveGlobalReadRoots()
+                .Select(NormalizeDirectoryPath)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray());
     }
 
     public bool TryResolveReadPath(string rawPath, ToolExecutionContext context, out string fullPath, out string error)
@@ -113,7 +119,7 @@ internal sealed class ScopedFileAccessPolicy
 
         if (accessKind == AccessKind.Read)
         {
-            foreach (var globalRoot in _profileResolver.ResolveGlobalReadRoots().Select(NormalizeDirectoryPath))
+            foreach (var globalRoot in _cachedGlobalReadRoots.Value)
                 roots.Add(globalRoot);
         }
 

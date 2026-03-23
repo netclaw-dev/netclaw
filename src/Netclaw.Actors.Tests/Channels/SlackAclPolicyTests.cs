@@ -153,7 +153,7 @@ public sealed class SlackAclPolicyTests
     }
 
     [Fact]
-    public void EvaluateInbound_invalid_channel_audience_value_falls_through_to_heuristic()
+    public void EvaluateInbound_invalid_channel_audience_value_denies_message()
     {
         var message = CreateDm("U123");
         var options = new SlackChannelOptions
@@ -164,9 +164,26 @@ public sealed class SlackAclPolicyTests
 
         var result = SlackAclPolicy.EvaluateInbound(message, options, null);
 
-        Assert.True(result.IsAllowed);
-        // Invalid value → TryParseAudience fails → heuristic fallback → Team
-        Assert.Equal(TrustAudience.Team, result.Audience);
+        Assert.False(result.IsAllowed);
+        Assert.Contains("invalid_channel_audience", result.DenyReason);
+        Assert.Contains("persoanl", result.DenyReason);
+    }
+
+    [Fact]
+    public void EvaluateInbound_invalid_channel_id_audience_value_denies_message()
+    {
+        var message = CreateChannelMessage("C456", "U123");
+        var options = new SlackChannelOptions
+        {
+            AllowedChannelIds = ["C456"],
+            ChannelAudiences = new Dictionary<string, string> { ["C456"] = "pubilc" } // typo
+        };
+
+        var result = SlackAclPolicy.EvaluateInbound(message, options, null);
+
+        Assert.False(result.IsAllowed);
+        Assert.Contains("invalid_channel_audience", result.DenyReason);
+        Assert.Contains("pubilc", result.DenyReason);
     }
 
     private static SlackInboundMessage CreateDm(string userId) => new(

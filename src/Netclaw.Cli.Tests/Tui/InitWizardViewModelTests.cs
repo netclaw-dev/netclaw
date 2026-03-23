@@ -1082,6 +1082,44 @@ public sealed class InitWizardViewModelTests : IDisposable
         Assert.Contains("Environment Capabilities", tooling, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void PopulateChannelAudiences_personal_posture_dm_maps_to_personal()
+    {
+        using var vm = CreateViewModel();
+        vm.ExposureMode = "Local only";
+        vm.SlackAllowDirectMessages = true;
+
+        vm.PopulateChannelAudiences();
+
+        Assert.True(vm.ChannelAudiences.ContainsKey("dm"));
+        Assert.Equal("personal", vm.ChannelAudiences["dm"]);
+    }
+
+    [Fact]
+    public void PopulateChannelAudiences_team_posture_dm_maps_to_team()
+    {
+        using var vm = CreateViewModel();
+        vm.ExposureMode = "Private network";
+        vm.SlackAllowDirectMessages = true;
+
+        vm.PopulateChannelAudiences();
+
+        Assert.True(vm.ChannelAudiences.ContainsKey("dm"));
+        Assert.Equal("team", vm.ChannelAudiences["dm"]);
+    }
+
+    [Fact]
+    public void PopulateChannelAudiences_no_dm_enabled_has_no_dm_key()
+    {
+        using var vm = CreateViewModel();
+        vm.ExposureMode = "Local only";
+        vm.SlackAllowDirectMessages = false;
+
+        vm.PopulateChannelAudiences();
+
+        Assert.False(vm.ChannelAudiences.ContainsKey("dm"));
+    }
+
     private InitWizardViewModel CreateViewModel(IBrowserAutomationBootstrapper? browserBootstrapper = null)
     {
         return new InitWizardViewModel(_paths, _registry, _fakeProbe, _fakeSlackProbe, browserBootstrapper);

@@ -31,7 +31,11 @@ public static class SlackAclPolicy
         var isExplicitUser = options.AllowedUserIds.Contains(userId.Value, StringComparer.Ordinal);
         var isExplicitChannel = options.AllowedChannelIds.Contains(message.ChannelId.Value, StringComparer.Ordinal);
 
-        var audience = ResolveAudience(message, options, isExplicitUser, isExplicitChannel);
+        var audienceResult = ResolveAudience(message, options, isExplicitUser, isExplicitChannel);
+        if (audienceResult.Error is not null)
+            return SlackAclDecision.Deny(audienceResult.Error);
+
+        var audience = audienceResult.Audience;
 
         var principal = isExplicitUser
             ? PrincipalClassification.TrustedInternal
@@ -66,32 +70,44 @@ public static class SlackAclPolicy
 
     /// <summary>
     /// Resolves audience via: explicit channel ID → "dm" key → existing heuristic fallback.
+    /// Returns an error when a <see cref="SlackChannelOptions.ChannelAudiences"/> key matches
+    /// but the value is not a recognized audience string — this is a config error, not a
+    /// "fall through to default" situation.
     /// </summary>
-    internal static TrustAudience ResolveAudience(
+    internal static AudienceResult ResolveAudience(
         SlackInboundMessage message,
         SlackChannelOptions options,
         bool isExplicitUser,
         bool isExplicitChannel)
     {
         // 1. Explicit channel ID mapping
-        if (options.ChannelAudiences.TryGetValue(message.ChannelId.Value, out var channelOverride)
-            && SecurityPolicyDefaults.TryParseAudience(channelOverride, out var channelAudience))
+        if (options.ChannelAudiences.TryGetValue(message.ChannelId.Value, out var channelOverride))
         {
-            return channelAudience;
+            return SecurityPolicyDefaults.TryParseAudience(channelOverride, out var channelAudience)
+                ? new AudienceResult(channelAudience)
+                : new AudienceResult($"invalid_channel_audience:{message.ChannelId.Value}={channelOverride}");
         }
 
         // 2. DM key mapping
         if (message.IsDirectMessage
-            && options.ChannelAudiences.TryGetValue("dm", out var dmOverride)
-            && SecurityPolicyDefaults.TryParseAudience(dmOverride, out var dmAudience))
+            && options.ChannelAudiences.TryGetValue("dm", out var dmOverride))
         {
-            return dmAudience;
+            return SecurityPolicyDefaults.TryParseAudience(dmOverride, out var dmAudience)
+                ? new AudienceResult(dmAudience)
+                : new AudienceResult($"invalid_channel_audience:dm={dmOverride}");
         }
 
-        // 3. Existing heuristic fallback
-        return (message.IsDirectMessage || isExplicitUser || isExplicitChannel)
+        // 3. Existing heuristic fallback (no key matched — this is the only legitimate fallback)
+        var audience = (message.IsDirectMessage || isExplicitUser || isExplicitChannel)
             ? TrustAudience.Team
             : TrustAudience.Public;
+        return new AudienceResult(audience);
+    }
+
+    internal readonly record struct AudienceResult(TrustAudience Audience, string? Error)
+    {
+        public AudienceResult(TrustAudience audience) : this(audience, null) { }
+        public AudienceResult(string error) : this(default, error) { }
     }
 
     /// <summary>

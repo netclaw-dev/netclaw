@@ -42,13 +42,11 @@ internal sealed class ToolAudienceProfileResolver
 
     /// <summary>
     /// Resolves <see cref="ToolAudienceProfiles.GlobalReadRoots"/> tokens into absolute paths.
-    /// Returns empty if paths are not available or no roots are configured.
+    /// Token-based roots (e.g. <c>{skills_dir}</c>) require <see cref="_paths"/> to resolve;
+    /// literal paths are always included.
     /// </summary>
     public IReadOnlyList<string> ResolveGlobalReadRoots()
     {
-        if (_paths is null)
-            return [];
-
         var profiles = _toolConfig.AudienceProfiles;
         var roots = new List<string>();
         foreach (var root in profiles.GlobalReadRoots)

@@ -129,7 +129,7 @@ public partial class InitWizardViewModel : ReactiveViewModel
     /// Per-channel audience overrides generated from the wizard.
     /// Keys: channel IDs or "dm". Values: "personal", "team", "public".
     /// </summary>
-    public Dictionary<string, string> ChannelAudiences { get; } = new(StringComparer.OrdinalIgnoreCase);
+    public Dictionary<string, string> ChannelAudiences { get; } = new(StringComparer.Ordinal);
 
     // ── Step 8: Identity ──
     public string AgentName { get; set; } = "Netclaw";

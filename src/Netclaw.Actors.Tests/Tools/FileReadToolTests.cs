@@ -213,6 +213,54 @@ public class FileReadToolTests : IDisposable
         Assert.Contains("Team trust context", result);
     }
 
+    [Fact]
+    public async Task Team_context_can_read_file_inside_literal_global_read_root()
+    {
+        var sharedDir = Path.Combine(_tempDir, "shared-data");
+        Directory.CreateDirectory(sharedDir);
+        var dataFile = Path.Combine(sharedDir, "data.txt");
+        await File.WriteAllTextAsync(dataFile, "shared content");
+
+        var config = new ToolConfig
+        {
+            AudienceProfiles = new ToolAudienceProfiles
+            {
+                GlobalReadRoots = [sharedDir]
+            }
+        };
+        var paths = new NetclawPaths(_tempDir);
+        var tool = new FileReadTool(config, paths: paths);
+
+        var args = new Dictionary<string, object?> { ["Path"] = dataFile };
+        var result = await tool.ExecuteAsync(args, CreateTeamContext(), CancellationToken.None);
+
+        Assert.Equal("shared content", result);
+    }
+
+    [Fact]
+    public async Task Literal_global_read_root_works_without_netclaw_paths()
+    {
+        var sharedDir = Path.Combine(_tempDir, "shared-data");
+        Directory.CreateDirectory(sharedDir);
+        var dataFile = Path.Combine(sharedDir, "data.txt");
+        await File.WriteAllTextAsync(dataFile, "shared content");
+
+        var config = new ToolConfig
+        {
+            AudienceProfiles = new ToolAudienceProfiles
+            {
+                GlobalReadRoots = [sharedDir]
+            }
+        };
+        // No NetclawPaths injected — literal paths should still resolve
+        var tool = new FileReadTool(config);
+
+        var args = new Dictionary<string, object?> { ["Path"] = dataFile };
+        var result = await tool.ExecuteAsync(args, CreateTeamContext(), CancellationToken.None);
+
+        Assert.Equal("shared content", result);
+    }
+
     private ToolExecutionContext CreatePersonalContext()
         => new("signalr/thread-1", _sessionDir)
         {
