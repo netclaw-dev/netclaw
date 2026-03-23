@@ -33,13 +33,13 @@ public sealed class OpenAiProviderPlugin : ProviderPluginBase<OpenAiDescriptor>
             options.AddPolicy(new OpenAiCodexRequestPolicy(accountId), PipelinePosition.PerCall);
 
             return new OpenAI.Responses.ResponsesClient(
-                    model.ModelId, new ApiKeyCredential(token.Value), options)
-                .AsIChatClient();
+                    new ApiKeyCredential(token.Value), options)
+                .AsIChatClient(model.ModelId);
         }
 
         // API key path → standard endpoint
         var apiKey = GetRequiredApiKey(entry, TypeKey);
-        return new OpenAI.Responses.ResponsesClient(model.ModelId, apiKey)
-            .AsIChatClient();
+        return new OpenAI.Responses.ResponsesClient(apiKey)
+            .AsIChatClient(model.ModelId);
     }
 }
