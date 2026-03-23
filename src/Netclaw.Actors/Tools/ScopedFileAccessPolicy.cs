@@ -24,26 +24,8 @@ internal sealed class ScopedFileAccessPolicy
     public IReadOnlyList<string> GetRootsForContext(ToolExecutionContext context, AccessKind accessKind)
     {
         var profile = _profileResolver.ResolveProfile(context);
-        var access = accessKind switch
-        {
-            AccessKind.Read => profile.ReadFiles,
-            AccessKind.Write => profile.WriteFiles,
-            AccessKind.Attach => profile.AttachFiles,
-            _ => profile.ReadFiles
-        };
-
-        var roots = _profileResolver.ResolveRoots(access, context)
-            .Select(NormalizeDirectoryPath)
-            .ToList();
-
-        // Merge global read roots for read access
-        if (accessKind == AccessKind.Read)
-        {
-            foreach (var globalRoot in _profileResolver.ResolveGlobalReadRoots().Select(NormalizeDirectoryPath))
-                roots.Add(globalRoot);
-        }
-
-        return roots.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        var access = GetAccessProfile(profile, accessKind);
+        return ResolveAndMergeRoots(access, context, accessKind);
     }
 
     private bool TryResolvePath(
@@ -65,13 +47,7 @@ internal sealed class ScopedFileAccessPolicy
         }
 
         var profile = _profileResolver.ResolveProfile(context);
-        var access = accessKind switch
-        {
-            AccessKind.Read => profile.ReadFiles,
-            AccessKind.Write => profile.WriteFiles,
-            AccessKind.Attach => profile.AttachFiles,
-            _ => profile.ReadFiles
-        };
+        var access = GetAccessProfile(profile, accessKind);
 
         if (access.Mode == ToolFilesystemMode.All)
         {
@@ -85,26 +61,15 @@ internal sealed class ScopedFileAccessPolicy
             return false;
         }
 
-        var roots = _profileResolver.ResolveRoots(access, context)
-            .Select(NormalizeDirectoryPath)
-            .ToList();
+        var roots = ResolveAndMergeRoots(access, context, accessKind);
 
-        // Merge global read roots for read access
-        if (accessKind == AccessKind.Read)
-        {
-            foreach (var globalRoot in _profileResolver.ResolveGlobalReadRoots().Select(NormalizeDirectoryPath))
-                roots.Add(globalRoot);
-        }
-
-        var distinctRoots = roots.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
-
-        if (distinctRoots.Length == 0)
+        if (roots.Count == 0)
         {
             error = $"Error: {GetAudienceLabel(context)} trust context does not have any configured local file roots for {accessKind.ToString().ToLowerInvariant()} access.";
             return false;
         }
 
-        foreach (var root in distinctRoots)
+        foreach (var root in roots)
         {
             if (!IsPathWithinDirectory(fullPath, root))
                 continue;
@@ -119,8 +84,40 @@ internal sealed class ScopedFileAccessPolicy
             return true;
         }
 
-        error = $"Error: {GetAudienceLabel(context)} trust context may only access files inside the current session directory or configured roots: {string.Join(", ", distinctRoots)}.";
+        error = $"Error: {GetAudienceLabel(context)} trust context may only access files inside the current session directory or configured roots: {string.Join(", ", roots)}.";
         return false;
+    }
+
+    private static ToolFilesystemAccessProfile GetAccessProfile(ToolAudienceProfile profile, AccessKind accessKind) =>
+        accessKind switch
+        {
+            AccessKind.Read => profile.ReadFiles,
+            AccessKind.Write => profile.WriteFiles,
+            AccessKind.Attach => profile.AttachFiles,
+            _ => profile.ReadFiles
+        };
+
+    /// <summary>
+    /// Resolves profile roots and merges global read roots for read access.
+    /// Single source of truth for root resolution — used by both
+    /// <see cref="GetRootsForContext"/> and <see cref="TryResolvePath"/>.
+    /// </summary>
+    private IReadOnlyList<string> ResolveAndMergeRoots(
+        ToolFilesystemAccessProfile access,
+        ToolExecutionContext context,
+        AccessKind accessKind)
+    {
+        var roots = _profileResolver.ResolveRoots(access, context)
+            .Select(NormalizeDirectoryPath)
+            .ToList();
+
+        if (accessKind == AccessKind.Read)
+        {
+            foreach (var globalRoot in _profileResolver.ResolveGlobalReadRoots().Select(NormalizeDirectoryPath))
+                roots.Add(globalRoot);
+        }
+
+        return roots.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
     }
 
     private static string GetAudienceLabel(ToolExecutionContext context)

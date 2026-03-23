@@ -1350,7 +1350,11 @@ public partial class InitWizardViewModel : ReactiveViewModel
         {
             foreach (var channel in LastChannelResolution.Resolved)
             {
-                // Don't override if already set (shouldn't happen, but defensive)
+                // Channels are inherently shared spaces — always default to Team
+                // regardless of deployment posture. Personal posture only elevates
+                // DMs, not channels, because channel messages are visible to other
+                // workspace members. Operators who need Personal for a specific
+                // channel can override in netclaw.json directly.
                 ChannelAudiences.TryAdd(channel.Id, TrustAudience.Team.ToWireValue());
             }
         }

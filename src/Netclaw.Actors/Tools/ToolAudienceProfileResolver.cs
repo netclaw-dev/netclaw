@@ -53,23 +53,9 @@ internal sealed class ToolAudienceProfileResolver
         var roots = new List<string>();
         foreach (var root in profiles.GlobalReadRoots)
         {
-            if (string.IsNullOrWhiteSpace(root))
-                continue;
-
-            var trimmed = root.Trim();
-            if (string.Equals(trimmed, ToolAudienceProfileDefaults.SkillsDirectoryToken, StringComparison.OrdinalIgnoreCase))
-            {
-                roots.Add(_paths.SkillsDirectory);
-            }
-            else if (string.Equals(trimmed, ToolAudienceProfileDefaults.IdentityDirectoryToken, StringComparison.OrdinalIgnoreCase))
-            {
-                roots.Add(_paths.IdentityDirectory);
-            }
-            else
-            {
-                // Literal path
-                roots.Add(trimmed);
-            }
+            var resolved = ResolvePathToken(root);
+            if (resolved is not null)
+                roots.Add(resolved);
         }
 
         return roots;
@@ -100,6 +86,28 @@ internal sealed class ToolAudienceProfileResolver
         return IsMcpServerAllowed(serverName, profile);
     }
 
+    /// <summary>
+    /// Resolves a path token (e.g. <c>{skills_dir}</c>, <c>{identity_dir}</c>) to an absolute path.
+    /// Returns null for empty input or if <see cref="_paths"/> is not available for path-based tokens.
+    /// Unrecognized values are treated as literal paths.
+    /// </summary>
+    private string? ResolvePathToken(string? token)
+    {
+        if (string.IsNullOrWhiteSpace(token))
+            return null;
+
+        var trimmed = token.Trim();
+
+        if (string.Equals(trimmed, ToolAudienceProfileDefaults.SkillsDirectoryToken, StringComparison.OrdinalIgnoreCase))
+            return _paths?.SkillsDirectory;
+
+        if (string.Equals(trimmed, ToolAudienceProfileDefaults.IdentityDirectoryToken, StringComparison.OrdinalIgnoreCase))
+            return _paths?.IdentityDirectory;
+
+        // Literal path
+        return trimmed;
+    }
+
     private string? ResolveToken(string root, ToolExecutionContext context)
     {
         if (string.IsNullOrWhiteSpace(root))
@@ -107,22 +115,12 @@ internal sealed class ToolAudienceProfileResolver
 
         var trimmed = root.Trim();
 
+        // Session token requires context, not paths
         if (string.Equals(trimmed, ToolAudienceProfileDefaults.SessionDirectoryToken, StringComparison.OrdinalIgnoreCase))
-        {
             return string.IsNullOrWhiteSpace(context.SessionDirectory) ? null : context.SessionDirectory;
-        }
 
-        if (string.Equals(trimmed, ToolAudienceProfileDefaults.SkillsDirectoryToken, StringComparison.OrdinalIgnoreCase))
-        {
-            return _paths?.SkillsDirectory;
-        }
-
-        if (string.Equals(trimmed, ToolAudienceProfileDefaults.IdentityDirectoryToken, StringComparison.OrdinalIgnoreCase))
-        {
-            return _paths?.IdentityDirectory;
-        }
-
-        return trimmed;
+        // Delegate to shared path token resolver
+        return ResolvePathToken(trimmed);
     }
 
     private static TrustAudience ResolveAudience(ToolExecutionContext? context)

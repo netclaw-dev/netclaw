@@ -130,6 +130,45 @@ public sealed class SlackAclPolicyTests
         Assert.Equal(TrustAudience.Team, result.Audience);
     }
 
+    [Fact]
+    public void EvaluateInbound_dm_channel_id_in_audiences_takes_precedence_over_dm_key()
+    {
+        // DM channel ID "D123" is explicitly mapped to "public",
+        // while "dm" key says "personal" — explicit ID wins.
+        var message = CreateDm("U123");
+        var options = new SlackChannelOptions
+        {
+            AllowDirectMessages = true,
+            ChannelAudiences = new Dictionary<string, string>
+            {
+                ["D123"] = "public",
+                ["dm"] = "personal"
+            }
+        };
+
+        var result = SlackAclPolicy.EvaluateInbound(message, options, null);
+
+        Assert.True(result.IsAllowed);
+        Assert.Equal(TrustAudience.Public, result.Audience);
+    }
+
+    [Fact]
+    public void EvaluateInbound_invalid_channel_audience_value_falls_through_to_heuristic()
+    {
+        var message = CreateDm("U123");
+        var options = new SlackChannelOptions
+        {
+            AllowDirectMessages = true,
+            ChannelAudiences = new Dictionary<string, string> { ["dm"] = "persoanl" } // typo
+        };
+
+        var result = SlackAclPolicy.EvaluateInbound(message, options, null);
+
+        Assert.True(result.IsAllowed);
+        // Invalid value → TryParseAudience fails → heuristic fallback → Team
+        Assert.Equal(TrustAudience.Team, result.Audience);
+    }
+
     private static SlackInboundMessage CreateDm(string userId) => new(
         SlackInboundKind.Message,
         new SlackEventId("evt-1"),

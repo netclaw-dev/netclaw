@@ -37,5 +37,5 @@ public sealed class SlackChannelOptions
     /// <c>"personal"</c>, <c>"team"</c>, or <c>"public"</c>.
     /// When a channel/DM is not mapped, the existing ACL heuristic applies.
     /// </summary>
-    public Dictionary<string, string> ChannelAudiences { get; init; } = new(StringComparer.OrdinalIgnoreCase);
+    public Dictionary<string, string> ChannelAudiences { get; init; } = new(StringComparer.Ordinal);
 }

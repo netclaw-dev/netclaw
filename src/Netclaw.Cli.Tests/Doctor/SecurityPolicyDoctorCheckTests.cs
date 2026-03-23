@@ -98,15 +98,14 @@ public sealed class SecurityPolicyDoctorCheckTests : IDisposable
     }
 
     [Fact]
-    public async Task MissingConfigFile_IsError()
+    public async Task MissingConfigFile_DelegatesToConfigReader_Warning()
     {
-        // Don't write any config
+        // Don't write any config — DoctorJsonConfigReader returns Warning for missing file
         var check = new SecurityPolicyDoctorCheck(_paths);
         var result = await check.RunAsync();
 
-        // DoctorJsonConfigReader returns Warning for missing file,
-        // which the check propagates
-        Assert.True(result.Severity is DoctorSeverity.Warning or DoctorSeverity.Error);
+        Assert.Equal(DoctorSeverity.Warning, result.Severity);
+        Assert.Equal("Config File", result.Name);
     }
 
     private void WriteConfig(object config)

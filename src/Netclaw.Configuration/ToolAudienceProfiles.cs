@@ -59,7 +59,8 @@ public static class ToolAudienceProfileDefaults
     {
         Public = CreatePublic(),
         Team = CreateTeam(),
-        Personal = CreatePersonal()
+        Personal = CreatePersonal(),
+        GlobalReadRoots = [SkillsDirectoryToken, IdentityDirectoryToken]
     };
 
     public static ToolAudienceProfile CreatePublic() => new()
