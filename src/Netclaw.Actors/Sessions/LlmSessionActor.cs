@@ -492,7 +492,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                     {
                         SessionId = _sessionId,
                         Delta = text.Text
-                    }, OutputFilter.Text);
+                    }, OutputFilter.TextStreaming);
                     break;
 
                 case TextReasoningContent thinking when !string.IsNullOrEmpty(thinking.Text):
@@ -1286,7 +1286,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                     }, OutputFilter.Text);
                 }
             }
-            EmitOutput(new BufferFlush { SessionId = _sessionId });
+            EmitOutput(new BufferFlush { SessionId = _sessionId }, OutputFilter.TextStreaming);
         }
 
         // Emit tool call outputs to subscribers and track for duplicate detection
