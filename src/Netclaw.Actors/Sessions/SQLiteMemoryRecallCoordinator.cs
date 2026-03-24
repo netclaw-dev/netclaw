@@ -52,9 +52,11 @@ public sealed class SQLiteMemoryRecallCoordinator(
 
                 var effectiveBoundary = ResolveBoundary(normalizedRequest, deterministicPlan.HardScope);
 
-                var rawCandidates = await store.SearchByPlanAsync(
+                // Audience-primary recall: domain is a ranking preference (via
+                // DeterministicCandidateSelector domain affinity boost), not a
+                // security gate. Audience+boundary are the SQL security filters.
+                var rawCandidates = await store.SearchAcrossDomainsByPlanAsync(
                     deterministicPlan.LexicalTerms.Count > 0 ? deterministicPlan.LexicalTerms : [normalizedRequest.Query],
-                    deterministicPlan.HardScope,
                     deterministicPlan.AllowedMemoryClasses,
                     deterministicPlan.CandidateLimit,
                     effectiveBoundary,
@@ -62,25 +64,10 @@ public sealed class SQLiteMemoryRecallCoordinator(
                     allowExpiredEvidence: false,
                     ct);
 
-                var widened = false;
-                if (rawCandidates.Count == 0 && ShouldWidenAcrossDomains(deterministicPlan))
-                {
-                    rawCandidates = await store.SearchAcrossDomainsByPlanAsync(
-                        deterministicPlan.LexicalTerms.Count > 0 ? deterministicPlan.LexicalTerms : [request.Query],
-                        deterministicPlan.AllowedMemoryClasses,
-                        deterministicPlan.CandidateLimit,
-                        effectiveBoundary,
-                        normalizedRequest.Audience,
-                        allowExpiredEvidence: false,
-                        ct);
-                    widened = true;
-                }
-
                 var candidates = _candidateSelector.Select(deterministicPlan, rawCandidates);
                 logger.LogInformation(
-                    "memory_retrieval_candidate_selection hardScope={HardScope} widenedAcrossDomains={WidenedAcrossDomains} rawCount={RawCount} selectedCount={SelectedCount} ids={Ids}",
+                    "memory_retrieval_candidate_selection hardScope={HardScope} rawCount={RawCount} selectedCount={SelectedCount} ids={Ids}",
                     deterministicPlan.HardScope,
-                    widened,
                     rawCandidates.Count,
                     candidates.Count,
                     string.Join("|", candidates.Select(x => x.Id)));
@@ -217,9 +204,6 @@ public sealed class SQLiteMemoryRecallCoordinator(
         => !string.IsNullOrWhiteSpace(request.Boundary)
             ? request.Boundary!
             : SecurityPolicyDefaults.InferLegacyBoundaryFromDomain(domain);
-    private static bool ShouldWidenAcrossDomains(DeterministicRetrievalRequestPlan plan)
-        => plan.AnchorHints.Count > 0
-           || plan.Facets.Contains("project_fact", StringComparer.OrdinalIgnoreCase);
 
     private async Task<RecallQueryPlan?> BuildPlanAsync(
         AutomaticRecallRequest request,

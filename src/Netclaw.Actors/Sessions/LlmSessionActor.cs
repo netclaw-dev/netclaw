@@ -1946,6 +1946,15 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 var filtered = resolved.Items
                     .Where(i => !_injectedMemoryIds.Contains(i.Id))
                     .ToArray();
+
+                if (filtered.Length == 0 && resolved.Items.Count > 0)
+                {
+                    _log.Info(
+                        "progressive_recall_exhausted allCandidatesAlreadyInjected={0} totalInjected={1}",
+                        resolved.Items.Count,
+                        _injectedMemoryIds.Count);
+                }
+
                 resolved = new AutomaticRecallResult(filtered, resolved.Degraded, resolved.DegradeReason, resolved.DegradeStage);
             }
 

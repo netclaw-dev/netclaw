@@ -355,6 +355,13 @@ public sealed class MemoryRulesFirstExtractor(MemoryPolicyEvaluator policy)
             return false;
         }
 
+        // Reject conversational fragments that accidentally match the regex
+        if (IsConversationalFragment(rawSubject) || IsConversationalFragment(rawObject))
+        {
+            candidate = null!;
+            return false;
+        }
+
         var subjectLabel = NormalizeSubject(rawSubject);
         var objectLabel = SummarizeObject(rawObject);
         var normalizedContent = NormalizeSentence($"{subjectLabel} {NormalizeVerb(rawVerb)} {rawObject}");
@@ -396,6 +403,22 @@ public sealed class MemoryRulesFirstExtractor(MemoryPolicyEvaluator policy)
             MemoryId: null);
         return true;
     }
+
+    private static readonly string[] ConversationalPrefixes =
+    [
+        "i ", "well ", "going to ", "want to ", "if that ", "i'm ",
+        "you ", "let me ", "maybe ", "just ", "so ", "anyway "
+    ];
+
+    private static bool IsConversationalFragment(string text)
+    {
+        var lower = text.Trim().ToLowerInvariant();
+        return ConversationalPrefixes.Any(p => lower.StartsWith(p, StringComparison.Ordinal));
+    }
+
+    private static int CountSubstantiveWords(string text)
+        => text.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Count(w => w.Length >= 3);
 
     private static string CleanStatementTail(string value)
         => value.Trim().TrimEnd('.', '!', '?');

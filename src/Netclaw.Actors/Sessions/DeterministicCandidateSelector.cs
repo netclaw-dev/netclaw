@@ -24,7 +24,9 @@ public sealed class DeterministicCandidateSelector
 
     private static double Score(DeterministicRetrievalRequestPlan plan, SQLiteMemoryHydratedItem document)
     {
-        var score = 0.0;
+        // Baseline: candidates survived SQL pre-filtering (LIKE match), so they
+        // deserve a non-zero score. Lexical/facet/anchor matches boost above this.
+        var score = 1.0;
         var text = (document.Title + " " + document.Content + " " + (document.AliasesJson ?? string.Empty) + " " + (document.FacetsJson ?? string.Empty)).ToLowerInvariant();
         var tokens = TextTokenizer.Tokenize(text).ToHashSet(StringComparer.OrdinalIgnoreCase);
 
@@ -45,6 +47,11 @@ public sealed class DeterministicCandidateSelector
         foreach (var scope in plan.SoftScopes)
             if (text.Contains(scope.Replace("scope:", string.Empty, StringComparison.OrdinalIgnoreCase), StringComparison.OrdinalIgnoreCase))
                 score += 3.5;
+
+        // Domain affinity: same-domain memories rank higher but cross-domain
+        // memories aren't excluded (audience+boundary are the security gates).
+        if (string.Equals(document.Domain, plan.HardScope, StringComparison.OrdinalIgnoreCase))
+            score += 5.0;
 
         return score;
     }

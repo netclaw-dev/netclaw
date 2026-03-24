@@ -131,6 +131,112 @@ public sealed class DeterministicRetrievalPlanningTests
     }
 
     [Fact]
+    public void Planner_includes_evidence_in_allowed_memory_classes()
+    {
+        var planner = new DeterministicRetrievalRequestPlanner();
+        var plan = planner.Plan(new AutomaticRecallRequest(
+            SessionId: "D0AC6CKBK5K/1774371415.126439",
+            Query: "what did we find about Reel.Farm?",
+            RecentUserMessages: ["what did we find about Reel.Farm?"],
+            MaxItems: 3));
+
+        Assert.Contains(MemoryClass.DurableFact.ToWireValue(), plan.AllowedMemoryClasses);
+        Assert.Contains(MemoryClass.Evidence.ToWireValue(), plan.AllowedMemoryClasses);
+    }
+
+    [Fact]
+    public async Task Coordinator_recalls_evidence_class_memories()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "netclaw-evidence-recall-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        var store = new SQLiteMemoryStore(Path.Combine(dir, "memory.db"), TimeProvider.System);
+        await store.InitializeAsync();
+
+        var anchor = store.CreateDefaultAnchor("reelfarm-research", "project:d0ac6ckbk5k");
+        var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+        await store.UpsertDocumentAsync(new SQLiteMemoryDocument(
+            DocumentId: "doc-reelfarm-research",
+            Anchor: anchor,
+            MemoryClass: "evidence",
+            Title: "Reel.Farm Marketing Tool Research",
+            MarkdownBody: "Reel.Farm costs $39/mo and generates AI-powered short-form videos for TikTok and Instagram Reels.",
+            AliasesJson: "[\"reelfarm\",\"reel farm\",\"marketing automation\"]",
+            FacetsJson: "[\"project_artifact\",\"marketing_tools\"]",
+            SlotsJson: null,
+            UpdateSemantics: "merge-document",
+            Domain: "project:d0ac6ckbk5k",
+            Sensitivity: "normal",
+            RecallMode: "searchable",
+            Confidence: 0.85,
+            FreshnessAtMs: now,
+            ExpiresAtMs: now + 2_592_000_000,
+            CreatedAtMs: now,
+            UpdatedAtMs: now));
+
+        var coordinator = new SQLiteMemoryRecallCoordinator(
+            store,
+            NullLogger<SQLiteMemoryRecallCoordinator>.Instance,
+            sessionConfig: new SessionConfig { DeterministicRetrievalEnabled = true, MemorySidecarsEnabled = false });
+
+        var result = await coordinator.RecallAsync(new AutomaticRecallRequest(
+            SessionId: "D0AC6CKBK5K/1774371415.126439",
+            Query: "what did we find about Reel.Farm?",
+            RecentUserMessages: ["what did we find about Reel.Farm?"],
+            MaxItems: 3));
+
+        Assert.False(result.Degraded);
+        Assert.Contains(result.Items, x => x.Id == "doc-reelfarm-research");
+    }
+
+    [Fact]
+    public async Task Coordinator_recalls_cross_domain_memories_via_audience_primary_path()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "netclaw-audience-primary-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        var store = new SQLiteMemoryStore(Path.Combine(dir, "memory.db"), TimeProvider.System);
+        await store.InitializeAsync();
+
+        // Store a memory under project:signalr (old domain)
+        var anchor = store.CreateDefaultAnchor("user-company", "project:signalr");
+        var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+        await store.UpsertDocumentAsync(new SQLiteMemoryDocument(
+            DocumentId: "doc-company-info",
+            Anchor: anchor,
+            MemoryClass: "durable_fact",
+            Title: "Company: Petabridge",
+            MarkdownBody: "Aaron works at Petabridge, an Akka.NET consultancy.",
+            AliasesJson: "[\"petabridge\",\"company\"]",
+            FacetsJson: "[\"personal_profile\"]",
+            SlotsJson: null,
+            UpdateSemantics: "merge-document",
+            Domain: "project:signalr",
+            Sensitivity: "normal",
+            RecallMode: "auto",
+            Confidence: 0.94,
+            FreshnessAtMs: now,
+            ExpiresAtMs: null,
+            CreatedAtMs: now,
+            UpdatedAtMs: now));
+
+        var coordinator = new SQLiteMemoryRecallCoordinator(
+            store,
+            NullLogger<SQLiteMemoryRecallCoordinator>.Instance,
+            sessionConfig: new SessionConfig { DeterministicRetrievalEnabled = true, MemorySidecarsEnabled = false });
+
+        // Query from a different domain (project:d0ac6ckbk5k — Slack DM)
+        var result = await coordinator.RecallAsync(new AutomaticRecallRequest(
+            SessionId: "D0AC6CKBK5K/1774371415.126439",
+            Query: "what company does Aaron work at",
+            RecentUserMessages: ["what company does Aaron work at"],
+            MaxItems: 3));
+
+        Assert.False(result.Degraded);
+        Assert.Contains(result.Items, x => x.Id == "doc-company-info");
+    }
+
+    [Fact]
     public async Task Coordinator_widens_across_domains_for_named_project_entities()
     {
         var dir = Path.Combine(Path.GetTempPath(), "netclaw-deterministic-cross-domain-tests", Guid.NewGuid().ToString("N"));

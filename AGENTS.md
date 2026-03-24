@@ -181,6 +181,14 @@ Update eval cases when:
 - Changing identity grounding rules — update identity assertion patterns
 - A production session exhibits a new failure pattern — add a regression case
 
+**Debugging eval failures:** Eval failures are VERY RARELY the model's fault.
+Almost always the root cause is an instrumentation issue — how we're parsing or
+asserting on the model's output (regex mismatch, output format change, assertion
+too brittle). If instrumentation checks out, the next most likely cause is a
+genuine alignment problem (system prompt, skill content, or context assembly not
+giving the model the right information). Only after ruling out both should you
+consider model capability as the cause.
+
 ## System Skills Sync Rule
 
 System skills in `feeds/skills/.system/files/` are the agent's operational
