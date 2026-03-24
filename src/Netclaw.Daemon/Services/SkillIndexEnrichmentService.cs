@@ -8,20 +8,21 @@ using Netclaw.Configuration;
 namespace Netclaw.Daemon.Services;
 
 /// <summary>
-/// Generates short trigger phrases for skills via an LLM sidecar call at scan time.
+/// Generates short trigger phrases for skills via a single LLM sidecar call at scan time.
 /// Results are cached to disk and used in the compressed skill index.
 /// This bridges operator language (how skills are written) to user language
 /// (how users actually talk) for better LLM-driven skill activation.
 /// </summary>
 internal sealed class SkillIndexEnrichmentService : IHostedService
 {
-    private static readonly TimeSpan SidecarTimeout = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan SidecarTimeout = TimeSpan.FromSeconds(30);
 
     private const string SystemPrompt =
         "You generate concise trigger phrases for an AI agent's skill index. " +
-        "Given a skill's name and description, produce a single phrase (5-15 words) " +
-        "that describes when a user would need this skill. Use everyday user language, " +
-        "not technical jargon or operator language. Output ONLY the phrase, nothing else.";
+        "For each skill, produce a single phrase (5-15 words) that describes when a user " +
+        "would need this skill. Use everyday user language, not technical jargon. " +
+        "Return a JSON object mapping skill names to trigger phrases. Example: " +
+        "{\"my-skill\": \"when the user wants to do something\"}";
 
     private readonly SkillRegistry _skillRegistry;
     private readonly SkillIndexContextLayer _skillIndexLayer;
@@ -45,8 +46,6 @@ internal sealed class SkillIndexEnrichmentService : IHostedService
 
     public Task StartAsync(CancellationToken cancellationToken)
     {
-        // Fire and forget — enrichment runs in the background so it never
-        // blocks daemon startup. Fallback descriptions are already in place.
         _ = Task.Run(() => RunEnrichmentAsync(cancellationToken), cancellationToken);
         return Task.CompletedTask;
     }
@@ -58,14 +57,16 @@ internal sealed class SkillIndexEnrichmentService : IHostedService
             var phrases = await EnrichAllSkillsAsync(cancellationToken);
             _skillRegistry.SetTriggerPhrases(phrases);
             _skillIndexLayer.Update(_skillRegistry.GenerateDescriptionMenu());
+
+            var enrichedCount = phrases.Count;
+            var totalCount = _skillRegistry.GetAll().Count;
             _logger.LogInformation(
                 "Skill index enrichment complete ({EnrichedCount} enriched, {FallbackCount} fallback)",
-                phrases.Count(p => !string.IsNullOrEmpty(p.Value)),
-                _skillRegistry.GetAll().Count - phrases.Count);
+                enrichedCount, totalCount - enrichedCount);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            // Clean shutdown — daemon is stopping
+            // Clean shutdown
         }
         catch (Exception ex)
         {
@@ -83,31 +84,141 @@ internal sealed class SkillIndexEnrichmentService : IHostedService
 
         var skills = _skillRegistry.GetAll();
         var phrases = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var uncached = new List<SkillEntry>();
 
+        // Phase 1: load from cache
         foreach (var skill in skills)
         {
-            cancellationToken.ThrowIfCancellationRequested();
-
-            // Check disk cache
             var cached = TryReadCache(cacheDir, skill);
             if (cached is not null)
-            {
                 phrases[skill.Name] = cached;
-                continue;
-            }
+            else
+                uncached.Add(skill);
+        }
 
-            // Try LLM sidecar
-            var generated = await TryGeneratePhraseAsync(skill, cancellationToken);
+        // Phase 2: single LLM call for all uncached skills
+        if (uncached.Count > 0)
+        {
+            var generated = await TryGenerateBatchAsync(uncached, cancellationToken);
             if (generated is not null)
             {
-                phrases[skill.Name] = generated;
-                WriteCache(cacheDir, skill, generated);
+                foreach (var (name, phrase) in generated)
+                {
+                    phrases[name] = phrase;
+                    var skill = uncached.FirstOrDefault(
+                        s => s.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+                    if (skill is not null)
+                        WriteCache(cacheDir, skill, phrase);
+                }
             }
-            // else: no cache, no LLM — fallback to truncated description (handled by registry)
         }
 
         return phrases;
     }
+
+    private async Task<Dictionary<string, string>?> TryGenerateBatchAsync(
+        IReadOnlyList<SkillEntry> skills,
+        CancellationToken cancellationToken)
+    {
+        if (_clientProvider is null)
+            return null;
+
+        try
+        {
+            var client = _clientProvider.GetClient(ModelRole.Compaction);
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            cts.CancelAfter(SidecarTimeout);
+
+            var skillList = string.Join("\n", skills.Select(
+                s => $"- {s.Name}: \"{s.Description}\""));
+
+            var userPrompt = $"Generate a trigger phrase for each skill:\n\n{skillList}";
+            var messages = new List<ChatMessage>
+            {
+                new(ChatRole.System, SystemPrompt),
+                new(ChatRole.User, userPrompt)
+            };
+
+            var response = await client.GetResponseAsync(messages, cancellationToken: cts.Token);
+            var text = response.Messages[^1].Text?.Trim();
+
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                _logger.LogDebug("Sidecar returned empty response for batch enrichment");
+                return null;
+            }
+
+            return ParseBatchResponse(text, skills);
+        }
+        catch (OperationCanceledException)
+        {
+            _logger.LogDebug("Sidecar timed out for batch enrichment ({SkillCount} skills)", skills.Count);
+            return null;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Sidecar failed for batch enrichment");
+            return null;
+        }
+    }
+
+    private Dictionary<string, string>? ParseBatchResponse(
+        string text, IReadOnlyList<SkillEntry> skills)
+    {
+        // Strip markdown fences if present
+        var cleaned = text.Trim();
+        if (cleaned.StartsWith("```", StringComparison.Ordinal))
+        {
+            var firstNewline = cleaned.IndexOf('\n', StringComparison.Ordinal);
+            if (firstNewline >= 0)
+            {
+                cleaned = cleaned[(firstNewline + 1)..];
+                var lastFence = cleaned.LastIndexOf("```", StringComparison.Ordinal);
+                if (lastFence >= 0)
+                    cleaned = cleaned[..lastFence];
+            }
+        }
+
+        try
+        {
+            var doc = JsonDocument.Parse(cleaned);
+            var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var skill in skills)
+            {
+                // Try exact match, then case-insensitive scan
+                if (doc.RootElement.TryGetProperty(skill.Name, out var prop))
+                {
+                    var phrase = prop.GetString()?.Trim();
+                    if (!string.IsNullOrWhiteSpace(phrase))
+                        result[skill.Name] = phrase.Length > 200 ? phrase[..197] + "..." : phrase;
+                }
+                else
+                {
+                    // Case-insensitive fallback
+                    foreach (var jsonProp in doc.RootElement.EnumerateObject())
+                    {
+                        if (jsonProp.Name.Equals(skill.Name, StringComparison.OrdinalIgnoreCase))
+                        {
+                            var phrase = jsonProp.Value.GetString()?.Trim();
+                            if (!string.IsNullOrWhiteSpace(phrase))
+                                result[skill.Name] = phrase.Length > 200 ? phrase[..197] + "..." : phrase;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            return result.Count > 0 ? result : null;
+        }
+        catch (JsonException ex)
+        {
+            _logger.LogDebug(ex, "Failed to parse batch enrichment response as JSON");
+            return null;
+        }
+    }
+
+    // ── Cache ────────────────────────────────────────────────────────
 
     private static string? TryReadCache(string cacheDir, SkillEntry skill)
     {
@@ -128,7 +239,7 @@ internal sealed class SkillIndexEnrichmentService : IHostedService
         }
         catch
         {
-            return null; // Corrupt cache — will re-generate
+            return null;
         }
     }
 
@@ -144,48 +255,4 @@ internal sealed class SkillIndexEnrichmentService : IHostedService
 
     private static string GetCachePath(string cacheDir, SkillEntry skill)
         => Path.Combine(cacheDir, $"{skill.Name}-{skill.Version}.json");
-
-    private async Task<string?> TryGeneratePhraseAsync(
-        SkillEntry skill,
-        CancellationToken cancellationToken)
-    {
-        if (_clientProvider is null)
-            return null;
-
-        try
-        {
-            var client = _clientProvider.GetClient(ModelRole.Compaction);
-            using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            cts.CancelAfter(SidecarTimeout);
-
-            var userPrompt = $"Skill name: {skill.Name}\nDescription: {skill.Description}";
-            var messages = new List<ChatMessage>
-            {
-                new(ChatRole.System, SystemPrompt),
-                new(ChatRole.User, userPrompt)
-            };
-
-            var response = await client.GetResponseAsync(messages, cancellationToken: cts.Token);
-            var text = response.Messages[^1].Text?.Trim();
-
-            if (string.IsNullOrWhiteSpace(text))
-            {
-                _logger.LogDebug("Sidecar returned empty phrase for {SkillName}", skill.Name);
-                return null;
-            }
-
-            // Sanity: phrase should be reasonably short
-            return text.Length > 200 ? text[..197] + "..." : text;
-        }
-        catch (OperationCanceledException)
-        {
-            _logger.LogDebug("Sidecar timed out for {SkillName}", skill.Name);
-            return null;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogDebug(ex, "Sidecar failed for {SkillName}", skill.Name);
-            return null;
-        }
-    }
 }
