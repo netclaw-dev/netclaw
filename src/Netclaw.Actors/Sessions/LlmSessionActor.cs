@@ -799,13 +799,17 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         // Route proposals through the standard gate → curation pipeline
         if (msg.Proposals.Count > 0 && _curationActor is not null)
         {
+            // Use session-derived audience when _currentTurnSource is null
+            // (distillation fires after idle, turn context is cleared)
+            var audience = _currentTurnSource?.Audience
+                ?? SecurityPolicyDefaults.ResolveAudienceFromSessionId(_sessionId.Value);
             var gateResult = _memoryProposalGate.Evaluate(
                 msg.Proposals,
                 _sessionId.ToMemoryDomain(),
                 Memory.MemorySensitivity.Normal.ToWireValue(),
                 NowMs(),
                 boundary: CurrentMemoryBoundary(),
-                audience: _currentTurnSource?.Audience ?? TrustAudience.Public);
+                audience: audience);
 
             var accepted = gateResult.MemoryOperations;
 
