@@ -94,7 +94,7 @@ public sealed partial class SkillManageTool : NetclawTool<SkillManageTool.Params
         var contentError = ValidateFrontmatter(args.Content);
         if (contentError is not null) return contentError;
 
-        var scanResult = await _scanner.ScanAsync(name, args.Content, ct);
+        var scanResult = await _scanner.ScanAsync(name, args.Content, SkillTrustTier.User, ct);
         if (!scanResult.IsAllowed)
             return $"Content scan rejected: {scanResult.Reason}";
 
@@ -108,7 +108,10 @@ public sealed partial class SkillManageTool : NetclawTool<SkillManageTool.Params
         AtomicWrite(skillPath, args.Content);
         RescanAndUpdateIndex();
 
-        return $"Skill '{name}' created at {skillDir}";
+        var warning = scanResult.Verdict == ScanVerdict.Warning
+            ? $" (warning: {scanResult.Reason})"
+            : "";
+        return $"Skill '{name}' created at {skillDir}{warning}";
     }
 
     private async Task<string> EditAsync(Params args, CancellationToken ct)
@@ -134,14 +137,17 @@ public sealed partial class SkillManageTool : NetclawTool<SkillManageTool.Params
         var contentError = ValidateFrontmatter(args.Content);
         if (contentError is not null) return contentError;
 
-        var scanResult = await _scanner.ScanAsync(name, args.Content, ct);
+        var scanResult = await _scanner.ScanAsync(name, args.Content, skill.TrustTier, ct);
         if (!scanResult.IsAllowed)
             return $"Content scan rejected: {scanResult.Reason}";
 
         AtomicWrite(skill.FilePath, args.Content);
         RescanAndUpdateIndex();
 
-        return $"Skill '{name}' updated.";
+        var warning = scanResult.Verdict == ScanVerdict.Warning
+            ? $" (warning: {scanResult.Reason})"
+            : "";
+        return $"Skill '{name}' updated.{warning}";
     }
 
     private async Task<string> PatchAsync(Params args, CancellationToken ct)
@@ -188,18 +194,25 @@ public sealed partial class SkillManageTool : NetclawTool<SkillManageTool.Params
             : ReplaceFirst(content, args.OldString, args.NewString);
 
         // Scan patched SKILL.md content
+        ScanVerdict patchVerdict = ScanVerdict.Allowed;
+        string? patchReason = null;
         if (targetPath == skill.FilePath)
         {
-            var scanResult = await _scanner.ScanAsync(name, newContent, ct);
+            var scanResult = await _scanner.ScanAsync(name, newContent, skill.TrustTier, ct);
             if (!scanResult.IsAllowed)
                 return $"Content scan rejected: {scanResult.Reason}";
+            patchVerdict = scanResult.Verdict;
+            patchReason = scanResult.Reason;
         }
 
         AtomicWrite(targetPath, newContent);
         if (targetPath == skill.FilePath)
             RescanAndUpdateIndex();
 
-        return "Patch applied.";
+        var warning = patchVerdict == ScanVerdict.Warning
+            ? $" (warning: {patchReason})"
+            : "";
+        return $"Patch applied.{warning}";
     }
 
     private string Delete(Params args)

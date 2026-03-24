@@ -5,13 +5,14 @@ namespace Netclaw.Security;
 /// </summary>
 public sealed record PromptInjectionResult(
     PromptInjectionRisk Risk,
-    string? Message = null)
+    string? Message = null,
+    string? Category = null)
 {
     public static PromptInjectionResult Safe() =>
         new(PromptInjectionRisk.None);
 
-    public static PromptInjectionResult Detected(PromptInjectionRisk risk, string message) =>
-        new(risk, message);
+    public static PromptInjectionResult Detected(PromptInjectionRisk risk, string message, string? category = null) =>
+        new(risk, message, category);
 }
 
 /// <summary>
