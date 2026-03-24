@@ -76,11 +76,11 @@ public sealed class InitWizardViewModelTests : IDisposable
     {
         using var vm = CreateViewModel();
         vm.SlackEnabled = true;
+        vm.GoNext(); // → SecurityPosture
         vm.GoNext(); // → ChatServices
-        vm.GoNext(); // → Acl
 
-        vm.GoBack(); // → ChatServices
-        Assert.Equal(WizardStep.ChatServices, vm.CurrentStep.Value);
+        vm.GoBack(); // → SecurityPosture
+        Assert.Equal(WizardStep.SecurityPosture, vm.CurrentStep.Value);
 
         vm.GoBack(); // → Provider
         Assert.Equal(WizardStep.Provider, vm.CurrentStep.Value);

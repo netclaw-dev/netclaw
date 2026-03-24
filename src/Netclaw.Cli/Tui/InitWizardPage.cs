@@ -62,8 +62,10 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
     // Step 3: Security Posture
     private SelectionListNode<string>? _securityPostureList;
 
-    // Step 5: Channels
+    // Step 4: Channels
     private int _channelCursorIndex;
+    private bool _channelAddMode;
+    private TextInputNode? _channelAddInput;
 
     // Step 8: Identity — webhook URL sub-step
     private TextInputNode? _webhookUrlInput;
@@ -1191,6 +1193,22 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
 
     private ILayoutNode BuildChannelsStep()
     {
+        // Add-channel sub-step
+        if (_channelAddMode && _channelAddInput is not null)
+        {
+            return Layouts.Vertical()
+                .WithChild(new TextNode("  Add channel:").WithForeground(Color.White))
+                .WithChild(new PanelNode()
+                    .WithTitle("Channel Name")
+                    .WithBorder(BorderStyle.Rounded)
+                    .WithBorderColor(Color.Gray)
+                    .WithContent(_channelAddInput)
+                    .Height(3))
+                .WithSpacing(1)
+                .WithChild(new TextNode("  Enter to add, Esc to cancel.")
+                    .WithForeground(Color.BrightBlack));
+        }
+
         var entries = ViewModel.ChannelEntries;
 
         if (entries.Count == 0)
@@ -1217,9 +1235,8 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             var isFocused = i == _channelCursorIndex;
             var prefix = isFocused ? " \u25b6 " : "   ";
             var name = entry.DisplayName.PadRight(20);
-            var id = entry.Id.PadRight(15);
             var audience = $"[\u25c0 {entry.Audience,-8} \u25b6]";
-            var line = $"{prefix}{name} {id} {audience}";
+            var line = $"{prefix}{name} {audience}";
 
             var node = new TextNode(line);
             if (isFocused)
@@ -1705,6 +1722,59 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
 
     private void HandleChannelsKeyPress(ConsoleKeyInfo keyInfo)
     {
+        // Add-channel mode: route input to text field
+        if (_channelAddMode)
+        {
+            if (keyInfo.Key == ConsoleKey.Escape)
+            {
+                _channelAddMode = false;
+                _channelAddInput = null;
+                _lastFocusedInput = null;
+                _stepContentNode?.Invalidate();
+                _helpTextNode?.Invalidate();
+                ViewModel.RequestRedraw();
+                return;
+            }
+
+            if (_channelAddInput is not null)
+            {
+                if (keyInfo.Key == ConsoleKey.Enter)
+                {
+                    var text = _channelAddInput.Text?.Trim().TrimStart('#');
+                    if (!string.IsNullOrWhiteSpace(text))
+                    {
+                        var posture = ViewModel.SelectedPosture ?? DeploymentPosture.Personal;
+                        var audience = posture == DeploymentPosture.Public
+                            ? TrustAudience.Public.ToWireValue()
+                            : TrustAudience.Team.ToWireValue();
+
+                        // Deduplicate
+                        if (!ViewModel.ChannelEntries.Any(e =>
+                            e.DisplayName.Equals($"#{text}", StringComparison.OrdinalIgnoreCase)))
+                        {
+                            ViewModel.ChannelEntries.Add(new ChannelEntry($"#{text}", text, audience));
+                        }
+                        else
+                        {
+                            ViewModel.StatusMessage.Value = $"#{text} is already in the list.";
+                        }
+                    }
+
+                    _channelAddMode = false;
+                    _channelAddInput = null;
+                    _lastFocusedInput = null;
+                    _stepContentNode?.Invalidate();
+                    _helpTextNode?.Invalidate();
+                    ViewModel.RequestRedraw();
+                    return;
+                }
+
+                _channelAddInput.HandleInput(keyInfo);
+                ViewModel.RequestRedraw();
+            }
+            return;
+        }
+
         var entries = ViewModel.ChannelEntries;
 
         switch (keyInfo.Key)
@@ -1737,6 +1807,14 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
                 }
                 break;
 
+            case ConsoleKey.A:
+                _channelAddMode = true;
+                _channelAddInput = new TextInputNode()
+                    .WithPlaceholder("channel-name");
+                _channelAddInput.OnFocused();
+                _lastFocusedInput = _channelAddInput;
+                break;
+
             case ConsoleKey.D:
                 if (entries.Count > 0 && !entries[_channelCursorIndex].IsDmRow)
                 {
@@ -1750,7 +1828,6 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
                 ViewModel.GoNext();
                 return;
 
-            // TODO: 'A' key for add-channel sub-step (requires conversations.list integration)
             default:
                 return;
         }

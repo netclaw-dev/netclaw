@@ -1348,23 +1348,37 @@ public partial class InitWizardViewModel : ReactiveViewModel
 
         if (SlackAllowDirectMessages)
         {
-            var dmAudience = posture == DeploymentPosture.Personal
+            // DM audience depends on how many users are allowed:
+            // - Single user (owner only) → Personal (private admin access)
+            // - Multiple users or all allowed → posture default (shared access)
+            var allowedUsers = ParseAllowedUserIds();
+            var dmAudience = allowedUsers.Count == 1
                 ? TrustAudience.Personal.ToWireValue()
-                : posture == DeploymentPosture.Team
-                    ? TrustAudience.Team.ToWireValue()
-                    : TrustAudience.Public.ToWireValue();
+                : posture == DeploymentPosture.Personal
+                    ? TrustAudience.Personal.ToWireValue()
+                    : posture == DeploymentPosture.Team
+                        ? TrustAudience.Team.ToWireValue()
+                        : TrustAudience.Public.ToWireValue();
             ChannelEntries.Add(new ChannelEntry("DMs", "dm", dmAudience, isDmRow: true));
         }
 
-        if (LastChannelResolution is { Resolved.Count: > 0 })
+        var channelAudience = posture == DeploymentPosture.Public
+            ? TrustAudience.Public.ToWireValue()
+            : TrustAudience.Team.ToWireValue();
+
+        // Populate from raw channel names entered in ChatServices.
+        // IDs are resolved during HealthCheck via conversations.list.
+        if (!string.IsNullOrWhiteSpace(SlackChannelNamesInput))
         {
-            var channelAudience = posture == DeploymentPosture.Public
-                ? TrustAudience.Public.ToWireValue()
-                : TrustAudience.Team.ToWireValue();
-            foreach (var channel in LastChannelResolution.Resolved)
+            var names = SlackChannelNamesInput
+                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Select(n => n.TrimStart('#'))
+                .Distinct(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var name in names)
             {
                 ChannelEntries.Add(new ChannelEntry(
-                    $"#{channel.Name}", channel.Id, channelAudience));
+                    $"#{name}", name, channelAudience));
             }
         }
     }
@@ -1373,6 +1387,17 @@ public partial class InitWizardViewModel : ReactiveViewModel
     /// Writes <see cref="ChannelEntries"/> to <see cref="ChannelAudiences"/>
     /// for config generation. Called before writing config.
     /// </summary>
+    private List<string> ParseAllowedUserIds()
+    {
+        if (string.IsNullOrWhiteSpace(SlackAllowedUserIdsInput))
+            return [];
+
+        return SlackAllowedUserIdsInput
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
     internal void SyncChannelAudiencesFromEntries()
     {
         ChannelAudiences.Clear();
