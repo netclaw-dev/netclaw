@@ -130,12 +130,27 @@ Doctor passes.
 
 ### 10. Tests
 
-- [ ] Unit test: `DeriveSecurityDefaults()` maps posture to shell mode + defaults
-- [ ] Unit test: audience cycling wraps correctly (Team→Personal→Public→Team)
-- [ ] Unit test: `ListUsersAsync` excludes bots and deactivated users
-- [ ] Unit test: `ListUsersAsync` returns empty on missing scope
-- [ ] Unit test: channel-add deduplication
-- [ ] Unit test: DMs row cannot be removed
-- [ ] Integration test: full wizard flow forward/back with new step order
-- [ ] Manual test: run `netclaw init` end-to-end, verify config output
+Use `VirtualTerminal` + `VirtualInputSource` headless TUI testing pattern
+from `InitWizardPageTests.cs`. Inject `FakeSlackProbe` for API calls.
+
+**ViewModel unit tests:**
+- [ ] `DeriveSecurityDefaults()` maps posture to shell mode + audience defaults
+- [ ] Audience cycling wraps correctly (Team→Personal→Public→Team, reverse too)
+- [ ] Channel-add deduplication
+- [ ] DMs row cannot be removed
+- [ ] Config generation uses explicit posture (not inferred from exposure)
+
+**Headless TUI integration tests (VirtualTerminal + VirtualInputSource):**
+- [ ] SecurityPosture step renders posture options, Enter selects and advances
+- [ ] Channels step renders channel list with audience values
+- [ ] ←/→ on channel row cycles audience in rendered terminal output
+- [ ] `a` key opens channel-add sub-step
+- [ ] `d` key removes focused channel
+- [ ] Full forward navigation through new step order (Provider → ... → HealthCheck)
+- [ ] Back navigation from Channels returns to ACL, then to SecurityPosture
+- [ ] Slack-disabled flow skips ACL and Channels steps
+- [ ] Fallback to manual entry when FakeSlackProbe returns empty user list
+
+**Quality gates:**
 - [ ] `dotnet slopwatch analyze` — no new violations
+- [ ] Existing `InitWizardPageTests` still pass (no regression)
