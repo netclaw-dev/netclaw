@@ -247,12 +247,14 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                     Memory.MemoryCurationActor.CreateProps(_memoryStore, _clientProvider),
                     "memory-curation");
 
+                // Distillation processes a full transcript — allow 2x normal sidecar timeout
+                var distillationTimeout = TimeSpan.FromSeconds(Math.Max(1, _config.SidecarLlmTimeoutSeconds) * 2);
                 _observerActor = Context.ActorOf(
                     SessionMemoryObserverActor.CreateProps(
                         _sessionId,
                         _compactionClient,
                         TimeSpan.FromSeconds(Math.Max(10, _config.MemoryObserverIdleSeconds)),
-                        TimeSpan.FromSeconds(Math.Max(1, _config.SidecarLlmTimeoutSeconds))),
+                        distillationTimeout),
                     "memory-observer");
             }
         });

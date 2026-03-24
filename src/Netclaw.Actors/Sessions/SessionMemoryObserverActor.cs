@@ -110,8 +110,13 @@ public sealed class SessionMemoryObserverActor : ReceivePersistentActor
         // Explicit distillation request from parent (passivation)
         Command<DistillMemories>(msg => TriggerDistillation(Sender));
 
-        // Internal: mark distillation complete
-        Command<DistillationFinished>(_ => _distilling = false);
+        // Internal: mark distillation complete. On failure, re-enable hasNewContent for retry.
+        Command<DistillationFinished>(msg =>
+        {
+            _distilling = false;
+            if (msg.Success)
+                _hasNewContent = false;
+        });
 
         // Internal: persist proposed anchors to journal (arrives from async task via self.Tell)
         Command<PersistAnchors>(msg =>
@@ -153,7 +158,6 @@ public sealed class SessionMemoryObserverActor : ReceivePersistentActor
         }
 
         _distilling = true;
-        _hasNewContent = false;
 
         var self = Self;
         var skipList = _proposedAnchors.ToArray();
@@ -224,11 +228,11 @@ public sealed class SessionMemoryObserverActor : ReceivePersistentActor
                 OutputTokens = outputTokens,
                 FailureReason = ex.Message
             });
+            self.Tell(new DistillationFinished(false));
+            return;
         }
-        finally
-        {
-            self.Tell(DistillationFinished.Instance);
-        }
+
+        self.Tell(new DistillationFinished(true));
     }
 
     private static IReadOnlyList<MemoryProposal> ParseProposals(string text)
@@ -341,10 +345,7 @@ public sealed class SessionMemoryObserverActor : ReceivePersistentActor
 
     // ── Internal messages ──
 
-    private sealed record DistillationFinished
-    {
-        public static readonly DistillationFinished Instance = new();
-    }
+    private sealed record DistillationFinished(bool Success);
 
     private sealed record PersistAnchors(IReadOnlyList<string> Anchors);
 }
