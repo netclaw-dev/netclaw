@@ -422,7 +422,7 @@ internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStas
                 break;
 
             case TextOutput text:
-                if (!_sawTextDelta && !_postedThisTurn)
+                if (!_sawTextDelta)
                 {
                     var fullText = text.Text?.Trim();
                     if (!string.IsNullOrWhiteSpace(fullText))
