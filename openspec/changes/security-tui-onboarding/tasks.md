@@ -149,7 +149,8 @@ from `InitWizardPageTests.cs`. Inject `FakeSlackProbe` for API calls.
 - [ ] Full forward navigation through new step order (Provider → ... → HealthCheck)
 - [ ] Back navigation from Channels returns to ACL, then to SecurityPosture
 - [ ] Slack-disabled flow skips ACL and Channels steps
-- [ ] Fallback to manual entry when FakeSlackProbe returns empty user list
+- [ ] API failure shows blocking error message with retry prompt
+- [ ] Enter retries failed API call, Esc goes back
 
 **Quality gates:**
 - [ ] `dotnet slopwatch analyze` — no new violations

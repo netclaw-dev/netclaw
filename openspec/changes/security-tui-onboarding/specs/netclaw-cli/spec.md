@@ -25,9 +25,11 @@ instead of owning the pagination logic directly.
 - **THEN** the tool delegates to the shared user listing service
 - **AND** existing behavior (query matching, result formatting) is unchanged
 
-#### Scenario: Graceful failure when users.list unavailable
+#### Scenario: API failure surfaces error to caller
 
 - **GIVEN** the `users.list` call fails (missing scope, network error)
 - **WHEN** the init wizard or tool attempts to list users
-- **THEN** an empty list is returned
-- **AND** no exception is thrown
+- **THEN** the failure reason is returned to the caller (not swallowed)
+- **AND** no unhandled exception is thrown
+- **AND** the caller decides how to present the error (wizard blocks,
+  tool returns error message)

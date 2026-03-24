@@ -40,19 +40,23 @@ validated in ChatServices.
 - **THEN** a filtered list shows matching Slack users with display name and ID
 - **AND** selecting a user sets the owner identity to their internal Slack ID
 
-#### Scenario: Fallback to manual ID entry (missing scope)
+#### Scenario: Block on missing users:read scope
 
 - **GIVEN** the bot token lacks `users:read` scope
 - **WHEN** the ACL step loads
-- **THEN** a text input for manual user ID entry is shown
-- **AND** a message explains that user search requires the `users:read` scope
+- **THEN** an error message is shown: "Failed to list users: missing
+  users:read scope. Add this scope to your Slack app and press Enter
+  to retry."
+- **AND** the user cannot advance until the API call succeeds or they
+  press Esc to go back and fix credentials
 
-#### Scenario: Fallback to manual ID entry (API failure)
+#### Scenario: Block on users.list API failure
 
 - **GIVEN** the bot token has `users:read` scope but `users.list` fails
 - **WHEN** the ACL step loads
-- **THEN** a text input for manual user ID entry is shown
-- **AND** a message explains that user search is temporarily unavailable
+- **THEN** an error message is shown with the failure reason
+- **AND** Enter retries the API call
+- **AND** Esc goes back to the previous step
 
 ## REMOVED Requirements
 

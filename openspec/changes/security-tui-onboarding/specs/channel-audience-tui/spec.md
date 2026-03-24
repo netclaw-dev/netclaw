@@ -94,25 +94,29 @@ ChatServices. No `ChannelAudiences` are written to config.
 - **THEN** the Channels step is skipped
 - **AND** no `ChannelAudiences` section is written to config
 
-### Requirement: Fallback to manual entry on API failure
+### Requirement: Block on API failure with actionable error
 
-If `conversations.list` fails (network error, rate limiting, or permissions),
-the Channels step SHALL fall back to manual channel name/ID entry via a
-`TextInputNode`. Manually-entered channels are resolved during HealthCheck.
+If `conversations.list` fails, the Channels step SHALL display an actionable
+error message and block until the user resolves the issue. No silent fallback
+to manual entry.
 
-#### Scenario: conversations.list fails
+#### Scenario: conversations.list fails with missing scope
 
-- **GIVEN** the Slack token is valid but `conversations.list` returns an error
+- **GIVEN** the Slack token is valid but lacks `channels:read` scope
 - **WHEN** the Channels step loads
-- **THEN** a text input for comma-separated channel names is shown
-- **AND** a message explains that channel search is unavailable
-- **AND** channels are resolved to IDs during the HealthCheck step
+- **THEN** an error message is shown: "Failed to list channels: missing
+  channels:read scope. Add this scope to your Slack app and press Enter
+  to retry."
+- **AND** the user cannot advance until the API call succeeds or they
+  press Esc to go back and re-enter credentials
 
-#### Scenario: conversations.list succeeds
+#### Scenario: conversations.list fails with network error
 
-- **GIVEN** `conversations.list` returns workspace channels
-- **WHEN** the user presses `a` to add a channel
-- **THEN** the type-to-filter search is shown with API results
+- **GIVEN** the Slack API is unreachable
+- **WHEN** the Channels step loads
+- **THEN** an error message is shown with the failure reason
+- **AND** Enter retries the API call
+- **AND** Esc goes back to the previous step
 
 ### Requirement: Audience defaults from posture
 
