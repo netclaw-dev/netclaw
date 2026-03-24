@@ -100,6 +100,60 @@ public sealed class InitWizardPageTests : IDisposable
         Assert.Equal(_registry.KnownTypeKeys[1], vm.SelectedProviderType);
     }
 
+    /// <summary>
+    /// Verifies the SecurityPosture step renders posture options when the
+    /// ViewModel is set directly to that step.
+    /// </summary>
+    [Fact]
+    public async Task SecurityPostureStep_RendersPostureOptions()
+    {
+        var (terminal, app, vm) = CreateHeadlessApp(out var input);
+
+        // Jump directly to SecurityPosture step (bypass Provider sub-steps)
+        vm.CurrentStep.Value = WizardStep.SecurityPosture;
+
+        // Quit immediately to capture the rendered output
+        input.EnqueueKey(ConsoleKey.Q, false, false, true);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await app.RunAsync(cts.Token);
+
+        Assert.True(terminal.Contains("Security Posture"),
+            "Expected step title 'Security Posture' in terminal output");
+        Assert.True(terminal.Contains("Personal"),
+            "Expected 'Personal' posture option in terminal output");
+        Assert.True(terminal.Contains("Team"),
+            "Expected 'Team' posture option in terminal output");
+    }
+
+    /// <summary>
+    /// Verifies the Channels step renders channel entries when pre-populated.
+    /// </summary>
+    [Fact]
+    public async Task ChannelsStep_RendersChannelEntries()
+    {
+        var (terminal, app, vm) = CreateHeadlessApp(out var input);
+
+        // Pre-populate channels
+        vm.ChannelEntries.Add(new ChannelEntry("DMs", "dm", "personal", isDmRow: true));
+        vm.ChannelEntries.Add(new ChannelEntry("#general", "C0AGM484P0Q", "team"));
+
+        // Jump directly to Channels step
+        vm.CurrentStep.Value = WizardStep.Channels;
+
+        input.EnqueueKey(ConsoleKey.Q, false, false, true);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await app.RunAsync(cts.Token);
+
+        Assert.True(terminal.Contains("Channels"),
+            "Expected step title 'Channels' in terminal output");
+        Assert.True(terminal.Contains("DMs"),
+            "Expected DMs entry in terminal output");
+        Assert.True(terminal.Contains("#general"),
+            "Expected #general entry in terminal output");
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────────
 
     private (VirtualTerminal Terminal, TerminaApplication App, InitWizardViewModel Vm)

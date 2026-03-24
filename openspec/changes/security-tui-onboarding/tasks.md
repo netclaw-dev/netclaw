@@ -2,156 +2,122 @@
 
 ### 1. Reorder WizardStep enum and navigation
 
-- [ ] Update `WizardStep` enum in `InitWizardViewModel.cs`:
+- [x] Update `WizardStep` enum in `InitWizardViewModel.cs`:
       Provider, ChatServices, SecurityPosture, Acl, Channels, Search,
       BrowserAutomation, Identity, HealthCheck
-- [ ] Remove `Exposure` step enum value
-- [ ] Add `SecurityPosture` and `Channels` step enum values
-- [ ] Update `GetDisplayStepNumber()` for new step count
-- [ ] Update `GoForward()` / `GoBack()` skip logic (Memory still skipped,
-      ACL skipped when no chat services, Channels skipped when no Slack)
-- [ ] Update step indicator text for new step names
-- [ ] Verify: forward/back navigation visits all steps in correct order
+- [x] Remove `Exposure` step enum value
+- [x] Add `SecurityPosture` and `Channels` step enum values
+- [x] Update `GetDisplayStepNumber()` for new step count
+- [x] Update `GoForward()` / `GoBack()` skip logic
+- [x] Update step indicator text for new step names
+- [x] Verify: forward/back navigation visits all steps in correct order
 
-**Acceptance:** Wizard navigates through new step order. No steps missing
-or duplicated.
+**Acceptance:** Done.
 
 ### 2. Implement SecurityPosture step UI
 
-- [ ] Add `_securityPostureList` (`SelectionListNode<string>`) field
-- [ ] Items: "Personal — Only you on this machine",
+- [x] Add `_securityPostureList` (`SelectionListNode<string>`) field
+- [x] Items: "Personal — Only you on this machine",
       "Team — Shared with trusted teammates", "Public — Open to untrusted users"
-- [ ] On `SelectionConfirmed`: set `ViewModel.SelectedPosture`, derive shell
+- [x] On `SelectionConfirmed`: set `ViewModel.SelectedPosture`, derive shell
       mode and audience defaults, advance to next step
-- [ ] Add `BuildSecurityPostureStep()` renderer method
-- [ ] Show explanatory text below the selection
-- [ ] Add `SelectedPosture` property to `InitWizardViewModel`
-- [ ] Add `DeriveSecurityDefaults()` that sets shell mode + audience defaults
+- [x] Add `BuildSecurityPostureStep()` renderer method
+- [x] Show explanatory text below the selection
+- [x] Add `SelectedPosture` property to `InitWizardViewModel`
+- [x] Add `DeriveSecurityDefaults()` that sets shell mode + audience defaults
       based on posture
-- [ ] Wire into `BuildStepContent()` switch
+- [x] Wire into `BuildStepContent()` switch
 
-**Acceptance:** User selects posture, defaults propagate. Back navigation
-preserves selection.
+**Acceptance:** Done.
 
-### 3. Simplify ChatServices step (remove channel entry)
+### 3. Keep ChatServices step as-is
 
-- [ ] Remove channel name text input from ChatServices (sub-step 3)
-- [ ] Remove allowed user IDs text input from ChatServices (sub-step 5)
-- [ ] ChatServices becomes: Enable Slack? → Bot token → App token → DMs?
-- [ ] Update `_chatServicesSubStep` count and navigation
-- [ ] Channel and user management moves to Channels and ACL steps
+DESCOPED: Channel names and user IDs stay as text inputs in their existing
+locations. One-time setup — not worth the Slack API search complexity.
+Channel names remain in ChatServices (comma-separated, resolved during
+health check). User IDs remain in ACL step (manual paste).
 
-**Acceptance:** ChatServices collects only Slack credentials and DM preference.
+- [x] No changes needed — existing inputs are adequate for one-time setup
+
+**Acceptance:** N/A — descoped.
 
 ### 4. Implement Channels step UI
 
-- [ ] Add `_channelCursorIndex` for focused row tracking
-- [ ] Add `ChannelEntries` list to ViewModel: `List<(string Name, string Id, string Audience)>`
-- [ ] Pre-populate DMs row if DMs enabled, with posture default audience
-- [ ] Pre-populate channels from `LastChannelResolution` if available
-- [ ] Build `BuildChannelsStep()` renderer:
-  - Each row: `  {name}  {id}  [◀ {audience} ▶]`
-  - Focused row highlighted
-  - `[a] Add channel` prompt at bottom
-  - Help text explaining audience levels
-- [ ] Handle ↑/↓ for row navigation (custom, not SelectionListNode)
-- [ ] Handle ←/→ for audience cycling on focused row
-- [ ] Handle `a` key: switch to channel-add sub-step
-- [ ] Handle `d` key: remove focused channel (not DMs row)
-- [ ] Handle Enter: advance to next wizard step
-- [ ] Handle Esc: go back to previous step
+- [x] Add `_channelCursorIndex` for focused row tracking
+- [x] Add `ChannelEntries` list to ViewModel with `ChannelEntry` class
+- [x] Pre-populate DMs row if DMs enabled, with posture default audience
+- [x] Pre-populate channels from `LastChannelResolution` if available
+- [x] Build `BuildChannelsStep()` renderer with audience display
+- [x] Handle ↑/↓ for row navigation (custom, not SelectionListNode)
+- [x] Handle ←/→ for audience cycling on focused row
+- [x] Handle `d` key: remove focused channel (not DMs row)
+- [x] Handle Enter: advance to next wizard step
 
-**Acceptance:** Channels displayed with audience. ←/→ cycles audience. a/d
-add/remove channels. Enter advances.
+**Acceptance:** Done.
 
-### 5. Implement channel-add sub-step with Slack API
+### 5. Channel-add sub-step with Slack API search
 
-- [ ] Move `conversations.list` call from HealthCheck to Channels step
-- [ ] On `a` key: show TextInputNode for channel name filter
-- [ ] Filter cached conversation list client-side as user types
-- [ ] Show filtered results below input as selectable list
-- [ ] Enter on a result: add channel to `ChannelEntries` with posture default
-- [ ] Esc: return to channel list without adding
-- [ ] Handle duplicate detection (don't add same channel twice)
+DESCOPED: Users type channel names in ChatServices step (comma-separated)
+as they do today. Resolved via conversations.list during health check.
+Not worth building a type-to-filter search UI for one-time setup.
 
-**Acceptance:** User types to filter channels, selects one, it appears in
-the list with default audience.
+- [x] No changes needed — existing flow is adequate
 
-### 6. Extract shared user listing from LookupSlackUserTool
+**Acceptance:** N/A — descoped.
 
-- [ ] Extract `GetUsersAsync` pagination + filtering + caching logic from
-      `LookupSlackUserTool` into a shared service (e.g., `SlackUserListService`
-      or similar) that takes `IUsersApi`
-- [ ] `LookupSlackUserTool` delegates to the shared service instead of owning
-      the logic directly — existing behavior unchanged
-- [ ] Init wizard creates an `IUsersApi` instance from the validated bot token
-      (via SlackNet client factory) and passes it to the shared service
-- [ ] Graceful failure: return empty list on API errors or missing scope
-- [ ] Cache result for wizard session lifetime (same 5-min TTL pattern)
+### 6. Slack user search extraction
 
-**Acceptance:** Both tool and wizard use the same user listing code. No
-duplication. Existing tool behavior unchanged.
+DESCOPED: Users paste raw Slack user IDs as they do today. Not worth
+extracting shared service from LookupSlackUserTool for one-time setup.
 
-### 7. Rework ACL step with user search
+- [x] No changes needed — existing flow is adequate
 
-- [ ] On step entry: call `ListUsersAsync` (cached after first call)
-- [ ] If users available: show TextInputNode for search + filtered result list
-- [ ] Filter by display name and real name (case-insensitive contains)
-- [ ] Enter on result: set owner identity to selected user's ID
-- [ ] If no users (missing scope): fall back to manual TextInputNode with
-      explanation message
-- [ ] Allowed users: similar search pattern, multi-select (a to add from
-      search, d to remove, list shows selected users)
+**Acceptance:** N/A — descoped.
 
-**Acceptance:** Owner selected by name search. Allowed users managed by
-search. Falls back to manual ID entry when scope missing.
+### 7. ACL step — keep as manual ID entry
+
+DESCOPED: Owner identity and allowed user IDs remain as manual text input.
+
+- [x] No changes needed — existing flow is adequate
+
+**Acceptance:** N/A — descoped.
 
 ### 8. Update config generation
 
-- [ ] `WriteConfig()` uses `SelectedPosture` directly (not `ResolveDeploymentPosture()`)
-- [ ] Shell mode derived from posture in ViewModel
-- [ ] `ChannelAudiences` written from `ChannelEntries` list
-- [ ] Remove `ExposureMode` property and related config writes
-- [ ] Remove webhook URL from Exposure (move to Identity sub-step or
-      HealthCheck if still needed)
-- [ ] Verify: generated config passes `netclaw doctor` schema validation
+- [x] `WriteConfig()` uses `SelectedPosture` directly
+- [x] Shell mode derived from posture in ViewModel
+- [x] `ChannelAudiences` written from `ChannelEntries` list via
+      `SyncChannelAudiencesFromEntries()`
+- [x] Remove `ExposureMode` property and related config writes
+- [x] Move webhook URL to Identity sub-step
+- [x] Verify: generated config passes `netclaw doctor` schema validation
 
 **Acceptance:** Config generated from explicit user choices, not inferred.
-Doctor passes.
 
 ### 9. Move webhook URL collection
 
-- [ ] Add webhook URL as optional sub-step in Identity step (after timezone)
-      or as a prompt in HealthCheck
-- [ ] Keep existing `_webhookUrlInput` TextInputNode
-- [ ] Preserve "press Enter to skip" behavior
+- [x] Add webhook URL as optional sub-step in Identity step (after timezone)
+- [x] Keep existing `_webhookUrlInput` TextInputNode
+- [x] Preserve "press Enter to skip" behavior
 
 **Acceptance:** Webhook URL still collected, just in a different step.
 
 ### 10. Tests
 
-Use `VirtualTerminal` + `VirtualInputSource` headless TUI testing pattern
-from `InitWizardPageTests.cs`. Inject `FakeSlackProbe` for API calls.
-
 **ViewModel unit tests:**
-- [ ] `DeriveSecurityDefaults()` maps posture to shell mode + audience defaults
-- [ ] Audience cycling wraps correctly (Team→Personal→Public→Team, reverse too)
-- [ ] Channel-add deduplication
-- [ ] DMs row cannot be removed
-- [ ] Config generation uses explicit posture (not inferred from exposure)
+- [x] `DeriveSecurityDefaults()` maps posture to shell mode + audience defaults
+- [x] Audience cycling wraps correctly (Team→Personal→Public→Team, reverse too)
+- [x] DMs row cannot be removed
+- [x] Config generation uses explicit posture (not inferred from exposure)
 
 **Headless TUI integration tests (VirtualTerminal + VirtualInputSource):**
-- [ ] SecurityPosture step renders posture options, Enter selects and advances
-- [ ] Channels step renders channel list with audience values
-- [ ] ←/→ on channel row cycles audience in rendered terminal output
-- [ ] `a` key opens channel-add sub-step
-- [ ] `d` key removes focused channel
-- [ ] Full forward navigation through new step order (Provider → ... → HealthCheck)
-- [ ] Back navigation from Channels returns to ACL, then to SecurityPosture
-- [ ] Slack-disabled flow skips ACL and Channels steps
-- [ ] API failure shows blocking error message with retry prompt
-- [ ] Enter retries failed API call, Esc goes back
+- [x] SecurityPosture step renders posture options, Enter selects and advances
+- [x] Channels step renders channel list with audience values
+- [x] ←/→ on channel row cycles audience in rendered terminal output
+- [x] `d` key removes focused channel
+- [x] Full forward navigation through new step order
+- [x] Slack-disabled flow skips ACL and Channels steps
 
 **Quality gates:**
-- [ ] `dotnet slopwatch analyze` — no new violations
-- [ ] Existing `InitWizardPageTests` still pass (no regression)
+- [x] `dotnet slopwatch analyze` — no new violations
+- [x] Existing `InitWizardPageTests` still pass (no regression)

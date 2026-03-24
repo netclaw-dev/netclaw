@@ -65,6 +65,9 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
     // Step 5: Channels
     private int _channelCursorIndex;
 
+    // Step 8: Identity — webhook URL sub-step
+    private TextInputNode? _webhookUrlInput;
+
     // Step 8: Identity
     private TextInputNode? _agentNameInput;
     private SelectionListNode<string>? _commStyleList;
@@ -273,7 +276,7 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
                 WizardStep.Identity when _identitySubStep == 3 =>
                     "  Used for time-aware responses and scheduling.",
                 WizardStep.Identity when _identitySubStep == 4 =>
-                    "  What will you primarily use this assistant for?",
+                    "  Optional. Receive alerts when MCP servers disconnect or LLM providers fail. Press Enter to skip.",
                 WizardStep.HealthCheck =>
                     "  Validating your configuration...",
                 _ => ""
@@ -1244,6 +1247,7 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             1 => BuildCommStyleSubStep(),
             2 => BuildUserNameSubStep(),
             3 => BuildTimezoneSubStep(),
+            4 => BuildWebhookUrlSubStep(),
             _ => Layouts.Empty()
         };
     }
@@ -1347,8 +1351,7 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             {
                 ViewModel.UserTimezone = string.IsNullOrWhiteSpace(text)
                     ? TimeZoneInfo.Local.Id : text;
-                _identitySubStep = 0;
-                ViewModel.GoNext();
+                SetIdentitySubStep(4);
             })
             .DisposeWith(_stepSubs);
 
@@ -1359,6 +1362,36 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
                 .WithBorder(BorderStyle.Rounded)
                 .WithBorderColor(Color.Gray)
                 .WithContent(_timezoneInput)
+                .Height(3));
+    }
+
+    private ILayoutNode BuildWebhookUrlSubStep()
+    {
+        _webhookUrlInput = new TextInputNode()
+            .WithPlaceholder("https://hooks.slack.com/services/...");
+
+        if (!string.IsNullOrWhiteSpace(ViewModel.WebhookUrl))
+            _webhookUrlInput.Text = ViewModel.WebhookUrl;
+
+        _webhookUrlInput.OnFocused();
+        _lastFocusedInput = _webhookUrlInput;
+
+        _webhookUrlInput.Submitted
+            .Subscribe(text =>
+            {
+                ViewModel.WebhookUrl = string.IsNullOrWhiteSpace(text) ? null : text;
+                _identitySubStep = 0;
+                ViewModel.GoNext();
+            })
+            .DisposeWith(_stepSubs);
+
+        return Layouts.Vertical()
+            .WithChild(new TextNode("  Notification webhook URL (optional, press Enter to skip):").WithForeground(Color.White))
+            .WithChild(new PanelNode()
+                .WithTitle("Webhook")
+                .WithBorder(BorderStyle.Rounded)
+                .WithBorderColor(Color.Gray)
+                .WithContent(_webhookUrlInput)
                 .Height(3));
     }
 
@@ -1619,6 +1652,7 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             WizardStep.Identity when _identitySubStep == 0 => _agentNameInput,
             WizardStep.Identity when _identitySubStep == 2 => _userNameInput,
             WizardStep.Identity when _identitySubStep == 3 => _timezoneInput,
+            WizardStep.Identity when _identitySubStep == 4 => _webhookUrlInput,
             _ => null
         };
     }

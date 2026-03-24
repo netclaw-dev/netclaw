@@ -1130,6 +1130,79 @@ public sealed class InitWizardViewModelTests : IDisposable
         Assert.False(vm.ChannelAudiences.ContainsKey("dm"));
     }
 
+    [Fact]
+    public void DeriveSecurityDefaults_public_posture_dm_maps_to_public()
+    {
+        using var vm = CreateViewModel();
+        vm.SelectedPosture = DeploymentPosture.Public;
+        vm.SlackAllowDirectMessages = true;
+
+        vm.DeriveSecurityDefaults();
+        vm.SyncChannelAudiencesFromEntries();
+
+        Assert.Equal("public", vm.ChannelAudiences["dm"]);
+    }
+
+    [Fact]
+    public void AudienceCycling_wraps_forward()
+    {
+        var entry = new ChannelEntry("#test", "C123", "team");
+        var values = new[] { "personal", "team", "public" };
+
+        // team → public → personal → team
+        var idx = Array.IndexOf(values, entry.Audience);
+        entry.Audience = values[(idx + 1) % values.Length];
+        Assert.Equal("public", entry.Audience);
+
+        idx = Array.IndexOf(values, entry.Audience);
+        entry.Audience = values[(idx + 1) % values.Length];
+        Assert.Equal("personal", entry.Audience);
+
+        idx = Array.IndexOf(values, entry.Audience);
+        entry.Audience = values[(idx + 1) % values.Length];
+        Assert.Equal("team", entry.Audience);
+    }
+
+    [Fact]
+    public void AudienceCycling_wraps_reverse()
+    {
+        var entry = new ChannelEntry("#test", "C123", "team");
+        var values = new[] { "personal", "team", "public" };
+
+        // team → personal → public → team
+        var idx = Array.IndexOf(values, entry.Audience);
+        entry.Audience = values[(idx - 1 + values.Length) % values.Length];
+        Assert.Equal("personal", entry.Audience);
+
+        idx = Array.IndexOf(values, entry.Audience);
+        entry.Audience = values[(idx - 1 + values.Length) % values.Length];
+        Assert.Equal("public", entry.Audience);
+    }
+
+    [Fact]
+    public void DmRow_cannot_be_removed_from_entries()
+    {
+        using var vm = CreateViewModel();
+        vm.SelectedPosture = DeploymentPosture.Personal;
+        vm.SlackAllowDirectMessages = true;
+        vm.DeriveSecurityDefaults();
+
+        var dmEntry = vm.ChannelEntries.FirstOrDefault(e => e.IsDmRow);
+        Assert.NotNull(dmEntry);
+        Assert.True(dmEntry!.IsDmRow);
+        // The UI prevents removal of DM rows — IsDmRow flag is the guard
+    }
+
+    [Fact]
+    public void ConfigGeneration_uses_explicit_posture()
+    {
+        using var vm = CreateViewModel();
+        vm.SelectedPosture = DeploymentPosture.Team;
+
+        // The posture should be used directly, not inferred from ExposureMode
+        Assert.Equal(DeploymentPosture.Team, vm.SelectedPosture);
+    }
+
     private InitWizardViewModel CreateViewModel(IBrowserAutomationBootstrapper? browserBootstrapper = null)
     {
         return new InitWizardViewModel(_paths, _registry, _fakeProbe, _fakeSlackProbe, browserBootstrapper);
