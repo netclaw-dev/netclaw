@@ -35,14 +35,14 @@ public sealed class SlackConversationActor : ReceiveActor
 
             if (!aclDecision.IsAllowed)
             {
-                _log.Debug("Ignoring Slack event {0}: {1}", message.EventId, aclDecision.DenyReason);
+                _log.Info("slack_event_dropped event={0} reason={1}", message.EventId, aclDecision.DenyReason ?? "acl_denied");
                 ChannelTelemetry.RecordSlackEventDropped(aclDecision.DenyReason ?? "acl_denied");
                 return;
             }
 
             if (IsBotMessage(message))
             {
-                _log.Debug("Ignoring Slack event {0}: bot/self message", message.EventId);
+                _log.Info("slack_event_filtered event={0} reason=bot_message", message.EventId);
                 ChannelTelemetry.RecordSlackEventFiltered("bot_message");
                 return;
             }
@@ -63,14 +63,14 @@ public sealed class SlackConversationActor : ReceiveActor
 
             if (decision is SlackRoutingDecision.Ignore)
             {
-                _log.Debug("Ignoring Slack event {0}: routing policy decision ignore", message.EventId);
+                _log.Info("slack_event_filtered event={0} reason=routing_policy_ignore", message.EventId);
                 ChannelTelemetry.RecordSlackEventFiltered("routing_policy_ignore");
                 return;
             }
 
             if (decision is SlackRoutingDecision.ContinueOnly && !threadExists)
             {
-                _log.Debug("Ignoring Slack event {0}: thread continuation requested but no thread actor exists", message.EventId);
+                _log.Info("slack_event_dropped event={0} reason=thread_not_initialized", message.EventId);
                 ChannelTelemetry.RecordSlackEventDropped("thread_not_initialized");
                 return;
             }
@@ -82,8 +82,8 @@ public sealed class SlackConversationActor : ReceiveActor
             var normalized = NormalizeInboundText(message.Text);
             if (string.IsNullOrWhiteSpace(normalized) && message.Files is not { Count: > 0 })
             {
-                _log.Debug("Ignoring Slack event {0}: normalized text is empty and no files", message.EventId);
-                ChannelTelemetry.RecordSlackEventDropped("empty_text");
+                _log.Info("slack_event_filtered event={0} reason=empty_text", message.EventId);
+                ChannelTelemetry.RecordSlackEventFiltered("empty_text");
                 return;
             }
 
