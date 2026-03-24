@@ -1,22 +1,33 @@
 # netclaw-cli Delta Spec
 
-## ADDED Requirements
+## MODIFIED Requirements
 
-### Requirement: Slack user list resolution
+### Requirement: Shared Slack user listing service
 
-`ISlackProbe` SHALL provide a `ListUsersAsync` method that fetches workspace
-users from the Slack `users.list` API with pagination support.
+The user-fetching logic in `LookupSlackUserTool` (pagination via
+`IUsersApi.List`, bot/deleted filtering, caching) SHALL be extracted into
+a shared service that both the tool and the init wizard can consume. The
+tool's existing behavior is unchanged — it delegates to the shared service
+instead of owning the pagination logic directly.
 
-#### Scenario: Fetch workspace users
+#### Scenario: Init wizard uses shared user listing
 
-- **GIVEN** a valid bot token with `users:read` scope
-- **WHEN** `ListUsersAsync` is called
-- **THEN** a list of `SlackUser(DisplayName, RealName, Id)` records is returned
-- **AND** bot users and deactivated users are excluded
+- **GIVEN** the bot token is validated in ChatServices
+- **WHEN** the ACL step loads
+- **THEN** the shared user listing service fetches workspace users via
+  `IUsersApi` using the same pagination and filtering as `LookupSlackUserTool`
+- **AND** results are cached for the wizard session
 
-#### Scenario: Missing users:read scope
+#### Scenario: LookupSlackUserTool delegates to shared service
 
-- **GIVEN** a bot token without `users:read` scope
-- **WHEN** `ListUsersAsync` is called
+- **GIVEN** the daemon is running with a valid Slack connection
+- **WHEN** the agent calls `lookup_slack_user`
+- **THEN** the tool delegates to the shared user listing service
+- **AND** existing behavior (query matching, result formatting) is unchanged
+
+#### Scenario: Graceful failure when users.list unavailable
+
+- **GIVEN** the `users.list` call fails (missing scope, network error)
+- **WHEN** the init wizard or tool attempts to list users
 - **THEN** an empty list is returned
 - **AND** no exception is thrown

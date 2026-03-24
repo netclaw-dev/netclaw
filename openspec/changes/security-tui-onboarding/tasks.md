@@ -77,18 +77,20 @@ add/remove channels. Enter advances.
 **Acceptance:** User types to filter channels, selects one, it appears in
 the list with default audience.
 
-### 6. Add ListUsersAsync to ISlackProbe
+### 6. Extract shared user listing from LookupSlackUserTool
 
-- [ ] Add `ListUsersAsync(string botToken, CancellationToken ct)` to
-      `ISlackProbe` interface
-- [ ] Implement in `SlackProbe`: call `users.list` with pagination
-- [ ] Return `List<SlackUser>` record: `(string DisplayName, string RealName, string Id)`
-- [ ] Exclude bot users (`is_bot == true`) and deactivated users (`deleted == true`)
-- [ ] Handle missing `users:read` scope gracefully (return empty list)
-- [ ] Cache result for wizard session lifetime
-- [ ] Timeout: 15 seconds
+- [ ] Extract `GetUsersAsync` pagination + filtering + caching logic from
+      `LookupSlackUserTool` into a shared service (e.g., `SlackUserListService`
+      or similar) that takes `IUsersApi`
+- [ ] `LookupSlackUserTool` delegates to the shared service instead of owning
+      the logic directly — existing behavior unchanged
+- [ ] Init wizard creates an `IUsersApi` instance from the validated bot token
+      (via SlackNet client factory) and passes it to the shared service
+- [ ] Graceful failure: return empty list on API errors or missing scope
+- [ ] Cache result for wizard session lifetime (same 5-min TTL pattern)
 
-**Acceptance:** Returns filtered user list. Graceful fallback on missing scope.
+**Acceptance:** Both tool and wizard use the same user listing code. No
+duplication. Existing tool behavior unchanged.
 
 ### 7. Rework ACL step with user search
 
