@@ -63,7 +63,11 @@ internal sealed class SkillIndexEnrichmentService : IHostedService
                 phrases.Count(p => !string.IsNullOrEmpty(p.Value)),
                 _skillRegistry.GetAll().Count - phrases.Count);
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // Clean shutdown — daemon is stopping
+        }
+        catch (Exception ex)
         {
             _logger.LogWarning(ex, "Skill index enrichment failed — using truncated descriptions");
         }
