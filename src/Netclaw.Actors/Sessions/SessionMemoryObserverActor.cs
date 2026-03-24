@@ -246,7 +246,10 @@ public sealed class SessionMemoryObserverActor : ReceivePersistentActor
             if (deserialized?.Proposals is not null)
                 return deserialized.Proposals;
         }
-        catch (JsonException) { }
+        catch (JsonException)
+        {
+            // Expected: sidecar may wrap JSON in markdown fences — fall through to extraction
+        }
 
         // Fallback: extract JSON from markdown fences
         var jsonStart = text.IndexOf('{', StringComparison.Ordinal);
@@ -259,7 +262,10 @@ public sealed class SessionMemoryObserverActor : ReceivePersistentActor
                     text[jsonStart..(jsonEnd + 1)], JsonOptions);
                 return deserialized?.Proposals ?? [];
             }
-            catch (JsonException) { }
+            catch (JsonException)
+            {
+                // Both parse attempts failed — return empty
+            }
         }
 
         return [];
