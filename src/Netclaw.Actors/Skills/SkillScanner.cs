@@ -202,7 +202,10 @@ public static partial class SkillScanner
             Compatibility = fm.Compatibility,
             AllowedTools = fm.AllowedTools,
             ResourcePaths = EnumerateResources(skillDirectory),
-            TrustTier = InferTrustTier(category)
+            TrustTier = InferTrustTier(category),
+            DisableModelInvocation = fm.DisableModelInvocation,
+            UserInvocable = fm.UserInvocable,
+            ArgumentHint = fm.ArgumentHint
         };
     }
 
@@ -296,6 +299,15 @@ internal sealed class SkillFrontmatter
 
     [YamlMember(Alias = "allowed-tools")]
     public string? AllowedTools { get; set; }
+
+    [YamlMember(Alias = "disable-model-invocation")]
+    public bool DisableModelInvocation { get; set; }
+
+    [YamlMember(Alias = "user-invocable")]
+    public bool UserInvocable { get; set; } = true;
+
+    [YamlMember(Alias = "argument-hint")]
+    public string? ArgumentHint { get; set; }
 
     public Dictionary<string, string>? Metadata { get; set; }
 }

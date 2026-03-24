@@ -480,8 +480,9 @@ static void ConfigureDaemonServices(
     services.AddSingleton<IContextLayerProvider>(_ =>
         new FileContextLayerProvider(paths.ToolIndexShadowPath, ContextLayerTiming.OnceAtStart));
 
-    // Skill index context layer
+    // Skill index context layer — uses compressed format, rebuilt by sync/enrichment services
     var skillIndexLayer = new SkillIndexContextLayer();
+    skillRegistry.RebuildAudienceMenus();
     skillIndexLayer.Update(skillRegistry.GenerateDescriptionMenu());
     services.AddSingleton(skillIndexLayer);
     services.AddSingleton<IContextLayerProvider>(skillIndexLayer);
@@ -511,6 +512,11 @@ static void ConfigureDaemonServices(
     services.AddHttpClient<SystemSkillSyncService>(client =>
         client.Timeout = FeedConstants.FeedHttpTimeout);
     services.AddHostedService<SystemSkillSyncService>();
+
+    // Skill index enrichment — generates trigger phrases via LLM sidecar.
+    // Runs after system skill sync, non-blocking. Falls back to truncated descriptions.
+    services.AddSingleton<SkillIndexEnrichmentService>();
+    services.AddHostedService<SkillIndexEnrichmentService>();
 
     // Binary update check — logs a warning at startup if a newer version is available.
     // Never blocks startup, never downloads anything.

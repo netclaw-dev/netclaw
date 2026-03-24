@@ -47,4 +47,24 @@ public sealed record SkillEntry(
     /// See <see cref="SkillTrustTier"/> for tier definitions.
     /// </summary>
     public SkillTrustTier TrustTier { get; init; } = SkillTrustTier.User;
+
+    /// <summary>
+    /// When <c>true</c>, the LLM cannot auto-load this skill — it is excluded
+    /// from the compressed index. The user can still invoke it via <c>/name</c>.
+    /// From frontmatter <c>disable-model-invocation</c>.
+    /// </summary>
+    public bool DisableModelInvocation { get; init; }
+
+    /// <summary>
+    /// When <c>false</c>, the user cannot invoke this skill via <c>/name</c>.
+    /// The LLM can still auto-load it from the compressed index.
+    /// From frontmatter <c>user-invocable</c>. Default: <c>true</c>.
+    /// </summary>
+    public bool UserInvocable { get; init; } = true;
+
+    /// <summary>
+    /// Hint shown after the slash command name for discoverability.
+    /// From frontmatter <c>argument-hint</c>. Example: <c>[subsystem]</c>.
+    /// </summary>
+    public string? ArgumentHint { get; init; }
 }

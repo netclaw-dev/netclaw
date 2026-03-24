@@ -299,6 +299,7 @@ internal sealed class SystemSkillSyncService : IHostedService
         foreach (var skill in SkillScanner.Scan(_paths.SkillsDirectory))
             _skillRegistry.Register(skill);
 
+        _skillRegistry.RebuildAudienceMenus();
         _skillIndexLayer.Update(_skillRegistry.GenerateDescriptionMenu());
         _logger.LogInformation("Skill description menu updated ({SkillCount} skills)", _skillRegistry.GetAll().Count);
     }
