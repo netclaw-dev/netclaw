@@ -240,35 +240,34 @@ public sealed class SessionMemoryObserverActor : ReceivePersistentActor
         if (string.IsNullOrWhiteSpace(text))
             return [];
 
-        try
-        {
-            var deserialized = JsonSerializer.Deserialize<DistillationResponse>(text, JsonOptions);
-            if (deserialized?.Proposals is not null)
-                return deserialized.Proposals;
-        }
-        catch (JsonException)
-        {
-            // Expected: sidecar may wrap JSON in markdown fences — fall through to extraction
-        }
+        // Try direct parse first, then extract from markdown fences
+        var direct = TryDeserialize(text);
+        if (direct is not null)
+            return direct;
 
-        // Fallback: extract JSON from markdown fences
         var jsonStart = text.IndexOf('{', StringComparison.Ordinal);
         var jsonEnd = text.LastIndexOf('}');
         if (jsonStart >= 0 && jsonEnd > jsonStart)
         {
-            try
-            {
-                var deserialized = JsonSerializer.Deserialize<DistillationResponse>(
-                    text[jsonStart..(jsonEnd + 1)], JsonOptions);
-                return deserialized?.Proposals ?? [];
-            }
-            catch (JsonException)
-            {
-                // Both parse attempts failed — return empty
-            }
+            var extracted = TryDeserialize(text[jsonStart..(jsonEnd + 1)]);
+            if (extracted is not null)
+                return extracted;
         }
 
         return [];
+    }
+
+    private static IReadOnlyList<MemoryProposal>? TryDeserialize(string json)
+    {
+        try
+        {
+            var result = JsonSerializer.Deserialize<DistillationResponse>(json, JsonOptions);
+            return result?.Proposals;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
     }
 
     private static string? FormatOutput(SessionOutput output) => output switch
