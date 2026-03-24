@@ -1,0 +1,402 @@
+using System.ComponentModel;
+using System.Text;
+using System.Text.RegularExpressions;
+using Netclaw.Actors.Skills;
+using Netclaw.Configuration;
+using Netclaw.Security.Skills;
+using Netclaw.Tools;
+
+namespace Netclaw.Actors.Tools;
+
+/// <summary>
+/// CRUD tool for skill creation and management. Validates AgentSkills.io format,
+/// writes atomically, and triggers registry re-scan after mutations.
+/// </summary>
+[NetclawTool("skill_manage",
+    "Create, edit, patch, or delete skills and their resource files. "
+    + "Actions: create, edit, patch, delete, write_file, remove_file.",
+    Grant = "builtin")]
+public sealed partial class SkillManageTool : NetclawTool<SkillManageTool.Params>
+{
+    private static readonly HashSet<string> AllowedResourcePrefixes =
+        new(StringComparer.OrdinalIgnoreCase) { "references", "scripts", "assets" };
+
+    [GeneratedRegex(@"^[a-z0-9]([a-z0-9-]*[a-z0-9])?$")]
+    private static partial Regex ValidNameRegex();
+
+    private const int MaxNameLength = 64;
+    private const int MaxDescriptionLength = 1024;
+
+    private readonly SkillRegistry _skillRegistry;
+    private readonly SkillIndexContextLayer _skillIndexLayer;
+    private readonly NetclawPaths _paths;
+    private readonly ISkillContentScanner _scanner;
+
+    public record Params(
+        [property: Description("Action to perform: create, edit, patch, delete, write_file, remove_file")]
+        string Action,
+        [property: Description("Skill name (lowercase letters, numbers, hyphens)")]
+        string Name,
+        [property: Description("Full SKILL.md content for create/edit actions")]
+        string? Content = null,
+        [property: Description("Relative file path within the skill for write_file/remove_file/patch")]
+        string? FilePath = null,
+        [property: Description("File content for write_file action")]
+        string? FileContent = null,
+        [property: Description("String to find for patch action")]
+        string? OldString = null,
+        [property: Description("Replacement string for patch action")]
+        string? NewString = null,
+        [property: Description("Replace all occurrences for patch action (default: false)")]
+        bool ReplaceAll = false);
+
+    public SkillManageTool(
+        SkillRegistry skillRegistry,
+        SkillIndexContextLayer skillIndexLayer,
+        NetclawPaths paths,
+        ISkillContentScanner scanner)
+    {
+        _skillRegistry = skillRegistry;
+        _skillIndexLayer = skillIndexLayer;
+        _paths = paths;
+        _scanner = scanner;
+    }
+
+    protected override async Task<string> ExecuteAsync(Params args, CancellationToken ct)
+    {
+        var action = args.Action.Trim().ToLowerInvariant();
+        return action switch
+        {
+            "create" => await CreateAsync(args, ct),
+            "edit" => await EditAsync(args, ct),
+            "patch" => await PatchAsync(args, ct),
+            "delete" => Delete(args),
+            "write_file" => WriteFile(args),
+            "remove_file" => RemoveFile(args),
+            _ => $"Unknown action '{action}'. Valid actions: create, edit, patch, delete, write_file, remove_file."
+        };
+    }
+
+    private async Task<string> CreateAsync(Params args, CancellationToken ct)
+    {
+        var nameError = ValidateName(args.Name);
+        if (nameError is not null) return nameError;
+
+        if (string.IsNullOrWhiteSpace(args.Content))
+            return "Content is required for create action.";
+
+        var name = args.Name.Trim().ToLowerInvariant();
+
+        // Reject writes to system directory
+        if (IsSystemSkill(name))
+            return "Cannot create skills in the .system directory. System skills are read-only.";
+
+        var contentError = ValidateFrontmatter(args.Content);
+        if (contentError is not null) return contentError;
+
+        var scanResult = await _scanner.ScanAsync(name, args.Content, ct);
+        if (!scanResult.IsAllowed)
+            return $"Content scan rejected: {scanResult.Reason}";
+
+        var skillDir = Path.Combine(_paths.SkillsDirectory, name);
+        var skillPath = Path.Combine(skillDir, "SKILL.md");
+
+        if (File.Exists(skillPath))
+            return $"Skill '{name}' already exists. Use 'edit' to modify it.";
+
+        Directory.CreateDirectory(skillDir);
+        AtomicWrite(skillPath, args.Content);
+        RescanAndUpdateIndex();
+
+        return $"Skill '{name}' created at {skillDir}";
+    }
+
+    private async Task<string> EditAsync(Params args, CancellationToken ct)
+    {
+        var nameError = ValidateName(args.Name);
+        if (nameError is not null) return nameError;
+
+        if (string.IsNullOrWhiteSpace(args.Content))
+            return "Content is required for edit action.";
+
+        var name = args.Name.Trim().ToLowerInvariant();
+
+        if (IsSystemSkill(name))
+            return "Cannot edit skills in the .system directory. System skills are read-only.";
+
+        var skill = FindSkill(name);
+        if (skill is null)
+            return $"Skill '{name}' not found.";
+
+        if (skill.TrustTier == SkillTrustTier.System)
+            return "Cannot edit system skills. System skills are read-only.";
+
+        var contentError = ValidateFrontmatter(args.Content);
+        if (contentError is not null) return contentError;
+
+        var scanResult = await _scanner.ScanAsync(name, args.Content, ct);
+        if (!scanResult.IsAllowed)
+            return $"Content scan rejected: {scanResult.Reason}";
+
+        AtomicWrite(skill.FilePath, args.Content);
+        RescanAndUpdateIndex();
+
+        return $"Skill '{name}' updated.";
+    }
+
+    private async Task<string> PatchAsync(Params args, CancellationToken ct)
+    {
+        var nameError = ValidateName(args.Name);
+        if (nameError is not null) return nameError;
+
+        if (string.IsNullOrWhiteSpace(args.OldString))
+            return "OldString is required for patch action.";
+        if (args.NewString is null)
+            return "NewString is required for patch action.";
+
+        var name = args.Name.Trim().ToLowerInvariant();
+        var skill = FindSkill(name);
+        if (skill is null)
+            return $"Skill '{name}' not found.";
+
+        if (skill.TrustTier == SkillTrustTier.System)
+            return "Cannot patch system skills. System skills are read-only.";
+
+        // Determine target file
+        var targetPath = skill.FilePath;
+        if (!string.IsNullOrWhiteSpace(args.FilePath))
+        {
+            var fileError = ValidateResourcePath(args.FilePath);
+            if (fileError is not null) return fileError;
+            targetPath = Path.Combine(skill.SkillDirectory, args.FilePath);
+        }
+
+        if (!File.Exists(targetPath))
+            return $"File not found: {args.FilePath ?? "SKILL.md"}";
+
+        var content = File.ReadAllText(targetPath);
+        var occurrences = CountOccurrences(content, args.OldString);
+
+        if (occurrences == 0)
+            return "OldString not found in the file.";
+
+        if (occurrences > 1 && !args.ReplaceAll)
+            return $"OldString found {occurrences} times. Set ReplaceAll=true to replace all, or provide a more specific string.";
+
+        var newContent = args.ReplaceAll
+            ? content.Replace(args.OldString, args.NewString, StringComparison.Ordinal)
+            : ReplaceFirst(content, args.OldString, args.NewString);
+
+        // Scan patched SKILL.md content
+        if (targetPath == skill.FilePath)
+        {
+            var scanResult = await _scanner.ScanAsync(name, newContent, ct);
+            if (!scanResult.IsAllowed)
+                return $"Content scan rejected: {scanResult.Reason}";
+        }
+
+        AtomicWrite(targetPath, newContent);
+        if (targetPath == skill.FilePath)
+            RescanAndUpdateIndex();
+
+        return "Patch applied.";
+    }
+
+    private string Delete(Params args)
+    {
+        var nameError = ValidateName(args.Name);
+        if (nameError is not null) return nameError;
+
+        var name = args.Name.Trim().ToLowerInvariant();
+        var skill = FindSkill(name);
+        if (skill is null)
+            return $"Skill '{name}' not found.";
+
+        if (skill.TrustTier == SkillTrustTier.System)
+            return "Cannot delete system skills. System skills are read-only.";
+
+        Directory.Delete(skill.SkillDirectory, recursive: true);
+
+        // Clean empty parent category directories
+        var parent = Path.GetDirectoryName(skill.SkillDirectory);
+        if (parent is not null && parent != _paths.SkillsDirectory
+            && Directory.Exists(parent) && !Directory.EnumerateFileSystemEntries(parent).Any())
+        {
+            Directory.Delete(parent);
+        }
+
+        RescanAndUpdateIndex();
+        return $"Skill '{name}' deleted.";
+    }
+
+    private string WriteFile(Params args)
+    {
+        var nameError = ValidateName(args.Name);
+        if (nameError is not null) return nameError;
+
+        if (string.IsNullOrWhiteSpace(args.FilePath))
+            return "FilePath is required for write_file action.";
+        if (args.FileContent is null)
+            return "FileContent is required for write_file action.";
+
+        var name = args.Name.Trim().ToLowerInvariant();
+        var skill = FindSkill(name);
+        if (skill is null)
+            return $"Skill '{name}' not found.";
+
+        if (skill.TrustTier == SkillTrustTier.System)
+            return "Cannot write files in system skills. System skills are read-only.";
+
+        var fileError = ValidateResourcePath(args.FilePath);
+        if (fileError is not null) return fileError;
+
+        var fullPath = Path.GetFullPath(Path.Combine(skill.SkillDirectory, args.FilePath));
+        if (!fullPath.StartsWith(Path.GetFullPath(skill.SkillDirectory), StringComparison.Ordinal))
+            return "Resolved path is outside the skill directory.";
+
+        var dir = Path.GetDirectoryName(fullPath)!;
+        Directory.CreateDirectory(dir);
+        AtomicWrite(fullPath, args.FileContent);
+
+        return $"File written: {args.FilePath}";
+    }
+
+    private string RemoveFile(Params args)
+    {
+        var nameError = ValidateName(args.Name);
+        if (nameError is not null) return nameError;
+
+        if (string.IsNullOrWhiteSpace(args.FilePath))
+            return "FilePath is required for remove_file action.";
+
+        var name = args.Name.Trim().ToLowerInvariant();
+        var skill = FindSkill(name);
+        if (skill is null)
+            return $"Skill '{name}' not found.";
+
+        if (skill.TrustTier == SkillTrustTier.System)
+            return "Cannot remove files from system skills. System skills are read-only.";
+
+        var fileError = ValidateResourcePath(args.FilePath);
+        if (fileError is not null) return fileError;
+
+        var fullPath = Path.GetFullPath(Path.Combine(skill.SkillDirectory, args.FilePath));
+        if (!fullPath.StartsWith(Path.GetFullPath(skill.SkillDirectory), StringComparison.Ordinal))
+            return "Resolved path is outside the skill directory.";
+
+        if (!File.Exists(fullPath))
+            return $"File not found: {args.FilePath}";
+
+        File.Delete(fullPath);
+
+        // Clean empty subdirectories
+        var dir = Path.GetDirectoryName(fullPath);
+        if (dir is not null && dir != skill.SkillDirectory
+            && Directory.Exists(dir) && !Directory.EnumerateFileSystemEntries(dir).Any())
+        {
+            Directory.Delete(dir);
+        }
+
+        return $"File removed: {args.FilePath}";
+    }
+
+    // --- Helpers ---
+
+    private SkillEntry? FindSkill(string name) =>
+        _skillRegistry.GetAll()
+            .FirstOrDefault(s => s.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+
+    private bool IsSystemSkill(string name)
+    {
+        var systemDir = Path.Combine(_paths.SkillsDirectory, ".system");
+        return _skillRegistry.GetAll()
+            .Any(s => s.Name.Equals(name, StringComparison.OrdinalIgnoreCase)
+                      && s.SkillDirectory.StartsWith(systemDir, StringComparison.Ordinal));
+    }
+
+    private static string? ValidateName(string? name)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+            return "Name is required.";
+
+        var trimmed = name.Trim().ToLowerInvariant();
+        if (trimmed.Length > MaxNameLength)
+            return $"Name must be at most {MaxNameLength} characters.";
+
+        if (!ValidNameRegex().IsMatch(trimmed))
+            return "Name must contain only lowercase letters, numbers, and hyphens. Cannot start or end with a hyphen.";
+
+        return null;
+    }
+
+    private static string? ValidateFrontmatter(string content)
+    {
+        var frontmatter = SkillScanner.ExtractFrontmatter(content);
+        if (frontmatter is null)
+            return "Content must start with YAML frontmatter (--- delimiters).";
+
+        if (string.IsNullOrWhiteSpace(frontmatter.Description))
+            return "Frontmatter must include a 'description' field.";
+
+        if (frontmatter.Description.Length > MaxDescriptionLength)
+            return $"Description must be at most {MaxDescriptionLength} characters.";
+
+        return null;
+    }
+
+    private static string? ValidateResourcePath(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+            return "FilePath is required.";
+
+        if (Path.IsPathRooted(path))
+            return "Absolute paths are not allowed.";
+
+        if (path.Contains("..", StringComparison.Ordinal))
+            return "Path traversal ('..') is not allowed.";
+
+        var normalized = path.Replace('\\', '/');
+        var firstSegment = normalized.Split('/')[0];
+        if (!AllowedResourcePrefixes.Contains(firstSegment))
+            return $"FilePath must start with one of: {string.Join(", ", AllowedResourcePrefixes)}. Got '{firstSegment}'.";
+
+        return null;
+    }
+
+    private static void AtomicWrite(string path, string content)
+    {
+        var tempPath = path + ".tmp";
+        File.WriteAllText(tempPath, content, Encoding.UTF8);
+        File.Move(tempPath, path, overwrite: true);
+    }
+
+    private void RescanAndUpdateIndex()
+    {
+        _skillRegistry.Clear();
+        foreach (var skill in SkillScanner.Scan(_paths.SkillsDirectory))
+            _skillRegistry.Register(skill);
+
+        _skillRegistry.RebuildAudienceMenus();
+        _skillIndexLayer.Update(_skillRegistry.GenerateDescriptionMenu());
+    }
+
+    private static int CountOccurrences(string text, string search)
+    {
+        var count = 0;
+        var index = 0;
+        while ((index = text.IndexOf(search, index, StringComparison.Ordinal)) >= 0)
+        {
+            count++;
+            index += search.Length;
+        }
+        return count;
+    }
+
+    private static string ReplaceFirst(string text, string oldValue, string newValue)
+    {
+        var index = text.IndexOf(oldValue, StringComparison.Ordinal);
+        return index < 0
+            ? text
+            : string.Concat(text.AsSpan(0, index), newValue, text.AsSpan(index + oldValue.Length));
+    }
+}

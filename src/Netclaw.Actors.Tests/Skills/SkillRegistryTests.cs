@@ -254,4 +254,102 @@ public class SkillRegistryTests
         // No RebuildAudienceMenus() called
         Assert.Equal(string.Empty, registry.GetMenuForAudience(TrustAudience.Team));
     }
+
+    // --- Slash-command dispatch tests ---
+
+    [Fact]
+    public void TryResolveSlashCommand_resolves_known_command()
+    {
+        var registry = new SkillRegistry();
+        registry.Register(MakeEntry("netclaw-operations", "Operations routing"));
+
+        var resolved = registry.TryResolveSlashCommand("/netclaw-operations check health",
+            out var skill, out var remainder);
+
+        Assert.True(resolved);
+        Assert.NotNull(skill);
+        Assert.Equal("netclaw-operations", skill!.Name);
+        Assert.Equal("check health", remainder);
+    }
+
+    [Fact]
+    public void TryResolveSlashCommand_returns_false_for_unknown_command()
+    {
+        var registry = new SkillRegistry();
+        registry.Register(MakeEntry("netclaw-operations", "Operations routing"));
+
+        var resolved = registry.TryResolveSlashCommand("/nonexistent",
+            out var skill, out var remainder);
+
+        Assert.False(resolved);
+        Assert.Null(skill);
+    }
+
+    [Fact]
+    public void TryResolveSlashCommand_returns_false_for_non_slash_input()
+    {
+        var registry = new SkillRegistry();
+        registry.Register(MakeEntry("my-skill", "desc"));
+
+        var resolved = registry.TryResolveSlashCommand("just a regular message",
+            out _, out _);
+
+        Assert.False(resolved);
+    }
+
+    [Fact]
+    public void TryResolveSlashCommand_handles_command_with_no_arguments()
+    {
+        var registry = new SkillRegistry();
+        registry.Register(MakeEntry("diag", "Diagnostics"));
+
+        var resolved = registry.TryResolveSlashCommand("/diag", out var skill, out var remainder);
+
+        Assert.True(resolved);
+        Assert.Equal("diag", skill!.Name);
+        Assert.Equal(string.Empty, remainder);
+    }
+
+    [Fact]
+    public void Non_user_invocable_skill_excluded_from_slash_commands()
+    {
+        var registry = new SkillRegistry();
+        var entry = new SkillEntry("bg-skill", "bg-skill", "Background guidance",
+            "/skills/bg-skill/SKILL.md", "/skills/bg-skill", null)
+        {
+            UserInvocable = false
+        };
+        registry.Register(entry);
+
+        var resolved = registry.TryResolveSlashCommand("/bg-skill", out _, out _);
+
+        Assert.False(resolved);
+    }
+
+    [Fact]
+    public void GetAvailableSlashCommands_lists_user_invocable_skills()
+    {
+        var registry = new SkillRegistry();
+        registry.Register(MakeEntry("ops", "Operations"));
+        registry.Register(new SkillEntry("hidden", "hidden", "Hidden",
+            "/skills/hidden/SKILL.md", "/skills/hidden", null) { UserInvocable = false });
+
+        var commands = registry.GetAvailableSlashCommands();
+
+        Assert.Single(commands);
+        Assert.Equal("/ops", commands[0].Command);
+    }
+
+    [Fact]
+    public void Clear_resets_slash_commands()
+    {
+        var registry = new SkillRegistry();
+        registry.Register(MakeEntry("ops", "Operations"));
+
+        Assert.True(registry.TryResolveSlashCommand("/ops", out _, out _));
+
+        registry.Clear();
+
+        Assert.False(registry.TryResolveSlashCommand("/ops", out _, out _));
+    }
 }

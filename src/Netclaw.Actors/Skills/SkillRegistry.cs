@@ -25,9 +25,17 @@ public sealed class SkillRegistry
     private volatile IReadOnlyDictionary<TrustAudience, string> _audienceMenus =
         new Dictionary<TrustAudience, string>();
 
+    /// <summary>
+    /// Slash-command dispatch map: skill name → entry, for skills where
+    /// <see cref="SkillEntry.UserInvocable"/> is true.
+    /// </summary>
+    private readonly Dictionary<string, SkillEntry> _slashCommands = new(StringComparer.OrdinalIgnoreCase);
+
     public void Register(SkillEntry skill)
     {
         _skills.Add(skill);
+        if (skill.UserInvocable)
+            _slashCommands[skill.Name] = skill;
     }
 
     /// <summary>
@@ -37,6 +45,7 @@ public sealed class SkillRegistry
     public void Clear()
     {
         _skills.Clear();
+        _slashCommands.Clear();
         _audienceMenus = new Dictionary<TrustAudience, string>();
     }
 
@@ -182,5 +191,38 @@ public sealed class SkillRegistry
         // Fallback: first 60 chars of description
         var desc = skill.Description;
         return desc.Length <= 60 ? desc : desc[..57] + "...";
+    }
+
+    // --- Slash-command dispatch ---
+
+    /// <summary>
+    /// Attempts to resolve a slash command from user input.
+    /// Returns true if the input starts with / and matches a registered skill name.
+    /// </summary>
+    public bool TryResolveSlashCommand(string input, out SkillEntry? skill, out string remainder)
+    {
+        skill = null;
+        remainder = string.Empty;
+
+        if (string.IsNullOrWhiteSpace(input) || input[0] != '/')
+            return false;
+
+        var trimmed = input[1..]; // strip leading /
+        var spaceIndex = trimmed.IndexOf(' ', StringComparison.Ordinal);
+        var commandName = spaceIndex >= 0 ? trimmed[..spaceIndex] : trimmed;
+        remainder = spaceIndex >= 0 ? trimmed[(spaceIndex + 1)..].Trim() : string.Empty;
+
+        return _slashCommands.TryGetValue(commandName, out skill);
+    }
+
+    /// <summary>
+    /// Returns all registered slash commands for error message generation.
+    /// </summary>
+    public IReadOnlyList<(string Command, string? ArgumentHint)> GetAvailableSlashCommands()
+    {
+        return _slashCommands.Values
+            .OrderBy(s => s.Name)
+            .Select(s => ($"/{s.Name}", s.ArgumentHint))
+            .ToList();
     }
 }

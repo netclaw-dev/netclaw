@@ -124,6 +124,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     // Startup context layers: injected on first LLM call, re-injected after compaction
     private bool _startupContextInjected;
 
+    // Skill registry for slash-command dispatch
+    private readonly Skills.SkillRegistry? _skillRegistry;
+
     // Memory recall state (transient — reset at turn boundaries and compaction)
     private AutomaticRecallResult? _turnRecallCache;
     private readonly HashSet<string> _injectedMemoryIds = new(StringComparer.Ordinal);
@@ -157,7 +160,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         Telemetry.ISessionMetrics? sessionMetrics = null,
         TrustContextDeriver? trustContextDeriver = null,
         ISessionLifecycleObserver? lifecycleObserver = null,
-        Memory.SQLiteMemoryStore? memoryStore = null)
+        Memory.SQLiteMemoryStore? memoryStore = null,
+        Skills.SkillRegistry? skillRegistry = null)
     {
         _sessionId = new SessionId(entityId);
         _sessionMetrics = sessionMetrics;
@@ -170,6 +174,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         _config = config;
         _promptProvider = promptProvider;
         _contextLayers = contextLayers ?? [];
+        _skillRegistry = skillRegistry;
         _toolExecutor = toolExecutor;
         _auditLogger = auditLogger;
         _toolAccessPolicy = toolAccessPolicy;
@@ -340,6 +345,11 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             }
 
             var userContent = cmd.Content ?? string.Empty;
+
+            // Slash-command dispatch: if message starts with /, try to resolve a skill
+            if (TryHandleSlashCommand(userContent, mediaRefs))
+                return;
+
             _state = _state.AddUserMessage(userContent, mediaRefs.Count > 0 ? mediaRefs : null);
             TryReplyAck();
             _turnRecallCache = null; // New user turn — resolve recall fresh
@@ -2103,6 +2113,67 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     }
 
     /// <summary>
+    /// Handles slash-command dispatch. If the user message starts with / and matches
+    /// a registered skill, injects the skill content as a transient system message
+    /// and passes the remainder as user content. Returns true if handled.
+    /// </summary>
+    private bool TryHandleSlashCommand(string userContent, List<SerializableMediaReference> mediaRefs)
+    {
+        if (_skillRegistry is null || string.IsNullOrWhiteSpace(userContent) || userContent[0] != '/')
+            return false;
+
+        if (_skillRegistry.TryResolveSlashCommand(userContent, out var skill, out var remainder))
+        {
+            // Load the skill content and inject as transient system message
+            string skillBody;
+            try
+            {
+                var content = File.ReadAllText(skill!.FilePath);
+                skillBody = Skills.SkillScanner.ExtractBody(content);
+            }
+            catch (IOException ex)
+            {
+                _log.Warning("Failed to read skill file for slash command /{SkillName}: {Error}",
+                    skill!.Name, ex.Message);
+                return false; // Fall through to normal processing
+            }
+
+            // Inject skill as system context, use remainder as user message
+            var effectiveUserContent = string.IsNullOrWhiteSpace(remainder)
+                ? $"The user invoked /{skill.Name}. Follow the skill instructions."
+                : remainder;
+
+            _state = _state.AddUserMessage(effectiveUserContent, mediaRefs.Count > 0 ? mediaRefs : null);
+            TryReplyAck();
+            _turnRecallCache = null;
+
+            // Inject skill content as a one-time system message for this turn
+            _slashCommandSkillContent = skillBody;
+            FireLlmCall(effectiveUserContent);
+            _slashCommandSkillContent = null;
+
+            Become(Processing);
+            return true;
+        }
+
+        // Unrecognized slash command — send deterministic error
+        var commands = _skillRegistry.GetAvailableSlashCommands();
+        var errorMsg = $"Unknown command: {userContent.Split(' ')[0]}\n\nAvailable commands:\n";
+        foreach (var (cmd, hint) in commands)
+        {
+            errorMsg += hint is not null ? $"  {cmd} {hint}\n" : $"  {cmd}\n";
+        }
+
+        EmitOutput(new TextOutput { SessionId = _sessionId, Text = errorMsg.TrimEnd() }, OutputFilter.Text);
+        EmitOutput(new TurnCompleted { SessionId = _sessionId, TurnNumber = _state.TurnCount });
+        TryReplyAck();
+        return true;
+    }
+
+    // Transient: skill body injected by slash-command dispatch for the current turn
+    private string? _slashCommandSkillContent;
+
+    /// <summary>
     /// Inject dynamic context layers as system messages after the persisted system prompt
     /// but before user messages. Static (<see cref="ContextLayerTiming.OnceAtStart"/>) layers
     /// are injected on the first call and again after compaction resets
@@ -2122,6 +2193,11 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             if (!string.IsNullOrWhiteSpace(content))
                 parts.Add(content.Trim());
         }
+
+        // Slash-command skill injection: if a slash command was invoked this turn,
+        // inject the skill body as a system context part
+        if (_slashCommandSkillContent is not null)
+            parts.Add(_slashCommandSkillContent);
 
         // Session identity — allows the agent to reference its own session and media directory
         var sessionBlock = $"[session]\nid: {_sessionId.Value}";

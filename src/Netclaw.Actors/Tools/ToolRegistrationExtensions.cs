@@ -2,9 +2,11 @@ using Akka.Actor;
 using Microsoft.Extensions.AI;
 using ModelContextProtocol.Client;
 using Netclaw.Actors.Reminders;
+using Netclaw.Actors.Skills;
 using Netclaw.Configuration;
 using Netclaw.Search;
 using Netclaw.Security;
+using Netclaw.Security.Skills;
 
 namespace Netclaw.Actors.Tools;
 
@@ -33,6 +35,23 @@ public static class ToolRegistrationExtensions
         // Register search_tools meta-tool (always loaded, "builtin" grant)
         registry.Register(new SearchToolsTool(registry, toolAccessPolicy));
 
+        return registry;
+    }
+
+    /// <summary>
+    /// Registers skill management tools (skill_load, skill_read_resource, skill_manage).
+    /// All use "builtin" grant — available to all audiences.
+    /// </summary>
+    public static ToolRegistry WithSkillTools(
+        this ToolRegistry registry,
+        SkillRegistry skillRegistry,
+        SkillIndexContextLayer skillIndexLayer,
+        NetclawPaths paths,
+        ISkillContentScanner scanner)
+    {
+        registry.Register(new SkillLoadTool(skillRegistry));
+        registry.Register(new SkillReadResourceTool(skillRegistry));
+        registry.Register(new SkillManageTool(skillRegistry, skillIndexLayer, paths, scanner));
         return registry;
     }
 
