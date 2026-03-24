@@ -251,3 +251,51 @@ and reconnect MCP servers when MCP profiles change.
 - **WHEN** the config watcher publishes a schedule change event
 - **THEN** the session actor does NOT take any action
 - **AND** the `ScheduleManagerActor` handles timer reconfiguration independently
+
+<!-- Delta from 2026-03-24 compressed-skill-index -->
+# netclaw-session Delta Spec
+
+## MODIFIED Requirements
+
+### Requirement: Skill index context layer injection
+
+The skill index context layer SHALL accept the session's effective trust
+audience and available tool set when producing the skill index for system
+prompt injection. The injected index SHALL be filtered per-audience rather
+than identical for all sessions.
+
+#### Scenario: Session prompt includes audience-filtered skill index
+
+- **GIVEN** a session with `TrustAudience.Team` and tools `[web_search, web_fetch, file_read]`
+- **WHEN** the system prompt is assembled
+- **THEN** the skill index context layer injects the Team-audience compressed
+  menu
+- **AND** skills requiring `shell_execute` are not present in the injected index
+
+#### Scenario: Session prompt uses pre-built menu
+
+- **GIVEN** pre-built menus exist for each audience
+- **WHEN** the system prompt is assembled for a new session
+- **THEN** the context layer selects the pre-built menu matching the session's
+  effective audience
+- **AND** no per-turn menu generation occurs
+
+<!-- Delta from 2026-03-24 skill-tools-and-slash-commands -->
+# netclaw-session Delta Spec
+
+## MODIFIED Requirements
+
+### Requirement: Slash-command interception before LLM dispatch
+
+The session actor SHALL intercept user messages starting with `/` and check
+the slash-command registry before passing the message to the LLM. This
+interception SHALL apply to all message sources (Slack, webhook, scheduled
+jobs, reminders).
+
+#### Scenario: Slash command intercepted before LLM
+
+- **GIVEN** a user message starting with `/netclaw-operations`
+- **WHEN** the session actor receives the message
+- **THEN** the slash-command registry is checked BEFORE any LLM call
+- **AND** if matched, the skill content is injected as a transient system message
+- **AND** the remainder text becomes the user message for the LLM turn
