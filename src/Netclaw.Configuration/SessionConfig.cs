@@ -107,6 +107,13 @@ public sealed record SessionConfig
     public bool MemorySidecarsEnabled { get; init; } = true;
 
     /// <summary>
+    /// Idle seconds before the session memory observer triggers distillation.
+    /// The observer watches the conversation stream and distills memories
+    /// when the session goes quiet for this duration.
+    /// </summary>
+    public int MemoryObserverIdleSeconds { get; init; } = 90;
+
+    /// <summary>
     /// Enables deterministic retrieval request planning for automatic
     /// memory recall on each turn.
     /// </summary>
