@@ -43,7 +43,15 @@ internal sealed class SkillIndexEnrichmentService : IHostedService
         _logger = logger;
     }
 
-    public async Task StartAsync(CancellationToken cancellationToken)
+    public Task StartAsync(CancellationToken cancellationToken)
+    {
+        // Fire and forget — enrichment runs in the background so it never
+        // blocks daemon startup. Fallback descriptions are already in place.
+        _ = Task.Run(() => RunEnrichmentAsync(cancellationToken), cancellationToken);
+        return Task.CompletedTask;
+    }
+
+    private async Task RunEnrichmentAsync(CancellationToken cancellationToken)
     {
         try
         {
@@ -58,7 +66,6 @@ internal sealed class SkillIndexEnrichmentService : IHostedService
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _logger.LogWarning(ex, "Skill index enrichment failed — using truncated descriptions");
-            // Menus already built with fallback descriptions during initial registration
         }
     }
 
