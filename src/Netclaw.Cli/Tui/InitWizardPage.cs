@@ -59,10 +59,11 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
     private SelectionListNode<string>? _browserAutomationBackendList;
     private int _browserAutomationSubStep; // 0=enable/disable, 1=backend selection
 
-    // Step 7: Exposure + Notifications
-    private SelectionListNode<string>? _exposureList;
-    private TextInputNode? _webhookUrlInput;
-    private int _exposureSubStep; // 0=exposure mode, 1=webhook URL
+    // Step 3: Security Posture
+    private SelectionListNode<string>? _securityPostureList;
+
+    // Step 5: Channels
+    private int _channelCursorIndex;
 
     // Step 8: Identity
     private TextInputNode? _agentNameInput;
@@ -148,11 +149,11 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
                 {
                     WizardStep.Provider => "LLM Provider",
                     WizardStep.ChatServices => "Chat Services",
+                    WizardStep.SecurityPosture => "Security Posture",
                     WizardStep.Acl => "Access Control",
+                    WizardStep.Channels => "Channels",
                     WizardStep.Search => "Web Search",
                     WizardStep.BrowserAutomation => "Browser Automation",
-
-                    WizardStep.Exposure => "Exposure Mode",
                     WizardStep.Identity => "Identity",
                     WizardStep.HealthCheck => "Health Check",
                     _ => ""
@@ -204,11 +205,11 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             {
                 WizardStep.Provider => BuildProviderStep(),
                 WizardStep.ChatServices => BuildChatServicesStep(),
+                WizardStep.SecurityPosture => BuildSecurityPostureStep(),
                 WizardStep.Acl => BuildAclStep(),
+                WizardStep.Channels => BuildChannelsStep(),
                 WizardStep.Search => BuildSearchStep(),
                 WizardStep.BrowserAutomation => BuildBrowserAutomationStep(),
-
-                WizardStep.Exposure => BuildExposureStep(),
                 WizardStep.Identity => BuildIdentityStep(),
                 _ => Layouts.Empty()
             };
@@ -259,10 +260,10 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
                 WizardStep.BrowserAutomation when _browserAutomationSubStep == 1 =>
                     "  Playwright MCP is the default no-sudo path. Chrome DevTools is enabled only when a local Chrome executable is detected.",
 
-                WizardStep.Exposure when _exposureSubStep == 0 =>
-                    "  Local-only is recommended for homelab use.",
-                WizardStep.Exposure when _exposureSubStep == 1 =>
-                    "  Optional. Receive alerts when MCP servers disconnect or LLM providers fail. Press Enter to skip.",
+                WizardStep.SecurityPosture =>
+                    "  This sets the default trust level. You can override per-channel in the Channels step.",
+                WizardStep.Channels =>
+                    "  Use \u2190/\u2192 to change audience. a to add, d to remove. Enter to continue.",
                 WizardStep.Identity when _identitySubStep == 0 =>
                     "  Give your assistant a name, or keep the default.",
                 WizardStep.Identity when _identitySubStep == 1 =>
@@ -1148,79 +1149,91 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             .WithChild(_browserAutomationBackendList);
     }
 
-    private ILayoutNode BuildExposureStep()
+    private ILayoutNode BuildSecurityPostureStep()
     {
-        return _exposureSubStep switch
-        {
-            0 => BuildExposureModeSubStep(),
-            1 => BuildWebhookUrlSubStep(),
-            _ => Layouts.Empty()
-        };
-    }
-
-    private ILayoutNode BuildExposureModeSubStep()
-    {
-        _exposureList = Layouts.SelectionList(
-                "Local only (recommended for homelab)",
-                "Tailscale (configure later)",
-                "Cloudflare Tunnel (configure later)")
+        _securityPostureList = Layouts.SelectionList(
+                "Personal \u2014 Only you on this machine",
+                "Team \u2014 Shared with trusted teammates (Slack/VPN)",
+                "Public \u2014 Open to untrusted users (webhooks/public)")
             .WithMode(SelectionMode.Single)
             .WithHighlightColors(Color.Black, Color.Cyan);
 
-        _exposureList.OnFocused();
-        _lastFocusedList = _exposureList;
+        _securityPostureList.OnFocused();
+        _lastFocusedList = _securityPostureList;
 
-        _exposureList.SelectionConfirmed
+        _securityPostureList.SelectionConfirmed
             .Subscribe(selected =>
             {
                 if (selected.Count > 0)
                 {
-                    ViewModel.ExposureMode = selected[0];
-                    SetExposureSubStep(1);
+                    var choice = selected[0];
+                    ViewModel.SelectedPosture = choice.StartsWith("Personal", StringComparison.Ordinal)
+                        ? DeploymentPosture.Personal
+                        : choice.StartsWith("Team", StringComparison.Ordinal)
+                            ? DeploymentPosture.Team
+                            : DeploymentPosture.Public;
+                    ViewModel.DeriveSecurityDefaults();
+                    ViewModel.GoNext();
                 }
             })
             .DisposeWith(_stepSubs);
 
         return Layouts.Vertical()
-            .WithChild(new TextNode("  Network exposure:").WithForeground(Color.White))
-            .WithChild(_exposureList);
+            .WithChild(new TextNode("  How will this Netclaw instance be accessed?").WithForeground(Color.White))
+            .WithSpacing(1)
+            .WithChild(_securityPostureList)
+            .WithSpacing(1)
+            .WithChild(new TextNode("  Personal = full shell + tools. Team = no shell, shared tools.")
+                .WithForeground(Color.BrightBlack))
+            .WithChild(new TextNode("  Public = minimal tools, restricted filesystem.")
+                .WithForeground(Color.BrightBlack));
     }
 
-    private ILayoutNode BuildWebhookUrlSubStep()
+    private ILayoutNode BuildChannelsStep()
     {
-        _webhookUrlInput = new TextInputNode()
-            .WithPlaceholder("https://hooks.slack.com/services/...");
+        var entries = ViewModel.ChannelEntries;
 
-        if (!string.IsNullOrWhiteSpace(ViewModel.WebhookUrl))
-            _webhookUrlInput.Text = ViewModel.WebhookUrl;
+        if (entries.Count == 0)
+        {
+            return Layouts.Vertical()
+                .WithChild(new TextNode("  No channels configured.").WithForeground(Color.Yellow))
+                .WithChild(new TextNode("  Press [a] to add a channel, or Enter to continue.")
+                    .WithForeground(Color.BrightBlack));
+        }
 
-        _webhookUrlInput.OnFocused();
-        _lastFocusedInput = _webhookUrlInput;
+        // Clamp cursor
+        if (_channelCursorIndex >= entries.Count)
+            _channelCursorIndex = entries.Count - 1;
+        if (_channelCursorIndex < 0)
+            _channelCursorIndex = 0;
 
-        _webhookUrlInput.Submitted
-            .Subscribe(text =>
-            {
-                ViewModel.WebhookUrl = string.IsNullOrWhiteSpace(text) ? null : text;
-                ViewModel.GoNext();
-            })
-            .DisposeWith(_stepSubs);
+        var layout = Layouts.Vertical()
+            .WithChild(new TextNode("  Slack channels:").WithForeground(Color.White))
+            .WithSpacing(1);
 
-        return Layouts.Vertical()
-            .WithChild(new TextNode("  Notification webhook URL (optional):").WithForeground(Color.White))
-            .WithChild(new PanelNode()
-                .WithTitle("Webhook")
-                .WithBorder(BorderStyle.Rounded)
-                .WithBorderColor(Color.Gray)
-                .WithContent(_webhookUrlInput)
-                .Height(3));
-    }
+        for (var i = 0; i < entries.Count; i++)
+        {
+            var entry = entries[i];
+            var isFocused = i == _channelCursorIndex;
+            var prefix = isFocused ? " \u25b6 " : "   ";
+            var name = entry.DisplayName.PadRight(20);
+            var id = entry.Id.PadRight(15);
+            var audience = $"[\u25c0 {entry.Audience,-8} \u25b6]";
+            var line = $"{prefix}{name} {id} {audience}";
 
-    private void SetExposureSubStep(int step)
-    {
-        _exposureSubStep = step;
-        _stepContentNode?.Invalidate();
-        _helpTextNode?.Invalidate();
-        ViewModel.RequestRedraw();
+            var node = new TextNode(line);
+            if (isFocused)
+                node = node.WithForeground(Color.Cyan).Bold();
+            else
+                node = node.WithForeground(Color.White);
+            layout = layout.WithChild(node);
+        }
+
+        layout = layout.WithSpacing(1)
+            .WithChild(new TextNode("  [a] Add channel    [d] Remove channel")
+                .WithForeground(Color.BrightBlack));
+
+        return layout;
     }
 
     private ILayoutNode BuildIdentityStep()
@@ -1391,6 +1404,13 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             return;
         }
 
+        // Channels step: custom keyboard handling (←/→ cycling, ↑/↓ nav, a/d/Enter)
+        if (ViewModel.CurrentStep.Value == WizardStep.Channels)
+        {
+            HandleChannelsKeyPress(keyInfo);
+            return;
+        }
+
         // Browser OAuth: "C" to copy URL to clipboard
         if (ViewModel.CurrentStep.Value == WizardStep.Provider
             && _providerSubStep == 6
@@ -1470,11 +1490,7 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             return true;
         }
 
-        if (ViewModel.CurrentStep.Value == WizardStep.Exposure && _exposureSubStep > 0)
-        {
-            SetExposureSubStep(_exposureSubStep - 1);
-            return true;
-        }
+        // Channels step has no sub-steps — back goes to previous wizard step
 
         if (ViewModel.CurrentStep.Value == WizardStep.Identity && _identitySubStep > 0)
         {
@@ -1579,7 +1595,7 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             WizardStep.Search when _searchSubStep == 0 => _searchBackendList,
             WizardStep.BrowserAutomation when _browserAutomationSubStep == 0 => _browserAutomationEnabledList,
             WizardStep.BrowserAutomation when _browserAutomationSubStep == 1 => _browserAutomationBackendList,
-            WizardStep.Exposure when _exposureSubStep == 0 => _exposureList,
+            WizardStep.SecurityPosture => _securityPostureList,
             WizardStep.Identity when _identitySubStep == 1 => _commStyleList,
             _ => null
         };
@@ -1600,7 +1616,6 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             WizardStep.Search when _searchSubStep == 1 && _braveApiKeyInput is not null => _braveApiKeyInput,
             WizardStep.Search when _searchSubStep == 1 => _searxngEndpointInput,
             WizardStep.Acl => _ownerIdentityInput,
-            WizardStep.Exposure when _exposureSubStep == 1 => _webhookUrlInput,
             WizardStep.Identity when _identitySubStep == 0 => _agentNameInput,
             WizardStep.Identity when _identitySubStep == 2 => _userNameInput,
             WizardStep.Identity when _identitySubStep == 3 => _timezoneInput,
@@ -1655,6 +1670,65 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
         ViewModel.RequestRedraw();
     }
 
+    private static readonly string[] AudienceValues = ["personal", "team", "public"];
+
+    private void HandleChannelsKeyPress(ConsoleKeyInfo keyInfo)
+    {
+        var entries = ViewModel.ChannelEntries;
+
+        switch (keyInfo.Key)
+        {
+            case ConsoleKey.UpArrow:
+                if (_channelCursorIndex > 0)
+                    _channelCursorIndex--;
+                break;
+
+            case ConsoleKey.DownArrow:
+                if (_channelCursorIndex < entries.Count - 1)
+                    _channelCursorIndex++;
+                break;
+
+            case ConsoleKey.RightArrow:
+                if (entries.Count > 0)
+                {
+                    var entry = entries[_channelCursorIndex];
+                    var idx = Array.IndexOf(AudienceValues, entry.Audience);
+                    entry.Audience = AudienceValues[(idx + 1) % AudienceValues.Length];
+                }
+                break;
+
+            case ConsoleKey.LeftArrow:
+                if (entries.Count > 0)
+                {
+                    var entry = entries[_channelCursorIndex];
+                    var idx = Array.IndexOf(AudienceValues, entry.Audience);
+                    entry.Audience = AudienceValues[(idx - 1 + AudienceValues.Length) % AudienceValues.Length];
+                }
+                break;
+
+            case ConsoleKey.D:
+                if (entries.Count > 0 && !entries[_channelCursorIndex].IsDmRow)
+                {
+                    entries.RemoveAt(_channelCursorIndex);
+                    if (_channelCursorIndex >= entries.Count && entries.Count > 0)
+                        _channelCursorIndex = entries.Count - 1;
+                }
+                break;
+
+            case ConsoleKey.Enter:
+                ViewModel.GoNext();
+                return;
+
+            // TODO: 'A' key for add-channel sub-step (requires conversations.list integration)
+            default:
+                return;
+        }
+
+        _stepContentNode?.Invalidate();
+        _helpTextNode?.Invalidate();
+        ViewModel.RequestRedraw();
+    }
+
     private void InitializeComponents()
     {
         // Invalidate dynamic layouts when step changes so they re-evaluate their factories.
@@ -1670,8 +1744,8 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
                     _searchSubStep = 0;
                 if (step == WizardStep.BrowserAutomation)
                     _browserAutomationSubStep = 0;
-                if (step == WizardStep.Exposure)
-                    _exposureSubStep = 0;
+                if (step == WizardStep.Channels)
+                    _channelCursorIndex = 0;
                 if (step == WizardStep.Identity)
                     _identitySubStep = 0;
 

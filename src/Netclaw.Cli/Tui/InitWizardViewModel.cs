@@ -22,11 +22,11 @@ public enum WizardStep
 {
     Provider = 1,
     ChatServices = 2,
-    Acl = 3,
-    Search = 4,
-    BrowserAutomation = 5,
-    Memory = 6,
-    Exposure = 7,
+    SecurityPosture = 3,
+    Acl = 4,
+    Channels = 5,
+    Search = 6,
+    BrowserAutomation = 7,
     Identity = 8,
     HealthCheck = 9
 }
@@ -120,16 +120,24 @@ public partial class InitWizardViewModel : ReactiveViewModel
     public bool IsChromeDevToolsAvailable { get; }
     public string ChromeDevToolsUnavailableReason { get; }
 
-    // ── Step 7: Exposure + Notifications ──
-    public string? ExposureMode { get; set; }
-    public string? WebhookUrl { get; set; }
+    // ── Step 3: Security Posture ──
+    public DeploymentPosture? SelectedPosture { get; set; }
 
-    // ── Channel trust (derived from exposure + Slack channels) ──
+    // ── Step 5: Channels ──
     /// <summary>
-    /// Per-channel audience overrides generated from the wizard.
+    /// Per-channel audience overrides edited by the user in the Channels step.
     /// Keys: channel IDs or "dm". Values: "personal", "team", "public".
     /// </summary>
     public Dictionary<string, string> ChannelAudiences { get; } = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Ordered channel entries for the Channels step UI.
+    /// Each entry has a display name, Slack ID, and mutable audience.
+    /// </summary>
+    public List<ChannelEntry> ChannelEntries { get; } = [];
+
+    // ── Notifications (moved from removed Exposure step) ──
+    public string? WebhookUrl { get; set; }
 
     // ── Step 8: Identity ──
     public string AgentName { get; set; } = "Netclaw";
@@ -213,9 +221,18 @@ public partial class InitWizardViewModel : ReactiveViewModel
     public bool AnyChatServicesEnabled() => SlackEnabled;
 
     /// <summary>
-    /// Returns the number of active steps (skipping ACL when no chat services).
+    /// Returns the number of active steps (skipping ACL + Channels when no chat services).
     /// </summary>
-    public int ActiveStepCount => TotalSteps - 1 - (AnyChatServicesEnabled() ? 0 : 1);
+    public int ActiveStepCount
+    {
+        get
+        {
+            var count = TotalSteps;
+            if (!AnyChatServicesEnabled())
+                count -= 2; // skip ACL + Channels
+            return count;
+        }
+    }
 
     /// <summary>
     /// Returns the display number for the given step, accounting for skipped steps.
@@ -223,10 +240,14 @@ public partial class InitWizardViewModel : ReactiveViewModel
     public int GetDisplayStepNumber(WizardStep step)
     {
         var num = (int)step;
-        if (!AnyChatServicesEnabled() && step > WizardStep.ChatServices)
-            num--;
-        if (step > WizardStep.Memory)
-            num--;
+        if (!AnyChatServicesEnabled())
+        {
+            // ACL (4) and Channels (5) are skipped — subtract for anything after ChatServices
+            if (step > WizardStep.Channels)
+                num -= 2;
+            else if (step > WizardStep.ChatServices && step != WizardStep.SecurityPosture)
+                num--;
+        }
         return num;
     }
 
@@ -245,13 +266,12 @@ public partial class InitWizardViewModel : ReactiveViewModel
 
         var next = (WizardStep)((int)CurrentStep.Value + 1);
 
-        // Skip ACL when no chat services are enabled
+        // Skip ACL and Channels when no chat services are enabled
         if (next == WizardStep.Acl && !AnyChatServicesEnabled())
-            next = (WizardStep)((int)next + 1);
+            next = WizardStep.Search; // jump past ACL + Channels
 
-        // Skip Memory — SQLite is the only backend, no user input needed
-        if (next == WizardStep.Memory)
-            next = (WizardStep)((int)next + 1);
+        if (next == WizardStep.Channels && !AnyChatServicesEnabled())
+            next = WizardStep.Search;
 
         CurrentStep.Value = next;
         StatusMessage.Value = "";
@@ -273,13 +293,12 @@ public partial class InitWizardViewModel : ReactiveViewModel
 
         var previous = (WizardStep)((int)CurrentStep.Value - 1);
 
-        // Skip ACL when going back too
-        if (previous == WizardStep.Acl && !AnyChatServicesEnabled())
-            previous = (WizardStep)((int)previous - 1);
+        // Skip Channels and ACL when going back with no chat services
+        if (previous == WizardStep.Channels && !AnyChatServicesEnabled())
+            previous = WizardStep.SecurityPosture;
 
-        // Skip Memory going back too
-        if (previous == WizardStep.Memory)
-            previous = (WizardStep)((int)previous - 1);
+        if (previous == WizardStep.Acl && !AnyChatServicesEnabled())
+            previous = WizardStep.SecurityPosture;
 
         // Back-navigation clearing rules from design doc:
         // Provider change clears auth + model downstream
@@ -891,8 +910,8 @@ public partial class InitWizardViewModel : ReactiveViewModel
                 slackSection["AllowedUserIds"] = userIds.ToArray();
             }
 
-            // Generate smart channel audience defaults
-            PopulateChannelAudiences();
+            // Write channel audiences from user-edited entries
+            SyncChannelAudiencesFromEntries();
             if (ChannelAudiences.Count > 0)
                 slackSection["ChannelAudiences"] = new Dictionary<string, string>(ChannelAudiences);
 
@@ -1310,17 +1329,12 @@ public partial class InitWizardViewModel : ReactiveViewModel
         };
     }
 
+    /// <summary>
+    /// Returns the deployment posture explicitly selected by the user in the
+    /// SecurityPosture step. Falls back to Personal if not yet selected.
+    /// </summary>
     private DeploymentPosture ResolveDeploymentPosture()
-    {
-        if (string.IsNullOrWhiteSpace(ExposureMode)
-            || ExposureMode.StartsWith("Local only", StringComparison.OrdinalIgnoreCase))
-            return DeploymentPosture.Personal;
-
-        if (ExposureMode.StartsWith("Private", StringComparison.OrdinalIgnoreCase))
-            return DeploymentPosture.Team;
-
-        return DeploymentPosture.Public;
-    }
+        => SelectedPosture ?? DeploymentPosture.Personal;
 
     private ShellExecutionMode ResolveRecommendedShellMode()
     {
@@ -1330,34 +1344,49 @@ public partial class InitWizardViewModel : ReactiveViewModel
     }
 
     /// <summary>
-    /// Derives smart channel audience defaults from deployment posture.
-    /// DMs → Personal (if posture is Personal), Team otherwise.
-    /// Explicitly-added channels → Team.
+    /// Derives security defaults from the selected posture. Called when the
+    /// user selects a posture in the SecurityPosture step. Pre-populates
+    /// <see cref="ChannelEntries"/> with audience defaults.
     /// </summary>
-    internal void PopulateChannelAudiences()
+    internal void DeriveSecurityDefaults()
     {
-        ChannelAudiences.Clear();
         var posture = ResolveDeploymentPosture();
+
+        // Pre-populate channel entries with posture-based defaults
+        ChannelEntries.Clear();
 
         if (SlackAllowDirectMessages)
         {
-            ChannelAudiences["dm"] = posture == DeploymentPosture.Personal
+            var dmAudience = posture == DeploymentPosture.Personal
                 ? TrustAudience.Personal.ToWireValue()
-                : TrustAudience.Team.ToWireValue();
+                : posture == DeploymentPosture.Team
+                    ? TrustAudience.Team.ToWireValue()
+                    : TrustAudience.Public.ToWireValue();
+            ChannelEntries.Add(new ChannelEntry("DMs", "dm", dmAudience, isDmRow: true));
         }
 
         if (LastChannelResolution is { Resolved.Count: > 0 })
         {
+            var channelAudience = posture == DeploymentPosture.Public
+                ? TrustAudience.Public.ToWireValue()
+                : TrustAudience.Team.ToWireValue();
             foreach (var channel in LastChannelResolution.Resolved)
             {
-                // Channels are inherently shared spaces — always default to Team
-                // regardless of deployment posture. Personal posture only elevates
-                // DMs, not channels, because channel messages are visible to other
-                // workspace members. Operators who need Personal for a specific
-                // channel can override in netclaw.json directly.
-                ChannelAudiences.TryAdd(channel.Id, TrustAudience.Team.ToWireValue());
+                ChannelEntries.Add(new ChannelEntry(
+                    $"#{channel.Name}", channel.Id, channelAudience));
             }
         }
+    }
+
+    /// <summary>
+    /// Writes <see cref="ChannelEntries"/> to <see cref="ChannelAudiences"/>
+    /// for config generation. Called before writing config.
+    /// </summary>
+    internal void SyncChannelAudiencesFromEntries()
+    {
+        ChannelAudiences.Clear();
+        foreach (var entry in ChannelEntries)
+            ChannelAudiences[entry.Id] = entry.Audience;
     }
 
     public override void Dispose()
@@ -1382,3 +1411,22 @@ public partial class InitWizardViewModel : ReactiveViewModel
 /// <param name="Label">Display text.</param>
 /// <param name="Passed">Null while running, true/false when complete.</param>
 public sealed record HealthCheckItem(string Label, bool? Passed);
+
+/// <summary>
+/// A channel entry in the Channels wizard step with editable audience.
+/// </summary>
+public sealed class ChannelEntry
+{
+    public string DisplayName { get; }
+    public string Id { get; }
+    public string Audience { get; set; }
+    public bool IsDmRow { get; }
+
+    public ChannelEntry(string displayName, string id, string audience, bool isDmRow = false)
+    {
+        DisplayName = displayName;
+        Id = id;
+        Audience = audience;
+        IsDmRow = isDmRow;
+    }
+}
