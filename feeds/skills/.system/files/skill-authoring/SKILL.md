@@ -138,18 +138,19 @@ atomically, and triggers a registry rescan after mutations.
 
 Skills are classified by trust tier based on their directory location:
 
-| Tier | Directory | Source |
-|------|-----------|--------|
-| System | `.system/` | Official Netclaw feed |
-| Operator | root `~/.netclaw/skills/` | Manually placed by operator |
-| Community | `.community/` | Netclaw org community feed |
-| External | `.external/` | Third-party marketplaces |
-| Agent | `.agent/` | Created by the agent at runtime |
+| Tier | Directory | Source | Default Min Audience |
+|------|-----------|--------|---------------------|
+| System | `.system/` | Official Netclaw feed | Team |
+| User | root `~/.netclaw/skills/` | Operator-placed or user-created | Team |
+| Community | `.community/` | Netclaw org community feed | Team |
+| External | `.external/` | Third-party marketplaces | Personal |
+| Agent | `.agent/` | Agent auto-synthesized | Personal |
 
-Trust tier affects visibility: System and Operator skills are visible to all
-session audiences. Community skills require Team or Personal audience.
-External and Agent skills require Personal audience.
+By default, no skills are visible to Public sessions. To make a skill visible
+in Public, add `minimum-audience: public` to the frontmatter — only System
+and User tier skills may do this.
 
-Agent-created skills (via `skill_manage`) automatically get the Agent tier.
-The tier is determined by directory location — a skill cannot self-declare
-a higher tier.
+Skills created via `skill_manage` get the User tier. The Agent tier is
+reserved for future auto-authoring where the agent creates skills without
+user direction. The tier is determined by directory location — a skill cannot
+self-declare a higher tier.

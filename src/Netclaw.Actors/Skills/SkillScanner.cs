@@ -251,19 +251,21 @@ public static partial class SkillScanner
     }
 
     /// <summary>
-    /// Hidden directories that are allowed during Pass 2 scanning.
-    /// Each corresponds to a <see cref="SkillTrustTier"/>.
+    /// Single source of truth: maps hidden directory names to their trust tiers.
+    /// Controls both which hidden directories are scanned (Pass 2) and what
+    /// tier the discovered skills receive.
     /// </summary>
-    private static readonly HashSet<string> AllowedHiddenDirectories = new(StringComparer.Ordinal)
-    {
-        ".system",
-        ".community",
-        ".external",
-        ".agent"
-    };
+    private static readonly Dictionary<string, SkillTrustTier> HiddenDirectoryTiers =
+        new(StringComparer.Ordinal)
+        {
+            [".system"] = SkillTrustTier.System,
+            [".community"] = SkillTrustTier.Community,
+            [".external"] = SkillTrustTier.External,
+            [".agent"] = SkillTrustTier.Agent,
+        };
 
     private static bool IsAllowedHiddenDirectory(string dirName)
-        => AllowedHiddenDirectories.Contains(dirName);
+        => HiddenDirectoryTiers.ContainsKey(dirName);
 
     /// <summary>
     /// Infers the trust tier from the skill's category (parent directory).
@@ -272,18 +274,13 @@ public static partial class SkillScanner
     internal static SkillTrustTier InferTrustTier(string? category)
     {
         if (category is null)
-            return SkillTrustTier.Operator;
+            return SkillTrustTier.User;
 
         // Category may be a path like ".system" or ".community/subcategory"
         var root = category.Split('/')[0];
-        return root switch
-        {
-            ".system" => SkillTrustTier.System,
-            ".community" => SkillTrustTier.Community,
-            ".external" => SkillTrustTier.External,
-            ".agent" => SkillTrustTier.Agent,
-            _ => SkillTrustTier.Operator
-        };
+        return HiddenDirectoryTiers.TryGetValue(root, out var tier)
+            ? tier
+            : SkillTrustTier.User;
     }
 }
 

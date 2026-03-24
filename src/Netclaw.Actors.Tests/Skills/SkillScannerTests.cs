@@ -310,7 +310,7 @@ public class SkillScannerTests : IDisposable
         var result = SkillScanner.Scan(_skillsDir);
 
         Assert.Single(result);
-        Assert.Equal(SkillTrustTier.Operator, result[0].TrustTier);
+        Assert.Equal(SkillTrustTier.User, result[0].TrustTier);
     }
 
     [Fact]
@@ -367,12 +367,12 @@ public class SkillScannerTests : IDisposable
     }
 
     [Theory]
-    [InlineData(null, SkillTrustTier.Operator)]
+    [InlineData(null, SkillTrustTier.User)]
     [InlineData(".system", SkillTrustTier.System)]
     [InlineData(".community", SkillTrustTier.Community)]
     [InlineData(".external", SkillTrustTier.External)]
     [InlineData(".agent", SkillTrustTier.Agent)]
-    [InlineData("custom-category", SkillTrustTier.Operator)]
+    [InlineData("custom-category", SkillTrustTier.User)]
     public void InferTrustTier_returns_correct_tier(string? category, SkillTrustTier expected)
     {
         Assert.Equal(expected, SkillScanner.InferTrustTier(category));
@@ -381,8 +381,8 @@ public class SkillScannerTests : IDisposable
     [Fact]
     public void SkillTrustTier_values_ordered_by_trust()
     {
-        Assert.True(SkillTrustTier.System < SkillTrustTier.Operator);
-        Assert.True(SkillTrustTier.Operator < SkillTrustTier.Community);
+        Assert.True(SkillTrustTier.System < SkillTrustTier.User);
+        Assert.True(SkillTrustTier.User < SkillTrustTier.Community);
         Assert.True(SkillTrustTier.Community < SkillTrustTier.External);
         Assert.True(SkillTrustTier.External < SkillTrustTier.Agent);
     }

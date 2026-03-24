@@ -46,5 +46,5 @@ public sealed record SkillEntry(
     /// Trust classification inferred from the skill's directory location.
     /// See <see cref="SkillTrustTier"/> for tier definitions.
     /// </summary>
-    public SkillTrustTier TrustTier { get; init; } = SkillTrustTier.Operator;
+    public SkillTrustTier TrustTier { get; init; } = SkillTrustTier.User;
 }
