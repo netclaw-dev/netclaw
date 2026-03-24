@@ -423,6 +423,13 @@ internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStas
 
             case TextOutput text:
             {
+                // Skip if this response was already posted via streaming deltas.
+                // _sawTextDelta is reset by BufferFlush after each LLM response,
+                // so this only suppresses the duplicate for the current response,
+                // not future responses in the same turn (e.g., after more tool calls).
+                if (_sawTextDelta)
+                    break;
+
                 var fullText = text.Text?.Trim();
                 if (!string.IsNullOrWhiteSpace(fullText))
                 {
