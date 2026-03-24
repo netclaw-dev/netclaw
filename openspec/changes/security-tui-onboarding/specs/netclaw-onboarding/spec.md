@@ -14,6 +14,19 @@ ACL, Channels, Search, BrowserAutomation, Identity, HealthCheck.
   SecurityPosture → ACL → Channels → Search → BrowserAutomation →
   Identity → HealthCheck
 
+#### Scenario: Slack disabled skips ACL and Channels
+
+- **GIVEN** Slack is disabled in the ChatServices step
+- **WHEN** the wizard advances past SecurityPosture
+- **THEN** ACL and Channels steps are skipped
+- **AND** the wizard proceeds directly to Search
+
+#### Scenario: Slack enabled shows all steps
+
+- **GIVEN** Slack is enabled with a valid bot token
+- **WHEN** the wizard advances past SecurityPosture
+- **THEN** ACL and Channels steps are shown
+
 ### Requirement: ACL uses Slack user search
 
 The ACL step SHALL present a type-to-filter search for Slack users instead
@@ -27,12 +40,19 @@ validated in ChatServices.
 - **THEN** a filtered list shows matching Slack users with display name and ID
 - **AND** selecting a user sets the owner identity to their internal Slack ID
 
-#### Scenario: Fallback to manual ID entry
+#### Scenario: Fallback to manual ID entry (missing scope)
 
 - **GIVEN** the bot token lacks `users:read` scope
 - **WHEN** the ACL step loads
 - **THEN** a text input for manual user ID entry is shown
 - **AND** a message explains that user search requires the `users:read` scope
+
+#### Scenario: Fallback to manual ID entry (API failure)
+
+- **GIVEN** the bot token has `users:read` scope but `users.list` fails
+- **WHEN** the ACL step loads
+- **THEN** a text input for manual user ID entry is shown
+- **AND** a message explains that user search is temporarily unavailable
 
 ## REMOVED Requirements
 

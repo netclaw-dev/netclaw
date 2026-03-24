@@ -82,6 +82,38 @@ in ChatServices. The DMs row audience is editable via ←/→.
 - **WHEN** the Channels step is shown
 - **THEN** a "DMs" row appears with audience "Personal"
 
+### Requirement: Skip when Slack disabled
+
+The Channels step SHALL be skipped entirely when Slack is disabled in
+ChatServices. No `ChannelAudiences` are written to config.
+
+#### Scenario: Slack disabled skips Channels
+
+- **GIVEN** Slack is disabled in the ChatServices step
+- **WHEN** the wizard advances past SecurityPosture and ACL
+- **THEN** the Channels step is skipped
+- **AND** no `ChannelAudiences` section is written to config
+
+### Requirement: Fallback to manual entry on API failure
+
+If `conversations.list` fails (network error, rate limiting, or permissions),
+the Channels step SHALL fall back to manual channel name/ID entry via a
+`TextInputNode`. Manually-entered channels are resolved during HealthCheck.
+
+#### Scenario: conversations.list fails
+
+- **GIVEN** the Slack token is valid but `conversations.list` returns an error
+- **WHEN** the Channels step loads
+- **THEN** a text input for comma-separated channel names is shown
+- **AND** a message explains that channel search is unavailable
+- **AND** channels are resolved to IDs during the HealthCheck step
+
+#### Scenario: conversations.list succeeds
+
+- **GIVEN** `conversations.list` returns workspace channels
+- **WHEN** the user presses `a` to add a channel
+- **THEN** the type-to-filter search is shown with API results
+
 ### Requirement: Audience defaults from posture
 
 Channel audiences SHALL be pre-populated based on the deployment posture
