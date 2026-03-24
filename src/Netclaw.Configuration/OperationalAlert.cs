@@ -15,6 +15,7 @@ public enum AlertType
     ReminderAutoDisabled,
     DaemonStarted,
     DaemonStopping,
+    UpdateAvailable,
 }
 
 /// <summary>

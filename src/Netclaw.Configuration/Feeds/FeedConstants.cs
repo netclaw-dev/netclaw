@@ -24,6 +24,11 @@ public static class FeedConstants
     public const string BinaryManifestUrl = "https://releases.netclaw.dev/manifest.json";
 
     /// <summary>
+    /// URL for the binary releases manifest signature (minisign detached signature).
+    /// </summary>
+    public const string BinaryManifestSignatureUrl = "https://releases.netclaw.dev/manifest.json.sig";
+
+    /// <summary>
     /// Base URL for skill file downloads (Cloudflare R2 + custom domain).
     /// Skill files are immutable and cached indefinitely at versioned URLs.
     /// The manifest URL remains at <see cref="FeedBaseUrl"/> on Cloudflare Pages.

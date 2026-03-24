@@ -25,11 +25,11 @@ internal static class StatusUpdateChecker
 
         try
         {
-            var manifest = await UpdateCheckService.FetchManifestAsync(httpClient, cts.Token);
-            if (manifest is null)
+            var fetchResult = await UpdateCheckService.FetchVerifiedManifestAsync(httpClient, cts.Token);
+            if (!fetchResult.IsSuccess)
                 return new StatusUpdateResult("unknown", currentVersion, null, null);
 
-            var result = UpdateCheckService.EvaluateManifest(manifest, currentVersion);
+            var result = UpdateCheckService.EvaluateManifest(fetchResult.Manifest!, currentVersion);
             return result.IsUpdateAvailable
                 ? new StatusUpdateResult("update-available", result.CurrentVersion, result.LatestVersion, result.ReleaseNotesUrl)
                 : new StatusUpdateResult("up-to-date", result.CurrentVersion, null, null);

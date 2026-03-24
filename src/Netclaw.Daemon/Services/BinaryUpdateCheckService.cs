@@ -1,41 +1,69 @@
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Netclaw.Configuration;
 using Netclaw.Configuration.Feeds;
 
 namespace Netclaw.Daemon.Services;
 
 /// <summary>
-/// Checks for binary updates at daemon startup and logs a warning if one is available.
+/// Checks for binary updates at daemon startup and periodically thereafter.
+/// Emits an <see cref="AlertType.UpdateAvailable"/> operational alert when
+/// an update is detected, so configured webhooks (Slack, etc.) get notified.
 /// The result is cached in <see cref="UpdateCheckService"/> for 1 hour so
 /// <see cref="Gateway.DaemonRuntimeStatusService"/> can include update info in the status API.
 /// Never blocks startup, never downloads anything.
-/// Runs after <see cref="SystemSkillSyncService"/>.
 /// </summary>
-internal sealed class BinaryUpdateCheckService : IHostedService
+internal sealed class BinaryUpdateCheckService : BackgroundService
 {
+    /// <summary>
+    /// How often to recheck for updates after the initial startup check.
+    /// </summary>
+    internal static readonly TimeSpan RecheckInterval = TimeSpan.FromHours(24);
+
     private readonly HttpClient _httpClient;
     private readonly ILogger<BinaryUpdateCheckService> _logger;
+    private readonly IOperationalNotificationSink? _notificationSink;
+    private readonly TimeProvider _timeProvider;
     private readonly string _currentVersion;
 
     public BinaryUpdateCheckService(
         HttpClient httpClient,
-        ILogger<BinaryUpdateCheckService> logger)
-        : this(httpClient, logger, BuildInfo.Version)
+        ILogger<BinaryUpdateCheckService> logger,
+        IOperationalNotificationSink? notificationSink = null,
+        TimeProvider? timeProvider = null)
+        : this(httpClient, logger, BuildInfo.Version, notificationSink, timeProvider)
     {
     }
 
-    // Internal constructor for testing — accepts HttpClient directly
+    // Internal constructor for testing
     internal BinaryUpdateCheckService(
         HttpClient httpClient,
         ILogger<BinaryUpdateCheckService> logger,
-        string currentVersion)
+        string currentVersion,
+        IOperationalNotificationSink? notificationSink = null,
+        TimeProvider? timeProvider = null)
     {
         _httpClient = httpClient;
         _logger = logger;
         _currentVersion = currentVersion;
+        _notificationSink = notificationSink;
+        _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
-    public async Task StartAsync(CancellationToken cancellationToken)
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        // Initial check at startup
+        await CheckAndNotifyAsync(stoppingToken);
+
+        // Periodic recheck
+        using var timer = new PeriodicTimer(RecheckInterval, _timeProvider);
+        while (await timer.WaitForNextTickAsync(stoppingToken))
+        {
+            await CheckAndNotifyAsync(stoppingToken);
+        }
+    }
+
+    internal async Task CheckAndNotifyAsync(CancellationToken cancellationToken)
     {
         try
         {
@@ -47,6 +75,8 @@ internal sealed class BinaryUpdateCheckService : IHostedService
                 _logger.LogWarning(
                     "Netclaw update available: {CurrentVersion} → {LatestVersion}. Run 'netclaw update' to upgrade.",
                     result.CurrentVersion, result.LatestVersion);
+
+                EmitUpdateAlert(result);
             }
             else
             {
@@ -59,5 +89,22 @@ internal sealed class BinaryUpdateCheckService : IHostedService
         }
     }
 
-    public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+    private void EmitUpdateAlert(UpdateCheckResult result)
+    {
+        _notificationSink?.Emit(new OperationalAlert
+        {
+            AlertId = Guid.NewGuid().ToString("N"),
+            Type = "update.available",
+            Category = AlertType.UpdateAvailable,
+            Summary = $"Netclaw update available: {result.CurrentVersion} → {result.LatestVersion}. Run 'netclaw update' to upgrade.",
+            Timestamp = _timeProvider.GetUtcNow(),
+            Severity = "info",
+            Source = result.LatestVersion,
+            Context = new Dictionary<string, string>
+            {
+                ["currentVersion"] = result.CurrentVersion,
+                ["latestVersion"] = result.LatestVersion,
+            },
+        });
+    }
 }

@@ -11,6 +11,7 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.AspNetCore.TestHost" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="NSec.Cryptography" />
     <PackageReference Include="Termina" />
     <PackageReference Include="xunit" />
     <PackageReference Include="xunit.runner.visualstudio" />

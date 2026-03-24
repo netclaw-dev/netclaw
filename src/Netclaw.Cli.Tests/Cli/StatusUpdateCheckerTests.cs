@@ -2,24 +2,45 @@ using System.Net;
 using System.Text.Json;
 using Netclaw.Cli.Update;
 using Netclaw.Configuration.Feeds;
+using Netclaw.Configuration.Security;
+using NSec.Cryptography;
 using Xunit;
 
 namespace Netclaw.Cli.Tests.Cli;
 
 public sealed class StatusUpdateCheckerTests : IDisposable
 {
+    private readonly Key _testSigningKey;
+    private readonly byte[] _testPublicKeyBlob;
+
+    public StatusUpdateCheckerTests()
+    {
+        _testSigningKey = Key.Create(SignatureAlgorithm.Ed25519,
+            new KeyCreationParameters { ExportPolicy = KeyExportPolicies.AllowPlaintextExport });
+
+        var pubKeyRaw = _testSigningKey.Export(KeyBlobFormat.RawPublicKey);
+        _testPublicKeyBlob = new byte[42];
+        _testPublicKeyBlob[0] = 0x45; _testPublicKeyBlob[1] = 0x64; // "Ed"
+        byte[] testKeyId = [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08];
+        Array.Copy(testKeyId, 0, _testPublicKeyBlob, 2, 8);
+        Array.Copy(pubKeyRaw, 0, _testPublicKeyBlob, 10, 32);
+
+        MinisignVerifier.TestPublicKeyOverride = _testPublicKeyBlob;
+        UpdateCheckService.ResetCache();
+    }
+
     public void Dispose()
     {
-        // Reset static update cache to avoid cross-test interference
+        MinisignVerifier.TestPublicKeyOverride = null;
         UpdateCheckService.ResetCache();
+        _testSigningKey.Dispose();
     }
 
     [Fact]
     public async Task CheckAsync_ReturnsUpdateAvailable_WhenNewerVersionExists()
     {
         var manifest = CreateManifest("0.9.0", UpdateCheckService.GetCurrentRid());
-        var handler = new FakeHttpHandler();
-        handler.AddJsonResponse(FeedConstants.BinaryManifestUrl, manifest);
+        var handler = CreateSignedHandler(manifest);
 
         using var httpClient = new HttpClient(handler);
         var result = await StatusUpdateChecker.CheckAsync(httpClient, "0.1.0");
@@ -33,8 +54,7 @@ public sealed class StatusUpdateCheckerTests : IDisposable
     public async Task CheckAsync_ReturnsUpToDate_WhenAlreadyLatest()
     {
         var manifest = CreateManifest("0.1.0", UpdateCheckService.GetCurrentRid());
-        var handler = new FakeHttpHandler();
-        handler.AddJsonResponse(FeedConstants.BinaryManifestUrl, manifest);
+        var handler = CreateSignedHandler(manifest);
 
         using var httpClient = new HttpClient(handler);
         var result = await StatusUpdateChecker.CheckAsync(httpClient, "0.1.0");
@@ -75,8 +95,7 @@ public sealed class StatusUpdateCheckerTests : IDisposable
     {
         var manifest = CreateManifest("0.9.0", UpdateCheckService.GetCurrentRid(),
             releaseNotesUrl: "https://github.com/stannardlabs/netclaw/releases/tag/0.9.0");
-        var handler = new FakeHttpHandler();
-        handler.AddJsonResponse(FeedConstants.BinaryManifestUrl, manifest);
+        var handler = CreateSignedHandler(manifest);
 
         using var httpClient = new HttpClient(handler);
         var result = await StatusUpdateChecker.CheckAsync(httpClient, "0.1.0");
@@ -86,6 +105,31 @@ public sealed class StatusUpdateCheckerTests : IDisposable
     }
 
     // ─── Helpers ────────────────────────────────────────────────────────────────
+
+    private FakeHttpHandler CreateSignedHandler(BinaryFeedManifest manifest)
+    {
+        var handler = new FakeHttpHandler();
+        var json = JsonSerializer.Serialize(manifest);
+        handler.AddResponse(FeedConstants.BinaryManifestUrl, HttpStatusCode.OK, json, "application/json");
+
+        var sigContent = SignContent(json);
+        handler.AddResponse(FeedConstants.BinaryManifestSignatureUrl, HttpStatusCode.OK, sigContent, "text/plain");
+
+        return handler;
+    }
+
+    private string SignContent(string content)
+    {
+        var data = System.Text.Encoding.UTF8.GetBytes(content);
+        var signature = SignatureAlgorithm.Ed25519.Sign(_testSigningKey, data);
+
+        var sigBlob = new byte[74];
+        sigBlob[0] = 0x45; sigBlob[1] = 0x44; // "ED"
+        Array.Copy(_testPublicKeyBlob, 2, sigBlob, 2, 8);
+        Array.Copy(signature, 0, sigBlob, 10, 64);
+
+        return $"untrusted comment: test signature\n{Convert.ToBase64String(sigBlob)}\ntrusted comment: test\ndGVzdA==\n";
+    }
 
     private static BinaryFeedManifest CreateManifest(string version, string rid, string? releaseNotesUrl = null)
     {
@@ -124,6 +168,11 @@ public sealed class StatusUpdateCheckerTests : IDisposable
         {
             var json = JsonSerializer.Serialize(body);
             _responses[url] = (HttpStatusCode.OK, json, "application/json");
+        }
+
+        public void AddResponse(string url, HttpStatusCode status, string content, string contentType)
+        {
+            _responses[url] = (status, content, contentType);
         }
 
         public void AddErrorResponse(string url, HttpStatusCode status)
