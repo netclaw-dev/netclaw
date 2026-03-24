@@ -21,14 +21,13 @@ namespace Netclaw.Cli.Tui;
 public enum WizardStep
 {
     Provider = 1,
-    ChatServices = 2,
-    SecurityPosture = 3,
-    Acl = 4,
-    Channels = 5,
-    Search = 6,
-    BrowserAutomation = 7,
-    Identity = 8,
-    HealthCheck = 9
+    SecurityPosture = 2,
+    ChatServices = 3,
+    Channels = 4,
+    Search = 5,
+    BrowserAutomation = 6,
+    Identity = 7,
+    HealthCheck = 8
 }
 
 /// <summary>
@@ -38,7 +37,7 @@ public enum WizardStep
 /// </summary>
 public partial class InitWizardViewModel : ReactiveViewModel
 {
-    public const int TotalSteps = 9;
+    public const int TotalSteps = 8;
     private static readonly TimeSpan ProbeHardTimeout = TimeSpan.FromSeconds(20);
     private static readonly TimeSpan SlackProbeHardTimeout = TimeSpan.FromSeconds(15);
     private static readonly TimeSpan ChannelResolutionHardTimeout = TimeSpan.FromSeconds(35);
@@ -221,7 +220,7 @@ public partial class InitWizardViewModel : ReactiveViewModel
     public bool AnyChatServicesEnabled() => SlackEnabled;
 
     /// <summary>
-    /// Returns the number of active steps (skipping ACL + Channels when no chat services).
+    /// Returns the number of active steps (skipping Channels when no chat services).
     /// </summary>
     public int ActiveStepCount
     {
@@ -229,7 +228,7 @@ public partial class InitWizardViewModel : ReactiveViewModel
         {
             var count = TotalSteps;
             if (!AnyChatServicesEnabled())
-                count -= 2; // skip ACL + Channels
+                count--; // skip Channels
             return count;
         }
     }
@@ -240,14 +239,8 @@ public partial class InitWizardViewModel : ReactiveViewModel
     public int GetDisplayStepNumber(WizardStep step)
     {
         var num = (int)step;
-        if (!AnyChatServicesEnabled())
-        {
-            // ACL (4) and Channels (5) are skipped — subtract for anything after ChatServices
-            if (step > WizardStep.Channels)
-                num -= 2;
-            else if (step > WizardStep.ChatServices && step != WizardStep.SecurityPosture)
-                num--;
-        }
+        if (!AnyChatServicesEnabled() && step > WizardStep.Channels)
+            num--; // Channels skipped
         return num;
     }
 
@@ -266,12 +259,13 @@ public partial class InitWizardViewModel : ReactiveViewModel
 
         var next = (WizardStep)((int)CurrentStep.Value + 1);
 
-        // Skip ACL and Channels when no chat services are enabled
-        if (next == WizardStep.Acl && !AnyChatServicesEnabled())
-            next = WizardStep.Search; // jump past ACL + Channels
-
+        // Skip Channels when no chat services are enabled
         if (next == WizardStep.Channels && !AnyChatServicesEnabled())
             next = WizardStep.Search;
+
+        // When entering Channels step, populate entries from resolved channels
+        if (next == WizardStep.Channels)
+            DeriveSecurityDefaults();
 
         CurrentStep.Value = next;
         StatusMessage.Value = "";
@@ -293,12 +287,9 @@ public partial class InitWizardViewModel : ReactiveViewModel
 
         var previous = (WizardStep)((int)CurrentStep.Value - 1);
 
-        // Skip Channels and ACL when going back with no chat services
+        // Skip Channels when going back with no chat services
         if (previous == WizardStep.Channels && !AnyChatServicesEnabled())
-            previous = WizardStep.SecurityPosture;
-
-        if (previous == WizardStep.Acl && !AnyChatServicesEnabled())
-            previous = WizardStep.SecurityPosture;
+            previous = WizardStep.ChatServices;
 
         // Back-navigation clearing rules from design doc:
         // Provider change clears auth + model downstream

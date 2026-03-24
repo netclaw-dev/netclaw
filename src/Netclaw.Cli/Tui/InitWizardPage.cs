@@ -153,7 +153,6 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
                     WizardStep.Provider => "LLM Provider",
                     WizardStep.ChatServices => "Chat Services",
                     WizardStep.SecurityPosture => "Security Posture",
-                    WizardStep.Acl => "Access Control",
                     WizardStep.Channels => "Channels",
                     WizardStep.Search => "Web Search",
                     WizardStep.BrowserAutomation => "Browser Automation",
@@ -209,7 +208,6 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
                 WizardStep.Provider => BuildProviderStep(),
                 WizardStep.ChatServices => BuildChatServicesStep(),
                 WizardStep.SecurityPosture => BuildSecurityPostureStep(),
-                WizardStep.Acl => BuildAclStep(),
                 WizardStep.Channels => BuildChannelsStep(),
                 WizardStep.Search => BuildSearchStep(),
                 WizardStep.BrowserAutomation => BuildBrowserAutomationStep(),
@@ -250,8 +248,6 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
                     "  Restrict Slack access to specific user IDs for both channels and DMs. Leave blank to allow all workspace members.",
                 WizardStep.ChatServices =>
                     "  Socket Mode requires both tokens. See: https://api.slack.com/apis/socket-mode",
-                WizardStep.Acl =>
-                    "  Your Slack user ID (e.g., U01234ABCDE) for admin access.",
                 WizardStep.Search when _searchSubStep == 0 =>
                     "  DuckDuckGo works without config but may hit bot detection. Brave Search is more reliable.",
                 WizardStep.Search when _searchSubStep == 1 && ViewModel.SelectedSearchBackend == "brave" =>
@@ -725,6 +721,7 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             3 => BuildSlackChannelNamesSubStep(),
             4 => BuildSlackDmEnabledSubStep(),
             5 => BuildSlackAllowedUserIdsSubStep(),
+            6 => BuildOwnerIdentitySubStep(),
             _ => Layouts.Empty()
         };
     }
@@ -901,8 +898,7 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             .Subscribe(text =>
             {
                 ViewModel.SlackAllowedUserIdsInput = string.IsNullOrWhiteSpace(text) ? null : text;
-                _chatServicesSubStep = 0;
-                ViewModel.GoNext();
+                SetChatServicesSubStep(6);
             })
             .DisposeWith(_stepSubs);
 
@@ -916,7 +912,7 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
                 .Height(3));
     }
 
-    private ILayoutNode BuildAclStep()
+    private ILayoutNode BuildOwnerIdentitySubStep()
     {
         _ownerIdentityInput = new TextInputNode()
             .WithPlaceholder("U01234ABCDE (your Slack user ID)");
@@ -931,6 +927,7 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             .Subscribe(text =>
             {
                 ViewModel.OwnerIdentity = string.IsNullOrWhiteSpace(text) ? null : text;
+                _chatServicesSubStep = 0;
                 ViewModel.GoNext();
             })
             .DisposeWith(_stepSubs);
@@ -1648,7 +1645,7 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             WizardStep.ChatServices when _chatServicesSubStep == 5 => _slackAllowedUserIdsInput,
             WizardStep.Search when _searchSubStep == 1 && _braveApiKeyInput is not null => _braveApiKeyInput,
             WizardStep.Search when _searchSubStep == 1 => _searxngEndpointInput,
-            WizardStep.Acl => _ownerIdentityInput,
+            WizardStep.ChatServices when _chatServicesSubStep == 6 => _ownerIdentityInput,
             WizardStep.Identity when _identitySubStep == 0 => _agentNameInput,
             WizardStep.Identity when _identitySubStep == 2 => _userNameInput,
             WizardStep.Identity when _identitySubStep == 3 => _timezoneInput,

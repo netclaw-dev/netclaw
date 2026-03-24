@@ -46,17 +46,14 @@ public sealed class InitWizardViewModelTests : IDisposable
     public void GoNext_AdvancesStep()
     {
         using var vm = CreateViewModel();
-        vm.SlackEnabled = true; // enable chat services so ACL + Channels are not skipped
+        vm.SlackEnabled = true; // enable chat services so Channels is not skipped
         Assert.Equal(WizardStep.Provider, vm.CurrentStep.Value);
-
-        vm.GoNext();
-        Assert.Equal(WizardStep.ChatServices, vm.CurrentStep.Value);
 
         vm.GoNext();
         Assert.Equal(WizardStep.SecurityPosture, vm.CurrentStep.Value);
 
         vm.GoNext();
-        Assert.Equal(WizardStep.Acl, vm.CurrentStep.Value);
+        Assert.Equal(WizardStep.ChatServices, vm.CurrentStep.Value);
 
         vm.GoNext();
         Assert.Equal(WizardStep.Channels, vm.CurrentStep.Value);
@@ -138,34 +135,34 @@ public sealed class InitWizardViewModelTests : IDisposable
     }
 
     [Fact]
-    public void GoNext_SkipsAclAndChannels_WhenNoChatServicesEnabled()
+    public void GoNext_SkipsChannels_WhenNoChatServicesEnabled()
     {
         using var vm = CreateViewModel();
         vm.SlackEnabled = false;
 
-        vm.GoNext(); // Provider → ChatServices
-        Assert.Equal(WizardStep.ChatServices, vm.CurrentStep.Value);
-
-        vm.GoNext(); // ChatServices → SecurityPosture (always shown)
+        vm.GoNext(); // Provider → SecurityPosture
         Assert.Equal(WizardStep.SecurityPosture, vm.CurrentStep.Value);
 
-        vm.GoNext(); // SecurityPosture → should skip ACL + Channels → Search
+        vm.GoNext(); // SecurityPosture → ChatServices
+        Assert.Equal(WizardStep.ChatServices, vm.CurrentStep.Value);
+
+        vm.GoNext(); // ChatServices → should skip Channels → Search
         Assert.Equal(WizardStep.Search, vm.CurrentStep.Value);
     }
 
     [Fact]
-    public void GoBack_SkipsAclAndChannels_WhenNoChatServicesEnabled()
+    public void GoBack_SkipsChannels_WhenNoChatServicesEnabled()
     {
         using var vm = CreateViewModel();
         vm.SlackEnabled = false;
 
-        vm.GoNext(); // → ChatServices
         vm.GoNext(); // → SecurityPosture
-        vm.GoNext(); // → Search (ACL + Channels skipped)
+        vm.GoNext(); // → ChatServices
+        vm.GoNext(); // → Search (Channels skipped)
         Assert.Equal(WizardStep.Search, vm.CurrentStep.Value);
 
-        vm.GoBack(); // → SecurityPosture (ACL + Channels skipped going back)
-        Assert.Equal(WizardStep.SecurityPosture, vm.CurrentStep.Value);
+        vm.GoBack(); // → ChatServices (Channels skipped going back)
+        Assert.Equal(WizardStep.ChatServices, vm.CurrentStep.Value);
     }
 
     [Fact]
@@ -484,9 +481,9 @@ public sealed class InitWizardViewModelTests : IDisposable
     }
 
     [Fact]
-    public void TotalSteps_IsNine()
+    public void TotalSteps_IsEight()
     {
-        Assert.Equal(9, InitWizardViewModel.TotalSteps);
+        Assert.Equal(8, InitWizardViewModel.TotalSteps);
     }
 
     [Fact]
@@ -498,11 +495,11 @@ public sealed class InitWizardViewModelTests : IDisposable
     }
 
     [Fact]
-    public void ActiveStepCount_IsNine_WhenChatServicesEnabled()
+    public void ActiveStepCount_IsEight_WhenChatServicesEnabled()
     {
         using var vm = CreateViewModel();
         vm.SlackEnabled = true;
-        Assert.Equal(9, vm.ActiveStepCount);
+        Assert.Equal(8, vm.ActiveStepCount);
     }
 
     [Fact]
@@ -511,12 +508,12 @@ public sealed class InitWizardViewModelTests : IDisposable
         using var vm = CreateViewModel();
         vm.SlackEnabled = false;
 
-        // Provider = 1, ChatServices = 2, SecurityPosture = 3,
-        // ACL + Channels skipped, Search = 4, BrowserAutomation = 5,
+        // Provider = 1, SecurityPosture = 2, ChatServices = 3,
+        // Channels skipped, Search = 4, BrowserAutomation = 5,
         // Identity = 6, HealthCheck = 7
         Assert.Equal(1, vm.GetDisplayStepNumber(WizardStep.Provider));
-        Assert.Equal(2, vm.GetDisplayStepNumber(WizardStep.ChatServices));
-        Assert.Equal(3, vm.GetDisplayStepNumber(WizardStep.SecurityPosture));
+        Assert.Equal(2, vm.GetDisplayStepNumber(WizardStep.SecurityPosture));
+        Assert.Equal(3, vm.GetDisplayStepNumber(WizardStep.ChatServices));
         Assert.Equal(4, vm.GetDisplayStepNumber(WizardStep.Search));
         Assert.Equal(5, vm.GetDisplayStepNumber(WizardStep.BrowserAutomation));
         Assert.Equal(6, vm.GetDisplayStepNumber(WizardStep.Identity));
