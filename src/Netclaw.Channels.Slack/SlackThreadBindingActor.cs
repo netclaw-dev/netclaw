@@ -422,20 +422,19 @@ internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStas
                 break;
 
             case TextOutput text:
-                if (!_sawTextDelta)
+            {
+                var fullText = text.Text?.Trim();
+                if (!string.IsNullOrWhiteSpace(fullText))
                 {
-                    var fullText = text.Text?.Trim();
-                    if (!string.IsNullOrWhiteSpace(fullText))
-                    {
-                        var result = await SafePostAsync(fullText);
-                        if (result.Success)
-                            _postedThisTurn = true;
-                        else
-                            _lastFailedPost = result;
-                    }
+                    var result = await SafePostAsync(fullText);
+                    if (result.Success)
+                        _postedThisTurn = true;
+                    else
+                        _lastFailedPost = result;
                 }
 
                 break;
+            }
 
             case FileOutput file:
                 var uploadResult = await SafeUploadFileAsync(file);
