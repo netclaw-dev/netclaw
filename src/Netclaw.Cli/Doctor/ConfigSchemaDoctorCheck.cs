@@ -86,9 +86,21 @@ public sealed class ConfigSchemaDoctorCheck(NetclawPaths paths) : IDoctorCheck
 
         if (!evaluation.IsValid)
         {
+            var errorDetails = string.Empty;
+            if (evaluation.Details is not null)
+            {
+                var failures = evaluation.Details
+                    .Where(d => !d.IsValid && d.Errors is not null)
+                    .Take(5)
+                    .Select(d => $"  {d.InstanceLocation}: {string.Join("; ", d.Errors!.Select(e => $"{e.Key}: {e.Value}"))}")
+                    .ToList();
+                if (failures.Count > 0)
+                    errorDetails = " Errors:\n" + string.Join("\n", failures);
+            }
+
             return Task.FromResult(DoctorCheckResult.Error(
                 "Config Schema",
-                "Config does not match schema.",
+                $"Config does not match schema (loaded from: {schemaPath}).{errorDetails}",
                 "Run `netclaw config validate` (planned) or check configVersion/schema fields in netclaw.json."));
         }
 

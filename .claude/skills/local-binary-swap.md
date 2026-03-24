@@ -68,14 +68,21 @@ dotnet publish src/Netclaw.Daemon/Netclaw.Daemon.csproj \
 (use `/p:` for clarity). The production pipeline uses these exact flags and any
 deviation produces subtly broken binaries that appear to work but fail at runtime.
 
-### 4. Copy system skills to install location
+### 4. Copy schemas and system skills to install location
 
-The built-in skills are compiled into the binary and copied at first boot, but
-for immediate testing, copy them explicitly:
+The publish output includes a `Schemas/` directory with the JSON schema used by
+`netclaw doctor`. If you don't copy it, the doctor will validate against a
+**stale schema** from a previous install and report false failures.
 
 ```bash
+cp -r /tmp/netclaw-publish/Schemas/* ~/.netclaw/bin/Schemas/
+cp -r /tmp/netclawd-publish/Schemas/* ~/.netclaw/bin/Schemas/
 cp -r feeds/skills/.system/files/* ~/.netclaw/skills/.system/
 ```
+
+**CRITICAL**: Always copy Schemas. A stale schema at `~/.netclaw/bin/Schemas/`
+will cause `netclaw doctor` to fail with "Config does not match schema" even
+when the config is valid.
 
 ### 5. Swap binaries
 
@@ -117,5 +124,6 @@ cp ~/.netclaw/bin/netclawd.bak ~/.netclaw/bin/netclawd
 | Missing `IncludeNativeLibrariesForSelfExtract` | `TypeInitializationException` for `SqliteConnection`, memory health doctor check fails | Republish with all flags |
 | Missing `EnableCompressionInSingleFile` | Binary is 2-3x larger than expected | Republish with all flags |
 | Forgot to stop daemon before swap | Binary overwrite fails or daemon crashes | Always `netclaw daemon stop` first |
+| Forgot to copy Schemas directory | `netclaw doctor` reports "Config does not match schema" against stale schema | Copy `Schemas/` from publish output to `~/.netclaw/bin/Schemas/` |
 | Forgot to copy system skills | New/updated skills not available | Copy from `feeds/skills/.system/files/` |
 | Used `-p:` instead of `/p:` | May work but inconsistent with CI | Use `/p:` to match production |
