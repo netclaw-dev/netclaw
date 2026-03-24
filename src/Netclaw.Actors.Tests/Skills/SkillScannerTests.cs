@@ -285,6 +285,109 @@ public class SkillScannerTests : IDisposable
     }
 
     [Fact]
+    public void System_directory_skill_gets_system_trust_tier()
+    {
+        WriteNestedSkill(".system", "diag", "System diagnostics.");
+
+        var result = SkillScanner.Scan(_skillsDir);
+
+        Assert.Single(result);
+        Assert.Equal(SkillTrustTier.System, result[0].TrustTier);
+    }
+
+    [Fact]
+    public void Root_skill_gets_operator_trust_tier()
+    {
+        WriteSkill("my-workflow", """
+            ---
+            name: my-workflow
+            description: Operator-placed skill.
+            ---
+
+            # My Workflow
+            """);
+
+        var result = SkillScanner.Scan(_skillsDir);
+
+        Assert.Single(result);
+        Assert.Equal(SkillTrustTier.Operator, result[0].TrustTier);
+    }
+
+    [Fact]
+    public void Community_directory_skill_gets_community_trust_tier()
+    {
+        WriteNestedSkill(".community", "home-auto", "Home automation skill.");
+
+        var result = SkillScanner.Scan(_skillsDir);
+
+        Assert.Single(result);
+        Assert.Equal(SkillTrustTier.Community, result[0].TrustTier);
+    }
+
+    [Fact]
+    public void External_directory_skill_gets_external_trust_tier()
+    {
+        WriteNestedSkill(".external", "third-party", "Third-party skill.");
+
+        var result = SkillScanner.Scan(_skillsDir);
+
+        Assert.Single(result);
+        Assert.Equal(SkillTrustTier.External, result[0].TrustTier);
+    }
+
+    [Fact]
+    public void Agent_directory_skill_gets_agent_trust_tier()
+    {
+        WriteNestedSkill(".agent", "learned-workflow", "Agent-created skill.");
+
+        var result = SkillScanner.Scan(_skillsDir);
+
+        Assert.Single(result);
+        Assert.Equal(SkillTrustTier.Agent, result[0].TrustTier);
+    }
+
+    [Fact]
+    public void Quarantine_directory_is_not_scanned()
+    {
+        WriteNestedSkill(".quarantine", "suspect", "Quarantined skill.");
+
+        var result = SkillScanner.Scan(_skillsDir);
+
+        Assert.Empty(result);
+    }
+
+    [Fact]
+    public void Unknown_hidden_directory_is_not_scanned()
+    {
+        WriteNestedSkill(".unknown", "mystery", "Unknown hidden dir skill.");
+
+        var result = SkillScanner.Scan(_skillsDir);
+
+        Assert.Empty(result);
+    }
+
+    [Theory]
+    [InlineData(null, SkillTrustTier.Operator)]
+    [InlineData(".system", SkillTrustTier.System)]
+    [InlineData(".community", SkillTrustTier.Community)]
+    [InlineData(".external", SkillTrustTier.External)]
+    [InlineData(".agent", SkillTrustTier.Agent)]
+    [InlineData("custom-category", SkillTrustTier.Operator)]
+    public void InferTrustTier_returns_correct_tier(string? category, SkillTrustTier expected)
+    {
+        Assert.Equal(expected, SkillScanner.InferTrustTier(category));
+    }
+
+    [Fact]
+    public void SkillTrustTier_values_ordered_by_trust()
+    {
+        Assert.True(SkillTrustTier.System < SkillTrustTier.Operator);
+        Assert.True(SkillTrustTier.Operator < SkillTrustTier.Community);
+        Assert.True(SkillTrustTier.Community < SkillTrustTier.External);
+        Assert.True(SkillTrustTier.External < SkillTrustTier.Agent);
+    }
+
+    [Fact]
     public void Skill_with_no_resources_has_null_resource_paths()
     {
         WriteSkill("minimal", """
@@ -320,5 +423,22 @@ public class SkillScannerTests : IDisposable
         var dir = Path.GetDirectoryName(fullPath)!;
         Directory.CreateDirectory(dir);
         File.WriteAllText(fullPath, content);
+    }
+
+    /// <summary>
+    /// Creates a skill inside a nested (category) directory, e.g. .system/skill-name/SKILL.md.
+    /// </summary>
+    private void WriteNestedSkill(string category, string skillName, string description)
+    {
+        var dir = Path.Combine(_skillsDir, category, skillName);
+        Directory.CreateDirectory(dir);
+        File.WriteAllText(Path.Combine(dir, "SKILL.md"), $"""
+            ---
+            name: {skillName}
+            description: "{description}"
+            ---
+
+            # {skillName}
+            """);
     }
 }

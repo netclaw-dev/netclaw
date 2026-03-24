@@ -1,9 +1,10 @@
 ---
 name: netclaw-operations
 description: "REQUIRED when the user asks about Netclaw capabilities, scheduling, diagnostics, identity updates, or self-maintenance. Read this first — it routes you to the right detail file."
+disable-model-invocation: true
 metadata:
   author: netclaw
-  version: "1.0.0"
+  version: "1.1.0"
 ---
 
 # Netclaw Operations

@@ -1,0 +1,18 @@
+using Netclaw.Security.Skills;
+using Xunit;
+
+namespace Netclaw.Security.Tests.Skills;
+
+public class NoOpSkillContentScannerTests
+{
+    [Fact]
+    public async Task ScanAsync_allows_all_content()
+    {
+        var scanner = new NoOpSkillContentScanner();
+
+        var result = await scanner.ScanAsync("test-skill", "any content here");
+
+        Assert.True(result.IsAllowed);
+        Assert.Null(result.Reason);
+    }
+}

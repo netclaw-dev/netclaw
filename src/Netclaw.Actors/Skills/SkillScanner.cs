@@ -67,8 +67,8 @@ public static partial class SkillScanner
             if (File.Exists(Path.Combine(subDir, SkillFileName)))
                 continue;
 
-            // Skip hidden directories (except .system/ which contains system skills)
-            if (subDirName.StartsWith('.') && !subDirName.Equals(".system", StringComparison.Ordinal))
+            // Skip hidden directories except known skill tier directories
+            if (subDirName.StartsWith('.') && !IsAllowedHiddenDirectory(subDirName))
                 continue;
 
             foreach (var nestedDir in Directory.GetDirectories(subDir))
@@ -201,7 +201,8 @@ public static partial class SkillScanner
             License = fm.License,
             Compatibility = fm.Compatibility,
             AllowedTools = fm.AllowedTools,
-            ResourcePaths = EnumerateResources(skillDirectory)
+            ResourcePaths = EnumerateResources(skillDirectory),
+            TrustTier = InferTrustTier(category)
         };
     }
 
@@ -247,6 +248,42 @@ public static partial class SkillScanner
         if (value.Length <= maxLength)
             return value;
         return value[..(maxLength - 3)] + "...";
+    }
+
+    /// <summary>
+    /// Hidden directories that are allowed during Pass 2 scanning.
+    /// Each corresponds to a <see cref="SkillTrustTier"/>.
+    /// </summary>
+    private static readonly HashSet<string> AllowedHiddenDirectories = new(StringComparer.Ordinal)
+    {
+        ".system",
+        ".community",
+        ".external",
+        ".agent"
+    };
+
+    private static bool IsAllowedHiddenDirectory(string dirName)
+        => AllowedHiddenDirectories.Contains(dirName);
+
+    /// <summary>
+    /// Infers the trust tier from the skill's category (parent directory).
+    /// A skill cannot self-declare its tier — it is determined by directory location.
+    /// </summary>
+    internal static SkillTrustTier InferTrustTier(string? category)
+    {
+        if (category is null)
+            return SkillTrustTier.Operator;
+
+        // Category may be a path like ".system" or ".community/subcategory"
+        var root = category.Split('/')[0];
+        return root switch
+        {
+            ".system" => SkillTrustTier.System,
+            ".community" => SkillTrustTier.Community,
+            ".external" => SkillTrustTier.External,
+            ".agent" => SkillTrustTier.Agent,
+            _ => SkillTrustTier.Operator
+        };
     }
 }
 

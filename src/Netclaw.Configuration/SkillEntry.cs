@@ -41,4 +41,10 @@ public sealed record SkillEntry(
     /// Null if the skill has no resources.
     /// </summary>
     public IReadOnlyList<string>? ResourcePaths { get; init; }
+
+    /// <summary>
+    /// Trust classification inferred from the skill's directory location.
+    /// See <see cref="SkillTrustTier"/> for tier definitions.
+    /// </summary>
+    public SkillTrustTier TrustTier { get; init; } = SkillTrustTier.Operator;
 }

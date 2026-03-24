@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using Netclaw.Security.Skills;
 
 namespace Netclaw.Security;
 
@@ -12,6 +13,7 @@ public static class SecurityServiceExtensions
         services.AddSingleton<ContentPolicy>();
         services.AddSingleton<IContentScanner, MagicByteContentScanner>();
         services.AddSingleton<IPromptInjectionDetector, NullPromptInjectionDetector>();
+        services.AddSingleton<ISkillContentScanner, NoOpSkillContentScanner>();
         return services;
     }
 }
