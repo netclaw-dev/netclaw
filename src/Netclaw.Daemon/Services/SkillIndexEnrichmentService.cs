@@ -66,7 +66,7 @@ internal sealed class SkillIndexEnrichmentService : IHostedService
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            // Clean shutdown
+            _logger.LogDebug("Skill enrichment cancelled — daemon shutting down");
         }
         catch (Exception ex)
         {
