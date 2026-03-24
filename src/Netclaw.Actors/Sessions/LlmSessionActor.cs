@@ -247,8 +247,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                     Memory.MemoryCurationActor.CreateProps(_memoryStore, _clientProvider),
                     "memory-curation");
 
-                // Distillation processes a full transcript — allow 2x normal sidecar timeout
-                var distillationTimeout = TimeSpan.FromSeconds(Math.Max(1, _config.SidecarLlmTimeoutSeconds) * 2);
+                // Distillation processes a full transcript — allow 5x normal sidecar timeout
+                // for slower local models (e.g., Qwen 3.5 27B)
+                var distillationTimeout = TimeSpan.FromSeconds(Math.Max(1, _config.SidecarLlmTimeoutSeconds) * 5);
                 _observerActor = Context.ActorOf(
                     SessionMemoryObserverActor.CreateProps(
                         _sessionId,
