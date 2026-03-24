@@ -2135,7 +2135,14 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             {
                 _log.Warning("Failed to read skill file for slash command /{SkillName}: {Error}",
                     skill!.Name, ex.Message);
-                return false; // Fall through to normal processing
+                EmitOutput(new TextOutput
+                {
+                    SessionId = _sessionId,
+                    Text = $"Failed to load skill /{skill.Name}: {ex.Message}\n\nThe skill file may be missing or corrupted."
+                }, OutputFilter.Text);
+                EmitOutput(new TurnCompleted { SessionId = _sessionId, TurnNumber = _state.TurnCount });
+                TryReplyAck();
+                return true; // Handled — do NOT fall through to LLM
             }
 
             // Inject skill as system context, use remainder as user message
