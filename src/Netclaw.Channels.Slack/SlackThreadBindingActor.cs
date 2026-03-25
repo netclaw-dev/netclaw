@@ -23,9 +23,9 @@ internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStas
     private readonly IPromptInjectionDetector _promptInjectionDetector;
     private readonly ILoggingAdapter _log;
 
-    private readonly StringBuilder _buffer = new();
+    // Slack subscribes to OutputFilter.Text (final assembled text), not TextStreaming.
     private const string EmptyTurnFallbackText = ":warning: I didn't manage to produce a reply. Please try rephrasing or sending your message again.";
-    private bool _sawTextDelta;
+    // No streaming state needed — Slack receives TextOutput only, not TextDeltaOutput.
     private bool _postedThisTurn;
     private bool _uploadedFileThisTurn;
     private PostResult? _lastFailedPost;
@@ -416,11 +416,6 @@ internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStas
     {
         switch (threadOutput.Output)
         {
-            case TextDeltaOutput delta:
-                _buffer.Append(delta.Delta);
-                _sawTextDelta = true;
-                break;
-
             case TextOutput text:
             {
                 var fullText = text.Text?.Trim();
@@ -442,22 +437,8 @@ internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStas
                     _lastFailedPost = uploadResult;
                 break;
 
-            case BufferFlush:
-                if (_sawTextDelta)
-                {
-                    var preamble = _buffer.ToString().Trim();
-                    if (!string.IsNullOrWhiteSpace(preamble))
-                    {
-                        var result = await SafePostAsync(preamble);
-                        if (result.Success)
-                            _postedThisTurn = true;
-                        else
-                            _lastFailedPost = result;
-                    }
-                }
-                _buffer.Clear();
-                _sawTextDelta = false;
-                break;
+            // BufferFlush and TextDeltaOutput are not received — Slack subscribes
+            // to OutputFilter.Text (final assembled text), not TextStreaming.
 
             case ErrorOutput err:
                 var refId = err.CorrelationId.ToString("N")[..8];
@@ -466,25 +447,9 @@ internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStas
                     _postedThisTurn = true;
                 else
                     _lastFailedPost = errorResult;
-                _buffer.Clear();
                 break;
 
             case TurnCompleted completed:
-                if (_sawTextDelta && !_postedThisTurn)
-                {
-                    var reply = _buffer.ToString().Trim();
-                    if (!string.IsNullOrWhiteSpace(reply))
-                    {
-                        var result = await SafePostAsync(reply);
-                        if (result.Success)
-                            _postedThisTurn = true;
-                        else
-                            _lastFailedPost = result;
-                    }
-                    else
-                        _log.Debug("Turn completed with no buffered reply text");
-                }
-
                 if (!_postedThisTurn && !_uploadedFileThisTurn)
                 {
                     if (_lastFailedPost is { ShouldNotifySession: true, FailureKind: { } failureKind, ErrorMessage: { } errorMessage })
@@ -501,8 +466,6 @@ internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStas
                     }
                 }
 
-                _buffer.Clear();
-                _sawTextDelta = false;
                 _postedThisTurn = false;
                 _uploadedFileThisTurn = false;
                 _lastFailedPost = null;

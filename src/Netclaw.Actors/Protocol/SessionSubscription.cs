@@ -13,7 +13,7 @@ public enum OutputFilter
     /// <summary>No content — lifecycle messages only.</summary>
     None = 0,
 
-    /// <summary><see cref="TextOutput"/> — user-facing assistant replies.</summary>
+    /// <summary><see cref="TextOutput"/> — final assembled assistant replies.</summary>
     Text = 1 << 0,
 
     /// <summary><see cref="ThinkingOutput"/> — reasoning/thinking tokens.</summary>
@@ -28,16 +28,25 @@ public enum OutputFilter
     /// <summary><see cref="FileOutput"/> — file attachments produced by the LLM or tools.</summary>
     Files = 1 << 4,
 
+    /// <summary>
+    /// <see cref="TextDeltaOutput"/> and <see cref="BufferFlush"/> — incremental streaming tokens.
+    /// Subscribe to this OR <see cref="Text"/>, not both, to avoid duplicate delivery.
+    /// </summary>
+    TextStreaming = 1 << 5,
+
     // ── Convenience presets ──
 
-    /// <summary>Text replies only — suitable for end-user adapters (Slack, TUI chat).</summary>
+    /// <summary>Final text replies only — suitable for adapters that post once (Slack).</summary>
     TextOnly = Text,
+
+    /// <summary>Streaming deltas only — suitable for adapters that render live (TUI).</summary>
+    StreamingOnly = TextStreaming,
 
     /// <summary>Text + token usage — for adapters that show context window indicators.</summary>
     TextAndUsage = Text | Usage,
 
     /// <summary>Everything — suitable for ops consoles, debugging, and observability.</summary>
-    Full = Text | Thinking | ToolCalls | Usage | Files,
+    Full = Text | TextStreaming | Thinking | ToolCalls | Usage | Files,
 }
 
 /// <summary>
