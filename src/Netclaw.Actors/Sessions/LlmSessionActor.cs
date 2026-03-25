@@ -142,6 +142,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     // Track whether system prompt was recovered from journal
     private bool _systemPromptRecovered;
 
+    // Explicit state machine phase (metadata + validation layer over Become())
+    private SessionPhase _currentPhase = SessionPhase.Recovering;
+
     public override string PersistenceId { get; }
     public ITimerScheduler Timers { get; set; } = null!;
 
@@ -222,7 +225,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 SetSystemPrompt();
             }
 
-            Become(Ready);
+            TransitionTo(SessionPhase.Ready);
 
             if (_sessionLogsBasePath is not null)
             {
@@ -251,6 +254,54 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         });
     }
 
+    // ── State machine ──
+
+    /// <summary>
+    /// Validated phase transition. Enforces legal transition rules and calls
+    /// the corresponding <c>Become()</c> handler. Illegal transitions throw
+    /// <see cref="InvalidOperationException"/>.
+    /// </summary>
+    private void TransitionTo(SessionPhase target)
+    {
+        if (!IsLegalTransition(_currentPhase, target))
+            throw new InvalidOperationException(
+                $"Illegal session phase transition: {_currentPhase} → {target}");
+
+        var from = _currentPhase;
+        _currentPhase = target;
+        _log.Info("session_phase_transition from={From} to={To}", from, target);
+
+        _observerActor?.Tell(new SessionPhaseChanged(target));
+
+        switch (target)
+        {
+            case SessionPhase.Ready:
+                Become(Ready);
+                break;
+            case SessionPhase.Processing:
+                Become(Processing);
+                break;
+            case SessionPhase.Compacting:
+                Become(Compacting);
+                break;
+            case SessionPhase.Passivating:
+                Become(Passivating);
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(target), target, null);
+        }
+    }
+
+    private static bool IsLegalTransition(SessionPhase from, SessionPhase to) => from switch
+    {
+        SessionPhase.Recovering => to == SessionPhase.Ready,
+        SessionPhase.Ready => to is SessionPhase.Processing or SessionPhase.Compacting or SessionPhase.Passivating,
+        SessionPhase.Processing => to is SessionPhase.Ready or SessionPhase.Compacting,
+        SessionPhase.Compacting => to is SessionPhase.Ready or SessionPhase.Processing,
+        SessionPhase.Passivating => false, // terminal
+        _ => false
+    };
+
     // ── Command behaviors ──
 
     private void Ready()
@@ -274,10 +325,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 return;
             }
 
-            _log.Info("Session idle, passivating (timeout={Timeout})", _config.IdleTimeout);
-            _lifecycleObserver?.OnSessionDeactivated(_sessionId);
-            SaveSnapshot(_state.ToSnapshot());
-            Context.Stop(Self);
+            _log.Info("Session idle, entering passivation (timeout={Timeout})", _config.IdleTimeout);
+            TransitionTo(SessionPhase.Passivating);
         });
 
         Command<ProcessingWatchdogExpired>(_ => { });
@@ -358,13 +407,13 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             TryReplyAck();
             _turnRecallCache = null; // New user turn — resolve recall fresh
             FireLlmCall(userContent);
-            Become(Processing);
+            TransitionTo(SessionPhase.Processing);
         });
     }
 
     private void Processing()
     {
-        // Disable idle timeout while processing — re-enabled in Become(Ready)
+        // Disable idle timeout while processing — re-enabled on transition to Ready
         Context.SetReceiveTimeout(null);
         CommandSubscriptionMessages();
         CommandSnapshotMessages();
@@ -731,7 +780,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 // Use the configured context window as the token count estimate since
                 // the provider rejected the request without returning usage stats.
                 Self.Tell(new CompactionTriggered { InputTokenCount = _model.ContextWindowTokens });
-                Become(Compacting);
+                TransitionTo(SessionPhase.Compacting);
                 return;
             }
 
@@ -821,7 +870,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     private void Compacting()
     {
-        // Disable idle timeout while compacting — re-enabled in Become(Ready)
+        // Disable idle timeout while compacting — re-enabled on transition to Ready
         Context.SetReceiveTimeout(null);
         CommandSubscriptionMessages();
         CommandSnapshotMessages();
@@ -1020,12 +1069,76 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             }
             _buffer.Clear();
             FireLlmCall();
-            Become(Processing);
+            TransitionTo(SessionPhase.Processing);
         }
         else
         {
-            Become(Ready);
+            TransitionTo(SessionPhase.Ready);
         }
+    }
+
+    private static readonly TimeSpan PassivationGracePeriod = TimeSpan.FromSeconds(5);
+    private static readonly object PassivationTimerKey = new();
+
+    private void Passivating()
+    {
+        // Disable idle timeout — we're shutting down
+        Context.SetReceiveTimeout(null);
+
+        // Distillation completed — proceed to stop
+        // Registered BEFORE CommandSubscriptionMessages so it takes priority over the
+        // normal distillation handler (Akka first-match wins).
+        Command<SessionDistillationCompleted>(_ =>
+        {
+            _log.Info("Passivation distillation complete, stopping");
+            Timers.Cancel(PassivationTimerKey);
+            CompletePassivation();
+        });
+
+        CommandSubscriptionMessages();
+        CommandSnapshotMessages();
+
+        // Buffer any incoming user messages — they'll be available after rehydration
+        Command<SendUserMessage>(cmd =>
+        {
+            _log.Info("Buffering user message (passivation in progress)");
+            _buffer.Add(cmd);
+            TryReplyAck();
+        });
+
+        // Ignore stale processing/compaction messages
+        Command<ProcessingWatchdogExpired>(_ => { });
+        Command<CompactionWorkCompleted>(_ => { });
+        Command<CompactionWorkFailed>(_ => { });
+        Command<SpawnChildActorRequest>(msg => Sender.Tell(Context.ActorOf(msg.Props, msg.ActorName)));
+
+        // Timeout — stop even if distillation didn't finish
+        Command<PassivationTimeout>(_ =>
+        {
+            _log.Warning("Passivation grace period expired, stopping without distillation");
+            CompletePassivation();
+        });
+
+        // Delivery failures during passivation are ignored
+        Command<DeliveryFailed>(_ => { });
+
+        // Request final distillation from observer, or stop immediately
+        if (_observerActor is not null)
+        {
+            _observerActor.Tell(new DistillMemories());
+            Timers.StartSingleTimer(PassivationTimerKey, new PassivationTimeout(), PassivationGracePeriod);
+        }
+        else
+        {
+            CompletePassivation();
+        }
+    }
+
+    private void CompletePassivation()
+    {
+        _lifecycleObserver?.OnSessionDeactivated(_sessionId);
+        SaveSnapshot(_state.ToSnapshot());
+        Context.Stop(Self);
     }
 
     private TimeSpan GetCompactionTimeout()
@@ -1503,7 +1616,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 _log.Info("Compaction threshold reached ({InputTokens} tokens >= {Threshold} limit), starting compaction",
                     _lastInputTokenCount, _model.CompactionTokenLimit(_config.Tuning.CompactionThreshold));
                 Self.Tell(new CompactionTriggered { InputTokenCount = _lastInputTokenCount });
-                Become(Compacting);
+                TransitionTo(SessionPhase.Compacting);
                 return;
             }
 
@@ -1525,11 +1638,11 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             _buffer.Clear();
             _turnRecallCache = null; // New user input — resolve recall fresh
             FireLlmCall();
-            Become(Processing);
+            // Already in Processing — no transition needed, just fired a new LLM call
             return;
         }
 
-        Become(Ready);
+        TransitionTo(SessionPhase.Ready);
     }
 
     private void HandleDeliveryFailedWhenReady(DeliveryFailed msg)
@@ -1580,7 +1693,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         _state = _state.AddSystemNudge(BuildDeliveryFailureNudge(msg));
         _turnRecallCache = null; // Delivery feedback changed context — resolve recall fresh
         FireLlmCall();
-        Become(Processing);
+        TransitionTo(SessionPhase.Processing);
     }
 
     private static bool IsRetryableDeliveryFailure(DeliveryFailed msg)
@@ -2229,7 +2342,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             FireLlmCall(effectiveUserContent);
             _slashCommandSkillContent = null;
 
-            Become(Processing);
+            TransitionTo(SessionPhase.Processing);
             return true;
         }
 

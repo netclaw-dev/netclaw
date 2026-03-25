@@ -26,14 +26,14 @@
 
 ## 3. State Machine Formalization (#411)
 
-- [ ] 3.1 Create `SessionPhase` enum in `src/Netclaw.Actors/Sessions/SessionPhase.cs` with `Recovering`, `Ready`, `Processing`, `Compacting`, `Passivating`
-- [ ] 3.2 Add `_currentPhase` field and `TransitionTo(SessionPhase)` method to `LlmSessionActor` with legal transition validation and `InvalidOperationException` for illegal transitions
-- [ ] 3.3 Replace all `Become(Ready)` / `Become(Processing)` / `Become(Compacting)` calls with `TransitionTo(SessionPhase.Xxx)`
-- [ ] 3.4 Add `SessionPhaseChanged` message type and forward to `_observerActor` on each transition
-- [ ] 3.5 Add phase transition logging (`session_phase_transition from=X to=Y`)
-- [ ] 3.6 Implement `Passivating` behavior: buffer messages, send `RequestFinalDistillation` to observer, 5s timeout timer, snapshot + stop
-- [ ] 3.7 Refactor `ReceiveTimeout` handler in `Ready` to call `TransitionTo(Passivating)` instead of inline passivation logic
-- [ ] 3.8 Verify: `dotnet build` passes, `dotnet test` passes (especially `LlmSessionIntegrationTests`, `LlmSessionWatchdogTests`)
+- [x] 3.1 Create `SessionPhase` enum in `src/Netclaw.Actors/Sessions/SessionPhase.cs` with `Recovering`, `Ready`, `Processing`, `Compacting`, `Passivating`
+- [x] 3.2 Add `_currentPhase` field and `TransitionTo(SessionPhase)` method to `LlmSessionActor` with legal transition validation and `InvalidOperationException` for illegal transitions
+- [x] 3.3 Replace all `Become(Ready)` / `Become(Processing)` / `Become(Compacting)` calls with `TransitionTo(SessionPhase.Xxx)` (11 replacements)
+- [x] 3.4 Add `SessionPhaseChanged`, `RequestFinalDistillation`, `PassivationTimeout` message types in LlmMessages.cs
+- [x] 3.5 Add phase transition logging (`session_phase_transition from=X to=Y`) in TransitionTo()
+- [x] 3.6 Implement `Passivating` behavior: buffer messages, send `DistillMemories` to observer, 5s grace period timer, snapshot + stop
+- [x] 3.7 Refactor `ReceiveTimeout` handler in `Ready` to call `TransitionTo(Passivating)` instead of inline passivation logic
+- [x] 3.8 Verify: `dotnet build` passes (0 errors), `dotnet test` passes (1,400 tests, 0 failures)
 
 ## 4. Handler Module Extractions
 

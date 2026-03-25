@@ -169,3 +169,22 @@ internal sealed record RecallPlanningFailed
 {
     public required string Reason { get; init; }
 }
+
+/// <summary>
+/// Sent to child actors (e.g., observer) when the session changes phase.
+/// Enables child actors to react to lifecycle events (e.g., trigger
+/// final distillation when entering <see cref="SessionPhase.Passivating"/>).
+/// </summary>
+internal sealed record SessionPhaseChanged(SessionPhase Phase);
+
+/// <summary>
+/// Sent to the observer actor to request immediate memory distillation
+/// before the session stops during passivation.
+/// </summary>
+internal sealed record RequestFinalDistillation;
+
+/// <summary>
+/// Sent back from the passivation timeout timer when the observer
+/// does not complete distillation within the grace period.
+/// </summary>
+internal sealed record PassivationTimeout;
