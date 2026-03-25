@@ -70,7 +70,7 @@ public sealed record SessionConfig
     public static SessionConfig BindFromConfiguration(IConfigurationSection section)
     {
         var raw = section.Get<RawSessionConfig>() ?? new RawSessionConfig();
-        var tuning = section.GetSection("Tuning").Get<SessionTuning>() ?? new SessionTuning();
+        var tuning = BindTuning(section);
 
         return new SessionConfig
         {
@@ -82,6 +82,37 @@ public sealed record SessionConfig
             SidecarLlmTimeout = TimeSpan.FromSeconds(Math.Max(1, raw.SidecarLlmTimeoutSeconds)),
             Tuning = tuning,
         };
+    }
+
+    private static SessionTuning BindTuning(IConfigurationSection section)
+    {
+        var tuningSection = section.GetSection("Tuning");
+        var nested = tuningSection.Get<SessionTuning>() ?? new SessionTuning();
+
+        return nested with
+        {
+            CompactionThreshold = ResolveValue(tuningSection, section, nameof(SessionTuning.CompactionThreshold), nested.CompactionThreshold),
+            SnapshotInterval = ResolveValue(tuningSection, section, nameof(SessionTuning.SnapshotInterval), nested.SnapshotInterval),
+            KeepRecentToolResults = ResolveValue(tuningSection, section, nameof(SessionTuning.KeepRecentToolResults), nested.KeepRecentToolResults),
+            MaxInlineToolResultChars = ResolveValue(tuningSection, section, nameof(SessionTuning.MaxInlineToolResultChars), nested.MaxInlineToolResultChars),
+            DiscoveredToolRetentionTurns = ResolveValue(tuningSection, section, nameof(SessionTuning.DiscoveredToolRetentionTurns), nested.DiscoveredToolRetentionTurns),
+            DiscoveredToolMaxCount = ResolveValue(tuningSection, section, nameof(SessionTuning.DiscoveredToolMaxCount), nested.DiscoveredToolMaxCount),
+            KeepRecentMessages = ResolveValue(tuningSection, section, nameof(SessionTuning.KeepRecentMessages), nested.KeepRecentMessages),
+            TitleGenerationInterval = ResolveValue(tuningSection, section, nameof(SessionTuning.TitleGenerationInterval), nested.TitleGenerationInterval),
+            MemorySidecarsEnabled = ResolveValue(tuningSection, section, nameof(SessionTuning.MemorySidecarsEnabled), nested.MemorySidecarsEnabled),
+            DeterministicRetrievalEnabled = ResolveValue(tuningSection, section, nameof(SessionTuning.DeterministicRetrievalEnabled), nested.DeterministicRetrievalEnabled),
+        };
+    }
+
+    private static T ResolveValue<T>(IConfigurationSection preferredSection, IConfigurationSection fallbackSection, string key, T fallback)
+    {
+        if (preferredSection[key] is not null)
+            return preferredSection.GetValue<T>(key)!;
+
+        if (fallbackSection[key] is not null)
+            return fallbackSection.GetValue<T>(key)!;
+
+        return fallback;
     }
 
     /// <summary>

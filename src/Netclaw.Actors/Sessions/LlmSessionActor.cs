@@ -272,7 +272,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         SessionPhase.Ready => to is SessionPhase.Processing or SessionPhase.Compacting or SessionPhase.Passivating,
         SessionPhase.Processing => to is SessionPhase.Ready or SessionPhase.Compacting,
         SessionPhase.Compacting => to is SessionPhase.Ready or SessionPhase.Processing,
-        SessionPhase.Passivating => false, // terminal
+        SessionPhase.Passivating => to is SessionPhase.Ready or SessionPhase.Processing,
         _ => false
     };
 
@@ -309,77 +309,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         Command<SpawnChildActorRequest>(msg => Sender.Tell(Context.ActorOf(msg.Props, msg.ActorName)));
         Command<DeliveryFailed>(HandleDeliveryFailedWhenReady);
 
-        Command<SendUserMessage>(cmd =>
-        {
-            _deliveryRetry.Clear();
-            _currentTurnSource = cmd.Source;
-            _currentTrustContext = _trustContextDeriver?.Derive(cmd.Source);
-            BindTurnTelemetry(cmd.Source);
-            TurnLog().Info(
-                "turn_received channel={ChannelType} sender={SenderId} hasMedia={HasMedia} textChars={TextLength}",
-                cmd.Source?.ChannelType.ToWireValue() ?? "unknown",
-                cmd.Source?.SenderId ?? "unknown",
-                cmd.MediaReferences.Count > 0,
-                cmd.Content?.Length ?? 0);
-            _logActor?.Tell(cmd);
-            _observerActor?.Tell(cmd);
-
-            _turnState.ResetForNewTurn();
-            _discoveredToolCache.PrepareForNewTurn(
-                _availableTools, _baseToolCount,
-                _config.Tuning.DiscoveredToolRetentionTurns,
-                _config.Tuning.DiscoveredToolMaxCount,
-                _fullRegistry);
-
-            // Modality gate: strip unsupported media references
-            var mediaRefs = cmd.MediaReferences;
-            if (mediaRefs.Count > 0 && !_model.InputModalities.HasFlag(Configuration.ModelModality.Image))
-            {
-                var imageRefs = mediaRefs.Where(r => r.Modality == (int)MediaModality.Image).ToList();
-                if (imageRefs.Count > 0)
-                {
-                    _log.Info("Stripping {Count} image reference(s) — model does not support vision", imageRefs.Count);
-                    mediaRefs = mediaRefs.Where(r => r.Modality != (int)MediaModality.Image).ToList();
-
-                    EmitOutput(new TextOutput
-                    {
-                        SessionId = _sessionId,
-                        Text = "[Images removed — the current model does not support vision input]"
-                    }, OutputFilter.Text);
-                }
-            }
-
-            // If ALL content is images (no text) and model doesn't support vision, skip entirely
-            if (string.IsNullOrWhiteSpace(cmd.Content) && mediaRefs.Count == 0
-                && cmd.MediaReferences.Count > 0)
-            {
-                _log.Info("Skipping LLM call — message contained only unsupported media");
-                EmitOutput(new TextOutput
-                {
-                    SessionId = _sessionId,
-                    Text = "Your message contained only images, but the current model doesn't support vision. Please send a text message instead."
-                }, OutputFilter.Text);
-                EmitOutput(new TurnCompleted
-                {
-                    SessionId = _sessionId,
-                    TurnNumber = _state.TurnCount
-                });
-                TryReplyAck();
-                return;
-            }
-
-            var userContent = cmd.Content ?? string.Empty;
-
-            // Slash-command dispatch: if message starts with /, try to resolve a skill
-            if (TryHandleSlashCommand(userContent, mediaRefs))
-                return;
-
-            _state = _state.AddUserMessage(userContent, mediaRefs.Count > 0 ? mediaRefs : null);
-            TryReplyAck();
-            _recallManager.ResetForNewTurn(); // New user turn — resolve recall fresh
-            FireLlmCall(userContent);
-            TransitionTo(SessionPhase.Processing);
-        });
+        Command<SendUserMessage>(HandleIncomingUserMessage);
     }
 
     private void Processing()
@@ -994,25 +924,23 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         // Disable idle timeout — we're shutting down
         Context.SetReceiveTimeout(null);
 
-        // Distillation completed — proceed to stop
-        // Registered BEFORE CommandSubscriptionMessages so it takes priority over the
-        // normal distillation handler (Akka first-match wins).
-        Command<SessionDistillationCompleted>(_ =>
+        Command<SessionDistillationCompleted>(msg =>
         {
             _log.Info("Passivation distillation complete, stopping");
             Timers.Cancel(PassivationTimerKey);
+            HandleDistillationResult(msg);
             CompletePassivation();
         });
 
         CommandSubscriptionMessages();
         CommandSnapshotMessages();
 
-        // Buffer any incoming user messages — they'll be available after rehydration
         Command<SendUserMessage>(cmd =>
         {
-            _log.Info("Buffering user message (passivation in progress)");
-            _buffer.Add(cmd);
-            TryReplyAck();
+            _log.Info("Aborting passivation due to new user message");
+            Timers.Cancel(PassivationTimerKey);
+            TransitionTo(SessionPhase.Ready);
+            HandleIncomingUserMessage(cmd);
         });
 
         // Ignore stale processing/compaction messages
@@ -1028,13 +956,18 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             CompletePassivation();
         });
 
-        // Delivery failures during passivation are ignored
-        Command<DeliveryFailed>(_ => { });
+        Command<DeliveryFailed>(msg =>
+        {
+            _log.Info("Aborting passivation due to delivery feedback");
+            Timers.Cancel(PassivationTimerKey);
+            TransitionTo(SessionPhase.Ready);
+            HandleDeliveryFailedWhenReady(msg);
+        });
 
         // Request final distillation from observer, or stop immediately
         if (_observerActor is not null)
         {
-            _observerActor.Tell(new DistillMemories());
+            _observerActor.Tell(new DistillMemories(), Self);
             Timers.StartSingleTimer(PassivationTimerKey, new PassivationTimeout(), PassivationGracePeriod);
         }
         else
@@ -1179,8 +1112,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             }, OutputFilter.ToolCalls);
 
             // Duplicate tool call detection: hash tool name + args
-            var hashKey = $"{tc.Name}:{argsJson ?? "{}"}";
-            _turnState.TrackToolCall(hashKey);
+            _turnState.TrackToolCall(tc.Name, argsJson);
         }
 
         // Emit usage if present (intermediate turn)
@@ -1390,6 +1322,74 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         _state = _state.AddSystemNudge(DeliveryRetryHandler.BuildNudge(msg));
         _recallManager.ResetForNewTurn(); // Delivery feedback changed context — resolve recall fresh
         FireLlmCall();
+        TransitionTo(SessionPhase.Processing);
+    }
+
+    private void HandleIncomingUserMessage(SendUserMessage cmd)
+    {
+        _deliveryRetry.Clear();
+        _currentTurnSource = cmd.Source;
+        _currentTrustContext = _trustContextDeriver?.Derive(cmd.Source);
+        BindTurnTelemetry(cmd.Source);
+        TurnLog().Info(
+            "turn_received channel={ChannelType} sender={SenderId} hasMedia={HasMedia} textChars={TextLength}",
+            cmd.Source?.ChannelType.ToWireValue() ?? "unknown",
+            cmd.Source?.SenderId ?? "unknown",
+            cmd.MediaReferences.Count > 0,
+            cmd.Content?.Length ?? 0);
+        _logActor?.Tell(cmd);
+        _observerActor?.Tell(cmd);
+
+        _turnState.ResetForNewTurn();
+        _discoveredToolCache.PrepareForNewTurn(
+            _availableTools, _baseToolCount,
+            _config.Tuning.DiscoveredToolRetentionTurns,
+            _config.Tuning.DiscoveredToolMaxCount,
+            _fullRegistry);
+
+        var mediaRefs = cmd.MediaReferences;
+        if (mediaRefs.Count > 0 && !_model.InputModalities.HasFlag(Configuration.ModelModality.Image))
+        {
+            var imageRefs = mediaRefs.Where(r => r.Modality == (int)MediaModality.Image).ToList();
+            if (imageRefs.Count > 0)
+            {
+                _log.Info("Stripping {Count} image reference(s) — model does not support vision", imageRefs.Count);
+                mediaRefs = mediaRefs.Where(r => r.Modality != (int)MediaModality.Image).ToList();
+
+                EmitOutput(new TextOutput
+                {
+                    SessionId = _sessionId,
+                    Text = "[Images removed — the current model does not support vision input]"
+                }, OutputFilter.Text);
+            }
+        }
+
+        if (string.IsNullOrWhiteSpace(cmd.Content) && mediaRefs.Count == 0
+            && cmd.MediaReferences.Count > 0)
+        {
+            _log.Info("Skipping LLM call — message contained only unsupported media");
+            EmitOutput(new TextOutput
+            {
+                SessionId = _sessionId,
+                Text = "Your message contained only images, but the current model doesn't support vision. Please send a text message instead."
+            }, OutputFilter.Text);
+            EmitOutput(new TurnCompleted
+            {
+                SessionId = _sessionId,
+                TurnNumber = _state.TurnCount
+            });
+            TryReplyAck();
+            return;
+        }
+
+        var userContent = cmd.Content ?? string.Empty;
+        if (TryHandleSlashCommand(userContent, mediaRefs))
+            return;
+
+        _state = _state.AddUserMessage(userContent, mediaRefs.Count > 0 ? mediaRefs : null);
+        TryReplyAck();
+        _recallManager.ResetForNewTurn();
+        FireLlmCall(userContent);
         TransitionTo(SessionPhase.Processing);
     }
 
@@ -1752,7 +1752,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         if (_recallManager.TurnRecallCache is null)
         {
             var recallSw = Stopwatch.StartNew();
-            var resolved = _recallManager.ResolveForTurn(recallQuery, _state, _sessionId, _currentTurnSource, _memoryRecallCoordinator, _log);
+            var resolved = _recallManager.ResolveForTurn(recallQuery, _state, _sessionId, _currentTurnSource, _memoryRecallCoordinator);
             recallSw.Stop();
 
             resolved = _recallManager.ApplyProgressiveRecall(resolved, _log);

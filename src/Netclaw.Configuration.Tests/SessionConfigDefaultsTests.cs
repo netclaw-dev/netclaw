@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Configuration;
 using Xunit;
 
 namespace Netclaw.Configuration.Tests;
@@ -43,5 +44,42 @@ public sealed class SessionConfigDefaultsTests
     {
         var config = new SessionConfig();
         Assert.Equal(TimeSpan.FromMinutes(30), config.IdleTimeout);
+    }
+
+    [Fact]
+    public void BindFromConfiguration_supports_legacy_root_level_tuning_keys()
+    {
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Session:CompactionThreshold"] = "0.5",
+                ["Session:SnapshotInterval"] = "7",
+                ["Session:KeepRecentMessages"] = "4",
+                ["Session:TitleGenerationInterval"] = "2"
+            })
+            .Build();
+
+        var bound = SessionConfig.BindFromConfiguration(config.GetSection("Session"));
+
+        Assert.Equal(0.5, bound.Tuning.CompactionThreshold);
+        Assert.Equal(7, bound.Tuning.SnapshotInterval);
+        Assert.Equal(4, bound.Tuning.KeepRecentMessages);
+        Assert.Equal(2, bound.Tuning.TitleGenerationInterval);
+    }
+
+    [Fact]
+    public void BindFromConfiguration_prefers_nested_tuning_values_over_legacy_root_keys()
+    {
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Session:CompactionThreshold"] = "0.5",
+                ["Session:Tuning:CompactionThreshold"] = "0.8"
+            })
+            .Build();
+
+        var bound = SessionConfig.BindFromConfiguration(config.GetSection("Session"));
+
+        Assert.Equal(0.8, bound.Tuning.CompactionThreshold);
     }
 }

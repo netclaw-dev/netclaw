@@ -113,6 +113,55 @@
           "minimum": 1,
           "description": "Timeout in seconds for sidecar LLM calls (title, memory, compaction)."
         },
+        "CompactionThreshold": {
+          "type": "number",
+          "minimum": 0.1,
+          "maximum": 1.0,
+          "description": "Legacy root-level alias for Session.Tuning.CompactionThreshold."
+        },
+        "SnapshotInterval": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Legacy root-level alias for Session.Tuning.SnapshotInterval."
+        },
+        "KeepRecentToolResults": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Legacy root-level alias for Session.Tuning.KeepRecentToolResults."
+        },
+        "MaxInlineToolResultChars": {
+          "type": "integer",
+          "minimum": 100,
+          "description": "Legacy root-level alias for Session.Tuning.MaxInlineToolResultChars."
+        },
+        "DiscoveredToolRetentionTurns": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Legacy root-level alias for Session.Tuning.DiscoveredToolRetentionTurns."
+        },
+        "DiscoveredToolMaxCount": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Legacy root-level alias for Session.Tuning.DiscoveredToolMaxCount."
+        },
+        "KeepRecentMessages": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Legacy root-level alias for Session.Tuning.KeepRecentMessages."
+        },
+        "TitleGenerationInterval": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Legacy root-level alias for Session.Tuning.TitleGenerationInterval."
+        },
+        "MemorySidecarsEnabled": {
+          "type": "boolean",
+          "description": "Legacy root-level alias for Session.Tuning.MemorySidecarsEnabled."
+        },
+        "DeterministicRetrievalEnabled": {
+          "type": "boolean",
+          "description": "Legacy root-level alias for Session.Tuning.DeterministicRetrievalEnabled."
+        },
         "Tuning": {
           "type": "object",
           "description": "Internal tuning constants. Not part of the documented operator surface.",

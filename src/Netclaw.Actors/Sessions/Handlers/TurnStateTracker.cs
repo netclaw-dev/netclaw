@@ -11,7 +11,7 @@ internal sealed class TurnStateTracker
     private const int DuplicateToolThreshold = 3;
     private const double BudgetNudgeRatio = 0.75;
 
-    private readonly Dictionary<string, int> _toolCallHashes = new(StringComparer.Ordinal);
+    private readonly Dictionary<ToolCallFingerprint, int> _toolCallCounts = new();
 
     public int ToolCallCount { get; private set; }
     public int ToolIterationCount { get; private set; }
@@ -33,7 +33,7 @@ internal sealed class TurnStateTracker
         _postToolNudgeSent = false;
         _preToolEmptyResponseCount = 0;
         ForceNoToolsActive = false;
-        _toolCallHashes.Clear();
+        _toolCallCounts.Clear();
         _duplicateNudgeSent = false;
     }
 
@@ -45,7 +45,7 @@ internal sealed class TurnStateTracker
     {
         ToolCallCount = 0;
         ToolIterationCount = 0;
-        _toolCallHashes.Clear();
+        _toolCallCounts.Clear();
         _duplicateNudgeSent = false;
     }
 
@@ -64,13 +64,13 @@ internal sealed class TurnStateTracker
     // ── Tool call tracking ──
 
     /// <summary>
-    /// Record a tool call for duplicate detection. Call once per tool call
-    /// with a key of <c>"{toolName}:{argsJson}"</c>.
+    /// Record a tool call for duplicate detection.
     /// </summary>
-    public void TrackToolCall(string key)
+    public void TrackToolCall(string toolName, string? argumentsJson)
     {
-        _toolCallHashes.TryGetValue(key, out var count);
-        _toolCallHashes[key] = count + 1;
+        var fingerprint = new ToolCallFingerprint(toolName, argumentsJson ?? "{}");
+        _toolCallCounts.TryGetValue(fingerprint, out var count);
+        _toolCallCounts[fingerprint] = count + 1;
     }
 
     // ── Tool budget decisions ──
@@ -120,18 +120,14 @@ internal sealed class TurnStateTracker
         if (_duplicateNudgeSent)
             return null;
 
-        foreach (var (key, count) in _toolCallHashes)
+        foreach (var (fingerprint, count) in _toolCallCounts)
         {
             if (count < DuplicateToolThreshold) continue;
 
-            // Extract tool name from hash key format "toolName:{args}"
-            var colonIndex = key.IndexOf(':', StringComparison.Ordinal);
-            var toolName = colonIndex >= 0 ? key[..colonIndex] : key;
-
             _duplicateNudgeSent = true;
             return new DuplicateToolNudge(
-                toolName, count,
-                $"You have called the tool '{toolName}' with the same arguments {count} times this turn. "
+                fingerprint.ToolName, count,
+                $"You have called the tool '{fingerprint.ToolName}' with the same arguments {count} times this turn. "
                 + "This strongly indicates you are repeating work you already completed. "
                 + "Review your prior tool results — the information you need is already in the conversation. "
                 + "If the task is complete, produce your final response to the user.");
@@ -177,6 +173,8 @@ internal sealed class TurnStateTracker
             new InvalidOperationException("LLM produced an empty response after tool execution and follow-up nudge."));
     }
 }
+
+internal readonly record struct ToolCallFingerprint(string ToolName, string ArgumentsJson);
 
 // ── Result types ──
 

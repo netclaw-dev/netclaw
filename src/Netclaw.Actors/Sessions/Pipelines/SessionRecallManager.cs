@@ -30,8 +30,7 @@ internal sealed class SessionRecallManager
         SessionState state,
         SessionId sessionId,
         MessageSource? turnSource,
-        IMemoryRecallCoordinator coordinator,
-        ILoggingAdapter log)
+        IMemoryRecallCoordinator coordinator)
     {
         var query = string.IsNullOrWhiteSpace(recallQuery)
             ? state.FindLastUserMessage()?.Content ?? string.Empty
@@ -40,6 +39,8 @@ internal sealed class SessionRecallManager
         if (string.IsNullOrWhiteSpace(query))
             return new AutomaticRecallResult([]);
 
+        var audience = turnSource?.Audience
+            ?? SecurityPolicyDefaults.ResolveAudienceFromSessionId(sessionId.Value);
         var recentUser = state.History
             .Where(x => x.Role == Protocol.ChatRole.User && !SessionState.IsSystemNudge(x))
             .Select(x => x.Content)
@@ -52,9 +53,9 @@ internal sealed class SessionRecallManager
             query,
             recentUser,
             3,
-            Audience: turnSource?.Audience ?? TrustAudience.Public,
+            Audience: audience,
             Boundary: turnSource?.Boundary
-                      ?? SecurityPolicyDefaults.ResolveBoundaryFromSessionId(sessionId.Value, turnSource?.Audience ?? TrustAudience.Public),
+                      ?? SecurityPolicyDefaults.ResolveBoundaryFromSessionId(sessionId.Value, audience),
             RecentAssistantMessages: state.History
                 .Where(x => x.Role == Protocol.ChatRole.Assistant)
                 .Select(x => x.Content)

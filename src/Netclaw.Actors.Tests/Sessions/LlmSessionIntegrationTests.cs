@@ -1099,6 +1099,129 @@ public class LlmSessionIntegrationTests : TestKit
         await subscriberB.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3));
         await subscriberB.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
     }
+
+    [Fact]
+    public async Task New_user_message_during_passivation_aborts_shutdown_and_processes_message()
+    {
+        var sessionId = new SessionId("test-channel/passivation-new-message");
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("passivation-new-message-sub");
+
+        await sessionManager.Ask<SessionJoined>(new JoinSession
+        {
+            SessionId = sessionId,
+            Subscriber = subscriber,
+            Filter = OutputFilter.TextOnly
+        }, TimeSpan.FromSeconds(3));
+        await subscriber.ExpectMsgAsync<SessionJoined>();
+
+        var escapedId = Uri.EscapeDataString(sessionId.Value);
+        var childPath = $"/user/session-manager/{escapedId}";
+        var child = await Sys.ActorSelection(childPath).ResolveOne(TimeSpan.FromSeconds(3));
+        Watch(child);
+
+        child.Tell(new LeaveSession
+        {
+            SessionId = sessionId,
+            Subscriber = subscriber
+        });
+
+        child.Tell(ReceiveTimeout.Instance);
+
+        var ack = await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Interrupt passivation"
+        }, TimeSpan.FromSeconds(3));
+
+        Assert.Equal(sessionId, ack.SessionId);
+        await AwaitAssertAsync(() =>
+        {
+            Assert.Equal(1, _fakeChatClient.CallCount);
+            return Task.CompletedTask;
+        }, TimeSpan.FromSeconds(3), TimeSpan.FromMilliseconds(100));
+
+        var rejoined = await sessionManager.Ask<SessionJoined>(new JoinSession
+        {
+            SessionId = sessionId,
+            Subscriber = subscriber,
+            Filter = OutputFilter.TextOnly
+        }, TimeSpan.FromSeconds(3));
+
+        Assert.Equal(1, rejoined.TurnCount);
+        await subscriber.ExpectMsgAsync<SessionJoined>(TimeSpan.FromSeconds(3));
+        await ExpectNoMsgAsync(TimeSpan.FromMilliseconds(300));
+        Assert.DoesNotContain(sessionId.Value, _lifecycleObserver.DeactivatedSessionIds);
+    }
+
+    [Fact]
+    public async Task Delivery_feedback_during_passivation_aborts_shutdown_and_retries_latest_turn()
+    {
+        var sessionId = new SessionId("test-channel/passivation-delivery-feedback");
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("passivation-delivery-sub");
+
+        await sessionManager.Ask<SessionJoined>(new JoinSession
+        {
+            SessionId = sessionId,
+            Subscriber = subscriber,
+            Filter = OutputFilter.TextOnly
+        }, TimeSpan.FromSeconds(3));
+        await subscriber.ExpectMsgAsync<SessionJoined>();
+
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Original message"
+        }, TimeSpan.FromSeconds(3));
+
+        await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3));
+        var completed = await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
+
+        var escapedId = Uri.EscapeDataString(sessionId.Value);
+        var childPath = $"/user/session-manager/{escapedId}";
+        var child = await Sys.ActorSelection(childPath).ResolveOne(TimeSpan.FromSeconds(3));
+        Watch(child);
+
+        child.Tell(new LeaveSession
+        {
+            SessionId = sessionId,
+            Subscriber = subscriber
+        });
+
+        child.Tell(ReceiveTimeout.Instance);
+        sessionManager.Tell(new DeliveryFailed
+        {
+            SessionId = sessionId,
+            TurnNumber = completed.TurnNumber,
+            ChannelType = ChannelType.Slack,
+            FailureKind = DeliveryFailureKind.MessageTooLarge,
+            ErrorMessage = "msg_too_long"
+        });
+
+        await AwaitAssertAsync(() =>
+        {
+            Assert.True(_fakeChatClient.CallCount >= 2);
+            Assert.Contains(_fakeChatClient.ReceivedMessages, conversation =>
+                conversation.Any(msg =>
+                    msg.Role == Microsoft.Extensions.AI.ChatRole.User
+                    && msg.Text is not null
+                    && msg.Text.Contains("msg_too_long", StringComparison.OrdinalIgnoreCase)));
+            return Task.CompletedTask;
+        }, TimeSpan.FromSeconds(3), TimeSpan.FromMilliseconds(100));
+
+        var rejoined = await sessionManager.Ask<SessionJoined>(new JoinSession
+        {
+            SessionId = sessionId,
+            Subscriber = subscriber,
+            Filter = OutputFilter.TextOnly
+        }, TimeSpan.FromSeconds(3));
+
+        Assert.Equal(2, rejoined.TurnCount);
+        await subscriber.ExpectMsgAsync<SessionJoined>(TimeSpan.FromSeconds(3));
+        await ExpectNoMsgAsync(TimeSpan.FromMilliseconds(300));
+        Assert.DoesNotContain(sessionId.Value, _lifecycleObserver.DeactivatedSessionIds);
+    }
 }
 
 /// <summary>
