@@ -855,6 +855,59 @@ public class LlmSessionIntegrationTests : TestKit
     }
 
     [Fact]
+    public async Task Non_contiguous_TextContent_items_produce_single_TextOutput()
+    {
+        // Simulate a response where ToChatResponse() produces non-contiguous
+        // TextContent items: [text, tool_call, text]. This happens when the
+        // provider returns text both before and after tool calls in the same
+        // response message. Without consolidation, each TextContent would be
+        // emitted as a separate TextOutput → duplicate Slack posts.
+        _fakeChatClient.PlannedResponses.Enqueue(new AIContent[]
+        {
+            new TextContent("Part one"),
+            new FunctionCallContent("call-nc1", "browser_chrome_devtools/navigate_page",
+                new Dictionary<string, object?> { ["url"] = "https://example.com" }),
+            new TextContent("Part two")
+        });
+        _fakeToolExecutor.Results["browser_chrome_devtools/navigate_page"] = "page loaded";
+
+        var sessionId = new SessionId("test-channel/non-contiguous-text");
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("nc-sub");
+
+        // Subscribe to Text + ToolCalls only (not TextStreaming) to match
+        // Slack adapter behavior and avoid streaming delta noise.
+        await sessionManager.Ask<SessionJoined>(new JoinSession
+        {
+            SessionId = sessionId,
+            Subscriber = subscriber,
+            Filter = OutputFilter.Text | OutputFilter.ToolCalls
+        }, TimeSpan.FromSeconds(3));
+        await subscriber.ExpectMsgAsync<SessionJoined>();
+
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Do something with tools"
+        }, TimeSpan.FromSeconds(3));
+
+        // Should receive exactly ONE consolidated TextOutput for the preamble
+        var preamble = await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(5));
+        Assert.Contains("Part one", preamble.Text);
+        Assert.Contains("Part two", preamble.Text);
+
+        // Tool call output
+        var toolCall = await subscriber.ExpectMsgAsync<ToolCallOutput>(TimeSpan.FromSeconds(3));
+        Assert.Equal("browser_chrome_devtools/navigate_page", toolCall.ToolName);
+
+        // Final text response after tool execution
+        var finalText = await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(5));
+        Assert.Contains("fake", finalText.Text, StringComparison.OrdinalIgnoreCase);
+
+        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
+    }
+
+    [Fact]
     public async Task Session_recovers_state_after_actor_is_killed()
     {
         var sessionId = new SessionId("test-channel/recovery-test");

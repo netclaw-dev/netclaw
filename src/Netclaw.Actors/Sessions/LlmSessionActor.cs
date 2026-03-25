@@ -1078,23 +1078,21 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         // TextDeltaOutput was emitted to subscribers.
         // BufferFlush tells streaming adapters to flush their accumulated buffer
         // so the preamble is visible to users before the potentially long tool phase.
-        var hasPreambleText = lastMessage.Contents
+        // Consolidate all TextContent items into a single TextOutput to avoid
+        // duplicate Slack posts when ToChatResponse() produces non-contiguous
+        // TextContent items (e.g. [text, tool_call, text]).
+        var preambleText = string.Join("\n\n", lastMessage.Contents
             .OfType<TextContent>()
-            .Any(t => !string.IsNullOrWhiteSpace(t.Text));
+            .Select(t => t.Text)
+            .Where(t => !string.IsNullOrWhiteSpace(t)));
 
-        if (hasPreambleText)
+        if (preambleText.Length > 0)
         {
-            foreach (var content in lastMessage.Contents)
+            EmitOutput(new TextOutput
             {
-                if (content is TextContent text && !string.IsNullOrWhiteSpace(text.Text))
-                {
-                    EmitOutput(new TextOutput
-                    {
-                        SessionId = _sessionId,
-                        Text = text.Text
-                    }, OutputFilter.Text);
-                }
-            }
+                SessionId = _sessionId,
+                Text = preambleText
+            }, OutputFilter.Text);
             EmitOutput(new BufferFlush { SessionId = _sessionId }, OutputFilter.TextStreaming);
         }
 
@@ -2041,14 +2039,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         {
             switch (content)
             {
-                case TextContent text when includeText:
-                    EmitOutput(new TextOutput
-                    {
-                        SessionId = _sessionId,
-                        Text = text.Text ?? string.Empty
-                    }, OutputFilter.Text);
-                    break;
-
                 case TextReasoningContent thinking when includeThinking:
                     EmitOutput(new ThinkingOutput
                     {
@@ -2068,6 +2058,27 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                             : null
                     }, OutputFilter.ToolCalls);
                     break;
+            }
+        }
+
+        // Consolidate all TextContent items into a single TextOutput to avoid
+        // duplicate posts when ToChatResponse() produces non-contiguous
+        // TextContent items (e.g. [text, tool_call, text]). Emitted after
+        // thinking to preserve the original content ordering (thinking before text).
+        if (includeText)
+        {
+            var fullText = string.Join("\n\n", message.Contents
+                .OfType<TextContent>()
+                .Select(t => t.Text)
+                .Where(t => !string.IsNullOrWhiteSpace(t)));
+
+            if (fullText.Length > 0)
+            {
+                EmitOutput(new TextOutput
+                {
+                    SessionId = _sessionId,
+                    Text = fullText
+                }, OutputFilter.Text);
             }
         }
 
