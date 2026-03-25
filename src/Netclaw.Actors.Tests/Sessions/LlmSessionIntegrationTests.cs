@@ -83,6 +83,29 @@ public class LlmSessionIntegrationTests : TestKit
         services.AddSingleton<IModelCapabilityResolver>(new FakeCapabilityResolver());
         services.AddSingleton<TimeProvider>(_timeProvider);
         services.AddSingleton<ISessionLifecycleObserver>(_lifecycleObserver);
+
+        // Composite records for LlmSessionActor constructor
+        services.AddSingleton(sp => new SessionServices(
+            sp.GetRequiredService<IChatClientProvider>(),
+            sp.GetRequiredService<ISystemPromptProvider>(),
+            sp.GetService<IReadOnlyList<IContextLayerProvider>>() ?? Array.Empty<IContextLayerProvider>(),
+            sp.GetService<TimeProvider>() ?? TimeProvider.System,
+            sp.GetService<NetclawPaths>()));
+        services.AddSingleton(sp => new SessionToolServices(
+            sp.GetRequiredService<IToolExecutor>(),
+            sp.GetService<IToolAuditLogger>(),
+            sp.GetRequiredService<ToolRegistry>(),
+            sp.GetService<ToolAccessPolicy>(),
+            sp.GetService<Netclaw.Actors.Channels.TrustContextDeriver>(),
+            sp.GetService<Netclaw.Actors.Skills.SkillRegistry>()));
+        services.AddSingleton(sp => new SessionMemoryServices(
+            sp.GetService<IMemoryExtractor>() ?? NullMemoryExtractor.Instance,
+            sp.GetService<IMemoryRecallCoordinator>() ?? NullMemoryRecallCoordinator.Instance,
+            sp.GetService<IMemoryCheckpointSink>() ?? NullMemoryCheckpointSink.Instance,
+            sp.GetService<SQLiteMemoryStore>()));
+        services.AddSingleton(sp => new SessionObservability(
+            sp.GetService<Telemetry.ISessionMetrics>(),
+            sp.GetService<ISessionLifecycleObserver>()));
     }
 
     protected override void ConfigureAkka(AkkaConfigurationBuilder builder, IServiceProvider provider)

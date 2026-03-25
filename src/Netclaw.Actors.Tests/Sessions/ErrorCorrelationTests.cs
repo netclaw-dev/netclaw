@@ -7,7 +7,9 @@ using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Netclaw.Actors.Hosting;
+using Netclaw.Actors.Memory;
 using Netclaw.Actors.Protocol;
+using Netclaw.Actors.Sessions;
 using Netclaw.Configuration;
 using Xunit;
 using Xunit.Abstractions;
@@ -45,6 +47,20 @@ public sealed class ErrorCorrelationTests(ITestOutputHelper output) : TestKit(ou
         });
         services.AddSingleton<ISystemPromptProvider>(new StaticSystemPromptProvider("You are a test assistant."));
         services.AddSingleton<IModelCapabilityResolver>(new FakeCapabilityResolver());
+
+        // Composite records for LlmSessionActor constructor
+        services.AddSingleton(sp => new SessionServices(
+            sp.GetRequiredService<IChatClientProvider>(),
+            sp.GetRequiredService<ISystemPromptProvider>(),
+            sp.GetService<IReadOnlyList<IContextLayerProvider>>() ?? Array.Empty<IContextLayerProvider>(),
+            sp.GetService<TimeProvider>() ?? TimeProvider.System,
+            sp.GetService<NetclawPaths>()));
+        services.AddSingleton(sp => new SessionMemoryServices(
+            sp.GetService<IMemoryExtractor>() ?? NullMemoryExtractor.Instance,
+            sp.GetService<IMemoryRecallCoordinator>() ?? NullMemoryRecallCoordinator.Instance,
+            sp.GetService<IMemoryCheckpointSink>() ?? NullMemoryCheckpointSink.Instance,
+            sp.GetService<SQLiteMemoryStore>()));
+        services.AddSingleton(new SessionObservability(null, null));
     }
 
     protected override void ConfigureAkka(AkkaConfigurationBuilder builder, IServiceProvider provider)

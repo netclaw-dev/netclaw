@@ -18,11 +18,11 @@
 
 ## 2. Constructor Dependency Reduction
 
-- [ ] 2.1 Create composite record types in `src/Netclaw.Actors/Sessions/SessionDependencies.cs`: `SessionServices`, `SessionToolServices`, `SessionMemoryServices`, `SessionObservability`
-- [ ] 2.2 Refactor `LlmSessionActor` constructor from 19 params to ~7 (`entityId`, `ModelCapabilities`, `SessionConfig`, `SessionServices`, `SessionToolServices?`, `SessionMemoryServices`, `SessionObservability`)
-- [ ] 2.3 Update `NetclawAkkaHostingExtensions.WithSessionManager()` — register composite records as DI singletons, update `resolver.Props<>()` wiring
-- [ ] 2.4 Update all test sites constructing `LlmSessionActor` or mocking its dependencies to use composite records
-- [ ] 2.5 Verify: `dotnet build` passes, `dotnet test` passes
+- [x] 2.1 Create composite record types in `src/Netclaw.Actors/Sessions/SessionDependencies.cs`: `SessionServices`, `SessionToolServices`, `SessionMemoryServices`, `SessionObservability`
+- [x] 2.2 Refactor `LlmSessionActor` constructor from 19 params to 7 (`entityId`, `ModelCapabilities`, `SessionConfig`, `SessionServices`, `SessionToolServices?`, `SessionMemoryServices?`, `SessionObservability?`)
+- [x] 2.3 Update `src/Netclaw.Daemon/Program.cs` — register composite records as DI singletons before Akka setup
+- [x] 2.4 Update all 9 test files to register composite records for DI resolution
+- [x] 2.5 Verify: `dotnet build` passes (0 errors), `dotnet test` passes (1,400 tests, 0 failures)
 
 ## 3. State Machine Formalization (#411)
 

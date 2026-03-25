@@ -147,50 +147,37 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     public LlmSessionActor(
         string entityId,
-        IChatClientProvider clientProvider,
         ModelCapabilities modelCapabilities,
         SessionConfig config,
-        ISystemPromptProvider promptProvider,
-        IToolExecutor? toolExecutor = null,
-        IToolAuditLogger? auditLogger = null,
-        ToolRegistry? toolRegistry = null,
-        ToolAccessPolicy? toolAccessPolicy = null,
-        IMemoryExtractor? memoryExtractor = null,
-        IMemoryRecallCoordinator? memoryRecallCoordinator = null,
-        IMemoryCheckpointSink? memoryCheckpointSink = null,
-        TimeProvider? timeProvider = null,
-        IReadOnlyList<IContextLayerProvider>? contextLayers = null,
-        NetclawPaths? paths = null,
-        Telemetry.ISessionMetrics? sessionMetrics = null,
-        TrustContextDeriver? trustContextDeriver = null,
-        ISessionLifecycleObserver? lifecycleObserver = null,
-        Memory.SQLiteMemoryStore? memoryStore = null,
-        Skills.SkillRegistry? skillRegistry = null)
+        SessionServices services,
+        SessionToolServices? tools = null,
+        SessionMemoryServices? memory = null,
+        SessionObservability? observability = null)
     {
         _sessionId = new SessionId(entityId);
-        _sessionMetrics = sessionMetrics;
-        _lifecycleObserver = lifecycleObserver;
-        _clientProvider = clientProvider;
-        _chatClient = clientProvider.GetClient(ModelRole.Main);
+        _sessionMetrics = observability?.Metrics;
+        _lifecycleObserver = observability?.LifecycleObserver;
+        _clientProvider = services.ClientProvider;
+        _chatClient = services.ClientProvider.GetClient(ModelRole.Main);
         _compactionClient = modelCapabilities.CompactionModelId is not null
-            ? clientProvider.GetClient(ModelRole.Compaction)
+            ? services.ClientProvider.GetClient(ModelRole.Compaction)
             : _chatClient;
         _model = modelCapabilities;
         _config = config;
-        _promptProvider = promptProvider;
-        _contextLayers = contextLayers ?? [];
-        _skillRegistry = skillRegistry;
-        _toolExecutor = toolExecutor;
-        _auditLogger = auditLogger;
-        _toolAccessPolicy = toolAccessPolicy;
-        _memoryExtractor = memoryExtractor ?? NullMemoryExtractor.Instance;
-        _memoryRecallCoordinator = memoryRecallCoordinator ?? NullMemoryRecallCoordinator.Instance;
-        _memoryCheckpointSink = memoryCheckpointSink ?? NullMemoryCheckpointSink.Instance;
-        _memoryStore = memoryStore;
-        _timeProvider = timeProvider ?? TimeProvider.System;
-        _sessionsBasePath = paths?.SessionsDirectory;
-        _sessionLogsBasePath = paths?.SessionsDirectory;
-        _trustContextDeriver = trustContextDeriver;
+        _promptProvider = services.PromptProvider;
+        _contextLayers = services.ContextLayers;
+        _skillRegistry = tools?.SkillRegistry;
+        _toolExecutor = tools?.ToolExecutor;
+        _auditLogger = tools?.AuditLogger;
+        _toolAccessPolicy = tools?.AccessPolicy;
+        _memoryExtractor = memory?.MemoryExtractor ?? NullMemoryExtractor.Instance;
+        _memoryRecallCoordinator = memory?.RecallCoordinator ?? NullMemoryRecallCoordinator.Instance;
+        _memoryCheckpointSink = memory?.CheckpointSink ?? NullMemoryCheckpointSink.Instance;
+        _memoryStore = memory?.MemoryStore;
+        _timeProvider = services.TimeProvider;
+        _sessionsBasePath = services.Paths?.SessionsDirectory;
+        _sessionLogsBasePath = services.Paths?.SessionsDirectory;
+        _trustContextDeriver = tools?.TrustDeriver;
         PersistenceId = $"session-{entityId}";
 
         // Enrich logger with session context — all log messages automatically include SessionId
@@ -199,10 +186,10 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         // Load all non-MCP tools for initial LLM calls.
         // MCP tools are loaded dynamically via search_tools and can be retained for a
         // small number of future turns (configurable lease) to reduce rediscovery churn.
-        _fullRegistry = toolRegistry;
-        if (toolRegistry is not null)
+        _fullRegistry = tools?.ToolRegistry;
+        if (_fullRegistry is not null)
         {
-            _availableTools.AddRange(toolRegistry.GetAlwaysLoadedTools());
+            _availableTools.AddRange(_fullRegistry.GetAlwaysLoadedTools());
         }
         _baseToolCount = _availableTools.Count;
 

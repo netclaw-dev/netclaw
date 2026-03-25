@@ -584,6 +584,32 @@ static void ConfigureDaemonServices(
             sp.GetRequiredService<ILogger<CompositeCapabilityResolver>>());
     });
 
+    // Composite dependency records for LlmSessionActor DI resolution
+    services.AddSingleton(sp => new SessionServices(
+        sp.GetRequiredService<IChatClientProvider>(),
+        sp.GetRequiredService<ISystemPromptProvider>(),
+        sp.GetRequiredService<IReadOnlyList<IContextLayerProvider>>(),
+        sp.GetRequiredService<TimeProvider>(),
+        sp.GetService<NetclawPaths>()));
+
+    services.AddSingleton(sp => new SessionToolServices(
+        sp.GetRequiredService<IToolExecutor>(),
+        sp.GetService<IToolAuditLogger>(),
+        sp.GetRequiredService<ToolRegistry>(),
+        sp.GetService<ToolAccessPolicy>(),
+        sp.GetService<TrustContextDeriver>(),
+        sp.GetService<SkillRegistry>()));
+
+    services.AddSingleton(sp => new SessionMemoryServices(
+        sp.GetService<IMemoryExtractor>() ?? NullMemoryExtractor.Instance,
+        sp.GetService<IMemoryRecallCoordinator>() ?? NullMemoryRecallCoordinator.Instance,
+        sp.GetService<IMemoryCheckpointSink>() ?? NullMemoryCheckpointSink.Instance,
+        sp.GetService<SQLiteMemoryStore>()));
+
+    services.AddSingleton(sp => new SessionObservability(
+        sp.GetService<Netclaw.Actors.Telemetry.ISessionMetrics>(),
+        sp.GetService<ISessionLifecycleObserver>()));
+
     // Akka.NET actor system
     services.AddAkka("netclaw", (akkaBuilder, sp) =>
     {
