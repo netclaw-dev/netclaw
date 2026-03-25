@@ -105,10 +105,10 @@ public sealed class SessionMemoryObserverActor : ReceivePersistentActor
         });
 
         // Idle timer: self-trigger distillation when stream goes quiet
-        Command<ReceiveTimeout>(_ => TriggerDistillation(Context.Parent));
+        Command<ReceiveTimeout>(_ => TriggerDistillation(Context.Parent, replyWhenNoWork: false));
 
         // Explicit distillation request from parent (passivation)
-        Command<DistillMemories>(msg => TriggerDistillation(Sender));
+        Command<DistillMemories>(_ => TriggerDistillation(Sender, replyWhenNoWork: true));
 
         // Internal: mark distillation complete. On failure, re-enable hasNewContent for retry.
         Command<DistillationFinished>(msg =>
@@ -134,7 +134,7 @@ public sealed class SessionMemoryObserverActor : ReceivePersistentActor
         Context.SetReceiveTimeout(idleTimeout);
     }
 
-    private void TriggerDistillation(IActorRef replyTo)
+    private void TriggerDistillation(IActorRef replyTo, bool replyWhenNoWork)
     {
         if (_distilling)
         {
@@ -145,7 +145,8 @@ public sealed class SessionMemoryObserverActor : ReceivePersistentActor
         if (!_hasNewContent)
         {
             _log.Info("session_observer_distill_skipped reason=no_new_content");
-            replyTo.Tell(SessionDistillationCompleted.Empty);
+            if (replyWhenNoWork)
+                replyTo.Tell(SessionDistillationCompleted.Empty);
             return;
         }
 
@@ -153,7 +154,8 @@ public sealed class SessionMemoryObserverActor : ReceivePersistentActor
         if (string.IsNullOrWhiteSpace(transcriptText))
         {
             _log.Info("session_observer_distill_skipped reason=empty_transcript");
-            replyTo.Tell(SessionDistillationCompleted.Empty);
+            if (replyWhenNoWork)
+                replyTo.Tell(SessionDistillationCompleted.Empty);
             return;
         }
 
