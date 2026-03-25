@@ -721,8 +721,9 @@ static async Task RunAsync(string[] args)
 
     var app = webBuilder.Build();
 
-    // Fire-and-forget update check for interactive modes
-    if (mode is "chat" or "sessions")
+    // Fire-and-forget update check for non-TUI modes only.
+    // TUI modes should not run background checks that write to console
+    if (mode is "status" or "doctor" or "daemon" or "help")
         _ = UpdateCommand.BackgroundUpdateCheckAsync();
 
     await app.RunAsync();

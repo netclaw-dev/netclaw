@@ -10,8 +10,16 @@ public static class LoggingRegistrationExtensions
         var consoleEnabled = builder.Configuration.GetValue("Logging:Console:Enabled", false);
 
         builder.Logging.ClearProviders();
+        
+        // Guard rail: daemon should never write to console in production.
+        // All logging must go to file-only sinks to avoid colliding with CLI TUI.
         if (consoleEnabled)
-            builder.Logging.AddSimpleConsole(options => options.SingleLine = true);
+        {
+            // Log a one-time warning via stderr (only happens at startup)
+            Console.Error.WriteLine(
+                "[WARN] Console logging enabled in daemon - this is not supported in production. " +
+                "All logging should go to file. Disabling console logging.");
+        }
 
         // Always write to a rolling log file in ~/.netclaw/logs/
         var logsDir = Path.Combine(

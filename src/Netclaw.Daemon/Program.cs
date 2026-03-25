@@ -358,7 +358,7 @@ static void ConfigureDaemonServices(
     // Search backend selection
     var searchConfig = configuration.GetSection("Search")
         .Get<SearchConfig>() ?? new SearchConfig();
-    var searchBackend = CreateSearchBackend(searchConfig);
+    var searchBackend = CreateSearchBackend(searchConfig, sp.GetRequiredService<ILogger<SearchConfig>>());
 
     // Tool path deny-list: prevent agent tools from accessing secrets
     var toolPathPolicy = new ToolPathPolicy([paths.SecretsPath, paths.KeysDirectory]);
@@ -668,7 +668,7 @@ static void ConfigureDaemonServices(
     services.AddSingleton<IHostedService>(sp => sp.GetRequiredService<SessionRegistryShutdownService>());
 }
 
-static ISearchBackend? CreateSearchBackend(SearchConfig config)
+static ISearchBackend? CreateSearchBackend(SearchConfig config, ILogger<SearchConfig> logger)
 {
     var backend = config.Backend.ToLowerInvariant();
     switch (backend)
@@ -676,7 +676,7 @@ static ISearchBackend? CreateSearchBackend(SearchConfig config)
         case "brave":
             if (config.BraveApiKey is null || string.IsNullOrWhiteSpace(config.BraveApiKey.Value))
             {
-                Console.Error.WriteLine("warn: Brave Search configured but no API key provided (Search.BraveApiKey). Web search tool will not be registered.");
+                logger.LogWarning("Brave Search configured but no API key provided (Search.BraveApiKey). Web search tool will not be registered.");
                 return null;
             }
             return new BraveSearchBackend(config.BraveApiKey.Value);
@@ -684,7 +684,7 @@ static ISearchBackend? CreateSearchBackend(SearchConfig config)
         case "searxng":
             if (string.IsNullOrWhiteSpace(config.SearXngEndpoint))
             {
-                Console.Error.WriteLine("warn: SearXNG configured but no endpoint provided (Search.SearXngEndpoint). Web search tool will not be registered.");
+                logger.LogWarning("SearXNG configured but no endpoint provided (Search.SearXngEndpoint). Web search tool will not be registered.");
                 return null;
             }
             return new SearXngBackend(config.SearXngEndpoint);
@@ -693,7 +693,7 @@ static ISearchBackend? CreateSearchBackend(SearchConfig config)
             return new DuckDuckGoBackend();
 
         default:
-            Console.Error.WriteLine($"warn: Unknown search backend '{backend}'. Falling back to DuckDuckGo.");
+            logger.LogWarning("Unknown search backend {0}. Falling back to DuckDuckGo.", backend);
             return new DuckDuckGoBackend();
     }
 }
