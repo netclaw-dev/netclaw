@@ -32,12 +32,15 @@ public sealed class SessionMemoryObserverActor : ReceivePersistentActor
     private readonly SessionId _sessionId;
     private readonly IChatClient _client;
     private readonly TimeSpan _sidecarTimeout;
+    private readonly TimeProvider _timeProvider;
     private readonly ILoggingAdapter _log = Context.GetLogger();
 
     private readonly StringBuilder _transcript = new();
     private readonly HashSet<string> _proposedAnchors = new(StringComparer.OrdinalIgnoreCase);
     private bool _hasNewContent;
     private bool _distilling;
+    private bool _draining;
+    private IActorRef? _pendingPassivationReplyTo;
     private int _turnCount;
 
     public override string PersistenceId { get; }
@@ -46,18 +49,21 @@ public sealed class SessionMemoryObserverActor : ReceivePersistentActor
         SessionId sessionId,
         IChatClient client,
         TimeSpan idleTimeout,
-        TimeSpan sidecarTimeout) =>
-        Props.Create(() => new SessionMemoryObserverActor(sessionId, client, idleTimeout, sidecarTimeout));
+        TimeSpan sidecarTimeout,
+        TimeProvider? timeProvider = null) =>
+        Props.Create(() => new SessionMemoryObserverActor(sessionId, client, idleTimeout, sidecarTimeout, timeProvider));
 
     public SessionMemoryObserverActor(
         SessionId sessionId,
         IChatClient client,
         TimeSpan idleTimeout,
-        TimeSpan sidecarTimeout)
+        TimeSpan sidecarTimeout,
+        TimeProvider? timeProvider = null)
     {
         _sessionId = sessionId;
         _client = client;
         _sidecarTimeout = sidecarTimeout;
+        _timeProvider = timeProvider ?? TimeProvider.System;
 
         PersistenceId = $"memory-observer-{sessionId.Value}";
 
@@ -110,18 +116,45 @@ public sealed class SessionMemoryObserverActor : ReceivePersistentActor
         // Explicit distillation request from parent (passivation)
         Command<DistillMemories>(_ => TriggerDistillation(Sender, replyWhenNoWork: true));
 
+        // Phase change notifications from parent (sent by TransitionTo())
+        Command<SessionPhaseChanged>(msg =>
+        {
+            if (msg.Phase == SessionPhase.Passivating)
+            {
+                _draining = true;
+                Context.SetReceiveTimeout(null); // disable idle timer to prevent racing with DistillMemories
+                _log.Info("session_observer_draining reason=passivating");
+            }
+            else if (_draining)
+            {
+                // Passivation aborted (parent got a new user message or delivery feedback)
+                _draining = false;
+                _pendingPassivationReplyTo = null; // parent already aborted, no reply needed
+                Context.SetReceiveTimeout(idleTimeout); // re-enable idle timer
+                _log.Info("session_observer_resumed reason=passivation_aborted phase={Phase}", msg.Phase);
+            }
+        });
+
         // Internal: mark distillation complete. On failure, re-enable hasNewContent for retry.
         Command<DistillationFinished>(msg =>
         {
             _distilling = false;
             if (msg.Success)
                 _hasNewContent = false;
+
+            // If passivation requested distillation while we were already in-flight,
+            // send the completion signal now so the parent can stop.
+            if (_pendingPassivationReplyTo is not null)
+            {
+                _pendingPassivationReplyTo.Tell(SessionDistillationCompleted.Empty);
+                _pendingPassivationReplyTo = null;
+            }
         });
 
         // Internal: persist proposed anchors to journal (arrives from async task via self.Tell)
         Command<PersistAnchors>(msg =>
         {
-            var evt = new MemoriesDistilled(msg.Anchors, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+            var evt = new MemoriesDistilled(msg.Anchors, _timeProvider.GetUtcNow().ToUnixTimeMilliseconds());
             Persist(evt, e =>
             {
                 foreach (var anchor in e.Anchors)
@@ -138,7 +171,9 @@ public sealed class SessionMemoryObserverActor : ReceivePersistentActor
     {
         if (_distilling)
         {
-            _log.Info("session_observer_distill_skipped reason=already_in_progress");
+            _log.Info("session_observer_distill_deferred reason=already_in_progress");
+            if (replyWhenNoWork)
+                _pendingPassivationReplyTo = replyTo;
             return;
         }
 

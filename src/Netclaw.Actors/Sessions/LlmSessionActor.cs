@@ -222,7 +222,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                         _sessionId,
                         _compactionClient,
                         TimeSpan.FromSeconds(Math.Max(10, _config.MemoryObserverIdleSeconds)),
-                        distillationTimeout),
+                        distillationTimeout,
+                        _timeProvider),
                     "memory-observer");
             }
         });
