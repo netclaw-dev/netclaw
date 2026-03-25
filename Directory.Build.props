@@ -7,38 +7,21 @@
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
-    <VersionPrefix>0.8.0</VersionPrefix>
-    <PackageReleaseNotes>Netclaw v0.8.0 — Memory pipeline overhaul, trust context policy, Slack message delivery fix, and update signature verification
+    <VersionPrefix>0.8.1</VersionPrefix>
+    <PackageReleaseNotes>Netclaw v0.8.1 — Slack duplicate message fix, memory passivation hardening, file_edit tool, and LlmSessionActor decomposition
 
-**Memory**
+**Features**
 
-* Overhauled memory formation, recall, and curation — stopped raw tool outputs from polluting the memory database (previously ~71% of records were junk web_search/web_fetch dumps), cached recall resolution at turn boundaries instead of re-running on every tool-loop LLM call, and added exclusion-based progressive recall so each turn surfaces different relevant memories instead of repeating the same top results. ([#380](https://github.com/Aaronontheweb/netclaw/pull/380))
-* Added session-level memory observer actor — a persistent child actor watches the conversation stream and distills memories when the session goes idle (90s), replacing the previous per-turn observation that produced zero proposals. Proposals flow through the existing gate/curation pipeline, and the observer journals proposed anchors so its skip list survives across actor incarnations. ([#410](https://github.com/Aaronontheweb/netclaw/pull/410))
+* Added `file_edit` tool for surgical text replacements — enables targeted edits without full file rewrites. Supports literal text matching with an ambiguity guard that rejects non-unique matches, a `ReplaceAll` option for bulk replacements, and the same security enforcement as `file_write`. ([#404](https://github.com/Aaronontheweb/netclaw/pull/404), [#416](https://github.com/Aaronontheweb/netclaw/pull/416))
 
-**Security**
+**Bug Fixes**
 
-* Added minisign Ed25519 signature verification to `netclaw update` and all background update checks — the manifest is now verified against an embedded public key before trusting its contents. Missing or invalid signatures fail closed with no fallback to unsigned manifests. Background update checks now run on a 24-hour periodic timer and emit `UpdateAvailable` operational alerts via webhooks. ([#393](https://github.com/Aaronontheweb/netclaw/pull/393))
-* Added trust context policy with channel audiences and global read roots — operators can now configure per-channel audience overrides in `Slack.ChannelAudiences` (resolution: explicit channel ID, then `"dm"` key, then heuristic fallback). Skills and identity files are always readable regardless of audience profile via `GlobalReadRoots`. The init wizard now generates a `Security` section with smart defaults derived from deployment posture, and `netclaw doctor` enforces that both `Security` and `Tools` config sections are present. ([#387](https://github.com/Aaronontheweb/netclaw/pull/387))
+* Fixed duplicate Slack messages caused by Microsoft.Extensions.AI 10.4.1 preserving non-contiguous `TextContent` items — the Slack output handler now consolidates multiple `TextContent` items into a single `TextOutput` before posting, preventing repeated message fragments in threads. ([#413](https://github.com/Aaronontheweb/netclaw/pull/413), [#429](https://github.com/Aaronontheweb/netclaw/pull/429))
+* Fixed `SessionMemoryObserverActor` passivation protocol — resolved dead-lettered phase notifications, mid-distillation reply drops causing 5-second stalls, and a racing idle timer during passivation. Also replaced hardcoded `DateTimeOffset.UtcNow` with injected `TimeProvider` for testability. ([#423](https://github.com/Aaronontheweb/netclaw/pull/423), [#428](https://github.com/Aaronontheweb/netclaw/pull/428))
 
-**Slack**
+**Architecture**
 
-* Fixed Slack sessions receiving dropped final responses and duplicate message posts — the root cause was `TextDeltaOutput` (streaming) and `TextOutput` (final) both emitting under the same `OutputFilter.Text` flag. Added a new `OutputFilter.TextStreaming` flag so Slack subscribes only to final assembled text while the TUI continues to receive both streams. Also fixed slash-command IO failures silently falling through to the LLM instead of surfacing an error. ([#407](https://github.com/Aaronontheweb/netclaw/pull/407))
-
-**Skills**
-
-* Replaced keyword-based skill matching with LLM-driven description menu — the skill index context layer now presents skill descriptions directly to the LLM, which loads relevant skills via `file_read`. Removed the entire keyword matching pipeline including IDF scoring, keyword enrichment sidecar, keyword cache I/O, and auto-load state from `LlmSessionActor`. ([#380](https://github.com/Aaronontheweb/netclaw/pull/380))
-* Skill enrichment now runs in the background instead of blocking daemon startup, fixing startup and healthcheck timeouts on slower hardware or when multiple skills need enrichment. ([#407](https://github.com/Aaronontheweb/netclaw/pull/407))
-* **Breaking (operators with custom skill references):** System skills consolidated from 6 to 4 — `netclaw-diagnostics`, `netclaw-identity`, and `netclaw-manual` were removed and their content merged into `netclaw-operations` and the remaining skills. Operators referencing the old skill names in custom configurations or scripts will need to update those references. ([#380](https://github.com/Aaronontheweb/netclaw/pull/380))
-
-**CLI / TUI**
-
-* Fixed the provider manager TUI crashing when two providers shared the same type (e.g., two `openai-compatible` entries with different endpoints) — the display now shows all configured instances and supports adding additional instances of any type. ([#385](https://github.com/Aaronontheweb/netclaw/pull/385))
-* Renamed the `openai-compatible` provider display from "OpenAI-Compatible" to "llama.cpp / vLLM" to better describe the actual servers it supports. No changes to config format or internal type keys. ([#383](https://github.com/Aaronontheweb/netclaw/pull/383))
-
-**Dependencies**
-
-* Bumped Akka.NET to 1.5.63 — includes a critical Akka.Remote fix for stale ACKs causing irrecoverable quarantine after transient network disruptions. All users running clustered deployments should upgrade. ([#397](https://github.com/Aaronontheweb/netclaw/pull/397))
-* Bumped Microsoft.Extensions.AI packages to 10.4.1 and adapted to OpenAI SDK 2.9.1 breaking change where `ResponsesClient` no longer accepts a model parameter in its constructor. ([#392](https://github.com/Aaronontheweb/netclaw/pull/392))</PackageReleaseNotes>
+* Decomposed `LlmSessionActor` for composability — split `SessionConfig` into `ModelCapabilities`, `SessionTuning`, and `SessionConfig` value objects, reduced the actor's constructor from 19 to 7 parameters, formalized the session lifecycle with a `SessionPhase` enum-based state machine, and extracted 9 focused handler modules. ([#411](https://github.com/Aaronontheweb/netclaw/pull/411), [#414](https://github.com/Aaronontheweb/netclaw/pull/414), [#417](https://github.com/Aaronontheweb/netclaw/pull/417))</PackageReleaseNotes>
   </PropertyGroup>
   <PropertyGroup>
     <NetCoreTestVersion>net10.0</NetCoreTestVersion>
