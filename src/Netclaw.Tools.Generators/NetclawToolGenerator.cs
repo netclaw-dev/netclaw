@@ -214,8 +214,8 @@ public sealed class NetclawToolGenerator : IIncrementalGenerator
                 sb.AppendLine($"        var __{p.Name} = Netclaw.Tools.ToolArgumentHelper.GetString(arguments, \"{p.Name}\");");
                 if (p.IsRequired)
                 {
-                    sb.AppendLine($"        if (string.IsNullOrWhiteSpace(__{p.Name}))");
-                    sb.AppendLine($"            throw new System.ArgumentException(\"Required parameter '{p.Name}' is missing or empty.\");");
+                    sb.AppendLine($"        if (__{p.Name} is null)");
+                    sb.AppendLine($"            throw new System.ArgumentException(\"Required parameter '{p.Name}' is missing.\");");
                 }
             }
             else if (p.JsonType == "integer")
