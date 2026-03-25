@@ -301,13 +301,13 @@ public sealed class SessionMemoryObserverActorTests : TestKit
 
         gate.SetResult();
 
-        await parentProbe.ExpectMsgAsync<SessionDistillationCompleted>(TimeSpan.FromSeconds(5));
+        await parentProbe.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(500));
 
         observer.Tell(ReceiveTimeout.Instance);
-
         await AwaitAssertAsync(() => Assert.True(client.CallCount >= 2,
             $"Expected follow-up distillation to start, but CallCount={client.CallCount}"));
         await parentProbe.ExpectMsgAsync<SessionDistillationCompleted>(TimeSpan.FromSeconds(5));
+        await parentProbe.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(500));
     }
 
     [Fact]

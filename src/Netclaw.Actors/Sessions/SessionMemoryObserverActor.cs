@@ -185,17 +185,17 @@ public sealed class SessionMemoryObserverActor : ReceivePersistentActor
 
         _activeRun = null;
 
-        if (msg.FailureReason is null
-            && _pendingPassivation is { } pending
-            && msg.ContentVersion < pending.RequiredContentVersion)
+        if (msg.FailureReason is null && msg.ContentVersion < _contentVersion)
         {
             _log.Info(
-                "session_observer_distill_superseded runId={RunId} runVersion={RunVersion} requiredVersion={RequiredVersion}",
+                "session_observer_distill_superseded runId={RunId} runVersion={RunVersion} currentVersion={CurrentVersion}",
                 msg.RunId,
                 msg.ContentVersion,
-                pending.RequiredContentVersion);
+                _contentVersion);
 
-            StartDistillation(pending.ReplyTo, _transcript.ToString());
+            if (_pendingPassivation is { } pending)
+                StartDistillation(pending.ReplyTo, _transcript.ToString());
+
             return;
         }
 
