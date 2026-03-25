@@ -26,16 +26,22 @@ public sealed class ErrorCorrelationTests(ITestOutputHelper output) : TestKit(ou
     protected override void ConfigureServices(HostBuilderContext context, IServiceCollection services)
     {
         services.AddSingleton<IChatClientProvider>(new SingleClientProvider(_chatClient));
-        services.AddSingleton(new SessionConfig
+        services.AddSingleton(new ModelCapabilities
         {
             ModelId = "error-test-model",
             ContextWindowTokens = 128_000,
-            SnapshotInterval = 5,
-            TitleGenerationInterval = 0,
-            TurnLlmTimeoutSeconds = 10,
-            ToolExecutionTimeoutSeconds = 10,
-            SidecarLlmTimeoutSeconds = 10,
-            MemorySidecarsEnabled = false
+        });
+        services.AddSingleton(new SessionConfig
+        {
+            TurnLlmTimeout = TimeSpan.FromSeconds(10),
+            ToolExecutionTimeout = TimeSpan.FromSeconds(10),
+            SidecarLlmTimeout = TimeSpan.FromSeconds(10),
+            Tuning = new SessionTuning
+            {
+                SnapshotInterval = 5,
+                TitleGenerationInterval = 0,
+                MemorySidecarsEnabled = false,
+            }
         });
         services.AddSingleton<ISystemPromptProvider>(new StaticSystemPromptProvider("You are a test assistant."));
         services.AddSingleton<IModelCapabilityResolver>(new FakeCapabilityResolver());

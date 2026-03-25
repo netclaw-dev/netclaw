@@ -32,14 +32,20 @@ public class ToolExecutionIntegrationTests : TestKit
     protected override void ConfigureServices(HostBuilderContext context, IServiceCollection services)
     {
         services.AddSingleton<IChatClientProvider>(new SingleClientProvider(_fakeChatClient));
-        services.AddSingleton(new SessionConfig
+        services.AddSingleton(new ModelCapabilities
         {
             ModelId = "fake-model",
             ContextWindowTokens = 128_000,
-            SnapshotInterval = 5,
-            TitleGenerationInterval = 0,
-            MaxInlineToolResultChars = 120,
-            MemorySidecarsEnabled = false
+        });
+        services.AddSingleton(new SessionConfig
+        {
+            Tuning = new SessionTuning
+            {
+                SnapshotInterval = 5,
+                TitleGenerationInterval = 0,
+                MaxInlineToolResultChars = 120,
+                MemorySidecarsEnabled = false,
+            }
         });
         services.AddSingleton<ISystemPromptProvider>(new StaticSystemPromptProvider(
             "You are a test assistant with tools."));

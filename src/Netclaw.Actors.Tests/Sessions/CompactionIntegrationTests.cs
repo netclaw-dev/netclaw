@@ -31,20 +31,26 @@ public class CompactionIntegrationTests : TestKit
     protected override void ConfigureServices(HostBuilderContext context, IServiceCollection services)
     {
         services.AddSingleton<IChatClientProvider>(new SingleClientProvider(_fakeChatClient));
+        services.AddSingleton(new ModelCapabilities
+        {
+            ModelId = "fake-model",
+            ContextWindowTokens = 1000,
+        });
         // Small context window for easy threshold triggering in tests.
         // KeepRecentMessages=0 so minimal-history tests (1 turn) actually reduce message count.
         services.AddSingleton(new SessionConfig
         {
-            ModelId = "fake-model",
-            ContextWindowTokens = 1000,
-            CompactionThreshold = 0.75, // 750 tokens triggers compaction
-            SnapshotInterval = 5,
-            KeepRecentToolResults = 1,
-            KeepRecentMessages = 0,
-            TitleGenerationInterval = 0,
-            TurnLlmTimeoutSeconds = 1,
-            SidecarLlmTimeoutSeconds = 1,
-            MemorySidecarsEnabled = false
+            TurnLlmTimeout = TimeSpan.FromSeconds(1),
+            SidecarLlmTimeout = TimeSpan.FromSeconds(1),
+            Tuning = new SessionTuning
+            {
+                CompactionThreshold = 0.75, // 750 tokens triggers compaction
+                SnapshotInterval = 5,
+                KeepRecentToolResults = 1,
+                KeepRecentMessages = 0,
+                TitleGenerationInterval = 0,
+                MemorySidecarsEnabled = false,
+            }
         });
         services.AddSingleton<ISystemPromptProvider>(new StaticSystemPromptProvider(
             "You are a test assistant."));

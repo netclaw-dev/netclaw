@@ -29,14 +29,20 @@ public class SubAgentSpawnIntegrationTests : TestKit
     protected override void ConfigureServices(HostBuilderContext context, IServiceCollection services)
     {
         services.AddSingleton<IChatClientProvider>(_clientProvider);
-        services.AddSingleton(new SessionConfig
+        services.AddSingleton(new ModelCapabilities
         {
             ModelId = "fake-model",
             ContextWindowTokens = 128_000,
-            SnapshotInterval = 5,
-            TitleGenerationInterval = 0,
-            ToolExecutionTimeoutSeconds = 10,
-            MemorySidecarsEnabled = false
+        });
+        services.AddSingleton(new SessionConfig
+        {
+            ToolExecutionTimeout = TimeSpan.FromSeconds(10),
+            Tuning = new SessionTuning
+            {
+                SnapshotInterval = 5,
+                TitleGenerationInterval = 0,
+                MemorySidecarsEnabled = false,
+            }
         });
         services.AddSingleton<ISystemPromptProvider>(new StaticSystemPromptProvider(
             "You are a test assistant with subagent support."));

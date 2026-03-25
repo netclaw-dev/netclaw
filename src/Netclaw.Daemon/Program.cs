@@ -321,20 +321,12 @@ static void ConfigureDaemonServices(
     var detected = ResolveStartupCapabilities(
         models.Main.ModelId, daemonLogLevel, mainProviderType, ollamaEndpoint, openAiCompatibleEndpoint, openAiCompatibleApiKey);
 
-    var (inputModalities, outputModalities, contextWindow) =
-        ModelCapabilityResolution.ResolveSessionConfig(models.Main, detected);
+    var modelCapabilities = ModelCapabilityResolution.ResolveModelCapabilities(models, detected);
+    services.AddSingleton(modelCapabilities);
 
-    // Session config: bind defaults from config section, overlay model-derived values
-    var sessionConfig = configuration.GetSection("Session").Get<SessionConfig>() ?? new SessionConfig();
-    var resolvedSessionConfig = sessionConfig with
-    {
-        ModelId = models.Main.ModelId,
-        ContextWindowTokens = contextWindow,
-        CompactionModelId = models.Compaction?.ModelId,
-        InputModalities = inputModalities,
-        OutputModalities = outputModalities,
-    };
-    services.AddSingleton(resolvedSessionConfig);
+    // Session config: bind operator-facing settings from config section
+    var sessionConfig = SessionConfig.BindFromConfiguration(configuration.GetSection("Session"));
+    services.AddSingleton(sessionConfig);
 
     // Tools (auto-bound, no required properties)
     var toolConfig = configuration.GetSection("Tools")

@@ -39,16 +39,22 @@ public class LlmSessionIntegrationTests : TestKit
     protected override void ConfigureServices(HostBuilderContext context, IServiceCollection services)
     {
         services.AddSingleton<IChatClientProvider>(new SingleClientProvider(_fakeChatClient));
-        services.AddSingleton(new SessionConfig
+        services.AddSingleton(new ModelCapabilities
         {
             ModelId = "fake-model",
             ContextWindowTokens = 128_000,
-            SnapshotInterval = 5,
+        });
+        services.AddSingleton(new SessionConfig
+        {
             IdleTimeout = TimeSpan.FromMinutes(1),
-            TitleGenerationInterval = 0,
-            MemorySidecarsEnabled = false,
-            DiscoveredToolRetentionTurns = 3,
-            DiscoveredToolMaxCount = 12
+            Tuning = new SessionTuning
+            {
+                SnapshotInterval = 5,
+                TitleGenerationInterval = 0,
+                MemorySidecarsEnabled = false,
+                DiscoveredToolRetentionTurns = 3,
+                DiscoveredToolMaxCount = 12,
+            }
         });
         services.AddSingleton<ISystemPromptProvider>(new StaticSystemPromptProvider(
             "You are a test assistant."));
@@ -63,7 +69,7 @@ public class LlmSessionIntegrationTests : TestKit
             sp.GetRequiredService<IChatClientProvider>(),
             sp.GetRequiredService<SidecarRecallPlanner>(),
             sp.GetRequiredService<RecallPlanGate>(),
-            sp.GetRequiredService<SessionConfig>()));
+            sessionConfig: sp.GetRequiredService<SessionConfig>()));
 
         var registry = new ToolRegistry();
         registry.Register(new McpToolAdapter(

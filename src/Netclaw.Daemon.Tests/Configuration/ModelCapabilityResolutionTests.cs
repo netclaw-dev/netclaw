@@ -7,17 +7,20 @@ namespace Netclaw.Daemon.Tests.Configuration;
 public sealed class ModelCapabilityResolutionTests
 {
     [Fact]
-    public void ResolveSessionConfig_UsesConfiguredContextWindowAsClamp()
+    public void ResolveModelCapabilities_UsesConfiguredContextWindowAsClamp()
     {
-        var model = new ModelReference
+        var models = new ModelSelection
         {
-            ContextWindow = 32768,
-            InputModalities = ModelModality.Text,
-            OutputModalities = ModelModality.Text
+            Main = new ModelReference
+            {
+                ContextWindow = 32768,
+                InputModalities = ModelModality.Text,
+                OutputModalities = ModelModality.Text
+            }
         };
         var detected = new ResolvedModelCapabilities("model", ModelModality.Text, ModelModality.Text, 65536);
 
-        var result = ModelCapabilityResolution.ResolveSessionConfig(model, detected);
+        var result = ModelCapabilityResolution.ResolveModelCapabilities(models, detected);
 
         Assert.Equal(32768, result.ContextWindowTokens);
         Assert.Equal(ModelModality.Text, result.InputModalities);
@@ -25,45 +28,54 @@ public sealed class ModelCapabilityResolutionTests
     }
 
     [Fact]
-    public void ResolveSessionConfig_ThrowsWhenConfiguredContextExceedsDetectedWindow()
+    public void ResolveModelCapabilities_ThrowsWhenConfiguredContextExceedsDetectedWindow()
     {
-        var model = new ModelReference
+        var models = new ModelSelection
         {
-            ContextWindow = 131072,
-            InputModalities = ModelModality.Text,
-            OutputModalities = ModelModality.Text
+            Main = new ModelReference
+            {
+                ContextWindow = 131072,
+                InputModalities = ModelModality.Text,
+                OutputModalities = ModelModality.Text
+            }
         };
         var detected = new ResolvedModelCapabilities("model", ModelModality.Text, ModelModality.Text, 65536);
 
         var ex = Assert.Throws<InvalidOperationException>(() =>
-            ModelCapabilityResolution.ResolveSessionConfig(model, detected));
+            ModelCapabilityResolution.ResolveModelCapabilities(models, detected));
 
         Assert.Contains("ContextWindow", ex.Message);
         Assert.Contains("65536", ex.Message);
     }
 
     [Fact]
-    public void ResolveSessionConfig_StillValidatesConfiguredContextWhenModalitiesAreManual()
+    public void ResolveModelCapabilities_StillValidatesConfiguredContextWhenModalitiesAreManual()
     {
-        var model = new ModelReference
+        var models = new ModelSelection
         {
-            ContextWindow = 131072,
-            InputModalities = ModelModality.Text | ModelModality.Image,
-            OutputModalities = ModelModality.Text
+            Main = new ModelReference
+            {
+                ContextWindow = 131072,
+                InputModalities = ModelModality.Text | ModelModality.Image,
+                OutputModalities = ModelModality.Text
+            }
         };
         var detected = new ResolvedModelCapabilities("model", ModelModality.Text, ModelModality.Text, 65536);
 
         Assert.Throws<InvalidOperationException>(() =>
-            ModelCapabilityResolution.ResolveSessionConfig(model, detected));
+            ModelCapabilityResolution.ResolveModelCapabilities(models, detected));
     }
 
     [Fact]
-    public void ResolveSessionConfig_UsesDetectedContextWhenNoClampConfigured()
+    public void ResolveModelCapabilities_UsesDetectedContextWhenNoClampConfigured()
     {
-        var model = new ModelReference();
+        var models = new ModelSelection
+        {
+            Main = new ModelReference()
+        };
         var detected = new ResolvedModelCapabilities("model", ModelModality.Text | ModelModality.Image, ModelModality.Text, 65536);
 
-        var result = ModelCapabilityResolution.ResolveSessionConfig(model, detected);
+        var result = ModelCapabilityResolution.ResolveModelCapabilities(models, detected);
 
         Assert.Equal(65536, result.ContextWindowTokens);
         Assert.Equal(ModelModality.Text | ModelModality.Image, result.InputModalities);

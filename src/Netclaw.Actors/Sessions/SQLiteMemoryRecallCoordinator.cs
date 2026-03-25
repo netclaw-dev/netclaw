@@ -13,10 +13,12 @@ public sealed class SQLiteMemoryRecallCoordinator(
     IChatClientProvider? clientProvider = null,
     SidecarRecallPlanner? sidecarPlanner = null,
     RecallPlanGate? recallPlanGate = null,
+    SessionTuning? sessionTuning = null,
     SessionConfig? sessionConfig = null) : IMemoryRecallCoordinator
 {
     private readonly SidecarRecallPlanner _sidecarPlanner = sidecarPlanner ?? new SidecarRecallPlanner();
     private readonly RecallPlanGate _recallPlanGate = recallPlanGate ?? new RecallPlanGate();
+    private readonly SessionTuning _sessionTuning = sessionTuning ?? new SessionTuning();
     private readonly SessionConfig _sessionConfig = sessionConfig ?? new SessionConfig();
     private readonly DeterministicRetrievalRequestPlanner _deterministicPlanner = new();
     private readonly DeterministicCandidateSelector _candidateSelector = new();
@@ -27,7 +29,7 @@ public sealed class SQLiteMemoryRecallCoordinator(
         {
             var normalizedRequest = NormalizeRequest(request);
 
-            if (_sessionConfig.DeterministicRetrievalEnabled)
+            if (_sessionTuning.DeterministicRetrievalEnabled)
             {
                 DeterministicRetrievalRequestPlan deterministicPlan;
                 try
@@ -87,7 +89,7 @@ public sealed class SQLiteMemoryRecallCoordinator(
                 return new AutomaticRecallResult(deterministicItems);
             }
 
-            if (!_sessionConfig.MemorySidecarsEnabled)
+            if (!_sessionTuning.MemorySidecarsEnabled)
                 return new AutomaticRecallResult([]);
 
             var domain = string.IsNullOrWhiteSpace(normalizedRequest.HardScopeOverride)
@@ -215,7 +217,7 @@ public sealed class SQLiteMemoryRecallCoordinator(
         if (clientProvider is null)
             return null;
 
-        if (!_sessionConfig.MemorySidecarsEnabled)
+        if (!_sessionTuning.MemorySidecarsEnabled)
             return null;
 
         var plannerRequest = _sidecarPlanner.BuildRequest(
@@ -229,7 +231,7 @@ public sealed class SQLiteMemoryRecallCoordinator(
             8,
             maxItems);
 
-        var timeout = TimeSpan.FromSeconds(Math.Max(1, _sessionConfig.SidecarLlmTimeoutSeconds));
+        var timeout = _sessionConfig.SidecarLlmTimeout;
         var plan = await SessionSidecarRunner.RunJsonAsync<RecallQueryPlan>(
             clientProvider.GetClient(Configuration.ModelRole.Compaction),
             MemorySidecarPromptBuilder.BuildRecallPlanningSystemPrompt(),

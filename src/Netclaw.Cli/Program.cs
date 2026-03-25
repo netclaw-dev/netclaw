@@ -149,11 +149,20 @@ static async Task RunAsync(string[] args)
                     .AddEnvironmentVariables("NETCLAW_");
                 var initConfig = configBuilder.Build();
 
+                return SessionConfig.BindFromConfiguration(initConfig.GetSection("Session"));
+            });
+            builder.Services.AddSingleton(sp =>
+            {
+                var configBuilder = new ConfigurationBuilder()
+                    .AddJsonFile(initPaths.NetclawConfigPath, optional: true, reloadOnChange: false)
+                    .AddJsonFile(initPaths.SecretsPath, optional: true, reloadOnChange: false)
+                    .AddEnvironmentVariables("NETCLAW_");
+                var initConfig = configBuilder.Build();
+
                 var models = initConfig.GetSection("Models")
                     .Get<ModelSelection>() ?? new ModelSelection();
 
-                var sessionConfig = initConfig.GetSection("Session").Get<SessionConfig>() ?? new SessionConfig();
-                return sessionConfig with
+                return new ModelCapabilities
                 {
                     ModelId = models.Main.ModelId,
                     ContextWindowTokens = models.Main.ContextWindow ?? 32_768,
@@ -1341,9 +1350,10 @@ static void ConfigureCliChatServices(IServiceCollection services, IConfiguration
     var models = configuration.GetSection("Models")
         .Get<ModelSelection>() ?? new ModelSelection();
 
-    // Session config: bind defaults from config section, overlay model-derived values
-    var sessionConfig = configuration.GetSection("Session").Get<SessionConfig>() ?? new SessionConfig();
-    services.AddSingleton(sessionConfig with
+    // Session config: bind operator-facing settings
+    var sessionConfig = SessionConfig.BindFromConfiguration(configuration.GetSection("Session"));
+    services.AddSingleton(sessionConfig);
+    services.AddSingleton(new ModelCapabilities
     {
         ModelId = models.Main.ModelId,
         ContextWindowTokens = models.Main.ContextWindow ?? 32_768,

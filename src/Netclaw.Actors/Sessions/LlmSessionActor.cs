@@ -36,6 +36,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     private readonly SessionId _sessionId;
     private readonly IChatClient _chatClient;
     private readonly IChatClient _compactionClient;
+    private readonly ModelCapabilities _model;
     private readonly SessionConfig _config;
     private readonly ISystemPromptProvider _promptProvider;
     private readonly IReadOnlyList<IContextLayerProvider> _contextLayers;
@@ -147,6 +148,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     public LlmSessionActor(
         string entityId,
         IChatClientProvider clientProvider,
+        ModelCapabilities modelCapabilities,
         SessionConfig config,
         ISystemPromptProvider promptProvider,
         IToolExecutor? toolExecutor = null,
@@ -170,9 +172,10 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         _lifecycleObserver = lifecycleObserver;
         _clientProvider = clientProvider;
         _chatClient = clientProvider.GetClient(ModelRole.Main);
-        _compactionClient = config.CompactionModelId is not null
+        _compactionClient = modelCapabilities.CompactionModelId is not null
             ? clientProvider.GetClient(ModelRole.Compaction)
             : _chatClient;
+        _model = modelCapabilities;
         _config = config;
         _promptProvider = promptProvider;
         _contextLayers = contextLayers ?? [];
@@ -249,7 +252,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
                 // Distillation processes a full transcript — allow 5x normal sidecar timeout
                 // for slower local models (e.g., Qwen 3.5 27B)
-                var distillationTimeout = TimeSpan.FromSeconds(Math.Max(1, _config.SidecarLlmTimeoutSeconds) * 5);
+                var distillationTimeout = TimeSpan.FromTicks(_config.SidecarLlmTimeout.Ticks * 5);
                 _observerActor = Context.ActorOf(
                     SessionMemoryObserverActor.CreateProps(
                         _sessionId,
@@ -323,7 +326,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
             // Modality gate: strip unsupported media references
             var mediaRefs = cmd.MediaReferences;
-            if (mediaRefs.Count > 0 && !_config.InputModalities.HasFlag(Configuration.ModelModality.Image))
+            if (mediaRefs.Count > 0 && !_model.InputModalities.HasFlag(Configuration.ModelModality.Image))
             {
                 var imageRefs = mediaRefs.Where(r => r.Modality == (int)MediaModality.Image).ToList();
                 if (imageRefs.Count > 0)
@@ -740,7 +743,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
                 // Use the configured context window as the token count estimate since
                 // the provider rejected the request without returning usage stats.
-                Self.Tell(new CompactionTriggered { InputTokenCount = _config.ContextWindowTokens });
+                Self.Tell(new CompactionTriggered { InputTokenCount = _model.ContextWindowTokens });
                 Become(Compacting);
                 return;
             }
@@ -761,8 +764,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 msg.OperationName, msg.OperationId);
 
             var timeout = msg.OperationName is "tool-execution"
-                ? TimeSpan.FromSeconds(Math.Max(1, _config.ToolExecutionTimeoutSeconds))
-                : TimeSpan.FromSeconds(Math.Max(1, _config.TurnLlmTimeoutSeconds));
+                ? _config.ToolExecutionTimeout
+                : _config.TurnLlmTimeout;
 
             var timeoutCause = new TimeoutException(
                 $"Session processing operation '{msg.OperationName}' exceeded watchdog timeout of {timeout.TotalSeconds:F0}s");
@@ -882,10 +885,10 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             _ = ExecuteCompactionAsync(
                 stateSnapshot,
                 msg.InputTokenCount,
-                _config.KeepRecentToolResults,
-                _config.KeepRecentMessages,
-                _config.ContextWindowTokens,
-                TimeSpan.FromSeconds(Math.Max(1, _config.SidecarLlmTimeoutSeconds)),
+                _config.Tuning.KeepRecentToolResults,
+                _config.Tuning.KeepRecentMessages,
+                _model.ContextWindowTokens,
+                _config.SidecarLlmTimeout,
                 timeout,
                 compactionClient,
                 self,
@@ -954,7 +957,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                     MessagesAfter = _state.History.Count,
                     ToolResultsCleared = msg.ClearedCount > 0,
                     Summarized = !string.IsNullOrWhiteSpace(msg.Summary),
-                    ContextWindowTokens = _config.ContextWindowTokens,
+                    ContextWindowTokens = _model.ContextWindowTokens,
                     PreCompactionInputTokens = msg.PreCompactionInputTokens,
                     KeepCountUsed = msg.KeepCountUsed
                 });
@@ -1039,8 +1042,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     }
 
     private TimeSpan GetCompactionTimeout()
-        => TimeSpan.FromSeconds(Math.Max(1,
-            Math.Max(_config.TurnLlmTimeoutSeconds, _config.SidecarLlmTimeoutSeconds)));
+        => _config.TurnLlmTimeout > _config.SidecarLlmTimeout
+            ? _config.TurnLlmTimeout
+            : _config.SidecarLlmTimeout;
 
     private bool IsCurrentCompactionOperation(long operationId)
         => _processingOperationName == "compaction" && _processingOperationId == operationId;
@@ -1158,7 +1162,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     /// </summary>
     private void MaybeGenerateTitle()
     {
-        var interval = _config.TitleGenerationInterval;
+        var interval = _config.Tuning.TitleGenerationInterval;
         if (interval <= 0)
             return;
 
@@ -1171,7 +1175,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         var self = Self;
         var client = _compactionClient;
         var log = _log;
-        var timeout = TimeSpan.FromSeconds(Math.Max(1, _config.SidecarLlmTimeoutSeconds));
+        var timeout = _config.SidecarLlmTimeout;
 
         _ = GenerateTitleAsync(client, history, self, log, timeout);
     }
@@ -1272,7 +1276,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         var history = _state.History;
         var self = Self;
         var client = _compactionClient;
-        var timeout = TimeSpan.FromSeconds(Math.Max(1, _config.SidecarLlmTimeoutSeconds));
+        var timeout = _config.SidecarLlmTimeout;
 
         _ = InvokeMemoryExtractionCoreAsync(client, history, self, timeout);
     }
@@ -1397,8 +1401,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         var auditLogger = _auditLogger;
         var tp = _timeProvider;
         var sessionDir = GetSessionDirectory();
-        var maxInlineToolResultChars = _config.MaxInlineToolResultChars;
-        var toolExecutionTimeout = TimeSpan.FromSeconds(Math.Max(1, _config.ToolExecutionTimeoutSeconds));
+        var maxInlineToolResultChars = _config.Tuning.MaxInlineToolResultChars;
+        var toolExecutionTimeout = _config.ToolExecutionTimeout;
 
         StartProcessingWatchdog("tool-execution", toolExecutionTimeout);
 
@@ -1510,7 +1514,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             if (ShouldCompact())
             {
                 _log.Info("Compaction threshold reached ({InputTokens} tokens >= {Threshold} limit), starting compaction",
-                    _lastInputTokenCount, _config.CompactionTokenLimit);
+                    _lastInputTokenCount, _model.CompactionTokenLimit(_config.Tuning.CompactionThreshold));
                 Self.Tell(new CompactionTriggered { InputTokenCount = _lastInputTokenCount });
                 Become(Compacting);
                 return;
@@ -1630,8 +1634,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     private bool ShouldCompact()
     {
-        return _config.CompactionTokenLimit > 0
-            && _lastInputTokenCount >= _config.CompactionTokenLimit;
+        var limit = _model.CompactionTokenLimit(_config.Tuning.CompactionThreshold);
+        return limit > 0
+            && _lastInputTokenCount >= limit;
     }
 
     private void CommandSubscriptionMessages()
@@ -1830,7 +1835,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             return providerEx.UserMessage;
 
         if (IsContextOverflowError(cause))
-            return $"Context window exceeded after compaction — the session has too many tools or a large system prompt for the {_config.ModelId} context window ({_config.ContextWindowTokens} tokens). Try reducing tools or increasing the model's context window.";
+            return $"Context window exceeded after compaction — the session has too many tools or a large system prompt for the {_model.ModelId} context window ({_model.ContextWindowTokens} tokens). Try reducing tools or increasing the model's context window.";
 
         return "I encountered an error processing your message. Please try again.";
     }
@@ -2066,7 +2071,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         InjectDynamicContextLayers(messages);
         var self = Self;
         var client = _chatClient;
-        var timeout = TimeSpan.FromSeconds(Math.Max(1, _config.TurnLlmTimeoutSeconds));
+        var timeout = _config.TurnLlmTimeout;
 
         var exposedTools = ResolveExposedToolsForCurrentTurn();
         ChatOptions? options = null;
@@ -2779,7 +2784,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         if (_fullRegistry is null)
             return;
 
-        if (_config.DiscoveredToolRetentionTurns <= 0 || _config.DiscoveredToolMaxCount <= 0)
+        if (_config.Tuning.DiscoveredToolRetentionTurns <= 0 || _config.Tuning.DiscoveredToolMaxCount <= 0)
         {
             _discoveredToolLeases.Clear();
             _discoveredToolOrder.Clear();
@@ -2823,10 +2828,10 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         if (tool is not McpToolAdapter)
             return;
 
-        if (_config.DiscoveredToolRetentionTurns <= 0 || _config.DiscoveredToolMaxCount <= 0)
+        if (_config.Tuning.DiscoveredToolRetentionTurns <= 0 || _config.Tuning.DiscoveredToolMaxCount <= 0)
             return;
 
-        var lease = Math.Max(1, _config.DiscoveredToolRetentionTurns);
+        var lease = Math.Max(1, _config.Tuning.DiscoveredToolRetentionTurns);
         _discoveredToolLeases[toolName] = lease;
 
         if (!_discoveredToolOrder.Contains(toolName))
@@ -2834,7 +2839,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             _discoveredToolOrder.Add(toolName);
         }
 
-        while (_discoveredToolOrder.Count > _config.DiscoveredToolMaxCount)
+        while (_discoveredToolOrder.Count > _config.Tuning.DiscoveredToolMaxCount)
         {
             var evicted = _discoveredToolOrder[0];
             _discoveredToolOrder.RemoveAt(0);
@@ -2880,7 +2885,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     private void MaybeSnapshot()
     {
-        if (_config.SnapshotInterval > 0 && LastSequenceNr % _config.SnapshotInterval == 0)
+        if (_config.Tuning.SnapshotInterval > 0 && LastSequenceNr % _config.Tuning.SnapshotInterval == 0)
         {
             SaveSnapshot(_state.ToSnapshot());
         }
@@ -2942,7 +2947,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     {
         _sessionMetrics?.RecordTokenUsage(usage.InputTokenCount ?? 0, usage.OutputTokenCount ?? 0);
 
-        var contextWindow = _config.ContextWindowTokens;
+        var contextWindow = _model.ContextWindowTokens;
         double? usagePercent = usage.InputTokenCount.HasValue && contextWindow > 0
             ? (double)usage.InputTokenCount.Value / contextWindow
             : null;
@@ -2980,7 +2985,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         if (_processingOperationName is not "llm-call")
             return;
 
-        var timeout = TimeSpan.FromSeconds(Math.Max(1, _config.TurnLlmTimeoutSeconds));
+        var timeout = _config.TurnLlmTimeout;
         Timers.StartSingleTimer(
             ProcessingWatchdogTimerKey,
             new ProcessingWatchdogExpired

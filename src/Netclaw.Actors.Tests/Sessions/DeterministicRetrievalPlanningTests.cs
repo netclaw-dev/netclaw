@@ -69,7 +69,7 @@ public sealed class DeterministicRetrievalPlanningTests
         var coordinator = new SQLiteMemoryRecallCoordinator(
             store,
             NullLogger<SQLiteMemoryRecallCoordinator>.Instance,
-            sessionConfig: new SessionConfig { DeterministicRetrievalEnabled = true, MemorySidecarsEnabled = false });
+            sessionTuning: new SessionTuning { DeterministicRetrievalEnabled = true, MemorySidecarsEnabled = false });
 
         var result = await coordinator.RecallAsync(new AutomaticRecallRequest(
             SessionId: "signalr/thread-3",
@@ -116,7 +116,7 @@ public sealed class DeterministicRetrievalPlanningTests
         var coordinator = new SQLiteMemoryRecallCoordinator(
             store,
             NullLogger<SQLiteMemoryRecallCoordinator>.Instance,
-            sessionConfig: new SessionConfig { DeterministicRetrievalEnabled = true, MemorySidecarsEnabled = false });
+            sessionTuning: new SessionTuning { DeterministicRetrievalEnabled = true, MemorySidecarsEnabled = false });
 
         var result = await coordinator.RecallAsync(new AutomaticRecallRequest(
             SessionId: "signalr/thread-4",
@@ -177,7 +177,7 @@ public sealed class DeterministicRetrievalPlanningTests
         var coordinator = new SQLiteMemoryRecallCoordinator(
             store,
             NullLogger<SQLiteMemoryRecallCoordinator>.Instance,
-            sessionConfig: new SessionConfig { DeterministicRetrievalEnabled = true, MemorySidecarsEnabled = false });
+            sessionTuning: new SessionTuning { DeterministicRetrievalEnabled = true, MemorySidecarsEnabled = false });
 
         var result = await coordinator.RecallAsync(new AutomaticRecallRequest(
             SessionId: "D0AC6CKBK5K/1774371415.126439",
@@ -223,7 +223,7 @@ public sealed class DeterministicRetrievalPlanningTests
         var coordinator = new SQLiteMemoryRecallCoordinator(
             store,
             NullLogger<SQLiteMemoryRecallCoordinator>.Instance,
-            sessionConfig: new SessionConfig { DeterministicRetrievalEnabled = true, MemorySidecarsEnabled = false });
+            sessionTuning: new SessionTuning { DeterministicRetrievalEnabled = true, MemorySidecarsEnabled = false });
 
         // Query from a different domain (project:d0ac6ckbk5k — Slack DM)
         var result = await coordinator.RecallAsync(new AutomaticRecallRequest(
@@ -269,7 +269,7 @@ public sealed class DeterministicRetrievalPlanningTests
         var coordinator = new SQLiteMemoryRecallCoordinator(
             store,
             NullLogger<SQLiteMemoryRecallCoordinator>.Instance,
-            sessionConfig: new SessionConfig { DeterministicRetrievalEnabled = true, MemorySidecarsEnabled = false });
+            sessionTuning: new SessionTuning { DeterministicRetrievalEnabled = true, MemorySidecarsEnabled = false });
 
         var result = await coordinator.RecallAsync(new AutomaticRecallRequest(
             SessionId: "signalr/thread-5",
