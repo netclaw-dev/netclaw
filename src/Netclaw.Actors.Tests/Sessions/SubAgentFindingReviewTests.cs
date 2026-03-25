@@ -1,4 +1,5 @@
 using Netclaw.Actors.Sessions;
+using Netclaw.Actors.Sessions.Pipelines;
 using Netclaw.Tools;
 using Xunit;
 
@@ -11,7 +12,7 @@ public class SubAgentFindingReviewTests
     {
         var finding = CreateFinding();
 
-        var result = LlmSessionActor.ReviewSubAgentFinding(finding, "project-a/thread-1");
+        var result = SessionToolExecutionPipeline.ReviewSubAgentFinding(finding, "project-a/thread-1");
 
         Assert.Equal(SubAgentFindingReviewDecision.Accepted, result.Decision);
         Assert.Null(result.Reason);
@@ -22,7 +23,7 @@ public class SubAgentFindingReviewTests
     {
         var finding = CreateFinding() with { Durability = (SubAgentFindingDurability)999 };
 
-        var result = LlmSessionActor.ReviewSubAgentFinding(finding, "project-a/thread-1");
+        var result = SessionToolExecutionPipeline.ReviewSubAgentFinding(finding, "project-a/thread-1");
 
         Assert.Equal(SubAgentFindingReviewDecision.Deferred, result.Decision);
         Assert.Equal("missing durability", result.Reason);
@@ -33,7 +34,7 @@ public class SubAgentFindingReviewTests
     {
         var finding = CreateFinding() with { Reusability = SubAgentFindingReusability.TaskLocal };
 
-        var result = LlmSessionActor.ReviewSubAgentFinding(finding, "project-a/thread-1");
+        var result = SessionToolExecutionPipeline.ReviewSubAgentFinding(finding, "project-a/thread-1");
 
         Assert.Equal(SubAgentFindingReviewDecision.Deferred, result.Decision);
         Assert.Equal("insufficient reusability", result.Reason);
@@ -48,7 +49,7 @@ public class SubAgentFindingReviewTests
             Content = "Step 1: I called file_read. Step 2: I inspected stdout: done."
         };
 
-        var result = LlmSessionActor.ReviewSubAgentFinding(finding, "project-a/thread-1");
+        var result = SessionToolExecutionPipeline.ReviewSubAgentFinding(finding, "project-a/thread-1");
 
         Assert.Equal(SubAgentFindingReviewDecision.Rejected, result.Decision);
         Assert.Equal("unsupported shape", result.Reason);
@@ -63,7 +64,7 @@ public class SubAgentFindingReviewTests
             RecallMode = SubAgentFindingRecallMode.Auto
         };
 
-        var result = LlmSessionActor.ReviewSubAgentFinding(finding, "project-a/thread-1");
+        var result = SessionToolExecutionPipeline.ReviewSubAgentFinding(finding, "project-a/thread-1");
 
         Assert.Equal(SubAgentFindingReviewDecision.Rejected, result.Decision);
         Assert.Equal("secret cannot auto-recall", result.Reason);
@@ -74,7 +75,7 @@ public class SubAgentFindingReviewTests
     {
         var finding = CreateFinding() with { Domain = "project:other" };
 
-        var result = LlmSessionActor.ReviewSubAgentFinding(finding, "project-a/thread-1");
+        var result = SessionToolExecutionPipeline.ReviewSubAgentFinding(finding, "project-a/thread-1");
 
         Assert.Equal(SubAgentFindingReviewDecision.Deferred, result.Decision);
         Assert.Contains("domain mismatch", result.Reason);
