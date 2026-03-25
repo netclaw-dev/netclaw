@@ -175,7 +175,7 @@ internal sealed record RecallPlanningFailed
 /// Enables child actors to react to lifecycle events (e.g., trigger
 /// final distillation when entering <see cref="SessionPhase.Passivating"/>).
 /// </summary>
-internal sealed record SessionPhaseChanged(SessionPhase Phase);
+internal sealed record SessionPhaseChanged(SessionPhase Phase) : INotInfluenceReceiveTimeout;
 
 /// <summary>
 /// Sent to the observer actor to request immediate memory distillation

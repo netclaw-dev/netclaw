@@ -46,7 +46,7 @@ public sealed class SessionMemoryObserverActorTests : TestKit
     /// messages from the observer to the returned probe. This is needed for
     /// tests that verify idle-triggered distillation (which sends to Context.Parent).
     /// </summary>
-    private (IActorRef Observer, Akka.TestKit.TestProbe ParentProbe) CreateObserverWithParentProbe(
+    private (IActorRef Observer, IActorRef ParentActor, Akka.TestKit.TestProbe ParentProbe) CreateObserverWithParentProbe(
         string sessionSuffix,
         FakeChatClient? client = null,
         TimeSpan? idleTimeout = null,
@@ -64,13 +64,13 @@ public sealed class SessionMemoryObserverActorTests : TestKit
 
         // Ask the parent for the child ref
         var observer = parent.Ask<IActorRef>(GetChild.Instance, TimeSpan.FromSeconds(3)).Result;
-        return (observer, probe);
+        return (observer, parent, probe);
     }
 
     [Fact]
     public async Task ReceiveTimeout_with_no_new_content_does_not_reply_to_parent()
     {
-        var (observer, parentProbe) = CreateObserverWithParentProbe("observer-timeout");
+        var (observer, _, parentProbe) = CreateObserverWithParentProbe("observer-timeout");
 
         observer.Tell(ReceiveTimeout.Instance, parentProbe.Ref);
 
@@ -94,7 +94,7 @@ public sealed class SessionMemoryObserverActorTests : TestKit
     public async Task SessionPhaseChanged_Passivating_disables_idle_distillation()
     {
         // Use a very short idle timeout so the test doesn't wait long
-        var (observer, parentProbe) = CreateObserverWithParentProbe("passivate-idle",
+        var (observer, _, parentProbe) = CreateObserverWithParentProbe("passivate-idle",
             idleTimeout: TimeSpan.FromMilliseconds(200));
 
         // Feed content so idle distillation would fire
@@ -114,7 +114,7 @@ public sealed class SessionMemoryObserverActorTests : TestKit
     [Fact]
     public async Task SessionPhaseChanged_Ready_after_Passivating_re_enables_idle_distillation()
     {
-        var (observer, parentProbe) = CreateObserverWithParentProbe("abort-idle",
+        var (observer, _, parentProbe) = CreateObserverWithParentProbe("abort-idle",
             idleTimeout: TimeSpan.FromMilliseconds(300));
 
         // Feed content
@@ -181,13 +181,13 @@ public sealed class SessionMemoryObserverActorTests : TestKit
     }
 
     [Fact]
-    public async Task DistillMemories_while_distilling_stashes_reply_and_responds_on_completion()
+    public async Task DistillMemories_while_distilling_with_different_sender_gets_empty_reply_after_completion()
     {
         // Gate the response so we can control when distillation completes
         var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var client = new FakeChatClient { NextResponseGate = gate };
 
-        var (observer, parentProbe) = CreateObserverWithParentProbe("mid-distill", client: client,
+        var (observer, _, parentProbe) = CreateObserverWithParentProbe("mid-distill", client: client,
             idleTimeout: TimeSpan.FromSeconds(30)); // long idle to prevent auto-fire
 
         var passivationProbe = CreateTestProbe("passivation-caller");
@@ -216,10 +216,11 @@ public sealed class SessionMemoryObserverActorTests : TestKit
         var idleReply = await parentProbe.ExpectMsgAsync<SessionDistillationCompleted>(TimeSpan.FromSeconds(5));
         Assert.NotNull(idleReply);
 
-        // The passivation caller gets the stashed Empty reply
+        // A distinct passivation caller gets the follow-up Empty reply
         var passivationReply = await passivationProbe.ExpectMsgAsync<SessionDistillationCompleted>(
             TimeSpan.FromSeconds(5));
         Assert.NotNull(passivationReply);
+        Assert.Empty(passivationReply.Proposals);
     }
 
     [Fact]
@@ -229,7 +230,7 @@ public sealed class SessionMemoryObserverActorTests : TestKit
         var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var client = new FakeChatClient { NextResponseGate = gate };
 
-        var (observer, parentProbe) = CreateObserverWithParentProbe("abort-stash", client: client,
+        var (observer, _, parentProbe) = CreateObserverWithParentProbe("abort-stash", client: client,
             idleTimeout: TimeSpan.FromSeconds(30));
 
         var passivationProbe = CreateTestProbe("passivation-abort-caller");
@@ -272,6 +273,128 @@ public sealed class SessionMemoryObserverActorTests : TestKit
         observer.Tell(new DistillMemories(), anotherProbe.Ref);
         var reply = await anotherProbe.ExpectMsgAsync<SessionDistillationCompleted>(TimeSpan.FromSeconds(5));
         Assert.NotNull(reply);
+    }
+
+    [Fact]
+    public async Task Distillation_completion_keeps_dirty_bit_when_new_content_arrives_mid_run()
+    {
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var client = new FakeChatClient { NextResponseGate = gate };
+        var (observer, _, parentProbe) = CreateObserverWithParentProbe("dirty-mid-run", client: client,
+            idleTimeout: TimeSpan.FromSeconds(30));
+
+        observer.Tell(new SendUserMessage
+        {
+            SessionId = new SessionId("test-channel/dirty-mid-run"),
+            Content = "first content"
+        });
+        observer.Tell(ReceiveTimeout.Instance);
+
+        await AwaitAssertAsync(() => Assert.True(client.CallCount >= 1,
+            $"Expected distillation to start, but CallCount={client.CallCount}"));
+
+        observer.Tell(new SendUserMessage
+        {
+            SessionId = new SessionId("test-channel/dirty-mid-run"),
+            Content = "second content after snapshot"
+        });
+
+        gate.SetResult();
+
+        await parentProbe.ExpectMsgAsync<SessionDistillationCompleted>(TimeSpan.FromSeconds(5));
+
+        observer.Tell(ReceiveTimeout.Instance);
+
+        await AwaitAssertAsync(() => Assert.True(client.CallCount >= 2,
+            $"Expected follow-up distillation to start, but CallCount={client.CallCount}"));
+        await parentProbe.ExpectMsgAsync<SessionDistillationCompleted>(TimeSpan.FromSeconds(5));
+    }
+
+    [Fact]
+    public async Task Same_parent_passivation_request_while_idle_distillation_runs_does_not_emit_duplicate_completion()
+    {
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var client = new FakeChatClient { NextResponseGate = gate };
+        var (observer, parentActor, parentProbe) = CreateObserverWithParentProbe("same-parent-passivation", client: client,
+            idleTimeout: TimeSpan.FromSeconds(30));
+
+        observer.Tell(new SendUserMessage
+        {
+            SessionId = new SessionId("test-channel/same-parent-passivation"),
+            Content = "content for passivation"
+        });
+        observer.Tell(ReceiveTimeout.Instance);
+
+        await AwaitAssertAsync(() => Assert.True(client.CallCount >= 1,
+            $"Expected distillation to start, but CallCount={client.CallCount}"));
+
+        observer.Tell(new DistillMemories(), parentActor);
+        gate.SetResult();
+
+        var reply = await parentProbe.ExpectMsgAsync<SessionDistillationCompleted>(TimeSpan.FromSeconds(5));
+        Assert.NotNull(reply);
+        await parentProbe.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(500));
+    }
+
+    [Fact]
+    public async Task DistillMemories_with_anchors_persists_before_reply()
+    {
+        var firstClient = new FakeChatClient();
+        firstClient.PlannedResponses.Enqueue([new TextContent("""
+            {
+                "proposals": [
+                    {
+                        "operation": "upsert_document",
+                        "memoryClass": "durable_fact",
+                        "subjectKind": "user",
+                        "subjectValue": "self",
+                        "anchor": { "canonicalName": "persisted-anchor", "anchorType": "preference" },
+                        "title": "Persisted Anchor",
+                        "content": "Should be skipped next time",
+                        "aliases": ["persisted"],
+                        "facets": ["test"],
+                        "recallMode": "auto",
+                        "sensitivity": "normal",
+                        "confidence": 0.9
+                    }
+                ]
+            }
+            """)]);
+
+        var observer = CreateObserver("persist-before-reply", client: firstClient);
+        var replyProbe = CreateTestProbe("persist-before-reply-probe");
+
+        observer.Tell(new SendUserMessage
+        {
+            SessionId = new SessionId("test-channel/persist-before-reply"),
+            Content = "remember this"
+        });
+
+        observer.Tell(new DistillMemories(), replyProbe.Ref);
+        await replyProbe.ExpectMsgAsync<SessionDistillationCompleted>(TimeSpan.FromSeconds(5));
+
+        Watch(observer);
+        Sys.Stop(observer);
+        await ExpectTerminatedAsync(observer, TimeSpan.FromSeconds(5));
+
+        var secondClient = new FakeChatClient();
+        var recoveredObserver = CreateObserver("persist-before-reply", client: secondClient);
+        var replayProbe = CreateTestProbe("persist-recovery-probe");
+
+        recoveredObserver.Tell(new SendUserMessage
+        {
+            SessionId = new SessionId("test-channel/persist-before-reply"),
+            Content = "check the skip list"
+        });
+
+        recoveredObserver.Tell(new DistillMemories(), replayProbe.Ref);
+        await replayProbe.ExpectMsgAsync<SessionDistillationCompleted>(TimeSpan.FromSeconds(5));
+
+        var skipPrompt = secondClient.ReceivedMessages[0]
+            .LastOrDefault(msg => msg.Role == Microsoft.Extensions.AI.ChatRole.User)?.Text;
+
+        Assert.NotNull(skipPrompt);
+        Assert.Contains("persisted-anchor", skipPrompt, StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>
