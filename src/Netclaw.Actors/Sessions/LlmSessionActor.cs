@@ -73,8 +73,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     // Per-turn transient counters (tool budget, duplicate detection, empty-response retries)
     private readonly TurnStateTracker _turnState = new();
 
-    private const int MaxPreToolEmptyResponseRetries = 2;
-    private const string EmptyResponseFallbackMessage = "I didn't manage to produce a reply. Please try rephrasing or sending your request again.";
     private const string ToolBudgetExhaustedMessage =
         "I used all available tool calls for this turn and couldn't produce a final summary. "
         + "You can ask me to summarize what was done, or rephrase your request.";
@@ -450,57 +448,22 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 return;
             }
 
-            // Guard: if the LLM produced no text and no tool calls, it likely tried to
-            // call an MCP tool that isn't in ChatOptions.Tools yet. Add a nudge and retry.
+            // Guard: empty response (no text, no tool calls) — delegate decision to tracker
             var hasText = lastMessage.Contents.OfType<TextContent>().Any(t => !string.IsNullOrWhiteSpace(t.Text));
-            if (!hasText && _turnState.ToolIterationCount == 0)
+            if (!hasText)
             {
-                _turnState.PreToolEmptyResponseCount++;
-                if (_turnState.PreToolEmptyResponseCount > MaxPreToolEmptyResponseRetries)
+                switch (_turnState.EvaluateEmptyResponse())
                 {
-                    _log.Warning(
-                        "LLM produced empty response after {RetryCount} pre-tool retries; failing turn",
-                        _turnState.PreToolEmptyResponseCount - 1);
-                    FailCurrentTurn(
-                        EmptyResponseFallbackMessage,
-                        new InvalidOperationException("LLM produced repeated empty responses before any tool execution."),
-                        ErrorCategory.ProviderFailure);
-                    return;
+                    case EmptyResponseAction.Retry retry:
+                        _log.Warning("LLM produced empty response — retrying with nudge");
+                        _state = _state.AddSystemNudge(retry.NudgeText);
+                        FireLlmCall();
+                        return;
+                    case EmptyResponseAction.Fail fail:
+                        _log.Warning("LLM produced empty response — failing turn");
+                        FailCurrentTurn(fail.ErrorMessage, fail.Cause, ErrorCategory.ProviderFailure);
+                        return;
                 }
-
-                _log.Warning("LLM produced empty response (no text, no tool calls) — retrying with nudge");
-                _state = _state.AddSystemNudge(
-                    "Your previous response was empty. If you need MCP capabilities, call search_tools(\"servers\") to pick a server "
-                    + "(for example browser, memory, or email), then call search_tools(\"<intent>\", server: \"<server_name>\") to load tools. "
-                    + "MCP tools are not directly callable until loaded via search_tools.");
-                FireLlmCall();
-                return;
-            }
-
-            // Guard: if the LLM did tool work but produced an empty final response, nudge it
-            // to continue working or answer the user.
-            if (!hasText && _turnState.ToolIterationCount > 0 && !_turnState.PostToolNudgeSent)
-            {
-                _log.Debug("LLM produced empty response after {ToolIterations} tool iteration(s) — nudging",
-                    _turnState.ToolIterationCount);
-                _turnState.PostToolNudgeSent = true;
-                _state = _state.AddSystemNudge(
-                    "You received tool results but did not respond. "
-                    + "Continue working or answer the user's question.");
-                FireLlmCall();
-                return;
-            }
-
-            if (!hasText && _turnState.ToolIterationCount > 0 && _turnState.PostToolNudgeSent)
-            {
-                _log.Warning(
-                    "LLM produced empty response after tool work and post-tool nudge; failing turn after {ToolIterations} tool iteration(s)",
-                    _turnState.ToolIterationCount);
-                FailCurrentTurn(
-                    EmptyResponseFallbackMessage,
-                    new InvalidOperationException("LLM produced an empty response after tool execution and follow-up nudge."),
-                    ErrorCategory.ProviderFailure);
-                return;
             }
 
             // Normal text response — persist turn
@@ -646,29 +609,16 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 }, OutputFilter.Files);
             }
 
-            _turnState.ToolCallCount += msg.ToolResults.Count;
-            _turnState.ToolIterationCount++;
+            // Record completion and check budget + duplicates
+            var budgetStatus = _turnState.RecordToolCompletion(msg.ToolResults.Count, _config.MaxToolCallsPerTurn);
 
-            // Duplicate tool call detection: warn model if identical tool+args calls repeat.
-            // Hashes are tracked in HandleToolCallResponse where args are available.
-            const int duplicateToolThreshold = 3;
-            if (!_turnState.DuplicateNudgeSent)
+            var dupNudge = _turnState.CheckForDuplicates();
+            if (dupNudge is not null)
             {
-                var worst = _turnState.FindWorstDuplicate(duplicateToolThreshold);
-                if (worst is var (callHash, dupCount))
-                {
-                    // Extract tool name from the hash key (format: "toolName:{args}")
-                    var toolName = callHash.AsSpan(0, callHash.IndexOf(':', StringComparison.Ordinal)).ToString();
-                    TurnLog().Warning(
-                        "turn_duplicate_tool_detected tool={ToolName} count={Count} iteration={Iteration}",
-                        toolName, dupCount, _turnState.ToolIterationCount);
-                    _state = _state.AddSystemNudge(
-                        $"You have called the tool '{toolName}' with the same arguments {dupCount} times this turn. "
-                        + "This strongly indicates you are repeating work you already completed. "
-                        + "Review your prior tool results — the information you need is already in the conversation. "
-                        + "If the task is complete, produce your final response to the user.");
-                    _turnState.DuplicateNudgeSent = true;
-                }
+                TurnLog().Warning(
+                    "turn_duplicate_tool_detected tool={ToolName} count={Count} iteration={Iteration}",
+                    dupNudge.ToolName, dupNudge.Count, _turnState.ToolIterationCount);
+                _state = _state.AddSystemNudge(dupNudge.NudgeText);
             }
 
             // Mid-loop user message injection: if the user sent messages while tools were
@@ -686,31 +636,18 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 _buffer.Clear();
             }
 
-            // Safety circuit breaker: force text response when tool call budget exhausted
-            if (_turnState.ToolCallCount >= _config.MaxToolCallsPerTurn)
+            // Apply budget decision
+            switch (budgetStatus)
             {
-                TurnLog().Warning("turn_tool_call_limit_reached callCount={CallCount} max={Max} iteration={Iteration}",
-                    _turnState.ToolCallCount, _config.MaxToolCallsPerTurn, _turnState.ToolIterationCount);
-                _state = _state.AddSystemNudge(
-                    "You have reached the tool call limit for this turn. "
-                    + "Do NOT request any more tools. "
-                    + "Summarize the work you completed and answer the user's question "
-                    + "based on the information you have gathered so far. "
-                    + "If you could not complete the task, explain what you found and what remains.");
-                FireLlmCall(forceNoTools: true);
-                return;
-            }
-
-            // Budget-awareness nudge: warn the model when approaching the limit
-            var budgetThreshold = (int)(_config.MaxToolCallsPerTurn * 0.75);
-            if (_turnState.ToolCallCount >= budgetThreshold && !_turnState.BudgetNudgeSent)
-            {
-                var remaining = _config.MaxToolCallsPerTurn - _turnState.ToolCallCount;
-                _state = _state.AddSystemNudge(
-                    $"You have used {_turnState.ToolCallCount} of {_config.MaxToolCallsPerTurn} tool calls for this turn. "
-                    + $"You have approximately {remaining} tool calls remaining. "
-                    + "Start wrapping up your tool usage and prepare to answer the user's question.");
-                _turnState.BudgetNudgeSent = true;
+                case ToolBudgetStatus.Exhausted exhausted:
+                    TurnLog().Warning("turn_tool_call_limit_reached callCount={CallCount} max={Max} iteration={Iteration}",
+                        _turnState.ToolCallCount, _config.MaxToolCallsPerTurn, _turnState.ToolIterationCount);
+                    _state = _state.AddSystemNudge(exhausted.NudgeText);
+                    FireLlmCall(forceNoTools: true);
+                    return;
+                case ToolBudgetStatus.NudgeNeeded nudge:
+                    _state = _state.AddSystemNudge(nudge.NudgeText);
+                    break;
             }
 
             // Fire follow-up LLM call with tool results in context
@@ -1194,11 +1131,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         List<FunctionCallContent> toolCalls,
         UsageDetails? usage)
     {
-        // Model produced tool calls — reset post-tool nudge so it can fire again
-        // if the model stalls later in the chain.
-        _turnState.PostToolNudgeSent = false;
-        _turnState.PreToolEmptyResponseCount = 0;
-        _turnState.ForceNoToolsActive = false;
+        // Model produced tool calls — reset empty-response guards so they can
+        // fire again if the model stalls later in the chain.
+        _turnState.ResetEmptyResponseGuards();
 
         // Add assistant message (with tool calls) to history
         var assistantMsg = ChatMessageConverter.FromAiMessage(lastMessage);
@@ -1309,11 +1244,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         bool streamedThinking,
         AutomaticRecallResult? recallResult)
     {
-        // Reset for potential buffer drain (new logical turn)
-        _turnState.ToolCallCount = 0;
-        _turnState.ToolIterationCount = 0;
-        _turnState.ClearHashes();
-        _turnState.DuplicateNudgeSent = false;
+        // Reset tool counters for potential buffer drain (new logical turn)
+        _turnState.ResetToolCounters();
 
         var reply = ChatMessageConverter.FromAiMessage(lastMessage);
         var userMsg = _state.FindLastUserMessage();
