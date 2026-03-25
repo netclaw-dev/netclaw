@@ -7,21 +7,38 @@
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
-    <VersionPrefix>0.7.9</VersionPrefix>
-    <PackageReleaseNotes>Netclaw v0.7.9 — Slack delivery hardening, config watcher fix, webhook schema fix, and token usage fix
+    <VersionPrefix>0.8.0</VersionPrefix>
+    <PackageReleaseNotes>Netclaw v0.8.0 — Memory pipeline overhaul, trust context policy, Slack message delivery fix, and update signature verification
+
+**Memory**
+
+* Overhauled memory formation, recall, and curation — stopped raw tool outputs from polluting the memory database (previously ~71% of records were junk web_search/web_fetch dumps), cached recall resolution at turn boundaries instead of re-running on every tool-loop LLM call, and added exclusion-based progressive recall so each turn surfaces different relevant memories instead of repeating the same top results. ([#380](https://github.com/Aaronontheweb/netclaw/pull/380))
+* Added session-level memory observer actor — a persistent child actor watches the conversation stream and distills memories when the session goes idle (90s), replacing the previous per-turn observation that produced zero proposals. Proposals flow through the existing gate/curation pipeline, and the observer journals proposed anchors so its skip list survives across actor incarnations. ([#410](https://github.com/Aaronontheweb/netclaw/pull/410))
+
+**Security**
+
+* Added minisign Ed25519 signature verification to `netclaw update` and all background update checks — the manifest is now verified against an embedded public key before trusting its contents. Missing or invalid signatures fail closed with no fallback to unsigned manifests. Background update checks now run on a 24-hour periodic timer and emit `UpdateAvailable` operational alerts via webhooks. ([#393](https://github.com/Aaronontheweb/netclaw/pull/393))
+* Added trust context policy with channel audiences and global read roots — operators can now configure per-channel audience overrides in `Slack.ChannelAudiences` (resolution: explicit channel ID, then `"dm"` key, then heuristic fallback). Skills and identity files are always readable regardless of audience profile via `GlobalReadRoots`. The init wizard now generates a `Security` section with smart defaults derived from deployment posture, and `netclaw doctor` enforces that both `Security` and `Tools` config sections are present. ([#387](https://github.com/Aaronontheweb/netclaw/pull/387))
 
 **Slack**
 
-* Fixed Slack delivery failures being silently swallowed — `SlackReplyClient` was discarding the return value of `Chat.PostMessage()` and relying on SlackNet to throw on `ok:false`. A bug in SlackNet 0.17.9 causes phantom `Ok=true` responses when the HTTP body is empty, so delivery failures were counted as successes. Responses are now validated — null or empty `Ts` throws `SlackMessageDeliveryException` with a `phantom_success` error code, and the full error is fed back to the LLM session. Added `SlackException` catch and response validation to `SlackOutboundClient`, which previously had zero error handling. `netclaw stats` now shows `posted`/`rejected`/`failed` counters instead of the old `posted`/`failed`/`plain_text_fallback` columns. ([#375](https://github.com/Aaronontheweb/netclaw/pull/375))
+* Fixed Slack sessions receiving dropped final responses and duplicate message posts — the root cause was `TextDeltaOutput` (streaming) and `TextOutput` (final) both emitting under the same `OutputFilter.Text` flag. Added a new `OutputFilter.TextStreaming` flag so Slack subscribes only to final assembled text while the TUI continues to receive both streams. Also fixed slash-command IO failures silently falling through to the LLM instead of surfacing an error. ([#407](https://github.com/Aaronontheweb/netclaw/pull/407))
 
-**Config**
+**Skills**
 
-* Fixed OAuth token refreshes causing daemon restarts mid-session — `ConfigWatcherService` was watching both `netclaw.json` and `secrets.json`, so writing a refreshed OAuth token triggered a full daemon restart, killing active turns. The watcher now monitors only `netclaw.json`; secret changes are loaded on-demand and never require a restart. ([#373](https://github.com/Aaronontheweb/netclaw/pull/373))
-* Fixed `netclaw doctor` rejecting configs with `"Format": "Slack"` on webhook targets — the `Format` field was added to `WebhookTarget` but omitted from `netclaw-config.v1.schema.json`, which uses `"additionalProperties": false` throughout. Any `netclaw.json` that set `"Format": "Slack"` on a webhook was flagged as invalid by the schema doctor check. The schema now includes the `Format` enum and the field is optional (defaults to `Generic`). ([#369](https://github.com/Aaronontheweb/netclaw/pull/369))
+* Replaced keyword-based skill matching with LLM-driven description menu — the skill index context layer now presents skill descriptions directly to the LLM, which loads relevant skills via `file_read`. Removed the entire keyword matching pipeline including IDF scoring, keyword enrichment sidecar, keyword cache I/O, and auto-load state from `LlmSessionActor`. ([#380](https://github.com/Aaronontheweb/netclaw/pull/380))
+* Skill enrichment now runs in the background instead of blocking daemon startup, fixing startup and healthcheck timeouts on slower hardware or when multiple skills need enrichment. ([#407](https://github.com/Aaronontheweb/netclaw/pull/407))
+* **Breaking (operators with custom skill references):** System skills consolidated from 6 to 4 — `netclaw-diagnostics`, `netclaw-identity`, and `netclaw-manual` were removed and their content merged into `netclaw-operations` and the remaining skills. Operators referencing the old skill names in custom configurations or scripts will need to update those references. ([#380](https://github.com/Aaronontheweb/netclaw/pull/380))
 
-**Stats**
+**CLI / TUI**
 
-* Fixed `netclaw stats` always showing zero token usage — OpenAI-compatible providers send token counts in a final SSE chunk that has an empty `choices` array. `ParseStreamingUpdates` returned early on empty choices before reaching `ParseUsage`, silently discarding all token data. Usage-only chunks are now processed before the early return so token statistics flow through to `DailyStatsActor`. ([#367](https://github.com/Aaronontheweb/netclaw/pull/367))</PackageReleaseNotes>
+* Fixed the provider manager TUI crashing when two providers shared the same type (e.g., two `openai-compatible` entries with different endpoints) — the display now shows all configured instances and supports adding additional instances of any type. ([#385](https://github.com/Aaronontheweb/netclaw/pull/385))
+* Renamed the `openai-compatible` provider display from "OpenAI-Compatible" to "llama.cpp / vLLM" to better describe the actual servers it supports. No changes to config format or internal type keys. ([#383](https://github.com/Aaronontheweb/netclaw/pull/383))
+
+**Dependencies**
+
+* Bumped Akka.NET to 1.5.63 — includes a critical Akka.Remote fix for stale ACKs causing irrecoverable quarantine after transient network disruptions. All users running clustered deployments should upgrade. ([#397](https://github.com/Aaronontheweb/netclaw/pull/397))
+* Bumped Microsoft.Extensions.AI packages to 10.4.1 and adapted to OpenAI SDK 2.9.1 breaking change where `ResponsesClient` no longer accepts a model parameter in its constructor. ([#392](https://github.com/Aaronontheweb/netclaw/pull/392))</PackageReleaseNotes>
   </PropertyGroup>
   <PropertyGroup>
     <NetCoreTestVersion>net10.0</NetCoreTestVersion>
