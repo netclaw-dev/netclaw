@@ -94,6 +94,6 @@ public sealed class DaemonManagerSingletonGuardTests : IDisposable
     public void Dispose()
     {
         try { Directory.Delete(_tempDir, recursive: true); }
-        catch { /* best effort */ }
+        catch (IOException) { /* test cleanup — directory may already be gone */ }
     }
 }

@@ -16,19 +16,30 @@ public sealed class PidFileWatchdogService : IHostedService, IDisposable
     private readonly NetclawPaths _paths;
     private readonly IHostApplicationLifetime _appLifetime;
     private readonly ILogger<PidFileWatchdogService> _logger;
+    private readonly TimeSpan _pollInterval;
     private CancellationTokenSource? _cts;
     private Task? _pollTask;
 
-    internal static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan DefaultPollInterval = TimeSpan.FromSeconds(5);
 
     public PidFileWatchdogService(
         NetclawPaths paths,
         IHostApplicationLifetime appLifetime,
         ILogger<PidFileWatchdogService> logger)
+        : this(paths, appLifetime, logger, DefaultPollInterval)
+    {
+    }
+
+    internal PidFileWatchdogService(
+        NetclawPaths paths,
+        IHostApplicationLifetime appLifetime,
+        ILogger<PidFileWatchdogService> logger,
+        TimeSpan pollInterval)
     {
         _paths = paths;
         _appLifetime = appLifetime;
         _logger = logger;
+        _pollInterval = pollInterval;
     }
 
     public Task StartAsync(CancellationToken cancellationToken)
@@ -40,24 +51,19 @@ public sealed class PidFileWatchdogService : IHostedService, IDisposable
 
     private async Task PollAsync(CancellationToken ct)
     {
-        using var timer = new PeriodicTimer(PollInterval);
-        try
+        using var timer = new PeriodicTimer(_pollInterval);
+        // OperationCanceledException from WaitForNextTickAsync on shutdown is
+        // expected and handled by StopAsync via ConfigureAwaitOptions.SuppressThrowing.
+        while (await timer.WaitForNextTickAsync(ct))
         {
-            while (await timer.WaitForNextTickAsync(ct))
+            if (!File.Exists(_paths.PidFilePath))
             {
-                if (!File.Exists(_paths.PidFilePath))
-                {
-                    _logger.LogWarning(
-                        "PID file missing ({PidFilePath}). Initiating shutdown to prevent orphan daemon.",
-                        _paths.PidFilePath);
-                    _appLifetime.StopApplication();
-                    return;
-                }
+                _logger.LogWarning(
+                    "PID file missing ({PidFilePath}). Initiating shutdown to prevent orphan daemon.",
+                    _paths.PidFilePath);
+                _appLifetime.StopApplication();
+                return;
             }
-        }
-        catch (OperationCanceledException)
-        {
-            // Normal shutdown — timer cancelled by StopAsync.
         }
     }
 
