@@ -1155,7 +1155,9 @@ static void WriteStatusResult(DaemonRuntimeStatus.Response status, string endpoi
             Console.WriteLine($"update: up-to-date (v{updateCurrentVersion})");
             break;
         default:
-            Console.WriteLine("update: unknown (check failed — run 'netclaw update --check' to retry)");
+            var errorHint = cliUpdate?.ErrorDetail ?? status.Update?.ErrorDetail;
+            var detail = errorHint is not null ? $" [{errorHint}]" : "";
+            Console.WriteLine($"update: unknown (check failed{detail} — run 'netclaw update --check' to retry)");
             break;
     }
 }

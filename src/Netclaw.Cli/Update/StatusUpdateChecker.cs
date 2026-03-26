@@ -27,17 +27,21 @@ internal static class StatusUpdateChecker
         {
             var fetchResult = await UpdateCheckService.FetchVerifiedManifestAsync(httpClient, cts.Token);
             if (!fetchResult.IsSuccess)
-                return new StatusUpdateResult("unknown", currentVersion, null, null);
+                return new StatusUpdateResult("unknown", currentVersion, null, null,
+                    $"{fetchResult.Status}: {fetchResult.ErrorMessage}");
 
             var result = UpdateCheckService.EvaluateManifest(fetchResult.Manifest!, currentVersion);
             return result.IsUpdateAvailable
                 ? new StatusUpdateResult("update-available", result.CurrentVersion, result.LatestVersion, result.ReleaseNotesUrl)
                 : new StatusUpdateResult("up-to-date", result.CurrentVersion, null, null);
         }
-        catch (Exception)
+        catch (OperationCanceledException)
         {
-            // OperationCanceledException (3s timeout) or HttpRequestException (network failure)
-            return new StatusUpdateResult("unknown", currentVersion, null, null);
+            return new StatusUpdateResult("unknown", currentVersion, null, null, "timed out");
+        }
+        catch (Exception ex)
+        {
+            return new StatusUpdateResult("unknown", currentVersion, null, null, ex.Message);
         }
     }
 }
@@ -46,4 +50,5 @@ internal sealed record StatusUpdateResult(
     string State,
     string CurrentVersion,
     string? LatestVersion,
-    string? ReleaseNotesUrl);
+    string? ReleaseNotesUrl,
+    string? ErrorDetail = null);

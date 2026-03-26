@@ -11,6 +11,18 @@ namespace Netclaw.Configuration.Feeds;
 public sealed class UpdateCheckResult
 {
     public bool IsUpdateAvailable { get; init; }
+
+    /// <summary>
+    /// Whether the check completed successfully (manifest fetched and verified).
+    /// When false, <see cref="IsUpdateAvailable"/> is meaningless — the check failed.
+    /// </summary>
+    public bool CheckSucceeded { get; init; } = true;
+
+    /// <summary>
+    /// Human-readable error detail when <see cref="CheckSucceeded"/> is false.
+    /// </summary>
+    public string? ErrorDetail { get; init; }
+
     public string CurrentVersion { get; init; } = "";
     public string LatestVersion { get; init; } = "";
     public string? ReleaseNotesUrl { get; init; }
@@ -74,20 +86,21 @@ public static class UpdateCheckService
         if (cached is not null && DateTimeOffset.UtcNow - s_cachedAt < CacheDuration)
             return cached;
 
-        var noUpdate = new UpdateCheckResult
-        {
-            IsUpdateAvailable = false,
-            CurrentVersion = currentVersion,
-            LatestVersion = currentVersion,
-        };
-
         try
         {
             var fetchResult = await FetchVerifiedManifestAsync(httpClient, cancellationToken);
             if (!fetchResult.IsSuccess)
             {
-                CacheResult(noUpdate);
-                return noUpdate;
+                var failed = new UpdateCheckResult
+                {
+                    IsUpdateAvailable = false,
+                    CheckSucceeded = false,
+                    ErrorDetail = $"{fetchResult.Status}: {fetchResult.ErrorMessage}",
+                    CurrentVersion = currentVersion,
+                    LatestVersion = currentVersion,
+                };
+                CacheResult(failed);
+                return failed;
             }
 
             var result = EvaluateManifest(fetchResult.Manifest!, currentVersion);
@@ -96,8 +109,16 @@ public static class UpdateCheckService
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            CacheResult(noUpdate);
-            return noUpdate;
+            var failed = new UpdateCheckResult
+            {
+                IsUpdateAvailable = false,
+                CheckSucceeded = false,
+                ErrorDetail = ex.Message,
+                CurrentVersion = currentVersion,
+                LatestVersion = currentVersion,
+            };
+            CacheResult(failed);
+            return failed;
         }
     }
 
@@ -111,6 +132,9 @@ public static class UpdateCheckService
     {
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         cts.CancelAfter(FeedConstants.BinaryFeedHttpTimeout);
+
+        // Start both requests in parallel — halves network time for the CLI's 3s timeout
+        var sigTask = httpClient.GetAsync(FeedConstants.BinaryManifestSignatureUrl, cts.Token);
 
         string json;
         try
@@ -129,12 +153,11 @@ public static class UpdateCheckService
             };
         }
 
-        // Fetch and verify signature
+        // Await the already-in-flight signature request
         string signatureContent;
         try
         {
-            var sigResponse = await httpClient.GetAsync(
-                FeedConstants.BinaryManifestSignatureUrl, cts.Token);
+            var sigResponse = await sigTask;
             sigResponse.EnsureSuccessStatusCode();
             signatureContent = await sigResponse.Content.ReadAsStringAsync(cts.Token);
         }
