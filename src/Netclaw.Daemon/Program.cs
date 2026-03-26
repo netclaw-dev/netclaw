@@ -358,7 +358,11 @@ static void ConfigureDaemonServices(
     // Search backend selection
     var searchConfig = configuration.GetSection("Search")
         .Get<SearchConfig>() ?? new SearchConfig();
-    var searchBackend = CreateSearchBackend(searchConfig, sp.GetRequiredService<ILogger<SearchConfig>>());
+    
+    // Create logger for search config warnings (before service provider is built)
+    using var startupLoggerFactory = LoggerFactory.Create(b => b.SetMinimumLevel(LogLevel.Warning));
+    var searchLogger = startupLoggerFactory.CreateLogger<SearchConfig>();
+    var searchBackend = CreateSearchBackend(searchConfig, searchLogger);
 
     // Tool path deny-list: prevent agent tools from accessing secrets
     var toolPathPolicy = new ToolPathPolicy([paths.SecretsPath, paths.KeysDirectory]);
