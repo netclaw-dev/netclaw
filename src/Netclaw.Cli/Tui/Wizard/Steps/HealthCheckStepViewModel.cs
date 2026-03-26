@@ -71,6 +71,15 @@ public sealed class HealthCheckStepViewModel : IWizardStepViewModel
     public Task ContributeHealthChecksAsync(HealthCheckRunner runner, CancellationToken ct) => Task.CompletedTask;
 
     /// <summary>
+    /// Start the health check with orchestrator support. Sets <see cref="HealthCheckCompletion"/>
+    /// and runs asynchronously.
+    /// </summary>
+    public void StartWithOrchestrator(WizardOrchestrator orchestrator)
+    {
+        HealthCheckCompletion = RunWithOrchestrator(orchestrator);
+    }
+
+    /// <summary>
     /// Run the full health check, write config, and start daemon.
     /// The <paramref name="orchestrator"/> is used to collect config from all steps.
     /// </summary>
