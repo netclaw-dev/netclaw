@@ -145,4 +145,23 @@ public sealed class RegexSkillContentScannerTests
         Assert.Equal(ScanVerdict.Warning, result.Verdict);
         Assert.True(result.IsAllowed);
     }
+
+    [Fact]
+    public async Task ScanAsync_detector_failure_rejects_candidate()
+    {
+        var scanner = new RegexSkillContentScanner(
+            new ThrowingPromptInjectionDetector(),
+            NullLogger<RegexSkillContentScanner>.Instance);
+
+        var result = await scanner.ScanAsync("skill", "content", SkillTrustTier.External);
+
+        Assert.Equal(ScanVerdict.Rejected, result.Verdict);
+        Assert.Contains("content scanning failed", result.Reason);
+    }
+
+    private sealed class ThrowingPromptInjectionDetector : IPromptInjectionDetector
+    {
+        public Task<PromptInjectionResult> DetectAsync(string text, string sourceContext, CancellationToken cancellationToken = default)
+            => throw new InvalidOperationException("boom");
+    }
 }

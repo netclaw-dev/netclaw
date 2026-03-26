@@ -6,6 +6,7 @@ namespace Netclaw.Security.Skills;
 /// <summary>
 /// Scans skill content for security threats by delegating to <see cref="IPromptInjectionDetector"/>
 /// and applying trust-tier-aware policy to map detection results to scan outcomes.
+/// This is a heuristic guardrail, not a complete malware scanner.
 /// </summary>
 public sealed class RegexSkillContentScanner : ISkillContentScanner
 {
@@ -31,13 +32,28 @@ public sealed class RegexSkillContentScanner : ISkillContentScanner
         if (trustTier <= SkillTrustTier.User)
             return SkillScanResult.Allow();
 
-        var detection = await _detector.DetectAsync(content, $"skill:{skillName}", cancellationToken);
+        PromptInjectionResult detection;
+        try
+        {
+            detection = await _detector.DetectAsync(content, $"skill:{skillName}", cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Skill content scanning failed for '{SkillName}'", skillName);
+            return SkillScanResult.Reject($"content scanning failed: {ex.Message}");
+        }
 
         if (detection.Risk == PromptInjectionRisk.None)
             return SkillScanResult.Allow();
 
         var verdict = MapToVerdict(detection.Risk, trustTier);
-        var reason = $"[{detection.Category}] {detection.Message}";
+        var reason = string.IsNullOrWhiteSpace(detection.Category)
+            ? detection.Message ?? "prompt injection risk detected"
+            : $"[{detection.Category}] {detection.Message}";
 
         if (verdict == ScanVerdict.Rejected)
         {
@@ -55,7 +71,6 @@ public sealed class RegexSkillContentScanner : ISkillContentScanner
             return SkillScanResult.Warn(reason);
         }
 
-        // Allowed — detection fired but tier policy permits it (e.g., Community + Low).
         return SkillScanResult.Allow();
     }
 

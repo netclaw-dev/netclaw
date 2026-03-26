@@ -15,6 +15,7 @@ public class NoOpSkillContentScannerTests
 
         Assert.Equal(ScanVerdict.Allowed, result.Verdict);
         Assert.True(result.IsAllowed);
+        Assert.Equal(ScanVerdict.Allowed, result.Verdict);
         Assert.Null(result.Reason);
     }
 
