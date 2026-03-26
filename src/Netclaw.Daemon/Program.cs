@@ -37,12 +37,39 @@ using static Microsoft.Extensions.Logging.LogLevel;
 
 try
 {
-    var restartSignal = new DaemonRestartSignal();
-    do
+    // Acquire an exclusive lock file before anything else. This is the OS-level
+    // singleton guard — a second netclawd instance will fail to open the file
+    // and exit immediately. The lock survives soft restarts (same process) and
+    // is released by the OS on crash (fd closed → flock released).
+    var paths = new NetclawPaths();
+    paths.EnsureDirectoriesExist();
+
+    FileStream lockFile;
+    try
     {
-        restartSignal.Reset();
-        await RunDaemonAsync(args, restartSignal);
-    } while (restartSignal.RestartRequested);
+        lockFile = new FileStream(
+            paths.LockFilePath,
+            FileMode.OpenOrCreate,
+            FileAccess.ReadWrite,
+            FileShare.None);
+    }
+    catch (IOException)
+    {
+        Console.Error.WriteLine(
+            "error: Another netclawd instance is already running (lock file held). Exiting.");
+        Environment.ExitCode = 1;
+        return;
+    }
+
+    await using (lockFile)
+    {
+        var restartSignal = new DaemonRestartSignal();
+        do
+        {
+            restartSignal.Reset();
+            await RunDaemonAsync(args, restartSignal);
+        } while (restartSignal.RestartRequested);
+    }
 }
 catch (Exception ex)
 {
@@ -680,6 +707,11 @@ static void ConfigureDaemonServices(
     // PID file authority for daemon lifecycle management
     services.AddSingleton<PidFileService>();
     services.AddSingleton<IHostedService>(sp => sp.GetRequiredService<PidFileService>());
+
+    // PID file watchdog — self-terminates daemon if PID file is deleted externally.
+    // Registered after PidFileService so it starts after the PID file is written
+    // and stops before PidFileService deletes it during graceful shutdown.
+    services.AddSingleton<IHostedService, PidFileWatchdogService>();
 
     // Active session cleanup during host shutdown
     services.AddSingleton<SessionRegistryShutdownService>();
