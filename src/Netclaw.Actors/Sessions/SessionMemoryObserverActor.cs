@@ -98,7 +98,7 @@ public sealed class SessionMemoryObserverActor : ReceivePersistentActor
             if (line is not null)
                 AppendTranscriptLine(line);
 
-            if (msg is TurnCompleted tc)
+            if (msg is TurnCompleted tc && tc.Outcome != TurnOutcome.Skipped)
                 _turnCount = tc.TurnNumber;
         });
 
@@ -366,7 +366,7 @@ public sealed class SessionMemoryObserverActor : ReceivePersistentActor
         ToolCallOutput toolCall
             => $"[tool] {toolCall.ToolName}({Truncate(toolCall.ArgumentsJson ?? "", 200)})",
         TurnCompleted tc
-            => $"[turn {tc.TurnNumber} completed]",
+            => $"[turn {tc.TurnNumber} {tc.Outcome.ToString().ToLowerInvariant()}]",
         CompactionOutput
             => "[session compacted]",
         SubAgentOutput sa when sa.Phase == SubAgentPhase.Completed

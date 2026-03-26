@@ -362,7 +362,8 @@ public sealed class SessionCatalogServiceTests : IDisposable
     public void OnOutput_TurnCompleted_Skipped_DoesNotIncrementTurnCount()
     {
         var paths = CreatePaths();
-        var service = CreateService(paths);
+        var metrics = new FakeMetrics();
+        var service = CreateService(paths, metrics: metrics);
         var sessionId = new SessionId("slack/skipped-turn-test");
         service.OnSessionActivated(sessionId, ChannelType.Slack);
 
@@ -375,13 +376,15 @@ public sealed class SessionCatalogServiceTests : IDisposable
 
         var stats = service.GetStats();
         Assert.Equal(0, stats.TotalTurns);
+        Assert.Equal(0, metrics.TurnCompletedCalls);
     }
 
     [Fact]
     public void OnOutput_TurnCompleted_Failed_IncrementsTurnCount()
     {
         var paths = CreatePaths();
-        var service = CreateService(paths);
+        var metrics = new FakeMetrics();
+        var service = CreateService(paths, metrics: metrics);
         var sessionId = new SessionId("slack/failed-turn-test");
         service.OnSessionActivated(sessionId, ChannelType.Slack);
 
@@ -394,6 +397,7 @@ public sealed class SessionCatalogServiceTests : IDisposable
 
         var stats = service.GetStats();
         Assert.Equal(1, stats.TotalTurns);
+        Assert.Equal(1, metrics.TurnCompletedCalls);
     }
 
     [Fact]
@@ -425,11 +429,12 @@ public sealed class SessionCatalogServiceTests : IDisposable
     private sealed class FakeMetrics : ISessionMetrics
     {
         public List<(long Input, long Output)> TokenUsageCalls { get; } = [];
+        public int TurnCompletedCalls { get; private set; }
 
         public void RecordTokenUsage(long inputTokens, long outputTokens)
             => TokenUsageCalls.Add((inputTokens, outputTokens));
 
-        public void RecordTurnCompleted() { }
+        public void RecordTurnCompleted() => TurnCompletedCalls++;
         public void RecordSessionCreated() { }
         public void RecordMemoriesFormed(int count) { }
         public void RecordMemoriesRecalled(int count) { }
