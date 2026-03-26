@@ -113,6 +113,20 @@
           "minimum": 1,
           "description": "Timeout in seconds for sidecar LLM calls (title, memory, compaction)."
         },
+        "LlmTimeoutMaxRetries": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10,
+          "default": 2,
+          "description": "Maximum number of retries when a per-turn LLM call times out. Set to 0 to disable."
+        },
+        "LlmTimeoutRetryBaseDelaySeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 30,
+          "default": 2,
+          "description": "Base delay in seconds for exponential backoff between LLM timeout retries."
+        },
         "CompactionThreshold": {
           "type": "number",
           "minimum": 0.1,

@@ -58,6 +58,19 @@ public sealed record SessionConfig
     public TimeSpan SidecarLlmTimeout { get; init; } = TimeSpan.FromSeconds(90);
 
     /// <summary>
+    /// Maximum number of retries when a per-turn LLM call times out.
+    /// Set to 0 to disable timeout retry (fail immediately).
+    /// Each retry uses exponential backoff with jitter.
+    /// </summary>
+    public int LlmTimeoutMaxRetries { get; init; } = 2;
+
+    /// <summary>
+    /// Base delay in seconds for exponential backoff between LLM timeout retries.
+    /// Actual delay: min(baseDelay * 2^attempt, 30s) +/- 25% jitter.
+    /// </summary>
+    public int LlmTimeoutRetryBaseDelaySeconds { get; init; } = 2;
+
+    /// <summary>
     /// Internal tuning constants. Bindable from config for development/testing
     /// but not part of the documented operator surface.
     /// </summary>
@@ -80,6 +93,8 @@ public sealed record SessionConfig
             TurnLlmTimeout = TimeSpan.FromSeconds(Math.Max(1, raw.TurnLlmTimeoutSeconds)),
             ToolExecutionTimeout = TimeSpan.FromSeconds(Math.Max(1, raw.ToolExecutionTimeoutSeconds)),
             SidecarLlmTimeout = TimeSpan.FromSeconds(Math.Max(1, raw.SidecarLlmTimeoutSeconds)),
+            LlmTimeoutMaxRetries = Math.Max(0, raw.LlmTimeoutMaxRetries),
+            LlmTimeoutRetryBaseDelaySeconds = Math.Max(1, raw.LlmTimeoutRetryBaseDelaySeconds),
             Tuning = tuning,
         };
     }
@@ -127,5 +142,7 @@ public sealed record SessionConfig
         public int TurnLlmTimeoutSeconds { get; init; } = 180;
         public int ToolExecutionTimeoutSeconds { get; init; } = 90;
         public int SidecarLlmTimeoutSeconds { get; init; } = 90;
+        public int LlmTimeoutMaxRetries { get; init; } = 2;
+        public int LlmTimeoutRetryBaseDelaySeconds { get; init; } = 2;
     }
 }

@@ -26,23 +26,6 @@ public sealed record SessionState
 
     // ── Event application (pure functions) ──
 
-    public SessionState Apply(SystemPromptSet evt)
-    {
-        var systemMsg = new SerializableChatMessage
-        {
-            Role = ChatRole.System,
-            Content = evt.Content
-        };
-
-        // System prompt is always the first message. Replace if present.
-        if (History.Count > 0 && History[0].Role == ChatRole.System)
-        {
-            return this with { History = History.SetItem(0, systemMsg) };
-        }
-
-        return this with { History = History.Insert(0, systemMsg) };
-    }
-
     public SessionState Apply(TurnRecorded evt)
     {
         return this with

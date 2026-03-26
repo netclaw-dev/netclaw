@@ -188,3 +188,9 @@ internal sealed record RequestFinalDistillation;
 /// does not complete distillation within the grace period.
 /// </summary>
 internal sealed record PassivationTimeout;
+
+/// <summary>
+/// Timer-fired message that triggers an LLM call retry after exponential backoff.
+/// Carries the attempt number for observability logging.
+/// </summary>
+internal sealed record RetryLlmCallAfterBackoff(int Attempt);
