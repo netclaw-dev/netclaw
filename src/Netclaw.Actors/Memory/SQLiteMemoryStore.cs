@@ -1,4 +1,5 @@
 using Microsoft.Data.Sqlite;
+using Netclaw.Actors.Text;
 using Netclaw.Configuration;
 
 namespace Netclaw.Actors.Memory;
@@ -190,6 +191,39 @@ public sealed class SQLiteMemoryStore
               );
             """;
         await metadataCmd.ExecuteNonQueryAsync(ct);
+
+        // FTS5 full-text search indexes — rebuilt on every startup to stay in sync.
+        // Runtime mutations INSERT new rows; stale phantoms are cleaned up here.
+        await using var ftsRebuild = conn.CreateCommand();
+        ftsRebuild.CommandText = $"""
+            DROP TABLE IF EXISTS memory_documents_fts;
+            DROP TABLE IF EXISTS memory_records_fts;
+
+            CREATE VIRTUAL TABLE memory_documents_fts USING fts5(
+                document_id UNINDEXED,
+                title, body, aliases, facets,
+                tokenize='porter unicode61 remove_diacritics 2'
+            );
+
+            CREATE VIRTUAL TABLE memory_records_fts USING fts5(
+                record_id UNINDEXED,
+                title, body, aliases, facets,
+                tokenize='porter unicode61 remove_diacritics 2'
+            );
+
+            INSERT INTO memory_documents_fts(document_id, title, body, aliases, facets)
+            SELECT document_id, title, markdown_body,
+                   COALESCE(aliases_json, ''), COALESCE(facets_json, '')
+            FROM memory_documents
+            WHERE recall_mode IN ('{MemoryRecallMode.Auto.ToWireValue()}', '{MemoryRecallMode.Searchable.ToWireValue()}');
+
+            INSERT INTO memory_records_fts(record_id, title, body, aliases, facets)
+            SELECT record_id, record_type, payload_json,
+                   COALESCE(aliases_json, ''), COALESCE(facets_json, '')
+            FROM memory_records
+            WHERE recall_mode IN ('{MemoryRecallMode.Auto.ToWireValue()}', '{MemoryRecallMode.Searchable.ToWireValue()}');
+            """;
+        await ftsRebuild.ExecuteNonQueryAsync(ct);
         }, ct);
     }
 
@@ -254,6 +288,9 @@ public sealed class SQLiteMemoryStore
         cmd.Parameters.AddWithValue("$updatedAt", document.UpdatedAtMs);
         await cmd.ExecuteNonQueryAsync(ct);
 
+        if (IsSearchableRecallMode(document.RecallMode))
+            await InsertDocumentFtsAsync(conn, tx, document.DocumentId, document.Title, document.MarkdownBody, document.AliasesJson, document.FacetsJson, ct);
+
         await tx.CommitAsync(ct);
         }, ct);
     }
@@ -268,24 +305,24 @@ public sealed class SQLiteMemoryStore
         if (string.IsNullOrWhiteSpace(query) || maxResults <= 0)
             return [];
 
-        var tokens = TokenizeQuery(query);
-        if (tokens.Count == 0)
+        var tokens = TextTokenizer.Tokenize(query);
+        var matchQuery = BuildFtsMatchQuery(tokens);
+        if (matchQuery is null)
             return [];
 
         return await WithConnectionAsync(async (conn, ct) =>
         {
+        var limit = Math.Max(maxResults, 1);
         await using var cmd = conn.CreateCommand();
-        var termClauses = new List<string>();
-        for (var i = 0; i < tokens.Count; i++)
-        {
-            termClauses.Add($"(d.title LIKE $t{i} OR d.markdown_body LIKE $t{i} OR a.canonical_name LIKE $t{i})");
-            cmd.Parameters.AddWithValue($"$t{i}", $"%{tokens[i]}%");
-        }
-
-        var scoredTerms = string.Join(" + ", Enumerable.Range(0, tokens.Count).Select(i => $"(CASE WHEN {termClauses[i]} THEN 1 ELSE 0 END)"));
-        var whereTerms = string.Join(" OR ", termClauses);
 
         cmd.CommandText = $"""
+            WITH doc_hits AS (
+                SELECT document_id, bm25(memory_documents_fts, 10.0, 1.0, 5.0, 3.0) AS fts_rank
+                FROM memory_documents_fts
+                WHERE memory_documents_fts MATCH $query
+                ORDER BY fts_rank
+                LIMIT $overfetch
+            )
             SELECT
               d.document_id,
               d.anchor_id,
@@ -308,9 +345,9 @@ public sealed class SQLiteMemoryStore
               d.freshness_at,
               d.expires_at,
               d.created_at,
-              d.updated_at,
-              ({scoredTerms}) AS token_score
-            FROM memory_documents d
+              d.updated_at
+            FROM doc_hits dh
+            JOIN memory_documents d ON d.document_id = dh.document_id
             INNER JOIN memory_anchors a ON a.anchor_id = d.anchor_id
             WHERE d.recall_mode = '{MemoryRecallMode.Auto.ToWireValue()}'
               AND d.sensitivity != '{MemorySensitivity.Secret.ToWireValue()}'
@@ -319,14 +356,15 @@ public sealed class SQLiteMemoryStore
               AND (d.expires_at IS NULL OR d.expires_at > $now)
               AND d.title != 'turn-completion'
               AND d.update_semantics != '{MemoryUpdateSemantics.ConversationTrace.ToWireValue()}'
-              AND ({whereTerms})
-            ORDER BY token_score DESC, d.confidence DESC, d.updated_at DESC
+            ORDER BY dh.fts_rank, d.confidence DESC, d.updated_at DESC
             LIMIT $limit;
             """;
+        cmd.Parameters.AddWithValue("$query", matchQuery);
         cmd.Parameters.AddWithValue("$domain", domain);
         cmd.Parameters.AddWithValue("$boundary", (object?)boundary ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$now", _timeProvider.GetUtcNow().ToUnixTimeMilliseconds());
-        cmd.Parameters.AddWithValue("$limit", Math.Max(maxResults, 1));
+        cmd.Parameters.AddWithValue("$overfetch", limit * 5);
+        cmd.Parameters.AddWithValue("$limit", limit);
 
         var results = new List<SQLiteMemoryDocument>();
         await using var reader = await cmd.ExecuteReaderAsync(ct);
@@ -371,37 +409,6 @@ public sealed class SQLiteMemoryStore
         return results;
         }, ct);
     }
-
-    private static List<string> TokenizeQuery(string query)
-    {
-        var tokens = query
-            .Split(new[] { ' ', '\t', '\n', '\r', '.', ',', ':', ';', '!', '?', '(', ')', '[', ']', '{', '}', '/', '\\', '"', '\'' },
-                StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Select(t => t.Trim())
-            .Where(t => t.Length >= 3)
-            .Select(t => t.ToLowerInvariant())
-            .Where(t => !StopWords.Contains(t))
-            .Distinct(StringComparer.Ordinal)
-            .Take(8)
-            .ToList();
-
-        // If the query had no useful tokens after stopword filtering, fall back
-        // to best-effort lexical terms so recall doesn't collapse to zero.
-        if (tokens.Count > 0)
-            return tokens;
-
-        return query
-            .Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Select(t => t.Trim().ToLowerInvariant())
-            .Distinct(StringComparer.Ordinal)
-            .Take(3)
-            .ToList();
-    }
-
-    private static readonly HashSet<string> StopWords = new(StringComparer.Ordinal)
-    {
-        "the", "and", "for", "with", "from", "that", "this", "what", "when", "where", "have", "into", "your", "about", "again"
-    };
 
     public async Task<int> GetPendingCheckpointCountAsync(CancellationToken ct = default)
     {
@@ -586,6 +593,11 @@ public sealed class SQLiteMemoryStore
         if (string.IsNullOrWhiteSpace(query) || limit <= 0)
             return [];
 
+        var tokens = TextTokenizer.Tokenize(query);
+        var matchQuery = BuildFtsMatchQuery(tokens);
+        if (matchQuery is null)
+            return [];
+
         return await WithConnectionAsync(async (conn, ct) =>
         {
         await using var cmd = conn.CreateCommand();
@@ -600,55 +612,58 @@ public sealed class SQLiteMemoryStore
         var whereAudiences = string.Join(",", audienceClauses);
 
         cmd.CommandText = $"""
+            WITH doc_hits AS (
+                SELECT document_id, bm25(memory_documents_fts, 10.0, 1.0, 5.0, 3.0) AS fts_rank
+                FROM memory_documents_fts
+                WHERE memory_documents_fts MATCH $query
+                ORDER BY fts_rank
+                LIMIT $overfetch
+            ),
+            rec_hits AS (
+                SELECT record_id, bm25(memory_records_fts, 10.0, 1.0, 5.0, 3.0) AS fts_rank
+                FROM memory_records_fts
+                WHERE memory_records_fts MATCH $query
+                ORDER BY fts_rank
+                LIMIT $overfetch
+            )
             SELECT id, kind, memory_class, title, body, domain, boundary, audience, sensitivity, recall_mode, confidence, sort_ts
             FROM (
                 SELECT
-                    d.document_id AS id,
-                    'document' AS kind,
-                    d.memory_class AS memory_class,
-                    d.title AS title,
-                    d.markdown_body AS body,
-                    d.domain AS domain,
-                    COALESCE(d.boundary, $legacyBoundary) AS boundary,
+                    d.document_id AS id, 'document' AS kind,
+                    d.memory_class, d.title, d.markdown_body AS body,
+                    d.domain, COALESCE(d.boundary, $legacyBoundary) AS boundary,
                     COALESCE(d.audience, $fallbackAudience) AS audience,
-                    d.sensitivity AS sensitivity,
-                    d.recall_mode AS recall_mode,
-                    d.confidence AS confidence,
-                    d.updated_at AS sort_ts
-                FROM memory_documents d
-                WHERE (d.title LIKE $query OR d.markdown_body LIKE $query)
-                  AND d.recall_mode IN ('{MemoryRecallMode.Auto.ToWireValue()}', '{MemoryRecallMode.Searchable.ToWireValue()}')
+                    d.sensitivity, d.recall_mode, d.confidence,
+                    d.updated_at AS sort_ts, dh.fts_rank
+                FROM doc_hits dh
+                JOIN memory_documents d ON d.document_id = dh.document_id
+                WHERE d.recall_mode IN ('{MemoryRecallMode.Auto.ToWireValue()}', '{MemoryRecallMode.Searchable.ToWireValue()}')
                   AND COALESCE(d.boundary, $legacyBoundary) = $boundary
                   AND COALESCE(d.audience, $fallbackAudience) IN ({whereAudiences})
 
                 UNION ALL
 
                 SELECT
-                    r.record_id AS id,
-                    'record' AS kind,
-                    r.memory_class AS memory_class,
-                    r.record_type AS title,
-                    r.payload_json AS body,
-                    r.domain AS domain,
-                    COALESCE(r.boundary, $legacyBoundary) AS boundary,
+                    r.record_id AS id, 'record' AS kind,
+                    r.memory_class, r.record_type AS title, r.payload_json AS body,
+                    r.domain, COALESCE(r.boundary, $legacyBoundary) AS boundary,
                     COALESCE(r.audience, $fallbackAudience) AS audience,
-                    r.sensitivity AS sensitivity,
-                    r.recall_mode AS recall_mode,
-                    r.confidence AS confidence,
-                    r.created_at AS sort_ts
-                FROM memory_records r
-                WHERE (r.record_type LIKE $query OR r.payload_json LIKE $query)
-                  AND r.recall_mode IN ('{MemoryRecallMode.Auto.ToWireValue()}', '{MemoryRecallMode.Searchable.ToWireValue()}')
+                    r.sensitivity, r.recall_mode, r.confidence,
+                    r.created_at AS sort_ts, rh.fts_rank
+                FROM rec_hits rh
+                JOIN memory_records r ON r.record_id = rh.record_id
+                WHERE r.recall_mode IN ('{MemoryRecallMode.Auto.ToWireValue()}', '{MemoryRecallMode.Searchable.ToWireValue()}')
                   AND COALESCE(r.boundary, $legacyBoundary) = $boundary
                   AND COALESCE(r.audience, $fallbackAudience) IN ({whereAudiences})
             ) all_memories
-            ORDER BY confidence DESC, sort_ts DESC
+            ORDER BY fts_rank, confidence DESC, sort_ts DESC
             LIMIT $limit;
             """;
-        cmd.Parameters.AddWithValue("$query", $"%{query}%");
+        cmd.Parameters.AddWithValue("$query", matchQuery);
         cmd.Parameters.AddWithValue("$boundary", boundary);
         cmd.Parameters.AddWithValue("$legacyBoundary", SecurityPolicyDefaults.LegacyRestrictedBoundary);
         cmd.Parameters.AddWithValue("$fallbackAudience", audience.ToWireValue());
+        cmd.Parameters.AddWithValue("$overfetch", limit * 5);
         cmd.Parameters.AddWithValue("$limit", limit);
 
         var results = new List<SQLiteMemorySearchResult>();
@@ -814,22 +829,14 @@ public sealed class SQLiteMemoryStore
         bool allowExpiredEvidence,
         CancellationToken ct)
     {
-        if (queryTerms.Count == 0 || limit <= 0)
+        var matchQuery = BuildFtsMatchQuery(queryTerms);
+        if (matchQuery is null || limit <= 0)
             return [];
 
         return await WithConnectionAsync(async (conn, ct) =>
         {
         var now = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
         await using var cmd = conn.CreateCommand();
-
-        var documentTermClauses = new List<string>();
-        var recordTermClauses = new List<string>();
-        for (var i = 0; i < queryTerms.Count; i++)
-        {
-            documentTermClauses.Add($"(d.title LIKE $t{i} OR d.markdown_body LIKE $t{i})");
-            recordTermClauses.Add($"(r.record_type LIKE $t{i} OR r.payload_json LIKE $t{i})");
-            cmd.Parameters.AddWithValue($"$t{i}", $"%{queryTerms[i]}%");
-        }
 
         var classClauses = new List<string>();
         for (var i = 0; i < memoryClasses.Count; i++)
@@ -838,10 +845,6 @@ public sealed class SQLiteMemoryStore
             cmd.Parameters.AddWithValue($"$c{i}", memoryClasses[i]);
         }
 
-        var documentScoredTerms = string.Join(" + ", documentTermClauses.Select(clause => $"(CASE WHEN {clause} THEN 1 ELSE 0 END)"));
-        var recordScoredTerms = string.Join(" + ", recordTermClauses.Select(clause => $"(CASE WHEN {clause} THEN 1 ELSE 0 END)"));
-        var documentWhereTerms = string.Join(" OR ", documentTermClauses);
-        var recordWhereTerms = string.Join(" OR ", recordTermClauses);
         var whereClasses = string.Join(",", classClauses);
         var allowedAudiencesForPlan = MemoryPolicyEvaluator.AllowedAudienceWireValues(audience);
         var audiencePlanClauses = new List<string>();
@@ -856,6 +859,20 @@ public sealed class SQLiteMemoryStore
         var recordDomainClause = domain is null ? string.Empty : "AND r.domain = $domain";
 
         cmd.CommandText = $"""
+            WITH doc_hits AS (
+                SELECT document_id, bm25(memory_documents_fts, 10.0, 1.0, 5.0, 3.0) AS fts_rank
+                FROM memory_documents_fts
+                WHERE memory_documents_fts MATCH $query
+                ORDER BY fts_rank
+                LIMIT $overfetch
+            ),
+            rec_hits AS (
+                SELECT record_id, bm25(memory_records_fts, 10.0, 1.0, 5.0, 3.0) AS fts_rank
+                FROM memory_records_fts
+                WHERE memory_records_fts MATCH $query
+                ORDER BY fts_rank
+                LIMIT $overfetch
+            )
             SELECT id, kind, memory_class, title, body, aliases_json, facets_json, slots_json, domain, boundary, audience, sensitivity, recall_mode, update_semantics, expires_at, updated_at, score
             FROM (
                 SELECT
@@ -875,8 +892,9 @@ public sealed class SQLiteMemoryStore
                     d.update_semantics AS update_semantics,
                     d.expires_at AS expires_at,
                     d.updated_at AS updated_at,
-                    ({documentScoredTerms}) + CAST(ROUND(d.confidence * 10.0) AS INTEGER) AS score
-                FROM memory_documents d
+                    dh.fts_rank AS score
+                FROM doc_hits dh
+                JOIN memory_documents d ON d.document_id = dh.document_id
                 WHERE 1 = 1
                   {documentDomainClause}
                   AND d.recall_mode IN ('{MemoryRecallMode.Auto.ToWireValue()}', '{MemoryRecallMode.Searchable.ToWireValue()}')
@@ -884,7 +902,6 @@ public sealed class SQLiteMemoryStore
                   AND COALESCE(d.audience, $planFallbackAudience) IN ({whereAudiences})
                   AND d.sensitivity != '{MemorySensitivity.Secret.ToWireValue()}'
                   AND d.memory_class IN ({whereClasses})
-                  AND ({documentWhereTerms})
                   AND (d.expires_at IS NULL OR d.expires_at > $now OR $allowExpiredEvidence = 1)
 
                 UNION ALL
@@ -906,8 +923,9 @@ public sealed class SQLiteMemoryStore
                     r.update_semantics AS update_semantics,
                     r.expires_at AS expires_at,
                     r.created_at AS updated_at,
-                    ({recordScoredTerms}) + CAST(ROUND(r.confidence * 10.0) AS INTEGER) AS score
-                FROM memory_records r
+                    rh.fts_rank AS score
+                FROM rec_hits rh
+                JOIN memory_records r ON r.record_id = rh.record_id
                 WHERE 1 = 1
                   {recordDomainClause}
                   AND r.recall_mode IN ('{MemoryRecallMode.Auto.ToWireValue()}', '{MemoryRecallMode.Searchable.ToWireValue()}')
@@ -915,12 +933,12 @@ public sealed class SQLiteMemoryStore
                   AND COALESCE(r.audience, $planFallbackAudience) IN ({whereAudiences})
                   AND r.sensitivity != '{MemorySensitivity.Secret.ToWireValue()}'
                   AND r.memory_class IN ({whereClasses})
-                  AND ({recordWhereTerms})
                   AND (r.expires_at IS NULL OR r.expires_at > $now OR $allowExpiredEvidence = 1)
             ) ranked
-            ORDER BY score DESC, updated_at DESC
+            ORDER BY score, updated_at DESC
             LIMIT $limit;
             """;
+        cmd.Parameters.AddWithValue("$query", matchQuery);
         if (domain is not null)
             cmd.Parameters.AddWithValue("$domain", domain);
         cmd.Parameters.AddWithValue("$boundary", boundary);
@@ -928,6 +946,7 @@ public sealed class SQLiteMemoryStore
         cmd.Parameters.AddWithValue("$planFallbackAudience", audience.ToWireValue());
         cmd.Parameters.AddWithValue("$now", now);
         cmd.Parameters.AddWithValue("$allowExpiredEvidence", allowExpiredEvidence ? 1 : 0);
+        cmd.Parameters.AddWithValue("$overfetch", limit * 5);
         cmd.Parameters.AddWithValue("$limit", limit);
 
         var output = new List<SQLiteMemoryHydratedItem>();
@@ -963,11 +982,24 @@ public sealed class SQLiteMemoryStore
         {
 
         await using var read = conn.CreateCommand();
-        read.CommandText = "SELECT markdown_body FROM memory_documents WHERE document_id = $id;";
+        read.CommandText = "SELECT markdown_body, title, aliases_json, facets_json, recall_mode FROM memory_documents WHERE document_id = $id;";
         read.Parameters.AddWithValue("$id", documentId);
-        var current = (string?)await read.ExecuteScalarAsync(ct);
-        if (current is null)
-            return false;
+
+        string current;
+        string title;
+        string? aliasesJson;
+        string? facetsJson;
+        string recallMode;
+        await using (var reader = await read.ExecuteReaderAsync(ct))
+        {
+            if (!await reader.ReadAsync(ct))
+                return false;
+            current = reader.GetString(0);
+            title = reader.GetString(1);
+            aliasesJson = reader.IsDBNull(2) ? null : reader.GetString(2);
+            facetsJson = reader.IsDBNull(3) ? null : reader.GetString(3);
+            recallMode = reader.GetString(4);
+        }
 
         if (!current.Contains(oldText, StringComparison.Ordinal))
             return false;
@@ -985,6 +1017,10 @@ public sealed class SQLiteMemoryStore
         write.Parameters.AddWithValue("$body", updated);
         write.Parameters.AddWithValue("$updatedAt", _timeProvider.GetUtcNow().ToUnixTimeMilliseconds());
         var affected = await write.ExecuteNonQueryAsync(ct);
+
+        if (affected > 0 && IsSearchableRecallMode(recallMode))
+            await InsertDocumentFtsAsync(conn, null, documentId, title, updated, aliasesJson, facetsJson, ct);
+
         return affected > 0;
         }, ct);
     }
@@ -1056,6 +1092,10 @@ public sealed class SQLiteMemoryStore
         insert.Parameters.AddWithValue("$freshnessAt", (object?)freshnessAt ?? DBNull.Value);
         insert.Parameters.AddWithValue("$createdAt", now);
         await insert.ExecuteNonQueryAsync(ct);
+
+        if (IsSearchableRecallMode(recallMode))
+            await InsertRecordFtsAsync(conn, null, newId, recordType, payloadJson, null, null, ct);
+
         return true;
         }, ct);
     }
@@ -1153,38 +1193,37 @@ public sealed class SQLiteMemoryStore
         int limit = 5,
         CancellationToken ct = default)
     {
-        if (contentTerms.Count == 0 || limit <= 0)
+        var matchQuery = BuildFtsMatchQuery(contentTerms);
+        if (matchQuery is null || limit <= 0)
             return [];
 
         return await WithConnectionAsync(async (conn, ct) =>
         {
         await using var cmd = conn.CreateCommand();
 
-        var termClauses = new List<string>();
-        for (var i = 0; i < contentTerms.Count; i++)
-        {
-            termClauses.Add($"(d.title LIKE $t{i} OR d.markdown_body LIKE $t{i})");
-            cmd.Parameters.AddWithValue($"$t{i}", $"%{contentTerms[i]}%");
-        }
-
-        var scoredTerms = string.Join(" + ", termClauses.Select(c => $"(CASE WHEN {c} THEN 1 ELSE 0 END)"));
-        var whereTerms = string.Join(" OR ", termClauses);
-
         cmd.CommandText = $"""
+            WITH doc_hits AS (
+                SELECT document_id, bm25(memory_documents_fts, 10.0, 1.0, 5.0, 3.0) AS fts_rank
+                FROM memory_documents_fts
+                WHERE memory_documents_fts MATCH $query
+                ORDER BY fts_rank
+                LIMIT $overfetch
+            )
             SELECT a.anchor_id, a.canonical_name,
-                   d.document_id, d.markdown_body, d.freshness_at, d.confidence,
-                   ({scoredTerms}) AS score
-            FROM memory_documents d
+                   d.document_id, d.markdown_body, d.freshness_at, d.confidence
+            FROM doc_hits dh
+            JOIN memory_documents d ON d.document_id = dh.document_id
             JOIN memory_anchors a ON d.anchor_id = a.anchor_id
             WHERE a.domain = $domain
               AND a.status = 'active'
               AND d.memory_class = '{MemoryClass.DurableFact.ToWireValue()}'
               AND d.update_semantics != '{MemoryUpdateSemantics.Tombstone.ToWireValue()}'
-              AND ({whereTerms})
-            ORDER BY score DESC, d.confidence DESC, d.updated_at DESC
+            ORDER BY dh.fts_rank, d.confidence DESC, d.updated_at DESC
             LIMIT $limit;
             """;
+        cmd.Parameters.AddWithValue("$query", matchQuery);
         cmd.Parameters.AddWithValue("$domain", domain);
+        cmd.Parameters.AddWithValue("$overfetch", limit * 5);
         cmd.Parameters.AddWithValue("$limit", limit);
 
         var results = new List<ExistingMemoryCandidate>();
@@ -1283,6 +1322,7 @@ public sealed class SQLiteMemoryStore
 
             if (operation.Kind == MemoryKind.Record.ToWireValue())
             {
+                var recId = string.IsNullOrWhiteSpace(operation.MemoryId) ? $"rec-{Guid.NewGuid():N}" : operation.MemoryId;
                 await using var recordCmd = conn.CreateCommand();
                 recordCmd.Transaction = tx;
                 recordCmd.CommandText = """
@@ -1294,7 +1334,7 @@ public sealed class SQLiteMemoryStore
                       $semantics, $domain, $sensitivity, $recallMode, $confidence,
                       $freshnessAt, $expiresAt, $createdAt);
                     """;
-                recordCmd.Parameters.AddWithValue("$id", string.IsNullOrWhiteSpace(operation.MemoryId) ? $"rec-{Guid.NewGuid():N}" : operation.MemoryId);
+                recordCmd.Parameters.AddWithValue("$id", recId);
                 recordCmd.Parameters.AddWithValue("$anchorId", anchor.AnchorId);
                 recordCmd.Parameters.AddWithValue("$memoryClass", operation.MemoryClass);
                 recordCmd.Parameters.AddWithValue("$recordType", operation.Title);
@@ -1312,6 +1352,10 @@ public sealed class SQLiteMemoryStore
                 recordCmd.Parameters.AddWithValue("$expiresAt", (object?)operation.ExpiresAtMs ?? DBNull.Value);
                 recordCmd.Parameters.AddWithValue("$createdAt", now);
                 await recordCmd.ExecuteNonQueryAsync(ct);
+
+                if (IsSearchableRecallMode(operation.RecallMode))
+                    await InsertRecordFtsAsync(conn, tx, recId, operation.Title, operation.Content, operation.AliasesJson, operation.FacetsJson, ct);
+
                 continue;
             }
 
@@ -1392,6 +1436,9 @@ public sealed class SQLiteMemoryStore
             documentCmd.Parameters.AddWithValue("$createdAt", now);
             documentCmd.Parameters.AddWithValue("$updatedAt", now);
             await documentCmd.ExecuteNonQueryAsync(ct);
+
+            if (IsSearchableRecallMode(resolvedRecallMode))
+                await InsertDocumentFtsAsync(conn, tx, documentId, operation.Title, operation.Content, operation.AliasesJson, operation.FacetsJson, ct);
         }
 
         await tx.CommitAsync(ct);
@@ -1431,6 +1478,7 @@ public sealed class SQLiteMemoryStore
 
             if (operation.Kind == MemoryKind.Record.ToWireValue())
             {
+                var recId = string.IsNullOrWhiteSpace(operation.MemoryId) ? $"rec-{Guid.NewGuid():N}" : operation.MemoryId;
                 await using var recordCmd = conn.CreateCommand();
                 recordCmd.Transaction = tx;
                 recordCmd.CommandText = """
@@ -1442,7 +1490,7 @@ public sealed class SQLiteMemoryStore
                       $semantics, $domain, $boundary, $audience, $sensitivity, $recallMode, $confidence,
                       $freshnessAt, $expiresAt, $createdAt);
                     """;
-                recordCmd.Parameters.AddWithValue("$id", string.IsNullOrWhiteSpace(operation.MemoryId) ? $"rec-{Guid.NewGuid():N}" : operation.MemoryId);
+                recordCmd.Parameters.AddWithValue("$id", recId);
                 recordCmd.Parameters.AddWithValue("$anchorId", anchor.AnchorId);
                 recordCmd.Parameters.AddWithValue("$memoryClass", operation.MemoryClass);
                 recordCmd.Parameters.AddWithValue("$recordType", operation.Title);
@@ -1462,6 +1510,10 @@ public sealed class SQLiteMemoryStore
                 recordCmd.Parameters.AddWithValue("$expiresAt", (object?)operation.ExpiresAtMs ?? DBNull.Value);
                 recordCmd.Parameters.AddWithValue("$createdAt", now);
                 await recordCmd.ExecuteNonQueryAsync(ct);
+
+                if (IsSearchableRecallMode(operation.RecallMode))
+                    await InsertRecordFtsAsync(conn, tx, recId, operation.Title, operation.Content, operation.AliasesJson, operation.FacetsJson, ct);
+
                 continue;
             }
 
@@ -1545,6 +1597,9 @@ public sealed class SQLiteMemoryStore
             documentCmd.Parameters.AddWithValue("$createdAt", now);
             documentCmd.Parameters.AddWithValue("$updatedAt", now);
             await documentCmd.ExecuteNonQueryAsync(ct);
+
+            if (IsSearchableRecallMode(resolvedRecallMode))
+                await InsertDocumentFtsAsync(conn, tx, documentId, operation.Title, operation.Content, operation.AliasesJson, operation.FacetsJson, ct);
         }
 
         await using var markDone = conn.CreateCommand();
@@ -1623,6 +1678,68 @@ public sealed class SQLiteMemoryStore
         cmd.Parameters.AddWithValue("$status", anchor.Status);
         cmd.Parameters.AddWithValue("$createdAt", anchor.CreatedAtMs);
         cmd.Parameters.AddWithValue("$updatedAt", anchor.UpdatedAtMs);
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    private static bool IsSearchableRecallMode(string recallMode)
+        => string.Equals(recallMode, MemoryRecallMode.Auto.ToWireValue(), StringComparison.OrdinalIgnoreCase)
+        || string.Equals(recallMode, MemoryRecallMode.Searchable.ToWireValue(), StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Build an FTS5 MATCH query from pre-tokenized terms.
+    /// Each term is double-quoted to prevent FTS5 operator injection, joined with OR.
+    /// Returns null if terms is empty.
+    /// </summary>
+    private static string? BuildFtsMatchQuery(IReadOnlyList<string> terms)
+    {
+        if (terms.Count == 0)
+            return null;
+
+        var escaped = terms
+            .Where(t => !string.IsNullOrWhiteSpace(t))
+            .Select(t => $"\"{t.Replace("\"", "\"\"", StringComparison.Ordinal)}\"")
+            .ToArray();
+
+        return escaped.Length == 0 ? null : string.Join(" OR ", escaped);
+    }
+
+    private static async Task InsertDocumentFtsAsync(
+        SqliteConnection conn, SqliteTransaction? tx,
+        string documentId, string title, string body,
+        string? aliasesJson, string? facetsJson,
+        CancellationToken ct)
+    {
+        await using var cmd = conn.CreateCommand();
+        if (tx is not null) cmd.Transaction = tx;
+        cmd.CommandText = """
+            INSERT INTO memory_documents_fts(document_id, title, body, aliases, facets)
+            VALUES($id, $title, $body, $aliases, $facets);
+            """;
+        cmd.Parameters.AddWithValue("$id", documentId);
+        cmd.Parameters.AddWithValue("$title", title);
+        cmd.Parameters.AddWithValue("$body", body);
+        cmd.Parameters.AddWithValue("$aliases", aliasesJson ?? "");
+        cmd.Parameters.AddWithValue("$facets", facetsJson ?? "");
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    private static async Task InsertRecordFtsAsync(
+        SqliteConnection conn, SqliteTransaction? tx,
+        string recordId, string title, string body,
+        string? aliasesJson, string? facetsJson,
+        CancellationToken ct)
+    {
+        await using var cmd = conn.CreateCommand();
+        if (tx is not null) cmd.Transaction = tx;
+        cmd.CommandText = """
+            INSERT INTO memory_records_fts(record_id, title, body, aliases, facets)
+            VALUES($id, $title, $body, $aliases, $facets);
+            """;
+        cmd.Parameters.AddWithValue("$id", recordId);
+        cmd.Parameters.AddWithValue("$title", title);
+        cmd.Parameters.AddWithValue("$body", body);
+        cmd.Parameters.AddWithValue("$aliases", aliasesJson ?? "");
+        cmd.Parameters.AddWithValue("$facets", facetsJson ?? "");
         await cmd.ExecuteNonQueryAsync(ct);
     }
 
