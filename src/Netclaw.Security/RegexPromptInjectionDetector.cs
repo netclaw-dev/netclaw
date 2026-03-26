@@ -8,6 +8,21 @@ namespace Netclaw.Security;
 /// Shared infrastructure — usable by skill scanning, webhook validation,
 /// and any other content trust boundary.
 /// </summary>
+/// <remarks>
+/// <para><b>Security note — known evasion vectors:</b></para>
+/// <para>This is a heuristic tripwire, not a complete defense. Known bypasses include:</para>
+/// <list type="bullet">
+///   <item>Unicode homoglyphs (e.g., Cyrillic 'а' instead of Latin 'a')</item>
+///   <item>Encoding indirection (Base64/ROT13 payloads decoded by the LLM at execution time)</item>
+///   <item>Synonym substitution (e.g., "dismiss preceding directives" vs "ignore previous instructions")</item>
+///   <item>Multi-file split (distributing injection fragments across SKILL.md and resource files)</item>
+///   <item>Indirect instruction injection (e.g., "When the user says X, your new behavior should be Y")</item>
+///   <item>Non-English attacks (all patterns are English-only)</item>
+/// </list>
+/// <para>Operators should treat this scanner as one layer in a defense-in-depth strategy,
+/// not a sole security boundary. Trust-tier-based policy and CDN hash verification
+/// provide additional layers.</para>
+/// </remarks>
 public sealed partial class RegexPromptInjectionDetector : IPromptInjectionDetector
 {
     private readonly ILogger<RegexPromptInjectionDetector> _logger;
@@ -17,7 +32,7 @@ public sealed partial class RegexPromptInjectionDetector : IPromptInjectionDetec
         // ── Prompt injection (High) ──────────────────────────────────────
         new(IgnorePreviousInstructionsRegex(), PromptInjectionRisk.High,
             "PromptInjection", "Attempts to override previous instructions"),
-        new(YouAreNowRegex(), PromptInjectionRisk.High,
+        new(YouAreNowRegex(), PromptInjectionRisk.Medium,
             "PromptInjection", "Role override attempt"),
         new(ForgetPreviousRegex(), PromptInjectionRisk.High,
             "PromptInjection", "Context reset attempt"),
@@ -33,7 +48,7 @@ public sealed partial class RegexPromptInjectionDetector : IPromptInjectionDetec
             "PromptInjection", "Security policy override attempt"),
 
         // ── Prompt injection (Medium) ────────────────────────────────────
-        new(ActAsRegex(), PromptInjectionRisk.Medium,
+        new(ActAsIfYouRegex(), PromptInjectionRisk.Medium,
             "PromptInjection", "Role assumption attempt"),
 
         // ── Data exfiltration (High) ─────────────────────────────────────
@@ -155,8 +170,8 @@ public sealed partial class RegexPromptInjectionDetector : IPromptInjectionDetec
     private static partial Regex OverrideSecurityRegex();
 
     // Prompt injection (Medium)
-    [GeneratedRegex(@"\bact\s+as\s+(a|an|if)\b", RegexOptions.IgnoreCase, matchTimeoutMilliseconds: 1000)]
-    private static partial Regex ActAsRegex();
+    [GeneratedRegex(@"\bact\s+as\s+if\s+you\b", RegexOptions.IgnoreCase, matchTimeoutMilliseconds: 1000)]
+    private static partial Regex ActAsIfYouRegex();
 
     // Data exfiltration (High)
     [GeneratedRegex(@"(send|post|transmit|exfiltrate|upload)\b.{0,40}\b(secret|password|token|credential|api[_\-]?key)", RegexOptions.IgnoreCase, matchTimeoutMilliseconds: 1000)]

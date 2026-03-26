@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using Netclaw.Actors.Skills;
+using Netclaw.Configuration;
 using Netclaw.Security.Skills;
 using Netclaw.Tools;
 
@@ -21,6 +22,8 @@ public sealed partial class SkillReadResourceTool : NetclawTool<SkillReadResourc
         "assets"
     };
 
+    private const SkillTrustTier LoadScanMinimumTrustTier = SkillTrustTier.Community;
+
     private readonly SkillRegistry _skillRegistry;
     private readonly ISkillContentScanner _scanner;
 
@@ -30,10 +33,10 @@ public sealed partial class SkillReadResourceTool : NetclawTool<SkillReadResourc
         [property: Description("Relative path within the skill directory (e.g., 'references/checklist.md')")]
         string ResourcePath);
 
-    public SkillReadResourceTool(SkillRegistry skillRegistry, ISkillContentScanner? scanner = null)
+    public SkillReadResourceTool(SkillRegistry skillRegistry, ISkillContentScanner scanner)
     {
         _skillRegistry = skillRegistry;
-        _scanner = scanner ?? new NoOpSkillContentScanner();
+        _scanner = scanner;
     }
 
     protected override async Task<string> ExecuteAsync(Params args, CancellationToken ct)
@@ -87,7 +90,7 @@ public sealed partial class SkillReadResourceTool : NetclawTool<SkillReadResourc
         try
         {
             var content = File.ReadAllText(fullPath);
-            var scanResult = await _scanner.ScanAsync($"{skillName}:{resourcePath}", content, skill.TrustTier, ct);
+            var scanResult = await _scanner.ScanAsync($"{skillName}:{resourcePath}", content, GetLoadScanTier(skill.TrustTier), ct);
             if (!scanResult.IsAllowed)
                 return $"Resource '{resourcePath}' blocked by content scan: {scanResult.Reason}";
 
@@ -101,6 +104,11 @@ public sealed partial class SkillReadResourceTool : NetclawTool<SkillReadResourc
             return $"Failed to read resource: {ex.Message}";
         }
     }
+
+    private static SkillTrustTier GetLoadScanTier(SkillTrustTier storedTrustTier)
+        => storedTrustTier < LoadScanMinimumTrustTier
+            ? LoadScanMinimumTrustTier
+            : storedTrustTier;
 
     private static bool ContainsSymlink(string path)
     {

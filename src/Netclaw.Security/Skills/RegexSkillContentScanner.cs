@@ -44,7 +44,7 @@ public sealed class RegexSkillContentScanner : ISkillContentScanner
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Skill content scanning failed for '{SkillName}'", skillName);
-            return SkillScanResult.Reject($"content scanning failed: {ex.Message}");
+            return SkillScanResult.Reject("content scanning failed");
         }
 
         if (detection.Risk == PromptInjectionRisk.None)

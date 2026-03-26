@@ -415,6 +415,13 @@ public static partial class SkillScanner
             || path.StartsWith(canonicalRoot + Path.DirectorySeparatorChar, StringComparison.Ordinal)
             || path.StartsWith(canonicalRoot + Path.AltDirectorySeparatorChar, StringComparison.Ordinal);
 
+    /// <remarks>
+    /// TOCTOU caveat: the symlink check runs before the subsequent file read, so an
+    /// attacker with local filesystem access could create a symlink between the check
+    /// and the read. Full mitigation requires OS-level sandboxing (e.g., seccomp,
+    /// AppArmor). At the point where an attacker has local filesystem write access,
+    /// they have many other attack vectors, so this check is a best-effort guardrail.
+    /// </remarks>
     private static bool ContainsSymlink(string path, string canonicalRoot)
     {
         string? current = path;

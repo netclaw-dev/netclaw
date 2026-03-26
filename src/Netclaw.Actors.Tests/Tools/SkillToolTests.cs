@@ -47,7 +47,7 @@ public class SkillToolTests : IDisposable
             """);
         ScanSkills();
 
-        var tool = new SkillLoadTool(_registry);
+        var tool = new SkillLoadTool(_registry, new NoOpSkillContentScanner());
         var result = await tool.ExecuteAsync(
             new Dictionary<string, object?> { ["Name"] = "test-skill" });
 
@@ -60,7 +60,7 @@ public class SkillToolTests : IDisposable
     public async Task SkillLoad_ReturnsErrorForUnknownSkill()
     {
         ScanSkills();
-        var tool = new SkillLoadTool(_registry);
+        var tool = new SkillLoadTool(_registry, new NoOpSkillContentScanner());
         var result = await tool.ExecuteAsync(
             new Dictionary<string, object?> { ["Name"] = "nonexistent" });
 
@@ -102,7 +102,7 @@ public class SkillToolTests : IDisposable
         WriteFile("my-skill", "references/guide.md", "# Guide Content");
         ScanSkills();
 
-        var tool = new SkillReadResourceTool(_registry);
+        var tool = new SkillReadResourceTool(_registry, new NoOpSkillContentScanner());
         var result = await tool.ExecuteAsync(new Dictionary<string, object?>
         {
             ["SkillName"] = "my-skill",
@@ -124,7 +124,7 @@ public class SkillToolTests : IDisposable
             """);
         ScanSkills();
 
-        var tool = new SkillReadResourceTool(_registry);
+        var tool = new SkillReadResourceTool(_registry, new NoOpSkillContentScanner());
         var result = await tool.ExecuteAsync(new Dictionary<string, object?>
         {
             ["SkillName"] = "my-skill",
@@ -146,7 +146,7 @@ public class SkillToolTests : IDisposable
             """);
         ScanSkills();
 
-        var tool = new SkillReadResourceTool(_registry);
+        var tool = new SkillReadResourceTool(_registry, new NoOpSkillContentScanner());
         var result = await tool.ExecuteAsync(new Dictionary<string, object?>
         {
             ["SkillName"] = "my-skill",
@@ -168,7 +168,7 @@ public class SkillToolTests : IDisposable
             """);
         ScanSkills();
 
-        var tool = new SkillReadResourceTool(_registry);
+        var tool = new SkillReadResourceTool(_registry, new NoOpSkillContentScanner());
         var result = await tool.ExecuteAsync(new Dictionary<string, object?>
         {
             ["SkillName"] = "my-skill",
