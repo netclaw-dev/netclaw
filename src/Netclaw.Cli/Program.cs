@@ -71,6 +71,12 @@ static async Task RunAsync(string[] args)
             break;
     }
 
+    // Fire-and-forget update check for non-TUI modes only.
+    // TUI modes (chat, sessions, headless, init) must not run background checks
+    // that write to Console, as it corrupts the terminal UI.
+    if (mode is not ("chat" or "sessions" or "headless" or "init"))
+        _ = UpdateCommand.BackgroundUpdateCheckAsync();
+
     // ── Lightweight modes (no Akka, no persistence) ──
     if (mode is "init" or "doctor")
     {
@@ -729,11 +735,6 @@ static async Task RunAsync(string[] args)
     }
 
     var app = webBuilder.Build();
-
-    // Fire-and-forget update check for interactive modes
-    if (mode is "chat" or "sessions")
-        _ = UpdateCommand.BackgroundUpdateCheckAsync();
-
     await app.RunAsync();
 }
 
