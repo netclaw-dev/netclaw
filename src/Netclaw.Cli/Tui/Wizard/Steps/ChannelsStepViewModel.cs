@@ -1,3 +1,4 @@
+using Netclaw.Actors.Channels;
 using Netclaw.Configuration;
 
 namespace Netclaw.Cli.Tui.Wizard.Steps;
@@ -70,7 +71,7 @@ public sealed class ChannelsStepViewModel : IWizardStepViewModel
     /// Add a channel entry to a specific source bucket.
     /// Called by the Channels view when the user adds a channel manually.
     /// </summary>
-    public void AddEntry(string source, ChannelEntry entry)
+    public void AddEntry(ChannelType source, ChannelEntry entry)
     {
         if (_context is null) return;
         if (!_context.ChannelEntries.TryGetValue(source, out var entries))
@@ -98,7 +99,7 @@ public sealed class ChannelsStepViewModel : IWizardStepViewModel
     /// <summary>
     /// Get the source key for a given entry (for display grouping).
     /// </summary>
-    public string? GetSource(ChannelEntry entry)
+    public ChannelType? GetSource(ChannelEntry entry)
     {
         if (_context is null) return null;
         foreach (var (source, entries) in _context.ChannelEntries)

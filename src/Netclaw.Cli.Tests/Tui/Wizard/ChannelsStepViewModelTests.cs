@@ -1,3 +1,4 @@
+using Netclaw.Actors.Channels;
 using Netclaw.Cli.Tui;
 using Netclaw.Cli.Tui.Wizard;
 using Netclaw.Cli.Tui.Wizard.Steps;
@@ -50,12 +51,12 @@ public sealed class ChannelsStepViewModelTests : IDisposable
     [Fact]
     public void AllEntries_FlattensAcrossSources()
     {
-        _context.ChannelEntries["slack"] =
+        _context.ChannelEntries[ChannelType.Slack] =
         [
             new ChannelEntry("#general", "C123", "team"),
             new ChannelEntry("DMs", "dm", "personal", isDmRow: true)
         ];
-        _context.ChannelEntries["discord"] =
+        _context.ChannelEntries[ChannelType.Tui] =
         [
             new ChannelEntry("#dev-chat", "123456", "team")
         ];
@@ -73,23 +74,23 @@ public sealed class ChannelsStepViewModelTests : IDisposable
         using var step = new ChannelsStepViewModel();
         step.OnEnter(_context, NavigationDirection.Forward);
 
-        step.AddEntry("slack", new ChannelEntry("#random", "random", "team"));
+        step.AddEntry(ChannelType.Slack, new ChannelEntry("#random", "random", "team"));
 
-        Assert.Single(_context.ChannelEntries["slack"]);
-        Assert.Equal("#random", _context.ChannelEntries["slack"][0].DisplayName);
+        Assert.Single(_context.ChannelEntries[ChannelType.Slack]);
+        Assert.Equal("#random", _context.ChannelEntries[ChannelType.Slack][0].DisplayName);
     }
 
     [Fact]
     public void RemoveEntry_RemovesFromCorrectBucket()
     {
         var entry = new ChannelEntry("#general", "C123", "team");
-        _context.ChannelEntries["slack"] = [entry];
+        _context.ChannelEntries[ChannelType.Slack] = [entry];
 
         using var step = new ChannelsStepViewModel();
         step.OnEnter(_context, NavigationDirection.Forward);
 
         Assert.True(step.RemoveEntry(entry));
-        Assert.Empty(_context.ChannelEntries["slack"]);
+        Assert.Empty(_context.ChannelEntries[ChannelType.Slack]);
     }
 
     [Fact]
@@ -97,13 +98,13 @@ public sealed class ChannelsStepViewModelTests : IDisposable
     {
         var slackEntry = new ChannelEntry("#general", "C123", "team");
         var discordEntry = new ChannelEntry("#dev", "123", "team");
-        _context.ChannelEntries["slack"] = [slackEntry];
-        _context.ChannelEntries["discord"] = [discordEntry];
+        _context.ChannelEntries[ChannelType.Slack] = [slackEntry];
+        _context.ChannelEntries[ChannelType.Tui] = [discordEntry];
 
         using var step = new ChannelsStepViewModel();
         step.OnEnter(_context, NavigationDirection.Forward);
 
-        Assert.Equal("slack", step.GetSource(slackEntry));
-        Assert.Equal("discord", step.GetSource(discordEntry));
+        Assert.Equal(ChannelType.Slack, step.GetSource(slackEntry));
+        Assert.Equal(ChannelType.Tui, step.GetSource(discordEntry));
     }
 }

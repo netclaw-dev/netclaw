@@ -1,3 +1,4 @@
+using Netclaw.Actors.Channels;
 using Netclaw.Cli.Tui;
 using Netclaw.Configuration;
 using R3;
@@ -122,9 +123,9 @@ public sealed class ChannelsStepView : IWizardStepView
                         if (!entries.Any(e =>
                             e.DisplayName.Equals($"#{text}", StringComparison.OrdinalIgnoreCase)))
                         {
-                            // Add to "slack" by default — when Discord is added,
+                            // Add to Slack by default — when Discord is added,
                             // the add UI will need a source selector
-                            _vm.AddEntry("slack", new ChannelEntry($"#{text}", text, audience));
+                            _vm.AddEntry(ChannelType.Slack, new ChannelEntry($"#{text}", text, audience));
                         }
                     }
 

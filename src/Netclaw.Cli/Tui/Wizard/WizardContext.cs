@@ -1,3 +1,4 @@
+using Netclaw.Actors.Channels;
 using Netclaw.Configuration;
 using Netclaw.Providers;
 using R3;
@@ -36,7 +37,7 @@ public sealed class WizardContext : IDisposable
     /// This allows DM entries and channel entries from different platforms to be
     /// configured independently (e.g., Slack DMs vs Discord DMs).
     /// </summary>
-    public Dictionary<string, List<ChannelEntry>> ChannelEntries { get; } = new(StringComparer.Ordinal);
+    public Dictionary<ChannelType, List<ChannelEntry>> ChannelEntries { get; } = [];
 
     /// <summary>Shared status message displayed at the bottom of the wizard.</summary>
     public ReactiveProperty<string> StatusMessage { get; } = new("");

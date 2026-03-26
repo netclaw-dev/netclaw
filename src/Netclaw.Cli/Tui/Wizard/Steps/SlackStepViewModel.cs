@@ -1,3 +1,4 @@
+using Netclaw.Actors.Channels;
 using Netclaw.Channels.Slack;
 using Netclaw.Configuration;
 
@@ -131,11 +132,11 @@ public sealed class SlackStepViewModel : IWizardStepViewModel
                     entries.Add(new ChannelEntry($"#{name}", name, channelAudience));
             }
 
-            _context.ChannelEntries["slack"] = entries;
+            _context.ChannelEntries[ChannelType.Slack] = entries;
         }
         else
         {
-            _context.ChannelEntries.Remove("slack");
+            _context.ChannelEntries.Remove(ChannelType.Slack);
         }
     }
 
@@ -262,8 +263,8 @@ public sealed class SlackStepViewModel : IWizardStepViewModel
         if (_context is null)
             return null;
 
-        // Read from the "slack" bucket in the source-keyed channel entries
-        if (!_context.ChannelEntries.TryGetValue("slack", out var slackEntries))
+        // Read from the Slack bucket in the source-keyed channel entries
+        if (!_context.ChannelEntries.TryGetValue(ChannelType.Slack, out var slackEntries))
             return null;
 
         var audiences = new Dictionary<string, string>(StringComparer.Ordinal);

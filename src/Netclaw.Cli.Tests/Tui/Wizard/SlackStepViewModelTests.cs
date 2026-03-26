@@ -1,3 +1,4 @@
+using Netclaw.Actors.Channels;
 using Netclaw.Channels.Slack;
 using Netclaw.Cli.Tui;
 using Netclaw.Cli.Tui.Wizard;
@@ -161,8 +162,8 @@ public sealed class SlackStepViewModelTests : IDisposable
 
         step.OnLeave();
 
-        Assert.True(_context.ChannelEntries.ContainsKey("slack"));
-        var entries = _context.ChannelEntries["slack"];
+        Assert.True(_context.ChannelEntries.ContainsKey(ChannelType.Slack));
+        var entries = _context.ChannelEntries[ChannelType.Slack];
         Assert.Equal(3, entries.Count); // DMs + #general + #dev
         Assert.True(entries[0].IsDmRow);
         Assert.Equal("#general", entries[1].DisplayName);
@@ -171,14 +172,14 @@ public sealed class SlackStepViewModelTests : IDisposable
     [Fact]
     public void OnLeave_RemovesChannelEntries_WhenDisabled()
     {
-        _context.ChannelEntries["slack"] = [new ChannelEntry("DMs", "dm", "personal", true)];
+        _context.ChannelEntries[ChannelType.Slack] = [new ChannelEntry("DMs", "dm", "personal", true)];
         using var step = new SlackStepViewModel(_fakeProbe);
         step.SlackEnabled = false;
         step.OnEnter(_context, NavigationDirection.Forward);
 
         step.OnLeave();
 
-        Assert.False(_context.ChannelEntries.ContainsKey("slack"));
+        Assert.False(_context.ChannelEntries.ContainsKey(ChannelType.Slack));
     }
 
     [Fact]
