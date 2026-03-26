@@ -8,7 +8,7 @@ namespace Netclaw.Cli.Tui.Wizard;
 /// Shared state that flows between wizard steps. Replaces the flat properties
 /// previously scattered across the monolithic InitWizardViewModel.
 /// </summary>
-public sealed class WizardContext
+public sealed class WizardContext : IDisposable
 {
     /// <summary>Config and identity file paths.</summary>
     public required NetclawPaths Paths { get; init; }
@@ -45,4 +45,9 @@ public sealed class WizardContext
     /// their fields from the existing config. (Deferred — not implemented yet.)
     /// </summary>
     public Dictionary<string, object>? ExistingConfig { get; init; }
+
+    public void Dispose()
+    {
+        StatusMessage.Dispose();
+    }
 }

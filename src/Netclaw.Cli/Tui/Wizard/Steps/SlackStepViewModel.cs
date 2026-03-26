@@ -86,6 +86,8 @@ public sealed class SlackStepViewModel : IWizardStepViewModel
         _context = context;
         if (direction == NavigationDirection.Back)
             _currentSubStep = _completedSubStep;
+        else
+            _currentSubStep = 0;
     }
 
     public void OnLeave()

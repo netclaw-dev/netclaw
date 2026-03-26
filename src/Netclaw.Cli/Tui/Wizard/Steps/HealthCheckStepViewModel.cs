@@ -92,7 +92,7 @@ public sealed class HealthCheckStepViewModel : IWizardStepViewModel
         }
     }
 
-    private async Task RunHealthCheckAsync()
+    private Task RunHealthCheckAsync()
     {
         // Standalone mode — no orchestrator. Used for testing.
         IsRunning.Value = true;
@@ -103,6 +103,7 @@ public sealed class HealthCheckStepViewModel : IWizardStepViewModel
         IsRunning.Value = false;
         IsComplete.Value = true;
         NotifyChanged();
+        return Task.CompletedTask;
     }
 
     private async Task RunHealthCheckCoreAsync(WizardOrchestrator orchestrator, CancellationToken ct)

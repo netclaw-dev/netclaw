@@ -298,49 +298,49 @@ public sealed class ProviderStepViewModel : IWizardStepViewModel
 
     public void ContributeSecrets(WizardSecretsBuilder builder)
     {
+        // Provider credentials use ProviderCredentialWriter which writes directly
+        // to disk. This is deferred to WriteProviderCredentials() which the
+        // orchestrator calls during finalization (after health checks pass).
+    }
+
+    /// <summary>
+    /// Write provider credentials to disk. Called by the orchestrator during
+    /// config finalization, not during ContributeSecrets, so credentials are
+    /// only persisted after health checks pass.
+    /// </summary>
+    public void WriteProviderCredentials(NetclawPaths paths)
+    {
         if (string.IsNullOrWhiteSpace(SelectedProviderType))
             return;
 
-        // Provider credentials are written via ProviderCredentialWriter
-        // which handles the dual config/secrets placement.
-        // For the wizard, we write provider creds directly.
-        if (_context is not null)
-        {
-            ProviderCredentialWriter.WriteProvider(
-                _context.Paths,
-                SelectedProviderType!.ToLowerInvariant(),
-                SelectedProviderType.ToLowerInvariant(),
-                SelectedAuthMethod,
-                EndpointInput,
-                OAuth.Result,
-                ApiKeyInput,
-                _registry,
-                SensitiveStringTypeConverter.Protector);
-        }
+        ProviderCredentialWriter.WriteProvider(
+            paths,
+            SelectedProviderType!.ToLowerInvariant(),
+            SelectedProviderType.ToLowerInvariant(),
+            SelectedAuthMethod,
+            EndpointInput,
+            OAuth.Result,
+            ApiKeyInput,
+            _registry,
+            SensitiveStringTypeConverter.Protector);
     }
 
-    public async Task ContributeHealthChecksAsync(HealthCheckRunner runner, CancellationToken ct)
+    public Task ContributeHealthChecksAsync(HealthCheckRunner runner, CancellationToken ct)
     {
         // Provider check
-        await runner.RunCheckAsync("LLM provider configured", async _ =>
-        {
-            await Task.Delay(200, ct);
-            var ok = !string.IsNullOrWhiteSpace(SelectedProviderType);
-            var label = ok ? Registry.Get(SelectedProviderType!).DisplayName : "none";
-            return new HealthCheckItem($"LLM provider configured ({label})", ok);
-        }, ct);
+        var providerOk = !string.IsNullOrWhiteSpace(SelectedProviderType);
+        var providerLabel = providerOk ? Registry.Get(SelectedProviderType!).DisplayName : "none";
+        runner.Add(new HealthCheckItem($"LLM provider configured ({providerLabel})", providerOk));
 
         // Model check
-        await runner.RunCheckAsync("Model selected", async _ =>
-        {
-            await Task.Delay(200, ct);
-            var modelOk = !string.IsNullOrWhiteSpace(SelectedModelId);
-            return new HealthCheckItem(
-                modelOk
-                    ? $"Model selected ({SelectedModelId})"
-                    : "Model selected (none — will use provider default)",
-                true); // not a hard failure
-        }, ct);
+        var modelOk = !string.IsNullOrWhiteSpace(SelectedModelId);
+        runner.Add(new HealthCheckItem(
+            modelOk
+                ? $"Model selected ({SelectedModelId})"
+                : "Model selected (none — will use provider default)",
+            true)); // not a hard failure
+
+        return Task.CompletedTask;
     }
 
     public void Dispose()

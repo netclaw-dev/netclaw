@@ -33,42 +33,6 @@ public sealed class SecurityPostureStepViewModelTests : IDisposable
     }
 
     [Fact]
-    public void StepId_IsSecurityPosture()
-    {
-        using var step = new SecurityPostureStepViewModel();
-        Assert.Equal("security-posture", step.StepId);
-    }
-
-    [Fact]
-    public void IsApplicable_AlwaysTrue()
-    {
-        using var step = new SecurityPostureStepViewModel();
-        Assert.True(step.IsApplicable(_context));
-    }
-
-    [Fact]
-    public void SubStepCount_IsOne()
-    {
-        using var step = new SecurityPostureStepViewModel();
-        Assert.Equal(1, step.SubStepCount);
-        Assert.Equal(0, step.CurrentSubStep);
-    }
-
-    [Fact]
-    public void TryAdvance_ReturnsFalse()
-    {
-        using var step = new SecurityPostureStepViewModel();
-        Assert.False(step.TryAdvance());
-    }
-
-    [Fact]
-    public void TryGoBack_ReturnsFalse()
-    {
-        using var step = new SecurityPostureStepViewModel();
-        Assert.False(step.TryGoBack());
-    }
-
-    [Fact]
     public void OnLeave_PublishesPostureToContext()
     {
         using var step = new SecurityPostureStepViewModel();

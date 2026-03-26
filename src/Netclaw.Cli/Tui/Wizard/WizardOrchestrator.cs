@@ -1,3 +1,4 @@
+using Netclaw.Cli.Tui.Wizard.Steps;
 using R3;
 
 namespace Netclaw.Cli.Tui.Wizard;
@@ -74,11 +75,13 @@ public sealed class WizardOrchestrator : IDisposable
             return true;
         }
 
-        // Step is complete — move to the next applicable step
+        // Step is complete — move to the next applicable step.
+        // Capture current position before OnLeave/rebuild can shift the index.
+        var currentIdx = _currentIndex;
         current.OnLeave();
         _activeSteps = RebuildActiveSteps();
 
-        var nextIndex = _currentIndex + 1;
+        var nextIndex = currentIdx + 1;
         if (nextIndex >= _activeSteps.Count)
             return false; // already at the end
 
@@ -111,14 +114,16 @@ public sealed class WizardOrchestrator : IDisposable
             return true;
         }
 
-        // At the first sub-step — move to the previous applicable step
-        if (_currentIndex <= 0)
+        // At the first sub-step — move to the previous applicable step.
+        // Capture current position before OnLeave/rebuild can shift the index.
+        var currentIdx = _currentIndex;
+        if (currentIdx <= 0)
             return false; // at the very beginning
 
         current.OnLeave();
         _activeSteps = RebuildActiveSteps();
 
-        var prevIndex = _currentIndex - 1;
+        var prevIndex = currentIdx - 1;
         if (prevIndex < 0)
             return false;
 
@@ -130,10 +135,13 @@ public sealed class WizardOrchestrator : IDisposable
     }
 
     /// <summary>
-    /// Collect config contributions from all steps and write the config files.
+    /// Collect config contributions from all steps and write all config files,
+    /// identity files, and seed built-in agents.
     /// </summary>
     public void WriteConfig()
     {
+        _context.Paths.EnsureDirectoriesExist();
+
         var configBuilder = new WizardConfigBuilder(_context.Paths);
         var secretsBuilder = new WizardSecretsBuilder(_context.Paths);
 
@@ -145,6 +153,18 @@ public sealed class WizardOrchestrator : IDisposable
 
         configBuilder.WriteConfigFile();
         secretsBuilder.WriteSecretsFile();
+
+        // Write provider credentials (deferred from ContributeSecrets to finalization)
+        var providerStep = _allSteps.OfType<ProviderStepViewModel>().FirstOrDefault();
+        providerStep?.WriteProviderCredentials(_context.Paths);
+
+        // Write identity files and seed built-in agents from the identity step
+        var identityStep = _allSteps.OfType<IdentityStepViewModel>().FirstOrDefault();
+        if (identityStep is not null)
+        {
+            identityStep.WriteIdentityFiles(_context.Paths);
+            identityStep.SeedBuiltInAgents(_context.Paths);
+        }
     }
 
     /// <summary>

@@ -22,26 +22,16 @@ public sealed class ChannelsStepView : IWizardStepView
     private TextInputNode? _addInput;
     private TextInputBaseNode? _lastFocusedInput;
     private StepViewCallbacks? _callbacks;
-    private WizardContext? _context;
+    private ChannelsStepViewModel? _vm;
 
     public string StepId => "channels";
 
     public ILayoutNode BuildContent(IWizardStepViewModel stepVm, StepViewCallbacks callbacks)
     {
         _callbacks = callbacks;
-        var vm = (ChannelsStepViewModel)stepVm;
-
-        // Find context from orchestrator — entries live on WizardContext
-        // We need to access context.ChannelEntries for the list
-        // The VM's OnEnter populates context.ChannelEntries
+        _vm = (ChannelsStepViewModel)stepVm;
         return BuildChannelList(callbacks);
     }
-
-    /// <summary>
-    /// Set the WizardContext reference for accessing ChannelEntries.
-    /// Called by the page after creating the view.
-    /// </summary>
-    public void SetContext(WizardContext context) => _context = context;
 
     private ILayoutNode BuildChannelList(StepViewCallbacks callbacks)
     {
@@ -60,7 +50,7 @@ public sealed class ChannelsStepView : IWizardStepView
                     .WithForeground(Color.BrightBlack));
         }
 
-        var entries = _context?.ChannelEntries ?? [];
+        var entries = _vm?.ChannelEntries ?? [];
 
         if (entries.Count == 0)
         {
@@ -103,7 +93,7 @@ public sealed class ChannelsStepView : IWizardStepView
     public bool HandleKeyPress(KeyPressed key)
     {
         var keyInfo = key.KeyInfo;
-        var entries = _context?.ChannelEntries ?? [];
+        var entries = _vm?.ChannelEntries ?? [];
 
         // Add-channel mode
         if (_addMode)
@@ -122,9 +112,9 @@ public sealed class ChannelsStepView : IWizardStepView
                 if (keyInfo.Key == ConsoleKey.Enter)
                 {
                     var text = _addInput.Text?.Trim().TrimStart('#');
-                    if (!string.IsNullOrWhiteSpace(text) && _context is not null)
+                    if (!string.IsNullOrWhiteSpace(text) && _vm is not null)
                     {
-                        var posture = _context.SelectedPosture ?? DeploymentPosture.Personal;
+                        var posture = _vm.SelectedPosture;
                         var audience = posture == DeploymentPosture.Public
                             ? TrustAudience.Public.ToWireValue()
                             : TrustAudience.Team.ToWireValue();

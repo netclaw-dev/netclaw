@@ -14,6 +14,12 @@ public sealed class ChannelsStepViewModel : IWizardStepViewModel
     public string StepId => "channels";
     public string DisplayTitle => "Channels";
 
+    /// <summary>The channel entries from the shared context, accessible by the view.</summary>
+    public List<ChannelEntry> ChannelEntries => _context?.ChannelEntries ?? [];
+
+    /// <summary>The selected posture from the shared context, for deriving audience defaults.</summary>
+    public DeploymentPosture SelectedPosture => _context?.SelectedPosture ?? DeploymentPosture.Personal;
+
     public bool IsApplicable(WizardContext context) => context.AnyChatServicesEnabled;
 
     public int CurrentSubStep => 0;
@@ -65,13 +71,6 @@ public sealed class ChannelsStepViewModel : IWizardStepViewModel
                 : TrustAudience.Public.ToWireValue();
 
         context.ChannelEntries.Add(new ChannelEntry("DMs", "dm", dmAudience, isDmRow: true));
-
-        var channelAudience = posture == DeploymentPosture.Public
-            ? TrustAudience.Public.ToWireValue()
-            : TrustAudience.Team.ToWireValue();
-
-        // Placeholder entries from channel names (IDs resolved during health check)
-        // These would be populated from the Slack step's ChannelNamesInput
     }
 
     public void Dispose() { }

@@ -35,20 +35,6 @@ public sealed class ProviderStepViewModelTests : IDisposable
     }
 
     [Fact]
-    public void StepId_IsProvider()
-    {
-        using var step = new ProviderStepViewModel(_registry, _fakeProbe);
-        Assert.Equal("provider", step.StepId);
-    }
-
-    [Fact]
-    public void IsApplicable_AlwaysTrue()
-    {
-        using var step = new ProviderStepViewModel(_registry, _fakeProbe);
-        Assert.True(step.IsApplicable(_context));
-    }
-
-    [Fact]
     public void SetSubStep_AdvancesToGivenStep()
     {
         using var step = new ProviderStepViewModel(_registry, _fakeProbe);

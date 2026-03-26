@@ -58,7 +58,8 @@ public sealed class SearchStepViewModel : IWizardStepViewModel
     {
         if (direction == NavigationDirection.Back)
             _currentSubStep = _completedSubStep;
-        // Forward keeps current sub-step at 0 (already default)
+        else
+            _currentSubStep = 0;
     }
 
     public void OnLeave() { }
