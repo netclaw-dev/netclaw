@@ -140,10 +140,10 @@ public sealed class LoggingChatClientTests
         // Third call: 150 tokens
         await client.GetResponseAsync([new ChatMessage(ChatRole.User, "hi")]);
 
-        // Verify first call has delta of +50 (no previous)
-        Assert.Contains(logs, l => l.Contains("delta: +50"));
-        // Verify 2nd and 3rd calls have delta of +50 each
-        Assert.Equal(3, logs.Count(l => l.Contains("delta: +50")));
+        // First call has no previous, so delta is N/A
+        Assert.Contains(logs, l => l.Contains("delta: N/A"));
+        // Second and third calls have delta of +50 each
+        Assert.Equal(2, logs.Count(l => l.Contains("delta: +50")));
     }
 
     [Fact]
@@ -202,8 +202,8 @@ public sealed class LoggingChatClientTests
 
         // Verify delta and cumulative appear in streaming logs
         Assert.Contains(logs, l => l.Contains("delta:") && l.Contains("cumulative:"));
-        // First call should have delta +100, cumulative 100
-        Assert.Contains(logs, l => l.Contains("delta: +100") && l.Contains("cumulative: 100"));
+        // First call should have delta N/A (no previous), cumulative 100
+        Assert.Contains(logs, l => l.Contains("delta: N/A") && l.Contains("cumulative: 100"));
         // Second call should have delta 0, cumulative 200
         Assert.Contains(logs, l => l.Contains("delta: 0") && l.Contains("cumulative: 200"));
     }

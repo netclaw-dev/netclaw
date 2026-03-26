@@ -8,7 +8,9 @@ namespace Netclaw.Daemon.Configuration;
 
 /// <summary>
 /// Decorates an <see cref="IChatClient"/> with logging for elapsed time,
-/// token usage, and errors.
+/// token usage, and errors. This class is <b>not</b> thread-safe and is
+/// intended to be scoped per-actor or per-session (Akka actors are
+/// single-threaded, so no synchronization is needed).
 /// </summary>
 public sealed class LoggingChatClient : DelegatingChatClient
 {
@@ -16,8 +18,8 @@ public sealed class LoggingChatClient : DelegatingChatClient
     private readonly TimeProvider _timeProvider;
 
     // Track token usage across calls (single-threaded, no lock needed)
-    private long _lastInputTokens = 0;
-    private long _cumulativeInputTokens = 0;
+    private long? _lastInputTokens;
+    private long _cumulativeInputTokens;
 
     public LoggingChatClient(
         IChatClient innerClient,
@@ -92,13 +94,12 @@ public sealed class LoggingChatClient : DelegatingChatClient
         var totalElapsed = _timeProvider.GetElapsedTime(start);
         if (inputTokens > 0 || outputTokens > 0)
         {
-            var delta = inputTokens - _lastInputTokens;
-            _cumulativeInputTokens += inputTokens;
-            _lastInputTokens = inputTokens;
+            var delta = RecordInputTokens(inputTokens);
+            var deltaFormatted = delta is null ? "N/A" : FormatDelta(delta.Value);
 
             _logger.LogInformation(
-                "LLM streaming call completed in {ElapsedMs:F0}ms (input: {InputTokens}, delta: {Delta:+#;-#;0}, cumulative: {Cumulative}, output: {OutputTokens})",
-                totalElapsed.TotalMilliseconds, inputTokens, delta, _cumulativeInputTokens, outputTokens);
+                "LLM streaming call completed in {ElapsedMs:F0}ms (input: {InputTokens}, delta: {Delta}, cumulative: {Cumulative}, output: {OutputTokens})",
+                totalElapsed.TotalMilliseconds, inputTokens, deltaFormatted, _cumulativeInputTokens, outputTokens);
         }
         else
         {
@@ -264,21 +265,40 @@ public sealed class LoggingChatClient : DelegatingChatClient
         int BrowserToolOptionCount,
         string PromptHash);
 
+    /// <summary>
+    /// Records input token usage and returns the delta from the previous call,
+    /// or <c>null</c> if this is the first call.
+    /// </summary>
+    private long? RecordInputTokens(long inputTokens)
+    {
+        var delta = _lastInputTokens.HasValue
+            ? inputTokens - _lastInputTokens.Value
+            : (long?)null;
+        _cumulativeInputTokens += inputTokens;
+        _lastInputTokens = inputTokens;
+        return delta;
+    }
+
+    private static string FormatDelta(long delta) => delta switch
+    {
+        > 0 => $"+{delta}",
+        _ => delta.ToString()
+    };
+
     private void LogCompletion(TimeSpan elapsed, UsageDetails? usage)
     {
         if (usage is not null)
         {
             var inputTokens = usage.InputTokenCount ?? 0;
             var outputTokens = usage.OutputTokenCount ?? 0;
-            var delta = inputTokens - _lastInputTokens;
-            _cumulativeInputTokens += inputTokens;
-            _lastInputTokens = inputTokens;
+            var delta = RecordInputTokens(inputTokens);
+            var deltaFormatted = delta is null ? "N/A" : FormatDelta(delta.Value);
 
             _logger.LogInformation(
-                "LLM call completed in {ElapsedMs:F0}ms (input: {InputTokens}, delta: {Delta:+#;-#;0}, cumulative: {Cumulative}, output: {OutputTokens})",
+                "LLM call completed in {ElapsedMs:F0}ms (input: {InputTokens}, delta: {Delta}, cumulative: {Cumulative}, output: {OutputTokens})",
                 elapsed.TotalMilliseconds,
                 inputTokens,
-                delta,
+                deltaFormatted,
                 _cumulativeInputTokens,
                 outputTokens);
         }
