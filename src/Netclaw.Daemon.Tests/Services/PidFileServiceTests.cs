@@ -68,6 +68,6 @@ public sealed class PidFileServiceTests : IDisposable
     public void Dispose()
     {
         try { Directory.Delete(_tempDir, recursive: true); }
-        catch (IOException) { /* test cleanup — directory may already be gone */ }
+        catch (IOException) { } // slopwatch-ignore: SW003 test cleanup best-effort — directory may already be gone
     }
 }

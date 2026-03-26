@@ -92,17 +92,14 @@ public sealed class PidFileWatchdogServiceTests : IDisposable
                     return true;
             }
         }
-        catch (OperationCanceledException) when (cts.IsCancellationRequested)
-        {
-            // Timeout expired — fall through to final check.
-        }
+        catch (OperationCanceledException) when (cts.IsCancellationRequested) { } // slopwatch-ignore: SW003 timeout expired — fall through to final condition check
         return condition();
     }
 
     public void Dispose()
     {
         try { Directory.Delete(_tempDir, recursive: true); }
-        catch (IOException) { /* test cleanup — directory may already be gone */ }
+        catch (IOException) { } // slopwatch-ignore: SW003 test cleanup best-effort — directory may already be gone
     }
 
     private sealed class FakeApplicationLifetime : IHostApplicationLifetime
