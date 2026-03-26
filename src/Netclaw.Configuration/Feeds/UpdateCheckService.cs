@@ -1,5 +1,4 @@
 using System.Runtime.InteropServices;
-using System.Text;
 using System.Text.Json;
 using Netclaw.Configuration.Security;
 
@@ -136,13 +135,16 @@ public static class UpdateCheckService
         // Start both requests in parallel — halves network time for the CLI's 3s timeout
         var sigTask = httpClient.GetAsync(FeedConstants.BinaryManifestSignatureUrl, cts.Token);
 
-        string json;
+        // Read raw bytes for signature verification — avoids encoding round-trip
+        // (ReadAsStringAsync → UTF8.GetBytes can alter bytes if the response charset
+        // differs from UTF-8, breaking the Ed25519 signature).
+        byte[] manifestBytes;
         try
         {
             var response = await httpClient.GetAsync(
                 FeedConstants.BinaryManifestUrl, cts.Token);
             response.EnsureSuccessStatusCode();
-            json = await response.Content.ReadAsStringAsync(cts.Token);
+            manifestBytes = await response.Content.ReadAsByteArrayAsync(cts.Token);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -170,8 +172,7 @@ public static class UpdateCheckService
             };
         }
 
-        var verifyResult = MinisignVerifier.Verify(
-            Encoding.UTF8.GetBytes(json), signatureContent);
+        var verifyResult = MinisignVerifier.Verify(manifestBytes, signatureContent);
 
         if (verifyResult != MinisignVerifier.VerifyResult.Valid)
         {
@@ -194,7 +195,7 @@ public static class UpdateCheckService
         }
 
         // Signature verified — safe to deserialize
-        var manifest = JsonSerializer.Deserialize<BinaryFeedManifest>(json);
+        var manifest = JsonSerializer.Deserialize<BinaryFeedManifest>(manifestBytes);
         if (manifest is null || manifest.SchemaVersion != 1)
         {
             return new ManifestFetchResult

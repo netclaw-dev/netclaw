@@ -171,7 +171,17 @@ public static class MinisignVerifier
         if (!sig.KeyId.AsSpan().SequenceEqual(activeKeyId))
             return VerifyResult.KeyMismatch;
 
-        return VerifyEd25519(activePublicKey, data, sig.Signature)
+        // Try raw Ed25519 first (works with test keys and legacy minisign).
+        if (VerifyEd25519(activePublicKey, data, sig.Signature))
+            return VerifyResult.Valid;
+
+        // Modern minisign (1.0.18+) always prehashes with BLAKE2b-512 before
+        // signing, even when algorithm bytes say "ED" (nominally "standard").
+        // Fall back to prehashed verification.
+        Span<byte> hash = stackalloc byte[64];
+        Blake2b512(data, hash);
+
+        return VerifyEd25519(activePublicKey, hash, sig.Signature)
             ? VerifyResult.Valid
             : VerifyResult.InvalidSignature;
     }
@@ -187,6 +197,15 @@ public static class MinisignVerifier
         var algorithm = SignatureAlgorithm.Ed25519;
         var publicKey = PublicKey.Import(algorithm, publicKeyBytes, KeyBlobFormat.RawPublicKey);
         return algorithm.Verify(publicKey, data, signatureBytes);
+    }
+
+    /// <summary>
+    /// Computes unkeyed BLAKE2b-512 (64-byte output) using Blake2Fast.
+    /// This is the same hash minisign uses for prehashing before Ed25519 signing.
+    /// </summary>
+    private static void Blake2b512(ReadOnlySpan<byte> data, Span<byte> hash)
+    {
+        Blake2Fast.Blake2b.ComputeAndWriteHash(64, data, hash);
     }
 
     internal sealed class ParsedSignature
