@@ -1,0 +1,48 @@
+using Netclaw.Configuration;
+using Netclaw.Providers;
+using R3;
+
+namespace Netclaw.Cli.Tui.Wizard;
+
+/// <summary>
+/// Shared state that flows between wizard steps. Replaces the flat properties
+/// previously scattered across the monolithic InitWizardViewModel.
+/// </summary>
+public sealed class WizardContext
+{
+    /// <summary>Config and identity file paths.</summary>
+    public required NetclawPaths Paths { get; init; }
+
+    /// <summary>Registry of available LLM provider descriptors.</summary>
+    public required ProviderDescriptorRegistry Registry { get; init; }
+
+    /// <summary>
+    /// Set by channel steps (Slack, Discord, etc.) to indicate at least one
+    /// chat service is enabled. Used by the Channels step's <c>IsApplicable</c>
+    /// to determine whether per-channel audience configuration should be shown.
+    /// </summary>
+    public bool AnyChatServicesEnabled { get; set; }
+
+    /// <summary>
+    /// Selected deployment posture from the SecurityPosture step.
+    /// Read by channel steps to derive audience defaults.
+    /// </summary>
+    public DeploymentPosture? SelectedPosture { get; set; }
+
+    /// <summary>
+    /// Per-channel audience entries populated by the Channels step.
+    /// </summary>
+    public List<ChannelEntry> ChannelEntries { get; } = [];
+
+    /// <summary>Shared status message displayed at the bottom of the wizard.</summary>
+    public ReactiveProperty<string> StatusMessage { get; } = new("");
+
+    /// <summary>Request a terminal redraw from the Termina framework.</summary>
+    public required Action RequestRedraw { get; init; }
+
+    /// <summary>
+    /// Null for fresh init. When populated, steps should pre-populate
+    /// their fields from the existing config. (Deferred — not implemented yet.)
+    /// </summary>
+    public Dictionary<string, object>? ExistingConfig { get; init; }
+}
