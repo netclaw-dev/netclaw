@@ -21,7 +21,7 @@ internal sealed class DaemonRuntimeStatusService(
     SlackChannelOptions slackOptions,
     DaemonPersistenceOptions persistenceOptions,
     IOptions<TelemetryOptions> telemetryOptions,
-    SessionConfig sessionConfig,
+    ModelCapabilities modelCapabilities,
     ModelSelection modelSelection,
     NetclawPaths paths,
     McpClientManager? mcpClientManager = null,
@@ -73,12 +73,12 @@ internal sealed class DaemonRuntimeStatusService(
             },
             Model = new DaemonRuntimeStatus.Model
             {
-                ModelId = sessionConfig.ModelId,
-                DisplayName = ModelIdNormalizer.GetDisplayName(sessionConfig.ModelId),
+                ModelId = modelCapabilities.ModelId,
+                DisplayName = ModelIdNormalizer.GetDisplayName(modelCapabilities.ModelId),
                 Provider = modelSelection.Main.Provider,
-                InputModalities = sessionConfig.InputModalities.ToString(),
-                OutputModalities = sessionConfig.OutputModalities.ToString(),
-                ContextWindow = sessionConfig.ContextWindowTokens
+                InputModalities = modelCapabilities.InputModalities.ToString(),
+                OutputModalities = modelCapabilities.OutputModalities.ToString(),
+                ContextWindow = modelCapabilities.ContextWindowTokens
             },
             Update = BuildUpdateStatus(),
             Memory = await BuildMemoryStatusAsync(cancellationToken),
@@ -252,13 +252,21 @@ internal sealed class DaemonRuntimeStatusService(
             };
         }
 
+        var state = result switch
+        {
+            { CheckSucceeded: false } => "unknown",
+            { IsUpdateAvailable: true } => "update-available",
+            _ => "up-to-date",
+        };
+
         return new DaemonRuntimeStatus.Update
         {
             Available = result.IsUpdateAvailable,
-            State = result.IsUpdateAvailable ? "update-available" : "up-to-date",
+            State = state,
             CurrentVersion = result.CurrentVersion,
             LatestVersion = result.IsUpdateAvailable ? result.LatestVersion : null,
             ReleaseNotesUrl = result.IsUpdateAvailable ? result.ReleaseNotesUrl : null,
+            ErrorDetail = result.CheckSucceeded ? null : result.ErrorDetail,
         };
     }
 

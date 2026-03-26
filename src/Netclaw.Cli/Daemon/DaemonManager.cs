@@ -59,6 +59,9 @@ public sealed partial class DaemonManager
             return new DaemonResult(false, $"Failed to start daemon: {ex.Message}");
         }
 
+        // Preliminary PID file for immediate status checks. The daemon's PidFileService
+        // overwrites with the authoritative two-line format. The lock file (acquired by
+        // the daemon in Program.cs) is the actual singleton guard.
         File.WriteAllText(_paths.PidFilePath, process.Id.ToString());
 
         return new DaemonResult(true, $"Daemon started (PID {process.Id}).");
@@ -75,8 +78,13 @@ public sealed partial class DaemonManager
     /// </param>
     public async Task<DaemonResult> StopAsync(string reason)
     {
-        if (!TryReadPid(out var pid))
-            return new DaemonResult(false, "Daemon is not running (no PID file).");
+        if (!TryGetRunningPid(out var pid))
+            return new DaemonResult(false, "Daemon is not running.");
+
+        if (pid == 0)
+            return new DaemonResult(false,
+                "Daemon appears running (lock file held) but PID file is missing. " +
+                "The daemon will self-terminate shortly, or use 'pkill netclawd' to stop it manually.");
 
         Process process;
         try
@@ -162,8 +170,16 @@ public sealed partial class DaemonManager
     /// </summary>
     public DaemonStatus GetStatus()
     {
-        if (!TryReadPid(out var pid))
+        if (!TryGetRunningPid(out var pid))
             return new DaemonStatus(IsRunning: false, Pid: null, Message: "Daemon is not running.");
+
+        if (pid == 0)
+        {
+            // Lock file is held but PID file is missing.
+            // The watchdog will terminate the daemon shortly.
+            return new DaemonStatus(IsRunning: true, Pid: null,
+                Message: "Daemon is running (PID file missing \u2014 daemon will self-terminate shortly).");
+        }
 
         try
         {
@@ -312,23 +328,56 @@ public sealed partial class DaemonManager
 
     private bool TryGetRunningPid(out int pid)
     {
-        if (!TryReadPid(out pid))
-            return false;
-
-        try
+        // Tier 1: PID file (fast path — covers normal operation)
+        if (TryReadPid(out pid))
         {
-            var process = Process.GetProcessById(pid);
-            if (process.HasExited || !IsDaemonProcess(process))
+            try
+            {
+                var process = Process.GetProcessById(pid);
+                if (!process.HasExited && IsDaemonProcess(process))
+                    return true;
+
+                CleanupPidFile();
+            }
+            catch (ArgumentException)
             {
                 CleanupPidFile();
-                return false;
             }
+        }
+
+        // Tier 2: Lock file probe (fast, OS-backed — covers PID file loss)
+        if (IsLockFileHeld())
+        {
+            // A daemon holds the lock but we have no (valid) PID file.
+            // Signal to callers via pid == 0 that we know a daemon exists
+            // but can't identify its PID.
+            pid = 0;
             return true;
         }
-        catch (ArgumentException)
+
+        return false;
+    }
+
+    /// <summary>
+    /// Probes whether the daemon lock file is currently held by another process.
+    /// Returns <c>true</c> if the lock cannot be acquired (a daemon is running).
+    /// The probe opens and immediately disposes the file — the CLI never holds the lock.
+    /// </summary>
+    internal bool IsLockFileHeld()
+    {
+        try
         {
-            CleanupPidFile();
+            using var probe = new FileStream(
+                _paths.LockFilePath,
+                FileMode.OpenOrCreate,
+                FileAccess.ReadWrite,
+                FileShare.None,
+                bufferSize: 1);
             return false;
+        }
+        catch (IOException)
+        {
+            return true;
         }
     }
 

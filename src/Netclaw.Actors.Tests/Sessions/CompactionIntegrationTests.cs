@@ -8,6 +8,7 @@ using Microsoft.Extensions.Hosting;
 using Netclaw.Configuration;
 using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Protocol;
+using Netclaw.Actors.Memory;
 using Netclaw.Actors.Sessions;
 using Xunit;
 using Xunit.Abstractions;
@@ -31,25 +32,45 @@ public class CompactionIntegrationTests : TestKit
     protected override void ConfigureServices(HostBuilderContext context, IServiceCollection services)
     {
         services.AddSingleton<IChatClientProvider>(new SingleClientProvider(_fakeChatClient));
+        services.AddSingleton(new ModelCapabilities
+        {
+            ModelId = "fake-model",
+            ContextWindowTokens = 1000,
+        });
         // Small context window for easy threshold triggering in tests.
         // KeepRecentMessages=0 so minimal-history tests (1 turn) actually reduce message count.
         services.AddSingleton(new SessionConfig
         {
-            ModelId = "fake-model",
-            ContextWindowTokens = 1000,
-            CompactionThreshold = 0.75, // 750 tokens triggers compaction
-            SnapshotInterval = 5,
-            KeepRecentToolResults = 1,
-            KeepRecentMessages = 0,
-            TitleGenerationInterval = 0,
-            TurnLlmTimeoutSeconds = 1,
-            SidecarLlmTimeoutSeconds = 1,
-            MemorySidecarsEnabled = false
+            TurnLlmTimeout = TimeSpan.FromSeconds(1),
+            SidecarLlmTimeout = TimeSpan.FromSeconds(1),
+            Tuning = new SessionTuning
+            {
+                CompactionThreshold = 0.75, // 750 tokens triggers compaction
+                SnapshotInterval = 5,
+                KeepRecentToolResults = 1,
+                KeepRecentMessages = 0,
+                TitleGenerationInterval = 0,
+                MemorySidecarsEnabled = false,
+            }
         });
         services.AddSingleton<ISystemPromptProvider>(new StaticSystemPromptProvider(
             "You are a test assistant."));
         services.AddSingleton<IMemoryExtractor>(_fakeMemoryExtractor);
         services.AddSingleton<IModelCapabilityResolver>(new FakeCapabilityResolver());
+
+        // Composite records for LlmSessionActor constructor
+        services.AddSingleton(sp => new SessionServices(
+            sp.GetRequiredService<IChatClientProvider>(),
+            sp.GetRequiredService<ISystemPromptProvider>(),
+            sp.GetService<IReadOnlyList<IContextLayerProvider>>() ?? Array.Empty<IContextLayerProvider>(),
+            sp.GetService<TimeProvider>() ?? TimeProvider.System,
+            sp.GetService<NetclawPaths>()));
+        services.AddSingleton(sp => new SessionMemoryServices(
+            sp.GetService<IMemoryExtractor>() ?? NullMemoryExtractor.Instance,
+            sp.GetService<IMemoryRecallCoordinator>() ?? NullMemoryRecallCoordinator.Instance,
+            sp.GetService<IMemoryCheckpointSink>() ?? NullMemoryCheckpointSink.Instance,
+            sp.GetService<SQLiteMemoryStore>()));
+        services.AddSingleton(new SessionObservability(null, null));
     }
 
     protected override void ConfigureAkka(AkkaConfigurationBuilder builder, IServiceProvider provider)

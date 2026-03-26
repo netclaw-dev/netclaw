@@ -81,7 +81,106 @@
     },
     "Session": {
       "type": "object",
-      "additionalProperties": true
+      "description": "Operator-facing session configuration.",
+      "properties": {
+        "MaxToolCallsPerTurn": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "description": "Maximum individual tool calls allowed per turn."
+        },
+        "MemoryObserverIdleSeconds": {
+          "type": "integer",
+          "minimum": 10,
+          "description": "Idle seconds before memory observer triggers distillation."
+        },
+        "IdleTimeout": {
+          "type": "string",
+          "description": "Session idle timeout in HH:mm:ss format. Set to 00:00:00 to disable."
+        },
+        "TurnLlmTimeoutSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Timeout in seconds for the primary per-turn LLM streaming call."
+        },
+        "ToolExecutionTimeoutSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Timeout in seconds for one tool-execution batch."
+        },
+        "SidecarLlmTimeoutSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Timeout in seconds for sidecar LLM calls (title, memory, compaction)."
+        },
+        "CompactionThreshold": {
+          "type": "number",
+          "minimum": 0.1,
+          "maximum": 1.0,
+          "description": "Legacy root-level alias for Session.Tuning.CompactionThreshold."
+        },
+        "SnapshotInterval": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Legacy root-level alias for Session.Tuning.SnapshotInterval."
+        },
+        "KeepRecentToolResults": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Legacy root-level alias for Session.Tuning.KeepRecentToolResults."
+        },
+        "MaxInlineToolResultChars": {
+          "type": "integer",
+          "minimum": 100,
+          "description": "Legacy root-level alias for Session.Tuning.MaxInlineToolResultChars."
+        },
+        "DiscoveredToolRetentionTurns": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Legacy root-level alias for Session.Tuning.DiscoveredToolRetentionTurns."
+        },
+        "DiscoveredToolMaxCount": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Legacy root-level alias for Session.Tuning.DiscoveredToolMaxCount."
+        },
+        "KeepRecentMessages": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Legacy root-level alias for Session.Tuning.KeepRecentMessages."
+        },
+        "TitleGenerationInterval": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Legacy root-level alias for Session.Tuning.TitleGenerationInterval."
+        },
+        "MemorySidecarsEnabled": {
+          "type": "boolean",
+          "description": "Legacy root-level alias for Session.Tuning.MemorySidecarsEnabled."
+        },
+        "DeterministicRetrievalEnabled": {
+          "type": "boolean",
+          "description": "Legacy root-level alias for Session.Tuning.DeterministicRetrievalEnabled."
+        },
+        "Tuning": {
+          "type": "object",
+          "description": "Internal tuning constants. Not part of the documented operator surface.",
+          "properties": {
+            "CompactionThreshold": { "type": "number", "minimum": 0.1, "maximum": 1.0 },
+            "SnapshotInterval": { "type": "integer", "minimum": 1 },
+            "KeepRecentToolResults": { "type": "integer", "minimum": 0 },
+            "MaxInlineToolResultChars": { "type": "integer", "minimum": 100 },
+            "DiscoveredToolRetentionTurns": { "type": "integer", "minimum": 0 },
+            "DiscoveredToolMaxCount": { "type": "integer", "minimum": 0 },
+            "KeepRecentMessages": { "type": "integer", "minimum": 1 },
+            "TitleGenerationInterval": { "type": "integer", "minimum": 0 },
+            "MemorySidecarsEnabled": { "type": "boolean" },
+            "DeterministicRetrievalEnabled": { "type": "boolean" }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
     },
     "Security": {
       "type": "object",

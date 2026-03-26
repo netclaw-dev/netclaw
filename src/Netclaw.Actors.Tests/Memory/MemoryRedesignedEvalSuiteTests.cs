@@ -60,7 +60,7 @@ public sealed class MemoryRedesignedEvalSuiteTests : IDisposable
         var recall = new SQLiteMemoryRecallCoordinator(
             _store,
             NullLogger<SQLiteMemoryRecallCoordinator>.Instance,
-            sessionConfig: new SessionConfig { MemorySidecarsEnabled = true });
+            sessionTuning: new SessionTuning { MemorySidecarsEnabled = true });
 
         var result = await recall.RecallAsync(new AutomaticRecallRequest(
             "slack/thread-1",
@@ -122,7 +122,7 @@ public sealed class MemoryRedesignedEvalSuiteTests : IDisposable
         var recall = new SQLiteMemoryRecallCoordinator(
             _store,
             NullLogger<SQLiteMemoryRecallCoordinator>.Instance,
-            sessionConfig: new SessionConfig { DeterministicRetrievalEnabled = true, MemorySidecarsEnabled = false });
+            sessionTuning: new SessionTuning { DeterministicRetrievalEnabled = true, MemorySidecarsEnabled = false });
 
         var result = await recall.RecallAsync(new AutomaticRecallRequest(
             "signalr/thread-iah",
@@ -185,7 +185,7 @@ public sealed class MemoryRedesignedEvalSuiteTests : IDisposable
         var recall = new SQLiteMemoryRecallCoordinator(
             _store,
             NullLogger<SQLiteMemoryRecallCoordinator>.Instance,
-            sessionConfig: new SessionConfig { DeterministicRetrievalEnabled = true, MemorySidecarsEnabled = false });
+            sessionTuning: new SessionTuning { DeterministicRetrievalEnabled = true, MemorySidecarsEnabled = false });
 
         var result = await recall.RecallAsync(new AutomaticRecallRequest(
             "signalr/thread-united",
@@ -252,7 +252,7 @@ public sealed class MemoryRedesignedEvalSuiteTests : IDisposable
         var recall = new SQLiteMemoryRecallCoordinator(
             _store,
             NullLogger<SQLiteMemoryRecallCoordinator>.Instance,
-            sessionConfig: new SessionConfig { MemorySidecarsEnabled = true });
+            sessionTuning: new SessionTuning { MemorySidecarsEnabled = true });
 
         var auto = await recall.RecallAsync(new AutomaticRecallRequest(
             "slack/thread-2",
@@ -473,7 +473,7 @@ public sealed class MemoryRedesignedEvalSuiteTests : IDisposable
         var recall = new SQLiteMemoryRecallCoordinator(
             _store,
             NullLogger<SQLiteMemoryRecallCoordinator>.Instance,
-            sessionConfig: new SessionConfig { MemorySidecarsEnabled = true });
+            sessionTuning: new SessionTuning { MemorySidecarsEnabled = true });
 
         var acceptedFact = proposalGate.Accept(
         [

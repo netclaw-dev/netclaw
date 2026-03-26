@@ -40,6 +40,7 @@
     <PackageVersion Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="$(OpenTelemetryVersion)" />
     <PackageVersion Include="OpenTelemetry.Extensions.Hosting" Version="$(OpenTelemetryVersion)" />
     <PackageVersion Include="OllamaSharp" Version="5.4.16" />
+    <PackageVersion Include="SauceControl.Blake2Fast" Version="2.0.0" />
     <PackageVersion Include="SlackNet" Version="$(SlackNetVersion)" />
     <PackageVersion Include="SlackNet.Extensions.DependencyInjection" Version="$(SlackNetVersion)" />
     <PackageVersion Include="Cronos" Version="0.8.4" />
@@ -47,7 +48,7 @@
   </ItemGroup>
   <!-- Serialization -->
   <ItemGroup>
-    <PackageVersion Include="protobuf-net" Version="3.2.30" />
+    <PackageVersion Include="protobuf-net" Version="3.2.56" />
     <PackageVersion Include="YamlDotNet" Version="16.3.0" />
   </ItemGroup>
   <!-- Test dependencies -->
@@ -55,7 +56,7 @@
     <PackageVersion Include="Akka.Hosting.TestKit" Version="$(AkkaHostingVersion)" />
     <PackageVersion Include="xunit" Version="2.9.3" />
     <PackageVersion Include="xunit.runner.visualstudio" Version="3.0.0" />
-    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.0.1" />
+    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.3.0" />
   </ItemGroup>
   <!-- Source generators -->
   <ItemGroup>

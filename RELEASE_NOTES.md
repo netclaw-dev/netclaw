@@ -1,3 +1,20 @@
+#### 0.8.1 2026-03-25 ####
+
+Netclaw v0.8.1 — Slack duplicate message fix, memory passivation hardening, file_edit tool, and LlmSessionActor decomposition
+
+**Features**
+
+* Added `file_edit` tool for surgical text replacements — enables targeted edits without full file rewrites. Supports literal text matching with an ambiguity guard that rejects non-unique matches, a `ReplaceAll` option for bulk replacements, and the same security enforcement as `file_write`. ([#404](https://github.com/Aaronontheweb/netclaw/pull/404), [#416](https://github.com/Aaronontheweb/netclaw/pull/416))
+
+**Bug Fixes**
+
+* Fixed duplicate Slack messages caused by Microsoft.Extensions.AI 10.4.1 preserving non-contiguous `TextContent` items — the Slack output handler now consolidates multiple `TextContent` items into a single `TextOutput` before posting, preventing repeated message fragments in threads. ([#413](https://github.com/Aaronontheweb/netclaw/pull/413), [#429](https://github.com/Aaronontheweb/netclaw/pull/429))
+* Fixed `SessionMemoryObserverActor` passivation protocol — resolved dead-lettered phase notifications, mid-distillation reply drops causing 5-second stalls, and a racing idle timer during passivation. Also replaced hardcoded `DateTimeOffset.UtcNow` with injected `TimeProvider` for testability. ([#423](https://github.com/Aaronontheweb/netclaw/pull/423), [#428](https://github.com/Aaronontheweb/netclaw/pull/428))
+
+**Architecture**
+
+* Decomposed `LlmSessionActor` for composability — split `SessionConfig` into `ModelCapabilities`, `SessionTuning`, and `SessionConfig` value objects, reduced the actor's constructor from 19 to 7 parameters, formalized the session lifecycle with a `SessionPhase` enum-based state machine, and extracted 9 focused handler modules. ([#411](https://github.com/Aaronontheweb/netclaw/pull/411), [#414](https://github.com/Aaronontheweb/netclaw/pull/414), [#417](https://github.com/Aaronontheweb/netclaw/pull/417))
+
 #### 0.8.0 2026-03-25 ####
 
 Netclaw v0.8.0 — Memory pipeline overhaul, trust context policy, Slack message delivery fix, and update signature verification

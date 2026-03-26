@@ -31,13 +31,19 @@ public sealed class SessionMemoryObserverActor : ReceivePersistentActor
 {
     private readonly SessionId _sessionId;
     private readonly IChatClient _client;
+    private readonly TimeSpan _idleTimeout;
     private readonly TimeSpan _sidecarTimeout;
+    private readonly TimeProvider _timeProvider;
     private readonly ILoggingAdapter _log = Context.GetLogger();
 
     private readonly StringBuilder _transcript = new();
     private readonly HashSet<string> _proposedAnchors = new(StringComparer.OrdinalIgnoreCase);
     private bool _hasNewContent;
-    private bool _distilling;
+    private bool _draining;
+    private long _contentVersion;
+    private long _nextRunId;
+    private DistillationRunState? _activeRun;
+    private PendingPassivationRequest? _pendingPassivation;
     private int _turnCount;
 
     public override string PersistenceId { get; }
@@ -46,22 +52,25 @@ public sealed class SessionMemoryObserverActor : ReceivePersistentActor
         SessionId sessionId,
         IChatClient client,
         TimeSpan idleTimeout,
-        TimeSpan sidecarTimeout) =>
-        Props.Create(() => new SessionMemoryObserverActor(sessionId, client, idleTimeout, sidecarTimeout));
+        TimeSpan sidecarTimeout,
+        TimeProvider? timeProvider = null) =>
+        Props.Create(() => new SessionMemoryObserverActor(sessionId, client, idleTimeout, sidecarTimeout, timeProvider));
 
     public SessionMemoryObserverActor(
         SessionId sessionId,
         IChatClient client,
         TimeSpan idleTimeout,
-        TimeSpan sidecarTimeout)
+        TimeSpan sidecarTimeout,
+        TimeProvider? timeProvider = null)
     {
         _sessionId = sessionId;
         _client = client;
+        _idleTimeout = idleTimeout;
         _sidecarTimeout = sidecarTimeout;
+        _timeProvider = timeProvider ?? TimeProvider.System;
 
         PersistenceId = $"memory-observer-{sessionId.Value}";
 
-        // Recovery: rebuild skip list from journaled events
         Recover<MemoriesDistilled>(evt =>
         {
             foreach (var anchor in evt.Anchors)
@@ -75,77 +84,64 @@ public sealed class SessionMemoryObserverActor : ReceivePersistentActor
                 _proposedAnchors.Count);
         });
 
-        // Stream messages from parent
         Command<SendUserMessage>(msg =>
         {
             if (!string.IsNullOrWhiteSpace(msg.Content))
-            {
-                _transcript.AppendLine($"[user] {msg.Content}");
-                _hasNewContent = true;
-            }
+                AppendTranscriptLine($"[user] {msg.Content}");
         });
 
-        Command<ObserverSystemContext>(msg =>
-        {
-            _transcript.AppendLine($"[{msg.Label}] {msg.Content}");
-            _hasNewContent = true;
-        });
+        Command<ObserverSystemContext>(msg => AppendTranscriptLine($"[{msg.Label}] {msg.Content}"));
 
         Command<SessionOutput>(msg =>
         {
             var line = FormatOutput(msg);
             if (line is not null)
-            {
-                _transcript.AppendLine(line);
-                _hasNewContent = true;
-            }
+                AppendTranscriptLine(line);
 
             if (msg is TurnCompleted tc)
                 _turnCount = tc.TurnNumber;
         });
 
-        // Idle timer: self-trigger distillation when stream goes quiet
-        Command<ReceiveTimeout>(_ => TriggerDistillation(Context.Parent));
+        Command<ReceiveTimeout>(_ => TriggerDistillation(Context.Parent, replyWhenNoWork: false));
+        Command<DistillMemories>(_ => TriggerDistillation(Sender, replyWhenNoWork: true));
 
-        // Explicit distillation request from parent (passivation)
-        Command<DistillMemories>(msg => TriggerDistillation(Sender));
-
-        // Internal: mark distillation complete. On failure, re-enable hasNewContent for retry.
-        Command<DistillationFinished>(msg =>
+        Command<SessionPhaseChanged>(msg =>
         {
-            _distilling = false;
-            if (msg.Success)
-                _hasNewContent = false;
-        });
-
-        // Internal: persist proposed anchors to journal (arrives from async task via self.Tell)
-        Command<PersistAnchors>(msg =>
-        {
-            var evt = new MemoriesDistilled(msg.Anchors, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
-            Persist(evt, e =>
+            if (msg.Phase == SessionPhase.Passivating)
             {
-                foreach (var anchor in e.Anchors)
-                    _proposedAnchors.Add(anchor);
-                _log.Info("session_observer_anchors_persisted count={Count}", e.Anchors.Count);
-            });
+                _draining = true;
+                Context.SetReceiveTimeout(null);
+                _log.Info("session_observer_draining reason=passivating");
+            }
+            else if (_draining)
+            {
+                _draining = false;
+                _pendingPassivation = null;
+                Context.SetReceiveTimeout(_idleTimeout);
+                _log.Info("session_observer_resumed reason=passivation_aborted phase={Phase}", msg.Phase);
+            }
         });
 
-        // Set the idle timer
-        Context.SetReceiveTimeout(idleTimeout);
+        Command<DistillationRunCompleted>(HandleDistillationRunCompleted);
+
+        Context.SetReceiveTimeout(_idleTimeout);
     }
 
-    private void TriggerDistillation(IActorRef replyTo)
+    private void TriggerDistillation(IActorRef replyTo, bool replyWhenNoWork)
     {
-        if (_distilling)
+        if (_activeRun is not null)
         {
-            _log.Info("session_observer_distill_skipped reason=already_in_progress");
+            _log.Info("session_observer_distill_deferred reason=already_in_progress");
+            if (replyWhenNoWork)
+                _pendingPassivation = new PendingPassivationRequest(replyTo, _contentVersion);
             return;
         }
 
         if (!_hasNewContent)
         {
             _log.Info("session_observer_distill_skipped reason=no_new_content");
-            replyTo.Tell(SessionDistillationCompleted.Empty);
+            if (replyWhenNoWork)
+                replyTo.Tell(SessionDistillationCompleted.Empty);
             return;
         }
 
@@ -153,18 +149,119 @@ public sealed class SessionMemoryObserverActor : ReceivePersistentActor
         if (string.IsNullOrWhiteSpace(transcriptText))
         {
             _log.Info("session_observer_distill_skipped reason=empty_transcript");
-            replyTo.Tell(SessionDistillationCompleted.Empty);
+            if (replyWhenNoWork)
+                replyTo.Tell(SessionDistillationCompleted.Empty);
             return;
         }
 
-        _distilling = true;
+        StartDistillation(replyTo, transcriptText);
+    }
 
-        var self = Self;
-        var skipList = _proposedAnchors.ToArray();
+    private void StartDistillation(IActorRef replyTo, string transcriptText)
+    {
+        var run = new DistillationRunState(++_nextRunId, _contentVersion, replyTo);
+        _activeRun = run;
 
         _ = RunDistillationAsync(
-            _client, _sessionId.Value, _sessionId.ToMemoryDomain(),
-            _turnCount, transcriptText, skipList, _sidecarTimeout, self, replyTo);
+            _client,
+            _sessionId.Value,
+            _sessionId.ToMemoryDomain(),
+            _turnCount,
+            transcriptText,
+            _proposedAnchors.ToArray(),
+            _sidecarTimeout,
+            Self,
+            run.RunId,
+            run.ContentVersion);
+    }
+
+    private void HandleDistillationRunCompleted(DistillationRunCompleted msg)
+    {
+        if (_activeRun is not { } activeRun || activeRun.RunId != msg.RunId)
+        {
+            _log.Info("session_observer_distill_ignored reason=stale_completion runId={RunId}", msg.RunId);
+            return;
+        }
+
+        _activeRun = null;
+
+        if (msg.FailureReason is null && msg.ContentVersion < _contentVersion)
+        {
+            _log.Info(
+                "session_observer_distill_superseded runId={RunId} runVersion={RunVersion} currentVersion={CurrentVersion}",
+                msg.RunId,
+                msg.ContentVersion,
+                _contentVersion);
+
+            if (_pendingPassivation is { } pending)
+                StartDistillation(pending.ReplyTo, _transcript.ToString());
+
+            return;
+        }
+
+        PersistAnchorsThenDispatch(activeRun, msg);
+    }
+
+    private void PersistAnchorsThenDispatch(DistillationRunState activeRun, DistillationRunCompleted msg)
+    {
+        void Dispatch()
+        {
+            if (msg.FailureReason is null && activeRun.ContentVersion == _contentVersion)
+                _hasNewContent = false;
+
+            var completion = new SessionDistillationCompleted
+            {
+                Proposals = msg.Proposals,
+                InputTokens = msg.InputTokens,
+                OutputTokens = msg.OutputTokens,
+                FailureReason = msg.FailureReason
+            };
+
+            IActorRef? additionalReplyTo = null;
+            if (_pendingPassivation is { } pending)
+            {
+                if (msg.FailureReason is not null || activeRun.ContentVersion >= pending.RequiredContentVersion)
+                {
+                    if (!pending.ReplyTo.Equals(activeRun.ReplyTo))
+                        additionalReplyTo = pending.ReplyTo;
+
+                    _pendingPassivation = null;
+                }
+            }
+
+            activeRun.ReplyTo.Tell(completion);
+
+            if (additionalReplyTo is not null)
+            {
+                if (msg.FailureReason is null)
+                    additionalReplyTo.Tell(SessionDistillationCompleted.Empty);
+                else
+                    additionalReplyTo.Tell(completion);
+            }
+        }
+
+        if (msg.FailureReason is null && msg.Anchors.Count > 0)
+        {
+            var evt = new MemoriesDistilled(msg.Anchors, _timeProvider.GetUtcNow().ToUnixTimeMilliseconds());
+            Persist(evt, e =>
+            {
+                foreach (var anchor in e.Anchors)
+                    _proposedAnchors.Add(anchor);
+
+                _log.Info("session_observer_anchors_persisted count={Count}", e.Anchors.Count);
+                Dispatch();
+            });
+            return;
+        }
+
+        Dispatch();
+    }
+
+    private void AppendTranscriptLine(string line)
+    {
+        _transcript.AppendLine(line);
+        _hasNewContent = true;
+        _contentVersion++;
     }
 
     private async Task RunDistillationAsync(
@@ -176,7 +273,8 @@ public sealed class SessionMemoryObserverActor : ReceivePersistentActor
         IReadOnlyList<string> skipAnchors,
         TimeSpan timeout,
         IActorRef self,
-        IActorRef replyTo)
+        long runId,
+        long contentVersion)
     {
         long? inputTokens = null;
         long? outputTokens = null;
@@ -198,8 +296,6 @@ public sealed class SessionMemoryObserverActor : ReceivePersistentActor
             outputTokens = response.Usage?.OutputTokenCount;
 
             var proposals = ParseProposals(text);
-
-            // Persist proposed anchors to journal for skip list durability
             var newAnchors = proposals
                 .Where(p => p.Anchor is not null)
                 .Select(p => p.Anchor!.CanonicalName)
@@ -207,32 +303,26 @@ public sealed class SessionMemoryObserverActor : ReceivePersistentActor
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToArray();
 
-            if (newAnchors.Length > 0)
-            {
-                self.Tell(new PersistAnchors(newAnchors));
-            }
-
-            replyTo.Tell(new SessionDistillationCompleted
-            {
-                Proposals = proposals,
-                InputTokens = inputTokens,
-                OutputTokens = outputTokens
-            });
+            self.Tell(new DistillationRunCompleted(
+                runId,
+                contentVersion,
+                proposals,
+                newAnchors,
+                inputTokens,
+                outputTokens,
+                null));
         }
         catch (Exception ex)
         {
-            replyTo.Tell(new SessionDistillationCompleted
-            {
-                Proposals = [],
-                InputTokens = inputTokens,
-                OutputTokens = outputTokens,
-                FailureReason = ex.Message
-            });
-            self.Tell(new DistillationFinished(false));
-            return;
+            self.Tell(new DistillationRunCompleted(
+                runId,
+                contentVersion,
+                [],
+                [],
+                inputTokens,
+                outputTokens,
+                ex.Message));
         }
-
-        self.Tell(new DistillationFinished(true));
     }
 
     private static IReadOnlyList<MemoryProposal> ParseProposals(string text)
@@ -240,7 +330,6 @@ public sealed class SessionMemoryObserverActor : ReceivePersistentActor
         if (string.IsNullOrWhiteSpace(text))
             return [];
 
-        // Try direct parse first, then extract from markdown fences
         var direct = TryDeserialize(text);
         if (direct is not null)
             return direct;
@@ -295,19 +384,19 @@ public sealed class SessionMemoryObserverActor : ReceivePersistentActor
         Your job: identify the 2-5 most valuable things learned in this session.
 
         What to extract:
-        - Stable user preferences, decisions, or assertions → durable_fact (recallMode: "auto")
-        - Agent conclusions from research, analysis, or tool use → evidence (recallMode: "searchable")
-        - Project facts, constraints, or architectural decisions → durable_fact (recallMode: "auto")
-        - Task outcomes and significant results → evidence (recallMode: "searchable")
+        - Stable user preferences, decisions, or assertions -> durable_fact (recallMode: "auto")
+        - Agent conclusions from research, analysis, or tool use -> evidence (recallMode: "searchable")
+        - Project facts, constraints, or architectural decisions -> durable_fact (recallMode: "auto")
+        - Task outcomes and significant results -> evidence (recallMode: "searchable")
 
         What to skip:
         - Greetings, pleasantries, task coordination ("can you do X" / "sure")
         - Intermediate reasoning superseded by a later conclusion
-        - Information already present in [recalled-memory] entries — those are already stored
-        - Information from [loaded-skill] entries — those are system knowledge, not memories
+        - Information already present in [recalled-memory] entries - those are already stored
+        - Information from [loaded-skill] entries - those are system knowledge, not memories
         - Raw data or tool output that was summarized later (keep the summary, skip the raw)
         - Anything the user corrected or walked back
-        - Anchors listed in the "skipAnchors" field — those were already proposed
+        - Anchors listed in the "skipAnchors" field - those were already proposed
 
         Focus on the narrative arc: What did this session accomplish?
         What would be useful to know in a future session?
@@ -348,19 +437,22 @@ public sealed class SessionMemoryObserverActor : ReceivePersistentActor
         PropertyNameCaseInsensitive = true
     };
 
-    // ── Internal messages ──
+    private sealed record PendingPassivationRequest(IActorRef ReplyTo, long RequiredContentVersion);
 
-    private sealed record DistillationFinished(bool Success);
+    private sealed record DistillationRunState(long RunId, long ContentVersion, IActorRef ReplyTo);
 
-    private sealed record PersistAnchors(IReadOnlyList<string> Anchors);
+    private sealed record DistillationRunCompleted(
+        long RunId,
+        long ContentVersion,
+        IReadOnlyList<MemoryProposal> Proposals,
+        IReadOnlyList<string> Anchors,
+        long? InputTokens,
+        long? OutputTokens,
+        string? FailureReason) : INotInfluenceReceiveTimeout;
 }
-
-// ── Journal event ──
 
 /// <summary>Journaled event recording which anchors were proposed in a distillation.</summary>
 public sealed record MemoriesDistilled(IReadOnlyList<string> Anchors, long TimestampMs);
-
-// ── Messages ──
 
 /// <summary>System context injection forwarded to the observer (recalled memories, loaded skills).</summary>
 public sealed record ObserverSystemContext(string Label, string Content);
@@ -369,7 +461,7 @@ public sealed record ObserverSystemContext(string Label, string Content);
 public sealed record DistillMemories;
 
 /// <summary>Observer's response with memory proposals and token usage for billing.</summary>
-public sealed record SessionDistillationCompleted
+public sealed record SessionDistillationCompleted : INotInfluenceReceiveTimeout
 {
     public static readonly SessionDistillationCompleted Empty = new() { Proposals = [] };
 

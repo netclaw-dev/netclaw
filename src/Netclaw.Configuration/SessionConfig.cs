@@ -1,53 +1,17 @@
+using Microsoft.Extensions.Configuration;
+
 namespace Netclaw.Configuration;
 
 /// <summary>
-/// Configuration for an LLM session. Carries model identity and context
-/// window size so sessions can make compaction decisions.
-/// Bound from the <c>Session</c> section in <c>netclaw.json</c> at startup
-/// (see <c>Program.cs</c>). Model-derived values (ModelId, ContextWindowTokens,
-/// modalities) are overlaid after capability resolution.
+/// Operator-facing session configuration. Bound from the <c>Session</c> section
+/// in <c>netclaw.json</c> at startup.
+///
+/// Model-derived properties (ModelId, ContextWindowTokens, modalities) live in
+/// <see cref="ModelCapabilities"/>. Internal tuning constants live in
+/// <see cref="SessionTuning"/> (accessible via <see cref="Tuning"/>).
 /// </summary>
 public sealed record SessionConfig
 {
-    /// <summary>
-    /// The model identifier (e.g., "qwen3:30b", "claude-sonnet-4-20250514").
-    /// Populated from <see cref="ModelSelection"/> at startup, not from the Session config section.
-    /// </summary>
-    public string ModelId { get; init; } = string.Empty;
-
-    /// <summary>
-    /// Maximum context window size in tokens for the configured model.
-    /// Used to determine when compaction should trigger.
-    /// Populated from <see cref="ModelSelection"/> at startup, not from the Session config section.
-    /// </summary>
-    public int ContextWindowTokens { get; init; } = 32_768;
-
-    /// <summary>
-    /// Percentage of context window usage (0.0–1.0) at which compaction triggers.
-    /// Default 0.75 — compact when 75% of the context window is consumed.
-    /// </summary>
-    public double CompactionThreshold { get; init; } = 0.75;
-
-    /// <summary>
-    /// Number of turns between persistence snapshots.
-    /// </summary>
-    public int SnapshotInterval { get; init; } = 20;
-
-    /// <summary>
-    /// Optional model ID for compaction summarization.
-    /// When set, compaction LLM calls use this model (typically cheaper/faster)
-    /// instead of the primary session model. Requires a provider that
-    /// can resolve an <see cref="Microsoft.Extensions.AI.IChatClient"/> for this model.
-    /// </summary>
-    public string? CompactionModelId { get; init; }
-
-    /// <summary>
-    /// Number of recent tool call/result pairs to keep in full detail
-    /// during tool result clearing (Phase 1 of compaction).
-    /// Older tool results are replaced with placeholders.
-    /// </summary>
-    public int KeepRecentToolResults { get; init; } = 3;
-
     /// <summary>
     /// Maximum number of individual tool calls allowed per turn.
     /// Each tool call in a batch counts separately (e.g., 3 parallel calls = 3).
@@ -58,80 +22,11 @@ public sealed record SessionConfig
     public int MaxToolCallsPerTurn { get; init; } = 30;
 
     /// <summary>
-    /// Maximum number of characters from a single tool result that may be
-    /// inlined into conversation history. Oversized results are truncated to
-    /// protect the context window from verbose tool payloads (DOM dumps,
-    /// large JSON blobs, etc.).
-    /// </summary>
-    public int MaxInlineToolResultChars { get; init; } = 12_000;
-
-    /// <summary>
-    /// Number of future user turns that dynamically discovered MCP tools remain
-    /// available without re-running <c>search_tools</c>. Set to 0 to require
-    /// discovery on every user turn.
-    /// </summary>
-    public int DiscoveredToolRetentionTurns { get; init; } = 3;
-
-    /// <summary>
-    /// Maximum number of discovered MCP tools retained across turns.
-    /// Oldest discovered tools are evicted first when the cap is exceeded.
-    /// </summary>
-    public int DiscoveredToolMaxCount { get; init; } = 12;
-
-    /// <summary>
-    /// Number of recent non-system messages to preserve verbatim after compaction
-    /// summarization. These are appended after the summary message so the assistant
-    /// has immediate conversational context. Counts raw messages (not turn pairs)
-    /// to handle tool-call-heavy turns correctly.
-    /// Default 6 — roughly covers 2 turns with tool calls.
-    /// </summary>
-    public int KeepRecentMessages { get; init; } = 6;
-
-    /// <summary>
-    /// Turn interval for sidecar title generation. Title is always generated
-    /// on turn 1, then refreshed every N turns. Set to 0 to disable.
-    /// </summary>
-    public int TitleGenerationInterval { get; init; } = 10;
-
-    /// <summary>
-    /// Timeout in seconds for sidecar LLM calls (title generation, observer
-    /// summaries, and memory extraction). Increase this when running slower
-    /// models to reduce false timeout failures during background tasks.
-    /// </summary>
-    public int SidecarLlmTimeoutSeconds { get; init; } = 90;
-
-    /// <summary>
-    /// Enables structured memory sidecars for recall planning and post-turn
-    /// observation.
-    /// </summary>
-    public bool MemorySidecarsEnabled { get; init; } = true;
-
-    /// <summary>
     /// Idle seconds before the session memory observer triggers distillation.
     /// The observer watches the conversation stream and distills memories
     /// when the session goes quiet for this duration.
     /// </summary>
     public int MemoryObserverIdleSeconds { get; init; } = 90;
-
-    /// <summary>
-    /// Enables deterministic retrieval request planning for automatic
-    /// memory recall on each turn.
-    /// </summary>
-    public bool DeterministicRetrievalEnabled { get; init; } = true;
-
-    /// <summary>
-    /// Timeout in seconds for the primary per-turn LLM streaming call.
-    /// Prevents sessions from remaining stuck in Processing forever when a
-    /// provider stream stalls under network/backpressure failure modes.
-    /// </summary>
-    public int TurnLlmTimeoutSeconds { get; init; } = 180;
-
-    /// <summary>
-    /// Timeout in seconds for one tool-execution batch (all tool calls emitted
-    /// by a single assistant response). Prevents indefinite hangs when one or
-    /// more tools block forever.
-    /// </summary>
-    public int ToolExecutionTimeoutSeconds { get; init; } = 90;
 
     /// <summary>
     /// How long a session can be idle before passivating.
@@ -142,21 +37,95 @@ public sealed record SessionConfig
     public TimeSpan IdleTimeout { get; init; } = TimeSpan.FromMinutes(30);
 
     /// <summary>
-    /// Effective token limit at which compaction fires.
+    /// Timeout for the primary per-turn LLM streaming call.
+    /// Prevents sessions from remaining stuck in Processing forever when a
+    /// provider stream stalls under network/backpressure failure modes.
     /// </summary>
-    public int CompactionTokenLimit => (int)(ContextWindowTokens * CompactionThreshold);
+    public TimeSpan TurnLlmTimeout { get; init; } = TimeSpan.FromMinutes(3);
 
     /// <summary>
-    /// Content types the configured model accepts as input.
-    /// Defaults to <see cref="ModelModality.Text"/> when capabilities
-    /// have not been resolved.
+    /// Timeout for one tool-execution batch (all tool calls emitted
+    /// by a single assistant response). Prevents indefinite hangs when one or
+    /// more tools block forever.
     /// </summary>
-    public ModelModality InputModalities { get; init; } = ModelModality.Text;
+    public TimeSpan ToolExecutionTimeout { get; init; } = TimeSpan.FromSeconds(90);
 
     /// <summary>
-    /// Content types the configured model can produce as output.
-    /// Defaults to <see cref="ModelModality.Text"/> when capabilities
-    /// have not been resolved.
+    /// Timeout for sidecar LLM calls (title generation, observer
+    /// summaries, and memory extraction). Increase this when running slower
+    /// models to reduce false timeout failures during background tasks.
     /// </summary>
-    public ModelModality OutputModalities { get; init; } = ModelModality.Text;
+    public TimeSpan SidecarLlmTimeout { get; init; } = TimeSpan.FromSeconds(90);
+
+    /// <summary>
+    /// Internal tuning constants. Bindable from config for development/testing
+    /// but not part of the documented operator surface.
+    /// </summary>
+    public SessionTuning Tuning { get; init; } = new();
+
+    /// <summary>
+    /// Bind from an <see cref="IConfigurationSection"/> with backward-compatible
+    /// int-seconds keys for timeouts. Enforces a minimum of 1 second per timeout.
+    /// </summary>
+    public static SessionConfig BindFromConfiguration(IConfigurationSection section)
+    {
+        var raw = section.Get<RawSessionConfig>() ?? new RawSessionConfig();
+        var tuning = BindTuning(section);
+
+        return new SessionConfig
+        {
+            MaxToolCallsPerTurn = raw.MaxToolCallsPerTurn,
+            MemoryObserverIdleSeconds = raw.MemoryObserverIdleSeconds,
+            IdleTimeout = raw.IdleTimeout,
+            TurnLlmTimeout = TimeSpan.FromSeconds(Math.Max(1, raw.TurnLlmTimeoutSeconds)),
+            ToolExecutionTimeout = TimeSpan.FromSeconds(Math.Max(1, raw.ToolExecutionTimeoutSeconds)),
+            SidecarLlmTimeout = TimeSpan.FromSeconds(Math.Max(1, raw.SidecarLlmTimeoutSeconds)),
+            Tuning = tuning,
+        };
+    }
+
+    private static SessionTuning BindTuning(IConfigurationSection section)
+    {
+        var tuningSection = section.GetSection("Tuning");
+        var nested = tuningSection.Get<SessionTuning>() ?? new SessionTuning();
+
+        return nested with
+        {
+            CompactionThreshold = ResolveValue(tuningSection, section, nameof(SessionTuning.CompactionThreshold), nested.CompactionThreshold),
+            SnapshotInterval = ResolveValue(tuningSection, section, nameof(SessionTuning.SnapshotInterval), nested.SnapshotInterval),
+            KeepRecentToolResults = ResolveValue(tuningSection, section, nameof(SessionTuning.KeepRecentToolResults), nested.KeepRecentToolResults),
+            MaxInlineToolResultChars = ResolveValue(tuningSection, section, nameof(SessionTuning.MaxInlineToolResultChars), nested.MaxInlineToolResultChars),
+            DiscoveredToolRetentionTurns = ResolveValue(tuningSection, section, nameof(SessionTuning.DiscoveredToolRetentionTurns), nested.DiscoveredToolRetentionTurns),
+            DiscoveredToolMaxCount = ResolveValue(tuningSection, section, nameof(SessionTuning.DiscoveredToolMaxCount), nested.DiscoveredToolMaxCount),
+            KeepRecentMessages = ResolveValue(tuningSection, section, nameof(SessionTuning.KeepRecentMessages), nested.KeepRecentMessages),
+            TitleGenerationInterval = ResolveValue(tuningSection, section, nameof(SessionTuning.TitleGenerationInterval), nested.TitleGenerationInterval),
+            MemorySidecarsEnabled = ResolveValue(tuningSection, section, nameof(SessionTuning.MemorySidecarsEnabled), nested.MemorySidecarsEnabled),
+            DeterministicRetrievalEnabled = ResolveValue(tuningSection, section, nameof(SessionTuning.DeterministicRetrievalEnabled), nested.DeterministicRetrievalEnabled),
+        };
+    }
+
+    private static T ResolveValue<T>(IConfigurationSection preferredSection, IConfigurationSection fallbackSection, string key, T fallback)
+    {
+        if (preferredSection[key] is not null)
+            return preferredSection.GetValue<T>(key)!;
+
+        if (fallbackSection[key] is not null)
+            return fallbackSection.GetValue<T>(key)!;
+
+        return fallback;
+    }
+
+    /// <summary>
+    /// Raw config shape matching the JSON keys (int-seconds for timeouts).
+    /// Used only by <see cref="BindFromConfiguration"/>.
+    /// </summary>
+    private sealed record RawSessionConfig
+    {
+        public int MaxToolCallsPerTurn { get; init; } = 30;
+        public int MemoryObserverIdleSeconds { get; init; } = 90;
+        public TimeSpan IdleTimeout { get; init; } = TimeSpan.FromMinutes(30);
+        public int TurnLlmTimeoutSeconds { get; init; } = 180;
+        public int ToolExecutionTimeoutSeconds { get; init; } = 90;
+        public int SidecarLlmTimeoutSeconds { get; init; } = 90;
+    }
 }

@@ -37,12 +37,39 @@ using static Microsoft.Extensions.Logging.LogLevel;
 
 try
 {
-    var restartSignal = new DaemonRestartSignal();
-    do
+    // Acquire an exclusive lock file before anything else. This is the OS-level
+    // singleton guard — a second netclawd instance will fail to open the file
+    // and exit immediately. The lock survives soft restarts (same process) and
+    // is released by the OS on crash (fd closed → flock released).
+    var paths = new NetclawPaths();
+    paths.EnsureDirectoriesExist();
+
+    FileStream lockFile;
+    try
     {
-        restartSignal.Reset();
-        await RunDaemonAsync(args, restartSignal);
-    } while (restartSignal.RestartRequested);
+        lockFile = new FileStream(
+            paths.LockFilePath,
+            FileMode.OpenOrCreate,
+            FileAccess.ReadWrite,
+            FileShare.None);
+    }
+    catch (IOException)
+    {
+        Console.Error.WriteLine(
+            "error: Another netclawd instance is already running (lock file held). Exiting.");
+        Environment.ExitCode = 1;
+        return;
+    }
+
+    await using (lockFile)
+    {
+        var restartSignal = new DaemonRestartSignal();
+        do
+        {
+            restartSignal.Reset();
+            await RunDaemonAsync(args, restartSignal);
+        } while (restartSignal.RestartRequested);
+    }
 }
 catch (Exception ex)
 {
@@ -321,20 +348,12 @@ static void ConfigureDaemonServices(
     var detected = ResolveStartupCapabilities(
         models.Main.ModelId, daemonLogLevel, mainProviderType, ollamaEndpoint, openAiCompatibleEndpoint, openAiCompatibleApiKey);
 
-    var (inputModalities, outputModalities, contextWindow) =
-        ModelCapabilityResolution.ResolveSessionConfig(models.Main, detected);
+    var modelCapabilities = ModelCapabilityResolution.ResolveModelCapabilities(models, detected);
+    services.AddSingleton(modelCapabilities);
 
-    // Session config: bind defaults from config section, overlay model-derived values
-    var sessionConfig = configuration.GetSection("Session").Get<SessionConfig>() ?? new SessionConfig();
-    var resolvedSessionConfig = sessionConfig with
-    {
-        ModelId = models.Main.ModelId,
-        ContextWindowTokens = contextWindow,
-        CompactionModelId = models.Compaction?.ModelId,
-        InputModalities = inputModalities,
-        OutputModalities = outputModalities,
-    };
-    services.AddSingleton(resolvedSessionConfig);
+    // Session config: bind operator-facing settings from config section
+    var sessionConfig = SessionConfig.BindFromConfiguration(configuration.GetSection("Session"));
+    services.AddSingleton(sessionConfig);
 
     // Tools (auto-bound, no required properties)
     var toolConfig = configuration.GetSection("Tools")
@@ -596,6 +615,32 @@ static void ConfigureDaemonServices(
             sp.GetRequiredService<ILogger<CompositeCapabilityResolver>>());
     });
 
+    // Composite dependency records for LlmSessionActor DI resolution
+    services.AddSingleton(sp => new SessionServices(
+        sp.GetRequiredService<IChatClientProvider>(),
+        sp.GetRequiredService<ISystemPromptProvider>(),
+        sp.GetRequiredService<IReadOnlyList<IContextLayerProvider>>(),
+        sp.GetRequiredService<TimeProvider>(),
+        sp.GetService<NetclawPaths>()));
+
+    services.AddSingleton(sp => new SessionToolServices(
+        sp.GetRequiredService<IToolExecutor>(),
+        sp.GetService<IToolAuditLogger>(),
+        sp.GetRequiredService<ToolRegistry>(),
+        sp.GetService<ToolAccessPolicy>(),
+        sp.GetService<TrustContextDeriver>(),
+        sp.GetService<SkillRegistry>()));
+
+    services.AddSingleton(sp => new SessionMemoryServices(
+        sp.GetService<IMemoryExtractor>() ?? NullMemoryExtractor.Instance,
+        sp.GetService<IMemoryRecallCoordinator>() ?? NullMemoryRecallCoordinator.Instance,
+        sp.GetService<IMemoryCheckpointSink>() ?? NullMemoryCheckpointSink.Instance,
+        sp.GetService<SQLiteMemoryStore>()));
+
+    services.AddSingleton(sp => new SessionObservability(
+        sp.GetService<Netclaw.Actors.Telemetry.ISessionMetrics>(),
+        sp.GetService<ISessionLifecycleObserver>()));
+
     // Akka.NET actor system
     services.AddAkka("netclaw", (akkaBuilder, sp) =>
     {
@@ -666,6 +711,11 @@ static void ConfigureDaemonServices(
     // PID file authority for daemon lifecycle management
     services.AddSingleton<PidFileService>();
     services.AddSingleton<IHostedService>(sp => sp.GetRequiredService<PidFileService>());
+
+    // PID file watchdog — self-terminates daemon if PID file is deleted externally.
+    // Registered after PidFileService so it starts after the PID file is written
+    // and stops before PidFileService deletes it during graceful shutdown.
+    services.AddSingleton<IHostedService, PidFileWatchdogService>();
 
     // Active session cleanup during host shutdown
     services.AddSingleton<SessionRegistryShutdownService>();

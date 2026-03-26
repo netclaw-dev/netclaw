@@ -8,6 +8,7 @@ using Microsoft.Extensions.Hosting;
 using Netclaw.Configuration;
 using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Protocol;
+using Netclaw.Actors.Memory;
 using Netclaw.Actors.Sessions;
 using Netclaw.Actors.Tools;
 using Xunit;
@@ -32,14 +33,20 @@ public class MaxToolIterationTests : TestKit
     protected override void ConfigureServices(HostBuilderContext context, IServiceCollection services)
     {
         services.AddSingleton<IChatClientProvider>(new SingleClientProvider(_fakeChatClient));
-        services.AddSingleton(new SessionConfig
+        services.AddSingleton(new ModelCapabilities
         {
             ModelId = "fake-model",
             ContextWindowTokens = 128_000,
-            SnapshotInterval = 5,
+        });
+        services.AddSingleton(new SessionConfig
+        {
             MaxToolCallsPerTurn = 3, // Low limit for testing
-            TitleGenerationInterval = 0,
-            MemorySidecarsEnabled = false
+            Tuning = new SessionTuning
+            {
+                SnapshotInterval = 5,
+                TitleGenerationInterval = 0,
+                MemorySidecarsEnabled = false,
+            }
         });
         services.AddSingleton<ISystemPromptProvider>(new StaticSystemPromptProvider(
             "You are a test assistant with tools."));
@@ -52,6 +59,27 @@ public class MaxToolIterationTests : TestKit
             "web_search");
         services.AddSingleton(registry);
         services.AddSingleton<IModelCapabilityResolver>(new FakeCapabilityResolver());
+
+        // Composite records for LlmSessionActor constructor
+        services.AddSingleton(sp => new SessionServices(
+            sp.GetRequiredService<IChatClientProvider>(),
+            sp.GetRequiredService<ISystemPromptProvider>(),
+            sp.GetService<IReadOnlyList<IContextLayerProvider>>() ?? Array.Empty<IContextLayerProvider>(),
+            sp.GetService<TimeProvider>() ?? TimeProvider.System,
+            sp.GetService<NetclawPaths>()));
+        services.AddSingleton(sp => new SessionToolServices(
+            sp.GetRequiredService<IToolExecutor>(),
+            sp.GetService<IToolAuditLogger>(),
+            sp.GetRequiredService<ToolRegistry>(),
+            sp.GetService<ToolAccessPolicy>(),
+            sp.GetService<Netclaw.Actors.Channels.TrustContextDeriver>(),
+            sp.GetService<Netclaw.Actors.Skills.SkillRegistry>()));
+        services.AddSingleton(sp => new SessionMemoryServices(
+            sp.GetService<IMemoryExtractor>() ?? NullMemoryExtractor.Instance,
+            sp.GetService<IMemoryRecallCoordinator>() ?? NullMemoryRecallCoordinator.Instance,
+            sp.GetService<IMemoryCheckpointSink>() ?? NullMemoryCheckpointSink.Instance,
+            sp.GetService<SQLiteMemoryStore>()));
+        services.AddSingleton(new SessionObservability(null, null));
     }
 
     protected override void ConfigureAkka(AkkaConfigurationBuilder builder, IServiceProvider provider)

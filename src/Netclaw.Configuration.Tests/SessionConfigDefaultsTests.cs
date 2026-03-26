@@ -1,9 +1,11 @@
+using Microsoft.Extensions.Configuration;
 using Xunit;
 
 namespace Netclaw.Configuration.Tests;
 
 /// <summary>
-/// Bear-trap tests for <see cref="SessionConfig"/> defaults.
+/// Bear-trap tests for <see cref="SessionConfig"/>, <see cref="SessionTuning"/>,
+/// and <see cref="ModelCapabilities"/> defaults.
 /// If you change a default, you must update these assertions —
 /// forcing a deliberate decision rather than an accidental drift.
 /// </summary>
@@ -12,29 +14,29 @@ public sealed class SessionConfigDefaultsTests
     [Fact]
     public void Memory_sidecars_enabled_by_default()
     {
-        var config = new SessionConfig();
-        Assert.True(config.MemorySidecarsEnabled);
+        var tuning = new SessionTuning();
+        Assert.True(tuning.MemorySidecarsEnabled);
     }
 
     [Fact]
     public void Deterministic_retrieval_enabled_by_default()
     {
-        var config = new SessionConfig();
-        Assert.True(config.DeterministicRetrievalEnabled);
+        var tuning = new SessionTuning();
+        Assert.True(tuning.DeterministicRetrievalEnabled);
     }
 
     [Fact]
     public void Compaction_threshold_is_75_percent()
     {
-        var config = new SessionConfig();
-        Assert.Equal(0.75, config.CompactionThreshold);
+        var tuning = new SessionTuning();
+        Assert.Equal(0.75, tuning.CompactionThreshold);
     }
 
     [Fact]
     public void Context_window_defaults_to_32k()
     {
-        var config = new SessionConfig();
-        Assert.Equal(32_768, config.ContextWindowTokens);
+        var capabilities = new ModelCapabilities();
+        Assert.Equal(32_768, capabilities.ContextWindowTokens);
     }
 
     [Fact]
@@ -42,5 +44,42 @@ public sealed class SessionConfigDefaultsTests
     {
         var config = new SessionConfig();
         Assert.Equal(TimeSpan.FromMinutes(30), config.IdleTimeout);
+    }
+
+    [Fact]
+    public void BindFromConfiguration_supports_legacy_root_level_tuning_keys()
+    {
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Session:CompactionThreshold"] = "0.5",
+                ["Session:SnapshotInterval"] = "7",
+                ["Session:KeepRecentMessages"] = "4",
+                ["Session:TitleGenerationInterval"] = "2"
+            })
+            .Build();
+
+        var bound = SessionConfig.BindFromConfiguration(config.GetSection("Session"));
+
+        Assert.Equal(0.5, bound.Tuning.CompactionThreshold);
+        Assert.Equal(7, bound.Tuning.SnapshotInterval);
+        Assert.Equal(4, bound.Tuning.KeepRecentMessages);
+        Assert.Equal(2, bound.Tuning.TitleGenerationInterval);
+    }
+
+    [Fact]
+    public void BindFromConfiguration_prefers_nested_tuning_values_over_legacy_root_keys()
+    {
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Session:CompactionThreshold"] = "0.5",
+                ["Session:Tuning:CompactionThreshold"] = "0.8"
+            })
+            .Build();
+
+        var bound = SessionConfig.BindFromConfiguration(config.GetSection("Session"));
+
+        Assert.Equal(0.8, bound.Tuning.CompactionThreshold);
     }
 }
