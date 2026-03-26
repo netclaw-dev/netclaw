@@ -7,7 +7,9 @@ using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Netclaw.Actors.Hosting;
+using Netclaw.Actors.Memory;
 using Netclaw.Actors.Protocol;
+using Netclaw.Actors.Sessions;
 using Netclaw.Configuration;
 using Xunit;
 using Xunit.Abstractions;
@@ -26,19 +28,39 @@ public sealed class ErrorCorrelationTests(ITestOutputHelper output) : TestKit(ou
     protected override void ConfigureServices(HostBuilderContext context, IServiceCollection services)
     {
         services.AddSingleton<IChatClientProvider>(new SingleClientProvider(_chatClient));
-        services.AddSingleton(new SessionConfig
+        services.AddSingleton(new ModelCapabilities
         {
             ModelId = "error-test-model",
             ContextWindowTokens = 128_000,
-            SnapshotInterval = 5,
-            TitleGenerationInterval = 0,
-            TurnLlmTimeoutSeconds = 10,
-            ToolExecutionTimeoutSeconds = 10,
-            SidecarLlmTimeoutSeconds = 10,
-            MemorySidecarsEnabled = false
+        });
+        services.AddSingleton(new SessionConfig
+        {
+            TurnLlmTimeout = TimeSpan.FromSeconds(10),
+            ToolExecutionTimeout = TimeSpan.FromSeconds(10),
+            SidecarLlmTimeout = TimeSpan.FromSeconds(10),
+            Tuning = new SessionTuning
+            {
+                SnapshotInterval = 5,
+                TitleGenerationInterval = 0,
+                MemorySidecarsEnabled = false,
+            }
         });
         services.AddSingleton<ISystemPromptProvider>(new StaticSystemPromptProvider("You are a test assistant."));
         services.AddSingleton<IModelCapabilityResolver>(new FakeCapabilityResolver());
+
+        // Composite records for LlmSessionActor constructor
+        services.AddSingleton(sp => new SessionServices(
+            sp.GetRequiredService<IChatClientProvider>(),
+            sp.GetRequiredService<ISystemPromptProvider>(),
+            sp.GetService<IReadOnlyList<IContextLayerProvider>>() ?? Array.Empty<IContextLayerProvider>(),
+            sp.GetService<TimeProvider>() ?? TimeProvider.System,
+            sp.GetService<NetclawPaths>()));
+        services.AddSingleton(sp => new SessionMemoryServices(
+            sp.GetService<IMemoryExtractor>() ?? NullMemoryExtractor.Instance,
+            sp.GetService<IMemoryRecallCoordinator>() ?? NullMemoryRecallCoordinator.Instance,
+            sp.GetService<IMemoryCheckpointSink>() ?? NullMemoryCheckpointSink.Instance,
+            sp.GetService<SQLiteMemoryStore>()));
+        services.AddSingleton(new SessionObservability(null, null));
     }
 
     protected override void ConfigureAkka(AkkaConfigurationBuilder builder, IServiceProvider provider)

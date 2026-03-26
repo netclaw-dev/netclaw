@@ -21,7 +21,7 @@ internal sealed class DaemonRuntimeStatusService(
     SlackChannelOptions slackOptions,
     DaemonPersistenceOptions persistenceOptions,
     IOptions<TelemetryOptions> telemetryOptions,
-    SessionConfig sessionConfig,
+    ModelCapabilities modelCapabilities,
     ModelSelection modelSelection,
     NetclawPaths paths,
     McpClientManager? mcpClientManager = null,
@@ -73,12 +73,12 @@ internal sealed class DaemonRuntimeStatusService(
             },
             Model = new DaemonRuntimeStatus.Model
             {
-                ModelId = sessionConfig.ModelId,
-                DisplayName = ModelIdNormalizer.GetDisplayName(sessionConfig.ModelId),
+                ModelId = modelCapabilities.ModelId,
+                DisplayName = ModelIdNormalizer.GetDisplayName(modelCapabilities.ModelId),
                 Provider = modelSelection.Main.Provider,
-                InputModalities = sessionConfig.InputModalities.ToString(),
-                OutputModalities = sessionConfig.OutputModalities.ToString(),
-                ContextWindow = sessionConfig.ContextWindowTokens
+                InputModalities = modelCapabilities.InputModalities.ToString(),
+                OutputModalities = modelCapabilities.OutputModalities.ToString(),
+                ContextWindow = modelCapabilities.ContextWindowTokens
             },
             Update = BuildUpdateStatus(),
             Memory = await BuildMemoryStatusAsync(cancellationToken),

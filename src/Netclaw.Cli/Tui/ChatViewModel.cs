@@ -16,7 +16,7 @@ public partial class ChatViewModel : ReactiveViewModel
 {
     private readonly DaemonClient _daemonClient;
     private readonly TimeProvider _timeProvider;
-    private readonly SessionConfig _sessionConfig;
+    private readonly ModelCapabilities _modelCapabilities;
     private string? _resumeSessionId;
     private string? _initialMessage;
 
@@ -42,19 +42,19 @@ public partial class ChatViewModel : ReactiveViewModel
     /// <summary>
     /// The configured model identifier for display in the status bar.
     /// </summary>
-    public string ModelId => _sessionConfig.ModelId;
+    public string ModelId => _modelCapabilities.ModelId;
 
-    public int ContextWindowTokens => _sessionConfig.ContextWindowTokens;
+    public int ContextWindowTokens => _modelCapabilities.ContextWindowTokens;
 
     public ChatViewModel(
         DaemonClient daemonClient,
         TimeProvider timeProvider,
-        SessionConfig sessionConfig,
+        ModelCapabilities modelCapabilities,
         ChatNavigationState navigationState)
     {
         _daemonClient = daemonClient;
         _timeProvider = timeProvider;
-        _sessionConfig = sessionConfig;
+        _modelCapabilities = modelCapabilities;
         _resumeSessionId = navigationState.TakeResumeSessionId();
         _initialMessage = navigationState.TakeInitialMessage();
     }

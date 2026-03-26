@@ -61,13 +61,36 @@ public static class MemorySidecarPromptBuilder
               "rationale": "Stable user preference stated explicitly."
             }
 
+            Example evidence (agent-derived finding):
+            {
+              "operation": "append_record",
+              "memoryClass": "evidence",
+              "subjectKind": "project",
+              "subjectValue": "netclaw",
+              "anchor": { "canonicalName": "pr-394-review", "anchorType": "review" },
+              "title": "PR #394 Review: Skill Platform Hardening",
+              "content": "PR #394 adds skill management CRUD tooling and a five-tier trust system (System > User > Community > External > Agent). Key findings: content security scanning interface, atomic file writes, system directory write protection.",
+              "aliases": ["PR 394", "skill trust tiers", "skill management"],
+              "facets": ["code_review", "project_artifact"],
+              "slots": [],
+              "relations": [],
+              "recallMode": "searchable",
+              "sensitivity": "normal",
+              "confidence": 0.80,
+              "freshUntilMs": null,
+              "expiresAtMs": null,
+              "targetSurface": null,
+              "rationale": "Agent-derived findings from PR review — synthesized conclusions, not raw diff output."
+            }
+
             Rules:
             - Strong stable user assertions and durable working preferences become durable_fact.
-            - Search results, hotel/flight options, passages, prices, and transient research become evidence.
-            - Diagnostic chatter and execution breadcrumbs become trace or ignore.
+            - Conclusions, learnings, and discoveries that the agent arrived at through tool use, analysis, or research become evidence with moderate confidence (0.7-0.85). Examples: PR review findings, research comparisons, discovered constraints or errors, task outcomes.
+            - Raw search results, hotel/flight options, price lists, and transient research data become evidence only when the agent has drawn a conclusion from them. Do not store raw tool output.
+            - Routine tool invocation logs, raw API responses, raw search result listings, status checks, and execution breadcrumbs become trace or ignore. The key distinction: synthesized knowledge → evidence; raw output → trace.
             - Never write secrets as auto-recall memories.
             - Never use SOUL.md as a sink for project facts, research passages, or evidence.
-            - Be conservative.
+            - When in doubt between evidence and ignore, prefer evidence with moderate confidence (0.7-0.8) rather than suppressing the observation.
             """;
     }
 

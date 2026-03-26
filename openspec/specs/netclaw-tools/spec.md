@@ -166,6 +166,64 @@ SHALL be truncated to a configurable limit.
 - **WHEN** the shell tool executes a command
 - **THEN** the working directory is set to the project's registered path
 
+### Requirement: File edit tool
+
+The system SHALL provide a file edit tool that performs targeted text
+replacements in existing files without rewriting the entire file. The tool
+SHALL require the target file to already exist. The tool SHALL match literal
+text (not regex) and fail loudly if the specified text is not found. When
+multiple matches exist and replace-all is not specified, the tool SHALL fail
+with an ambiguity error to prevent accidental edits. OldString and NewString
+SHALL both be required and must differ. The tool uses the `file` grant
+category and respects the same security policies as file_write.
+
+#### Scenario: Single replacement in existing file
+
+- **GIVEN** the `file` grant is available and a file exists at the specified path
+- **WHEN** the agent invokes file_edit with OldString and NewString
+- **AND** OldString matches exactly once in the file
+- **THEN** the first occurrence is replaced with NewString
+- **AND** the rest of the file content is preserved
+
+#### Scenario: Replace all occurrences
+
+- **GIVEN** a file contains multiple occurrences of OldString
+- **WHEN** the agent invokes file_edit with ReplaceAll=true
+- **THEN** all occurrences are replaced with NewString
+
+#### Scenario: Ambiguous match rejected
+
+- **GIVEN** a file contains multiple occurrences of OldString
+- **WHEN** the agent invokes file_edit without ReplaceAll
+- **THEN** the tool returns an error indicating the match is ambiguous
+- **AND** the file is not modified
+
+#### Scenario: Text not found returns error
+
+- **GIVEN** a file does not contain OldString
+- **WHEN** the agent invokes file_edit
+- **THEN** the tool returns an error that the text was not found
+- **AND** the file is not modified
+
+#### Scenario: File must exist
+
+- **GIVEN** the specified file path does not exist
+- **WHEN** the agent invokes file_edit
+- **THEN** the tool returns a file-not-found error
+
+#### Scenario: Empty replacement performs deletion
+
+- **GIVEN** a file contains OldString
+- **WHEN** the agent invokes file_edit with NewString as empty string
+- **THEN** the matched text is deleted from the file
+
+#### Scenario: OldString and NewString must differ
+
+- **GIVEN** the agent invokes file_edit with OldString equal to NewString
+- **WHEN** the tool validates parameters
+- **THEN** the tool returns an error that OldString and NewString must differ
+- **AND** the file is not modified
+
 ### Requirement: GitHub CLI tool
 
 The system SHALL provide a GitHub tool that shells out to the `gh` CLI for

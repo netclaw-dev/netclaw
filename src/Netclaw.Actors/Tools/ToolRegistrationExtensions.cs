@@ -27,6 +27,7 @@ public static class ToolRegistrationExtensions
         registry.Register(new ShellTool(config, pathPolicy));
         registry.Register(new FileReadTool(config, pathPolicy, paths));
         registry.Register(new FileWriteTool(config, pathPolicy));
+        registry.Register(new FileEditTool(config, pathPolicy));
         registry.Register(new AttachFileTool(config));
         if (searchBackend is not null)
             registry.Register(new WebSearchTool(searchBackend));

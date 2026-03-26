@@ -1349,10 +1349,10 @@ public sealed class SQLiteMemoryStore
             documentCmd.CommandText = """
                 INSERT INTO memory_documents(
                   document_id, anchor_id, memory_class, title, markdown_body, aliases_json, facets_json, slots_json, update_semantics,
-                  domain, sensitivity, recall_mode, confidence, freshness_at,
+                  domain, boundary, audience, sensitivity, recall_mode, confidence, freshness_at,
                   expires_at, created_at, updated_at)
                 VALUES($id, $anchorId, $memoryClass, $title, $body, $aliasesJson, $facetsJson, $slotsJson, $semantics,
-                  $domain, $sensitivity, $recallMode, $confidence, $freshnessAt,
+                  $domain, $boundary, $audience, $sensitivity, $recallMode, $confidence, $freshnessAt,
                   $expiresAt, $createdAt, $updatedAt)
                 ON CONFLICT(document_id) DO UPDATE SET
                   memory_class=excluded.memory_class,
@@ -1363,6 +1363,8 @@ public sealed class SQLiteMemoryStore
                   slots_json=excluded.slots_json,
                   update_semantics=excluded.update_semantics,
                   domain=excluded.domain,
+                  boundary=excluded.boundary,
+                  audience=excluded.audience,
                   sensitivity=excluded.sensitivity,
                   recall_mode=excluded.recall_mode,
                   confidence=excluded.confidence,
@@ -1380,6 +1382,8 @@ public sealed class SQLiteMemoryStore
             documentCmd.Parameters.AddWithValue("$slotsJson", (object?)operation.SlotsJson ?? DBNull.Value);
             documentCmd.Parameters.AddWithValue("$semantics", operation.UpdateSemantics);
             documentCmd.Parameters.AddWithValue("$domain", operation.Domain);
+            documentCmd.Parameters.AddWithValue("$boundary", (object?)operation.Boundary ?? DBNull.Value);
+            documentCmd.Parameters.AddWithValue("$audience", (object?)operation.Audience ?? DBNull.Value);
             documentCmd.Parameters.AddWithValue("$sensitivity", operation.Sensitivity);
             documentCmd.Parameters.AddWithValue("$recallMode", resolvedRecallMode);
             documentCmd.Parameters.AddWithValue("$confidence", operation.Confidence);

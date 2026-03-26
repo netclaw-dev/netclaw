@@ -45,7 +45,7 @@ public sealed class DeterministicRetrievalRequestPlanner
             Facets: facets,
             AnchorHints: anchorHints,
             CandidateLimit: retrievalMode == DeterministicRetrievalMode.Bundle ? 60 : 30,
-            AllowedMemoryClasses: [MemoryClass.DurableFact.ToWireValue()],
+            AllowedMemoryClasses: [MemoryClass.DurableFact.ToWireValue(), MemoryClass.Evidence.ToWireValue()],
             ExcludedSensitivity: [MemorySensitivity.Secret.ToWireValue()],
             ExcludeExpired: true);
     }

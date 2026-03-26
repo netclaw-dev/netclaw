@@ -18,7 +18,7 @@ namespace Netclaw.Daemon.Tests.Gateway;
 
 public sealed class DaemonRuntimeStatusServiceTests : IAsyncLifetime
 {
-    private static readonly SessionConfig DefaultSessionConfig = new()
+    private static readonly ModelCapabilities DefaultModelCapabilities = new()
     {
         ModelId = "test-model",
         InputModalities = ModelModality.Text | ModelModality.Image,
@@ -79,7 +79,7 @@ public sealed class DaemonRuntimeStatusServiceTests : IAsyncLifetime
             slackOptions: new SlackChannelOptions { Enabled = false },
             persistenceOptions: new DaemonPersistenceOptions(),
             telemetryOptions: Options.Create(new TelemetryOptions()),
-            sessionConfig: DefaultSessionConfig,
+            modelCapabilities: DefaultModelCapabilities,
             modelSelection: DefaultModelSelection,
             paths: CreatePaths());
 
@@ -99,7 +99,7 @@ public sealed class DaemonRuntimeStatusServiceTests : IAsyncLifetime
             slackOptions: new SlackChannelOptions { Enabled = true, AllowedChannelIds = ["C1"] },
             persistenceOptions: new DaemonPersistenceOptions(),
             telemetryOptions: Options.Create(new TelemetryOptions()),
-            sessionConfig: DefaultSessionConfig,
+            modelCapabilities: DefaultModelCapabilities,
             modelSelection: DefaultModelSelection,
             paths: CreatePaths());
 
@@ -119,7 +119,7 @@ public sealed class DaemonRuntimeStatusServiceTests : IAsyncLifetime
             slackOptions: new SlackChannelOptions { Enabled = false },
             persistenceOptions: new DaemonPersistenceOptions(),
             telemetryOptions: Options.Create(new TelemetryOptions()),
-            sessionConfig: DefaultSessionConfig,
+            modelCapabilities: DefaultModelCapabilities,
             modelSelection: DefaultModelSelection,
             paths: CreatePaths());
 
@@ -177,7 +177,7 @@ public sealed class DaemonRuntimeStatusServiceTests : IAsyncLifetime
                 slackOptions: new SlackChannelOptions { Enabled = false },
                 persistenceOptions: new DaemonPersistenceOptions(),
                 telemetryOptions: Options.Create(new TelemetryOptions()),
-                sessionConfig: DefaultSessionConfig,
+                modelCapabilities: DefaultModelCapabilities,
                 modelSelection: DefaultModelSelection,
                 paths: CreatePaths(),
                 mcpClientManager: manager);
@@ -240,7 +240,7 @@ public sealed class DaemonRuntimeStatusServiceTests : IAsyncLifetime
             slackOptions: new SlackChannelOptions { Enabled = false },
             persistenceOptions: new DaemonPersistenceOptions(),
             telemetryOptions: Options.Create(new TelemetryOptions()),
-            sessionConfig: DefaultSessionConfig,
+            modelCapabilities: DefaultModelCapabilities,
             modelSelection: DefaultModelSelection,
             paths: paths,
             sqliteMemoryStore: sqliteStore);
@@ -272,7 +272,7 @@ public sealed class DaemonRuntimeStatusServiceTests : IAsyncLifetime
             slackOptions: new SlackChannelOptions { Enabled = false },
             persistenceOptions: new DaemonPersistenceOptions(),
             telemetryOptions: Options.Create(new TelemetryOptions()),
-            sessionConfig: DefaultSessionConfig,
+            modelCapabilities: DefaultModelCapabilities,
             modelSelection: DefaultModelSelection,
             paths: CreatePaths());
 

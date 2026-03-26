@@ -9,6 +9,8 @@ using Microsoft.Extensions.AI;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Memory;
 using Netclaw.Actors.Protocol;
+using Netclaw.Actors.Sessions.Handlers;
+using Netclaw.Actors.Sessions.Pipelines;
 using Netclaw.Actors.Text;
 using Netclaw.Configuration;
 using Netclaw.Actors.Tools;
@@ -36,6 +38,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     private readonly SessionId _sessionId;
     private readonly IChatClient _chatClient;
     private readonly IChatClient _compactionClient;
+    private readonly ModelCapabilities _model;
     private readonly SessionConfig _config;
     private readonly ISystemPromptProvider _promptProvider;
     private readonly IReadOnlyList<IContextLayerProvider> _contextLayers;
@@ -44,7 +47,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     private readonly IMemoryExtractor _memoryExtractor;
     private readonly IMemoryRecallCoordinator _memoryRecallCoordinator;
     private readonly IMemoryCheckpointSink _memoryCheckpointSink;
-    private readonly SidecarMemoryObserver _sidecarMemoryObserver = new();
     private readonly MemoryProposalGate _memoryProposalGate = new();
     private readonly TimeProvider _timeProvider;
     private readonly string? _sessionsBasePath;
@@ -63,45 +65,20 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     private readonly ToolAccessPolicy? _toolAccessPolicy;
     private readonly TrustContextDeriver? _trustContextDeriver;
     private int _baseToolCount; // count of always-loaded tools; dynamic tools appended after this
-    private readonly List<string> _discoveredToolOrder = new();
-    private readonly Dictionary<string, int> _discoveredToolLeases = new(StringComparer.Ordinal);
+    private readonly DiscoveredToolCache _discoveredToolCache = new();
 
     // Last observed input token count from LLM response (for compaction trigger)
     private long _lastInputTokenCount;
 
-    // Tool call counter (reset per turn, incremented by the number of tool calls in each batch)
-    private int _toolCallCount;
+    // Per-turn transient counters (tool budget, duplicate detection, empty-response retries)
+    private readonly TurnStateTracker _turnState = new();
 
-    // Tool iteration counter (reset per turn, incremented once per ToolExecutionCompleted batch — for logging)
-    private int _toolIterationCount;
-
-    // Whether the budget-awareness nudge has been injected for this turn
-    private bool _budgetNudgeSent;
-
-    private const int MaxPreToolEmptyResponseRetries = 2;
-    private const int MaxDeliveryFailureRetries = 2;
-    private const string EmptyResponseFallbackMessage = "I didn't manage to produce a reply. Please try rephrasing or sending your request again.";
     private const string ToolBudgetExhaustedMessage =
         "I used all available tool calls for this turn and couldn't produce a final summary. "
         + "You can ask me to summarize what was done, or rephrase your request.";
 
-    // Whether we already sent a post-tool empty-response nudge in this tool chain
-    private bool _postToolNudgeSent;
-
-    // Number of consecutive empty responses observed before any tool work happened
-    private int _preToolEmptyResponseCount;
-
-    // Whether the current LLM call intentionally disabled tool use after a circuit breaker fired.
-    private bool _forceNoToolsActive;
-
-    // Duplicate tool call detection: tracks hash(toolName:argsJson) within a turn
-    private readonly Dictionary<string, int> _toolCallHashes = new(StringComparer.Ordinal);
-    private bool _duplicateNudgeSent;
-
-    // Delivery retry state. A completed turn remains eligible until a new user turn starts.
-    private int? _deliveryRetryEligibleTurnNumber;
-    private int _deliveryRetryCount;
-    private bool _deliveryRetryChainActive;
+    // Delivery retry handler (eligibility tracking, retry counting, nudge builders)
+    private readonly DeliveryRetryHandler _deliveryRetry = new();
 
     // Child actor for per-session log file (created when session logs directory is configured)
     private IActorRef? _logActor;
@@ -109,10 +86,11 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     // Child actor for per-session memory curation (evaluate-before-write pipeline)
     private IActorRef? _curationActor;
 
-    // Processing watchdog state (non-persistent)
-    private static readonly object ProcessingWatchdogTimerKey = new();
-    private long _processingOperationId;
-    private string? _processingOperationName;
+    // Child actor for session-level memory observation (distills transcript on idle)
+    private IActorRef? _observerActor;
+
+    // Processing watchdog (timer management for stuck operations)
+    private readonly ProcessingWatchdog _watchdog = new();
 
     // Per-turn diagnostic correlation (ephemeral)
     private string? _activeTurnId;
@@ -128,8 +106,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     private readonly Skills.SkillRegistry? _skillRegistry;
 
     // Memory recall state (transient — reset at turn boundaries and compaction)
-    private AutomaticRecallResult? _turnRecallCache;
-    private readonly HashSet<string> _injectedMemoryIds = new(StringComparer.Ordinal);
+    private readonly SessionRecallManager _recallManager = new();
 
     private readonly Telemetry.ISessionMetrics? _sessionMetrics;
 
@@ -139,53 +116,45 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     // Track whether system prompt was recovered from journal
     private bool _systemPromptRecovered;
 
+    // Explicit state machine phase (metadata + validation layer over Become())
+    private SessionPhase _currentPhase = SessionPhase.Recovering;
+
     public override string PersistenceId { get; }
     public ITimerScheduler Timers { get; set; } = null!;
 
     public LlmSessionActor(
         string entityId,
-        IChatClientProvider clientProvider,
+        ModelCapabilities modelCapabilities,
         SessionConfig config,
-        ISystemPromptProvider promptProvider,
-        IToolExecutor? toolExecutor = null,
-        IToolAuditLogger? auditLogger = null,
-        ToolRegistry? toolRegistry = null,
-        ToolAccessPolicy? toolAccessPolicy = null,
-        IMemoryExtractor? memoryExtractor = null,
-        IMemoryRecallCoordinator? memoryRecallCoordinator = null,
-        IMemoryCheckpointSink? memoryCheckpointSink = null,
-        TimeProvider? timeProvider = null,
-        IReadOnlyList<IContextLayerProvider>? contextLayers = null,
-        NetclawPaths? paths = null,
-        Telemetry.ISessionMetrics? sessionMetrics = null,
-        TrustContextDeriver? trustContextDeriver = null,
-        ISessionLifecycleObserver? lifecycleObserver = null,
-        Memory.SQLiteMemoryStore? memoryStore = null,
-        Skills.SkillRegistry? skillRegistry = null)
+        SessionServices services,
+        SessionToolServices? tools = null,
+        SessionMemoryServices? memory = null,
+        SessionObservability? observability = null)
     {
         _sessionId = new SessionId(entityId);
-        _sessionMetrics = sessionMetrics;
-        _lifecycleObserver = lifecycleObserver;
-        _clientProvider = clientProvider;
-        _chatClient = clientProvider.GetClient(ModelRole.Main);
-        _compactionClient = config.CompactionModelId is not null
-            ? clientProvider.GetClient(ModelRole.Compaction)
+        _sessionMetrics = observability?.Metrics;
+        _lifecycleObserver = observability?.LifecycleObserver;
+        _clientProvider = services.ClientProvider;
+        _chatClient = services.ClientProvider.GetClient(ModelRole.Main);
+        _compactionClient = modelCapabilities.CompactionModelId is not null
+            ? services.ClientProvider.GetClient(ModelRole.Compaction)
             : _chatClient;
+        _model = modelCapabilities;
         _config = config;
-        _promptProvider = promptProvider;
-        _contextLayers = contextLayers ?? [];
-        _skillRegistry = skillRegistry;
-        _toolExecutor = toolExecutor;
-        _auditLogger = auditLogger;
-        _toolAccessPolicy = toolAccessPolicy;
-        _memoryExtractor = memoryExtractor ?? NullMemoryExtractor.Instance;
-        _memoryRecallCoordinator = memoryRecallCoordinator ?? NullMemoryRecallCoordinator.Instance;
-        _memoryCheckpointSink = memoryCheckpointSink ?? NullMemoryCheckpointSink.Instance;
-        _memoryStore = memoryStore;
-        _timeProvider = timeProvider ?? TimeProvider.System;
-        _sessionsBasePath = paths?.SessionsDirectory;
-        _sessionLogsBasePath = paths?.SessionsDirectory;
-        _trustContextDeriver = trustContextDeriver;
+        _promptProvider = services.PromptProvider;
+        _contextLayers = services.ContextLayers;
+        _skillRegistry = tools?.SkillRegistry;
+        _toolExecutor = tools?.ToolExecutor;
+        _auditLogger = tools?.AuditLogger;
+        _toolAccessPolicy = tools?.AccessPolicy;
+        _memoryExtractor = memory?.MemoryExtractor ?? NullMemoryExtractor.Instance;
+        _memoryRecallCoordinator = memory?.RecallCoordinator ?? NullMemoryRecallCoordinator.Instance;
+        _memoryCheckpointSink = memory?.CheckpointSink ?? NullMemoryCheckpointSink.Instance;
+        _memoryStore = memory?.MemoryStore;
+        _timeProvider = services.TimeProvider;
+        _sessionsBasePath = services.Paths?.SessionsDirectory;
+        _sessionLogsBasePath = services.Paths?.SessionsDirectory;
+        _trustContextDeriver = tools?.TrustDeriver;
         PersistenceId = $"session-{entityId}";
 
         // Enrich logger with session context — all log messages automatically include SessionId
@@ -194,10 +163,10 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         // Load all non-MCP tools for initial LLM calls.
         // MCP tools are loaded dynamically via search_tools and can be retained for a
         // small number of future turns (configurable lease) to reduce rediscovery churn.
-        _fullRegistry = toolRegistry;
-        if (toolRegistry is not null)
+        _fullRegistry = tools?.ToolRegistry;
+        if (_fullRegistry is not null)
         {
-            _availableTools.AddRange(toolRegistry.GetAlwaysLoadedTools());
+            _availableTools.AddRange(_fullRegistry.GetAlwaysLoadedTools());
         }
         _baseToolCount = _availableTools.Count;
 
@@ -230,7 +199,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 SetSystemPrompt();
             }
 
-            Become(Ready);
+            TransitionTo(SessionPhase.Ready);
 
             if (_sessionLogsBasePath is not null)
             {
@@ -244,9 +213,69 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 _curationActor = Context.ActorOf(
                     Memory.MemoryCurationActor.CreateProps(_memoryStore, _clientProvider),
                     "memory-curation");
+
+                // Distillation processes a full transcript — allow 5x normal sidecar timeout
+                // for slower local models (e.g., Qwen 3.5 27B)
+                var distillationTimeout = TimeSpan.FromTicks(_config.SidecarLlmTimeout.Ticks * 5);
+                _observerActor = Context.ActorOf(
+                    SessionMemoryObserverActor.CreateProps(
+                        _sessionId,
+                        _compactionClient,
+                        TimeSpan.FromSeconds(Math.Max(10, _config.MemoryObserverIdleSeconds)),
+                        distillationTimeout,
+                        _timeProvider),
+                    "memory-observer");
             }
         });
     }
+
+    // ── State machine ──
+
+    /// <summary>
+    /// Validated phase transition. Enforces legal transition rules and calls
+    /// the corresponding <c>Become()</c> handler. Illegal transitions throw
+    /// <see cref="InvalidOperationException"/>.
+    /// </summary>
+    private void TransitionTo(SessionPhase target)
+    {
+        if (!IsLegalTransition(_currentPhase, target))
+            throw new InvalidOperationException(
+                $"Illegal session phase transition: {_currentPhase} → {target}");
+
+        var from = _currentPhase;
+        _currentPhase = target;
+        _log.Info("session_phase_transition from={From} to={To}", from, target);
+
+        _observerActor?.Tell(new SessionPhaseChanged(target));
+
+        switch (target)
+        {
+            case SessionPhase.Ready:
+                Become(Ready);
+                break;
+            case SessionPhase.Processing:
+                Become(Processing);
+                break;
+            case SessionPhase.Compacting:
+                Become(Compacting);
+                break;
+            case SessionPhase.Passivating:
+                Become(Passivating);
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(target), target, null);
+        }
+    }
+
+    private static bool IsLegalTransition(SessionPhase from, SessionPhase to) => from switch
+    {
+        SessionPhase.Recovering => to == SessionPhase.Ready,
+        SessionPhase.Ready => to is SessionPhase.Processing or SessionPhase.Compacting or SessionPhase.Passivating,
+        SessionPhase.Processing => to is SessionPhase.Ready or SessionPhase.Compacting,
+        SessionPhase.Compacting => to is SessionPhase.Ready or SessionPhase.Processing,
+        SessionPhase.Passivating => to is SessionPhase.Ready or SessionPhase.Processing,
+        _ => false
+    };
 
     // ── Command behaviors ──
 
@@ -271,10 +300,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 return;
             }
 
-            _log.Info("Session idle, passivating (timeout={Timeout})", _config.IdleTimeout);
-            _lifecycleObserver?.OnSessionDeactivated(_sessionId);
-            SaveSnapshot(_state.ToSnapshot());
-            Context.Stop(Self);
+            _log.Info("Session idle, entering passivation (timeout={Timeout})", _config.IdleTimeout);
+            TransitionTo(SessionPhase.Passivating);
         });
 
         Command<ProcessingWatchdogExpired>(_ => { });
@@ -283,91 +310,19 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         Command<SpawnChildActorRequest>(msg => Sender.Tell(Context.ActorOf(msg.Props, msg.ActorName)));
         Command<DeliveryFailed>(HandleDeliveryFailedWhenReady);
 
-        Command<SendUserMessage>(cmd =>
-        {
-            ClearDeliveryRetryState();
-            _currentTurnSource = cmd.Source;
-            _currentTrustContext = _trustContextDeriver?.Derive(cmd.Source);
-            BindTurnTelemetry(cmd.Source);
-            TurnLog().Info(
-                "turn_received channel={ChannelType} sender={SenderId} hasMedia={HasMedia} textChars={TextLength}",
-                cmd.Source?.ChannelType.ToWireValue() ?? "unknown",
-                cmd.Source?.SenderId ?? "unknown",
-                cmd.MediaReferences.Count > 0,
-                cmd.Content?.Length ?? 0);
-            _logActor?.Tell(cmd);
-
-            _toolCallCount = 0;
-            _toolIterationCount = 0;
-            _budgetNudgeSent = false;
-            _postToolNudgeSent = false;
-            _preToolEmptyResponseCount = 0;
-            _forceNoToolsActive = false;
-            _toolCallHashes.Clear();
-            _duplicateNudgeSent = false;
-            PrepareDiscoveredToolsForNewTurn();
-
-            // Modality gate: strip unsupported media references
-            var mediaRefs = cmd.MediaReferences;
-            if (mediaRefs.Count > 0 && !_config.InputModalities.HasFlag(Configuration.ModelModality.Image))
-            {
-                var imageRefs = mediaRefs.Where(r => r.Modality == (int)MediaModality.Image).ToList();
-                if (imageRefs.Count > 0)
-                {
-                    _log.Info("Stripping {Count} image reference(s) — model does not support vision", imageRefs.Count);
-                    mediaRefs = mediaRefs.Where(r => r.Modality != (int)MediaModality.Image).ToList();
-
-                    EmitOutput(new TextOutput
-                    {
-                        SessionId = _sessionId,
-                        Text = "[Images removed — the current model does not support vision input]"
-                    }, OutputFilter.Text);
-                }
-            }
-
-            // If ALL content is images (no text) and model doesn't support vision, skip entirely
-            if (string.IsNullOrWhiteSpace(cmd.Content) && mediaRefs.Count == 0
-                && cmd.MediaReferences.Count > 0)
-            {
-                _log.Info("Skipping LLM call — message contained only unsupported media");
-                EmitOutput(new TextOutput
-                {
-                    SessionId = _sessionId,
-                    Text = "Your message contained only images, but the current model doesn't support vision. Please send a text message instead."
-                }, OutputFilter.Text);
-                EmitOutput(new TurnCompleted
-                {
-                    SessionId = _sessionId,
-                    TurnNumber = _state.TurnCount
-                });
-                TryReplyAck();
-                return;
-            }
-
-            var userContent = cmd.Content ?? string.Empty;
-
-            // Slash-command dispatch: if message starts with /, try to resolve a skill
-            if (TryHandleSlashCommand(userContent, mediaRefs))
-                return;
-
-            _state = _state.AddUserMessage(userContent, mediaRefs.Count > 0 ? mediaRefs : null);
-            TryReplyAck();
-            _turnRecallCache = null; // New user turn — resolve recall fresh
-            FireLlmCall(userContent);
-            Become(Processing);
-        });
+        Command<SendUserMessage>(HandleIncomingUserMessage);
     }
 
     private void Processing()
     {
-        // Disable idle timeout while processing — re-enabled in Become(Ready)
+        // Disable idle timeout while processing — re-enabled on transition to Ready
         Context.SetReceiveTimeout(null);
         CommandSubscriptionMessages();
         CommandSnapshotMessages();
 
         Command<SendUserMessage>(cmd =>
         {
-            ClearDeliveryRetryState();
+            _deliveryRetry.Clear();
             _log.Info("Buffering user message (LLM call in progress)");
             _buffer.Add(cmd);
             TryReplyAck();
@@ -375,14 +330,14 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         Command<DeliveryFailed>(msg =>
         {
-            if (!IsRetryableDeliveryFailure(msg))
+            if (!DeliveryRetryHandler.IsRetryable(msg))
             {
                 _log.Warning(
                     "Non-retryable delivery feedback while processing channel={Channel} turn={Turn} kind={FailureKind}; injecting context",
                     msg.ChannelType,
                     msg.TurnNumber,
                     msg.FailureKind);
-                _state = _state.AddSystemNudge(BuildDeliveryFailureNudge(msg));
+                _state = _state.AddSystemNudge(DeliveryRetryHandler.BuildNudge(msg));
                 return;
             }
 
@@ -397,19 +352,19 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         Command<LlmResponseReceived>(msg =>
         {
-            StopProcessingWatchdog();
+            _watchdog.Stop(Timers);
 
             var response = msg.Response;
             var lastMessage = response.Messages[^1];
 
             // Check for tool calls
             var toolCalls = lastMessage.Contents.OfType<FunctionCallContent>().ToList();
-            if (toolCalls.Count > 0 && _forceNoToolsActive)
+            if (toolCalls.Count > 0 && _turnState.ForceNoToolsActive)
             {
                 TurnLog().Warning(
                     "turn_force_no_tools_violation toolCallCount={ToolCallCount} budgetUsed={BudgetUsed} max={Max}",
                     toolCalls.Count,
-                    _toolCallCount,
+                    _turnState.ToolCallCount,
                     _config.MaxToolCallsPerTurn);
                 FailCurrentTurn(
                     ToolBudgetExhaustedMessage,
@@ -424,57 +379,22 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 return;
             }
 
-            // Guard: if the LLM produced no text and no tool calls, it likely tried to
-            // call an MCP tool that isn't in ChatOptions.Tools yet. Add a nudge and retry.
+            // Guard: empty response (no text, no tool calls) — delegate decision to tracker
             var hasText = lastMessage.Contents.OfType<TextContent>().Any(t => !string.IsNullOrWhiteSpace(t.Text));
-            if (!hasText && _toolIterationCount == 0)
+            if (!hasText)
             {
-                _preToolEmptyResponseCount++;
-                if (_preToolEmptyResponseCount > MaxPreToolEmptyResponseRetries)
+                switch (_turnState.EvaluateEmptyResponse())
                 {
-                    _log.Warning(
-                        "LLM produced empty response after {RetryCount} pre-tool retries; failing turn",
-                        _preToolEmptyResponseCount - 1);
-                    FailCurrentTurn(
-                        EmptyResponseFallbackMessage,
-                        new InvalidOperationException("LLM produced repeated empty responses before any tool execution."),
-                        ErrorCategory.ProviderFailure);
-                    return;
+                    case EmptyResponseAction.Retry retry:
+                        _log.Warning("LLM produced empty response — retrying with nudge");
+                        _state = _state.AddSystemNudge(retry.NudgeText);
+                        FireLlmCall();
+                        return;
+                    case EmptyResponseAction.Fail fail:
+                        _log.Warning("LLM produced empty response — failing turn");
+                        FailCurrentTurn(fail.ErrorMessage, fail.Cause, ErrorCategory.ProviderFailure);
+                        return;
                 }
-
-                _log.Warning("LLM produced empty response (no text, no tool calls) — retrying with nudge");
-                _state = _state.AddSystemNudge(
-                    "Your previous response was empty. If you need MCP capabilities, call search_tools(\"servers\") to pick a server "
-                    + "(for example browser, memory, or email), then call search_tools(\"<intent>\", server: \"<server_name>\") to load tools. "
-                    + "MCP tools are not directly callable until loaded via search_tools.");
-                FireLlmCall();
-                return;
-            }
-
-            // Guard: if the LLM did tool work but produced an empty final response, nudge it
-            // to continue working or answer the user.
-            if (!hasText && _toolIterationCount > 0 && !_postToolNudgeSent)
-            {
-                _log.Debug("LLM produced empty response after {ToolIterations} tool iteration(s) — nudging",
-                    _toolIterationCount);
-                _postToolNudgeSent = true;
-                _state = _state.AddSystemNudge(
-                    "You received tool results but did not respond. "
-                    + "Continue working or answer the user's question.");
-                FireLlmCall();
-                return;
-            }
-
-            if (!hasText && _toolIterationCount > 0 && _postToolNudgeSent)
-            {
-                _log.Warning(
-                    "LLM produced empty response after tool work and post-tool nudge; failing turn after {ToolIterations} tool iteration(s)",
-                    _toolIterationCount);
-                FailCurrentTurn(
-                    EmptyResponseFallbackMessage,
-                    new InvalidOperationException("LLM produced an empty response after tool execution and follow-up nudge."),
-                    ErrorCategory.ProviderFailure);
-                return;
             }
 
             // Normal text response — persist turn
@@ -483,7 +403,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         Command<LlmResponseDeltaReceived>(msg =>
         {
-            RefreshProcessingWatchdogIfActive();
+            _watchdog.Refresh(_config.TurnLlmTimeout, Timers);
 
             switch (msg.Content)
             {
@@ -507,7 +427,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         Command<ToolExecutionCompleted>(msg =>
         {
-            StopProcessingWatchdog();
+            _watchdog.Stop(Timers);
 
             var emittedRunIds = new HashSet<string>(StringComparer.Ordinal);
             foreach (var finding in msg.AcceptedSubAgentFindings)
@@ -620,32 +540,16 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 }, OutputFilter.Files);
             }
 
-            _toolCallCount += msg.ToolResults.Count;
-            _toolIterationCount++;
+            // Record completion and check budget + duplicates
+            var budgetStatus = _turnState.RecordToolCompletion(msg.ToolResults.Count, _config.MaxToolCallsPerTurn);
 
-            // Duplicate tool call detection: warn model if identical tool+args calls repeat.
-            // Hashes are tracked in HandleToolCallResponse where args are available.
-            const int duplicateToolThreshold = 3;
-            if (!_duplicateNudgeSent)
+            var dupNudge = _turnState.CheckForDuplicates();
+            if (dupNudge is not null)
             {
-                foreach (var (callHash, dupCount) in _toolCallHashes)
-                {
-                    if (dupCount >= duplicateToolThreshold)
-                    {
-                        // Extract tool name from the hash key (format: "toolName:{args}")
-                        var toolName = callHash.AsSpan(0, callHash.IndexOf(':', StringComparison.Ordinal)).ToString();
-                        TurnLog().Warning(
-                            "turn_duplicate_tool_detected tool={ToolName} count={Count} iteration={Iteration}",
-                            toolName, dupCount, _toolIterationCount);
-                        _state = _state.AddSystemNudge(
-                            $"You have called the tool '{toolName}' with the same arguments {dupCount} times this turn. "
-                            + "This strongly indicates you are repeating work you already completed. "
-                            + "Review your prior tool results — the information you need is already in the conversation. "
-                            + "If the task is complete, produce your final response to the user.");
-                        _duplicateNudgeSent = true;
-                        break;
-                    }
-                }
+                TurnLog().Warning(
+                    "turn_duplicate_tool_detected tool={ToolName} count={Count} iteration={Iteration}",
+                    dupNudge.ToolName, dupNudge.Count, _turnState.ToolIterationCount);
+                _state = _state.AddSystemNudge(dupNudge.NudgeText);
             }
 
             // Mid-loop user message injection: if the user sent messages while tools were
@@ -654,7 +558,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             if (_buffer.Count > 0)
             {
                 TurnLog().Info("turn_mid_loop_buffer_drain count={BufferCount} iteration={Iteration}",
-                    _buffer.Count, _toolIterationCount);
+                    _buffer.Count, _turnState.ToolIterationCount);
                 foreach (var buffered in _buffer)
                 {
                     var refs = buffered.MediaReferences.Count > 0 ? buffered.MediaReferences : null;
@@ -663,42 +567,29 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 _buffer.Clear();
             }
 
-            // Safety circuit breaker: force text response when tool call budget exhausted
-            if (_toolCallCount >= _config.MaxToolCallsPerTurn)
+            // Apply budget decision
+            switch (budgetStatus)
             {
-                TurnLog().Warning("turn_tool_call_limit_reached callCount={CallCount} max={Max} iteration={Iteration}",
-                    _toolCallCount, _config.MaxToolCallsPerTurn, _toolIterationCount);
-                _state = _state.AddSystemNudge(
-                    "You have reached the tool call limit for this turn. "
-                    + "Do NOT request any more tools. "
-                    + "Summarize the work you completed and answer the user's question "
-                    + "based on the information you have gathered so far. "
-                    + "If you could not complete the task, explain what you found and what remains.");
-                FireLlmCall(forceNoTools: true);
-                return;
-            }
-
-            // Budget-awareness nudge: warn the model when approaching the limit
-            var budgetThreshold = (int)(_config.MaxToolCallsPerTurn * 0.75);
-            if (_toolCallCount >= budgetThreshold && !_budgetNudgeSent)
-            {
-                var remaining = _config.MaxToolCallsPerTurn - _toolCallCount;
-                _state = _state.AddSystemNudge(
-                    $"You have used {_toolCallCount} of {_config.MaxToolCallsPerTurn} tool calls for this turn. "
-                    + $"You have approximately {remaining} tool calls remaining. "
-                    + "Start wrapping up your tool usage and prepare to answer the user's question.");
-                _budgetNudgeSent = true;
+                case ToolBudgetStatus.Exhausted exhausted:
+                    TurnLog().Warning("turn_tool_call_limit_reached callCount={CallCount} max={Max} iteration={Iteration}",
+                        _turnState.ToolCallCount, _config.MaxToolCallsPerTurn, _turnState.ToolIterationCount);
+                    _state = _state.AddSystemNudge(exhausted.NudgeText);
+                    FireLlmCall(forceNoTools: true);
+                    return;
+                case ToolBudgetStatus.NudgeNeeded nudge:
+                    _state = _state.AddSystemNudge(nudge.NudgeText);
+                    break;
             }
 
             // Fire follow-up LLM call with tool results in context
             TurnLog().Info("turn_tool_execution_complete iteration={Iteration} callCount={CallCount} max={Max} resultCount={ResultCount}",
-                _toolIterationCount, _toolCallCount, _config.MaxToolCallsPerTurn, msg.ToolResults.Count);
+                _turnState.ToolIterationCount, _turnState.ToolCallCount, _config.MaxToolCallsPerTurn, msg.ToolResults.Count);
             FireLlmCall();
         });
 
         Command<ToolExecutionFailed>(msg =>
         {
-            StopProcessingWatchdog();
+            _watchdog.Stop(Timers);
             TurnLog().Error(msg.Cause, "turn_tool_execution_failed");
 
             const string errorMessage = "I encountered an error executing a tool. Please try again.";
@@ -708,7 +599,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         Command<LlmCallFailed>(msg =>
         {
-            StopProcessingWatchdog();
+            _watchdog.Stop(Timers);
 
             // Context overflow: compact and recover instead of failing the turn
             if (IsContextOverflowError(msg.Cause))
@@ -726,8 +617,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
                 // Use the configured context window as the token count estimate since
                 // the provider rejected the request without returning usage stats.
-                Self.Tell(new CompactionTriggered { InputTokenCount = _config.ContextWindowTokens });
-                Become(Compacting);
+                Self.Tell(new CompactionTriggered { InputTokenCount = _model.ContextWindowTokens });
+                TransitionTo(SessionPhase.Compacting);
                 return;
             }
 
@@ -740,29 +631,84 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         Command<ProcessingWatchdogExpired>(msg =>
         {
-            if (!IsCurrentWatchdog(msg))
+            if (!_watchdog.IsCurrent(msg))
                 return;
 
             _log.Error("Processing watchdog expired for operation {OperationName} (opId={OperationId})",
                 msg.OperationName, msg.OperationId);
 
             var timeout = msg.OperationName is "tool-execution"
-                ? TimeSpan.FromSeconds(Math.Max(1, _config.ToolExecutionTimeoutSeconds))
-                : TimeSpan.FromSeconds(Math.Max(1, _config.TurnLlmTimeoutSeconds));
+                ? _config.ToolExecutionTimeout
+                : _config.TurnLlmTimeout;
 
             var timeoutCause = new TimeoutException(
                 $"Session processing operation '{msg.OperationName}' exceeded watchdog timeout of {timeout.TotalSeconds:F0}s");
 
-            StopProcessingWatchdog();
+            _watchdog.Stop(Timers);
             FailCurrentTurn("I encountered a timeout while processing your message. Please try again.", timeoutCause, ErrorCategory.Timeout);
         });
 
         Command<SpawnChildActorRequest>(msg => Sender.Tell(Context.ActorOf(msg.Props, msg.ActorName)));
     }
 
+    private void HandleDistillationResult(SessionDistillationCompleted msg)
+    {
+        _log.Info(
+            "session_distillation_completed proposals={ProposalCount} inputTokens={InputTokens} outputTokens={OutputTokens} failure={Failure}",
+            msg.Proposals.Count,
+            msg.InputTokens,
+            msg.OutputTokens,
+            msg.FailureReason ?? "-");
+
+        // Emit sidecar token usage through the standard pipeline
+        if (msg.InputTokens.HasValue || msg.OutputTokens.HasValue)
+        {
+            _sessionMetrics?.RecordTokenUsage(msg.InputTokens ?? 0, msg.OutputTokens ?? 0);
+            EmitOutput(new UsageOutput
+            {
+                SessionId = _sessionId,
+                InputTokens = msg.InputTokens,
+                OutputTokens = msg.OutputTokens,
+                TotalTokens = (msg.InputTokens ?? 0) + (msg.OutputTokens ?? 0)
+            }, OutputFilter.Usage);
+        }
+
+        // Route proposals through the standard gate → curation pipeline
+        if (msg.Proposals.Count > 0 && _curationActor is not null)
+        {
+            // Use session-derived audience when _currentTurnSource is null
+            // (distillation fires after idle, turn context is cleared)
+            var audience = _currentTurnSource?.Audience
+                ?? SecurityPolicyDefaults.ResolveAudienceFromSessionId(_sessionId.Value);
+            var gateResult = _memoryProposalGate.Evaluate(
+                msg.Proposals,
+                _sessionId.ToMemoryDomain(),
+                Memory.MemorySensitivity.Normal.ToWireValue(),
+                NowMs(),
+                boundary: CurrentMemoryBoundary(),
+                audience: audience);
+
+            var accepted = gateResult.MemoryOperations;
+
+            _log.Info(
+                "session_distillation_gate_result total={Total} accepted={Accepted} rejections={Rejections}",
+                gateResult.Summary.Total,
+                gateResult.Summary.Accepted,
+                gateResult.Summary.RejectionReasons.Count == 0
+                    ? "-"
+                    : string.Join("|", gateResult.Summary.RejectionReasons.Select(x => $"{x.Key}:{x.Value}")));
+
+            if (accepted.Count > 0)
+            {
+                _curationActor.Tell(new Memory.EvaluateProposals(accepted, _sessionId.ToMemoryDomain()));
+                _sessionMetrics?.RecordMemoriesFormed(accepted.Count);
+            }
+        }
+    }
+
     private void Compacting()
     {
-        // Disable idle timeout while compacting — re-enabled in Become(Ready)
+        // Disable idle timeout while compacting — re-enabled on transition to Ready
         Context.SetReceiveTimeout(null);
         CommandSubscriptionMessages();
         CommandSnapshotMessages();
@@ -777,13 +723,13 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         Command<ProcessingWatchdogExpired>(msg =>
         {
-            if (!IsCurrentWatchdog(msg))
+            if (!_watchdog.IsCurrent(msg))
                 return;
 
             _log.Error("Compaction watchdog expired for operation {OperationName} (opId={OperationId})",
                 msg.OperationName, msg.OperationId);
 
-            StopProcessingWatchdog();
+            _watchdog.Stop(Timers);
 
             EmitOutput(new ErrorOutput
             {
@@ -802,22 +748,25 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         Command<CompactionTriggered>(msg =>
         {
             var timeout = GetCompactionTimeout();
-            StartProcessingWatchdog("compaction", timeout);
+            _watchdog.Start("compaction", timeout, Timers);
 
-            var operationId = _processingOperationId;
+            var operationId = _watchdog.CurrentOperationId;
             var stateSnapshot = _state;
             var self = Self;
             var log = _log;
             var compactionClient = _compactionClient;
 
-            _ = ExecuteCompactionAsync(
-                stateSnapshot,
+            var compactionParams = new CompactionParameters(
                 msg.InputTokenCount,
-                _config.KeepRecentToolResults,
-                _config.KeepRecentMessages,
-                _config.ContextWindowTokens,
-                TimeSpan.FromSeconds(Math.Max(1, _config.SidecarLlmTimeoutSeconds)),
-                timeout,
+                _config.Tuning.KeepRecentToolResults,
+                _config.Tuning.KeepRecentMessages,
+                _model.ContextWindowTokens,
+                _config.SidecarLlmTimeout,
+                timeout);
+
+            _ = SessionCompactionPipeline.ExecuteAsync(
+                stateSnapshot,
+                compactionParams,
                 compactionClient,
                 self,
                 log,
@@ -829,7 +778,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             if (!IsCurrentCompactionOperation(msg.OperationId))
                 return;
 
-            StopProcessingWatchdog();
+            _watchdog.Stop(Timers);
 
             var compactedEvent = new SessionCompacted
             {
@@ -845,8 +794,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 _state = _state.Apply(evt);
                 _lastInputTokenCount = 0; // Reset — next LLM call will provide fresh count
                 _startupContextInjected = false; // Re-inject static layers on next LLM call
-                _turnRecallCache = null; // Force fresh recall after compaction
-                _injectedMemoryIds.Clear(); // Reset progressive recall — all memories eligible again
+                _recallManager.ResetForCompaction(); // Force fresh recall + progressive recall reset
 
                 EnqueueCheckpointFireAndForget(new MemoryCheckpointRequest(
                     SessionId: _sessionId,
@@ -885,7 +833,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                     MessagesAfter = _state.History.Count,
                     ToolResultsCleared = msg.ClearedCount > 0,
                     Summarized = !string.IsNullOrWhiteSpace(msg.Summary),
-                    ContextWindowTokens = _config.ContextWindowTokens,
+                    ContextWindowTokens = _model.ContextWindowTokens,
                     PreCompactionInputTokens = msg.PreCompactionInputTokens,
                     KeepCountUsed = msg.KeepCountUsed
                 });
@@ -905,7 +853,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             if (!IsCurrentCompactionOperation(msg.OperationId))
                 return;
 
-            StopProcessingWatchdog();
+            _watchdog.Stop(Timers);
 
             _log.Warning(msg.Cause, "Compaction failed");
 
@@ -961,127 +909,89 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             }
             _buffer.Clear();
             FireLlmCall();
-            Become(Processing);
+            TransitionTo(SessionPhase.Processing);
         }
         else
         {
-            Become(Ready);
+            TransitionTo(SessionPhase.Ready);
         }
+    }
+
+    private static readonly TimeSpan PassivationGracePeriod = TimeSpan.FromSeconds(5);
+    private static readonly object PassivationTimerKey = new();
+
+    private void Passivating()
+    {
+        // Disable idle timeout — we're shutting down
+        Context.SetReceiveTimeout(null);
+
+        Command<SessionDistillationCompleted>(msg =>
+        {
+            _log.Info("Passivation distillation complete, stopping");
+            Timers.Cancel(PassivationTimerKey);
+            HandleDistillationResult(msg);
+            CompletePassivation();
+        });
+
+        CommandSubscriptionMessages();
+        CommandSnapshotMessages();
+
+        Command<SendUserMessage>(cmd =>
+        {
+            _log.Info("Aborting passivation due to new user message");
+            Timers.Cancel(PassivationTimerKey);
+            TransitionTo(SessionPhase.Ready);
+            HandleIncomingUserMessage(cmd);
+        });
+
+        // Ignore stale processing/compaction messages
+        Command<ProcessingWatchdogExpired>(_ => { });
+        Command<CompactionWorkCompleted>(_ => { });
+        Command<CompactionWorkFailed>(_ => { });
+        Command<SpawnChildActorRequest>(msg => Sender.Tell(Context.ActorOf(msg.Props, msg.ActorName)));
+
+        // Timeout — stop even if distillation didn't finish
+        Command<PassivationTimeout>(_ =>
+        {
+            _log.Warning("Passivation grace period expired, stopping without distillation");
+            CompletePassivation();
+        });
+
+        Command<DeliveryFailed>(msg =>
+        {
+            _log.Info("Aborting passivation due to delivery feedback");
+            Timers.Cancel(PassivationTimerKey);
+            TransitionTo(SessionPhase.Ready);
+            HandleDeliveryFailedWhenReady(msg);
+        });
+
+        // Request final distillation from observer, or stop immediately
+        if (_observerActor is not null)
+        {
+            _observerActor.Tell(new DistillMemories(), Self);
+            Timers.StartSingleTimer(PassivationTimerKey, new PassivationTimeout(), PassivationGracePeriod);
+        }
+        else
+        {
+            CompletePassivation();
+        }
+    }
+
+    private void CompletePassivation()
+    {
+        _lifecycleObserver?.OnSessionDeactivated(_sessionId);
+        SaveSnapshot(_state.ToSnapshot());
+        Context.Stop(Self);
     }
 
     private TimeSpan GetCompactionTimeout()
-        => TimeSpan.FromSeconds(Math.Max(1,
-            Math.Max(_config.TurnLlmTimeoutSeconds, _config.SidecarLlmTimeoutSeconds)));
+        => _config.TurnLlmTimeout > _config.SidecarLlmTimeout
+            ? _config.TurnLlmTimeout
+            : _config.SidecarLlmTimeout;
 
     private bool IsCurrentCompactionOperation(long operationId)
-        => _processingOperationName == "compaction" && _processingOperationId == operationId;
+        => _watchdog.IsCurrentOperation("compaction", operationId);
 
-    private static async Task ExecuteCompactionAsync(
-        SessionState stateSnapshot,
-        long preCompactionInputTokens,
-        int keepRecentToolResults,
-        int keepRecentMessages,
-        int contextWindowTokens,
-        TimeSpan sidecarTimeout,
-        TimeSpan compactionTimeout,
-        IChatClient client,
-        IActorRef self,
-        ILoggingAdapter log,
-        long operationId)
-    {
-        try
-        {
-            using var cts = new CancellationTokenSource(compactionTimeout);
-
-            var messagesBefore = stateSnapshot.History.Count;
-            var (compactionState, clearedCount) = stateSnapshot.ClearOldToolResults(keepRecentToolResults);
-            var history = compactionState.History;
-
-            if (clearedCount > 0)
-            {
-                log.Info("Phase 1: Cleared {ClearedCount} old tool result(s)", clearedCount);
-            }
-
-            var systemOffset = history.Count > 0 && history[0].Role == Protocol.ChatRole.System ? 1 : 0;
-            var effectiveKeepCount = keepRecentMessages;
-            List<SerializableChatMessage> compactedMessages;
-            int discardStartIndex;
-
-            while (true)
-            {
-                cts.Token.ThrowIfCancellationRequested();
-
-                var reducer = new ExtractiveSessionReducer(effectiveKeepCount);
-                var meaiMessages = ChatMessageConverter.ToAiMessages(history);
-                var reduced = await reducer.ReduceAsync(meaiMessages, cts.Token);
-
-                var reducedList = reduced as IList<Microsoft.Extensions.AI.ChatMessage> ?? reduced.ToList();
-                var keptNonSystemCount = reducedList.Count(m => m.Role != Microsoft.Extensions.AI.ChatRole.System);
-
-                var startIndex = history.Count - keptNonSystemCount;
-                discardStartIndex = startIndex;
-                compactedMessages = [];
-                for (var i = Math.Max(systemOffset, startIndex); i < history.Count; i++)
-                {
-                    compactedMessages.Add(history[i]);
-                }
-
-                var estimatedTokens = EstimateTokens(compactedMessages, systemOffset > 0 ? history[0] : null);
-                var budgetHalf = contextWindowTokens / 2;
-
-                if (estimatedTokens <= budgetHalf || effectiveKeepCount <= 2)
-                    break;
-
-                var newKeepCount = Math.Max(2, effectiveKeepCount / 2);
-                log.Info("Adaptive compaction: estimated {EstimatedTokens} tokens > {Budget} budget half, reducing keep count {OldKeep} -> {NewKeep}",
-                    estimatedTokens, budgetHalf, effectiveKeepCount, newKeepCount);
-                effectiveKeepCount = newKeepCount;
-            }
-
-            log.Info("Phase 2: Extractive reduction (history={HistoryCount} -> {KeptCount} messages, keepCount={KeepCount})",
-                history.Count, compactedMessages.Count + systemOffset, effectiveKeepCount);
-
-            var observationText = await GenerateObservationsAsync(
-                client,
-                history,
-                systemOffset,
-                discardStartIndex,
-                sidecarTimeout,
-                log,
-                cts.Token);
-
-            if (!string.IsNullOrWhiteSpace(observationText))
-            {
-                var observationMsg = new SerializableChatMessage
-                {
-                    Role = Protocol.ChatRole.User,
-                    Content = ObservationPromptBuilder.WrapObservations(observationText)
-                };
-                compactedMessages.Insert(0, observationMsg);
-                log.Info("Observer: generated {ObsLength} chars of observations from {DiscardedCount} discarded messages",
-                    observationText.Length, Math.Max(0, discardStartIndex - systemOffset));
-            }
-
-            self.Tell(new CompactionWorkCompleted
-            {
-                OperationId = operationId,
-                Summary = observationText ?? string.Empty,
-                CompactedMessages = compactedMessages,
-                MessagesBefore = messagesBefore,
-                ClearedCount = clearedCount,
-                PreCompactionInputTokens = preCompactionInputTokens,
-                KeepCountUsed = effectiveKeepCount
-            });
-        }
-        catch (Exception ex)
-        {
-            self.Tell(new CompactionWorkFailed
-            {
-                OperationId = operationId,
-                Cause = ex
-            });
-        }
-    }
 
     /// <summary>
     /// Fire a sidecar LLM call to generate a short session title.
@@ -1089,109 +999,10 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     /// </summary>
     private void MaybeGenerateTitle()
     {
-        var interval = _config.TitleGenerationInterval;
-        if (interval <= 0)
-            return;
-
-        // Generate on turn 1, then refresh every N turns
-        var turn = _state.TurnCount;
-        if (turn != 1 && turn % interval != 0)
-            return;
-
-        var history = _state.History;
-        var self = Self;
-        var client = _compactionClient;
-        var log = _log;
-        var timeout = TimeSpan.FromSeconds(Math.Max(1, _config.SidecarLlmTimeoutSeconds));
-
-        _ = GenerateTitleAsync(client, history, self, log, timeout);
+        if (SessionTitleGenerator.ShouldGenerate(_state.TurnCount, _config.Tuning.TitleGenerationInterval))
+            _ = SessionTitleGenerator.GenerateAsync(_compactionClient, _state.History, Self, _log, _config.SidecarLlmTimeout);
     }
 
-    private static async Task GenerateTitleAsync(
-        IChatClient client,
-        IReadOnlyList<SerializableChatMessage> history,
-        IActorRef self,
-        ILoggingAdapter log,
-        TimeSpan timeout)
-    {
-        try
-        {
-            using var cts = new CancellationTokenSource(timeout);
-            var messages = new List<AiChatMessage>
-            {
-                new(Microsoft.Extensions.AI.ChatRole.User,
-                    CompactionPromptBuilder.BuildTitleGenerationPrompt(history))
-            };
-            var response = await client.GetResponseAsync(messages, cancellationToken: cts.Token);
-            var title = response.Messages[^1].Text ?? string.Empty;
-
-            if (string.IsNullOrWhiteSpace(title))
-            {
-                log.Warning("Sidecar title generation returned null/whitespace text");
-                return;
-            }
-
-            self.Tell(new TitleGenerationCompleted { Title = title });
-        }
-        catch (Exception ex)
-        {
-            // Title generation is best-effort — log and move on
-            log.Warning("Sidecar title generation failed: {0}", ex.Message);
-        }
-    }
-
-    /// <summary>
-    /// Observer phase: compress discarded messages into observation notes via LLM call.
-    /// Returns null if no messages to compress or if the LLM call fails (graceful degradation).
-    /// </summary>
-    private static async Task<string?> GenerateObservationsAsync(
-        IChatClient client,
-        IReadOnlyList<SerializableChatMessage> history,
-        int systemOffset,
-        int keepStartIndex,
-        TimeSpan sidecarTimeout,
-        ILoggingAdapter log,
-        CancellationToken cancellationToken)
-    {
-        var discardedMessages = new List<SerializableChatMessage>();
-        for (var i = systemOffset; i < keepStartIndex && i < history.Count; i++)
-        {
-            discardedMessages.Add(history[i]);
-        }
-
-        if (discardedMessages.Count == 0)
-            return null;
-
-        try
-        {
-            using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            cts.CancelAfter(sidecarTimeout);
-            var observerMessages = new List<AiChatMessage>
-            {
-                new(Microsoft.Extensions.AI.ChatRole.System,
-                    ObservationPromptBuilder.BuildObservationSystemPrompt()),
-                new(Microsoft.Extensions.AI.ChatRole.User,
-                    ObservationPromptBuilder.BuildObservationUserPrompt(discardedMessages))
-            };
-
-            var response = await client.GetResponseAsync(
-                observerMessages, cancellationToken: cts.Token);
-            var text = response.Messages[^1].Text;
-
-            if (string.IsNullOrWhiteSpace(text))
-            {
-                log.Warning("Observer returned empty observation text — falling back to extractive-only");
-                return null;
-            }
-
-            return text;
-        }
-        catch (Exception ex)
-        {
-            log.Warning(ex, "Observer LLM call failed — falling back to extractive-only compaction");
-            return null;
-        }
-    }
 
     /// <summary>
     /// Fire an async memory extraction LLM call with a 30-second timeout.
@@ -1203,7 +1014,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         var history = _state.History;
         var self = Self;
         var client = _compactionClient;
-        var timeout = TimeSpan.FromSeconds(Math.Max(1, _config.SidecarLlmTimeoutSeconds));
+        var timeout = _config.SidecarLlmTimeout;
 
         _ = InvokeMemoryExtractionCoreAsync(client, history, self, timeout);
     }
@@ -1254,11 +1065,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         List<FunctionCallContent> toolCalls,
         UsageDetails? usage)
     {
-        // Model produced tool calls — reset post-tool nudge so it can fire again
-        // if the model stalls later in the chain.
-        _postToolNudgeSent = false;
-        _preToolEmptyResponseCount = 0;
-        _forceNoToolsActive = false;
+        // Model produced tool calls — reset empty-response guards so they can
+        // fire again if the model stalls later in the chain.
+        _turnState.ResetEmptyResponseGuards();
 
         // Add assistant message (with tool calls) to history
         var assistantMsg = ChatMessageConverter.FromAiMessage(lastMessage);
@@ -1269,23 +1078,21 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         // TextDeltaOutput was emitted to subscribers.
         // BufferFlush tells streaming adapters to flush their accumulated buffer
         // so the preamble is visible to users before the potentially long tool phase.
-        var hasPreambleText = lastMessage.Contents
+        // Consolidate all TextContent items into a single TextOutput to avoid
+        // duplicate Slack posts when ToChatResponse() produces non-contiguous
+        // TextContent items (e.g. [text, tool_call, text]).
+        var preambleText = string.Join("\n\n", lastMessage.Contents
             .OfType<TextContent>()
-            .Any(t => !string.IsNullOrWhiteSpace(t.Text));
+            .Select(t => t.Text)
+            .Where(t => !string.IsNullOrWhiteSpace(t)));
 
-        if (hasPreambleText)
+        if (preambleText.Length > 0)
         {
-            foreach (var content in lastMessage.Contents)
+            EmitOutput(new TextOutput
             {
-                if (content is TextContent text && !string.IsNullOrWhiteSpace(text.Text))
-                {
-                    EmitOutput(new TextOutput
-                    {
-                        SessionId = _sessionId,
-                        Text = text.Text
-                    }, OutputFilter.Text);
-                }
-            }
+                SessionId = _sessionId,
+                Text = preambleText
+            }, OutputFilter.Text);
             EmitOutput(new BufferFlush { SessionId = _sessionId }, OutputFilter.TextStreaming);
         }
 
@@ -1304,9 +1111,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             }, OutputFilter.ToolCalls);
 
             // Duplicate tool call detection: hash tool name + args
-            var hashKey = $"{tc.Name}:{argsJson ?? "{}"}";
-            _toolCallHashes.TryGetValue(hashKey, out var dupCount);
-            _toolCallHashes[hashKey] = dupCount + 1;
+            _turnState.TrackToolCall(tc.Name, argsJson);
         }
 
         // Emit usage if present (intermediate turn)
@@ -1328,10 +1133,10 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         var auditLogger = _auditLogger;
         var tp = _timeProvider;
         var sessionDir = GetSessionDirectory();
-        var maxInlineToolResultChars = _config.MaxInlineToolResultChars;
-        var toolExecutionTimeout = TimeSpan.FromSeconds(Math.Max(1, _config.ToolExecutionTimeoutSeconds));
+        var maxInlineToolResultChars = _config.Tuning.MaxInlineToolResultChars;
+        var toolExecutionTimeout = _config.ToolExecutionTimeout;
 
-        StartProcessingWatchdog("tool-execution", toolExecutionTimeout);
+        _watchdog.Start("tool-execution", toolExecutionTimeout, Timers);
 
         // Capture subscriber snapshot for subagent activity notifications.
         // These are emitted directly from the tool execution thread via Tell(),
@@ -1360,7 +1165,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 timeout: toolExecutionTimeout,
                 cancellationToken: ct);
 
-        _ = ExecuteToolsAsync(executor, toolCalls, sessionId, _currentTurnSource, auditLogger, tp, sessionDir, maxInlineToolResultChars, toolExecutionTimeout, self, emitSubAgentOutput, spawnChildActor);
+        _ = SessionToolExecutionPipeline.ExecuteToolsAsync(executor, toolCalls, sessionId, _currentTurnSource, auditLogger, tp, sessionDir, maxInlineToolResultChars, toolExecutionTimeout, self, emitSubAgentOutput, spawnChildActor);
     }
 
     private void HandleTextResponse(
@@ -1370,10 +1175,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         bool streamedThinking,
         AutomaticRecallResult? recallResult)
     {
-        _toolCallCount = 0; // Reset for potential buffer drain (new logical turn)
-        _toolIterationCount = 0;
-        _toolCallHashes.Clear();
-        _duplicateNudgeSent = false;
+        // Reset tool counters for potential buffer drain (new logical turn)
+        _turnState.ResetToolCounters();
 
         var reply = ChatMessageConverter.FromAiMessage(lastMessage);
         var userMsg = _state.FindLastUserMessage();
@@ -1409,9 +1212,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             MaybeGenerateTitle();
             _activeRecall = recallResult;
 
-            if (_config.MemorySidecarsEnabled)
-                ObserveTurnForMemory(evt.UserMessage, evt.AssistantReply);
-
             EnqueueCheckpointFireAndForget(new MemoryCheckpointRequest(
                 SessionId: _sessionId,
                 TurnId: _activeTurnId,
@@ -1438,15 +1238,15 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                     Title: "turn-completion",
                     UpdateSemantics: "append-document")));
 
-            MarkTurnEligibleForDeliveryRetry(_state.TurnCount);
+            _deliveryRetry.MarkEligible(_state.TurnCount);
 
             // Check if compaction should trigger
             if (ShouldCompact())
             {
                 _log.Info("Compaction threshold reached ({InputTokens} tokens >= {Threshold} limit), starting compaction",
-                    _lastInputTokenCount, _config.CompactionTokenLimit);
+                    _lastInputTokenCount, _model.CompactionTokenLimit(_config.Tuning.CompactionThreshold));
                 Self.Tell(new CompactionTriggered { InputTokenCount = _lastInputTokenCount });
-                Become(Compacting);
+                TransitionTo(SessionPhase.Compacting);
                 return;
             }
 
@@ -1466,106 +1266,137 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             }
 
             _buffer.Clear();
-            _turnRecallCache = null; // New user input — resolve recall fresh
+            _recallManager.ResetForNewTurn(); // New user input — resolve recall fresh
             FireLlmCall();
-            Become(Processing);
+            // Already in Processing — no transition needed, just fired a new LLM call
             return;
         }
 
-        Become(Ready);
+        TransitionTo(SessionPhase.Ready);
     }
 
     private void HandleDeliveryFailedWhenReady(DeliveryFailed msg)
     {
-        if (_deliveryRetryEligibleTurnNumber != msg.TurnNumber)
+        if (_deliveryRetry.EligibleTurnNumber != msg.TurnNumber)
         {
             _log.Warning(
                 "Ignoring stale delivery feedback channel={Channel} turn={Turn} eligibleTurn={EligibleTurn}",
                 msg.ChannelType,
                 msg.TurnNumber,
-                _deliveryRetryEligibleTurnNumber?.ToString() ?? "none");
+                _deliveryRetry.EligibleTurnNumber?.ToString() ?? "none");
             return;
         }
 
-        if (!IsRetryableDeliveryFailure(msg))
+        if (!DeliveryRetryHandler.IsRetryable(msg))
         {
             _log.Warning(
                 "Non-retryable delivery failure channel={Channel} turn={Turn} kind={FailureKind}; injecting context for next turn",
                 msg.ChannelType,
                 msg.TurnNumber,
                 msg.FailureKind);
-            _state = _state.AddSystemNudge(BuildDeliveryFailureNudge(msg));
+            _state = _state.AddSystemNudge(DeliveryRetryHandler.BuildNudge(msg));
             return;
         }
 
-        if (_deliveryRetryCount >= MaxDeliveryFailureRetries)
+        if (_deliveryRetry.RetryCount >= DeliveryRetryHandler.MaxRetries)
         {
             _log.Warning(
                 "Delivery retry budget exhausted channel={Channel} turn={Turn} kind={FailureKind}",
                 msg.ChannelType,
                 msg.TurnNumber,
                 msg.FailureKind);
-            _deliveryRetryEligibleTurnNumber = null;
-            _deliveryRetryChainActive = false;
+            _deliveryRetry.Exhaust();
             return;
         }
 
-        _deliveryRetryCount++;
-        _deliveryRetryChainActive = true;
+        _deliveryRetry.RecordRetry();
 
         _log.Warning(
             "Retrying after delivery failure channel={Channel} turn={Turn} kind={FailureKind} attempt={Attempt}",
             msg.ChannelType,
             msg.TurnNumber,
             msg.FailureKind,
-            _deliveryRetryCount);
+            _deliveryRetry.RetryCount);
 
-        _state = _state.AddSystemNudge(BuildDeliveryFailureNudge(msg));
-        _turnRecallCache = null; // Delivery feedback changed context — resolve recall fresh
+        _state = _state.AddSystemNudge(DeliveryRetryHandler.BuildNudge(msg));
+        _recallManager.ResetForNewTurn(); // Delivery feedback changed context — resolve recall fresh
         FireLlmCall();
-        Become(Processing);
+        TransitionTo(SessionPhase.Processing);
     }
 
-    private static bool IsRetryableDeliveryFailure(DeliveryFailed msg)
-        => msg.FailureKind is DeliveryFailureKind.ContentRejected
-            or DeliveryFailureKind.MessageTooLarge
-            or DeliveryFailureKind.UnsupportedContent;
-
-    private static string BuildDeliveryFailureNudge(DeliveryFailed msg)
+    private void HandleIncomingUserMessage(SendUserMessage cmd)
     {
-        var guidance = msg.FailureKind switch
+        _deliveryRetry.Clear();
+        _currentTurnSource = cmd.Source;
+        _currentTrustContext = _trustContextDeriver?.Derive(cmd.Source);
+        BindTurnTelemetry(cmd.Source);
+        TurnLog().Info(
+            "turn_received channel={ChannelType} sender={SenderId} hasMedia={HasMedia} textChars={TextLength}",
+            cmd.Source?.ChannelType.ToWireValue() ?? "unknown",
+            cmd.Source?.SenderId ?? "unknown",
+            cmd.MediaReferences.Count > 0,
+            cmd.Content?.Length ?? 0);
+        _logActor?.Tell(cmd);
+        _observerActor?.Tell(cmd);
+
+        _turnState.ResetForNewTurn();
+        _discoveredToolCache.PrepareForNewTurn(
+            _availableTools, _baseToolCount,
+            _config.Tuning.DiscoveredToolRetentionTurns,
+            _config.Tuning.DiscoveredToolMaxCount,
+            _fullRegistry);
+
+        var mediaRefs = cmd.MediaReferences;
+        if (mediaRefs.Count > 0 && !_model.InputModalities.HasFlag(Configuration.ModelModality.Image))
         {
-            DeliveryFailureKind.ContentRejected => "Produce a simpler channel-safe response and avoid the content pattern the channel rejected.",
-            DeliveryFailureKind.MessageTooLarge => "Produce a shorter response that fits the channel's length limits.",
-            DeliveryFailureKind.UnsupportedContent => "Avoid unsupported formatting or content types for this channel.",
-            DeliveryFailureKind.TransportFailure => "The channel experienced a transport error. Your response content was likely fine. Acknowledge to the user that delivery failed due to a technical issue and offer to retry.",
-            DeliveryFailureKind.PermissionDenied => "The bot lacks permission to post in this channel. Inform the user that a permissions issue prevented delivery.",
-            DeliveryFailureKind.Unknown or _ => "An unknown delivery error occurred. Acknowledge the issue to the user."
-        };
+            var imageRefs = mediaRefs.Where(r => r.Modality == (int)MediaModality.Image).ToList();
+            if (imageRefs.Count > 0)
+            {
+                _log.Info("Stripping {Count} image reference(s) — model does not support vision", imageRefs.Count);
+                mediaRefs = mediaRefs.Where(r => r.Modality != (int)MediaModality.Image).ToList();
 
-        return $"Your last response could not be delivered to the user via {msg.ChannelType}. "
-            + $"The user did not receive it. Delivery failure kind: {msg.FailureKind}. "
-            + $"Channel error: {msg.ErrorMessage}\n{guidance}";
-    }
+                EmitOutput(new TextOutput
+                {
+                    SessionId = _sessionId,
+                    Text = "[Images removed — the current model does not support vision input]"
+                }, OutputFilter.Text);
+            }
+        }
 
-    private void ClearDeliveryRetryState()
-    {
-        _deliveryRetryEligibleTurnNumber = null;
-        _deliveryRetryCount = 0;
-        _deliveryRetryChainActive = false;
-    }
+        if (string.IsNullOrWhiteSpace(cmd.Content) && mediaRefs.Count == 0
+            && cmd.MediaReferences.Count > 0)
+        {
+            _log.Info("Skipping LLM call — message contained only unsupported media");
+            EmitOutput(new TextOutput
+            {
+                SessionId = _sessionId,
+                Text = "Your message contained only images, but the current model doesn't support vision. Please send a text message instead."
+            }, OutputFilter.Text);
+            EmitOutput(new TurnCompleted
+            {
+                SessionId = _sessionId,
+                TurnNumber = _state.TurnCount
+            });
+            TryReplyAck();
+            return;
+        }
 
-    private void MarkTurnEligibleForDeliveryRetry(int turnNumber)
-    {
-        _deliveryRetryEligibleTurnNumber = turnNumber;
-        if (!_deliveryRetryChainActive)
-            _deliveryRetryCount = 0;
+        var userContent = cmd.Content ?? string.Empty;
+        if (TryHandleSlashCommand(userContent, mediaRefs))
+            return;
+
+        _state = _state.AddUserMessage(userContent, mediaRefs.Count > 0 ? mediaRefs : null);
+        TryReplyAck();
+        _recallManager.ResetForNewTurn();
+        FireLlmCall(userContent);
+        TransitionTo(SessionPhase.Processing);
     }
 
     private bool ShouldCompact()
     {
-        return _config.CompactionTokenLimit > 0
-            && _lastInputTokenCount >= _config.CompactionTokenLimit;
+        var limit = _model.CompactionTokenLimit(_config.Tuning.CompactionThreshold);
+        return limit > 0
+            && _lastInputTokenCount >= limit;
     }
 
     private void CommandSubscriptionMessages()
@@ -1665,6 +1496,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             TurnLog().Warning("memory_curation_failed reason={Reason}", msg.Reason);
         });
 
+        Command<SessionDistillationCompleted>(msg => HandleDistillationResult(msg));
+
         Command<JoinSession>(cmd =>
         {
             // Detect re-join: same subscriber already registered with same filter.
@@ -1762,7 +1595,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             return providerEx.UserMessage;
 
         if (IsContextOverflowError(cause))
-            return $"Context window exceeded after compaction — the session has too many tools or a large system prompt for the {_config.ModelId} context window ({_config.ContextWindowTokens} tokens). Try reducing tools or increasing the model's context window.";
+            return $"Context window exceeded after compaction — the session has too many tools or a large system prompt for the {_model.ModelId} context window ({_model.ContextWindowTokens} tokens). Try reducing tools or increasing the model's context window.";
 
         return "I encountered an error processing your message. Please try again.";
     }
@@ -1824,10 +1657,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             && message.Contains("exceed", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
-    /// Naive token estimation: total character count / 4.
-    /// Includes the system prompt (if present) plus all compacted messages.
-    /// </summary>
-    /// <summary>
     /// Extracts the last N user/assistant text messages for session resume display.
     /// Skips system prompts, tool messages, and assistant messages that are tool-call-only
     /// (no visible text). Truncates long content to keep the DTO payload reasonable.
@@ -1880,21 +1709,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         return candidates;
     }
 
-    private static int EstimateTokens(
-        List<SerializableChatMessage> messages,
-        SerializableChatMessage? systemPrompt)
-    {
-        var totalChars = 0;
-        if (systemPrompt is not null)
-            totalChars += systemPrompt.Content?.Length ?? 0;
-        foreach (var msg in messages)
-        {
-            totalChars += msg.Content?.Length ?? 0;
-            foreach (var tc in msg.ToolCalls)
-                totalChars += tc.ArgumentsJson?.Length ?? 0;
-        }
-        return totalChars / 4;
-    }
 
     private string GetSessionDirectory() =>
         _sessionsBasePath is not null
@@ -1928,32 +1742,19 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     private void FireLlmCall(string? recallQuery = null, bool forceNoTools = false)
     {
-        _forceNoToolsActive = forceNoTools;
+        _turnState.ForceNoToolsActive = forceNoTools;
 
         var sessionDir = GetSessionDirectory();
         var messages = ChatMessageConverter.ToAiMessages(_state.History, sessionDir);
 
         // Recall: only resolve on turn-start calls, reuse cache for tool-loop follow-ups
-        if (_turnRecallCache is null)
+        if (_recallManager.TurnRecallCache is null)
         {
             var recallSw = Stopwatch.StartNew();
-            var resolved = ResolveRecallBundle(recallQuery);
+            var resolved = _recallManager.ResolveForTurn(recallQuery, _state, _sessionId, _currentTurnSource, _memoryRecallCoordinator);
             recallSw.Stop();
 
-            // Exclusion-based progressive recall: filter out already-injected memories
-            if (_injectedMemoryIds.Count > 0 && resolved.Items.Count > 0)
-            {
-                var filtered = resolved.Items
-                    .Where(i => !_injectedMemoryIds.Contains(i.Id))
-                    .ToArray();
-                resolved = new AutomaticRecallResult(filtered, resolved.Degraded, resolved.DegradeReason, resolved.DegradeStage);
-            }
-
-            _turnRecallCache = resolved;
-
-            // Track injected IDs for progressive recall across turns
-            foreach (var item in resolved.Items)
-                _injectedMemoryIds.Add(item.Id);
+            resolved = _recallManager.ApplyProgressiveRecall(resolved, _log);
 
             // Persist recalled memories into session history so they survive
             // across turns. Without this, recalled memories are transient system
@@ -1961,8 +1762,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             // re-injection — making the memory invisible for the rest of the session.
             if (resolved.Items.Count > 0)
             {
-                var recallContent = FormatRecallForHistory(resolved);
+                var recallContent = SessionRecallManager.FormatForHistory(resolved);
                 _state = _state.AddSystemNudge(recallContent);
+                _observerActor?.Tell(new ObserverSystemContext("recalled-memory", recallContent));
             }
 
             var recallIds = resolved.Items.Count == 0
@@ -1980,15 +1782,15 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 _sessionMetrics?.RecordMemoriesRecalled(resolved.Items.Count);
         }
 
-        _activeRecall = _turnRecallCache;
-        InjectAutomaticRecall(messages, _activeRecall);
+        _activeRecall = _recallManager.TurnRecallCache;
+        SessionRecallManager.InjectIntoMessages(messages, _activeRecall!);
 
         // Inject dynamic context layers (e.g. tool index, skill index) as transient system messages.
         // These are NOT persisted — rebuilt on every call so rehydrated sessions stay fresh.
         InjectDynamicContextLayers(messages);
         var self = Self;
         var client = _chatClient;
-        var timeout = TimeSpan.FromSeconds(Math.Max(1, _config.TurnLlmTimeoutSeconds));
+        var timeout = _config.TurnLlmTimeout;
 
         var exposedTools = ResolveExposedToolsForCurrentTurn();
         ChatOptions? options = null;
@@ -2000,91 +1802,16 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             };
         }
 
-        StartProcessingWatchdog("llm-call", timeout);
+        _watchdog.Start("llm-call", timeout, Timers);
 
         TurnLog().Info("turn_llm_call_start messages={MessageCount} toolsEnabled={ToolsEnabled} forceNoTools={ForceNoTools}",
             messages.Count,
             options?.Tools?.Count > 0,
             forceNoTools);
 
-        _ = InvokeLlmAsync(client, messages, options, self, timeout);
+        _ = SessionLlmInvoker.InvokeAsync(client, messages, options, self, timeout);
     }
 
-    private AutomaticRecallResult ResolveRecallBundle(string? recallQuery)
-    {
-        var query = string.IsNullOrWhiteSpace(recallQuery)
-            ? _state.FindLastUserMessage()?.Content ?? string.Empty
-            : recallQuery;
-
-        if (string.IsNullOrWhiteSpace(query))
-            return new AutomaticRecallResult([]);
-
-        var recentUser = _state.History
-            .Where(x => x.Role == Protocol.ChatRole.User && !SessionState.IsSystemNudge(x))
-            .Select(x => x.Content)
-            .Where(x => !string.IsNullOrWhiteSpace(x))
-            .TakeLast(3)
-            .ToArray();
-
-        var request = new AutomaticRecallRequest(
-            _sessionId.Value,
-            query,
-            recentUser,
-            3,
-            Audience: _currentTurnSource?.Audience ?? TrustAudience.Public,
-            Boundary: CurrentMemoryBoundary(),
-            RecentAssistantMessages: _state.History
-                .Where(x => x.Role == Protocol.ChatRole.Assistant)
-                .Select(x => x.Content)
-                .Where(x => !string.IsNullOrWhiteSpace(x))
-                .TakeLast(3)
-                .ToArray(),
-            RecentEntities: [],
-            HardScopeOverride: _sessionId.ToMemoryDomain(),
-            ThreadTitle: _state.Title);
-
-        try
-        {
-            using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(300));
-            return _memoryRecallCoordinator.RecallAsync(request, cts.Token)
-                .GetAwaiter()
-                .GetResult();
-        }
-        catch (Exception ex)
-        {
-            return new AutomaticRecallResult([], true, ex.Message, "resolution");
-        }
-    }
-
-    private static void InjectAutomaticRecall(List<AiChatMessage> messages, AutomaticRecallResult recall)
-    {
-        if (recall.Degraded)
-        {
-            var degraded = new AiChatMessage(
-                Microsoft.Extensions.AI.ChatRole.System,
-                "[memory-recall]\nstatus: degraded\nreason: automatic recall unavailable for this turn");
-            var insertAt = messages.FindLastIndex(m => m.Role == Microsoft.Extensions.AI.ChatRole.System);
-            messages.Insert(insertAt >= 0 ? insertAt + 1 : 0, degraded);
-            return;
-        }
-
-        if (recall.Items.Count == 0)
-            return;
-
-        var sb = new StringBuilder();
-        sb.AppendLine("[memory-recall]");
-        sb.AppendLine("status: healthy");
-        sb.AppendLine("mode: automatic");
-        foreach (var item in recall.Items)
-        {
-            sb.AppendLine($"- {item.Title} [{item.Id}] domain={item.Domain} sensitivity={item.Sensitivity} score={item.Score:F2}");
-            sb.AppendLine($"  {item.Content}");
-        }
-
-        var recallMessage = new AiChatMessage(Microsoft.Extensions.AI.ChatRole.System, sb.ToString().TrimEnd());
-        var index = messages.FindLastIndex(m => m.Role == Microsoft.Extensions.AI.ChatRole.System);
-        messages.Insert(index >= 0 ? index + 1 : 0, recallMessage);
-    }
 
     private string CurrentMemoryAudience()
         => (_currentTurnSource?.Audience ?? TrustAudience.Public).ToWireValue();
@@ -2101,16 +1828,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         return _toolAccessPolicy.FilterExposedTools(_availableTools, _fullRegistry, _currentTrustContext);
     }
 
-    private static string FormatRecallForHistory(AutomaticRecallResult recall)
-    {
-        var sb = new StringBuilder();
-        sb.AppendLine("[recalled-memories]");
-        foreach (var item in recall.Items)
-        {
-            sb.AppendLine($"- {item.Title}: {item.Content}");
-        }
-        return sb.ToString().TrimEnd();
-    }
 
     /// <summary>
     /// Handles slash-command dispatch. If the user message starts with / and matches
@@ -2152,14 +1869,14 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
             _state = _state.AddUserMessage(effectiveUserContent, mediaRefs.Count > 0 ? mediaRefs : null);
             TryReplyAck();
-            _turnRecallCache = null;
+            _recallManager.ResetForNewTurn();
 
             // Inject skill content as a one-time system message for this turn
             _slashCommandSkillContent = skillBody;
             FireLlmCall(effectiveUserContent);
             _slashCommandSkillContent = null;
 
-            Become(Processing);
+            TransitionTo(SessionPhase.Processing);
             return true;
         }
 
@@ -2234,410 +1951,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         messages.Insert(insertIndex, contextMessage);
     }
 
-    private static async Task InvokeLlmAsync(
-        IChatClient client,
-        List<AiChatMessage> messages,
-        ChatOptions? options,
-        IActorRef self,
-        TimeSpan timeout)
-    {
-        try
-        {
-            using var cts = new CancellationTokenSource(timeout);
-            var response = await InvokeStreamingResponseAsync(client, messages, options, self, cts.Token);
-            self.Tell(response);
-        }
-        catch (OperationCanceledException ex)
-        {
-            self.Tell(new LlmCallFailed
-            {
-                Cause = new TimeoutException(
-                    $"LLM call exceeded timeout of {timeout.TotalSeconds:F0}s",
-                    ex)
-            });
-        }
-        catch (Exception ex)
-        {
-            self.Tell(new LlmCallFailed { Cause = ex });
-        }
-    }
-
-    private static async Task<LlmResponseReceived> InvokeStreamingResponseAsync(
-        IChatClient client,
-        List<AiChatMessage> messages,
-        ChatOptions? options,
-        IActorRef self,
-        CancellationToken cancellationToken)
-    {
-        var contents = new List<AIContent>();
-        var updates = new List<ChatResponseUpdate>();
-        var textBuilder = new StringBuilder();
-        var thinkingBuilder = new StringBuilder();
-        string? pendingTextDelta = null;
-        string? pendingThinkingDelta = null;
-        var textDeltaCount = 0;
-        var thinkingDeltaCount = 0;
-
-        await foreach (var update in client.GetStreamingResponseAsync(messages, options, cancellationToken))
-        {
-            updates.Add(update);
-
-            if (update.Contents is not null)
-            {
-                foreach (var content in update.Contents)
-                {
-                    switch (content)
-                    {
-                        case TextContent text when !string.IsNullOrEmpty(text.Text):
-                            textBuilder.Append(text.Text);
-                            textDeltaCount++;
-                            if (textDeltaCount == 1)
-                            {
-                                pendingTextDelta = text.Text;
-                            }
-                            else
-                            {
-                                if (textDeltaCount == 2 && !string.IsNullOrEmpty(pendingTextDelta))
-                                {
-                                    self.Tell(new LlmResponseDeltaReceived
-                                    {
-                                        Content = new TextContent(pendingTextDelta)
-                                    });
-                                }
-
-                                self.Tell(new LlmResponseDeltaReceived { Content = content });
-                            }
-                            break;
-
-                        case TextReasoningContent thinking when !string.IsNullOrEmpty(thinking.Text):
-                            thinkingBuilder.Append(thinking.Text);
-                            thinkingDeltaCount++;
-                            if (thinkingDeltaCount == 1)
-                            {
-                                pendingThinkingDelta = thinking.Text;
-                            }
-                            else
-                            {
-                                if (thinkingDeltaCount == 2 && !string.IsNullOrEmpty(pendingThinkingDelta))
-                                {
-                                    self.Tell(new LlmResponseDeltaReceived
-                                    {
-                                        Content = new TextReasoningContent(pendingThinkingDelta)
-                                    });
-                                }
-
-                                self.Tell(new LlmResponseDeltaReceived { Content = content });
-                            }
-                            break;
-
-                        case FunctionCallContent:
-                            contents.Add(content);
-                            break;
-                    }
-                }
-            }
-
-        }
-
-        if (thinkingBuilder.Length > 0)
-            contents.Add(new TextReasoningContent(thinkingBuilder.ToString()));
-
-        if (textBuilder.Length > 0)
-            contents.Add(new TextContent(textBuilder.ToString()));
-
-        var response = updates.Count > 0
-            ? updates.ToChatResponse()
-            : new ChatResponse(new AiChatMessage(Microsoft.Extensions.AI.ChatRole.Assistant, contents));
-
-        if (response.Messages.Count == 0)
-            response.Messages.Add(new AiChatMessage(Microsoft.Extensions.AI.ChatRole.Assistant, contents));
-
-        return new LlmResponseReceived
-        {
-            Response = response,
-            StreamedText = textDeltaCount > 1,
-            StreamedThinking = thinkingDeltaCount > 1,
-            RecallResult = null
-        };
-    }
-
-    private sealed record ToolCallResult(
-        SerializableChatMessage Message,
-        IReadOnlyList<FileAttachmentInfo> FileAttachments,
-        IReadOnlyList<CompletedSubAgentRun> CompletedSubAgentRuns,
-        IReadOnlyList<AcceptedSubAgentFinding> AcceptedSubAgentFindings);
-
-    private static async Task ExecuteToolsAsync(
-        IToolExecutor executor,
-        List<FunctionCallContent> toolCalls,
-        SessionId sessionId,
-        MessageSource? source,
-        IToolAuditLogger? auditLogger,
-        TimeProvider timeProvider,
-        string sessionDir,
-        int maxInlineToolResultChars,
-        TimeSpan timeout,
-        IActorRef self,
-        Action<SubAgentOutput> emitSubAgentOutput,
-        Func<object, string, CancellationToken, Task<object>> spawnChildActor)
-    {
-        try
-        {
-            using var cts = new CancellationTokenSource(timeout);
-
-            // Execute all tool calls in parallel — each is independent
-            var tasks = toolCalls.Select(tc => ExecuteSingleToolAsync(
-                executor,
-                tc,
-                sessionId,
-                source,
-                auditLogger,
-                timeProvider,
-                sessionDir,
-                maxInlineToolResultChars,
-                emitSubAgentOutput,
-                spawnChildActor,
-                cts.Token));
-            var results = await Task.WhenAll(tasks);
-
-            var fileAttachments = results.SelectMany(r => r.FileAttachments).ToList();
-            self.Tell(new ToolExecutionCompleted
-            {
-                ToolResults = results.Select(r => r.Message).ToList(),
-                FileAttachments = fileAttachments,
-                CompletedSubAgentRuns = results
-                    .SelectMany(r => r.CompletedSubAgentRuns)
-                    .ToList(),
-                AcceptedSubAgentFindings = results
-                    .SelectMany(r => r.AcceptedSubAgentFindings)
-                    .ToList()
-            });
-        }
-        catch (OperationCanceledException ex)
-        {
-            self.Tell(new ToolExecutionFailed
-            {
-                Cause = new TimeoutException(
-                    $"Tool execution exceeded timeout of {timeout.TotalSeconds:F0}s",
-                    ex)
-            });
-        }
-        catch (Exception ex)
-        {
-            self.Tell(new ToolExecutionFailed { Cause = ex });
-        }
-    }
-
-    private static async Task<ToolCallResult> ExecuteSingleToolAsync(
-        IToolExecutor executor,
-        FunctionCallContent tc,
-        SessionId sessionId,
-        MessageSource? source,
-        IToolAuditLogger? auditLogger,
-        TimeProvider timeProvider,
-        string sessionDir,
-        int maxInlineToolResultChars,
-        Action<SubAgentOutput> emitSubAgentOutput,
-        Func<object, string, CancellationToken, Task<object>> spawnChildActor,
-        CancellationToken ct)
-    {
-        var sw = Stopwatch.StartNew();
-        string resultText;
-        var context = new Netclaw.Tools.ToolExecutionContext(sessionId.Value, sessionDir);
-        context.Audience = source is null ? null : source.Audience.ToWireValue();
-        context.Boundary = source?.Boundary;
-        context.ChannelType = source is null ? null : source.ChannelType.ToWireValue();
-        context.SpawnChildActor = spawnChildActor;
-        var completedRuns = new List<CompletedSubAgentRun>();
-        var acceptedFindings = new List<AcceptedSubAgentFinding>();
-        context.OnSubAgentActivity = info =>
-        {
-            if (info.IsStarted)
-            {
-                emitSubAgentOutput(new SubAgentOutput
-                {
-                    SessionId = sessionId,
-                    TimestampMs = timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
-                    AgentName = info.AgentName,
-                    Phase = Netclaw.Actors.SubAgents.SubAgentPhase.Started,
-                    ToolCount = info.ToolCount,
-                    Success = info.Success,
-                    Duration = info.Duration
-                });
-            }
-
-            if (!info.IsStarted)
-            {
-                string? decision = null;
-                string? reason = null;
-
-                if (info.Success && info.Findings.Count == 1)
-                {
-                    var singleDecision = ReviewSubAgentFinding(info.Findings[0], sessionId.Value);
-                    decision = singleDecision.Decision.ToWireValue();
-                    reason = singleDecision.Reason;
-                }
-
-                completedRuns.Add(new CompletedSubAgentRun
-                {
-                    RunId = info.RunId,
-                    AgentName = info.AgentName,
-                    Success = info.Success,
-                    Duration = info.Duration,
-                    FindingsCount = info.Findings.Count,
-                    MemoryDecision = decision,
-                    MemoryDecisionReason = reason
-                });
-            }
-
-            if (!info.IsStarted && info.Success)
-            {
-                foreach (var finding in info.Findings)
-                {
-                    var decision = ReviewSubAgentFinding(finding, sessionId.Value);
-                    acceptedFindings.Add(new AcceptedSubAgentFinding
-                    {
-                        RunId = info.RunId,
-                        AgentName = info.AgentName,
-                        Duration = info.Duration,
-                        Shape = finding.Shape.ToWireValue(),
-                        Title = finding.Title,
-                        Content = finding.Content,
-                        Kind = finding.Kind,
-                        Domain = finding.Domain,
-                        Sensitivity = finding.Sensitivity.ToWireValue(),
-                        RecallMode = finding.RecallMode.ToWireValue(),
-                        UpdateSemantics = finding.UpdateSemantics,
-                        Confidence = finding.Confidence,
-                        Durability = finding.Durability.ToWireValue(),
-                        Reusability = finding.Reusability.ToWireValue(),
-                        Evidence = finding.Evidence,
-                        FreshnessAtMs = finding.FreshnessAtMs,
-                        Decision = decision.Decision.ToWireValue(),
-                        DecisionReason = decision.Reason
-                    });
-                }
-            }
-        };
-        try
-        {
-            resultText = await executor.ExecuteAsync(tc, context, ct);
-            sw.Stop();
-
-            auditLogger?.Log(new ToolAuditEntry
-            {
-                SessionId = sessionId.Value,
-                ToolName = tc.Name,
-                CallId = tc.CallId,
-                Timestamp = timeProvider.GetUtcNow(),
-                Allowed = true,
-                Duration = sw.Elapsed
-            });
-        }
-        catch (ToolAccessDeniedException ex)
-        {
-            sw.Stop();
-            resultText = $"Tool access denied: {ex.DenyReason}";
-
-            auditLogger?.Log(new ToolAuditEntry
-            {
-                SessionId = sessionId.Value,
-                ToolName = tc.Name,
-                CallId = tc.CallId,
-                Timestamp = timeProvider.GetUtcNow(),
-                Allowed = false,
-                DenyReason = ex.DenyReason,
-                Duration = sw.Elapsed
-            });
-        }
-        catch (Exception ex)
-        {
-            sw.Stop();
-            resultText = $"Error executing tool: {ex.Message}";
-
-            auditLogger?.Log(new ToolAuditEntry
-            {
-                SessionId = sessionId.Value,
-                ToolName = tc.Name,
-                CallId = tc.CallId,
-                Timestamp = timeProvider.GetUtcNow(),
-                Allowed = true,
-                Duration = sw.Elapsed
-            });
-        }
-
-        resultText = ClampToolResult(resultText, maxInlineToolResultChars);
-
-        var message = new SerializableChatMessage
-        {
-            Role = Protocol.ChatRole.Tool,
-            Content = resultText,
-            ToolCallId = tc.CallId,
-            Name = tc.Name
-        };
-
-        return new ToolCallResult(
-            message,
-            context.FileAttachments,
-            completedRuns,
-            acceptedFindings);
-    }
-
-    internal static SubAgentFindingReviewResult ReviewSubAgentFinding(
-        SubAgentFinding finding,
-        string sessionId)
-    {
-        if (string.IsNullOrWhiteSpace(finding.Title))
-            return new(SubAgentFindingReviewDecision.Deferred, "missing title");
-
-        if (string.IsNullOrWhiteSpace(finding.Content))
-            return new(SubAgentFindingReviewDecision.Rejected, "empty content");
-
-        if (finding.Shape != SubAgentFindingShape.Conclusion)
-            return new(SubAgentFindingReviewDecision.Rejected, "unsupported shape");
-
-        if (!Enum.IsDefined(finding.Durability))
-            return new(SubAgentFindingReviewDecision.Deferred, "missing durability");
-
-        if (!Enum.IsDefined(finding.Reusability))
-            return new(SubAgentFindingReviewDecision.Deferred, "missing reusability");
-
-        if (finding.RecallMode == SubAgentFindingRecallMode.Never)
-            return new(SubAgentFindingReviewDecision.Rejected, "recallMode=never");
-
-        if (!string.Equals(finding.Kind, "record", StringComparison.OrdinalIgnoreCase)
-            && !string.Equals(finding.Kind, "document", StringComparison.OrdinalIgnoreCase))
-            return new(SubAgentFindingReviewDecision.Deferred, "unsupported kind");
-
-        if (finding.Sensitivity == SubAgentFindingSensitivity.Secret
-            && finding.RecallMode == SubAgentFindingRecallMode.Auto)
-            return new(SubAgentFindingReviewDecision.Rejected, "secret cannot auto-recall");
-
-        var expectedDomain = new SessionId(sessionId).ToMemoryDomain();
-        if (!string.Equals(finding.Domain, expectedDomain, StringComparison.OrdinalIgnoreCase))
-            return new(SubAgentFindingReviewDecision.Deferred, $"domain mismatch: expected {expectedDomain}");
-
-        if (finding.Durability != SubAgentFindingDurability.Durable)
-            return new(SubAgentFindingReviewDecision.Deferred, "insufficient durability");
-
-        if (finding.Reusability != SubAgentFindingReusability.Reusable)
-            return new(SubAgentFindingReviewDecision.Deferred, "insufficient reusability");
-
-        if (finding.Confidence < 0.55)
-            return new(SubAgentFindingReviewDecision.Deferred, "low confidence");
-
-        return new(SubAgentFindingReviewDecision.Accepted, null);
-    }
-
-    private static string ClampToolResult(string resultText, int maxInlineToolResultChars)
-    {
-        if (maxInlineToolResultChars <= 0 || resultText.Length <= maxInlineToolResultChars)
-            return resultText;
-
-        var omittedChars = resultText.Length - maxInlineToolResultChars;
-        return resultText[..maxInlineToolResultChars]
-               + $"\n[tool result truncated: omitted {omittedChars} chars to protect context window]";
-    }
 
     private void EnqueueCheckpointFireAndForget(MemoryCheckpointRequest request)
     {
@@ -2691,103 +2004,11 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 continue;
 
             var tool = registration.Tool;
-            RememberDiscoveredTool(toolName, tool);
+            _discoveredToolCache.Remember(toolName, tool,
+                _config.Tuning.DiscoveredToolRetentionTurns,
+                _config.Tuning.DiscoveredToolMaxCount);
             AddAvailableToolIfMissing(toolName, tool.ToAITool());
         }
-    }
-
-    private void PrepareDiscoveredToolsForNewTurn()
-    {
-        if (_fullRegistry is null)
-            return;
-
-        if (_config.DiscoveredToolRetentionTurns <= 0 || _config.DiscoveredToolMaxCount <= 0)
-        {
-            _discoveredToolLeases.Clear();
-            _discoveredToolOrder.Clear();
-            TrimAvailableToolsToBase();
-            return;
-        }
-
-        if (_discoveredToolLeases.Count == 0)
-        {
-            TrimAvailableToolsToBase();
-            return;
-        }
-
-        var expired = _discoveredToolLeases
-            .Where(x => x.Value <= 0)
-            .Select(x => x.Key)
-            .ToList();
-
-        if (expired.Count > 0)
-        {
-            foreach (var name in expired)
-            {
-                _discoveredToolLeases.Remove(name);
-            }
-
-            _discoveredToolOrder.RemoveAll(name => !_discoveredToolLeases.ContainsKey(name));
-        }
-
-        RebuildAvailableToolsFromDiscoveredCache();
-
-        // Lease countdown happens after this turn's tool set is prepared,
-        // so a lease value of N keeps tools available for N future turns.
-        foreach (var name in _discoveredToolLeases.Keys.ToList())
-        {
-            _discoveredToolLeases[name]--;
-        }
-    }
-
-    private void RememberDiscoveredTool(string toolName, INetclawTool tool)
-    {
-        if (tool is not McpToolAdapter)
-            return;
-
-        if (_config.DiscoveredToolRetentionTurns <= 0 || _config.DiscoveredToolMaxCount <= 0)
-            return;
-
-        var lease = Math.Max(1, _config.DiscoveredToolRetentionTurns);
-        _discoveredToolLeases[toolName] = lease;
-
-        if (!_discoveredToolOrder.Contains(toolName))
-        {
-            _discoveredToolOrder.Add(toolName);
-        }
-
-        while (_discoveredToolOrder.Count > _config.DiscoveredToolMaxCount)
-        {
-            var evicted = _discoveredToolOrder[0];
-            _discoveredToolOrder.RemoveAt(0);
-            _discoveredToolLeases.Remove(evicted);
-        }
-    }
-
-    private void RebuildAvailableToolsFromDiscoveredCache()
-    {
-        if (_fullRegistry is null)
-            return;
-
-        TrimAvailableToolsToBase();
-
-        foreach (var toolName in _discoveredToolOrder)
-        {
-            if (!_discoveredToolLeases.TryGetValue(toolName, out var lease) || lease <= 0)
-                continue;
-
-            var tool = _fullRegistry.GetByName(toolName);
-            if (tool is null)
-                continue;
-
-            AddAvailableToolIfMissing(toolName, tool.ToAITool());
-        }
-    }
-
-    private void TrimAvailableToolsToBase()
-    {
-        if (_availableTools.Count > _baseToolCount)
-            _availableTools.RemoveRange(_baseToolCount, _availableTools.Count - _baseToolCount);
     }
 
     private void AddAvailableToolIfMissing(string toolName, AITool aiTool)
@@ -2802,7 +2023,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     private void MaybeSnapshot()
     {
-        if (_config.SnapshotInterval > 0 && LastSequenceNr % _config.SnapshotInterval == 0)
+        if (_config.Tuning.SnapshotInterval > 0 && LastSequenceNr % _config.Tuning.SnapshotInterval == 0)
         {
             SaveSnapshot(_state.ToSnapshot());
         }
@@ -2818,14 +2039,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         {
             switch (content)
             {
-                case TextContent text when includeText:
-                    EmitOutput(new TextOutput
-                    {
-                        SessionId = _sessionId,
-                        Text = text.Text ?? string.Empty
-                    }, OutputFilter.Text);
-                    break;
-
                 case TextReasoningContent thinking when includeThinking:
                     EmitOutput(new ThinkingOutput
                     {
@@ -2848,6 +2061,27 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             }
         }
 
+        // Consolidate all TextContent items into a single TextOutput to avoid
+        // duplicate posts when ToChatResponse() produces non-contiguous
+        // TextContent items (e.g. [text, tool_call, text]). Emitted after
+        // thinking to preserve the original content ordering (thinking before text).
+        if (includeText)
+        {
+            var fullText = string.Join("\n\n", message.Contents
+                .OfType<TextContent>()
+                .Select(t => t.Text)
+                .Where(t => !string.IsNullOrWhiteSpace(t)));
+
+            if (fullText.Length > 0)
+            {
+                EmitOutput(new TextOutput
+                {
+                    SessionId = _sessionId,
+                    Text = fullText
+                }, OutputFilter.Text);
+            }
+        }
+
         if (usage is not null)
         {
             EmitUsageOutput(usage);
@@ -2860,89 +2094,11 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         });
     }
 
-    private void ObserveTurnForMemory(SerializableChatMessage userMessage, SerializableChatMessage assistantReply)
-    {
-        var userText = userMessage.Content ?? string.Empty;
-        if (string.IsNullOrWhiteSpace(userText))
-            return;
-
-        var recentUser = _state.History
-            .Where(x => x.Role == Protocol.ChatRole.User && !SessionState.IsSystemNudge(x))
-            .Select(x => x.Content)
-            .Where(x => !string.IsNullOrWhiteSpace(x))
-            .TakeLast(3)
-            .ToArray();
-
-        var recentAssistant = _state.History
-            .Where(x => x.Role == Protocol.ChatRole.Assistant)
-            .Select(x => x.Content)
-            .Where(x => !string.IsNullOrWhiteSpace(x))
-            .TakeLast(3)
-            .ToArray();
-
-        var strongAssertions = BuildStrongAssertions(userText);
-        var request = _sidecarMemoryObserver.BuildRequest(
-            _sessionId.Value,
-            _activeTurnId ?? $"{_sessionId.Value}:{NowMs()}",
-            "turn_completed",
-            _sessionId.ToMemoryDomain(),
-            Memory.MemorySensitivity.Normal.ToWireValue(),
-            userText,
-            assistantReply.Content ?? string.Empty,
-            strongAssertions,
-            [],
-            recentUser,
-            recentAssistant,
-            [],
-            false,
-            _timeProvider.GetUtcNow());
-
-        var self = Self;
-        var timeout = TimeSpan.FromSeconds(Math.Max(1, _config.SidecarLlmTimeoutSeconds));
-        _ = ObserveMemoryAsync(_compactionClient, request, self, _log, timeout);
-    }
-
-    private static async Task ObserveMemoryAsync(
-        IChatClient client,
-        MemoryObservationRequest request,
-        IActorRef self,
-        ILoggingAdapter log,
-        TimeSpan timeout)
-    {
-        var proposals = await SessionSidecarRunner.RunJsonAsync<IReadOnlyList<MemoryProposal>>(
-            client,
-            MemorySidecarPromptBuilder.BuildMemoryObservationSystemPrompt(),
-            MemorySidecarPromptBuilder.BuildMemoryObservationUserPrompt(request),
-            timeout,
-            message => log.Warning("Memory observation sidecar failed: {0}", message));
-
-        if (proposals is null)
-        {
-            self.Tell(new MemoryObservationFailed { Reason = "sidecar failed or returned null" });
-            return;
-        }
-
-        self.Tell(new MemoryObservationCompleted { Proposals = proposals });
-    }
-
-    private static IReadOnlyList<string> BuildStrongAssertions(string userText)
-    {
-        var assertions = new List<string>();
-        var text = userText.Trim();
-        if (text.StartsWith("I ", StringComparison.OrdinalIgnoreCase)
-            || text.StartsWith("I'm ", StringComparison.OrdinalIgnoreCase)
-            || text.StartsWith("I’m ", StringComparison.OrdinalIgnoreCase))
-        {
-            assertions.Add(text);
-        }
-        return assertions;
-    }
-
     private void EmitUsageOutput(UsageDetails usage)
     {
         _sessionMetrics?.RecordTokenUsage(usage.InputTokenCount ?? 0, usage.OutputTokenCount ?? 0);
 
-        var contextWindow = _config.ContextWindowTokens;
+        var contextWindow = _model.ContextWindowTokens;
         double? usagePercent = usage.InputTokenCount.HasValue && contextWindow > 0
             ? (double)usage.InputTokenCount.Value / contextWindow
             : null;
@@ -2960,50 +2116,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         }, OutputFilter.Usage);
     }
 
-    private void StartProcessingWatchdog(string operationName, TimeSpan timeout)
-    {
-        _processingOperationId++;
-        _processingOperationName = operationName;
-
-        Timers.StartSingleTimer(
-            ProcessingWatchdogTimerKey,
-            new ProcessingWatchdogExpired
-            {
-                OperationId = _processingOperationId,
-                OperationName = operationName
-            },
-            timeout);
-    }
-
-    private void RefreshProcessingWatchdogIfActive()
-    {
-        if (_processingOperationName is not "llm-call")
-            return;
-
-        var timeout = TimeSpan.FromSeconds(Math.Max(1, _config.TurnLlmTimeoutSeconds));
-        Timers.StartSingleTimer(
-            ProcessingWatchdogTimerKey,
-            new ProcessingWatchdogExpired
-            {
-                OperationId = _processingOperationId,
-                OperationName = _processingOperationName
-            },
-            timeout);
-    }
-
-    private bool IsCurrentWatchdog(ProcessingWatchdogExpired msg)
-        => msg.OperationId == _processingOperationId
-           && string.Equals(msg.OperationName, _processingOperationName, StringComparison.Ordinal);
-
-    private void StopProcessingWatchdog()
-    {
-        Timers.Cancel(ProcessingWatchdogTimerKey);
-        _processingOperationName = null;
-    }
-
     private void FailCurrentTurn(string errorMessage, Exception cause, ErrorCategory category = ErrorCategory.Unknown)
     {
-        ClearDeliveryRetryState();
+        _deliveryRetry.Clear();
         _state = _state.AddErrorReply(errorMessage);
 
         var correlationId = Guid.NewGuid();
@@ -3042,6 +2157,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         }
 
         _logActor?.Tell(output);
+        _observerActor?.Tell(output);
     }
 
     private void BindTurnTelemetry(MessageSource? source)
@@ -3077,7 +2193,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         Sender.Tell(CommandAck.For(_sessionId));
     }
-
 
 
     internal void SetTitle(string title)

@@ -39,16 +39,22 @@ public class LlmSessionIntegrationTests : TestKit
     protected override void ConfigureServices(HostBuilderContext context, IServiceCollection services)
     {
         services.AddSingleton<IChatClientProvider>(new SingleClientProvider(_fakeChatClient));
-        services.AddSingleton(new SessionConfig
+        services.AddSingleton(new ModelCapabilities
         {
             ModelId = "fake-model",
             ContextWindowTokens = 128_000,
-            SnapshotInterval = 5,
+        });
+        services.AddSingleton(new SessionConfig
+        {
             IdleTimeout = TimeSpan.FromMinutes(1),
-            TitleGenerationInterval = 0,
-            MemorySidecarsEnabled = false,
-            DiscoveredToolRetentionTurns = 3,
-            DiscoveredToolMaxCount = 12
+            Tuning = new SessionTuning
+            {
+                SnapshotInterval = 5,
+                TitleGenerationInterval = 0,
+                MemorySidecarsEnabled = false,
+                DiscoveredToolRetentionTurns = 3,
+                DiscoveredToolMaxCount = 12,
+            }
         });
         services.AddSingleton<ISystemPromptProvider>(new StaticSystemPromptProvider(
             "You are a test assistant."));
@@ -63,7 +69,7 @@ public class LlmSessionIntegrationTests : TestKit
             sp.GetRequiredService<IChatClientProvider>(),
             sp.GetRequiredService<SidecarRecallPlanner>(),
             sp.GetRequiredService<RecallPlanGate>(),
-            sp.GetRequiredService<SessionConfig>()));
+            sessionConfig: sp.GetRequiredService<SessionConfig>()));
 
         var registry = new ToolRegistry();
         registry.Register(new McpToolAdapter(
@@ -77,6 +83,29 @@ public class LlmSessionIntegrationTests : TestKit
         services.AddSingleton<IModelCapabilityResolver>(new FakeCapabilityResolver());
         services.AddSingleton<TimeProvider>(_timeProvider);
         services.AddSingleton<ISessionLifecycleObserver>(_lifecycleObserver);
+
+        // Composite records for LlmSessionActor constructor
+        services.AddSingleton(sp => new SessionServices(
+            sp.GetRequiredService<IChatClientProvider>(),
+            sp.GetRequiredService<ISystemPromptProvider>(),
+            sp.GetService<IReadOnlyList<IContextLayerProvider>>() ?? Array.Empty<IContextLayerProvider>(),
+            sp.GetService<TimeProvider>() ?? TimeProvider.System,
+            sp.GetService<NetclawPaths>()));
+        services.AddSingleton(sp => new SessionToolServices(
+            sp.GetRequiredService<IToolExecutor>(),
+            sp.GetService<IToolAuditLogger>(),
+            sp.GetRequiredService<ToolRegistry>(),
+            sp.GetService<ToolAccessPolicy>(),
+            sp.GetService<Netclaw.Actors.Channels.TrustContextDeriver>(),
+            sp.GetService<Netclaw.Actors.Skills.SkillRegistry>()));
+        services.AddSingleton(sp => new SessionMemoryServices(
+            sp.GetService<IMemoryExtractor>() ?? NullMemoryExtractor.Instance,
+            sp.GetService<IMemoryRecallCoordinator>() ?? NullMemoryRecallCoordinator.Instance,
+            sp.GetService<IMemoryCheckpointSink>() ?? NullMemoryCheckpointSink.Instance,
+            sp.GetService<SQLiteMemoryStore>()));
+        services.AddSingleton(sp => new SessionObservability(
+            sp.GetService<Telemetry.ISessionMetrics>(),
+            sp.GetService<ISessionLifecycleObserver>()));
     }
 
     protected override void ConfigureAkka(AkkaConfigurationBuilder builder, IServiceProvider provider)
@@ -826,6 +855,59 @@ public class LlmSessionIntegrationTests : TestKit
     }
 
     [Fact]
+    public async Task Non_contiguous_TextContent_items_produce_single_TextOutput()
+    {
+        // Simulate a response where ToChatResponse() produces non-contiguous
+        // TextContent items: [text, tool_call, text]. This happens when the
+        // provider returns text both before and after tool calls in the same
+        // response message. Without consolidation, each TextContent would be
+        // emitted as a separate TextOutput → duplicate Slack posts.
+        _fakeChatClient.PlannedResponses.Enqueue(new AIContent[]
+        {
+            new TextContent("Part one"),
+            new FunctionCallContent("call-nc1", "browser_chrome_devtools/navigate_page",
+                new Dictionary<string, object?> { ["url"] = "https://example.com" }),
+            new TextContent("Part two")
+        });
+        _fakeToolExecutor.Results["browser_chrome_devtools/navigate_page"] = "page loaded";
+
+        var sessionId = new SessionId("test-channel/non-contiguous-text");
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("nc-sub");
+
+        // Subscribe to Text + ToolCalls only (not TextStreaming) to match
+        // Slack adapter behavior and avoid streaming delta noise.
+        await sessionManager.Ask<SessionJoined>(new JoinSession
+        {
+            SessionId = sessionId,
+            Subscriber = subscriber,
+            Filter = OutputFilter.Text | OutputFilter.ToolCalls
+        }, TimeSpan.FromSeconds(3));
+        await subscriber.ExpectMsgAsync<SessionJoined>();
+
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Do something with tools"
+        }, TimeSpan.FromSeconds(3));
+
+        // Should receive exactly ONE consolidated TextOutput for the preamble
+        var preamble = await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(5));
+        Assert.Contains("Part one", preamble.Text);
+        Assert.Contains("Part two", preamble.Text);
+
+        // Tool call output
+        var toolCall = await subscriber.ExpectMsgAsync<ToolCallOutput>(TimeSpan.FromSeconds(3));
+        Assert.Equal("browser_chrome_devtools/navigate_page", toolCall.ToolName);
+
+        // Final text response after tool execution
+        var finalText = await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(5));
+        Assert.Contains("fake", finalText.Text, StringComparison.OrdinalIgnoreCase);
+
+        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
+    }
+
+    [Fact]
     public async Task Session_recovers_state_after_actor_is_killed()
     {
         var sessionId = new SessionId("test-channel/recovery-test");
@@ -1069,6 +1151,129 @@ public class LlmSessionIntegrationTests : TestKit
 
         await subscriberB.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3));
         await subscriberB.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
+    }
+
+    [Fact]
+    public async Task New_user_message_during_passivation_aborts_shutdown_and_processes_message()
+    {
+        var sessionId = new SessionId("test-channel/passivation-new-message");
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("passivation-new-message-sub");
+
+        await sessionManager.Ask<SessionJoined>(new JoinSession
+        {
+            SessionId = sessionId,
+            Subscriber = subscriber,
+            Filter = OutputFilter.TextOnly
+        }, TimeSpan.FromSeconds(3));
+        await subscriber.ExpectMsgAsync<SessionJoined>();
+
+        var escapedId = Uri.EscapeDataString(sessionId.Value);
+        var childPath = $"/user/session-manager/{escapedId}";
+        var child = await Sys.ActorSelection(childPath).ResolveOne(TimeSpan.FromSeconds(3));
+        Watch(child);
+
+        child.Tell(new LeaveSession
+        {
+            SessionId = sessionId,
+            Subscriber = subscriber
+        });
+
+        child.Tell(ReceiveTimeout.Instance);
+
+        var ack = await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Interrupt passivation"
+        }, TimeSpan.FromSeconds(3));
+
+        Assert.Equal(sessionId, ack.SessionId);
+        await AwaitAssertAsync(() =>
+        {
+            Assert.Equal(1, _fakeChatClient.CallCount);
+            return Task.CompletedTask;
+        }, TimeSpan.FromSeconds(3), TimeSpan.FromMilliseconds(100));
+
+        var rejoined = await sessionManager.Ask<SessionJoined>(new JoinSession
+        {
+            SessionId = sessionId,
+            Subscriber = subscriber,
+            Filter = OutputFilter.TextOnly
+        }, TimeSpan.FromSeconds(3));
+
+        Assert.Equal(1, rejoined.TurnCount);
+        await subscriber.ExpectMsgAsync<SessionJoined>(TimeSpan.FromSeconds(3));
+        await ExpectNoMsgAsync(TimeSpan.FromMilliseconds(300));
+        Assert.DoesNotContain(sessionId.Value, _lifecycleObserver.DeactivatedSessionIds);
+    }
+
+    [Fact]
+    public async Task Delivery_feedback_during_passivation_aborts_shutdown_and_retries_latest_turn()
+    {
+        var sessionId = new SessionId("test-channel/passivation-delivery-feedback");
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("passivation-delivery-sub");
+
+        await sessionManager.Ask<SessionJoined>(new JoinSession
+        {
+            SessionId = sessionId,
+            Subscriber = subscriber,
+            Filter = OutputFilter.TextOnly
+        }, TimeSpan.FromSeconds(3));
+        await subscriber.ExpectMsgAsync<SessionJoined>();
+
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Original message"
+        }, TimeSpan.FromSeconds(3));
+
+        await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3));
+        var completed = await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
+
+        var escapedId = Uri.EscapeDataString(sessionId.Value);
+        var childPath = $"/user/session-manager/{escapedId}";
+        var child = await Sys.ActorSelection(childPath).ResolveOne(TimeSpan.FromSeconds(3));
+        Watch(child);
+
+        child.Tell(new LeaveSession
+        {
+            SessionId = sessionId,
+            Subscriber = subscriber
+        });
+
+        child.Tell(ReceiveTimeout.Instance);
+        sessionManager.Tell(new DeliveryFailed
+        {
+            SessionId = sessionId,
+            TurnNumber = completed.TurnNumber,
+            ChannelType = ChannelType.Slack,
+            FailureKind = DeliveryFailureKind.MessageTooLarge,
+            ErrorMessage = "msg_too_long"
+        });
+
+        await AwaitAssertAsync(() =>
+        {
+            Assert.True(_fakeChatClient.CallCount >= 2);
+            Assert.Contains(_fakeChatClient.ReceivedMessages, conversation =>
+                conversation.Any(msg =>
+                    msg.Role == Microsoft.Extensions.AI.ChatRole.User
+                    && msg.Text is not null
+                    && msg.Text.Contains("msg_too_long", StringComparison.OrdinalIgnoreCase)));
+            return Task.CompletedTask;
+        }, TimeSpan.FromSeconds(3), TimeSpan.FromMilliseconds(100));
+
+        var rejoined = await sessionManager.Ask<SessionJoined>(new JoinSession
+        {
+            SessionId = sessionId,
+            Subscriber = subscriber,
+            Filter = OutputFilter.TextOnly
+        }, TimeSpan.FromSeconds(3));
+
+        Assert.Equal(2, rejoined.TurnCount);
+        await subscriber.ExpectMsgAsync<SessionJoined>(TimeSpan.FromSeconds(3));
+        await ExpectNoMsgAsync(TimeSpan.FromMilliseconds(300));
+        Assert.DoesNotContain(sessionId.Value, _lifecycleObserver.DeactivatedSessionIds);
     }
 }
 
