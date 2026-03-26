@@ -130,7 +130,7 @@ public sealed class SessionCatalogService : ISessionLifecycleObserver
 
             switch (output)
             {
-                case TurnCompleted:
+                case TurnCompleted tc when tc.Outcome != TurnOutcome.Skipped:
                     UpdateSession(conn, persistenceId, cmd =>
                     {
                         cmd.CommandText =
@@ -142,6 +142,10 @@ public sealed class SessionCatalogService : ISessionLifecycleObserver
                             """;
                     });
                     _metrics?.RecordTurnCompleted();
+                    break;
+
+                case TurnCompleted:
+                    UpdateLastActivity(conn, persistenceId);
                     break;
 
                 case UsageOutput usage

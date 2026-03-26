@@ -151,7 +151,8 @@ public class ModalityGateTextOnlyTests : TestKit
         var explanation = await subscriber.ExpectMsgAsync<TextOutput>();
         Assert.Contains("only images", explanation.Text, StringComparison.OrdinalIgnoreCase);
 
-        await subscriber.ExpectMsgAsync<TurnCompleted>();
+        var tc = await subscriber.ExpectMsgAsync<TurnCompleted>();
+        Assert.Equal(TurnOutcome.Skipped, tc.Outcome);
 
         // LLM was NOT called
         Assert.Equal(0, _fakeChatClient.CallCount);
