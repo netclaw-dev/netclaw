@@ -38,6 +38,7 @@ public sealed class ErrorCorrelationTests(ITestOutputHelper output) : TestKit(ou
             TurnLlmTimeout = TimeSpan.FromSeconds(10),
             ToolExecutionTimeout = TimeSpan.FromSeconds(10),
             SidecarLlmTimeout = TimeSpan.FromSeconds(10),
+            LlmTimeoutMaxRetries = 0, // Disable retry — test verifies immediate error correlation
             Tuning = new SessionTuning
             {
                 SnapshotInterval = 5,

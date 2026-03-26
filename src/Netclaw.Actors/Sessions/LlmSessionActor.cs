@@ -622,36 +622,13 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             }
 
             // Evaluate timeout retry before failing the turn
-            switch (_timeoutRetry.Evaluate(msg.Cause))
-            {
-                case TimeoutRetryAction.Retry retry:
-                    TurnLog().Warning(msg.Cause,
-                        "turn_llm_call_timeout attempt={Attempt} maxRetries={MaxRetries} backoffMs={BackoffMs}",
-                        retry.Attempt, retry.MaxRetries, (int)retry.Delay.TotalMilliseconds);
+            if (HandleTimeoutRetryOrFail(msg.Cause, "turn_llm_call"))
+                return;
 
-                    // Status indicator only — do NOT call FailCurrentTurn or AddErrorReply.
-                    // Turn stays open in Processing; no TurnCompleted emitted.
-                    EmitOutput(new ErrorOutput
-                    {
-                        SessionId = _sessionId,
-                        Message = $"The LLM provider timed out. Retrying (attempt {retry.Attempt} of {retry.MaxRetries})...",
-                        Category = ErrorCategory.Timeout,
-                        CorrelationId = Guid.NewGuid(),
-                        Cause = msg.Cause
-                    });
-
-                    Timers.StartSingleTimer(
-                        TimeoutRetryTimerKey,
-                        new RetryLlmCallAfterBackoff(retry.Attempt),
-                        retry.Delay);
-                    return;
-
-                case TimeoutRetryAction.Fail fail:
-                    TurnLog().Error(msg.Cause, "turn_llm_call_failed");
-                    var category = msg.Cause is TimeoutException ? ErrorCategory.Timeout : ErrorCategory.ProviderFailure;
-                    FailCurrentTurn(fail.ErrorMessage, msg.Cause, category);
-                    return;
-            }
+            // Non-timeout failure — use the actor's richer error extraction
+            TurnLog().Error(msg.Cause, "turn_llm_call_failed");
+            var errorMessage = ExtractLlmErrorMessage(msg.Cause);
+            FailCurrentTurn(errorMessage, msg.Cause, ErrorCategory.ProviderFailure);
         });
 
         Command<ProcessingWatchdogExpired>(msg =>
@@ -669,34 +646,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             _watchdog.Stop(Timers);
 
             // Only retry LLM call timeouts, not tool execution timeouts (tools may have side effects)
-            if (msg.OperationName is "llm-call")
-            {
-                switch (_timeoutRetry.Evaluate(timeoutCause))
-                {
-                    case TimeoutRetryAction.Retry retry:
-                        TurnLog().Warning(
-                            "turn_watchdog_timeout_retry operation={Operation} attempt={Attempt} maxRetries={MaxRetries} backoffMs={BackoffMs}",
-                            msg.OperationName, retry.Attempt, retry.MaxRetries, (int)retry.Delay.TotalMilliseconds);
-
-                        EmitOutput(new ErrorOutput
-                        {
-                            SessionId = _sessionId,
-                            Message = $"The LLM provider timed out. Retrying (attempt {retry.Attempt} of {retry.MaxRetries})...",
-                            Category = ErrorCategory.Timeout,
-                            CorrelationId = Guid.NewGuid(),
-                            Cause = timeoutCause
-                        });
-
-                        Timers.StartSingleTimer(
-                            TimeoutRetryTimerKey,
-                            new RetryLlmCallAfterBackoff(retry.Attempt),
-                            retry.Delay);
-                        return;
-
-                    case TimeoutRetryAction.Fail:
-                        break; // Fall through to FailCurrentTurn below
-                }
-            }
+            if (msg.OperationName is "llm-call" && HandleTimeoutRetryOrFail(timeoutCause, "turn_watchdog"))
+                return;
 
             _log.Error("Processing watchdog expired for operation {OperationName} (opId={OperationId})",
                 msg.OperationName, msg.OperationId);
@@ -2177,6 +2128,48 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             ContextWindowTokens = contextWindow,
             UsagePercent = usagePercent
         }, OutputFilter.Usage);
+    }
+
+    /// <summary>
+    /// Evaluate timeout retry for an LLM call failure. If retryable, emits a status
+    /// indicator and schedules a retry via timer. Returns true if the failure was
+    /// handled (either retry scheduled or turn failed); false if the cause is not
+    /// a timeout and the caller should handle it.
+    /// </summary>
+    private bool HandleTimeoutRetryOrFail(Exception cause, string logPrefix)
+    {
+        switch (_timeoutRetry.Evaluate(cause))
+        {
+            case TimeoutRetryAction.Retry retry:
+                TurnLog().Warning(cause,
+                    "{Prefix}_timeout attempt={Attempt} maxRetries={MaxRetries} backoffMs={BackoffMs}",
+                    logPrefix, retry.Attempt, retry.MaxRetries, (int)retry.Delay.TotalMilliseconds);
+
+                // Status indicator only — do NOT call FailCurrentTurn or AddErrorReply.
+                // Turn stays open in Processing; no TurnCompleted emitted.
+                EmitOutput(new ErrorOutput
+                {
+                    SessionId = _sessionId,
+                    Message = $"The LLM provider timed out. Retrying (attempt {retry.Attempt} of {retry.MaxRetries})...",
+                    Category = ErrorCategory.Timeout,
+                    CorrelationId = Guid.NewGuid(),
+                    Cause = cause
+                });
+
+                Timers.StartSingleTimer(
+                    TimeoutRetryTimerKey,
+                    new RetryLlmCallAfterBackoff(retry.Attempt),
+                    retry.Delay);
+                return true;
+
+            case TimeoutRetryAction.Fail fail:
+                TurnLog().Error(cause, "{Prefix}_failed", logPrefix);
+                FailCurrentTurn(fail.ErrorMessage, cause, ErrorCategory.Timeout);
+                return true;
+
+            default:
+                return false; // Not a timeout — caller handles
+        }
     }
 
     private void FailCurrentTurn(string errorMessage, Exception cause, ErrorCategory category = ErrorCategory.Unknown)

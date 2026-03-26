@@ -6,13 +6,13 @@ namespace Netclaw.Actors.Tests.Sessions.Handlers;
 public sealed class TimeoutRetryHandlerTests
 {
     [Fact]
-    public void Evaluate_non_timeout_returns_Fail()
+    public void Evaluate_non_timeout_returns_NonRetryable()
     {
         var handler = new TimeoutRetryHandler(maxRetries: 2, baseDelay: TimeSpan.FromSeconds(2));
 
         var result = handler.Evaluate(new InvalidOperationException("not a timeout"));
 
-        Assert.IsType<TimeoutRetryAction.Fail>(result);
+        Assert.IsType<TimeoutRetryAction.NonRetryable>(result);
     }
 
     [Fact]

@@ -36,10 +36,9 @@ internal sealed class TimeoutRetryHandler
     /// </summary>
     public TimeoutRetryAction Evaluate(Exception cause)
     {
+        // Only timeouts are retryable — all other failures should be handled by the caller
         if (cause is not TimeoutException)
-            return new TimeoutRetryAction.Fail(
-                ExtractErrorMessage(cause),
-                cause);
+            return new TimeoutRetryAction.NonRetryable(cause);
 
         if (_attemptCount >= _maxRetries)
             return new TimeoutRetryAction.Fail(
@@ -60,8 +59,6 @@ internal sealed class TimeoutRetryHandler
         return clamped * jitter;
     }
 
-    private static string ExtractErrorMessage(Exception cause) =>
-        "I encountered an error processing your message. Please try again.";
 }
 
 // ── Result types ──
@@ -74,4 +71,7 @@ internal abstract record TimeoutRetryAction
 
     /// <summary>Fail the turn with the given error message and cause.</summary>
     internal sealed record Fail(string ErrorMessage, Exception Cause) : TimeoutRetryAction;
+
+    /// <summary>Not a timeout — caller should handle with its own error extraction.</summary>
+    internal sealed record NonRetryable(Exception Cause) : TimeoutRetryAction;
 }
