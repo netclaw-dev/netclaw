@@ -109,13 +109,13 @@ public partial class InitWizardViewModel : ReactiveViewModel
     public string? OwnerIdentity { get; set; }
 
     // ── Step 4: Search ──
-    public string SelectedSearchBackend { get; set; } = "duckduckgo";
+    public SearchBackend SelectedSearchBackend { get; set; } = SearchBackend.DuckDuckGo;
     public string? BraveApiKeyInput { get; set; }
     public string? SearXngEndpointInput { get; set; }
 
     // ── Step 5: Browser automation ──
     public bool BrowserAutomationEnabled { get; set; }
-    public string SelectedBrowserAutomationBackend { get; set; } = BrowserAutomationMcpProfiles.PlaywrightBackend;
+    public BrowserAutomationBackend SelectedBrowserAutomationBackend { get; set; } = BrowserAutomationBackend.Playwright;
     public bool IsChromeDevToolsAvailable { get; }
     public string ChromeDevToolsUnavailableReason { get; }
 
@@ -666,7 +666,7 @@ public partial class InitWizardViewModel : ReactiveViewModel
                     SelectedBrowserAutomationBackend, browserCts.Token);
                 if (bootstrap.Success)
                 {
-                    var backendName = SelectedBrowserAutomationBackend == BrowserAutomationMcpProfiles.PlaywrightBackend
+                    var backendName = SelectedBrowserAutomationBackend == BrowserAutomationBackend.Playwright
                         ? "Playwright MCP"
                         : "Chrome DevTools MCP";
                     HealthCheckResults[^1] = new HealthCheckItem(
@@ -910,14 +910,14 @@ public partial class InitWizardViewModel : ReactiveViewModel
         }
 
         // Search section
-        if (SelectedSearchBackend != "duckduckgo")
+        if (SelectedSearchBackend != SearchBackend.DuckDuckGo)
         {
             var searchSection = new Dictionary<string, object>
             {
-                ["Backend"] = SelectedSearchBackend
+                ["Backend"] = SelectedSearchBackend.ToWireValue()
             };
 
-        if (SelectedSearchBackend == "searxng" && !string.IsNullOrWhiteSpace(SearXngEndpointInput))
+        if (SelectedSearchBackend == SearchBackend.SearXng && !string.IsNullOrWhiteSpace(SearXngEndpointInput))
             searchSection["SearXngEndpoint"] = SearXngEndpointInput;
 
             config["Search"] = searchSection;
@@ -1012,7 +1012,7 @@ public partial class InitWizardViewModel : ReactiveViewModel
                 secrets["Slack"] = slackSecrets;
         }
 
-        if (SelectedSearchBackend == "brave" && !string.IsNullOrWhiteSpace(BraveApiKeyInput))
+        if (SelectedSearchBackend == SearchBackend.Brave && !string.IsNullOrWhiteSpace(BraveApiKeyInput))
         {
             secrets["Search"] = new Dictionary<string, object>
             {
@@ -1353,18 +1353,18 @@ public partial class InitWizardViewModel : ReactiveViewModel
             // - Multiple users or all allowed → posture default (shared access)
             var allowedUsers = ParseAllowedUserIds();
             var dmAudience = allowedUsers.Count == 1
-                ? TrustAudience.Personal.ToWireValue()
+                ? TrustAudience.Personal
                 : posture == DeploymentPosture.Personal
-                    ? TrustAudience.Personal.ToWireValue()
+                    ? TrustAudience.Personal
                     : posture == DeploymentPosture.Team
-                        ? TrustAudience.Team.ToWireValue()
-                        : TrustAudience.Public.ToWireValue();
+                        ? TrustAudience.Team
+                        : TrustAudience.Public;
             ChannelEntries.Add(new ChannelEntry("DMs", "dm", dmAudience, isDmRow: true));
         }
 
         var channelAudience = posture == DeploymentPosture.Public
-            ? TrustAudience.Public.ToWireValue()
-            : TrustAudience.Team.ToWireValue();
+            ? TrustAudience.Public
+            : TrustAudience.Team;
 
         // Populate from raw channel names entered in ChatServices.
         // IDs are resolved during HealthCheck via conversations.list.
@@ -1402,7 +1402,7 @@ public partial class InitWizardViewModel : ReactiveViewModel
     {
         ChannelAudiences.Clear();
         foreach (var entry in ChannelEntries)
-            ChannelAudiences[entry.Id] = entry.Audience;
+            ChannelAudiences[entry.Id] = entry.Audience.ToWireValue();
     }
 
     public override void Dispose()
@@ -1435,10 +1435,10 @@ public sealed class ChannelEntry
 {
     public string DisplayName { get; }
     public string Id { get; }
-    public string Audience { get; set; }
+    public TrustAudience Audience { get; set; }
     public bool IsDmRow { get; }
 
-    public ChannelEntry(string displayName, string id, string audience, bool isDmRow = false)
+    public ChannelEntry(string displayName, string id, TrustAudience audience, bool isDmRow = false)
     {
         DisplayName = displayName;
         Id = id;

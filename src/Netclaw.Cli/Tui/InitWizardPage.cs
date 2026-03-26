@@ -252,9 +252,9 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
                     "  Socket Mode requires both tokens. See: https://api.slack.com/apis/socket-mode",
                 WizardStep.Search when _searchSubStep == 0 =>
                     "  DuckDuckGo works without config but may hit bot detection. Brave Search is more reliable.",
-                WizardStep.Search when _searchSubStep == 1 && ViewModel.SelectedSearchBackend == "brave" =>
+                WizardStep.Search when _searchSubStep == 1 && ViewModel.SelectedSearchBackend == SearchBackend.Brave =>
                     "  Get a free API key at https://brave.com/search/api/. Stored in secrets.json.",
-                WizardStep.Search when _searchSubStep == 1 && ViewModel.SelectedSearchBackend == "searxng" =>
+                WizardStep.Search when _searchSubStep == 1 && ViewModel.SelectedSearchBackend == SearchBackend.SearXng =>
                     "  Enter the base URL of your SearXNG instance. JSON format must be enabled in settings.yml.",
                 WizardStep.BrowserAutomation when _browserAutomationSubStep == 0 =>
                     "  Optional. Enable this to let the agent delegate browser steering via MCP tools.",
@@ -974,18 +974,18 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
                     var choice = selected[0];
                     if (choice.StartsWith("DuckDuckGo", StringComparison.Ordinal))
                     {
-                        ViewModel.SelectedSearchBackend = "duckduckgo";
+                        ViewModel.SelectedSearchBackend = SearchBackend.DuckDuckGo;
                         _searchSubStep = 0;
                         ViewModel.GoNext();
                     }
                     else if (choice.StartsWith("Brave", StringComparison.Ordinal))
                     {
-                        ViewModel.SelectedSearchBackend = "brave";
+                        ViewModel.SelectedSearchBackend = SearchBackend.Brave;
                         SetSearchSubStep(1);
                     }
                     else if (choice.StartsWith("SearXNG", StringComparison.Ordinal))
                     {
-                        ViewModel.SelectedSearchBackend = "searxng";
+                        ViewModel.SelectedSearchBackend = SearchBackend.SearXng;
                         SetSearchSubStep(1);
                     }
                 }
@@ -999,7 +999,7 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
 
     private ILayoutNode BuildSearchCredentialSubStep()
     {
-        if (ViewModel.SelectedSearchBackend == "brave")
+        if (ViewModel.SelectedSearchBackend == SearchBackend.Brave)
         {
             _braveApiKeyInput = new TextInputNode()
                 .AsPassword()
@@ -1138,8 +1138,8 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
 
                 ViewModel.SelectedBrowserAutomationBackend =
                     selected[0].StartsWith("Playwright", StringComparison.Ordinal)
-                        ? BrowserAutomationMcpProfiles.PlaywrightBackend
-                        : BrowserAutomationMcpProfiles.ChromeDevToolsBackend;
+                        ? BrowserAutomationBackend.Playwright
+                        : BrowserAutomationBackend.ChromeDevTools;
 
                 _browserAutomationSubStep = 0;
                 ViewModel.GoNext();
@@ -1235,7 +1235,7 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             var isFocused = i == _channelCursorIndex;
             var prefix = isFocused ? " \u25b6 " : "   ";
             var name = entry.DisplayName.PadRight(20);
-            var audience = $"[\u25c0 {entry.Audience,-8} \u25b6]";
+            var audience = $"[\u25c0 {entry.Audience.ToWireValue(),-8} \u25b6]";
             var line = $"{prefix}{name} {audience}";
 
             var node = new TextNode(line);
@@ -1718,7 +1718,7 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
         ViewModel.RequestRedraw();
     }
 
-    private static readonly string[] AudienceValues = ["personal", "team", "public"];
+    private static readonly TrustAudience[] AudienceValues = [TrustAudience.Personal, TrustAudience.Team, TrustAudience.Public];
 
     private void HandleChannelsKeyPress(ConsoleKeyInfo keyInfo)
     {
@@ -1745,8 +1745,8 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
                     {
                         var posture = ViewModel.SelectedPosture ?? DeploymentPosture.Personal;
                         var audience = posture == DeploymentPosture.Public
-                            ? TrustAudience.Public.ToWireValue()
-                            : TrustAudience.Team.ToWireValue();
+                            ? TrustAudience.Public
+                            : TrustAudience.Team;
 
                         // Deduplicate
                         if (!ViewModel.ChannelEntries.Any(e =>

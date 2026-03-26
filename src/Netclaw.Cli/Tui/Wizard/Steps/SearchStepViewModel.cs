@@ -1,3 +1,5 @@
+using Netclaw.Configuration;
+
 namespace Netclaw.Cli.Tui.Wizard.Steps;
 
 /// <summary>
@@ -12,7 +14,7 @@ public sealed class SearchStepViewModel : IWizardStepViewModel
     public string StepId => "search";
     public string DisplayTitle => "Web Search";
 
-    public string SelectedBackend { get; set; } = "duckduckgo";
+    public SearchBackend SelectedBackend { get; set; } = SearchBackend.DuckDuckGo;
     public string? BraveApiKey { get; set; }
     public string? SearXngEndpoint { get; set; }
 
@@ -22,12 +24,12 @@ public sealed class SearchStepViewModel : IWizardStepViewModel
 
     public int SubStepCount => NeedsCredentials ? 2 : 1;
 
-    private bool NeedsCredentials => SelectedBackend is "brave" or "searxng";
+    private bool NeedsCredentials => SelectedBackend is SearchBackend.Brave or SearchBackend.SearXng;
 
     public string GetHelpText() => _currentSubStep switch
     {
         0 => "  DuckDuckGo works without config but may hit bot detection. Brave Search is more reliable.",
-        1 when SelectedBackend == "brave" =>
+        1 when SelectedBackend == SearchBackend.Brave =>
             "  Get a free API key at https://brave.com/search/api/. Stored in secrets.json.",
         1 => "  Enter the base URL of your SearXNG instance. JSON format must be enabled in settings.yml.",
         _ => ""
@@ -75,7 +77,7 @@ public sealed class SearchStepViewModel : IWizardStepViewModel
 
     public void ContributeSecrets(WizardSecretsBuilder builder)
     {
-        if (SelectedBackend == "brave" && !string.IsNullOrWhiteSpace(BraveApiKey))
+        if (SelectedBackend == SearchBackend.Brave && !string.IsNullOrWhiteSpace(BraveApiKey))
         {
             builder.AddSection("Search", new Dictionary<string, object>
             {

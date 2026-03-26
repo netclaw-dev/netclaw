@@ -53,12 +53,12 @@ public sealed class ChannelsStepViewModelTests : IDisposable
     {
         _context.ChannelEntries[ChannelType.Slack] =
         [
-            new ChannelEntry("#general", "C123", "team"),
-            new ChannelEntry("DMs", "dm", "personal", isDmRow: true)
+            new ChannelEntry("#general", "C123", TrustAudience.Team),
+            new ChannelEntry("DMs", "dm", TrustAudience.Personal, isDmRow: true)
         ];
         _context.ChannelEntries[ChannelType.Tui] =
         [
-            new ChannelEntry("#dev-chat", "123456", "team")
+            new ChannelEntry("#dev-chat", "123456", TrustAudience.Team)
         ];
 
         using var step = new ChannelsStepViewModel();
@@ -74,7 +74,7 @@ public sealed class ChannelsStepViewModelTests : IDisposable
         using var step = new ChannelsStepViewModel();
         step.OnEnter(_context, NavigationDirection.Forward);
 
-        step.AddEntry(ChannelType.Slack, new ChannelEntry("#random", "random", "team"));
+        step.AddEntry(ChannelType.Slack, new ChannelEntry("#random", "random", TrustAudience.Team));
 
         Assert.Single(_context.ChannelEntries[ChannelType.Slack]);
         Assert.Equal("#random", _context.ChannelEntries[ChannelType.Slack][0].DisplayName);
@@ -83,7 +83,7 @@ public sealed class ChannelsStepViewModelTests : IDisposable
     [Fact]
     public void RemoveEntry_RemovesFromCorrectBucket()
     {
-        var entry = new ChannelEntry("#general", "C123", "team");
+        var entry = new ChannelEntry("#general", "C123", TrustAudience.Team);
         _context.ChannelEntries[ChannelType.Slack] = [entry];
 
         using var step = new ChannelsStepViewModel();
@@ -96,8 +96,8 @@ public sealed class ChannelsStepViewModelTests : IDisposable
     [Fact]
     public void GetSource_ReturnsCorrectSource()
     {
-        var slackEntry = new ChannelEntry("#general", "C123", "team");
-        var discordEntry = new ChannelEntry("#dev", "123", "team");
+        var slackEntry = new ChannelEntry("#general", "C123", TrustAudience.Team);
+        var discordEntry = new ChannelEntry("#dev", "123", TrustAudience.Team);
         _context.ChannelEntries[ChannelType.Slack] = [slackEntry];
         _context.ChannelEntries[ChannelType.Tui] = [discordEntry];
 

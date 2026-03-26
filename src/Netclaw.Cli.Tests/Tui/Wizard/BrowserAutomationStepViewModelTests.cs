@@ -1,4 +1,3 @@
-using Netclaw.Cli.Mcp;
 using Netclaw.Cli.Tui;
 using Netclaw.Cli.Tui.Wizard;
 using Netclaw.Cli.Tui.Wizard.Steps;
@@ -92,14 +91,14 @@ public sealed class BrowserAutomationStepViewModelTests : IDisposable
     {
         using var step = new BrowserAutomationStepViewModel(false, "test");
         step.Enabled = true;
-        step.SelectedBackend = BrowserAutomationMcpProfiles.PlaywrightBackend;
+        step.SelectedBackend = BrowserAutomationBackend.Playwright;
 
         var builder = new WizardConfigBuilder(_context.Paths);
         step.ContributeConfig(builder);
 
         Assert.NotNull(builder.BrowserAutomation);
         Assert.True(builder.BrowserAutomation!.Enabled);
-        Assert.Equal(BrowserAutomationMcpProfiles.PlaywrightBackend, builder.BrowserAutomation.Backend);
+        Assert.Equal(BrowserAutomationBackend.Playwright, builder.BrowserAutomation.Backend);
     }
 
     [Fact]
@@ -118,6 +117,6 @@ public sealed class BrowserAutomationStepViewModelTests : IDisposable
     public void DefaultBackend_IsPlaywright()
     {
         using var step = new BrowserAutomationStepViewModel(false, "test");
-        Assert.Equal(BrowserAutomationMcpProfiles.PlaywrightBackend, step.SelectedBackend);
+        Assert.Equal(BrowserAutomationBackend.Playwright, step.SelectedBackend);
     }
 }

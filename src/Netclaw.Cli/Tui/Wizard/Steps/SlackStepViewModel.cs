@@ -108,18 +108,18 @@ public sealed class SlackStepViewModel : IWizardStepViewModel
             {
                 var allowedUsers = ParseUserIds(AllowedUserIdsInput);
                 var dmAudience = allowedUsers.Count == 1
-                    ? TrustAudience.Personal.ToWireValue()
+                    ? TrustAudience.Personal
                     : posture == DeploymentPosture.Personal
-                        ? TrustAudience.Personal.ToWireValue()
+                        ? TrustAudience.Personal
                         : posture == DeploymentPosture.Team
-                            ? TrustAudience.Team.ToWireValue()
-                            : TrustAudience.Public.ToWireValue();
+                            ? TrustAudience.Team
+                            : TrustAudience.Public;
                 entries.Add(new ChannelEntry("DMs", "dm", dmAudience, isDmRow: true));
             }
 
             var channelAudience = posture == DeploymentPosture.Public
-                ? TrustAudience.Public.ToWireValue()
-                : TrustAudience.Team.ToWireValue();
+                ? TrustAudience.Public
+                : TrustAudience.Team;
 
             if (!string.IsNullOrWhiteSpace(ChannelNamesInput))
             {
@@ -269,7 +269,7 @@ public sealed class SlackStepViewModel : IWizardStepViewModel
 
         var audiences = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var entry in slackEntries)
-            audiences[entry.Id] = entry.Audience;
+            audiences[entry.Id] = entry.Audience.ToWireValue();
 
         return audiences.Count > 0 ? audiences : null;
     }

@@ -1,3 +1,4 @@
+using Netclaw.Configuration;
 using R3;
 using Termina.Extensions;
 using Termina.Input;
@@ -55,17 +56,17 @@ public sealed class SearchStepView : IWizardStepView
                     var choice = selected[0];
                     if (choice.StartsWith("DuckDuckGo", StringComparison.Ordinal))
                     {
-                        vm.SelectedBackend = "duckduckgo";
+                        vm.SelectedBackend = SearchBackend.DuckDuckGo;
                         callbacks.AdvanceStep(); // step complete, no credentials needed
                     }
                     else if (choice.StartsWith("Brave", StringComparison.Ordinal))
                     {
-                        vm.SelectedBackend = "brave";
+                        vm.SelectedBackend = SearchBackend.Brave;
                         callbacks.AdvanceStep(); // → sub-step 1 (handled by TryAdvance)
                     }
                     else if (choice.StartsWith("SearXNG", StringComparison.Ordinal))
                     {
-                        vm.SelectedBackend = "searxng";
+                        vm.SelectedBackend = SearchBackend.SearXng;
                         callbacks.AdvanceStep(); // → sub-step 1
                     }
                 }
@@ -81,7 +82,7 @@ public sealed class SearchStepView : IWizardStepView
     {
         _lastFocusedList = null;
 
-        if (vm.SelectedBackend == "brave")
+        if (vm.SelectedBackend == SearchBackend.Brave)
         {
             _braveApiKeyInput = new TextInputNode()
                 .AsPassword()

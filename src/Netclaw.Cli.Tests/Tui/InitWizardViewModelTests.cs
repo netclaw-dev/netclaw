@@ -726,7 +726,7 @@ public sealed class InitWizardViewModelTests : IDisposable
         using var vm = CreateViewModel();
         vm.SelectedProviderType = "ollama";
         vm.SlackEnabled = false;
-        vm.SelectedSearchBackend = "brave";
+        vm.SelectedSearchBackend = SearchBackend.Brave;
         vm.BraveApiKeyInput = "BSA-test-key-123";
 
         vm.CurrentStep.Value = WizardStep.HealthCheck;
@@ -755,7 +755,7 @@ public sealed class InitWizardViewModelTests : IDisposable
         using var vm = CreateViewModel();
         vm.SelectedProviderType = "ollama";
         vm.SlackEnabled = false;
-        vm.SelectedSearchBackend = "searxng";
+        vm.SelectedSearchBackend = SearchBackend.SearXng;
         vm.SearXngEndpointInput = "http://searxng.local:8080";
 
         vm.CurrentStep.Value = WizardStep.HealthCheck;
@@ -775,7 +775,7 @@ public sealed class InitWizardViewModelTests : IDisposable
         using var vm = CreateViewModel();
         vm.SelectedProviderType = "ollama";
         vm.SlackEnabled = false;
-        // SelectedSearchBackend defaults to "duckduckgo"
+        // SelectedSearchBackend defaults to SearchBackend.DuckDuckGo
 
         vm.CurrentStep.Value = WizardStep.HealthCheck;
         vm.GoNext();
@@ -791,7 +791,7 @@ public sealed class InitWizardViewModelTests : IDisposable
     public void BrowserAutomation_DefaultBackend_IsPlaywright()
     {
         using var vm = CreateViewModel();
-        Assert.Equal(BrowserAutomationMcpProfiles.PlaywrightBackend, vm.SelectedBrowserAutomationBackend);
+        Assert.Equal(BrowserAutomationBackend.Playwright, vm.SelectedBrowserAutomationBackend);
     }
 
     [Fact]
@@ -806,7 +806,7 @@ public sealed class InitWizardViewModelTests : IDisposable
         vm.SelectedProviderType = "ollama";
         vm.SlackEnabled = false;
         vm.BrowserAutomationEnabled = true;
-        vm.SelectedBrowserAutomationBackend = BrowserAutomationMcpProfiles.ChromeDevToolsBackend;
+        vm.SelectedBrowserAutomationBackend = BrowserAutomationBackend.ChromeDevTools;
 
         vm.CurrentStep.Value = WizardStep.HealthCheck;
         vm.GoNext();
@@ -840,7 +840,7 @@ public sealed class InitWizardViewModelTests : IDisposable
         vm.SelectedProviderType = "ollama";
         vm.SlackEnabled = false;
         vm.BrowserAutomationEnabled = true;
-        vm.SelectedBrowserAutomationBackend = BrowserAutomationMcpProfiles.PlaywrightBackend;
+        vm.SelectedBrowserAutomationBackend = BrowserAutomationBackend.Playwright;
 
         vm.CurrentStep.Value = WizardStep.HealthCheck;
         vm.GoNext();
@@ -1038,7 +1038,7 @@ public sealed class InitWizardViewModelTests : IDisposable
         vm.SelectedProviderType = "ollama";
         vm.SlackEnabled = false;
         vm.BrowserAutomationEnabled = true;
-        vm.SelectedBrowserAutomationBackend = BrowserAutomationMcpProfiles.PlaywrightBackend;
+        vm.SelectedBrowserAutomationBackend = BrowserAutomationBackend.Playwright;
 
         vm.CurrentStep.Value = WizardStep.HealthCheck;
         vm.GoNext();
@@ -1143,37 +1143,37 @@ public sealed class InitWizardViewModelTests : IDisposable
     [Fact]
     public void AudienceCycling_wraps_forward()
     {
-        var entry = new ChannelEntry("#test", "C123", "team");
-        var values = new[] { "personal", "team", "public" };
+        var entry = new ChannelEntry("#test", "C123", TrustAudience.Team);
+        var values = new[] { TrustAudience.Personal, TrustAudience.Team, TrustAudience.Public };
 
         // team → public → personal → team
         var idx = Array.IndexOf(values, entry.Audience);
         entry.Audience = values[(idx + 1) % values.Length];
-        Assert.Equal("public", entry.Audience);
+        Assert.Equal(TrustAudience.Public, entry.Audience);
 
         idx = Array.IndexOf(values, entry.Audience);
         entry.Audience = values[(idx + 1) % values.Length];
-        Assert.Equal("personal", entry.Audience);
+        Assert.Equal(TrustAudience.Personal, entry.Audience);
 
         idx = Array.IndexOf(values, entry.Audience);
         entry.Audience = values[(idx + 1) % values.Length];
-        Assert.Equal("team", entry.Audience);
+        Assert.Equal(TrustAudience.Team, entry.Audience);
     }
 
     [Fact]
     public void AudienceCycling_wraps_reverse()
     {
-        var entry = new ChannelEntry("#test", "C123", "team");
-        var values = new[] { "personal", "team", "public" };
+        var entry = new ChannelEntry("#test", "C123", TrustAudience.Team);
+        var values = new[] { TrustAudience.Personal, TrustAudience.Team, TrustAudience.Public };
 
         // team → personal → public → team
         var idx = Array.IndexOf(values, entry.Audience);
         entry.Audience = values[(idx - 1 + values.Length) % values.Length];
-        Assert.Equal("personal", entry.Audience);
+        Assert.Equal(TrustAudience.Personal, entry.Audience);
 
         idx = Array.IndexOf(values, entry.Audience);
         entry.Audience = values[(idx - 1 + values.Length) % values.Length];
-        Assert.Equal("public", entry.Audience);
+        Assert.Equal(TrustAudience.Public, entry.Audience);
     }
 
     [Fact]
@@ -1218,7 +1218,7 @@ internal sealed class FakeBrowserAutomationBootstrapper : IBrowserAutomationBoot
     /// </summary>
     public TimeSpan? DelayBeforeResult { get; set; }
 
-    public async Task<BrowserAutomationBootstrapResult> EnsureReadyAsync(string backend, CancellationToken ct = default)
+    public async Task<BrowserAutomationBootstrapResult> EnsureReadyAsync(BrowserAutomationBackend backend, CancellationToken ct = default)
     {
         CallCount++;
         if (DelayBeforeResult.HasValue)

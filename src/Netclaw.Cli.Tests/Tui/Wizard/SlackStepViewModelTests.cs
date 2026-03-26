@@ -172,7 +172,7 @@ public sealed class SlackStepViewModelTests : IDisposable
     [Fact]
     public void OnLeave_RemovesChannelEntries_WhenDisabled()
     {
-        _context.ChannelEntries[ChannelType.Slack] = [new ChannelEntry("DMs", "dm", "personal", true)];
+        _context.ChannelEntries[ChannelType.Slack] = [new ChannelEntry("DMs", "dm", TrustAudience.Personal, true)];
         using var step = new SlackStepViewModel(_fakeProbe);
         step.SlackEnabled = false;
         step.OnEnter(_context, NavigationDirection.Forward);

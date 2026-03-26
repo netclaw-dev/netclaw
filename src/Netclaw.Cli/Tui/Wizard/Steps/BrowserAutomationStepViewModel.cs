@@ -1,4 +1,5 @@
 using Netclaw.Cli.Mcp;
+using Netclaw.Configuration;
 
 namespace Netclaw.Cli.Tui.Wizard.Steps;
 
@@ -15,7 +16,7 @@ public sealed class BrowserAutomationStepViewModel : IWizardStepViewModel
     public string DisplayTitle => "Browser Automation";
 
     public bool Enabled { get; set; }
-    public string SelectedBackend { get; set; } = BrowserAutomationMcpProfiles.PlaywrightBackend;
+    public BrowserAutomationBackend SelectedBackend { get; set; } = BrowserAutomationBackend.Playwright;
     public bool IsChromeDevToolsAvailable { get; }
     public string ChromeDevToolsUnavailableReason { get; }
 

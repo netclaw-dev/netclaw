@@ -1,4 +1,4 @@
-using Netclaw.Cli.Mcp;
+using Netclaw.Configuration;
 using R3;
 using Termina.Extensions;
 using Termina.Input;
@@ -94,8 +94,8 @@ public sealed class BrowserAutomationStepView : IWizardStepView
                 }
 
                 vm.SelectedBackend = selected[0].StartsWith("Playwright", StringComparison.Ordinal)
-                    ? BrowserAutomationMcpProfiles.PlaywrightBackend
-                    : BrowserAutomationMcpProfiles.ChromeDevToolsBackend;
+                    ? BrowserAutomationBackend.Playwright
+                    : BrowserAutomationBackend.ChromeDevTools;
 
                 callbacks.AdvanceStep();
             })

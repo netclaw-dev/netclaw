@@ -135,8 +135,8 @@ public sealed class InitWizardPageTests : IDisposable
         var (terminal, app, vm) = CreateHeadlessApp(out var input);
 
         // Pre-populate channels
-        vm.ChannelEntries.Add(new ChannelEntry("DMs", "dm", "personal", isDmRow: true));
-        vm.ChannelEntries.Add(new ChannelEntry("#general", "C0AGM484P0Q", "team"));
+        vm.ChannelEntries.Add(new ChannelEntry("DMs", "dm", TrustAudience.Personal, isDmRow: true));
+        vm.ChannelEntries.Add(new ChannelEntry("#general", "C0AGM484P0Q", TrustAudience.Team));
 
         // Jump directly to Channels step
         vm.CurrentStep.Value = WizardStep.Channels;

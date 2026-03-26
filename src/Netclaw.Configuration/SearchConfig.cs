@@ -7,9 +7,9 @@ namespace Netclaw.Configuration;
 public sealed class SearchConfig
 {
     /// <summary>
-    /// Search backend identifier: "duckduckgo", "brave", or "searxng".
+    /// Search backend identifier.
     /// </summary>
-    public string Backend { get; set; } = "duckduckgo";
+    public SearchBackend Backend { get; set; } = SearchBackend.DuckDuckGo;
 
     /// <summary>
     /// Brave Search API subscription token. Required when Backend is "brave".

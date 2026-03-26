@@ -121,14 +121,14 @@ public sealed class WizardConfigBuilder
         }
 
         // Search section
-        if (Search is not null && Search.Backend != "duckduckgo")
+        if (Search is not null && Search.Backend != SearchBackend.DuckDuckGo)
         {
             var searchSection = new Dictionary<string, object>
             {
-                ["Backend"] = Search.Backend
+                ["Backend"] = Search.Backend.ToWireValue()
             };
 
-            if (Search.Backend == "searxng" && !string.IsNullOrWhiteSpace(Search.SearXngEndpoint))
+            if (Search.Backend == SearchBackend.SearXng && !string.IsNullOrWhiteSpace(Search.SearXngEndpoint))
                 searchSection["SearXngEndpoint"] = Search.SearXngEndpoint;
 
             config["Search"] = searchSection;
@@ -250,14 +250,14 @@ public sealed class SecurityConfigSection
 
 public sealed class SearchConfigSection
 {
-    public required string Backend { get; init; }
+    public required SearchBackend Backend { get; init; }
     public string? SearXngEndpoint { get; init; }
 }
 
 public sealed class BrowserAutomationConfigSection
 {
     public bool Enabled { get; init; }
-    public required string Backend { get; init; }
+    public required BrowserAutomationBackend Backend { get; init; }
 }
 
 public sealed class NotificationsConfigSection

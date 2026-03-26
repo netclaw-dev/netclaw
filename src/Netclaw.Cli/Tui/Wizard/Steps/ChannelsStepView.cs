@@ -16,7 +16,7 @@ namespace Netclaw.Cli.Tui.Wizard.Steps;
 /// </summary>
 public sealed class ChannelsStepView : IWizardStepView
 {
-    private static readonly string[] AudienceValues = ["personal", "team", "public"];
+    private static readonly TrustAudience[] AudienceValues = [TrustAudience.Personal, TrustAudience.Team, TrustAudience.Public];
 
     private int _cursorIndex;
     private bool _addMode;
@@ -74,7 +74,7 @@ public sealed class ChannelsStepView : IWizardStepView
             var isFocused = i == _cursorIndex;
             var prefix = isFocused ? " \u25b6 " : "   ";
             var name = entry.DisplayName.PadRight(20);
-            var audience = $"[\u25c0 {entry.Audience,-8} \u25b6]";
+            var audience = $"[\u25c0 {entry.Audience.ToWireValue(),-8} \u25b6]";
             var line = $"{prefix}{name} {audience}";
 
             var node = new TextNode(line);
@@ -117,8 +117,8 @@ public sealed class ChannelsStepView : IWizardStepView
                     {
                         var posture = _vm.SelectedPosture;
                         var audience = posture == DeploymentPosture.Public
-                            ? TrustAudience.Public.ToWireValue()
-                            : TrustAudience.Team.ToWireValue();
+                            ? TrustAudience.Public
+                            : TrustAudience.Team;
 
                         if (!entries.Any(e =>
                             e.DisplayName.Equals($"#{text}", StringComparison.OrdinalIgnoreCase)))

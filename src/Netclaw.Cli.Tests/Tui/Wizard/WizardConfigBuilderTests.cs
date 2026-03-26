@@ -160,7 +160,7 @@ public sealed class WizardConfigBuilderTests : IDisposable
     {
         var builder = new WizardConfigBuilder(_paths)
         {
-            Search = new SearchConfigSection { Backend = "duckduckgo" }
+            Search = new SearchConfigSection { Backend = SearchBackend.DuckDuckGo }
         };
 
         var config = builder.BuildConfigDictionary();
@@ -173,7 +173,7 @@ public sealed class WizardConfigBuilderTests : IDisposable
     {
         var builder = new WizardConfigBuilder(_paths)
         {
-            Search = new SearchConfigSection { Backend = "brave" }
+            Search = new SearchConfigSection { Backend = SearchBackend.Brave }
         };
 
         var config = builder.BuildConfigDictionary();
