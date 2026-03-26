@@ -15,6 +15,10 @@ public sealed class LoggingChatClient : DelegatingChatClient
     private readonly ILogger _logger;
     private readonly TimeProvider _timeProvider;
 
+    // Track token usage across calls (single-threaded, no lock needed)
+    private long _lastInputTokens = 0;
+    private long _cumulativeInputTokens = 0;
+
     public LoggingChatClient(
         IChatClient innerClient,
         ILogger logger,
@@ -88,9 +92,13 @@ public sealed class LoggingChatClient : DelegatingChatClient
         var totalElapsed = _timeProvider.GetElapsedTime(start);
         if (inputTokens > 0 || outputTokens > 0)
         {
+            var delta = inputTokens - _lastInputTokens;
+            _cumulativeInputTokens += inputTokens;
+            _lastInputTokens = inputTokens;
+
             _logger.LogInformation(
-                "LLM streaming call completed in {ElapsedMs:F0}ms (input: {InputTokens}, output: {OutputTokens})",
-                totalElapsed.TotalMilliseconds, inputTokens, outputTokens);
+                "LLM streaming call completed in {ElapsedMs:F0}ms (input: {InputTokens}, delta: {Delta:+#;-#;0}, cumulative: {Cumulative}, output: {OutputTokens})",
+                totalElapsed.TotalMilliseconds, inputTokens, delta, _cumulativeInputTokens, outputTokens);
         }
         else
         {
@@ -260,11 +268,19 @@ public sealed class LoggingChatClient : DelegatingChatClient
     {
         if (usage is not null)
         {
+            var inputTokens = usage.InputTokenCount ?? 0;
+            var outputTokens = usage.OutputTokenCount ?? 0;
+            var delta = inputTokens - _lastInputTokens;
+            _cumulativeInputTokens += inputTokens;
+            _lastInputTokens = inputTokens;
+
             _logger.LogInformation(
-                "LLM call completed in {ElapsedMs:F0}ms (input: {InputTokens}, output: {OutputTokens})",
+                "LLM call completed in {ElapsedMs:F0}ms (input: {InputTokens}, delta: {Delta:+#;-#;0}, cumulative: {Cumulative}, output: {OutputTokens})",
                 elapsed.TotalMilliseconds,
-                usage.InputTokenCount ?? 0,
-                usage.OutputTokenCount ?? 0);
+                inputTokens,
+                delta,
+                _cumulativeInputTokens,
+                outputTokens);
         }
         else
         {
