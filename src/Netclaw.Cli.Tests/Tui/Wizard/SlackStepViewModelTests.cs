@@ -150,6 +150,38 @@ public sealed class SlackStepViewModelTests : IDisposable
     }
 
     [Fact]
+    public void OnLeave_PopulatesChannelEntries_WhenEnabled()
+    {
+        _context.SelectedPosture = DeploymentPosture.Team;
+        using var step = new SlackStepViewModel(_fakeProbe);
+        step.SlackEnabled = true;
+        step.AllowDirectMessages = true;
+        step.ChannelNamesInput = "general, dev";
+        step.OnEnter(_context, NavigationDirection.Forward);
+
+        step.OnLeave();
+
+        Assert.True(_context.ChannelEntries.ContainsKey("slack"));
+        var entries = _context.ChannelEntries["slack"];
+        Assert.Equal(3, entries.Count); // DMs + #general + #dev
+        Assert.True(entries[0].IsDmRow);
+        Assert.Equal("#general", entries[1].DisplayName);
+    }
+
+    [Fact]
+    public void OnLeave_RemovesChannelEntries_WhenDisabled()
+    {
+        _context.ChannelEntries["slack"] = [new ChannelEntry("DMs", "dm", "personal", true)];
+        using var step = new SlackStepViewModel(_fakeProbe);
+        step.SlackEnabled = false;
+        step.OnEnter(_context, NavigationDirection.Forward);
+
+        step.OnLeave();
+
+        Assert.False(_context.ChannelEntries.ContainsKey("slack"));
+    }
+
+    [Fact]
     public void ContributeConfig_Disabled_NoSlackSection()
     {
         using var step = new SlackStepViewModel(_fakeProbe);

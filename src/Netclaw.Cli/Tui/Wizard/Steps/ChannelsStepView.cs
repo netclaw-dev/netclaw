@@ -50,7 +50,7 @@ public sealed class ChannelsStepView : IWizardStepView
                     .WithForeground(Color.BrightBlack));
         }
 
-        var entries = _vm?.ChannelEntries ?? [];
+        var entries = _vm?.AllEntries ?? [];
 
         if (entries.Count == 0)
         {
@@ -93,7 +93,7 @@ public sealed class ChannelsStepView : IWizardStepView
     public bool HandleKeyPress(KeyPressed key)
     {
         var keyInfo = key.KeyInfo;
-        var entries = _vm?.ChannelEntries ?? [];
+        var entries = _vm?.AllEntries ?? [];
 
         // Add-channel mode
         if (_addMode)
@@ -122,7 +122,9 @@ public sealed class ChannelsStepView : IWizardStepView
                         if (!entries.Any(e =>
                             e.DisplayName.Equals($"#{text}", StringComparison.OrdinalIgnoreCase)))
                         {
-                            entries.Add(new ChannelEntry($"#{text}", text, audience));
+                            // Add to "slack" by default — when Discord is added,
+                            // the add UI will need a source selector
+                            _vm.AddEntry("slack", new ChannelEntry($"#{text}", text, audience));
                         }
                     }
 
@@ -176,11 +178,13 @@ public sealed class ChannelsStepView : IWizardStepView
                 break;
 
             case ConsoleKey.D:
-                if (entries.Count > 0 && !entries[_cursorIndex].IsDmRow)
+                if (entries.Count > 0 && !entries[_cursorIndex].IsDmRow && _vm is not null)
                 {
-                    entries.RemoveAt(_cursorIndex);
-                    if (_cursorIndex >= entries.Count && entries.Count > 0)
-                        _cursorIndex = entries.Count - 1;
+                    _vm.RemoveEntry(entries[_cursorIndex]);
+                    // Re-fetch entries after removal for cursor clamping
+                    var remaining = _vm.AllEntries;
+                    if (_cursorIndex >= remaining.Count && remaining.Count > 0)
+                        _cursorIndex = remaining.Count - 1;
                 }
                 break;
 

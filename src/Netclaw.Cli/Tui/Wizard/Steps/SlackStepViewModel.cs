@@ -92,9 +92,51 @@ public sealed class SlackStepViewModel : IWizardStepViewModel
 
     public void OnLeave()
     {
+        if (_context is null) return;
+
         // Publish to shared context — additive so multiple channel steps coexist
-        if (_context is not null)
-            _context.AnyChatServicesEnabled = _context.AnyChatServicesEnabled || SlackEnabled;
+        _context.AnyChatServicesEnabled = _context.AnyChatServicesEnabled || SlackEnabled;
+
+        // Populate channel entries for the Channels step to display/edit
+        if (SlackEnabled)
+        {
+            var posture = _context.SelectedPosture ?? DeploymentPosture.Personal;
+            var entries = new List<ChannelEntry>();
+
+            if (AllowDirectMessages)
+            {
+                var allowedUsers = ParseUserIds(AllowedUserIdsInput);
+                var dmAudience = allowedUsers.Count == 1
+                    ? TrustAudience.Personal.ToWireValue()
+                    : posture == DeploymentPosture.Personal
+                        ? TrustAudience.Personal.ToWireValue()
+                        : posture == DeploymentPosture.Team
+                            ? TrustAudience.Team.ToWireValue()
+                            : TrustAudience.Public.ToWireValue();
+                entries.Add(new ChannelEntry("DMs", "dm", dmAudience, isDmRow: true));
+            }
+
+            var channelAudience = posture == DeploymentPosture.Public
+                ? TrustAudience.Public.ToWireValue()
+                : TrustAudience.Team.ToWireValue();
+
+            if (!string.IsNullOrWhiteSpace(ChannelNamesInput))
+            {
+                var names = ChannelNamesInput
+                    .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                    .Select(n => n.TrimStart('#'))
+                    .Distinct(StringComparer.OrdinalIgnoreCase);
+
+                foreach (var name in names)
+                    entries.Add(new ChannelEntry($"#{name}", name, channelAudience));
+            }
+
+            _context.ChannelEntries["slack"] = entries;
+        }
+        else
+        {
+            _context.ChannelEntries.Remove("slack");
+        }
     }
 
     public void ContributeConfig(WizardConfigBuilder builder)
@@ -220,8 +262,12 @@ public sealed class SlackStepViewModel : IWizardStepViewModel
         if (_context is null)
             return null;
 
+        // Read from the "slack" bucket in the source-keyed channel entries
+        if (!_context.ChannelEntries.TryGetValue("slack", out var slackEntries))
+            return null;
+
         var audiences = new Dictionary<string, string>(StringComparer.Ordinal);
-        foreach (var entry in _context.ChannelEntries)
+        foreach (var entry in slackEntries)
             audiences[entry.Id] = entry.Audience;
 
         return audiences.Count > 0 ? audiences : null;

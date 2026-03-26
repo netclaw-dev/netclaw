@@ -30,9 +30,13 @@ public sealed class WizardContext : IDisposable
     public DeploymentPosture? SelectedPosture { get; set; }
 
     /// <summary>
-    /// Per-channel audience entries populated by the Channels step.
+    /// Per-channel audience entries keyed by channel source (e.g., "slack", "discord").
+    /// Each channel step populates its own bucket in <c>OnLeave</c>.
+    /// The Channels step renders all entries grouped by source.
+    /// This allows DM entries and channel entries from different platforms to be
+    /// configured independently (e.g., Slack DMs vs Discord DMs).
     /// </summary>
-    public List<ChannelEntry> ChannelEntries { get; } = [];
+    public Dictionary<string, List<ChannelEntry>> ChannelEntries { get; } = new(StringComparer.Ordinal);
 
     /// <summary>Shared status message displayed at the bottom of the wizard.</summary>
     public ReactiveProperty<string> StatusMessage { get; } = new("");
@@ -41,8 +45,12 @@ public sealed class WizardContext : IDisposable
     public required Action RequestRedraw { get; init; }
 
     /// <summary>
-    /// Null for fresh init. When populated, steps should pre-populate
-    /// their fields from the existing config. (Deferred — not implemented yet.)
+    /// Null for fresh init. When populated, steps should pre-populate their
+    /// fields from the existing config. (Deferred — not implemented yet.)
+    ///
+    /// Re-edit UX intent: when existing config is detected, the wizard should
+    /// offer "Start fresh" vs "Modify existing". "Start fresh" does NOT wipe
+    /// existing files until the health check/validate stage completes successfully.
     /// </summary>
     public Dictionary<string, object>? ExistingConfig { get; init; }
 

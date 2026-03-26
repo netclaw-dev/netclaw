@@ -48,29 +48,62 @@ public sealed class ChannelsStepViewModelTests : IDisposable
     }
 
     [Fact]
-    public void OnEnter_Forward_PopulatesChannelEntries()
+    public void AllEntries_FlattensAcrossSources()
     {
-        _context.SelectedPosture = DeploymentPosture.Team;
-        using var step = new ChannelsStepViewModel();
+        _context.ChannelEntries["slack"] =
+        [
+            new ChannelEntry("#general", "C123", "team"),
+            new ChannelEntry("DMs", "dm", "personal", isDmRow: true)
+        ];
+        _context.ChannelEntries["discord"] =
+        [
+            new ChannelEntry("#dev-chat", "123456", "team")
+        ];
 
+        using var step = new ChannelsStepViewModel();
         step.OnEnter(_context, NavigationDirection.Forward);
 
-        // Should have at least a DM entry
-        Assert.NotEmpty(_context.ChannelEntries);
-        Assert.True(_context.ChannelEntries[0].IsDmRow);
+        var all = step.AllEntries;
+        Assert.Equal(3, all.Count);
     }
 
     [Fact]
-    public void SubStepCount_IsOne()
+    public void AddEntry_AddsToCorrectSourceBucket()
     {
         using var step = new ChannelsStepViewModel();
-        Assert.Equal(1, step.SubStepCount);
+        step.OnEnter(_context, NavigationDirection.Forward);
+
+        step.AddEntry("slack", new ChannelEntry("#random", "random", "team"));
+
+        Assert.Single(_context.ChannelEntries["slack"]);
+        Assert.Equal("#random", _context.ChannelEntries["slack"][0].DisplayName);
     }
 
     [Fact]
-    public void TryAdvance_ReturnsFalse()
+    public void RemoveEntry_RemovesFromCorrectBucket()
     {
+        var entry = new ChannelEntry("#general", "C123", "team");
+        _context.ChannelEntries["slack"] = [entry];
+
         using var step = new ChannelsStepViewModel();
-        Assert.False(step.TryAdvance());
+        step.OnEnter(_context, NavigationDirection.Forward);
+
+        Assert.True(step.RemoveEntry(entry));
+        Assert.Empty(_context.ChannelEntries["slack"]);
+    }
+
+    [Fact]
+    public void GetSource_ReturnsCorrectSource()
+    {
+        var slackEntry = new ChannelEntry("#general", "C123", "team");
+        var discordEntry = new ChannelEntry("#dev", "123", "team");
+        _context.ChannelEntries["slack"] = [slackEntry];
+        _context.ChannelEntries["discord"] = [discordEntry];
+
+        using var step = new ChannelsStepViewModel();
+        step.OnEnter(_context, NavigationDirection.Forward);
+
+        Assert.Equal("slack", step.GetSource(slackEntry));
+        Assert.Equal("discord", step.GetSource(discordEntry));
     }
 }
