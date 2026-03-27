@@ -102,7 +102,18 @@ public sealed partial class SkillManageTool : NetclawTool<SkillManageTool.Params
         var skillPath = Path.Combine(skillDir, "SKILL.md");
 
         if (File.Exists(skillPath))
-            return $"Skill '{name}' already exists. Use 'edit' to modify it.";
+        {
+            // If the file exists on disk but isn't in the registry (orphaned from file_write),
+            // allow create to overwrite it. Only block if the skill is properly registered.
+            var existing = FindSkill(name);
+            if (existing is not null)
+                return $"Skill '{name}' already exists. Use 'edit' to modify it.";
+
+            // Orphaned file — overwrite and register it
+            AtomicWrite(skillPath, args.Content);
+            RescanAndUpdateIndex();
+            return $"Skill '{name}' created at {skillDir} (replaced orphaned file)";
+        }
 
         Directory.CreateDirectory(skillDir);
         AtomicWrite(skillPath, args.Content);
@@ -126,7 +137,19 @@ public sealed partial class SkillManageTool : NetclawTool<SkillManageTool.Params
 
         var skill = FindSkill(name);
         if (skill is null)
-            return $"Skill '{name}' not found.";
+        {
+            // The skill might exist on disk but not be in the registry (orphaned from file_write).
+            // Rescan and retry before giving up.
+            var candidatePath = Path.Combine(_paths.SkillsDirectory, name, "SKILL.md");
+            if (File.Exists(candidatePath))
+            {
+                RescanAndUpdateIndex();
+                skill = FindSkill(name);
+            }
+
+            if (skill is null)
+                return $"Skill '{name}' not found.";
+        }
 
         if (skill.TrustTier == SkillTrustTier.System)
             return "Cannot edit system skills. System skills are read-only.";
