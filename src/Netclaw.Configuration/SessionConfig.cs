@@ -98,13 +98,15 @@ public sealed record SessionConfig
             TurnLlmTimeout = turnLlmTimeout,
             ToolExecutionTimeout = TimeSpan.FromSeconds(Math.Max(1, raw.ToolExecutionTimeoutSeconds)),
             SidecarLlmTimeout = TimeSpan.FromSeconds(Math.Max(1, raw.SidecarLlmTimeoutSeconds)),
-            // Two-phase timeout: explicit value → TurnLlmTimeout fallback → default
+            // Two-phase timeout: explicit value → TurnLlmTimeout fallback (if customized) → default
+            // If operator set TurnLlmTimeoutSeconds (non-default 180), use it for both phases
+            // to preserve backward compat. Otherwise use the generous new defaults.
             FirstTokenTimeout = raw.FirstTokenTimeoutSeconds > 0
                 ? TimeSpan.FromSeconds(raw.FirstTokenTimeoutSeconds)
-                : turnLlmTimeout.TotalSeconds < 600 ? turnLlmTimeout : TimeSpan.FromSeconds(600),
+                : raw.TurnLlmTimeoutSeconds != 180 ? turnLlmTimeout : TimeSpan.FromSeconds(600),
             StreamIdleTimeout = raw.StreamIdleTimeoutSeconds > 0
                 ? TimeSpan.FromSeconds(raw.StreamIdleTimeoutSeconds)
-                : turnLlmTimeout.TotalSeconds < 120 ? turnLlmTimeout : TimeSpan.FromSeconds(120),
+                : raw.TurnLlmTimeoutSeconds != 180 ? turnLlmTimeout : TimeSpan.FromSeconds(120),
             Tuning = tuning,
         };
     }
