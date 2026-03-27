@@ -362,9 +362,31 @@ public class WebFetchToolTests : IDisposable
     }
 
     [Fact]
-    public async Task ExecuteAsync_saves_plain_text_as_is()
+    public async Task ExecuteAsync_saves_json_with_json_extension()
     {
         var json = """{"name": "test", "value": 42}""";
+
+        var handler = new FakeHttpHandler(json, "application/json");
+        var httpClient = new HttpClient(handler);
+        var tool = new WebFetchTool(httpClient: httpClient, fetchDirectory: _tempDir);
+
+        var result = await tool.ExecuteAsync(
+            new Dictionary<string, object?> { ["Url"] = "https://api.example.com/data.json" },
+            CancellationToken.None);
+
+        Assert.Contains("Saved to:", result);
+
+        var files = Directory.GetFiles(_tempDir, "*.json");
+        Assert.Single(files);
+
+        var fileContent = await File.ReadAllTextAsync(files[0]);
+        Assert.Contains("\"name\": \"test\"", fileContent);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_saves_json_without_url_extension_uses_content_type()
+    {
+        var json = """{"name": "test"}""";
 
         var handler = new FakeHttpHandler(json, "application/json");
         var httpClient = new HttpClient(handler);
@@ -376,11 +398,32 @@ public class WebFetchToolTests : IDisposable
 
         Assert.Contains("Saved to:", result);
 
-        var files = Directory.GetFiles(_tempDir, "*.txt");
+        // Should use .json from Content-Type fallback, not .txt
+        var files = Directory.GetFiles(_tempDir, "*.json");
+        Assert.Single(files);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_preserves_shell_script_extension()
+    {
+        var script = "#!/bin/bash\necho 'hello world'";
+
+        var handler = new FakeHttpHandler(script, "text/plain");
+        var httpClient = new HttpClient(handler);
+        var tool = new WebFetchTool(httpClient: httpClient, fetchDirectory: _tempDir);
+
+        var result = await tool.ExecuteAsync(
+            new Dictionary<string, object?> { ["Url"] = "https://example.com/install.sh" },
+            CancellationToken.None);
+
+        Assert.Contains("Saved to:", result);
+        Assert.Contains(".sh", result);
+
+        var files = Directory.GetFiles(_tempDir, "*.sh");
         Assert.Single(files);
 
         var fileContent = await File.ReadAllTextAsync(files[0]);
-        Assert.Contains("\"name\": \"test\"", fileContent);
+        Assert.Contains("echo 'hello world'", fileContent);
     }
 
     [Fact]
@@ -500,6 +543,91 @@ public class WebFetchToolTests : IDisposable
     }
 
     [Fact]
+    public async Task ExecuteAsync_saves_binary_image_with_correct_extension_and_bytes()
+    {
+        var imageBytes = new byte[] { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0xFF, 0xFE, 0x00, 0x01 };
+
+        var handler = new FakeHttpHandler(imageBytes, "image/png");
+        var httpClient = new HttpClient(handler);
+        var tool = new WebFetchTool(httpClient: httpClient, fetchDirectory: _tempDir);
+
+        var result = await tool.ExecuteAsync(
+            new Dictionary<string, object?> { ["Url"] = "https://example.com/photo.png" },
+            CancellationToken.None);
+
+        Assert.Contains("Fetched:", result);
+        Assert.Contains(".png", result);
+        Assert.Contains("Content-Type: image/png", result);
+        Assert.Contains("binary file", result);
+        Assert.Contains("attach_file", result);
+
+        var files = Directory.GetFiles(_tempDir, "*.png");
+        Assert.Single(files);
+
+        // Verify byte-perfect round-trip
+        var savedBytes = await File.ReadAllBytesAsync(files[0]);
+        Assert.Equal(imageBytes, savedBytes);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_saves_pdf_with_correct_extension()
+    {
+        // PDF magic bytes
+        var pdfBytes = new byte[] { 0x25, 0x50, 0x44, 0x46, 0x2D, 0x31, 0x2E, 0x34 };
+
+        var handler = new FakeHttpHandler(pdfBytes, "application/pdf");
+        var httpClient = new HttpClient(handler);
+        var tool = new WebFetchTool(httpClient: httpClient, fetchDirectory: _tempDir);
+
+        var result = await tool.ExecuteAsync(
+            new Dictionary<string, object?> { ["Url"] = "https://arxiv.org/pdf/2603.25414" },
+            CancellationToken.None);
+
+        Assert.Contains("Content-Type: application/pdf", result);
+
+        // URL has no extension, should fall back to .pdf from Content-Type
+        var files = Directory.GetFiles(_tempDir, "*.pdf");
+        Assert.Single(files);
+
+        var savedBytes = await File.ReadAllBytesAsync(files[0]);
+        Assert.Equal(pdfBytes, savedBytes);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_saves_binary_with_url_extension_over_fallback()
+    {
+        var bytes = new byte[] { 0x47, 0x49, 0x46, 0x38, 0x39, 0x61 }; // GIF89a
+
+        var handler = new FakeHttpHandler(bytes, "image/gif");
+        var httpClient = new HttpClient(handler);
+        var tool = new WebFetchTool(httpClient: httpClient, fetchDirectory: _tempDir);
+
+        var result = await tool.ExecuteAsync(
+            new Dictionary<string, object?> { ["Url"] = "https://example.com/animation.gif" },
+            CancellationToken.None);
+
+        var files = Directory.GetFiles(_tempDir, "*.gif");
+        Assert.Single(files);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_binary_unknown_type_no_url_extension_saves_as_bin()
+    {
+        var bytes = new byte[] { 0x00, 0x01, 0x02, 0x03 };
+
+        var handler = new FakeHttpHandler(bytes, "application/octet-stream");
+        var httpClient = new HttpClient(handler);
+        var tool = new WebFetchTool(httpClient: httpClient, fetchDirectory: _tempDir);
+
+        var result = await tool.ExecuteAsync(
+            new Dictionary<string, object?> { ["Url"] = "https://example.com/api/download" },
+            CancellationToken.None);
+
+        var files = Directory.GetFiles(_tempDir, "*.bin");
+        Assert.Single(files);
+    }
+
+    [Fact]
     public async Task ExecuteAsync_rejects_ftp_url()
     {
         var tool = new WebFetchTool(fetchDirectory: _tempDir);
@@ -509,6 +637,48 @@ public class WebFetchToolTests : IDisposable
             CancellationToken.None);
 
         Assert.Contains("Error", result);
+    }
+
+    [Theory]
+    [InlineData("image/png", true)]
+    [InlineData("image/jpeg", true)]
+    [InlineData("image/webp", true)]
+    [InlineData("audio/mpeg", true)]
+    [InlineData("video/mp4", true)]
+    [InlineData("application/pdf", true)]
+    [InlineData("application/zip", true)]
+    [InlineData("application/octet-stream", true)]
+    [InlineData("text/html", false)]
+    [InlineData("text/plain", false)]
+    [InlineData("application/json", false)]
+    [InlineData("", false)]
+    public void IsBinaryContentType_classifies_correctly(string contentType, bool expected)
+    {
+        Assert.Equal(expected, WebFetchTool.IsBinaryContentType(contentType));
+    }
+
+    [Theory]
+    [InlineData("https://example.com/photo.png", ".png")]
+    [InlineData("https://example.com/install.sh", ".sh")]
+    [InlineData("https://example.com/data.json", ".json")]
+    [InlineData("https://example.com/api/data", null)]
+    [InlineData("https://example.com/", null)]
+    [InlineData("https://arxiv.org/pdf/2603.25414", null)] // numeric-only = not a real extension
+    public void GetExtensionFromUrl_extracts_extension(string url, string? expected)
+    {
+        var uri = new Uri(url);
+        Assert.Equal(expected, WebFetchTool.GetExtensionFromUrl(uri));
+    }
+
+    [Theory]
+    [InlineData("application/pdf", true, ".pdf")]
+    [InlineData("application/json", false, ".json")]
+    [InlineData("text/csv", false, ".csv")]
+    [InlineData("image/png", true, ".bin")]
+    [InlineData("text/plain", false, ".txt")]
+    public void GetFallbackExtension_returns_correct_extension(string contentType, bool isBinary, string expected)
+    {
+        Assert.Equal(expected, WebFetchTool.GetFallbackExtension(contentType, isBinary));
     }
 
     private static string LoadFixture(string filename)
@@ -522,25 +692,33 @@ public class WebFetchToolTests : IDisposable
     }
 
     /// <summary>
-    /// Fake HTTP handler that returns a canned response.
+    /// Fake HTTP handler that returns a canned response (text or binary).
     /// </summary>
     private sealed class FakeHttpHandler : HttpMessageHandler
     {
-        private readonly string _content;
+        private readonly byte[] _bytes;
         private readonly string _contentType;
 
         public FakeHttpHandler(string content, string contentType)
         {
-            _content = content;
+            _bytes = Encoding.UTF8.GetBytes(content);
+            _contentType = contentType;
+        }
+
+        public FakeHttpHandler(byte[] bytes, string contentType)
+        {
+            _bytes = bytes;
             _contentType = contentType;
         }
 
         protected override Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request, CancellationToken ct)
         {
+            var content = new ByteArrayContent(_bytes);
+            content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue(_contentType);
             var response = new HttpResponseMessage(System.Net.HttpStatusCode.OK)
             {
-                Content = new StringContent(_content, Encoding.UTF8, new System.Net.Http.Headers.MediaTypeHeaderValue(_contentType))
+                Content = content
             };
             return Task.FromResult(response);
         }

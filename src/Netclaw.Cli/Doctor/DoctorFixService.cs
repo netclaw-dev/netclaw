@@ -60,6 +60,31 @@ public sealed class DoctorFixService(NetclawPaths paths)
             }
         }
 
+        // Webhook format auto-detection
+        if (obj["Notifications"] is JsonObject notif
+            && notif["Webhooks"] is JsonArray webhooksArr)
+        {
+            foreach (var item in webhooksArr)
+            {
+                if (item is not JsonObject wh)
+                    continue;
+
+                var url = wh["Url"]?.GetValue<string>();
+                if (string.IsNullOrWhiteSpace(url))
+                    continue;
+
+                if (WebhookFormatDetection.InferFromUrl(url) != WebhookFormat.Slack)
+                    continue;
+
+                var existing = wh["Format"]?.GetValue<string>();
+                if (existing is null || existing.Equals(nameof(WebhookFormat.Generic), StringComparison.OrdinalIgnoreCase))
+                {
+                    wh["Format"] = nameof(WebhookFormat.Slack);
+                    changed = true;
+                }
+            }
+        }
+
         if (changed)
         {
             var normalized = obj.ToJsonString(new JsonSerializerOptions
@@ -73,7 +98,7 @@ public sealed class DoctorFixService(NetclawPaths paths)
 
             fixes.Add(new DoctorFileFix(
                 FilePath: paths.NetclawConfigPath,
-                Description: "Apply safe configuration autofixes (schema version, ACL defaults, telemetry endpoint).",
+                Description: "Apply safe configuration autofixes (schema version, ACL defaults, telemetry endpoint, webhook format).",
                 OriginalText: original,
                 UpdatedText: replacement));
         }

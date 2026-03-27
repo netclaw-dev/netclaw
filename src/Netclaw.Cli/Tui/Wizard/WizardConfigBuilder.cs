@@ -177,7 +177,11 @@ public sealed class WizardConfigBuilder
             {
                 ["Webhooks"] = new object[]
                 {
-                    new Dictionary<string, object> { ["Url"] = Notifications.WebhookUrl }
+                    new Dictionary<string, object>
+                    {
+                        ["Url"] = Notifications.WebhookUrl,
+                        ["Format"] = WebhookFormatDetection.InferFromUrl(Notifications.WebhookUrl).ToString()
+                    }
                 }
             };
         }
