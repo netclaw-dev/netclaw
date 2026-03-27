@@ -572,6 +572,7 @@ public sealed class SlackProactiveThreadActorTests(ITestOutputHelper output) : T
     {
         return new SlackGatewayDependencies(
             Pipeline: null!,
+            IngressGate: null,
             ActorSystem: null!,
             TimeProvider: TimeProvider.System,
             Options: new SlackChannelOptions

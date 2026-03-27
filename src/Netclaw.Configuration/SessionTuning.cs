@@ -73,4 +73,13 @@ public sealed record SessionTuning
     /// memory recall on each turn. Scheduled for removal — always true in production.
     /// </summary>
     public bool DeterministicRetrievalEnabled { get; init; } = true;
+
+    /// <summary>
+    /// Number of completed turns between memory distillation triggers.
+    /// When set, the observer distills every N turns regardless of idle state,
+    /// ensuring memories form during long active sessions (e.g., 25-turn tool loops).
+    /// The idle timeout (<see cref="SessionConfig.MemoryObserverIdleSeconds"/>) remains
+    /// active as a fallback for partial-turn content. Set to 0 to disable.
+    /// </summary>
+    public int MemoryDistillationTurnInterval { get; init; } = 5;
 }

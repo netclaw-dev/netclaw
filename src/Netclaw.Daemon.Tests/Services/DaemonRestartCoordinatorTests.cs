@@ -1,0 +1,177 @@
+using Akka.Actor;
+using Akka.Hosting;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging.Abstractions;
+using Netclaw.Actors.Channels;
+using Netclaw.Actors.Hosting;
+using Netclaw.Actors.Protocol;
+using Netclaw.Configuration;
+using Netclaw.Daemon.Services;
+using Xunit;
+
+namespace Netclaw.Daemon.Tests.Services;
+
+public sealed class DaemonRestartCoordinatorTests : IDisposable
+{
+    private readonly string _tempDir;
+    private readonly ActorSystem _system;
+    private readonly NetclawPaths _paths;
+    private readonly SessionIngressGate _ingressGate = new();
+    private readonly DaemonRestartSignal _restartSignal = new();
+    private readonly FakeApplicationLifetime _appLifetime = new();
+    private readonly RecordingSink _sink = new();
+
+    public DaemonRestartCoordinatorTests()
+    {
+        _tempDir = Path.Combine(Path.GetTempPath(), $"netclaw-restart-test-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(_tempDir);
+        _paths = new NetclawPaths(_tempDir);
+        _paths.EnsureDirectoriesExist();
+        _system = ActorSystem.Create($"restart-tests-{Guid.NewGuid():N}");
+    }
+
+    [Fact]
+    public async Task RequestConfigRestartAsync_drains_active_sessions_and_requests_stop()
+    {
+        var coordinator = CreateCoordinator(["slack/C123.1", "slack/C123.2"], restartDrainTimeout: TimeSpan.FromMilliseconds(250));
+
+        await coordinator.RequestConfigRestartAsync(CancellationToken.None);
+
+        Assert.True(_restartSignal.RestartRequested);
+        Assert.True(_appLifetime.StopRequested);
+        Assert.Equal(SessionIngressGate.RestartInProgressMessage, _ingressGate.ClosedReason);
+
+        var manifest = await new RestartManifestStore(_paths).ReadAsync(CancellationToken.None);
+        Assert.NotNull(manifest);
+        Assert.Equal(["slack/C123.1", "slack/C123.2"], manifest!.SessionIds);
+        Assert.Empty(manifest.TimedOutSessionIds);
+
+        var alert = Assert.Single(_sink.Alerts);
+        Assert.Equal("drained", alert.Context!["drainOutcome"]);
+        Assert.Equal("2", alert.Context["activeSessions"]);
+    }
+
+    [Fact]
+    public async Task RequestConfigRestartAsync_records_timed_out_sessions()
+    {
+        var coordinator = CreateCoordinator(
+            ["slack/C123.1", "slack/C123.2"],
+            timedOutSessionIds: ["slack/C123.2"],
+            restartDrainTimeout: TimeSpan.FromMilliseconds(100));
+
+        await coordinator.RequestConfigRestartAsync(CancellationToken.None);
+
+        Assert.True(_restartSignal.RestartRequested);
+        Assert.True(_appLifetime.StopRequested);
+
+        var manifest = await new RestartManifestStore(_paths).ReadAsync(CancellationToken.None);
+        Assert.NotNull(manifest);
+        Assert.Equal(["slack/C123.2"], manifest!.TimedOutSessionIds);
+
+        var alert = Assert.Single(_sink.Alerts);
+        Assert.Equal("timeout", alert.Context!["drainOutcome"]);
+        Assert.Equal("1", alert.Context["timedOutSessions"]);
+    }
+
+    [Fact]
+    public async Task RequestConfigRestartAsync_reopens_ingress_when_coordination_fails()
+    {
+        var coordinator = CreateCoordinator([], throwOnEnumeration: true, restartDrainTimeout: TimeSpan.FromMilliseconds(100));
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => coordinator.RequestConfigRestartAsync(CancellationToken.None));
+
+        Assert.False(_restartSignal.RestartRequested);
+        Assert.False(_appLifetime.StopRequested);
+        Assert.Null(_ingressGate.ClosedReason);
+    }
+
+    public void Dispose()
+    {
+        _system.Terminate().GetAwaiter().GetResult();
+        if (Directory.Exists(_tempDir))
+            Directory.Delete(_tempDir, recursive: true);
+    }
+
+    private DaemonRestartCoordinator CreateCoordinator(
+        IReadOnlyList<string> activeSessionIds,
+        IReadOnlyList<string>? timedOutSessionIds = null,
+        bool throwOnEnumeration = false,
+        TimeSpan? restartDrainTimeout = null)
+    {
+        var sessionManager = _system.ActorOf(Props.Create(() => new StubSessionManagerActor(
+            activeSessionIds,
+            timedOutSessionIds ?? Array.Empty<string>(),
+            throwOnEnumeration)));
+        var notifier = new DaemonLifecycleNotifier(_sink, TimeProvider.System, NullLogger<DaemonLifecycleNotifier>.Instance);
+
+        return new DaemonRestartCoordinator(
+            _ingressGate,
+            new RestartManifestStore(_paths),
+            new StubRequiredActor(sessionManager),
+            _restartSignal,
+            _appLifetime,
+            notifier,
+            TimeProvider.System,
+            NullLogger<DaemonRestartCoordinator>.Instance,
+            restartDrainTimeout);
+    }
+
+    private sealed class StubRequiredActor : IRequiredActor<SessionManagerActorKey>
+    {
+        public StubRequiredActor(IActorRef actorRef)
+        {
+            ActorRef = actorRef;
+        }
+
+        public IActorRef ActorRef { get; }
+
+        public Task<IActorRef> GetAsync(CancellationToken cancellationToken = default)
+            => Task.FromResult(ActorRef);
+    }
+
+    private sealed class StubSessionManagerActor : ReceiveActor
+    {
+        public StubSessionManagerActor(
+            IReadOnlyList<string> activeSessionIds,
+            IReadOnlyList<string> timedOutSessionIds,
+            bool throwOnEnumeration)
+        {
+            Receive<GetActiveEntityIds>(_ =>
+            {
+                if (throwOnEnumeration)
+                {
+                    Sender.Tell(new Status.Failure(new InvalidOperationException("enumeration failed")));
+                    return;
+                }
+
+                Sender.Tell(new ActiveEntityIds(activeSessionIds));
+            });
+
+            Receive<PrepareForDaemonRestart>(msg =>
+            {
+                if (timedOutSessionIds.Contains(msg.SessionId.Value, StringComparer.Ordinal))
+                    return;
+
+                Sender.Tell(CommandAck.For(msg.SessionId));
+            });
+        }
+    }
+
+    private sealed class FakeApplicationLifetime : IHostApplicationLifetime
+    {
+        public bool StopRequested { get; private set; }
+
+        public CancellationToken ApplicationStarted => CancellationToken.None;
+        public CancellationToken ApplicationStopping => CancellationToken.None;
+        public CancellationToken ApplicationStopped => CancellationToken.None;
+
+        public void StopApplication() => StopRequested = true;
+    }
+
+    private sealed class RecordingSink : IOperationalNotificationSink
+    {
+        public List<OperationalAlert> Alerts { get; } = [];
+
+        public void Emit(OperationalAlert alert) => Alerts.Add(alert);
+    }
+}

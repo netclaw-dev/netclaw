@@ -104,12 +104,20 @@ static async Task RunDaemonAsync(string[] args, DaemonRestartSignal restartSigna
     builder.Services.AddSingleton<SessionCatalogService>();
     builder.Services.AddSingleton<ISessionLifecycleObserver>(sp => sp.GetRequiredService<SessionCatalogService>());
     builder.Services.AddSingleton<SessionRegistry>();
+    builder.Services.AddSingleton<DaemonStartClock>();
     builder.Services.AddSingleton<DaemonRuntimeStatusService>();
     builder.Services.AddSingleton<DailyStatsPublisher>();
     builder.Services.AddSingleton<Netclaw.Actors.Telemetry.ISessionMetrics>(sp => sp.GetRequiredService<DailyStatsPublisher>());
     builder.Services.AddSingleton<DaemonStatsService>();
+    builder.Services.AddSingleton<SessionIngressGate>();
+    builder.Services.AddSingleton<RestartManifestStore>();
+    builder.Services.AddSingleton<DaemonRestartCoordinator>();
+    builder.Services.AddSingleton<IDaemonRestartCoordinator>(sp => sp.GetRequiredService<DaemonRestartCoordinator>());
 
     var app = builder.Build();
+
+    // Eagerly resolve so StartedAt reflects daemon startup, not first request.
+    app.Services.GetRequiredService<DaemonStartClock>();
 
     // Gateway surface
     app.MapHub<SessionHub>("/hub/session");
@@ -214,7 +222,7 @@ static async Task RunDaemonAsync(string[] args, DaemonRestartSignal restartSigna
     app.MapProviderOAuthEndpoints();
 
     // Daemon lifecycle endpoint — CLI calls this before sending SIGTERM.
-    // Future #326 hook: add session drain before returning.
+    // Config-triggered restart coordination happens inside DaemonRestartCoordinator.
     app.MapPost("/api/lifecycle/shutdown", (
         DaemonLifecycleNotifier notifier,
         HttpRequest request) =>
@@ -314,7 +322,7 @@ static void ConfigureDaemonServices(
 
     services.Configure<HostOptions>(options =>
     {
-        options.ShutdownTimeout = TimeSpan.FromSeconds(10);
+        options.ShutdownTimeout = TimeSpan.FromSeconds(30);
     });
 
     // Resolve models for session config
@@ -723,6 +731,10 @@ static void ConfigureDaemonServices(
     services.AddSingleton<ConfigWatcherService>();
     services.AddSingleton<IHostedService>(sp => sp.GetRequiredService<ConfigWatcherService>());
 
+    // Warm previously active sessions after a coordinated restart.
+    services.AddSingleton<RestartRecoveryService>();
+    services.AddSingleton<IHostedService>(sp => sp.GetRequiredService<RestartRecoveryService>());
+
     // PID file authority for daemon lifecycle management
     services.AddSingleton<PidFileService>();
     services.AddSingleton<IHostedService>(sp => sp.GetRequiredService<PidFileService>());
@@ -739,10 +751,9 @@ static void ConfigureDaemonServices(
 
 static ISearchBackend? CreateSearchBackend(SearchConfig config)
 {
-    var backend = config.Backend.ToLowerInvariant();
-    switch (backend)
+    switch (config.Backend)
     {
-        case "brave":
+        case SearchBackend.Brave:
             if (config.BraveApiKey is null || string.IsNullOrWhiteSpace(config.BraveApiKey.Value))
             {
                 Console.Error.WriteLine("warn: Brave Search configured but no API key provided (Search.BraveApiKey). Web search tool will not be registered.");
@@ -750,7 +761,7 @@ static ISearchBackend? CreateSearchBackend(SearchConfig config)
             }
             return new BraveSearchBackend(config.BraveApiKey.Value);
 
-        case "searxng":
+        case SearchBackend.SearXng:
             if (string.IsNullOrWhiteSpace(config.SearXngEndpoint))
             {
                 Console.Error.WriteLine("warn: SearXNG configured but no endpoint provided (Search.SearXngEndpoint). Web search tool will not be registered.");
@@ -758,12 +769,12 @@ static ISearchBackend? CreateSearchBackend(SearchConfig config)
             }
             return new SearXngBackend(config.SearXngEndpoint);
 
-        case "duckduckgo":
+        case SearchBackend.DuckDuckGo:
             return new DuckDuckGoBackend();
 
         default:
-            Console.Error.WriteLine($"warn: Unknown search backend '{backend}'. Falling back to DuckDuckGo.");
-            return new DuckDuckGoBackend();
+            throw new ArgumentOutOfRangeException(nameof(config.Backend), config.Backend,
+                $"Unknown search backend: {config.Backend}");
     }
 }
 

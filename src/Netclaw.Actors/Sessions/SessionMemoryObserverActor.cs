@@ -33,6 +33,7 @@ public sealed class SessionMemoryObserverActor : ReceivePersistentActor
     private readonly IChatClient _client;
     private readonly TimeSpan _idleTimeout;
     private readonly TimeSpan _sidecarTimeout;
+    private readonly int _distillTurnInterval;
     private readonly TimeProvider _timeProvider;
     private readonly ILoggingAdapter _log = Context.GetLogger();
 
@@ -45,6 +46,7 @@ public sealed class SessionMemoryObserverActor : ReceivePersistentActor
     private DistillationRunState? _activeRun;
     private PendingPassivationRequest? _pendingPassivation;
     private int _turnCount;
+    private int _turnsSinceLastDistill;
 
     public override string PersistenceId { get; }
 
@@ -53,20 +55,23 @@ public sealed class SessionMemoryObserverActor : ReceivePersistentActor
         IChatClient client,
         TimeSpan idleTimeout,
         TimeSpan sidecarTimeout,
+        int distillTurnInterval = 0,
         TimeProvider? timeProvider = null) =>
-        Props.Create(() => new SessionMemoryObserverActor(sessionId, client, idleTimeout, sidecarTimeout, timeProvider));
+        Props.Create(() => new SessionMemoryObserverActor(sessionId, client, idleTimeout, sidecarTimeout, distillTurnInterval, timeProvider));
 
     public SessionMemoryObserverActor(
         SessionId sessionId,
         IChatClient client,
         TimeSpan idleTimeout,
         TimeSpan sidecarTimeout,
+        int distillTurnInterval = 0,
         TimeProvider? timeProvider = null)
     {
         _sessionId = sessionId;
         _client = client;
         _idleTimeout = idleTimeout;
         _sidecarTimeout = sidecarTimeout;
+        _distillTurnInterval = distillTurnInterval;
         _timeProvider = timeProvider ?? TimeProvider.System;
 
         PersistenceId = $"memory-observer-{sessionId.Value}";
@@ -98,8 +103,20 @@ public sealed class SessionMemoryObserverActor : ReceivePersistentActor
             if (line is not null)
                 AppendTranscriptLine(line);
 
-            if (msg is TurnCompleted tc)
+            if (msg is TurnCompleted tc && tc.Outcome != TurnOutcome.Skipped)
+            {
                 _turnCount = tc.TurnNumber;
+                _turnsSinceLastDistill++;
+
+                if (_distillTurnInterval > 0 && _hasNewContent && !_draining
+                    && _turnsSinceLastDistill >= _distillTurnInterval)
+                {
+                    _log.Info(
+                        "session_observer_turn_trigger turns_since_last={TurnsSince} interval={Interval}",
+                        _turnsSinceLastDistill, _distillTurnInterval);
+                    TriggerDistillation(Context.Parent, replyWhenNoWork: false);
+                }
+            }
         });
 
         Command<ReceiveTimeout>(_ => TriggerDistillation(Context.Parent, replyWhenNoWork: false));
@@ -161,6 +178,7 @@ public sealed class SessionMemoryObserverActor : ReceivePersistentActor
     {
         var run = new DistillationRunState(++_nextRunId, _contentVersion, replyTo);
         _activeRun = run;
+        _turnsSinceLastDistill = 0;
 
         _ = RunDistillationAsync(
             _client,
@@ -366,7 +384,7 @@ public sealed class SessionMemoryObserverActor : ReceivePersistentActor
         ToolCallOutput toolCall
             => $"[tool] {toolCall.ToolName}({Truncate(toolCall.ArgumentsJson ?? "", 200)})",
         TurnCompleted tc
-            => $"[turn {tc.TurnNumber} completed]",
+            => $"[turn {tc.TurnNumber} {tc.Outcome.ToString().ToLowerInvariant()}]",
         CompactionOutput
             => "[session compacted]",
         SubAgentOutput sa when sa.Phase == SubAgentPhase.Completed
@@ -376,7 +394,7 @@ public sealed class SessionMemoryObserverActor : ReceivePersistentActor
         _ => null
     };
 
-    internal static string BuildDistillationSystemPrompt() => """
+    internal static string BuildDistillationSystemPrompt() => $$"""
         You are a session memory distillation sidecar.
         You receive the full transcript of a conversation session.
         Return JSON only: { "proposals": [ ... ] }
@@ -388,6 +406,8 @@ public sealed class SessionMemoryObserverActor : ReceivePersistentActor
         - Agent conclusions from research, analysis, or tool use -> evidence (recallMode: "searchable")
         - Project facts, constraints, or architectural decisions -> durable_fact (recallMode: "auto")
         - Task outcomes and significant results -> evidence (recallMode: "searchable")
+
+        {{MemorySidecarPromptBuilder.BuildClassificationRules()}}
 
         What to skip:
         - Greetings, pleasantries, task coordination ("can you do X" / "sure")
@@ -402,7 +422,7 @@ public sealed class SessionMemoryObserverActor : ReceivePersistentActor
         What would be useful to know in a future session?
 
         For each proposal, include:
-        - operation: "upsert_document" or "append_record"
+        - operation: "upsert_document" for durable_fact, "append_record" for evidence (see rules above)
         - memoryClass: "durable_fact" or "evidence"
         - subjectKind: "user" or "project"
         - subjectValue: the subject identifier
@@ -411,6 +431,38 @@ public sealed class SessionMemoryObserverActor : ReceivePersistentActor
         - recallMode: "auto" for durable_fact, "searchable" for evidence
         - sensitivity: "normal"
         - confidence: 0.7-0.95
+
+        Example durable_fact (stable knowledge — merged on write):
+        {
+          "operation": "upsert_document",
+          "memoryClass": "durable_fact",
+          "subjectKind": "user",
+          "subjectValue": "self",
+          "anchor": { "canonicalName": "user-preferred-editor", "anchorType": "preference" },
+          "title": "Preferred Code Editor",
+          "content": "User prefers VS Code with Vim keybindings.",
+          "aliases": ["VS Code", "editor preference", "vim keybindings"],
+          "facets": ["development_tools", "user_preference"],
+          "recallMode": "auto",
+          "sensitivity": "normal",
+          "confidence": 0.92
+        }
+
+        Example evidence (point-in-time finding — immutable, never merged):
+        {
+          "operation": "append_record",
+          "memoryClass": "evidence",
+          "subjectKind": "project",
+          "subjectValue": "netclaw",
+          "anchor": { "canonicalName": "memory-curation-perf-analysis", "anchorType": "analysis" },
+          "title": "Memory Curation Performance Analysis",
+          "content": "Curation dedup runs in <2ms per proposal with SQLite FTS5. Bottleneck is the LLM tier at ~800ms per ambiguous case.",
+          "aliases": ["curation performance", "dedup latency"],
+          "facets": ["performance_analysis", "project_artifact"],
+          "recallMode": "searchable",
+          "sensitivity": "normal",
+          "confidence": 0.78
+        }
 
         If nothing is worth remembering, return { "proposals": [] }.
         """;

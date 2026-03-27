@@ -55,10 +55,22 @@ public sealed class DaemonLifecycleNotifier
     /// <param name="reason">
     /// Human-readable reason string (e.g., "cli-stop", "update", "config-reload").
     /// </param>
-    public void NotifyShutdown(string reason)
+    public void NotifyShutdown(string reason, IReadOnlyDictionary<string, string>? additionalContext = null)
     {
         var pid = Environment.ProcessId;
         _logger.LogInformation("Netclaw daemon stopping (PID {Pid}, reason: {Reason})", pid, reason);
+
+        var context = new Dictionary<string, string>
+        {
+            ["pid"] = pid.ToString(CultureInfo.InvariantCulture),
+            ["reason"] = reason,
+        };
+
+        if (additionalContext is not null)
+        {
+            foreach (var pair in additionalContext)
+                context[pair.Key] = pair.Value;
+        }
 
         _sink.Emit(new OperationalAlert
         {
@@ -69,11 +81,7 @@ public sealed class DaemonLifecycleNotifier
             Summary = $"Netclaw daemon stopping: {reason}",
             Timestamp = _timeProvider.GetUtcNow(),
             Source = pid.ToString(CultureInfo.InvariantCulture),
-            Context = new Dictionary<string, string>
-            {
-                ["pid"] = pid.ToString(CultureInfo.InvariantCulture),
-                ["reason"] = reason,
-            },
+            Context = context,
         });
     }
 }

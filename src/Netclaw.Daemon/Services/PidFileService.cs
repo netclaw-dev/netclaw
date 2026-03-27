@@ -12,14 +12,14 @@ public sealed class PidFileService : IHostedService
 {
     private readonly NetclawPaths _paths;
     private readonly DaemonRestartSignal _restartSignal;
-    private readonly TimeProvider _timeProvider;
+    private readonly DaemonStartClock _startClock;
     private readonly ILogger<PidFileService> _logger;
 
-    public PidFileService(NetclawPaths paths, DaemonRestartSignal restartSignal, TimeProvider timeProvider, ILogger<PidFileService> logger)
+    public PidFileService(NetclawPaths paths, DaemonRestartSignal restartSignal, DaemonStartClock startClock, ILogger<PidFileService> logger)
     {
         _paths = paths;
         _restartSignal = restartSignal;
-        _timeProvider = timeProvider;
+        _startClock = startClock;
         _logger = logger;
     }
 
@@ -28,7 +28,7 @@ public sealed class PidFileService : IHostedService
         _paths.EnsureDirectoriesExist();
 
         var pid = Environment.ProcessId.ToString(CultureInfo.InvariantCulture);
-        var startedAt = _timeProvider.GetUtcNow().ToString("o", CultureInfo.InvariantCulture);
+        var startedAt = _startClock.StartedAt.ToString("o", CultureInfo.InvariantCulture);
         File.WriteAllText(_paths.PidFilePath, $"{pid}\n{startedAt}");
         _logger.LogDebug("Wrote daemon PID file: {PidFilePath} -> {Pid}", _paths.PidFilePath, pid);
 

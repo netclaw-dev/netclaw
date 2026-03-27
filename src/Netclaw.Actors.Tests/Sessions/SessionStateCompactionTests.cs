@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Sessions;
 using Xunit;
@@ -102,13 +103,11 @@ public class SessionStateCompactionTests
     [Fact]
     public void Apply_SessionCompacted_preserves_system_prompt()
     {
-        var state = SessionState.Empty
-            .Apply(new SystemPromptSet
-            {
-                SessionId = new SessionId("test"),
-                Content = "System prompt",
-                SetAtMs = 0
-            })
+        var state = (SessionState.Empty with
+        {
+            History = ImmutableList.Create(
+                new SerializableChatMessage { Role = ChatRole.System, Content = "System prompt" })
+        })
             .AddUserMessage("Hello")
             .AddErrorReply("Hi");
 

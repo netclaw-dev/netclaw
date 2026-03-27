@@ -1,3 +1,4 @@
+using System.Linq;
 using Akka.Actor;
 using Akka.Cluster.Sharding;
 
@@ -25,6 +26,17 @@ public sealed class GenericChildPerEntityParent : ReceiveActor
     {
         _extractor = extractor;
         _propsFactory = propsFactory;
+
+        Receive<GetActiveEntityIds>(_ =>
+        {
+            var entityIds = Context
+                .GetChildren()
+                .Select(child => Uri.UnescapeDataString(child.Path.Name))
+                .OrderBy(static id => id, StringComparer.Ordinal)
+                .ToArray();
+
+            Sender.Tell(new ActiveEntityIds(entityIds));
+        });
 
         ReceiveAny(o =>
         {

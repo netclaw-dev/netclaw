@@ -120,6 +120,13 @@ them on demand via `skill_read_resource`.
 
 ## Creating Skills with skill_manage
 
+**IMPORTANT: NEVER use `file_write` to create or modify skill files.** The
+`file_write` tool writes to disk but does NOT register the skill in the
+in-memory `SkillRegistry`. The skill will exist on disk but be invisible to
+`skill_load`, the skill index, and `netclaw stats` until the next daemon
+restart. Always use `skill_manage` — it validates frontmatter, writes
+atomically, and triggers an immediate registry rescan.
+
 Use the `skill_manage` tool for all skill mutations:
 
 ```

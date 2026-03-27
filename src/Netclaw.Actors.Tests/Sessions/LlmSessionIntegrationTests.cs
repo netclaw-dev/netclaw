@@ -2,6 +2,7 @@ using Akka.Actor;
 using Akka.Hosting;
 using Akka.Hosting.TestKit;
 using Akka.Persistence.Hosting;
+using Akka.Streams;
 using System.Text.Json;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
@@ -56,6 +57,7 @@ public class LlmSessionIntegrationTests : TestKit
                 DiscoveredToolMaxCount = 12,
             }
         });
+        services.AddSingleton(new ReminderConfig());
         services.AddSingleton<ISystemPromptProvider>(new StaticSystemPromptProvider(
             "You are a test assistant."));
         services.AddSingleton<SidecarRecallPlanner>();
@@ -83,6 +85,7 @@ public class LlmSessionIntegrationTests : TestKit
         services.AddSingleton<IModelCapabilityResolver>(new FakeCapabilityResolver());
         services.AddSingleton<TimeProvider>(_timeProvider);
         services.AddSingleton<ISessionLifecycleObserver>(_lifecycleObserver);
+        services.AddSingleton<ISessionPipeline>(new UnusedSessionPipeline());
 
         // Composite records for LlmSessionActor constructor
         services.AddSingleton(sp => new SessionServices(
@@ -1087,6 +1090,194 @@ public class LlmSessionIntegrationTests : TestKit
     }
 
     [Fact]
+    public async Task Ready_session_drains_for_daemon_restart()
+    {
+        var sessionId = new SessionId("test-channel/restart-drain-ready");
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("restart-drain-ready-sub");
+
+        await sessionManager.Ask<SessionJoined>(new JoinSession
+        {
+            SessionId = sessionId,
+            Subscriber = subscriber,
+            Filter = OutputFilter.TextOnly
+        }, TimeSpan.FromSeconds(3));
+        await subscriber.ExpectMsgAsync<SessionJoined>();
+
+        var escapedId = Uri.EscapeDataString(sessionId.Value);
+        var child = await Sys.ActorSelection($"/user/session-manager/{escapedId}").ResolveOne(TimeSpan.FromSeconds(3));
+        Watch(child);
+
+        var ack = await sessionManager.Ask<CommandAck>(new PrepareForDaemonRestart
+        {
+            SessionId = sessionId,
+            Reason = "config-reload"
+        }, TimeSpan.FromSeconds(3));
+
+        Assert.Equal(sessionId, ack.SessionId);
+        await ExpectTerminatedAsync(child, TimeSpan.FromSeconds(5));
+        Assert.Contains(sessionId.Value, _lifecycleObserver.DeactivatedSessionIds);
+    }
+
+    [Fact]
+    public async Task Processing_session_rejects_new_work_and_passivates_after_current_turn()
+    {
+        var sessionId = new SessionId("test-channel/restart-drain-processing");
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("restart-drain-processing-sub");
+        var responseGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _fakeChatClient.NextResponseGate = responseGate;
+
+        await sessionManager.Ask<SessionJoined>(new JoinSession
+        {
+            SessionId = sessionId,
+            Subscriber = subscriber,
+            Filter = OutputFilter.TextOnly
+        }, TimeSpan.FromSeconds(3));
+        await subscriber.ExpectMsgAsync<SessionJoined>();
+
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "First message"
+        }, TimeSpan.FromSeconds(3));
+
+        var escapedId = Uri.EscapeDataString(sessionId.Value);
+        var child = await Sys.ActorSelection($"/user/session-manager/{escapedId}").ResolveOne(TimeSpan.FromSeconds(3));
+        Watch(child);
+
+        var drainTask = sessionManager.Ask<CommandAck>(new PrepareForDaemonRestart
+        {
+            SessionId = sessionId,
+            Reason = "config-reload"
+        }, TimeSpan.FromSeconds(5));
+
+        var nack = await sessionManager.Ask<CommandNack>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Should be rejected"
+        }, TimeSpan.FromSeconds(3));
+
+        Assert.Equal(SessionIngressGate.RestartInProgressMessage, nack.Reason);
+
+        sessionManager.Tell(new DeliveryFailed
+        {
+            SessionId = sessionId,
+            TurnNumber = 999,
+            ChannelType = ChannelType.Slack,
+            FailureKind = DeliveryFailureKind.MessageTooLarge,
+            ErrorMessage = "msg_too_long"
+        });
+
+        responseGate.TrySetResult();
+
+        await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3));
+        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
+        Assert.Equal(sessionId, (await drainTask).SessionId);
+        await ExpectTerminatedAsync(child, TimeSpan.FromSeconds(5));
+        Assert.DoesNotContain(_fakeChatClient.ReceivedMessages, conversation =>
+            conversation.Any(msg =>
+                msg.Text is not null
+                && msg.Text.Contains("msg_too_long", StringComparison.OrdinalIgnoreCase)));
+    }
+
+    [Fact]
+    public async Task Compacting_session_rejects_new_work_and_passivates_after_compaction_finishes()
+    {
+        var sessionId = new SessionId("test-channel/restart-drain-compacting");
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("restart-drain-compacting-sub");
+        _fakeChatClient.UsageOverride = new UsageDetails
+        {
+            InputTokenCount = 200_000,
+            OutputTokenCount = 1,
+            TotalTokenCount = 200_001
+        };
+        _fakeChatClient.HangingObservationCallsRemaining = 1;
+
+        await sessionManager.Ask<SessionJoined>(new JoinSession
+        {
+            SessionId = sessionId,
+            Subscriber = subscriber,
+            Filter = OutputFilter.TextOnly
+        }, TimeSpan.FromSeconds(3));
+        await subscriber.ExpectMsgAsync<SessionJoined>();
+
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Trigger compaction"
+        }, TimeSpan.FromSeconds(3));
+
+        await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3));
+        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
+
+        var escapedId = Uri.EscapeDataString(sessionId.Value);
+        var child = await Sys.ActorSelection($"/user/session-manager/{escapedId}").ResolveOne(TimeSpan.FromSeconds(3));
+        Watch(child);
+
+        var drainTask = sessionManager.Ask<CommandAck>(new PrepareForDaemonRestart
+        {
+            SessionId = sessionId,
+            Reason = "config-reload"
+        }, TimeSpan.FromSeconds(5));
+
+        var nack = await sessionManager.Ask<CommandNack>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Should be rejected during compaction"
+        }, TimeSpan.FromSeconds(3));
+
+        Assert.Equal(SessionIngressGate.RestartInProgressMessage, nack.Reason);
+
+        child.Tell(new CompactionFailed
+        {
+            Cause = new InvalidOperationException("test compaction completion")
+        });
+
+        Assert.Equal(sessionId, (await drainTask).SessionId);
+        await ExpectTerminatedAsync(child, TimeSpan.FromSeconds(5));
+        Assert.Contains(sessionId.Value, _lifecycleObserver.DeactivatedSessionIds);
+    }
+
+    [Fact]
+    public async Task Warm_session_injects_restart_notice_on_next_turn()
+    {
+        var sessionId = new SessionId("test-channel/restart-warm-notice");
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("restart-warm-notice-sub");
+
+        await sessionManager.Ask<CommandAck>(new WarmSession
+        {
+            SessionId = sessionId,
+            RestartNotice = "The daemon restarted due to a configuration change. Recovery resumed from the last durable checkpoint."
+        }, TimeSpan.FromSeconds(3));
+
+        await sessionManager.Ask<SessionJoined>(new JoinSession
+        {
+            SessionId = sessionId,
+            Subscriber = subscriber,
+            Filter = OutputFilter.TextOnly
+        }, TimeSpan.FromSeconds(3));
+        await subscriber.ExpectMsgAsync<SessionJoined>();
+
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Hello after restart"
+        }, TimeSpan.FromSeconds(3));
+
+        await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3));
+        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
+
+        Assert.Contains(_fakeChatClient.ReceivedMessages, conversation =>
+            conversation.Any(msg =>
+                msg.Role == Microsoft.Extensions.AI.ChatRole.System
+                && msg.Text is not null
+                && msg.Text.Contains("Recovery resumed from the last durable checkpoint", StringComparison.Ordinal)));
+    }
+
+    [Fact]
     public async Task Subscriber_survives_session_actor_passivation_via_piggyback_rejoin()
     {
         var sessionId = new SessionId("test-channel/passivation-rejoin");
@@ -1613,4 +1804,17 @@ internal sealed class RecordingSessionLifecycleObserver : ISessionLifecycleObser
 
     public void OnSessionDeactivated(SessionId sessionId)
         => DeactivatedSessionIds.Add(sessionId.Value);
+}
+
+internal sealed class UnusedSessionPipeline : ISessionPipeline
+{
+    public Task<MaterializedSession> CreateAsync(
+        SessionId sessionId,
+        SessionPipelineOptions options,
+        IMaterializer? materializer = null,
+        CancellationToken cancellationToken = default)
+        => Task.FromException<MaterializedSession>(new NotSupportedException("Session pipeline is not used by these tests."));
+
+    public Task SendFeedbackAsync(IWithSessionId feedback, CancellationToken ct = default)
+        => Task.CompletedTask;
 }

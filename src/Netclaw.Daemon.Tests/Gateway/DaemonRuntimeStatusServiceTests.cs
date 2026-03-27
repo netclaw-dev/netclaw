@@ -11,6 +11,7 @@ using Netclaw.Configuration;
 using Netclaw.Daemon.Configuration;
 using Netclaw.Daemon.Gateway;
 using Netclaw.Daemon.Mcp;
+using Netclaw.Daemon.Services;
 using Netclaw.Providers.OAuth;
 using Xunit;
 
@@ -74,6 +75,7 @@ public sealed class DaemonRuntimeStatusServiceTests : IAsyncLifetime
     public async Task IncludesSlackConnectorAsDisabled_WhenNotEnabled()
     {
         var service = new DaemonRuntimeStatusService(
+            new DaemonStartClock(TimeProvider.System),
             TimeProvider.System,
             channels: Array.Empty<IChannel>(),
             slackOptions: new SlackChannelOptions { Enabled = false },
@@ -94,6 +96,7 @@ public sealed class DaemonRuntimeStatusServiceTests : IAsyncLifetime
     public async Task ReportsSlackAsDisconnected_WhenEnabledButMissingRuntimeChannel()
     {
         var service = new DaemonRuntimeStatusService(
+            new DaemonStartClock(TimeProvider.System),
             TimeProvider.System,
             channels: Array.Empty<IChannel>(),
             slackOptions: new SlackChannelOptions { Enabled = true, AllowedChannelIds = ["C1"] },
@@ -114,6 +117,7 @@ public sealed class DaemonRuntimeStatusServiceTests : IAsyncLifetime
     public async Task StatusIncludesModelCapabilities()
     {
         var service = new DaemonRuntimeStatusService(
+            new DaemonStartClock(TimeProvider.System),
             TimeProvider.System,
             channels: Array.Empty<IChannel>(),
             slackOptions: new SlackChannelOptions { Enabled = false },
@@ -172,6 +176,7 @@ public sealed class DaemonRuntimeStatusServiceTests : IAsyncLifetime
         try
         {
             var service = new DaemonRuntimeStatusService(
+                new DaemonStartClock(TimeProvider.System),
                 TimeProvider.System,
                 channels: Array.Empty<IChannel>(),
                 slackOptions: new SlackChannelOptions { Enabled = false },
@@ -235,6 +240,7 @@ public sealed class DaemonRuntimeStatusServiceTests : IAsyncLifetime
         await sqliteStore.InitializeAsync();
 
         var service = new DaemonRuntimeStatusService(
+            new DaemonStartClock(TimeProvider.System),
             TimeProvider.System,
             channels: Array.Empty<IChannel>(),
             slackOptions: new SlackChannelOptions { Enabled = false },
@@ -267,6 +273,7 @@ public sealed class DaemonRuntimeStatusServiceTests : IAsyncLifetime
         ChannelTelemetry.RecordSlackReplyFailed(77);
 
         var service = new DaemonRuntimeStatusService(
+            new DaemonStartClock(TimeProvider.System),
             TimeProvider.System,
             channels: Array.Empty<IChannel>(),
             slackOptions: new SlackChannelOptions { Enabled = false },

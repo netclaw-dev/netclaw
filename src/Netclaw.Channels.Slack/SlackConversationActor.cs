@@ -75,6 +75,15 @@ public sealed class SlackConversationActor : ReceiveActor
                 return;
             }
 
+            if (_dependencies.IngressGate?.ClosedReason is { } ingressClosedReason)
+            {
+                var replyThreadTs = message.ThreadTs ?? SlackThreadTs.FromEventTs(message.EventTs);
+                _log.Info("slack_event_filtered event={0} reason=restart_drain_active", message.EventId);
+                ChannelTelemetry.RecordSlackEventFiltered("restart_drain_active");
+                _ = PostIngressClosedReplyAsync(message.ChannelId, replyThreadTs, ingressClosedReason);
+                return;
+            }
+
             var thread = existingThread.IsNobody()
                 ? Context.ActorOf(CreateThreadProps(message.ChannelId, threadTs), threadActorName)
                 : existingThread;
@@ -119,6 +128,12 @@ public sealed class SlackConversationActor : ReceiveActor
 
         Receive<StartProactiveThread>(message =>
         {
+            if (_dependencies.IngressGate?.ClosedReason is { } ingressClosedReason)
+            {
+                Sender.Tell(new Status.Failure(new InvalidOperationException(ingressClosedReason)));
+                return;
+            }
+
             // Defense-in-depth: validate channel ACL even though the tool already checked.
             // DM channels (D-prefixed) skip this — they were validated via user ACL + AllowDirectMessages.
             var isDmChannel = message.ChannelId.Value.StartsWith("D", StringComparison.Ordinal);
@@ -195,5 +210,19 @@ public sealed class SlackConversationActor : ReceiveActor
             channelId: channelId,
             threadTs: threadTs,
             dependencies: _dependencies);
+    }
+
+    private async Task PostIngressClosedReplyAsync(SlackChannelId channelId, SlackThreadTs threadTs, string message)
+    {
+        try
+        {
+            await _dependencies.ReplyClient.PostThreadReplyAsync(
+                new SlackPostMessage(channelId, threadTs, message),
+                CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            _log.Warning(ex, "Failed to post restart-drain reply to Slack thread {0}", threadTs.Value);
+        }
     }
 }

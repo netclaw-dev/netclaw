@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Sessions;
 using Xunit;
@@ -66,53 +67,6 @@ public class SessionStateTests
     }
 
     [Fact]
-    public void Apply_SystemPromptSet_inserts_at_beginning()
-    {
-        var state = SessionState.Empty;
-        var evt = new SystemPromptSet
-        {
-            SessionId = TestSessionId,
-            Content = "You are a helpful assistant.",
-            SetAtMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
-        };
-
-        var next = state.Apply(evt);
-
-        Assert.Single(next.History);
-        Assert.Equal(ChatRole.System, next.History[0].Role);
-        Assert.Equal("You are a helpful assistant.", next.History[0].Content);
-    }
-
-    [Fact]
-    public void Apply_SystemPromptSet_replaces_existing_system_prompt()
-    {
-        var state = SessionState.Empty
-            .Apply(new SystemPromptSet
-            {
-                SessionId = TestSessionId,
-                Content = "Original prompt"
-            })
-            .Apply(new TurnRecorded
-            {
-                SessionId = TestSessionId,
-                UserMessage = new SerializableChatMessage { Role = ChatRole.User, Content = "Hello" },
-                AssistantReply = new SerializableChatMessage { Role = ChatRole.Assistant, Content = "Hi" },
-            });
-
-        // Replace system prompt
-        var next = state.Apply(new SystemPromptSet
-        {
-            SessionId = TestSessionId,
-            Content = "Updated prompt"
-        });
-
-        Assert.Equal(3, next.History.Count); // system + user + assistant
-        Assert.Equal(ChatRole.System, next.History[0].Role);
-        Assert.Equal("Updated prompt", next.History[0].Content);
-        Assert.Equal(ChatRole.User, next.History[1].Role);
-    }
-
-    [Fact]
     public void Apply_SessionTitleSet_updates_title()
     {
         var state = SessionState.Empty;
@@ -128,12 +82,7 @@ public class SessionStateTests
     [Fact]
     public void Apply_SessionCompacted_preserves_system_prompt()
     {
-        var state = SessionState.Empty
-            .Apply(new SystemPromptSet
-            {
-                SessionId = TestSessionId,
-                Content = "System prompt"
-            })
+        var state = WithSystemPrompt("System prompt")
             .Apply(new TurnRecorded
             {
                 SessionId = TestSessionId,
@@ -218,8 +167,7 @@ public class SessionStateTests
     [Fact]
     public void FindLastUserMessage_returns_most_recent_user_message()
     {
-        var state = SessionState.Empty
-            .Apply(new SystemPromptSet { SessionId = TestSessionId, Content = "System" })
+        var state = WithSystemPrompt("System")
             .AddUserMessage("First")
             .Apply(new TurnRecorded
             {
@@ -250,8 +198,7 @@ public class SessionStateTests
     [Fact]
     public void FindLastUserMessage_returns_null_when_no_user_messages()
     {
-        var state = SessionState.Empty
-            .Apply(new SystemPromptSet { SessionId = TestSessionId, Content = "System" });
+        var state = WithSystemPrompt("System");
 
         Assert.Null(state.FindLastUserMessage());
     }
@@ -259,8 +206,7 @@ public class SessionStateTests
     [Fact]
     public void ToSnapshot_and_FromSnapshot_round_trip()
     {
-        var state = SessionState.Empty
-            .Apply(new SystemPromptSet { SessionId = TestSessionId, Content = "Prompt" })
+        var state = WithSystemPrompt("Prompt")
             .Apply(new TurnRecorded
             {
                 SessionId = TestSessionId,
@@ -291,5 +237,14 @@ public class SessionStateTests
 
         Assert.Empty(original.History);
         Assert.Single(modified.History);
+    }
+
+    private static SessionState WithSystemPrompt(string content)
+    {
+        return SessionState.Empty with
+        {
+            History = ImmutableList.Create(
+                new SerializableChatMessage { Role = ChatRole.System, Content = content })
+        };
     }
 }

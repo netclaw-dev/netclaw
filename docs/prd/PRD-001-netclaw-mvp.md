@@ -271,21 +271,20 @@ Before context compaction occurs, Netclaw shall trigger a silent agentic turn
 prompting the model to write durable memories to disk. This directly counters
 context rot — losing important information when context resets. See PRD-007.
 
-### FR-016 Config Hot-Reload
+### FR-016 Config Change Restart Coordination
 
-Netclaw shall monitor operational configuration files for changes and apply
-updates without process restart:
+Netclaw shall monitor operational configuration files for changes and validate
+them before they affect runtime behavior.
 
-- **Watched files** (hot-reloaded): ACL rules, provider config, MCP profiles,
-  schedule definitions
-- **Unwatched files** (require restart or session reboot): personality files,
-  project registry, environment inventory
+- **Watched files**: operational daemon config written to `netclaw.json`
+- **Session-scoped files** (require session reboot or fresh turn context):
+  personality files, project registry, environment inventory
 
-Mechanism: `FileSystemWatcher` + 500ms debounce + validate-before-apply.
-Invalid config changes SHALL be rejected with logged diagnostics. Valid changes
-SHALL notify owning actors (ACL changes → policy engine refresh, provider
-changes → `IChatClient` rebuild, MCP changes → reconnect/disconnect servers,
-schedule changes → timer reconfiguration).
+Mechanism: `FileSystemWatcher` + 500ms debounce + validate-before-restart.
+Invalid config changes SHALL be rejected with logged diagnostics and SHALL keep
+the current daemon instance running. Valid changes SHALL trigger coordinated
+daemon restart: close new ingress, drain active sessions, restart, relaunch the
+sessions that were active, and resume from the last durable checkpoint.
 
 ## Operational Requirements
 

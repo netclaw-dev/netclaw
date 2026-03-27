@@ -45,7 +45,7 @@ Netclaw.Daemon Process
 │   ├── Slack Socket Mode
 │   └── Internal Timer
 │
-├── ConfigWatcherService (FileSystemWatcher hot-reload)
+├── ConfigWatcherService + RestartCoordinator (FileSystemWatcher restart coordination)
 └── ISystemPromptProvider (layered soul files)
 ```
 
@@ -267,27 +267,36 @@ works for:
 The TUI is a presentation layer — it renders tool call/result output but does
 not execute tools.
 
-## Configuration Hot-Reload
+## Configuration Restart Coordination
 
 ### Trigger
 
 `FileSystemWatcher` on `~/.netclaw/config/` monitors for changes to
-`netclaw.json` and `secrets.json`.
+`netclaw.json`.
 
 ### Behavior
 
 1. File change event received
 2. 500ms debounce timer started (reset on additional events)
 3. After debounce: read and validate new configuration
-4. **Valid config**: rebuild `IChatClientProvider`, notify actor system
-5. **Invalid config**: log warning with validation errors, preserve previous config
+4. **Valid config**: close daemon-managed ingress, enumerate live session actors,
+   ask them to drain, persist a restart manifest, and request coordinated
+   daemon restart
+5. **After restart**: warm the sessions that were active when restart began and
+   inject a continuity notice for the next turn
+6. **Invalid config**: log warning with validation errors, preserve previous config
 
-### What Reloads
+### What Changes Take Effect After Restart
 
 - Provider credentials and endpoints
 - Model selections (main, fallback, compaction)
 - Session parameters (compaction threshold, tool iteration limits)
 - Tool configuration (shell timeout, output limits)
+
+### What Still Requires Manual Session Resume Or Reconnect
+
+- Live transport connections, SignalR sockets, and Slack delivery handles
+- New inbound work that arrives after restart drain begins
 
 ### What Does Not Reload (requires restart)
 

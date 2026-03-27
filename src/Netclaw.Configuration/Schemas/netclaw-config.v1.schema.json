@@ -113,6 +113,20 @@
           "minimum": 1,
           "description": "Timeout in seconds for sidecar LLM calls (title, memory, compaction)."
         },
+        "FirstTokenTimeoutSeconds": {
+          "type": "integer",
+          "minimum": 10,
+          "maximum": 1800,
+          "default": 600,
+          "description": "Maximum wait in seconds for the first streaming token. Covers model prefill on large contexts."
+        },
+        "StreamIdleTimeoutSeconds": {
+          "type": "integer",
+          "minimum": 10,
+          "maximum": 600,
+          "default": 120,
+          "description": "Maximum silence in seconds between streaming tokens. Resets on each delta."
+        },
         "CompactionThreshold": {
           "type": "number",
           "minimum": 0.1,
@@ -175,7 +189,8 @@
             "KeepRecentMessages": { "type": "integer", "minimum": 1 },
             "TitleGenerationInterval": { "type": "integer", "minimum": 0 },
             "MemorySidecarsEnabled": { "type": "boolean" },
-            "DeterministicRetrievalEnabled": { "type": "boolean" }
+            "DeterministicRetrievalEnabled": { "type": "boolean" },
+            "MemoryDistillationTurnInterval": { "type": "integer", "minimum": 0 }
           },
           "additionalProperties": false
         }
@@ -220,6 +235,23 @@
         },
         "AudienceProfiles": {
           "$ref": "#/$defs/ToolAudienceProfiles"
+        },
+        "WebFetch": {
+          "type": "object",
+          "properties": {
+            "RequireHttps": {
+              "type": "boolean",
+              "default": true,
+              "description": "When true, web_fetch rejects plain HTTP URLs unless the host is in HttpAllowList."
+            },
+            "HttpAllowList": {
+              "type": "array",
+              "items": { "type": "string" },
+              "default": ["localhost", "127.0.0.1", "::1", "[::1]"],
+              "description": "Hosts allowed to use plain HTTP when RequireHttps is true. Default includes loopback addresses."
+            }
+          },
+          "additionalProperties": false
         }
       },
       "additionalProperties": false

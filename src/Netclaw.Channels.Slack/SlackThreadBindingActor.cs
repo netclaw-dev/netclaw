@@ -253,6 +253,13 @@ internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStas
                 return;
             }
 
+            if (_dependencies.IngressGate?.ClosedReason is { } ingressClosedReason)
+            {
+                _log.Info("Rejecting Slack inbound message while restart drain is active");
+                await SafePostAsync(ingressClosedReason);
+                return;
+            }
+
             var writer = _inputQueue;
             if (writer is null)
             {
