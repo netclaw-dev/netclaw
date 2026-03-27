@@ -7,21 +7,40 @@
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
-    <VersionPrefix>0.8.1</VersionPrefix>
-    <PackageReleaseNotes>Netclaw v0.8.1 — Slack duplicate message fix, memory passivation hardening, file_edit tool, and LlmSessionActor decomposition
+    <VersionPrefix>0.9.0</VersionPrefix>
+    <PackageReleaseNotes>Netclaw v0.9.0 — Two-phase streaming timeout, FTS5 memory recall, turn-based distillation, and streaming performance fix
 
 **Features**
 
-* Added `file_edit` tool for surgical text replacements — enables targeted edits without full file rewrites. Supports literal text matching with an ambiguity guard that rejects non-unique matches, a `ReplaceAll` option for bulk replacements, and the same security enforcement as `file_write`. ([#404](https://github.com/Aaronontheweb/netclaw/pull/404), [#416](https://github.com/Aaronontheweb/netclaw/pull/416))
+* Added two-phase streaming timeout for LLM calls — introduces separate `FirstTokenTimeout` and `StreamIdleTimeout` settings, replacing the single monolithic timeout. The first-token window catches provider failures fast while the idle timeout tolerates long-running tool-use streams without premature cancellation. ([#460](https://github.com/Aaronontheweb/netclaw/pull/460))
+* Added turn-based memory distillation trigger alongside idle timeout — sessions now trigger memory distillation at turn boundaries in addition to the existing 90-second idle timer, so busy multi-turn conversations no longer defer all memory formation until the session goes quiet. ([#442](https://github.com/Aaronontheweb/netclaw/pull/442), [#463](https://github.com/Aaronontheweb/netclaw/pull/463))
+* Migrated memory recall search from LIKE to SQLite FTS5 full-text search with BM25 scoring — recall queries now use a dedicated FTS5 virtual table for relevance-ranked results instead of substring matching, significantly improving recall quality for multi-word queries. ([#436](https://github.com/Aaronontheweb/netclaw/pull/436))
+* Added token delta and cumulative logging to `LoggingChatClient` — each streaming chunk now logs its individual token delta alongside the running cumulative total, making it easier to diagnose token consumption during long tool-use loops. ([#443](https://github.com/Aaronontheweb/netclaw/pull/443), [#445](https://github.com/Aaronontheweb/netclaw/pull/445))
 
 **Bug Fixes**
 
-* Fixed duplicate Slack messages caused by Microsoft.Extensions.AI 10.4.1 preserving non-contiguous `TextContent` items — the Slack output handler now consolidates multiple `TextContent` items into a single `TextOutput` before posting, preventing repeated message fragments in threads. ([#413](https://github.com/Aaronontheweb/netclaw/pull/413), [#429](https://github.com/Aaronontheweb/netclaw/pull/429))
-* Fixed `SessionMemoryObserverActor` passivation protocol — resolved dead-lettered phase notifications, mid-distillation reply drops causing 5-second stalls, and a racing idle timer during passivation. Also replaced hardcoded `DateTimeOffset.UtcNow` with injected `TimeProvider` for testability. ([#423](https://github.com/Aaronontheweb/netclaw/pull/423), [#428](https://github.com/Aaronontheweb/netclaw/pull/428))
+* Fixed daemon restarting active sessions during config reload — the config restart path now drains all active sessions gracefully before applying the new configuration, preventing mid-turn interruptions. ([#468](https://github.com/Aaronontheweb/netclaw/pull/468))
+* Fixed `web_fetch` saving binary content with incorrect extensions and corrupted bytes — binary responses (images, PDFs, etc.) are now saved with the correct file extension derived from the Content-Type header, and raw bytes are written without text encoding round-trips. ([#386](https://github.com/Aaronontheweb/netclaw/pull/386), [#461](https://github.com/Aaronontheweb/netclaw/pull/461))
+* Enforced HTTPS by default in the `web_fetch` tool — requests to plain HTTP URLs are now rejected unless explicitly allowed, hardening the default security posture for outbound fetches. ([#458](https://github.com/Aaronontheweb/netclaw/pull/458))
+* Fixed `netclaw init` auto-detecting Slack webhook format from URL — the init wizard now inspects the webhook URL to determine whether it is a Slack incoming webhook and sets `"Format": "Slack"` automatically, eliminating a common misconfiguration. ([#401](https://github.com/Aaronontheweb/netclaw/pull/401), [#462](https://github.com/Aaronontheweb/netclaw/pull/462))
+* Stopped persisting system prompt in Akka journal — the full system prompt was previously included in persisted session state, bloating the journal and slowing recovery. It is now excluded from persistence and reconstructed on recovery. ([#451](https://github.com/Aaronontheweb/netclaw/pull/451))
+* Enforced record-class storage for evidence memories — evidence memory proposals that arrived as plain strings are now normalized into the expected record-class format before storage, preventing downstream deserialization failures. ([#446](https://github.com/Aaronontheweb/netclaw/pull/446), [#452](https://github.com/Aaronontheweb/netclaw/pull/452))
+* Added `TurnOutcome` to prevent quick-exit paths from inflating turn count — tool-only and no-op turns that exit early without an LLM response no longer increment the turn counter, giving more accurate turn-based metrics. ([#450](https://github.com/Aaronontheweb/netclaw/pull/450))
+* Added singleton guard and PID file watchdog to prevent duplicate daemons — launching a second daemon instance now fails fast with a clear error instead of silently competing for resources. A PID file watchdog detects stale lock files from crashed processes. ([#433](https://github.com/Aaronontheweb/netclaw/pull/433))
+* Fixed console output leaks in CLI and daemon — stray `Console.Write` calls that bypassed the structured logging pipeline are now routed through the proper output channels. ([#425](https://github.com/Aaronontheweb/netclaw/pull/425))
 
-**Architecture**
+**Performance**
 
-* Decomposed `LlmSessionActor` for composability — split `SessionConfig` into `ModelCapabilities`, `SessionTuning`, and `SessionConfig` value objects, reduced the actor's constructor from 19 to 7 parameters, formalized the session lifecycle with a `SessionPhase` enum-based state machine, and extracted 9 focused handler modules. ([#411](https://github.com/Aaronontheweb/netclaw/pull/411), [#414](https://github.com/Aaronontheweb/netclaw/pull/414), [#417](https://github.com/Aaronontheweb/netclaw/pull/417))</PackageReleaseNotes>
+* Fixed O(n^2) `ToolCallTextFilter` scanning during streaming — replaced the quadratic per-chunk scan with incremental delta detection, eliminating a hot path that caused visible latency on long tool-call sequences. ([#454](https://github.com/Aaronontheweb/netclaw/pull/454), [#457](https://github.com/Aaronontheweb/netclaw/pull/457))
+
+**Diagnostics**
+
+* Unified daemon uptime into a single `DaemonStartClock` singleton — previously uptime was computed from multiple inconsistent sources. All uptime queries now read from one authoritative clock. ([#456](https://github.com/Aaronontheweb/netclaw/pull/456))
+* Surfaced diagnostic detail when update check fails — `netclaw update` and background update checks now log the specific HTTP status and error body instead of a generic "check failed" message. ([#431](https://github.com/Aaronontheweb/netclaw/pull/431))
+
+**Dependencies**
+
+* Bumped ModelContextProtocol.Core from 1.0.0 to 1.1.0. ([#434](https://github.com/Aaronontheweb/netclaw/pull/434))</PackageReleaseNotes>
   </PropertyGroup>
   <PropertyGroup>
     <NetCoreTestVersion>net10.0</NetCoreTestVersion>
