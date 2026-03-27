@@ -79,8 +79,13 @@ public sealed class OpenAiCompatibleChatClient : IChatClient
             using var document = JsonDocument.Parse(ssePayload);
             foreach (var update in ParseStreamingUpdates(document.RootElement, pendingToolCalls))
             {
+                var suppressThisUpdate = false;
                 foreach (var tc in update.Contents.OfType<TextContent>())
+                {
                     accumulatedText.Append(tc.Text);
+                    if (filter.ShouldSuppress(tc.Text))
+                        suppressThisUpdate = true;
+                }
 
                 if (update.Contents.OfType<FunctionCallContent>().Any())
                     hadStructuredToolCalls = true;
@@ -89,8 +94,7 @@ public sealed class OpenAiCompatibleChatClient : IChatClient
                     finalUpdate = update;
 
                 // Suppress text updates that contain tool call XML
-                if (update.Contents.OfType<TextContent>().Any()
-                    && filter.ShouldSuppress(accumulatedText.ToString()))
+                if (suppressThisUpdate)
                     continue;
 
                 yield return update;
@@ -108,7 +112,7 @@ public sealed class OpenAiCompatibleChatClient : IChatClient
             if (textToolCalls.Count > 0)
             {
                 // Emit any cleaned non-tool-call text that was suppressed
-                var cleaned = filter.GetCleanedText();
+                var cleaned = ToolCallTextFilter.GetCleanedText(accumulatedText);
                 if (!string.IsNullOrWhiteSpace(cleaned))
                 {
                     yield return new ChatResponseUpdate(ChatRole.Assistant, [new TextContent(cleaned)]);
@@ -635,23 +639,50 @@ public sealed class OpenAiCompatibleChatClient : IChatClient
 
     internal sealed class ToolCallTextFilter
     {
-        private bool _suppressionActive;
-        private readonly StringBuilder _suppressedText = new();
+        private const string Marker = "<tool_call";
+        private const int OverlapSize = 9; // Marker.Length - 1
 
-        public bool ShouldSuppress(string accumulatedText)
+        private bool _suppressionActive;
+        private readonly char[] _overlap = new char[OverlapSize];
+        private int _overlapLength;
+
+        /// <summary>
+        /// Checks whether the given delta text (newest chunk only) should be suppressed.
+        /// Uses a small overlap buffer to detect the marker split across delta boundaries.
+        /// </summary>
+        public bool ShouldSuppress(string? delta)
         {
             if (_suppressionActive)
+                return true;
+
+            if (string.IsNullOrEmpty(delta))
+                return false;
+
+            // Search window = overlap tail from previous delta(s) + current delta
+            int windowLength = _overlapLength + delta.Length;
+            Span<char> window = windowLength <= 256
+                ? stackalloc char[windowLength]
+                : new char[windowLength];
+
+            _overlap.AsSpan(0, _overlapLength).CopyTo(window);
+            delta.AsSpan().CopyTo(window[_overlapLength..]);
+
+            if (window.IndexOf(Marker.AsSpan()) >= 0)
             {
-                _suppressedText.Clear();
-                _suppressedText.Append(accumulatedText);
+                _suppressionActive = true;
                 return true;
             }
 
-            if (accumulatedText.Contains("<tool_call", StringComparison.Ordinal))
+            // Retain the last OverlapSize chars for cross-boundary detection
+            if (windowLength >= OverlapSize)
             {
-                _suppressionActive = true;
-                _suppressedText.Append(accumulatedText);
-                return true;
+                window[(windowLength - OverlapSize)..].CopyTo(_overlap);
+                _overlapLength = OverlapSize;
+            }
+            else
+            {
+                window[..windowLength].CopyTo(_overlap);
+                _overlapLength = windowLength;
             }
 
             return false;
@@ -659,7 +690,7 @@ public sealed class OpenAiCompatibleChatClient : IChatClient
 
         public bool IsActive => _suppressionActive;
 
-        public string GetCleanedText()
-            => TextToolCallParser.StripToolCallText(_suppressedText.ToString());
+        public static string GetCleanedText(StringBuilder accumulatedText)
+            => TextToolCallParser.StripToolCallText(accumulatedText.ToString());
     }
 }

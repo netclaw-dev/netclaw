@@ -6,10 +6,12 @@ using Netclaw.Actors.Reminders;
 using Netclaw.Actors.Skills;
 using Netclaw.Channels.Telemetry;
 using Netclaw.Configuration;
+using Netclaw.Daemon.Services;
 
 namespace Netclaw.Daemon.Gateway;
 
 internal sealed class DaemonStatsService(
+    DaemonStartClock startClock,
     TimeProvider timeProvider,
     SessionCatalogService sessionCatalog,
     SkillRegistry skillRegistry,
@@ -17,12 +19,10 @@ internal sealed class DaemonStatsService(
     SQLiteMemoryStore? sqliteMemoryStore = null,
     IRequiredActor<ReminderManagerActorKey>? reminderManagerActor = null)
 {
-    private readonly DateTimeOffset _startedAt = timeProvider.GetUtcNow();
-
     public async Task<DaemonStats.Response> GetStatsAsync(int? days = null, CancellationToken ct = default)
     {
         var now = timeProvider.GetUtcNow();
-        var uptime = now - _startedAt;
+        var uptime = now - startClock.StartedAt;
 
         var actorRef = await dailyStatsActor.GetAsync(ct);
 
@@ -45,7 +45,7 @@ internal sealed class DaemonStatsService(
             Process = new DaemonStats.Process
             {
                 UptimeSeconds = (long)uptime.TotalSeconds,
-                StartedAtUtc = _startedAt
+                StartedAtUtc = startClock.StartedAt
             },
             Tokens = new DaemonStats.Tokens
             {

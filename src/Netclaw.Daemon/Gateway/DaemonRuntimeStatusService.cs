@@ -12,10 +12,12 @@ using Netclaw.Configuration;
 using Netclaw.Configuration.Feeds;
 using Netclaw.Daemon.Configuration;
 using Netclaw.Daemon.Mcp;
+using Netclaw.Daemon.Services;
 
 namespace Netclaw.Daemon.Gateway;
 
 internal sealed class DaemonRuntimeStatusService(
+    DaemonStartClock startClock,
     TimeProvider timeProvider,
     IEnumerable<IChannel> channels,
     SlackChannelOptions slackOptions,
@@ -28,13 +30,11 @@ internal sealed class DaemonRuntimeStatusService(
     SQLiteMemoryStore? sqliteMemoryStore = null,
     IRequiredActor<ReminderManagerActorKey>? reminderManagerActor = null)
 {
-    private readonly DateTimeOffset _startedAt = timeProvider.GetUtcNow();
-
     public async Task<DaemonRuntimeStatus.Response> GetStatusAsync(CancellationToken cancellationToken = default)
     {
         var process = Process.GetCurrentProcess();
         var now = timeProvider.GetUtcNow();
-        var uptime = now - _startedAt;
+        var uptime = now - startClock.StartedAt;
 
         var connectors = new List<DaemonRuntimeStatus.Connector>
         {
@@ -57,7 +57,7 @@ internal sealed class DaemonRuntimeStatusService(
             Process = new DaemonRuntimeStatus.Process
             {
                 Pid = process.Id,
-                StartedAtUtc = _startedAt,
+                StartedAtUtc = startClock.StartedAt,
                 UptimeSeconds = (long)uptime.TotalSeconds
             },
             Connectors = connectors,
