@@ -33,6 +33,7 @@ public sealed class SessionMemoryObserverActor : ReceivePersistentActor
     private readonly IChatClient _client;
     private readonly TimeSpan _idleTimeout;
     private readonly TimeSpan _sidecarTimeout;
+    private readonly int _distillTurnInterval;
     private readonly TimeProvider _timeProvider;
     private readonly ILoggingAdapter _log = Context.GetLogger();
 
@@ -45,6 +46,7 @@ public sealed class SessionMemoryObserverActor : ReceivePersistentActor
     private DistillationRunState? _activeRun;
     private PendingPassivationRequest? _pendingPassivation;
     private int _turnCount;
+    private int _turnsSinceLastDistill;
 
     public override string PersistenceId { get; }
 
@@ -53,20 +55,23 @@ public sealed class SessionMemoryObserverActor : ReceivePersistentActor
         IChatClient client,
         TimeSpan idleTimeout,
         TimeSpan sidecarTimeout,
+        int distillTurnInterval = 0,
         TimeProvider? timeProvider = null) =>
-        Props.Create(() => new SessionMemoryObserverActor(sessionId, client, idleTimeout, sidecarTimeout, timeProvider));
+        Props.Create(() => new SessionMemoryObserverActor(sessionId, client, idleTimeout, sidecarTimeout, distillTurnInterval, timeProvider));
 
     public SessionMemoryObserverActor(
         SessionId sessionId,
         IChatClient client,
         TimeSpan idleTimeout,
         TimeSpan sidecarTimeout,
+        int distillTurnInterval = 0,
         TimeProvider? timeProvider = null)
     {
         _sessionId = sessionId;
         _client = client;
         _idleTimeout = idleTimeout;
         _sidecarTimeout = sidecarTimeout;
+        _distillTurnInterval = distillTurnInterval;
         _timeProvider = timeProvider ?? TimeProvider.System;
 
         PersistenceId = $"memory-observer-{sessionId.Value}";
@@ -99,7 +104,19 @@ public sealed class SessionMemoryObserverActor : ReceivePersistentActor
                 AppendTranscriptLine(line);
 
             if (msg is TurnCompleted tc && tc.Outcome != TurnOutcome.Skipped)
+            {
                 _turnCount = tc.TurnNumber;
+                _turnsSinceLastDistill++;
+
+                if (_distillTurnInterval > 0 && _hasNewContent && !_draining
+                    && _turnsSinceLastDistill >= _distillTurnInterval)
+                {
+                    _log.Info(
+                        "session_observer_turn_trigger turns_since_last={TurnsSince} interval={Interval}",
+                        _turnsSinceLastDistill, _distillTurnInterval);
+                    TriggerDistillation(Context.Parent, replyWhenNoWork: false);
+                }
+            }
         });
 
         Command<ReceiveTimeout>(_ => TriggerDistillation(Context.Parent, replyWhenNoWork: false));
@@ -161,6 +178,7 @@ public sealed class SessionMemoryObserverActor : ReceivePersistentActor
     {
         var run = new DistillationRunState(++_nextRunId, _contentVersion, replyTo);
         _activeRun = run;
+        _turnsSinceLastDistill = 0;
 
         _ = RunDistillationAsync(
             _client,

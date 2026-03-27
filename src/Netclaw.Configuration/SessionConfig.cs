@@ -128,6 +128,7 @@ public sealed record SessionConfig
             TitleGenerationInterval = ResolveValue(tuningSection, section, nameof(SessionTuning.TitleGenerationInterval), nested.TitleGenerationInterval),
             MemorySidecarsEnabled = ResolveValue(tuningSection, section, nameof(SessionTuning.MemorySidecarsEnabled), nested.MemorySidecarsEnabled),
             DeterministicRetrievalEnabled = ResolveValue(tuningSection, section, nameof(SessionTuning.DeterministicRetrievalEnabled), nested.DeterministicRetrievalEnabled),
+            MemoryDistillationTurnInterval = ResolveValue(tuningSection, section, nameof(SessionTuning.MemoryDistillationTurnInterval), nested.MemoryDistillationTurnInterval),
         };
     }
 

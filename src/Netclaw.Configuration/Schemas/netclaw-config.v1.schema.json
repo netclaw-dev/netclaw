@@ -189,7 +189,8 @@
             "KeepRecentMessages": { "type": "integer", "minimum": 1 },
             "TitleGenerationInterval": { "type": "integer", "minimum": 0 },
             "MemorySidecarsEnabled": { "type": "boolean" },
-            "DeterministicRetrievalEnabled": { "type": "boolean" }
+            "DeterministicRetrievalEnabled": { "type": "boolean" },
+            "MemoryDistillationTurnInterval": { "type": "integer", "minimum": 0 }
           },
           "additionalProperties": false
         }
