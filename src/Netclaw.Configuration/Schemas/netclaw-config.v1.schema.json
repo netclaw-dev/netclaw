@@ -234,6 +234,23 @@
         },
         "AudienceProfiles": {
           "$ref": "#/$defs/ToolAudienceProfiles"
+        },
+        "WebFetch": {
+          "type": "object",
+          "properties": {
+            "RequireHttps": {
+              "type": "boolean",
+              "default": true,
+              "description": "When true, web_fetch rejects plain HTTP URLs unless the host is in HttpAllowList."
+            },
+            "HttpAllowList": {
+              "type": "array",
+              "items": { "type": "string" },
+              "default": ["localhost", "127.0.0.1", "::1", "[::1]"],
+              "description": "Hosts allowed to use plain HTTP when RequireHttps is true. Default includes loopback addresses."
+            }
+          },
+          "additionalProperties": false
         }
       },
       "additionalProperties": false

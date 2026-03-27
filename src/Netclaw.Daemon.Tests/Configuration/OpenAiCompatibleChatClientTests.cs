@@ -332,24 +332,84 @@ data: [DONE]
         Assert.False(filter.ShouldSuppress("Hello "));
         Assert.False(filter.IsActive);
 
-        Assert.True(filter.ShouldSuppress("Hello <tool_call><function=test>"));
+        // Delta containing the marker triggers suppression
+        Assert.True(filter.ShouldSuppress("<tool_call><function=test>"));
         Assert.True(filter.IsActive);
 
-        // Subsequent calls are also suppressed
-        Assert.True(filter.ShouldSuppress("Hello <tool_call><function=test></function></tool_call>"));
+        // Subsequent deltas are also suppressed
+        Assert.True(filter.ShouldSuppress("</function></tool_call>"));
     }
 
     [Fact]
     public void ToolCallTextFilter_ReturnsCleanedText()
     {
         var filter = new OpenAiCompatibleChatClient.ToolCallTextFilter();
-        var fullText = "Preamble text <tool_call><function=search><parameter=Query>test</parameter></function></tool_call> Done";
+        var accumulatedText = new StringBuilder();
 
-        filter.ShouldSuppress(fullText);
+        var delta1 = "Preamble text ";
+        accumulatedText.Append(delta1);
+        filter.ShouldSuppress(delta1);
 
-        var cleaned = filter.GetCleanedText();
+        var delta2 = "<tool_call><function=search><parameter=Query>test</parameter></function></tool_call> Done";
+        accumulatedText.Append(delta2);
+        filter.ShouldSuppress(delta2);
+
+        var cleaned = OpenAiCompatibleChatClient.ToolCallTextFilter.GetCleanedText(accumulatedText);
         Assert.Contains("Preamble text", cleaned, StringComparison.Ordinal);
         Assert.DoesNotContain("<tool_call>", cleaned, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ToolCallTextFilter_DetectsMarkerSplitAcrossTwoDeltas()
+    {
+        var filter = new OpenAiCompatibleChatClient.ToolCallTextFilter();
+
+        Assert.False(filter.ShouldSuppress("some text <tool_"));
+        Assert.False(filter.IsActive);
+
+        // Second delta completes the marker
+        Assert.True(filter.ShouldSuppress("call><function=test>"));
+        Assert.True(filter.IsActive);
+    }
+
+    [Fact]
+    public void ToolCallTextFilter_DetectsMarkerSplitAcrossManySmallDeltas()
+    {
+        var filter = new OpenAiCompatibleChatClient.ToolCallTextFilter();
+        var marker = "<tool_call";
+
+        // Feed marker one character at a time
+        for (var i = 0; i < marker.Length - 1; i++)
+        {
+            Assert.False(filter.ShouldSuppress(marker[i].ToString()));
+            Assert.False(filter.IsActive);
+        }
+
+        // Last character completes the marker
+        Assert.True(filter.ShouldSuppress(marker[^1].ToString()));
+        Assert.True(filter.IsActive);
+    }
+
+    [Fact]
+    public void ToolCallTextFilter_HandlesEmptyDeltas()
+    {
+        var filter = new OpenAiCompatibleChatClient.ToolCallTextFilter();
+
+        Assert.False(filter.ShouldSuppress(""));
+        Assert.False(filter.ShouldSuppress("Hello "));
+        Assert.False(filter.ShouldSuppress(""));
+        Assert.False(filter.ShouldSuppress(""));
+        Assert.True(filter.ShouldSuppress("<tool_call>"));
+        Assert.True(filter.IsActive);
+    }
+
+    [Fact]
+    public void ToolCallTextFilter_MarkerAtStartOfStream()
+    {
+        var filter = new OpenAiCompatibleChatClient.ToolCallTextFilter();
+
+        Assert.True(filter.ShouldSuppress("<tool_call><function=foo>"));
+        Assert.True(filter.IsActive);
     }
 
     [Fact]

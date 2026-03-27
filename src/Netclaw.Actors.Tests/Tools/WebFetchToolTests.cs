@@ -1,5 +1,6 @@
 using System.Text;
 using Netclaw.Actors.Tools;
+using Netclaw.Configuration;
 using Xunit;
 
 namespace Netclaw.Actors.Tests.Tools;
@@ -273,7 +274,7 @@ public class WebFetchToolTests : IDisposable
 
         var handler = new FakeHttpHandler(html, "text/html");
         var httpClient = new HttpClient(handler);
-        var tool = new WebFetchTool(httpClient, _tempDir);
+        var tool = new WebFetchTool(httpClient: httpClient, fetchDirectory: _tempDir);
 
         var result = await tool.ExecuteAsync(
             new Dictionary<string, object?> { ["Url"] = "https://example.com/test" },
@@ -313,7 +314,7 @@ public class WebFetchToolTests : IDisposable
 
         var handler = new FakeHttpHandler(html, "text/html");
         var httpClient = new HttpClient(handler);
-        var tool = new WebFetchTool(httpClient, _tempDir);
+        var tool = new WebFetchTool(httpClient: httpClient, fetchDirectory: _tempDir);
 
         var result = await tool.ExecuteAsync(
             new Dictionary<string, object?> { ["Url"] = "https://example.com/test", ["Format"] = "text" },
@@ -344,7 +345,7 @@ public class WebFetchToolTests : IDisposable
 
         var handler = new FakeHttpHandler(html, "text/html");
         var httpClient = new HttpClient(handler);
-        var tool = new WebFetchTool(httpClient, _tempDir);
+        var tool = new WebFetchTool(httpClient: httpClient, fetchDirectory: _tempDir);
 
         var result = await tool.ExecuteAsync(
             new Dictionary<string, object?> { ["Url"] = "https://example.com/page" },
@@ -367,7 +368,7 @@ public class WebFetchToolTests : IDisposable
 
         var handler = new FakeHttpHandler(json, "application/json");
         var httpClient = new HttpClient(handler);
-        var tool = new WebFetchTool(httpClient, _tempDir);
+        var tool = new WebFetchTool(httpClient: httpClient, fetchDirectory: _tempDir);
 
         var result = await tool.ExecuteAsync(
             new Dictionary<string, object?> { ["Url"] = "https://api.example.com/data" },
@@ -393,6 +394,109 @@ public class WebFetchToolTests : IDisposable
 
         Assert.Contains("Error", result);
         Assert.Contains("Invalid URL", result);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_rejects_http_when_https_required()
+    {
+        var tool = new WebFetchTool(fetchDirectory: _tempDir);
+
+        var result = await tool.ExecuteAsync(
+            new Dictionary<string, object?> { ["Url"] = "http://example.com/page" },
+            CancellationToken.None);
+
+        Assert.Contains("HTTPS is required", result);
+        Assert.Contains("Tools.WebFetch.RequireHttps", result);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_allows_http_when_not_required()
+    {
+        var config = new ToolConfig { WebFetch = new WebFetchConfig { RequireHttps = false } };
+        var handler = new FakeHttpHandler("<html><body><p>OK</p></body></html>", "text/html");
+        var httpClient = new HttpClient(handler);
+        var tool = new WebFetchTool(config, httpClient, _tempDir);
+
+        var result = await tool.ExecuteAsync(
+            new Dictionary<string, object?> { ["Url"] = "http://example.com/page" },
+            CancellationToken.None);
+
+        Assert.Contains("Fetched:", result);
+        Assert.DoesNotContain("Error", result);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_allows_http_localhost_by_default()
+    {
+        var handler = new FakeHttpHandler("<html><body><p>Local</p></body></html>", "text/html");
+        var httpClient = new HttpClient(handler);
+        var tool = new WebFetchTool(httpClient: httpClient, fetchDirectory: _tempDir);
+
+        var result = await tool.ExecuteAsync(
+            new Dictionary<string, object?> { ["Url"] = "http://localhost:8080/api" },
+            CancellationToken.None);
+
+        Assert.Contains("Fetched:", result);
+        Assert.DoesNotContain("Error", result);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_allows_http_127_0_0_1_by_default()
+    {
+        var handler = new FakeHttpHandler("<html><body><p>Loopback</p></body></html>", "text/html");
+        var httpClient = new HttpClient(handler);
+        var tool = new WebFetchTool(httpClient: httpClient, fetchDirectory: _tempDir);
+
+        var result = await tool.ExecuteAsync(
+            new Dictionary<string, object?> { ["Url"] = "http://127.0.0.1:3000/" },
+            CancellationToken.None);
+
+        Assert.Contains("Fetched:", result);
+        Assert.DoesNotContain("Error", result);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_allows_http_ipv6_loopback_by_default()
+    {
+        var handler = new FakeHttpHandler("<html><body><p>IPv6</p></body></html>", "text/html");
+        var httpClient = new HttpClient(handler);
+        var tool = new WebFetchTool(httpClient: httpClient, fetchDirectory: _tempDir);
+
+        var result = await tool.ExecuteAsync(
+            new Dictionary<string, object?> { ["Url"] = "http://[::1]:5000/" },
+            CancellationToken.None);
+
+        Assert.Contains("Fetched:", result);
+        Assert.DoesNotContain("Error", result);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_rejects_http_localhost_when_not_in_allow_list()
+    {
+        var config = new ToolConfig { WebFetch = new WebFetchConfig { HttpAllowList = [] } };
+        var tool = new WebFetchTool(config, fetchDirectory: _tempDir);
+
+        var result = await tool.ExecuteAsync(
+            new Dictionary<string, object?> { ["Url"] = "http://localhost:8080/" },
+            CancellationToken.None);
+
+        Assert.Contains("HTTPS is required", result);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_allows_http_for_custom_allow_list_host()
+    {
+        var config = new ToolConfig { WebFetch = new WebFetchConfig { HttpAllowList = ["internal.corp"] } };
+        var handler = new FakeHttpHandler("<html><body><p>Internal</p></body></html>", "text/html");
+        var httpClient = new HttpClient(handler);
+        var tool = new WebFetchTool(config, httpClient, _tempDir);
+
+        var result = await tool.ExecuteAsync(
+            new Dictionary<string, object?> { ["Url"] = "http://internal.corp/api" },
+            CancellationToken.None);
+
+        Assert.Contains("Fetched:", result);
+        Assert.DoesNotContain("Error", result);
     }
 
     [Fact]

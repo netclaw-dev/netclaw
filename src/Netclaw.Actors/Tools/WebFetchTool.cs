@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Net;
 using System.Text;
 using HtmlAgilityPack;
+using Netclaw.Configuration;
 using Netclaw.Tools;
 
 namespace Netclaw.Actors.Tools;
@@ -28,6 +29,7 @@ public sealed partial class WebFetchTool : NetclawTool<WebFetchTool.Params>
         "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     ];
 
+    private readonly WebFetchConfig _webFetchConfig;
     private readonly HttpClient _httpClient;
     private readonly string _fetchDirectory;
     private readonly TimeProvider _timeProvider;
@@ -38,13 +40,20 @@ public sealed partial class WebFetchTool : NetclawTool<WebFetchTool.Params>
         [property: Description("Output format: 'raw' (default) preserves HTML structure (links, images, tables); 'text' extracts plain text only")]
         string? Format = null);
 
-    public WebFetchTool(HttpClient? httpClient = null, string? fetchDirectory = null, TimeProvider? timeProvider = null)
+    public WebFetchTool(ToolConfig config, HttpClient? httpClient = null, string? fetchDirectory = null, TimeProvider? timeProvider = null)
     {
+        _webFetchConfig = config.WebFetch;
         _httpClient = httpClient ?? new HttpClient();
         _fetchDirectory = fetchDirectory
             ?? Path.Combine(Path.GetTempPath(), "netclaw-fetch");
         _timeProvider = timeProvider ?? TimeProvider.System;
     }
+
+    /// <summary>
+    /// Test convenience constructor — uses default config.
+    /// </summary>
+    public WebFetchTool(HttpClient? httpClient = null, string? fetchDirectory = null, TimeProvider? timeProvider = null)
+        : this(new ToolConfig(), httpClient, fetchDirectory, timeProvider) { }
 
     protected override Task<string> ExecuteAsync(Params args, CancellationToken ct)
         => ExecuteAsync(args, ToolExecutionContext.Empty, ct);
@@ -57,6 +66,15 @@ public sealed partial class WebFetchTool : NetclawTool<WebFetchTool.Params>
         if (!Uri.TryCreate(args.Url, UriKind.Absolute, out var uri)
             || uri.Scheme is not ("http" or "https"))
             return "Error: Invalid URL. Must be an absolute HTTP or HTTPS URL.";
+
+        if (_webFetchConfig.RequireHttps
+            && uri.Scheme == "http"
+            && !_webFetchConfig.HttpAllowList.Any(h => h.Equals(uri.Host, StringComparison.OrdinalIgnoreCase)))
+        {
+            return $"Error: HTTPS is required by security policy. The URL '{args.Url}' uses plain HTTP. "
+                 + "Use https:// instead, or ask the operator to add the host to Tools.WebFetch.HttpAllowList "
+                 + "or set Tools.WebFetch.RequireHttps to false in the configuration.";
+        }
 
         try
         {
