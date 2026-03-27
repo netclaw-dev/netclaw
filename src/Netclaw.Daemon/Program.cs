@@ -110,6 +110,10 @@ static async Task RunDaemonAsync(string[] args, DaemonRestartSignal restartSigna
     builder.Services.AddSingleton<DailyStatsPublisher>();
     builder.Services.AddSingleton<Netclaw.Actors.Telemetry.ISessionMetrics>(sp => sp.GetRequiredService<DailyStatsPublisher>());
     builder.Services.AddSingleton<DaemonStatsService>();
+    builder.Services.AddSingleton<SessionIngressGate>();
+    builder.Services.AddSingleton<RestartManifestStore>();
+    builder.Services.AddSingleton<DaemonRestartCoordinator>();
+    builder.Services.AddSingleton<IDaemonRestartCoordinator>(sp => sp.GetRequiredService<DaemonRestartCoordinator>());
 
     var app = builder.Build();
 
@@ -219,7 +223,7 @@ static async Task RunDaemonAsync(string[] args, DaemonRestartSignal restartSigna
     app.MapProviderOAuthEndpoints();
 
     // Daemon lifecycle endpoint — CLI calls this before sending SIGTERM.
-    // Future #326 hook: add session drain before returning.
+    // Config-triggered restart coordination happens inside DaemonRestartCoordinator.
     app.MapPost("/api/lifecycle/shutdown", (
         DaemonLifecycleNotifier notifier,
         HttpRequest request) =>
@@ -318,7 +322,7 @@ static void ConfigureDaemonServices(
 
     services.Configure<HostOptions>(options =>
     {
-        options.ShutdownTimeout = TimeSpan.FromSeconds(10);
+        options.ShutdownTimeout = TimeSpan.FromSeconds(30);
     });
 
     // Resolve models for session config
@@ -707,6 +711,10 @@ static void ConfigureDaemonServices(
     // Config hot-reload watcher
     services.AddSingleton<ConfigWatcherService>();
     services.AddSingleton<IHostedService>(sp => sp.GetRequiredService<ConfigWatcherService>());
+
+    // Warm previously active sessions after a coordinated restart.
+    services.AddSingleton<RestartRecoveryService>();
+    services.AddSingleton<IHostedService>(sp => sp.GetRequiredService<RestartRecoveryService>());
 
     // PID file authority for daemon lifecycle management
     services.AddSingleton<PidFileService>();

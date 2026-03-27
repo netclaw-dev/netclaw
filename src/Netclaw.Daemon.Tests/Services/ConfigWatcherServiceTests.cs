@@ -1,4 +1,3 @@
-using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
 using Netclaw.Configuration;
 using Netclaw.Daemon.Services;
@@ -10,9 +9,7 @@ public sealed class ConfigWatcherServiceTests : IDisposable
 {
     private readonly string _tempDir;
     private readonly NetclawPaths _paths;
-    private readonly DaemonRestartSignal _restartSignal;
-    private readonly FakeApplicationLifetime _lifetime;
-    private readonly RecordingSink _sink;
+    private readonly FakeRestartCoordinator _restartCoordinator;
     private readonly ConfigWatcherService _sut;
 
     public ConfigWatcherServiceTests()
@@ -23,33 +20,23 @@ public sealed class ConfigWatcherServiceTests : IDisposable
         _paths = new NetclawPaths(_tempDir);
         _paths.EnsureDirectoriesExist();
 
-        _restartSignal = new DaemonRestartSignal();
-        _lifetime = new FakeApplicationLifetime();
-        _sink = new RecordingSink();
-
-        var notifier = new DaemonLifecycleNotifier(
-            _sink,
-            TimeProvider.System,
-            NullLogger<DaemonLifecycleNotifier>.Instance);
+        _restartCoordinator = new FakeRestartCoordinator();
 
         _sut = new ConfigWatcherService(
             _paths,
             TimeProvider.System,
-            _lifetime,
-            _restartSignal,
-            notifier,
+            _restartCoordinator,
             NullLogger<ConfigWatcherService>.Instance);
     }
 
     [Fact]
-    public void ValidConfigChange_TriggersRestart()
+    public async Task ValidConfigChange_TriggersRestart()
     {
         File.WriteAllText(_paths.NetclawConfigPath, """{ "Providers": {} }""");
 
-        _sut.ApplyReload();
+        await _sut.ApplyReloadAsync(CancellationToken.None);
 
-        Assert.True(_restartSignal.RestartRequested);
-        Assert.True(_lifetime.StopRequested);
+        Assert.Equal(1, _restartCoordinator.RequestCount);
     }
 
     [Theory]
@@ -69,41 +56,37 @@ public sealed class ConfigWatcherServiceTests : IDisposable
     }
 
     [Fact]
-    public void InvalidJson_DoesNotTriggerRestart()
+    public async Task InvalidJson_DoesNotTriggerRestart()
     {
         File.WriteAllText(_paths.NetclawConfigPath, """{ broken json """);
         // secrets.json doesn't exist — that's fine (optional)
 
-        _sut.ApplyReload();
+        await _sut.ApplyReloadAsync(CancellationToken.None);
 
-        Assert.False(_restartSignal.RestartRequested);
-        Assert.False(_lifetime.StopRequested);
+        Assert.Equal(0, _restartCoordinator.RequestCount);
     }
 
     [Fact]
-    public void MissingConfigFiles_TriggersRestart()
+    public async Task MissingConfigFiles_TriggersRestart()
     {
         // Both files are optional in the config chain — missing = valid
         Assert.False(File.Exists(_paths.NetclawConfigPath));
         Assert.False(File.Exists(_paths.SecretsPath));
 
-        _sut.ApplyReload();
+        await _sut.ApplyReloadAsync(CancellationToken.None);
 
-        Assert.True(_restartSignal.RestartRequested);
-        Assert.True(_lifetime.StopRequested);
+        Assert.Equal(1, _restartCoordinator.RequestCount);
     }
 
     [Fact]
-    public void ValidConfigChange_NotifiesShutdown()
+    public async Task RestartCoordinatorFailure_DoesNotLeaveIngressClosed()
     {
         File.WriteAllText(_paths.NetclawConfigPath, """{ "Providers": {} }""");
+        _restartCoordinator.ThrowOnRequest = true;
 
-        _sut.ApplyReload();
+        await _sut.ApplyReloadAsync(CancellationToken.None);
 
-        var alert = Assert.Single(_sink.Alerts);
-        Assert.Equal(AlertType.DaemonStopping, alert.Category);
-        Assert.NotNull(alert.Context);
-        Assert.Equal("config-reload", alert.Context["reason"]);
+        Assert.Equal(1, _restartCoordinator.RequestCount);
     }
 
     public void Dispose()
@@ -113,21 +96,20 @@ public sealed class ConfigWatcherServiceTests : IDisposable
             Directory.Delete(_tempDir, recursive: true);
     }
 
-    private sealed class FakeApplicationLifetime : IHostApplicationLifetime
+    private sealed class FakeRestartCoordinator : IDaemonRestartCoordinator
     {
-        public bool StopRequested { get; private set; }
+        public int RequestCount { get; private set; }
 
-        public CancellationToken ApplicationStarted => CancellationToken.None;
-        public CancellationToken ApplicationStopping => CancellationToken.None;
-        public CancellationToken ApplicationStopped => CancellationToken.None;
+        public bool ThrowOnRequest { get; set; }
 
-        public void StopApplication() => StopRequested = true;
-    }
+        public Task RequestConfigRestartAsync(CancellationToken cancellationToken)
+        {
+            RequestCount++;
 
-    private sealed class RecordingSink : IOperationalNotificationSink
-    {
-        public List<OperationalAlert> Alerts { get; } = [];
+            if (ThrowOnRequest)
+                throw new InvalidOperationException("boom");
 
-        public void Emit(OperationalAlert alert) => Alerts.Add(alert);
+            return Task.CompletedTask;
+        }
     }
 }

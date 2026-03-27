@@ -18,6 +18,7 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
     private readonly ISlackApiClient _slack;
     private readonly ISlackSocketModeClient _socketModeClient;
     private readonly ISlackReplyClient _replyClient;
+    private readonly SessionIngressGate _ingressGate;
     private readonly IContentScanner _contentScanner;
     private readonly IPromptInjectionDetector _promptInjectionDetector;
     private readonly IHttpClientFactory _httpClientFactory;
@@ -37,6 +38,7 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
         ISlackApiClient slack,
         ISlackSocketModeClient socketModeClient,
         ISlackReplyClient replyClient,
+        SessionIngressGate ingressGate,
         IContentScanner contentScanner,
         IPromptInjectionDetector? promptInjectionDetector,
         IHttpClientFactory httpClientFactory,
@@ -50,6 +52,7 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
         _slack = slack;
         _socketModeClient = socketModeClient;
         _replyClient = replyClient;
+        _ingressGate = ingressGate;
         _contentScanner = contentScanner;
         _promptInjectionDetector = promptInjectionDetector ?? new NullPromptInjectionDetector();
         _httpClientFactory = httpClientFactory;
@@ -109,6 +112,7 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
             _gateway = _system.ActorOf(
                 SlackGatewayActor.CreateProps(new SlackGatewayDependencies(
                     Pipeline: _pipeline,
+                    IngressGate: _ingressGate,
                     ActorSystem: _system,
                     TimeProvider: _timeProvider,
                     Options: _options,

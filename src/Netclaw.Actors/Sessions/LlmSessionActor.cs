@@ -113,6 +113,11 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     private readonly Telemetry.ISessionMetrics? _sessionMetrics;
 
+    private bool _restartDrainRequested;
+    private IActorRef? _restartDrainReplyTo;
+    private string? _pendingRestartNotice;
+    private string? _turnRestartNotice;
+
     // Persistent state (immutable — replaced on each event)
     private SessionState _state = SessionState.Empty;
 
@@ -306,6 +311,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         Command<CompactionWorkFailed>(_ => { });
         Command<SpawnChildActorRequest>(msg => Sender.Tell(Context.ActorOf(msg.Props, msg.ActorName)));
         Command<DeliveryFailed>(HandleDeliveryFailedWhenReady);
+        Command<PrepareForDaemonRestart>(_ => RequestRestartDrain());
 
         Command<SendUserMessage>(HandleIncomingUserMessage);
     }
@@ -319,6 +325,13 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         Command<SendUserMessage>(cmd =>
         {
+            if (_restartDrainRequested)
+            {
+                _log.Info("Rejecting new user message while restart drain is pending");
+                TryReplyNack(SessionIngressGate.RestartInProgressMessage);
+                return;
+            }
+
             _deliveryRetry.Clear();
             _log.Info("Buffering user message (LLM call in progress)");
             _buffer.Add(cmd);
@@ -327,6 +340,12 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         Command<DeliveryFailed>(msg =>
         {
+            if (_restartDrainRequested)
+            {
+                _log.Info("Ignoring delivery feedback while restart drain is pending");
+                return;
+            }
+
             if (!DeliveryRetryHandler.IsRetryable(msg))
             {
                 _log.Warning(
@@ -651,6 +670,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         });
 
         Command<SpawnChildActorRequest>(msg => Sender.Tell(Context.ActorOf(msg.Props, msg.ActorName)));
+        Command<PrepareForDaemonRestart>(_ => RequestRestartDrain());
     }
 
     private void HandleDistillationResult(SessionDistillationCompleted msg)
@@ -718,6 +738,13 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         // Buffer user messages during compaction (same as Processing)
         Command<SendUserMessage>(cmd =>
         {
+            if (_restartDrainRequested)
+            {
+                _log.Info("Rejecting new user message while restart drain is pending during compaction");
+                TryReplyNack(SessionIngressGate.RestartInProgressMessage);
+                return;
+            }
+
             _log.Info("Buffering user message (compaction in progress)");
             _buffer.Add(cmd);
             TryReplyAck();
@@ -746,6 +773,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             DrainBufferOrReady();
         });
         Command<SpawnChildActorRequest>(msg => Sender.Tell(Context.ActorOf(msg.Props, msg.ActorName)));
+        Command<PrepareForDaemonRestart>(_ => RequestRestartDrain());
 
         Command<CompactionTriggered>(msg =>
         {
@@ -901,6 +929,14 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     private void DrainBufferOrReady()
     {
+        if (_restartDrainRequested)
+        {
+            ClearBufferedMessagesForRestartDrain();
+            TransitionTo(SessionPhase.Ready);
+            TransitionTo(SessionPhase.Passivating);
+            return;
+        }
+
         if (_buffer.Count > 0)
         {
             _log.Info("Post-compaction: draining {BufferCount} buffered message(s)", _buffer.Count);
@@ -937,9 +973,17 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         CommandSubscriptionMessages();
         CommandSnapshotMessages();
+        Command<PrepareForDaemonRestart>(_ => RequestRestartDrain());
 
         Command<SendUserMessage>(cmd =>
         {
+            if (_restartDrainRequested)
+            {
+                _log.Info("Rejecting new user message while restart passivation is in progress");
+                TryReplyNack(SessionIngressGate.RestartInProgressMessage);
+                return;
+            }
+
             _log.Info("Aborting passivation due to new user message");
             Timers.Cancel(PassivationTimerKey);
             TransitionTo(SessionPhase.Ready);
@@ -961,6 +1005,12 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         Command<DeliveryFailed>(msg =>
         {
+            if (_restartDrainRequested)
+            {
+                _log.Info("Ignoring delivery feedback while restart passivation is in progress");
+                return;
+            }
+
             _log.Info("Aborting passivation due to delivery feedback");
             Timers.Cancel(PassivationTimerKey);
             TransitionTo(SessionPhase.Ready);
@@ -983,6 +1033,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     {
         _lifecycleObserver?.OnSessionDeactivated(_sessionId);
         SaveSnapshot(_state.ToSnapshot());
+        _restartDrainReplyTo?.Tell(CommandAck.For(_sessionId));
+        _restartDrainReplyTo = null;
         Context.Stop(Self);
     }
 
@@ -1258,6 +1310,14 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     private void DrainBufferedMessagesOrBecomeReady()
     {
+        if (_restartDrainRequested)
+        {
+            ClearBufferedMessagesForRestartDrain();
+            TransitionTo(SessionPhase.Ready);
+            TransitionTo(SessionPhase.Passivating);
+            return;
+        }
+
         if (_buffer.Count > 0)
         {
             TurnLog().Info("turn_buffer_drain count={BufferCount}", _buffer.Count);
@@ -1392,7 +1452,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         _state = _state.AddUserMessage(userContent, mediaRefs.Count > 0 ? mediaRefs : null);
         TryReplyAck();
         _recallManager.ResetForNewTurn();
-        FireLlmCall(userContent);
+        FireInitialTurnLlmCall(userContent);
         TransitionTo(SessionPhase.Processing);
     }
 
@@ -1501,6 +1561,12 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         });
 
         Command<SessionDistillationCompleted>(msg => HandleDistillationResult(msg));
+
+        Command<WarmSession>(cmd =>
+        {
+            _pendingRestartNotice = cmd.RestartNotice;
+            Sender.Tell(CommandAck.For(_sessionId));
+        });
 
         Command<JoinSession>(cmd =>
         {
@@ -1891,7 +1957,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
             // Inject skill content as a one-time system message for this turn
             _slashCommandSkillContent = skillBody;
-            FireLlmCall(effectiveUserContent);
+            FireInitialTurnLlmCall(effectiveUserContent);
             _slashCommandSkillContent = null;
 
             TransitionTo(SessionPhase.Processing);
@@ -1923,8 +1989,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     /// </summary>
     private void InjectDynamicContextLayers(List<AiChatMessage> messages)
     {
-        if (_contextLayers.Count == 0) return;
-
         var parts = new List<string>();
         foreach (var layer in _contextLayers)
         {
@@ -1940,6 +2004,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         // inject the skill body as a system context part
         if (_slashCommandSkillContent is not null)
             parts.Add(_slashCommandSkillContent);
+
+        if (_turnRestartNotice is not null)
+            parts.Add(_turnRestartNotice);
 
         // Session identity — allows the agent to reference its own session and media directory
         var sessionBlock = $"[session]\nid: {_sessionId.Value}";
@@ -2205,12 +2272,55 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         return log;
     }
 
+    private void RequestRestartDrain()
+    {
+        _restartDrainRequested = true;
+        _restartDrainReplyTo = Sender;
+
+        if (_currentPhase == SessionPhase.Ready)
+            TransitionTo(SessionPhase.Passivating);
+    }
+
+    private void ClearBufferedMessagesForRestartDrain()
+    {
+        if (_buffer.Count == 0)
+            return;
+
+        _log.Warning(
+            "Dropping {BufferCount} buffered message(s) because coordinated restart drain is completing.",
+            _buffer.Count);
+        _buffer.Clear();
+    }
+
+    private void FireInitialTurnLlmCall(string? recallQuery)
+    {
+        _turnRestartNotice = _pendingRestartNotice;
+        _pendingRestartNotice = null;
+
+        try
+        {
+            FireLlmCall(recallQuery);
+        }
+        finally
+        {
+            _turnRestartNotice = null;
+        }
+    }
+
     private void TryReplyAck()
     {
         if (Sender.IsNobody() || Equals(Sender, Context.System.DeadLetters))
             return;
 
         Sender.Tell(CommandAck.For(_sessionId));
+    }
+
+    private void TryReplyNack(string reason)
+    {
+        if (Sender.IsNobody() || Equals(Sender, Context.System.DeadLetters))
+            return;
+
+        Sender.Tell(CommandNack.For(_sessionId, reason));
     }
 
 

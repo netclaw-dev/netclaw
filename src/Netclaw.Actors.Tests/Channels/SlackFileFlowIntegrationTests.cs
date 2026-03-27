@@ -107,6 +107,7 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
 
         var deps = new SlackGatewayDependencies(
             Pipeline: pipeline,
+            IngressGate: null,
             ActorSystem: Sys,
             TimeProvider: TimeProvider.System,
             Options: new SlackChannelOptions
@@ -184,6 +185,7 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
 
         var deps = new SlackGatewayDependencies(
             Pipeline: pipeline,
+            IngressGate: null,
             ActorSystem: Sys,
             TimeProvider: TimeProvider.System,
             Options: new SlackChannelOptions
@@ -252,6 +254,7 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
 
         var deps = new SlackGatewayDependencies(
             Pipeline: pipeline,
+            IngressGate: null,
             ActorSystem: Sys,
             TimeProvider: TimeProvider.System,
             Options: new SlackChannelOptions
@@ -315,6 +318,7 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
 
         var deps = new SlackGatewayDependencies(
             Pipeline: pipeline,
+            IngressGate: null,
             ActorSystem: Sys,
             TimeProvider: TimeProvider.System,
             Options: new SlackChannelOptions
@@ -363,6 +367,7 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
 
         var deps = new SlackGatewayDependencies(
             Pipeline: pipeline,
+            IngressGate: null,
             ActorSystem: Sys,
             TimeProvider: TimeProvider.System,
             Options: new SlackChannelOptions
@@ -411,6 +416,7 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
 
         var deps = new SlackGatewayDependencies(
             Pipeline: pipeline,
+            IngressGate: null,
             ActorSystem: Sys,
             TimeProvider: TimeProvider.System,
             Options: new SlackChannelOptions
@@ -481,6 +487,7 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
 
         var deps = new SlackGatewayDependencies(
             Pipeline: pipeline,
+            IngressGate: null,
             ActorSystem: Sys,
             TimeProvider: TimeProvider.System,
             Options: new SlackChannelOptions
@@ -550,6 +557,7 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
 
         var deps = new SlackGatewayDependencies(
             Pipeline: feedbackPipeline,
+            IngressGate: null,
             ActorSystem: Sys,
             TimeProvider: TimeProvider.System,
             Options: new SlackChannelOptions
@@ -604,6 +612,7 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
 
         var deps = new SlackGatewayDependencies(
             Pipeline: feedbackPipeline,
+            IngressGate: null,
             ActorSystem: Sys,
             TimeProvider: TimeProvider.System,
             Options: new SlackChannelOptions
@@ -658,6 +667,7 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
 
         var deps = new SlackGatewayDependencies(
             Pipeline: feedbackPipeline,
+            IngressGate: null,
             ActorSystem: Sys,
             TimeProvider: TimeProvider.System,
             Options: new SlackChannelOptions
@@ -715,6 +725,7 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
 
         var deps = new SlackGatewayDependencies(
             Pipeline: feedbackPipeline,
+            IngressGate: null,
             ActorSystem: Sys,
             TimeProvider: TimeProvider.System,
             Options: new SlackChannelOptions
@@ -773,6 +784,7 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
 
         var deps = new SlackGatewayDependencies(
             Pipeline: feedbackPipeline,
+            IngressGate: null,
             ActorSystem: Sys,
             TimeProvider: TimeProvider.System,
             Options: new SlackChannelOptions
@@ -817,6 +829,7 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
 
         var deps = new SlackGatewayDependencies(
             Pipeline: pipeline,
+            IngressGate: null,
             ActorSystem: Sys,
             TimeProvider: TimeProvider.System,
             Options: new SlackChannelOptions
@@ -874,6 +887,7 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
 
         var deps = new SlackGatewayDependencies(
             Pipeline: pipeline,
+            IngressGate: null,
             ActorSystem: Sys,
             TimeProvider: TimeProvider.System,
             Options: new SlackChannelOptions

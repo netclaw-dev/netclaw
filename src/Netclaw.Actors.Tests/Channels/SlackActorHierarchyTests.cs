@@ -189,6 +189,7 @@ public sealed class SlackActorHierarchyTests(ITestOutputHelper output) : TestKit
     {
         return new SlackGatewayDependencies(
             Pipeline: null!,
+            IngressGate: null,
             ActorSystem: null!,
             TimeProvider: TimeProvider.System,
             Options: new SlackChannelOptions

@@ -157,17 +157,20 @@ public sealed class SessionPipeline : ISessionPipeline
     private readonly IRequiredActor<SessionManagerActorKey> _sessionManagerProvider;
     private readonly ISessionLifecycleObserver? _lifecycleObserver;
     private readonly NetclawPaths? _paths;
+    private readonly SessionIngressGate? _ingressGate;
 
     public SessionPipeline(
         ActorSystem system,
         IRequiredActor<SessionManagerActorKey> sessionManagerProvider,
         ISessionLifecycleObserver? lifecycleObserver = null,
-        NetclawPaths? paths = null)
+        NetclawPaths? paths = null,
+        SessionIngressGate? ingressGate = null)
     {
         _system = system;
         _sessionManagerProvider = sessionManagerProvider;
         _lifecycleObserver = lifecycleObserver;
         _paths = paths;
+        _ingressGate = ingressGate;
     }
 
     /// <summary>
@@ -188,6 +191,8 @@ public sealed class SessionPipeline : ISessionPipeline
         IMaterializer? materializer = null,
         CancellationToken cancellationToken = default)
     {
+        _ingressGate?.ThrowIfClosed();
+
         var sessionManager = await _sessionManagerProvider.GetAsync(cancellationToken);
         var killSwitch = KillSwitches.Shared($"session-{sessionId.Value}");
 

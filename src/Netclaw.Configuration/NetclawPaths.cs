@@ -35,6 +35,7 @@ public sealed class NetclawPaths
 
     // ── Cache directory ──
     public string CacheDirectory => Path.Combine(BasePath, "cache");
+    public string RestartManifestPath => Path.Combine(CacheDirectory, "restart-manifest.json");
 
     // ── Memory ──
     public string MemorySqliteDbPath => SqliteDbPath;

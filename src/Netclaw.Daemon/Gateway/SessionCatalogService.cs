@@ -280,6 +280,29 @@ public sealed class SessionCatalogService : ISessionLifecycleObserver
         return entries;
     }
 
+    public void MarkSessionActive(SessionId sessionId)
+    {
+        var persistenceId = $"session-{sessionId.Value}";
+
+        try
+        {
+            using var conn = new SqliteConnection(_connectionString);
+            conn.Open();
+
+            EnsureSchemaUpToDate(conn, _logger);
+
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText =
+                "UPDATE sessions SET status = 'active' WHERE persistence_id = $pid";
+            cmd.Parameters.AddWithValue("$pid", persistenceId);
+            cmd.ExecuteNonQuery();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to mark session {SessionId} active during restart recovery", sessionId.Value);
+        }
+    }
+
     private void UpdateSession(
         SqliteConnection conn,
         string persistenceId,

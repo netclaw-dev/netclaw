@@ -1,6 +1,7 @@
 using Akka.Actor;
 using Akka.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
+using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
 using Netclaw.Daemon.Gateway;
 using Xunit;
@@ -15,9 +16,10 @@ namespace Netclaw.Daemon.Tests.Gateway;
 /// </summary>
 public sealed class SessionRegistryTests
 {
-    private SessionRegistry BuildRegistry()
+    private SessionRegistry BuildRegistry(SessionIngressGate? ingressGate = null)
         => new(
             new StubRequiredActor(),
+            ingressGate ?? new SessionIngressGate(),
             TimeProvider.System,
             NullLogger<SessionRegistry>.Instance);
 
@@ -128,6 +130,33 @@ public sealed class SessionRegistryTests
         var result = await registry.EnsureSessionAsync("conn-3", "signalr/any-old-id", "tui");
         // The old ID was unknown after shutdown, so it's created fresh
         Assert.Equal("signalr/any-old-id", result.SessionId);
+    }
+
+    [Fact]
+    public async Task EnsureSession_throws_when_ingress_closed()
+    {
+        var gate = new SessionIngressGate();
+        gate.TryClose(SessionIngressGate.RestartInProgressMessage);
+        var registry = BuildRegistry(gate);
+
+        var ex = await Assert.ThrowsAsync<Microsoft.AspNetCore.SignalR.HubException>(
+            () => registry.EnsureSessionAsync("conn-1", null, "tui"));
+
+        Assert.Equal(SessionIngressGate.RestartInProgressMessage, ex.Message);
+    }
+
+    [Fact]
+    public async Task SendMessage_throws_when_ingress_closed()
+    {
+        var gate = new SessionIngressGate();
+        var registry = BuildRegistry(gate);
+        var sessionId = await registry.CreateSessionAsync("conn-1", "tui");
+        gate.TryClose(SessionIngressGate.RestartInProgressMessage);
+
+        var ex = await Assert.ThrowsAsync<Microsoft.AspNetCore.SignalR.HubException>(
+            () => registry.SendMessageAsync("conn-1", sessionId, "hello"));
+
+        Assert.Equal(SessionIngressGate.RestartInProgressMessage, ex.Message);
     }
 
     /// <summary>

@@ -24,6 +24,7 @@ namespace Netclaw.Daemon.Gateway;
 public sealed class SessionRegistry
 {
     private readonly IRequiredActor<SignalRGatewayActorKey> _gatewayProvider;
+    private readonly SessionIngressGate _ingressGate;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<SessionRegistry> _logger;
 
@@ -35,10 +36,12 @@ public sealed class SessionRegistry
 
     public SessionRegistry(
         IRequiredActor<SignalRGatewayActorKey> gatewayProvider,
+        SessionIngressGate ingressGate,
         TimeProvider timeProvider,
         ILogger<SessionRegistry> logger)
     {
         _gatewayProvider = gatewayProvider;
+        _ingressGate = ingressGate;
         _timeProvider = timeProvider;
         _logger = logger;
     }
@@ -54,6 +57,7 @@ public sealed class SessionRegistry
         await _sessionMutationGate.WaitAsync();
         try
         {
+            ThrowIfIngressClosed();
             return await CreateSessionCoreAsync(callerConnectionId, ct);
         }
         finally
@@ -100,6 +104,8 @@ public sealed class SessionRegistry
         await _sessionMutationGate.WaitAsync();
         try
         {
+            ThrowIfIngressClosed();
+
             if (!string.IsNullOrWhiteSpace(sessionId))
             {
                 var requestedSessionId = ParseSessionId(sessionId);
@@ -162,6 +168,8 @@ public sealed class SessionRegistry
         await _sessionMutationGate.WaitAsync();
         try
         {
+            ThrowIfIngressClosed();
+
             if (!_knownSessions.TryGetValue(requestedSessionId, out var channelType))
                 throw new HubException($"Session '{sessionId}' not found.");
 
@@ -196,6 +204,8 @@ public sealed class SessionRegistry
 
         if (!_knownSessions.ContainsKey(attachedSessionId))
             throw new HubException($"Session '{sessionId}' not found.");
+
+        ThrowIfIngressClosed();
 
         var signalrMessageId = $"signalr:{callerConnectionId.Value}:{_timeProvider.GetUtcNow().ToUnixTimeMilliseconds()}:{Guid.NewGuid():N}";
         if (signalrMessageId.Length > 128)
@@ -330,5 +340,12 @@ public sealed class SessionRegistry
             return parsed;
 
         throw new HubException($"Unknown channel type: '{channelType}'.");
+    }
+
+    private void ThrowIfIngressClosed()
+    {
+        var reason = _ingressGate.ClosedReason;
+        if (reason is not null)
+            throw new HubException(reason);
     }
 }

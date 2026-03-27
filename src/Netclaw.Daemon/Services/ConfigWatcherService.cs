@@ -21,9 +21,7 @@ public sealed class ConfigWatcherService : IHostedService, IDisposable
 {
     private readonly NetclawPaths _paths;
     private readonly TimeProvider _timeProvider;
-    private readonly IHostApplicationLifetime _appLifetime;
-    private readonly DaemonRestartSignal _restartSignal;
-    private readonly DaemonLifecycleNotifier _lifecycleNotifier;
+    private readonly IDaemonRestartCoordinator _restartCoordinator;
     private readonly ILogger<ConfigWatcherService> _logger;
 
     private FileSystemWatcher? _watcher;
@@ -33,16 +31,12 @@ public sealed class ConfigWatcherService : IHostedService, IDisposable
     public ConfigWatcherService(
         NetclawPaths paths,
         TimeProvider timeProvider,
-        IHostApplicationLifetime appLifetime,
-        DaemonRestartSignal restartSignal,
-        DaemonLifecycleNotifier lifecycleNotifier,
+        IDaemonRestartCoordinator restartCoordinator,
         ILogger<ConfigWatcherService> logger)
     {
         _paths = paths;
         _timeProvider = timeProvider;
-        _appLifetime = appLifetime;
-        _restartSignal = restartSignal;
-        _lifecycleNotifier = lifecycleNotifier;
+        _restartCoordinator = restartCoordinator;
         _logger = logger;
     }
 
@@ -107,7 +101,7 @@ public sealed class ConfigWatcherService : IHostedService, IDisposable
                 await Task.Delay(_debounceInterval, token);
                 if (token.IsCancellationRequested) return;
 
-                ApplyReload();
+                await ApplyReloadAsync(CancellationToken.None);
             }
             catch (OperationCanceledException)
             {
@@ -116,7 +110,7 @@ public sealed class ConfigWatcherService : IHostedService, IDisposable
         }, CancellationToken.None);
     }
 
-    internal void ApplyReload()
+    internal async Task ApplyReloadAsync(CancellationToken cancellationToken)
     {
         try
         {
@@ -132,10 +126,8 @@ public sealed class ConfigWatcherService : IHostedService, IDisposable
                 return;
             }
 
-            _logger.LogInformation("Config valid. Requesting daemon restart.");
-            _lifecycleNotifier.NotifyShutdown("config-reload");
-            _restartSignal.RequestRestart();
-            _appLifetime.StopApplication();
+            _logger.LogInformation("Config valid. Starting coordinated daemon restart.");
+            await _restartCoordinator.RequestConfigRestartAsync(cancellationToken);
         }
         catch (Exception ex)
         {
