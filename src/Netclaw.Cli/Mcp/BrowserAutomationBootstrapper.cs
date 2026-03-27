@@ -1,11 +1,12 @@
 using System.Diagnostics;
 using System.Text.RegularExpressions;
+using Netclaw.Configuration;
 
 namespace Netclaw.Cli.Mcp;
 
 internal interface IBrowserAutomationBootstrapper
 {
-    Task<BrowserAutomationBootstrapResult> EnsureReadyAsync(string backend, CancellationToken ct = default);
+    Task<BrowserAutomationBootstrapResult> EnsureReadyAsync(BrowserAutomationBackend backend, CancellationToken ct = default);
 }
 
 internal sealed record BrowserAutomationBootstrapResult(
@@ -16,16 +17,8 @@ internal sealed record BrowserAutomationBootstrapResult(
 
 internal sealed class BrowserAutomationBootstrapper : IBrowserAutomationBootstrapper
 {
-    public async Task<BrowserAutomationBootstrapResult> EnsureReadyAsync(string backend, CancellationToken ct = default)
+    public async Task<BrowserAutomationBootstrapResult> EnsureReadyAsync(BrowserAutomationBackend backend, CancellationToken ct = default)
     {
-        if (string.IsNullOrWhiteSpace(backend))
-        {
-            return new BrowserAutomationBootstrapResult(
-                Success: false,
-                NeedsManualAction: false,
-                Message: "Browser automation backend was not selected.");
-        }
-
         var installedNode = false;
         if (!await HasNodeRuntimeAsync(ct))
         {
@@ -36,7 +29,7 @@ internal sealed class BrowserAutomationBootstrapper : IBrowserAutomationBootstra
             }
             else
             {
-                var backendLabel = backend == BrowserAutomationMcpProfiles.PlaywrightBackend
+                var backendLabel = backend == BrowserAutomationBackend.Playwright
                     ? "Playwright MCP"
                     : "Chrome DevTools MCP";
 
@@ -71,9 +64,9 @@ internal sealed class BrowserAutomationBootstrapper : IBrowserAutomationBootstra
         return backendReady;
     }
 
-    private static async Task<BrowserAutomationBootstrapResult> EnsureBackendRuntimeAsync(string backend, CancellationToken ct)
+    private static async Task<BrowserAutomationBootstrapResult> EnsureBackendRuntimeAsync(BrowserAutomationBackend backend, CancellationToken ct)
     {
-        if (backend == BrowserAutomationMcpProfiles.ChromeDevToolsBackend)
+        if (backend == BrowserAutomationBackend.ChromeDevTools)
         {
             var chrome = BrowserAutomationRuntimeDetector.DetectChrome();
             if (!chrome.IsInstalled)
@@ -90,7 +83,7 @@ internal sealed class BrowserAutomationBootstrapper : IBrowserAutomationBootstra
                 Message: "Node.js runtime and Chrome executable detected.");
         }
 
-        if (backend == BrowserAutomationMcpProfiles.PlaywrightBackend)
+        if (backend == BrowserAutomationBackend.Playwright)
         {
             var browser = BrowserAutomationRuntimeDetector.GetPreferredPlaywrightBrowser();
             if (BrowserAutomationRuntimeDetector.HasPlaywrightBrowserRuntime(browser))

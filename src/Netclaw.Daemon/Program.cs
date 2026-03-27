@@ -720,10 +720,9 @@ static void ConfigureDaemonServices(
 
 static ISearchBackend? CreateSearchBackend(SearchConfig config)
 {
-    var backend = config.Backend.ToLowerInvariant();
-    switch (backend)
+    switch (config.Backend)
     {
-        case "brave":
+        case SearchBackend.Brave:
             if (config.BraveApiKey is null || string.IsNullOrWhiteSpace(config.BraveApiKey.Value))
             {
                 Console.Error.WriteLine("warn: Brave Search configured but no API key provided (Search.BraveApiKey). Web search tool will not be registered.");
@@ -731,7 +730,7 @@ static ISearchBackend? CreateSearchBackend(SearchConfig config)
             }
             return new BraveSearchBackend(config.BraveApiKey.Value);
 
-        case "searxng":
+        case SearchBackend.SearXng:
             if (string.IsNullOrWhiteSpace(config.SearXngEndpoint))
             {
                 Console.Error.WriteLine("warn: SearXNG configured but no endpoint provided (Search.SearXngEndpoint). Web search tool will not be registered.");
@@ -739,12 +738,12 @@ static ISearchBackend? CreateSearchBackend(SearchConfig config)
             }
             return new SearXngBackend(config.SearXngEndpoint);
 
-        case "duckduckgo":
+        case SearchBackend.DuckDuckGo:
             return new DuckDuckGoBackend();
 
         default:
-            Console.Error.WriteLine($"warn: Unknown search backend '{backend}'. Falling back to DuckDuckGo.");
-            return new DuckDuckGoBackend();
+            throw new ArgumentOutOfRangeException(nameof(config.Backend), config.Backend,
+                $"Unknown search backend: {config.Backend}");
     }
 }
 
