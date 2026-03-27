@@ -397,6 +397,24 @@ public sealed class SessionMemoryObserverActorTests : TestKit
         Assert.Contains("persisted-anchor", skipPrompt, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public void DistillationSystemPrompt_contains_explicit_operation_mapping_and_examples()
+    {
+        var prompt = SessionMemoryObserverActor.BuildDistillationSystemPrompt();
+
+        // Must contain explicit operation-class mapping rules
+        Assert.Contains("evidence -> operation MUST be \"append_record\"", prompt, StringComparison.Ordinal);
+        Assert.Contains("durable_fact -> operation MUST be \"upsert_document\"", prompt, StringComparison.Ordinal);
+
+        // Must contain both example operations
+        Assert.Contains("\"operation\": \"append_record\"", prompt, StringComparison.Ordinal);
+        Assert.Contains("\"operation\": \"upsert_document\"", prompt, StringComparison.Ordinal);
+
+        // Must contain both example memory classes
+        Assert.Contains("\"memoryClass\": \"evidence\"", prompt, StringComparison.Ordinal);
+        Assert.Contains("\"memoryClass\": \"durable_fact\"", prompt, StringComparison.Ordinal);
+    }
+
     /// <summary>
     /// Simple parent actor that creates the observer as its child and forwards
     /// all received messages to a probe. This lets tests verify messages sent

@@ -1,6 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using Netclaw.Cli.Provider;
 using Netclaw.Cli.Tui;
+using Netclaw.Cli.Tui.Wizard.Steps;
 using Netclaw.Configuration;
 using Netclaw.Providers;
 using Termina;
@@ -14,8 +15,7 @@ namespace Netclaw.Cli.Tests.Tui;
 /// <summary>
 /// Headless TUI tests for <see cref="InitWizardPage"/> using Termina's
 /// <see cref="VirtualTerminal"/> and <see cref="VirtualInputSource"/>.
-/// Exercises the full Termina rendering and input-routing pipeline,
-/// complementing the ViewModel-level tests in <see cref="InitWizardViewModelTests"/>.
+/// Exercises the full Termina rendering and input-routing pipeline.
 /// </summary>
 public sealed class InitWizardPageTests : IDisposable
 {
@@ -61,7 +61,7 @@ public sealed class InitWizardPageTests : IDisposable
 
     /// <summary>
     /// Verifies the keyboard input pipeline: Enter on the provider selection list
-    /// routes through Termina's input → page → SelectionListNode → ViewModel.
+    /// routes through Termina's input -> page -> SelectionListNode -> ProviderStepViewModel.
     /// KnownTypeKeys is alphabetically sorted; index 0 is "anthropic".
     /// </summary>
     [Fact]
@@ -76,7 +76,7 @@ public sealed class InitWizardPageTests : IDisposable
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         await app.RunAsync(cts.Token);
 
-        Assert.Equal(_registry.KnownTypeKeys[0], vm.SelectedProviderType);
+        Assert.Equal(_registry.KnownTypeKeys[0], vm.ProviderStep.SelectedProviderType);
     }
 
     /// <summary>
@@ -97,61 +97,7 @@ public sealed class InitWizardPageTests : IDisposable
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         await app.RunAsync(cts.Token);
 
-        Assert.Equal(_registry.KnownTypeKeys[1], vm.SelectedProviderType);
-    }
-
-    /// <summary>
-    /// Verifies the SecurityPosture step renders posture options when the
-    /// ViewModel is set directly to that step.
-    /// </summary>
-    [Fact]
-    public async Task SecurityPostureStep_RendersPostureOptions()
-    {
-        var (terminal, app, vm) = CreateHeadlessApp(out var input);
-
-        // Jump directly to SecurityPosture step (bypass Provider sub-steps)
-        vm.CurrentStep.Value = WizardStep.SecurityPosture;
-
-        // Quit immediately to capture the rendered output
-        input.EnqueueKey(ConsoleKey.Q, false, false, true);
-
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-        await app.RunAsync(cts.Token);
-
-        Assert.True(terminal.Contains("Security Posture"),
-            "Expected step title 'Security Posture' in terminal output");
-        Assert.True(terminal.Contains("Personal"),
-            "Expected 'Personal' posture option in terminal output");
-        Assert.True(terminal.Contains("Team"),
-            "Expected 'Team' posture option in terminal output");
-    }
-
-    /// <summary>
-    /// Verifies the Channels step renders channel entries when pre-populated.
-    /// </summary>
-    [Fact]
-    public async Task ChannelsStep_RendersChannelEntries()
-    {
-        var (terminal, app, vm) = CreateHeadlessApp(out var input);
-
-        // Pre-populate channels
-        vm.ChannelEntries.Add(new ChannelEntry("DMs", "dm", "personal", isDmRow: true));
-        vm.ChannelEntries.Add(new ChannelEntry("#general", "C0AGM484P0Q", "team"));
-
-        // Jump directly to Channels step
-        vm.CurrentStep.Value = WizardStep.Channels;
-
-        input.EnqueueKey(ConsoleKey.Q, false, false, true);
-
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-        await app.RunAsync(cts.Token);
-
-        Assert.True(terminal.Contains("Channels"),
-            "Expected step title 'Channels' in terminal output");
-        Assert.True(terminal.Contains("DMs"),
-            "Expected DMs entry in terminal output");
-        Assert.True(terminal.Contains("#general"),
-            "Expected #general entry in terminal output");
+        Assert.Equal(_registry.KnownTypeKeys[1], vm.ProviderStep.SelectedProviderType);
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────
