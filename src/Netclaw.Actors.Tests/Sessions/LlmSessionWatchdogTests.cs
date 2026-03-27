@@ -30,10 +30,10 @@ public sealed class LlmSessionWatchdogTests(ITestOutputHelper output) : TestKit(
         });
         services.AddSingleton(new SessionConfig
         {
-            TurnLlmTimeout = TimeSpan.FromSeconds(1),
+            FirstTokenTimeout = TimeSpan.FromSeconds(1),
+            StreamIdleTimeout = TimeSpan.FromSeconds(1),
             ToolExecutionTimeout = TimeSpan.FromSeconds(1),
             SidecarLlmTimeout = TimeSpan.FromSeconds(1),
-            LlmTimeoutMaxRetries = 0, // Disable retry — these tests verify immediate failure behavior
             Tuning = new SessionTuning
             {
                 SnapshotInterval = 5,
@@ -89,7 +89,7 @@ public sealed class LlmSessionWatchdogTests(ITestOutputHelper output) : TestKit(
         }, TimeSpan.FromSeconds(3));
 
         var firstError = await subscriber.ExpectMsgAsync<ErrorOutput>(TimeSpan.FromSeconds(6));
-        Assert.Contains("timed out", firstError.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("did not respond", firstError.Message, StringComparison.OrdinalIgnoreCase);
         await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
@@ -99,7 +99,7 @@ public sealed class LlmSessionWatchdogTests(ITestOutputHelper output) : TestKit(
         }, TimeSpan.FromSeconds(3));
 
         var secondError = await subscriber.ExpectMsgAsync<ErrorOutput>(TimeSpan.FromSeconds(6));
-        Assert.Contains("timed out", secondError.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("did not respond", secondError.Message, StringComparison.OrdinalIgnoreCase);
         await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
 
         Assert.True(_chatClient.CallCount >= 2);
@@ -135,7 +135,7 @@ public sealed class LlmSessionWatchdogTests(ITestOutputHelper output) : TestKit(
         }, TimeSpan.FromSeconds(3));
 
         var firstError = await subscriber.ExpectMsgAsync<ErrorOutput>(TimeSpan.FromSeconds(6));
-        Assert.Contains("timed out", firstError.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("did not respond", firstError.Message, StringComparison.OrdinalIgnoreCase);
         await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
 
         var recoveredText = await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(6));

@@ -58,17 +58,20 @@ public sealed record SessionConfig
     public TimeSpan SidecarLlmTimeout { get; init; } = TimeSpan.FromSeconds(90);
 
     /// <summary>
-    /// Maximum number of retries when a per-turn LLM call times out.
-    /// Set to 0 to disable timeout retry (fail immediately).
-    /// Each retry uses exponential backoff with jitter.
+    /// Maximum wait time for the first streaming token from the LLM provider.
+    /// Covers the prefill phase where the model processes input context before
+    /// generating output. Large contexts (200K+ tokens) can take several minutes.
+    /// Falls back to <see cref="TurnLlmTimeout"/> if not explicitly configured.
     /// </summary>
-    public int LlmTimeoutMaxRetries { get; init; } = 2;
+    public TimeSpan FirstTokenTimeout { get; init; } = TimeSpan.FromSeconds(600);
 
     /// <summary>
-    /// Base delay in seconds for exponential backoff between LLM timeout retries.
-    /// Actual delay: min(baseDelay * 2^attempt, 30s) +/- 25% jitter.
+    /// Maximum silence between consecutive streaming tokens. Once the first token
+    /// arrives, the watchdog switches to this tighter timeout and resets on every
+    /// delta. If no tokens arrive within this window, the stream is considered dead.
+    /// Falls back to <see cref="TurnLlmTimeout"/> if not explicitly configured.
     /// </summary>
-    public int LlmTimeoutRetryBaseDelaySeconds { get; init; } = 2;
+    public TimeSpan StreamIdleTimeout { get; init; } = TimeSpan.FromSeconds(120);
 
     /// <summary>
     /// Internal tuning constants. Bindable from config for development/testing
@@ -85,16 +88,25 @@ public sealed record SessionConfig
         var raw = section.Get<RawSessionConfig>() ?? new RawSessionConfig();
         var tuning = BindTuning(section);
 
+        var turnLlmTimeout = TimeSpan.FromSeconds(Math.Max(1, raw.TurnLlmTimeoutSeconds));
+
         return new SessionConfig
         {
             MaxToolCallsPerTurn = raw.MaxToolCallsPerTurn,
             MemoryObserverIdleSeconds = raw.MemoryObserverIdleSeconds,
             IdleTimeout = raw.IdleTimeout,
-            TurnLlmTimeout = TimeSpan.FromSeconds(Math.Max(1, raw.TurnLlmTimeoutSeconds)),
+            TurnLlmTimeout = turnLlmTimeout,
             ToolExecutionTimeout = TimeSpan.FromSeconds(Math.Max(1, raw.ToolExecutionTimeoutSeconds)),
             SidecarLlmTimeout = TimeSpan.FromSeconds(Math.Max(1, raw.SidecarLlmTimeoutSeconds)),
-            LlmTimeoutMaxRetries = Math.Max(0, raw.LlmTimeoutMaxRetries),
-            LlmTimeoutRetryBaseDelaySeconds = Math.Max(1, raw.LlmTimeoutRetryBaseDelaySeconds),
+            // Two-phase timeout: explicit value → TurnLlmTimeout fallback (if customized) → default
+            // If operator set TurnLlmTimeoutSeconds (non-default 180), use it for both phases
+            // to preserve backward compat. Otherwise use the generous new defaults.
+            FirstTokenTimeout = raw.FirstTokenTimeoutSeconds > 0
+                ? TimeSpan.FromSeconds(raw.FirstTokenTimeoutSeconds)
+                : raw.TurnLlmTimeoutSeconds != 180 ? turnLlmTimeout : TimeSpan.FromSeconds(600),
+            StreamIdleTimeout = raw.StreamIdleTimeoutSeconds > 0
+                ? TimeSpan.FromSeconds(raw.StreamIdleTimeoutSeconds)
+                : raw.TurnLlmTimeoutSeconds != 180 ? turnLlmTimeout : TimeSpan.FromSeconds(120),
             Tuning = tuning,
         };
     }
@@ -142,7 +154,7 @@ public sealed record SessionConfig
         public int TurnLlmTimeoutSeconds { get; init; } = 180;
         public int ToolExecutionTimeoutSeconds { get; init; } = 90;
         public int SidecarLlmTimeoutSeconds { get; init; } = 90;
-        public int LlmTimeoutMaxRetries { get; init; } = 2;
-        public int LlmTimeoutRetryBaseDelaySeconds { get; init; } = 2;
+        public int FirstTokenTimeoutSeconds { get; init; }
+        public int StreamIdleTimeoutSeconds { get; init; }
     }
 }

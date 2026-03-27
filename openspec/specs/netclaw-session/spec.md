@@ -455,11 +455,29 @@ forwarding via `self.Tell(LlmResponseDeltaReceived)`, and error packaging as
 `LlmCallFailed`. Dynamic context layer injection SHALL be a static method on
 this class.
 
-#### Scenario: LLM call timeout produces LlmCallFailed
+#### Scenario: Two-phase LLM call timeout
 
-- **GIVEN** an LLM call is in progress
-- **WHEN** the configured `TurnLlmTimeout` elapses
-- **THEN** the invoker sends `LlmCallFailed` with a `TimeoutException` to the actor
+The system SHALL enforce two separate timeout phases for LLM streaming calls:
+
+- **Phase 1 — First-Token Timeout**: The system SHALL wait up to
+  `FirstTokenTimeout` (default 600s) for the first streaming delta. This
+  covers the prefill phase where the model processes input context.
+- **Phase 2 — Stream-Idle Timeout**: Once the first delta arrives, the
+  system SHALL switch to `StreamIdleTimeout` (default 120s). This resets
+  on every subsequent delta and detects dead streams.
+
+- **GIVEN** an LLM streaming call is in progress and no deltas have arrived
+- **WHEN** the `FirstTokenTimeout` elapses
+- **THEN** the invoker sends `LlmCallFailed` with a `TimeoutException`
+- **AND** the error message indicates the provider did not respond
+
+- **GIVEN** an LLM streaming call has produced at least one delta
+- **WHEN** no further deltas arrive within `StreamIdleTimeout`
+- **THEN** the watchdog fires and the turn fails with `ErrorCategory.Timeout`
+- **AND** the error message indicates the stream stopped unexpectedly
+
+Backward compat: if `TurnLlmTimeoutSeconds` is configured but the new
+properties are not, both phases use `TurnLlmTimeout`.
 
 #### Scenario: Streaming deltas forwarded to actor
 
@@ -467,6 +485,7 @@ this class.
 - **WHEN** text content chunks arrive
 - **THEN** each chunk after the first is forwarded as `LlmResponseDeltaReceived`
 - **AND** the first chunk is held until the second arrives (single-chunk optimization)
+- **AND** the watchdog refreshes with `StreamIdleTimeout` on each delta
 
 ### Requirement: Tool execution encapsulation
 

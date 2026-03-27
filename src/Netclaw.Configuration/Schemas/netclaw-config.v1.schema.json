@@ -113,19 +113,19 @@
           "minimum": 1,
           "description": "Timeout in seconds for sidecar LLM calls (title, memory, compaction)."
         },
-        "LlmTimeoutMaxRetries": {
+        "FirstTokenTimeoutSeconds": {
           "type": "integer",
-          "minimum": 0,
-          "maximum": 10,
-          "default": 2,
-          "description": "Maximum number of retries when a per-turn LLM call times out. Set to 0 to disable."
+          "minimum": 10,
+          "maximum": 1800,
+          "default": 600,
+          "description": "Maximum wait in seconds for the first streaming token. Covers model prefill on large contexts."
         },
-        "LlmTimeoutRetryBaseDelaySeconds": {
+        "StreamIdleTimeoutSeconds": {
           "type": "integer",
-          "minimum": 1,
-          "maximum": 30,
-          "default": 2,
-          "description": "Base delay in seconds for exponential backoff between LLM timeout retries."
+          "minimum": 10,
+          "maximum": 600,
+          "default": 120,
+          "description": "Maximum silence in seconds between streaming tokens. Resets on each delta."
         },
         "CompactionThreshold": {
           "type": "number",
