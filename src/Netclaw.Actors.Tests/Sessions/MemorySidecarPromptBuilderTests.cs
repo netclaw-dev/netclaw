@@ -62,4 +62,23 @@ public sealed class MemorySidecarPromptBuilderTests
         Assert.Contains("evidence", prompt, StringComparison.Ordinal);
         Assert.Contains("trace", prompt, StringComparison.Ordinal);
     }
+
+    [Fact]
+    public void ClassificationRules_map_memoryClass_to_operation()
+    {
+        var rules = MemorySidecarPromptBuilder.BuildClassificationRules();
+
+        Assert.Contains("durable_fact -> operation MUST be \"upsert_document\"", rules, StringComparison.Ordinal);
+        Assert.Contains("evidence -> operation MUST be \"append_record\"", rules, StringComparison.Ordinal);
+        Assert.Contains("trace -> operation MUST be \"append_record\"", rules, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void MemoryObservationSystemPrompt_includes_classification_rules()
+    {
+        var prompt = MemorySidecarPromptBuilder.BuildMemoryObservationSystemPrompt();
+
+        Assert.Contains("durable_fact -> operation MUST be \"upsert_document\"", prompt, StringComparison.Ordinal);
+        Assert.Contains("evidence -> operation MUST be \"append_record\"", prompt, StringComparison.Ordinal);
+    }
 }

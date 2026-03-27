@@ -97,7 +97,8 @@ public sealed class ErrorCorrelationTests(ITestOutputHelper output) : TestKit(ou
 
         Assert.Equal(ErrorCategory.ProviderFailure, error.Category);
         Assert.NotEqual(Guid.Empty, error.CorrelationId);
-        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
+        var tc = await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
+        Assert.Equal(TurnOutcome.Failed, tc.Outcome);
     }
 
     [Fact]
@@ -165,7 +166,8 @@ public sealed class ErrorCorrelationTests(ITestOutputHelper output) : TestKit(ou
 
         Assert.Equal(ErrorCategory.Timeout, error.Category);
         Assert.NotEqual(Guid.Empty, error.CorrelationId);
-        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
+        var tc = await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
+        Assert.Equal(TurnOutcome.Failed, tc.Outcome);
     }
 
     private sealed class FailingChatClient : IChatClient

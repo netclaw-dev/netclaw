@@ -106,7 +106,7 @@ public sealed class SessionLogActor : ReceiveActor
                 ToolResultOutput toolResult => $"Tool result: {toolResult.ToolName} (call={toolResult.CallId}) → {Truncate(toolResult.Result, 1000)}",
                 ThinkingOutput thinking => $"Thinking: {Truncate(thinking.Text, 1000)}",
                 UsageOutput usage => $"Usage: in={usage.InputTokens} out={usage.OutputTokens} cached={usage.CachedInputTokens} reasoning={usage.ReasoningTokens} context={usage.UsagePercent:P0}",
-                TurnCompleted tc => $"Turn {tc.TurnNumber} completed",
+                TurnCompleted tc => $"Turn {tc.TurnNumber} {tc.Outcome.ToString().ToLowerInvariant()}",
                 SessionTitleOutput title => $"Title set: {title.Title}",
                 CompactionOutput compaction =>
                     $"Compaction: {compaction.MessagesBefore} → {compaction.MessagesAfter} messages " +

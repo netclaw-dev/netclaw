@@ -117,12 +117,32 @@ public sealed record UsageOutput : SessionOutput
 }
 
 /// <summary>
+/// Classifies how a turn ended.
+/// </summary>
+public enum TurnOutcome
+{
+    /// <summary>LLM produced a final text response.</summary>
+    Completed = 0,
+
+    /// <summary>Turn failed (timeout, provider error, tool failure).</summary>
+    Failed = 1,
+
+    /// <summary>Quick-exit path — LLM was never invoked (e.g. vision-only rejection, unknown slash command).</summary>
+    Skipped = 2
+}
+
+/// <summary>
 /// Signals that a turn has completed (all content delivered).
 /// Lifecycle — always delivered regardless of <see cref="OutputFilter"/>.
 /// </summary>
 public sealed record TurnCompleted : SessionOutput
 {
     public required int TurnNumber { get; init; }
+
+    /// <summary>
+    /// How the turn ended. Defaults to <see cref="TurnOutcome.Completed"/> for backward compatibility.
+    /// </summary>
+    public TurnOutcome Outcome { get; init; } = TurnOutcome.Completed;
 }
 
 /// <summary>

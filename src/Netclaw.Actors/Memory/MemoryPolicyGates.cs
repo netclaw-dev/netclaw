@@ -245,12 +245,20 @@ public sealed class MemoryProposalGate
         string? boundary,
         TrustAudience audience)
     {
-        var kind = operation == MemoryProposalOperation.AppendRecord ? MemoryKind.Record : MemoryKind.Document;
-        var updateSemantics = memoryClass == MemoryClass.Trace
-            ? MemoryUpdateSemantics.ConversationTrace
-            : operation == MemoryProposalOperation.AppendRecord
-                ? MemoryUpdateSemantics.ImmutableRecord
-                : MemoryUpdateSemantics.MergeDocument;
+        // Policy override: memoryClass determines storage kind, not the LLM's operation choice.
+        // Evidence and trace are always immutable records; durable_fact is always a document.
+        var kind = memoryClass switch
+        {
+            MemoryClass.Evidence => MemoryKind.Record,
+            MemoryClass.Trace => MemoryKind.Record,
+            _ => MemoryKind.Document
+        };
+        var updateSemantics = memoryClass switch
+        {
+            MemoryClass.Evidence => MemoryUpdateSemantics.ImmutableRecord,
+            MemoryClass.Trace => MemoryUpdateSemantics.ConversationTrace,
+            _ => MemoryUpdateSemantics.MergeDocument
+        };
 
         return new SQLiteMemoryCurationOperation(
             Kind: kind.ToWireValue(),
