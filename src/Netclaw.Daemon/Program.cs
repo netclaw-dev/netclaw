@@ -105,12 +105,16 @@ static async Task RunDaemonAsync(string[] args, DaemonRestartSignal restartSigna
     builder.Services.AddSingleton<SessionCatalogService>();
     builder.Services.AddSingleton<ISessionLifecycleObserver>(sp => sp.GetRequiredService<SessionCatalogService>());
     builder.Services.AddSingleton<SessionRegistry>();
+    builder.Services.AddSingleton<DaemonStartClock>();
     builder.Services.AddSingleton<DaemonRuntimeStatusService>();
     builder.Services.AddSingleton<DailyStatsPublisher>();
     builder.Services.AddSingleton<Netclaw.Actors.Telemetry.ISessionMetrics>(sp => sp.GetRequiredService<DailyStatsPublisher>());
     builder.Services.AddSingleton<DaemonStatsService>();
 
     var app = builder.Build();
+
+    // Eagerly resolve so StartedAt reflects daemon startup, not first request.
+    app.Services.GetRequiredService<DaemonStartClock>();
 
     // Gateway surface
     app.MapHub<SessionHub>("/hub/session");

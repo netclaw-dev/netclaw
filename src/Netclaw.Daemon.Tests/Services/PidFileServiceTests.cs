@@ -61,7 +61,7 @@ public sealed class PidFileServiceTests : IDisposable
         return new PidFileService(
             _paths,
             signal ?? new DaemonRestartSignal(),
-            TimeProvider.System,
+            new DaemonStartClock(TimeProvider.System),
             NullLogger<PidFileService>.Instance);
     }
 
