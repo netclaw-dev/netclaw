@@ -5,9 +5,25 @@ namespace Netclaw.Actors.Sessions;
 
 public static class MemorySidecarPromptBuilder
 {
+    /// <summary>
+    /// Shared classification rules that map memory class to operation type.
+    /// Used by both the observation and distillation prompts to prevent drift.
+    /// </summary>
+    internal static string BuildClassificationRules() => """
+        Operation-to-class mapping (STRICT — always follow these):
+        - durable_fact -> operation MUST be "upsert_document" (stable knowledge, merged on write)
+        - evidence -> operation MUST be "append_record" (point-in-time observation, immutable)
+        - trace -> operation MUST be "append_record" (execution breadcrumb, immutable)
+
+        Why: evidence captures temporal observations ("PR review findings on March 26",
+        "build failure at 2:30pm"). Using upsert_document would silently merge distinct
+        observations into one, destroying the historical record. Only durable_fact
+        (standing truths like user preferences) should be updatable.
+        """;
+
     public static string BuildMemoryObservationSystemPrompt()
     {
-        return """
+        return $$"""
             You are a memory observation sidecar.
             Return JSON only.
 
@@ -25,6 +41,8 @@ public static class MemorySidecarPromptBuilder
             - append_record
             - ignore
 
+            {{BuildClassificationRules()}}
+
             Do not invent synonyms. Do not use any other operation or memory class value.
             If no memory should be created, return { "proposals": [] }.
 
@@ -39,7 +57,7 @@ public static class MemorySidecarPromptBuilder
             - trip_plan
             - venue_area
 
-            Example durable_fact:
+            Example durable_fact (stable knowledge — merged on write):
             {
               "operation": "upsert_document",
               "memoryClass": "durable_fact",
@@ -61,7 +79,7 @@ public static class MemorySidecarPromptBuilder
               "rationale": "Stable user preference stated explicitly."
             }
 
-            Example evidence (agent-derived finding):
+            Example evidence (point-in-time finding — immutable, never merged):
             {
               "operation": "append_record",
               "memoryClass": "evidence",

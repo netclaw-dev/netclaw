@@ -312,6 +312,44 @@ public sealed class MemoryPolicyGatesTests
     }
 
     [Fact]
+    public void ProposalGate_forces_evidence_to_record_even_when_llm_says_upsert_document()
+    {
+        var gate = new MemoryProposalGate();
+        var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+        var accepted = gate.Accept(
+        [
+            new MemoryProposal(
+                "upsert_document", // LLM incorrectly chose upsert_document
+                "evidence",        // but memoryClass is evidence
+                "project",
+                "netclaw",
+                new MemoryAnchor("reddit-scanner-tuning", "analysis"),
+                "Reddit Scanner Tuning",
+                "Tuned scanner parameters for better accuracy.",
+                ["reddit scanner", "tuning"],
+                ["project_artifact"],
+                null,
+                null,
+                "searchable",
+                "normal",
+                0.78,
+                now,
+                null,
+                null,
+                "agent research finding")
+        ],
+        "project:test",
+        "normal",
+        now);
+
+        var op = Assert.Single(accepted);
+        Assert.Equal("record", op.Kind);
+        Assert.Equal("immutable-record", op.UpdateSemantics);
+        Assert.Equal("evidence", op.MemoryClass);
+    }
+
+    [Fact]
     public void ProposalGate_applies_supplied_audience_and_boundary_to_operations()
     {
         var gate = new MemoryProposalGate();

@@ -376,7 +376,7 @@ public sealed class SessionMemoryObserverActor : ReceivePersistentActor
         _ => null
     };
 
-    internal static string BuildDistillationSystemPrompt() => """
+    internal static string BuildDistillationSystemPrompt() => $$"""
         You are a session memory distillation sidecar.
         You receive the full transcript of a conversation session.
         Return JSON only: { "proposals": [ ... ] }
@@ -388,6 +388,8 @@ public sealed class SessionMemoryObserverActor : ReceivePersistentActor
         - Agent conclusions from research, analysis, or tool use -> evidence (recallMode: "searchable")
         - Project facts, constraints, or architectural decisions -> durable_fact (recallMode: "auto")
         - Task outcomes and significant results -> evidence (recallMode: "searchable")
+
+        {{MemorySidecarPromptBuilder.BuildClassificationRules()}}
 
         What to skip:
         - Greetings, pleasantries, task coordination ("can you do X" / "sure")
@@ -402,7 +404,7 @@ public sealed class SessionMemoryObserverActor : ReceivePersistentActor
         What would be useful to know in a future session?
 
         For each proposal, include:
-        - operation: "upsert_document" or "append_record"
+        - operation: "upsert_document" for durable_fact, "append_record" for evidence (see rules above)
         - memoryClass: "durable_fact" or "evidence"
         - subjectKind: "user" or "project"
         - subjectValue: the subject identifier
@@ -411,6 +413,38 @@ public sealed class SessionMemoryObserverActor : ReceivePersistentActor
         - recallMode: "auto" for durable_fact, "searchable" for evidence
         - sensitivity: "normal"
         - confidence: 0.7-0.95
+
+        Example durable_fact (stable knowledge — merged on write):
+        {
+          "operation": "upsert_document",
+          "memoryClass": "durable_fact",
+          "subjectKind": "user",
+          "subjectValue": "self",
+          "anchor": { "canonicalName": "user-preferred-editor", "anchorType": "preference" },
+          "title": "Preferred Code Editor",
+          "content": "User prefers VS Code with Vim keybindings.",
+          "aliases": ["VS Code", "editor preference", "vim keybindings"],
+          "facets": ["development_tools", "user_preference"],
+          "recallMode": "auto",
+          "sensitivity": "normal",
+          "confidence": 0.92
+        }
+
+        Example evidence (point-in-time finding — immutable, never merged):
+        {
+          "operation": "append_record",
+          "memoryClass": "evidence",
+          "subjectKind": "project",
+          "subjectValue": "netclaw",
+          "anchor": { "canonicalName": "memory-curation-perf-analysis", "anchorType": "analysis" },
+          "title": "Memory Curation Performance Analysis",
+          "content": "Curation dedup runs in <2ms per proposal with SQLite FTS5. Bottleneck is the LLM tier at ~800ms per ambiguous case.",
+          "aliases": ["curation performance", "dedup latency"],
+          "facets": ["performance_analysis", "project_artifact"],
+          "recallMode": "searchable",
+          "sensitivity": "normal",
+          "confidence": 0.78
+        }
 
         If nothing is worth remembering, return { "proposals": [] }.
         """;
