@@ -2,6 +2,7 @@ using Akka.Actor;
 using Akka.Hosting;
 using Akka.Hosting.TestKit;
 using Akka.Persistence.Hosting;
+using Akka.Streams;
 using System.Text.Json;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
@@ -84,6 +85,7 @@ public class LlmSessionIntegrationTests : TestKit
         services.AddSingleton<IModelCapabilityResolver>(new FakeCapabilityResolver());
         services.AddSingleton<TimeProvider>(_timeProvider);
         services.AddSingleton<ISessionLifecycleObserver>(_lifecycleObserver);
+        services.AddSingleton<ISessionPipeline>(new UnusedSessionPipeline());
 
         // Composite records for LlmSessionActor constructor
         services.AddSingleton(sp => new SessionServices(
@@ -1802,4 +1804,17 @@ internal sealed class RecordingSessionLifecycleObserver : ISessionLifecycleObser
 
     public void OnSessionDeactivated(SessionId sessionId)
         => DeactivatedSessionIds.Add(sessionId.Value);
+}
+
+internal sealed class UnusedSessionPipeline : ISessionPipeline
+{
+    public Task<MaterializedSession> CreateAsync(
+        SessionId sessionId,
+        SessionPipelineOptions options,
+        IMaterializer? materializer = null,
+        CancellationToken cancellationToken = default)
+        => Task.FromException<MaterializedSession>(new NotSupportedException("Session pipeline is not used by these tests."));
+
+    public Task SendFeedbackAsync(IWithSessionId feedback, CancellationToken ct = default)
+        => Task.CompletedTask;
 }

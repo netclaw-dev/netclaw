@@ -8,7 +8,7 @@ namespace Netclaw.Daemon.Services;
 /// <summary>
 /// Monitors <c>~/.netclaw/config/</c> for changes to <c>netclaw.json</c>.
 /// Debounces file system events and validates new config before applying.
-/// See SPEC-011 §Configuration Hot-Reload.
+/// See SPEC-011 §Configuration Restart Coordination.
 ///
 /// <para>
 /// Single reload trigger: all config changes go to disk first (TUI wizard,
@@ -118,7 +118,7 @@ public sealed class ConfigWatcherService : IHostedService, IDisposable
                 "[{Timestamp:o}] Config change detected, validating before restart...",
                 _timeProvider.GetUtcNow());
 
-            // Validate JSON structure of both config files before triggering restart.
+            // Validate JSON structure of the watched config file before triggering restart.
             // Full semantic validation happens during the next startup cycle.
             if (!ValidateConfigJson(_paths.NetclawConfigPath))
             {
