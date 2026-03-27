@@ -8,14 +8,15 @@ using Netclaw.Tools;
 namespace Netclaw.Actors.Tools;
 
 /// <summary>
-/// Fetches a web page and saves its content to a local file.
-/// Default format preserves HTML (links, images, structure); text mode
-/// extracts plain text only. Returns a summary with the file path so the
-/// agent can use file_read or shell_execute (grep) to selectively read
-/// the content without blowing out the context window.
+/// Fetches a URL and saves its content to a local file.
+/// For HTML: default format preserves structure; text mode extracts plain text.
+/// For binary content (images, PDFs, etc.): saves raw bytes with correct extension.
+/// For other text content: saves as-is with the URL's file extension preserved.
+/// Returns a summary with the file path so the agent can use file_read,
+/// grep, or attach_file to work with the content.
 /// </summary>
 [NetclawTool("web_fetch",
-    "Fetch a web page URL and save its content to a local file. Default format='raw' preserves HTML (links, images, structure); format='text' extracts plain text. Returns file path with preview. Use file_read to examine the full content.",
+    "Fetch a URL and save its content to a local file. HTML: format='raw' (default) preserves structure, format='text' extracts plain text. Binary (images, PDFs): saves raw bytes with correct extension. Returns file path with preview. Use file_read to examine content or attach_file to send binary files to the user.",
     Grant = "web")]
 public sealed partial class WebFetchTool : NetclawTool<WebFetchTool.Params>
 {
@@ -84,15 +85,28 @@ public sealed partial class WebFetchTool : NetclawTool<WebFetchTool.Params>
             using var response = await _httpClient.SendAsync(request, ct);
             response.EnsureSuccessStatusCode();
 
-            var content = await ReadWithLimitAsync(response, ct);
             var contentType = response.Content.Headers.ContentType?.MediaType ?? "";
+            var fetchDir = context.SessionDirectory ?? _fetchDirectory;
 
-            // Determine format: null or "raw" → raw HTML; "text" → text extraction
+            if (IsBinaryContentType(contentType))
+            {
+                var bytes = await ReadBytesWithLimitAsync(response, ct);
+                if (bytes.Length == 0)
+                    return $"Fetched {args.Url} but the response was empty.";
+
+                var extension = GetExtensionFromUrl(uri)
+                    ?? GetFallbackExtension(contentType, isBinary: true);
+                var filePath = SaveBytesToFile(bytes, uri, fetchDir, extension);
+
+                return FormatBinarySummary(uri.ToString(), filePath, bytes.Length, contentType);
+            }
+
+            var content = await ReadTextWithLimitAsync(response, ct);
             var useTextMode = string.Equals(args.Format, "text", StringComparison.OrdinalIgnoreCase);
 
             string savedContent;
             string title;
-            string extension;
+            string textExtension;
             string previewText;
 
             if (contentType.Contains("html", StringComparison.OrdinalIgnoreCase))
@@ -101,13 +115,13 @@ public sealed partial class WebFetchTool : NetclawTool<WebFetchTool.Params>
                 if (useTextMode)
                 {
                     savedContent = ExtractTextFromHtml(content);
-                    extension = ".txt";
+                    textExtension = ".txt";
                     previewText = savedContent;
                 }
                 else
                 {
                     savedContent = SanitizeHtml(content);
-                    extension = ".html";
+                    textExtension = ".html";
                     previewText = ExtractMetadataSummary(content);
                 }
             }
@@ -115,22 +129,18 @@ public sealed partial class WebFetchTool : NetclawTool<WebFetchTool.Params>
             {
                 title = uri.Host;
                 savedContent = content;
-                extension = ".txt";
+                textExtension = GetExtensionFromUrl(uri)
+                    ?? GetFallbackExtension(contentType, isBinary: false);
                 previewText = content;
             }
 
             if (string.IsNullOrWhiteSpace(savedContent))
                 return $"Fetched {args.Url} but the page contained no extractable content.";
 
-            // Use session-scoped directory if available, otherwise fall back to shared temp
-            var fetchDir = context.SessionDirectory ?? _fetchDirectory;
-
-            // Save to disk
-            var filePath = SaveToFile(savedContent, uri, fetchDir, extension);
+            var textFilePath = SaveToFile(savedContent, uri, fetchDir, textExtension);
             var lineCount = savedContent.Count(c => c == '\n') + 1;
 
-            // Build summary with preview
-            return FormatSummary(uri.ToString(), title, filePath, savedContent.Length, lineCount, previewText);
+            return FormatSummary(uri.ToString(), title, textFilePath, savedContent.Length, lineCount, previewText);
         }
         catch (HttpRequestException ex)
         {
@@ -142,24 +152,73 @@ public sealed partial class WebFetchTool : NetclawTool<WebFetchTool.Params>
         }
     }
 
-    private static async Task<string> ReadWithLimitAsync(HttpResponseMessage response, CancellationToken ct)
+    internal static bool IsBinaryContentType(string contentType)
+        => contentType.StartsWith("image/", StringComparison.OrdinalIgnoreCase)
+        || contentType.StartsWith("audio/", StringComparison.OrdinalIgnoreCase)
+        || contentType.StartsWith("video/", StringComparison.OrdinalIgnoreCase)
+        || contentType is "application/pdf" or "application/zip"
+            or "application/gzip" or "application/octet-stream";
+
+    /// <summary>
+    /// Extract file extension from the URL path (e.g., /photo.png → .png).
+    /// Returns null if the URL has no recognizable extension.
+    /// Filters out numeric-only "extensions" like .25414 (version numbers, IDs).
+    /// </summary>
+    internal static string? GetExtensionFromUrl(Uri uri)
     {
-        // Read up to MaxResponseBytes to avoid memory issues
-        var stream = await response.Content.ReadAsStreamAsync(ct);
-        using var limited = new BinaryReader(stream);
-        var bytes = limited.ReadBytes(MaxResponseBytes);
-        return Encoding.UTF8.GetString(bytes);
+        var ext = Path.GetExtension(uri.AbsolutePath);
+        if (string.IsNullOrEmpty(ext))
+            return null;
+
+        // Filter out numeric-only extensions (e.g., .25414 from arxiv URLs)
+        if (ext.Length > 1 && ext.AsSpan(1).IndexOfAnyExceptInRange('0', '9') < 0)
+            return null;
+
+        return ext;
     }
 
-    private string SaveToFile(string content, Uri uri, string directory, string extension = ".txt")
+    /// <summary>
+    /// Fallback extension when the URL has no file extension.
+    /// Covers common Content-Types; defaults to .bin (binary) or .txt (text).
+    /// </summary>
+    internal static string GetFallbackExtension(string contentType, bool isBinary) => contentType switch
+    {
+        "application/pdf" => ".pdf",
+        "application/json" => ".json",
+        "text/csv" => ".csv",
+        "text/html" => ".html",
+        "text/markdown" => ".md",
+        _ => isBinary ? ".bin" : ".txt"
+    };
+
+    private static async Task<string> ReadTextWithLimitAsync(HttpResponseMessage response, CancellationToken ct)
+        => Encoding.UTF8.GetString(await ReadBytesWithLimitAsync(response, ct));
+
+    private static async Task<byte[]> ReadBytesWithLimitAsync(HttpResponseMessage response, CancellationToken ct)
+    {
+        var stream = await response.Content.ReadAsStreamAsync(ct);
+        using var limited = new BinaryReader(stream);
+        return limited.ReadBytes(MaxResponseBytes);
+    }
+
+    private string BuildFilePath(Uri uri, string directory, string extension)
     {
         Directory.CreateDirectory(directory);
-
-        // Generate a filename from the URL host + path + timestamp
         var sanitized = SanitizeForFilename(uri);
         var filename = $"{sanitized}-{_timeProvider.GetUtcNow().ToUnixTimeSeconds()}{extension}";
-        var filePath = Path.Combine(directory, filename);
+        return Path.Combine(directory, filename);
+    }
 
+    private string SaveBytesToFile(byte[] content, Uri uri, string directory, string extension)
+    {
+        var filePath = BuildFilePath(uri, directory, extension);
+        File.WriteAllBytes(filePath, content);
+        return filePath;
+    }
+
+    private string SaveToFile(string content, Uri uri, string directory, string extension)
+    {
+        var filePath = BuildFilePath(uri, directory, extension);
         File.WriteAllText(filePath, content, Encoding.UTF8);
         return filePath;
     }
@@ -186,6 +245,18 @@ public sealed partial class WebFetchTool : NetclawTool<WebFetchTool.Params>
         if (lines.Length > PreviewLines)
             sb.AppendLine($"... ({lines.Length - PreviewLines} more lines — use file_read or grep to search)");
 
+        return sb.ToString().TrimEnd();
+    }
+
+    private static string FormatBinarySummary(
+        string url, string filePath, int byteCount, string contentType)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine($"Fetched: {url}");
+        sb.AppendLine($"Saved to: {filePath} ({byteCount:N0} bytes)");
+        sb.AppendLine($"Content-Type: {contentType}");
+        sb.AppendLine();
+        sb.AppendLine("This is a binary file. Use attach_file to send it to the user, or file_read if the format supports text extraction.");
         return sb.ToString().TrimEnd();
     }
 
