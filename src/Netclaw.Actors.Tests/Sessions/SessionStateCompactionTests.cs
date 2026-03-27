@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Sessions;
 using Xunit;
@@ -104,7 +105,7 @@ public class SessionStateCompactionTests
     {
         var state = (SessionState.Empty with
         {
-            History = System.Collections.Immutable.ImmutableList.Create(
+            History = ImmutableList.Create(
                 new SerializableChatMessage { Role = ChatRole.System, Content = "System prompt" })
         })
             .AddUserMessage("Hello")

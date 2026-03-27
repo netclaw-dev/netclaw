@@ -2,11 +2,13 @@ using ProtoBuf;
 
 namespace Netclaw.Actors.Protocol;
 
+// TODO: delete SystemPromptSet and its Recover<> handler once old journals have been migrated
 /// <summary>
-/// Persisted event recording that the system prompt was set or replaced.
-/// This is the first event in a new session's journal.
+/// Retained for backward compatibility with pre-v0.9 journals.
+/// No longer persisted — the system prompt is now read fresh from identity files on every recovery.
 /// </summary>
 [ProtoContract]
+[Obsolete("No longer persisted. Retained so old journals can still deserialize during recovery.")]
 public sealed class SystemPromptSet
 {
     [ProtoMember(1)]

@@ -177,7 +177,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         // ── Recovery handlers ──
         // Backward compat: old journals contain SystemPromptSet events.
         // Ignore the content — we always read fresh from disk in RecoveryCompleted.
+#pragma warning disable CS0618 // Obsolete type retained for journal deserialization
         Recover<SystemPromptSet>(_ => { });
+#pragma warning restore CS0618
         Recover<TurnRecorded>(evt => _state = _state.Apply(evt));
         Recover<SessionTitleSet>(evt => _state = _state.Apply(evt));
         Recover<SessionCompacted>(evt => _state = _state.Apply(evt));
@@ -1736,7 +1738,16 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         var content = _promptProvider.GetSystemPrompt();
         if (string.IsNullOrWhiteSpace(content))
         {
-            _log.Info("No system prompt layers available");
+            // Clear stale prompt from snapshot recovery rather than silently keeping it
+            if (_state.History.Count > 0 && _state.History[0].Role == Protocol.ChatRole.System)
+            {
+                _state = _state with { History = _state.History.RemoveAt(0) };
+                _log.Warning("Identity files missing — cleared stale system prompt from snapshot");
+            }
+            else
+            {
+                _log.Info("No system prompt layers available");
+            }
             return;
         }
 

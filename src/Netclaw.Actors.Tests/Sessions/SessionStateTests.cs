@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Sessions;
 using Xunit;
@@ -242,7 +243,7 @@ public class SessionStateTests
     {
         return SessionState.Empty with
         {
-            History = System.Collections.Immutable.ImmutableList.Create(
+            History = ImmutableList.Create(
                 new SerializableChatMessage { Role = ChatRole.System, Content = content })
         };
     }
