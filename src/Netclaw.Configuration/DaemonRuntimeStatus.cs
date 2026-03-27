@@ -124,6 +124,12 @@ public static class DaemonRuntimeStatus
         public string? LatestVersion { get; init; }
 
         public string? ReleaseNotesUrl { get; init; }
+
+        /// <summary>
+        /// Diagnostic detail when <see cref="State"/> is "unknown" — e.g. the specific
+        /// error that caused the check to fail.
+        /// </summary>
+        public string? ErrorDetail { get; init; }
     }
 
     public sealed class Memory : IWireType
