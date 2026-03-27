@@ -47,6 +47,13 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             .Subscribe(HandlePaste)
             .DisposeWith(Subscriptions);
 
+        // Wire content invalidation for ALL navigation (step and sub-step changes)
+        ViewModel.OnStepContentChanged = () =>
+        {
+            _stepContentNode?.Invalidate();
+            _helpTextNode?.Invalidate();
+        };
+
         // When the orchestrator's step index changes, clear subs and invalidate layouts
         ViewModel.Orchestrator.CurrentStepIndex
             .Subscribe(_ =>

@@ -139,6 +139,8 @@ public partial class InitWizardViewModel : ReactiveViewModel
 
     /// <summary>
     /// Advance the wizard. On the health check step, triggers RunWithOrchestrator.
+    /// Calls <see cref="OnStepContentChanged"/> after navigation so the Page can
+    /// invalidate its layout nodes (sub-step changes don't update CurrentStepIndex).
     /// </summary>
     public void GoNext()
     {
@@ -151,6 +153,7 @@ public partial class InitWizardViewModel : ReactiveViewModel
 
         _orchestrator.GoNext();
         _context.StatusMessage.Value = "";
+        OnStepContentChanged?.Invoke();
         RequestRedraw();
     }
 
@@ -163,9 +166,16 @@ public partial class InitWizardViewModel : ReactiveViewModel
             return false; // at the very beginning
 
         _context.StatusMessage.Value = "";
+        OnStepContentChanged?.Invoke();
         RequestRedraw();
         return true;
     }
+
+    /// <summary>
+    /// Invoked after any navigation (step or sub-step change) so the Page can
+    /// invalidate its DynamicLayoutNodes. Wired by the Page in OnBound.
+    /// </summary>
+    public Action? OnStepContentChanged { get; set; }
 
     /// <summary>
     /// Request application quit.
