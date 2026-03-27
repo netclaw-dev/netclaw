@@ -92,9 +92,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     // Processing watchdog (timer management for stuck operations)
     private readonly ProcessingWatchdog _watchdog = new();
 
-    // Timeout retry handler (exponential backoff for LLM call timeouts)
-    private TimeoutRetryHandler _timeoutRetry = null!; // Initialized in constructor from config
-    private static readonly object TimeoutRetryTimerKey = new();
+    // Two-phase timeout: tracks whether we've received any streaming delta this turn
+    private bool _firstDeltaReceived;
 
     // Per-turn diagnostic correlation (ephemeral)
     private string? _activeTurnId;
@@ -142,9 +141,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             : _chatClient;
         _model = modelCapabilities;
         _config = config;
-        _timeoutRetry = new TimeoutRetryHandler(
-            config.LlmTimeoutMaxRetries,
-            TimeSpan.FromSeconds(config.LlmTimeoutRetryBaseDelaySeconds));
         _promptProvider = services.PromptProvider;
         _contextLayers = services.ContextLayers;
         _skillRegistry = tools?.SkillRegistry;
@@ -305,7 +301,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         });
 
         Command<ProcessingWatchdogExpired>(_ => { });
-        Command<RetryLlmCallAfterBackoff>(_ => { }); // Stale retry from previous turn — ignore
         Command<CompactionWorkCompleted>(_ => { });
         Command<CompactionWorkFailed>(_ => { });
         Command<SpawnChildActorRequest>(msg => Sender.Tell(Context.ActorOf(msg.Props, msg.ActorName)));
@@ -404,7 +399,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         Command<LlmResponseDeltaReceived>(msg =>
         {
-            _watchdog.Refresh(_config.TurnLlmTimeout, Timers);
+            _firstDeltaReceived = true;
+            _watchdog.Refresh(_config.StreamIdleTimeout, Timers);
 
             switch (msg.Content)
             {
@@ -623,14 +619,11 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 return;
             }
 
-            // Evaluate timeout retry before failing the turn
-            if (HandleTimeoutRetryOrFail(msg.Cause, "turn_llm_call"))
-                return;
-
-            // Non-timeout failure — use the actor's richer error extraction
             TurnLog().Error(msg.Cause, "turn_llm_call_failed");
+
             var errorMessage = ExtractLlmErrorMessage(msg.Cause);
-            FailCurrentTurn(errorMessage, msg.Cause, ErrorCategory.ProviderFailure);
+            var category = msg.Cause is TimeoutException ? ErrorCategory.Timeout : ErrorCategory.ProviderFailure;
+            FailCurrentTurn(errorMessage, msg.Cause, category);
         });
 
         Command<ProcessingWatchdogExpired>(msg =>
@@ -638,28 +631,22 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             if (!_watchdog.IsCurrent(msg))
                 return;
 
-            var timeout = msg.OperationName is "tool-execution"
-                ? _config.ToolExecutionTimeout
-                : _config.TurnLlmTimeout;
+            var timeout = msg.OperationName switch
+            {
+                "tool-execution" => _config.ToolExecutionTimeout,
+                "llm-call" => _firstDeltaReceived ? _config.StreamIdleTimeout : _config.FirstTokenTimeout,
+                _ => _config.TurnLlmTimeout
+            };
 
             var timeoutCause = new TimeoutException(
                 $"Session processing operation '{msg.OperationName}' exceeded watchdog timeout of {timeout.TotalSeconds:F0}s");
 
             _watchdog.Stop(Timers);
 
-            // Only retry LLM call timeouts, not tool execution timeouts (tools may have side effects)
-            if (msg.OperationName is "llm-call" && HandleTimeoutRetryOrFail(timeoutCause, "turn_watchdog"))
-                return;
-
             _log.Error("Processing watchdog expired for operation {OperationName} (opId={OperationId})",
                 msg.OperationName, msg.OperationId);
-            FailCurrentTurn("I encountered a timeout while processing your message. Please try again.", timeoutCause, ErrorCategory.Timeout);
-        });
-
-        Command<RetryLlmCallAfterBackoff>(msg =>
-        {
-            TurnLog().Info("turn_timeout_retry_firing attempt={Attempt}", msg.Attempt);
-            FireLlmCall();
+            var errorMessage = ExtractLlmErrorMessage(timeoutCause);
+            FailCurrentTurn(errorMessage, timeoutCause, ErrorCategory.Timeout);
         });
 
         Command<SpawnChildActorRequest>(msg => Sender.Tell(Context.ActorOf(msg.Props, msg.ActorName)));
@@ -1354,8 +1341,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         _observerActor?.Tell(cmd);
 
         _turnState.ResetForNewTurn();
-        _timeoutRetry.ResetForNewTurn();
-        Timers.Cancel(TimeoutRetryTimerKey);
+        _firstDeltaReceived = false;
         _discoveredToolCache.PrepareForNewTurn(
             _availableTools, _baseToolCount,
             _config.Tuning.DiscoveredToolRetentionTurns,
@@ -1614,6 +1600,11 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         if (IsContextOverflowError(cause))
             return $"Context window exceeded after compaction — the session has too many tools or a large system prompt for the {_model.ModelId} context window ({_model.ContextWindowTokens} tokens). Try reducing tools or increasing the model's context window.";
 
+        if (cause is TimeoutException)
+            return _firstDeltaReceived
+                ? "The LLM response stream stopped unexpectedly. Please try again."
+                : "The LLM provider did not respond in time. The model may be overloaded or the context too large. Please try again.";
+
         return "I encountered an error processing your message. Please try again.";
     }
 
@@ -1816,7 +1807,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         InjectDynamicContextLayers(messages);
         var self = Self;
         var client = _chatClient;
-        var timeout = _config.TurnLlmTimeout;
+        var timeout = _config.FirstTokenTimeout;
 
         var exposedTools = ResolveExposedToolsForCurrentTurn();
         ChatOptions? options = null;
@@ -2142,52 +2133,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         }, OutputFilter.Usage);
     }
 
-    /// <summary>
-    /// Evaluate timeout retry for an LLM call failure. If retryable, emits a status
-    /// indicator and schedules a retry via timer. Returns true if the failure was
-    /// handled (either retry scheduled or turn failed); false if the cause is not
-    /// a timeout and the caller should handle it.
-    /// </summary>
-    private bool HandleTimeoutRetryOrFail(Exception cause, string logPrefix)
-    {
-        switch (_timeoutRetry.Evaluate(cause))
-        {
-            case TimeoutRetryAction.Retry retry:
-                TurnLog().Warning(cause,
-                    "{Prefix}_timeout attempt={Attempt} maxRetries={MaxRetries} backoffMs={BackoffMs}",
-                    logPrefix, retry.Attempt, retry.MaxRetries, (int)retry.Delay.TotalMilliseconds);
-
-                // Status indicator only — do NOT call FailCurrentTurn or AddErrorReply.
-                // Turn stays open in Processing; no TurnCompleted emitted.
-                EmitOutput(new ErrorOutput
-                {
-                    SessionId = _sessionId,
-                    Message = $"The LLM provider timed out. Retrying (attempt {retry.Attempt} of {retry.MaxRetries})...",
-                    Category = ErrorCategory.Timeout,
-                    CorrelationId = Guid.NewGuid(),
-                    Cause = cause
-                });
-
-                Timers.StartSingleTimer(
-                    TimeoutRetryTimerKey,
-                    new RetryLlmCallAfterBackoff(retry.Attempt),
-                    retry.Delay);
-                return true;
-
-            case TimeoutRetryAction.Fail fail:
-                TurnLog().Error(cause, "{Prefix}_failed", logPrefix);
-                FailCurrentTurn(fail.ErrorMessage, cause, ErrorCategory.Timeout);
-                return true;
-
-            default:
-                return false; // Not a timeout — caller handles
-        }
-    }
-
     private void FailCurrentTurn(string errorMessage, Exception cause, ErrorCategory category = ErrorCategory.Unknown)
     {
         _deliveryRetry.Clear();
-        Timers.Cancel(TimeoutRetryTimerKey);
         _state = _state.AddErrorReply(errorMessage);
 
         var correlationId = Guid.NewGuid();

@@ -6,7 +6,6 @@ using Akka.Persistence.Hosting;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
-using AiChatRole = Microsoft.Extensions.AI.ChatRole;
 using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Memory;
 using Netclaw.Actors.Protocol;
@@ -14,28 +13,28 @@ using Netclaw.Actors.Sessions;
 using Netclaw.Configuration;
 using Xunit;
 using Xunit.Abstractions;
+using AiChatRole = Microsoft.Extensions.AI.ChatRole;
 
 namespace Netclaw.Actors.Tests.Sessions;
 
-public sealed class LlmSessionTimeoutRetryTests(ITestOutputHelper output) : TestKit(output: output)
+public sealed class LlmSessionTwoPhaseTimeoutTests(ITestOutputHelper output) : TestKit(output: output)
 {
-    private readonly TimeoutThenSucceedChatClient _chatClient = new();
+    private readonly TwoPhaseTestChatClient _chatClient = new();
 
     protected override void ConfigureServices(HostBuilderContext context, IServiceCollection services)
     {
         services.AddSingleton<IChatClientProvider>(new SingleClientProvider(_chatClient));
         services.AddSingleton(new ModelCapabilities
         {
-            ModelId = "timeout-retry-test-model",
+            ModelId = "two-phase-timeout-test-model",
             ContextWindowTokens = 128_000,
         });
         services.AddSingleton(new SessionConfig
         {
-            TurnLlmTimeout = TimeSpan.FromSeconds(1),
-            ToolExecutionTimeout = TimeSpan.FromSeconds(1),
-            SidecarLlmTimeout = TimeSpan.FromSeconds(1),
-            LlmTimeoutMaxRetries = 2,
-            LlmTimeoutRetryBaseDelaySeconds = 1,
+            FirstTokenTimeout = TimeSpan.FromSeconds(2),
+            StreamIdleTimeout = TimeSpan.FromSeconds(1),
+            ToolExecutionTimeout = TimeSpan.FromSeconds(10),
+            SidecarLlmTimeout = TimeSpan.FromSeconds(10),
             Tuning = new SessionTuning
             {
                 SnapshotInterval = 5,
@@ -69,14 +68,13 @@ public sealed class LlmSessionTimeoutRetryTests(ITestOutputHelper output) : Test
     }
 
     [Fact]
-    public async Task Timeout_retries_then_succeeds()
+    public async Task First_token_timeout_fires_when_no_deltas_arrive()
     {
-        // First call hangs (timeout), second call succeeds
-        _chatClient.SucceedAfterCalls = 1;
+        _chatClient.Mode = StreamMode.HangForever;
 
-        var sessionId = new SessionId("timeout-retry/retry-succeed");
+        var sessionId = new SessionId("two-phase/first-token-timeout");
         var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
-        var subscriber = CreateTestProbe("retry-succeed-sub");
+        var subscriber = CreateTestProbe("first-token-sub");
 
         await sessionManager.Ask<SessionJoined>(new JoinSession
         {
@@ -92,110 +90,78 @@ public sealed class LlmSessionTimeoutRetryTests(ITestOutputHelper output) : Test
             Content = "hello"
         }, TimeSpan.FromSeconds(3));
 
-        // First: retry status indicator
-        var retryIndicator = await subscriber.ExpectMsgAsync<ErrorOutput>(TimeSpan.FromSeconds(6));
-        Assert.Contains("Retrying", retryIndicator.Message);
-        Assert.Contains("attempt 1 of 2", retryIndicator.Message);
-        Assert.Equal(ErrorCategory.Timeout, retryIndicator.Category);
-
-        // Then: successful response from retry
-        var text = await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(10));
-        Assert.Contains("succeeded on call 2", text.Text, StringComparison.OrdinalIgnoreCase);
-        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
-
-        // Verify exactly 2 LLM calls were made
-        Assert.Equal(2, _chatClient.CallCount);
-    }
-
-    [Fact]
-    public async Task Timeout_exhausts_retries_and_fails_gracefully()
-    {
-        // All calls hang — never succeed
-        _chatClient.SucceedAfterCalls = int.MaxValue;
-
-        var sessionId = new SessionId("timeout-retry/exhaust");
-        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
-        var subscriber = CreateTestProbe("exhaust-sub");
-
-        await sessionManager.Ask<SessionJoined>(new JoinSession
-        {
-            SessionId = sessionId,
-            Subscriber = subscriber,
-            Filter = OutputFilter.TextOnly
-        }, TimeSpan.FromSeconds(3));
-        await subscriber.ExpectMsgAsync<SessionJoined>();
-
-        await sessionManager.Ask<CommandAck>(new SendUserMessage
-        {
-            SessionId = sessionId,
-            Content = "hello"
-        }, TimeSpan.FromSeconds(3));
-
-        // Retry 1 indicator
-        var retry1 = await subscriber.ExpectMsgAsync<ErrorOutput>(TimeSpan.FromSeconds(6));
-        Assert.Contains("attempt 1 of 2", retry1.Message);
-
-        // Retry 2 indicator
-        var retry2 = await subscriber.ExpectMsgAsync<ErrorOutput>(TimeSpan.FromSeconds(10));
-        Assert.Contains("attempt 2 of 2", retry2.Message);
-
-        // Final failure with descriptive message
-        var finalError = await subscriber.ExpectMsgAsync<ErrorOutput>(TimeSpan.FromSeconds(10));
-        Assert.Contains("3 attempts", finalError.Message);
-        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
-
-        // 1 initial + 2 retries = 3 total calls
-        Assert.Equal(3, _chatClient.CallCount);
-    }
-
-    [Fact]
-    public async Task Non_timeout_error_does_not_retry()
-    {
-        // Throw a non-timeout error on first call
-        _chatClient.ThrowNonTimeoutError = true;
-
-        var sessionId = new SessionId("timeout-retry/no-retry");
-        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
-        var subscriber = CreateTestProbe("no-retry-sub");
-
-        await sessionManager.Ask<SessionJoined>(new JoinSession
-        {
-            SessionId = sessionId,
-            Subscriber = subscriber,
-            Filter = OutputFilter.TextOnly
-        }, TimeSpan.FromSeconds(3));
-        await subscriber.ExpectMsgAsync<SessionJoined>();
-
-        await sessionManager.Ask<CommandAck>(new SendUserMessage
-        {
-            SessionId = sessionId,
-            Content = "hello"
-        }, TimeSpan.FromSeconds(3));
-
-        // Immediate error, no retry indicators
+        // FirstTokenTimeout is 2s — should fire within ~3s
         var error = await subscriber.ExpectMsgAsync<ErrorOutput>(TimeSpan.FromSeconds(6));
-        Assert.DoesNotContain("Retrying", error.Message);
+        Assert.Equal(ErrorCategory.Timeout, error.Category);
+        Assert.Contains("did not respond", error.Message);
         await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
-
-        // Only 1 LLM call made
-        Assert.Equal(1, _chatClient.CallCount);
     }
 
-    /// <summary>
-    /// Chat client that hangs for the first N calls, then succeeds.
-    /// Can also throw non-timeout errors for testing error classification.
-    /// </summary>
-    private sealed class TimeoutThenSucceedChatClient : IChatClient
+    [Fact]
+    public async Task Stream_idle_timeout_fires_when_stream_stalls_after_deltas()
     {
-        private int _callCount;
+        // Emit 2 deltas then hang — the stream-idle timeout (1s) should fire, not first-token (2s)
+        _chatClient.Mode = StreamMode.EmitThenHang;
 
-        public int CallCount => _callCount;
+        var sessionId = new SessionId("two-phase/stream-idle-timeout");
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("stream-idle-sub");
 
-        /// <summary>Succeed starting from this call number (1-based). Set to int.MaxValue to always hang.</summary>
-        public int SucceedAfterCalls { get; set; } = 1;
+        await sessionManager.Ask<SessionJoined>(new JoinSession
+        {
+            SessionId = sessionId,
+            Subscriber = subscriber,
+            Filter = OutputFilter.TextOnly
+        }, TimeSpan.FromSeconds(3));
+        await subscriber.ExpectMsgAsync<SessionJoined>();
 
-        /// <summary>If true, first call throws a non-timeout error instead of hanging.</summary>
-        public bool ThrowNonTimeoutError { get; set; }
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "hello"
+        }, TimeSpan.FromSeconds(3));
+
+        // We should see text deltas streamed, then a timeout error
+        // StreamIdleTimeout is 1s — should fire well before FirstTokenTimeout (2s)
+        var error = await subscriber.ExpectMsgAsync<ErrorOutput>(TimeSpan.FromSeconds(6));
+        Assert.Equal(ErrorCategory.Timeout, error.Category);
+        Assert.Contains("stopped unexpectedly", error.Message);
+        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
+    }
+
+    [Fact]
+    public async Task Successful_stream_completes_without_timeout()
+    {
+        _chatClient.Mode = StreamMode.SucceedImmediately;
+
+        var sessionId = new SessionId("two-phase/success");
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("success-sub");
+
+        await sessionManager.Ask<SessionJoined>(new JoinSession
+        {
+            SessionId = sessionId,
+            Subscriber = subscriber,
+            Filter = OutputFilter.TextOnly
+        }, TimeSpan.FromSeconds(3));
+        await subscriber.ExpectMsgAsync<SessionJoined>();
+
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "hello"
+        }, TimeSpan.FromSeconds(3));
+
+        var text = await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(6));
+        Assert.Contains("success", text.Text, StringComparison.OrdinalIgnoreCase);
+        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
+    }
+
+    private enum StreamMode { HangForever, EmitThenHang, SucceedImmediately }
+
+    private sealed class TwoPhaseTestChatClient : IChatClient
+    {
+        public StreamMode Mode { get; set; } = StreamMode.HangForever;
 
         public Task<ChatResponse> GetResponseAsync(
             IEnumerable<ChatMessage> messages,
@@ -208,20 +174,47 @@ public sealed class LlmSessionTimeoutRetryTests(ITestOutputHelper output) : Test
             ChatOptions? options = null,
             CancellationToken cancellationToken = default)
         {
-            var callNumber = Interlocked.Increment(ref _callCount);
-
-            if (ThrowNonTimeoutError && callNumber == 1)
-                return ThrowAsync(new InvalidOperationException("Non-timeout provider error"), cancellationToken);
-
-            if (callNumber > SucceedAfterCalls)
-                return ReturnTextAsync($"succeeded on call {callNumber}", cancellationToken);
-
-            return NeverCompletesAsync(CancellationToken.None);
+            return Mode switch
+            {
+                StreamMode.HangForever => NeverCompletesAsync(CancellationToken.None),
+                StreamMode.EmitThenHang => EmitThenHangAsync(cancellationToken),
+                StreamMode.SucceedImmediately => ReturnTextAsync("success response", cancellationToken),
+                _ => throw new InvalidOperationException()
+            };
         }
 
         private static async IAsyncEnumerable<ChatResponseUpdate> NeverCompletesAsync(
             [EnumeratorCancellation] CancellationToken cancellationToken = default)
         {
+            var gate = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            await gate.Task;
+            yield break;
+        }
+
+        private static async IAsyncEnumerable<ChatResponseUpdate> EmitThenHangAsync(
+            [EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            // Emit a few deltas so the actor receives LlmResponseDeltaReceived
+            yield return new ChatResponseUpdate
+            {
+                Role = AiChatRole.Assistant,
+                Contents = [new TextContent("chunk1 ")]
+            };
+            await Task.Yield();
+
+            yield return new ChatResponseUpdate
+            {
+                Contents = [new TextContent("chunk2 ")]
+            };
+            await Task.Yield();
+
+            yield return new ChatResponseUpdate
+            {
+                Contents = [new TextContent("chunk3")]
+            };
+            await Task.Yield();
+
+            // Now hang — stream goes silent
             var gate = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
             await gate.Task;
             yield break;
@@ -241,17 +234,6 @@ public sealed class LlmSessionTimeoutRetryTests(ITestOutputHelper output) : Test
                 yield return update;
                 await Task.Yield();
             }
-        }
-
-        private static async IAsyncEnumerable<ChatResponseUpdate> ThrowAsync(
-            Exception ex,
-            [EnumeratorCancellation] CancellationToken cancellationToken = default)
-        {
-            await Task.Yield();
-            throw ex;
-#pragma warning disable CS0162 // Unreachable code — required for async-iterator signature
-            yield break;
-#pragma warning restore CS0162
         }
 
         public object? GetService(Type serviceType, object? serviceKey = null) => null;
