@@ -4,10 +4,7 @@ namespace Netclaw.Cli.Mcp;
 
 internal static class BrowserAutomationMcpProfiles
 {
-    public const string ChromeDevToolsBackend = "chrome-devtools";
-    public const string PlaywrightBackend = "playwright";
-
-    public static (string Name, McpServerEntry Entry) Create(string backend)
+    public static (string Name, McpServerEntry Entry) Create(BrowserAutomationBackend backend)
     {
         var npxCommand = BrowserAutomationRuntimeDetector.GetPreferredNpxCommand();
         var env = BrowserAutomationRuntimeDetector.BuildMcpEnvironmentOverlay(npxCommand);
@@ -16,7 +13,7 @@ internal static class BrowserAutomationMcpProfiles
 
         return backend switch
         {
-            PlaywrightBackend => ("browser_playwright", new McpServerEntry
+            BrowserAutomationBackend.Playwright => ("browser_playwright", new McpServerEntry
             {
                 Transport = "stdio",
                 Enabled = true,
@@ -38,7 +35,7 @@ internal static class BrowserAutomationMcpProfiles
                 ]
             }),
 
-            _ => ("browser_chrome_devtools", new McpServerEntry
+            BrowserAutomationBackend.ChromeDevTools => ("browser_chrome_devtools", new McpServerEntry
             {
                 Transport = "stdio",
                 Enabled = true,
@@ -52,7 +49,10 @@ internal static class BrowserAutomationMcpProfiles
                     "--headless=true",
                     "--no-usage-statistics"
                 ]
-            })
+            }),
+
+            _ => throw new ArgumentOutOfRangeException(nameof(backend), backend,
+                $"Unknown browser automation backend: {backend}")
         };
     }
 }
