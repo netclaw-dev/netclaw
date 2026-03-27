@@ -55,6 +55,35 @@ public sealed class DoctorFixServiceTests
         Assert.Contains("\"configVersion\": 1", updated, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task AddsSlackFormat_WhenSlackWebhookMissingFormat()
+    {
+        var basePath = CreateTempBasePath();
+        var paths = new NetclawPaths(basePath);
+        paths.EnsureDirectoriesExist();
+
+        await File.WriteAllTextAsync(paths.NetclawConfigPath,
+            """
+            {
+              "configVersion": 1,
+              "Notifications": {
+                "Webhooks": [
+                  {
+                    "Url": "https://hooks.slack.com/services/T00/B00/xxx"
+                  }
+                ]
+              }
+            }
+            """);
+
+        var service = new DoctorFixService(paths);
+        var plan = await service.BuildPlanAsync();
+
+        Assert.True(plan.HasChanges);
+        Assert.Single(plan.Fixes);
+        Assert.Contains("\"Format\": \"Slack\"", plan.Fixes[0].UpdatedText, StringComparison.Ordinal);
+    }
+
     private static string CreateTempBasePath()
     {
         var path = Path.Combine(Path.GetTempPath(), "netclaw-tests", Guid.NewGuid().ToString("N"));

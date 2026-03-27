@@ -65,3 +65,14 @@ public enum WebhookFormat
     /// <summary>Slack Block Kit format with required text field and structured blocks.</summary>
     Slack = 1,
 }
+
+/// <summary>
+/// Infers the appropriate <see cref="WebhookFormat"/> from a webhook URL.
+/// </summary>
+public static class WebhookFormatDetection
+{
+    public static WebhookFormat InferFromUrl(string url)
+        => url.Contains("hooks.slack.com", StringComparison.OrdinalIgnoreCase)
+            ? WebhookFormat.Slack
+            : WebhookFormat.Generic;
+}
