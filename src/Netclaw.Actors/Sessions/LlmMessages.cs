@@ -17,6 +17,12 @@ internal sealed record LlmResponseReceived
     public bool StreamedThinking { get; init; }
 
     public AutomaticRecallResult? RecallResult { get; init; }
+
+    /// <summary>
+    /// Correlation ID matching <see cref="LlmSessionActor._activeCallId"/>.
+    /// Stale responses from cancelled calls are ignored.
+    /// </summary>
+    public long CallId { get; init; }
 }
 
 /// <summary>
@@ -25,6 +31,8 @@ internal sealed record LlmResponseReceived
 internal sealed record LlmResponseDeltaReceived
 {
     public required AIContent Content { get; init; }
+
+    public long CallId { get; init; }
 }
 
 /// <summary>
@@ -33,6 +41,8 @@ internal sealed record LlmResponseDeltaReceived
 internal sealed record LlmCallFailed
 {
     public required Exception Cause { get; init; }
+
+    public long CallId { get; init; }
 }
 
 /// <summary>

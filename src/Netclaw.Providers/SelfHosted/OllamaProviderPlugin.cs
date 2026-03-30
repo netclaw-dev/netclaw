@@ -18,6 +18,6 @@ public sealed class OllamaProviderPlugin : ProviderPluginBase<OllamaDescriptor>
         var endpoint = string.IsNullOrWhiteSpace(entry.Endpoint)
             ? new Uri(DefaultEndpoint)
             : new Uri(entry.Endpoint);
-        return new OllamaApiClient(endpoint, model.ModelId);
+        return new OllamaApiClient(CreateLlmHttpClient(endpoint), model.ModelId);
     }
 }
