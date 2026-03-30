@@ -675,6 +675,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
                 // Use the configured context window as the token count estimate since
                 // the provider rejected the request without returning usage stats.
+                Timers.Cancel(StreamingRetryTimerKey);
                 Self.Tell(new CompactionTriggered { InputTokenCount = _model.ContextWindowTokens });
                 TransitionTo(SessionPhase.Compacting);
                 return;
@@ -1005,21 +1006,25 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     {
         for (var i = _state.History.Count - 1; i >= 0; i--)
         {
-            if (_state.History[i].Role != Protocol.ChatRole.User)
+            var candidate = _state.History[i];
+            if (candidate.Role != Protocol.ChatRole.User)
                 continue;
 
-            var msg = _state.History[i];
+            // Skip system nudges (recall content, empty-response nudges) — they use
+            // User role but are not the real user message.
+            if (SessionState.IsSystemNudge(candidate))
+                continue;
+
             _buffer.Insert(0, new SendUserMessage
             {
                 SessionId = _sessionId,
-                Content = msg.Content ?? string.Empty,
-                MediaReferences = msg.MediaReferences
+                Content = candidate.Content ?? string.Empty,
+                MediaReferences = candidate.MediaReferences
             });
             _state = _state with { History = _state.History.GetRange(0, i) };
             return;
         }
 
-        // No user message found — nothing to roll back (shouldn't happen)
         _log.Warning("RollBackCurrentTurnIntoBuffer: no User message found in history");
     }
 
