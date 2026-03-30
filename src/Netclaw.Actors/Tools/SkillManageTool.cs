@@ -26,6 +26,7 @@ public sealed partial class SkillManageTool : NetclawTool<SkillManageTool.Params
 
     private const int MaxNameLength = 64;
     private const int MaxDescriptionLength = 1024;
+    private const SkillTrustTier ManagedMutationMinimumTrustTier = SkillTrustTier.Community;
 
     private readonly SkillRegistry _skillRegistry;
     private readonly SkillIndexContextLayer _skillIndexLayer;
@@ -71,7 +72,7 @@ public sealed partial class SkillManageTool : NetclawTool<SkillManageTool.Params
             "edit" => await EditAsync(args, ct),
             "patch" => await PatchAsync(args, ct),
             "delete" => Delete(args),
-            "write_file" => WriteFile(args),
+            "write_file" => await WriteFileAsync(args, ct),
             "remove_file" => RemoveFile(args),
             _ => $"Unknown action '{action}'. Valid actions: create, edit, patch, delete, write_file, remove_file."
         };
@@ -94,7 +95,10 @@ public sealed partial class SkillManageTool : NetclawTool<SkillManageTool.Params
         var contentError = ValidateFrontmatter(args.Content);
         if (contentError is not null) return contentError;
 
-        var scanResult = await _scanner.ScanAsync(name, args.Content, ct);
+        var identityError = ValidateManagedIdentity(name, args.Content);
+        if (identityError is not null) return identityError;
+
+        var scanResult = await _scanner.ScanAsync(name, args.Content, GetManagedMutationScanTier(SkillTrustTier.User), ct);
         if (!scanResult.IsAllowed)
             return $"Content scan rejected: {scanResult.Reason}";
 
@@ -117,9 +121,13 @@ public sealed partial class SkillManageTool : NetclawTool<SkillManageTool.Params
 
         Directory.CreateDirectory(skillDir);
         AtomicWrite(skillPath, args.Content);
-        RescanAndUpdateIndex();
+        var rescan = RescanAndUpdateIndex();
 
-        return $"Skill '{name}' created at {skillDir}";
+        var message = $"Skill '{name}' created at {skillDir}";
+        if (scanResult.Verdict == ScanVerdict.Warning)
+            message += $" (warning: {scanResult.Reason})";
+
+        return AppendScanWarnings(message, rescan);
     }
 
     private async Task<string> EditAsync(Params args, CancellationToken ct)
@@ -157,14 +165,21 @@ public sealed partial class SkillManageTool : NetclawTool<SkillManageTool.Params
         var contentError = ValidateFrontmatter(args.Content);
         if (contentError is not null) return contentError;
 
-        var scanResult = await _scanner.ScanAsync(name, args.Content, ct);
+        var identityError = ValidateManagedIdentity(name, args.Content);
+        if (identityError is not null) return identityError;
+
+        var scanResult = await _scanner.ScanAsync(name, args.Content, GetManagedMutationScanTier(skill.TrustTier), ct);
         if (!scanResult.IsAllowed)
             return $"Content scan rejected: {scanResult.Reason}";
 
         AtomicWrite(skill.FilePath, args.Content);
-        RescanAndUpdateIndex();
+        var rescan = RescanAndUpdateIndex();
 
-        return $"Skill '{name}' updated.";
+        var message = $"Skill '{name}' updated.";
+        if (scanResult.Verdict == ScanVerdict.Warning)
+            message += $" (warning: {scanResult.Reason})";
+
+        return AppendScanWarnings(message, rescan);
     }
 
     private async Task<string> PatchAsync(Params args, CancellationToken ct)
@@ -210,19 +225,38 @@ public sealed partial class SkillManageTool : NetclawTool<SkillManageTool.Params
             ? content.Replace(args.OldString, args.NewString, StringComparison.Ordinal)
             : ReplaceFirst(content, args.OldString, args.NewString);
 
-        // Scan patched SKILL.md content
         if (targetPath == skill.FilePath)
         {
-            var scanResult = await _scanner.ScanAsync(name, newContent, ct);
-            if (!scanResult.IsAllowed)
-                return $"Content scan rejected: {scanResult.Reason}";
+            var contentError = ValidateFrontmatter(newContent);
+            if (contentError is not null) return contentError;
+
+            var identityError = ValidateManagedIdentity(name, newContent);
+            if (identityError is not null) return identityError;
+        }
+
+        var scanSubject = targetPath == skill.FilePath
+            ? name
+            : $"{name}:{args.FilePath}";
+        var scanResult = await _scanner.ScanAsync(scanSubject, newContent, GetManagedMutationScanTier(skill.TrustTier), ct);
+        if (!scanResult.IsAllowed)
+            return $"Content scan rejected: {scanResult.Reason}";
+
+        if (targetPath == skill.FilePath)
+        {
+            AtomicWrite(targetPath, newContent);
+
+            var message = "Patch applied.";
+            if (scanResult.Verdict == ScanVerdict.Warning)
+                message += $" (warning: {scanResult.Reason})";
+
+            return AppendScanWarnings(message, RescanAndUpdateIndex());
         }
 
         AtomicWrite(targetPath, newContent);
-        if (targetPath == skill.FilePath)
-            RescanAndUpdateIndex();
-
-        return "Patch applied.";
+        var warning = scanResult.Verdict == ScanVerdict.Warning
+            ? $" (warning: {scanResult.Reason})"
+            : string.Empty;
+        return $"Patch applied.{warning}";
     }
 
     private string Delete(Params args)
@@ -248,11 +282,10 @@ public sealed partial class SkillManageTool : NetclawTool<SkillManageTool.Params
             Directory.Delete(parent);
         }
 
-        RescanAndUpdateIndex();
-        return $"Skill '{name}' deleted.";
+        return AppendScanWarnings($"Skill '{name}' deleted.", RescanAndUpdateIndex());
     }
 
-    private string WriteFile(Params args)
+    private async Task<string> WriteFileAsync(Params args, CancellationToken ct)
     {
         var nameError = ValidateName(args.Name);
         if (nameError is not null) return nameError;
@@ -277,11 +310,24 @@ public sealed partial class SkillManageTool : NetclawTool<SkillManageTool.Params
         if (!fullPath.StartsWith(Path.GetFullPath(skill.SkillDirectory), StringComparison.Ordinal))
             return "Resolved path is outside the skill directory.";
 
+        var scanResult = await _scanner.ScanAsync(
+            $"{name}:{args.FilePath}",
+            args.FileContent,
+            GetManagedMutationScanTier(skill.TrustTier),
+            ct);
+        if (!scanResult.IsAllowed)
+            return $"Content scan rejected: {scanResult.Reason}";
+
         var dir = Path.GetDirectoryName(fullPath)!;
         Directory.CreateDirectory(dir);
         AtomicWrite(fullPath, args.FileContent);
+        var rescan = RescanAndUpdateIndex();
 
-        return $"File written: {args.FilePath}";
+        var message = $"File written: {args.FilePath}";
+        if (scanResult.Verdict == ScanVerdict.Warning)
+            message += $" (warning: {scanResult.Reason})";
+
+        return AppendScanWarnings(message, rescan);
     }
 
     private string RemoveFile(Params args)
@@ -320,7 +366,7 @@ public sealed partial class SkillManageTool : NetclawTool<SkillManageTool.Params
             Directory.Delete(dir);
         }
 
-        return $"File removed: {args.FilePath}";
+        return AppendScanWarnings($"File removed: {args.FilePath}", RescanAndUpdateIndex());
     }
 
     // --- Helpers ---
@@ -367,6 +413,21 @@ public sealed partial class SkillManageTool : NetclawTool<SkillManageTool.Params
         return null;
     }
 
+    private static string? ValidateManagedIdentity(string targetName, string content)
+    {
+        var frontmatter = SkillScanner.ExtractFrontmatter(content);
+        if (frontmatter is null || string.IsNullOrWhiteSpace(frontmatter.Name))
+            return null;
+
+        var normalizedFrontmatterName = SkillScanner.NormalizeSkillName(frontmatter.Name);
+        if (!string.Equals(normalizedFrontmatterName, targetName, StringComparison.OrdinalIgnoreCase))
+        {
+            return $"Frontmatter name '{normalizedFrontmatterName}' does not match target skill '{targetName}'.";
+        }
+
+        return null;
+    }
+
     private static string? ValidateResourcePath(string? path)
     {
         if (string.IsNullOrWhiteSpace(path))
@@ -386,6 +447,11 @@ public sealed partial class SkillManageTool : NetclawTool<SkillManageTool.Params
         return null;
     }
 
+    private static SkillTrustTier GetManagedMutationScanTier(SkillTrustTier storedTrustTier)
+        => storedTrustTier < ManagedMutationMinimumTrustTier
+            ? ManagedMutationMinimumTrustTier
+            : storedTrustTier;
+
     private static void AtomicWrite(string path, string content)
     {
         var tempPath = path + ".tmp";
@@ -393,14 +459,19 @@ public sealed partial class SkillManageTool : NetclawTool<SkillManageTool.Params
         File.Move(tempPath, path, overwrite: true);
     }
 
-    private void RescanAndUpdateIndex()
+    private Netclaw.Actors.Skills.SkillScanResult RescanAndUpdateIndex()
     {
-        _skillRegistry.Clear();
-        foreach (var skill in SkillScanner.Scan(_paths.SkillsDirectory))
-            _skillRegistry.Register(skill);
+        var scanResult = SkillScanner.Scan(_paths.SkillsDirectory);
+        SkillRegistryUpdater.ApplyScanResult(_skillRegistry, _skillIndexLayer, scanResult);
+        return scanResult;
+    }
 
-        _skillRegistry.RebuildAudienceMenus();
-        _skillIndexLayer.Update(_skillRegistry.GenerateDescriptionMenu());
+    private static string AppendScanWarnings(string message, Netclaw.Actors.Skills.SkillScanResult scanResult)
+    {
+        if (!scanResult.HasIssues)
+            return message;
+
+        return $"{message} Warning: skill inventory rebuild is degraded ({scanResult.Summary}). {string.Join(" ", scanResult.FormatIssueLines(3))}";
     }
 
     private static int CountOccurrences(string text, string search)
