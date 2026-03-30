@@ -10,7 +10,11 @@ namespace Netclaw.Cli.Config;
 /// </summary>
 internal static class ConfigFileHelper
 {
-    internal static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
+    internal static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        WriteIndented = true,
+        Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() }
+    };
 
     /// <summary>
     /// Load both netclaw.json and secrets.json as mutable dictionaries.
