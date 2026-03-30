@@ -1000,8 +1000,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     {
         if (_restartDrainRequested)
         {
-            _pendingEmergencyResend = false;
-            _emergencyResendInFlight = false;
+            ClearEmergencyRetryState();
             ClearBufferedMessagesForRestartDrain();
             TransitionTo(SessionPhase.Ready);
             TransitionTo(SessionPhase.Passivating);
@@ -1010,11 +1009,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         if (_buffer.Count > 0)
         {
-            // Buffer drain handles both buffered messages AND the pending resend —
-            // the user's original message is already in compacted history, and
-            // buffered messages are added on top.
-            _pendingEmergencyResend = false;
-            _emergencyResendInFlight = false;
+            // User's original message is already in compacted history —
+            // buffered messages are added on top, no separate resend needed.
+            ClearEmergencyRetryState();
             _log.Info("Post-compaction: draining {BufferCount} buffered message(s)", _buffer.Count);
             foreach (var buffered in _buffer)
             {
@@ -1027,8 +1024,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         }
         else if (_pendingEmergencyResend)
         {
-            // Emergency compaction completed — re-fire the LLM call for the
-            // user message that's already in the compacted history.
+            // User message is preserved in compacted history — just re-fire the call.
             _pendingEmergencyResend = false;
             _emergencyResendInFlight = true;
             _streamingRetryAttempt = 0;
@@ -1040,6 +1036,13 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         {
             TransitionTo(SessionPhase.Ready);
         }
+    }
+
+    private void ClearEmergencyRetryState()
+    {
+        _pendingEmergencyResend = false;
+        _emergencyResendInFlight = false;
+        _streamingRetryAttempt = 0;
     }
 
     private static readonly TimeSpan PassivationGracePeriod = TimeSpan.FromSeconds(5);
@@ -1416,6 +1419,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
             _buffer.Clear();
             _recallManager.ResetForNewTurn(); // New user input — resolve recall fresh
+            _streamingRetryAttempt = 0;
             FireLlmCall();
             // Already in Processing — no transition needed, just fired a new LLM call
             return;
@@ -1538,8 +1542,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         _state = _state.AddUserMessage(userContent, mediaRefs.Count > 0 ? mediaRefs : null);
         TryReplyAck();
         _recallManager.ResetForNewTurn();
-        _streamingRetryAttempt = 0;
-        _emergencyResendInFlight = false;
+        ClearEmergencyRetryState();
         FireInitialTurnLlmCall(userContent);
         TransitionTo(SessionPhase.Processing);
     }
@@ -2328,6 +2331,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     private void FailCurrentTurn(string errorMessage, Exception cause, ErrorCategory category = ErrorCategory.Unknown)
     {
         _deliveryRetry.Clear();
+        Timers.Cancel(StreamingRetryTimerKey);
         _state = _state.AddErrorReply(errorMessage);
 
         var correlationId = Guid.NewGuid();
