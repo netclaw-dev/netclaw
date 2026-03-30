@@ -17,6 +17,8 @@ public sealed class OpenAiCompatibleProviderPlugin : ProviderPluginBase<OpenAiCo
             entry.Endpoint ?? DefaultEndpoint,
             entry.ApiKey?.Value);
 
-        return new OpenAiCompatibleChatClient(new HttpClient { BaseAddress = endpoint.BaseUri }, endpoint, model.ModelId);
+        return new OpenAiCompatibleChatClient(
+            CreateLlmHttpClient(endpoint.BaseUri),
+            endpoint, model.ModelId);
     }
 }

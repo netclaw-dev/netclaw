@@ -16,26 +16,24 @@ internal static class SessionLlmInvoker
         List<AiChatMessage> messages,
         ChatOptions? options,
         IActorRef self,
-        TimeSpan timeout)
+        long callId,
+        CancellationToken cancellationToken)
     {
         try
         {
-            using var cts = new CancellationTokenSource(timeout);
-            var response = await StreamAsync(client, messages, options, self, cts.Token);
+            var response = await StreamAsync(client, messages, options, self, callId, cancellationToken);
             self.Tell(response);
         }
         catch (OperationCanceledException ex)
         {
-            self.Tell(new LlmCallFailed
-            {
-                Cause = new TimeoutException(
-                    $"LLM call exceeded timeout of {timeout.TotalSeconds:F0}s",
-                    ex)
-            });
+            // The actor's ProcessingWatchdog cancelled the CTS — let the watchdog
+            // handler produce the user-facing error. Send a typed failure so the
+            // actor can clean up, but the watchdog message is the authoritative timeout.
+            self.Tell(new LlmCallFailed { Cause = ex, CallId = callId });
         }
         catch (Exception ex)
         {
-            self.Tell(new LlmCallFailed { Cause = ex });
+            self.Tell(new LlmCallFailed { Cause = ex, CallId = callId });
         }
     }
 
@@ -44,6 +42,7 @@ internal static class SessionLlmInvoker
         List<AiChatMessage> messages,
         ChatOptions? options,
         IActorRef self,
+        long callId,
         CancellationToken cancellationToken)
     {
         var contents = new List<AIContent>();
@@ -78,11 +77,12 @@ internal static class SessionLlmInvoker
                                 {
                                     self.Tell(new LlmResponseDeltaReceived
                                     {
-                                        Content = new TextContent(pendingTextDelta)
+                                        Content = new TextContent(pendingTextDelta),
+                                        CallId = callId
                                     });
                                 }
 
-                                self.Tell(new LlmResponseDeltaReceived { Content = content });
+                                self.Tell(new LlmResponseDeltaReceived { Content = content, CallId = callId });
                             }
                             break;
 
@@ -99,11 +99,12 @@ internal static class SessionLlmInvoker
                                 {
                                     self.Tell(new LlmResponseDeltaReceived
                                     {
-                                        Content = new TextReasoningContent(pendingThinkingDelta)
+                                        Content = new TextReasoningContent(pendingThinkingDelta),
+                                        CallId = callId
                                     });
                                 }
 
-                                self.Tell(new LlmResponseDeltaReceived { Content = content });
+                                self.Tell(new LlmResponseDeltaReceived { Content = content, CallId = callId });
                             }
                             break;
 
@@ -134,7 +135,8 @@ internal static class SessionLlmInvoker
             Response = response,
             StreamedText = textDeltaCount > 1,
             StreamedThinking = thinkingDeltaCount > 1,
-            RecallResult = null
+            RecallResult = null,
+            CallId = callId
         };
     }
 }

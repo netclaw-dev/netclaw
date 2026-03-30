@@ -18,7 +18,8 @@ public sealed class AnthropicProviderPlugin : ProviderPluginBase<AnthropicDescri
         var apiKey = GetRequiredApiKey(entry, TypeKey);
         var client = new AnthropicClient(new()
         {
-            ApiKey = apiKey
+            ApiKey = apiKey,
+            HttpClient = CreateLlmHttpClient()
         });
         return client.AsIChatClient(model.ModelId);
     }

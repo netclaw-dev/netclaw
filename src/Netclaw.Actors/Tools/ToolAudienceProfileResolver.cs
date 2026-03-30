@@ -85,7 +85,7 @@ internal sealed class ToolAudienceProfileResolver
     }
 
     /// <summary>
-    /// Resolves a path token (e.g. <c>{skills_dir}</c>, <c>{identity_dir}</c>) to an absolute path.
+    /// Resolves a path token (e.g. <c>{skills_dir}</c>, <c>{identity_dir}</c>, <c>{workspaces_dir}</c>) to an absolute path.
     /// Returns null for empty input or if <see cref="_paths"/> is not available for path-based tokens.
     /// Unrecognized values are treated as literal paths.
     /// </summary>
@@ -101,6 +101,9 @@ internal sealed class ToolAudienceProfileResolver
 
         if (string.Equals(trimmed, ToolAudienceProfileDefaults.IdentityDirectoryToken, StringComparison.OrdinalIgnoreCase))
             return _paths?.IdentityDirectory;
+
+        if (string.Equals(trimmed, ToolAudienceProfileDefaults.WorkspacesDirectoryToken, StringComparison.OrdinalIgnoreCase))
+            return _paths?.WorkspacesDirectory;
 
         // Literal path
         return trimmed;

@@ -3,8 +3,8 @@ using Netclaw.Configuration;
 namespace Netclaw.Cli.Tui.Wizard.Steps;
 
 /// <summary>
-/// Wizard step for configuring agent identity (name, communication style, user profile, webhook).
-/// 5 sub-steps: agent name → comm style → user name → timezone → webhook URL.
+/// Wizard step for configuring agent identity (name, communication style, user profile, webhook, workspaces).
+/// 6 sub-steps: agent name → comm style → user name → timezone → workspaces directory → webhook URL.
 /// </summary>
 public sealed class IdentityStepViewModel : IWizardStepViewModel
 {
@@ -20,12 +20,14 @@ public sealed class IdentityStepViewModel : IWizardStepViewModel
     public string? CommunicationStyle { get; set; }
     public string? UserName { get; set; }
     public string UserTimezone { get; set; } = TimeZoneInfo.Local.Id;
+    public string WorkspacesDirectory { get; set; } = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".netclaw", "workspaces");
     public string? WebhookUrl { get; set; }
 
     public bool IsApplicable(WizardContext context) => true;
 
     public int CurrentSubStep => _currentSubStep;
-    public int SubStepCount => 5;
+    public int SubStepCount => 6;
 
     public string GetHelpText() => _currentSubStep switch
     {
@@ -33,7 +35,8 @@ public sealed class IdentityStepViewModel : IWizardStepViewModel
         1 => "  How should your assistant communicate?",
         2 => "  So your assistant knows what to call you.",
         3 => "  Used for time-aware responses and scheduling.",
-        4 => "  Optional. Receive alerts when MCP servers disconnect or LLM providers fail. Press Enter to skip.",
+        4 => "  Where your agent stores and discovers project workspaces. Press Enter to keep the default.",
+        5 => "  Optional. Receive alerts when MCP servers disconnect or LLM providers fail. Press Enter to skip.",
         _ => ""
     };
 
@@ -77,6 +80,11 @@ public sealed class IdentityStepViewModel : IWizardStepViewModel
             CommunicationStyle = CommunicationStyle ?? "Concise & casual",
             UserName = UserName,
             UserTimezone = UserTimezone
+        };
+
+        builder.Workspaces = new WorkspacesConfigSection
+        {
+            Directory = WorkspacesDirectory
         };
 
         if (!string.IsNullOrWhiteSpace(WebhookUrl))
@@ -226,6 +234,7 @@ public sealed class IdentityStepViewModel : IWizardStepViewModel
             | User wants to update lasting preferences, profile, tone, workflow rules, or environment capabilities | `{paths.SystemSkillsDirectory}/netclaw-identity/SKILL.md` |
             | Session/tool failure, missing capabilities, daemon health issues, debugging what happened | `{paths.SystemSkillsDirectory}/netclaw-diagnostics/SKILL.md` |
             | A repeatable workflow emerges and should become a skill file | `{paths.SystemSkillsDirectory}/skill-authoring/SKILL.md` |
+            | User references a project, asks to organize work, or you need a sustained workspace | `{paths.SystemSkillsDirectory}/netclaw-projects/SKILL.md` |
 
             ## Identity Files
 
@@ -258,10 +267,13 @@ public sealed class IdentityStepViewModel : IWizardStepViewModel
             """);
 
         File.WriteAllText(paths.ToolingPath,
-            """
+            $"""
             # Environment Capabilities
 
             No capabilities discovered yet. Run `netclaw doctor` or ask Netclaw to probe your environment.
+
+            # Workspaces
+            - **Projects directory:** `{WorkspacesDirectory}`
 
             # Source Code
             - **Repository:** https://github.com/Aaronontheweb/netclaw (private)

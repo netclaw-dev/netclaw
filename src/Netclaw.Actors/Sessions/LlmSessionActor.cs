@@ -92,6 +92,17 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     // Processing watchdog (timer management for stuck operations)
     private readonly ProcessingWatchdog _watchdog = new();
 
+    // Actor-owned CTS for the active LLM call. Cancelled by the watchdog on timeout
+    // or when a response/failure arrives. The session-level watchdog (FirstTokenTimeout /
+    // StreamIdleTimeout) is the authoritative timeout — this CTS just propagates
+    // cancellation to the HTTP layer so timed-out connections are released.
+    private CancellationTokenSource? _activeLlmCts;
+
+    // Correlation ID for the active LLM call. Incremented in FireLlmCall.
+    // Stale LlmResponseReceived/LlmCallFailed/LlmResponseDeltaReceived messages
+    // from cancelled calls are ignored when their CallId doesn't match.
+    private long _activeCallId;
+
     // Two-phase timeout: tracks whether we've received any streaming delta this turn
     private bool _firstDeltaReceived;
 
@@ -368,7 +379,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         Command<LlmResponseReceived>(msg =>
         {
+            if (msg.CallId != _activeCallId) return; // stale response from cancelled call
             _watchdog.Stop(Timers);
+            CancelAndDisposeLlmCts();
 
             var response = msg.Response;
             var lastMessage = response.Messages[^1];
@@ -419,6 +432,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         Command<LlmResponseDeltaReceived>(msg =>
         {
+            if (msg.CallId != _activeCallId) return; // stale delta from cancelled call
             _firstDeltaReceived = true;
             _watchdog.Refresh(_config.StreamIdleTimeout, Timers);
 
@@ -616,7 +630,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         Command<LlmCallFailed>(msg =>
         {
+            if (msg.CallId != _activeCallId) return; // stale failure from cancelled call
             _watchdog.Stop(Timers);
+            CancelAndDisposeLlmCts();
 
             // Context overflow: compact and recover instead of failing the turn
             if (IsContextOverflowError(msg.Cause))
@@ -662,6 +678,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 $"Session processing operation '{msg.OperationName}' exceeded watchdog timeout of {timeout.TotalSeconds:F0}s");
 
             _watchdog.Stop(Timers);
+            CancelAndDisposeLlmCts();
 
             _log.Error("Processing watchdog expired for operation {OperationName} (opId={OperationId})",
                 msg.OperationName, msg.OperationId);
@@ -1402,7 +1419,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         _observerActor?.Tell(cmd);
 
         _turnState.ResetForNewTurn();
-        _firstDeltaReceived = false;
         _discoveredToolCache.PrepareForNewTurn(
             _availableTools, _baseToolCount,
             _config.Tuning.DiscoveredToolRetentionTurns,
@@ -1643,8 +1659,22 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             Self.Tell(buffered);
         }
         _buffer.Clear();
+        CancelAndDisposeLlmCts();
 
         base.PreRestart(reason, message);
+    }
+
+    protected override void PostStop()
+    {
+        CancelAndDisposeLlmCts();
+        base.PostStop();
+    }
+
+    private void CancelAndDisposeLlmCts()
+    {
+        _activeLlmCts?.Cancel();
+        _activeLlmCts?.Dispose();
+        _activeLlmCts = null;
     }
 
     // ── Helpers ──
@@ -1826,6 +1856,11 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     private void FireLlmCall(string? recallQuery = null, bool forceNoTools = false)
     {
+        _firstDeltaReceived = false;
+        CancelAndDisposeLlmCts();
+        _activeLlmCts = new CancellationTokenSource();
+        _activeCallId++;
+
         _turnState.ForceNoToolsActive = forceNoTools;
 
         var sessionDir = GetSessionDirectory();
@@ -1888,12 +1923,13 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         _watchdog.Start("llm-call", timeout, Timers);
 
-        TurnLog().Info("turn_llm_call_start messages={MessageCount} toolsEnabled={ToolsEnabled} forceNoTools={ForceNoTools}",
+        TurnLog().Info("turn_llm_call_start messages={MessageCount} toolsEnabled={ToolsEnabled} forceNoTools={ForceNoTools} callId={CallId}",
             messages.Count,
             options?.Tools?.Count > 0,
-            forceNoTools);
+            forceNoTools,
+            _activeCallId);
 
-        _ = SessionLlmInvoker.InvokeAsync(client, messages, options, self, timeout);
+        _ = SessionLlmInvoker.InvokeAsync(client, messages, options, self, _activeCallId, _activeLlmCts!.Token);
     }
 
 

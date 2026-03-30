@@ -10,7 +10,7 @@ namespace Netclaw.Cli.Tui.Wizard.Steps;
 
 /// <summary>
 /// Termina view for the Identity wizard step.
-/// 5 sub-steps: agent name → comm style → user name → timezone → webhook URL.
+/// 6 sub-steps: agent name → comm style → user name → timezone → workspaces directory → webhook URL.
 /// </summary>
 public sealed class IdentityStepView : IWizardStepView
 {
@@ -18,6 +18,7 @@ public sealed class IdentityStepView : IWizardStepView
     private SelectionListNode<string>? _commStyleList;
     private TextInputNode? _userNameInput;
     private TextInputNode? _timezoneInput;
+    private TextInputNode? _workspacesInput;
     private TextInputNode? _webhookUrlInput;
     private IFocusable? _lastFocusedList;
     private TextInputBaseNode? _lastFocusedInput;
@@ -34,7 +35,8 @@ public sealed class IdentityStepView : IWizardStepView
             1 => BuildCommStyle(vm, callbacks),
             2 => BuildUserName(vm, callbacks),
             3 => BuildTimezone(vm, callbacks),
-            4 => BuildWebhookUrl(vm, callbacks),
+            4 => BuildWorkspacesDirectory(vm, callbacks),
+            5 => BuildWebhookUrl(vm, callbacks),
             _ => Layouts.Empty()
         };
     }
@@ -150,6 +152,34 @@ public sealed class IdentityStepView : IWizardStepView
                 .Height(3));
     }
 
+    private ILayoutNode BuildWorkspacesDirectory(IdentityStepViewModel vm, StepViewCallbacks callbacks)
+    {
+        _workspacesInput = new TextInputNode().WithPlaceholder(vm.WorkspacesDirectory);
+        _workspacesInput.Text = vm.WorkspacesDirectory;
+
+        _workspacesInput.OnFocused();
+        _lastFocusedInput = _workspacesInput;
+        _lastFocusedList = null;
+
+        _workspacesInput.Submitted
+            .Subscribe(text =>
+            {
+                if (!string.IsNullOrWhiteSpace(text))
+                    vm.WorkspacesDirectory = text;
+                callbacks.AdvanceStep();
+            })
+            .DisposeWith(callbacks.Subscriptions);
+
+        return Layouts.Vertical()
+            .WithChild(new TextNode("  Projects directory:").WithForeground(Color.White))
+            .WithChild(new PanelNode()
+                .WithTitle("Workspaces")
+                .WithBorder(BorderStyle.Rounded)
+                .WithBorderColor(Color.Gray)
+                .WithContent(_workspacesInput)
+                .Height(3));
+    }
+
     private ILayoutNode BuildWebhookUrl(IdentityStepViewModel vm, StepViewCallbacks callbacks)
     {
         _webhookUrlInput = new TextInputNode()
@@ -208,6 +238,7 @@ public sealed class IdentityStepView : IWizardStepView
         _commStyleList = null;
         _userNameInput = null;
         _timezoneInput = null;
+        _workspacesInput = null;
         _webhookUrlInput = null;
     }
 }

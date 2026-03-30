@@ -203,6 +203,7 @@ feature area, the corresponding skill **must** be updated in the same PR.
 | Skill file format, discovery, authoring workflow | `skill-authoring` |
 | Tool definitions, CLI commands, grant categories, search_tools, scheduling tools | `netclaw-manual` |
 | Search tool behavior, citation policy, web_search/web_fetch usage guidance | `search-citation` |
+| Workspaces, project creation/discovery | `netclaw-projects` |
 
 **Workflow:**
 1. Edit the skill at `feeds/skills/.system/files/{name}/SKILL.md`
