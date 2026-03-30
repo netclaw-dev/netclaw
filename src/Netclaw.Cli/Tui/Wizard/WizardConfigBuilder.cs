@@ -30,6 +30,7 @@ public sealed class WizardConfigBuilder
     public ToolConfig? Tools { get; set; }
     public BrowserAutomationConfigSection? BrowserAutomation { get; set; }
     public IdentityConfigSection? Identity { get; set; }
+    public WorkspacesConfigSection? Workspaces { get; set; }
     public NotificationsConfigSection? Notifications { get; set; }
 
     /// <summary>
@@ -145,6 +146,15 @@ public sealed class WizardConfigBuilder
         // Tools section
         if (Tools is not null)
             config["Tools"] = Tools;
+
+        // Workspaces section
+        if (Workspaces is not null)
+        {
+            config["Workspaces"] = new Dictionary<string, object>
+            {
+                ["Directory"] = Workspaces.Directory
+            };
+        }
 
         // Skill sync
         config["SkillSync"] = new Dictionary<string, object>
@@ -267,6 +277,11 @@ public sealed class BrowserAutomationConfigSection
 public sealed class NotificationsConfigSection
 {
     public string? WebhookUrl { get; init; }
+}
+
+public sealed class WorkspacesConfigSection
+{
+    public required string Directory { get; init; }
 }
 
 public sealed class IdentityConfigSection

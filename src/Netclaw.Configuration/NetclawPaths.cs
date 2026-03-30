@@ -47,6 +47,14 @@ public sealed class NetclawPaths
     // ── Agent definitions directory ──
     public string AgentsDirectory => Path.Combine(BasePath, "agents");
 
+    // ── Project workspaces ──
+    /// <summary>
+    /// Root directory for project workspaces. Projects are git repos with an
+    /// AGENTS.md and may be nested at any depth within this directory tree.
+    /// Configurable via <c>Workspaces:Directory</c> in netclaw.json; defaults to <c>{BasePath}/workspaces</c>.
+    /// </summary>
+    public string WorkspacesDirectory { get; }
+
     // ── Other standard directories ──
     public string ProjectsDirectory => Path.Combine(BasePath, "projects");
     public string EnvironmentDirectory => Path.Combine(BasePath, "environment");
@@ -70,11 +78,12 @@ public sealed class NetclawPaths
     public string McpOAuthMetadataPath => Path.Combine(ConfigDirectory, "mcp-oauth-metadata.json");
     public string KeysDirectory => Path.Combine(BasePath, "keys");
 
-    public NetclawPaths(string? basePath = null)
+    public NetclawPaths(string? basePath = null, string? workspacesDirectory = null)
     {
         BasePath = basePath ?? Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
             ".netclaw");
+        WorkspacesDirectory = workspacesDirectory ?? Path.Combine(BasePath, "workspaces");
     }
 
     /// <summary>
@@ -104,5 +113,6 @@ public sealed class NetclawPaths
         Directory.CreateDirectory(BinDirectory);
         Directory.CreateDirectory(KeysDirectory);
         Directory.CreateDirectory(CacheDirectory);
+        Directory.CreateDirectory(WorkspacesDirectory);
     }
 }

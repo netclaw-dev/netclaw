@@ -32,10 +32,10 @@ public sealed class IdentityStepViewModelTests : IDisposable
     }
 
     [Fact]
-    public void SubStepCount_IsFive()
+    public void SubStepCount_IsSix()
     {
         using var step = new IdentityStepViewModel();
-        Assert.Equal(5, step.SubStepCount);
+        Assert.Equal(6, step.SubStepCount);
     }
 
     [Fact]
@@ -43,13 +43,13 @@ public sealed class IdentityStepViewModelTests : IDisposable
     {
         using var step = new IdentityStepViewModel();
 
-        for (var i = 0; i < 4; i++)
+        for (var i = 0; i < 5; i++)
         {
             Assert.True(step.TryAdvance());
             Assert.Equal(i + 1, step.CurrentSubStep);
         }
 
-        // Sub-step 4 → complete
+        // Sub-step 5 → complete
         Assert.False(step.TryAdvance());
     }
 
@@ -73,11 +73,11 @@ public sealed class IdentityStepViewModelTests : IDisposable
     public void OnEnter_Back_ResumesAtLastSubStep()
     {
         using var step = new IdentityStepViewModel();
-        for (var i = 0; i < 4; i++)
+        for (var i = 0; i < 5; i++)
             step.TryAdvance();
 
         step.OnEnter(_context, NavigationDirection.Back);
-        Assert.Equal(4, step.CurrentSubStep);
+        Assert.Equal(5, step.CurrentSubStep);
     }
 
     [Fact]

@@ -260,15 +260,13 @@ static void WriteCrashLog(Exception ex)
 
 static NetclawPaths ConfigureConfigServices(IServiceCollection services, IConfigurationManager configuration)
 {
-    // Netclaw paths (creates ~/.netclaw/ structure)
-    var paths = new NetclawPaths();
-    paths.EnsureDirectoriesExist();
-    services.AddSingleton(paths);
+    // Bootstrap paths with defaults to locate config files.
+    var bootstrapPaths = new NetclawPaths();
 
     // Initialize Data Protection for secrets encryption/decryption.
     // Must happen before config binding so SensitiveStringTypeConverter
     // can transparently decrypt ENC: values.
-    var protector = SecretsProtection.CreateProtector(paths);
+    var protector = SecretsProtection.CreateProtector(bootstrapPaths);
     services.AddSingleton<ISecretsProtector>(protector);
     SensitiveStringTypeConverter.Protector = protector;
 
@@ -277,9 +275,15 @@ static NetclawPaths ConfigureConfigServices(IServiceCollection services, IConfig
     // 2. secrets.json (credentials overlay, optional)
     // 3. NETCLAW_* environment variables (highest priority)
     configuration
-        .AddJsonFile(paths.NetclawConfigPath, optional: true, reloadOnChange: false)
-        .AddJsonFile(paths.SecretsPath, optional: true, reloadOnChange: false)
+        .AddJsonFile(bootstrapPaths.NetclawConfigPath, optional: true, reloadOnChange: false)
+        .AddJsonFile(bootstrapPaths.SecretsPath, optional: true, reloadOnChange: false)
         .AddEnvironmentVariables("NETCLAW_");
+
+    // Re-create paths with config-driven overrides (e.g. custom workspaces directory).
+    var workspacesDir = configuration.GetValue<string>("Workspaces:Directory");
+    var paths = new NetclawPaths(workspacesDirectory: workspacesDir);
+    paths.EnsureDirectoriesExist();
+    services.AddSingleton(paths);
 
     // TimeProvider (virtualized for testing)
     services.AddSingleton(TimeProvider.System);

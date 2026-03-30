@@ -382,6 +382,17 @@
       },
       "additionalProperties": false
     },
+    "Workspaces": {
+      "type": "object",
+      "description": "Project workspace configuration.",
+      "properties": {
+        "Directory": {
+          "type": "string",
+          "description": "Root directory for project workspaces. Projects are git repos with an AGENTS.md, potentially nested at any depth. Defaults to ~/.netclaw/workspaces."
+        }
+      },
+      "additionalProperties": false
+    },
     "McpServers": {
       "type": "object",
       "description": "MCP server profiles keyed by name.",
@@ -469,7 +480,7 @@
         "Personal": { "$ref": "#/$defs/ToolAudienceProfile" },
         "GlobalReadRoots": {
           "type": "array",
-          "description": "Filesystem roots readable by all audiences. Supports tokens: {skills_dir}, {identity_dir}.",
+          "description": "Filesystem roots readable by all audiences. Supports tokens: {skills_dir}, {identity_dir}, {workspaces_dir}.",
           "items": { "type": "string" }
         }
       },
