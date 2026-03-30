@@ -13,9 +13,7 @@ public static class SecurityServiceExtensions
         services.AddSingleton<ContentPolicy>();
         services.AddSingleton<IContentScanner, MagicByteContentScanner>();
         services.AddSingleton<IPromptInjectionDetector, RegexPromptInjectionDetector>();
-        services.AddSingleton<RegexSkillContentScanner>();
-        services.AddSingleton<ISkillContentScanner>(sp =>
-            new CachingSkillContentScanner(sp.GetRequiredService<RegexSkillContentScanner>()));
+        services.AddSingleton<ISkillContentScanner, RegexSkillContentScanner>();
         return services;
     }
 }
