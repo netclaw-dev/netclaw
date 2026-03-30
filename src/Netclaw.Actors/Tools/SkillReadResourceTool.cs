@@ -22,8 +22,6 @@ public sealed partial class SkillReadResourceTool : NetclawTool<SkillReadResourc
         "assets"
     };
 
-    private const SkillTrustTier LoadScanMinimumTrustTier = SkillTrustTier.Community;
-
     private readonly SkillRegistry _skillRegistry;
     private readonly ISkillContentScanner _scanner;
 
@@ -90,7 +88,7 @@ public sealed partial class SkillReadResourceTool : NetclawTool<SkillReadResourc
         try
         {
             var content = File.ReadAllText(fullPath);
-            var scanResult = await _scanner.ScanAsync($"{skillName}:{resourcePath}", content, GetLoadScanTier(skill.TrustTier), ct);
+            var scanResult = await _scanner.ScanAsync($"{skillName}:{resourcePath}", content, ct);
             if (!scanResult.IsAllowed)
                 return $"Resource '{resourcePath}' blocked by content scan: {scanResult.Reason}";
 
@@ -104,11 +102,6 @@ public sealed partial class SkillReadResourceTool : NetclawTool<SkillReadResourc
             return $"Failed to read resource: {ex.Message}";
         }
     }
-
-    private static SkillTrustTier GetLoadScanTier(SkillTrustTier storedTrustTier)
-        => storedTrustTier < LoadScanMinimumTrustTier
-            ? LoadScanMinimumTrustTier
-            : storedTrustTier;
 
     private static bool ContainsSymlink(string path)
     {

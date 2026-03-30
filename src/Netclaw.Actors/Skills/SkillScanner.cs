@@ -18,6 +18,11 @@ public static partial class SkillScanner
     private const string SkillFileName = "SKILL.md";
 
     /// <summary>
+    /// The directory name for system skills (synced from CDN, read-only).
+    /// </summary>
+    public const string SystemCategory = ".system";
+
+    /// <summary>
     /// Standard subdirectories within a skill directory that contain resources.
     /// </summary>
     private static readonly string[] ResourceSubdirectories = ["scripts", "references", "assets"];
@@ -269,7 +274,6 @@ public static partial class SkillScanner
             Compatibility = fm.Compatibility,
             AllowedTools = fm.AllowedTools,
             ResourcePaths = resourcePaths,
-            TrustTier = InferTrustTier(category),
             DisableModelInvocation = fm.DisableModelInvocation,
             UserInvocable = fm.UserInvocable,
             ArgumentHint = fm.ArgumentHint
@@ -342,37 +346,11 @@ public static partial class SkillScanner
     }
 
     /// <summary>
-    /// Single source of truth: maps hidden directory names to their trust tiers.
-    /// Controls both which hidden directories are scanned (Pass 2) and what
-    /// tier the discovered skills receive.
+    /// Only <c>.system</c> is scanned as a hidden directory (system skills from CDN).
+    /// All other hidden directories are ignored.
     /// </summary>
-    private static readonly Dictionary<string, SkillTrustTier> HiddenDirectoryTiers =
-        new(StringComparer.Ordinal)
-        {
-            [".system"] = SkillTrustTier.System,
-            [".community"] = SkillTrustTier.Community,
-            [".external"] = SkillTrustTier.External,
-            [".agent"] = SkillTrustTier.Agent,
-        };
-
     private static bool IsAllowedHiddenDirectory(string dirName)
-        => HiddenDirectoryTiers.ContainsKey(dirName);
-
-    /// <summary>
-    /// Infers the trust tier from the skill's category (parent directory).
-    /// A skill cannot self-declare its tier — it is determined by directory location.
-    /// </summary>
-    internal static SkillTrustTier InferTrustTier(string? category)
-    {
-        if (category is null)
-            return SkillTrustTier.User;
-
-        // Category may be a path like ".system" or ".community/subcategory"
-        var root = category.Split('/')[0];
-        return HiddenDirectoryTiers.TryGetValue(root, out var tier)
-            ? tier
-            : SkillTrustTier.User;
-    }
+        => string.Equals(dirName, SystemCategory, StringComparison.Ordinal);
 
     internal static string NormalizeSkillName(string value)
         => value.Trim().ToLowerInvariant();

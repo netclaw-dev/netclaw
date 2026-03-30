@@ -16,8 +16,6 @@ namespace Netclaw.Actors.Tools;
     Grant = "builtin")]
 public sealed partial class SkillLoadTool : NetclawTool<SkillLoadTool.Params>
 {
-    private const SkillTrustTier LoadScanMinimumTrustTier = SkillTrustTier.Community;
-
     private readonly SkillRegistry _skillRegistry;
     private readonly ISkillContentScanner _scanner;
 
@@ -57,7 +55,7 @@ public sealed partial class SkillLoadTool : NetclawTool<SkillLoadTool.Params>
             return $"Failed to read skill file: {ex.Message}";
         }
 
-        var scanResult = await _scanner.ScanAsync(name, content, GetLoadScanTier(skill.TrustTier), ct);
+        var scanResult = await _scanner.ScanAsync(name, content, ct);
         if (!scanResult.IsAllowed)
             return $"Skill '{name}' blocked by content scan: {scanResult.Reason}";
 
@@ -86,8 +84,4 @@ public sealed partial class SkillLoadTool : NetclawTool<SkillLoadTool.Params>
         return sb.ToString();
     }
 
-    private static SkillTrustTier GetLoadScanTier(SkillTrustTier storedTrustTier)
-        => storedTrustTier < LoadScanMinimumTrustTier
-            ? LoadScanMinimumTrustTier
-            : storedTrustTier;
 }

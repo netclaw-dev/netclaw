@@ -1982,6 +1982,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 return true; // Handled — do NOT fall through to LLM
             }
 
+            _sessionMetrics?.RecordSkillsLoaded(1);
+
             // Inject skill as system context, use remainder as user message
             var effectiveUserContent = string.IsNullOrWhiteSpace(remainder)
                 ? $"The user invoked /{skill.Name}. Follow the skill instructions."

@@ -1,4 +1,3 @@
-using Netclaw.Configuration;
 using Netclaw.Security.Skills;
 using Xunit;
 

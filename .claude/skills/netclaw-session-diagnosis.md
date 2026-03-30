@@ -86,8 +86,8 @@ Key fields:
 grep "turn_skill_auto_load" ~/.netclaw/logs/daemon-${DATE}.log | grep "D0AC6CKBK5K/1774023557.531309"
 ```
 
-- Present: shows which skills loaded, match scores, keyword/phrase hits
-- **Absent: no skills auto-loaded.** Check enrichment state (Step 8).
+- Present: shows which skills loaded
+- **Absent: no skills auto-loaded.** Check that skill index is in system prompt.
 
 ### Step 6: Check for daemon restarts
 
@@ -104,16 +104,19 @@ grep "ConfigWatcherService" ~/.netclaw/logs/daemon-${DATE}.log
 grep "\[ERR\]\|\[WRN\]" ~/.netclaw/logs/daemon-${DATE}.log | grep "D0AC6CKBK5K/1774023557.531309" | head -20
 ```
 
-### Step 8: Check skill enrichment state
+### Step 8: Check skill index in system prompt
+
+The skill index is a compressed pipe-delimited listing injected into the
+system prompt at session start. It points the agent at SKILL.md files on disk.
+If skills are not being discovered, check:
 
 ```bash
-# Keyword cache files (version should match current skill version)
-ls ~/.netclaw/cache/skill-keywords/
-cat ~/.netclaw/cache/skill-keywords/netclaw-manual-*.json | head -5
+# Verify skills are registered
+grep "skill.*scan\|SkillScanner" ~/.netclaw/logs/daemon-${DATE}.log | tail -10
 ```
 
-Stale cache (version mismatch with installed skill) → enrichment must re-run
-→ race window with no keywords available for matching.
+- Skills appear in scan results → index should be populated
+- Scan issues logged → check for frontmatter validation failures
 
 ## Data Store Queries
 

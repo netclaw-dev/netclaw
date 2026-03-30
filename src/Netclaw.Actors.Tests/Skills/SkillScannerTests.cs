@@ -291,65 +291,33 @@ public class SkillScannerTests : IDisposable
     }
 
     [Fact]
-    public void System_directory_skill_gets_system_trust_tier()
-    {
-        WriteNestedSkill(".system", "diag", "System diagnostics.");
-
-        var result = SkillScanner.Scan(_skillsDir);
-
-        Assert.Single(result.AcceptedSkills);
-        Assert.Equal(SkillTrustTier.System, result.AcceptedSkills[0].TrustTier);
-    }
-
-    [Fact]
-    public void Root_skill_gets_operator_trust_tier()
-    {
-        WriteSkill("my-workflow", """
-            ---
-            name: my-workflow
-            description: Operator-placed skill.
-            ---
-
-            # My Workflow
-            """);
-
-        var result = SkillScanner.Scan(_skillsDir);
-
-        Assert.Single(result.AcceptedSkills);
-        Assert.Equal(SkillTrustTier.User, result.AcceptedSkills[0].TrustTier);
-    }
-
-    [Fact]
-    public void Community_directory_skill_gets_community_trust_tier()
+    public void Community_directory_is_not_scanned()
     {
         WriteNestedSkill(".community", "home-auto", "Home automation skill.");
 
         var result = SkillScanner.Scan(_skillsDir);
 
-        Assert.Single(result.AcceptedSkills);
-        Assert.Equal(SkillTrustTier.Community, result.AcceptedSkills[0].TrustTier);
+        Assert.Empty(result.AcceptedSkills);
     }
 
     [Fact]
-    public void External_directory_skill_gets_external_trust_tier()
+    public void External_directory_is_not_scanned()
     {
         WriteNestedSkill(".external", "third-party", "Third-party skill.");
 
         var result = SkillScanner.Scan(_skillsDir);
 
-        Assert.Single(result.AcceptedSkills);
-        Assert.Equal(SkillTrustTier.External, result.AcceptedSkills[0].TrustTier);
+        Assert.Empty(result.AcceptedSkills);
     }
 
     [Fact]
-    public void Agent_directory_skill_gets_agent_trust_tier()
+    public void Agent_directory_is_not_scanned()
     {
         WriteNestedSkill(".agent", "learned-workflow", "Agent-created skill.");
 
         var result = SkillScanner.Scan(_skillsDir);
 
-        Assert.Single(result.AcceptedSkills);
-        Assert.Equal(SkillTrustTier.Agent, result.AcceptedSkills[0].TrustTier);
+        Assert.Empty(result.AcceptedSkills);
     }
 
     [Fact]
@@ -370,27 +338,6 @@ public class SkillScannerTests : IDisposable
         var result = SkillScanner.Scan(_skillsDir);
 
         Assert.Empty(result.AcceptedSkills);
-    }
-
-    [Theory]
-    [InlineData(null, SkillTrustTier.User)]
-    [InlineData(".system", SkillTrustTier.System)]
-    [InlineData(".community", SkillTrustTier.Community)]
-    [InlineData(".external", SkillTrustTier.External)]
-    [InlineData(".agent", SkillTrustTier.Agent)]
-    [InlineData("custom-category", SkillTrustTier.User)]
-    public void InferTrustTier_returns_correct_tier(string? category, SkillTrustTier expected)
-    {
-        Assert.Equal(expected, SkillScanner.InferTrustTier(category));
-    }
-
-    [Fact]
-    public void SkillTrustTier_values_ordered_by_trust()
-    {
-        Assert.True(SkillTrustTier.System < SkillTrustTier.User);
-        Assert.True(SkillTrustTier.User < SkillTrustTier.Community);
-        Assert.True(SkillTrustTier.Community < SkillTrustTier.External);
-        Assert.True(SkillTrustTier.External < SkillTrustTier.Agent);
     }
 
     [Fact]
