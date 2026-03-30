@@ -4,7 +4,7 @@
     <!-- Nuget package versions -->
     <AkkaHostingVersion>1.5.63</AkkaHostingVersion>
     <AkkaPersistenceSqlHostingVersion>1.5.62</AkkaPersistenceSqlHostingVersion>
-    <AkkaRemindersVersion>0.5.1</AkkaRemindersVersion>
+    <AkkaRemindersVersion>0.6.0-beta2</AkkaRemindersVersion>
     <OpenTelemetryVersion>1.13.1</OpenTelemetryVersion>
     <SlackNetVersion>0.17.9</SlackNetVersion>
     <MicrosoftExtensionsAIVersion>10.4.1</MicrosoftExtensionsAIVersion>
