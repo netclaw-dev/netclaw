@@ -154,10 +154,8 @@ public class ReminderExecutionActorTests : TestKit, IDisposable
         await probe.ExpectMsgAsync<ReminderExecutionCompleted>(TimeSpan.FromSeconds(5));
 
         Assert.NotNull(pipeline.CapturedOptions);
-        Assert.True(pipeline.CapturedOptions!.Filter.HasFlag(OutputFilter.TextStreaming),
-            "Filter must include TextStreaming so idle timeout resets on every streaming token");
-        Assert.True(pipeline.CapturedOptions!.Filter.HasFlag(OutputFilter.ToolCalls),
-            "Filter must include ToolCalls so notification tool results are tracked");
+        Assert.True(pipeline.CapturedOptions!.Filter.HasFlag(OutputFilter.TextStreaming));
+        Assert.True(pipeline.CapturedOptions!.Filter.HasFlag(OutputFilter.ToolCalls));
     }
 
     private static ReminderDefinition CreateDefinition(string id)
