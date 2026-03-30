@@ -39,7 +39,7 @@ public sealed class SecurityServiceExtensionsTests
     }
 
     [Fact]
-    public void AddContentSecurity_registers_caching_skill_content_scanner()
+    public void AddContentSecurity_registers_regex_skill_content_scanner()
     {
         var services = new ServiceCollection();
         services.AddLogging();
@@ -48,6 +48,6 @@ public sealed class SecurityServiceExtensionsTests
         using var provider = services.BuildServiceProvider();
         var scanner = provider.GetRequiredService<ISkillContentScanner>();
 
-        Assert.IsType<CachingSkillContentScanner>(scanner);
+        Assert.IsType<RegexSkillContentScanner>(scanner);
     }
 }
