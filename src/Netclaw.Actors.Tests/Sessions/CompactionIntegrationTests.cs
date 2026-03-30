@@ -451,6 +451,114 @@ public class CompactionIntegrationTests : TestKit
         var text = await subscriber.ExpectMsgAsync<TextOutput>();
         Assert.Contains("fake", text.Text, StringComparison.OrdinalIgnoreCase);
     }
+
+    [Fact]
+    public async Task Emergency_compaction_auto_resends_pending_message()
+    {
+        // First call: context overflow (triggers emergency compaction)
+        // Subsequent calls: succeed normally
+        _fakeChatClient.PlannedExceptions.Enqueue(
+            new ProviderException(
+                "maximum context length exceeded",
+                "HTTP 400: maximum context length exceeded",
+                statusCode: 400));
+
+        _fakeChatClient.UsageOverride = new UsageDetails
+        {
+            InputTokenCount = 100,
+            OutputTokenCount = 20,
+            TotalTokenCount = 120
+        };
+
+        var sessionId = new SessionId("test-channel/emergency-auto-resend");
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("emergency-sub");
+
+        await sessionManager.Ask<SessionJoined>(new JoinSession
+        {
+            SessionId = sessionId,
+            Subscriber = subscriber,
+            Filter = OutputFilter.Full
+        });
+        await subscriber.ExpectMsgAsync<SessionJoined>();
+
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "This message triggers overflow then gets auto-resent"
+        });
+
+        // ErrorOutput from context overflow — should NOT say "Please resend"
+        var error = await subscriber.ExpectMsgAsync<ErrorOutput>(TimeSpan.FromSeconds(5));
+        Assert.Contains("compacting session history", error.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("resend", error.Message, StringComparison.OrdinalIgnoreCase);
+
+        // Compaction runs
+        await subscriber.ExpectMsgAsync<CompactionOutput>(TimeSpan.FromSeconds(5));
+
+        // Auto-resend fires and produces a response
+        var text = await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(5));
+        Assert.Contains("fake", text.Text, StringComparison.OrdinalIgnoreCase);
+        await subscriber.ExpectMsgAsync<UsageOutput>(TimeSpan.FromSeconds(3));
+        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
+    }
+
+    [Fact]
+    public async Task Emergency_compaction_with_buffered_message_drains_both()
+    {
+        // First call: context overflow
+        _fakeChatClient.PlannedExceptions.Enqueue(
+            new ProviderException(
+                "maximum context length exceeded",
+                "HTTP 400: maximum context length exceeded",
+                statusCode: 400));
+
+        _fakeChatClient.UsageOverride = new UsageDetails
+        {
+            InputTokenCount = 100,
+            OutputTokenCount = 20,
+            TotalTokenCount = 120
+        };
+        _fakeChatClient.Delay = TimeSpan.FromMilliseconds(50);
+
+        var sessionId = new SessionId("test-channel/emergency-with-buffer");
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("emergency-buffer-sub");
+
+        await sessionManager.Ask<SessionJoined>(new JoinSession
+        {
+            SessionId = sessionId,
+            Subscriber = subscriber,
+            Filter = OutputFilter.Full
+        });
+        await subscriber.ExpectMsgAsync<SessionJoined>();
+
+        // First message triggers overflow
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "First message"
+        });
+
+        // Buffer a second message during compaction
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Second message (buffered)"
+        });
+
+        // ErrorOutput from overflow
+        await subscriber.ExpectMsgAsync<ErrorOutput>(TimeSpan.FromSeconds(5));
+
+        // Compaction
+        await subscriber.ExpectMsgAsync<CompactionOutput>(TimeSpan.FromSeconds(5));
+
+        // Buffer drain processes the buffered message — auto-resend is subsumed
+        var text = await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(5));
+        Assert.Contains("fake", text.Text, StringComparison.OrdinalIgnoreCase);
+        await subscriber.ExpectMsgAsync<UsageOutput>(TimeSpan.FromSeconds(3));
+        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
+    }
 }
 
 /// <summary>

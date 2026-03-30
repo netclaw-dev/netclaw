@@ -82,4 +82,11 @@ public sealed record SessionTuning
     /// active as a fallback for partial-turn content. Set to 0 to disable.
     /// </summary>
     public int MemoryDistillationTurnInterval { get; init; } = 5;
+
+    /// <summary>
+    /// Retry policy for transient streaming LLM failures (5xx, 429).
+    /// Only applies when no data has been streamed yet — mid-stream failures
+    /// are not retried because the partial response cannot be reconstructed.
+    /// </summary>
+    public RetryPolicy StreamingRetryPolicy { get; init; } = new();
 }

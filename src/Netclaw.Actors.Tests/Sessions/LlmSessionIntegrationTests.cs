@@ -1466,6 +1466,74 @@ public class LlmSessionIntegrationTests : TestKit
         await ExpectNoMsgAsync(TimeSpan.FromMilliseconds(300));
         Assert.DoesNotContain(sessionId.Value, _lifecycleObserver.DeactivatedSessionIds);
     }
+
+    [Fact]
+    public async Task Streaming_retry_recovers_from_transient_502()
+    {
+        // First 2 calls throw 502, third succeeds
+        _fakeChatClient.PlannedExceptions.Enqueue(
+            new ProviderException("server error (502)", "HTTP 502", statusCode: 502));
+        _fakeChatClient.PlannedExceptions.Enqueue(
+            new ProviderException("server error (502)", "HTTP 502", statusCode: 502));
+
+        var sessionId = new SessionId("test-channel/streaming-retry-502");
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("retry-502-sub");
+
+        await sessionManager.Ask<SessionJoined>(new JoinSession
+        {
+            SessionId = sessionId,
+            Subscriber = subscriber,
+            Filter = OutputFilter.Full
+        });
+        await subscriber.ExpectMsgAsync<SessionJoined>();
+
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Message that should succeed after retries"
+        });
+
+        // Should succeed after retries — response arrives
+        var text = await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(15));
+        Assert.Contains("fake", text.Text, StringComparison.OrdinalIgnoreCase);
+        var completed = await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
+        Assert.Equal(TurnOutcome.Completed, completed.Outcome);
+    }
+
+    [Fact]
+    public async Task Streaming_retry_exhaustion_fails_turn()
+    {
+        // All calls throw 502 — retries exhaust and turn fails.
+        // Default RetryPolicy.MaxRetries=3, so we need initial + 3 retries = 4 exceptions.
+        for (var i = 0; i < 5; i++)
+            _fakeChatClient.PlannedExceptions.Enqueue(
+                new ProviderException("server error (502)", "HTTP 502", statusCode: 502));
+
+        var sessionId = new SessionId("test-channel/streaming-retry-exhaust");
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("retry-exhaust-sub");
+
+        await sessionManager.Ask<SessionJoined>(new JoinSession
+        {
+            SessionId = sessionId,
+            Subscriber = subscriber,
+            Filter = OutputFilter.Full
+        });
+        await subscriber.ExpectMsgAsync<SessionJoined>();
+
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Message that will fail after exhausting retries"
+        });
+
+        // Should fail with error after exhausting retries
+        var error = await subscriber.ExpectMsgAsync<ErrorOutput>(TimeSpan.FromSeconds(20));
+        Assert.Equal(ErrorCategory.ProviderFailure, error.Category);
+        var completed = await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
+        Assert.Equal(TurnOutcome.Failed, completed.Outcome);
+    }
 }
 
 /// <summary>
@@ -1540,6 +1608,13 @@ internal sealed class FakeChatClient : IChatClient
     /// </summary>
     public Queue<IReadOnlyList<AIContent>> PlannedResponses { get; } = new();
 
+    /// <summary>
+    /// When populated, exceptions are dequeued and thrown before processing the
+    /// response. Used to simulate provider errors (502, 400 context overflow, etc.).
+    /// Exceptions are thrown before incrementing <see cref="CallCount"/>.
+    /// </summary>
+    public Queue<Exception> PlannedExceptions { get; } = new();
+
     public TaskCompletionSource? NextResponseGate { get; set; }
 
     public async Task<ChatResponse> GetResponseAsync(
@@ -1547,6 +1622,9 @@ internal sealed class FakeChatClient : IChatClient
         ChatOptions? options = null,
         CancellationToken cancellationToken = default)
     {
+        if (PlannedExceptions.Count > 0)
+            throw PlannedExceptions.Dequeue();
+
         var messageList = messages.ToList();
         ReceivedMessages.Add(messageList);
         ReceivedToolNames.Add(options?.Tools?

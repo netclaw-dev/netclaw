@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Diagnostics;
+using System.Net.Http;
 using System.Text;
 using System.Text.Json;
 using Akka.Actor;
@@ -115,6 +116,18 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     // Startup context layers: injected on first LLM call, re-injected after compaction
     private bool _startupContextInjected;
+
+    // Emergency compaction auto-resend: set when context overflow triggers compaction,
+    // cleared after compaction completes and the pending user message is re-sent.
+    private bool _pendingEmergencyResend;
+
+    // Guards against infinite compaction loops: if the auto-resend after compaction
+    // triggers another overflow, fail the turn instead of compacting again.
+    private bool _emergencyResendInFlight;
+
+    // Per-turn retry counter for transient streaming failures (5xx, 429)
+    private int _streamingRetryAttempt;
+    private static readonly object StreamingRetryTimerKey = new();
 
     // Skill registry for slash-command dispatch
     private readonly Skills.SkillRegistry? _skillRegistry;
@@ -637,12 +650,24 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             // Context overflow: compact and recover instead of failing the turn
             if (IsContextOverflowError(msg.Cause))
             {
+                // If this is already a retry after compaction, don't loop — fail the turn
+                if (_emergencyResendInFlight)
+                {
+                    _emergencyResendInFlight = false;
+                    TurnLog().Error(msg.Cause, "turn_context_overflow_after_compaction — failing turn");
+                    FailCurrentTurn(
+                        "Context window exceeded even after compaction. The conversation may be too large.",
+                        msg.Cause, ErrorCategory.ProviderFailure);
+                    return;
+                }
+
                 TurnLog().Warning(msg.Cause, "turn_context_overflow — triggering emergency compaction");
+                _pendingEmergencyResend = true;
 
                 EmitOutput(new ErrorOutput
                 {
                     SessionId = _sessionId,
-                    Message = "Context window exceeded — compacting session history. Please resend your last message.",
+                    Message = "Context window exceeded — compacting session history.",
                     Category = ErrorCategory.ProviderFailure,
                     CorrelationId = Guid.NewGuid(),
                     Cause = msg.Cause
@@ -655,11 +680,38 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 return;
             }
 
+            // Pre-stream transient failure: retry with backoff if no data was streamed yet.
+            // IsTransientStreamingError handles ProviderException (which wraps HTTP status codes)
+            // while RetryPolicy only provides the attempt limit and backoff delay.
+            if (!_firstDeltaReceived && IsTransientStreamingError(msg.Cause))
+            {
+                var policy = _config.Tuning.StreamingRetryPolicy;
+                if (_streamingRetryAttempt < policy.MaxRetries)
+                {
+                    var delay = policy.GetDelay(_streamingRetryAttempt);
+                    _streamingRetryAttempt++;
+                    TurnLog().Warning(msg.Cause,
+                        "turn_llm_transient_failure — retrying in {DelayMs:F0}ms (attempt {Attempt}/{Max})",
+                        delay.TotalMilliseconds, _streamingRetryAttempt, policy.MaxRetries);
+                    Timers.StartSingleTimer(
+                        StreamingRetryTimerKey,
+                        new RetryLlmCallAfterBackoff(_streamingRetryAttempt),
+                        delay);
+                    return; // Stay in Processing, watchdog is already stopped
+                }
+            }
+
             TurnLog().Error(msg.Cause, "turn_llm_call_failed");
 
             var errorMessage = ExtractLlmErrorMessage(msg.Cause);
             var category = msg.Cause is TimeoutException ? ErrorCategory.Timeout : ErrorCategory.ProviderFailure;
             FailCurrentTurn(errorMessage, msg.Cause, category);
+        });
+
+        Command<RetryLlmCallAfterBackoff>(msg =>
+        {
+            TurnLog().Info("turn_streaming_retry attempt={Attempt}", msg.Attempt);
+            FireLlmCall();
         });
 
         Command<ProcessingWatchdogExpired>(msg =>
@@ -948,6 +1000,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     {
         if (_restartDrainRequested)
         {
+            _pendingEmergencyResend = false;
+            _emergencyResendInFlight = false;
             ClearBufferedMessagesForRestartDrain();
             TransitionTo(SessionPhase.Ready);
             TransitionTo(SessionPhase.Passivating);
@@ -956,6 +1010,11 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         if (_buffer.Count > 0)
         {
+            // Buffer drain handles both buffered messages AND the pending resend —
+            // the user's original message is already in compacted history, and
+            // buffered messages are added on top.
+            _pendingEmergencyResend = false;
+            _emergencyResendInFlight = false;
             _log.Info("Post-compaction: draining {BufferCount} buffered message(s)", _buffer.Count);
             foreach (var buffered in _buffer)
             {
@@ -963,6 +1022,17 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 _state = _state.AddUserMessage(buffered.Content, refs);
             }
             _buffer.Clear();
+            FireLlmCall();
+            TransitionTo(SessionPhase.Processing);
+        }
+        else if (_pendingEmergencyResend)
+        {
+            // Emergency compaction completed — re-fire the LLM call for the
+            // user message that's already in the compacted history.
+            _pendingEmergencyResend = false;
+            _emergencyResendInFlight = true;
+            _streamingRetryAttempt = 0;
+            _log.Info("Post-compaction: auto-resending pending user message");
             FireLlmCall();
             TransitionTo(SessionPhase.Processing);
         }
@@ -1468,6 +1538,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         _state = _state.AddUserMessage(userContent, mediaRefs.Count > 0 ? mediaRefs : null);
         TryReplyAck();
         _recallManager.ResetForNewTurn();
+        _streamingRetryAttempt = 0;
+        _emergencyResendInFlight = false;
         FireInitialTurnLlmCall(userContent);
         TransitionTo(SessionPhase.Processing);
     }
@@ -1760,6 +1832,22 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         || message.Contains("prompt is too long", StringComparison.OrdinalIgnoreCase)
         || message.Contains("token", StringComparison.OrdinalIgnoreCase)
             && message.Contains("exceed", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Detect transient streaming errors that are safe to retry when no data
+    /// has been streamed yet (5xx server errors, 429 rate limits, network failures).
+    /// </summary>
+    internal static bool IsTransientStreamingError(Exception? ex)
+    {
+        if (ex is null) return false;
+        var providerEx = FindException<Configuration.ProviderException>(ex);
+        if (providerEx?.StatusCode is >= 500) return true;
+        if (providerEx?.StatusCode is 429) return true;
+        // Only retry network-level failures (no response from provider).
+        // TimeoutException is NOT retried here — the ProcessingWatchdog is the
+        // authoritative timeout handler and covers that case.
+        return ex is HttpRequestException { StatusCode: null };
+    }
 
     /// <summary>
     /// Extracts the last N user/assistant text messages for session resume display.
