@@ -3,7 +3,7 @@ name: skill-authoring
 description: "How to create, edit, and manage Netclaw skills. Read this when you need to synthesize a new skill from a session, understand the skill file format, or use the skill_manage tool."
 metadata:
   author: netclaw
-  version: "1.2.0"
+  version: "1.3.0"
 ---
 
 # Skill Authoring
@@ -143,7 +143,7 @@ atomically, and triggers a registry rescan after mutations.
 
 Content scanning rules:
 - `SKILL.md` and prompt-facing resource files are scanned for prompt-injection patterns before Netclaw persists or loads them.
-- `skill_manage` mutations are scanned with at least Community-tier policy even though the created skill lives in the User tier, so model-authored edits do not bypass the guardrail.
+- All skills are scanned uniformly regardless of origin — system, user, and all other skills use the same policy (High risk → Reject, Medium → Warn, Low → Allow).
 - Rejected scans fail closed: Netclaw returns the rejection reason and leaves the previous on-disk content unchanged.
 - Warnings may still allow a mutation or read, but the warning text is surfaced in the tool result.
 - Resource files must stay under `references/`, `scripts/`, or `assets/`; other paths are rejected.
@@ -156,23 +156,19 @@ Hard rules:
   symlinked directories/files/resources, or unreadable `SKILL.md` files are
   rejected from the registry until fixed.
 
-## Trust Tiers
+## Skill Directories
 
-Skills are classified by trust tier based on their directory location:
+Skills live in two locations:
 
-| Tier | Directory | Source | Default Min Audience |
-|------|-----------|--------|---------------------|
-| System | `.system/` | Official Netclaw feed | Team |
-| User | root `~/.netclaw/skills/` | Operator-placed or user-created | Team |
-| Community | `.community/` | Netclaw org community feed | Team |
-| External | `.external/` | Third-party marketplaces | Personal |
-| Agent | `.agent/` | Agent auto-synthesized | Personal |
+| Directory | Source | Editable |
+|-----------|--------|----------|
+| `~/.netclaw/skills/.system/` | Official Netclaw feed (synced from CDN) | No — read-only |
+| `~/.netclaw/skills/` (root) | Operator-placed or user-created via `skill_manage` | Yes |
 
-By default, no skills are visible to Public sessions. To make a skill visible
-in Public, add `minimum-audience: public` to the frontmatter — only System
-and User tier skills may do this.
+System skills (`.system/`) cannot be edited, patched, or deleted via
+`skill_manage`. They are maintained by the Netclaw release process.
 
-Skills created via `skill_manage` get the User tier. The Agent tier is
-reserved for future auto-authoring where the agent creates skills without
-user direction. The tier is determined by directory location — a skill cannot
-self-declare a higher tier.
+All skills — regardless of origin — are visible in the skill index and
+available to all sessions. The skill index is a compressed file listing
+injected into the system prompt that points the agent directly at SKILL.md
+files on disk for retrieval-led reasoning.

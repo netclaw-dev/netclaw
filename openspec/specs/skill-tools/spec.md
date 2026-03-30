@@ -76,7 +76,6 @@ SHALL target the user skills area only, never `.system/`.
 - **THEN** the tool creates `~/.netclaw/skills/my-workflow/SKILL.md`
 - **AND** validates frontmatter (name format, description required, description <= 1024 chars)
 - **AND** uses atomic write (temp file + rename)
-- **AND** sets `SkillTrustTier.Agent` on the created skill
 - **AND** re-scans the skills directory and rebuilds the registry
 
 #### Scenario: Create skill with invalid frontmatter
