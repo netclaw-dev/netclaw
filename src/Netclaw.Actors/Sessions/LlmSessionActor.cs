@@ -117,13 +117,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     // Startup context layers: injected on first LLM call, re-injected after compaction
     private bool _startupContextInjected;
 
-    // Emergency compaction auto-resend: set when context overflow triggers compaction,
-    // cleared after compaction completes and the pending user message is re-sent.
-    private bool _pendingEmergencyResend;
-
-    // Guards against infinite compaction loops: if the auto-resend after compaction
-    // triggers another overflow, fail the turn instead of compacting again.
-    private bool _emergencyResendInFlight;
+    // Guards against infinite compaction loops: if a post-compaction buffer drain
+    // overflows again, fail the turn. Reset at the start of each new user turn.
+    private int _compactionOverflowRetryCount;
 
     // Per-turn retry counter for transient streaming failures (5xx, 429)
     private int _streamingRetryAttempt;
@@ -647,13 +643,13 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             _watchdog.Stop(Timers);
             CancelAndDisposeLlmCts();
 
-            // Context overflow: compact and recover instead of failing the turn
+            // Context overflow: roll back the failed turn, buffer the user message,
+            // compact the history, and let the normal buffer drain re-deliver it.
             if (IsContextOverflowError(msg.Cause))
             {
-                // If this is already a retry after compaction, don't loop — fail the turn
-                if (_emergencyResendInFlight)
+                if (_compactionOverflowRetryCount > 0)
                 {
-                    _emergencyResendInFlight = false;
+                    _compactionOverflowRetryCount = 0;
                     TurnLog().Error(msg.Cause, "turn_context_overflow_after_compaction — failing turn");
                     FailCurrentTurn(
                         "Context window exceeded even after compaction. The conversation may be too large.",
@@ -661,8 +657,12 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                     return;
                 }
 
-                TurnLog().Warning(msg.Cause, "turn_context_overflow — triggering emergency compaction");
-                _pendingEmergencyResend = true;
+                _compactionOverflowRetryCount++;
+                TurnLog().Warning(msg.Cause, "turn_context_overflow — rolling back turn and triggering compaction");
+
+                // Roll back: move the user message (and any recall nudges from this turn)
+                // out of history and into the buffer so the normal drain re-delivers it.
+                RollBackCurrentTurnIntoBuffer();
 
                 EmitOutput(new ErrorOutput
                 {
@@ -996,11 +996,37 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         });
     }
 
+    /// <summary>
+    /// Roll back the current turn's messages from history and buffer the user message
+    /// for re-delivery after compaction. Removes the user message and any system nudges
+    /// (e.g. recall content) that were added after it during this turn.
+    /// </summary>
+    private void RollBackCurrentTurnIntoBuffer()
+    {
+        for (var i = _state.History.Count - 1; i >= 0; i--)
+        {
+            if (_state.History[i].Role != Protocol.ChatRole.User)
+                continue;
+
+            var msg = _state.History[i];
+            _buffer.Insert(0, new SendUserMessage
+            {
+                SessionId = _sessionId,
+                Content = msg.Content ?? string.Empty,
+                MediaReferences = msg.MediaReferences
+            });
+            _state = _state with { History = _state.History.GetRange(0, i) };
+            return;
+        }
+
+        // No user message found — nothing to roll back (shouldn't happen)
+        _log.Warning("RollBackCurrentTurnIntoBuffer: no User message found in history");
+    }
+
     private void DrainBufferOrReady()
     {
         if (_restartDrainRequested)
         {
-            ClearEmergencyRetryState();
             ClearBufferedMessagesForRestartDrain();
             TransitionTo(SessionPhase.Ready);
             TransitionTo(SessionPhase.Passivating);
@@ -1009,9 +1035,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         if (_buffer.Count > 0)
         {
-            // User's original message is already in compacted history —
-            // buffered messages are added on top, no separate resend needed.
-            ClearEmergencyRetryState();
             _log.Info("Post-compaction: draining {BufferCount} buffered message(s)", _buffer.Count);
             foreach (var buffered in _buffer)
             {
@@ -1019,16 +1042,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 _state = _state.AddUserMessage(buffered.Content, refs);
             }
             _buffer.Clear();
-            FireLlmCall();
-            TransitionTo(SessionPhase.Processing);
-        }
-        else if (_pendingEmergencyResend)
-        {
-            // User message is preserved in compacted history — just re-fire the call.
-            _pendingEmergencyResend = false;
-            _emergencyResendInFlight = true;
             _streamingRetryAttempt = 0;
-            _log.Info("Post-compaction: auto-resending pending user message");
             FireLlmCall();
             TransitionTo(SessionPhase.Processing);
         }
@@ -1036,13 +1050,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         {
             TransitionTo(SessionPhase.Ready);
         }
-    }
-
-    private void ClearEmergencyRetryState()
-    {
-        _pendingEmergencyResend = false;
-        _emergencyResendInFlight = false;
-        _streamingRetryAttempt = 0;
     }
 
     private static readonly TimeSpan PassivationGracePeriod = TimeSpan.FromSeconds(5);
@@ -1542,7 +1549,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         _state = _state.AddUserMessage(userContent, mediaRefs.Count > 0 ? mediaRefs : null);
         TryReplyAck();
         _recallManager.ResetForNewTurn();
-        ClearEmergencyRetryState();
+        _streamingRetryAttempt = 0;
+        _compactionOverflowRetryCount = 0;
         FireInitialTurnLlmCall(userContent);
         TransitionTo(SessionPhase.Processing);
     }
