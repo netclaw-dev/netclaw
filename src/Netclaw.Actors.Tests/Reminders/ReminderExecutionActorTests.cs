@@ -137,6 +137,27 @@ public class ReminderExecutionActorTests : TestKit, IDisposable
         Assert.Null(completed.ErrorMessage);
     }
 
+    [Fact]
+    public async Task Execution_pipeline_requests_streaming_and_tool_call_output()
+    {
+        var pipeline = new ScriptedSessionPipeline(sessionId =>
+        [
+            new TurnCompleted { SessionId = sessionId, TurnNumber = 1 }
+        ]);
+
+        var definition = CreateDefinition("filter-check") with { NotifyInstructions = string.Empty };
+        var probe = CreateTestProbe();
+        Sys.ActorOf(
+            Props.Create(() => new ParentProxy(probe.Ref, definition, pipeline, _historyStore)),
+            "exec-filter-check");
+
+        await probe.ExpectMsgAsync<ReminderExecutionCompleted>(TimeSpan.FromSeconds(5));
+
+        Assert.NotNull(pipeline.CapturedOptions);
+        Assert.True(pipeline.CapturedOptions!.Filter.HasFlag(OutputFilter.TextStreaming));
+        Assert.True(pipeline.CapturedOptions!.Filter.HasFlag(OutputFilter.ToolCalls));
+    }
+
     private static ReminderDefinition CreateDefinition(string id)
     {
         var now = TimeProvider.System.GetUtcNow();
@@ -198,12 +219,16 @@ public class ReminderExecutionActorTests : TestKit, IDisposable
     private sealed class ScriptedSessionPipeline(
         Func<SessionId, IReadOnlyList<SessionOutput>> outputFactory) : ISessionPipeline
     {
+        public SessionPipelineOptions? CapturedOptions { get; private set; }
+
         public Task<MaterializedSession> CreateAsync(
             SessionId sessionId,
             SessionPipelineOptions options,
             IMaterializer? materializer = null,
             CancellationToken cancellationToken = default)
         {
+            CapturedOptions = options;
+
             var killSwitch = KillSwitches.Shared($"scripted-{sessionId.Value}");
 
             var input = Sink.Ignore<ChannelInput>()

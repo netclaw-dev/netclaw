@@ -110,7 +110,7 @@ internal sealed class ReminderExecutionActor : ReceiveActor
                     PayloadTaint = PayloadTaint.Trusted,
                     SourceKind = "reminder"
                 },
-                Filter = OutputFilter.Text
+                Filter = OutputFilter.TextStreaming | OutputFilter.ToolCalls
             }, materializer: _materializer);
 
             var self = Self;
