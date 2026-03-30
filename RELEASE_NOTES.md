@@ -1,3 +1,19 @@
+#### 0.9.1 2026-03-30 ####
+
+Netclaw v0.9.1 — Configurable project workspaces, reminders upgrade, skill security scanning, and session reliability fixes
+
+**Features**
+
+* Added configurable project workspaces with AGENTS.md discovery — operators can now define named workspaces under `~/.netclaw/workspaces/`. Each workspace maps a name to a root directory, and `AGENTS.md` files found in the workspace tree are surfaced automatically as project context. The `netclaw init` wizard now prompts for a workspaces path during setup. ([#472](https://github.com/Aaronontheweb/netclaw/pull/472), [#482](https://github.com/Aaronontheweb/netclaw/pull/482))
+* Upgraded to Akka.Reminders v0.6.0-beta2 with envelope-based delivery — reminders now deliver via a typed envelope wrapper rather than raw message dispatch, improving type safety and routing clarity. **Breaking change:** the SQLite reminder store schema adds ack-tracking columns in this release. Existing reminder databases must be deleted and recreated after upgrading. ([#484](https://github.com/Aaronontheweb/netclaw/pull/484))
+* Added skill content security scanning with shared prompt injection detection — skill files are now scanned at load time using 22 regex patterns across 5 threat categories (prompt injection, role hijacking, instruction override, data exfiltration, and system escape). Skills that match a pattern are blocked from loading and logged with the specific pattern that triggered the rejection. ([#408](https://github.com/Aaronontheweb/netclaw/pull/408))
+
+**Bug Fixes**
+
+* Fixed sessions requiring manual message resend after context overflow compaction — sessions now automatically resend the original user message after compaction completes, so users no longer see "Please resend your last message" prompts. Also added streaming retry for transient provider errors (5xx, 429) with configurable backoff via `SessionTuning.StreamingRetryPolicy`. ([#485](https://github.com/Aaronontheweb/netclaw/pull/485))
+* Fixed `HttpClient.Timeout` (default 100s) prematurely killing LLM calls for self-hosted models with large contexts — the session watchdog is now the sole timeout authority for LLM request lifetimes. `HttpClient.Timeout` is set to `Timeout.InfiniteTimeSpan` and all cancellation flows through the session watchdog's `CancellationToken`. ([#476](https://github.com/Aaronontheweb/netclaw/pull/476))
+* Fixed reminder execution actor using the wrong output filter — the actor was configured with `TextStreaming | ToolCalls` instead of the correct filter for reminder delivery, causing reminders to not stream output correctly. ([#475](https://github.com/Aaronontheweb/netclaw/pull/475))
+
 #### 0.9.0 2026-03-27 ####
 
 Netclaw v0.9.0 — Two-phase streaming timeout, FTS5 memory recall, turn-based distillation, and streaming performance fix
