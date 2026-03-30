@@ -1857,11 +1857,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     private void FireLlmCall(string? recallQuery = null, bool forceNoTools = false)
     {
         _firstDeltaReceived = false;
-
-        // Cancel and dispose the previous CTS (if any) and create a fresh one.
-        // No auto-timeout — the ProcessingWatchdog is the sole timeout authority.
-        _activeLlmCts?.Cancel();
-        _activeLlmCts?.Dispose();
+        CancelAndDisposeLlmCts();
         _activeLlmCts = new CancellationTokenSource();
         _activeCallId++;
 
