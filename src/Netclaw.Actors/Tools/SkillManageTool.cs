@@ -375,10 +375,8 @@ public sealed partial class SkillManageTool : NetclawTool<SkillManageTool.Params
 
     private bool IsSystemSkill(string name)
     {
-        var systemDir = Path.Combine(_paths.SkillsDirectory, ".system");
-        return _skillRegistry.GetAll()
-            .Any(s => s.Name.Equals(name, StringComparison.OrdinalIgnoreCase)
-                      && s.SkillDirectory.StartsWith(systemDir, StringComparison.Ordinal));
+        var skill = FindSkill(name);
+        return skill is not null && IsSystemCategory(skill);
     }
 
     private static string? ValidateName(string? name)
@@ -446,7 +444,7 @@ public sealed partial class SkillManageTool : NetclawTool<SkillManageTool.Params
     }
 
     private static bool IsSystemCategory(SkillEntry skill)
-        => string.Equals(skill.Category, ".system", StringComparison.Ordinal);
+        => string.Equals(skill.Category, SkillScanner.SystemCategory, StringComparison.Ordinal);
 
     private static void AtomicWrite(string path, string content)
     {

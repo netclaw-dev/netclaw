@@ -18,6 +18,11 @@ public static partial class SkillScanner
     private const string SkillFileName = "SKILL.md";
 
     /// <summary>
+    /// The directory name for system skills (synced from CDN, read-only).
+    /// </summary>
+    public const string SystemCategory = ".system";
+
+    /// <summary>
     /// Standard subdirectories within a skill directory that contain resources.
     /// </summary>
     private static readonly string[] ResourceSubdirectories = ["scripts", "references", "assets"];
@@ -345,7 +350,7 @@ public static partial class SkillScanner
     /// All other hidden directories are ignored.
     /// </summary>
     private static bool IsAllowedHiddenDirectory(string dirName)
-        => string.Equals(dirName, ".system", StringComparison.Ordinal);
+        => string.Equals(dirName, SystemCategory, StringComparison.Ordinal);
 
     internal static string NormalizeSkillName(string value)
         => value.Trim().ToLowerInvariant();

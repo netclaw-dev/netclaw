@@ -79,18 +79,6 @@ public class SkillRegistryTests
     // --- Index format tests ---
 
     [Fact]
-    public void GenerateDescriptionMenu_delegates_to_GenerateIndex()
-    {
-        var registry = new SkillRegistry();
-        registry.Register(MakeEntry("netclaw-memory", "Memory tools and recall guidance", ".system"));
-
-        var menu = registry.GenerateDescriptionMenu();
-
-        Assert.Contains("[skills]|root:", menu);
-        Assert.Contains("netclaw-memory/SKILL.md", menu);
-    }
-
-    [Fact]
     public void GenerateIndex_returns_empty_when_no_skills()
     {
         var registry = new SkillRegistry();
@@ -98,7 +86,7 @@ public class SkillRegistryTests
     }
 
     [Fact]
-    public void GenerateIndex_includes_description()
+    public void GenerateIndex_includes_skill_file_path()
     {
         var registry = new SkillRegistry();
         registry.Register(MakeEntry("my-skill", "Short description"));
@@ -106,6 +94,17 @@ public class SkillRegistryTests
         var index = registry.GenerateIndex("/test/skills");
 
         Assert.Contains("my-skill/SKILL.md", index);
+    }
+
+    [Fact]
+    public void GenerateIndex_includes_root_path()
+    {
+        var registry = new SkillRegistry();
+        registry.Register(MakeEntry("my-skill", "desc"));
+
+        var index = registry.GenerateIndex("/home/user/.netclaw/skills");
+
+        Assert.Contains("[skills]|root: /home/user/.netclaw/skills", index);
     }
 
     [Fact]

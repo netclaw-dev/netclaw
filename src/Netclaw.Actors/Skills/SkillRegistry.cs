@@ -11,7 +11,6 @@ public sealed class SkillRegistry
 {
     private readonly List<SkillEntry> _skills = new();
     private volatile IReadOnlyList<SkillScanIssue> _scanIssues = [];
-    private string _skillsRoot = string.Empty;
 
     /// <summary>
     /// Slash-command dispatch map: skill name → entry, for skills where
@@ -37,15 +36,13 @@ public sealed class SkillRegistry
         _scanIssues = [];
     }
 
-    public void ReplaceAll(IEnumerable<SkillEntry> skills, IReadOnlyList<SkillScanIssue>? issues = null, string? skillsRoot = null)
+    public void ReplaceAll(IEnumerable<SkillEntry> skills, IReadOnlyList<SkillScanIssue>? issues = null)
     {
         Clear();
         foreach (var skill in skills)
             Register(skill);
 
         _scanIssues = issues ?? [];
-        if (skillsRoot is not null)
-            _skillsRoot = skillsRoot;
     }
 
     public IReadOnlyList<SkillEntry> GetAll() => _skills;
@@ -107,10 +104,6 @@ public sealed class SkillRegistry
         return sb.ToString();
     }
 
-    /// <summary>
-    /// Backwards-compatible overload used by context layer and sync services.
-    /// </summary>
-    public string GenerateDescriptionMenu() => GenerateIndex(_skillsRoot);
 
     // --- Slash-command dispatch ---
 

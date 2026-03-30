@@ -512,9 +512,9 @@ static void ConfigureDaemonServices(
     services.AddSingleton<IContextLayerProvider>(_ =>
         new FileContextLayerProvider(paths.ToolIndexShadowPath, ContextLayerTiming.OnceAtStart));
 
-    // Skill index context layer — uses compressed format, rebuilt by sync/enrichment services
+    // Skill index context layer — compressed format pointing at files on disk, rebuilt by sync service
     var skillIndexLayer = new SkillIndexContextLayer();
-    skillIndexLayer.Update(skillRegistry.GenerateDescriptionMenu());
+    skillIndexLayer.Update(skillRegistry.GenerateIndex(paths.SkillsDirectory));
     services.AddSingleton(skillIndexLayer);
     services.AddSingleton<IContextLayerProvider>(skillIndexLayer);
 
