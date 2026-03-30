@@ -1,5 +1,3 @@
-using Netclaw.Configuration;
-
 namespace Netclaw.Security.Skills;
 
 /// <summary>
@@ -11,7 +9,6 @@ public sealed class NoOpSkillContentScanner : ISkillContentScanner
     public Task<SkillScanResult> ScanAsync(
         string skillName,
         string content,
-        SkillTrustTier trustTier = SkillTrustTier.User,
         CancellationToken cancellationToken = default)
     {
         return Task.FromResult(SkillScanResult.Allow());

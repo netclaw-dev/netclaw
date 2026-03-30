@@ -1,5 +1,3 @@
-using Netclaw.Configuration;
-
 namespace Netclaw.Security.Skills;
 
 /// <summary>
@@ -11,7 +9,6 @@ public interface ISkillContentScanner
     Task<SkillScanResult> ScanAsync(
         string skillName,
         string content,
-        SkillTrustTier trustTier = SkillTrustTier.User,
         CancellationToken cancellationToken = default);
 }
 

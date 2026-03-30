@@ -568,11 +568,6 @@ static void ConfigureDaemonServices(
         client.Timeout = FeedConstants.FeedHttpTimeout);
     services.AddHostedService<SystemSkillSyncService>();
 
-    // Skill index enrichment — generates trigger phrases via LLM sidecar.
-    // Runs after system skill sync, non-blocking. Falls back to truncated descriptions.
-    services.AddSingleton<SkillIndexEnrichmentService>();
-    services.AddHostedService<SkillIndexEnrichmentService>();
-
     // Binary update check — logs a warning at startup if a newer version is available.
     // Never blocks startup, never downloads anything.
     // Result is cached in UpdateCheckService for 1 hour; DaemonRuntimeStatusService

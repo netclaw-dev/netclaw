@@ -639,7 +639,7 @@ public sealed class SystemSkillSyncServiceTests : IDisposable
 
     private sealed class RejectingSkillScanner : ISkillContentScanner
     {
-        public Task<SecuritySkillScanResult> ScanAsync(string skillName, string content, SkillTrustTier trustTier = SkillTrustTier.User, CancellationToken cancellationToken = default)
+        public Task<SecuritySkillScanResult> ScanAsync(string skillName, string content, CancellationToken cancellationToken = default)
             => Task.FromResult(skillName == "risky"
                 ? SecuritySkillScanResult.Reject("synthetic rejection")
                 : SecuritySkillScanResult.Allow());
@@ -647,7 +647,7 @@ public sealed class SystemSkillSyncServiceTests : IDisposable
 
     private sealed class RejectingResourceSkillScanner : ISkillContentScanner
     {
-        public Task<SecuritySkillScanResult> ScanAsync(string skillName, string content, SkillTrustTier trustTier = SkillTrustTier.User, CancellationToken cancellationToken = default)
+        public Task<SecuritySkillScanResult> ScanAsync(string skillName, string content, CancellationToken cancellationToken = default)
             => Task.FromResult(skillName.Contains(':', StringComparison.Ordinal)
                 ? SecuritySkillScanResult.Reject("synthetic resource rejection")
                 : SecuritySkillScanResult.Allow());

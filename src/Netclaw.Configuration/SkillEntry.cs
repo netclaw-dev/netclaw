@@ -43,12 +43,6 @@ public sealed record SkillEntry(
     public IReadOnlyList<string>? ResourcePaths { get; init; }
 
     /// <summary>
-    /// Trust classification inferred from the skill's directory location.
-    /// See <see cref="SkillTrustTier"/> for tier definitions.
-    /// </summary>
-    public SkillTrustTier TrustTier { get; init; } = SkillTrustTier.User;
-
-    /// <summary>
     /// When <c>true</c>, the LLM cannot auto-load this skill — it is excluded
     /// from the compressed index. The user can still invoke it via <c>/name</c>.
     /// From frontmatter <c>disable-model-invocation</c>.
