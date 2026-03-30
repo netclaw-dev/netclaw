@@ -10,12 +10,10 @@ public class SkillRegistryTests
         string name,
         string description = "desc",
         string? category = null,
-        SkillTrustTier tier = SkillTrustTier.User,
         bool disableModelInvocation = false,
         string? allowedTools = null) =>
         new(name, name, description, $"/skills/{name}/SKILL.md", $"/skills/{name}", category)
         {
-            TrustTier = tier,
             DisableModelInvocation = disableModelInvocation,
             AllowedTools = allowedTools
         };
@@ -78,181 +76,75 @@ public class SkillRegistryTests
         Assert.Equal(3, results.Count);
     }
 
-    // --- Compressed index format tests ---
+    // --- Index format tests ---
 
     [Fact]
-    public void GenerateDescriptionMenu_uses_compressed_pipe_format()
+    public void GenerateIndex_returns_empty_when_no_skills()
     {
         var registry = new SkillRegistry();
-        registry.Register(MakeEntry("netclaw-memory", "Memory tools and recall guidance", ".system",
-            SkillTrustTier.System));
-
-        var menu = registry.GenerateDescriptionMenu();
-
-        Assert.Contains("[skills]|load via skill_load(name)|invoke via /name", menu);
-        Assert.Contains("|.system:{netclaw-memory}", menu);
-        Assert.DoesNotContain("path:", menu);
-        Assert.DoesNotContain("MANDATORY", menu);
+        Assert.Equal(string.Empty, registry.GenerateIndex("/test/skills"));
     }
 
     [Fact]
-    public void GenerateDescriptionMenu_returns_empty_when_no_skills()
-    {
-        var registry = new SkillRegistry();
-        Assert.Equal(string.Empty, registry.GenerateDescriptionMenu());
-    }
-
-    [Fact]
-    public void GenerateDescriptionMenu_uses_truncated_description_as_fallback_trigger()
+    public void GenerateIndex_includes_skill_file_path()
     {
         var registry = new SkillRegistry();
         registry.Register(MakeEntry("my-skill", "Short description"));
 
-        var menu = registry.GenerateDescriptionMenu();
+        var index = registry.GenerateIndex("/test/skills");
 
-        Assert.Contains("Short description", menu);
+        Assert.Contains("my-skill/SKILL.md", index);
     }
 
     [Fact]
-    public void GenerateDescriptionMenu_truncates_long_descriptions()
+    public void GenerateIndex_includes_root_path()
     {
-        var longDesc = new string('x', 100);
         var registry = new SkillRegistry();
-        registry.Register(MakeEntry("verbose", longDesc));
+        registry.Register(MakeEntry("my-skill", "desc"));
 
-        var menu = registry.GenerateDescriptionMenu();
+        var index = registry.GenerateIndex("/home/user/.netclaw/skills");
 
-        // Should be truncated to 60 chars (57 + "...")
-        Assert.DoesNotContain(longDesc, menu);
-        Assert.Contains("...", menu);
+        Assert.Contains("[skills]|root: /home/user/.netclaw/skills", index);
     }
 
     [Fact]
-    public void GenerateDescriptionMenu_uses_enriched_trigger_phrase_when_available()
+    public void GenerateIndex_groups_by_category()
     {
         var registry = new SkillRegistry();
-        registry.Register(MakeEntry("search-citation", "REQUIRED before any web_search..."));
+        registry.Register(MakeEntry("netclaw-memory", "Memory guidance", ".system"));
+        registry.Register(MakeEntry("my-workflow", "Workflow help"));
 
-        registry.SetTriggerPhrases(new Dictionary<string, string>
-        {
-            ["search-citation"] = "web search, citations, source verification"
-        });
+        var index = registry.GenerateIndex("/test/skills");
 
-        var menu = registry.GetMenuForAudience(TrustAudience.Personal);
-
-        Assert.Contains("web search, citations, source verification", menu);
-        Assert.DoesNotContain("REQUIRED before any web_search", menu);
+        Assert.Contains("|.system:{netclaw-memory/SKILL.md}", index);
+        Assert.Contains("|user:{my-workflow/SKILL.md}", index);
     }
-
-    // --- Audience filtering tests ---
 
     [Fact]
     public void DisableModelInvocation_skill_excluded_from_index()
     {
         var registry = new SkillRegistry();
         registry.Register(MakeEntry("ops", "Operations routing", ".system",
-            SkillTrustTier.System, disableModelInvocation: true));
-        registry.Register(MakeEntry("memory", "Memory guidance", ".system",
-            SkillTrustTier.System));
+            disableModelInvocation: true));
+        registry.Register(MakeEntry("memory", "Memory guidance", ".system"));
 
-        registry.RebuildAudienceMenus();
-        var menu = registry.GetMenuForAudience(TrustAudience.Personal);
+        var index = registry.GenerateIndex("/test/skills");
 
-        Assert.DoesNotContain("ops", menu);
-        Assert.Contains("memory", menu);
+        Assert.DoesNotContain("ops/SKILL.md", index);
+        Assert.Contains("memory/SKILL.md", index);
     }
 
     [Fact]
-    public void Public_audience_sees_no_skills_by_default()
-    {
-        var registry = new SkillRegistry();
-        registry.Register(MakeEntry("system-skill", "A system skill", ".system",
-            SkillTrustTier.System));
-        registry.Register(MakeEntry("user-skill", "A user skill"));
-
-        registry.RebuildAudienceMenus();
-        var menu = registry.GetMenuForAudience(TrustAudience.Public);
-
-        // All tiers default to Team minimum, so Public sees nothing
-        Assert.Equal(string.Empty, menu);
-    }
-
-    [Fact]
-    public void Team_audience_sees_system_user_and_community_skills()
-    {
-        var registry = new SkillRegistry();
-        registry.Register(MakeEntry("sys", "System skill", ".system", SkillTrustTier.System));
-        registry.Register(MakeEntry("usr", "User skill", tier: SkillTrustTier.User));
-        registry.Register(MakeEntry("comm", "Community skill", ".community", SkillTrustTier.Community));
-        registry.Register(MakeEntry("ext", "External skill", ".external", SkillTrustTier.External));
-
-        registry.RebuildAudienceMenus();
-        var menu = registry.GetMenuForAudience(TrustAudience.Team);
-
-        Assert.Contains("sys", menu);
-        Assert.Contains("usr", menu);
-        Assert.Contains("comm", menu);
-        Assert.DoesNotContain("ext", menu);
-    }
-
-    [Fact]
-    public void Personal_audience_sees_all_tiers()
-    {
-        var registry = new SkillRegistry();
-        registry.Register(MakeEntry("sys", "System skill", ".system", SkillTrustTier.System));
-        registry.Register(MakeEntry("usr", "User skill", tier: SkillTrustTier.User));
-        registry.Register(MakeEntry("ext", "External skill", ".external", SkillTrustTier.External));
-        registry.Register(MakeEntry("agt", "Agent skill", ".agent", SkillTrustTier.Agent));
-
-        registry.RebuildAudienceMenus();
-        var menu = registry.GetMenuForAudience(TrustAudience.Personal);
-
-        Assert.Contains("sys", menu);
-        Assert.Contains("usr", menu);
-        Assert.Contains("ext", menu);
-        Assert.Contains("agt", menu);
-    }
-
-    // --- Per-audience menu caching tests ---
-
-    [Fact]
-    public void RebuildAudienceMenus_caches_per_audience()
+    public void Clear_resets_index()
     {
         var registry = new SkillRegistry();
         registry.Register(MakeEntry("my-skill", "A user skill"));
-        registry.RebuildAudienceMenus();
 
-        var publicMenu = registry.GetMenuForAudience(TrustAudience.Public);
-        var teamMenu = registry.GetMenuForAudience(TrustAudience.Team);
-        var personalMenu = registry.GetMenuForAudience(TrustAudience.Personal);
-
-        Assert.Equal(string.Empty, publicMenu);
-        Assert.NotEqual(string.Empty, teamMenu);
-        Assert.NotEqual(string.Empty, personalMenu);
-    }
-
-    [Fact]
-    public void Clear_resets_audience_menus()
-    {
-        var registry = new SkillRegistry();
-        registry.Register(MakeEntry("my-skill", "A user skill"));
-        registry.RebuildAudienceMenus();
-
-        Assert.NotEqual(string.Empty, registry.GetMenuForAudience(TrustAudience.Personal));
+        Assert.NotEqual(string.Empty, registry.GenerateIndex("/test/skills"));
 
         registry.Clear();
 
-        Assert.Equal(string.Empty, registry.GetMenuForAudience(TrustAudience.Personal));
-    }
-
-    [Fact]
-    public void GetMenuForAudience_returns_empty_before_rebuild()
-    {
-        var registry = new SkillRegistry();
-        registry.Register(MakeEntry("my-skill", "A user skill"));
-
-        // No RebuildAudienceMenus() called
-        Assert.Equal(string.Empty, registry.GetMenuForAudience(TrustAudience.Team));
+        Assert.Equal(string.Empty, registry.GenerateIndex("/test/skills"));
     }
 
     // --- Slash-command dispatch tests ---

@@ -7,9 +7,10 @@ public static class SkillRegistryUpdater
     public static void ApplyScanResult(
         SkillRegistry skillRegistry,
         SkillIndexContextLayer skillIndexLayer,
-        SkillScanResult scanResult)
+        SkillScanResult scanResult,
+        string skillsRoot)
     {
         skillRegistry.ReplaceAll(scanResult.AcceptedSkills, scanResult.Issues);
-        skillIndexLayer.Update(skillRegistry.GenerateDescriptionMenu());
+        skillIndexLayer.Update(skillRegistry.GenerateIndex(skillsRoot));
     }
 }

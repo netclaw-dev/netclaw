@@ -20,7 +20,6 @@ namespace Netclaw.Daemon.Services;
 internal sealed class SystemSkillSyncService : IHostedService
 {
     private static readonly string[] AllowedResourcePrefixes = ["references", "scripts", "assets"];
-    private const SkillTrustTier SyncScanMinimumTrustTier = SkillTrustTier.Community;
 
     private readonly HttpClient _httpClient;
     private readonly NetclawPaths _paths;
@@ -206,7 +205,6 @@ internal sealed class SystemSkillSyncService : IHostedService
                 var mainScan = await _scanner.ScanAsync(
                     entry.Name,
                     mainContent,
-                    GetSyncScanTier(SkillTrustTier.System),
                     cancellationToken);
                 if (!mainScan.IsAllowed)
                 {
@@ -250,7 +248,6 @@ internal sealed class SystemSkillSyncService : IHostedService
                         var fileScan = await _scanner.ScanAsync(
                             $"{entry.Name}:{normalizedPath}",
                             fileContent,
-                            GetSyncScanTier(SkillTrustTier.System),
                             cancellationToken);
                         if (!fileScan.IsAllowed)
                         {
@@ -347,7 +344,7 @@ internal sealed class SystemSkillSyncService : IHostedService
     private void RescanAndUpdateIndex()
     {
         var scanResult = SkillScanner.Scan(_paths.SkillsDirectory);
-        SkillRegistryUpdater.ApplyScanResult(_skillRegistry, _skillIndexLayer, scanResult);
+        SkillRegistryUpdater.ApplyScanResult(_skillRegistry, _skillIndexLayer, scanResult, _paths.SkillsDirectory);
 
         if (scanResult.HasIssues)
         {
@@ -393,11 +390,6 @@ internal sealed class SystemSkillSyncService : IHostedService
         // If parsing fails, assume satisfied to avoid blocking skills unnecessarily
         return true;
     }
-
-    private static SkillTrustTier GetSyncScanTier(SkillTrustTier storedTrustTier)
-        => storedTrustTier < SyncScanMinimumTrustTier
-            ? SyncScanMinimumTrustTier
-            : storedTrustTier;
 
     private static string? ValidateFeedResourcePath(string path)
     {

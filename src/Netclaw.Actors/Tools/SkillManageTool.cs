@@ -26,7 +26,6 @@ public sealed partial class SkillManageTool : NetclawTool<SkillManageTool.Params
 
     private const int MaxNameLength = 64;
     private const int MaxDescriptionLength = 1024;
-    private const SkillTrustTier ManagedMutationMinimumTrustTier = SkillTrustTier.Community;
 
     private readonly SkillRegistry _skillRegistry;
     private readonly SkillIndexContextLayer _skillIndexLayer;
@@ -98,7 +97,7 @@ public sealed partial class SkillManageTool : NetclawTool<SkillManageTool.Params
         var identityError = ValidateManagedIdentity(name, args.Content);
         if (identityError is not null) return identityError;
 
-        var scanResult = await _scanner.ScanAsync(name, args.Content, GetManagedMutationScanTier(SkillTrustTier.User), ct);
+        var scanResult = await _scanner.ScanAsync(name, args.Content, ct);
         if (!scanResult.IsAllowed)
             return $"Content scan rejected: {scanResult.Reason}";
 
@@ -159,7 +158,7 @@ public sealed partial class SkillManageTool : NetclawTool<SkillManageTool.Params
                 return $"Skill '{name}' not found.";
         }
 
-        if (skill.TrustTier == SkillTrustTier.System)
+        if (IsSystemCategory(skill))
             return "Cannot edit system skills. System skills are read-only.";
 
         var contentError = ValidateFrontmatter(args.Content);
@@ -168,7 +167,7 @@ public sealed partial class SkillManageTool : NetclawTool<SkillManageTool.Params
         var identityError = ValidateManagedIdentity(name, args.Content);
         if (identityError is not null) return identityError;
 
-        var scanResult = await _scanner.ScanAsync(name, args.Content, GetManagedMutationScanTier(skill.TrustTier), ct);
+        var scanResult = await _scanner.ScanAsync(name, args.Content, ct);
         if (!scanResult.IsAllowed)
             return $"Content scan rejected: {scanResult.Reason}";
 
@@ -197,7 +196,7 @@ public sealed partial class SkillManageTool : NetclawTool<SkillManageTool.Params
         if (skill is null)
             return $"Skill '{name}' not found.";
 
-        if (skill.TrustTier == SkillTrustTier.System)
+        if (IsSystemCategory(skill))
             return "Cannot patch system skills. System skills are read-only.";
 
         // Determine target file
@@ -237,7 +236,7 @@ public sealed partial class SkillManageTool : NetclawTool<SkillManageTool.Params
         var scanSubject = targetPath == skill.FilePath
             ? name
             : $"{name}:{args.FilePath}";
-        var scanResult = await _scanner.ScanAsync(scanSubject, newContent, GetManagedMutationScanTier(skill.TrustTier), ct);
+        var scanResult = await _scanner.ScanAsync(scanSubject, newContent, ct);
         if (!scanResult.IsAllowed)
             return $"Content scan rejected: {scanResult.Reason}";
 
@@ -269,7 +268,7 @@ public sealed partial class SkillManageTool : NetclawTool<SkillManageTool.Params
         if (skill is null)
             return $"Skill '{name}' not found.";
 
-        if (skill.TrustTier == SkillTrustTier.System)
+        if (IsSystemCategory(skill))
             return "Cannot delete system skills. System skills are read-only.";
 
         Directory.Delete(skill.SkillDirectory, recursive: true);
@@ -300,7 +299,7 @@ public sealed partial class SkillManageTool : NetclawTool<SkillManageTool.Params
         if (skill is null)
             return $"Skill '{name}' not found.";
 
-        if (skill.TrustTier == SkillTrustTier.System)
+        if (IsSystemCategory(skill))
             return "Cannot write files in system skills. System skills are read-only.";
 
         var fileError = ValidateResourcePath(args.FilePath);
@@ -313,7 +312,6 @@ public sealed partial class SkillManageTool : NetclawTool<SkillManageTool.Params
         var scanResult = await _scanner.ScanAsync(
             $"{name}:{args.FilePath}",
             args.FileContent,
-            GetManagedMutationScanTier(skill.TrustTier),
             ct);
         if (!scanResult.IsAllowed)
             return $"Content scan rejected: {scanResult.Reason}";
@@ -343,7 +341,7 @@ public sealed partial class SkillManageTool : NetclawTool<SkillManageTool.Params
         if (skill is null)
             return $"Skill '{name}' not found.";
 
-        if (skill.TrustTier == SkillTrustTier.System)
+        if (IsSystemCategory(skill))
             return "Cannot remove files from system skills. System skills are read-only.";
 
         var fileError = ValidateResourcePath(args.FilePath);
@@ -377,10 +375,8 @@ public sealed partial class SkillManageTool : NetclawTool<SkillManageTool.Params
 
     private bool IsSystemSkill(string name)
     {
-        var systemDir = Path.Combine(_paths.SkillsDirectory, ".system");
-        return _skillRegistry.GetAll()
-            .Any(s => s.Name.Equals(name, StringComparison.OrdinalIgnoreCase)
-                      && s.SkillDirectory.StartsWith(systemDir, StringComparison.Ordinal));
+        var skill = FindSkill(name);
+        return skill is not null && IsSystemCategory(skill);
     }
 
     private static string? ValidateName(string? name)
@@ -447,10 +443,8 @@ public sealed partial class SkillManageTool : NetclawTool<SkillManageTool.Params
         return null;
     }
 
-    private static SkillTrustTier GetManagedMutationScanTier(SkillTrustTier storedTrustTier)
-        => storedTrustTier < ManagedMutationMinimumTrustTier
-            ? ManagedMutationMinimumTrustTier
-            : storedTrustTier;
+    private static bool IsSystemCategory(SkillEntry skill)
+        => string.Equals(skill.Category, SkillScanner.SystemCategory, StringComparison.Ordinal);
 
     private static void AtomicWrite(string path, string content)
     {
@@ -462,7 +456,7 @@ public sealed partial class SkillManageTool : NetclawTool<SkillManageTool.Params
     private Netclaw.Actors.Skills.SkillScanResult RescanAndUpdateIndex()
     {
         var scanResult = SkillScanner.Scan(_paths.SkillsDirectory);
-        SkillRegistryUpdater.ApplyScanResult(_skillRegistry, _skillIndexLayer, scanResult);
+        SkillRegistryUpdater.ApplyScanResult(_skillRegistry, _skillIndexLayer, scanResult, _paths.SkillsDirectory);
         return scanResult;
     }
 

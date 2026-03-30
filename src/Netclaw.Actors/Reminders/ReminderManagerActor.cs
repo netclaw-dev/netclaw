@@ -54,7 +54,7 @@ public sealed partial class ReminderManagerActor : ReceiveActor
         ReceiveAsync<ListRemindersCommand>(HandleListAsync);
         ReceiveAsync<GetReminderCommand>(HandleGetAsync);
 
-        ReceiveAsync<ReminderPayload>(HandleReminderFiredAsync);
+        ReceiveAsync<ReminderEnvelope<ReminderPayload>>(HandleReminderFiredAsync);
         ReceiveAsync<ReminderExecutionCompleted>(HandleExecutionCompletedAsync);
 
         ReceiveAsync<ReconcileReminders>(_ => HandleReconcileAsync());
@@ -389,8 +389,9 @@ public sealed partial class ReminderManagerActor : ReceiveActor
         }
     }
 
-    private async Task HandleReminderFiredAsync(ReminderPayload payload)
+    private async Task HandleReminderFiredAsync(ReminderEnvelope<ReminderPayload> envelope)
     {
+        var payload = envelope.Message;
         var reminderId = payload.Id;
         var definition = _definitionStore.Get(reminderId);
 
@@ -398,6 +399,7 @@ public sealed partial class ReminderManagerActor : ReceiveActor
         {
             _log.Error("Reminder fired for missing definition '{0}'. Cancelling orphaned schedule.", reminderId.Value);
             await CancelScheduleOnlyAsync(reminderId);
+            await _client!.AckAsync(envelope);
             return;
         }
 
@@ -406,6 +408,7 @@ public sealed partial class ReminderManagerActor : ReceiveActor
             _log.Warning("Reminder '{0}' fired while disabled. Cancelling any lingering schedule.", reminderId.Value);
             await CancelScheduleOnlyAsync(reminderId);
             RemoveFromDeferredQueue(reminderId);
+            await _client!.AckAsync(envelope);
             return;
         }
 
@@ -427,10 +430,12 @@ public sealed partial class ReminderManagerActor : ReceiveActor
             _log.Info("Concurrency limit reached ({0}), deferring reminder '{1}'",
                 _config.MaxConcurrentExecutions, reminderId.Value);
             _deferredQueue.Enqueue(reminderId);
+            await _client!.AckAsync(envelope);
             return;
         }
 
         StartExecution(definition);
+        await _client!.AckAsync(envelope);
     }
 
     private async Task HandleExecutionCompletedAsync(ReminderExecutionCompleted completed)

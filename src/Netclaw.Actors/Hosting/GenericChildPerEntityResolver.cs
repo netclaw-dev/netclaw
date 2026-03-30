@@ -33,8 +33,8 @@ public sealed class GenericChildPerEntityResolver : IShardRegionResolver
         _ => null
     };
 
-    public void DeliverReminder(ReminderEntity entity, object message)
+    public void DeliverReminder(ReminderEntity entity, ReminderEnvelope envelope, IActorRef? sender = null)
     {
-        TryResolve(entity)?.Tell(message, ActorRefs.NoSender);
+        TryResolve(entity)?.Tell(envelope, sender ?? ActorRefs.NoSender);
     }
 }
