@@ -32,7 +32,6 @@ using Netclaw.Daemon.Providers;
 using Netclaw.Daemon.Services;
 using Netclaw.Search;
 using Netclaw.Security;
-using Netclaw.Security.Skills;
 using static Microsoft.Extensions.Logging.LogLevel;
 
 try
@@ -236,8 +235,9 @@ static async Task RunDaemonAsync(string[] args, DaemonRestartSignal restartSigna
         return Results.Ok(new { reason, pid = Environment.ProcessId });
     });
 
-    // Register channel-specific tools after DI is built (tools need resolved services).
+    // Register tools that need DI-resolved dependencies after the container is built.
     ChannelToolRegistration.RegisterChannelTools(app.Services);
+    SkillToolRegistration.RegisterSkillTools(app.Services);
 
     // Reminder REST API
     MapReminderEndpoints(app);
@@ -400,8 +400,8 @@ static void ConfigureDaemonServices(
     // Skills system: seed built-in skills to .system/, register sync service
     CopyBuiltInSkills(paths.SystemSkillsDirectory);
     var skillRegistry = new SkillRegistry();
-    foreach (var skill in SkillScanner.Scan(paths.SkillsDirectory))
-        skillRegistry.Register(skill);
+    var initialSkillScan = SkillScanner.Scan(paths.SkillsDirectory);
+    skillRegistry.ReplaceAll(initialSkillScan.AcceptedSkills, initialSkillScan.Issues);
     services.AddSingleton(skillRegistry);
 
     // Subagent timeout configuration
@@ -510,14 +510,33 @@ static void ConfigureDaemonServices(
 
     // Skill index context layer — uses compressed format, rebuilt by sync/enrichment services
     var skillIndexLayer = new SkillIndexContextLayer();
-    skillRegistry.RebuildAudienceMenus();
     skillIndexLayer.Update(skillRegistry.GenerateDescriptionMenu());
     services.AddSingleton(skillIndexLayer);
     services.AddSingleton<IContextLayerProvider>(skillIndexLayer);
 
-    // Skill tools (skill_load, skill_read_resource, skill_manage)
-    // Scanner is resolved later via DI; use no-op for now (real impl registered in AddContentSecurity)
-    toolRegistry.WithSkillTools(skillRegistry, skillIndexLayer, paths, new NoOpSkillContentScanner());
+    // Skill tools are registered post-build so ISkillContentScanner resolves from DI.
+    // See SkillToolRegistration call after app.Build().
+    if (initialSkillScan.HasIssues)
+    {
+        using var loggerFactory = LoggerFactory.Create(b => b.SetMinimumLevel(daemonLogLevel));
+        var startupLogger = loggerFactory.CreateLogger("Netclaw.Startup");
+        startupLogger.LogWarning(
+            "Skill inventory is degraded at startup: accepted={AcceptedSkillCount} rejected={RejectedIssueCount}",
+            initialSkillScan.AcceptedSkills.Count,
+            initialSkillScan.Issues.Count);
+
+        foreach (var issue in initialSkillScan.Issues)
+        {
+            startupLogger.LogWarning(
+                "Rejected skill item during startup scan: kind={IssueKind} path={Path} message={Message}",
+                issue.Kind,
+                issue.Path,
+                issue.Message);
+        }
+    }
+
+    // Skill tools are registered post-build so ISkillContentScanner resolves from DI.
+    // See SkillToolRegistration call after app.Build().
 
     // Memory context layer — status is updated by ToolIndexUpdater after MCP discovery
     var memoryIndexLayer = new MemoryIndexContextLayer();

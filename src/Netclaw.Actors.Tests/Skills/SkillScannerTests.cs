@@ -24,14 +24,16 @@ public class SkillScannerTests : IDisposable
     public void Empty_directory_returns_empty_list()
     {
         var result = SkillScanner.Scan(_skillsDir);
-        Assert.Empty(result);
+        Assert.Empty(result.AcceptedSkills);
+        Assert.Empty(result.Issues);
     }
 
     [Fact]
     public void Nonexistent_directory_returns_empty_list()
     {
         var result = SkillScanner.Scan(Path.Combine(_skillsDir, "nonexistent"));
-        Assert.Empty(result);
+        Assert.Empty(result.AcceptedSkills);
+        Assert.Empty(result.Issues);
     }
 
     [Fact]
@@ -51,12 +53,12 @@ public class SkillScannerTests : IDisposable
 
         var result = SkillScanner.Scan(_skillsDir);
 
-        Assert.Single(result);
-        Assert.Equal("git-workflow", result[0].Name);
-        Assert.Equal("Git Workflow", result[0].DisplayName);
-        Assert.Equal("How to manage branches and PRs in this project.", result[0].Description);
-        Assert.Null(result[0].Category);
-        Assert.Equal(Path.Combine(_skillsDir, "git-workflow"), result[0].SkillDirectory);
+        Assert.Single(result.AcceptedSkills);
+        Assert.Equal("git-workflow", result.AcceptedSkills[0].Name);
+        Assert.Equal("Git Workflow", result.AcceptedSkills[0].DisplayName);
+        Assert.Equal("How to manage branches and PRs in this project.", result.AcceptedSkills[0].Description);
+        Assert.Null(result.AcceptedSkills[0].Category);
+        Assert.Equal(Path.Combine(_skillsDir, "git-workflow"), result.AcceptedSkills[0].SkillDirectory);
     }
 
     [Fact]
@@ -79,11 +81,11 @@ public class SkillScannerTests : IDisposable
 
         var result = SkillScanner.Scan(_skillsDir);
 
-        Assert.Single(result);
-        Assert.Equal("Apache-2.0", result[0].License);
-        Assert.Equal("Requires poppler-utils", result[0].Compatibility);
-        Assert.Equal("Bash(pdftotext:*) Read", result[0].AllowedTools);
-        Assert.Equal("1.2.0", result[0].Version);
+        Assert.Single(result.AcceptedSkills);
+        Assert.Equal("Apache-2.0", result.AcceptedSkills[0].License);
+        Assert.Equal("Requires poppler-utils", result.AcceptedSkills[0].Compatibility);
+        Assert.Equal("Bash(pdftotext:*) Read", result.AcceptedSkills[0].AllowedTools);
+        Assert.Equal("1.2.0", result.AcceptedSkills[0].Version);
     }
 
     [Fact]
@@ -105,16 +107,16 @@ public class SkillScannerTests : IDisposable
 
         var result = SkillScanner.Scan(_skillsDir);
 
-        Assert.Single(result);
-        Assert.Equal("web-search", result[0].Name);
-        Assert.Equal("Web Search", result[0].DisplayName);
-        Assert.Equal(Path.Combine(_skillsDir, "web-search", "SKILL.md"), result[0].FilePath);
-        Assert.Equal(Path.Combine(_skillsDir, "web-search"), result[0].SkillDirectory);
-        Assert.NotNull(result[0].ResourcePaths);
-        Assert.Equal(3, result[0].ResourcePaths!.Count);
-        Assert.Contains("references/flight-pricing.md", result[0].ResourcePaths!);
-        Assert.Contains("references/restaurant-search.md", result[0].ResourcePaths!);
-        Assert.Contains("scripts/validate.sh", result[0].ResourcePaths!);
+        Assert.Single(result.AcceptedSkills);
+        Assert.Equal("web-search", result.AcceptedSkills[0].Name);
+        Assert.Equal("Web Search", result.AcceptedSkills[0].DisplayName);
+        Assert.Equal(Path.Combine(_skillsDir, "web-search", "SKILL.md"), result.AcceptedSkills[0].FilePath);
+        Assert.Equal(Path.Combine(_skillsDir, "web-search"), result.AcceptedSkills[0].SkillDirectory);
+        Assert.NotNull(result.AcceptedSkills[0].ResourcePaths);
+        Assert.Equal(3, result.AcceptedSkills[0].ResourcePaths!.Count);
+        Assert.Contains("references/flight-pricing.md", result.AcceptedSkills[0].ResourcePaths!);
+        Assert.Contains("references/restaurant-search.md", result.AcceptedSkills[0].ResourcePaths!);
+        Assert.Contains("scripts/validate.sh", result.AcceptedSkills[0].ResourcePaths!);
     }
 
     [Fact]
@@ -124,7 +126,9 @@ public class SkillScannerTests : IDisposable
 
         var result = SkillScanner.Scan(_skillsDir);
 
-        Assert.Empty(result);
+        Assert.Empty(result.AcceptedSkills);
+        Assert.Single(result.Issues);
+        Assert.Equal(SkillScanIssueKind.MissingFrontmatter, result.Issues[0].Kind);
     }
 
     [Fact]
@@ -141,7 +145,9 @@ public class SkillScannerTests : IDisposable
 
         var result = SkillScanner.Scan(_skillsDir);
 
-        Assert.Empty(result);
+        Assert.Empty(result.AcceptedSkills);
+        Assert.Single(result.Issues);
+        Assert.Equal(SkillScanIssueKind.MissingDescription, result.Issues[0].Kind);
     }
 
     [Fact]
@@ -160,7 +166,7 @@ public class SkillScannerTests : IDisposable
 
         // YamlDotNet may or may not parse this depending on leniency,
         // but it should not throw
-        Assert.True(result.Count <= 1);
+        Assert.True(result.AcceptedSkills.Count <= 1);
     }
 
     [Fact]
@@ -178,8 +184,8 @@ public class SkillScannerTests : IDisposable
 
         var result = SkillScanner.Scan(_skillsDir);
 
-        Assert.Single(result);
-        Assert.Equal("Use this skill when: the user asks about PDFs.", result[0].Description);
+        Assert.Single(result.AcceptedSkills);
+        Assert.Equal("Use this skill when: the user asks about PDFs.", result.AcceptedSkills[0].Description);
     }
 
     [Fact]
@@ -195,9 +201,9 @@ public class SkillScannerTests : IDisposable
 
         var result = SkillScanner.Scan(_skillsDir);
 
-        Assert.Single(result);
-        Assert.Equal("my-skill", result[0].Name);
-        Assert.Equal("My Custom Skill", result[0].DisplayName);
+        Assert.Single(result.AcceptedSkills);
+        Assert.Equal("my-skill", result.AcceptedSkills[0].Name);
+        Assert.Equal("My Custom Skill", result.AcceptedSkills[0].DisplayName);
     }
 
     [Fact]
@@ -216,8 +222,8 @@ public class SkillScannerTests : IDisposable
 
         var result = SkillScanner.Scan(_skillsDir);
 
-        Assert.Single(result);
-        Assert.Equal("devops", result[0].Category);
+        Assert.Single(result.AcceptedSkills);
+        Assert.Equal("devops", result.AcceptedSkills[0].Category);
     }
 
     [Fact]
@@ -240,8 +246,8 @@ public class SkillScannerTests : IDisposable
 
         var result = SkillScanner.Scan(_skillsDir);
 
-        Assert.Single(result);
-        Assert.Equal("real-skill", result[0].Name);
+        Assert.Single(result.AcceptedSkills);
+        Assert.Equal("real-skill", result.AcceptedSkills[0].Name);
     }
 
     [Fact]
@@ -260,7 +266,7 @@ public class SkillScannerTests : IDisposable
 
         var result = SkillScanner.Scan(_skillsDir);
 
-        Assert.Empty(result);
+        Assert.Empty(result.AcceptedSkills);
     }
 
     [Fact]
@@ -279,9 +285,9 @@ public class SkillScannerTests : IDisposable
 
         var result = SkillScanner.Scan(_skillsDir);
 
-        Assert.Single(result);
-        Assert.Equal("diagnostics", result[0].Name);
-        Assert.Equal(".system", result[0].Category);
+        Assert.Single(result.AcceptedSkills);
+        Assert.Equal("diagnostics", result.AcceptedSkills[0].Name);
+        Assert.Equal(".system", result.AcceptedSkills[0].Category);
     }
 
     [Fact]
@@ -291,8 +297,8 @@ public class SkillScannerTests : IDisposable
 
         var result = SkillScanner.Scan(_skillsDir);
 
-        Assert.Single(result);
-        Assert.Equal(SkillTrustTier.System, result[0].TrustTier);
+        Assert.Single(result.AcceptedSkills);
+        Assert.Equal(SkillTrustTier.System, result.AcceptedSkills[0].TrustTier);
     }
 
     [Fact]
@@ -309,8 +315,8 @@ public class SkillScannerTests : IDisposable
 
         var result = SkillScanner.Scan(_skillsDir);
 
-        Assert.Single(result);
-        Assert.Equal(SkillTrustTier.User, result[0].TrustTier);
+        Assert.Single(result.AcceptedSkills);
+        Assert.Equal(SkillTrustTier.User, result.AcceptedSkills[0].TrustTier);
     }
 
     [Fact]
@@ -320,8 +326,8 @@ public class SkillScannerTests : IDisposable
 
         var result = SkillScanner.Scan(_skillsDir);
 
-        Assert.Single(result);
-        Assert.Equal(SkillTrustTier.Community, result[0].TrustTier);
+        Assert.Single(result.AcceptedSkills);
+        Assert.Equal(SkillTrustTier.Community, result.AcceptedSkills[0].TrustTier);
     }
 
     [Fact]
@@ -331,8 +337,8 @@ public class SkillScannerTests : IDisposable
 
         var result = SkillScanner.Scan(_skillsDir);
 
-        Assert.Single(result);
-        Assert.Equal(SkillTrustTier.External, result[0].TrustTier);
+        Assert.Single(result.AcceptedSkills);
+        Assert.Equal(SkillTrustTier.External, result.AcceptedSkills[0].TrustTier);
     }
 
     [Fact]
@@ -342,8 +348,8 @@ public class SkillScannerTests : IDisposable
 
         var result = SkillScanner.Scan(_skillsDir);
 
-        Assert.Single(result);
-        Assert.Equal(SkillTrustTier.Agent, result[0].TrustTier);
+        Assert.Single(result.AcceptedSkills);
+        Assert.Equal(SkillTrustTier.Agent, result.AcceptedSkills[0].TrustTier);
     }
 
     [Fact]
@@ -353,7 +359,7 @@ public class SkillScannerTests : IDisposable
 
         var result = SkillScanner.Scan(_skillsDir);
 
-        Assert.Empty(result);
+        Assert.Empty(result.AcceptedSkills);
     }
 
     [Fact]
@@ -363,7 +369,7 @@ public class SkillScannerTests : IDisposable
 
         var result = SkillScanner.Scan(_skillsDir);
 
-        Assert.Empty(result);
+        Assert.Empty(result.AcceptedSkills);
     }
 
     [Theory]
@@ -401,9 +407,80 @@ public class SkillScannerTests : IDisposable
 
         var result = SkillScanner.Scan(_skillsDir);
 
-        Assert.Single(result);
-        Assert.Null(result[0].ResourcePaths);
-        Assert.NotNull(result[0].SkillDirectory);
+        Assert.Single(result.AcceptedSkills);
+        Assert.Null(result.AcceptedSkills[0].ResourcePaths);
+        Assert.NotNull(result.AcceptedSkills[0].SkillDirectory);
+    }
+
+    [Fact]
+    public void Duplicate_skill_names_are_rejected_with_explicit_issues()
+    {
+        WriteSkill("shared-name", """
+            ---
+            name: shared-name
+            description: First copy.
+            ---
+
+            # First
+            """);
+
+        var secondDir = Path.Combine(_skillsDir, ".system", "shared-name");
+        Directory.CreateDirectory(secondDir);
+        File.WriteAllText(Path.Combine(secondDir, "SKILL.md"), """
+            ---
+            name: shared-name
+            description: Second copy.
+            ---
+
+            # Second
+            """);
+
+        var result = SkillScanner.Scan(_skillsDir);
+
+        Assert.Empty(result.AcceptedSkills);
+        Assert.Equal(2, result.Issues.Count(issue => issue.Kind == SkillScanIssueKind.DuplicateName));
+    }
+
+    [Fact]
+    public void Frontmatter_name_mismatch_is_rejected_with_issue()
+    {
+        WriteSkill("expected-name", """
+            ---
+            name: other-name
+            description: Wrong identity.
+            ---
+
+            # Mismatch
+            """);
+
+        var result = SkillScanner.Scan(_skillsDir);
+
+        Assert.Empty(result.AcceptedSkills);
+        Assert.Single(result.Issues);
+        Assert.Equal(SkillScanIssueKind.FrontmatterNameMismatch, result.Issues[0].Kind);
+    }
+
+    [Fact]
+    public void Symlinked_resource_tree_is_rejected_with_issue()
+    {
+        WriteSkill("linked-skill", """
+            ---
+            name: linked-skill
+            description: Has linked resources.
+            ---
+
+            # Linked
+            """);
+
+        var targetDir = Path.Combine(_skillsDir, "external-resources");
+        Directory.CreateDirectory(targetDir);
+        File.WriteAllText(Path.Combine(targetDir, "guide.md"), "# Guide");
+        Directory.CreateSymbolicLink(Path.Combine(_skillsDir, "linked-skill", "references"), targetDir);
+
+        var result = SkillScanner.Scan(_skillsDir);
+
+        Assert.Empty(result.AcceptedSkills);
+        Assert.Contains(result.Issues, issue => issue.Kind == SkillScanIssueKind.SymlinkNotAllowed);
     }
 
     /// <summary>

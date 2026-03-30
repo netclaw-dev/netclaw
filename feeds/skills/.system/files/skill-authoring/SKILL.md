@@ -3,7 +3,7 @@ name: skill-authoring
 description: "How to create, edit, and manage Netclaw skills. Read this when you need to synthesize a new skill from a session, understand the skill file format, or use the skill_manage tool."
 metadata:
   author: netclaw
-  version: "1.1.0"
+  version: "1.2.0"
 ---
 
 # Skill Authoring
@@ -140,6 +140,21 @@ skill_manage(action: "remove_file", name: "my-workflow", filePath: "references/o
 
 The tool validates frontmatter, enforces the AgentSkills.io format, writes
 atomically, and triggers a registry rescan after mutations.
+
+Content scanning rules:
+- `SKILL.md` and prompt-facing resource files are scanned for prompt-injection patterns before Netclaw persists or loads them.
+- `skill_manage` mutations are scanned with at least Community-tier policy even though the created skill lives in the User tier, so model-authored edits do not bypass the guardrail.
+- Rejected scans fail closed: Netclaw returns the rejection reason and leaves the previous on-disk content unchanged.
+- Warnings may still allow a mutation or read, but the warning text is surfaced in the tool result.
+- Resource files must stay under `references/`, `scripts/`, or `assets/`; other paths are rejected.
+
+Hard rules:
+- The frontmatter `name` must match the target skill name for `create` and `edit`.
+- If a rescan finds unrelated malformed or unsafe skills, the mutation can still
+  succeed, but the tool reports that the rebuilt inventory is degraded.
+- Skills with duplicate normalized names, mismatched frontmatter identity,
+  symlinked directories/files/resources, or unreadable `SKILL.md` files are
+  rejected from the registry until fixed.
 
 ## Trust Tiers
 

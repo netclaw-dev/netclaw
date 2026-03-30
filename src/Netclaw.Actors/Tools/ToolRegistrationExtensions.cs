@@ -50,8 +50,8 @@ public static class ToolRegistrationExtensions
         NetclawPaths paths,
         ISkillContentScanner scanner)
     {
-        registry.Register(new SkillLoadTool(skillRegistry));
-        registry.Register(new SkillReadResourceTool(skillRegistry));
+        registry.Register(new SkillLoadTool(skillRegistry, scanner));
+        registry.Register(new SkillReadResourceTool(skillRegistry, scanner));
         registry.Register(new SkillManageTool(skillRegistry, skillIndexLayer, paths, scanner));
         return registry;
     }
