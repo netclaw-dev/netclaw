@@ -47,7 +47,9 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
 
     // Track pending changes
     private readonly Dictionary<string, Dictionary<string, HashSet<string>>> _pendingGrants = new();
-    public bool HasUnsavedChanges => _pendingGrants.Count > 0;
+    // Track pending server access changes: (audience, server) → allowed
+    private readonly Dictionary<(string Audience, string Server), bool> _pendingServerAccess = new();
+    public bool HasUnsavedChanges => _pendingGrants.Count > 0 || _pendingServerAccess.Count > 0;
 
     public override void OnActivated()
     {
@@ -190,9 +192,17 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
             _ => Profiles.Personal
         };
 
-        // Server must be allowed by this audience first
-        if (!IsServerAllowed(SelectedServer, profile))
+        // Check pending server access, then config
+        var audName = AudienceName(SelectedAudience);
+        if (_pendingServerAccess.TryGetValue((audName, SelectedServer), out var pendingAccess))
+        {
+            if (!pendingAccess)
+                return false;
+        }
+        else if (!IsServerAllowed(SelectedServer, profile))
+        {
             return false;
+        }
 
         // No grants dictionary at all = no per-tool filtering, all tools pass
         if (profile.McpServerToolGrants is null)
@@ -291,6 +301,42 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
         var toolsSection = ConfigFileHelper.GetOrCreateSection(config, "Tools");
         var profilesSection = ConfigFileHelper.GetOrCreateSection(toolsSection, "AudienceProfiles");
 
+        // Write server access changes (AllowedMcpServers)
+        foreach (var ((audienceName, serverName), allowed) in _pendingServerAccess)
+        {
+            var audienceSection = ConfigFileHelper.GetOrCreateSection(profilesSection, audienceName);
+
+            var serverList = audienceSection.TryGetValue("AllowedMcpServers", out var existingList)
+                && existingList is List<object> list
+                    ? list.Select(o => o.ToString()!).ToList()
+                    : [];
+
+            if (allowed && !serverList.Contains(serverName, StringComparer.OrdinalIgnoreCase))
+            {
+                serverList.Add(serverName);
+            }
+            else if (!allowed)
+            {
+                serverList.RemoveAll(s => s.Equals(serverName, StringComparison.OrdinalIgnoreCase));
+            }
+
+            audienceSection["AllowedMcpServers"] = serverList;
+
+            // Also update the in-memory profile so the UI reflects changes immediately
+            var profile = audienceName switch
+            {
+                "Public" => Profiles.Public,
+                "Team" => Profiles.Team,
+                _ => Profiles.Personal
+            };
+
+            if (allowed && !profile.AllowedMcpServers.Contains(serverName, StringComparer.OrdinalIgnoreCase))
+                profile.AllowedMcpServers.Add(serverName);
+            else if (!allowed)
+                profile.AllowedMcpServers.RemoveAll(s => s.Equals(serverName, StringComparison.OrdinalIgnoreCase));
+        }
+
+        // Write tool grant changes (McpServerToolGrants)
         foreach (var (serverName, audienceGrants) in _pendingGrants)
         {
             foreach (var (audienceName, tools) in audienceGrants)
@@ -309,6 +355,7 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
 
         ConfigFileHelper.WriteConfigFile(_paths.NetclawConfigPath, config);
         _pendingGrants.Clear();
+        _pendingServerAccess.Clear();
 
         StatusMessage.Value = "Saved to netclaw.json. Restart daemon to apply changes.";
         CurrentState.Value = ToolPermissionsState.ToolGrid;
@@ -320,14 +367,40 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
         if (SelectedServer is null)
             return false;
 
-        var profile = SelectedAudience switch
-        {
-            TrustAudience.Public => Profiles.Public,
-            TrustAudience.Team => Profiles.Team,
-            _ => Profiles.Personal
-        };
+        var audienceName = AudienceName(SelectedAudience);
 
+        // Check pending changes first
+        if (_pendingServerAccess.TryGetValue((audienceName, SelectedServer), out var pending))
+            return pending;
+
+        var profile = ResolveProfile(SelectedAudience);
         return IsServerAllowed(SelectedServer, profile);
+    }
+
+    public void ToggleServerAccess()
+    {
+        if (SelectedServer is null)
+            return;
+
+        var allowed = IsServerAllowedForSelectedAudience();
+        var audienceName = AudienceName(SelectedAudience);
+        _pendingServerAccess[(audienceName, SelectedServer)] = !allowed;
+
+        if (!allowed)
+        {
+            // Enabling server for this audience — start with empty tool grants
+            // so the operator explicitly selects which tools to expose
+            if (!_pendingGrants.TryGetValue(SelectedServer, out var serverGrants))
+            {
+                serverGrants = new Dictionary<string, HashSet<string>>();
+                _pendingGrants[SelectedServer] = serverGrants;
+            }
+
+            if (!serverGrants.ContainsKey(audienceName))
+                serverGrants[audienceName] = new HashSet<string>(StringComparer.Ordinal);
+        }
+
+        NotifyStateChanged();
     }
 
     private static bool IsServerAllowed(string serverName, ToolAudienceProfile profile)
@@ -337,6 +410,20 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
 
         return profile.AllowedMcpServers.Contains(serverName, StringComparer.OrdinalIgnoreCase);
     }
+
+    private ToolAudienceProfile ResolveProfile(TrustAudience audience) => audience switch
+    {
+        TrustAudience.Public => Profiles.Public,
+        TrustAudience.Team => Profiles.Team,
+        _ => Profiles.Personal
+    };
+
+    private static string AudienceName(TrustAudience audience) => audience switch
+    {
+        TrustAudience.Public => "Public",
+        TrustAudience.Team => "Team",
+        _ => "Personal"
+    };
 
     public void RequestQuit() => Shutdown();
 

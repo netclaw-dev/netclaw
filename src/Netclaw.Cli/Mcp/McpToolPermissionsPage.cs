@@ -120,39 +120,35 @@ public sealed class McpToolPermissionsPage : ReactivePage<McpToolPermissionsView
         if (_toolCursor < 0) _toolCursor = 0;
 
         var serverAllowed = ViewModel.IsServerAllowedForSelectedAudience();
+        var accessMarker = serverAllowed ? "\u2713" : " ";
 
         var layout = Layouts.Vertical()
             .WithChild(new TextNode($"  Server: {server}").WithForeground(Color.White).Bold())
             .WithChild(new TextNode($"  Audience: {audienceSelector}").WithForeground(Color.Cyan).Bold())
+            .WithSpacing(1)
+            .WithChild(new TextNode($"  [{accessMarker}] Server enabled for {audienceLabel}")
+                .WithForeground(serverAllowed ? Color.White : Color.Yellow))
             .WithSpacing(1);
 
-        if (!serverAllowed)
+        for (var i = 0; i < tools.Count; i++)
         {
-            layout = layout
-                .WithChild(new TextNode($"  Server '{server}' is not allowed for the {audienceLabel} audience.")
-                    .WithForeground(Color.Yellow))
-                .WithChild(new TextNode("  Add it to AllowedMcpServers or set McpServersMode to All first.")
-                    .WithForeground(Color.BrightBlack));
-        }
-        else
-        {
-            for (var i = 0; i < tools.Count; i++)
-            {
-                var tool = tools[i];
-                var isFocused = i == _toolCursor;
-                var granted = ViewModel.IsToolGranted(tool);
-                var prefix = isFocused ? " \u25b6 " : "   ";
-                var marker = granted ? "\u2713" : " ";
-                var line = $"{prefix}[{marker}] {tool}";
+            var tool = tools[i];
+            var isFocused = i == _toolCursor;
+            var granted = serverAllowed && ViewModel.IsToolGranted(tool);
+            var prefix = isFocused ? " \u25b6 " : "   ";
+            var marker = granted ? "\u2713" : " ";
+            var line = $"{prefix}[{marker}] {tool}";
 
-                var node = new TextNode(line);
-                node = isFocused
-                    ? node.WithForeground(Color.Cyan).Bold()
-                    : granted
-                        ? node.WithForeground(Color.White)
-                        : node.WithForeground(Color.BrightBlack);
-                layout = layout.WithChild(node);
-            }
+            var node = new TextNode(line);
+            if (!serverAllowed)
+                node = node.WithForeground(Color.BrightBlack);
+            else if (isFocused)
+                node = node.WithForeground(Color.Cyan).Bold();
+            else if (granted)
+                node = node.WithForeground(Color.White);
+            else
+                node = node.WithForeground(Color.BrightBlack);
+            layout = layout.WithChild(node);
         }
 
         if (!string.IsNullOrEmpty(ViewModel.StatusMessage.Value))
@@ -172,7 +168,7 @@ public sealed class McpToolPermissionsPage : ReactivePage<McpToolPermissionsView
             {
                 ToolPermissionsState.ServerList => "[Enter] Select  [Esc] Quit  [Ctrl+Q] Quit",
                 ToolPermissionsState.ToolGrid =>
-                    "[\u2190/\u2192] Audience  [\u2191/\u2193] Navigate  [Enter] Toggle  [A] All  [S] Save  [Esc] Back  [Ctrl+Q] Quit" +
+                    "[\u2190/\u2192] Audience  [\u2191/\u2193] Navigate  [Enter] Toggle  [A] All  [E] Enable/Disable  [S] Save  [Esc] Back" +
                     (ViewModel.HasUnsavedChanges ? "  *unsaved*" : ""),
                 _ => ""
             };
@@ -235,7 +231,8 @@ public sealed class McpToolPermissionsPage : ReactivePage<McpToolPermissionsView
                     return;
 
                 case ConsoleKey.Enter:
-                    if (ViewModel.DiscoveredTools.Count > 0)
+                    if (ViewModel.IsServerAllowedForSelectedAudience()
+                        && ViewModel.DiscoveredTools.Count > 0)
                         ViewModel.ToggleTool(ViewModel.DiscoveredTools[_toolCursor]);
                     return;
 
@@ -244,7 +241,12 @@ public sealed class McpToolPermissionsPage : ReactivePage<McpToolPermissionsView
                     return;
 
                 case ConsoleKey.A:
-                    ViewModel.ToggleAll();
+                    if (ViewModel.IsServerAllowedForSelectedAudience())
+                        ViewModel.ToggleAll();
+                    return;
+
+                case ConsoleKey.E:
+                    ViewModel.ToggleServerAccess();
                     return;
             }
 
@@ -254,9 +256,15 @@ public sealed class McpToolPermissionsPage : ReactivePage<McpToolPermissionsView
                 return;
             }
 
-            if (keyInfo.KeyChar == 'a')
+            if (keyInfo.KeyChar == 'a' && ViewModel.IsServerAllowedForSelectedAudience())
             {
                 ViewModel.ToggleAll();
+                return;
+            }
+
+            if (keyInfo.KeyChar == 'e')
+            {
+                ViewModel.ToggleServerAccess();
                 return;
             }
 
