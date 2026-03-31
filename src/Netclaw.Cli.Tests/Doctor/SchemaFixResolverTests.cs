@@ -7,30 +7,32 @@ namespace Netclaw.Cli.Tests.Doctor;
 
 public sealed class SchemaFixResolverTests
 {
+    private const string ServerLevelEnumSchema = """
+        {
+          "type": "object",
+          "properties": {
+            "Servers": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "object",
+                "properties": {
+                  "Level": {
+                    "type": "string",
+                    "enum": ["Low", "Medium", "High"],
+                    "default": "Low"
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+        """;
+
     [Fact]
     public void FixesIntegerEnumToString()
     {
-        var (schema, schemaJson) = ParseSchema("""
-            {
-              "type": "object",
-              "properties": {
-                "Servers": {
-                  "type": "object",
-                  "additionalProperties": {
-                    "type": "object",
-                    "properties": {
-                      "Level": {
-                        "type": "string",
-                        "enum": ["Low", "Medium", "High"],
-                        "default": "Low"
-                      }
-                    },
-                    "additionalProperties": false
-                  }
-                }
-              }
-            }
-            """);
+        var (schema, schemaJson) = ParseSchema(ServerLevelEnumSchema);
 
         var config = JsonNode.Parse("""
             {
@@ -51,27 +53,7 @@ public sealed class SchemaFixResolverTests
     [Fact]
     public void SkipsAlreadyCorrectStringEnum()
     {
-        var (schema, schemaJson) = ParseSchema("""
-            {
-              "type": "object",
-              "properties": {
-                "Servers": {
-                  "type": "object",
-                  "additionalProperties": {
-                    "type": "object",
-                    "properties": {
-                      "Level": {
-                        "type": "string",
-                        "enum": ["Low", "Medium", "High"],
-                        "default": "Low"
-                      }
-                    },
-                    "additionalProperties": false
-                  }
-                }
-              }
-            }
-            """);
+        var (schema, schemaJson) = ParseSchema(ServerLevelEnumSchema);
 
         var config = JsonNode.Parse("""
             {
@@ -90,27 +72,7 @@ public sealed class SchemaFixResolverTests
     [Fact]
     public void SkipsOutOfRangeIntegerEnum()
     {
-        var (schema, schemaJson) = ParseSchema("""
-            {
-              "type": "object",
-              "properties": {
-                "Servers": {
-                  "type": "object",
-                  "additionalProperties": {
-                    "type": "object",
-                    "properties": {
-                      "Level": {
-                        "type": "string",
-                        "enum": ["Low", "Medium", "High"],
-                        "default": "Low"
-                      }
-                    },
-                    "additionalProperties": false
-                  }
-                }
-              }
-            }
-            """);
+        var (schema, schemaJson) = ParseSchema(ServerLevelEnumSchema);
 
         var config = JsonNode.Parse("""
             {
@@ -131,27 +93,7 @@ public sealed class SchemaFixResolverTests
     [Fact]
     public void FixesMultipleServerEntries()
     {
-        var (schema, schemaJson) = ParseSchema("""
-            {
-              "type": "object",
-              "properties": {
-                "Servers": {
-                  "type": "object",
-                  "additionalProperties": {
-                    "type": "object",
-                    "properties": {
-                      "Level": {
-                        "type": "string",
-                        "enum": ["Low", "Medium", "High"],
-                        "default": "Low"
-                      }
-                    },
-                    "additionalProperties": false
-                  }
-                }
-              }
-            }
-            """);
+        var (schema, schemaJson) = ParseSchema(ServerLevelEnumSchema);
 
         var config = JsonNode.Parse("""
             {

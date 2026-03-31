@@ -4,7 +4,7 @@ description: "REQUIRED when the user asks about Netclaw capabilities, scheduling
 disable-model-invocation: true
 metadata:
   author: netclaw
-  version: "1.1.0"
+  version: "1.2.0"
 ---
 
 # Netclaw Operations
@@ -62,7 +62,9 @@ When something seems wrong with Netclaw itself:
 
 1. Run `netclaw doctor` via `shell_execute` — validates config, providers,
    MCP connections, memory health
-2. Run `netclaw status` via `shell_execute` — live runtime state from daemon
+2. If doctor reports fixable issues, run `netclaw doctor --fix --dry-run` to
+   preview auto-repairs (schema-driven: stale properties, enum coercion, missing defaults)
+3. Run `netclaw status` via `shell_execute` — live runtime state from daemon
 3. Check daemon logs at `~/.netclaw/logs/daemon-{yyyy-MM-dd}.log`
 4. Check session logs at `~/.netclaw/sessions/{session-id}/logs/`
 

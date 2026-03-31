@@ -1,6 +1,6 @@
-using System.Text.Json;
 using System.Text.Json.Nodes;
 using Json.Schema;
+using Netclaw.Cli.Config;
 using Netclaw.Configuration;
 
 namespace Netclaw.Cli.Doctor;
@@ -93,10 +93,7 @@ public sealed class DoctorFixService(NetclawPaths paths)
 
         if (appliedFixes.Count > 0)
         {
-            var normalized = obj.ToJsonString(new JsonSerializerOptions
-            {
-                WriteIndented = true
-            });
+            var normalized = obj.ToJsonString(ConfigFileHelper.JsonOptions);
 
             var replacement = normalized.EndsWith(Environment.NewLine, StringComparison.Ordinal)
                 ? normalized

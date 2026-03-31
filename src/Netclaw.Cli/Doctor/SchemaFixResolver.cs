@@ -73,17 +73,15 @@ public static class SchemaFixResolver
             if (segments.Length == 0)
                 continue;
 
-            // Get the current value from config — must be an integer
             if (ResolveConfigValue(config, segments) is not JsonValue jsonVal
                 || !jsonVal.TryGetValue<int>(out var intValue))
                 continue;
 
-            // Get the enum values from the schema at this path
             var propertySchema = ResolvePropertySchema(schemaJson, segments);
             if (propertySchema?["enum"] is not JsonArray enumArray || enumArray.Count == 0)
                 continue;
 
-            // Map integer index to enum string
+            // Map integer index to enum string — C# enums serialize as 0-based ordinals
             if (intValue < 0 || intValue >= enumArray.Count)
                 continue;
 
@@ -91,7 +89,6 @@ public static class SchemaFixResolver
             if (enumStr is null)
                 continue;
 
-            // Apply the fix
             if (SetConfigValue(config, segments, JsonValue.Create(enumStr)))
             {
                 appliedFixes.Add($"{instancePath}: {intValue} → \"{enumStr}\"");
@@ -170,7 +167,7 @@ public static class SchemaFixResolver
             if (detail.Errors is not { } errors)
                 continue;
 
-            if (!errors.TryGetValue("required", out var requiredMessage))
+            if (!errors.ContainsKey("required"))
                 continue;
 
             var instancePath = detail.InstanceLocation.ToString();
@@ -178,7 +175,6 @@ public static class SchemaFixResolver
                 ? Array.Empty<string>()
                 : ParseJsonPointer(instancePath);
 
-            // Get the parent object's schema to find which properties are required and have defaults
             var parentSchema = parentSegments.Length == 0
                 ? schemaJson
                 : ResolvePropertySchema(schemaJson, parentSegments);
@@ -194,7 +190,6 @@ public static class SchemaFixResolver
             if (properties is null || requiredProps.Count == 0)
                 continue;
 
-            // Get the config object at this path
             var configParent = parentSegments.Length == 0
                 ? config
                 : ResolveConfigNode(config, parentSegments) as JsonObject;
@@ -207,12 +202,10 @@ public static class SchemaFixResolver
                 if (configParent.ContainsKey(propName!))
                     continue; // already present
 
-                // Check if the property schema has a default
                 var propSchema = FollowRef(schemaJson, properties[propName!] as JsonObject);
                 if (propSchema?["default"] is not { } defaultNode)
                     continue;
 
-                // Insert the default value
                 configParent[propName!] = defaultNode.DeepClone();
                 var fullPath = parentSegments.Length == 0
                     ? $"/{propName}"
