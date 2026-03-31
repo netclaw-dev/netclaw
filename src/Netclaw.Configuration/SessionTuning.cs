@@ -86,8 +86,9 @@ public sealed record SessionTuning
     /// <summary>
     /// Maximum characters allowed in an MCP tool description before truncation.
     /// Oversized descriptions (e.g., Notion tools at ~10K chars each) are truncated
-    /// at registration time to protect the context window. Matches Claude Code's
-    /// documented 2KB cap. Set to 0 to disable truncation.
+    /// at registration time to protect the context window. Default matches Claude Code's
+    /// documented 2KB cap (see https://code.claude.com/docs/en/mcp — "Scale with MCP
+    /// Tool Search" section). Set to 0 to disable truncation.
     /// </summary>
     public int MaxToolDescriptionChars { get; init; } = 2048;
 

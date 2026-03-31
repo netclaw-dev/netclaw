@@ -49,7 +49,7 @@ public sealed class McpToolAdapter : INetclawTool
 
     /// <summary>
     /// Truncates a tool description to fit within the configured character limit.
-    /// Matches Claude Code's 2KB cap on MCP tool descriptions.
+    /// Default 2KB matches Claude Code's cap: https://code.claude.com/docs/en/mcp
     /// </summary>
     internal static string ClampDescription(string description, int maxChars)
     {

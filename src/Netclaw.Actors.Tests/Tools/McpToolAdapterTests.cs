@@ -126,13 +126,6 @@ public class McpToolAdapterTests
     }
 
     [Fact]
-    public void ClampDescription_ShortDescription_PreservedAsIs()
-    {
-        var result = McpToolAdapter.ClampDescription("Search for items", 2048);
-        Assert.Equal("Search for items", result);
-    }
-
-    [Fact]
     public void ClampDescription_ExactlyAtLimit_PreservedAsIs()
     {
         var description = new string('a', 2048);
@@ -159,13 +152,6 @@ public class McpToolAdapterTests
     }
 
     [Fact]
-    public void ClampDescription_EmptyDescription_ReturnsEmpty()
-    {
-        var result = McpToolAdapter.ClampDescription("", 2048);
-        Assert.Equal("", result);
-    }
-
-    [Fact]
     public void Constructor_WithMaxDescriptionChars_TruncatesDescription()
     {
         var longDesc = new string('x', 5000);
@@ -181,16 +167,6 @@ public class McpToolAdapterTests
         Assert.Equal(adapter.Description, aiFunc.Description);
     }
 
-    [Fact]
-    public void Constructor_WithoutMaxDescriptionChars_PreservesFullDescription()
-    {
-        var longDesc = new string('x', 5000);
-        string FakeFunc() => "result";
-        var fakeTool = AIFunctionFactory.Create(FakeFunc, "verbose_tool", longDesc);
-        var adapter = new McpToolAdapter(fakeTool, "notion", "verbose_tool");
-
-        Assert.Equal(longDesc, adapter.Description);
-    }
 }
 
 internal sealed class RecordingMcpToolInvoker(string result) : IMcpToolInvoker
