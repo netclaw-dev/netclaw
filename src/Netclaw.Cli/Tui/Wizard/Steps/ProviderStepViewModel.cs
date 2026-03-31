@@ -26,7 +26,7 @@ public sealed class ProviderStepViewModel : IWizardStepViewModel
 
     // Sub-step tracking: these map to the same values as the monolith's _providerSubStep
     private int _currentSubStep;
-    private int _completedSubStep;
+    private int _highWaterSubStep;
 
     public ProviderStepViewModel(
         ProviderDescriptorRegistry registry,
@@ -82,8 +82,8 @@ public sealed class ProviderStepViewModel : IWizardStepViewModel
     public void SetSubStep(int step)
     {
         _currentSubStep = step;
-        if (step > _completedSubStep)
-            _completedSubStep = step;
+        if (step > _highWaterSubStep)
+            _highWaterSubStep = step;
     }
 
     public bool TryAdvance()
@@ -132,7 +132,7 @@ public sealed class ProviderStepViewModel : IWizardStepViewModel
     {
         _context = context;
         if (direction == NavigationDirection.Back)
-            _currentSubStep = _completedSubStep;
+            _currentSubStep = _highWaterSubStep;
     }
 
     public void OnLeave() { }

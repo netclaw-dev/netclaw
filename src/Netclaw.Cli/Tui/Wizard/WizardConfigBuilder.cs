@@ -318,4 +318,3 @@ public sealed class IdentityConfigSection
     public string? UserName { get; init; }
     public required string UserTimezone { get; init; }
 }
-

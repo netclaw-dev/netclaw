@@ -15,7 +15,7 @@ public sealed class SlackStepViewModel : IWizardStepViewModel
 
     private readonly ISlackProbe _slackProbe;
     private int _currentSubStep;
-    private int _completedSubStep;
+    private int _highWaterSubStep;
     private WizardContext? _context;
 
     public SlackStepViewModel(ISlackProbe slackProbe)
@@ -58,14 +58,14 @@ public sealed class SlackStepViewModel : IWizardStepViewModel
         if (_currentSubStep == 0 && SlackEnabled)
         {
             _currentSubStep = 1;
-            _completedSubStep = 1;
+            _highWaterSubStep = 1;
             return true;
         }
 
         if (_currentSubStep >= 1 && _currentSubStep < 6 && SlackEnabled)
         {
             _currentSubStep++;
-            _completedSubStep = _currentSubStep;
+            _highWaterSubStep = _currentSubStep;
             return true;
         }
 
@@ -86,7 +86,7 @@ public sealed class SlackStepViewModel : IWizardStepViewModel
     {
         _context = context;
         if (direction == NavigationDirection.Back)
-            _currentSubStep = _completedSubStep;
+            _currentSubStep = _highWaterSubStep;
         else
             _currentSubStep = 0;
     }
