@@ -107,13 +107,10 @@ public sealed class McpToolPermissionsPage : ReactivePage<McpToolPermissionsView
     private ILayoutNode BuildToolGrid()
     {
         var server = ViewModel.SelectedServer ?? "?";
-        var audience = ViewModel.SelectedAudience;
-        var audienceLabel = audience switch
-        {
-            TrustAudience.Public => "Public",
-            TrustAudience.Team => "Team",
-            _ => "Personal"
-        };
+        var audienceLabel = ViewModel.SelectedAudience.ToWireValue();
+
+        // Audience selector matching the channel wizard pattern: [◀ personal ▶]
+        var audienceSelector = $"[\u25c0 {audienceLabel,-8} \u25b6]";
 
         var items = ViewModel.DiscoveredTools
             .Select(tool =>
@@ -143,9 +140,9 @@ public sealed class McpToolPermissionsPage : ReactivePage<McpToolPermissionsView
             .DisposeWith(_stepSubs);
 
         var layout = Layouts.Vertical()
-            .WithChild(new TextNode($"Server: {server}  |  Audience: {audienceLabel}")
-                .WithForeground(Color.White)
-                .Bold())
+            .WithChild(new TextNode($"  Server: {server}").WithForeground(Color.White).Bold())
+            .WithChild(new TextNode($"  Audience: {audienceSelector}").WithForeground(Color.Cyan).Bold())
+            .WithSpacing(1)
             .WithChild(_activeList);
 
         if (!string.IsNullOrEmpty(ViewModel.StatusMessage.Value))
@@ -160,9 +157,9 @@ public sealed class McpToolPermissionsPage : ReactivePage<McpToolPermissionsView
         {
             var hints = ViewModel.CurrentState.Value switch
             {
-                ToolPermissionsState.ServerList => "[Enter] Select  [Esc] Quit",
+                ToolPermissionsState.ServerList => "[Enter] Select  [Esc] Quit  [Ctrl+Q] Quit",
                 ToolPermissionsState.ToolGrid =>
-                    $"[Enter] Toggle  [Tab] Audience  [S] Save  [Esc] Back" +
+                    "[\u2190/\u2192] Audience  [Enter] Toggle  [S] Save  [Esc] Back  [Ctrl+Q] Quit" +
                     (ViewModel.HasUnsavedChanges ? "  *unsaved*" : ""),
                 _ => ""
             };
@@ -175,17 +172,37 @@ public sealed class McpToolPermissionsPage : ReactivePage<McpToolPermissionsView
     {
         var keyInfo = key.KeyInfo;
 
+        // Ctrl+Q always quits
+        if (keyInfo.Key == ConsoleKey.Q && keyInfo.Modifiers.HasFlag(ConsoleModifiers.Control))
+        {
+            ViewModel.RequestQuit();
+            return;
+        }
+
         if (keyInfo.Key == ConsoleKey.Escape)
         {
+            // From server list, Esc quits the app
+            if (ViewModel.CurrentState.Value == ToolPermissionsState.ServerList)
+            {
+                ViewModel.RequestQuit();
+                return;
+            }
+
             ViewModel.GoBack();
             return;
         }
 
         if (ViewModel.CurrentState.Value == ToolPermissionsState.ToolGrid)
         {
-            if (keyInfo.Key == ConsoleKey.Tab)
+            if (keyInfo.Key == ConsoleKey.RightArrow)
             {
                 ViewModel.CycleAudience();
+                return;
+            }
+
+            if (keyInfo.Key == ConsoleKey.LeftArrow)
+            {
+                ViewModel.CycleAudienceBack();
                 return;
             }
 

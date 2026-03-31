@@ -146,14 +146,20 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
             _pendingGrants[serverName] = audienceGrants;
     }
 
+    private static readonly TrustAudience[] AudienceValues =
+        [TrustAudience.Personal, TrustAudience.Team, TrustAudience.Public];
+
     public void CycleAudience()
     {
-        SelectedAudience = SelectedAudience switch
-        {
-            TrustAudience.Public => TrustAudience.Team,
-            TrustAudience.Team => TrustAudience.Personal,
-            _ => TrustAudience.Public
-        };
+        var idx = Array.IndexOf(AudienceValues, SelectedAudience);
+        SelectedAudience = AudienceValues[(idx + 1) % AudienceValues.Length];
+        NotifyStateChanged();
+    }
+
+    public void CycleAudienceBack()
+    {
+        var idx = Array.IndexOf(AudienceValues, SelectedAudience);
+        SelectedAudience = AudienceValues[(idx - 1 + AudienceValues.Length) % AudienceValues.Length];
         NotifyStateChanged();
     }
 
@@ -259,6 +265,8 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
         CurrentState.Value = ToolPermissionsState.ToolGrid;
         NotifyStateChanged();
     }
+
+    public void RequestQuit() => Shutdown();
 
     public void GoBack()
     {
