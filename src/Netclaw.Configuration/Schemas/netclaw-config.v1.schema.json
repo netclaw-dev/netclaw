@@ -420,11 +420,6 @@
           },
           "Enabled": { "type": "boolean", "default": true },
           "GrantCategory": { "type": ["string", "null"] },
-          "CapabilityClass": {
-            "type": "string",
-            "enum": ["Unknown", "Information", "MemorySafe", "SensitiveRead", "PublishExternal", "HighImpact"],
-            "default": "Unknown"
-          },
           "OAuthClientId": { "type": ["string", "null"] },
           "OAuthScope": { "type": ["string", "null"] }
         },

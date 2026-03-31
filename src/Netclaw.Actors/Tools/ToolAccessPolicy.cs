@@ -53,8 +53,7 @@ public sealed class ToolAccessPolicy
     private bool IsToolExposed(INetclawTool tool, TrustAudience audience)
     {
         if (tool is McpToolAdapter mcp)
-            return _profileResolver.IsMcpServerAllowed(mcp.ServerName, audience)
-                && IsMcpToolExposed(mcp.CapabilityClass, audience);
+            return _profileResolver.IsMcpServerAllowed(mcp.ServerName, audience);
 
         if (!_profileResolver.IsToolAllowed(tool.Name, CreateContext(audience)))
             return false;
@@ -73,9 +72,7 @@ public sealed class ToolAccessPolicy
             if (!_profileResolver.IsMcpServerAllowed(mcp.ServerName, context))
                 return ToolAccessDecision.Deny("mcp_server_not_allowed_for_audience_profile");
 
-            return IsMcpToolExposed(mcp.CapabilityClass, audience)
-                ? ToolAccessDecision.Allow()
-                : ToolAccessDecision.Deny("mcp_capability_denied_for_audience");
+            return ToolAccessDecision.Allow();
         }
 
         if (!_profileResolver.IsToolAllowed(tool.Name, context))
@@ -116,17 +113,6 @@ public sealed class ToolAccessPolicy
 
     private static bool IsShellTool(INetclawTool tool)
         => string.Equals(tool.Name, "shell_execute", StringComparison.Ordinal);
-
-    private static bool IsMcpToolExposed(McpCapabilityClass capabilityClass, TrustAudience audience)
-        => capabilityClass switch
-        {
-            McpCapabilityClass.Information => true,
-            McpCapabilityClass.MemorySafe => audience is TrustAudience.Team or TrustAudience.Personal,
-            McpCapabilityClass.SensitiveRead => audience == TrustAudience.Personal,
-            McpCapabilityClass.PublishExternal => audience == TrustAudience.Personal,
-            McpCapabilityClass.HighImpact => audience == TrustAudience.Personal,
-            _ => audience == TrustAudience.Personal
-        };
 
     private static string? GetToolName(AITool tool)
         => tool is AIFunction function ? function.Name : null;

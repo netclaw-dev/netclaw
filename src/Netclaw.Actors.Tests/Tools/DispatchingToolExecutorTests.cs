@@ -329,7 +329,6 @@ public class DispatchingToolExecutorTests
             AIFunctionFactory.Create(() => "ok", "search_memories"),
             "memorizer",
             "search_memories",
-            capabilityClass: McpCapabilityClass.MemorySafe,
             invoker: new RecordingMcpToolInvoker("ok")));
 
         var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
@@ -355,39 +354,4 @@ public class DispatchingToolExecutorTests
         Assert.Equal("mcp_server_not_allowed_for_audience_profile", ex.DenyReason);
     }
 
-    [Fact]
-    public async Task Mcp_tool_is_denied_when_capability_exceeds_allowed_audience()
-    {
-        var registry = new ToolRegistry();
-        registry.Register(new McpToolAdapter(
-            AIFunctionFactory.Create(() => "ok", "read_inbox"),
-            "textforge",
-            "read_inbox",
-            capabilityClass: McpCapabilityClass.SensitiveRead,
-            invoker: new RecordingMcpToolInvoker("ok")));
-
-        var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
-        config.AudienceProfiles.Team.AllowedMcpServers.Add("textforge");
-
-        var executor = new DispatchingToolExecutor(
-            registry,
-            new ToolAccessPolicy(
-                config,
-                new EffectivePolicyDefaults(
-                    DeploymentPosture.Personal,
-                    TrustAudience.Personal,
-                    ShellExecutionMode.HostAllowed,
-                    UsedStrictFallback: false)));
-
-        var toolCall = new FunctionCallContent("call-mcp-capability-deny", "textforge/read_inbox", new Dictionary<string, object?>());
-        var context = new Netclaw.Tools.ToolExecutionContext("slack/thread-1", null)
-        {
-            Audience = TrustAudience.Team.ToWireValue(),
-            Boundary = SecurityPolicyDefaults.TeamBoundary,
-            ChannelType = "slack"
-        };
-
-        var ex = await Assert.ThrowsAsync<ToolAccessDeniedException>(() => executor.ExecuteAsync(toolCall, context));
-        Assert.Equal("mcp_capability_denied_for_audience", ex.DenyReason);
-    }
 }

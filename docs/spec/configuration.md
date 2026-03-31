@@ -218,8 +218,7 @@ shape, confirm that strict-default fallback is active, or verify that
       "Command": "uvx",
       "Arguments": ["memorizer-mcp"],
       "Enabled": true,
-      "GrantCategory": "mcp:memorizer",
-      "CapabilityClass": "MemorySafe"
+      "GrantCategory": "mcp:memorizer"
     },
     "github": {
       "Transport": "http",
@@ -227,8 +226,7 @@ shape, confirm that strict-default fallback is active, or verify that
       "Headers": {
         "Authorization": "Bearer ${GITHUB_TOKEN}"
       },
-      "Enabled": true,
-      "CapabilityClass": "PublishExternal"
+      "Enabled": true
     }
   }
 }
@@ -244,7 +242,6 @@ shape, confirm that strict-default fallback is active, or verify that
 | `Headers` | object? | `null` | Additional headers for remote HTTP/SSE MCP servers. |
 | `Enabled` | bool | `true` | Whether the server is loaded at startup. |
 | `GrantCategory` | string? | `null` | Optional ACL grant category. Defaults to `mcp:{serverName}` when omitted. |
-| `CapabilityClass` | string | `"Unknown"` | Server-level trust classification (`Unknown`, `Information`, `MemorySafe`, `SensitiveRead`, `PublishExternal`, `HighImpact`). |
 | `OAuthClientId` | string? | `null` | Static OAuth client ID for servers without dynamic client registration. |
 | `OAuthScope` | string? | `null` | Optional OAuth scope override. |
 

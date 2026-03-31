@@ -199,54 +199,13 @@ public class SearchToolsToolTests
     }
 
     [Fact]
-    public async Task Search_FiltersSensitiveMcpTools_InTeamContext()
-    {
-        var registry = new ToolRegistry();
-        registry.Register(new McpToolAdapter(
-            CreateFakeAIFunction("search_memories", "Find stored memories"),
-            "memorizer",
-            "search_memories",
-            capabilityClass: McpCapabilityClass.MemorySafe));
-        registry.Register(new McpToolAdapter(
-            CreateFakeAIFunction("read_inbox", "Read email inbox"),
-            "textforge",
-            "read_inbox",
-            capabilityClass: McpCapabilityClass.SensitiveRead));
-
-        var tool = new SearchToolsTool(
-            registry,
-            new ToolAccessPolicy(
-                CreateProfileAwareToolConfig(allowedTeamServers: ["memorizer", "textforge"]),
-                new EffectivePolicyDefaults(
-                    DeploymentPosture.Personal,
-                    TrustAudience.Personal,
-                    ShellExecutionMode.HostAllowed,
-                    UsedStrictFallback: false)));
-
-        var context = new Netclaw.Tools.ToolExecutionContext("slack/thread-1", null)
-        {
-            Audience = TrustAudience.Team.ToWireValue(),
-            Boundary = SecurityPolicyDefaults.TrustedInstanceBoundary,
-            ChannelType = "slack"
-        };
-
-        var result = await tool.ExecuteAsync(
-            new Dictionary<string, object?> { ["Query"] = "all", ["Server"] = "textforge" },
-            context,
-            CancellationToken.None);
-
-        Assert.Contains("No tools found", result);
-    }
-
-    [Fact]
     public async Task Search_AllowsMemorySafeMcpTools_InTeamContext()
     {
         var registry = new ToolRegistry();
         registry.Register(new McpToolAdapter(
             CreateFakeAIFunction("search_memories", "Find stored memories"),
             "memorizer",
-            "search_memories",
-            capabilityClass: McpCapabilityClass.MemorySafe));
+            "search_memories"));
 
         var tool = new SearchToolsTool(
             registry,
@@ -280,8 +239,7 @@ public class SearchToolsToolTests
         registry.Register(new McpToolAdapter(
             CreateFakeAIFunction("search_memories", "Find stored memories"),
             "memorizer",
-            "search_memories",
-            capabilityClass: McpCapabilityClass.MemorySafe));
+            "search_memories"));
 
         var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
         var tool = new SearchToolsTool(

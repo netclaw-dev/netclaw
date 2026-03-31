@@ -1,15 +1,5 @@
 namespace Netclaw.Configuration;
 
-public enum McpCapabilityClass
-{
-    Unknown,
-    Information,
-    MemorySafe,
-    SensitiveRead,
-    PublishExternal,
-    HighImpact
-}
-
 /// <summary>
 /// Configuration for a single MCP server profile.
 /// Bound from the <c>McpServers</c> section of <c>netclaw.json</c> + <c>secrets.json</c>.
@@ -39,9 +29,6 @@ public sealed class McpServerEntry
 
     /// <summary>ACL grant category. Defaults to "mcp:{name}" when null.</summary>
     public string? GrantCategory { get; set; }
-
-    /// <summary>Capability classification used by trust policy and discovery filtering.</summary>
-    public McpCapabilityClass CapabilityClass { get; set; } = McpCapabilityClass.Unknown;
 
     /// <summary>Static OAuth client ID for servers that don't support dynamic client registration.</summary>
     public string? OAuthClientId { get; set; }

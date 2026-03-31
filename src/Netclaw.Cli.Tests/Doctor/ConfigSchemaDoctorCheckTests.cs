@@ -135,7 +135,6 @@ public sealed class ConfigSchemaDoctorCheckTests
                   "Transport": "stdio",
                   "Command": "uvx",
                   "Arguments": ["memorizer-mcp"],
-                  "CapabilityClass": "MemorySafe",
                   "Enabled": false
                 }
               }
