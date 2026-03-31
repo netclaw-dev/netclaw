@@ -39,4 +39,4 @@
 
 ## 8. Spec Sync
 
-- [ ] 8.1 Sync delta specs to main specs via `/opsx-sync` after implementation is verified
+- [x] 8.1 Sync delta specs to main specs via `/opsx-sync` after implementation is verified
