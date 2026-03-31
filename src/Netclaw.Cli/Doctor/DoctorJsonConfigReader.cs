@@ -1,10 +1,17 @@
+using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.Json.Serialization;
 using Netclaw.Configuration;
 
 namespace Netclaw.Cli.Doctor;
 
 internal static class DoctorJsonConfigReader
 {
+    internal static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        Converters = { new JsonStringEnumConverter() }
+    };
+
     public static (JsonObject? Root, DoctorCheckResult? Error) TryReadConfig(NetclawPaths paths)
     {
         if (!File.Exists(paths.NetclawConfigPath))

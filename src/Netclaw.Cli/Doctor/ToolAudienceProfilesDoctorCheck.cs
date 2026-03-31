@@ -1,17 +1,11 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using System.Text.Json.Serialization;
 using Netclaw.Configuration;
 
 namespace Netclaw.Cli.Doctor;
 
 public sealed class ToolAudienceProfilesDoctorCheck(NetclawPaths paths) : IDoctorCheck
 {
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        Converters = { new JsonStringEnumConverter() }
-    };
-
     public Task<DoctorCheckResult> RunAsync(CancellationToken cancellationToken = default)
     {
         var (root, error) = DoctorJsonConfigReader.TryReadConfig(paths);
@@ -51,7 +45,7 @@ public sealed class ToolAudienceProfilesDoctorCheck(NetclawPaths paths) : IDocto
         ToolConfig toolConfig;
         try
         {
-            toolConfig = JsonSerializer.Deserialize<ToolConfig>(toolsObject.ToJsonString(), JsonOptions) ?? new ToolConfig();
+            toolConfig = JsonSerializer.Deserialize<ToolConfig>(toolsObject, DoctorJsonConfigReader.JsonOptions) ?? new ToolConfig();
         }
         catch (Exception ex)
         {
@@ -60,6 +54,10 @@ public sealed class ToolAudienceProfilesDoctorCheck(NetclawPaths paths) : IDocto
                 $"Failed to parse Tools configuration: {ex.Message}",
                 "Fix Tools.AudienceProfiles values or rerun `netclaw init`."));
         }
+
+        var mcpServers = root["McpServers"] is JsonObject mcpObj
+            ? JsonSerializer.Deserialize<Dictionary<string, McpServerEntry>>(mcpObj, DoctorJsonConfigReader.JsonOptions) ?? new()
+            : new();
 
         var errors = new List<string>();
         ValidateNonPersonalProfile("public", toolConfig.AudienceProfiles.Public, errors);
@@ -87,7 +85,7 @@ public sealed class ToolAudienceProfilesDoctorCheck(NetclawPaths paths) : IDocto
         }
 
         // Advisory: MCP servers allowed by any audience but with no McpServerToolGrants
-        var ungatedServers = FindUngatedMcpServers(toolConfig.AudienceProfiles, root);
+        var ungatedServers = FindUngatedMcpServers(toolConfig.AudienceProfiles, mcpServers);
         if (ungatedServers.Count > 0)
         {
             warnings.Add(
@@ -139,7 +137,9 @@ public sealed class ToolAudienceProfilesDoctorCheck(NetclawPaths paths) : IDocto
     /// Finds MCP servers that are allowed by at least one audience profile
     /// but have no <see cref="ToolAudienceProfile.McpServerToolGrants"/> on any profile.
     /// </summary>
-    private static List<string> FindUngatedMcpServers(ToolAudienceProfiles profiles, JsonObject root)
+    private static List<string> FindUngatedMcpServers(
+        ToolAudienceProfiles profiles,
+        IReadOnlyDictionary<string, McpServerEntry> mcpServers)
     {
         // Collect all server names that are allowed by any audience
         var allowedServers = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -149,12 +149,8 @@ public sealed class ToolAudienceProfilesDoctorCheck(NetclawPaths paths) : IDocto
         {
             if (profile.McpServersMode == ToolProfileMode.All)
             {
-                // All servers allowed — collect from config
-                if (root["McpServers"] is JsonObject mcpServers)
-                {
-                    foreach (var prop in mcpServers)
-                        allowedServers.Add(prop.Key);
-                }
+                foreach (var name in mcpServers.Keys)
+                    allowedServers.Add(name);
             }
             else
             {
