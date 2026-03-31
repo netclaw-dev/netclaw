@@ -216,26 +216,23 @@ public sealed class WizardConfigBuilderTests : IDisposable
     {
         var builder = new WizardConfigBuilder(_paths)
         {
-            ExternalSkills = new ExternalSkillsConfigSection
-            {
-                Sources =
-                [
-                    new ExternalSkillSource
-                    {
-                        Name = "claude-code",
-                        WellKnown = "claude-code",
-                        Enabled = true,
-                        AllowSymlinks = true
-                    },
-                    new ExternalSkillSource
-                    {
-                        Name = "custom",
-                        Path = "/opt/team/skills",
-                        Enabled = true,
-                        AllowSymlinks = false
-                    }
-                ]
-            }
+            ExternalSkillSources =
+            [
+                new ExternalSkillSource
+                {
+                    Name = "claude-code",
+                    WellKnown = "claude-code",
+                    Enabled = true,
+                    AllowSymlinks = true
+                },
+                new ExternalSkillSource
+                {
+                    Name = "custom",
+                    Path = "/opt/team/skills",
+                    Enabled = true,
+                    AllowSymlinks = false
+                }
+            ]
         };
 
         var config = builder.BuildConfigDictionary();

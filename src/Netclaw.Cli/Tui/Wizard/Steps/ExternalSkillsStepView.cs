@@ -112,9 +112,10 @@ public sealed class ExternalSkillsStepView : IWizardStepView
     {
         _lastFocusedInput = null;
 
-        _symlinkList = Layouts.SelectionList(
-                "No \u2014 stricter security (default)",
-                "Yes \u2014 needed if skill directory uses symlinks")
+        var noLabel = "No \u2014 stricter security (default)";
+        var yesLabel = "Yes \u2014 needed if skill directory uses symlinks";
+
+        _symlinkList = Layouts.SelectionList(noLabel, yesLabel)
             .WithMode(SelectionMode.Single)
             .WithHighlightColors(Color.Black, Color.Cyan);
 
@@ -127,7 +128,7 @@ public sealed class ExternalSkillsStepView : IWizardStepView
                 if (selected.Count == 0)
                     return;
 
-                _vm!.CustomPathAllowSymlinks = selected[0].StartsWith("Yes", StringComparison.Ordinal);
+                _vm!.CustomPathAllowSymlinks = selected[0] == yesLabel;
                 callbacks.AdvanceStep();
             })
             .DisposeWith(callbacks.Subscriptions);
@@ -180,7 +181,7 @@ public sealed class ExternalSkillsStepView : IWizardStepView
                 return false;
         }
 
-        InvalidateAndRedraw();
+        _callbacks?.InvalidateAndRedraw();
         return true;
     }
 
@@ -210,10 +211,4 @@ public sealed class ExternalSkillsStepView : IWizardStepView
         _cursorIndex = 0;
     }
 
-    private void InvalidateAndRedraw()
-    {
-        _callbacks?.InvalidateContent();
-        _callbacks?.InvalidateHelp();
-        _callbacks?.RequestRedraw();
-    }
 }

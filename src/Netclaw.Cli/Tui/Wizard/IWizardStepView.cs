@@ -27,6 +27,14 @@ public sealed class StepViewCallbacks
 
     /// <summary>Request a terminal redraw.</summary>
     public required Action RequestRedraw { get; init; }
+
+    /// <summary>Invalidate content and help, then request a redraw.</summary>
+    public void InvalidateAndRedraw()
+    {
+        InvalidateContent();
+        InvalidateHelp();
+        RequestRedraw();
+    }
 }
 
 /// <summary>

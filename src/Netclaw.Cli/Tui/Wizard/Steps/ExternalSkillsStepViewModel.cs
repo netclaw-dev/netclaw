@@ -11,7 +11,7 @@ namespace Netclaw.Cli.Tui.Wizard.Steps;
 public sealed class ExternalSkillsStepViewModel : IWizardStepViewModel
 {
     private int _currentSubStep;
-    private int _completedSubStep;
+    private int _highWaterSubStep;
 
     private readonly IReadOnlyList<WellKnownProbeResult> _detectedSources;
     private readonly bool[] _enabledFlags;
@@ -70,14 +70,14 @@ public sealed class ExternalSkillsStepViewModel : IWizardStepViewModel
         if (_currentSubStep == 0)
         {
             _currentSubStep = 1;
-            _completedSubStep = 1;
+            _highWaterSubStep = 1;
             return true;
         }
 
         if (_currentSubStep == 1 && HasCustomPath)
         {
             _currentSubStep = 2;
-            _completedSubStep = 2;
+            _highWaterSubStep = 2;
             return true;
         }
 
@@ -98,7 +98,7 @@ public sealed class ExternalSkillsStepViewModel : IWizardStepViewModel
     public void OnEnter(WizardContext context, NavigationDirection direction)
     {
         if (direction == NavigationDirection.Back)
-            _currentSubStep = _completedSubStep;
+            _currentSubStep = _highWaterSubStep;
         else
             _currentSubStep = 0;
     }
@@ -134,10 +134,7 @@ public sealed class ExternalSkillsStepViewModel : IWizardStepViewModel
 
         if (sources.Count > 0)
         {
-            builder.ExternalSkills = new ExternalSkillsConfigSection
-            {
-                Sources = sources
-            };
+            builder.ExternalSkillSources = sources;
         }
     }
 

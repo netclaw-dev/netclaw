@@ -34,9 +34,10 @@ public sealed class BrowserAutomationStepView : IWizardStepView
 
     private ILayoutNode BuildEnableSubStep(BrowserAutomationStepViewModel vm, StepViewCallbacks callbacks)
     {
-        _enabledList = Layouts.SelectionList(
-                "No \u2014 skip browser automation for now",
-                "Yes \u2014 configure browser MCP tools")
+        var noLabel = "No \u2014 skip browser automation for now";
+        var yesLabel = "Yes \u2014 configure browser MCP tools";
+
+        _enabledList = Layouts.SelectionList(noLabel, yesLabel)
             .WithMode(SelectionMode.Single)
             .WithHighlightColors(Color.Black, Color.Cyan);
 
@@ -49,16 +50,8 @@ public sealed class BrowserAutomationStepView : IWizardStepView
                 if (selected.Count == 0)
                     return;
 
-                if (selected[0].StartsWith("Yes", StringComparison.Ordinal))
-                {
-                    vm.Enabled = true;
-                    callbacks.AdvanceStep(); // → sub-step 1 via TryAdvance
-                }
-                else
-                {
-                    vm.Enabled = false;
-                    callbacks.AdvanceStep(); // step complete
-                }
+                vm.Enabled = selected[0] == yesLabel;
+                callbacks.AdvanceStep();
             })
             .DisposeWith(callbacks.Subscriptions);
 
@@ -72,8 +65,9 @@ public sealed class BrowserAutomationStepView : IWizardStepView
         var chromeLabel = vm.IsChromeDevToolsAvailable
             ? "Chrome DevTools MCP"
             : $"Chrome DevTools MCP (disabled - {vm.ChromeDevToolsUnavailableReason})";
+        var playwrightLabel = "Playwright MCP";
 
-        _backendList = Layouts.SelectionList(chromeLabel, "Playwright MCP")
+        _backendList = Layouts.SelectionList(chromeLabel, playwrightLabel)
             .WithMode(SelectionMode.Single)
             .WithHighlightColors(Color.Black, Color.Cyan);
 
@@ -86,14 +80,13 @@ public sealed class BrowserAutomationStepView : IWizardStepView
                 if (selected.Count == 0)
                     return;
 
-                if (selected[0].StartsWith("Chrome DevTools", StringComparison.Ordinal)
-                    && !vm.IsChromeDevToolsAvailable)
+                if (selected[0] == chromeLabel && !vm.IsChromeDevToolsAvailable)
                 {
                     // Can't select disabled option — show error
                     return;
                 }
 
-                vm.SelectedBackend = selected[0].StartsWith("Playwright", StringComparison.Ordinal)
+                vm.SelectedBackend = selected[0] == playwrightLabel
                     ? BrowserAutomationBackend.Playwright
                     : BrowserAutomationBackend.ChromeDevTools;
 

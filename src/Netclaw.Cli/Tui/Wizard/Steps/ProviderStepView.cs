@@ -88,9 +88,7 @@ public sealed class ProviderStepView : IWizardStepView
                     {
                         vm.SetSubStep(1);
                     }
-                    callbacks.InvalidateContent();
-                    callbacks.InvalidateHelp();
-                    callbacks.RequestRedraw();
+                    callbacks.InvalidateAndRedraw();
                 }
             })
             .DisposeWith(callbacks.Subscriptions);
@@ -136,9 +134,7 @@ public sealed class ProviderStepView : IWizardStepView
                     {
                         vm.SetSubStep(2);
                     }
-                    callbacks.InvalidateContent();
-                    callbacks.InvalidateHelp();
-                    callbacks.RequestRedraw();
+                    callbacks.InvalidateAndRedraw();
                 }
             })
             .DisposeWith(callbacks.Subscriptions);
@@ -170,9 +166,7 @@ public sealed class ProviderStepView : IWizardStepView
                     vm.EndpointInput = string.IsNullOrWhiteSpace(text) ? defaultEndpoint : text;
                     vm.SetSubStep(3);
                     vm.StartProbe();
-                    callbacks.InvalidateContent();
-                    callbacks.InvalidateHelp();
-                    callbacks.RequestRedraw();
+                    callbacks.InvalidateAndRedraw();
                 })
                 .DisposeWith(callbacks.Subscriptions);
 
@@ -203,9 +197,7 @@ public sealed class ProviderStepView : IWizardStepView
                 vm.ApiKeyInput = text;
                 vm.SetSubStep(3);
                 vm.StartProbe();
-                callbacks.InvalidateContent();
-                callbacks.InvalidateHelp();
-                callbacks.RequestRedraw();
+                callbacks.InvalidateAndRedraw();
             })
             .DisposeWith(callbacks.Subscriptions);
 

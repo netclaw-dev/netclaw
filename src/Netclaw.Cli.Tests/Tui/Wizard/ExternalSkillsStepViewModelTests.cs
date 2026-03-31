@@ -165,16 +165,16 @@ public sealed class ExternalSkillsStepViewModelTests : IDisposable
         var builder = new WizardConfigBuilder(_context.Paths);
         step.ContributeConfig(builder);
 
-        Assert.NotNull(builder.ExternalSkills);
-        Assert.Equal(2, builder.ExternalSkills!.Sources.Count);
+        Assert.NotNull(builder.ExternalSkillSources);
+        Assert.Equal(2, builder.ExternalSkillSources!.Count);
 
-        var claude = builder.ExternalSkills.Sources[0];
+        var claude = builder.ExternalSkillSources[0];
         Assert.Equal("claude-code", claude.Name);
         Assert.Equal("claude-code", claude.WellKnown);
         Assert.True(claude.Enabled);
         Assert.True(claude.AllowSymlinks);
 
-        var openCode = builder.ExternalSkills.Sources[1];
+        var openCode = builder.ExternalSkillSources[1];
         Assert.Equal("open-code", openCode.Name);
         Assert.Equal("open-code", openCode.WellKnown);
         Assert.False(openCode.Enabled);
@@ -191,10 +191,10 @@ public sealed class ExternalSkillsStepViewModelTests : IDisposable
         var builder = new WizardConfigBuilder(_context.Paths);
         step.ContributeConfig(builder);
 
-        Assert.NotNull(builder.ExternalSkills);
-        Assert.Equal(2, builder.ExternalSkills!.Sources.Count);
+        Assert.NotNull(builder.ExternalSkillSources);
+        Assert.Equal(2, builder.ExternalSkillSources!.Count);
 
-        var custom = builder.ExternalSkills.Sources[1];
+        var custom = builder.ExternalSkillSources[1];
         Assert.Equal("custom", custom.Name);
         Assert.Equal("/opt/team/skills", custom.Path);
         Assert.Null(custom.WellKnown);
@@ -210,6 +210,6 @@ public sealed class ExternalSkillsStepViewModelTests : IDisposable
         var builder = new WizardConfigBuilder(_context.Paths);
         step.ContributeConfig(builder);
 
-        Assert.Null(builder.ExternalSkills);
+        Assert.Null(builder.ExternalSkillSources);
     }
 }

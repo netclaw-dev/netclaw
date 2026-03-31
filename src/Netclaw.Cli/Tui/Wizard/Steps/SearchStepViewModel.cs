@@ -9,7 +9,7 @@ namespace Netclaw.Cli.Tui.Wizard.Steps;
 public sealed class SearchStepViewModel : IWizardStepViewModel
 {
     private int _currentSubStep;
-    private int _completedSubStep;
+    private int _highWaterSubStep;
 
     public string StepId => "search";
     public string DisplayTitle => "Web Search";
@@ -40,7 +40,7 @@ public sealed class SearchStepViewModel : IWizardStepViewModel
         if (_currentSubStep == 0 && NeedsCredentials)
         {
             _currentSubStep = 1;
-            _completedSubStep = 1;
+            _highWaterSubStep = 1;
             return true;
         }
         return false; // step complete
@@ -59,7 +59,7 @@ public sealed class SearchStepViewModel : IWizardStepViewModel
     public void OnEnter(WizardContext context, NavigationDirection direction)
     {
         if (direction == NavigationDirection.Back)
-            _currentSubStep = _completedSubStep;
+            _currentSubStep = _highWaterSubStep;
         else
             _currentSubStep = 0;
     }

@@ -104,7 +104,7 @@ public sealed class ChannelsStepView : IWizardStepView
                 _addMode = false;
                 _addInput = null;
                 _lastFocusedInput = null;
-                InvalidateAndRedraw();
+                _callbacks?.InvalidateAndRedraw();
                 return true;
             }
 
@@ -132,7 +132,7 @@ public sealed class ChannelsStepView : IWizardStepView
                     _addMode = false;
                     _addInput = null;
                     _lastFocusedInput = null;
-                    InvalidateAndRedraw();
+                    _callbacks?.InvalidateAndRedraw();
                     return true;
                 }
 
@@ -197,7 +197,7 @@ public sealed class ChannelsStepView : IWizardStepView
                 return false;
         }
 
-        InvalidateAndRedraw();
+        _callbacks?.InvalidateAndRedraw();
         return true;
     }
 
@@ -214,10 +214,4 @@ public sealed class ChannelsStepView : IWizardStepView
         _cursorIndex = 0;
     }
 
-    private void InvalidateAndRedraw()
-    {
-        _callbacks?.InvalidateContent();
-        _callbacks?.InvalidateHelp();
-        _callbacks?.RequestRedraw();
-    }
 }
