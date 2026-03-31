@@ -46,6 +46,17 @@ public sealed class ToolAudienceProfiles
     public ToolAudienceProfile Personal { get; set; } = ToolAudienceProfileDefaults.CreatePersonal();
 
     /// <summary>
+    /// Returns all audience profiles (Public, Team, Personal) for enumeration.
+    /// Use this instead of manually constructing arrays to avoid missing a tier.
+    /// </summary>
+    public IEnumerable<ToolAudienceProfile> GetAllProfiles()
+    {
+        yield return Public;
+        yield return Team;
+        yield return Personal;
+    }
+
+    /// <summary>
     /// Filesystem roots that are always readable regardless of audience profile.
     /// Supports tokens: <c>{skills_dir}</c>, <c>{identity_dir}</c>, <c>{workspaces_dir}</c>.
     /// Defaults to skills, identity, and workspaces directories so skill loading,

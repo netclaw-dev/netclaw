@@ -741,9 +741,9 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         var allGrantedTools = new HashSet<string>(StringComparer.Ordinal);
         var hasAnyGrants = false;
 
-        foreach (var profile in new[] { profiles.Public, profiles.Team, profiles.Personal })
+        foreach (var profile in profiles.GetAllProfiles())
         {
-            if (profile?.McpServerToolGrants is not { } grants)
+            if (profile.McpServerToolGrants is not { } grants)
                 continue;
 
             if (!grants.TryGetValue(serverName, out var tools))

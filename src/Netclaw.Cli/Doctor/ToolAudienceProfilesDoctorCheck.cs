@@ -145,7 +145,7 @@ public sealed class ToolAudienceProfilesDoctorCheck(NetclawPaths paths) : IDocto
         var allowedServers = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var grantedServers = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        foreach (var profile in new[] { profiles.Public, profiles.Team, profiles.Personal })
+        foreach (var profile in profiles.GetAllProfiles())
         {
             if (profile.McpServersMode == ToolProfileMode.All)
             {
