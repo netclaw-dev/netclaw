@@ -201,6 +201,170 @@ public sealed class McpToolAudienceGrantsTests
         Assert.DoesNotContain("memorizer/delete", result);
     }
 
+    // ── FilterExposedTools (session hot path) ──
+
+    [Fact]
+    public void FilterExposedTools_RemovesToolsBlockedByGrants()
+    {
+        var registry = new ToolRegistry();
+        var granted = CreateMcpTool("memorizer", "search_memories");
+        var blocked = CreateMcpTool("memorizer", "store");
+        registry.Register(granted);
+        registry.Register(blocked);
+
+        var config = CreateConfigWithTeamServer("memorizer");
+        config.AudienceProfiles.Team.McpServerToolGrants = new Dictionary<string, List<string>>
+        {
+            ["memorizer"] = ["search_memories"]
+        };
+        var policy = new ToolAccessPolicy(config, Defaults);
+
+        var trustContext = new EffectiveTrustContext(
+            DeploymentPosture.Personal,
+            TrustAudience.Team,
+            TrustAudience.Team,
+            TrustAudience.Team,
+            SecurityPolicyDefaults.TrustedInstanceBoundary,
+            PrincipalClassification.TrustedInternal,
+            TransportAuthenticity.Verified,
+            PayloadTaint.Trusted,
+            null, null, false, false, null);
+
+        var aiTools = new[] { granted.ToAITool(), blocked.ToAITool() };
+        var filtered = policy.FilterExposedTools(aiTools, registry, trustContext);
+
+        Assert.Single(filtered);
+        Assert.Equal("memorizer/search_memories", ((AIFunction)filtered[0]).Name);
+    }
+
+    // ── load_tool denial ──
+
+    [Fact]
+    public async Task LoadTool_DeniesBlockedTool()
+    {
+        var registry = new ToolRegistry();
+        registry.Register(CreateMcpTool("memorizer", "search_memories"));
+        registry.Register(CreateMcpTool("memorizer", "store"));
+
+        var config = CreateConfigWithTeamServer("memorizer");
+        config.AudienceProfiles.Team.McpServerToolGrants = new Dictionary<string, List<string>>
+        {
+            ["memorizer"] = ["search_memories"]
+        };
+        var policy = new ToolAccessPolicy(config, Defaults);
+        var tool = new LoadToolTool(registry, policy);
+
+        var result = await tool.ExecuteAsync(
+            new Dictionary<string, object?> { ["Name"] = "memorizer/store" },
+            CreateExecutionContext(TrustAudience.Team),
+            CancellationToken.None);
+
+        Assert.Contains("not available", result);
+    }
+
+    [Fact]
+    public async Task LoadTool_AllowsGrantedTool()
+    {
+        var registry = new ToolRegistry();
+        registry.Register(CreateMcpTool("memorizer", "search_memories"));
+
+        var config = CreateConfigWithTeamServer("memorizer");
+        config.AudienceProfiles.Team.McpServerToolGrants = new Dictionary<string, List<string>>
+        {
+            ["memorizer"] = ["search_memories"]
+        };
+        var policy = new ToolAccessPolicy(config, Defaults);
+        var tool = new LoadToolTool(registry, policy);
+
+        var result = await tool.ExecuteAsync(
+            new Dictionary<string, object?> { ["Name"] = "memorizer/search_memories" },
+            CreateExecutionContext(TrustAudience.Team),
+            CancellationToken.None);
+
+        Assert.Equal("memorizer/search_memories", result);
+    }
+
+    // ── Public audience ──
+
+    [Fact]
+    public void PublicAudience_WithGrants_OnlyExposesGrantedTools()
+    {
+        var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
+        config.AudienceProfiles.Public.AllowedMcpServers.Add("memorizer");
+        config.AudienceProfiles.Public.McpServerToolGrants = new Dictionary<string, List<string>>
+        {
+            ["memorizer"] = ["search_memories"]
+        };
+        var policy = new ToolAccessPolicy(config, Defaults);
+
+        Assert.True(policy.IsToolExposed(
+            CreateMcpTool("memorizer", "search_memories"),
+            CreateExecutionContext(TrustAudience.Public)));
+        Assert.False(policy.IsToolExposed(
+            CreateMcpTool("memorizer", "store"),
+            CreateExecutionContext(TrustAudience.Public)));
+    }
+
+    // ── Multiple servers with independent grants ──
+
+    [Fact]
+    public void MultipleServers_GrantsAreIndependent()
+    {
+        var config = CreateConfigWithTeamServer("memorizer", "github");
+        config.AudienceProfiles.Team.McpServerToolGrants = new Dictionary<string, List<string>>
+        {
+            ["memorizer"] = ["search_memories"],
+            ["github"] = ["create_issue", "list_issues"]
+        };
+        var policy = new ToolAccessPolicy(config, Defaults);
+
+        // memorizer grants don't affect github
+        Assert.True(policy.IsToolExposed(CreateMcpTool("github", "create_issue"), TeamContext()));
+        Assert.True(policy.IsToolExposed(CreateMcpTool("github", "list_issues"), TeamContext()));
+        Assert.False(policy.IsToolExposed(CreateMcpTool("github", "delete_repo"), TeamContext()));
+
+        // github grants don't affect memorizer
+        Assert.True(policy.IsToolExposed(CreateMcpTool("memorizer", "search_memories"), TeamContext()));
+        Assert.False(policy.IsToolExposed(CreateMcpTool("memorizer", "store"), TeamContext()));
+    }
+
+    // ── Config deserialization round-trip ──
+
+    [Fact]
+    public void McpServerToolGrants_DeserializesFromJson()
+    {
+        var json = """
+        {
+            "ShellMode": "HostAllowed",
+            "AudienceProfiles": {
+                "Team": {
+                    "McpServersMode": "Allowlist",
+                    "AllowedMcpServers": ["memorizer"],
+                    "McpServerToolGrants": {
+                        "memorizer": ["search_memories", "get"]
+                    }
+                }
+            }
+        }
+        """;
+
+        var config = System.Text.Json.JsonSerializer.Deserialize<ToolConfig>(json,
+            new System.Text.Json.JsonSerializerOptions
+            {
+                Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() }
+            });
+
+        Assert.NotNull(config);
+        Assert.NotNull(config.AudienceProfiles.Team.McpServerToolGrants);
+        Assert.True(config.AudienceProfiles.Team.McpServerToolGrants.ContainsKey("memorizer"));
+        Assert.Equal(["search_memories", "get"], config.AudienceProfiles.Team.McpServerToolGrants["memorizer"]);
+
+        // Verify it actually enforces correctly when wired through the policy
+        var policy = new ToolAccessPolicy(config, Defaults);
+        Assert.True(policy.IsToolExposed(CreateMcpTool("memorizer", "search_memories"), TeamContext()));
+        Assert.False(policy.IsToolExposed(CreateMcpTool("memorizer", "store"), TeamContext()));
+    }
+
     // ── Helpers ──
 
     private static McpToolAdapter CreateMcpTool(string serverName, string toolName, string? description = null)
