@@ -99,6 +99,17 @@ internal sealed class DiscoveredToolCache
     }
 
     /// <summary>
+    /// Evict all discovered tools and trim the available tools list back to base tools.
+    /// Used when an LLM call fails to prevent a bad tool set from poisoning subsequent turns.
+    /// </summary>
+    public void EvictAll(List<AITool> availableTools, int baseToolCount)
+    {
+        _leases.Clear();
+        _order.Clear();
+        TrimToBase(availableTools, baseToolCount);
+    }
+
+    /// <summary>
     /// Check whether the cache contains a tool with an active lease.
     /// </summary>
     public bool HasTool(string toolName)

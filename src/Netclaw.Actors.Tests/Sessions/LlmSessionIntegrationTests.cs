@@ -79,6 +79,7 @@ public class LlmSessionIntegrationTests : TestKit
             "browser_chrome_devtools",
             "navigate_page"));
         registry.Register(new SearchToolsTool(registry));
+        registry.Register(new LoadToolTool(registry));
 
         services.AddSingleton(registry);
         services.AddSingleton<IToolExecutor>(_fakeToolExecutor);
@@ -758,14 +759,11 @@ public class LlmSessionIntegrationTests : TestKit
     {
         _fakeChatClient.ToolCallsOnFirstCall =
         [
-            new FunctionCallContent("call-search", "search_tools",
-                new Dictionary<string, object?> { ["Query"] = "browser_chrome_devtools" })
+            new FunctionCallContent("call-load", "load_tool",
+                new Dictionary<string, object?> { ["Name"] = "browser_chrome_devtools/navigate_page" })
         ];
 
-        _fakeToolExecutor.Results["search_tools"] =
-            "Found 1 tool(s):\n\n"
-            + "  browser_chrome_devtools/navigate_page — Navigate to URL (params: url)\n\n"
-            + "Call any tool above by its full name. Tools are now loaded and available.";
+        _fakeToolExecutor.Results["load_tool"] = "browser_chrome_devtools/navigate_page";
 
         var sessionId = new SessionId("channel-discovery/thread-retention");
         var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();

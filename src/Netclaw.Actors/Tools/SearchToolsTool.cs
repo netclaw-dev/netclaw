@@ -10,7 +10,7 @@ namespace Netclaw.Actors.Tools;
 /// to load dynamically. Used as part of the two-layer discovery architecture.
 /// </summary>
 [NetclawTool("search_tools",
-    "Search for available tools by keyword. Returns tool names, descriptions, and parameter names. "
+    "Search for available tools by keyword. Returns tool names and descriptions — tools are NOT loaded until you call load_tool. "
     + "Use query='servers' to list MCP servers and query='all' with a server filter to browse one server.",
     Grant = "builtin")]
 public sealed partial class SearchToolsTool : NetclawTool<SearchToolsTool.Params>
@@ -122,7 +122,7 @@ public sealed partial class SearchToolsTool : NetclawTool<SearchToolsTool.Params
 
         sb.AppendLine();
         sb.AppendLine("To browse one server, call search_tools(query: \"all\", server: \"<server_name>\").");
-        sb.AppendLine("To load specific tools, call search_tools(query: \"<intent>\", server: \"<server_name>\").");
+        sb.AppendLine("To find tools, call search_tools(query: \"<intent>\", server: \"<server_name>\"), then load_tool(\"<name>\") to activate.");
         sb.AppendLine("Detailed generated catalogs are on disk at identity/tooling/shadow/mcp/<server>.md.");
 
         if (!string.IsNullOrWhiteSpace(trailingHint))
@@ -153,7 +153,7 @@ public sealed partial class SearchToolsTool : NetclawTool<SearchToolsTool.Params
         }
 
         sb.AppendLine();
-        sb.AppendLine("Call any tool above by its full name. Tools are now loaded and available.");
+        sb.AppendLine("To use a tool, call load_tool(\"<tool_name>\") to activate it first.");
         return sb.ToString();
     }
 

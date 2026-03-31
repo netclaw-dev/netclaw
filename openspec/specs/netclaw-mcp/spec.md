@@ -113,10 +113,19 @@ removed tools from MCP servers.
 
 To avoid context window bloat with large tool catalogs (see
 `docs/research/dynamic-context-discovery.md` §1–2), the system SHALL use a
-two-layer discovery strategy: a compressed tool index injected into the system
-prompt for agent awareness, and a `search_tools` meta-tool for on-demand
-loading of full tool definitions. Core tools (shell, file operations) SHALL
-remain always-loaded; MCP tools SHALL be deferred by default.
+three-step discovery strategy: a compressed tool index injected into the system
+prompt for agent awareness, a `search_tools` meta-tool for browsing available
+tools (names and descriptions only), and a `load_tool` meta-tool for
+on-demand activation of individual tool definitions. `search_tools` SHALL NOT
+load tool schemas into the session — it SHALL return a discovery menu only.
+The agent SHALL call `load_tool` to activate each tool it needs. Core tools
+(shell, file operations) SHALL remain always-loaded; MCP tools SHALL be
+deferred by default.
+
+When an LLM call fails after tools have been dynamically loaded, the system
+SHALL evict all discovered tools from the session's available tool set. This
+prevents a tool set that caused the failure (e.g., oversized schemas) from
+poisoning subsequent turns.
 
 #### Scenario: Startup tool discovery
 

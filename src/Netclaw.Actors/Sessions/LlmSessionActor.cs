@@ -554,15 +554,17 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                     result.Name ?? "unknown", result.ToolCallId ?? "?", preview);
             }
 
-            // Dynamic tool loading: if search_tools was called, load discovered tools
-            // into the available tools list so they can be called in subsequent turns
+            // Dynamic tool loading: if load_tool was called, activate the requested tool.
+            // LoadToolTool returns the canonical tool name on success; the actor looks it
+            // up in the registry. Error messages won't match any entry, so only valid
+            // tool names trigger activation — no string parsing required.
             if (_fullRegistry is not null)
             {
                 foreach (var result in msg.ToolResults)
                 {
-                    if (result.Name is "search_tools" && result.Content is not null)
+                    if (result.Name is "load_tool" && result.Content is not null)
                     {
-                        LoadDiscoveredTools(result.Content);
+                        TryActivateDiscoveredTool(result.Content.Trim());
                     }
                 }
             }
@@ -703,6 +705,11 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             }
 
             TurnLog().Error(msg.Cause, "turn_llm_call_failed");
+
+            // Evict discovered tools to prevent a poisoned tool set from cascading
+            // across turns (e.g., oversized Notion schemas causing repeated 502s).
+            _discoveredToolCache.EvictAll(_availableTools, _baseToolCount);
+            TurnLog().Info("turn_discovered_tools_evicted — tool list reset to base tools after LLM call failure");
 
             var errorMessage = ExtractLlmErrorMessage(msg.Cause);
             var category = msg.Cause is TimeoutException ? ErrorCategory.Timeout : ErrorCategory.ProviderFailure;
@@ -2204,38 +2211,25 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     }
 
     /// <summary>
-    /// Parse tool names from search_tools output and add their AITool definitions
-    /// to <see cref="_availableTools"/> so the LLM can call them in subsequent iterations.
+    /// Attempt to activate a single discovered tool by name.
+    /// Checks registry, access policy, and adds to the available tools cache.
     /// </summary>
-    private void LoadDiscoveredTools(string searchToolOutput)
+    private bool TryActivateDiscoveredTool(string toolName)
     {
-        if (_fullRegistry is null) return;
+        if (_fullRegistry is null) return false;
 
-        // Parse tool names from the search output format: "  server/toolname — description"
-        foreach (var line in searchToolOutput.Split('\n'))
-        {
-            var trimmed = line.TrimStart();
-            var separatorIndex = trimmed.IndexOf(" — ", StringComparison.Ordinal);
-            if (separatorIndex < 0)
-                continue;
+        var registration = _fullRegistry.GetRegistrationByToolName(toolName);
+        if (registration is null) return false;
 
-            var toolName = trimmed[..separatorIndex].Trim();
-            if (string.IsNullOrEmpty(toolName))
-                continue;
+        if (_toolAccessPolicy is not null && !_toolAccessPolicy.IsToolExposed(registration, _currentTrustContext))
+            return false;
 
-            var registration = _fullRegistry.GetRegistrationByToolName(toolName);
-            if (registration is null)
-                continue;
-
-            if (_toolAccessPolicy is not null && !_toolAccessPolicy.IsToolExposed(registration, _currentTrustContext))
-                continue;
-
-            var tool = registration.Tool;
-            _discoveredToolCache.Remember(toolName, tool,
-                _config.Tuning.DiscoveredToolRetentionTurns,
-                _config.Tuning.DiscoveredToolMaxCount);
-            AddAvailableToolIfMissing(toolName, tool.ToAITool());
-        }
+        var tool = registration.Tool;
+        _discoveredToolCache.Remember(toolName, tool,
+            _config.Tuning.DiscoveredToolRetentionTurns,
+            _config.Tuning.DiscoveredToolMaxCount);
+        AddAvailableToolIfMissing(toolName, tool.ToAITool());
+        return true;
     }
 
     private void AddAvailableToolIfMissing(string toolName, AITool aiTool)

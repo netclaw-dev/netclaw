@@ -33,8 +33,9 @@ public static class ToolRegistrationExtensions
             registry.Register(new WebSearchTool(searchBackend));
         registry.Register(new WebFetchTool(config));
 
-        // Register search_tools meta-tool (always loaded, "builtin" grant)
+        // Register search_tools and load_tool meta-tools (always loaded, "builtin" grant)
         registry.Register(new SearchToolsTool(registry, toolAccessPolicy));
+        registry.Register(new LoadToolTool(registry, toolAccessPolicy));
 
         return registry;
     }
