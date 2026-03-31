@@ -27,15 +27,15 @@
 
 ## 6. CLI: `netclaw mcp tools`
 
-- [ ] 6.1 Add `tools` subcommand routing in `McpCommand.RunAsync` and help text
-- [ ] 6.2 Implement CLI list mode (`netclaw mcp tools <server>`) — query daemon for discovered tools, display per-audience grant status table
-- [ ] 6.3 Implement `--snapshot` flag — populate `McpServerToolGrants` from discovered tools and write to `netclaw.json`
+- [x] 6.1 Add `tools` subcommand routing in `McpCommand.RunAsync` and help text
+- [x] 6.2 Implement CLI list mode (`netclaw mcp tools <server>`) — query daemon for discovered tools, display per-audience grant status table
+- [x] 6.3 Implement `--snapshot` flag — populate `McpServerToolGrants` from discovered tools and write to `netclaw.json`
 
 ## 7. TUI: Interactive Tool Permissions
 
-- [ ] 7.1 Create `McpToolPermissionsViewModel` with server list, tool list, audience selector, and toggle state
-- [ ] 7.2 Create `McpToolPermissionsPage` with Termina layout: server list → tool grid with checkboxes → save
-- [ ] 7.3 Wire TUI mode in `McpCommand` (no server arg) and `Program.cs` routing
+- [x] 7.1 Create `McpToolPermissionsViewModel` with server list, tool list, audience selector, and toggle state
+- [x] 7.2 Create `McpToolPermissionsPage` with Termina layout: server list → tool grid with checkboxes → save
+- [x] 7.3 Wire TUI mode in `McpCommand` (no server arg) and `Program.cs` routing
 
 ## 8. Spec Sync
 

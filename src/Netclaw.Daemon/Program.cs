@@ -206,6 +206,12 @@ static async Task RunDaemonAsync(string[] args, DaemonRestartSignal restartSigna
         return Results.Ok(result);
     });
 
+    app.MapGet("/api/mcp/tools/{name}", (string name, McpClientManager mcpManager) =>
+    {
+        var tools = mcpManager.GetToolNames(name);
+        return Results.Ok(tools);
+    });
+
     app.MapGet("/api/mcp/oauth/status/{name}", (string name, McpOAuthService oauthService) =>
     {
         var status = oauthService.GetFlowStatus(name);

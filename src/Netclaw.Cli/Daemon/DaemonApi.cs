@@ -197,6 +197,14 @@ public sealed class DaemonApi
         return await JsonSerializer.DeserializeAsync<JsonElement>(stream, WebJsonOptions, cts.Token);
     }
 
+    public async Task<List<string>> GetMcpToolNamesAsync(string serverName, CancellationToken ct = default)
+    {
+        using var cts = CreateTimeoutCts(DefaultTimeout, ct);
+        var client = _factory.CreateClient();
+        return await client.GetFromJsonAsync<List<string>>(
+            $"{_endpoint}/api/mcp/tools/{Uri.EscapeDataString(serverName)}", cts.Token) ?? [];
+    }
+
     // ── Provider OAuth ─────────────────────────────────────────────────
 
     public async Task<HttpResponseMessage> StartProviderOAuthAsync(string providerType, CancellationToken ct = default)

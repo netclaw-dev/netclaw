@@ -110,6 +110,17 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
 
     public IReadOnlyDictionary<string, McpServerStatus> GetServerStatuses() => _statuses;
 
+    /// <summary>
+    /// Returns discovered tool names for a connected MCP server.
+    /// </summary>
+    public IReadOnlyList<string> GetToolNames(string serverName)
+    {
+        if (!_sharedToolFunctions.TryGetValue(serverName, out var tools))
+            return [];
+
+        return tools.Keys.Order(StringComparer.Ordinal).ToList();
+    }
+
     public async Task<bool> TryReconnectAsync(string serverName, CancellationToken ct = default)
     {
         if (!_serverEntries.TryGetValue(serverName, out var entry) || !entry.Enabled)

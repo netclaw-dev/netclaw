@@ -474,9 +474,27 @@ static async Task RunAsync(string[] args)
     {
         var mcpSubcommand = args.Length > 1 ? args[1] : "help";
 
-        if (mcpSubcommand is "auth" or "list")
+        if (mcpSubcommand is "tools" && args.Length <= 2)
         {
-            // auth/list need the daemon — spin up DI to get DaemonApi
+            // Bare `netclaw mcp tools` → TUI mode
+            var builder = Host.CreateApplicationBuilder(args);
+            ConfigureConfigServices(builder.Services, builder.Configuration);
+            builder.Logging.ClearProviders();
+            builder.Logging.SetMinimumLevel(LogLevel.Warning);
+
+            var traceFile = Path.Combine(Path.GetTempPath(), "netclaw-mcp-tools-trace.log");
+            builder.Services.AddTerminaFileTracing(traceFile, TerminaTraceCategory.All, TerminaTraceLevel.Trace);
+
+            builder.Services.AddTermina("/mcp-tools", t =>
+                t.RegisterRoute<McpToolPermissionsPage, McpToolPermissionsViewModel>("/mcp-tools"));
+
+            await builder.Build().RunAsync();
+            return;
+        }
+
+        if (mcpSubcommand is "auth" or "list" or "tools")
+        {
+            // auth/list/tools need the daemon — spin up DI to get DaemonApi
             var builder = Host.CreateApplicationBuilder(args);
             ConfigureConfigServices(builder.Services, builder.Configuration);
             builder.Logging.ClearProviders();

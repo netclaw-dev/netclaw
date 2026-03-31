@@ -48,6 +48,7 @@ internal static class McpCommand
             "remove" => RunRemove(args, paths, writer),
             "enable" => RunToggle(args, paths, enabled: true, writer),
             "disable" => RunToggle(args, paths, enabled: false, writer),
+            "tools" => await RunToolsAsync(args, paths, daemonApi, writer),
             "help" or "-h" or "--help" => WriteHelp(writer),
             _ => WriteHelp(writer)
         };
@@ -837,6 +838,188 @@ internal static class McpCommand
         return doc.RootElement.Clone();
     }
 
+    private static async Task<int> RunToolsAsync(string[] args, NetclawPaths paths, DaemonApi? daemonApi, TextWriter writer)
+    {
+        // Parse: netclaw mcp tools [<server>] [--snapshot]
+        string? serverName = null;
+        var snapshot = false;
+
+        for (var i = 2; i < args.Length; i++)
+        {
+            if (args[i] is "--snapshot")
+                snapshot = true;
+            else if (args[i] is "--help" or "-h")
+            {
+                writer.WriteLine("Usage: netclaw mcp tools <server> [--snapshot]");
+                writer.WriteLine();
+                writer.WriteLine("  <server>     Show discovered tools and per-audience grant status");
+                writer.WriteLine("  --snapshot   Populate McpServerToolGrants from currently discovered tools");
+                return 0;
+            }
+            else if (serverName is null)
+                serverName = args[i];
+        }
+
+        if (serverName is null)
+        {
+            writer.WriteLine("Usage: netclaw mcp tools <server> [--snapshot]");
+            writer.WriteLine("Specify a server name. Use `netclaw mcp list` to see configured servers.");
+            return 1;
+        }
+
+        if (daemonApi is null)
+        {
+            writer.WriteLine("Error: daemon API not available. Is the daemon running?");
+            return 1;
+        }
+
+        // Get discovered tools from daemon
+        List<string> discoveredTools;
+        try
+        {
+            discoveredTools = await daemonApi.GetMcpToolNamesAsync(serverName, CancellationToken.None);
+        }
+        catch (HttpRequestException)
+        {
+            writer.WriteLine($"Error: could not reach daemon. Is it running?");
+            return 1;
+        }
+        catch (Exception ex)
+        {
+            writer.WriteLine($"Error: {ex.Message}");
+            return 1;
+        }
+
+        if (discoveredTools.Count == 0)
+        {
+            writer.WriteLine($"No tools discovered for server '{serverName}'.");
+            writer.WriteLine("The server may be disconnected or have no tools. Check `netclaw mcp list`.");
+            return 1;
+        }
+
+        // Load audience profiles for grant status
+        var toolConfig = LoadToolConfig(paths);
+        var profiles = toolConfig.AudienceProfiles;
+
+        if (snapshot)
+            return RunToolsSnapshot(serverName, discoveredTools, profiles, paths, writer);
+
+        return RunToolsList(serverName, discoveredTools, profiles, writer);
+    }
+
+    private static int RunToolsList(
+        string serverName, List<string> discoveredTools, ToolAudienceProfiles profiles, TextWriter writer)
+    {
+        writer.WriteLine($"Tools for server '{serverName}' ({discoveredTools.Count} discovered):");
+        writer.WriteLine();
+
+        // Column headers
+        var maxNameLen = Math.Max(discoveredTools.Max(t => t.Length), 4);
+        writer.Write("  ");
+        writer.Write("Tool".PadRight(maxNameLen + 2));
+        writer.Write("Public   Team     Personal");
+        writer.WriteLine();
+        writer.Write("  ");
+        writer.WriteLine(new string('\u2500', maxNameLen + 2 + 26));
+
+        foreach (var tool in discoveredTools)
+        {
+            writer.Write("  ");
+            writer.Write(tool.PadRight(maxNameLen + 2));
+
+            writer.Write(FormatGrantStatus(serverName, tool, profiles.Public));
+            writer.Write(FormatGrantStatus(serverName, tool, profiles.Team));
+            writer.Write(FormatGrantStatus(serverName, tool, profiles.Personal));
+            writer.WriteLine();
+        }
+
+        return 0;
+    }
+
+    private static string FormatGrantStatus(string serverName, string toolName, ToolAudienceProfile profile)
+    {
+        if (profile.McpServerToolGrants is null)
+            return "\u2731        "; // ✱ = all (no grants configured)
+
+        if (!profile.McpServerToolGrants.TryGetValue(serverName, out var allowedTools))
+            return "\u2731        "; // ✱ = server not in grants, all tools pass
+
+        return allowedTools.Contains(toolName, StringComparer.Ordinal)
+            ? "\u2713        " // ✓ = granted
+            : "-        ";    // - = blocked
+    }
+
+    private static int RunToolsSnapshot(
+        string serverName, List<string> discoveredTools, ToolAudienceProfiles profiles,
+        NetclawPaths paths, TextWriter writer)
+    {
+        var (config, _) = LoadConfigFiles(paths);
+        var toolsSection = GetOrCreateSection(config, "Tools");
+        var profilesSection = GetOrCreateSection(toolsSection, "AudienceProfiles");
+
+        var updated = 0;
+        foreach (var audienceName in new[] { "Public", "Team", "Personal" })
+        {
+            var profile = audienceName switch
+            {
+                "Public" => profiles.Public,
+                "Team" => profiles.Team,
+                _ => profiles.Personal
+            };
+
+            // Only snapshot for audiences that allow this server
+            var serverAllowed = profile.McpServersMode == ToolProfileMode.All
+                || profile.AllowedMcpServers.Contains(serverName, StringComparer.OrdinalIgnoreCase);
+
+            if (!serverAllowed)
+                continue;
+
+            var audienceSection = GetOrCreateSection(profilesSection, audienceName);
+            var grants = audienceSection.TryGetValue("McpServerToolGrants", out var existing)
+                && existing is Dictionary<string, object> dict
+                    ? dict
+                    : new Dictionary<string, object>();
+
+            grants[serverName] = discoveredTools;
+            audienceSection["McpServerToolGrants"] = grants;
+            updated++;
+        }
+
+        if (updated == 0)
+        {
+            writer.WriteLine($"Server '{serverName}' is not allowed by any audience profile. Nothing to snapshot.");
+            return 1;
+        }
+
+        WriteConfigFile(paths.NetclawConfigPath, config);
+        writer.WriteLine($"Snapshot complete: {discoveredTools.Count} tools from '{serverName}' written to McpServerToolGrants for {updated} audience profile(s).");
+        writer.WriteLine("New tools added by the server will not be exposed until you update the grants.");
+        return 0;
+    }
+
+    private static ToolConfig LoadToolConfig(NetclawPaths paths)
+    {
+        if (!File.Exists(paths.NetclawConfigPath))
+            return new ToolConfig();
+
+        try
+        {
+            var text = File.ReadAllText(paths.NetclawConfigPath);
+            using var doc = JsonDocument.Parse(text);
+
+            if (!doc.RootElement.TryGetProperty("Tools", out var toolsSection))
+                return new ToolConfig();
+
+            return JsonSerializer.Deserialize<ToolConfig>(toolsSection.GetRawText(),
+                new JsonSerializerOptions { Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() } })
+                ?? new ToolConfig();
+        }
+        catch
+        {
+            return new ToolConfig();
+        }
+    }
+
     private static int WriteHelp(TextWriter writer)
     {
         writer.WriteLine("Usage: netclaw mcp <subcommand>");
@@ -849,6 +1032,7 @@ internal static class McpCommand
         writer.WriteLine("  remove     Remove an MCP server profile");
         writer.WriteLine("  enable     Enable a disabled MCP server");
         writer.WriteLine("  disable    Disable an MCP server without removing it");
+        writer.WriteLine("  tools      Show discovered tools and per-audience grant status");
         writer.WriteLine();
         writer.WriteLine("Examples:");
         writer.WriteLine("  netclaw mcp add --transport stdio memorizer -- npx -y @memorizer/mcp-server");
@@ -856,6 +1040,8 @@ internal static class McpCommand
         writer.WriteLine("  netclaw mcp add --transport http textforge https://textforge.net/mcp");
         writer.WriteLine("  netclaw mcp auth forge");
         writer.WriteLine("  netclaw mcp list");
+        writer.WriteLine("  netclaw mcp tools memorizer");
+        writer.WriteLine("  netclaw mcp tools memorizer --snapshot");
         return 0;
     }
 }
