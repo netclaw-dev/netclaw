@@ -97,10 +97,10 @@ public sealed class ExternalSkillsStepViewModel : IWizardStepViewModel
 
     public void OnEnter(WizardContext context, NavigationDirection direction)
     {
-        if (direction == NavigationDirection.Forward)
-            _currentSubStep = 0;
-        else
+        if (direction == NavigationDirection.Back)
             _currentSubStep = _completedSubStep;
+        else
+            _currentSubStep = 0;
     }
 
     public void OnLeave() { }

@@ -140,54 +140,60 @@ public sealed class ExternalSkillsStepView : IWizardStepView
 
     public bool HandleKeyPress(KeyPressed key)
     {
+        if (_vm is null)
+            return false;
+
         var keyInfo = key.KeyInfo;
 
-        // Sub-step 0: custom checklist navigation
-        if (_vm is { CurrentSubStep: 0 })
+        return _vm.CurrentSubStep switch
         {
-            var sources = _vm.DetectedSources;
-            switch (keyInfo.Key)
-            {
-                case ConsoleKey.UpArrow:
-                    if (_cursorIndex > 0) _cursorIndex--;
-                    break;
+            0 => HandleChecklistKey(keyInfo),
+            1 when _lastFocusedInput is not null => HandleDelegatedInput(keyInfo),
+            2 when _lastFocusedList is not null => HandleDelegatedList(keyInfo),
+            _ => false
+        };
+    }
 
-                case ConsoleKey.DownArrow:
-                    if (_cursorIndex < sources.Count - 1) _cursorIndex++;
-                    break;
+    private bool HandleChecklistKey(ConsoleKeyInfo keyInfo)
+    {
+        var sources = _vm!.DetectedSources;
+        switch (keyInfo.Key)
+        {
+            case ConsoleKey.UpArrow:
+                if (_cursorIndex > 0) _cursorIndex--;
+                break;
 
-                case ConsoleKey.Spacebar:
-                    if (sources.Count > 0)
-                        _vm.ToggleSource(_cursorIndex);
-                    break;
+            case ConsoleKey.DownArrow:
+                if (_cursorIndex < sources.Count - 1) _cursorIndex++;
+                break;
 
-                case ConsoleKey.Enter:
-                    _callbacks?.AdvanceStep();
-                    return true;
+            case ConsoleKey.Spacebar:
+                if (sources.Count > 0)
+                    _vm.ToggleSource(_cursorIndex);
+                break;
 
-                default:
-                    return false;
-            }
+            case ConsoleKey.Enter:
+                _callbacks?.AdvanceStep();
+                return true;
 
-            InvalidateAndRedraw();
-            return true;
+            default:
+                return false;
         }
 
-        // Sub-step 1: text input
-        if (_lastFocusedInput is not null)
-        {
-            _lastFocusedInput.HandleInput(keyInfo);
-            return true;
-        }
+        InvalidateAndRedraw();
+        return true;
+    }
 
-        // Sub-step 2: selection list
-        if (_lastFocusedList is not null)
-        {
-            _lastFocusedList.HandleInput(keyInfo);
-            return true;
-        }
+    private bool HandleDelegatedInput(ConsoleKeyInfo keyInfo)
+    {
+        _lastFocusedInput!.HandleInput(keyInfo);
+        return true;
+    }
 
-        return false;
+    private bool HandleDelegatedList(ConsoleKeyInfo keyInfo)
+    {
+        _lastFocusedList!.HandleInput(keyInfo);
+        return true;
     }
 
     public void HandlePaste(PasteEvent paste)

@@ -7,6 +7,17 @@ namespace Netclaw.Configuration;
 public sealed class ExternalSkillsConfig
 {
     /// <summary>
+    /// Single catalog of well-known external skill sources. Both
+    /// <see cref="ResolveWellKnownPath"/> and <see cref="ProbeWellKnownSources"/>
+    /// consume this so alias/display/symlink metadata stays in one place.
+    /// </summary>
+    private static readonly (string Alias, string DisplayName, string RelativePath, bool DefaultAllowSymlinks)[] WellKnownCatalog =
+    [
+        ("claude-code", "Claude Code", Path.Combine(".claude", "skills"), true),
+        ("open-code", "Open Code", Path.Combine(".open-code", "skills"), false)
+    ];
+
+    /// <summary>
     /// Ordered list of external skill sources. Precedence follows list order —
     /// earlier sources win on name collisions (native Netclaw skills always take
     /// highest precedence regardless of order).
@@ -49,17 +60,13 @@ public sealed class ExternalSkillsConfig
     /// </summary>
     public static IReadOnlyList<WellKnownProbeResult> ProbeWellKnownSources()
     {
-        ReadOnlySpan<(string Alias, string DisplayName, bool AllowSymlinks)> wellKnowns =
-        [
-            ("claude-code", "Claude Code", true),
-            ("open-code", "Open Code", false)
-        ];
-
+        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         var results = new List<WellKnownProbeResult>();
-        foreach (var (alias, displayName, allowSymlinks) in wellKnowns)
+
+        foreach (var (alias, displayName, relativePath, allowSymlinks) in WellKnownCatalog)
         {
-            var path = ResolveWellKnownPath(alias);
-            if (path is not null && Directory.Exists(path))
+            var path = Path.Combine(home, relativePath);
+            if (Directory.Exists(path))
                 results.Add(new WellKnownProbeResult(alias, displayName, path, allowSymlinks));
         }
 
@@ -72,12 +79,15 @@ public sealed class ExternalSkillsConfig
     public static string? ResolveWellKnownPath(string wellKnown)
     {
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        return wellKnown.ToLowerInvariant() switch
+        var normalized = wellKnown.ToLowerInvariant();
+
+        foreach (var (alias, _, relativePath, _) in WellKnownCatalog)
         {
-            "claude-code" => Path.Combine(home, ".claude", "skills"),
-            "open-code" => Path.Combine(home, ".open-code", "skills"),
-            _ => null
-        };
+            if (alias == normalized)
+                return Path.Combine(home, relativePath);
+        }
+
+        return null;
     }
 }
 
