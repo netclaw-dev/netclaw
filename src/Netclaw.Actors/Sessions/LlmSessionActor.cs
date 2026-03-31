@@ -630,10 +630,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                     break;
             }
 
-            // Check if compaction should trigger before the next LLM call.
-            // Without this, tool-loop iterations never trigger compaction because
-            // HandleToolCallResponse updates _lastInputTokenCount but only
-            // HandleTextResponse checked ShouldCompact(). See #424.
+            // Compaction check before follow-up LLM call (#424)
             if (ShouldCompact())
             {
                 _log.Info("Compaction threshold reached during tool loop ({InputTokens} tokens >= {Threshold} limit), starting compaction",
@@ -1068,31 +1065,16 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             return;
         }
 
-        // Mid-tool-loop compaction: the turn is still in-progress with tool
-        // results in the history. Resume the LLM call to continue the turn. #424
-        if (_resumeToolLoopAfterCompaction)
-        {
-            _resumeToolLoopAfterCompaction = false;
+        // Mid-tool-loop compaction (#424): the turn is still in-progress,
+        // so we must fire a follow-up LLM call even if the buffer is empty.
+        var resumeToolLoop = _resumeToolLoopAfterCompaction;
+        _resumeToolLoopAfterCompaction = false;
+
+        if (resumeToolLoop)
             _log.Info("Post-compaction: resuming tool loop with follow-up LLM call");
 
-            // Drain any mid-loop buffered messages before the follow-up call
-            if (_buffer.Count > 0)
-            {
-                foreach (var buffered in _buffer)
-                {
-                    var refs = buffered.MediaReferences.Count > 0 ? buffered.MediaReferences : null;
-                    _state = _state.AddUserMessage(buffered.Content, refs);
-                }
-                _buffer.Clear();
-            }
-
-            _streamingRetryAttempt = 0;
-            FireLlmCall();
-            TransitionTo(SessionPhase.Processing);
-            return;
-        }
-
-        if (_buffer.Count > 0)
+        var hadBufferedMessages = _buffer.Count > 0;
+        if (hadBufferedMessages)
         {
             _log.Info("Post-compaction: draining {BufferCount} buffered message(s)", _buffer.Count);
             foreach (var buffered in _buffer)
@@ -1101,6 +1083,10 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 _state = _state.AddUserMessage(buffered.Content, refs);
             }
             _buffer.Clear();
+        }
+
+        if (resumeToolLoop || hadBufferedMessages)
+        {
             _streamingRetryAttempt = 0;
             FireLlmCall();
             TransitionTo(SessionPhase.Processing);
