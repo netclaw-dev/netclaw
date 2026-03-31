@@ -7,20 +7,20 @@
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
-    <VersionPrefix>0.9.1</VersionPrefix>
-    <PackageReleaseNotes>Netclaw v0.9.1 — Configurable project workspaces, reminders upgrade, skill security scanning, and session reliability fixes
+    <VersionPrefix>0.9.2</VersionPrefix>
+    <PackageReleaseNotes>Netclaw v0.9.2 — Schema-driven config migration, load_tool two-step discovery, and security model simplification
 
 **Features**
 
-* Added configurable project workspaces with AGENTS.md discovery — operators can now define named workspaces under `~/.netclaw/workspaces/`. Each workspace maps a name to a root directory, and `AGENTS.md` files found in the workspace tree are surfaced automatically as project context. The `netclaw init` wizard now prompts for a workspaces path during setup. ([#472](https://github.com/Aaronontheweb/netclaw/pull/472), [#482](https://github.com/Aaronontheweb/netclaw/pull/482))
-* Upgraded to Akka.Reminders v0.6.0-beta2 with envelope-based delivery — reminders now deliver via a typed envelope wrapper rather than raw message dispatch, improving type safety and routing clarity. **Breaking change:** the SQLite reminder store schema adds ack-tracking columns in this release. Existing reminder databases must be deleted and recreated after upgrading. ([#484](https://github.com/Aaronontheweb/netclaw/pull/484))
-* Added skill content security scanning with shared prompt injection detection — skill files are now scanned at load time using 22 regex patterns across 5 threat categories (prompt injection, role hijacking, instruction override, data exfiltration, and system escape). Skills that match a pattern are blocked from loading and logged with the specific pattern that triggered the rejection. ([#408](https://github.com/Aaronontheweb/netclaw/pull/408))
+* Added schema-driven config migration to `netclaw doctor --fix` — a new `SchemaFixResolver` validates the config against the JSON schema and automatically corrects three common error patterns: integer-to-string enum coercion (stale numeric enum values), missing required property insertion (when the schema defines a default), and stale property removal (properties disallowed by `additionalProperties: false`). The `doctor` command now shows exactly which fixes were applied and suggests `--fix --dry-run` when fixable issues are detected. ([#493](https://github.com/Aaronontheweb/netclaw/pull/493))
 
 **Bug Fixes**
 
-* Fixed sessions requiring manual message resend after context overflow compaction — sessions now automatically resend the original user message after compaction completes, so users no longer see "Please resend your last message" prompts. Also added streaming retry for transient provider errors (5xx, 429) with configurable backoff via `SessionTuning.StreamingRetryPolicy`. ([#485](https://github.com/Aaronontheweb/netclaw/pull/485))
-* Fixed `HttpClient.Timeout` (default 100s) prematurely killing LLM calls for self-hosted models with large contexts — the session watchdog is now the sole timeout authority for LLM request lifetimes. `HttpClient.Timeout` is set to `Timeout.InfiniteTimeSpan` and all cancellation flows through the session watchdog's `CancellationToken`. ([#476](https://github.com/Aaronontheweb/netclaw/pull/476))
-* Fixed reminder execution actor using the wrong output filter — the actor was configured with `TextStreaming | ToolCalls` instead of the correct filter for reminder delivery, causing reminders to not stream output correctly. ([#475](https://github.com/Aaronontheweb/netclaw/pull/475))</PackageReleaseNotes>
+* Fixed `search_tools` auto-loading all MCP tool schemas into the session, causing immediate 502 failures when large schema sets (e.g., Notion's 45K-char schema) were discovered — `search_tools` is now discovery-only and returns names and descriptions without loading schemas. A new `load_tool` built-in lets the LLM explicitly activate individual tools on demand. Discovered tools are also evicted on `LlmCallFailed` to prevent poisoned tool sets from cascading across turns. ([#492](https://github.com/Aaronontheweb/netclaw/pull/492))
+
+**Breaking Changes**
+
+* Removed `CapabilityClass` from MCP server config — the `McpCapabilityClass` enum has been removed and `CapabilityClass` is no longer a valid property on MCP server entries. MCP tool exposure is now gated solely by `AllowedMcpServers` in audience profiles. Configs containing `CapabilityClass` will be flagged by `netclaw doctor` and can be auto-removed with `netclaw doctor --fix`. ([#491](https://github.com/Aaronontheweb/netclaw/pull/491))</PackageReleaseNotes>
   </PropertyGroup>
   <PropertyGroup>
     <NetCoreTestVersion>net10.0</NetCoreTestVersion>

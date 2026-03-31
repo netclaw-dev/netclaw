@@ -1,3 +1,19 @@
+#### 0.9.2 2026-03-31 ####
+
+Netclaw v0.9.2 — Schema-driven config migration, load_tool two-step discovery, and security model simplification
+
+**Features**
+
+* Added schema-driven config migration to `netclaw doctor --fix` — a new `SchemaFixResolver` validates the config against the JSON schema and automatically corrects three common error patterns: integer-to-string enum coercion (stale numeric enum values), missing required property insertion (when the schema defines a default), and stale property removal (properties disallowed by `additionalProperties: false`). The `doctor` command now shows exactly which fixes were applied and suggests `--fix --dry-run` when fixable issues are detected. ([#493](https://github.com/Aaronontheweb/netclaw/pull/493))
+
+**Bug Fixes**
+
+* Fixed `search_tools` auto-loading all MCP tool schemas into the session, causing immediate 502 failures when large schema sets (e.g., Notion's 45K-char schema) were discovered — `search_tools` is now discovery-only and returns names and descriptions without loading schemas. A new `load_tool` built-in lets the LLM explicitly activate individual tools on demand. Discovered tools are also evicted on `LlmCallFailed` to prevent poisoned tool sets from cascading across turns. ([#492](https://github.com/Aaronontheweb/netclaw/pull/492))
+
+**Breaking Changes**
+
+* Removed `CapabilityClass` from MCP server config — the `McpCapabilityClass` enum has been removed and `CapabilityClass` is no longer a valid property on MCP server entries. MCP tool exposure is now gated solely by `AllowedMcpServers` in audience profiles. Configs containing `CapabilityClass` will be flagged by `netclaw doctor` and can be auto-removed with `netclaw doctor --fix`. ([#491](https://github.com/Aaronontheweb/netclaw/pull/491))
+
 #### 0.9.1 2026-03-30 ####
 
 Netclaw v0.9.1 — Configurable project workspaces, reminders upgrade, skill security scanning, and session reliability fixes
