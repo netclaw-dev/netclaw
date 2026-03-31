@@ -32,6 +32,7 @@ public sealed class WizardConfigBuilder
     public IdentityConfigSection? Identity { get; set; }
     public WorkspacesConfigSection? Workspaces { get; set; }
     public NotificationsConfigSection? Notifications { get; set; }
+    public ExternalSkillsConfigSection? ExternalSkills { get; set; }
 
     /// <summary>
     /// Assemble the typed sections into netclaw.json and write it.
@@ -162,6 +163,32 @@ public sealed class WizardConfigBuilder
             ["DisableSystemSkillSync"] = false
         };
 
+        // External skills
+        if (ExternalSkills is { Sources.Count: > 0 })
+        {
+            var sourcesArray = ExternalSkills.Sources.Select(s =>
+            {
+                var entry = new Dictionary<string, object>
+                {
+                    ["Name"] = s.Name,
+                    ["Enabled"] = s.Enabled,
+                    ["AllowSymlinks"] = s.AllowSymlinks
+                };
+
+                if (s.WellKnown is not null)
+                    entry["WellKnown"] = s.WellKnown;
+                else if (s.Path is not null)
+                    entry["Path"] = s.Path;
+
+                return (object)entry;
+            }).ToArray();
+
+            config["ExternalSkills"] = new Dictionary<string, object>
+            {
+                ["Sources"] = sourcesArray
+            };
+        }
+
         // MCP servers (browser automation)
         if (BrowserAutomation is { Enabled: true })
         {
@@ -290,4 +317,9 @@ public sealed class IdentityConfigSection
     public required string CommunicationStyle { get; init; }
     public string? UserName { get; init; }
     public required string UserTimezone { get; init; }
+}
+
+public sealed class ExternalSkillsConfigSection
+{
+    public List<ExternalSkillSource> Sources { get; init; } = [];
 }

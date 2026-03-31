@@ -1,0 +1,215 @@
+using Netclaw.Cli.Tui.Wizard;
+using Netclaw.Cli.Tui.Wizard.Steps;
+using Netclaw.Configuration;
+using Netclaw.Providers;
+using Xunit;
+
+namespace Netclaw.Cli.Tests.Tui.Wizard;
+
+public sealed class ExternalSkillsStepViewModelTests : IDisposable
+{
+    private readonly string _tempDir;
+    private readonly WizardContext _context;
+
+    private static readonly IReadOnlyList<WellKnownProbeResult> TwoSources =
+    [
+        new("claude-code", "Claude Code", "/home/user/.claude/skills", true),
+        new("open-code", "Open Code", "/home/user/.open-code/skills", false)
+    ];
+
+    private static readonly IReadOnlyList<WellKnownProbeResult> OnlyClaudeCode =
+    [
+        new("claude-code", "Claude Code", "/home/user/.claude/skills", true)
+    ];
+
+    private static readonly IReadOnlyList<WellKnownProbeResult> NoSources = [];
+
+    public ExternalSkillsStepViewModelTests()
+    {
+        _tempDir = Path.Combine(Path.GetTempPath(), $"netclaw-test-{Guid.NewGuid():N}");
+        var paths = new NetclawPaths(_tempDir);
+        paths.EnsureDirectoriesExist();
+        _context = new WizardContext
+        {
+            Paths = paths,
+            Registry = new ProviderDescriptorRegistry([]),
+            RequestRedraw = () => { }
+        };
+    }
+
+    public void Dispose()
+    {
+        if (Directory.Exists(_tempDir))
+            Directory.Delete(_tempDir, true);
+    }
+
+    [Fact]
+    public void IsApplicable_True_WhenSourcesDetected()
+    {
+        using var step = new ExternalSkillsStepViewModel(OnlyClaudeCode);
+        Assert.True(step.IsApplicable(_context));
+    }
+
+    [Fact]
+    public void IsApplicable_False_WhenNoSourcesDetected()
+    {
+        using var step = new ExternalSkillsStepViewModel(NoSources);
+        Assert.False(step.IsApplicable(_context));
+    }
+
+    [Fact]
+    public void AllSourcesEnabledByDefault()
+    {
+        using var step = new ExternalSkillsStepViewModel(TwoSources);
+        Assert.True(step.IsSourceEnabled(0));
+        Assert.True(step.IsSourceEnabled(1));
+    }
+
+    [Fact]
+    public void ToggleSource_FlipsEnabled()
+    {
+        using var step = new ExternalSkillsStepViewModel(TwoSources);
+
+        step.ToggleSource(0);
+        Assert.False(step.IsSourceEnabled(0));
+        Assert.True(step.IsSourceEnabled(1));
+
+        step.ToggleSource(0);
+        Assert.True(step.IsSourceEnabled(0));
+    }
+
+    [Fact]
+    public void SubStepCount_IsTwo_WithoutCustomPath()
+    {
+        using var step = new ExternalSkillsStepViewModel(OnlyClaudeCode);
+        Assert.Equal(2, step.SubStepCount);
+    }
+
+    [Fact]
+    public void SubStepCount_IsThree_WithCustomPath()
+    {
+        using var step = new ExternalSkillsStepViewModel(OnlyClaudeCode);
+        step.CustomPath = "/opt/team/skills";
+        Assert.Equal(3, step.SubStepCount);
+    }
+
+    [Fact]
+    public void TryAdvance_FromChecklist_GoesToCustomPath()
+    {
+        using var step = new ExternalSkillsStepViewModel(OnlyClaudeCode);
+        step.OnEnter(_context, NavigationDirection.Forward);
+
+        Assert.True(step.TryAdvance());
+        Assert.Equal(1, step.CurrentSubStep);
+    }
+
+    [Fact]
+    public void TryAdvance_FromCustomPath_GoesToSymlink_WhenPathSet()
+    {
+        using var step = new ExternalSkillsStepViewModel(OnlyClaudeCode);
+        step.OnEnter(_context, NavigationDirection.Forward);
+        step.TryAdvance(); // → sub-step 1
+        step.CustomPath = "/opt/team/skills";
+
+        Assert.True(step.TryAdvance());
+        Assert.Equal(2, step.CurrentSubStep);
+    }
+
+    [Fact]
+    public void TryAdvance_FromCustomPath_Completes_WhenNoPath()
+    {
+        using var step = new ExternalSkillsStepViewModel(OnlyClaudeCode);
+        step.OnEnter(_context, NavigationDirection.Forward);
+        step.TryAdvance(); // → sub-step 1
+
+        Assert.False(step.TryAdvance());
+    }
+
+    [Fact]
+    public void TryGoBack_FromCustomPath_ReturnsToChecklist()
+    {
+        using var step = new ExternalSkillsStepViewModel(OnlyClaudeCode);
+        step.OnEnter(_context, NavigationDirection.Forward);
+        step.TryAdvance(); // → sub-step 1
+
+        Assert.True(step.TryGoBack());
+        Assert.Equal(0, step.CurrentSubStep);
+    }
+
+    [Fact]
+    public void TryGoBack_FromChecklist_ReturnsFalse()
+    {
+        using var step = new ExternalSkillsStepViewModel(OnlyClaudeCode);
+        step.OnEnter(_context, NavigationDirection.Forward);
+
+        Assert.False(step.TryGoBack());
+    }
+
+    [Fact]
+    public void OnEnter_Back_ResumesAtLastSubStep()
+    {
+        using var step = new ExternalSkillsStepViewModel(OnlyClaudeCode);
+        step.OnEnter(_context, NavigationDirection.Forward);
+        step.TryAdvance(); // → sub-step 1
+
+        step.OnEnter(_context, NavigationDirection.Back);
+        Assert.Equal(1, step.CurrentSubStep);
+    }
+
+    [Fact]
+    public void ContributeConfig_WritesEnabledSources()
+    {
+        using var step = new ExternalSkillsStepViewModel(TwoSources);
+        step.ToggleSource(1); // disable Open Code
+
+        var builder = new WizardConfigBuilder(_context.Paths);
+        step.ContributeConfig(builder);
+
+        Assert.NotNull(builder.ExternalSkills);
+        Assert.Equal(2, builder.ExternalSkills!.Sources.Count);
+
+        var claude = builder.ExternalSkills.Sources[0];
+        Assert.Equal("claude-code", claude.Name);
+        Assert.Equal("claude-code", claude.WellKnown);
+        Assert.True(claude.Enabled);
+        Assert.True(claude.AllowSymlinks);
+
+        var openCode = builder.ExternalSkills.Sources[1];
+        Assert.Equal("open-code", openCode.Name);
+        Assert.Equal("open-code", openCode.WellKnown);
+        Assert.False(openCode.Enabled);
+        Assert.False(openCode.AllowSymlinks);
+    }
+
+    [Fact]
+    public void ContributeConfig_IncludesCustomPath()
+    {
+        using var step = new ExternalSkillsStepViewModel(OnlyClaudeCode);
+        step.CustomPath = "/opt/team/skills";
+        step.CustomPathAllowSymlinks = true;
+
+        var builder = new WizardConfigBuilder(_context.Paths);
+        step.ContributeConfig(builder);
+
+        Assert.NotNull(builder.ExternalSkills);
+        Assert.Equal(2, builder.ExternalSkills!.Sources.Count);
+
+        var custom = builder.ExternalSkills.Sources[1];
+        Assert.Equal("custom", custom.Name);
+        Assert.Equal("/opt/team/skills", custom.Path);
+        Assert.Null(custom.WellKnown);
+        Assert.True(custom.Enabled);
+        Assert.True(custom.AllowSymlinks);
+    }
+
+    [Fact]
+    public void ContributeConfig_NoSection_WhenNoSourcesAndNoCustomPath()
+    {
+        using var step = new ExternalSkillsStepViewModel(NoSources);
+
+        var builder = new WizardConfigBuilder(_context.Paths);
+        step.ContributeConfig(builder);
+
+        Assert.Null(builder.ExternalSkills);
+    }
+}

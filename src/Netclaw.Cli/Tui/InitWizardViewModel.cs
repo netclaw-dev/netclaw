@@ -88,6 +88,7 @@ public partial class InitWizardViewModel : ReactiveViewModel
         var searchStep = new SearchStepViewModel();
         var browserStep = new BrowserAutomationStepViewModel();
         var identityStep = new IdentityStepViewModel();
+        var externalSkillsStep = new ExternalSkillsStepViewModel();
         _healthCheckStep = new HealthCheckStepViewModel(daemonManager, daemonApi, navigationState);
 
         var steps = new List<IWizardStepViewModel>
@@ -99,6 +100,7 @@ public partial class InitWizardViewModel : ReactiveViewModel
             searchStep,
             browserStep,
             identityStep,
+            externalSkillsStep,
             _healthCheckStep
         };
 
@@ -124,6 +126,7 @@ public partial class InitWizardViewModel : ReactiveViewModel
             ["search"] = new SearchStepView(),
             ["browser-automation"] = new BrowserAutomationStepView(),
             ["identity"] = new IdentityStepView(),
+            ["external-skills"] = new ExternalSkillsStepView(),
             ["health-check"] = new HealthCheckStepView()
         };
     }

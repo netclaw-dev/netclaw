@@ -210,4 +210,61 @@ public sealed class WizardConfigBuilderTests : IDisposable
 
         Assert.False(config.ContainsKey("Notifications"));
     }
+
+    [Fact]
+    public void BuildConfigDictionary_IncludesExternalSkills_WhenSet()
+    {
+        var builder = new WizardConfigBuilder(_paths)
+        {
+            ExternalSkills = new ExternalSkillsConfigSection
+            {
+                Sources =
+                [
+                    new ExternalSkillSource
+                    {
+                        Name = "claude-code",
+                        WellKnown = "claude-code",
+                        Enabled = true,
+                        AllowSymlinks = true
+                    },
+                    new ExternalSkillSource
+                    {
+                        Name = "custom",
+                        Path = "/opt/team/skills",
+                        Enabled = true,
+                        AllowSymlinks = false
+                    }
+                ]
+            }
+        };
+
+        var config = builder.BuildConfigDictionary();
+
+        Assert.True(config.ContainsKey("ExternalSkills"));
+        var section = (Dictionary<string, object>)config["ExternalSkills"];
+        var sources = (object[])section["Sources"];
+        Assert.Equal(2, sources.Length);
+
+        var first = (Dictionary<string, object>)sources[0];
+        Assert.Equal("claude-code", first["Name"]);
+        Assert.Equal("claude-code", first["WellKnown"]);
+        Assert.Equal(true, first["Enabled"]);
+        Assert.Equal(true, first["AllowSymlinks"]);
+        Assert.False(first.ContainsKey("Path"));
+
+        var second = (Dictionary<string, object>)sources[1];
+        Assert.Equal("custom", second["Name"]);
+        Assert.Equal("/opt/team/skills", second["Path"]);
+        Assert.False(second.ContainsKey("WellKnown"));
+    }
+
+    [Fact]
+    public void BuildConfigDictionary_OmitsExternalSkills_WhenNull()
+    {
+        var builder = new WizardConfigBuilder(_paths);
+
+        var config = builder.BuildConfigDictionary();
+
+        Assert.False(config.ContainsKey("ExternalSkills"));
+    }
 }

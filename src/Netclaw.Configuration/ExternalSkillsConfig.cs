@@ -44,9 +44,32 @@ public sealed class ExternalSkillsConfig
     }
 
     /// <summary>
+    /// Probes the filesystem for well-known external skill directories and returns
+    /// those that exist on disk, with their default configuration values.
+    /// </summary>
+    public static IReadOnlyList<WellKnownProbeResult> ProbeWellKnownSources()
+    {
+        ReadOnlySpan<(string Alias, string DisplayName, bool AllowSymlinks)> wellKnowns =
+        [
+            ("claude-code", "Claude Code", true),
+            ("open-code", "Open Code", false)
+        ];
+
+        var results = new List<WellKnownProbeResult>();
+        foreach (var (alias, displayName, allowSymlinks) in wellKnowns)
+        {
+            var path = ResolveWellKnownPath(alias);
+            if (path is not null && Directory.Exists(path))
+                results.Add(new WellKnownProbeResult(alias, displayName, path, allowSymlinks));
+        }
+
+        return results;
+    }
+
+    /// <summary>
     /// Maps well-known source aliases to their standard directory paths.
     /// </summary>
-    internal static string? ResolveWellKnownPath(string wellKnown)
+    public static string? ResolveWellKnownPath(string wellKnown)
     {
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         return wellKnown.ToLowerInvariant() switch
@@ -97,3 +120,16 @@ public sealed class ExternalSkillSource
 /// A resolved external skill source with an absolute path ready for scanning.
 /// </summary>
 public sealed record ResolvedExternalSource(string Name, string Path, bool AllowSymlinks);
+
+/// <summary>
+/// Result of probing for a well-known external skill directory.
+/// </summary>
+/// <param name="WellKnownAlias">The alias used in config (e.g., "claude-code").</param>
+/// <param name="DisplayName">Human-readable name (e.g., "Claude Code").</param>
+/// <param name="ResolvedPath">Absolute path on disk.</param>
+/// <param name="DefaultAllowSymlinks">Whether this source should allow symlinks by default.</param>
+public sealed record WellKnownProbeResult(
+    string WellKnownAlias,
+    string DisplayName,
+    string ResolvedPath,
+    bool DefaultAllowSymlinks);
