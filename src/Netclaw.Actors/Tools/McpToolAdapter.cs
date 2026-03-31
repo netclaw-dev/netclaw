@@ -32,7 +32,6 @@ public sealed class McpToolAdapter : INetclawTool
         Name = $"{serverName}/{toolName}";
         GrantCategory = grantCategory ?? $"mcp:{serverName}";
 
-        // Extract description and schema from the underlying AITool
         if (mcpTool is AIFunction func)
         {
             Description = ClampDescription(func.Description ?? "", maxDescriptionChars);
