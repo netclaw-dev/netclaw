@@ -32,7 +32,7 @@ public sealed class WizardConfigBuilder
     public IdentityConfigSection? Identity { get; set; }
     public WorkspacesConfigSection? Workspaces { get; set; }
     public NotificationsConfigSection? Notifications { get; set; }
-    public ExternalSkillsConfigSection? ExternalSkills { get; set; }
+    public List<ExternalSkillSource>? ExternalSkillSources { get; set; }
 
     /// <summary>
     /// Assemble the typed sections into netclaw.json and write it.
@@ -164,9 +164,9 @@ public sealed class WizardConfigBuilder
         };
 
         // External skills
-        if (ExternalSkills is { Sources.Count: > 0 })
+        if (ExternalSkillSources is { Count: > 0 })
         {
-            var sourcesArray = ExternalSkills.Sources.Select(s =>
+            var sourcesArray = ExternalSkillSources.Select(s =>
             {
                 var entry = new Dictionary<string, object>
                 {
@@ -317,9 +317,4 @@ public sealed class IdentityConfigSection
     public required string CommunicationStyle { get; init; }
     public string? UserName { get; init; }
     public required string UserTimezone { get; init; }
-}
-
-public sealed class ExternalSkillsConfigSection
-{
-    public List<ExternalSkillSource> Sources { get; init; } = [];
 }

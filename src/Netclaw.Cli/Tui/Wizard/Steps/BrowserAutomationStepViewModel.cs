@@ -10,7 +10,7 @@ namespace Netclaw.Cli.Tui.Wizard.Steps;
 public sealed class BrowserAutomationStepViewModel : IWizardStepViewModel
 {
     private int _currentSubStep;
-    private int _completedSubStep;
+    private int _highWaterSubStep;
 
     public string StepId => "browser-automation";
     public string DisplayTitle => "Browser Automation";
@@ -51,7 +51,7 @@ public sealed class BrowserAutomationStepViewModel : IWizardStepViewModel
         if (_currentSubStep == 0 && Enabled)
         {
             _currentSubStep = 1;
-            _completedSubStep = 1;
+            _highWaterSubStep = 1;
             return true;
         }
         return false;
@@ -70,7 +70,7 @@ public sealed class BrowserAutomationStepViewModel : IWizardStepViewModel
     public void OnEnter(WizardContext context, NavigationDirection direction)
     {
         if (direction == NavigationDirection.Back)
-            _currentSubStep = _completedSubStep;
+            _currentSubStep = _highWaterSubStep;
         else
             _currentSubStep = 0;
     }

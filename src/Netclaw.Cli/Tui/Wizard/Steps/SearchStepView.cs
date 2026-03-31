@@ -37,10 +37,11 @@ public sealed class SearchStepView : IWizardStepView
 
     private ILayoutNode BuildBackendSelection(SearchStepViewModel vm, StepViewCallbacks callbacks)
     {
-        _backendList = Layouts.SelectionList(
-                "DuckDuckGo (default \u2014 no config needed, may hit bot detection)",
-                "Brave Search (API key required \u2014 reliable, fast)",
-                "SearXNG (self-hosted \u2014 endpoint required)")
+        var duckDuckGoLabel = "DuckDuckGo (default \u2014 no config needed, may hit bot detection)";
+        var braveLabel = "Brave Search (API key required \u2014 reliable, fast)";
+        var searxngLabel = "SearXNG (self-hosted \u2014 endpoint required)";
+
+        _backendList = Layouts.SelectionList(duckDuckGoLabel, braveLabel, searxngLabel)
             .WithMode(SelectionMode.Single)
             .WithHighlightColors(Color.Black, Color.Cyan);
 
@@ -54,17 +55,17 @@ public sealed class SearchStepView : IWizardStepView
                 if (selected.Count > 0)
                 {
                     var choice = selected[0];
-                    if (choice.StartsWith("DuckDuckGo", StringComparison.Ordinal))
+                    if (choice == duckDuckGoLabel)
                     {
                         vm.SelectedBackend = SearchBackend.DuckDuckGo;
                         callbacks.AdvanceStep(); // step complete, no credentials needed
                     }
-                    else if (choice.StartsWith("Brave", StringComparison.Ordinal))
+                    else if (choice == braveLabel)
                     {
                         vm.SelectedBackend = SearchBackend.Brave;
                         callbacks.AdvanceStep(); // → sub-step 1 (handled by TryAdvance)
                     }
-                    else if (choice.StartsWith("SearXNG", StringComparison.Ordinal))
+                    else if (choice == searxngLabel)
                     {
                         vm.SelectedBackend = SearchBackend.SearXng;
                         callbacks.AdvanceStep(); // → sub-step 1

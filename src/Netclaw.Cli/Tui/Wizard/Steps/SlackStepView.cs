@@ -45,7 +45,10 @@ public sealed class SlackStepView : IWizardStepView
 
     private ILayoutNode BuildEnableSubStep(SlackStepViewModel vm, StepViewCallbacks callbacks)
     {
-        _enabledList = Layouts.SelectionList("Yes \u2014 configure Slack bot", "No \u2014 skip for now")
+        var yesLabel = "Yes \u2014 configure Slack bot";
+        var noLabel = "No \u2014 skip for now";
+
+        _enabledList = Layouts.SelectionList(yesLabel, noLabel)
             .WithMode(SelectionMode.Single)
             .WithHighlightColors(Color.Black, Color.Cyan);
 
@@ -58,7 +61,7 @@ public sealed class SlackStepView : IWizardStepView
             {
                 if (selected.Count > 0)
                 {
-                    vm.SlackEnabled = selected[0].StartsWith("Yes", StringComparison.Ordinal);
+                    vm.SlackEnabled = selected[0] == yesLabel;
                     callbacks.AdvanceStep();
                 }
             })
@@ -169,9 +172,10 @@ public sealed class SlackStepView : IWizardStepView
 
     private ILayoutNode BuildDmEnabledSubStep(SlackStepViewModel vm, StepViewCallbacks callbacks)
     {
-        _dmEnabledList = Layouts.SelectionList(
-                "Yes \u2014 allow approved users to DM the bot",
-                "No \u2014 channel messages only (default)")
+        var dmYesLabel = "Yes \u2014 allow approved users to DM the bot";
+        var dmNoLabel = "No \u2014 channel messages only (default)";
+
+        _dmEnabledList = Layouts.SelectionList(dmYesLabel, dmNoLabel)
             .WithMode(SelectionMode.Single)
             .WithHighlightColors(Color.Black, Color.Cyan);
 
@@ -184,7 +188,7 @@ public sealed class SlackStepView : IWizardStepView
             {
                 if (selected.Count > 0)
                 {
-                    vm.AllowDirectMessages = selected[0].StartsWith("Yes", StringComparison.Ordinal);
+                    vm.AllowDirectMessages = selected[0] == dmYesLabel;
                     callbacks.AdvanceStep();
                 }
             })

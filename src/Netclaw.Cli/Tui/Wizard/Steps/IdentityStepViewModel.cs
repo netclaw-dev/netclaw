@@ -9,7 +9,7 @@ namespace Netclaw.Cli.Tui.Wizard.Steps;
 public sealed class IdentityStepViewModel : IWizardStepViewModel
 {
     private int _currentSubStep;
-    private int _completedSubStep;
+    private int _highWaterSubStep;
     private WizardContext? _context;
 
     public string StepId => "identity";
@@ -45,7 +45,7 @@ public sealed class IdentityStepViewModel : IWizardStepViewModel
         if (_currentSubStep < SubStepCount - 1)
         {
             _currentSubStep++;
-            _completedSubStep = _currentSubStep;
+            _highWaterSubStep = _currentSubStep;
             return true;
         }
         return false; // step complete
@@ -67,7 +67,7 @@ public sealed class IdentityStepViewModel : IWizardStepViewModel
         if (direction == NavigationDirection.Forward)
             _currentSubStep = 0;
         else if (direction == NavigationDirection.Back)
-            _currentSubStep = _completedSubStep;
+            _currentSubStep = _highWaterSubStep;
     }
 
     public void OnLeave() { }
