@@ -124,6 +124,73 @@ public class McpToolAdapterTests
         Assert.StartsWith("Error:", result);
         Assert.Contains("session transport failed", result);
     }
+
+    [Fact]
+    public void ClampDescription_ShortDescription_PreservedAsIs()
+    {
+        var result = McpToolAdapter.ClampDescription("Search for items", 2048);
+        Assert.Equal("Search for items", result);
+    }
+
+    [Fact]
+    public void ClampDescription_ExactlyAtLimit_PreservedAsIs()
+    {
+        var description = new string('a', 2048);
+        var result = McpToolAdapter.ClampDescription(description, 2048);
+        Assert.Equal(description, result);
+    }
+
+    [Fact]
+    public void ClampDescription_ExceedsLimit_Truncated()
+    {
+        var description = new string('a', 5000);
+        var result = McpToolAdapter.ClampDescription(description, 2048);
+        Assert.Equal(2048 + " [truncated]".Length, result.Length);
+        Assert.EndsWith(" [truncated]", result);
+        Assert.StartsWith(new string('a', 2048), result);
+    }
+
+    [Fact]
+    public void ClampDescription_DisabledWithZero_PreservesFullDescription()
+    {
+        var description = new string('a', 10000);
+        var result = McpToolAdapter.ClampDescription(description, 0);
+        Assert.Equal(description, result);
+    }
+
+    [Fact]
+    public void ClampDescription_EmptyDescription_ReturnsEmpty()
+    {
+        var result = McpToolAdapter.ClampDescription("", 2048);
+        Assert.Equal("", result);
+    }
+
+    [Fact]
+    public void Constructor_WithMaxDescriptionChars_TruncatesDescription()
+    {
+        var longDesc = new string('x', 5000);
+        string FakeFunc() => "result";
+        var fakeTool = AIFunctionFactory.Create(FakeFunc, "verbose_tool", longDesc);
+        var adapter = new McpToolAdapter(fakeTool, "notion", "verbose_tool", maxDescriptionChars: 100);
+
+        Assert.Equal(100 + " [truncated]".Length, adapter.Description.Length);
+        Assert.EndsWith(" [truncated]", adapter.Description);
+
+        // SanitizedAIFunction should also have the truncated description
+        var aiFunc = (AIFunction)adapter.ToAITool();
+        Assert.Equal(adapter.Description, aiFunc.Description);
+    }
+
+    [Fact]
+    public void Constructor_WithoutMaxDescriptionChars_PreservesFullDescription()
+    {
+        var longDesc = new string('x', 5000);
+        string FakeFunc() => "result";
+        var fakeTool = AIFunctionFactory.Create(FakeFunc, "verbose_tool", longDesc);
+        var adapter = new McpToolAdapter(fakeTool, "notion", "verbose_tool");
+
+        Assert.Equal(longDesc, adapter.Description);
+    }
 }
 
 internal sealed class RecordingMcpToolInvoker(string result) : IMcpToolInvoker

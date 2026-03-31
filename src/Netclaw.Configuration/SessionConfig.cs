@@ -129,6 +129,8 @@ public sealed record SessionConfig
             MemorySidecarsEnabled = ResolveValue(tuningSection, section, nameof(SessionTuning.MemorySidecarsEnabled), nested.MemorySidecarsEnabled),
             DeterministicRetrievalEnabled = ResolveValue(tuningSection, section, nameof(SessionTuning.DeterministicRetrievalEnabled), nested.DeterministicRetrievalEnabled),
             MemoryDistillationTurnInterval = ResolveValue(tuningSection, section, nameof(SessionTuning.MemoryDistillationTurnInterval), nested.MemoryDistillationTurnInterval),
+            MaxToolDescriptionChars = ResolveValue(tuningSection, section, nameof(SessionTuning.MaxToolDescriptionChars), nested.MaxToolDescriptionChars),
+            MaxToolSchemaWarnChars = ResolveValue(tuningSection, section, nameof(SessionTuning.MaxToolSchemaWarnChars), nested.MaxToolSchemaWarnChars),
         };
     }
 
