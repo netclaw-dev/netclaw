@@ -209,6 +209,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             if (offer.Snapshot is SessionSnapshot snapshot)
             {
                 _state = SessionState.FromSnapshot(snapshot);
+                if (snapshot.EligibleDeliveryTurnNumber is { } eligibleTurn)
+                    _deliveryRetry.MarkEligible(eligibleTurn);
                 _log.Info("Recovered from snapshot (turns={TurnCount})", _state.TurnCount);
             }
         });
@@ -932,7 +934,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                         Title: "compaction-boundary",
                         UpdateSemantics: "append-document")));
 
-                SaveSnapshot(_state.ToSnapshot());
+                SaveSnapshot(BuildSnapshot());
 
                 EmitOutput(new CompactionOutput
                 {
@@ -1142,7 +1144,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     private void CompletePassivation()
     {
         _lifecycleObserver?.OnSessionDeactivated(_sessionId);
-        SaveSnapshot(_state.ToSnapshot());
+        SaveSnapshot(BuildSnapshot());
         _restartDrainReplyTo?.Tell(CommandAck.For(_sessionId));
         _restartDrainReplyTo = null;
         Context.Stop(Self);
@@ -2243,11 +2245,18 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         _log.Info("Dynamically loaded tool '{ToolName}' into session", toolName);
     }
 
+    private SessionSnapshot BuildSnapshot()
+    {
+        var snapshot = _state.ToSnapshot();
+        snapshot.EligibleDeliveryTurnNumber = _deliveryRetry.EligibleTurnNumber;
+        return snapshot;
+    }
+
     private void MaybeSnapshot()
     {
         if (_config.Tuning.SnapshotInterval > 0 && LastSequenceNr % _config.Tuning.SnapshotInterval == 0)
         {
-            SaveSnapshot(_state.ToSnapshot());
+            SaveSnapshot(BuildSnapshot());
         }
     }
 

@@ -1432,7 +1432,10 @@ public class LlmSessionIntegrationTests : TestKit
         });
 
         child.Tell(ReceiveTimeout.Instance);
-        sessionManager.Tell(new DeliveryFailed
+        // Send directly to child (not via sessionManager) so Akka's single-sender
+        // ordering guarantee ensures the message arrives during Passivating, not
+        // after the actor has stopped and been re-created by the entity parent.
+        child.Tell(new DeliveryFailed
         {
             SessionId = sessionId,
             TurnNumber = completed.TurnNumber,
