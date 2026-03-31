@@ -410,7 +410,16 @@ static void ConfigureDaemonServices(
     // Skills system: seed built-in skills to .system/, register sync service
     CopyBuiltInSkills(paths.SystemSkillsDirectory);
     var skillRegistry = new SkillRegistry();
-    var initialSkillScan = SkillScanner.Scan(paths.SkillsDirectory);
+
+    // External skill sources (Claude Code, Open Code, custom paths)
+    var externalSkillsConfig = configuration.GetSection("ExternalSkills")
+        .Get<ExternalSkillsConfig>() ?? new ExternalSkillsConfig();
+    var resolvedExternalSources = externalSkillsConfig.ResolveEnabledSources();
+    services.AddSingleton(externalSkillsConfig);
+    services.AddSingleton(resolvedExternalSources);
+
+    // Scan native skills first (highest precedence), then external sources
+    var initialSkillScan = SkillScanner.ScanAndMerge(paths.SkillsDirectory, resolvedExternalSources);
     skillRegistry.ReplaceAll(initialSkillScan.AcceptedSkills, initialSkillScan.Issues);
     services.AddSingleton(skillRegistry);
 
@@ -520,13 +529,13 @@ static void ConfigureDaemonServices(
 
     // Skill index context layer — compressed format pointing at files on disk, rebuilt by sync service
     var skillIndexLayer = new SkillIndexContextLayer();
-    skillIndexLayer.Update(skillRegistry.GenerateIndex(paths.SkillsDirectory));
+    skillIndexLayer.Update(skillRegistry.GenerateIndex(paths.SkillsDirectory, resolvedExternalSources));
     services.AddSingleton(skillIndexLayer);
     services.AddSingleton<IContextLayerProvider>(skillIndexLayer);
 
     // Skill tools are registered post-build so ISkillContentScanner resolves from DI.
     // See SkillToolRegistration call after app.Build().
-    if (initialSkillScan.HasIssues)
+    if (initialSkillScan.Issues.Count > 0)
     {
         using var loggerFactory = LoggerFactory.Create(b => b.SetMinimumLevel(daemonLogLevel));
         var startupLogger = loggerFactory.CreateLogger("Netclaw.Startup");
@@ -871,8 +880,7 @@ static ResolvedModelCapabilities? ResolveStartupCapabilities(
 }
 
 /// <summary>
-/// Copies built-in skill files from the output directory to the skills directory.
-/// Skills are sourced from <c>feeds/skills/.system/files/</c> and copied to the
+/// Copies built-in system skills from the daemon's embedded resources into
 /// build output as <c>BuiltInSkills/{skill-name}/SKILL.md</c> (with companion files).
 /// Only writes files that do not already exist (feed updates are preserved).
 /// </summary>

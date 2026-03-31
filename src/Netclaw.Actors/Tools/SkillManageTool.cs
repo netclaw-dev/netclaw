@@ -31,6 +31,7 @@ public sealed partial class SkillManageTool : NetclawTool<SkillManageTool.Params
     private readonly SkillIndexContextLayer _skillIndexLayer;
     private readonly NetclawPaths _paths;
     private readonly ISkillContentScanner _scanner;
+    private readonly IReadOnlyList<ResolvedExternalSource> _externalSources;
 
     public record Params(
         [property: Description("Action to perform: create, edit, patch, delete, write_file, remove_file")]
@@ -54,12 +55,14 @@ public sealed partial class SkillManageTool : NetclawTool<SkillManageTool.Params
         SkillRegistry skillRegistry,
         SkillIndexContextLayer skillIndexLayer,
         NetclawPaths paths,
-        ISkillContentScanner scanner)
+        ISkillContentScanner scanner,
+        IReadOnlyList<ResolvedExternalSource> externalSources)
     {
         _skillRegistry = skillRegistry;
         _skillIndexLayer = skillIndexLayer;
         _paths = paths;
         _scanner = scanner;
+        _externalSources = externalSources;
     }
 
     protected override async Task<string> ExecuteAsync(Params args, CancellationToken ct)
@@ -161,6 +164,9 @@ public sealed partial class SkillManageTool : NetclawTool<SkillManageTool.Params
         if (IsSystemCategory(skill))
             return "Cannot edit system skills. System skills are read-only.";
 
+        if (IsExternalSkill(skill))
+            return "Cannot edit external skills. External skill directories are read-only.";
+
         var contentError = ValidateFrontmatter(args.Content);
         if (contentError is not null) return contentError;
 
@@ -198,6 +204,9 @@ public sealed partial class SkillManageTool : NetclawTool<SkillManageTool.Params
 
         if (IsSystemCategory(skill))
             return "Cannot patch system skills. System skills are read-only.";
+
+        if (IsExternalSkill(skill))
+            return "Cannot patch external skills. External skill directories are read-only.";
 
         // Determine target file
         var targetPath = skill.FilePath;
@@ -271,6 +280,9 @@ public sealed partial class SkillManageTool : NetclawTool<SkillManageTool.Params
         if (IsSystemCategory(skill))
             return "Cannot delete system skills. System skills are read-only.";
 
+        if (IsExternalSkill(skill))
+            return "Cannot delete external skills. External skill directories are read-only.";
+
         Directory.Delete(skill.SkillDirectory, recursive: true);
 
         // Clean empty parent category directories
@@ -301,6 +313,9 @@ public sealed partial class SkillManageTool : NetclawTool<SkillManageTool.Params
 
         if (IsSystemCategory(skill))
             return "Cannot write files in system skills. System skills are read-only.";
+
+        if (IsExternalSkill(skill))
+            return "Cannot write files in external skills. External skill directories are read-only.";
 
         var fileError = ValidateResourcePath(args.FilePath);
         if (fileError is not null) return fileError;
@@ -343,6 +358,9 @@ public sealed partial class SkillManageTool : NetclawTool<SkillManageTool.Params
 
         if (IsSystemCategory(skill))
             return "Cannot remove files from system skills. System skills are read-only.";
+
+        if (IsExternalSkill(skill))
+            return "Cannot remove files from external skills. External skill directories are read-only.";
 
         var fileError = ValidateResourcePath(args.FilePath);
         if (fileError is not null) return fileError;
@@ -446,6 +464,13 @@ public sealed partial class SkillManageTool : NetclawTool<SkillManageTool.Params
     private static bool IsSystemCategory(SkillEntry skill)
         => string.Equals(skill.Category, SkillScanner.SystemCategory, StringComparison.Ordinal);
 
+    private bool IsExternalSkill(SkillEntry skill)
+    {
+        var nativeRoot = SkillScanner.NormalizeDirectoryPath(_paths.SkillsDirectory);
+        var skillPath = SkillScanner.NormalizeDirectoryPath(Path.GetDirectoryName(skill.FilePath)!);
+        return !SkillScanner.IsUnderRoot(skillPath, nativeRoot);
+    }
+
     private static void AtomicWrite(string path, string content)
     {
         var tempPath = path + ".tmp";
@@ -455,9 +480,12 @@ public sealed partial class SkillManageTool : NetclawTool<SkillManageTool.Params
 
     private Netclaw.Actors.Skills.SkillScanResult RescanAndUpdateIndex()
     {
-        var scanResult = SkillScanner.Scan(_paths.SkillsDirectory);
-        SkillRegistryUpdater.ApplyScanResult(_skillRegistry, _skillIndexLayer, scanResult, _paths.SkillsDirectory);
-        return scanResult;
+        var mergedResult = SkillScanner.ScanAndMerge(_paths.SkillsDirectory, _externalSources);
+        SkillRegistryUpdater.ApplyMergedScanResult(
+            _skillRegistry, _skillIndexLayer, mergedResult, _paths.SkillsDirectory, _externalSources);
+
+        // Return as SkillScanResult for AppendScanWarnings compatibility
+        return new Netclaw.Actors.Skills.SkillScanResult(mergedResult.AcceptedSkills, mergedResult.Issues);
     }
 
     private static string AppendScanWarnings(string message, Netclaw.Actors.Skills.SkillScanResult scanResult)

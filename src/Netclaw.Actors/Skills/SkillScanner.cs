@@ -39,7 +39,13 @@ public static partial class SkillScanner
     /// Scan the skills directory and return metadata for each skill found.
     /// Returns accepted skills plus explicit issues for rejected items.
     /// </summary>
-    public static SkillScanResult Scan(string skillsDirectory)
+    /// <param name="skillsDirectory">Root directory to scan for skills.</param>
+    /// <param name="allowSymlinks">
+    /// When <c>true</c>, symlinks within the directory are followed instead of rejected.
+    /// Resolved paths are still validated to stay within the root. Used for external
+    /// skill directories (e.g., Claude Code) that rely on symlinks.
+    /// </param>
+    public static SkillScanResult Scan(string skillsDirectory, bool allowSymlinks = false)
     {
         if (!Directory.Exists(skillsDirectory))
             return SkillScanResult.Empty;
@@ -55,7 +61,7 @@ public static partial class SkillScanner
             if (!File.Exists(skillMdPath))
                 continue;
 
-            var entry = ParseSkillFile(skillMdPath, rootFull, issues);
+            var entry = ParseSkillFile(skillMdPath, rootFull, issues, allowSymlinks);
             if (entry is not null)
                 acceptedCandidates.Add(entry);
         }
@@ -79,7 +85,7 @@ public static partial class SkillScanner
                 if (!File.Exists(skillMdPath))
                     continue;
 
-                var entry = ParseSkillFile(skillMdPath, rootFull, issues);
+                var entry = ParseSkillFile(skillMdPath, rootFull, issues, allowSymlinks);
                 if (entry is not null)
                     acceptedCandidates.Add(entry);
             }
@@ -111,15 +117,55 @@ public static partial class SkillScanner
         return new SkillScanResult(accepted, issues);
     }
 
-    private static SkillEntry? ParseSkillFile(string filePath, string rootDirectory, List<SkillScanIssue> issues)
+    /// <summary>
+    /// Scans the native skills directory and all external sources, merging results.
+    /// Native skills take highest precedence; external sources follow config order.
+    /// Duplicate names from lower-precedence sources are logged as issues and skipped.
+    /// </summary>
+    public static MergedSkillScanResult ScanAndMerge(
+        string nativeSkillsDirectory,
+        IReadOnlyList<ResolvedExternalSource> externalSources)
+    {
+        var nativeScan = Scan(nativeSkillsDirectory);
+        var allAccepted = new List<SkillEntry>(nativeScan.AcceptedSkills);
+        var allIssues = new List<SkillScanIssue>(nativeScan.Issues);
+
+        var knownNames = new HashSet<string>(
+            nativeScan.AcceptedSkills.Select(s => s.Name), StringComparer.OrdinalIgnoreCase);
+
+        foreach (var source in externalSources)
+        {
+            var externalScan = Scan(source.Path, allowSymlinks: source.AllowSymlinks);
+            allIssues.AddRange(externalScan.Issues);
+
+            foreach (var skill in externalScan.AcceptedSkills)
+            {
+                if (!knownNames.Add(skill.Name))
+                {
+                    allIssues.Add(new SkillScanIssue(
+                        Path: skill.FilePath,
+                        Kind: SkillScanIssueKind.DuplicateName,
+                        Message: $"Skill '{skill.Name}' from external source '{source.Name}' is shadowed by a higher-precedence skill.",
+                        SkillName: skill.Name));
+                    continue;
+                }
+
+                allAccepted.Add(skill);
+            }
+        }
+
+        return new MergedSkillScanResult(allAccepted, allIssues);
+    }
+
+    private static SkillEntry? ParseSkillFile(string filePath, string rootDirectory, List<SkillScanIssue> issues, bool allowSymlinks = false)
     {
         var canonicalRoot = NormalizeDirectoryPath(rootDirectory);
-        var canonicalSkillFilePath = ValidateCanonicalPath(filePath, canonicalRoot, issues, "skill file");
+        var canonicalSkillFilePath = ValidateCanonicalPath(filePath, canonicalRoot, issues, "skill file", allowSymlinks);
         if (canonicalSkillFilePath is null)
             return null;
 
         var skillDirectory = Path.GetDirectoryName(canonicalSkillFilePath)!;
-        var canonicalSkillDirectory = ValidateCanonicalPath(skillDirectory, canonicalRoot, issues, "skill directory");
+        var canonicalSkillDirectory = ValidateCanonicalPath(skillDirectory, canonicalRoot, issues, "skill directory", allowSymlinks);
         if (canonicalSkillDirectory is null)
             return null;
 
@@ -151,7 +197,7 @@ public static partial class SkillScanner
             return null;
         }
 
-        return BuildEntryFromFrontmatter(frontmatter, content, canonicalSkillFilePath, canonicalSkillDirectory, canonicalRoot, issues);
+        return BuildEntryFromFrontmatter(frontmatter, content, canonicalSkillFilePath, canonicalSkillDirectory, canonicalRoot, issues, allowSymlinks);
     }
 
     /// <summary>
@@ -198,16 +244,9 @@ public static partial class SkillScanner
         string content,
         string filePath,
         string skillDirectory,
-        string rootDirectory)
-        => BuildEntryFromFrontmatter(fm, content, filePath, skillDirectory, rootDirectory, []);
-
-    private static SkillEntry? BuildEntryFromFrontmatter(
-        SkillFrontmatter fm,
-        string content,
-        string filePath,
-        string skillDirectory,
         string rootDirectory,
-        List<SkillScanIssue> issues)
+        List<SkillScanIssue> issues,
+        bool allowSymlinks = false)
     {
         // Description is required per AgentSkills.io spec
         if (string.IsNullOrWhiteSpace(fm.Description))
@@ -257,7 +296,7 @@ public static partial class SkillScanner
             version = versionValue;
 
         var issueCountBeforeResourceScan = issues.Count;
-        var resourcePaths = EnumerateResources(skillDirectory, rootDirectory, issues);
+        var resourcePaths = EnumerateResources(skillDirectory, rootDirectory, issues, allowSymlinks);
         if (issues.Count > issueCountBeforeResourceScan)
             return null;
 
@@ -284,7 +323,7 @@ public static partial class SkillScanner
     /// Enumerates resource files in standard subdirectories of a skill directory.
     /// Returns null if no resources are found.
     /// </summary>
-    private static IReadOnlyList<string>? EnumerateResources(string skillDirectory, string rootDirectory, List<SkillScanIssue> issues)
+    private static IReadOnlyList<string>? EnumerateResources(string skillDirectory, string rootDirectory, List<SkillScanIssue> issues, bool allowSymlinks = false)
     {
         List<string>? resources = null;
         var canonicalRoot = NormalizeDirectoryPath(rootDirectory);
@@ -295,7 +334,7 @@ public static partial class SkillScanner
             if (!Directory.Exists(subDir))
                 continue;
 
-            if (ValidateCanonicalPath(subDir, canonicalRoot, issues, $"resource directory '{subDirName}'") is null)
+            if (ValidateCanonicalPath(subDir, canonicalRoot, issues, $"resource directory '{subDirName}'", allowSymlinks) is null)
                 return null;
 
             string[] files;
@@ -314,7 +353,7 @@ public static partial class SkillScanner
 
             foreach (var file in files)
             {
-                if (ValidateCanonicalPath(file, canonicalRoot, issues, "resource file") is null)
+                if (ValidateCanonicalPath(file, canonicalRoot, issues, "resource file", allowSymlinks) is null)
                     return null;
 
                 var relativePath = Path.GetRelativePath(skillDirectory, file)
@@ -355,14 +394,15 @@ public static partial class SkillScanner
     internal static string NormalizeSkillName(string value)
         => value.Trim().ToLowerInvariant();
 
-    private static string NormalizeDirectoryPath(string path)
+    internal static string NormalizeDirectoryPath(string path)
         => Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
 
     private static string? ValidateCanonicalPath(
         string path,
         string canonicalRoot,
         List<SkillScanIssue> issues,
-        string label)
+        string label,
+        bool allowSymlinks = false)
     {
         var normalizedPath = Path.GetFullPath(path);
         var normalizedDirectoryPath = NormalizeDirectoryPath(normalizedPath);
@@ -376,7 +416,7 @@ public static partial class SkillScanner
             return null;
         }
 
-        if (ContainsSymlink(normalizedPath, canonicalRoot))
+        if (!allowSymlinks && ContainsSymlink(normalizedPath, canonicalRoot))
         {
             issues.Add(new SkillScanIssue(
                 Path: normalizedPath,
@@ -388,7 +428,7 @@ public static partial class SkillScanner
         return normalizedPath;
     }
 
-    private static bool IsUnderRoot(string path, string canonicalRoot)
+    internal static bool IsUnderRoot(string path, string canonicalRoot)
         => path.Equals(canonicalRoot, StringComparison.Ordinal)
             || path.StartsWith(canonicalRoot + Path.DirectorySeparatorChar, StringComparison.Ordinal)
             || path.StartsWith(canonicalRoot + Path.AltDirectorySeparatorChar, StringComparison.Ordinal);

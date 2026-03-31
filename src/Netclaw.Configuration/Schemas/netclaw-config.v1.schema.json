@@ -303,6 +303,47 @@
       },
       "additionalProperties": false
     },
+    "ExternalSkills": {
+      "type": "object",
+      "description": "External skill directory sources (Claude Code, Open Code, custom paths).",
+      "properties": {
+        "Sources": {
+          "type": "array",
+          "description": "Ordered list of external skill sources. Precedence follows list order; native Netclaw skills always win.",
+          "items": {
+            "type": "object",
+            "properties": {
+              "Name": {
+                "type": "string",
+                "description": "Unique identifier for this source (e.g., 'claude-code', 'team-skills')."
+              },
+              "Path": {
+                "type": ["string", "null"],
+                "description": "Absolute path to the skill directory. Mutually exclusive with WellKnown."
+              },
+              "WellKnown": {
+                "type": ["string", "null"],
+                "enum": ["claude-code", "open-code", null],
+                "description": "Well-known source alias. Resolves to a standard path automatically."
+              },
+              "Enabled": {
+                "type": "boolean",
+                "default": true,
+                "description": "Whether this source is active."
+              },
+              "AllowSymlinks": {
+                "type": "boolean",
+                "default": false,
+                "description": "Whether to follow symlinks in this directory. Resolved paths are still validated to stay within the source root."
+              }
+            },
+            "required": ["Name"],
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
     "SubAgents": {
       "type": "object",
       "description": "Timeout configuration for subagent execution (seconds).",

@@ -561,7 +561,7 @@ public class SkillToolTests : IDisposable
     }
 
     private SkillManageTool CreateManageTool(ISkillContentScanner? scanner = null)
-        => new(_registry, _indexLayer, _paths, scanner ?? new NoOpSkillContentScanner());
+        => new(_registry, _indexLayer, _paths, scanner ?? new NoOpSkillContentScanner(), Array.Empty<ResolvedExternalSource>());
 
     private static ISkillContentScanner CreateRegexScanner()
         => new RegexSkillContentScanner(
@@ -600,5 +600,81 @@ public class SkillToolTests : IDisposable
     {
         var result = SkillScanner.Scan(_paths.SkillsDirectory);
         _registry.ReplaceAll(result.AcceptedSkills, result.Issues);
+    }
+
+    [Fact]
+    public async Task Edit_rejects_external_skill()
+    {
+        // Create a skill in an "external" directory (outside native skills root)
+        var externalDir = Path.Combine(Path.GetTempPath(), $"netclaw-external-test-{Guid.NewGuid():N}");
+        try
+        {
+            var skillDir = Path.Combine(externalDir, "ext-skill");
+            Directory.CreateDirectory(skillDir);
+            File.WriteAllText(Path.Combine(skillDir, "SKILL.md"), """
+                ---
+                name: ext-skill
+                description: External skill.
+                ---
+
+                # External
+                """);
+
+            // Register the external skill in the registry
+            var externalScan = SkillScanner.Scan(externalDir);
+            _registry.ReplaceAll(externalScan.AcceptedSkills, externalScan.Issues);
+
+            var tool = CreateManageTool();
+            var result = await tool.ExecuteAsync(new Dictionary<string, object?>
+            {
+                ["Action"] = "edit",
+                ["Name"] = "ext-skill",
+                ["Content"] = "---\nname: ext-skill\ndescription: Hacked.\n---\n# Hacked"
+            });
+
+            Assert.Contains("External skill directories are read-only", result);
+        }
+        finally
+        {
+            if (Directory.Exists(externalDir))
+                Directory.Delete(externalDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Delete_rejects_external_skill()
+    {
+        var externalDir = Path.Combine(Path.GetTempPath(), $"netclaw-external-test-{Guid.NewGuid():N}");
+        try
+        {
+            var skillDir = Path.Combine(externalDir, "ext-skill");
+            Directory.CreateDirectory(skillDir);
+            File.WriteAllText(Path.Combine(skillDir, "SKILL.md"), """
+                ---
+                name: ext-skill
+                description: External skill.
+                ---
+
+                # External
+                """);
+
+            var externalScan = SkillScanner.Scan(externalDir);
+            _registry.ReplaceAll(externalScan.AcceptedSkills, externalScan.Issues);
+
+            var tool = CreateManageTool();
+            var result = await tool.ExecuteAsync(new Dictionary<string, object?>
+            {
+                ["Action"] = "delete",
+                ["Name"] = "ext-skill"
+            });
+
+            Assert.Contains("External skill directories are read-only", result);
+            Assert.True(Directory.Exists(skillDir), "External skill directory should not be deleted");
+        }
+        finally
+        {
+            if (Directory.Exists(externalDir))
+                Directory.Delete(externalDir, recursive: true);
+        }
     }
 }

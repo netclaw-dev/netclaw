@@ -430,6 +430,47 @@ public class SkillScannerTests : IDisposable
         Assert.Contains(result.Issues, issue => issue.Kind == SkillScanIssueKind.SymlinkNotAllowed);
     }
 
+    [Fact]
+    public void Symlinked_resource_tree_accepted_when_allowSymlinks_is_true()
+    {
+        WriteSkill("linked-skill", """
+            ---
+            name: linked-skill
+            description: Has linked resources.
+            ---
+
+            # Linked
+            """);
+
+        var targetDir = Path.Combine(_skillsDir, "external-resources");
+        Directory.CreateDirectory(targetDir);
+        File.WriteAllText(Path.Combine(targetDir, "guide.md"), "# Guide");
+        Directory.CreateSymbolicLink(Path.Combine(_skillsDir, "linked-skill", "references"), targetDir);
+
+        var result = SkillScanner.Scan(_skillsDir, allowSymlinks: true);
+
+        Assert.Single(result.AcceptedSkills);
+        Assert.Equal("linked-skill", result.AcceptedSkills[0].Name);
+    }
+
+    [Fact]
+    public void AllowSymlinks_does_not_affect_normal_skills()
+    {
+        WriteSkill("normal-skill", """
+            ---
+            name: normal-skill
+            description: A normal skill.
+            ---
+
+            # Normal
+            """);
+
+        var result = SkillScanner.Scan(_skillsDir, allowSymlinks: true);
+
+        Assert.Single(result.AcceptedSkills);
+        Assert.Equal("normal-skill", result.AcceptedSkills[0].Name);
+    }
+
     /// <summary>
     /// Creates a skill directory with SKILL.md containing the given content.
     /// </summary>

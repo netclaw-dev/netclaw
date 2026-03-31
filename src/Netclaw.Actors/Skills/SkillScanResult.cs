@@ -40,3 +40,10 @@ public sealed record SkillScanResult(
             yield return $"... and {Issues.Count - maxIssues} more issue(s)";
     }
 }
+
+/// <summary>
+/// Merged skill scan result from native + external sources.
+/// </summary>
+public sealed record MergedSkillScanResult(
+    IReadOnlyList<SkillEntry> AcceptedSkills,
+    IReadOnlyList<SkillScanIssue> Issues);

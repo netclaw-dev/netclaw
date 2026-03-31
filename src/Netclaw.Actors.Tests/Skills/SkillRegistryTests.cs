@@ -244,4 +244,46 @@ public class SkillRegistryTests
 
         Assert.False(registry.TryResolveSlashCommand("/ops", out _, out _));
     }
+
+    // --- Multi-root index tests ---
+
+    [Fact]
+    public void GenerateIndex_with_external_sources_uses_roots_header()
+    {
+        var registry = new SkillRegistry();
+        registry.Register(MakeEntry("my-skill", "desc"));
+
+        var externalSources = new[]
+        {
+            new ResolvedExternalSource("claude-code", "/home/user/.claude/skills", true)
+        };
+
+        var index = registry.GenerateIndex("/home/user/.netclaw/skills", externalSources);
+
+        Assert.Contains("roots: native=/home/user/.netclaw/skills,claude-code=/home/user/.claude/skills", index);
+        Assert.DoesNotContain("[skills]|root:", index);
+    }
+
+    [Fact]
+    public void GenerateIndex_without_external_sources_uses_single_root_header()
+    {
+        var registry = new SkillRegistry();
+        registry.Register(MakeEntry("my-skill", "desc"));
+
+        var index = registry.GenerateIndex("/home/user/.netclaw/skills");
+
+        Assert.Contains("[skills]|root: /home/user/.netclaw/skills", index);
+        Assert.DoesNotContain("roots:", index);
+    }
+
+    [Fact]
+    public void GenerateIndex_with_empty_external_sources_uses_single_root_header()
+    {
+        var registry = new SkillRegistry();
+        registry.Register(MakeEntry("my-skill", "desc"));
+
+        var index = registry.GenerateIndex("/home/user/.netclaw/skills", Array.Empty<ResolvedExternalSource>());
+
+        Assert.Contains("[skills]|root: /home/user/.netclaw/skills", index);
+    }
 }

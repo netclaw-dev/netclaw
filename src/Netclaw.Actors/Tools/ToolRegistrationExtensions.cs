@@ -50,11 +50,12 @@ public static class ToolRegistrationExtensions
         SkillRegistry skillRegistry,
         SkillIndexContextLayer skillIndexLayer,
         NetclawPaths paths,
-        ISkillContentScanner scanner)
+        ISkillContentScanner scanner,
+        IReadOnlyList<ResolvedExternalSource> externalSources)
     {
         registry.Register(new SkillLoadTool(skillRegistry, scanner));
         registry.Register(new SkillReadResourceTool(skillRegistry, scanner));
-        registry.Register(new SkillManageTool(skillRegistry, skillIndexLayer, paths, scanner));
+        registry.Register(new SkillManageTool(skillRegistry, skillIndexLayer, paths, scanner, externalSources));
         return registry;
     }
 

@@ -21,7 +21,8 @@ internal static class SkillToolRegistration
         var skillIndexLayer = services.GetRequiredService<SkillIndexContextLayer>();
         var paths = services.GetRequiredService<NetclawPaths>();
         var scanner = services.GetRequiredService<ISkillContentScanner>();
+        var externalSources = services.GetRequiredService<IReadOnlyList<ResolvedExternalSource>>();
 
-        registry.WithSkillTools(skillRegistry, skillIndexLayer, paths, scanner);
+        registry.WithSkillTools(skillRegistry, skillIndexLayer, paths, scanner, externalSources);
     }
 }

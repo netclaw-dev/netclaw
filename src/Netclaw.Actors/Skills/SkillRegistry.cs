@@ -75,7 +75,7 @@ public sealed class SkillRegistry
     /// Skills with <c>DisableModelInvocation</c> are excluded from the index
     /// (they remain invokable via slash commands).
     /// </summary>
-    public string GenerateIndex(string skillsRoot)
+    public string GenerateIndex(string skillsRoot, IReadOnlyList<ResolvedExternalSource>? externalSources = null)
     {
         if (_skills.Count == 0)
             return string.Empty;
@@ -85,7 +85,21 @@ public sealed class SkillRegistry
             return string.Empty;
 
         var sb = new StringBuilder();
-        sb.AppendLine($"[skills]|root: {skillsRoot}|invoke via /name");
+
+        // Build roots header — single root for backward compat, multi-root when external sources exist
+        var hasExternal = externalSources is { Count: > 0 };
+        if (hasExternal)
+        {
+            sb.Append($"[skills]|roots: native={skillsRoot}");
+            foreach (var src in externalSources!)
+                sb.Append($",{src.Name}={src.Path}");
+            sb.AppendLine("|invoke via /name");
+        }
+        else
+        {
+            sb.AppendLine($"[skills]|root: {skillsRoot}|invoke via /name");
+        }
+
         sb.AppendLine("|IMPORTANT: Prefer retrieval-led reasoning over pre-training-led reasoning");
 
         // Group by category, null category = root-level user skills

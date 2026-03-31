@@ -30,6 +30,7 @@ internal sealed class SystemSkillSyncService : IHostedService
     private readonly ILogger<SystemSkillSyncService> _logger;
     private readonly string _daemonVersion;
     private readonly ISkillContentScanner _scanner;
+    private readonly IReadOnlyList<ResolvedExternalSource> _externalSources;
 
     public SystemSkillSyncService(
         HttpClient httpClient,
@@ -40,9 +41,10 @@ internal sealed class SystemSkillSyncService : IHostedService
         TimeProvider timeProvider,
         ISkillContentScanner scanner,
         ILogger<SystemSkillSyncService> logger,
+        IReadOnlyList<ResolvedExternalSource> externalSources,
         IChatClientProvider? chatClientProvider = null)
         : this(httpClient, paths, skillSyncConfig, skillRegistry, skillIndexLayer,
-            timeProvider, scanner, logger, BuildInfo.Version)
+            timeProvider, scanner, logger, BuildInfo.Version, externalSources)
     {
     }
 
@@ -56,7 +58,8 @@ internal sealed class SystemSkillSyncService : IHostedService
         TimeProvider timeProvider,
         ISkillContentScanner scanner,
         ILogger<SystemSkillSyncService> logger,
-        string daemonVersion)
+        string daemonVersion,
+        IReadOnlyList<ResolvedExternalSource>? externalSources = null)
     {
         _httpClient = httpClient;
         _paths = paths;
@@ -67,6 +70,7 @@ internal sealed class SystemSkillSyncService : IHostedService
         _scanner = scanner;
         _logger = logger;
         _daemonVersion = daemonVersion;
+        _externalSources = externalSources ?? [];
     }
 
     public async Task StartAsync(CancellationToken cancellationToken)
@@ -343,17 +347,18 @@ internal sealed class SystemSkillSyncService : IHostedService
     /// </summary>
     private void RescanAndUpdateIndex()
     {
-        var scanResult = SkillScanner.Scan(_paths.SkillsDirectory);
-        SkillRegistryUpdater.ApplyScanResult(_skillRegistry, _skillIndexLayer, scanResult, _paths.SkillsDirectory);
+        var mergedResult = SkillScanner.ScanAndMerge(_paths.SkillsDirectory, _externalSources);
+        SkillRegistryUpdater.ApplyMergedScanResult(
+            _skillRegistry, _skillIndexLayer, mergedResult, _paths.SkillsDirectory, _externalSources);
 
-        if (scanResult.HasIssues)
+        if (mergedResult.Issues.Count > 0)
         {
             _logger.LogWarning(
                 "Skill inventory is degraded after sync rebuild: accepted={AcceptedSkillCount} rejected={RejectedIssueCount}",
-                scanResult.AcceptedSkills.Count,
-                scanResult.Issues.Count);
+                mergedResult.AcceptedSkills.Count,
+                mergedResult.Issues.Count);
 
-            foreach (var issue in scanResult.Issues)
+            foreach (var issue in mergedResult.Issues)
             {
                 _logger.LogWarning(
                     "Rejected skill item during sync rebuild: kind={IssueKind} path={Path} message={Message}",
@@ -364,7 +369,7 @@ internal sealed class SystemSkillSyncService : IHostedService
         }
         else
         {
-            _logger.LogInformation("Skill description menu updated ({SkillCount} skills)", scanResult.AcceptedSkills.Count);
+            _logger.LogInformation("Skill description menu updated ({SkillCount} skills)", mergedResult.AcceptedSkills.Count);
         }
     }
 
