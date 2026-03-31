@@ -25,6 +25,15 @@ public sealed class ToolAudienceProfile
     public List<string> AllowedTools { get; set; } = [];
     public ToolProfileMode McpServersMode { get; set; } = ToolProfileMode.Allowlist;
     public List<string> AllowedMcpServers { get; set; } = [];
+
+    /// <summary>
+    /// Per-server tool allowlists for this audience.
+    /// When a server appears here, only listed tools are exposed to this audience.
+    /// Servers not listed expose all their registered tools (subject to AllowedMcpServers gate).
+    /// Null means no per-tool filtering.
+    /// </summary>
+    public Dictionary<string, List<string>>? McpServerToolGrants { get; set; }
+
     public ToolFilesystemAccessProfile ReadFiles { get; set; } = new();
     public ToolFilesystemAccessProfile WriteFiles { get; set; } = new();
     public ToolFilesystemAccessProfile AttachFiles { get; set; } = new();

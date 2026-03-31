@@ -85,6 +85,25 @@ internal sealed class ToolAudienceProfileResolver
     }
 
     /// <summary>
+    /// Checks whether a specific tool from an MCP server is allowed for the given audience.
+    /// Returns true if:
+    /// - The profile has no <see cref="ToolAudienceProfile.McpServerToolGrants"/> (null), or
+    /// - The server has no entry in the grants dictionary, or
+    /// - The tool name appears in the server's grant list.
+    /// </summary>
+    public bool IsMcpToolAllowed(string serverName, string toolName, TrustAudience audience)
+    {
+        var profile = ResolveProfile(audience);
+        return IsMcpToolAllowed(serverName, toolName, profile);
+    }
+
+    public bool IsMcpToolAllowed(string serverName, string toolName, ToolExecutionContext? context)
+    {
+        var profile = ResolveProfile(context);
+        return IsMcpToolAllowed(serverName, toolName, profile);
+    }
+
+    /// <summary>
     /// Resolves a path token (e.g. <c>{skills_dir}</c>, <c>{identity_dir}</c>, <c>{workspaces_dir}</c>) to an absolute path.
     /// Returns null for empty input or if <see cref="_paths"/> is not available for path-based tokens.
     /// Unrecognized values are treated as literal paths.
@@ -135,6 +154,17 @@ internal sealed class ToolAudienceProfileResolver
             return true;
 
         return profile.AllowedMcpServers.Contains(serverName, StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static bool IsMcpToolAllowed(string serverName, string toolName, ToolAudienceProfile profile)
+    {
+        if (profile.McpServerToolGrants is not { } grants)
+            return true;
+
+        if (!grants.TryGetValue(serverName, out var allowedTools))
+            return true;
+
+        return allowedTools.Contains(toolName, StringComparer.Ordinal);
     }
 
     private static bool IsProfileManagedTool(string toolName)

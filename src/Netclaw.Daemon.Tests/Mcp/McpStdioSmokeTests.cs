@@ -160,7 +160,7 @@ public class McpStdioSmokeTests : IAsyncDisposable
             NullLogger<McpOAuthService>.Instance,
             pkceService,
             NullNotificationSink.Instance);
-        var manager = new McpClientManager(serverEntries, registry, oauthService, NullNotificationSink.Instance, TimeProvider.System, logger);
+        var manager = new McpClientManager(serverEntries, registry, new ToolConfig(), oauthService, NullNotificationSink.Instance, TimeProvider.System, logger);
 
         try
         {

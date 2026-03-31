@@ -53,7 +53,8 @@ public sealed class ToolAccessPolicy
     private bool IsToolExposed(INetclawTool tool, TrustAudience audience)
     {
         if (tool is McpToolAdapter mcp)
-            return _profileResolver.IsMcpServerAllowed(mcp.ServerName, audience);
+            return _profileResolver.IsMcpServerAllowed(mcp.ServerName, audience)
+                && _profileResolver.IsMcpToolAllowed(mcp.ServerName, mcp.BareToolName, audience);
 
         if (!_profileResolver.IsToolAllowed(tool.Name, CreateContext(audience)))
             return false;
@@ -68,9 +69,11 @@ public sealed class ToolAccessPolicy
     {
         if (tool is McpToolAdapter mcp)
         {
-            var audience = ResolveAudience(context);
             if (!_profileResolver.IsMcpServerAllowed(mcp.ServerName, context))
                 return ToolAccessDecision.Deny("mcp_server_not_allowed_for_audience_profile");
+
+            if (!_profileResolver.IsMcpToolAllowed(mcp.ServerName, mcp.BareToolName, context))
+                return ToolAccessDecision.Deny("mcp_tool_not_allowed_for_audience_profile");
 
             return ToolAccessDecision.Allow();
         }

@@ -86,6 +86,15 @@ public sealed class ToolAudienceProfilesDoctorCheck(NetclawPaths paths) : IDocto
                 warnings.Add("Personal profile also enables host shell, which has a high blast radius.");
         }
 
+        // Advisory: MCP servers allowed by any audience but with no McpServerToolGrants
+        var ungatedServers = FindUngatedMcpServers(toolConfig.AudienceProfiles, root);
+        if (ungatedServers.Count > 0)
+        {
+            warnings.Add(
+                $"MCP server(s) {string.Join(", ", ungatedServers)} have no McpServerToolGrants on any audience — " +
+                "all discovered tools are exposed. Consider adding per-tool grants for supply-chain protection.");
+        }
+
         if (warnings.Count > 0)
         {
             return Task.FromResult(DoctorCheckResult.Warning(
@@ -124,5 +133,42 @@ public sealed class ToolAudienceProfilesDoctorCheck(NetclawPaths paths) : IDocto
             && profile.ReadFiles.Mode == ToolFilesystemMode.All
             && profile.WriteFiles.Mode == ToolFilesystemMode.All
             && profile.AttachFiles.Mode == ToolFilesystemMode.All;
+    }
+
+    /// <summary>
+    /// Finds MCP servers that are allowed by at least one audience profile
+    /// but have no <see cref="ToolAudienceProfile.McpServerToolGrants"/> on any profile.
+    /// </summary>
+    private static List<string> FindUngatedMcpServers(ToolAudienceProfiles profiles, JsonObject root)
+    {
+        // Collect all server names that are allowed by any audience
+        var allowedServers = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var grantedServers = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var profile in new[] { profiles.Public, profiles.Team, profiles.Personal })
+        {
+            if (profile.McpServersMode == ToolProfileMode.All)
+            {
+                // All servers allowed — collect from config
+                if (root["McpServers"] is JsonObject mcpServers)
+                {
+                    foreach (var prop in mcpServers)
+                        allowedServers.Add(prop.Key);
+                }
+            }
+            else
+            {
+                foreach (var server in profile.AllowedMcpServers)
+                    allowedServers.Add(server);
+            }
+
+            if (profile.McpServerToolGrants is { } grants)
+            {
+                foreach (var server in grants.Keys)
+                    grantedServers.Add(server);
+            }
+        }
+
+        return allowedServers.Except(grantedServers, StringComparer.OrdinalIgnoreCase).Order().ToList();
     }
 }

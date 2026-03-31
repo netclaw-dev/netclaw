@@ -116,6 +116,80 @@ public sealed class ToolAudienceProfilesDoctorCheckTests : IDisposable
     }
 
     [Fact]
+    public async Task McpServerWithNoToolGrants_WarnsAboutSupplyChain()
+    {
+        WriteConfig(
+            """
+            {
+              "configVersion": 1,
+              "Tools": {
+                "AudienceProfiles": {
+                  "Personal": {
+                    "ToolsMode": "All",
+                    "McpServersMode": "All",
+                    "ReadFiles": { "Mode": "All" },
+                    "WriteFiles": { "Mode": "All" },
+                    "AttachFiles": { "Mode": "All" }
+                  }
+                }
+              },
+              "McpServers": {
+                "memorizer": {
+                  "Transport": "stdio",
+                  "Command": "npx",
+                  "Enabled": true
+                }
+              }
+            }
+            """);
+
+        var check = new ToolAudienceProfilesDoctorCheck(_paths);
+        var result = await check.RunAsync();
+
+        Assert.Equal(DoctorSeverity.Warning, result.Severity);
+        Assert.Contains("memorizer", result.Message);
+        Assert.Contains("McpServerToolGrants", result.Message);
+    }
+
+    [Fact]
+    public async Task McpServerWithToolGrants_NoSupplyChainWarning()
+    {
+        WriteConfig(
+            """
+            {
+              "configVersion": 1,
+              "Tools": {
+                "AudienceProfiles": {
+                  "Personal": {
+                    "ToolsMode": "All",
+                    "McpServersMode": "All",
+                    "McpServerToolGrants": {
+                      "memorizer": ["search_memories", "store"]
+                    },
+                    "ReadFiles": { "Mode": "All" },
+                    "WriteFiles": { "Mode": "All" },
+                    "AttachFiles": { "Mode": "All" }
+                  }
+                }
+              },
+              "McpServers": {
+                "memorizer": {
+                  "Transport": "stdio",
+                  "Command": "npx",
+                  "Enabled": true
+                }
+              }
+            }
+            """);
+
+        var check = new ToolAudienceProfilesDoctorCheck(_paths);
+        var result = await check.RunAsync();
+
+        // Should still warn about unrestricted personal, but NOT about tool grants
+        Assert.DoesNotContain("McpServerToolGrants", result.Message);
+    }
+
+    [Fact]
     public async Task RecommendedProfiles_Pass()
     {
         var toolConfig = new ToolConfig

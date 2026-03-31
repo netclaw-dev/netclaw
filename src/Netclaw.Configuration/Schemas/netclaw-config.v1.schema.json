@@ -461,6 +461,14 @@
           "type": "array",
           "items": { "type": "string" }
         },
+        "McpServerToolGrants": {
+          "type": ["object", "null"],
+          "description": "Per-server tool allowlists. Keys are server names, values are arrays of allowed tool names. Servers not listed expose all tools.",
+          "additionalProperties": {
+            "type": "array",
+            "items": { "type": "string" }
+          }
+        },
         "ReadFiles": { "$ref": "#/$defs/ToolFilesystemAccessProfile" },
         "WriteFiles": { "$ref": "#/$defs/ToolFilesystemAccessProfile" },
         "AttachFiles": { "$ref": "#/$defs/ToolFilesystemAccessProfile" }

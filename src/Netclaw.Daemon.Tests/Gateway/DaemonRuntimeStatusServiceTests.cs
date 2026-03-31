@@ -167,6 +167,7 @@ public sealed class DaemonRuntimeStatusServiceTests : IAsyncLifetime
         var manager = new McpClientManager(
             mcpServers,
             new ToolRegistry(),
+            new ToolConfig(),
             oauthService,
             NullNotificationSink.Instance,
             TimeProvider.System,
