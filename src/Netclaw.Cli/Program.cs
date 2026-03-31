@@ -214,6 +214,16 @@ static async Task RunAsync(string[] args)
         else
             WriteDoctorResult(result);
 
+        // Hint about --fix when there are issues and fix wasn't requested
+        if (!doctorOptions.Fix
+            && result.ExitCode != 0
+            && doctorOptions.Format is DoctorOutputFormat.Text)
+        {
+            fixPlan ??= await fixService.BuildPlanAsync();
+            if (fixPlan.HasChanges)
+                Console.WriteLine("hint: Some issues may be auto-fixable. Run `netclaw doctor --fix --dry-run` to preview.");
+        }
+
         Environment.ExitCode = result.ExitCode;
         return;
     }

@@ -102,6 +102,15 @@ update `src/Netclaw.Configuration/Schemas/netclaw-config.v1.schema.json` in the 
 The schema uses `"additionalProperties": false` throughout — any new property that is
 missing from the schema will be rejected by `ConfigSchemaDoctorCheck` at runtime.
 
+**Migration-friendly schema changes:** `netclaw doctor --fix` uses `SchemaFixResolver` to
+auto-fix common schema validation errors. To ensure smooth upgrades for existing configs:
+- When adding a new **required** property, include a `"default"` value in the schema so
+  the fix resolver can insert it automatically.
+- When adding an **enum** property, always use `"type": "string"` with named values (not
+  integers) so the resolver can coerce stale numeric values.
+- When **removing** a property, no special action is needed — the resolver detects and
+  removes properties disallowed by `additionalProperties: false`.
+
 ## Universal Quality Bar
 
 - secure-by-default behavior for gateway and tools

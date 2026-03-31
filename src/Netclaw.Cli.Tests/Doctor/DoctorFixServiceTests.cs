@@ -84,6 +84,66 @@ public sealed class DoctorFixServiceTests
         Assert.Contains("\"Format\": \"Slack\"", plan.Fixes[0].UpdatedText, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task RemovesStalePropertyViaSchemaFix()
+    {
+        var basePath = CreateTempBasePath();
+        var paths = new NetclawPaths(basePath);
+        paths.EnsureDirectoriesExist();
+
+        // Config with a stale property that the schema no longer defines
+        await File.WriteAllTextAsync(paths.NetclawConfigPath,
+            """
+            {
+              "configVersion": 1,
+              "McpServers": {
+                "memorizer": {
+                  "Transport": "stdio",
+                  "Command": "uvx",
+                  "Enabled": true,
+                  "CapabilityClass": "MemorySafe"
+                }
+              }
+            }
+            """);
+
+        var service = new DoctorFixService(paths);
+        var plan = await service.BuildPlanAsync();
+
+        Assert.True(plan.HasChanges);
+        Assert.Single(plan.Fixes);
+        // CapabilityClass was removed from schema — should be cleaned up
+        Assert.DoesNotContain("CapabilityClass", plan.Fixes[0].UpdatedText, StringComparison.Ordinal);
+        // Other properties should be preserved
+        Assert.Contains("memorizer", plan.Fixes[0].UpdatedText, StringComparison.Ordinal);
+        Assert.Contains("stdio", plan.Fixes[0].UpdatedText, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task DynamicDescriptionReflectsAppliedFixes()
+    {
+        var basePath = CreateTempBasePath();
+        var paths = new NetclawPaths(basePath);
+        paths.EnsureDirectoriesExist();
+
+        await File.WriteAllTextAsync(paths.NetclawConfigPath,
+            """
+            {
+              "Slack": {
+                "Enabled": true
+              }
+            }
+            """);
+
+        var service = new DoctorFixService(paths);
+        var plan = await service.BuildPlanAsync();
+
+        Assert.True(plan.HasChanges);
+        // Description should mention what was actually fixed
+        Assert.Contains("configVersion", plan.Fixes[0].Description, StringComparison.Ordinal);
+        Assert.Contains("Slack ACL defaults", plan.Fixes[0].Description, StringComparison.Ordinal);
+    }
+
     private static string CreateTempBasePath()
     {
         var path = Path.Combine(Path.GetTempPath(), "netclaw-tests", Guid.NewGuid().ToString("N"));

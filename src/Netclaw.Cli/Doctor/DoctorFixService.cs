@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Json.Schema;
 using Netclaw.Configuration;
 
 namespace Netclaw.Cli.Doctor;
@@ -28,12 +29,14 @@ public sealed class DoctorFixService(NetclawPaths paths)
         if (obj is null)
             return Task.FromResult(new DoctorFixPlan(fixes));
 
-        var changed = false;
+        var appliedFixes = new List<string>();
+
+        // --- Manual fixes (not derivable from schema alone) ---
 
         if (obj["configVersion"] is null)
         {
             obj["configVersion"] = 1;
-            changed = true;
+            appliedFixes.Add("configVersion");
         }
 
         if (obj["Slack"] is JsonObject slack && ReadBool(slack, "Enabled"))
@@ -45,7 +48,7 @@ public sealed class DoctorFixService(NetclawPaths paths)
             if (!hasAllowedChannels && !hasDefaultChannel)
             {
                 slack["AllowedChannelIds"] = new JsonArray();
-                changed = true;
+                appliedFixes.Add("Slack ACL defaults");
             }
         }
 
@@ -56,7 +59,7 @@ public sealed class DoctorFixService(NetclawPaths paths)
                 && string.IsNullOrWhiteSpace(otlp["Endpoint"]?.GetValue<string>()))
             {
                 otlp["Endpoint"] = "http://127.0.0.1:4317";
-                changed = true;
+                appliedFixes.Add("telemetry endpoint");
             }
         }
 
@@ -80,12 +83,15 @@ public sealed class DoctorFixService(NetclawPaths paths)
                 if (existing is null || existing.Equals(nameof(WebhookFormat.Generic), StringComparison.OrdinalIgnoreCase))
                 {
                     wh["Format"] = nameof(WebhookFormat.Slack);
-                    changed = true;
+                    appliedFixes.Add("webhook format");
                 }
             }
         }
 
-        if (changed)
+        // --- Schema-driven fixes ---
+        TryApplySchemaFixes(obj, appliedFixes);
+
+        if (appliedFixes.Count > 0)
         {
             var normalized = obj.ToJsonString(new JsonSerializerOptions
             {
@@ -98,12 +104,46 @@ public sealed class DoctorFixService(NetclawPaths paths)
 
             fixes.Add(new DoctorFileFix(
                 FilePath: paths.NetclawConfigPath,
-                Description: "Apply safe configuration autofixes (schema version, ACL defaults, telemetry endpoint, webhook format).",
+                Description: $"Apply safe configuration autofixes ({string.Join(", ", appliedFixes)}).",
                 OriginalText: original,
                 UpdatedText: replacement));
         }
 
         return Task.FromResult(new DoctorFixPlan(fixes));
+    }
+
+    private void TryApplySchemaFixes(JsonObject config, List<string> appliedFixes)
+    {
+        // Resolve schema version (default to 1 if not present or invalid)
+        var version = 1;
+        if (config["configVersion"] is JsonValue versionValue
+            && versionValue.TryGetValue<int>(out var parsedVersion))
+        {
+            version = parsedVersion;
+        }
+
+        var schemaPath = ConfigSchemaDoctorCheck.ResolveSchemaPath(version);
+        if (!File.Exists(schemaPath))
+            return;
+
+        JsonSchema schema;
+        JsonObject? schemaJson;
+        try
+        {
+            var schemaText = File.ReadAllText(schemaPath);
+            schema = JsonSchema.FromText(schemaText);
+            schemaJson = JsonNode.Parse(schemaText) as JsonObject;
+        }
+        catch
+        {
+            return;
+        }
+
+        if (schemaJson is null)
+            return;
+
+        if (SchemaFixResolver.TryApplySchemaFixes(schema, schemaJson, config, out var schemaFixes))
+            appliedFixes.AddRange(schemaFixes);
     }
 
     public async Task ApplyAsync(DoctorFixPlan plan, CancellationToken cancellationToken = default)
