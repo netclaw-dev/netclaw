@@ -11,9 +11,10 @@ namespace Netclaw.Cli.Mcp;
 
 public sealed class McpToolPermissionsPage : ReactivePage<McpToolPermissionsViewModel>
 {
-    private SelectionListNode<string>? _activeList;
+    private SelectionListNode<string>? _serverList;
     private DynamicLayoutNode? _contentNode;
     private readonly CompositeDisposable _stepSubs = new();
+    private int _toolCursor;
 
     protected override void OnBound()
     {
@@ -45,7 +46,7 @@ public sealed class McpToolPermissionsPage : ReactivePage<McpToolPermissionsView
     {
         _contentNode = new DynamicLayoutNode(() =>
         {
-            _activeList = null;
+            _serverList = null;
             _stepSubs.Clear();
 
             return ViewModel.CurrentState.Value switch
@@ -83,12 +84,12 @@ public sealed class McpToolPermissionsPage : ReactivePage<McpToolPermissionsView
             .Select(s => $"{s.Name}  ({s.Status}, {s.ToolCount} tools)")
             .ToList();
 
-        _activeList = Layouts.SelectionList(items)
+        _serverList = Layouts.SelectionList(items)
             .WithMode(SelectionMode.Single)
             .WithHighlightColors(Color.Black, Color.Cyan);
-        _activeList.OnFocused();
+        _serverList.OnFocused();
 
-        _activeList.SelectionConfirmed
+        _serverList.SelectionConfirmed
             .Subscribe(selected =>
             {
                 if (selected.Count > 0)
@@ -101,71 +102,90 @@ public sealed class McpToolPermissionsPage : ReactivePage<McpToolPermissionsView
 
         return Layouts.Vertical()
             .WithChild(new TextNode("Select a server:").WithForeground(Color.White))
-            .WithChild(_activeList);
+            .WithChild(_serverList);
     }
 
+    /// <summary>
+    /// Manual cursor rendering — matches the channel wizard pattern.
+    /// Preserves cursor position across rebuilds (no SelectionListNode reset).
+    /// </summary>
     private ILayoutNode BuildToolGrid()
     {
         var server = ViewModel.SelectedServer ?? "?";
         var audienceLabel = ViewModel.SelectedAudience.ToWireValue();
-
-        // Audience selector matching the channel wizard pattern: [◀ personal ▶]
         var audienceSelector = $"[\u25c0 {audienceLabel,-8} \u25b6]";
 
-        var items = ViewModel.DiscoveredTools
-            .Select(tool =>
-            {
-                var granted = ViewModel.IsToolGranted(tool);
-                var marker = granted ? "\u2713" : " ";
-                return $"[{marker}] {tool}";
-            })
-            .ToList();
+        var tools = ViewModel.DiscoveredTools;
+        if (_toolCursor >= tools.Count) _toolCursor = tools.Count - 1;
+        if (_toolCursor < 0) _toolCursor = 0;
 
-        _activeList = Layouts.SelectionList(items)
-            .WithMode(SelectionMode.Single)
-            .WithHighlightColors(Color.Black, Color.Cyan);
-        _activeList.OnFocused();
-
-        _activeList.SelectionConfirmed
-            .Subscribe(selected =>
-            {
-                if (selected.Count > 0)
-                {
-                    // Extract tool name from "[✓] tool_name" or "[ ] tool_name"
-                    var raw = selected[0];
-                    var toolName = raw.Length > 4 ? raw[4..].Trim() : raw;
-                    ViewModel.ToggleTool(toolName);
-                }
-            })
-            .DisposeWith(_stepSubs);
+        var serverAllowed = ViewModel.IsServerAllowedForSelectedAudience();
 
         var layout = Layouts.Vertical()
             .WithChild(new TextNode($"  Server: {server}").WithForeground(Color.White).Bold())
             .WithChild(new TextNode($"  Audience: {audienceSelector}").WithForeground(Color.Cyan).Bold())
-            .WithSpacing(1)
-            .WithChild(_activeList);
+            .WithSpacing(1);
+
+        if (!serverAllowed)
+        {
+            layout = layout
+                .WithChild(new TextNode($"  Server '{server}' is not allowed for the {audienceLabel} audience.")
+                    .WithForeground(Color.Yellow))
+                .WithChild(new TextNode("  Add it to AllowedMcpServers or set McpServersMode to All first.")
+                    .WithForeground(Color.BrightBlack));
+        }
+        else
+        {
+            for (var i = 0; i < tools.Count; i++)
+            {
+                var tool = tools[i];
+                var isFocused = i == _toolCursor;
+                var granted = ViewModel.IsToolGranted(tool);
+                var prefix = isFocused ? " \u25b6 " : "   ";
+                var marker = granted ? "\u2713" : " ";
+                var line = $"{prefix}[{marker}] {tool}";
+
+                var node = new TextNode(line);
+                node = isFocused
+                    ? node.WithForeground(Color.Cyan).Bold()
+                    : granted
+                        ? node.WithForeground(Color.White)
+                        : node.WithForeground(Color.BrightBlack);
+                layout = layout.WithChild(node);
+            }
+        }
 
         if (!string.IsNullOrEmpty(ViewModel.StatusMessage.Value))
-            layout.WithChild(new TextNode(ViewModel.StatusMessage.Value).WithForeground(Color.Green));
+        {
+            layout = layout.WithSpacing(1)
+                .WithChild(new TextNode($"  {ViewModel.StatusMessage.Value}").WithForeground(Color.Green));
+        }
 
         return layout;
     }
 
     private LayoutNode BuildFooter()
     {
-        return new DynamicLayoutNode(() =>
+        var footerNode = new DynamicLayoutNode(() =>
         {
             var hints = ViewModel.CurrentState.Value switch
             {
                 ToolPermissionsState.ServerList => "[Enter] Select  [Esc] Quit  [Ctrl+Q] Quit",
                 ToolPermissionsState.ToolGrid =>
-                    "[\u2190/\u2192] Audience  [Enter] Toggle  [S] Save  [Esc] Back  [Ctrl+Q] Quit" +
+                    "[\u2190/\u2192] Audience  [\u2191/\u2193] Navigate  [Enter] Toggle  [A] All  [S] Save  [Esc] Back  [Ctrl+Q] Quit" +
                     (ViewModel.HasUnsavedChanges ? "  *unsaved*" : ""),
                 _ => ""
             };
 
             return new TextNode(hints).WithForeground(Color.BrightBlack);
         });
+
+        // Footer must invalidate on state changes to show correct hints
+        ViewModel.StateVersion
+            .Subscribe(_ => footerNode.Invalidate())
+            .DisposeWith(Subscriptions);
+
+        return footerNode;
     }
 
     private void HandleKeyPress(KeyPressed key)
@@ -181,43 +201,79 @@ public sealed class McpToolPermissionsPage : ReactivePage<McpToolPermissionsView
 
         if (keyInfo.Key == ConsoleKey.Escape)
         {
-            // From server list, Esc quits the app
             if (ViewModel.CurrentState.Value == ToolPermissionsState.ServerList)
             {
                 ViewModel.RequestQuit();
                 return;
             }
 
+            _toolCursor = 0;
             ViewModel.GoBack();
             return;
         }
 
         if (ViewModel.CurrentState.Value == ToolPermissionsState.ToolGrid)
         {
-            if (keyInfo.Key == ConsoleKey.RightArrow)
+            switch (keyInfo.Key)
             {
-                ViewModel.CycleAudience();
-                return;
+                case ConsoleKey.UpArrow:
+                    if (_toolCursor > 0) _toolCursor--;
+                    InvalidateAndRedraw();
+                    return;
+
+                case ConsoleKey.DownArrow:
+                    if (_toolCursor < ViewModel.DiscoveredTools.Count - 1) _toolCursor++;
+                    InvalidateAndRedraw();
+                    return;
+
+                case ConsoleKey.RightArrow:
+                    ViewModel.CycleAudience();
+                    return;
+
+                case ConsoleKey.LeftArrow:
+                    ViewModel.CycleAudienceBack();
+                    return;
+
+                case ConsoleKey.Enter:
+                    if (ViewModel.DiscoveredTools.Count > 0)
+                        ViewModel.ToggleTool(ViewModel.DiscoveredTools[_toolCursor]);
+                    return;
+
+                case ConsoleKey.S:
+                    ViewModel.Save();
+                    return;
+
+                case ConsoleKey.A:
+                    ViewModel.ToggleAll();
+                    return;
             }
 
-            if (keyInfo.Key == ConsoleKey.LeftArrow)
-            {
-                ViewModel.CycleAudienceBack();
-                return;
-            }
-
-            if (keyInfo.Key == ConsoleKey.S || keyInfo.KeyChar == 's')
+            if (keyInfo.KeyChar == 's')
             {
                 ViewModel.Save();
                 return;
             }
+
+            if (keyInfo.KeyChar == 'a')
+            {
+                ViewModel.ToggleAll();
+                return;
+            }
+
+            return;
         }
 
-        // Route to active list
-        if (_activeList is not null)
+        // Server list — route to SelectionListNode
+        if (_serverList is not null)
         {
-            _activeList.HandleInput(keyInfo);
+            _serverList.HandleInput(keyInfo);
             ViewModel.RequestRedraw();
         }
+    }
+
+    private void InvalidateAndRedraw()
+    {
+        _contentNode?.Invalidate();
+        ViewModel.RequestRedraw();
     }
 }

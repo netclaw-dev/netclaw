@@ -166,7 +166,7 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
     public bool IsToolGranted(string toolName)
     {
         if (SelectedServer is null)
-            return true;
+            return false;
 
         var audienceName = SelectedAudience switch
         {
@@ -190,13 +190,47 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
             _ => Profiles.Personal
         };
 
-        if (profile.McpServerToolGrants is null)
-            return true; // No grants = all tools
+        // Server must be allowed by this audience first
+        if (!IsServerAllowed(SelectedServer, profile))
+            return false;
 
+        // No grants dictionary at all = no per-tool filtering, all tools pass
+        if (profile.McpServerToolGrants is null)
+            return true;
+
+        // Server not in grants = not yet configured, all tools pass
         if (!profile.McpServerToolGrants.TryGetValue(SelectedServer, out var configTools))
-            return true; // Server not in grants = all tools
+            return true;
 
         return configTools.Contains(toolName, StringComparer.Ordinal);
+    }
+
+    public void ToggleAll()
+    {
+        if (SelectedServer is null)
+            return;
+
+        // If any tool is granted, deselect all. Otherwise select all.
+        var anyGranted = DiscoveredTools.Any(IsToolGranted);
+
+        var audienceName = SelectedAudience switch
+        {
+            TrustAudience.Public => "Public",
+            TrustAudience.Team => "Team",
+            _ => "Personal"
+        };
+
+        if (!_pendingGrants.TryGetValue(SelectedServer, out var serverGrants))
+        {
+            serverGrants = new Dictionary<string, HashSet<string>>();
+            _pendingGrants[SelectedServer] = serverGrants;
+        }
+
+        serverGrants[audienceName] = anyGranted
+            ? new HashSet<string>(StringComparer.Ordinal) // deselect all
+            : new HashSet<string>(DiscoveredTools, StringComparer.Ordinal); // select all
+
+        NotifyStateChanged();
     }
 
     public void ToggleTool(string toolName)
@@ -213,17 +247,32 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
 
         if (!_pendingGrants.TryGetValue(SelectedServer, out var serverGrants))
         {
-            // First edit: snapshot all tools as granted
             serverGrants = new Dictionary<string, HashSet<string>>();
-            var allTools = new HashSet<string>(DiscoveredTools, StringComparer.Ordinal);
-            serverGrants[audienceName] = allTools;
             _pendingGrants[SelectedServer] = serverGrants;
         }
 
         if (!serverGrants.TryGetValue(audienceName, out var tools))
         {
-            // First edit for this audience: snapshot all tools as granted
-            tools = new HashSet<string>(DiscoveredTools, StringComparer.Ordinal);
+            // Initialize from config if grants exist for this server,
+            // otherwise start from all tools (matches IsToolGranted behavior)
+            var profile = SelectedAudience switch
+            {
+                TrustAudience.Public => Profiles.Public,
+                TrustAudience.Team => Profiles.Team,
+                _ => Profiles.Personal
+            };
+
+            if (profile.McpServerToolGrants is { } existing
+                && existing.TryGetValue(SelectedServer, out var configTools))
+            {
+                tools = new HashSet<string>(configTools, StringComparer.Ordinal);
+            }
+            else
+            {
+                // Server not yet configured — start with all tools granted
+                tools = new HashSet<string>(DiscoveredTools, StringComparer.Ordinal);
+            }
+
             serverGrants[audienceName] = tools;
         }
 
@@ -264,6 +313,29 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
         StatusMessage.Value = "Saved to netclaw.json. Restart daemon to apply changes.";
         CurrentState.Value = ToolPermissionsState.ToolGrid;
         NotifyStateChanged();
+    }
+
+    public bool IsServerAllowedForSelectedAudience()
+    {
+        if (SelectedServer is null)
+            return false;
+
+        var profile = SelectedAudience switch
+        {
+            TrustAudience.Public => Profiles.Public,
+            TrustAudience.Team => Profiles.Team,
+            _ => Profiles.Personal
+        };
+
+        return IsServerAllowed(SelectedServer, profile);
+    }
+
+    private static bool IsServerAllowed(string serverName, ToolAudienceProfile profile)
+    {
+        if (profile.McpServersMode == ToolProfileMode.All)
+            return true;
+
+        return profile.AllowedMcpServers.Contains(serverName, StringComparer.OrdinalIgnoreCase);
     }
 
     public void RequestQuit() => Shutdown();
