@@ -22,7 +22,8 @@ public sealed class McpToolAdapter : INetclawTool
         string serverName,
         string toolName,
         string? grantCategory = null,
-        IMcpToolInvoker? invoker = null)
+        IMcpToolInvoker? invoker = null,
+        int maxDescriptionChars = 0)
     {
         _mcpTool = mcpTool;
         _toolName = toolName;
@@ -31,13 +32,12 @@ public sealed class McpToolAdapter : INetclawTool
         Name = $"{serverName}/{toolName}";
         GrantCategory = grantCategory ?? $"mcp:{serverName}";
 
-        // Extract description and schema from the underlying AITool
         if (mcpTool is AIFunction func)
         {
-            Description = func.Description ?? "";
+            Description = ClampDescription(func.Description ?? "", maxDescriptionChars);
             // Sanitize schema for LLM compatibility (strips nullable unions, etc.)
             ParameterSchema = McpSchemaSanitizer.SanitizeSchema(func.JsonSchema);
-            _sanitizedTool = new SanitizedAIFunction(func, Name, ParameterSchema);
+            _sanitizedTool = new SanitizedAIFunction(func, Name, Description, ParameterSchema);
         }
         else
         {
@@ -45,6 +45,18 @@ public sealed class McpToolAdapter : INetclawTool
             ParameterSchema = default;
             _sanitizedTool = mcpTool;
         }
+    }
+
+    /// <summary>
+    /// Truncates a tool description to fit within the configured character limit.
+    /// Default 2KB matches Claude Code's cap: https://code.claude.com/docs/en/mcp
+    /// </summary>
+    internal static string ClampDescription(string description, int maxChars)
+    {
+        if (maxChars <= 0 || description.Length <= maxChars)
+            return description;
+
+        return description[..maxChars] + " [truncated]";
     }
 
     public string Name { get; }
@@ -114,19 +126,21 @@ public sealed class McpToolAdapter : INetclawTool
     {
         private readonly AIFunction _inner;
         private readonly string _namespacedName;
+        private readonly string _description;
         private readonly JsonElement _sanitizedSchema;
 
-        public SanitizedAIFunction(AIFunction inner, string namespacedName, JsonElement sanitizedSchema)
+        public SanitizedAIFunction(AIFunction inner, string namespacedName, string description, JsonElement sanitizedSchema)
         {
             _inner = inner;
             _namespacedName = namespacedName;
+            _description = description;
             _sanitizedSchema = sanitizedSchema;
         }
 
         // Use the namespaced name (e.g., "memorizer/search_memories") so the LLM
         // calls the tool by the same name it's registered under in ToolRegistry.
         public override string Name => _namespacedName;
-        public override string Description => _inner.Description;
+        public override string Description => _description;
         public override JsonElement JsonSchema => _sanitizedSchema;
 
         protected override ValueTask<object?> InvokeCoreAsync(

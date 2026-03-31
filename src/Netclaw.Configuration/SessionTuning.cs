@@ -84,6 +84,23 @@ public sealed record SessionTuning
     public int MemoryDistillationTurnInterval { get; init; } = 5;
 
     /// <summary>
+    /// Maximum characters allowed in an MCP tool description before truncation.
+    /// Oversized descriptions (e.g., Notion tools at ~10K chars each) are truncated
+    /// at registration time to protect the context window. Default matches Claude Code's
+    /// documented 2KB cap (see https://code.claude.com/docs/en/mcp — "Scale with MCP
+    /// Tool Search" section). Set to 0 to disable truncation.
+    /// </summary>
+    public int MaxToolDescriptionChars { get; init; } = 2048;
+
+    /// <summary>
+    /// Character threshold at which an MCP tool's JSON schema triggers a warning log.
+    /// Schemas cannot be safely truncated (would break invocation), so this is
+    /// observability only — alerts operators that an MCP server is shipping bloated
+    /// tool definitions. Set to 0 to disable warnings.
+    /// </summary>
+    public int MaxToolSchemaWarnChars { get; init; } = 8000;
+
+    /// <summary>
     /// Retry policy for transient streaming LLM failures (5xx, 429).
     /// Only applies when no data has been streamed yet — mid-stream failures
     /// are not retried because the partial response cannot be reconstructed.

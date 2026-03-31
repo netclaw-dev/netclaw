@@ -1,5 +1,6 @@
 using Akka.Actor;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Logging;
 using ModelContextProtocol.Client;
 using Netclaw.Actors.Reminders;
 using Netclaw.Actors.Skills;
@@ -78,16 +79,36 @@ public static class ToolRegistrationExtensions
     /// <summary>
     /// Register MCP tools discovered from an MCP server into the tool registry.
     /// Tools are wrapped as <see cref="McpToolAdapter"/> with namespaced names.
+    /// Descriptions exceeding <paramref name="maxDescriptionChars"/> are truncated.
+    /// Schemas exceeding <paramref name="maxSchemaWarnChars"/> trigger a warning log.
     /// </summary>
     public static ToolRegistry WithMcpTools(
         this ToolRegistry registry,
         string serverName,
         IList<McpClientTool> tools,
         string? grantCategory = null,
-        IMcpToolInvoker? invoker = null)
+        IMcpToolInvoker? invoker = null,
+        int maxDescriptionChars = 0,
+        int maxSchemaWarnChars = 0,
+        ILogger? logger = null)
     {
         foreach (var tool in tools)
-            registry.Register(new McpToolAdapter(tool, serverName, tool.Name, grantCategory, invoker));
+        {
+            var adapter = new McpToolAdapter(tool, serverName, tool.Name, grantCategory, invoker, maxDescriptionChars);
+            registry.Register(adapter);
+
+            if (maxSchemaWarnChars > 0 && adapter.ParameterSchema.ValueKind != System.Text.Json.JsonValueKind.Undefined)
+            {
+                var schemaChars = adapter.ParameterSchema.GetRawText().Length;
+                if (schemaChars > maxSchemaWarnChars)
+                {
+                    logger?.LogWarning(
+                        "MCP tool '{ServerName}/{ToolName}' has an oversized schema ({SchemaChars} chars, threshold {Threshold}). " +
+                        "This wastes context window budget when the tool is loaded. Consider asking the MCP server author to reduce schema verbosity.",
+                        serverName, tool.Name, schemaChars, maxSchemaWarnChars);
+                }
+            }
+        }
 
         return registry;
     }

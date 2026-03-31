@@ -21,6 +21,8 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
     private readonly IOperationalNotificationSink _notificationSink;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<McpClientManager> _logger;
+    private readonly int _maxToolDescriptionChars;
+    private readonly int _maxToolSchemaWarnChars;
 
     private readonly ConcurrentDictionary<string, McpClient> _clients =
         new(StringComparer.OrdinalIgnoreCase);
@@ -49,7 +51,8 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         McpOAuthService oauthService,
         IOperationalNotificationSink notificationSink,
         TimeProvider timeProvider,
-        ILogger<McpClientManager> logger)
+        ILogger<McpClientManager> logger,
+        SessionConfig? sessionConfig = null)
     {
         _serverEntries = serverEntries;
         _toolRegistry = toolRegistry;
@@ -58,6 +61,8 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         _notificationSink = notificationSink;
         _timeProvider = timeProvider;
         _logger = logger;
+        _maxToolDescriptionChars = sessionConfig?.Tuning.MaxToolDescriptionChars ?? 0;
+        _maxToolSchemaWarnChars = sessionConfig?.Tuning.MaxToolSchemaWarnChars ?? 0;
     }
 
     public async Task StartAsync(CancellationToken cancellationToken)
@@ -396,7 +401,8 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
             _sharedToolFunctions[name] = CreateFunctionMap(tools);
             _sessionScopedServers[name] = RequiresSessionScopedClient(name, entry);
 
-            _toolRegistry.WithMcpTools(name, tools, entry.GrantCategory, this);
+            _toolRegistry.WithMcpTools(name, tools, entry.GrantCategory, this,
+                _maxToolDescriptionChars, _maxToolSchemaWarnChars, _logger);
             _statuses[name] = new McpServerStatus(name, McpConnectionState.Connected, tools.Count, null);
 
             LogToolDrift(name, tools);

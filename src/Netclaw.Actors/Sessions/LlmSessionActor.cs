@@ -902,6 +902,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 _lastInputTokenCount = 0; // Reset — next LLM call will provide fresh count
                 _startupContextInjected = false; // Re-inject static layers on next LLM call
                 _recallManager.ResetForCompaction(); // Force fresh recall + progressive recall reset
+                _discoveredToolCache.EvictAll(_availableTools, _baseToolCount); // Reset to base tools — re-discover as needed
 
                 EnqueueCheckpointFireAndForget(new MemoryCheckpointRequest(
                     SessionId: _sessionId,
