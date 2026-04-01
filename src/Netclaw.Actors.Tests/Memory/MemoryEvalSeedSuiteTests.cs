@@ -327,9 +327,9 @@ public sealed class MemoryEvalSeedSuiteTests : IAsyncLifetime
         Assert.True(elapsed <= TimeSpan.FromMilliseconds(300));
     }
 
-    public Task InitializeAsync() => Task.CompletedTask;
+    public ValueTask InitializeAsync() => ValueTask.CompletedTask;
 
-    public async Task DisposeAsync()
+    public async ValueTask DisposeAsync()
     {
         await TryDeleteDirectoryAsync(_baseDir);
     }

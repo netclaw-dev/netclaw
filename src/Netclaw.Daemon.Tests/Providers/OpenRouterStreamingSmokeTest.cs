@@ -5,7 +5,6 @@ using Microsoft.Extensions.AI;
 using Netclaw.Providers.OpenRouter;
 using OpenAI;
 using Xunit;
-using Xunit.Abstractions;
 
 namespace Netclaw.Daemon.Tests.Providers;
 

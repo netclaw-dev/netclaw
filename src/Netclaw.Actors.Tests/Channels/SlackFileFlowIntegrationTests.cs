@@ -20,7 +20,6 @@ using Netclaw.Channels.Slack;
 using Netclaw.Configuration;
 using Netclaw.Security;
 using Xunit;
-using Xunit.Abstractions;
 
 namespace Netclaw.Actors.Tests.Channels;
 

@@ -9,7 +9,6 @@ using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Reminders;
 using Netclaw.Configuration;
 using Xunit;
-using Xunit.Abstractions;
 
 namespace Netclaw.Actors.Tests.Reminders;
 

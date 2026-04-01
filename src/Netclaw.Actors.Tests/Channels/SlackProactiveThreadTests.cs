@@ -13,7 +13,6 @@ using Netclaw.Security;
 using SlackNet;
 using SlackNet.WebApi;
 using Xunit;
-using Xunit.Abstractions;
 
 namespace Netclaw.Actors.Tests.Channels;
 

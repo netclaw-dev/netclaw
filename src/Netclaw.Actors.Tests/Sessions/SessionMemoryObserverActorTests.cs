@@ -6,7 +6,6 @@ using Microsoft.Extensions.AI;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Sessions;
 using Xunit;
-using Xunit.Abstractions;
 
 namespace Netclaw.Actors.Tests.Sessions;
 

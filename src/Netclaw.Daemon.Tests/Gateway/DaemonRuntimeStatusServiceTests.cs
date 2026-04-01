@@ -36,9 +36,9 @@ public sealed class DaemonRuntimeStatusServiceTests : IAsyncLifetime
 
     private NetclawPaths CreatePaths() => new(_tempBase);
 
-    public Task InitializeAsync() => Task.CompletedTask;
+    public ValueTask InitializeAsync() => ValueTask.CompletedTask;
 
-    public async Task DisposeAsync()
+    public async ValueTask DisposeAsync()
     {
         await TryDeleteDirectoryAsync(_tempBase);
     }
