@@ -11,6 +11,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <PackageReference Include="Akka.Hosting" VersionOverride="1.5.64" />
     <PackageReference Include="ModelContextProtocol.Core" />
     <PackageReference Include="protobuf-net" />
     <ProjectReference Include="..\Netclaw.Actors\Netclaw.Actors.csproj" />
