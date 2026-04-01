@@ -21,5 +21,6 @@ public static class DoctorRegistrationExtensions
         services.AddSingleton<IDoctorCheck, ContextWindowDoctorCheck>();
         services.AddSingleton<IDoctorCheck, UpdateAvailableDoctorCheck>();
         services.AddSingleton<IDoctorCheck, WebhookFormatDoctorCheck>();
+        services.AddSingleton<IDoctorCheck, ExposureModeDoctorCheck>();
     }
 }

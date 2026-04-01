@@ -673,12 +673,12 @@ Done when:
 **Verification:** L2
 
 Done when:
-- [ ] `ExposureModeDoctorCheck : IDoctorCheck` reads `DaemonConfig` from `netclaw.json`.
-- [ ] Reports warning when bind address is non-loopback and exposure mode is `local`.
-- [ ] Reports error when exposure mode is non-local and tunnel process not detected.
-- [ ] Reports pass when mode is `local` with loopback or non-local with healthy tunnel.
-- [ ] Registered in `DoctorRegistrationExtensions`.
-- [ ] Unit tests verify warning, error, and pass cases.
+- [x] `ExposureModeDoctorCheck : IDoctorCheck` reads `DaemonConfig` from `netclaw.json`.
+- [x] Reports warning when bind address is non-loopback and exposure mode is `local`.
+- [x] Reports error when exposure mode is non-local and tunnel process not detected.
+- [x] Reports pass when mode is `local` with loopback or non-local with healthy tunnel.
+- [x] Registered in `DoctorRegistrationExtensions`.
+- [x] Unit tests verify warning, error, and pass cases.
 
 ### Task M7.A5: Init wizard exposure mode step
 
