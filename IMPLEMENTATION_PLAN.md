@@ -32,7 +32,7 @@ Three OpenSpec changes: `exposure-modes`, `hub-auth-framework`, `device-pairing`
 **Source:** Review after iteration 5, finding #3
 **Issue:** `DaemonConfig.BindFromConfiguration()` is called twice in `Program.cs` (line ~100 for WebHost URL, line ~324 for DI singleton), creating two separate instances. If config were modified between calls, WebHost bind address and DI singleton would silently diverge.
 **Done when:**
-- [ ] `DaemonConfig` is computed once in `RunDaemonAsync`, used for `UseUrls`, and passed into `ConfigureDaemonServices` for DI registration (instead of re-parsing)
+- [x] `DaemonConfig` is computed once in `RunDaemonAsync`, used for `UseUrls`, and passed into `ConfigureDaemonServices` for DI registration (instead of re-parsing)
 **Verification:** L1
 
 ---

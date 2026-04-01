@@ -97,11 +97,11 @@ static async Task RunDaemonAsync(string[] args, DaemonRestartSignal restartSigna
 
     // Bind listen address from DaemonConfig; falls back to 127.0.0.1:5199 if
     // the Daemon section is absent from netclaw.json.
-    var daemonBindConfig = DaemonConfig.BindFromConfiguration(builder.Configuration.GetSection("Daemon"));
-    builder.WebHost.UseUrls($"http://{daemonBindConfig.Host}:{daemonBindConfig.Port}");
+    var daemonConfig = DaemonConfig.BindFromConfiguration(builder.Configuration.GetSection("Daemon"));
+    builder.WebHost.UseUrls($"http://{daemonConfig.Host}:{daemonConfig.Port}");
     var daemonLogLevel = builder.ConfigureNetclawLogging();
     builder.AddNetclawTelemetry();
-    ConfigureDaemonServices(builder.Services, builder.Configuration, paths, daemonLogLevel);
+    ConfigureDaemonServices(builder.Services, builder.Configuration, paths, daemonLogLevel, daemonConfig);
 
     // SignalR for remote clients (CLI thin client, Blazor ops console)
     builder.Services.AddSignalR();
@@ -318,10 +318,10 @@ static void ConfigureDaemonServices(
     IServiceCollection services,
     IConfigurationManager configuration,
     NetclawPaths paths,
-    LogLevel daemonLogLevel)
+    LogLevel daemonLogLevel,
+    DaemonConfig daemonConfig)
 {
-    // Daemon bind address and exposure mode
-    var daemonConfig = DaemonConfig.BindFromConfiguration(configuration.GetSection("Daemon"));
+    // Daemon bind address and exposure mode (computed once in RunDaemonAsync)
     services.AddSingleton(daemonConfig);
 
     // Validate tunnel prerequisites before the rest of the daemon starts.
