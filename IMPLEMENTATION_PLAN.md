@@ -1,13 +1,12 @@
 # Netclaw Implementation Plan
 
-Last updated: 2026-03-06
+Last updated: 2026-04-01
 Mode: build
 
 This file is RALPH-consumable.
 
-**Active milestone: Milestone 6 (0.3.2) — COMPLETE**
-All M6.x tasks are done. The next active milestone has not been designated.
-Update this header before the next RALPH run.
+**Active milestone: Milestone 7 — Daemon Exposure and Hub Auth**
+Three OpenSpec changes: `exposure-modes`, `hub-auth-framework`, `device-pairing`.
 
 ---
 
@@ -602,6 +601,269 @@ Done when:
 - [x] JSON output mode includes update info in the response payload.
 - [x] Test: mock GitHub releases API → verify `update-available` when newer version exists; verify `unknown` on timeout/error.
 
+## Milestone 7: Daemon Exposure and Hub Auth
+
+**OpenSpec Changes:**
+- `openspec/changes/exposure-modes/`
+- `openspec/changes/hub-auth-framework/`
+- `openspec/changes/device-pairing/`
+
+**Goal:** Make the daemon safely reachable beyond loopback. Configurable bind
+address, exposure mode declaration with tunnel validation, scheme-agnostic hub
+authentication, and device pairing for self-hosted remote access.
+
+**Dependency chain:** exposure-modes → hub-auth-framework → device-pairing.
+Phases below follow this order.
+
+### Phase A: Exposure Mode Configuration (exposure-modes change)
+
+### Task M7.A1: ExposureMode enum and DaemonConfig type
+
+**PRD:** `docs/prd/PRD-002-gateway-security-envelope.md` (SEC-005)
+**OpenSpec Capabilities:** `openspec/specs/netclaw-gateway-security/spec.md`
+**OpenSpec Changes:** `openspec/changes/exposure-modes/`
+**OpenSpec Tasks:** exposure-modes 1.1, 1.2, 1.4
+**Surface area:** `Netclaw.Configuration`
+**Verification:** L1
+
+Done when:
+- [ ] `ExposureMode` enum exists with `Local`, `TailscaleServe`, `TailscaleFunnel`, `CloudflareTunnel` values and `JsonStringEnumConverter` support for kebab-case.
+- [ ] `DaemonConfig` record exists with `Host` (string, default `"127.0.0.1"`), `Port` (int, default `5199`), `ExposureMode` (default `Local`).
+- [ ] `DaemonConfig` is registered in daemon DI bound from `IConfiguration` section `"Daemon"`.
+- [ ] Unit tests verify deserialization from JSON with kebab-case enum values, defaults, and missing section.
+
+### Task M7.A2: JSON schema and daemon bind address
+
+**PRD:** `docs/prd/PRD-002-gateway-security-envelope.md` (SEC-005)
+**OpenSpec Capabilities:** `openspec/specs/netclaw-gateway-security/spec.md`
+**OpenSpec Changes:** `openspec/changes/exposure-modes/`
+**OpenSpec Tasks:** exposure-modes 1.3, 2.1, 2.2
+**Surface area:** `Netclaw.Configuration`, `Netclaw.Daemon`
+**Verification:** L2
+
+Done when:
+- [ ] `Daemon` section added to `netclaw-config.v1.schema.json` with `Host` (string), `Port` (integer), `ExposureMode` (string enum), all with defaults. Section is optional.
+- [ ] `Program.cs` reads `DaemonConfig.Host` and `DaemonConfig.Port` instead of hardcoded `UseUrls("http://127.0.0.1:5199")`.
+- [ ] Existing `DaemonApi.ResolveEndpoint()` in CLI continues to work (reads `Daemon:Endpoint`, unaffected).
+- [ ] Schema validation test verifies valid `Daemon` section accepted, invalid enum rejected, missing section accepted.
+
+### Task M7.A3: Startup prerequisite validation
+
+**PRD:** `docs/prd/PRD-002-gateway-security-envelope.md` (SEC-005)
+**OpenSpec Capabilities:** `openspec/specs/netclaw-gateway-security/spec.md`
+**OpenSpec Changes:** `openspec/changes/exposure-modes/`
+**OpenSpec Tasks:** exposure-modes 3.1–3.5
+**Surface area:** `Netclaw.Daemon`
+**Verification:** L2
+
+Done when:
+- [ ] `ExposureModeValidationService : IHostedService` reads `DaemonConfig` and validates tunnel prerequisites.
+- [ ] Tailscale modes check for `tailscaled` process; Cloudflare mode checks for `cloudflared` process.
+- [ ] On failure: logs descriptive error naming the missing prerequisite and throws to fail startup.
+- [ ] `Local` mode skips all tunnel validation.
+- [ ] Unit tests verify local skips, non-local with missing process throws.
+
+### Task M7.A4: Doctor check for exposure health
+
+**PRD:** `docs/prd/PRD-002-gateway-security-envelope.md` (SEC-005)
+**OpenSpec Capabilities:** `openspec/specs/netclaw-gateway-security/spec.md`
+**OpenSpec Changes:** `openspec/changes/exposure-modes/`
+**OpenSpec Tasks:** exposure-modes 4.1–4.5
+**Surface area:** `Netclaw.Cli`
+**Verification:** L2
+
+Done when:
+- [ ] `ExposureModeDoctorCheck : IDoctorCheck` reads `DaemonConfig` from `netclaw.json`.
+- [ ] Reports warning when bind address is non-loopback and exposure mode is `local`.
+- [ ] Reports error when exposure mode is non-local and tunnel process not detected.
+- [ ] Reports pass when mode is `local` with loopback or non-local with healthy tunnel.
+- [ ] Registered in `DoctorRegistrationExtensions`.
+- [ ] Unit tests verify warning, error, and pass cases.
+
+### Task M7.A5: Init wizard exposure mode step
+
+**PRD:** `docs/prd/PRD-004-cli-onboarding-and-config.md` (Step 5)
+**OpenSpec Capabilities:** `openspec/specs/netclaw-onboarding/spec.md`
+**OpenSpec Changes:** `openspec/changes/exposure-modes/`
+**OpenSpec Tasks:** exposure-modes 5.1–5.7
+**Surface area:** `Netclaw.Cli`
+**Verification:** L1
+
+Done when:
+- [ ] `DaemonConfigSection` record added to `WizardConfigBuilder` typed sections.
+- [ ] `ExposureModeStepViewModel : IWizardStepViewModel` with `SelectionListNode` for four modes, `local` pre-selected.
+- [ ] `ExposureModeStepView` renders mode descriptions and risk indicators.
+- [ ] High-risk warning panel with explicit confirmation for `tailscale-funnel` and `cloudflare-tunnel`.
+- [ ] Informational notice for `tailscale-serve`.
+- [ ] `ContributeConfig` writes `Daemon` section only for non-default mode (local = omit).
+- [ ] Step inserted after security posture, before Slack in `InitWizardViewModel`.
+- [ ] Unit tests verify config contribution per mode.
+
+### Task M7.A6: Hot-reload exclusion and spec updates
+
+**PRD:** `docs/prd/PRD-002-gateway-security-envelope.md`
+**OpenSpec Capabilities:** `openspec/specs/netclaw-gateway-security/spec.md`
+**OpenSpec Changes:** `openspec/changes/exposure-modes/`
+**OpenSpec Tasks:** exposure-modes 6.1, 8.1, 8.2
+**Surface area:** `Netclaw.Daemon`, `docs/spec/`
+**Verification:** L1
+
+Done when:
+- [ ] `ConfigWatcherService` / `RestartCoordinator` does not apply `Daemon` section changes during hot-reload; logs warning that restart is required.
+- [ ] `SPEC-006` updated to mark exposure mode configuration as implemented.
+- [ ] `SPEC-011` updated to reference `DaemonConfig` instead of hardcoded URL.
+
+### Phase B: Hub Auth Framework (hub-auth-framework change)
+
+### Task M7.B1: Claim types and ClaimsPrincipalMapper
+
+**PRD:** `docs/prd/PRD-002-gateway-security-envelope.md`
+**OpenSpec Capabilities:** `openspec/specs/netclaw-gateway-security/spec.md`
+**OpenSpec Changes:** `openspec/changes/hub-auth-framework/`
+**OpenSpec Tasks:** hub-auth-framework 1.1–1.3
+**Surface area:** `Netclaw.Configuration`, `Netclaw.Actors`
+**Verification:** L1
+
+Done when:
+- [ ] `NetclawClaimTypes` static class exists with `netclaw:principal`, `netclaw:transport`, `netclaw:device-id` constants.
+- [ ] `ConnectionIdentity` record exists with `PrincipalClassification`, `TransportAuthenticity`, `SenderId`.
+- [ ] `ClaimsPrincipalMapper` converts `ClaimsPrincipal` → `ConnectionIdentity`, falling back to `UntrustedExternal` / `Unknown`.
+- [ ] Unit tests cover loopback claims, bearer claims, and missing claims.
+
+### Task M7.B2: Loopback authentication scheme
+
+**PRD:** `docs/prd/PRD-002-gateway-security-envelope.md`
+**OpenSpec Capabilities:** `openspec/specs/netclaw-gateway-security/spec.md`
+**OpenSpec Changes:** `openspec/changes/hub-auth-framework/`
+**OpenSpec Tasks:** hub-auth-framework 2.1–2.4
+**Surface area:** `Netclaw.Daemon`
+**Verification:** L2
+
+Done when:
+- [ ] `LoopbackAuthenticationHandler : AuthenticationHandler<AuthenticationSchemeOptions>` checks `RemoteIpAddress` against `127.0.0.1` and `::1`.
+- [ ] Loopback match returns success with `Operator` + `LocalProcess` claims.
+- [ ] Non-loopback returns `AuthenticateResult.NoResult()`.
+- [ ] Registered as default authentication scheme in daemon DI.
+- [ ] Unit tests verify loopback → success, non-loopback → NoResult.
+
+### Task M7.B3: Hub authorization and middleware
+
+**PRD:** `docs/prd/PRD-002-gateway-security-envelope.md`
+**OpenSpec Capabilities:** `openspec/specs/netclaw-gateway-security/spec.md`
+**OpenSpec Changes:** `openspec/changes/hub-auth-framework/`
+**OpenSpec Tasks:** hub-auth-framework 3.1–3.3
+**Surface area:** `Netclaw.Daemon`
+**Verification:** L2
+
+Done when:
+- [ ] `AddAuthentication()` and `AddAuthorization()` registered in daemon `Program.cs`.
+- [ ] `[Authorize]` attribute added to `SessionHub`.
+- [ ] `app.UseAuthentication()` and `app.UseAuthorization()` in middleware pipeline before hub mapping.
+- [ ] Integration test: unauthenticated non-loopback connection gets 401.
+- [ ] Integration test: loopback connection succeeds.
+
+### Task M7.B4: Identity propagation into MessageSource
+
+**PRD:** `docs/prd/PRD-002-gateway-security-envelope.md`
+**OpenSpec Capabilities:** `openspec/specs/netclaw-gateway-security/spec.md`
+**OpenSpec Changes:** `openspec/changes/hub-auth-framework/`
+**OpenSpec Tasks:** hub-auth-framework 4.1–4.4, 5.1–5.2
+**Surface area:** `Netclaw.Daemon`, `Netclaw.Cli`
+**Verification:** L2
+
+Done when:
+- [ ] `SessionRegistry.CreateSessionAsync` and `SendMessageAsync` accept `ClaimsPrincipal` parameter.
+- [ ] `ClaimsPrincipalMapper` injected into `SessionRegistry`.
+- [ ] `MessageSource.Principal`, `Provenance.TransportAuthenticity`, and `SenderId` populated from `ConnectionIdentity`.
+- [ ] `SessionHub` passes `Context.User` to all `SessionRegistry` calls.
+- [ ] CLI `DaemonClient` works without changes for loopback (verified).
+- [ ] `ConfigureAccessToken` extension point on `HubConnectionBuilder` for future bearer token attachment.
+- [ ] Unit test verifies `MessageSource` populated from claims.
+
+### Phase C: Device Pairing (device-pairing change)
+
+### Task M7.C1: Device registry and bearer token scheme
+
+**PRD:** `docs/prd/PRD-002-gateway-security-envelope.md`
+**OpenSpec Capabilities:** `openspec/specs/netclaw-gateway-security/spec.md`
+**OpenSpec Changes:** `openspec/changes/device-pairing/`
+**OpenSpec Tasks:** device-pairing 1.1–1.3, 2.1–2.6
+**Surface area:** `Netclaw.Configuration`, `Netclaw.Daemon`
+**Verification:** L2
+
+Done when:
+- [ ] `PairedDevice` record with `Name`, `TokenHash`, `Salt`, `CreatedAt`, `LastUsedAt`.
+- [ ] `DeviceRegistry` service reads/writes `devices.json` — list, add, remove, lookup-by-hash, update last-used.
+- [ ] `IRemoteAuthSchemeRegistration` marker interface for startup validation.
+- [ ] `DeviceTokenAuthenticationHandler` reads `Authorization: Bearer` header, hashes with salt, validates against registry.
+- [ ] Valid token → `Operator` / `Verified` / device name; invalid → Fail; missing → NoResult.
+- [ ] Registered alongside loopback scheme in daemon DI.
+- [ ] Unit tests for registry CRUD and auth handler.
+
+### Task M7.C2: Pairing code service and exchange endpoint
+
+**PRD:** `docs/prd/PRD-002-gateway-security-envelope.md`
+**OpenSpec Capabilities:** `openspec/specs/netclaw-gateway-security/spec.md`
+**OpenSpec Changes:** `openspec/changes/device-pairing/`
+**OpenSpec Tasks:** device-pairing 3.1–3.4, 4.1–4.5
+**Surface area:** `Netclaw.Daemon`
+**Verification:** L2
+
+Done when:
+- [ ] `PairingCodeService` generates, stores (in-memory), validates, and consumes codes.
+- [ ] Code format: 8 chars from `23456789ABCDEFGHJKLMNPQRSTUVWXYZ` as `XXXX-XXXX`, 5-min TTL, single-use.
+- [ ] Token generation: 32 bytes `RandomNumberGenerator`, base64url.
+- [ ] `POST /api/pair/exchange` endpoint — unauthenticated, accepts `{ code, deviceName }`, returns `{ token }`.
+- [ ] Rate limiting on exchange endpoint.
+- [ ] Unit tests for code lifecycle (generate, expire, consume, replace).
+
+### Task M7.C3: CLI pairing commands
+
+**PRD:** `docs/prd/PRD-002-gateway-security-envelope.md`
+**OpenSpec Capabilities:** `openspec/specs/netclaw-gateway-security/spec.md`
+**OpenSpec Changes:** `openspec/changes/device-pairing/`
+**OpenSpec Tasks:** device-pairing 5.1–5.5, 6.1–6.4
+**Surface area:** `Netclaw.Cli`, `Netclaw.Daemon`
+**Verification:** L2
+
+Done when:
+- [ ] `netclaw daemon pair` connects via SignalR, invokes `GeneratePairingCode()`, displays code + expiry.
+- [ ] `GeneratePairingCode()` hub method requires `Operator` principal.
+- [ ] `netclaw daemon devices` lists paired devices (name, created, last-used).
+- [ ] `netclaw daemon devices revoke <name>` removes device.
+- [ ] Daemon logs pairing code to stdout for Docker container log access.
+- [ ] `netclaw pair <endpoint>` prompts for code + device name, POSTs to exchange endpoint.
+- [ ] On success: stores token in `secrets.json`, endpoint in `netclaw.json`.
+
+### Task M7.C4: CLI token attachment and startup validation
+
+**PRD:** `docs/prd/PRD-002-gateway-security-envelope.md`
+**OpenSpec Capabilities:** `openspec/specs/netclaw-gateway-security/spec.md`
+**OpenSpec Changes:** `openspec/changes/device-pairing/`
+**OpenSpec Tasks:** device-pairing 7.1–7.3, 8.1–8.2
+**Surface area:** `Netclaw.Cli`, `Netclaw.Daemon`
+**Verification:** L2
+
+Done when:
+- [ ] `DaemonClient` detects non-loopback endpoint, reads `DeviceToken` from secrets, attaches via `AccessTokenProvider`.
+- [ ] On 401, CLI displays message suggesting `netclaw pair`.
+- [ ] `ExposureModeValidationService` extended: non-local mode fails startup if no paired devices and no `IRemoteAuthSchemeRegistration`.
+- [ ] Unit test: token attachment for non-loopback, skip for loopback.
+- [ ] Integration test: non-local + no devices → startup failure.
+
+### Task M7.C5: Pairing smoke test in CI
+
+**PRD:** `docs/prd/PRD-002-gateway-security-envelope.md`
+**OpenSpec Capabilities:** `openspec/specs/netclaw-gateway-security/spec.md`
+**OpenSpec Changes:** `openspec/changes/device-pairing/`
+**OpenSpec Tasks:** device-pairing 9.1–9.2
+**Surface area:** `scripts/smoke/check.sh`
+**Verification:** L2
+
+Done when:
+- [ ] Pairing smoke test section in `scripts/smoke/check.sh` exercises full lifecycle: generate code → exchange → verify device list → connect with token → revoke → verify rejection.
+- [ ] Smoke test runs after existing session/stats tests, before teardown.
+
 ---
 
 ## Deferred (Not in MVP)
@@ -619,7 +881,6 @@ be promoted to milestones in future planning sessions.
   execution.
 - **Self-configuration through conversation** — agent modifies personality,
   project registry, environment via conversation.
-- **CloudFlare/Tailscale tunnels** — external access for webhooks.
 - **Multi-key entity routing** — full multi-pattern support and routing tests.
 - **Local memory subsystem** — project registry, environment inventory,
   capability self-discovery.

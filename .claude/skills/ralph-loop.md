@@ -5,7 +5,7 @@ description: RALPH loop methodology for iterative, verifiable development. Activ
 
 # RALPH Loop Development
 
-RALPH (Recursive Autonomous Loop for Programming Humans) is an iterative development methodology where progress lives in files + git, not LLM context. The loop is only "done" when the correct verification has been performed and recorded.
+RALPH (Recursive Autonomous Loop for Programming Humans) is an iterative development methodology where progress lives in files + git, not LLM context. The loop is only “done” when the correct verification has been performed and recorded.
 
 ## When to Activate
 
@@ -19,10 +19,10 @@ Activate this skill when:
 1. **One task per iteration** — Pick ONE `### Task:` block, complete it fully, then stop
 2. **Progress in files** — All meaningful work persists in code, docs, and git
 3. **Verification is mandatory** — Done means verified, not "seems right"
-4. **Bottom-up order** — Schema/Data → API → Services → UI (unless plan explicitly overrides)
+4. **Bottom-up order** — Schema → Data → API → Actors → UI (unless plan explicitly overrides)
 5. **Flight Recorder** — Every iteration logs decisions + verification ("log or it didn't happen")
 6. **Approval gates are hard stops** — If human approval is needed, exit the loop immediately
-7. **Traceability gates are hard stops** — Tasks must reference PRD + OpenSpec artifacts
+7. **PRD gates are hard stops** — Tasks must have a valid, approved PRD reference
 8. **Evolve the system** — Repeated friction becomes a skill/template/tooling note (not a bigger constitution)
 
 ---
@@ -57,7 +57,7 @@ As soon as you pick a task, create `iter-{NN}.md` with the skeleton:
 ```markdown
 # RALPH Iteration {N} - {Task Title}
 
-## Status: IN_PROGRESS
+## Status: IN_PROGRESS ← REQUIRED: Indicates incomplete iteration
 
 ## Metadata
 - Run ID: {RUN_ID}
@@ -121,11 +121,11 @@ Each `iter-{NN}.md` MUST capture the following sections. Missing sections indica
 ## Skills Consulted
 - {skill-name.md} - {why loaded}
 - {skill-name.md} - {why loaded}
+- (or "None beyond testing-strategy" if only required skill)
 
-## Traceability Validation
+## PRD Validation (if applicable)
 - PRD reviewed: {yes/no}
-- OpenSpec capability reviewed: {yes/no}
-- OpenSpec change reviewed: {yes/no/n/a}
+- PRD accurate: {yes/no/n/a}
 - If NO: {describe discrepancy and resolution}
 
 ## Investigation Log
@@ -138,9 +138,39 @@ Each `iter-{NN}.md` MUST capture the following sections. Missing sections indica
 ## Commands Run
 | Command | Outcome |
 |---------|---------|
-| `{build command}` | {0 errors, 0 warnings} |
-| `{test command}` | {X passed, Y failed, Z skipped} |
+| `dotnet build` | {0 errors, 0 warnings} |
+| `dotnet test` | {X passed, Y failed, Z skipped} |
 | {other commands} | {outcome} |
+
+<!-- ═══ INCLUDE THIS SECTION IF VERIFICATION LEVEL IS L3 OR L4 ═══ -->
+## L3 Verification Evidence
+
+### Screenshots Captured
+- `.ralph/runs/{RUN_ID}/screenshots/iter-{NN}-1024px-{route}.png` - {description}
+- `.ralph/runs/{RUN_ID}/screenshots/iter-{NN}-1280px-{route}.png` - {description}
+- `.ralph/runs/{RUN_ID}/screenshots/iter-{NN}-1920px-{route}.png` - {description}
+
+### Application Started
+- Command: `aspire run`
+- Outcome: {All resources healthy | describe issues}
+
+### Routes Checked
+| Route | Auth | Screenshot | Result |
+|-------|------|------------|--------|
+| {/route} | {/dev-login | N/A} | {screenshot filename} | {200 - rendered correctly | describe issue} |
+
+### Console Errors
+- Console errors: none
+<!-- OR list actual errors — ANY error is a failure, fix before proceeding -->
+
+### Viewport Check
+- 1024px: {pass | describe issue} (screenshot: iter-{NN}-1024px-{route}.png)
+- 1280px: {pass | describe issue} (screenshot: iter-{NN}-1280px-{route}.png)
+- 1920px: {pass | describe issue} (screenshot: iter-{NN}-1920px-{route}.png)
+
+### Click Interactions
+- {element clicked} → {outcome}
+<!-- ═══ END L3 SECTION ═══ -->
 
 ## Commits
 - `{short_hash}` - {commit message}
@@ -171,8 +201,8 @@ Note: Each follow-up MUST have an explicit disposition:
 2. **"Write early, write often"** — Create iter file IMMEDIATELY on iteration start; append findings as discovered
 3. **Skills must be listed** — Even if just "testing-strategy.md (required)"
 4. **Issues require root cause** — Don't just note issues, explain why they occurred
-5. **Commits must be listed** — Include hash and message for traceability
-6. **Traceability validation** — Note if PRD + OpenSpec references were checked
+5. **Commits must be listed with actual hashes** — The Commits section MUST list actual commit hashes (e.g., `abc1234 - commit message`). Never write "See git log" or similar references. The hash is required for adversarial review traceability.
+6. **PRD validation** — Note if PRD was checked and whether it was accurate
 7. **Status field is mandatory** — Every iter file must have `## Status:` with value: `IN_PROGRESS`, `COMPLETED`, `BLOCKED`, or `FAILED`
 8. **Follow-ups require disposition** — Each follow-up item must have `→ Task X.Y`, `→ PARKED`, or `→ DISMISSED` to prevent orphaned issues
 
@@ -191,7 +221,6 @@ Before picking a task, read:
 2. **`PROJECT_CONTEXT.md`** — Current architecture and state (if present)
 3. **`TOOLING.md`** — Available tools/services/MCP capabilities (if present)
 4. **`IMPLEMENTATION_PLAN.md`** — Task breakdown and progress
-5. **`openspec/specs/README.md`** — Capability inventory and naming
 
 If any are missing, proceed using available evidence and note assumptions in the flight recorder.
 
@@ -227,6 +256,8 @@ Before starting any new task, check for NOW fix-it items:
    - Return to this check (there may be multiple NOW items)
 3. **No grace period.** NOW items must be addressed before ANY other work. They are the next iteration's task, period.
 
+**Why:** Run 20260207-010903 carried 3 NOW items for 13-23 iterations each without action. NOW items represent blocking issues that compound into technical debt when ignored.
+
 ---
 
 ## RALPH Iteration Steps
@@ -251,6 +282,8 @@ Before starting work, check if ALL done-when criteria are already satisfied:
 4. **Rule:** Commits must contain substantive code changes. Do not create commits that only update `IMPLEMENTATION_PLAN.md` checkboxes.
 5. **Escalation:** If 3+ consecutive tasks are already done, STOP and report: "Phase may be finished by prior work. Reassess before continuing."
 
+**Why:** Run 20260207-010903 spent 8 of 10 Phase 10 iterations creating checkbox-only commits for work already done by PR #290.
+
 ### Task Interpretation Rules
 
 **Done-when criteria describe the end state, not the steps.**
@@ -263,29 +296,26 @@ Before starting work, check if ALL done-when criteria are already satisfied:
 
 ---
 
-### 1.5) Verify Traceability Gate (HARD STOP)
+### 1.5) Verify PRD Gate (HARD STOP)
 
-Before proceeding, verify the task has references to planning artifacts:
+Before proceeding, verify the task has a valid PRD:
 
-1. `**PRD:**` field with one or more `docs/prd/*.md` files
-2. `**OpenSpec Capabilities:**` field with one or more
-   `openspec/specs/*/spec.md` files
-3. Optional but preferred: `**OpenSpec Changes:**` field with one or more
-   `openspec/changes/*/` directories
-4. Verify all referenced paths exist
+1. Check task has `**PRD:** docs/prd/{name}.md` field
+2. Verify PRD file exists
+3. Verify PRD status is `approved` (not `draft` or `in-review`)
 
-**If required references are missing or invalid:**
+**If PRD is missing, doesn't exist, or not approved:**
 - EXIT the iteration immediately
-- Report: "BLOCKED: Task missing PRD/OpenSpec traceability references."
+- Report: "BLOCKED: Task requires approved PRD. Use /plan to create."
 - Do NOT proceed to implementation
 
-This prevents implementation drift from the approved planning baseline.
+This prevents work on undefined requirements.
 
 ---
 
 ### 2) Determine Mode
 
-From `AGENTS.md` / `CLAUDE.md` Task Routing, pick the correct MODE for this iteration.
+From `AGENTS.md` Task Routing, pick the correct MODE for this iteration.
 
 If the task spans modes, execute sequentially:
 1) engineering → 2) design → 3) marketing (unless constitution says otherwise).
@@ -344,13 +374,23 @@ Write `.ralph/runs/{RUN_ID}/BAIL.md` and exit the run when:
 **Work completed so far:** {Brief summary of iterations 1 through N-1}
 ```
 
+#### What Happens After Bail
+
+1. The bail file is written
+2. An adversarial review runs on all work done so far (commits up to this point)
+3. The review writes any fix-it items to `IMPLEMENTATION_PLAN.md`
+4. The loop exits
+5. Human reads BAIL.md, provides direction, and starts a new Ralph run
+
+**Why:** Bailing early prevents slop from accumulating. If the agent doesn't have clear direction, continuing will produce low-quality work that needs to be cleaned up later. It's cheaper to stop, review, and restart with clarity.
+
 ---
 
 ### 4) Gather Context (Skills & Policies)
 
 #### 4a) Mandatory Skill Citation Checklist (REQUIRED)
 
-**Before writing any code**, check the Mandatory Skill Consultation Triggers table in `CLAUDE.md` (if present).
+**Before writing any code**, check the Mandatory Skill Consultation Triggers table in `CLAUDE.md`.
 
 For EACH trigger that matches your task:
 1. Load the skill
@@ -362,20 +402,35 @@ For EACH trigger that matches your task:
 
 **Even if the pattern is familiar from prior work, you MUST cite the skill.** The citation is for traceability, not learning. The adversarial review checks for these citations.
 
-**Why:** Mandatory skill citation rate can drop below 50% without this rule. The agent applies patterns correctly but doesn't cite skills, making it impossible to audit whether skills were actually consulted.
+**Common triggers to check:**
+- Adding/modifying configuration → `microsoft-extensions-configuration`
+- Creating/modifying actors → `akka-hosting-actor-patterns`
+- Adding persistence events → `extend-only-design.md`
+- Creating email templates → `mjml-email-templates`
+- Adding EF Core queries/migrations → `efcore-patterns`
+- Blazor services using DbContext → `blazor-server-dbcontext.md`
+- Configuring cluster sharding/singletons → `akka-cluster-roles.md`
+- Adding actor tests → `akka-net-testing-patterns`
+
+**Why:** Run 20260210-165314 had 43% mandatory skill citation rate. The agent applied patterns correctly but didn't cite skills, making it impossible to audit whether skills were actually consulted.
 
 #### 4b) Load Standard Skills
 
 Load relevant skills based on surface area:
 
 **Always for code:**
-- `testing-strategy.md` — if present: unit vs integration test decisions
+- `.claude/skills/testing-strategy.md` — REQUIRED: unit vs integration vs screenshots; `/dev-login`; no fakes
 
-**If UI or UI dependencies change:**
-- `ui-smoke-validation.md` — if present: UI verification requirements
+**If UI or UI dependencies change OR the task is UI-related:**
+- `.claude/skills/ui-smoke-validation.md` — REQUIRED
 
 **If schema/events:**
-- `extend-only-design.md` — wire compatibility rules (if present)
+- `.claude/skills/extend-only-design.md` — wire compatibility rules (if present)
+
+Also consider external/marketplace skills only when relevant:
+- `/dotnet-skills:slopwatch`
+- `/dotnet-skills:akka-net-testing-patterns`
+- `/dotnet-skills:snapshot-testing`
 
 ---
 
@@ -386,7 +441,7 @@ Before implementing, classify the task surface area and choose a Verification Le
 - **L0**: docs-only
 - **L1**: pure logic changes (build + unit tests)
 - **L2**: I/O coordination (DB/HTTP/actors/external) → integration tests required
-- **L3**: UI changes OR UI dependency changes → L2 + manual click testing via Playwright MCP (screenshots required; no downgrade to L2 for UI files)
+- **L3**: UI changes OR UI dependency changes → L2 + manual click testing via Playwright MCP (screenshots required; no downgrade to L2 for `*.razor` / `*.css` files)
 - **L4**: cross-cutting/high-risk → L3 + golden path walkthrough with screenshots
 
 You must state:
@@ -402,75 +457,87 @@ If verification level is L3 or L4, screenshots MUST be saved to disk in the ralp
 
 **Directory:** `.ralph/runs/{RUN_ID}/screenshots/`
 **Naming:** `iter-{NN}-{viewport}-{route-slug}.png`
-  - Example: `iter-08-1280px-settings-page.png`
+  - Example: `iter-08-1280px-webhooks-add-slack.png`
+
+#### How to Capture Screenshots
+
+**Option A: `browser_take_screenshot` with `filename` (PREFERRED)**
+Use `mcp__playwright__browser_take_screenshot` with the `filename` parameter pointing to the ralph screenshots directory:
+```
+filename: .ralph/runs/{RUN_ID}/screenshots/iter-08-1280px-setup-sync.png
+```
+This saves directly to disk AND returns the image in conversation context for verification.
+
+**Option B: `browser_run_code` with `page.screenshot()`**
+```javascript
+await page.screenshot({ path: '.ralph/runs/{RUN_ID}/screenshots/iter-08-1280px-inbox.png' });
+```
 
 #### Playwright MCP Subagent Rules
 
 When delegating Playwright work to a subagent via the Task tool:
 - **Use subagent type: `playwright-gopher`** — this is the ONLY valid type for browser automation
-- **Specify `model: "haiku"`** — playwright-gopher agents default to parent model otherwise, wasting cost
+- **Specify `model: "haiku"`** — playwright-gopher agents default to parent model (Opus) otherwise, wasting cost
 - **`browser-automation` does NOT exist** — never use it as a subagent type
-- **Use HTTP, not HTTPS** for local dev URLs if Playwright does not trust the dev certificate
+- **Use HTTP, not HTTPS** for local dev URLs — Playwright does not trust the ASP.NET dev certificate (`ERR_SSL_PROTOCOL_ERROR`). Use `http://localhost:5000` instead of `https://localhost:5001`.
+
+**Why subagent rules matter:** Run 20260211-130358 iter-08 tried `subagent_type=browser-automation` (doesn't exist), then tried HTTPS (SSL error), losing two iterations before the human intervened.
 
 #### Screenshot Persistence Rules
 
-- Screenshots MUST be saved to `.ralph/runs/{RUN_ID}/screenshots/` — NOT to project root
+- Screenshots MUST be saved to `.ralph/runs/{RUN_ID}/screenshots/` — NOT to project root, NOT to `.playwright-mcp/`
 - Every screenshot filename MUST be listed in the iteration log under "## L3 Verification Evidence > ### Screenshots Captured"
 - If no screenshot files exist in the screenshots directory for this iteration, the L3 verification is INVALID
 - Do NOT delete screenshots after viewing them — the adversarial reviewer needs persistent evidence
 - After capturing, use `Read` tool to visually confirm the screenshot content before proceeding
 
+**Why:** Run 20260207-010903 iter-30 claimed L4 with zero artifacts on disk. Run 20260211-130358 iter-08 captured screenshots to the wrong location and then deleted them.
+
 ---
 
 ### 5.75) UI File Gate (MANDATORY)
 
-**If ANY file touched in this iteration is a UI file** (e.g., `*.razor`, `*.css`, `*.tsx`, `*.vue`, `*.svelte`, `*.html`), the following rules apply:
+**If ANY file touched in this iteration matches `*.razor` or `*.css`**, the following rules apply:
 
 1. **Screenshots are MANDATORY** — verification level MUST be L3 or higher
 2. **No L3→L2 downgrade for UI work** — this is a hard policy, not a suggestion
-3. **If the app can't start:** the iteration is **BLOCKED**, not COMPLETED. Do not commit code without visual verification.
+3. **If Aspire can't start:** the iteration is **BLOCKED**, not COMPLETED. Do not commit code without visual verification.
 
 #### L3 Deferral for Unintegrated Components
 
-If a new component is created but **cannot be visually tested** because it isn't integrated into any page yet, L3 may be deferred to the integration iteration — provided:
+If a new component is created (`*.razor`) but **cannot be visually tested** because it isn't integrated into any page yet, L3 may be deferred to the integration iteration — provided:
 
 1. The **same RALPH run** has a subsequent task that integrates the component into a page
 2. That integration task performs full L3 verification covering both the component and its styling
 3. The creation iteration is marked **BLOCKED on L3** (not COMPLETED) until the integration iteration's L3 passes
 
+If no integration task follows in the current run, the component must be integrated into a test page for L3 in the same iteration.
+
+#### Comparison Rules
+
+| Scenario | Screenshots Required? |
+|----------|----------------------|
+| `*.razor` + backend code | YES (for UI parts) |
+| CSS-only changes | YES (CSS is visual by definition) |
+| Shared component change | YES, primary page + document which pages use it |
+| Layout component change | YES, at least 2 pages using the layout |
+| `.razor.cs` only (no markup change) | Only if rendering behavior changes |
+| New component, not yet integrated | DEFERRED (see L3 Deferral above) |
+
+**With mockup:** Compare screenshots against `docs/design/mockups/` reference.
+**Without mockup:** Existence proof — the page renders, is interactive, and has no console errors.
+
+**Why:** RALPH run 20260210-165314 built 15 iterations of account deletion UI and never launched the app. The agent wrote E2E tests as a proxy for verification. Those tests were never executed. Screenshots force the agent to actually run the app.
+
 ---
-
-### 5.9) OpenSpec Artifact Gate (HARD STOP)
-
-**If the task requires creating or modifying OpenSpec artifacts** (specs,
-changes, proposals, delta specs, design docs, tasks files), you MUST use
-the OpenSpec skills. Do NOT manually create or edit files under `openspec/`.
-
-| Need | Skill |
-|------|-------|
-| New feature/capability needs spec work | `/opsx-new` |
-| Continue an in-progress change | `/opsx-continue` |
-| Fast-forward all artifacts at once | `/opsx-ff` |
-| Implement tasks from a change | `/opsx-apply` |
-| Sync delta specs to main specs | `/opsx-sync` |
-| Verify implementation matches specs | `/opsx-verify` |
-| Archive a completed change | `/opsx-archive` |
-
-**The only exception:** Updating task checkboxes in
-`openspec/changes/*/tasks.md` during RALPH iterations (Step 9).
-
-**If you encounter a missing OpenSpec capability during implementation:**
-1. STOP implementation
-2. Use `/opsx-new` to create the change
-3. Use `/opsx-ff` to generate all artifacts
-4. Resume implementation with proper traceability
 
 ### 6) Implement
 
-Follow architecture rules from the constitution (AGENTS.md / CLAUDE.md):
-- service layer patterns
+Follow architecture rules from the constitution:
+- service layer pattern
 - endpoints thin
 - UI thin
+- actors not called directly by endpoints
 - value objects preferred
 
 ---
@@ -480,8 +547,8 @@ Follow architecture rules from the constitution (AGENTS.md / CLAUDE.md):
 Minimum quality bar:
 
 ```bash
-# Use project-appropriate build + test commands
-# Examples: dotnet build && dotnet test, npm run build && npm test, cargo build && cargo test
+dotnet build   # 0 errors, 0 warnings
+dotnet test    # all pass
 ```
 
 **Level-specific requirements:**
@@ -501,39 +568,73 @@ Minimum quality bar:
 **CRITICAL:** If you claim L3 verification level, you MUST complete ALL of the following.
 Deferring L3 verification to "follow-up" or "can be performed manually later" is **FORBIDDEN**.
 
+**FORMAT REQUIREMENT:** Your iteration log MUST use the `## L3 Verification Evidence` template from the Iteration Log Template above (the section between `═══ INCLUDE THIS SECTION IF VERIFICATION LEVEL IS L3 OR L4 ═══` markers). The `ralph.sh` L3 gate greps for these **exact patterns** — freeform prose will not pass:
+- `Routes Checked` (subsection header — NOT buried in a table or bullet list)
+- `Console errors: none` (literal string — or `Console errors:` with documented errors)
+- `1024px` AND `1280px` AND `1920px` (all three viewports — one is not enough)
+
+If your L3 section doesn't contain these exact strings, **the automated gate will reject the iteration**.
+
 #### Required Evidence
 
 Your iteration log MUST include explicit evidence of each item:
 
 1. **Application Running**
-   - Start command ran (per project: `aspire run`, `npm start`, `cargo run`, etc.)
-   - Wait for health check or startup confirmation
+   - `aspire run` command ran (or fallback documented per TOOLING.md)
+   - Wait for health check: "api" resource healthy
    - Log the command and outcome
 
 2. **Routes Navigated**
-   - List specific routes checked
-   - For authenticated routes: used dev auth method
-   - Confirm each route rendered without errors
+   - List specific routes checked (e.g., `/webhooks/add/slack`, `/webhooks/add/discord`)
+   - For authenticated routes: used `/dev-login` first
+   - Confirm each route rendered without 404/500
 
 3. **Console Errors Checked**
-   - Open browser dev tools
+   - Open browser dev tools (F12)
    - Navigate to each impacted route
    - Report: "Console errors: none" OR list actual errors
    - **ANY console error is a failure** - fix before proceeding
 
-4. **Viewport Sanity (spot check)**
-   - Check layout at 1024px, 1280px, 1920px
+4. **Viewport Check (ALL THREE REQUIRED)**
+   - Resize browser and screenshot at 1024px, 1280px, AND 1920px
    - No broken layouts, hidden CTAs, or content overflow
+   - Record each viewport result individually (the gate checks for all three width strings)
 
 5. **Click Interactions (for new/changed UI)**
    - Test primary interactions: buttons, links, modals, form submissions
    - Record what was clicked and outcome
 
+#### If L3 Cannot Be Performed
+
+**Non-UI tasks** (no `*.razor` or `*.css` files touched):
+1. Downgrade to L2 is allowed with explicit justification
+2. Add a follow-up task: "L3 verification for [feature]" with `→ Task X.Y`
+3. Do NOT claim L3 while deferring the actual verification
+
+**UI tasks** (`*.razor` or `*.css` files touched):
+1. **Downgrade is FORBIDDEN** — verification level stays L3
+2. If infrastructure prevents verification, the iteration status is **BLOCKED**, not COMPLETED
+3. Do NOT commit code changes. The iteration is incomplete.
+4. Document the blocker in the flight recorder and fix the infrastructure issue before proceeding
+
+This prevents "checkbox fraud" where L3 is claimed without evidence, and prevents UI code from shipping without visual verification.
+
+#### L3 Section Format
+
+**Use the `## L3 Verification Evidence` template from the Iteration Log Template** (search for `═══ INCLUDE THIS SECTION IF VERIFICATION LEVEL IS L3 OR L4 ═══`). Copy the subsection structure exactly — do NOT write freeform prose instead of the structured sections.
+
+**Note:** Every screenshot filename must be saved to `.ralph/runs/{RUN_ID}/screenshots/` using `browser_take_screenshot` with `filename` parameter or `browser_run_code` with `page.screenshot({path: ...})`. Claiming L3 without persistent artifacts is verification fraud.
+
+**Why this is strict:** Run 20260227-044734 iter-01 wrote L3 evidence as freeform bullets instead of using the required subsection headers (`### Routes Checked`, `### Console Errors`, `### Viewport Check`). The `ralph.sh` automated gate grep'd for those exact strings and rejected the iteration. The agent did the work but logged it in the wrong format.
+
 ---
 
 ### 8) Record Evidence (Flight Recorder)
 
-Update `$ITER_LOG` with all sections from the iteration log template.
+Update `$ITER_LOG` with:
+- All sections from the iteration log template
+- Commands run with outcomes
+- If L3: Include complete L3 Verification Evidence section
 
 ---
 
@@ -542,23 +643,20 @@ Update `$ITER_LOG` with all sections from the iteration log template.
 If verification passes:
 1. Commit code changes with descriptive message
 2. Include IMPLEMENTATION_PLAN.md checkbox updates in same commit
-3. Update referenced `openspec/changes/*/tasks.md` checkboxes in same commit
-4. Run `openspec validate --all --no-interactive` and record result
-5. Update TOOLING.md if new tools/resources were discovered
+3. Update TOOLING.md if new tools/resources were discovered
 
 ---
 
-### 10) Check OpenSpec Change Progress
+### 10) Check PRD Completion
 
-After completing a task, check whether linked OpenSpec changes are ready to
-advance:
+After completing a task, check if it completes a PRD:
 
-1. Read task's `**OpenSpec Changes:**` references
-2. Update task checkboxes inside each referenced
-   `openspec/changes/<name>/tasks.md`
-3. Run `openspec status --change <name>` for each linked change
-4. If all artifacts are complete and implementation for that change is done,
-   note that the change is ready for `openspec archive <name>`
+1. Read the task's `**PRD:**` reference
+2. Check `IMPLEMENTATION_PLAN.md` - are ALL tasks for that PRD complete?
+3. If complete:
+   - Update PRD frontmatter: `status: implemented`, `implemented: {date}`
+   - Update `docs/prd/INDEX.md`: move to "Implemented PRDs" section
+   - Log in flight recorder: "PRD completed: {name}"
 
 ### 11) Write Parked Items to BACKLOG_PARKING_LOT.md
 
@@ -568,6 +666,8 @@ If your iteration log contains any follow-ups marked `→ PARKED`:
 2. Append each item under "## Items Awaiting Decision" with: title, source (iteration/task), issue description, decision needed, date
 3. Update your iteration log to reference the parking lot entry
 4. **This is NOT optional** — all PARKED items must be written in the same iteration they're identified
+
+**Why:** Run 20260207-010903 had 15+ items marked PARKED in reviews that never reached BACKLOG_PARKING_LOT.md.
 
 ### 12) Check Archive Need
 
@@ -583,27 +683,32 @@ Stop after ONE task. Do not continue to additional tasks.
 
 ---
 
-## OpenSpec Traceability Gate (HARD STOP)
+## PRD Gate (HARD STOP)
 
-**Before implementing any task, verify traceability references:**
+**Before implementing any task, verify its PRD reference:**
 
-1. Task has `**PRD:** docs/prd/*.md`
-2. Task has `**OpenSpec Capabilities:** openspec/specs/*/spec.md`
-3. Referenced files exist
+1. Check task has `**PRD:** docs/prd/{name}/README.md` field
+2. Verify the PRD file exists at that path
+3. Check PRD frontmatter `status` is `approved` (not `draft`)
 
-**If required references are missing:**
+**If PRD is missing or draft:**
 ```
-BLOCKED: Task X.Y requires PRD + OpenSpec references
+BLOCKED: Task X.Y requires approved PRD
 
-PRD reference: {path or missing}
-OpenSpec capability: {path or missing}
+PRD reference: {path}
+Status: {missing | draft}
 
 Action required:
-- Update IMPLEMENTATION_PLAN.md task metadata with valid references
-- Create missing OpenSpec artifacts with /opsx:new or /opsx:continue
+- Use /plan to create or complete the PRD
+- Get PRD approved before implementing
 
-EXIT ITERATION - Do not proceed without traceability.
+EXIT ITERATION - Do not proceed without approved PRD.
 ```
+
+**Why this matters:**
+- Prevents implementing features without clear requirements
+- Ensures business context and success metrics are defined
+- Creates audit trail from requirement → implementation
 
 ---
 

@@ -178,8 +178,6 @@ ${prior_reviews:-  (none — this is the first review)}
 
 3. **Full review areas (from skill):**
    - A) Checkbox Integrity — do changes satisfy Done-when criteria?
-   - A2) OpenSpec Integrity — code aligned with referenced specs?
-   - A3) OpenSpec Workflow Compliance — were /opsx-* skills used (not manual edits)?
    - B) Testing Strategy Compliance — integration tests for I/O, screenshots for UI
    - C) Architecture Compliance — follow constraints from AGENTS.md/CLAUDE.md
    - D) Framework compliance per CLAUDE.md
@@ -335,16 +333,13 @@ for ((i=1; i<=ITERATIONS; i++)); do
 2. PROJECT_CONTEXT.md - Current architecture and state (if present)
 3. TOOLING.md - Available tools/services (if present)
 4. IMPLEMENTATION_PLAN.md - Task breakdown
-5. openspec/specs/README.md - Capability map
 
 ## Instructions (ONE TASK ONLY)
 
 1) Find the next incomplete task in IMPLEMENTATION_PLAN.md:
-    - Look for '### Task:' blocks with unchecked 'Done when:' items
-    - Work on the FIRST incomplete task you find
-    - A task is complete only when ALL its Done-when checkboxes are satisfied
-    - Read task metadata fields: PRD, OpenSpec Capabilities, OpenSpec Changes
-    - Open the referenced OpenSpec files before implementing
+   - Look for '### Task:' blocks with unchecked 'Done when:' items
+   - Work on the FIRST incomplete task you find
+   - A task is complete only when ALL its Done-when checkboxes are satisfied
 
 2) Determine MODE from Task Routing in AGENTS.md/CLAUDE.md (engineering/ux/marketing/ops/etc.)
 
@@ -354,15 +349,6 @@ for ((i=1; i<=ITERATIONS; i++)); do
    - If UI impacted: ui-smoke-validation.md (or follow UI validation policy)
    - If schema/events touched: extend-only-design.md (if present)
 
-3b) OpenSpec Workflow (MANDATORY — see AGENTS.md for full details):
-   - If your task involves PLANNING work (new specs, changes, proposals):
-     Use /opsx-new, /opsx-continue, or /opsx-ff — do NOT manually create openspec/ files
-   - If your task involves FINISHING work (syncing specs, archiving):
-     Use /opsx-sync, /opsx-verify, /opsx-archive
-   - The ONLY manual edit allowed under openspec/ is ticking task checkboxes
-     in openspec/changes/*/tasks.md
-   - Run 'openspec validate --all --no-interactive' before every commit
-
 4) BEFORE coding: choose Verification Level (L0-L4) and state why:
    - I/O coordination (DB/HTTP/actors/external) => L2+ (integration tests required)
    - UI or UI dependency changed => L3+ (UI smoke / Playwright required)
@@ -370,10 +356,9 @@ for ((i=1; i<=ITERATIONS; i++)); do
 5) Implement to satisfy ALL unchecked Done-when criteria for the chosen task.
 
 6) Verify (must match chosen level):
-    - Minimum: build + test (language-appropriate commands)
-    - If Level >= L3: run UI smoke/Playwright and check for console errors
-    - Follow any additional quality gates from AGENTS.md/CLAUDE.md
-    - Run openspec validate --all --no-interactive before committing
+   - Minimum: build + test (language-appropriate commands)
+   - If Level >= L3: run UI smoke/Playwright and check for console errors
+   - Follow any additional quality gates from AGENTS.md/CLAUDE.md
 
 7) FLIGHT RECORDER (MANDATORY):
    - Write $ITER_LOG BEFORE committing.
@@ -389,10 +374,9 @@ for ((i=1; i<=ITERATIONS; i++)); do
    - 'Log or it didn't happen.'
 
 8) If verification passes:
-    - Commit to the current feature branch with a descriptive message
-    - Update IMPLEMENTATION_PLAN.md checkboxes in the SAME commit
-    - Update referenced openspec/changes/*/tasks.md checkboxes in the SAME commit
-    - Update TOOLING.md if you used or discovered a new tool/resource
+   - Commit to the current feature branch with a descriptive message
+   - Update IMPLEMENTATION_PLAN.md checkboxes in the SAME commit
+   - Update TOOLING.md if you used or discovered a new tool/resource
 
 9) Stop at checkpoints (UI approval, architecture decisions, credential setup) and ask the user if needed.
 
@@ -403,7 +387,6 @@ for ((i=1; i<=ITERATIONS; i++)); do
 - Never commit to dev/main/master
 - Follow constraints from AGENTS.md/CLAUDE.md
 - Test against real infrastructure (per testing-strategy)
-- Keep OpenSpec changes/specs synchronized with implementation
 "; then
     EXIT_CODE=$?
     echo ""
