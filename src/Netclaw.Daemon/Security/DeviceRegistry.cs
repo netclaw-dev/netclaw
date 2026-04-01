@@ -174,9 +174,9 @@ internal sealed class DeviceRegistry
             var computed = ComputeTokenHash(rawToken, device.Salt);
             return string.Equals(computed, device.TokenHash, StringComparison.OrdinalIgnoreCase);
         }
-        catch
+        catch (FormatException)
         {
-            // Malformed token bytes — treat as no-match
+            // Malformed token bytes (bad base64url or hex) — treat as no-match
             return false;
         }
     }

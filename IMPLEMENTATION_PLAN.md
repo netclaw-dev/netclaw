@@ -32,7 +32,7 @@ Three OpenSpec changes: `exposure-modes`, `hub-auth-framework`, `device-pairing`
 **Source:** Review after iteration 15, finding #3
 **Issue:** `DeviceRegistry.VerifyToken()` at line 176 uses bare `catch` that swallows all exceptions. Only `FormatException` (from malformed base64url/hex) is expected. Broader exceptions (e.g., `CryptographicException`) should propagate.
 **Done when:**
-- [ ] `catch` in `DeviceRegistry.VerifyToken` narrowed to `catch (FormatException)`
+- [x] `catch` in `DeviceRegistry.VerifyToken` narrowed to `catch (FormatException)`
 **Verification:** L1
 
 ### Task R3.4: Sync device-pairing/tasks.md section 10 checkboxes

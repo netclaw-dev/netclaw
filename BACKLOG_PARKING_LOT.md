@@ -24,3 +24,9 @@
 - **Issue:** ExposureMode parsing and wire-value conversion logic is duplicated in 6 locations across 3 assemblies (`Netclaw.Configuration`, `Netclaw.Cli`, `Netclaw.Daemon`). The doctor check duplicates `ParseMode`/`ToWireValue` because `Netclaw.Cli` doesn't have `InternalsVisibleTo` for `Netclaw.Configuration`. Adding a new ExposureMode variant requires synchronized changes in all 6 locations.
 - **Decision needed:** Should `DaemonConfig.ParseExposureMode()` and a canonical `ToWireValue()` be made `public` on the `Netclaw.Configuration` assembly so other assemblies can reuse them? Or create a new `ExposureModeSerializer` public utility type? Or accept the duplication given assembly boundary constraints?
 - **Date parked:** 2026-04-01
+
+### Exchange endpoint integration test timing
+- **Source:** RALPH run 20260401-171023, review after iteration 15 (finding #5)
+- **Issue:** `POST /api/pair/exchange` is a new HTTP endpoint added in M7.C2 that coordinates PairingCodeService + DeviceRegistry + rate limiter. Per testing strategy, new endpoints should have integration tests in the same iteration. Currently only unit tests exist for the underlying service. Task 10.4 in `device-pairing/tasks.md` plans a full integration test ("generate code → exchange → connect with token → authenticated session") but this is deferred to a later task.
+- **Decision needed:** Should M7.C2 retroactively add a focused integration test for the exchange endpoint HTTP behavior (400/401/200 responses, rate limiting), or is the planned full-flow integration test in task 10.4 sufficient?
+- **Date parked:** 2026-04-01
