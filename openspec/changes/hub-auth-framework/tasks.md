@@ -6,10 +6,10 @@
 
 ## 2. Loopback Authentication Scheme
 
-- [ ] 2.1 Implement `LoopbackAuthenticationHandler : AuthenticationHandler<AuthenticationSchemeOptions>` that checks `HttpContext.Connection.RemoteIpAddress` against `127.0.0.1` and `::1`
-- [ ] 2.2 On loopback match: return success with Netclaw claims (`Operator`, `LocalProcess`, `SenderId = "local"`)
-- [ ] 2.3 On non-loopback: return `AuthenticateResult.NoResult()` to defer to other schemes
-- [ ] 2.4 Register the loopback scheme as the default authentication scheme in daemon DI
+- [x] 2.1 Implement `LoopbackAuthenticationHandler : AuthenticationHandler<AuthenticationSchemeOptions>` that checks `HttpContext.Connection.RemoteIpAddress` against `127.0.0.1` and `::1`
+- [x] 2.2 On loopback match: return success with Netclaw claims (`Operator`, `LocalProcess`, `SenderId = "local"`)
+- [x] 2.3 On non-loopback: return `AuthenticateResult.NoResult()` to defer to other schemes
+- [x] 2.4 Register the loopback scheme as the default authentication scheme in daemon DI
 
 ## 3. Hub Authorization
 
@@ -32,7 +32,7 @@
 ## 6. Tests
 
 - [x] 6.1 Unit test `ClaimsPrincipalMapper` — loopback claims → `Operator`/`LocalProcess`, missing claims → `UntrustedExternal`/`Unknown`, bearer claims → `Operator`/`Verified`
-- [ ] 6.2 Unit test `LoopbackAuthenticationHandler` — loopback IP → success with correct claims, non-loopback IP → `NoResult`
+- [x] 6.2 Unit test `LoopbackAuthenticationHandler` — loopback IP → success with correct claims, non-loopback IP → `NoResult`
 - [ ] 6.3 Integration test — unauthenticated non-loopback connection gets 401
 - [ ] 6.4 Integration test — loopback connection succeeds and `MessageSource` carries `Operator` / `LocalProcess`
 - [ ] 6.5 Unit test `SessionRegistry` — verify `MessageSource` is populated from `ClaimsPrincipal` instead of hardcoded defaults

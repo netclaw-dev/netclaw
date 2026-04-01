@@ -767,11 +767,11 @@ Done when:
 **Verification:** L2
 
 Done when:
-- [ ] `LoopbackAuthenticationHandler : AuthenticationHandler<AuthenticationSchemeOptions>` checks `RemoteIpAddress` against `127.0.0.1` and `::1`.
-- [ ] Loopback match returns success with `Operator` + `LocalProcess` claims.
-- [ ] Non-loopback returns `AuthenticateResult.NoResult()`.
-- [ ] Registered as default authentication scheme in daemon DI.
-- [ ] Unit tests verify loopback → success, non-loopback → NoResult.
+- [x] `LoopbackAuthenticationHandler : AuthenticationHandler<AuthenticationSchemeOptions>` checks `RemoteIpAddress` against `127.0.0.1` and `::1`.
+- [x] Loopback match returns success with `Operator` + `LocalProcess` claims.
+- [x] Non-loopback returns `AuthenticateResult.NoResult()`.
+- [x] Registered as default authentication scheme in daemon DI.
+- [x] Unit tests verify loopback → success, non-loopback → NoResult.
 
 ### Task M7.B3: Hub authorization and middleware
 

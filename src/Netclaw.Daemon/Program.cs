@@ -29,6 +29,7 @@ using Netclaw.Daemon.Configuration;
 using Netclaw.Daemon.Gateway;
 using Netclaw.Daemon.Mcp;
 using Netclaw.Daemon.Providers;
+using Netclaw.Daemon.Security;
 using Netclaw.Daemon.Services;
 using Netclaw.Search;
 using Netclaw.Security;
@@ -102,6 +103,13 @@ static async Task RunDaemonAsync(string[] args, DaemonRestartSignal restartSigna
     var daemonLogLevel = builder.ConfigureNetclawLogging();
     builder.AddNetclawTelemetry();
     ConfigureDaemonServices(builder.Services, builder.Configuration, paths, daemonLogLevel, daemonConfig);
+
+    // Authentication — loopback scheme trusts same-machine connections by default.
+    // Additional schemes (device bearer token) are registered by later milestones.
+    builder.Services
+        .AddAuthentication(LoopbackAuthenticationHandler.SchemeName)
+        .AddScheme<Microsoft.AspNetCore.Authentication.AuthenticationSchemeOptions, LoopbackAuthenticationHandler>(
+            LoopbackAuthenticationHandler.SchemeName, _ => { });
 
     // SignalR for remote clients (CLI thin client, Blazor ops console)
     builder.Services.AddSignalR();
