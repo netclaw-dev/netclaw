@@ -62,7 +62,7 @@ internal sealed class ExposureModeValidationService : IHostedService
             ExposureMode.TailscaleServe => "tailscale-serve",
             ExposureMode.TailscaleFunnel => "tailscale-funnel",
             ExposureMode.CloudflareTunnel => "cloudflare-tunnel",
-            _ => _config.ExposureMode.ToString()
+            _ => throw new ArgumentOutOfRangeException(nameof(_config.ExposureMode), _config.ExposureMode, $"Unknown ExposureMode value: {_config.ExposureMode}")
         };
 
         _logger.LogCritical(

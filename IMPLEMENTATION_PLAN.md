@@ -23,9 +23,9 @@ Three OpenSpec changes: `exposure-modes`, `hub-auth-framework`, `device-pairing`
 **Source:** Review after iteration 5, finding #2
 **Issue:** `ExposureModeExtensions.ToWireValue()` in `WizardConfigBuilder.cs:340-347` uses `_ => "local"` — a silent fallback that violates CLAUDE.md's "No silent fallbacks" rule. Also: `ExposureModeDoctorCheck.ToWireValue()` and `ExposureModeValidationService` inline switch each use different fallback strategies.
 **Done when:**
-- [ ] `ExposureModeExtensions.ToWireValue()` in `WizardConfigBuilder.cs` throws on unknown enum values instead of defaulting to "local"
-- [ ] `ExposureModeDoctorCheck.ToWireValue()` throws on unknown enum values instead of using `ToString()`
-- [ ] `ExposureModeValidationService.StartAsync()` inline wire-value switch at line 60-66 throws on unknown enum values instead of using `ToString()`
+- [x] `ExposureModeExtensions.ToWireValue()` in `WizardConfigBuilder.cs` throws on unknown enum values instead of defaulting to "local"
+- [x] `ExposureModeDoctorCheck.ToWireValue()` throws on unknown enum values instead of using `ToString()`
+- [x] `ExposureModeValidationService.StartAsync()` inline wire-value switch at line 60-66 throws on unknown enum values instead of using `ToString()`
 **Verification:** L1
 
 ### Task R1.3: DaemonConfig single-bind refactor in Program.cs

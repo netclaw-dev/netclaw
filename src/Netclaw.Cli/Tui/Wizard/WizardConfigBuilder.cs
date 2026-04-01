@@ -343,6 +343,6 @@ internal static class ExposureModeExtensions
         ExposureMode.TailscaleServe => "tailscale-serve",
         ExposureMode.TailscaleFunnel => "tailscale-funnel",
         ExposureMode.CloudflareTunnel => "cloudflare-tunnel",
-        _ => "local"
+        _ => throw new ArgumentOutOfRangeException(nameof(mode), mode, $"Unknown ExposureMode value: {mode}")
     };
 }

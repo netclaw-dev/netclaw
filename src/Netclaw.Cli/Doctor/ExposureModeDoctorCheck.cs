@@ -115,9 +115,10 @@ public sealed class ExposureModeDoctorCheck : IDoctorCheck
     private static string ToWireValue(ExposureMode mode)
         => mode switch
         {
+            ExposureMode.Local => "local",
             ExposureMode.TailscaleServe => "tailscale-serve",
             ExposureMode.TailscaleFunnel => "tailscale-funnel",
             ExposureMode.CloudflareTunnel => "cloudflare-tunnel",
-            _ => mode.ToString().ToLowerInvariant()
+            _ => throw new ArgumentOutOfRangeException(nameof(mode), mode, $"Unknown ExposureMode value: {mode}")
         };
 }
