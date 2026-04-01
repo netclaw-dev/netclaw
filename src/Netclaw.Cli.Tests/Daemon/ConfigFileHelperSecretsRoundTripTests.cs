@@ -1,5 +1,3 @@
-using System.Net;
-using System.Net.Http.Json;
 using System.Text.Json;
 using Netclaw.Cli.Config;
 using Netclaw.Configuration;
@@ -8,18 +6,20 @@ using Xunit;
 namespace Netclaw.Cli.Tests.Daemon;
 
 /// <summary>
-/// Tests that <see cref="Netclaw.Cli.Daemon.PairCommand"/> writes the
-/// device token and daemon endpoint to the correct config files on success.
+/// Verifies that <see cref="ConfigFileHelper"/> correctly persists and retrieves
+/// a device token (via <see cref="ConfigFileHelper.WriteSecretsFile"/>) and a
+/// daemon endpoint (via <see cref="ConfigFileHelper.WriteConfigFile"/>) through
+/// an encrypted secrets round-trip.
 ///
-/// These are offline tests that simulate the HTTP exchange response using
-/// a stub <see cref="HttpClient"/> with a custom message handler.
+/// These are offline tests that exercise the config-file helpers directly,
+/// without invoking any CLI commands or network operations.
 /// </summary>
-public sealed class PairCommandConfigTests : IDisposable
+public sealed class ConfigFileHelperSecretsRoundTripTests : IDisposable
 {
     private readonly string _tempDir;
     private readonly NetclawPaths _paths;
 
-    public PairCommandConfigTests()
+    public ConfigFileHelperSecretsRoundTripTests()
     {
         _tempDir = Path.Combine(Path.GetTempPath(), $"netclaw-pair-cmd-test-{Guid.NewGuid():N}");
         Directory.CreateDirectory(_tempDir);
@@ -30,12 +30,12 @@ public sealed class PairCommandConfigTests : IDisposable
     public void Dispose() => Directory.Delete(_tempDir, recursive: true);
 
     [Fact]
-    public void Successful_exchange_writes_DeviceToken_to_secrets_and_Endpoint_to_config()
+    public void DeviceToken_WrittenToSecrets_DecryptsCorrectly_And_Endpoint_WrittenToConfig_RoundsTrip()
     {
         var token = "abc123def456";
         var endpoint = "http://my-server:5199";
 
-        // Simulate what PairCommand does on successful exchange:
+        // Write token to secrets.json and endpoint to netclaw.json
         var secrets = ConfigFileHelper.LoadJsonDict(_paths.SecretsPath);
         secrets["DeviceToken"] = token;
         ConfigFileHelper.WriteSecretsFile(_paths, secrets);

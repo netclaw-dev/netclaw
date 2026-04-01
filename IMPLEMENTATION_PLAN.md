@@ -903,7 +903,7 @@ Done when:
 **Source:** Postmortem adversarial review, finding CLEANUP-1
 **Issue:** `src/Netclaw.Cli.Tests/Daemon/PairCommandConfigTests.cs` never calls `PairCommand.RunAsync()`. The test manually re-implements `PairCommand`'s config-write logic and verifies `ConfigFileHelper` round-trips correctly. The underlying test is useful (exercises secrets encryption round-trip), but the class name and XMLdoc falsely claim it tests `PairCommand`.
 **Done when:**
-- [ ] Either: (a) rename test class to `ConfigFileHelperSecretsRoundTripTests` and update XMLdoc, or (b) extract config-write logic from `PairCommand` into a testable method and test it directly, or (c) update XMLdoc to remove the claim that it tests `PairCommand`
+- [x] Either: (a) rename test class to `ConfigFileHelperSecretsRoundTripTests` and update XMLdoc, or (b) extract config-write logic from `PairCommand` into a testable method and test it directly, or (c) update XMLdoc to remove the claim that it tests `PairCommand`
 **Verification:** L1
 
 ---
