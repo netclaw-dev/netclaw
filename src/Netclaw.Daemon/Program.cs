@@ -104,12 +104,16 @@ static async Task RunDaemonAsync(string[] args, DaemonRestartSignal restartSigna
     builder.AddNetclawTelemetry();
     ConfigureDaemonServices(builder.Services, builder.Configuration, paths, daemonLogLevel, daemonConfig);
 
-    // Authentication — loopback scheme trusts same-machine connections by default.
-    // Additional schemes (device bearer token) are registered by later milestones.
+    // Authentication — loopback scheme is the default (local operator).
+    // Device bearer token scheme authenticates remote clients paired via the pairing flow.
+    builder.Services.AddSingleton<DeviceRegistry>();
+    builder.Services.AddSingleton<IRemoteAuthSchemeRegistration, DevicePairingSchemeRegistration>();
     builder.Services
         .AddAuthentication(LoopbackAuthenticationHandler.SchemeName)
         .AddScheme<Microsoft.AspNetCore.Authentication.AuthenticationSchemeOptions, LoopbackAuthenticationHandler>(
-            LoopbackAuthenticationHandler.SchemeName, _ => { });
+            LoopbackAuthenticationHandler.SchemeName, _ => { })
+        .AddScheme<Microsoft.AspNetCore.Authentication.AuthenticationSchemeOptions, DeviceTokenAuthenticationHandler>(
+            DeviceTokenAuthenticationHandler.SchemeName, _ => { });
     builder.Services.AddAuthorization();
 
     // SignalR for remote clients (CLI thin client, Blazor ops console)

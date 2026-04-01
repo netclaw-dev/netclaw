@@ -819,13 +819,13 @@ Done when:
 **Verification:** L2
 
 Done when:
-- [ ] `PairedDevice` record with `Name`, `TokenHash`, `Salt`, `CreatedAt`, `LastUsedAt`.
-- [ ] `DeviceRegistry` service reads/writes `devices.json` — list, add, remove, lookup-by-hash, update last-used.
-- [ ] `IRemoteAuthSchemeRegistration` marker interface for startup validation.
-- [ ] `DeviceTokenAuthenticationHandler` reads `Authorization: Bearer` header, hashes with salt, validates against registry.
-- [ ] Valid token → `Operator` / `Verified` / device name; invalid → Fail; missing → NoResult.
-- [ ] Registered alongside loopback scheme in daemon DI.
-- [ ] Unit tests for registry CRUD and auth handler.
+- [x] `PairedDevice` record with `Name`, `TokenHash`, `Salt`, `CreatedAt`, `LastUsedAt`.
+- [x] `DeviceRegistry` service reads/writes `devices.json` — list, add, remove, lookup-by-hash, update last-used.
+- [x] `IRemoteAuthSchemeRegistration` marker interface for startup validation.
+- [x] `DeviceTokenAuthenticationHandler` reads `Authorization: Bearer` header, hashes with salt, validates against registry.
+- [x] Valid token → `Operator` / `Verified` / device name; invalid → Fail; missing → NoResult.
+- [x] Registered alongside loopback scheme in daemon DI.
+- [x] Unit tests for registry CRUD and auth handler.
 
 ### Task M7.C2: Pairing code service and exchange endpoint
 

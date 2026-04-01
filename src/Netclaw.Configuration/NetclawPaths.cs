@@ -63,6 +63,7 @@ public sealed class NetclawPaths
     public string ConfigDirectory => Path.Combine(BasePath, "config");
     public string NetclawConfigPath => Path.Combine(ConfigDirectory, "netclaw.json");
     public string SecretsPath => Path.Combine(ConfigDirectory, "secrets.json");
+    public string DevicesPath => Path.Combine(ConfigDirectory, "devices.json");
     public string LogsDirectory => Path.Combine(BasePath, "logs");
     /// <summary>
     /// Legacy path. Session logs now live inside each session's directory:

@@ -1,17 +1,17 @@
 ## 1. Paired Device Registry
 
-- [ ] 1.1 Add `PairedDevice` record with `Name`, `TokenHash`, `Salt`, `CreatedAt`, `LastUsedAt` properties
-- [ ] 1.2 Add `DeviceRegistry` service that reads/writes `~/.netclaw/config/devices.json` — list, add, remove, lookup-by-hash, update last-used
-- [ ] 1.3 Add `IRemoteAuthSchemeRegistration` marker interface so startup validation can detect registered remote auth schemes
+- [x] 1.1 Add `PairedDevice` record with `Name`, `TokenHash`, `Salt`, `CreatedAt`, `LastUsedAt` properties
+- [x] 1.2 Add `DeviceRegistry` service that reads/writes `~/.netclaw/config/devices.json` — list, add, remove, lookup-by-hash, update last-used
+- [x] 1.3 Add `IRemoteAuthSchemeRegistration` marker interface so startup validation can detect registered remote auth schemes
 
 ## 2. Bearer Token Authentication Scheme
 
-- [ ] 2.1 Implement `DeviceTokenAuthenticationHandler : AuthenticationHandler<AuthenticationSchemeOptions>` that reads `Authorization: Bearer <token>` header
-- [ ] 2.2 Hash the presented token with each device's salt and compare against `DeviceRegistry`
-- [ ] 2.3 On match: succeed with Netclaw claims (`Operator`, `Verified`, device name as `SenderId`), update `LastUsedAt`
-- [ ] 2.4 On no match: return `AuthenticateResult.Fail`
-- [ ] 2.5 On missing header: return `AuthenticateResult.NoResult()` to defer to other schemes
-- [ ] 2.6 Register the bearer token scheme alongside the loopback scheme in daemon DI
+- [x] 2.1 Implement `DeviceTokenAuthenticationHandler : AuthenticationHandler<AuthenticationSchemeOptions>` that reads `Authorization: Bearer <token>` header
+- [x] 2.2 Hash the presented token with each device's salt and compare against `DeviceRegistry`
+- [x] 2.3 On match: succeed with Netclaw claims (`Operator`, `Verified`, device name as `SenderId`), update `LastUsedAt`
+- [x] 2.4 On no match: return `AuthenticateResult.Fail`
+- [x] 2.5 On missing header: return `AuthenticateResult.NoResult()` to defer to other schemes
+- [x] 2.6 Register the bearer token scheme alongside the loopback scheme in daemon DI
 
 ## 3. Pairing Code Service
 
