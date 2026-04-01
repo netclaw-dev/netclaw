@@ -37,6 +37,18 @@ public static class ExposureModeExtensions
         ExposureMode.CloudflareTunnel => "cloudflare-tunnel",
         _ => throw new ArgumentOutOfRangeException(nameof(mode), mode, $"Unknown ExposureMode value: {mode}")
     };
+
+    /// <summary>
+    /// Returns the OS process name required by the given tunnel exposure mode,
+    /// or <c>null</c> for <see cref="ExposureMode.Local"/> (no tunnel needed).
+    /// </summary>
+    public static string? GetRequiredProcessName(this ExposureMode mode) => mode switch
+    {
+        ExposureMode.Local => null,
+        ExposureMode.TailscaleServe or ExposureMode.TailscaleFunnel => "tailscaled",
+        ExposureMode.CloudflareTunnel => "cloudflared",
+        _ => throw new ArgumentOutOfRangeException(nameof(mode), mode, $"Unknown ExposureMode value: {mode}")
+    };
 }
 
 /// <summary>

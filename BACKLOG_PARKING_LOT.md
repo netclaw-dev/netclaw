@@ -19,8 +19,7 @@
 
 -->
 
-### Exchange endpoint integration test timing
+### ~~Exchange endpoint integration test timing~~ (RESOLVED)
 - **Source:** RALPH run 20260401-171023, review after iteration 15 (finding #5)
-- **Issue:** `POST /api/pair/exchange` is a new HTTP endpoint added in M7.C2 that coordinates PairingCodeService + DeviceRegistry + rate limiter. Per testing strategy, new endpoints should have integration tests in the same iteration. Currently only unit tests exist for the underlying service. Task 10.4 in `device-pairing/tasks.md` plans a full integration test ("generate code → exchange → connect with token → authenticated session") but this is deferred to a later task.
-- **Decision needed:** Should M7.C2 retroactively add a focused integration test for the exchange endpoint HTTP behavior (400/401/200 responses, rate limiting), or is the planned full-flow integration test in task 10.4 sufficient?
-- **Date parked:** 2026-04-01
+- **Resolution:** Integration tests added in `PairingExchangeEndpointTests.cs` covering 200/400/401 responses, code consumption semantics, token authentication, expiry, and single-use enforcement.
+- **Date resolved:** 2026-04-01

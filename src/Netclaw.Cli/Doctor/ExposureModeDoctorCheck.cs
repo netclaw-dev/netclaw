@@ -72,12 +72,7 @@ public sealed class ExposureModeDoctorCheck : IDoctorCheck
         // Error: non-local mode but required tunnel process is not running.
         if (mode != ExposureMode.Local)
         {
-            var requiredProcess = mode switch
-            {
-                ExposureMode.TailscaleServe or ExposureMode.TailscaleFunnel => "tailscaled",
-                ExposureMode.CloudflareTunnel => "cloudflared",
-                _ => null
-            };
+            var requiredProcess = mode.GetRequiredProcessName();
 
             if (requiredProcess is not null && !_processDetector(requiredProcess))
             {

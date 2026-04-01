@@ -45,14 +45,14 @@
 
 ## 7. CLI Token Attachment
 
-- [ ] 7.1 Update `DaemonClient` / `HubConnectionBuilder` to detect non-loopback endpoint and read `DeviceToken` from secrets
-- [ ] 7.2 Attach token via `AccessTokenProvider` on the SignalR connection options
-- [ ] 7.3 On 401 response, display a message suggesting `netclaw pair <endpoint>`
+- [x] 7.1 Update `DaemonClient` / `HubConnectionBuilder` to detect non-loopback endpoint and read `DeviceToken` from secrets
+- [x] 7.2 Attach token via `AccessTokenProvider` on the SignalR connection options
+- [x] 7.3 On 401 response, display a message suggesting `netclaw pair <endpoint>`
 
 ## 8. Startup Validation Extension
 
-- [ ] 8.1 Extend `ExposureModeValidationService` — after tunnel checks, verify at least one paired device exists or `IRemoteAuthSchemeRegistration` is registered when exposure mode is non-local
-- [ ] 8.2 On failure: log descriptive error explaining that remote access requires at least one paired device or auth scheme
+- [x] 8.1 Extend `ExposureModeValidationService` — after tunnel checks, verify at least one paired device exists or `IRemoteAuthSchemeRegistration` is registered when exposure mode is non-local
+- [x] 8.2 On failure: log descriptive error explaining that remote access requires at least one paired device or auth scheme
 
 ## 9. CI Smoke Test
 
@@ -66,4 +66,4 @@
 - [x] 10.3 Unit test `DeviceTokenAuthenticationHandler` — valid token → success with correct claims, invalid token → fail, missing header → no-result
 - [ ] 10.4 Integration test — full pairing flow: generate code → exchange → connect with token → authenticated session
 - [ ] 10.5 Integration test — non-local exposure with no devices fails startup
-- [ ] 10.6 Unit test CLI token attachment — non-loopback endpoint attaches token, loopback skips
+- [x] 10.6 Unit test CLI token attachment — non-loopback endpoint attaches token, loopback skips

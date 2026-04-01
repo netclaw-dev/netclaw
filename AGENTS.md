@@ -254,7 +254,7 @@ Routing (invoke by name):
   csharp-api-design, csharp-type-design-performance
 - DI / config: microsoft-extensions-dependency-injection, microsoft-extensions-configuration
 - Serialization: serialization
-- Testing: akka-testing-patterns, snapshot-testing
+- Testing: akka-testing-patterns, snapshot-testing, testing-strategy
 - Project structure: project-structure, package-management
 
 Quality gates (use when applicable):

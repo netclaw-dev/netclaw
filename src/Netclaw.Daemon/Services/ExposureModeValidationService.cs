@@ -63,14 +63,10 @@ internal sealed class ExposureModeValidationService : IHostedService
         if (_config.ExposureMode == ExposureMode.Local)
             return;
 
-        var requiredProcess = _config.ExposureMode switch
-        {
-            ExposureMode.TailscaleServe or ExposureMode.TailscaleFunnel => "tailscaled",
-            ExposureMode.CloudflareTunnel => "cloudflared",
-            _ => throw new InvalidOperationException(
+        var requiredProcess = _config.ExposureMode.GetRequiredProcessName()
+            ?? throw new InvalidOperationException(
                 $"Unknown ExposureMode: {_config.ExposureMode}. " +
-                "Cannot determine tunnel prerequisite.")
-        };
+                "Cannot determine tunnel prerequisite.");
 
         if (!_processDetector(requiredProcess))
         {
