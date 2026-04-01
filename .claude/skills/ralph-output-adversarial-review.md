@@ -439,6 +439,8 @@ Before issuing a PASS verdict, explicitly confirm:
 - [ ] For any FAIL/PARTIAL finding: Included command output as evidence
 - [ ] No patterns requiring synchronized multi-file changes
 - [ ] All findings written to actionable locations (IMPLEMENTATION_PLAN.md or BACKLOG_PARKING_LOT.md)
+- [ ] Iteration logs in review range have `## Status: COMPLETED` (exact spelling), commit hashes, and `testing-strategy.md` citation
+- [ ] All follow-up items in review range have explicit `→` dispositions (Task X.Y / PARKED / DISMISSED)
 
 **If ANY checkbox is unchecked and applies to the commits reviewed, the verdict cannot be PASS.**
 

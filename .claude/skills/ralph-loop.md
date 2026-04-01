@@ -186,13 +186,11 @@ Each `iter-{NN}.md` MUST capture the following sections. Missing sections indica
 - (or "None" if followed plan exactly)
 
 ## Follow-ups (Deferred)
-- {item} → {disposition: "Task C.X" | "PARKED" | "DISMISSED (reason)"}
-- (or "None")
-
-Note: Each follow-up MUST have an explicit disposition:
-- **→ Task X.Y**: Create a new task in IMPLEMENTATION_PLAN.md
-- **→ PARKED**: Add to BACKLOG_PARKING_LOT.md (needs human decision)
-- **→ DISMISSED (reason)**: Not worth pursuing, document why
+EVERY item below MUST have one of these dispositions or this section is INCOMPLETE:
+- {item} → Task X.Y  (task already exists or created in IMPLEMENTATION_PLAN.md)
+- {item} → PARKED  (added to BACKLOG_PARKING_LOT.md — needs human decision)
+- {item} → DISMISSED (reason)  (not worth pursuing, document why)
+- (or "None" if no follow-ups)
 ```
 
 ### Logging Rules
@@ -418,8 +416,11 @@ For EACH trigger that matches your task:
 
 Load relevant skills based on surface area:
 
-**Always for code:**
-- `.claude/skills/testing-strategy.md` — REQUIRED: unit vs integration vs screenshots; `/dev-login`; no fakes
+**MANDATORY before writing any code or test (no exception):**
+- `.claude/skills/testing-strategy.md` — REQUIRED for ALL code changes
+- Citation format: `- testing-strategy.md (required: {brief reason, e.g. "new endpoint", "new service", "auth middleware"})`
+- Purpose: adversarial traceability, not learning. Even if the test strategy is obvious, the citation is required for audit.
+- **Omitting this citation is a diagnostics finding.** Run 20260401-171023 had 0/20 iterations citing this skill despite correct testing choices throughout.
 
 **If UI or UI dependencies change OR the task is UI-related:**
 - `.claude/skills/ui-smoke-validation.md` — REQUIRED
@@ -641,9 +642,34 @@ Update `$ITER_LOG` with:
 ### 9) Commit
 
 If verification passes:
+
+#### 9a) Pre-Commit Log Compliance Check (30 seconds — MANDATORY)
+
+Before committing, verify `iter-{NN}.md` contains ALL of:
+- [ ] `## Status: COMPLETED` (exact spelling — not COMPLETE, Complete, etc.)
+- [ ] `## Commits` section (hash placeholder OK — will be filled in 9c)
+- [ ] `## PRD Validation` section (even if just "N/A" or "N/A — fix-it task")
+- [ ] `## Skills Consulted` including `testing-strategy.md (required: ...)`
+- [ ] `## Follow-ups` with explicit `→ Task X.Y` / `→ PARKED` / `→ DISMISSED` on every item
+
+If any section is missing, add it before committing. This takes 30 seconds and prevents the structural gaps found in run 20260401-171023 (10 of 20 iterations missing required sections).
+
+#### 9b) Commit
+
 1. Commit code changes with descriptive message
 2. Include IMPLEMENTATION_PLAN.md checkbox updates in same commit
 3. Update TOOLING.md if new tools/resources were discovered
+
+#### 9c) Post-Commit Hash Capture (MANDATORY)
+
+Immediately after `git commit` succeeds:
+1. Run `git log --oneline -1` to get the short hash
+2. Update the `## Commits` section in `iter-{NN}.md` with the actual hash:
+   ```markdown
+   ## Commits
+   - `abc1234` - feat(feature): commit message here
+   ```
+3. This is NOT optional — commit hashes are required for adversarial review traceability. Run 20260401-171023 had 10 of 20 iterations missing commit hashes because they were never captured post-commit.
 
 ---
 
