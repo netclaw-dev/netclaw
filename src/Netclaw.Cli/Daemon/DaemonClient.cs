@@ -1,3 +1,4 @@
+using System.Net;
 using Microsoft.AspNetCore.SignalR.Client;
 using R3;
 using Microsoft.Extensions.AI;
@@ -194,6 +195,11 @@ public sealed class DaemonClient : IAsyncDisposable
                     lastError = ex;
                 }
             }
+
+            if (IsAuthenticationFailure(lastError))
+                throw new InvalidOperationException(
+                    "Authentication failed: the daemon rejected the bearer token. " +
+                    "Run 'netclaw pair <endpoint>' to re-pair this device.", lastError);
 
             throw new InvalidOperationException("Failed to connect to daemon SignalR hub.", lastError);
         }
@@ -460,6 +466,11 @@ public sealed class DaemonClient : IAsyncDisposable
                 }
             }
 
+            if (IsAuthenticationFailure(lastError))
+                throw new InvalidOperationException(
+                    "Authentication failed: the daemon rejected the bearer token. " +
+                    "Run 'netclaw pair <endpoint>' to re-pair this device.", lastError);
+
             throw new InvalidOperationException("Failed to connect to daemon SignalR hub.", lastError);
         }
         finally
@@ -467,6 +478,9 @@ public sealed class DaemonClient : IAsyncDisposable
             _connectGate.Release();
         }
     }
+
+    private static bool IsAuthenticationFailure(Exception? ex) =>
+        ex is HttpRequestException { StatusCode: HttpStatusCode.Unauthorized };
 
     private static string BuildHubUrl(string endpoint)
     {

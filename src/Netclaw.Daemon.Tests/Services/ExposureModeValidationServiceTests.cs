@@ -103,6 +103,53 @@ public sealed class ExposureModeValidationServiceTests
             () => sut.StartAsync(TestContext.Current.CancellationToken));
     }
 
+    // ── Remote auth guard: non-local + no devices + no scheme ────────────────
+
+    [Fact]
+    public async Task NonLocal_NoRemoteAuthScheme_NoPairedDevices_Throws()
+    {
+        var config = new DaemonConfig { ExposureMode = ExposureMode.TailscaleServe };
+        // Process is running, but no auth scheme and no devices → must fail.
+        var sut = BuildService(
+            config,
+            name => name == "tailscaled",
+            remoteAuthSchemes: [],
+            deviceCount: 0);
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => sut.StartAsync(TestContext.Current.CancellationToken));
+
+        Assert.Contains("No remote authentication available", ex.Message);
+    }
+
+    [Fact]
+    public async Task NonLocal_NoRemoteAuthScheme_WithPairedDevices_StartSucceeds()
+    {
+        // Devices exist → remote clients CAN authenticate, even without a registered scheme.
+        var config = new DaemonConfig { ExposureMode = ExposureMode.TailscaleServe };
+        var sut = BuildService(
+            config,
+            name => name == "tailscaled",
+            remoteAuthSchemes: [],
+            deviceCount: 1);
+
+        await sut.StartAsync(TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task NonLocal_WithRemoteAuthScheme_NoPairedDevices_StartSucceeds()
+    {
+        // Auth scheme is registered → devices can be paired later; startup is allowed.
+        var config = new DaemonConfig { ExposureMode = ExposureMode.TailscaleServe };
+        var sut = BuildService(
+            config,
+            name => name == "tailscaled",
+            remoteAuthSchemes: [new FakeRemoteAuthScheme("TestScheme")],
+            deviceCount: 0);
+
+        await sut.StartAsync(TestContext.Current.CancellationToken);
+    }
+
     // ── StopAsync is always a no-op ──────────────────────────────────────────
 
     [Fact]
@@ -118,11 +165,20 @@ public sealed class ExposureModeValidationServiceTests
 
     private static ExposureModeValidationService BuildService(
         DaemonConfig config,
-        Func<string, bool> processDetector)
+        Func<string, bool> processDetector,
+        IEnumerable<IRemoteAuthSchemeRegistration>? remoteAuthSchemes = null,
+        int deviceCount = 0)
     {
         return new ExposureModeValidationService(
             config,
             NullLogger<ExposureModeValidationService>.Instance,
-            processDetector);
+            processDetector,
+            remoteAuthSchemes,
+            _ => Task.FromResult(deviceCount));
+    }
+
+    private sealed class FakeRemoteAuthScheme(string schemeName) : IRemoteAuthSchemeRegistration
+    {
+        public string SchemeName => schemeName;
     }
 }

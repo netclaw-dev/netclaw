@@ -918,11 +918,11 @@ Done when:
 **Verification:** L2
 
 Done when:
-- [ ] `DaemonClient` detects non-loopback endpoint, reads `DeviceToken` from secrets, attaches via `AccessTokenProvider`.
-- [ ] On 401, CLI displays message suggesting `netclaw pair`.
-- [ ] `ExposureModeValidationService` extended: non-local mode fails startup if no paired devices and no `IRemoteAuthSchemeRegistration`.
-- [ ] Unit test: token attachment for non-loopback, skip for loopback.
-- [ ] Integration test: non-local + no devices → startup failure.
+- [x] `DaemonClient` detects non-loopback endpoint, reads `DeviceToken` from secrets, attaches via `AccessTokenProvider`.
+- [x] On 401, CLI displays message suggesting `netclaw pair`.
+- [x] `ExposureModeValidationService` extended: non-local mode fails startup if no paired devices and no `IRemoteAuthSchemeRegistration`.
+- [x] Unit test: token attachment for non-loopback, skip for loopback.
+- [x] Integration test: non-local + no devices → startup failure.
 
 ### Task M7.C5: Pairing smoke test in CI
 

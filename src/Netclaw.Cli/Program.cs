@@ -147,7 +147,9 @@ static async Task RunAsync(string[] args)
             // Register DaemonClient, ChatNavigationState, and SessionConfig for ChatPage
             // (uses freshly-written config from the wizard's WriteConfig)
             builder.Services.AddSingleton(new ChatNavigationState());
-            builder.Services.AddSingleton(sp => new DaemonClient(sp.GetRequiredService<DaemonApi>().Endpoint));
+            builder.Services.AddSingleton(sp => DaemonClientFactory.Create(
+                sp.GetRequiredService<DaemonApi>().Endpoint,
+                sp.GetRequiredService<NetclawPaths>()));
             builder.Services.AddSingleton(sp =>
             {
                 // Read the just-written config files for session settings
@@ -1555,6 +1557,9 @@ static void ConfigureCliChatServices(IServiceCollection services, IConfiguration
         CompactionModelId = models.Compaction?.ModelId,
     });
 
-    // DaemonClient uses the endpoint from DaemonApi (already registered in ConfigureConfigServices)
-    services.AddSingleton(sp => new DaemonClient(sp.GetRequiredService<DaemonApi>().Endpoint));
+    // DaemonClient uses the endpoint from DaemonApi. For non-loopback (remote) endpoints,
+    // reads DeviceToken from secrets.json and attaches it as a bearer token provider.
+    services.AddSingleton(sp => DaemonClientFactory.Create(
+        sp.GetRequiredService<DaemonApi>().Endpoint,
+        sp.GetRequiredService<NetclawPaths>()));
 }
