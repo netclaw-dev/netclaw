@@ -131,8 +131,10 @@ public static class McpSchemaSanitizer
                 // Recursively sanitize anyOf/oneOf/allOf
                 "anyOf" or "oneOf" or "allOf" => SanitizeSchemaArray(property.Value),
 
-                // Pass through other properties
-                _ => JsonElementToObject(property.Value)
+                // Recursively sanitize all other properties so stripping
+                // rules (e.g. $schema) apply through unrecognized keywords
+                // like patternProperties, not, if/then/else, etc.
+                _ => JsonElementToObject(SanitizeElement(property.Value))
             };
 
             // Skip stripped fields (e.g. $schema)
