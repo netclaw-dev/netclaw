@@ -220,7 +220,7 @@ static async Task RunDaemonAsync(string[] args, DaemonRestartSignal restartSigna
 
         await deviceRegistry.AddAsync(device, ct);
         return Results.Ok(new { token = rawToken });
-    }).RequireRateLimiting("pairing-exchange");
+    }).RequireRateLimiting("pairing-exchange").AllowAnonymous();
 
     // MCP OAuth 2.1 endpoints
     app.MapPost("/api/mcp/oauth/start/{name}", async (

@@ -25,7 +25,7 @@ Three OpenSpec changes: `exposure-modes`, `hub-auth-framework`, `device-pairing`
 **Source:** Review after iteration 15, finding #2
 **Issue:** `POST /api/pair/exchange` is designed as unauthenticated but relies on implicit anonymity (no fallback authorization policy). Adding `options.FallbackPolicy` in the future would silently break pairing. Explicit `.AllowAnonymous()` documents intent and prevents breakage.
 **Done when:**
-- [ ] `MapPost("/api/pair/exchange", ...)` chain includes `.AllowAnonymous()`
+- [x] `MapPost("/api/pair/exchange", ...)` chain includes `.AllowAnonymous()`
 **Verification:** L1
 
 ### Task R3.3: Narrow DeviceRegistry.VerifyToken catch to FormatException
