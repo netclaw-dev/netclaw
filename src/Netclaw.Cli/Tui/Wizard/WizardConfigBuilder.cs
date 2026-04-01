@@ -334,15 +334,3 @@ public sealed class DaemonConfigSection
     public ExposureMode ExposureMode { get; init; } = ExposureMode.Local;
 }
 
-internal static class ExposureModeExtensions
-{
-    /// <summary>Returns the kebab-case wire value expected by the JSON schema.</summary>
-    internal static string ToWireValue(this ExposureMode mode) => mode switch
-    {
-        ExposureMode.Local => "local",
-        ExposureMode.TailscaleServe => "tailscale-serve",
-        ExposureMode.TailscaleFunnel => "tailscale-funnel",
-        ExposureMode.CloudflareTunnel => "cloudflare-tunnel",
-        _ => throw new ArgumentOutOfRangeException(nameof(mode), mode, $"Unknown ExposureMode value: {mode}")
-    };
-}

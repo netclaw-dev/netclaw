@@ -53,11 +53,9 @@ internal sealed class DeviceTokenAuthenticationHandler : AuthenticationHandler<A
         if (string.IsNullOrEmpty(token))
             return AuthenticateResult.NoResult();
 
-        var device = await _deviceRegistry.LookupByTokenAsync(token);
+        var device = await _deviceRegistry.LookupAndUpdateLastUsedAsync(token);
         if (device is null)
             return AuthenticateResult.Fail("Invalid or revoked device token.");
-
-        await _deviceRegistry.UpdateLastUsedAsync(device.Name);
 
         var claims = new[]
         {

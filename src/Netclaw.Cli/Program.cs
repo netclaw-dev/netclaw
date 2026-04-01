@@ -916,10 +916,7 @@ static void WriteDaemonResult(DaemonResult result)
         Environment.ExitCode = 1;
 }
 
-static bool IsHelpToken(string token)
-{
-    return token is "help" or "-h" or "--help";
-}
+static bool IsHelpToken(string token) => CliArgsParser.IsHelpToken(token);
 
 static void WriteGeneralHelp()
 {

@@ -24,6 +24,22 @@ public enum ExposureMode
 }
 
 /// <summary>
+/// Extension methods for <see cref="ExposureMode"/>.
+/// </summary>
+public static class ExposureModeExtensions
+{
+    /// <summary>Returns the kebab-case wire value expected by the JSON schema.</summary>
+    public static string ToWireValue(this ExposureMode mode) => mode switch
+    {
+        ExposureMode.Local => "local",
+        ExposureMode.TailscaleServe => "tailscale-serve",
+        ExposureMode.TailscaleFunnel => "tailscale-funnel",
+        ExposureMode.CloudflareTunnel => "cloudflare-tunnel",
+        _ => throw new ArgumentOutOfRangeException(nameof(mode), mode, $"Unknown ExposureMode value: {mode}")
+    };
+}
+
+/// <summary>
 /// JSON converter for <see cref="ExposureMode"/> that serializes to/from
 /// lowercase kebab-case wire values (e.g., <c>tailscale-serve</c>).
 /// </summary>

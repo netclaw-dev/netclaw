@@ -33,6 +33,10 @@ public static class CliArgsParser
         "secrets", "config", "update", "pair",
     };
 
+    /// <summary>Returns <c>true</c> if the token is a help flag (<c>help</c>, <c>-h</c>, <c>--help</c>).</summary>
+    public static bool IsHelpToken(string token)
+        => token is "help" or "-h" or "--help";
+
     public static CliParseResult Parse(string[] args)
     {
         if (args.Length == 0)

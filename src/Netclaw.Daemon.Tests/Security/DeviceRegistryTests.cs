@@ -34,23 +34,7 @@ public sealed class DeviceRegistryTests : IDisposable
     // ── Helpers ──────────────────────────────────────────────────────────────
 
     private static (string RawToken, PairedDevice Device) MakeDevice(string name, DateTimeOffset createdAt)
-    {
-        var tokenBytes = RandomNumberGenerator.GetBytes(32);
-        var saltBytes = RandomNumberGenerator.GetBytes(16);
-        var rawToken = Base64Url.EncodeToString(tokenBytes);
-        var saltHex = Convert.ToHexString(saltBytes).ToLowerInvariant();
-        var tokenHash = DeviceRegistry.ComputeTokenHash(rawToken, saltHex);
-
-        var device = new PairedDevice
-        {
-            Name = name,
-            TokenHash = tokenHash,
-            Salt = saltHex,
-            CreatedAt = createdAt,
-            LastUsedAt = createdAt,
-        };
-        return (rawToken, device);
-    }
+        => DeviceTestHelpers.MakeDevice(name, createdAt);
 
     // ── List ─────────────────────────────────────────────────────────────────
 

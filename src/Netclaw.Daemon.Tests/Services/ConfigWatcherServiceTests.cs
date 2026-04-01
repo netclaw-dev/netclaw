@@ -115,7 +115,7 @@ public sealed class ConfigWatcherServiceTests : IDisposable
     [Fact]
     public void ReadDaemonConfigFromFile_MissingFile_ReturnsDefaults()
     {
-        var result = _sut.ReadDaemonConfigFromFile(_paths.NetclawConfigPath);
+        var result = ConfigWatcherService.ReadDaemonConfigFromFile(_paths.NetclawConfigPath);
 
         Assert.Equal(new DaemonConfig(), result);
     }
@@ -125,7 +125,7 @@ public sealed class ConfigWatcherServiceTests : IDisposable
     {
         File.WriteAllText(_paths.NetclawConfigPath, """{ "Providers": {} }""");
 
-        var result = _sut.ReadDaemonConfigFromFile(_paths.NetclawConfigPath);
+        var result = ConfigWatcherService.ReadDaemonConfigFromFile(_paths.NetclawConfigPath);
 
         Assert.Equal(new DaemonConfig(), result);
     }

@@ -57,13 +57,7 @@ internal sealed class ExposureModeValidationService : IHostedService
         if (_processDetector(requiredProcess))
             return Task.CompletedTask;
 
-        var modeWireValue = _config.ExposureMode switch
-        {
-            ExposureMode.TailscaleServe => "tailscale-serve",
-            ExposureMode.TailscaleFunnel => "tailscale-funnel",
-            ExposureMode.CloudflareTunnel => "cloudflare-tunnel",
-            _ => throw new ArgumentOutOfRangeException(nameof(_config.ExposureMode), _config.ExposureMode, $"Unknown ExposureMode value: {_config.ExposureMode}")
-        };
+        var modeWireValue = _config.ExposureMode.ToWireValue();
 
         _logger.LogCritical(
             "Daemon startup aborted: ExposureMode is '{Mode}' but the required tunnel process " +

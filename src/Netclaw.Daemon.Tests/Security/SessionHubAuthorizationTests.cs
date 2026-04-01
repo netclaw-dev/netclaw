@@ -65,21 +65,7 @@ public sealed class SessionHubAuthorizationTests : IDisposable
         builder.WebHost.UseTestServer();
 
         builder.Services.AddSingleton(_deviceRegistry);
-        builder.Services
-            .AddAuthentication("AuthSelector")
-            .AddPolicyScheme("AuthSelector", "Bearer or Loopback selector", options =>
-            {
-                options.ForwardDefaultSelector = ctx =>
-                    ctx.Request.Headers.ContainsKey("Authorization") &&
-                    ctx.Request.Headers.Authorization.ToString()
-                        .StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase)
-                        ? DeviceTokenAuthenticationHandler.SchemeName
-                        : LoopbackAuthenticationHandler.SchemeName;
-            })
-            .AddScheme<AuthenticationSchemeOptions, LoopbackAuthenticationHandler>(
-                LoopbackAuthenticationHandler.SchemeName, _ => { })
-            .AddScheme<AuthenticationSchemeOptions, DeviceTokenAuthenticationHandler>(
-                DeviceTokenAuthenticationHandler.SchemeName, _ => { });
+        builder.Services.AddNetclawAuthSchemes();
         builder.Services.AddAuthorization();
         builder.Services.AddSignalR();
 
@@ -104,23 +90,7 @@ public sealed class SessionHubAuthorizationTests : IDisposable
     }
 
     private static (string RawToken, PairedDevice Device) MakeDevice(string name, DateTimeOffset createdAt)
-    {
-        var tokenBytes = RandomNumberGenerator.GetBytes(32);
-        var saltBytes = RandomNumberGenerator.GetBytes(16);
-        var rawToken = Base64Url.EncodeToString(tokenBytes);
-        var saltHex = Convert.ToHexString(saltBytes).ToLowerInvariant();
-        var tokenHash = DeviceRegistry.ComputeTokenHash(rawToken, saltHex);
-
-        var device = new PairedDevice
-        {
-            Name = name,
-            TokenHash = tokenHash,
-            Salt = saltHex,
-            CreatedAt = createdAt,
-            LastUsedAt = createdAt,
-        };
-        return (rawToken, device);
-    }
+        => DeviceTestHelpers.MakeDevice(name, createdAt);
 
     [Fact]
     public async Task Non_loopback_connection_without_bearer_receives_401()

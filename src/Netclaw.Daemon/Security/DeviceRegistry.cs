@@ -28,6 +28,10 @@ internal sealed class DeviceRegistry
     private readonly ILogger<DeviceRegistry> _logger;
     private readonly SemaphoreSlim _lock = new(1, 1);
 
+    // In-memory cache — invalidated on AddAsync/RemoveAsync/UpdateLastUsedAsync writes.
+    // Safe because devices.json is only modified by local operator actions through this class.
+    private List<PairedDevice>? _cachedDevices;
+
     public DeviceRegistry(
         NetclawPaths paths,
         TimeProvider timeProvider,
@@ -36,6 +40,10 @@ internal sealed class DeviceRegistry
         _devicesPath = paths.DevicesPath;
         _timeProvider = timeProvider;
         _logger = logger;
+
+        var dir = Path.GetDirectoryName(_devicesPath);
+        if (dir is not null)
+            Directory.CreateDirectory(dir);
     }
 
     /// <summary>
@@ -126,8 +134,45 @@ internal sealed class DeviceRegistry
     }
 
     /// <summary>
+    /// Atomically looks up a device by token and updates its <c>LastUsedAt</c> timestamp.
+    /// Single lock acquisition, single file read, and one conditional write.
+    /// Returns the matched device or <c>null</c>.
+    /// </summary>
+    public async Task<PairedDevice?> LookupAndUpdateLastUsedAsync(string rawToken, CancellationToken ct = default)
+    {
+        await _lock.WaitAsync(ct);
+        try
+        {
+            var devices = await ReadDevicesAsync(ct);
+            PairedDevice? matched = null;
+            foreach (var device in devices)
+            {
+                if (VerifyToken(rawToken, device))
+                {
+                    matched = device;
+                    break;
+                }
+            }
+
+            if (matched is null)
+                return null;
+
+            var now = _timeProvider.GetUtcNow();
+            var updated = devices
+                .Select(d => ReferenceEquals(d, matched) ? d with { LastUsedAt = now } : d)
+                .ToList();
+            await WriteDevicesAsync(updated, ct);
+            return matched;
+        }
+        finally
+        {
+            _lock.Release();
+        }
+    }
+
+    /// <summary>
     /// Updates the <c>LastUsedAt</c> timestamp for the named device.
-    /// No-op if the device is not found.
+    /// No-op if the device is not found (skips write).
     /// </summary>
     public async Task UpdateLastUsedAsync(string name, CancellationToken ct = default)
     {
@@ -135,6 +180,9 @@ internal sealed class DeviceRegistry
         try
         {
             var devices = await ReadDevicesAsync(ct);
+            if (!devices.Any(d => string.Equals(d.Name, name, StringComparison.OrdinalIgnoreCase)))
+                return;
+
             var now = _timeProvider.GetUtcNow();
             var updated = devices
                 .Select(d => string.Equals(d.Name, name, StringComparison.OrdinalIgnoreCase)
@@ -183,20 +231,26 @@ internal sealed class DeviceRegistry
 
     private async Task<List<PairedDevice>> ReadDevicesAsync(CancellationToken ct)
     {
-        if (!File.Exists(_devicesPath))
-            return [];
+        if (_cachedDevices is not null)
+            return _cachedDevices;
 
-        var json = await File.ReadAllTextAsync(_devicesPath, ct);
-        return JsonSerializer.Deserialize<List<PairedDevice>>(json, JsonOptions) ?? [];
+        try
+        {
+            var json = await File.ReadAllTextAsync(_devicesPath, ct);
+            _cachedDevices = JsonSerializer.Deserialize<List<PairedDevice>>(json, JsonOptions) ?? [];
+        }
+        catch (FileNotFoundException)
+        {
+            _cachedDevices = [];
+        }
+
+        return _cachedDevices;
     }
 
     private async Task WriteDevicesAsync(List<PairedDevice> devices, CancellationToken ct)
     {
-        var dir = Path.GetDirectoryName(_devicesPath);
-        if (dir is not null)
-            Directory.CreateDirectory(dir);
-
         var json = JsonSerializer.Serialize(devices, JsonOptions);
         await File.WriteAllTextAsync(_devicesPath, json, ct);
+        _cachedDevices = devices;
     }
 }

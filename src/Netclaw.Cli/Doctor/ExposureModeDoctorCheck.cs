@@ -48,7 +48,7 @@ public sealed class ExposureModeDoctorCheck : IDoctorCheck
         ExposureMode mode;
         try
         {
-            mode = ParseMode(modeStr);
+            mode = DaemonConfig.ParseExposureMode(modeStr);
         }
         catch (InvalidOperationException)
         {
@@ -81,7 +81,7 @@ public sealed class ExposureModeDoctorCheck : IDoctorCheck
 
             if (requiredProcess is not null && !_processDetector(requiredProcess))
             {
-                var modeDisplay = ToWireValue(mode);
+                var modeDisplay = mode.ToWireValue();
                 return Task.FromResult(DoctorCheckResult.Error(
                     CheckName,
                     $"ExposureMode is '{modeDisplay}' but '{requiredProcess}' is not running.",
@@ -92,7 +92,7 @@ public sealed class ExposureModeDoctorCheck : IDoctorCheck
 
         var modeDescription = mode == ExposureMode.Local
             ? $"local (bound to {host})"
-            : ToWireValue(mode);
+            : mode.ToWireValue();
 
         return Task.FromResult(DoctorCheckResult.Pass(
             CheckName,
@@ -102,23 +102,4 @@ public sealed class ExposureModeDoctorCheck : IDoctorCheck
     private static bool IsLoopback(string host)
         => host is "127.0.0.1" or "::1" or "localhost";
 
-    private static ExposureMode ParseMode(string value)
-        => value.Trim().ToLowerInvariant() switch
-        {
-            "local" => ExposureMode.Local,
-            "tailscale-serve" or "tailscaleserve" => ExposureMode.TailscaleServe,
-            "tailscale-funnel" or "tailscalefunnel" => ExposureMode.TailscaleFunnel,
-            "cloudflare-tunnel" or "cloudflaretunnel" => ExposureMode.CloudflareTunnel,
-            _ => throw new InvalidOperationException($"Unknown ExposureMode value: '{value}'.")
-        };
-
-    private static string ToWireValue(ExposureMode mode)
-        => mode switch
-        {
-            ExposureMode.Local => "local",
-            ExposureMode.TailscaleServe => "tailscale-serve",
-            ExposureMode.TailscaleFunnel => "tailscale-funnel",
-            ExposureMode.CloudflareTunnel => "cloudflare-tunnel",
-            _ => throw new ArgumentOutOfRangeException(nameof(mode), mode, $"Unknown ExposureMode value: {mode}")
-        };
 }

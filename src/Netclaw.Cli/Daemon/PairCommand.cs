@@ -93,7 +93,7 @@ internal static class PairCommand
         }
     }
 
-    private static bool IsHelpToken(string s) => s is "help" or "-h" or "--help";
+    private static bool IsHelpToken(string s) => CliArgsParser.IsHelpToken(s);
 
     private static void WritePairHelp()
     {

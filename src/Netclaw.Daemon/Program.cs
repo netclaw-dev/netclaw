@@ -115,21 +115,7 @@ static async Task RunDaemonAsync(string[] args, DaemonRestartSignal restartSigna
     builder.Services.AddSingleton<DeviceRegistry>();
     builder.Services.AddSingleton<PairingCodeService>();
     builder.Services.AddSingleton<IRemoteAuthSchemeRegistration, DevicePairingSchemeRegistration>();
-    builder.Services
-        .AddAuthentication("AuthSelector")
-        .AddPolicyScheme("AuthSelector", "Bearer or Loopback selector", options =>
-        {
-            options.ForwardDefaultSelector = ctx =>
-                ctx.Request.Headers.ContainsKey("Authorization") &&
-                ctx.Request.Headers.Authorization.ToString()
-                    .StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase)
-                    ? DeviceTokenAuthenticationHandler.SchemeName
-                    : LoopbackAuthenticationHandler.SchemeName;
-        })
-        .AddScheme<Microsoft.AspNetCore.Authentication.AuthenticationSchemeOptions, LoopbackAuthenticationHandler>(
-            LoopbackAuthenticationHandler.SchemeName, _ => { })
-        .AddScheme<Microsoft.AspNetCore.Authentication.AuthenticationSchemeOptions, DeviceTokenAuthenticationHandler>(
-            DeviceTokenAuthenticationHandler.SchemeName, _ => { });
+    builder.Services.AddNetclawAuthSchemes();
     builder.Services.AddAuthorization();
 
     // Rate limiting for the unauthenticated pairing exchange endpoint.

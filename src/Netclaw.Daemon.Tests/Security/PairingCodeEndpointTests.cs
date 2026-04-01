@@ -47,21 +47,7 @@ public sealed class PairingCodeEndpointTests : IDisposable
         builder.WebHost.UseTestServer();
 
         builder.Services.AddSingleton(_registry);
-        builder.Services
-            .AddAuthentication("AuthSelector")
-            .AddPolicyScheme("AuthSelector", "Bearer or Loopback selector", options =>
-            {
-                options.ForwardDefaultSelector = ctx =>
-                    ctx.Request.Headers.ContainsKey("Authorization") &&
-                    ctx.Request.Headers.Authorization.ToString()
-                        .StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase)
-                        ? DeviceTokenAuthenticationHandler.SchemeName
-                        : LoopbackAuthenticationHandler.SchemeName;
-            })
-            .AddScheme<AuthenticationSchemeOptions, LoopbackAuthenticationHandler>(
-                LoopbackAuthenticationHandler.SchemeName, _ => { })
-            .AddScheme<AuthenticationSchemeOptions, DeviceTokenAuthenticationHandler>(
-                DeviceTokenAuthenticationHandler.SchemeName, _ => { });
+        builder.Services.AddNetclawAuthSchemes();
         builder.Services.AddAuthorization();
 
         var app = builder.Build();
@@ -99,19 +85,7 @@ public sealed class PairingCodeEndpointTests : IDisposable
 
     private PairedDevice MakeDevice(string name)
     {
-        var tokenBytes = RandomNumberGenerator.GetBytes(32);
-        var saltBytes = RandomNumberGenerator.GetBytes(16);
-        var rawToken = Base64Url.EncodeToString(tokenBytes);
-        var saltHex = Convert.ToHexString(saltBytes).ToLowerInvariant();
-        var tokenHash = DeviceRegistry.ComputeTokenHash(rawToken, saltHex);
-        return new PairedDevice
-        {
-            Name = name,
-            TokenHash = tokenHash,
-            Salt = saltHex,
-            CreatedAt = _time.GetUtcNow(),
-            LastUsedAt = _time.GetUtcNow(),
-        };
+        return DeviceTestHelpers.MakeDevice(name, _time.GetUtcNow()).Device;
     }
 
     [Fact]

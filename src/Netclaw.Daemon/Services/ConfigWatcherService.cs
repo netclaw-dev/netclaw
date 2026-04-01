@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Netclaw.Configuration;
@@ -166,29 +167,15 @@ public sealed class ConfigWatcherService : IHostedService, IDisposable
         }
     }
 
-    internal DaemonConfig ReadDaemonConfigFromFile(string path)
+    internal static DaemonConfig ReadDaemonConfigFromFile(string path)
     {
         if (!File.Exists(path))
             return new DaemonConfig();
 
-        using var doc = JsonDocument.Parse(File.ReadAllBytes(path));
-        if (!doc.RootElement.TryGetProperty("Daemon", out var daemonElement))
-            return new DaemonConfig();
-
-        var host = daemonElement.TryGetProperty("Host", out var hostProp) && hostProp.ValueKind == JsonValueKind.String
-            ? hostProp.GetString() ?? "127.0.0.1"
-            : "127.0.0.1";
-
-        var port = daemonElement.TryGetProperty("Port", out var portProp) && portProp.ValueKind == JsonValueKind.Number
-            ? portProp.GetInt32()
-            : 5199;
-
-        var modeStr = daemonElement.TryGetProperty("ExposureMode", out var modeProp) && modeProp.ValueKind == JsonValueKind.String
-            ? modeProp.GetString()
-            : null;
-
-        var mode = DaemonConfig.ParseExposureMode(modeStr);
-        return new DaemonConfig { Host = host, Port = port, ExposureMode = mode };
+        var config = new ConfigurationBuilder()
+            .AddJsonFile(path, optional: false, reloadOnChange: false)
+            .Build();
+        return DaemonConfig.BindFromConfiguration(config.GetSection("Daemon"));
     }
 
     private bool ValidateConfigJson(string path)

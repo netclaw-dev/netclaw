@@ -15,7 +15,7 @@ namespace Netclaw.Daemon.Tests.Security;
 /// </summary>
 public sealed class LoopbackAuthenticationHandlerTests
 {
-    private static IAuthenticationService BuildAuthService()
+    private static (IServiceProvider Sp, IAuthenticationService Auth) BuildAuthService()
     {
         var services = new ServiceCollection();
         services.AddLogging();
@@ -23,8 +23,8 @@ public sealed class LoopbackAuthenticationHandlerTests
             .AddAuthentication(LoopbackAuthenticationHandler.SchemeName)
             .AddScheme<AuthenticationSchemeOptions, LoopbackAuthenticationHandler>(
                 LoopbackAuthenticationHandler.SchemeName, _ => { });
-        return services.BuildServiceProvider()
-            .GetRequiredService<IAuthenticationService>();
+        var sp = services.BuildServiceProvider();
+        return (sp, sp.GetRequiredService<IAuthenticationService>());
     }
 
     private static DefaultHttpContext BuildContext(IPAddress remoteIp, IServiceProvider sp)
@@ -39,16 +39,8 @@ public sealed class LoopbackAuthenticationHandlerTests
     [InlineData("::1")]
     public async Task Loopback_ip_returns_success_with_operator_claims(string ip)
     {
-        var sp = new ServiceCollection()
-            .AddLogging()
-            .AddAuthentication(LoopbackAuthenticationHandler.SchemeName)
-            .AddScheme<AuthenticationSchemeOptions, LoopbackAuthenticationHandler>(
-                LoopbackAuthenticationHandler.SchemeName, _ => { })
-            .Services
-            .BuildServiceProvider();
-
+        var (sp, authService) = BuildAuthService();
         var ctx = BuildContext(IPAddress.Parse(ip), sp);
-        var authService = sp.GetRequiredService<IAuthenticationService>();
 
         var result = await authService.AuthenticateAsync(ctx, LoopbackAuthenticationHandler.SchemeName);
 
@@ -73,16 +65,8 @@ public sealed class LoopbackAuthenticationHandlerTests
     [InlineData("203.0.113.1")]
     public async Task Non_loopback_ip_returns_no_result(string ip)
     {
-        var sp = new ServiceCollection()
-            .AddLogging()
-            .AddAuthentication(LoopbackAuthenticationHandler.SchemeName)
-            .AddScheme<AuthenticationSchemeOptions, LoopbackAuthenticationHandler>(
-                LoopbackAuthenticationHandler.SchemeName, _ => { })
-            .Services
-            .BuildServiceProvider();
-
+        var (sp, authService) = BuildAuthService();
         var ctx = BuildContext(IPAddress.Parse(ip), sp);
-        var authService = sp.GetRequiredService<IAuthenticationService>();
 
         var result = await authService.AuthenticateAsync(ctx, LoopbackAuthenticationHandler.SchemeName);
 
@@ -94,17 +78,9 @@ public sealed class LoopbackAuthenticationHandlerTests
     [Fact]
     public async Task Null_remote_ip_returns_no_result()
     {
-        var sp = new ServiceCollection()
-            .AddLogging()
-            .AddAuthentication(LoopbackAuthenticationHandler.SchemeName)
-            .AddScheme<AuthenticationSchemeOptions, LoopbackAuthenticationHandler>(
-                LoopbackAuthenticationHandler.SchemeName, _ => { })
-            .Services
-            .BuildServiceProvider();
-
+        var (sp, authService) = BuildAuthService();
         var ctx = BuildContext(IPAddress.None, sp);
         ctx.Connection.RemoteIpAddress = null;
-        var authService = sp.GetRequiredService<IAuthenticationService>();
 
         var result = await authService.AuthenticateAsync(ctx, LoopbackAuthenticationHandler.SchemeName);
 
