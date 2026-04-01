@@ -1,8 +1,8 @@
 ## 1. Claim Types and Identity
 
-- [ ] 1.1 Add `NetclawClaimTypes` static class to `Netclaw.Configuration` with constants for `netclaw:principal`, `netclaw:transport`, `netclaw:device-id`
-- [ ] 1.2 Add `ConnectionIdentity` record to `Netclaw.Actors.Channels` with `PrincipalClassification`, `TransportAuthenticity`, and `SenderId` properties
-- [ ] 1.3 Add `ClaimsPrincipalMapper` service that converts `ClaimsPrincipal` → `ConnectionIdentity`, falling back to `UntrustedExternal` / `Unknown` when claims are missing
+- [x] 1.1 Add `NetclawClaimTypes` static class to `Netclaw.Configuration` with constants for `netclaw:principal`, `netclaw:transport`, `netclaw:device-id`
+- [x] 1.2 Add `ConnectionIdentity` record to `Netclaw.Actors.Channels` with `PrincipalClassification`, `TransportAuthenticity`, and `SenderId` properties
+- [x] 1.3 Add `ClaimsPrincipalMapper` service that converts `ClaimsPrincipal` → `ConnectionIdentity`, falling back to `UntrustedExternal` / `Unknown` when claims are missing
 
 ## 2. Loopback Authentication Scheme
 
@@ -31,7 +31,7 @@
 
 ## 6. Tests
 
-- [ ] 6.1 Unit test `ClaimsPrincipalMapper` — loopback claims → `Operator`/`LocalProcess`, missing claims → `UntrustedExternal`/`Unknown`, bearer claims → `Operator`/`Verified`
+- [x] 6.1 Unit test `ClaimsPrincipalMapper` — loopback claims → `Operator`/`LocalProcess`, missing claims → `UntrustedExternal`/`Unknown`, bearer claims → `Operator`/`Verified`
 - [ ] 6.2 Unit test `LoopbackAuthenticationHandler` — loopback IP → success with correct claims, non-loopback IP → `NoResult`
 - [ ] 6.3 Integration test — unauthenticated non-loopback connection gets 401
 - [ ] 6.4 Integration test — loopback connection succeeds and `MessageSource` carries `Operator` / `LocalProcess`

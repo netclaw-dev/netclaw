@@ -752,10 +752,10 @@ Done when:
 **Verification:** L1
 
 Done when:
-- [ ] `NetclawClaimTypes` static class exists with `netclaw:principal`, `netclaw:transport`, `netclaw:device-id` constants.
-- [ ] `ConnectionIdentity` record exists with `PrincipalClassification`, `TransportAuthenticity`, `SenderId`.
-- [ ] `ClaimsPrincipalMapper` converts `ClaimsPrincipal` → `ConnectionIdentity`, falling back to `UntrustedExternal` / `Unknown`.
-- [ ] Unit tests cover loopback claims, bearer claims, and missing claims.
+- [x] `NetclawClaimTypes` static class exists with `netclaw:principal`, `netclaw:transport`, `netclaw:device-id` constants.
+- [x] `ConnectionIdentity` record exists with `PrincipalClassification`, `TransportAuthenticity`, `SenderId`.
+- [x] `ClaimsPrincipalMapper` converts `ClaimsPrincipal` → `ConnectionIdentity`, falling back to `UntrustedExternal` / `Unknown`.
+- [x] Unit tests cover loopback claims, bearer claims, and missing claims.
 
 ### Task M7.B2: Loopback authentication scheme
 
