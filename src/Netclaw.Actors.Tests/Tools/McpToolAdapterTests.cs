@@ -287,4 +287,175 @@ public class McpSchemaSanitizerTests
         Assert.False(normalized.ContainsKey("Url"));
         Assert.False(normalized.ContainsKey("Timeout"));
     }
+
+    [Fact]
+    public void SanitizeSchema_Strips_DollarSchema()
+    {
+        var schema = JsonDocument.Parse("""
+            {
+                "$schema": "http://json-schema.org/draft-07/schema#",
+                "type": "object",
+                "properties": {
+                    "query": { "type": "string" }
+                }
+            }
+            """).RootElement;
+
+        var sanitized = McpSchemaSanitizer.SanitizeSchema(schema);
+
+        Assert.False(sanitized.TryGetProperty("$schema", out _));
+        Assert.Equal("object", sanitized.GetProperty("type").GetString());
+        Assert.True(sanitized.TryGetProperty("properties", out _));
+    }
+
+    [Fact]
+    public void SanitizeSchema_Strips_DollarSchema_InNestedObjects()
+    {
+        var schema = JsonDocument.Parse("""
+            {
+                "type": "object",
+                "properties": {
+                    "filters": {
+                        "$schema": "http://json-schema.org/draft-07/schema#",
+                        "type": "object",
+                        "properties": {
+                            "name": { "type": "string" }
+                        }
+                    }
+                }
+            }
+            """).RootElement;
+
+        var sanitized = McpSchemaSanitizer.SanitizeSchema(schema);
+        var filters = sanitized.GetProperty("properties").GetProperty("filters");
+
+        Assert.False(filters.TryGetProperty("$schema", out _));
+        Assert.Equal("object", filters.GetProperty("type").GetString());
+    }
+
+    [Fact]
+    public void SanitizeSchema_NormalizesEmptyAdditionalProperties()
+    {
+        var schema = JsonDocument.Parse("""
+            {
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string" }
+                },
+                "additionalProperties": {}
+            }
+            """).RootElement;
+
+        var sanitized = McpSchemaSanitizer.SanitizeSchema(schema);
+
+        var ap = sanitized.GetProperty("additionalProperties");
+        Assert.Equal(JsonValueKind.True, ap.ValueKind);
+    }
+
+    [Fact]
+    public void SanitizeSchema_PreservesBooleanAdditionalProperties()
+    {
+        var schema = JsonDocument.Parse("""
+            {
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string" }
+                },
+                "additionalProperties": false
+            }
+            """).RootElement;
+
+        var sanitized = McpSchemaSanitizer.SanitizeSchema(schema);
+
+        var ap = sanitized.GetProperty("additionalProperties");
+        Assert.Equal(JsonValueKind.False, ap.ValueKind);
+    }
+
+    [Fact]
+    public void SanitizeSchema_PreservesNonEmptyAdditionalProperties()
+    {
+        var schema = JsonDocument.Parse("""
+            {
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string" }
+                },
+                "additionalProperties": { "type": "string" }
+            }
+            """).RootElement;
+
+        var sanitized = McpSchemaSanitizer.SanitizeSchema(schema);
+
+        var ap = sanitized.GetProperty("additionalProperties");
+        Assert.Equal(JsonValueKind.Object, ap.ValueKind);
+        Assert.Equal("string", ap.GetProperty("type").GetString());
+    }
+
+    [Fact]
+    public void SanitizeSchema_PreservesActualNullValues()
+    {
+        var schema = JsonDocument.Parse("""
+            {
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string" }
+                },
+                "default": null
+            }
+            """).RootElement;
+
+        var sanitized = McpSchemaSanitizer.SanitizeSchema(schema);
+
+        Assert.True(sanitized.TryGetProperty("default", out var defaultProp));
+        Assert.Equal(JsonValueKind.Null, defaultProp.ValueKind);
+    }
+
+    [Fact]
+    public void SanitizeSchema_HandlesNotionSearchSchema()
+    {
+        // Real-world Notion search schema that was causing 502 errors
+        var schema = JsonDocument.Parse("""
+            {
+                "$schema": "http://json-schema.org/draft-07/schema#",
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "Search query"
+                    },
+                    "filters": {
+                        "type": "object",
+                        "properties": {
+                            "created_date_range": {
+                                "type": "object",
+                                "properties": {
+                                    "start_date": { "type": "string" }
+                                },
+                                "additionalProperties": {}
+                            }
+                        },
+                        "additionalProperties": {}
+                    }
+                },
+                "required": ["query", "filters"]
+            }
+            """).RootElement;
+
+        var sanitized = McpSchemaSanitizer.SanitizeSchema(schema);
+
+        // $schema stripped at top level
+        Assert.False(sanitized.TryGetProperty("$schema", out _));
+
+        // additionalProperties: {} normalized to true in nested objects
+        var filters = sanitized.GetProperty("properties").GetProperty("filters");
+        Assert.Equal(JsonValueKind.True, filters.GetProperty("additionalProperties").ValueKind);
+
+        var dateRange = filters.GetProperty("properties").GetProperty("created_date_range");
+        Assert.Equal(JsonValueKind.True, dateRange.GetProperty("additionalProperties").ValueKind);
+
+        // Core schema structure preserved
+        Assert.Equal("object", sanitized.GetProperty("type").GetString());
+        Assert.Equal(2, sanitized.GetProperty("required").GetArrayLength());
+    }
 }

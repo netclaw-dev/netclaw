@@ -107,9 +107,20 @@ public static class McpSchemaSanitizer
         {
             var value = property.Name switch
             {
+                // Strip $schema meta-reference — not a tool parameter, and it
+                // breaks llama.cpp's JSON-schema-to-GBNF grammar conversion.
+                "$schema" => (object?)null,
+
                 // Handle type arrays like ["string", "null"] -> "string"
                 "type" when property.Value.ValueKind == JsonValueKind.Array =>
                     SimplifyTypeArray(property.Value),
+
+                // Normalize additionalProperties: {} to true. An empty object is
+                // semantically equivalent to true in JSON Schema, but confuses
+                // grammar generators that expect a boolean.
+                "additionalProperties" when property.Value.ValueKind == JsonValueKind.Object
+                    && !property.Value.EnumerateObject().Any()
+                    => true,
 
                 // Recursively sanitize properties object
                 "properties" => SanitizePropertiesObject(property.Value),
@@ -123,6 +134,10 @@ public static class McpSchemaSanitizer
                 // Pass through other properties
                 _ => JsonElementToObject(property.Value)
             };
+
+            // Skip stripped fields (e.g. $schema)
+            if (value is null && property.Value.ValueKind != JsonValueKind.Null)
+                continue;
 
             dict[property.Name] = value;
         }
