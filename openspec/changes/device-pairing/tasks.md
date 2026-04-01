@@ -15,18 +15,18 @@
 
 ## 3. Pairing Code Service
 
-- [ ] 3.1 Add `PairingCodeService` that generates, stores (in-memory), validates, and consumes pairing codes
-- [ ] 3.2 Code format: 8 characters from `23456789ABCDEFGHJKLMNPQRSTUVWXYZ`, displayed as `XXXX-XXXX`
-- [ ] 3.3 5-minute TTL, single-use, only one pending code at a time
-- [ ] 3.4 Token generation on successful exchange: 32 bytes from `RandomNumberGenerator`, base64url-encoded
+- [x] 3.1 Add `PairingCodeService` that generates, stores (in-memory), validates, and consumes pairing codes
+- [x] 3.2 Code format: 8 characters from `23456789ABCDEFGHJKLMNPQRSTUVWXYZ`, displayed as `XXXX-XXXX`
+- [x] 3.3 5-minute TTL, single-use, only one pending code at a time
+- [x] 3.4 Token generation on successful exchange: 32 bytes from `RandomNumberGenerator`, base64url-encoded
 
 ## 4. Pairing Exchange Endpoint
 
-- [ ] 4.1 Add `POST /api/pair/exchange` endpoint — accepts `{ code, deviceName }`, returns `{ token }` on success
-- [ ] 4.2 Endpoint is unauthenticated (outside `[Authorize]` gate) but only functional when a pending code exists
-- [ ] 4.3 On success: generate token, hash with random salt, store in `DeviceRegistry`, return raw token
-- [ ] 4.4 On failure (invalid/expired/consumed code): return 401 with descriptive error
-- [ ] 4.5 Add rate limiting on the exchange endpoint (e.g., 5 attempts per minute per IP)
+- [x] 4.1 Add `POST /api/pair/exchange` endpoint — accepts `{ code, deviceName }`, returns `{ token }` on success
+- [x] 4.2 Endpoint is unauthenticated (outside `[Authorize]` gate) but only functional when a pending code exists
+- [x] 4.3 On success: generate token, hash with random salt, store in `DeviceRegistry`, return raw token
+- [x] 4.4 On failure (invalid/expired/consumed code): return 401 with descriptive error
+- [x] 4.5 Add rate limiting on the exchange endpoint (e.g., 5 attempts per minute per IP)
 
 ## 5. Daemon-Side CLI Commands
 

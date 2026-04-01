@@ -837,12 +837,12 @@ Done when:
 **Verification:** L2
 
 Done when:
-- [ ] `PairingCodeService` generates, stores (in-memory), validates, and consumes codes.
-- [ ] Code format: 8 chars from `23456789ABCDEFGHJKLMNPQRSTUVWXYZ` as `XXXX-XXXX`, 5-min TTL, single-use.
-- [ ] Token generation: 32 bytes `RandomNumberGenerator`, base64url.
-- [ ] `POST /api/pair/exchange` endpoint — unauthenticated, accepts `{ code, deviceName }`, returns `{ token }`.
-- [ ] Rate limiting on exchange endpoint.
-- [ ] Unit tests for code lifecycle (generate, expire, consume, replace).
+- [x] `PairingCodeService` generates, stores (in-memory), validates, and consumes codes.
+- [x] Code format: 8 chars from `23456789ABCDEFGHJKLMNPQRSTUVWXYZ` as `XXXX-XXXX`, 5-min TTL, single-use.
+- [x] Token generation: 32 bytes `RandomNumberGenerator`, base64url.
+- [x] `POST /api/pair/exchange` endpoint — unauthenticated, accepts `{ code, deviceName }`, returns `{ token }`.
+- [x] Rate limiting on exchange endpoint.
+- [x] Unit tests for code lifecycle (generate, expire, consume, replace).
 
 ### Task M7.C3: CLI pairing commands
 

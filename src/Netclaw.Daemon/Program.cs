@@ -1,7 +1,11 @@
+using System.Buffers.Text;
+using System.Security.Cryptography;
+using System.Threading.RateLimiting;
 using Akka.Actor;
 using Akka.Hosting;
 using Akka.Persistence.Hosting;
 using Akka.Persistence.Sql.Hosting;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -107,6 +111,7 @@ static async Task RunDaemonAsync(string[] args, DaemonRestartSignal restartSigna
     // Authentication — loopback scheme is the default (local operator).
     // Device bearer token scheme authenticates remote clients paired via the pairing flow.
     builder.Services.AddSingleton<DeviceRegistry>();
+    builder.Services.AddSingleton<PairingCodeService>();
     builder.Services.AddSingleton<IRemoteAuthSchemeRegistration, DevicePairingSchemeRegistration>();
     builder.Services
         .AddAuthentication(LoopbackAuthenticationHandler.SchemeName)
@@ -115,6 +120,23 @@ static async Task RunDaemonAsync(string[] args, DaemonRestartSignal restartSigna
         .AddScheme<Microsoft.AspNetCore.Authentication.AuthenticationSchemeOptions, DeviceTokenAuthenticationHandler>(
             DeviceTokenAuthenticationHandler.SchemeName, _ => { });
     builder.Services.AddAuthorization();
+
+    // Rate limiting for the unauthenticated pairing exchange endpoint.
+    // 5 attempts per minute per IP — brute-force defense for the 8-char code space.
+    builder.Services.AddRateLimiter(options =>
+    {
+        options.AddPolicy("pairing-exchange", context =>
+            RateLimitPartition.GetFixedWindowLimiter(
+                context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+                _ => new FixedWindowRateLimiterOptions
+                {
+                    PermitLimit = 5,
+                    Window = TimeSpan.FromMinutes(1),
+                    QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+                    QueueLimit = 0,
+                }));
+        options.RejectionStatusCode = 429;
+    });
 
     // SignalR for remote clients (CLI thin client, Blazor ops console)
     builder.Services.AddSignalR();
@@ -139,6 +161,7 @@ static async Task RunDaemonAsync(string[] args, DaemonRestartSignal restartSigna
 
     app.UseAuthentication();
     app.UseAuthorization();
+    app.UseRateLimiter();
 
     // Gateway surface
     app.MapHub<SessionHub>("/hub/session");
@@ -149,6 +172,44 @@ static async Task RunDaemonAsync(string[] args, DaemonRestartSignal restartSigna
         Results.Ok(catalog.ListRecent(limit: 50)));
     app.MapGet("/api/stats", async (DaemonStatsService statsService, int? days, CancellationToken ct) =>
         Results.Ok(await statsService.GetStatsAsync(days, ct)));
+
+    // Device pairing exchange — unauthenticated, rate-limited.
+    // Accepts a time-limited pairing code and a device name; returns a bearer token on success.
+    app.MapPost("/api/pair/exchange", async (
+        PairingCodeExchangeRequest request,
+        PairingCodeService pairingCodeService,
+        DeviceRegistry deviceRegistry,
+        TimeProvider timeProvider,
+        CancellationToken ct) =>
+    {
+        if (string.IsNullOrWhiteSpace(request.Code) || string.IsNullOrWhiteSpace(request.DeviceName))
+            return Results.BadRequest(new { error = "code and deviceName are required." });
+
+        if (!pairingCodeService.TryConsume(request.Code))
+            return Results.Json(
+                new { error = "Invalid, expired, or already-used pairing code." },
+                statusCode: StatusCodes.Status401Unauthorized);
+
+        var tokenBytes = RandomNumberGenerator.GetBytes(32);
+        var rawToken = Base64Url.EncodeToString(tokenBytes);
+
+        var saltBytes = RandomNumberGenerator.GetBytes(16);
+        var saltHex = Convert.ToHexString(saltBytes).ToLowerInvariant();
+        var tokenHash = DeviceRegistry.ComputeTokenHash(rawToken, saltHex);
+
+        var now = timeProvider.GetUtcNow();
+        var device = new PairedDevice
+        {
+            Name = request.DeviceName.Trim(),
+            TokenHash = tokenHash,
+            Salt = saltHex,
+            CreatedAt = now,
+            LastUsedAt = now,
+        };
+
+        await deviceRegistry.AddAsync(device, ct);
+        return Results.Ok(new { token = rawToken });
+    }).RequireRateLimiting("pairing-exchange");
 
     // MCP OAuth 2.1 endpoints
     app.MapPost("/api/mcp/oauth/start/{name}", async (
@@ -1213,5 +1274,10 @@ sealed record ImportReminderRequest
     public required ReminderDefinition Definition { get; init; }
     public string? WriteMode { get; init; }
 }
+
+/// <summary>
+/// Request body for <c>POST /api/pair/exchange</c>.
+/// </summary>
+sealed record PairingCodeExchangeRequest(string Code, string DeviceName);
 
 public partial class Program;
