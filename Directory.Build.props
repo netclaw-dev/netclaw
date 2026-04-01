@@ -7,26 +7,20 @@
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
-    <VersionPrefix>0.9.3</VersionPrefix>
-    <PackageReleaseNotes>Netclaw v0.9.3 — External skill directories, per-tool MCP audience gating, and tool-loop compaction fix
+    <VersionPrefix>0.9.4</VersionPrefix>
+    <PackageReleaseNotes>Netclaw v0.9.4 — Conditional reminder notifications, llama.cpp MCP schema compatibility, and MCP SDK 1.2.0
 
 **Features**
 
-* Added support for loading skills from external directories — operators can now configure `ExternalSkills.Sources` in `netclaw.json` to load skills from Claude Code (`~/.claude/skills/`), Open Code, or any custom team directory alongside native Netclaw skills. Per-source `AllowSymlinks` policy controls whether symlinked skill files are followed. External directories are read-only — `skill_manage` rejects all write operations targeting them. Native skills win on name collision. ([#503](https://github.com/Aaronontheweb/netclaw/pull/503))
-
-* Added per-tool audience gating for MCP servers — `ToolAudienceProfile` now accepts a `McpServerToolGrants` dictionary that restricts which tools from a given MCP server are exposed to that audience. Composes with the existing `AllowedMcpServers` gate; omitting grants preserves the current behavior of exposing all tools. New `netclaw mcp tools &lt;server&gt;` CLI command shows the per-audience grant status table, and `--snapshot` baselines grants from the currently discovered tool set. ([#500](https://github.com/Aaronontheweb/netclaw/pull/500))
-
-* Added `netclaw init` wizard step to detect and suggest external skill directories — the init wizard now probes for well-known skill directories (`~/.claude/skills`, `~/.open-code/skills`) and presents a checklist to toggle each detected source. The step auto-skips when neither directory exists on disk. Detected sources are written into the `ExternalSkills.Sources` config section. ([#509](https://github.com/Aaronontheweb/netclaw/pull/509))
-
-* Added MCP tool description capping and configurable schema size warnings — tool descriptions are capped at 2KB at registration time (matching Claude Code's documented limit) to prevent oversized MCP descriptions from bloating the LLM context window. Operators are warned via log when tool schemas exceed 8KB. Both thresholds are configurable via `SessionTuning.MaxToolDescriptionChars` and `SessionTuning.MaxToolSchemaWarnChars`. ([#498](https://github.com/Aaronontheweb/netclaw/pull/498))
+* Added `NotificationPolicy` for conditional reminder notifications — reminders can now be created with `NotifyPolicy: Conditional`, allowing the LLM to skip the notification tool call without the execution being marked as failed. Useful for reminders like "only notify if there are actionable results." Failed notification attempts still count as failures regardless of policy. Existing reminders without a `notifyPolicy` field default to `Required`, preserving current behavior. ([#512](https://github.com/Aaronontheweb/netclaw/pull/512))
 
 **Bug Fixes**
 
-* Fixed compaction never triggering during tool-loop iterations — `_lastInputTokenCount` was updated for metrics but never written to the field checked by `ShouldCompact()`, so the threshold was never crossed during multi-step tool loops. Compaction now checks after each tool response, and the tool loop resumes automatically after mid-loop compaction completes. Closes [#424](https://github.com/Aaronontheweb/netclaw/issues/424). ([#511](https://github.com/Aaronontheweb/netclaw/pull/511))
+* Fixed MCP tool schemas breaking llama.cpp grammar generation — `$schema` meta-references and `additionalProperties: {}` empty objects in MCP tool parameter schemas caused immediate 502 errors when loading tools from servers like Notion when using llama.cpp as the backend. Schemas are now sanitized at registration time: `$schema` references are stripped and empty-object `additionalProperties` values are normalized to `true`. Sanitization applies recursively through all schema keywords. ([#516](https://github.com/Aaronontheweb/netclaw/pull/516))
 
-* Fixed delivery retry eligibility being silently lost on session passivation — `DeliveryRetryHandler._eligibleTurnNumber` was in-memory only; if a channel reported delivery failure after the session stopped, the recovered instance discarded the feedback as stale and silently dropped the retry. Eligibility is now persisted in `SessionSnapshot` and restored on recovery. Backward-compatible with existing snapshots. ([#504](https://github.com/Aaronontheweb/netclaw/pull/504))
+**Dependencies**
 
-* Evict discovered MCP tools on compaction — discovered tools survived compaction and continued consuming context even after the conversation was summarized. Tools are now evicted alongside other compaction resets, forcing re-discovery of only the tools actually needed for the next turn. ([#498](https://github.com/Aaronontheweb/netclaw/pull/498))</PackageReleaseNotes>
+* Bumped ModelContextProtocol.Core from 1.1.0 to 1.2.0. This upstream release **disables legacy SSE endpoints by default** — MCP servers that previously served `/sse` and `/message` endpoints will no longer expose them unless `HttpServerTransportOptions.EnableLegacySse = true` is set explicitly. Clients using the legacy SSE transport must migrate their endpoint URL from `/sse` to the root MCP endpoint. See the [MCP C# SDK 1.2.0 release notes](https://github.com/modelcontextprotocol/csharp-sdk/releases/tag/v1.2.0) for full migration guidance. ([#478](https://github.com/Aaronontheweb/netclaw/pull/478))</PackageReleaseNotes>
   </PropertyGroup>
   <PropertyGroup>
     <NetCoreTestVersion>net10.0</NetCoreTestVersion>

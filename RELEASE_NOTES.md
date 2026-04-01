@@ -1,3 +1,19 @@
+#### 0.9.4 2026-04-01 ####
+
+Netclaw v0.9.4 — Conditional reminder notifications, llama.cpp MCP schema compatibility, and MCP SDK 1.2.0
+
+**Features**
+
+* Added `NotificationPolicy` for conditional reminder notifications — reminders can now be created with `NotifyPolicy: Conditional`, allowing the LLM to skip the notification tool call without the execution being marked as failed. Useful for reminders like "only notify if there are actionable results." Failed notification attempts still count as failures regardless of policy. Existing reminders without a `notifyPolicy` field default to `Required`, preserving current behavior. ([#512](https://github.com/Aaronontheweb/netclaw/pull/512))
+
+**Bug Fixes**
+
+* Fixed MCP tool schemas breaking llama.cpp grammar generation — `$schema` meta-references and `additionalProperties: {}` empty objects in MCP tool parameter schemas caused immediate 502 errors when loading tools from servers like Notion when using llama.cpp as the backend. Schemas are now sanitized at registration time: `$schema` references are stripped and empty-object `additionalProperties` values are normalized to `true`. Sanitization applies recursively through all schema keywords. ([#516](https://github.com/Aaronontheweb/netclaw/pull/516))
+
+**Dependencies**
+
+* Bumped ModelContextProtocol.Core from 1.1.0 to 1.2.0. This upstream release **disables legacy SSE endpoints by default** — MCP servers that previously served `/sse` and `/message` endpoints will no longer expose them unless `HttpServerTransportOptions.EnableLegacySse = true` is set explicitly. Clients using the legacy SSE transport must migrate their endpoint URL from `/sse` to the root MCP endpoint. See the [MCP C# SDK 1.2.0 release notes](https://github.com/modelcontextprotocol/csharp-sdk/releases/tag/v1.2.0) for full migration guidance. ([#478](https://github.com/Aaronontheweb/netclaw/pull/478))
+
 #### 0.9.3 2026-03-31 ####
 
 Netclaw v0.9.3 — External skill directories, per-tool MCP audience gating, and tool-loop compaction fix
