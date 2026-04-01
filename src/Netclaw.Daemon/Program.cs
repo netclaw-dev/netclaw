@@ -110,6 +110,7 @@ static async Task RunDaemonAsync(string[] args, DaemonRestartSignal restartSigna
         .AddAuthentication(LoopbackAuthenticationHandler.SchemeName)
         .AddScheme<Microsoft.AspNetCore.Authentication.AuthenticationSchemeOptions, LoopbackAuthenticationHandler>(
             LoopbackAuthenticationHandler.SchemeName, _ => { });
+    builder.Services.AddAuthorization();
 
     // SignalR for remote clients (CLI thin client, Blazor ops console)
     builder.Services.AddSignalR();
@@ -130,6 +131,9 @@ static async Task RunDaemonAsync(string[] args, DaemonRestartSignal restartSigna
 
     // Eagerly resolve so StartedAt reflects daemon startup, not first request.
     app.Services.GetRequiredService<DaemonStartClock>();
+
+    app.UseAuthentication();
+    app.UseAuthorization();
 
     // Gateway surface
     app.MapHub<SessionHub>("/hub/session");

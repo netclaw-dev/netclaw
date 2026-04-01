@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.SignalR;
 using Netclaw.Actors.Protocol;
 
@@ -22,6 +23,7 @@ namespace Netclaw.Daemon.Gateway;
 ///   ReceiveOutput(output: SessionOutputDto) → void
 /// </code>
 /// </summary>
+[Authorize]
 public sealed class SessionHub : Hub<ISessionHubClient>
 {
     private readonly SessionRegistry _registry;

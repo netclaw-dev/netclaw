@@ -783,11 +783,11 @@ Done when:
 **Verification:** L2
 
 Done when:
-- [ ] `AddAuthentication()` and `AddAuthorization()` registered in daemon `Program.cs`.
-- [ ] `[Authorize]` attribute added to `SessionHub`.
-- [ ] `app.UseAuthentication()` and `app.UseAuthorization()` in middleware pipeline before hub mapping.
-- [ ] Integration test: unauthenticated non-loopback connection gets 401.
-- [ ] Integration test: loopback connection succeeds.
+- [x] `AddAuthentication()` and `AddAuthorization()` registered in daemon `Program.cs`.
+- [x] `[Authorize]` attribute added to `SessionHub`.
+- [x] `app.UseAuthentication()` and `app.UseAuthorization()` in middleware pipeline before hub mapping.
+- [x] Integration test: unauthenticated non-loopback connection gets 401.
+- [x] Integration test: loopback connection succeeds.
 
 ### Task M7.B4: Identity propagation into MessageSource
 
