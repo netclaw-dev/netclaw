@@ -48,7 +48,7 @@ public sealed record DaemonConfig
     /// Accepts kebab-case (<c>tailscale-serve</c>) and PascalCase (<c>TailscaleServe</c>).
     /// Returns <see cref="ExposureMode.Local"/> for null/empty input.
     /// </summary>
-    internal static ExposureMode ParseExposureMode(string? value)
+    public static ExposureMode ParseExposureMode(string? value)
     {
         if (string.IsNullOrWhiteSpace(value))
             return ExposureMode.Local;

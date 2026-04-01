@@ -736,9 +736,9 @@ Done when:
 **Verification:** L1
 
 Done when:
-- [ ] `ConfigWatcherService` / `RestartCoordinator` does not apply `Daemon` section changes during hot-reload; logs warning that restart is required.
-- [ ] `SPEC-006` updated to mark exposure mode configuration as implemented.
-- [ ] `SPEC-011` updated to reference `DaemonConfig` instead of hardcoded URL.
+- [x] `ConfigWatcherService` / `RestartCoordinator` does not apply `Daemon` section changes during hot-reload; logs warning that restart is required.
+- [x] `SPEC-006` updated to mark exposure mode configuration as implemented.
+- [x] `SPEC-011` updated to reference `DaemonConfig` instead of hardcoded URL.
 
 ### Phase B: Hub Auth Framework (hub-auth-framework change)
 

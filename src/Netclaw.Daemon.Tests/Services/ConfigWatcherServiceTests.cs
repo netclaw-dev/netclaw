@@ -26,6 +26,7 @@ public sealed class ConfigWatcherServiceTests : IDisposable
             _paths,
             TimeProvider.System,
             _restartCoordinator,
+            new DaemonConfig(),
             NullLogger<ConfigWatcherService>.Instance);
     }
 
@@ -87,6 +88,46 @@ public sealed class ConfigWatcherServiceTests : IDisposable
         await _sut.ApplyReloadAsync(CancellationToken.None);
 
         Assert.Equal(1, _restartCoordinator.RequestCount);
+    }
+
+    [Fact]
+    public async Task DaemonSectionChanged_SkipsRestartAndLogsWarning()
+    {
+        // Port differs from the default DaemonConfig (5199) injected into _sut
+        File.WriteAllText(_paths.NetclawConfigPath, """{ "Daemon": { "Port": 9999 } }""");
+
+        await _sut.ApplyReloadAsync(CancellationToken.None);
+
+        Assert.Equal(0, _restartCoordinator.RequestCount);
+    }
+
+    [Fact]
+    public async Task DaemonSectionMatchingCurrentConfig_TriggersRestart()
+    {
+        // Explicit Daemon section that matches the running defaults — not a change
+        File.WriteAllText(_paths.NetclawConfigPath, """{ "Daemon": { "Host": "127.0.0.1", "Port": 5199, "ExposureMode": "local" } }""");
+
+        await _sut.ApplyReloadAsync(CancellationToken.None);
+
+        Assert.Equal(1, _restartCoordinator.RequestCount);
+    }
+
+    [Fact]
+    public void ReadDaemonConfigFromFile_MissingFile_ReturnsDefaults()
+    {
+        var result = _sut.ReadDaemonConfigFromFile(_paths.NetclawConfigPath);
+
+        Assert.Equal(new DaemonConfig(), result);
+    }
+
+    [Fact]
+    public void ReadDaemonConfigFromFile_NoDaemonSection_ReturnsDefaults()
+    {
+        File.WriteAllText(_paths.NetclawConfigPath, """{ "Providers": {} }""");
+
+        var result = _sut.ReadDaemonConfigFromFile(_paths.NetclawConfigPath);
+
+        Assert.Equal(new DaemonConfig(), result);
     }
 
     public void Dispose()

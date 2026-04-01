@@ -2,6 +2,13 @@
 
 Source PRDs: `PRD-002`, `PRD-004`
 
+**Implementation status:** Exposure mode configuration is implemented (Milestone 7, Phase A).
+`ExposureMode` enum, `DaemonConfig`, JSON schema, startup validation
+(`ExposureModeValidationService`), doctor check (`ExposureModeDoctorCheck`), and
+init wizard step (`ExposureModeStepViewModel`) are all live.
+`DaemonConfig` changes (bind address, exposure mode) are excluded from hot-reload
+and require a manual daemon restart.
+
 ## Purpose
 
 Define secure exposure modes for operator access to Netclaw management surfaces.

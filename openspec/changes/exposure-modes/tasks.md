@@ -38,7 +38,7 @@
 
 ## 6. Hot-Reload Exclusion
 
-- [ ] 6.1 Ensure `ConfigWatcherService` / `RestartCoordinator` does not apply `Daemon` section changes during hot-reload — log a warning that restart is required if the section changed
+- [x] 6.1 Ensure `ConfigWatcherService` / `RestartCoordinator` does not apply `Daemon` section changes during hot-reload — log a warning that restart is required if the section changed
 
 ## 7. Tests
 
@@ -50,5 +50,5 @@
 
 ## 8. Spec and Doc Updates
 
-- [ ] 8.1 Update `SPEC-006` to mark exposure mode configuration as implemented
-- [ ] 8.2 Update `SPEC-011` daemon architecture to reference `DaemonConfig` instead of hardcoded URL
+- [x] 8.1 Update `SPEC-006` to mark exposure mode configuration as implemented
+- [x] 8.2 Update `SPEC-011` daemon architecture to reference `DaemonConfig` instead of hardcoded URL

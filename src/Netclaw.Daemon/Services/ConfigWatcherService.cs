@@ -16,12 +16,18 @@ namespace Netclaw.Daemon.Services;
 /// mechanism that triggers config reload — there is no in-memory config
 /// mutation path.
 /// </para>
+/// <para>
+/// <see cref="DaemonConfig"/> properties (bind address, exposure mode) are
+/// excluded from hot-reload. If those values change, a warning is logged and
+/// the operator must restart the daemon manually.
+/// </para>
 /// </summary>
 public sealed class ConfigWatcherService : IHostedService, IDisposable
 {
     private readonly NetclawPaths _paths;
     private readonly TimeProvider _timeProvider;
     private readonly IDaemonRestartCoordinator _restartCoordinator;
+    private readonly DaemonConfig _currentDaemonConfig;
     private readonly ILogger<ConfigWatcherService> _logger;
 
     private FileSystemWatcher? _watcher;
@@ -32,11 +38,13 @@ public sealed class ConfigWatcherService : IHostedService, IDisposable
         NetclawPaths paths,
         TimeProvider timeProvider,
         IDaemonRestartCoordinator restartCoordinator,
+        DaemonConfig currentDaemonConfig,
         ILogger<ConfigWatcherService> logger)
     {
         _paths = paths;
         _timeProvider = timeProvider;
         _restartCoordinator = restartCoordinator;
+        _currentDaemonConfig = currentDaemonConfig;
         _logger = logger;
     }
 
@@ -126,6 +134,29 @@ public sealed class ConfigWatcherService : IHostedService, IDisposable
                 return;
             }
 
+            // Daemon section changes (bind address, exposure mode) are not applied via
+            // hot-reload — they affect network infrastructure and require a clean restart.
+            // Warn the operator and skip; all other config changes will take effect on
+            // the next manual restart.
+            DaemonConfig newDaemonConfig;
+            try
+            {
+                newDaemonConfig = ReadDaemonConfigFromFile(_paths.NetclawConfigPath);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Could not read Daemon section from updated config; skipping hot-reload.");
+                return;
+            }
+
+            if (newDaemonConfig != _currentDaemonConfig)
+            {
+                _logger.LogWarning(
+                    "Daemon configuration changed (bind address or exposure mode). " +
+                    "These settings are not applied via hot-reload — restart the daemon manually to apply the new network configuration.");
+                return;
+            }
+
             _logger.LogInformation("Config valid. Starting coordinated daemon restart.");
             await _restartCoordinator.RequestConfigRestartAsync(cancellationToken);
         }
@@ -133,6 +164,31 @@ public sealed class ConfigWatcherService : IHostedService, IDisposable
         {
             _logger.LogError(ex, "Config reload failed. Keeping previous config.");
         }
+    }
+
+    internal DaemonConfig ReadDaemonConfigFromFile(string path)
+    {
+        if (!File.Exists(path))
+            return new DaemonConfig();
+
+        using var doc = JsonDocument.Parse(File.ReadAllBytes(path));
+        if (!doc.RootElement.TryGetProperty("Daemon", out var daemonElement))
+            return new DaemonConfig();
+
+        var host = daemonElement.TryGetProperty("Host", out var hostProp) && hostProp.ValueKind == JsonValueKind.String
+            ? hostProp.GetString() ?? "127.0.0.1"
+            : "127.0.0.1";
+
+        var port = daemonElement.TryGetProperty("Port", out var portProp) && portProp.ValueKind == JsonValueKind.Number
+            ? portProp.GetInt32()
+            : 5199;
+
+        var modeStr = daemonElement.TryGetProperty("ExposureMode", out var modeProp) && modeProp.ValueKind == JsonValueKind.String
+            ? modeProp.GetString()
+            : null;
+
+        var mode = DaemonConfig.ParseExposureMode(modeStr);
+        return new DaemonConfig { Host = host, Port = port, ExposureMode = mode };
     }
 
     private bool ValidateConfigJson(string path)
