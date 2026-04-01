@@ -39,7 +39,7 @@ Three OpenSpec changes: `exposure-modes`, `hub-auth-framework`, `device-pairing`
 **Source:** Review after iteration 15, finding #4
 **Issue:** `openspec/changes/device-pairing/tasks.md` section 10 tasks 10.1 (DeviceRegistry tests), 10.2 (PairingCodeService tests), 10.3 (DeviceTokenAuthenticationHandler tests) are unchecked despite being implemented in iterations 14-15.
 **Done when:**
-- [ ] Tasks 10.1, 10.2, 10.3 in `openspec/changes/device-pairing/tasks.md` marked `[x]`
+- [x] Tasks 10.1, 10.2, 10.3 in `openspec/changes/device-pairing/tasks.md` marked `[x]`
 **Verification:** L1
 
 ---
