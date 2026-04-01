@@ -34,8 +34,8 @@ public sealed class SlackActorHierarchyTests(ITestOutputHelper output) : TestKit
         gateway.Tell(message);
         gateway.Tell(message);
 
-        await sink.ExpectMsgAsync<SlackInboundMessage>();
-        await ExpectNoMsgAsync(TimeSpan.FromMilliseconds(250));
+        await sink.ExpectMsgAsync<SlackInboundMessage>(cancellationToken: TestContext.Current.CancellationToken);
+        await ExpectNoMsgAsync(TimeSpan.FromMilliseconds(250), TestContext.Current.CancellationToken);
     }
 
     [Fact]
@@ -54,7 +54,7 @@ public sealed class SlackActorHierarchyTests(ITestOutputHelper output) : TestKit
             text: "no mention",
             threadTs: null));
 
-        await ExpectNoMsgAsync(TimeSpan.FromMilliseconds(250));
+        await ExpectNoMsgAsync(TimeSpan.FromMilliseconds(250), TestContext.Current.CancellationToken);
 
         conversation.Tell(CreateAppMention(
             eventId: "C1:201",
@@ -62,7 +62,7 @@ public sealed class SlackActorHierarchyTests(ITestOutputHelper output) : TestKit
             eventTs: "201.1",
             text: "<@UBOT> start"));
 
-        var first = await sink.ExpectMsgAsync<SlackThreadInbound>();
+        var first = await sink.ExpectMsgAsync<SlackThreadInbound>(cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal("C1/201.1", first.SessionId.Value);
         Assert.Equal("start", first.Text);
 
@@ -73,7 +73,7 @@ public sealed class SlackActorHierarchyTests(ITestOutputHelper output) : TestKit
             text: "follow up",
             threadTs: "201.1"));
 
-        var second = await sink.ExpectMsgAsync<SlackThreadInbound>();
+        var second = await sink.ExpectMsgAsync<SlackThreadInbound>(cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal("C1/201.1", second.SessionId.Value);
         Assert.Equal("follow up", second.Text);
     }
@@ -95,7 +95,7 @@ public sealed class SlackActorHierarchyTests(ITestOutputHelper output) : TestKit
             isDirectMessage: true,
             threadTs: null));
 
-        var inbound = await sink.ExpectMsgAsync<SlackThreadInbound>();
+        var inbound = await sink.ExpectMsgAsync<SlackThreadInbound>(cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal("D1/300.1", inbound.SessionId.Value);
         Assert.Equal("hello from dm", inbound.Text);
     }
@@ -121,7 +121,7 @@ public sealed class SlackActorHierarchyTests(ITestOutputHelper output) : TestKit
             text: "<@UBOT> check this",
             files: files));
 
-        var inbound = await sink.ExpectMsgAsync<SlackThreadInbound>();
+        var inbound = await sink.ExpectMsgAsync<SlackThreadInbound>(cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal("check this", inbound.Text);
         Assert.NotNull(inbound.Files);
         Assert.Single(inbound.Files);
@@ -150,7 +150,7 @@ public sealed class SlackActorHierarchyTests(ITestOutputHelper output) : TestKit
             text: "<@UBOT>",
             files: files));
 
-        var inbound = await sink.ExpectMsgAsync<SlackThreadInbound>();
+        var inbound = await sink.ExpectMsgAsync<SlackThreadInbound>(cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(string.Empty, inbound.Text);
         Assert.NotNull(inbound.Files);
         Assert.Single(inbound.Files);
@@ -179,7 +179,7 @@ public sealed class SlackActorHierarchyTests(ITestOutputHelper output) : TestKit
             Hidden: false,
             IsDirectMessage: false));
 
-        await ExpectNoMsgAsync(TimeSpan.FromMilliseconds(250));
+        await ExpectNoMsgAsync(TimeSpan.FromMilliseconds(250), TestContext.Current.CancellationToken);
     }
 
     private static SlackGatewayDependencies CreateDependencies(

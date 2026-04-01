@@ -21,9 +21,9 @@ public sealed class SQLiteMemoryStoreTests : IAsyncLifetime
     [Fact]
     public async Task InitializeAsync_creates_schema_and_checkpoint_table()
     {
-        await _store.InitializeAsync();
+        await _store.InitializeAsync(TestContext.Current.CancellationToken);
 
-        var pending = await _store.GetPendingCheckpointCountAsync();
+        var pending = await _store.GetPendingCheckpointCountAsync(TestContext.Current.CancellationToken);
         Assert.Equal(0, pending);
         Assert.True(File.Exists(_dbPath));
     }
@@ -31,7 +31,7 @@ public sealed class SQLiteMemoryStoreTests : IAsyncLifetime
     [Fact]
     public async Task UpsertAndSearchAutoRecallDocuments_filters_by_policy()
     {
-        await _store.InitializeAsync();
+        await _store.InitializeAsync(TestContext.Current.CancellationToken);
 
         var anchor = _store.CreateDefaultAnchor("netclaw", "project:test");
         var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
@@ -53,7 +53,7 @@ public sealed class SQLiteMemoryStoreTests : IAsyncLifetime
             FreshnessAtMs: now,
             ExpiresAtMs: null,
             CreatedAtMs: now,
-            UpdatedAtMs: now));
+            UpdatedAtMs: now), TestContext.Current.CancellationToken);
 
         await _store.UpsertDocumentAsync(new SQLiteMemoryDocument(
             DocumentId: "doc-2",
@@ -72,9 +72,9 @@ public sealed class SQLiteMemoryStoreTests : IAsyncLifetime
             FreshnessAtMs: now,
             ExpiresAtMs: null,
             CreatedAtMs: now,
-            UpdatedAtMs: now));
+            UpdatedAtMs: now), TestContext.Current.CancellationToken);
 
-        var results = await _store.SearchAutoRecallDocumentsAsync("sqlite", "project:test", 5);
+        var results = await _store.SearchAutoRecallDocumentsAsync("sqlite", "project:test", 5, ct: TestContext.Current.CancellationToken);
 
         Assert.Single(results);
         Assert.Equal("doc-1", results[0].DocumentId);
@@ -83,7 +83,7 @@ public sealed class SQLiteMemoryStoreTests : IAsyncLifetime
     [Fact]
     public async Task EnqueueCheckpoint_increments_pending_count()
     {
-        await _store.InitializeAsync();
+        await _store.InitializeAsync(TestContext.Current.CancellationToken);
         var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
         await _store.EnqueueCheckpointAsync(new SQLiteMemoryCheckpoint(
@@ -96,16 +96,16 @@ public sealed class SQLiteMemoryStoreTests : IAsyncLifetime
             PayloadJson: "{}",
             RetryCount: 0,
             CreatedAtMs: now,
-            UpdatedAtMs: now));
+            UpdatedAtMs: now), TestContext.Current.CancellationToken);
 
-        var pending = await _store.GetPendingCheckpointCountAsync();
+        var pending = await _store.GetPendingCheckpointCountAsync(TestContext.Current.CancellationToken);
         Assert.Equal(1, pending);
     }
 
     [Fact]
     public async Task SearchAutoRecallDocuments_excludes_expired_evidence_and_trace()
     {
-        await _store.InitializeAsync();
+        await _store.InitializeAsync(TestContext.Current.CancellationToken);
 
         var anchor = _store.CreateDefaultAnchor("netclaw", "project:test");
         var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
@@ -127,7 +127,7 @@ public sealed class SQLiteMemoryStoreTests : IAsyncLifetime
             FreshnessAtMs: now,
             ExpiresAtMs: null,
             CreatedAtMs: now,
-            UpdatedAtMs: now));
+            UpdatedAtMs: now), TestContext.Current.CancellationToken);
 
         await _store.UpsertDocumentAsync(new SQLiteMemoryDocument(
             DocumentId: "doc-expired-evidence",
@@ -146,7 +146,7 @@ public sealed class SQLiteMemoryStoreTests : IAsyncLifetime
             FreshnessAtMs: now - 1000,
             ExpiresAtMs: now - 1,
             CreatedAtMs: now,
-            UpdatedAtMs: now));
+            UpdatedAtMs: now), TestContext.Current.CancellationToken);
 
         await _store.UpsertDocumentAsync(new SQLiteMemoryDocument(
             DocumentId: "doc-expired-trace",
@@ -165,9 +165,9 @@ public sealed class SQLiteMemoryStoreTests : IAsyncLifetime
             FreshnessAtMs: now - 1000,
             ExpiresAtMs: now - 1,
             CreatedAtMs: now,
-            UpdatedAtMs: now));
+            UpdatedAtMs: now), TestContext.Current.CancellationToken);
 
-        var results = await _store.SearchAutoRecallDocumentsAsync("visible excluded", "project:test", 10);
+        var results = await _store.SearchAutoRecallDocumentsAsync("visible excluded", "project:test", 10, ct: TestContext.Current.CancellationToken);
 
         Assert.Contains(results, x => x.DocumentId == "doc-durable");
         Assert.DoesNotContain(results, x => x.DocumentId == "doc-expired-evidence");
@@ -177,7 +177,7 @@ public sealed class SQLiteMemoryStoreTests : IAsyncLifetime
     [Fact]
     public async Task InitializeAsync_demotes_malformed_auto_recall_documents_to_searchable()
     {
-        await _store.InitializeAsync();
+        await _store.InitializeAsync(TestContext.Current.CancellationToken);
 
         var anchor = _store.CreateDefaultAnchor("textforge", "project:test");
         var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
@@ -199,16 +199,16 @@ public sealed class SQLiteMemoryStoreTests : IAsyncLifetime
             FreshnessAtMs: now,
             ExpiresAtMs: null,
             CreatedAtMs: now,
-            UpdatedAtMs: now));
+            UpdatedAtMs: now), TestContext.Current.CancellationToken);
 
-        await _store.InitializeAsync();
+        await _store.InitializeAsync(TestContext.Current.CancellationToken);
 
         await using var conn = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = _dbPath }.ToString());
-        await conn.OpenAsync();
+        await conn.OpenAsync(TestContext.Current.CancellationToken);
         await using var cmd = conn.CreateCommand();
         cmd.CommandText = "SELECT recall_mode, facets_json FROM memory_documents WHERE document_id = 'doc-bad';";
-        await using var reader = await cmd.ExecuteReaderAsync();
-        Assert.True(await reader.ReadAsync());
+        await using var reader = await cmd.ExecuteReaderAsync(TestContext.Current.CancellationToken);
+        Assert.True(await reader.ReadAsync(TestContext.Current.CancellationToken));
         Assert.Equal("searchable", reader.GetString(0));
         Assert.Contains("needs_metadata_enrichment", reader.GetString(1), StringComparison.OrdinalIgnoreCase);
     }
@@ -216,7 +216,7 @@ public sealed class SQLiteMemoryStoreTests : IAsyncLifetime
     [Fact]
     public async Task SearchByPlan_filters_results_by_allowed_audience()
     {
-        await _store.InitializeAsync();
+        await _store.InitializeAsync(TestContext.Current.CancellationToken);
 
         var anchor = _store.CreateDefaultAnchor("netclaw", "project:test");
         var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
@@ -239,7 +239,7 @@ public sealed class SQLiteMemoryStoreTests : IAsyncLifetime
             ExpiresAtMs: null,
             CreatedAtMs: now,
             UpdatedAtMs: now,
-            Audience: TrustAudience.Public.ToWireValue()));
+            Audience: TrustAudience.Public.ToWireValue()), TestContext.Current.CancellationToken);
 
         await _store.UpsertDocumentAsync(new SQLiteMemoryDocument(
             DocumentId: "doc-personal",
@@ -259,7 +259,7 @@ public sealed class SQLiteMemoryStoreTests : IAsyncLifetime
             ExpiresAtMs: null,
             CreatedAtMs: now,
             UpdatedAtMs: now,
-            Audience: TrustAudience.Personal.ToWireValue()));
+            Audience: TrustAudience.Personal.ToWireValue()), TestContext.Current.CancellationToken);
 
         var publicResults = await _store.SearchByPlanAsync(
             ["visible"],
@@ -268,7 +268,7 @@ public sealed class SQLiteMemoryStoreTests : IAsyncLifetime
             10,
             SecurityPolicyDefaults.InferLegacyBoundaryFromDomain("project:test"),
             TrustAudience.Public,
-            false);
+            false, TestContext.Current.CancellationToken);
 
         var personalResults = await _store.SearchByPlanAsync(
             ["visible"],
@@ -277,7 +277,7 @@ public sealed class SQLiteMemoryStoreTests : IAsyncLifetime
             10,
             SecurityPolicyDefaults.InferLegacyBoundaryFromDomain("project:test"),
             TrustAudience.Personal,
-            false);
+            false, TestContext.Current.CancellationToken);
 
         Assert.Contains(publicResults, x => x.Id == "doc-public");
         Assert.DoesNotContain(publicResults, x => x.Id == "doc-personal");

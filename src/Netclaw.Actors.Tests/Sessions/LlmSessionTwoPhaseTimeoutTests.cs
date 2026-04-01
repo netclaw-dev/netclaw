@@ -80,20 +80,20 @@ public sealed class LlmSessionTwoPhaseTimeoutTests(ITestOutputHelper output) : T
             SessionId = sessionId,
             Subscriber = subscriber,
             Filter = OutputFilter.TextOnly
-        }, TimeSpan.FromSeconds(3));
-        await subscriber.ExpectMsgAsync<SessionJoined>();
+        }, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = sessionId,
             Content = "hello"
-        }, TimeSpan.FromSeconds(3));
+        }, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
 
         // FirstTokenTimeout is 2s — should fire within ~3s
-        var error = await subscriber.ExpectMsgAsync<ErrorOutput>(TimeSpan.FromSeconds(6));
+        var error = await subscriber.ExpectMsgAsync<ErrorOutput>(TimeSpan.FromSeconds(6), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(ErrorCategory.Timeout, error.Category);
         Assert.Contains("did not respond", error.Message);
-        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
+        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
     }
 
     [Fact]
@@ -111,21 +111,21 @@ public sealed class LlmSessionTwoPhaseTimeoutTests(ITestOutputHelper output) : T
             SessionId = sessionId,
             Subscriber = subscriber,
             Filter = OutputFilter.TextOnly
-        }, TimeSpan.FromSeconds(3));
-        await subscriber.ExpectMsgAsync<SessionJoined>();
+        }, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = sessionId,
             Content = "hello"
-        }, TimeSpan.FromSeconds(3));
+        }, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
 
         // We should see text deltas streamed, then a timeout error
         // StreamIdleTimeout is 1s — should fire well before FirstTokenTimeout (2s)
-        var error = await subscriber.ExpectMsgAsync<ErrorOutput>(TimeSpan.FromSeconds(6));
+        var error = await subscriber.ExpectMsgAsync<ErrorOutput>(TimeSpan.FromSeconds(6), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(ErrorCategory.Timeout, error.Category);
         Assert.Contains("stopped unexpectedly", error.Message);
-        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
+        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
     }
 
     [Fact]
@@ -142,18 +142,18 @@ public sealed class LlmSessionTwoPhaseTimeoutTests(ITestOutputHelper output) : T
             SessionId = sessionId,
             Subscriber = subscriber,
             Filter = OutputFilter.TextOnly
-        }, TimeSpan.FromSeconds(3));
-        await subscriber.ExpectMsgAsync<SessionJoined>();
+        }, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = sessionId,
             Content = "hello"
-        }, TimeSpan.FromSeconds(3));
+        }, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
 
-        var text = await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(6));
+        var text = await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(6), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Contains("success", text.Text, StringComparison.OrdinalIgnoreCase);
-        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
+        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
     }
 
     private enum StreamMode { HangForever, EmitThenHang, SucceedImmediately }

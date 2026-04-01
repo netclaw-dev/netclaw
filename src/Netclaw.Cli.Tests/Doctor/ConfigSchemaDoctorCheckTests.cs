@@ -14,7 +14,7 @@ public sealed class ConfigSchemaDoctorCheckTests
         paths.EnsureDirectoriesExist();
 
         var check = new ConfigSchemaDoctorCheck(paths);
-        var result = await check.RunAsync();
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(DoctorSeverity.Warning, result.Severity);
         Assert.Contains("not found", result.Message, StringComparison.OrdinalIgnoreCase);
@@ -38,10 +38,10 @@ public sealed class ConfigSchemaDoctorCheckTests
                 "AllowedChannelIds": ["C123"]
               }
             }
-            """);
+            """, TestContext.Current.CancellationToken);
 
         var check = new ConfigSchemaDoctorCheck(paths);
-        var result = await check.RunAsync();
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(DoctorSeverity.Pass, result.Severity);
     }
@@ -67,10 +67,10 @@ public sealed class ConfigSchemaDoctorCheckTests
                 "SearchMemoriesTimeoutSeconds": 45
               }
             }
-            """);
+            """, TestContext.Current.CancellationToken);
 
         var check = new ConfigSchemaDoctorCheck(paths);
-        var result = await check.RunAsync();
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(DoctorSeverity.Pass, result.Severity);
     }
@@ -90,10 +90,10 @@ public sealed class ConfigSchemaDoctorCheckTests
                 "DisableSystemSkillSync": true
               }
             }
-            """);
+            """, TestContext.Current.CancellationToken);
 
         var check = new ConfigSchemaDoctorCheck(paths);
-        var result = await check.RunAsync();
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(DoctorSeverity.Pass, result.Severity);
     }
@@ -139,10 +139,10 @@ public sealed class ConfigSchemaDoctorCheckTests
                 }
               }
             }
-            """);
+            """, TestContext.Current.CancellationToken);
 
         var check = new ConfigSchemaDoctorCheck(paths);
-        var result = await check.RunAsync();
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(DoctorSeverity.Pass, result.Severity);
     }
@@ -162,10 +162,10 @@ public sealed class ConfigSchemaDoctorCheckTests
                 "Provider": "redis"
               }
             }
-            """);
+            """, TestContext.Current.CancellationToken);
 
         var check = new ConfigSchemaDoctorCheck(paths);
-        var result = await check.RunAsync();
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(DoctorSeverity.Error, result.Severity);
     }
@@ -185,10 +185,10 @@ public sealed class ConfigSchemaDoctorCheckTests
                 "DefaultTimeoutSeconds": 2
               }
             }
-            """);
+            """, TestContext.Current.CancellationToken);
 
         var check = new ConfigSchemaDoctorCheck(paths);
-        var result = await check.RunAsync();
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(DoctorSeverity.Error, result.Severity);
     }
@@ -208,10 +208,10 @@ public sealed class ConfigSchemaDoctorCheckTests
                 "StoreMemoryTimeoutSeconds": 999
               }
             }
-            """);
+            """, TestContext.Current.CancellationToken);
 
         var check = new ConfigSchemaDoctorCheck(paths);
-        var result = await check.RunAsync();
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(DoctorSeverity.Error, result.Severity);
     }

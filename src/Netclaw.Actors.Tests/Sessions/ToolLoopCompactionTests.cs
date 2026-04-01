@@ -120,21 +120,21 @@ public class ToolLoopCompactionTests : TestKit
             SessionId = sessionId,
             Subscriber = subscriber,
             Filter = OutputFilter.Full
-        });
-        await subscriber.ExpectMsgAsync<SessionJoined>();
+        }, TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = sessionId,
             Content = "Search for something"
-        });
+        }, TestContext.Current.CancellationToken);
 
         // The first LLM call returns a tool call (with 800 token usage).
         // After tool execution completes, the actor should detect that
         // _lastInputTokenCount >= threshold and trigger compaction instead
         // of firing another LLM call.
-        await subscriber.ExpectMsgAsync<ToolCallOutput>();
-        await subscriber.ExpectMsgAsync<UsageOutput>();
+        await subscriber.ExpectMsgAsync<ToolCallOutput>(cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<UsageOutput>(cancellationToken: TestContext.Current.CancellationToken);
 
         // Compaction should trigger after the tool execution completes.
         // Lower usage for post-compaction calls so we don't loop forever.
@@ -146,13 +146,13 @@ public class ToolLoopCompactionTests : TestKit
         };
         _fakeChatClient.AlwaysReturnToolCalls = false;
 
-        var compaction = await subscriber.ExpectMsgAsync<CompactionOutput>(TimeSpan.FromSeconds(5));
+        var compaction = await subscriber.ExpectMsgAsync<CompactionOutput>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
         Assert.True(compaction.MessagesAfter < compaction.MessagesBefore,
             "Compaction should have reduced message count");
 
         // After compaction, the session drains the buffer and completes the turn.
-        await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(5));
-        await subscriber.ExpectMsgAsync<UsageOutput>(TimeSpan.FromSeconds(3));
-        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
+        await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<UsageOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
     }
 }

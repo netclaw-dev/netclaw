@@ -22,7 +22,7 @@ public sealed class SlackTargetResolverTests
         };
 
         var resolver = new SlackTargetResolver(lookup);
-        var result = await resolver.ResolveAsync("#openclaw");
+        var result = await resolver.ResolveAsync("#openclaw", TestContext.Current.CancellationToken);
 
         Assert.True(result.Success);
         Assert.Equal("C1", result.ChannelId);
@@ -55,7 +55,7 @@ public sealed class SlackTargetResolverTests
         };
 
         var resolver = new SlackTargetResolver(lookup);
-        var result = await resolver.ResolveAsync("@aaron");
+        var result = await resolver.ResolveAsync("@aaron", TestContext.Current.CancellationToken);
 
         Assert.True(result.Success);
         Assert.Equal("U42", result.UserId);
@@ -79,7 +79,7 @@ public sealed class SlackTargetResolverTests
         };
 
         var resolver = new SlackTargetResolver(lookup);
-        var result = await resolver.ResolveAsync("aaron");
+        var result = await resolver.ResolveAsync("aaron", TestContext.Current.CancellationToken);
 
         Assert.False(result.Success);
         Assert.Contains("Could not resolve", result.ErrorMessage);
@@ -103,7 +103,7 @@ public sealed class SlackTargetResolverTests
         };
 
         var resolver = new SlackTargetResolver(lookup);
-        var result = await resolver.ResolveAsync("openclaw");
+        var result = await resolver.ResolveAsync("openclaw", TestContext.Current.CancellationToken);
 
         Assert.True(result.Success);
         Assert.Equal("C777", result.ChannelId);

@@ -24,7 +24,7 @@ public sealed class SlackReplyClientTests
             client.PostThreadReplyAsync(new SlackPostMessage(
                 ChannelId: new SlackChannelId("C123"),
                 ThreadTs: new SlackThreadTs("1234.5678"),
-                Text: "hello")));
+                Text: "hello"), TestContext.Current.CancellationToken));
 
         Assert.Equal("phantom_success", ex.ErrorCode);
         Assert.Equal(DeliveryFailureKind.TransportFailure, ex.FailureKind);
@@ -41,7 +41,7 @@ public sealed class SlackReplyClientTests
             client.PostThreadReplyAsync(new SlackPostMessage(
                 ChannelId: new SlackChannelId("C123"),
                 ThreadTs: new SlackThreadTs("1234.5678"),
-                Text: "hello")));
+                Text: "hello"), TestContext.Current.CancellationToken));
 
         Assert.Equal("phantom_success", ex.ErrorCode);
         Assert.Equal(DeliveryFailureKind.TransportFailure, ex.FailureKind);
@@ -58,7 +58,7 @@ public sealed class SlackReplyClientTests
             client.PostThreadReplyAsync(new SlackPostMessage(
                 ChannelId: new SlackChannelId("C123"),
                 ThreadTs: new SlackThreadTs("1234.5678"),
-                Text: new string('x', 50_000))));
+                Text: new string('x', 50_000)), TestContext.Current.CancellationToken));
 
         Assert.Equal("msg_too_long", ex.ErrorCode);
         Assert.Equal(DeliveryFailureKind.MessageTooLarge, ex.FailureKind);
@@ -75,7 +75,7 @@ public sealed class SlackReplyClientTests
             client.PostThreadReplyAsync(new SlackPostMessage(
                 ChannelId: new SlackChannelId("C123"),
                 ThreadTs: new SlackThreadTs("1234.5678"),
-                Text: "hello")));
+                Text: "hello"), TestContext.Current.CancellationToken));
 
         Assert.Equal("rate_limited", ex.ErrorCode);
         Assert.Equal(DeliveryFailureKind.TransportFailure, ex.FailureKind);
@@ -91,7 +91,7 @@ public sealed class SlackReplyClientTests
         await client.PostThreadReplyAsync(new SlackPostMessage(
             ChannelId: new SlackChannelId("C123"),
             ThreadTs: new SlackThreadTs("1234.5678"),
-            Text: "hello"));
+            Text: "hello"), TestContext.Current.CancellationToken);
     }
 
     [Theory]

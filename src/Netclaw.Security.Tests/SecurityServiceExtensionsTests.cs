@@ -19,7 +19,7 @@ public sealed class SecurityServiceExtensionsTests
         Assert.IsType<MagicByteContentScanner>(scanner);
 
         var disguisedExecutable = new byte[] { 0x4D, 0x5A, 0x90, 0x00 };
-        var result = await scanner.ScanAsync(disguisedExecutable, "photo.png", "image/png");
+        var result = await scanner.ScanAsync(disguisedExecutable, "photo.png", "image/png", TestContext.Current.CancellationToken);
 
         Assert.False(result.IsAllowed);
         Assert.Equal(ContentScanError.ExecutableContent, result.Error);

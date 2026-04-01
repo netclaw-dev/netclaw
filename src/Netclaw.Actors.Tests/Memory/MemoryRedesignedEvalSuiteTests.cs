@@ -25,7 +25,7 @@ public sealed class MemoryRedesignedEvalSuiteTests : IDisposable
     [Fact]
     public async Task Formation_then_auto_recall_surfaces_durable_fact()
     {
-        await _store.InitializeAsync();
+        await _store.InitializeAsync(TestContext.Current.CancellationToken);
         var now = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
         var gate = new MemoryProposalGate();
 
@@ -66,7 +66,7 @@ public sealed class MemoryRedesignedEvalSuiteTests : IDisposable
             "slack/thread-1",
             "what airline do I usually use",
             ["I usually fly United"],
-            3));
+            3), TestContext.Current.CancellationToken);
 
         Assert.False(result.Degraded);
         Assert.Contains(result.Items, x => x.Content.Contains("United Airlines", StringComparison.Ordinal));
@@ -76,7 +76,7 @@ public sealed class MemoryRedesignedEvalSuiteTests : IDisposable
     [Fact]
     public async Task Formation_then_recall_surfaces_travel_origin_and_persists_metadata()
     {
-        await _store.InitializeAsync();
+        await _store.InitializeAsync(TestContext.Current.CancellationToken);
         var now = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
         var gate = new MemoryProposalGate();
 
@@ -111,9 +111,9 @@ public sealed class MemoryRedesignedEvalSuiteTests : IDisposable
         Assert.Contains("travel_profile", op.FacetsJson ?? string.Empty, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("origin_airport", op.SlotsJson ?? string.Empty, StringComparison.OrdinalIgnoreCase);
 
-        await _store.ApplyCurationBatchAsync("cp-formation-iah", gateResult.MemoryOperations, CancellationToken.None);
+        await _store.ApplyCurationBatchAsync("cp-formation-iah", gateResult.MemoryOperations, TestContext.Current.CancellationToken);
 
-        var stored = await _store.SearchAutoRecallDocumentsAsync("airport IAH fly", "user:aaron", 5);
+        var stored = await _store.SearchAutoRecallDocumentsAsync("airport IAH fly", "user:aaron", 5, ct: TestContext.Current.CancellationToken);
         var storedDoc = Assert.Single(stored, x => x.Title == "Travel Profile: Primary Origin Airport");
         Assert.Contains("IAH", storedDoc.AliasesJson ?? string.Empty, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("travel_profile", storedDoc.FacetsJson ?? string.Empty, StringComparison.OrdinalIgnoreCase);
@@ -130,7 +130,7 @@ public sealed class MemoryRedesignedEvalSuiteTests : IDisposable
             ["What airport do I usually fly out of?"],
             3,
             HardScopeOverride: "user:aaron",
-            ThreadTitle: "Travel preferences"));
+            ThreadTitle: "Travel preferences"), TestContext.Current.CancellationToken);
 
         Assert.False(result.Degraded);
         Assert.Contains(result.Items, x => x.Content.Contains("IAH", StringComparison.OrdinalIgnoreCase));
@@ -139,7 +139,7 @@ public sealed class MemoryRedesignedEvalSuiteTests : IDisposable
     [Fact]
     public async Task Formation_then_recall_surfaces_preferred_airline_and_persists_metadata()
     {
-        await _store.InitializeAsync();
+        await _store.InitializeAsync(TestContext.Current.CancellationToken);
         var now = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
         var gate = new MemoryProposalGate();
 
@@ -174,9 +174,9 @@ public sealed class MemoryRedesignedEvalSuiteTests : IDisposable
         Assert.Contains("travel_profile", op.FacetsJson ?? string.Empty, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("preferred_airline", op.SlotsJson ?? string.Empty, StringComparison.OrdinalIgnoreCase);
 
-        await _store.ApplyCurationBatchAsync("cp-formation-united", gateResult.MemoryOperations, CancellationToken.None);
+        await _store.ApplyCurationBatchAsync("cp-formation-united", gateResult.MemoryOperations, TestContext.Current.CancellationToken);
 
-        var stored = await _store.SearchAutoRecallDocumentsAsync("airline United status", "user:aaron", 5);
+        var stored = await _store.SearchAutoRecallDocumentsAsync("airline United status", "user:aaron", 5, ct: TestContext.Current.CancellationToken);
         var storedDoc = Assert.Single(stored, x => x.Title == "Travel Profile: Preferred Airline");
         Assert.Contains("United Airlines", storedDoc.AliasesJson ?? string.Empty, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("travel_profile", storedDoc.FacetsJson ?? string.Empty, StringComparison.OrdinalIgnoreCase);
@@ -193,7 +193,7 @@ public sealed class MemoryRedesignedEvalSuiteTests : IDisposable
             ["What airline do I usually take?"],
             3,
             HardScopeOverride: "user:aaron",
-            ThreadTitle: "Travel preferences"));
+            ThreadTitle: "Travel preferences"), TestContext.Current.CancellationToken);
 
         Assert.False(result.Degraded);
         Assert.Contains(result.Items, x => x.Content.Contains("United Airlines", StringComparison.OrdinalIgnoreCase));
@@ -202,7 +202,7 @@ public sealed class MemoryRedesignedEvalSuiteTests : IDisposable
     [Fact]
     public async Task Formation_then_intentional_search_returns_evidence_without_auto_recall_leakage()
     {
-        await _store.InitializeAsync();
+        await _store.InitializeAsync(TestContext.Current.CancellationToken);
         var now = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
 
         await _store.ApplyCurationBatchAsync(
@@ -258,7 +258,7 @@ public sealed class MemoryRedesignedEvalSuiteTests : IDisposable
             "slack/thread-2",
             "where should I stay",
             ["where should I stay near Stir Trek"],
-            3));
+            3), TestContext.Current.CancellationToken);
 
         Assert.DoesNotContain(auto.Items, x => x.Id == "rec-hotel-evidence");
 
@@ -353,7 +353,7 @@ public sealed class MemoryRedesignedEvalSuiteTests : IDisposable
     [Fact]
     public async Task Soul_boundary_keeps_project_facts_in_sqlite_memory()
     {
-        await _store.InitializeAsync();
+        await _store.InitializeAsync(TestContext.Current.CancellationToken);
         var now = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
         var gate = new MemoryProposalGate();
 
@@ -403,7 +403,7 @@ public sealed class MemoryRedesignedEvalSuiteTests : IDisposable
         now);
 
         await _store.ApplyCurationBatchAsync("cp-eval-3", accepted, CancellationToken.None);
-        var items = await _store.SearchByPlanAsync(["deploys", "east-2"], "project:ops", ["durable_fact"], 5, SecurityPolicyDefaults.InferLegacyBoundaryFromDomain("project:ops"), TrustAudience.Public, false);
+        var items = await _store.SearchByPlanAsync(["deploys", "east-2"], "project:ops", ["durable_fact"], 5, SecurityPolicyDefaults.InferLegacyBoundaryFromDomain("project:ops"), TrustAudience.Public, false, TestContext.Current.CancellationToken);
 
         Assert.Single(items);
         Assert.Equal("Deployment region", items[0].Title);
@@ -412,7 +412,7 @@ public sealed class MemoryRedesignedEvalSuiteTests : IDisposable
     [Fact]
     public async Task Expiry_and_staleness_hides_expired_evidence_by_default_but_allows_debug_search()
     {
-        await _store.InitializeAsync();
+        await _store.InitializeAsync(TestContext.Current.CancellationToken);
         var now = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
 
         await _store.ApplyCurationBatchAsync(
@@ -467,7 +467,7 @@ public sealed class MemoryRedesignedEvalSuiteTests : IDisposable
     [Fact]
     public async Task Eval_reporting_thresholds_meet_smoke_targets_for_current_fixture_set()
     {
-        await _store.InitializeAsync();
+        await _store.InitializeAsync(TestContext.Current.CancellationToken);
         var now = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
         var proposalGate = new MemoryProposalGate();
         var recall = new SQLiteMemoryRecallCoordinator(
@@ -550,7 +550,7 @@ public sealed class MemoryRedesignedEvalSuiteTests : IDisposable
             "slack/thread-report",
             "what airline do I use and where should I stay",
             ["what airline do I use and where should I stay near Stir Trek"],
-            3));
+            3), TestContext.Current.CancellationToken);
         var searchTool = new SqliteFindMemoriesTool(_store, _timeProvider);
         var search = await searchTool.ExecuteAsync(
             new Dictionary<string, object?>

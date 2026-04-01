@@ -134,7 +134,7 @@ public sealed class ProviderStepViewModelTests : IDisposable
         ]);
 
         step.StartProbe();
-        await step.ProbeCompletion!.WaitAsync(TimeSpan.FromSeconds(5));
+        await step.ProbeCompletion!.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         Assert.True(step.ProbeResult.Value!.Success);
         Assert.Equal(2, step.DiscoveredModels.Count);
@@ -150,7 +150,7 @@ public sealed class ProviderStepViewModelTests : IDisposable
         _fakeProbe.NextResult = new ProviderProbeResult(false, "Invalid API key", []);
 
         step.StartProbe();
-        await step.ProbeCompletion!.WaitAsync(TimeSpan.FromSeconds(5));
+        await step.ProbeCompletion!.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         Assert.False(step.ProbeResult.Value!.Success);
         Assert.Contains("Invalid API key", step.ProbeResult.Value.ErrorMessage);

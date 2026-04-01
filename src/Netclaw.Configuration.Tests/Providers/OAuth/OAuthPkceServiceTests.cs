@@ -130,7 +130,7 @@ public class OAuthPkceServiceTests
             "test-client",
             "auth-code-123",
             "verifier-xyz",
-            "http://127.0.0.1:5199/callback");
+            "http://127.0.0.1:5199/callback", ct: TestContext.Current.CancellationToken);
 
         Assert.Equal("at-secret", result.AccessToken.Value);
         Assert.NotNull(result.RefreshToken);
@@ -166,7 +166,7 @@ public class OAuthPkceServiceTests
             "http://127.0.0.1:5199/callback",
             "openid");
 
-        var result = await service.CompleteAuthorizationAsync("callback-code", state);
+        var result = await service.CompleteAuthorizationAsync("callback-code", state, TestContext.Current.CancellationToken);
 
         Assert.Equal("at-from-callback", result.AccessToken.Value);
         Assert.Equal("rt-from-callback", result.RefreshToken!.Value);
@@ -178,7 +178,7 @@ public class OAuthPkceServiceTests
         var service = new OAuthPkceService(new HttpClient());
 
         await Assert.ThrowsAsync<InvalidOperationException>(
-            () => service.CompleteAuthorizationAsync("code", "unknown-state"));
+            () => service.CompleteAuthorizationAsync("code", "unknown-state", TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -197,7 +197,7 @@ public class OAuthPkceServiceTests
             "openid");
 
         await Assert.ThrowsAsync<HttpRequestException>(
-            () => service.CompleteAuthorizationAsync("callback-code", state));
+            () => service.CompleteAuthorizationAsync("callback-code", state, TestContext.Current.CancellationToken));
 
         Assert.Equal(OAuthPkceFlowStatus.Failed, service.GetFlowStatus(state));
     }
@@ -218,7 +218,7 @@ public class OAuthPkceServiceTests
         var result = await service.RefreshTokenAsync(
             "https://auth.example.com/token",
             "test-client",
-            new SensitiveString("old-refresh"));
+            new SensitiveString("old-refresh"), ct: TestContext.Current.CancellationToken);
 
         Assert.NotNull(result);
         Assert.Equal("new-at", result!.AccessToken.Value);
@@ -237,7 +237,7 @@ public class OAuthPkceServiceTests
         var result = await service.RefreshTokenAsync(
             "https://auth.example.com/token",
             "test-client",
-            new SensitiveString("expired-refresh"));
+            new SensitiveString("expired-refresh"), ct: TestContext.Current.CancellationToken);
 
         Assert.Null(result);
     }
@@ -289,7 +289,7 @@ public class OAuthPkceServiceTests
             "auth-code",
             "verifier",
             "http://127.0.0.1:5199/callback",
-            extraParams);
+            extraParams, TestContext.Current.CancellationToken);
 
         Assert.NotNull(capturedBody);
         Assert.Contains("resource=https%3A%2F%2Fmcp.example.com%2Fmcp", capturedBody);
@@ -321,7 +321,7 @@ public class OAuthPkceServiceTests
             "https://auth.example.com/token",
             "test-client",
             new SensitiveString("old-refresh"),
-            extraParams);
+            extraParams, TestContext.Current.CancellationToken);
 
         Assert.NotNull(capturedBody);
         Assert.Contains("resource=https%3A%2F%2Fmcp.example.com%2Fmcp", capturedBody);
@@ -356,7 +356,7 @@ public class OAuthPkceServiceTests
             "http://127.0.0.1:5199/callback",
             extraTokenParams: extraTokenParams);
 
-        await service.CompleteAuthorizationAsync("callback-code", state);
+        await service.CompleteAuthorizationAsync("callback-code", state, TestContext.Current.CancellationToken);
 
         Assert.NotNull(capturedBody);
         Assert.Contains("resource=https%3A%2F%2Fmcp.example.com%2Fmcp", capturedBody);

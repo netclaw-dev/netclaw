@@ -16,7 +16,7 @@ public sealed class LoggingChatClientTests
         var fake = new FakeChatClient();
 
         var client = new LoggingChatClient(fake, logger);
-        var response = await client.GetResponseAsync([new ChatMessage(ChatRole.User, "hi")]);
+        var response = await client.GetResponseAsync([new ChatMessage(ChatRole.User, "hi")], cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.NotNull(response);
         Assert.Contains(logs, l => l.Contains("LLM call completed"));
@@ -37,7 +37,7 @@ public sealed class LoggingChatClientTests
         });
 
         var client = new LoggingChatClient(fake, logger);
-        await client.GetResponseAsync([new ChatMessage(ChatRole.User, "hi")]);
+        await client.GetResponseAsync([new ChatMessage(ChatRole.User, "hi")], cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Contains(logs, l => l.Contains("input: 10") && l.Contains("output: 20"));
     }
@@ -53,7 +53,7 @@ public sealed class LoggingChatClientTests
         var client = new LoggingChatClient(fake, logger);
 
         await Assert.ThrowsAsync<HttpRequestException>(() =>
-            client.GetResponseAsync([new ChatMessage(ChatRole.User, "hi")]));
+            client.GetResponseAsync([new ChatMessage(ChatRole.User, "hi")], cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Contains(logs, l => l.Contains("LLM call failed"));
     }
@@ -67,7 +67,7 @@ public sealed class LoggingChatClientTests
 
         var client = new LoggingChatClient(fake, logger);
         await foreach (var _ in client.GetStreamingResponseAsync(
-            [new ChatMessage(ChatRole.User, "hi")])) { }
+            [new ChatMessage(ChatRole.User, "hi")], cancellationToken: TestContext.Current.CancellationToken)) { }
 
         Assert.Contains(logs, l => l.Contains("LLM streaming call completed"));
     }
@@ -92,7 +92,7 @@ public sealed class LoggingChatClientTests
                     AIFunctionFactory.Create((string query) => query, "search_tools"),
                     AIFunctionFactory.Create((string url) => url, "browser_playwright/browser_navigate")
                 ]
-            });
+            }, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Contains(logs, l => l.Contains("LLM prompt summary"));
         Assert.Contains(logs, l => l.Contains("promptSha256="));
@@ -107,7 +107,7 @@ public sealed class LoggingChatClientTests
         var fake = new FakeChatClient();
 
         var client = new LoggingChatClient(fake, logger);
-        await client.GetResponseAsync([new ChatMessage(ChatRole.User, "hello")]);
+        await client.GetResponseAsync([new ChatMessage(ChatRole.User, "hello")], cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Contains(logs, l => l.Contains("LLM prompt dump:"));
         Assert.Contains(logs, l => l.Contains("role=user"));
@@ -134,11 +134,11 @@ public sealed class LoggingChatClientTests
         var client = new LoggingChatClient(fake, logger);
 
         // First call: 50 tokens
-        await client.GetResponseAsync([new ChatMessage(ChatRole.User, "hi")]);
+        await client.GetResponseAsync([new ChatMessage(ChatRole.User, "hi")], cancellationToken: TestContext.Current.CancellationToken);
         // Second call: 100 tokens
-        await client.GetResponseAsync([new ChatMessage(ChatRole.User, "hi")]);
+        await client.GetResponseAsync([new ChatMessage(ChatRole.User, "hi")], cancellationToken: TestContext.Current.CancellationToken);
         // Third call: 150 tokens
-        await client.GetResponseAsync([new ChatMessage(ChatRole.User, "hi")]);
+        await client.GetResponseAsync([new ChatMessage(ChatRole.User, "hi")], cancellationToken: TestContext.Current.CancellationToken);
 
         // First call has no previous, so delta is N/A
         Assert.Contains(logs, l => l.Contains("delta: N/A"));
@@ -167,11 +167,11 @@ public sealed class LoggingChatClientTests
         var client = new LoggingChatClient(fake, logger);
 
         // First call: 50 tokens
-        await client.GetResponseAsync([new ChatMessage(ChatRole.User, "hi")]);
+        await client.GetResponseAsync([new ChatMessage(ChatRole.User, "hi")], cancellationToken: TestContext.Current.CancellationToken);
         // Second call: 100 tokens
-        await client.GetResponseAsync([new ChatMessage(ChatRole.User, "hi")]);
+        await client.GetResponseAsync([new ChatMessage(ChatRole.User, "hi")], cancellationToken: TestContext.Current.CancellationToken);
         // Third call: 150 tokens
-        await client.GetResponseAsync([new ChatMessage(ChatRole.User, "hi")]);
+        await client.GetResponseAsync([new ChatMessage(ChatRole.User, "hi")], cancellationToken: TestContext.Current.CancellationToken);
 
         // Verify cumulative: 50, 150, 300
         Assert.Contains(logs, l => l.Contains("cumulative: 50"));
@@ -196,9 +196,9 @@ public sealed class LoggingChatClientTests
         var client = new LoggingChatClient(fake, logger);
 
         // First streaming call
-        await foreach (var _ in client.GetStreamingResponseAsync([new ChatMessage(ChatRole.User, "hi")])) { }
+        await foreach (var _ in client.GetStreamingResponseAsync([new ChatMessage(ChatRole.User, "hi")], cancellationToken: TestContext.Current.CancellationToken)) { }
         // Second streaming call
-        await foreach (var _ in client.GetStreamingResponseAsync([new ChatMessage(ChatRole.User, "hi")])) { }
+        await foreach (var _ in client.GetStreamingResponseAsync([new ChatMessage(ChatRole.User, "hi")], cancellationToken: TestContext.Current.CancellationToken)) { }
 
         // Verify delta and cumulative appear in streaming logs
         Assert.Contains(logs, l => l.Contains("delta:") && l.Contains("cumulative:"));

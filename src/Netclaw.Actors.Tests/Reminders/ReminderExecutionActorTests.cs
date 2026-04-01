@@ -49,7 +49,7 @@ public class ReminderExecutionActorTests : TestKit, IDisposable
             Props.Create(() => new ParentProxy(probe.Ref, definition, failingPipeline, _historyStore)),
             "exec-parent");
 
-        var completed = await probe.ExpectMsgAsync<ReminderExecutionCompleted>(TimeSpan.FromSeconds(5));
+        var completed = await probe.ExpectMsgAsync<ReminderExecutionCompleted>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.False(completed.Success);
         Assert.Equal("fail-test", completed.Id.Value);
@@ -73,7 +73,7 @@ public class ReminderExecutionActorTests : TestKit, IDisposable
             Props.Create(() => new ParentProxy(probe.Ref, definition, failingPipeline, _historyStore)),
             "exec-parent-2");
 
-        var completed = await probe.ExpectMsgAsync<ReminderExecutionCompleted>(TimeSpan.FromSeconds(5));
+        var completed = await probe.ExpectMsgAsync<ReminderExecutionCompleted>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.False(completed.Success);
         // Outer message is the protocol-level error; inner is in the log via ex.ToString()
@@ -101,7 +101,7 @@ public class ReminderExecutionActorTests : TestKit, IDisposable
             Props.Create(() => new ParentProxy(probe.Ref, definition, pipeline, _historyStore)),
             "exec-parent-3");
 
-        var completed = await probe.ExpectMsgAsync<ReminderExecutionCompleted>(TimeSpan.FromSeconds(5));
+        var completed = await probe.ExpectMsgAsync<ReminderExecutionCompleted>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.False(completed.Success);
         Assert.Equal("notify-fail-test", completed.Id.Value);
@@ -129,7 +129,7 @@ public class ReminderExecutionActorTests : TestKit, IDisposable
             Props.Create(() => new ParentProxy(probe.Ref, definition, pipeline, _historyStore)),
             "exec-parent-4");
 
-        var completed = await probe.ExpectMsgAsync<ReminderExecutionCompleted>(TimeSpan.FromSeconds(5));
+        var completed = await probe.ExpectMsgAsync<ReminderExecutionCompleted>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.True(completed.Success);
         Assert.Equal("notify-success-test", completed.Id.Value);
@@ -154,7 +154,7 @@ public class ReminderExecutionActorTests : TestKit, IDisposable
             Props.Create(() => new ParentProxy(probe.Ref, definition, pipeline, _historyStore)),
             "exec-conditional-no-notify");
 
-        var completed = await probe.ExpectMsgAsync<ReminderExecutionCompleted>(TimeSpan.FromSeconds(5));
+        var completed = await probe.ExpectMsgAsync<ReminderExecutionCompleted>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.True(completed.Success);
         Assert.Null(completed.ErrorMessage);
@@ -176,7 +176,7 @@ public class ReminderExecutionActorTests : TestKit, IDisposable
             Props.Create(() => new ParentProxy(probe.Ref, definition, pipeline, _historyStore)),
             "exec-required-no-notify");
 
-        var completed = await probe.ExpectMsgAsync<ReminderExecutionCompleted>(TimeSpan.FromSeconds(5));
+        var completed = await probe.ExpectMsgAsync<ReminderExecutionCompleted>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.False(completed.Success);
         Assert.Contains("no notification tool was invoked", completed.ErrorMessage);
@@ -206,7 +206,7 @@ public class ReminderExecutionActorTests : TestKit, IDisposable
             Props.Create(() => new ParentProxy(probe.Ref, definition, pipeline, _historyStore)),
             "exec-conditional-notify-error");
 
-        var completed = await probe.ExpectMsgAsync<ReminderExecutionCompleted>(TimeSpan.FromSeconds(5));
+        var completed = await probe.ExpectMsgAsync<ReminderExecutionCompleted>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
 
         // Even with conditional policy, a failed notification attempt is still a failure
         Assert.False(completed.Success);
@@ -227,7 +227,7 @@ public class ReminderExecutionActorTests : TestKit, IDisposable
             Props.Create(() => new ParentProxy(probe.Ref, definition, pipeline, _historyStore)),
             "exec-filter-check");
 
-        await probe.ExpectMsgAsync<ReminderExecutionCompleted>(TimeSpan.FromSeconds(5));
+        await probe.ExpectMsgAsync<ReminderExecutionCompleted>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.NotNull(pipeline.CapturedOptions);
         Assert.True(pipeline.CapturedOptions!.Filter.HasFlag(OutputFilter.TextStreaming));
@@ -337,7 +337,7 @@ public class ReminderExecutionActorTests : TestKit, IDisposable
             Props.Create(() => new ParentProxy(probe.Ref, definition, pipeline, _historyStore)),
             "exec-history-success");
 
-        var completed = await probe.ExpectMsgAsync<ReminderExecutionCompleted>(TimeSpan.FromSeconds(5));
+        var completed = await probe.ExpectMsgAsync<ReminderExecutionCompleted>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
         Assert.True(completed.Success);
 
         // PostStop writes the history record asynchronously after the actor stops.
@@ -345,7 +345,7 @@ public class ReminderExecutionActorTests : TestKit, IDisposable
         var rid = new ReminderId("history-success-test");
         await AwaitConditionAsync(
             async () => (await _historyStore.ReadAsync(rid, 10)).Count > 0,
-            TimeSpan.FromSeconds(5));
+            TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         var records = await _historyStore.ReadAsync(rid, 10);
         Assert.Single(records);
@@ -366,13 +366,13 @@ public class ReminderExecutionActorTests : TestKit, IDisposable
             Props.Create(() => new ParentProxy(probe.Ref, definition, failingPipeline, _historyStore)),
             "exec-history-failure");
 
-        var completed = await probe.ExpectMsgAsync<ReminderExecutionCompleted>(TimeSpan.FromSeconds(5));
+        var completed = await probe.ExpectMsgAsync<ReminderExecutionCompleted>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
         Assert.False(completed.Success);
 
         var rid = new ReminderId("history-failure-test");
         await AwaitConditionAsync(
             async () => (await _historyStore.ReadAsync(rid, 10)).Count > 0,
-            TimeSpan.FromSeconds(5));
+            TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         var records = await _historyStore.ReadAsync(rid, 10);
         Assert.Single(records);

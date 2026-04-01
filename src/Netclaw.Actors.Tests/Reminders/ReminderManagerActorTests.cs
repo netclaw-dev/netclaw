@@ -79,13 +79,13 @@ public class ReminderManagerActorTests : TestKit
         var definition = CreateDefinition("test-list", "Check status");
 
         var scheduled = await manager.Ask<ReminderSavedResponse>(
-            new SaveReminderCommand(definition), TimeSpan.FromSeconds(5));
+            new SaveReminderCommand(definition), TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         Assert.Equal("test-list", scheduled.Title);
         Assert.NotNull(scheduled.NextFire);
 
         var list = await manager.Ask<ReminderListResponse>(
-            new ListRemindersCommand(), TimeSpan.FromSeconds(5));
+            new ListRemindersCommand(), TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         Assert.Single(list.Reminders);
         Assert.Equal("test-list", list.Reminders[0].Title);
@@ -100,10 +100,10 @@ public class ReminderManagerActorTests : TestKit
         var definition = CreateDefinition("test-cancel", "Check it");
 
         await manager.Ask<ReminderSavedResponse>(
-            new SaveReminderCommand(definition), TimeSpan.FromSeconds(5));
+            new SaveReminderCommand(definition), TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         var cancelled = await manager.Ask<ReminderCancelledResponse>(
-            new CancelReminderCommand(new ReminderId(definition.Id)), TimeSpan.FromSeconds(5));
+            new CancelReminderCommand(new ReminderId(definition.Id)), TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         Assert.True(cancelled.Found);
     }
@@ -115,7 +115,7 @@ public class ReminderManagerActorTests : TestKit
 
         var cancelled = await manager.Ask<ReminderCancelledResponse>(
             new CancelReminderCommand(new ReminderId("does-not-exist")),
-            TimeSpan.FromSeconds(5));
+            TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         Assert.False(cancelled.Found);
     }
@@ -128,10 +128,10 @@ public class ReminderManagerActorTests : TestKit
         var definition = CreateDefinition("test-health", "Check health");
 
         await manager.Ask<ReminderSavedResponse>(
-            new SaveReminderCommand(definition), TimeSpan.FromSeconds(5));
+            new SaveReminderCommand(definition), TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         var health = await manager.Ask<ReminderHealthResponse>(
-            GetReminderHealthQuery.Instance, TimeSpan.FromSeconds(5));
+            GetReminderHealthQuery.Instance, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         Assert.Equal(1, health.ScheduledCount);
         Assert.Equal(0, health.ActiveExecutions);
@@ -144,7 +144,7 @@ public class ReminderManagerActorTests : TestKit
         var manager = await GetManagerAsync();
 
         var health = await manager.Ask<ReminderHealthResponse>(
-            GetReminderHealthQuery.Instance, TimeSpan.FromSeconds(5));
+            GetReminderHealthQuery.Instance, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         Assert.Equal(0, health.ScheduledCount);
         Assert.Equal(0, health.ActiveExecutions);
@@ -163,9 +163,9 @@ public class ReminderManagerActorTests : TestKit
         // reconcile Asks guarantees that both PreStart's reconcile and our barrier
         // have processed before we write the zombie to the store.
         await manager.Ask<ReminderManagerActor.ReconcileCompleted>(
-            ReminderManagerActor.ReconcileReminders.Instance, TimeSpan.FromSeconds(5));
+            ReminderManagerActor.ReconcileReminders.Instance, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
         await manager.Ask<ReminderManagerActor.ReconcileCompleted>(
-            ReminderManagerActor.ReconcileReminders.Instance, TimeSpan.FromSeconds(5));
+            ReminderManagerActor.ReconcileReminders.Instance, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         // Write a zombie one-shot directly to the store AFTER startup reconcile:
         // fire time in the past, still enabled, no Akka.Reminders schedule
@@ -189,12 +189,12 @@ public class ReminderManagerActorTests : TestKit
 
         // Confirm it shows up as scheduled
         var healthBefore = await manager.Ask<ReminderHealthResponse>(
-            GetReminderHealthQuery.Instance, TimeSpan.FromSeconds(5));
+            GetReminderHealthQuery.Instance, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
         Assert.Equal(1, healthBefore.ScheduledCount);
 
         // Trigger reconciliation and wait for completion ack
         var reconcileResult = await manager.Ask<ReminderManagerActor.ReconcileCompleted>(
-            ReminderManagerActor.ReconcileReminders.Instance, TimeSpan.FromSeconds(30));
+            ReminderManagerActor.ReconcileReminders.Instance, TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
         Assert.Equal(1, reconcileResult.DeletedOneShots);
 
         // Verify definition has been deleted from the store

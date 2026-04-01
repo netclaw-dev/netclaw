@@ -23,7 +23,7 @@ public sealed class MemoryEvalSeedSuiteTests : IAsyncLifetime
     [Fact]
     public async Task RecallQuality_seeded_fixture_returns_relevant_auto_recall_item()
     {
-        await _store.InitializeAsync();
+        await _store.InitializeAsync(TestContext.Current.CancellationToken);
         var now = TimeProvider.System.GetUtcNow().ToUnixTimeMilliseconds();
         var anchor = _store.CreateDefaultAnchor("netclaw", "project:ops");
 
@@ -44,14 +44,14 @@ public sealed class MemoryEvalSeedSuiteTests : IAsyncLifetime
             FreshnessAtMs: now,
             ExpiresAtMs: null,
             CreatedAtMs: now,
-            UpdatedAtMs: now));
+            UpdatedAtMs: now), TestContext.Current.CancellationToken);
 
         var coordinator = new SQLiteMemoryRecallCoordinator(_store, NullLogger<SQLiteMemoryRecallCoordinator>.Instance, sessionTuning: new SessionTuning { MemorySidecarsEnabled = true });
         var result = await coordinator.RecallAsync(new AutomaticRecallRequest(
             SessionId: "ops/thread-1",
             Query: "router failover",
             RecentUserMessages: ["what was our vrrp delay"],
-            MaxItems: 3));
+            MaxItems: 3), TestContext.Current.CancellationToken);
 
         Assert.False(result.Degraded);
         Assert.Contains(result.Items, i => i.Id == "doc-ops");
@@ -61,7 +61,7 @@ public sealed class MemoryEvalSeedSuiteTests : IAsyncLifetime
     [Fact]
     public async Task Privacy_seeded_fixture_blocks_secret_memory_from_auto_recall()
     {
-        await _store.InitializeAsync();
+        await _store.InitializeAsync(TestContext.Current.CancellationToken);
         var now = TimeProvider.System.GetUtcNow().ToUnixTimeMilliseconds();
         var anchor = _store.CreateDefaultAnchor("netclaw", "project:ops");
 
@@ -82,14 +82,14 @@ public sealed class MemoryEvalSeedSuiteTests : IAsyncLifetime
             FreshnessAtMs: now,
             ExpiresAtMs: null,
             CreatedAtMs: now,
-            UpdatedAtMs: now));
+            UpdatedAtMs: now), TestContext.Current.CancellationToken);
 
         var coordinator = new SQLiteMemoryRecallCoordinator(_store, NullLogger<SQLiteMemoryRecallCoordinator>.Instance, sessionTuning: new SessionTuning { MemorySidecarsEnabled = true });
         var result = await coordinator.RecallAsync(new AutomaticRecallRequest(
             SessionId: "ops/thread-1",
             Query: "token",
             RecentUserMessages: ["what is token"],
-            MaxItems: 3));
+            MaxItems: 3), TestContext.Current.CancellationToken);
 
         Assert.False(result.Degraded);
         Assert.DoesNotContain(result.Items, i => i.Id == "doc-secret");
@@ -98,7 +98,7 @@ public sealed class MemoryEvalSeedSuiteTests : IAsyncLifetime
     [Fact]
     public async Task Formation_seeded_fixture_rejects_raw_secret_content_even_for_explicit_memory_requests()
     {
-        await _store.InitializeAsync();
+        await _store.InitializeAsync(TestContext.Current.CancellationToken);
         var policy = new MemoryPolicyEvaluator();
         var extractor = new MemoryRulesFirstExtractor(policy);
 
@@ -127,7 +127,7 @@ public sealed class MemoryEvalSeedSuiteTests : IAsyncLifetime
     [Fact]
     public async Task NoiseSuppression_seeded_fixture_drops_trivial_checkpoint_candidate()
     {
-        await _store.InitializeAsync();
+        await _store.InitializeAsync(TestContext.Current.CancellationToken);
         var policy = new MemoryPolicyEvaluator();
         var extractor = new MemoryRulesFirstExtractor(policy);
 
@@ -154,7 +154,7 @@ public sealed class MemoryEvalSeedSuiteTests : IAsyncLifetime
     [Fact]
     public async Task TurnCompletion_snapshot_is_classed_conversation_trace_and_rejected_from_durable_candidates()
     {
-        await _store.InitializeAsync();
+        await _store.InitializeAsync(TestContext.Current.CancellationToken);
         var policy = new MemoryPolicyEvaluator();
         var extractor = new MemoryRulesFirstExtractor(policy);
 
@@ -184,7 +184,7 @@ public sealed class MemoryEvalSeedSuiteTests : IAsyncLifetime
     [Fact]
     public async Task Verified_tool_finding_is_classed_as_evidence_with_default_expiry()
     {
-        await _store.InitializeAsync();
+        await _store.InitializeAsync(TestContext.Current.CancellationToken);
         var policy = new MemoryPolicyEvaluator();
         var extractor = new MemoryRulesFirstExtractor(policy);
         var now = TimeProvider.System.GetUtcNow().ToUnixTimeMilliseconds();
@@ -217,7 +217,7 @@ public sealed class MemoryEvalSeedSuiteTests : IAsyncLifetime
     [Fact]
     public async Task TurnCompletion_promotes_stable_project_fact_into_durable_document()
     {
-        await _store.InitializeAsync();
+        await _store.InitializeAsync(TestContext.Current.CancellationToken);
         var policy = new MemoryPolicyEvaluator();
         var extractor = new MemoryRulesFirstExtractor(policy);
         var now = TimeProvider.System.GetUtcNow().ToUnixTimeMilliseconds();
@@ -254,7 +254,7 @@ public sealed class MemoryEvalSeedSuiteTests : IAsyncLifetime
     [Fact]
     public async Task TurnCompletion_promotes_completed_project_milestone_into_durable_document()
     {
-        await _store.InitializeAsync();
+        await _store.InitializeAsync(TestContext.Current.CancellationToken);
         var policy = new MemoryPolicyEvaluator();
         var extractor = new MemoryRulesFirstExtractor(policy);
 
@@ -288,7 +288,7 @@ public sealed class MemoryEvalSeedSuiteTests : IAsyncLifetime
     [Fact]
     public async Task Latency_seeded_fixture_recall_completes_under_budget_on_local_store()
     {
-        await _store.InitializeAsync();
+        await _store.InitializeAsync(TestContext.Current.CancellationToken);
         var now = TimeProvider.System.GetUtcNow().ToUnixTimeMilliseconds();
         var anchor = _store.CreateDefaultAnchor("netclaw", "project:latency");
 
@@ -311,7 +311,7 @@ public sealed class MemoryEvalSeedSuiteTests : IAsyncLifetime
                 FreshnessAtMs: now,
                 ExpiresAtMs: null,
                 CreatedAtMs: now,
-                UpdatedAtMs: now));
+                UpdatedAtMs: now), TestContext.Current.CancellationToken);
         }
 
         var coordinator = new SQLiteMemoryRecallCoordinator(_store, NullLogger<SQLiteMemoryRecallCoordinator>.Instance, sessionTuning: new SessionTuning { MemorySidecarsEnabled = true });
@@ -320,7 +320,7 @@ public sealed class MemoryEvalSeedSuiteTests : IAsyncLifetime
             SessionId: "latency/thread-1",
             Query: "latency",
             RecentUserMessages: ["latency"],
-            MaxItems: 3));
+            MaxItems: 3), TestContext.Current.CancellationToken);
         var elapsed = TimeProvider.System.GetElapsedTime(start);
 
         Assert.False(result.Degraded);

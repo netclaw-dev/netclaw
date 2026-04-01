@@ -40,14 +40,14 @@ public class FileWriteToolTests : IDisposable
 
         Assert.Contains("Successfully wrote", result);
         Assert.Contains("bytes", result);
-        Assert.Equal("hello world", await File.ReadAllTextAsync(filePath));
+        Assert.Equal("hello world", await File.ReadAllTextAsync(filePath, TestContext.Current.CancellationToken));
     }
 
     [Fact]
     public async Task Overwrite_existing_file()
     {
         var filePath = Path.Combine(_tempDir, "existing.txt");
-        await File.WriteAllTextAsync(filePath, "old content");
+        await File.WriteAllTextAsync(filePath, "old content", TestContext.Current.CancellationToken);
 
         var args = new Dictionary<string, object?>
         {
@@ -58,7 +58,7 @@ public class FileWriteToolTests : IDisposable
         var result = await _tool.ExecuteAsync(args, CreatePersonalContext(), CancellationToken.None);
 
         Assert.Contains("Successfully wrote", result);
-        Assert.Equal("new content", await File.ReadAllTextAsync(filePath));
+        Assert.Equal("new content", await File.ReadAllTextAsync(filePath, TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -74,7 +74,7 @@ public class FileWriteToolTests : IDisposable
         var result = await _tool.ExecuteAsync(args, CreatePersonalContext(), CancellationToken.None);
 
         Assert.Contains("Successfully wrote", result);
-        Assert.Equal("deep content", await File.ReadAllTextAsync(filePath));
+        Assert.Equal("deep content", await File.ReadAllTextAsync(filePath, TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -136,7 +136,7 @@ public class FileWriteToolTests : IDisposable
         var result = await _tool.ExecuteAsync(args, CreatePublicContext(), CancellationToken.None);
 
         Assert.Contains("Successfully wrote", result);
-        Assert.Equal("session output", await File.ReadAllTextAsync(filePath));
+        Assert.Equal("session output", await File.ReadAllTextAsync(filePath, TestContext.Current.CancellationToken));
     }
 
     [Fact]

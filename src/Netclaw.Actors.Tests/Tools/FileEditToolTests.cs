@@ -30,7 +30,7 @@ public class FileEditToolTests : IDisposable
     public async Task Edit_single_occurrence_replaces_text()
     {
         var filePath = Path.Combine(_tempDir, "test.cs");
-        await File.WriteAllTextAsync(filePath, "using System;\nusing Xunit;\n\nclass Foo { }");
+        await File.WriteAllTextAsync(filePath, "using System;\nusing Xunit;\n\nclass Foo { }", TestContext.Current.CancellationToken);
 
         var result = await _tool.ExecuteAsync(new Dictionary<string, object?>
         {
@@ -41,7 +41,7 @@ public class FileEditToolTests : IDisposable
 
         Assert.Contains("Successfully edited", result);
         Assert.Contains("replaced 1 occurrence", result);
-        var content = await File.ReadAllTextAsync(filePath);
+        var content = await File.ReadAllTextAsync(filePath, TestContext.Current.CancellationToken);
         Assert.Equal("using System;\nusing NUnit.Framework;\n\nclass Foo { }", content);
     }
 
@@ -49,7 +49,7 @@ public class FileEditToolTests : IDisposable
     public async Task ReplaceAll_replaces_all_occurrences()
     {
         var filePath = Path.Combine(_tempDir, "test.txt");
-        await File.WriteAllTextAsync(filePath, "foo bar foo baz foo");
+        await File.WriteAllTextAsync(filePath, "foo bar foo baz foo", TestContext.Current.CancellationToken);
 
         var result = await _tool.ExecuteAsync(new Dictionary<string, object?>
         {
@@ -60,7 +60,7 @@ public class FileEditToolTests : IDisposable
         }, CreatePersonalContext(), CancellationToken.None);
 
         Assert.Contains("replaced 3 occurrence", result);
-        Assert.Equal("qux bar qux baz qux", await File.ReadAllTextAsync(filePath));
+        Assert.Equal("qux bar qux baz qux", await File.ReadAllTextAsync(filePath, TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -68,7 +68,7 @@ public class FileEditToolTests : IDisposable
     {
         var filePath = Path.Combine(_tempDir, "test.txt");
         var original = "foo bar foo baz foo";
-        await File.WriteAllTextAsync(filePath, original);
+        await File.WriteAllTextAsync(filePath, original, TestContext.Current.CancellationToken);
 
         var result = await _tool.ExecuteAsync(new Dictionary<string, object?>
         {
@@ -78,7 +78,7 @@ public class FileEditToolTests : IDisposable
         }, CreatePersonalContext(), CancellationToken.None);
 
         Assert.Contains("matches 3 locations", result);
-        Assert.Equal(original, await File.ReadAllTextAsync(filePath));
+        Assert.Equal(original, await File.ReadAllTextAsync(filePath, TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -86,7 +86,7 @@ public class FileEditToolTests : IDisposable
     {
         var filePath = Path.Combine(_tempDir, "test.txt");
         var original = "hello world";
-        await File.WriteAllTextAsync(filePath, original);
+        await File.WriteAllTextAsync(filePath, original, TestContext.Current.CancellationToken);
 
         var result = await _tool.ExecuteAsync(new Dictionary<string, object?>
         {
@@ -96,14 +96,14 @@ public class FileEditToolTests : IDisposable
         }, CreatePersonalContext(), CancellationToken.None);
 
         Assert.Contains("not found", result);
-        Assert.Equal(original, await File.ReadAllTextAsync(filePath));
+        Assert.Equal(original, await File.ReadAllTextAsync(filePath, TestContext.Current.CancellationToken));
     }
 
     [Fact]
     public async Task OldString_equals_NewString_returns_error()
     {
         var filePath = Path.Combine(_tempDir, "test.txt");
-        await File.WriteAllTextAsync(filePath, "hello world");
+        await File.WriteAllTextAsync(filePath, "hello world", TestContext.Current.CancellationToken);
 
         var result = await _tool.ExecuteAsync(new Dictionary<string, object?>
         {
@@ -119,7 +119,7 @@ public class FileEditToolTests : IDisposable
     public async Task Empty_NewString_performs_deletion()
     {
         var filePath = Path.Combine(_tempDir, "test.cs");
-        await File.WriteAllTextAsync(filePath, "line1\nDELETE_ME\nline3");
+        await File.WriteAllTextAsync(filePath, "line1\nDELETE_ME\nline3", TestContext.Current.CancellationToken);
 
         var result = await _tool.ExecuteAsync(new Dictionary<string, object?>
         {
@@ -129,7 +129,7 @@ public class FileEditToolTests : IDisposable
         }, CreatePersonalContext(), CancellationToken.None);
 
         Assert.Contains("Successfully edited", result);
-        Assert.Equal("line1\nline3", await File.ReadAllTextAsync(filePath));
+        Assert.Equal("line1\nline3", await File.ReadAllTextAsync(filePath, TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -151,7 +151,7 @@ public class FileEditToolTests : IDisposable
     public async Task Edit_denied_path_returns_access_denied()
     {
         var filePath = Path.Combine(_tempDir, "secrets.json");
-        await File.WriteAllTextAsync(filePath, "secret data");
+        await File.WriteAllTextAsync(filePath, "secret data", TestContext.Current.CancellationToken);
         var policy = new ToolPathPolicy([filePath]);
         var tool = new FileEditTool(new ToolConfig(), policy);
 
@@ -163,14 +163,14 @@ public class FileEditToolTests : IDisposable
         }, CreatePersonalContext(), CancellationToken.None);
 
         Assert.Contains("Access denied", result);
-        Assert.Equal("secret data", await File.ReadAllTextAsync(filePath));
+        Assert.Equal("secret data", await File.ReadAllTextAsync(filePath, TestContext.Current.CancellationToken));
     }
 
     [Fact]
     public async Task Public_context_can_edit_inside_session_directory()
     {
         var filePath = Path.Combine(_sessionDir, "note.txt");
-        await File.WriteAllTextAsync(filePath, "old text");
+        await File.WriteAllTextAsync(filePath, "old text", TestContext.Current.CancellationToken);
 
         var result = await _tool.ExecuteAsync(new Dictionary<string, object?>
         {
@@ -180,14 +180,14 @@ public class FileEditToolTests : IDisposable
         }, CreatePublicContext(), CancellationToken.None);
 
         Assert.Contains("Successfully edited", result);
-        Assert.Equal("new text", await File.ReadAllTextAsync(filePath));
+        Assert.Equal("new text", await File.ReadAllTextAsync(filePath, TestContext.Current.CancellationToken));
     }
 
     [Fact]
     public async Task Public_context_cannot_edit_outside_session_directory()
     {
         var filePath = Path.Combine(_tempDir, "host-file.txt");
-        await File.WriteAllTextAsync(filePath, "original");
+        await File.WriteAllTextAsync(filePath, "original", TestContext.Current.CancellationToken);
 
         var result = await _tool.ExecuteAsync(new Dictionary<string, object?>
         {
@@ -198,7 +198,7 @@ public class FileEditToolTests : IDisposable
 
         Assert.Contains("Public trust context", result);
         Assert.Contains("session directory", result);
-        Assert.Equal("original", await File.ReadAllTextAsync(filePath));
+        Assert.Equal("original", await File.ReadAllTextAsync(filePath, TestContext.Current.CancellationToken));
     }
 
     private ToolExecutionContext CreatePersonalContext()

@@ -22,10 +22,10 @@ public sealed class ProviderOAuthEndpointTests
         await using var host = await CreateHostAsync(_ => SuccessfulTokenResponse());
         var client = host.GetTestClient();
 
-        var startResponse = await client.PostAsync("/api/provider/oauth/start?provider=test-oauth", null);
+        var startResponse = await client.PostAsync("/api/provider/oauth/start?provider=test-oauth", null, TestContext.Current.CancellationToken);
         startResponse.EnsureSuccessStatusCode();
 
-        var startPayload = await startResponse.Content.ReadFromJsonAsync<JsonElement>();
+        var startPayload = await startResponse.Content.ReadFromJsonAsync<JsonElement>(TestContext.Current.CancellationToken);
         var state = startPayload.GetProperty("state").GetString();
         var authorizationUrl = startPayload.GetProperty("authorizationUrl").GetString();
 
@@ -34,7 +34,7 @@ public sealed class ProviderOAuthEndpointTests
         Assert.Contains("code_challenge=", authorizationUrl);
         Assert.Contains($"state={state}", authorizationUrl);
 
-        var statusPayload = await client.GetFromJsonAsync<JsonElement>($"/api/provider/oauth/status/{state}");
+        var statusPayload = await client.GetFromJsonAsync<JsonElement>($"/api/provider/oauth/status/{state}", TestContext.Current.CancellationToken);
         Assert.Equal("Pending", statusPayload.GetProperty("status").GetString());
         Assert.False(statusPayload.GetProperty("hasToken").GetBoolean());
     }
@@ -45,16 +45,16 @@ public sealed class ProviderOAuthEndpointTests
         await using var host = await CreateHostAsync(_ => SuccessfulTokenResponse());
         var client = host.GetTestClient();
 
-        var startResponse = await client.PostAsync("/api/provider/oauth/start?provider=test-oauth", null);
-        var startPayload = await startResponse.Content.ReadFromJsonAsync<JsonElement>();
+        var startResponse = await client.PostAsync("/api/provider/oauth/start?provider=test-oauth", null, TestContext.Current.CancellationToken);
+        var startPayload = await startResponse.Content.ReadFromJsonAsync<JsonElement>(TestContext.Current.CancellationToken);
         var state = startPayload.GetProperty("state").GetString();
 
-        var callbackResponse = await client.GetAsync($"/api/provider/oauth/callback?code=test-code&state={state}");
+        var callbackResponse = await client.GetAsync($"/api/provider/oauth/callback?code=test-code&state={state}", TestContext.Current.CancellationToken);
         callbackResponse.EnsureSuccessStatusCode();
-        var html = await callbackResponse.Content.ReadAsStringAsync();
+        var html = await callbackResponse.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
         Assert.Contains("Authorization complete", html);
 
-        var statusPayload = await client.GetFromJsonAsync<JsonElement>($"/api/provider/oauth/status/{state}");
+        var statusPayload = await client.GetFromJsonAsync<JsonElement>($"/api/provider/oauth/status/{state}", TestContext.Current.CancellationToken);
         Assert.Equal("Completed", statusPayload.GetProperty("status").GetString());
         Assert.True(statusPayload.GetProperty("hasToken").GetBoolean());
         Assert.Equal("access-token", statusPayload.GetProperty("accessToken").GetString());
@@ -68,16 +68,16 @@ public sealed class ProviderOAuthEndpointTests
             JsonResponse(new { error = "invalid_request" }, HttpStatusCode.BadRequest));
         var client = host.GetTestClient();
 
-        var startResponse = await client.PostAsync("/api/provider/oauth/start?provider=test-oauth", null);
-        var startPayload = await startResponse.Content.ReadFromJsonAsync<JsonElement>();
+        var startResponse = await client.PostAsync("/api/provider/oauth/start?provider=test-oauth", null, TestContext.Current.CancellationToken);
+        var startPayload = await startResponse.Content.ReadFromJsonAsync<JsonElement>(TestContext.Current.CancellationToken);
         var state = startPayload.GetProperty("state").GetString();
 
-        var callbackResponse = await client.GetAsync($"/api/provider/oauth/callback?code=bad-code&state={state}");
+        var callbackResponse = await client.GetAsync($"/api/provider/oauth/callback?code=bad-code&state={state}", TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.InternalServerError, callbackResponse.StatusCode);
-        var html = await callbackResponse.Content.ReadAsStringAsync();
+        var html = await callbackResponse.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
         Assert.Contains("Authorization failed", html);
 
-        var statusPayload = await client.GetFromJsonAsync<JsonElement>($"/api/provider/oauth/status/{state}");
+        var statusPayload = await client.GetFromJsonAsync<JsonElement>($"/api/provider/oauth/status/{state}", TestContext.Current.CancellationToken);
         Assert.Equal("Failed", statusPayload.GetProperty("status").GetString());
         Assert.False(statusPayload.GetProperty("hasToken").GetBoolean());
     }

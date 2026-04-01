@@ -29,7 +29,7 @@ public sealed class RetryingChatClientTests
         });
 
         var client = new RetryingChatClient(fake, _policy, NullLogger.Instance);
-        var response = await client.GetResponseAsync([new ChatMessage(ChatRole.User, "hi")]);
+        var response = await client.GetResponseAsync([new ChatMessage(ChatRole.User, "hi")], cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal("ok", response.Messages[0].Text);
         Assert.Equal(3, attempts);
@@ -48,7 +48,7 @@ public sealed class RetryingChatClientTests
         });
 
         var client = new RetryingChatClient(fake, _policy, NullLogger.Instance);
-        var response = await client.GetResponseAsync([new ChatMessage(ChatRole.User, "hi")]);
+        var response = await client.GetResponseAsync([new ChatMessage(ChatRole.User, "hi")], cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal("ok", response.Messages[0].Text);
         Assert.Equal(2, attempts);
@@ -67,7 +67,7 @@ public sealed class RetryingChatClientTests
         });
 
         var client = new RetryingChatClient(fake, _policy, NullLogger.Instance);
-        var response = await client.GetResponseAsync([new ChatMessage(ChatRole.User, "hi")]);
+        var response = await client.GetResponseAsync([new ChatMessage(ChatRole.User, "hi")], cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal("ok", response.Messages[0].Text);
         Assert.Equal(2, attempts);
@@ -86,7 +86,7 @@ public sealed class RetryingChatClientTests
         });
 
         var client = new RetryingChatClient(fake, _policy, NullLogger.Instance);
-        var response = await client.GetResponseAsync([new ChatMessage(ChatRole.User, "hi")]);
+        var response = await client.GetResponseAsync([new ChatMessage(ChatRole.User, "hi")], cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal("ok", response.Messages[0].Text);
         Assert.Equal(2, attempts);
@@ -105,7 +105,7 @@ public sealed class RetryingChatClientTests
         var client = new RetryingChatClient(fake, _policy, NullLogger.Instance);
 
         await Assert.ThrowsAsync<HttpRequestException>(() =>
-            client.GetResponseAsync([new ChatMessage(ChatRole.User, "hi")]));
+            client.GetResponseAsync([new ChatMessage(ChatRole.User, "hi")], cancellationToken: TestContext.Current.CancellationToken));
 
         // 1 initial + 3 retries = 4 total
         Assert.Equal(4, attempts);
@@ -124,7 +124,7 @@ public sealed class RetryingChatClientTests
         var client = new RetryingChatClient(fake, _policy, NullLogger.Instance);
 
         await Assert.ThrowsAsync<HttpRequestException>(() =>
-            client.GetResponseAsync([new ChatMessage(ChatRole.User, "hi")]));
+            client.GetResponseAsync([new ChatMessage(ChatRole.User, "hi")], cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Equal(1, attempts); // No retries for 400
     }
@@ -159,7 +159,7 @@ public sealed class RetryingChatClientTests
 
         var updates = new List<ChatResponseUpdate>();
         await foreach (var u in client.GetStreamingResponseAsync(
-            [new ChatMessage(ChatRole.User, "hi")]))
+            [new ChatMessage(ChatRole.User, "hi")], cancellationToken: TestContext.Current.CancellationToken))
         {
             updates.Add(u);
         }

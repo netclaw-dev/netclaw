@@ -31,7 +31,7 @@ public sealed class SchemaMigratorTests : IDisposable
 
         await using (var conn = new SqliteConnection(connString))
         {
-            await conn.OpenAsync();
+            await conn.OpenAsync(TestContext.Current.CancellationToken);
 
             await using var create = conn.CreateCommand();
             create.CommandText =
@@ -46,21 +46,21 @@ public sealed class SchemaMigratorTests : IDisposable
                 INSERT INTO sessions(session_id, last_activity, message_count, created, display_name)
                 VALUES ('D123/1772671231.713319', 1772671231713, 4, 1772671200000, 'Legacy Session');
                 """;
-            await create.ExecuteNonQueryAsync();
+            await create.ExecuteNonQueryAsync(TestContext.Current.CancellationToken);
         }
 
         var migrator = new SchemaMigrator(_paths, NullLogger<SchemaMigrator>.Instance);
         await migrator.MigrateAsync(_paths.SqliteDbPath, CancellationToken.None);
 
         await using var verifyConn = new SqliteConnection(connString);
-        await verifyConn.OpenAsync();
+        await verifyConn.OpenAsync(TestContext.Current.CancellationToken);
 
         await using (var columnsCmd = verifyConn.CreateCommand())
         {
             columnsCmd.CommandText = "PRAGMA table_info(sessions)";
-            await using var reader = await columnsCmd.ExecuteReaderAsync();
+            await using var reader = await columnsCmd.ExecuteReaderAsync(TestContext.Current.CancellationToken);
             var columns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            while (await reader.ReadAsync())
+            while (await reader.ReadAsync(TestContext.Current.CancellationToken))
                 columns.Add(reader.GetString(1));
 
             Assert.Contains("persistence_id", columns);
@@ -71,8 +71,8 @@ public sealed class SchemaMigratorTests : IDisposable
         {
             rowCmd.CommandText =
                 "SELECT persistence_id, channel, turn_count, title FROM sessions WHERE persistence_id = 'session-D123/1772671231.713319'";
-            await using var reader = await rowCmd.ExecuteReaderAsync();
-            Assert.True(await reader.ReadAsync());
+            await using var reader = await rowCmd.ExecuteReaderAsync(TestContext.Current.CancellationToken);
+            Assert.True(await reader.ReadAsync(TestContext.Current.CancellationToken));
             Assert.Equal("session-D123/1772671231.713319", reader.GetString(0));
             Assert.Equal("slack", reader.GetString(1));
             Assert.Equal(4, reader.GetInt32(2));
@@ -82,7 +82,7 @@ public sealed class SchemaMigratorTests : IDisposable
         await using (var schemaCmd = verifyConn.CreateCommand())
         {
             schemaCmd.CommandText = "SELECT COUNT(*) FROM schema_version";
-            var appliedCount = (long)(await schemaCmd.ExecuteScalarAsync() ?? 0L);
+            var appliedCount = (long)(await schemaCmd.ExecuteScalarAsync(TestContext.Current.CancellationToken) ?? 0L);
             Assert.True(appliedCount >= 3);
         }
     }

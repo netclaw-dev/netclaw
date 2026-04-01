@@ -28,7 +28,7 @@ public class OAuthDeviceFlowServiceTests
 
         var service = new OAuthDeviceFlowService(new HttpClient(handler));
 
-        var result = await service.StartDeviceAuthorizationAsync(TestConfig);
+        var result = await service.StartDeviceAuthorizationAsync(TestConfig, TestContext.Current.CancellationToken);
 
         Assert.Equal("dc-123", result.DeviceCode);
         Assert.Equal("USER-CODE", result.UserCode);
@@ -66,7 +66,7 @@ public class OAuthDeviceFlowServiceTests
             Interval: 1);
 
         var states = new List<DeviceFlowState>();
-        var pollTask = service.PollForTokenAsync(TestConfig, deviceAuth, s => states.Add(s));
+        var pollTask = service.PollForTokenAsync(TestConfig, deviceAuth, s => states.Add(s), TestContext.Current.CancellationToken);
 
         // Advance time to trigger each poll interval
         for (var i = 0; i < 3; i++)
@@ -100,7 +100,7 @@ public class OAuthDeviceFlowServiceTests
         var service = new OAuthDeviceFlowService(new HttpClient(handler), timeProvider);
         var deviceAuth = new DeviceAuthorizationResponse("dc", "UC", "https://x.com/v", 60, 1);
 
-        var pollTask = service.PollForTokenAsync(TestConfig, deviceAuth);
+        var pollTask = service.PollForTokenAsync(TestConfig, deviceAuth, ct: TestContext.Current.CancellationToken);
 
         // First poll at 1s interval
         timeProvider.Advance(TimeSpan.FromSeconds(1));
@@ -123,7 +123,7 @@ public class OAuthDeviceFlowServiceTests
         var service = new OAuthDeviceFlowService(new HttpClient(handler), timeProvider);
         var deviceAuth = new DeviceAuthorizationResponse("dc", "UC", "https://x.com/v", 60, 1);
 
-        var pollTask = service.PollForTokenAsync(TestConfig, deviceAuth);
+        var pollTask = service.PollForTokenAsync(TestConfig, deviceAuth, ct: TestContext.Current.CancellationToken);
         timeProvider.Advance(TimeSpan.FromSeconds(1));
 
         await Assert.ThrowsAsync<OAuthDeviceFlowDeniedException>(() => pollTask);
@@ -139,7 +139,7 @@ public class OAuthDeviceFlowServiceTests
         var service = new OAuthDeviceFlowService(new HttpClient(handler), timeProvider);
         var deviceAuth = new DeviceAuthorizationResponse("dc", "UC", "https://x.com/v", 60, 1);
 
-        var pollTask = service.PollForTokenAsync(TestConfig, deviceAuth);
+        var pollTask = service.PollForTokenAsync(TestConfig, deviceAuth, ct: TestContext.Current.CancellationToken);
         timeProvider.Advance(TimeSpan.FromSeconds(1));
 
         await Assert.ThrowsAsync<OAuthDeviceFlowExpiredException>(() => pollTask);
@@ -181,7 +181,7 @@ public class OAuthDeviceFlowServiceTests
         var result = await service.RefreshTokenAsync(
             "https://auth.example.com/token",
             "client-id",
-            new SensitiveString("old-refresh-token"));
+            new SensitiveString("old-refresh-token"), TestContext.Current.CancellationToken);
 
         Assert.NotNull(result);
         Assert.Equal("new-at", result!.AccessToken.Value);
@@ -200,7 +200,7 @@ public class OAuthDeviceFlowServiceTests
         var result = await service.RefreshTokenAsync(
             "https://auth.example.com/token",
             "client-id",
-            new SensitiveString("expired-refresh-token"));
+            new SensitiveString("expired-refresh-token"), TestContext.Current.CancellationToken);
 
         Assert.Null(result);
     }
@@ -220,7 +220,7 @@ public class OAuthDeviceFlowServiceTests
         var result = await service.RefreshTokenAsync(
             "https://auth.example.com/token",
             "client-id",
-            "old-refresh-token");
+            "old-refresh-token", TestContext.Current.CancellationToken);
 
         Assert.NotNull(result);
         Assert.Equal("new-at", result!.AccessToken.Value);

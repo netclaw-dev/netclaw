@@ -12,10 +12,10 @@ public sealed class RetrievalPrototypeTests : IDisposable
     [Fact]
     public async Task Deterministic_retrieval_matches_expected_hits_and_no_hits()
     {
-        await _store.InitializeAndSeedAsync(_fixture);
+        await _store.InitializeAndSeedAsync(_fixture, TestContext.Current.CancellationToken);
 
-        var documents = await _store.LoadDocumentsAsync("project:signalr");
-        var edges = await _store.LoadEdgesAsync("project:signalr");
+        var documents = await _store.LoadDocumentsAsync("project:signalr", TestContext.Current.CancellationToken);
+        var edges = await _store.LoadEdgesAsync("project:signalr", TestContext.Current.CancellationToken);
         var engine = new DeterministicRecallEngine(documents, edges);
 
         var failures = new List<string>();
@@ -81,10 +81,10 @@ public sealed class RetrievalPrototypeTests : IDisposable
     [Fact]
     public async Task Deterministic_retrieval_explains_ranked_hits_bundles_and_neighbors()
     {
-        await _store.InitializeAndSeedAsync(_fixture);
+        await _store.InitializeAndSeedAsync(_fixture, TestContext.Current.CancellationToken);
 
-        var documents = await _store.LoadDocumentsAsync("project:signalr");
-        var edges = await _store.LoadEdgesAsync("project:signalr");
+        var documents = await _store.LoadDocumentsAsync("project:signalr", TestContext.Current.CancellationToken);
+        var edges = await _store.LoadEdgesAsync("project:signalr", TestContext.Current.CancellationToken);
         var engine = new DeterministicRecallEngine(documents, edges);
 
         var sb = new StringBuilder();
@@ -112,12 +112,12 @@ public sealed class RetrievalPrototypeTests : IDisposable
     [Fact]
     public async Task Scope_request_planner_builds_reasonable_hard_and_soft_scopes()
     {
-        await _store.InitializeAndSeedAsync(_fixture);
+        await _store.InitializeAndSeedAsync(_fixture, TestContext.Current.CancellationToken);
 
-        var documents = await _store.LoadDocumentsAsync("project:signalr");
-        var userDocuments = await _store.LoadDocumentsAsync("user:aaron");
+        var documents = await _store.LoadDocumentsAsync("project:signalr", TestContext.Current.CancellationToken);
+        var userDocuments = await _store.LoadDocumentsAsync("user:aaron", TestContext.Current.CancellationToken);
         var allDocuments = documents.Concat(userDocuments).ToArray();
-        var edges = await _store.LoadEdgesAsync("project:signalr");
+        var edges = await _store.LoadEdgesAsync("project:signalr", TestContext.Current.CancellationToken);
         var planner = new ScopeRequestPlanner(allDocuments, edges);
 
         var dmTravel = planner.Plan(new QueryContext(
@@ -160,13 +160,13 @@ public sealed class RetrievalPrototypeTests : IDisposable
     [Fact]
     public async Task Candidate_selector_filters_corpus_before_reranking()
     {
-        await _store.InitializeAndSeedAsync(_fixture);
+        await _store.InitializeAndSeedAsync(_fixture, TestContext.Current.CancellationToken);
 
-        var signalrDocuments = await _store.LoadDocumentsAsync("project:signalr");
-        var userDocuments = await _store.LoadDocumentsAsync("user:aaron");
+        var signalrDocuments = await _store.LoadDocumentsAsync("project:signalr", TestContext.Current.CancellationToken);
+        var userDocuments = await _store.LoadDocumentsAsync("user:aaron", TestContext.Current.CancellationToken);
         var allDocuments = signalrDocuments.Concat(userDocuments).ToArray();
-        var signalrEdges = await _store.LoadEdgesAsync("project:signalr");
-        var userEdges = await _store.LoadEdgesAsync("user:aaron");
+        var signalrEdges = await _store.LoadEdgesAsync("project:signalr", TestContext.Current.CancellationToken);
+        var userEdges = await _store.LoadEdgesAsync("user:aaron", TestContext.Current.CancellationToken);
         var allEdges = signalrEdges.Concat(userEdges).ToArray();
         var planner = new ScopeRequestPlanner(allDocuments, allEdges);
         var selector = new CandidateSelector();
@@ -198,13 +198,13 @@ public sealed class RetrievalPrototypeTests : IDisposable
     [Fact]
     public async Task End_to_end_trace_shows_plan_candidates_ranked_hits_and_bundle_for_stirtrek_trip()
     {
-        await _store.InitializeAndSeedAsync(_fixture);
+        await _store.InitializeAndSeedAsync(_fixture, TestContext.Current.CancellationToken);
 
-        var signalrDocuments = await _store.LoadDocumentsAsync("project:signalr");
-        var userDocuments = await _store.LoadDocumentsAsync("user:aaron");
+        var signalrDocuments = await _store.LoadDocumentsAsync("project:signalr", TestContext.Current.CancellationToken);
+        var userDocuments = await _store.LoadDocumentsAsync("user:aaron", TestContext.Current.CancellationToken);
         var allDocuments = signalrDocuments.Concat(userDocuments).ToArray();
-        var signalrEdges = await _store.LoadEdgesAsync("project:signalr");
-        var userEdges = await _store.LoadEdgesAsync("user:aaron");
+        var signalrEdges = await _store.LoadEdgesAsync("project:signalr", TestContext.Current.CancellationToken);
+        var userEdges = await _store.LoadEdgesAsync("user:aaron", TestContext.Current.CancellationToken);
         var allEdges = signalrEdges.Concat(userEdges).ToArray();
 
         var planner = new ScopeRequestPlanner(allDocuments, allEdges);

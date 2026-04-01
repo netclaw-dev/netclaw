@@ -36,7 +36,7 @@ public class OpenAiDeviceFlowServiceTests
         });
 
         var service = new OpenAiDeviceFlowService(new HttpClient(handler));
-        var result = await service.StartDeviceAuthorizationAsync(TestConfig);
+        var result = await service.StartDeviceAuthorizationAsync(TestConfig, TestContext.Current.CancellationToken);
 
         // Verify JSON body with client_id and scope
         Assert.Equal("application/json", capturedContentType);
@@ -76,7 +76,7 @@ public class OpenAiDeviceFlowServiceTests
         });
 
         var service = new OpenAiDeviceFlowService(new HttpClient(handler));
-        await service.StartDeviceAuthorizationAsync(configNoScope);
+        await service.StartDeviceAuthorizationAsync(configNoScope, TestContext.Current.CancellationToken);
 
         Assert.NotNull(capturedBody);
         using var doc = JsonDocument.Parse(capturedBody!);
@@ -95,7 +95,7 @@ public class OpenAiDeviceFlowServiceTests
             }));
 
         var service = new OpenAiDeviceFlowService(new HttpClient(handler));
-        var result = await service.StartDeviceAuthorizationAsync(TestConfig);
+        var result = await service.StartDeviceAuthorizationAsync(TestConfig, TestContext.Current.CancellationToken);
 
         Assert.Equal(900, result.ExpiresIn);
     }
@@ -109,7 +109,7 @@ public class OpenAiDeviceFlowServiceTests
         var service = new OpenAiDeviceFlowService(new HttpClient(handler));
 
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => service.StartDeviceAuthorizationAsync(TestConfig));
+            () => service.StartDeviceAuthorizationAsync(TestConfig, TestContext.Current.CancellationToken));
 
         Assert.Contains("not available", ex.Message);
         Assert.Contains("API key", ex.Message);
@@ -162,7 +162,7 @@ public class OpenAiDeviceFlowServiceTests
             Interval: 1);
 
         var states = new List<DeviceFlowState>();
-        var pollTask = service.PollForTokenAsync(TestConfig, deviceAuth, s => states.Add(s));
+        var pollTask = service.PollForTokenAsync(TestConfig, deviceAuth, s => states.Add(s), TestContext.Current.CancellationToken);
 
         // Advance time to trigger each poll interval
         for (var i = 0; i < 3; i++)
@@ -221,7 +221,7 @@ public class OpenAiDeviceFlowServiceTests
         var deviceAuth = new DeviceAuthorizationResponse(
             "daid", "UC", "https://auth.openai.com/codex/device", 30, 1);
 
-        var pollTask = service.PollForTokenAsync(TestConfig, deviceAuth);
+        var pollTask = service.PollForTokenAsync(TestConfig, deviceAuth, ct: TestContext.Current.CancellationToken);
 
         timeProvider.Advance(TimeSpan.FromSeconds(1));
         timeProvider.Advance(TimeSpan.FromSeconds(1));
@@ -244,7 +244,7 @@ public class OpenAiDeviceFlowServiceTests
         var deviceAuth = new DeviceAuthorizationResponse(
             "daid", "UC", "https://auth.openai.com/codex/device", 30, 1);
 
-        var pollTask = service.PollForTokenAsync(TestConfig, deviceAuth);
+        var pollTask = service.PollForTokenAsync(TestConfig, deviceAuth, ct: TestContext.Current.CancellationToken);
         timeProvider.Advance(TimeSpan.FromSeconds(1));
 
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => pollTask);
@@ -285,7 +285,7 @@ public class OpenAiDeviceFlowServiceTests
         var deviceAuth = new DeviceAuthorizationResponse(
             "daid", "UC", "https://auth.openai.com/codex/device", 30, 1);
 
-        var pollTask = service.PollForTokenAsync(TestConfig, deviceAuth);
+        var pollTask = service.PollForTokenAsync(TestConfig, deviceAuth, ct: TestContext.Current.CancellationToken);
         timeProvider.Advance(TimeSpan.FromSeconds(1));
 
         var ex = await Assert.ThrowsAsync<HttpRequestException>(() => pollTask);
@@ -328,7 +328,7 @@ public class OpenAiDeviceFlowServiceTests
         var result = await service.RefreshTokenAsync(
             "https://auth.openai.com/oauth/token",
             "client-id",
-            new SensitiveString("old-refresh-token"));
+            new SensitiveString("old-refresh-token"), TestContext.Current.CancellationToken);
 
         Assert.NotNull(result);
         Assert.Equal("new-at", result!.AccessToken.Value);
@@ -347,7 +347,7 @@ public class OpenAiDeviceFlowServiceTests
         var result = await service.RefreshTokenAsync(
             "https://auth.openai.com/oauth/token",
             "client-id",
-            new SensitiveString("expired-refresh-token"));
+            new SensitiveString("expired-refresh-token"), TestContext.Current.CancellationToken);
 
         Assert.Null(result);
     }
@@ -367,7 +367,7 @@ public class OpenAiDeviceFlowServiceTests
         var result = await service.RefreshTokenAsync(
             "https://auth.openai.com/oauth/token",
             "client-id",
-            "old-refresh-token");
+            "old-refresh-token", TestContext.Current.CancellationToken);
 
         Assert.NotNull(result);
         Assert.Equal("new-at", result!.AccessToken.Value);

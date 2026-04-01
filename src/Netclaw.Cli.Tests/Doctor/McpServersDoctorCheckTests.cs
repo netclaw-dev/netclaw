@@ -32,7 +32,7 @@ public sealed class McpServersDoctorCheckTests : IDisposable
     public async Task NoConfigFile_Passes()
     {
         var check = new McpServersDoctorCheck(_paths, CreateDaemonApi(_ => JsonResponse(new { })));
-        var result = await check.RunAsync();
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(DoctorSeverity.Pass, result.Severity);
     }
@@ -43,7 +43,7 @@ public sealed class McpServersDoctorCheckTests : IDisposable
         WriteConfig(new { configVersion = 1 });
         var check = new McpServersDoctorCheck(_paths, CreateDaemonApi(_ => JsonResponse(new { })));
 
-        var result = await check.RunAsync();
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(DoctorSeverity.Pass, result.Severity);
         Assert.Contains("No MCP servers", result.Message);
@@ -68,7 +68,7 @@ public sealed class McpServersDoctorCheckTests : IDisposable
         });
 
         var check = new McpServersDoctorCheck(_paths, CreateDaemonApi(_ => throw new HttpRequestException("daemon offline")));
-        var result = await check.RunAsync();
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
 
         // Single enabled server that can't connect → Error
         Assert.Equal(DoctorSeverity.Error, result.Severity);
@@ -92,7 +92,7 @@ public sealed class McpServersDoctorCheckTests : IDisposable
         });
 
         var check = new McpServersDoctorCheck(_paths, CreateDaemonApi(_ => JsonResponse(new { })));
-        var result = await check.RunAsync();
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(DoctorSeverity.Error, result.Severity);
         Assert.Contains("requires 'Command'", result.Message);
@@ -115,7 +115,7 @@ public sealed class McpServersDoctorCheckTests : IDisposable
         });
 
         var check = new McpServersDoctorCheck(_paths, CreateDaemonApi(_ => JsonResponse(new { })));
-        var result = await check.RunAsync();
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(DoctorSeverity.Error, result.Severity);
         Assert.Contains("requires 'Url'", result.Message);
@@ -138,7 +138,7 @@ public sealed class McpServersDoctorCheckTests : IDisposable
         });
 
         var check = new McpServersDoctorCheck(_paths, CreateDaemonApi(_ => JsonResponse(new { })));
-        var result = await check.RunAsync();
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(DoctorSeverity.Error, result.Severity);
         Assert.Contains("invalid transport", result.Message);
@@ -157,7 +157,7 @@ public sealed class McpServersDoctorCheckTests : IDisposable
         });
 
         var check = new McpServersDoctorCheck(_paths, CreateDaemonApi(_ => JsonResponse(new { })));
-        var result = await check.RunAsync();
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
 
         // Only disabled servers → all pass (no enabled servers to fail)
         Assert.Equal(DoctorSeverity.Pass, result.Severity);
@@ -191,7 +191,7 @@ public sealed class McpServersDoctorCheckTests : IDisposable
             }
         })));
 
-        var result = await check.RunAsync();
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(DoctorSeverity.Error, result.Severity);
         Assert.Contains("auth failed", result.Message);
@@ -225,7 +225,7 @@ public sealed class McpServersDoctorCheckTests : IDisposable
             }
         })));
 
-        var result = await check.RunAsync();
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(DoctorSeverity.Warning, result.Severity);
         Assert.Contains("awaiting auth", result.Message);
@@ -252,7 +252,7 @@ public sealed class McpServersDoctorCheckTests : IDisposable
         });
 
         var check = new McpServersDoctorCheck(_paths, CreateDaemonApi(_ => throw new HttpRequestException("daemon offline")));
-        var result = await check.RunAsync();
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(DoctorSeverity.Warning, result.Severity);
         Assert.Contains("auth cannot be verified offline", result.Message);

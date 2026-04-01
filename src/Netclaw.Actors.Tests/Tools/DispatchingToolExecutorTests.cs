@@ -46,7 +46,7 @@ public class DispatchingToolExecutorTests
             ChannelType = "signalr"
         };
 
-        var result = await _executor.ExecuteAsync(toolCall, context);
+        var result = await _executor.ExecuteAsync(toolCall, context, TestContext.Current.CancellationToken);
 
         Assert.Contains("routed", result);
         Assert.Contains("Exit code: 0", result);
@@ -66,7 +66,7 @@ public class DispatchingToolExecutorTests
             ChannelType = "signalr"
         };
 
-        var result = await _executor.ExecuteAsync(toolCall, context);
+        var result = await _executor.ExecuteAsync(toolCall, context, TestContext.Current.CancellationToken);
 
         Assert.Contains("File not found", result);
     }
@@ -85,7 +85,7 @@ public class DispatchingToolExecutorTests
             ChannelType = "slack"
         };
 
-        var ex = await Assert.ThrowsAsync<ToolAccessDeniedException>(() => _restrictedExecutor.ExecuteAsync(toolCall, context));
+        var ex = await Assert.ThrowsAsync<ToolAccessDeniedException>(() => _restrictedExecutor.ExecuteAsync(toolCall, context, TestContext.Current.CancellationToken));
         Assert.Equal("shell_requires_personal_context", ex.DenyReason);
     }
 
@@ -120,7 +120,7 @@ public class DispatchingToolExecutorTests
             ChannelType = "signalr"
         };
 
-        var ex = await Assert.ThrowsAsync<ToolAccessDeniedException>(() => executor.ExecuteAsync(toolCall, context));
+        var ex = await Assert.ThrowsAsync<ToolAccessDeniedException>(() => executor.ExecuteAsync(toolCall, context, TestContext.Current.CancellationToken));
         Assert.Equal("tool_not_allowed_for_audience_profile", ex.DenyReason);
     }
 
@@ -155,7 +155,7 @@ public class DispatchingToolExecutorTests
             ChannelType = "signalr"
         };
 
-        var ex = await Assert.ThrowsAsync<ToolAccessDeniedException>(() => executor.ExecuteAsync(toolCall, context));
+        var ex = await Assert.ThrowsAsync<ToolAccessDeniedException>(() => executor.ExecuteAsync(toolCall, context, TestContext.Current.CancellationToken));
         Assert.Equal("shell_disabled", ex.DenyReason);
     }
 
@@ -173,7 +173,7 @@ public class DispatchingToolExecutorTests
             ChannelType = "signalr"
         };
 
-        var result = await _restrictedExecutor.ExecuteAsync(toolCall, context);
+        var result = await _restrictedExecutor.ExecuteAsync(toolCall, context, TestContext.Current.CancellationToken);
         Assert.Contains("allowed", result);
     }
 
@@ -181,7 +181,7 @@ public class DispatchingToolExecutorTests
     public async Task File_read_is_denied_outside_session_directory_in_public_context()
     {
         var filePath = Path.Combine(Path.GetTempPath(), $"netclaw-public-read-{Guid.NewGuid():N}.txt");
-        await File.WriteAllTextAsync(filePath, "secret");
+        await File.WriteAllTextAsync(filePath, "secret", TestContext.Current.CancellationToken);
 
         try
         {
@@ -199,7 +199,7 @@ public class DispatchingToolExecutorTests
                 ChannelType = "slack"
             };
 
-            var result = await _restrictedExecutor.ExecuteAsync(toolCall, context);
+            var result = await _restrictedExecutor.ExecuteAsync(toolCall, context, TestContext.Current.CancellationToken);
             Assert.Contains("Public trust context", result);
             Assert.Contains("session directory", result);
         }
@@ -234,7 +234,7 @@ public class DispatchingToolExecutorTests
                 ChannelType = "slack"
             };
 
-            var result = await _restrictedExecutor.ExecuteAsync(toolCall, context);
+            var result = await _restrictedExecutor.ExecuteAsync(toolCall, context, TestContext.Current.CancellationToken);
             Assert.Contains("Public trust context", result);
             Assert.Contains("session directory", result);
             Assert.False(File.Exists(filePath));
@@ -269,7 +269,7 @@ public class DispatchingToolExecutorTests
                 ChannelType = "signalr"
             };
 
-            var result = await _executor.ExecuteAsync(toolCall, context);
+            var result = await _executor.ExecuteAsync(toolCall, context, TestContext.Current.CancellationToken);
 
             Assert.Contains("Successfully wrote", result);
         }
@@ -286,7 +286,7 @@ public class DispatchingToolExecutorTests
             "call-4", "unknown_tool",
             new Dictionary<string, object?> { ["arg"] = "value" });
 
-        var result = await _executor.ExecuteAsync(toolCall);
+        var result = await _executor.ExecuteAsync(toolCall, null, TestContext.Current.CancellationToken);
 
         Assert.Equal("Unknown tool: unknown_tool", result);
     }
@@ -350,7 +350,7 @@ public class DispatchingToolExecutorTests
             ChannelType = "slack"
         };
 
-        var ex = await Assert.ThrowsAsync<ToolAccessDeniedException>(() => executor.ExecuteAsync(toolCall, context));
+        var ex = await Assert.ThrowsAsync<ToolAccessDeniedException>(() => executor.ExecuteAsync(toolCall, context, TestContext.Current.CancellationToken));
         Assert.Equal("mcp_server_not_allowed_for_audience_profile", ex.DenyReason);
     }
 

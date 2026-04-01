@@ -169,7 +169,7 @@ public sealed class OpenAiCodexTests
                 OAuthAccessToken = new SensitiveString("fake-oauth-token"),
             };
 
-            var result = await _descriptor.ProbeAsync(entry);
+            var result = await _descriptor.ProbeAsync(entry, TestContext.Current.CancellationToken);
 
             Assert.True(result.Success);
             Assert.Null(result.ErrorMessage);
@@ -196,7 +196,7 @@ public sealed class OpenAiCodexTests
                 AuthMethod = AuthMethod.OAuthPkce,
             };
 
-            var result = await _descriptor.ProbeAsync(entry);
+            var result = await _descriptor.ProbeAsync(entry, TestContext.Current.CancellationToken);
 
             Assert.False(result.Success);
             Assert.NotNull(result.ErrorMessage);
@@ -218,7 +218,7 @@ public sealed class OpenAiCodexTests
                 OAuthTokenExpiry = now.AddHours(-1),
             };
 
-            var result = await descriptor.ProbeAsync(entry);
+            var result = await descriptor.ProbeAsync(entry, TestContext.Current.CancellationToken);
 
             Assert.False(result.Success);
             Assert.Contains("expired", result.ErrorMessage);
@@ -241,7 +241,7 @@ public sealed class OpenAiCodexTests
                 OAuthTokenExpiry = now.AddHours(1),
             };
 
-            var result = await descriptor.ProbeAsync(entry);
+            var result = await descriptor.ProbeAsync(entry, TestContext.Current.CancellationToken);
 
             Assert.True(result.Success);
             Assert.NotEmpty(result.Models);
@@ -256,7 +256,7 @@ public sealed class OpenAiCodexTests
                 AuthMethod = AuthMethod.ApiKey,
             };
 
-            var result = await _descriptor.ProbeAsync(entry);
+            var result = await _descriptor.ProbeAsync(entry, TestContext.Current.CancellationToken);
 
             Assert.False(result.Success);
             Assert.NotNull(result.ErrorMessage);
@@ -275,7 +275,7 @@ public sealed class OpenAiCodexTests
         [Fact]
         public async Task ResolveAsync_KnownCodexModel_ReturnsCapabilities()
         {
-            var result = await _resolver.ResolveAsync("gpt-5.3-codex");
+            var result = await _resolver.ResolveAsync("gpt-5.3-codex", TestContext.Current.CancellationToken);
 
             Assert.NotNull(result);
             Assert.Equal(256_000, result.ContextWindowTokens);
@@ -286,7 +286,7 @@ public sealed class OpenAiCodexTests
         [Fact]
         public async Task ResolveAsync_UnknownModel_ReturnsNull()
         {
-            var result = await _resolver.ResolveAsync("claude-3-opus");
+            var result = await _resolver.ResolveAsync("claude-3-opus", TestContext.Current.CancellationToken);
 
             Assert.Null(result);
         }
@@ -296,7 +296,7 @@ public sealed class OpenAiCodexTests
         {
             foreach (var model in OpenAiDescriptor.CuratedModels)
             {
-                var result = await _resolver.ResolveAsync(model.ModelId);
+                var result = await _resolver.ResolveAsync(model.ModelId, TestContext.Current.CancellationToken);
                 Assert.NotNull(result);
                 Assert.NotNull(result.ContextWindowTokens);
                 Assert.True(result.ContextWindowTokens > 32_768);

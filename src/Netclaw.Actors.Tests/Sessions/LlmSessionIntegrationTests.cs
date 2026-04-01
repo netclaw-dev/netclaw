@@ -131,7 +131,7 @@ public class LlmSessionIntegrationTests : TestKit
             SessionId = sessionId,
             Subscriber = subscriber,
             Filter = OutputFilter.TextOnly
-        }, TimeSpan.FromSeconds(3));
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(sessionId, joined.SessionId);
         Assert.Equal(0, joined.TurnCount);
         Assert.Null(joined.Title);
@@ -149,22 +149,22 @@ public class LlmSessionIntegrationTests : TestKit
             SessionId = sessionId,
             Subscriber = subscriber,
             Filter = OutputFilter.TextOnly
-        }, TimeSpan.FromSeconds(3));
-        await subscriber.ExpectMsgAsync<SessionJoined>(); // Drain subscriber notification
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken); // Drain subscriber notification
 
         var ack = await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = sessionId,
             Content = "Hello, Netclaw!"
-        }, TimeSpan.FromSeconds(3));
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(sessionId, ack.SessionId);
 
         // Subscriber receives typed output events
-        var text = await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3));
+        var text = await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(sessionId, text.SessionId);
         Assert.Contains("fake", text.Text, StringComparison.OrdinalIgnoreCase);
 
-        var completed = await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
+        var completed = await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(sessionId, completed.SessionId);
         Assert.Equal(1, completed.TurnNumber);
     }
@@ -185,32 +185,32 @@ public class LlmSessionIntegrationTests : TestKit
             SessionId = sessionId,
             Subscriber = subscriber,
             Filter = OutputFilter.Full
-        }, TimeSpan.FromSeconds(3));
-        await subscriber.ExpectMsgAsync<SessionJoined>();
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = sessionId,
             Content = "Please answer"
-        }, TimeSpan.FromSeconds(3));
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
 
-        var error = await subscriber.ExpectMsgAsync<ErrorOutput>(TimeSpan.FromSeconds(6));
+        var error = await subscriber.ExpectMsgAsync<ErrorOutput>(TimeSpan.FromSeconds(6), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(sessionId, error.SessionId);
         Assert.Equal(ErrorCategory.ProviderFailure, error.Category);
         Assert.Contains("Please try rephrasing", error.Message, StringComparison.OrdinalIgnoreCase);
 
-        var completed = await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
+        var completed = await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(sessionId, completed.SessionId);
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = sessionId,
             Content = "Try again"
-        }, TimeSpan.FromSeconds(3));
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
 
-        var text = await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3));
+        var text = await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Contains("[fake] Response #4", text.Text, StringComparison.OrdinalIgnoreCase);
-        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
+        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
     }
 
     [Fact]
@@ -233,31 +233,31 @@ public class LlmSessionIntegrationTests : TestKit
             SessionId = sessionId,
             Subscriber = subscriber,
             Filter = OutputFilter.Full
-        }, TimeSpan.FromSeconds(3));
-        await subscriber.ExpectMsgAsync<SessionJoined>();
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = sessionId,
             Content = "Search for something"
-        }, TimeSpan.FromSeconds(3));
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
 
-        await subscriber.ExpectMsgAsync<ToolCallOutput>(TimeSpan.FromSeconds(3));
-        var error = await subscriber.ExpectMsgAsync<ErrorOutput>(TimeSpan.FromSeconds(6));
+        await subscriber.ExpectMsgAsync<ToolCallOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        var error = await subscriber.ExpectMsgAsync<ErrorOutput>(TimeSpan.FromSeconds(6), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(sessionId, error.SessionId);
         Assert.Equal(ErrorCategory.ProviderFailure, error.Category);
 
-        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
+        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = sessionId,
             Content = "Try again after the failure"
-        }, TimeSpan.FromSeconds(3));
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
 
-        var text = await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3));
+        var text = await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Contains("[fake] Response #4", text.Text, StringComparison.OrdinalIgnoreCase);
-        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
+        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
     }
 
     [Fact]
@@ -272,17 +272,17 @@ public class LlmSessionIntegrationTests : TestKit
             SessionId = sessionId,
             Subscriber = subscriber,
             Filter = OutputFilter.TextOnly
-        }, TimeSpan.FromSeconds(3));
-        await subscriber.ExpectMsgAsync<SessionJoined>();
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = sessionId,
             Content = "Say hello"
-        }, TimeSpan.FromSeconds(3));
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
 
-        await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3));
-        var completed = await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
+        await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        var completed = await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
 
         sessionManager.Tell(new DeliveryFailed
         {
@@ -293,9 +293,9 @@ public class LlmSessionIntegrationTests : TestKit
             ErrorMessage = "msg_too_long"
         });
 
-        var retried = await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3));
+        var retried = await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Contains("Response #2", retried.Text, StringComparison.OrdinalIgnoreCase);
-        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
+        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Contains(_fakeChatClient.ReceivedMessages[^1], msg =>
             msg.Role == Microsoft.Extensions.AI.ChatRole.User
@@ -315,26 +315,26 @@ public class LlmSessionIntegrationTests : TestKit
             SessionId = sessionId,
             Subscriber = subscriber,
             Filter = OutputFilter.TextOnly
-        }, TimeSpan.FromSeconds(3));
-        await subscriber.ExpectMsgAsync<SessionJoined>();
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = sessionId,
             Content = "first"
-        }, TimeSpan.FromSeconds(3));
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
 
-        await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3));
-        var firstCompleted = await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
+        await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        var firstCompleted = await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = sessionId,
             Content = "second"
-        }, TimeSpan.FromSeconds(3));
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
 
-        await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3));
-        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
+        await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
 
         sessionManager.Tell(new DeliveryFailed
         {
@@ -345,7 +345,7 @@ public class LlmSessionIntegrationTests : TestKit
             ErrorMessage = "invalid_blocks"
         });
 
-        await subscriber.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(300));
+        await subscriber.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(300), cancellationToken: TestContext.Current.CancellationToken);
     }
 
     [Fact]
@@ -360,17 +360,17 @@ public class LlmSessionIntegrationTests : TestKit
             SessionId = sessionId,
             Subscriber = subscriber,
             Filter = OutputFilter.TextOnly
-        }, TimeSpan.FromSeconds(3));
-        await subscriber.ExpectMsgAsync<SessionJoined>();
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = sessionId,
             Content = "first"
-        }, TimeSpan.FromSeconds(3));
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
 
-        await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3));
-        var firstCompleted = await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
+        await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        var firstCompleted = await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
 
         var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         _fakeChatClient.NextResponseGate = gate;
@@ -379,7 +379,7 @@ public class LlmSessionIntegrationTests : TestKit
         {
             SessionId = sessionId,
             Content = "second"
-        }, TimeSpan.FromSeconds(3));
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
 
         sessionManager.Tell(new DeliveryFailed
         {
@@ -392,10 +392,10 @@ public class LlmSessionIntegrationTests : TestKit
 
         gate.TrySetResult();
 
-        var secondText = await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3));
+        var secondText = await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Contains("Response #2", secondText.Text, StringComparison.OrdinalIgnoreCase);
-        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
-        await subscriber.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(300));
+        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(300), cancellationToken: TestContext.Current.CancellationToken);
     }
 
     [Fact]
@@ -410,17 +410,17 @@ public class LlmSessionIntegrationTests : TestKit
             SessionId = sessionId,
             Subscriber = subscriber,
             Filter = OutputFilter.TextOnly
-        }, TimeSpan.FromSeconds(3));
-        await subscriber.ExpectMsgAsync<SessionJoined>();
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = sessionId,
             Content = "first"
-        }, TimeSpan.FromSeconds(3));
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
 
-        await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3));
-        var completed = await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
+        await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        var completed = await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
 
         for (var attempt = 0; attempt < 2; attempt++)
         {
@@ -433,8 +433,8 @@ public class LlmSessionIntegrationTests : TestKit
                 ErrorMessage = "invalid_blocks"
             });
 
-            await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3));
-            completed = await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
+            await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+            completed = await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
         }
 
         sessionManager.Tell(new DeliveryFailed
@@ -446,7 +446,7 @@ public class LlmSessionIntegrationTests : TestKit
             ErrorMessage = "invalid_blocks"
         });
 
-        await subscriber.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(300));
+        await subscriber.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(300), cancellationToken: TestContext.Current.CancellationToken);
     }
 
     [Fact]
@@ -461,17 +461,17 @@ public class LlmSessionIntegrationTests : TestKit
             SessionId = sessionId,
             Subscriber = subscriber,
             Filter = OutputFilter.TextOnly
-        }, TimeSpan.FromSeconds(3));
-        await subscriber.ExpectMsgAsync<SessionJoined>();
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = sessionId,
             Content = "Say hello"
-        }, TimeSpan.FromSeconds(3));
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
 
-        await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3));
-        var completed = await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
+        await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        var completed = await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
 
         // Send non-retryable transport failure — should NOT trigger LLM retry
         sessionManager.Tell(new DeliveryFailed
@@ -484,17 +484,17 @@ public class LlmSessionIntegrationTests : TestKit
         });
 
         // No retry should occur — transport failures can't be fixed by changing output
-        await subscriber.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(300));
+        await subscriber.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(300), cancellationToken: TestContext.Current.CancellationToken);
 
         // On the next user message, the LLM should see the transport failure nudge
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = sessionId,
             Content = "Are you there?"
-        }, TimeSpan.FromSeconds(3));
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
 
-        await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3));
-        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
+        await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Contains(_fakeChatClient.ReceivedMessages[^1], msg =>
             msg.Role == Microsoft.Extensions.AI.ChatRole.User
@@ -514,17 +514,17 @@ public class LlmSessionIntegrationTests : TestKit
             SessionId = sessionId,
             Subscriber = subscriber,
             Filter = OutputFilter.TextOnly
-        }, TimeSpan.FromSeconds(3));
-        await subscriber.ExpectMsgAsync<SessionJoined>();
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = sessionId,
             Content = "Say hello"
-        }, TimeSpan.FromSeconds(3));
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
 
-        await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3));
-        var completed = await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
+        await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        var completed = await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
 
         // Send non-retryable unknown failure — should NOT trigger LLM retry
         sessionManager.Tell(new DeliveryFailed
@@ -537,17 +537,17 @@ public class LlmSessionIntegrationTests : TestKit
         });
 
         // No retry should occur
-        await subscriber.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(300));
+        await subscriber.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(300), cancellationToken: TestContext.Current.CancellationToken);
 
         // On the next user message, the nudge should be visible in LLM context
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = sessionId,
             Content = "Are you there?"
-        }, TimeSpan.FromSeconds(3));
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
 
-        await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3));
-        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
+        await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Contains(_fakeChatClient.ReceivedMessages[^1], msg =>
             msg.Role == Microsoft.Extensions.AI.ChatRole.User
@@ -580,7 +580,7 @@ public class LlmSessionIntegrationTests : TestKit
         {
             new ChatMessage(Microsoft.Extensions.AI.ChatRole.System, MemorySidecarPromptBuilder.BuildMemoryObservationSystemPrompt()),
             new ChatMessage(Microsoft.Extensions.AI.ChatRole.User, MemorySidecarPromptBuilder.BuildMemoryObservationUserPrompt(request))
-        });
+        }, cancellationToken: TestContext.Current.CancellationToken);
 
         var proposals = JsonSerializer.Deserialize<IReadOnlyList<MemoryProposal>>(
             response.Messages[^1].Text!,
@@ -609,49 +609,49 @@ public class LlmSessionIntegrationTests : TestKit
             SessionId = sessionId,
             Subscriber = textOnlySub,
             Filter = OutputFilter.TextOnly
-        }, TimeSpan.FromSeconds(3));
-        await textOnlySub.ExpectMsgAsync<SessionJoined>(); // Drain subscriber notification
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await textOnlySub.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken); // Drain subscriber notification
         await sessionManager.Ask<SessionJoined>(new JoinSession
         {
             SessionId = sessionId,
             Subscriber = textAndUsageSub,
             Filter = OutputFilter.TextAndUsage
-        }, TimeSpan.FromSeconds(3));
-        await textAndUsageSub.ExpectMsgAsync<SessionJoined>(); // Drain subscriber notification
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await textAndUsageSub.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken); // Drain subscriber notification
         await sessionManager.Ask<SessionJoined>(new JoinSession
         {
             SessionId = sessionId,
             Subscriber = fullSub,
             Filter = OutputFilter.Full
-        }, TimeSpan.FromSeconds(3));
-        await fullSub.ExpectMsgAsync<SessionJoined>(); // Drain subscriber notification
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await fullSub.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken); // Drain subscriber notification
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = sessionId,
             Content = "Think about this"
-        }, TimeSpan.FromSeconds(3));
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
 
         // TextOnly: TextOutput + TurnCompleted (lifecycle always delivered)
-        await textOnlySub.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3));
-        await textOnlySub.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
-        await textOnlySub.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(200));
+        await textOnlySub.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await textOnlySub.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await textOnlySub.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(200), cancellationToken: TestContext.Current.CancellationToken);
 
         // TextAndUsage: TextOutput + UsageOutput + TurnCompleted (no thinking)
-        await textAndUsageSub.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3));
-        await textAndUsageSub.ExpectMsgAsync<UsageOutput>(TimeSpan.FromSeconds(3));
-        await textAndUsageSub.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
-        await textAndUsageSub.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(200));
+        await textAndUsageSub.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await textAndUsageSub.ExpectMsgAsync<UsageOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await textAndUsageSub.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await textAndUsageSub.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(200), cancellationToken: TestContext.Current.CancellationToken);
 
         // Full: ThinkingOutput + TextOutput + UsageOutput + TurnCompleted
-        await fullSub.ExpectMsgAsync<ThinkingOutput>(TimeSpan.FromSeconds(3));
-        await fullSub.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3));
-        var usage = await fullSub.ExpectMsgAsync<UsageOutput>(TimeSpan.FromSeconds(3));
+        await fullSub.ExpectMsgAsync<ThinkingOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await fullSub.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        var usage = await fullSub.ExpectMsgAsync<UsageOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(128_000, usage.ContextWindowTokens);
         Assert.NotNull(usage.UsagePercent);
         Assert.True(usage.UsagePercent > 0);
-        await fullSub.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
-        await fullSub.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(200));
+        await fullSub.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await fullSub.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(200), cancellationToken: TestContext.Current.CancellationToken);
     }
 
     [Fact]
@@ -668,39 +668,39 @@ public class LlmSessionIntegrationTests : TestKit
             SessionId = session1,
             Subscriber = sub1,
             Filter = OutputFilter.TextOnly
-        }, TimeSpan.FromSeconds(3));
-        await sub1.ExpectMsgAsync<SessionJoined>(); // Drain subscriber notification
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await sub1.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken); // Drain subscriber notification
         await sessionManager.Ask<SessionJoined>(new JoinSession
         {
             SessionId = session2,
             Subscriber = sub2,
             Filter = OutputFilter.TextOnly
-        }, TimeSpan.FromSeconds(3));
-        await sub2.ExpectMsgAsync<SessionJoined>(); // Drain subscriber notification
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await sub2.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken); // Drain subscriber notification
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = session1,
             Content = "Message for session 1",
-        }, TimeSpan.FromSeconds(3));
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = session2,
             Content = "Message for session 2"
-        }, TimeSpan.FromSeconds(3));
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
 
         // Each subscriber only gets its own session's output
-        var text1 = await sub1.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3));
+        var text1 = await sub1.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(session1, text1.SessionId);
-        await sub1.ExpectMsgAsync<TurnCompleted>();
+        await sub1.ExpectMsgAsync<TurnCompleted>(cancellationToken: TestContext.Current.CancellationToken);
 
-        var text2 = await sub2.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3));
+        var text2 = await sub2.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(session2, text2.SessionId);
-        await sub2.ExpectMsgAsync<TurnCompleted>();
+        await sub2.ExpectMsgAsync<TurnCompleted>(cancellationToken: TestContext.Current.CancellationToken);
 
-        await sub1.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(200));
-        await sub2.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(200));
+        await sub1.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(200), cancellationToken: TestContext.Current.CancellationToken);
+        await sub2.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(200), cancellationToken: TestContext.Current.CancellationToken);
     }
 
     [Fact]
@@ -716,15 +716,15 @@ public class LlmSessionIntegrationTests : TestKit
             SessionId = sessionId,
             Subscriber = subscriber,
             Filter = OutputFilter.TextOnly
-        }, TimeSpan.FromSeconds(3));
-        await subscriber.ExpectMsgAsync<SessionJoined>(); // Drain subscriber notification
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken); // Drain subscriber notification
 
         // First message — actor enters Processing
         var ack1 = await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = sessionId,
             Content = "First message"
-        }, TimeSpan.FromSeconds(3));
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(sessionId, ack1.SessionId);
 
         // These two are deterministically buffered
@@ -732,25 +732,25 @@ public class LlmSessionIntegrationTests : TestKit
         {
             SessionId = sessionId,
             Content = "Second message"
-        }, TimeSpan.FromSeconds(3));
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = sessionId,
             Content = "Third message"
-        }, TimeSpan.FromSeconds(3));
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
 
         // First turn output
-        await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(6));
-        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(6));
+        await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(6), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(6), cancellationToken: TestContext.Current.CancellationToken);
 
         // Second turn output (batched follow-up)
-        await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(6));
-        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(6));
+        await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(6), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(6), cancellationToken: TestContext.Current.CancellationToken);
 
         // Only two LLM calls total
         Assert.Equal(2, _fakeChatClient.CallCount);
 
-        await subscriber.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(300));
+        await subscriber.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(300), cancellationToken: TestContext.Current.CancellationToken);
     }
 
     [Fact]
@@ -773,18 +773,18 @@ public class LlmSessionIntegrationTests : TestKit
             SessionId = sessionId,
             Subscriber = subscriber,
             Filter = OutputFilter.Full
-        }, TimeSpan.FromSeconds(3));
-        await subscriber.ExpectMsgAsync<SessionJoined>();
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = sessionId,
             Content = "Find browser tools"
-        }, TimeSpan.FromSeconds(3));
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
 
-        await subscriber.ExpectMsgAsync<ToolCallOutput>(TimeSpan.FromSeconds(3));
-        await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(6));
-        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(6));
+        await subscriber.ExpectMsgAsync<ToolCallOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(6), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(6), cancellationToken: TestContext.Current.CancellationToken);
 
         for (var i = 0; i < 4; i++)
         {
@@ -792,10 +792,10 @@ public class LlmSessionIntegrationTests : TestKit
             {
                 SessionId = sessionId,
                 Content = $"Follow-up turn {i + 1}"
-            }, TimeSpan.FromSeconds(3));
+            }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
 
-            await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(6));
-            await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(6));
+            await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(6), cancellationToken: TestContext.Current.CancellationToken);
+            await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(6), cancellationToken: TestContext.Current.CancellationToken);
         }
 
         Assert.True(_fakeChatClient.ReceivedToolNames.Count >= 6);
@@ -827,31 +827,31 @@ public class LlmSessionIntegrationTests : TestKit
             SessionId = sessionId,
             Subscriber = subscriber,
             Filter = OutputFilter.Full
-        }, TimeSpan.FromSeconds(3));
-        await subscriber.ExpectMsgAsync<SessionJoined>();
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = sessionId,
             Content = "Search for something"
-        }, TimeSpan.FromSeconds(3));
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
 
         // Preamble text should arrive before tool calls
-        var preamble = await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(5));
+        var preamble = await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal("Let me search for that...", preamble.Text);
 
         // BufferFlush should arrive after preamble text
-        await subscriber.ExpectMsgAsync<BufferFlush>(TimeSpan.FromSeconds(3));
+        await subscriber.ExpectMsgAsync<BufferFlush>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
 
         // Then tool call
-        var toolCall = await subscriber.ExpectMsgAsync<ToolCallOutput>(TimeSpan.FromSeconds(3));
+        var toolCall = await subscriber.ExpectMsgAsync<ToolCallOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal("browser_chrome_devtools/navigate_page", toolCall.ToolName);
 
         // After tool execution and follow-up LLM call, final text response
-        var finalText = await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(5));
+        var finalText = await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Contains("fake", finalText.Text, StringComparison.OrdinalIgnoreCase);
 
-        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
+        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
     }
 
     [Fact]
@@ -882,29 +882,29 @@ public class LlmSessionIntegrationTests : TestKit
             SessionId = sessionId,
             Subscriber = subscriber,
             Filter = OutputFilter.Text | OutputFilter.ToolCalls
-        }, TimeSpan.FromSeconds(3));
-        await subscriber.ExpectMsgAsync<SessionJoined>();
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = sessionId,
             Content = "Do something with tools"
-        }, TimeSpan.FromSeconds(3));
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
 
         // Should receive exactly ONE consolidated TextOutput for the preamble
-        var preamble = await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(5));
+        var preamble = await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Contains("Part one", preamble.Text);
         Assert.Contains("Part two", preamble.Text);
 
         // Tool call output
-        var toolCall = await subscriber.ExpectMsgAsync<ToolCallOutput>(TimeSpan.FromSeconds(3));
+        var toolCall = await subscriber.ExpectMsgAsync<ToolCallOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal("browser_chrome_devtools/navigate_page", toolCall.ToolName);
 
         // Final text response after tool execution
-        var finalText = await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(5));
+        var finalText = await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Contains("fake", finalText.Text, StringComparison.OrdinalIgnoreCase);
 
-        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
+        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
     }
 
     [Fact]
@@ -920,32 +920,32 @@ public class LlmSessionIntegrationTests : TestKit
             SessionId = sessionId,
             Subscriber = subscriber,
             Filter = OutputFilter.TextOnly
-        }, TimeSpan.FromSeconds(3));
-        await subscriber.ExpectMsgAsync<SessionJoined>(); // Drain subscriber notification
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken); // Drain subscriber notification
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = sessionId,
             Content = "First message"
-        }, TimeSpan.FromSeconds(3));
-        await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3));
-        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = sessionId,
             Content = "Second message"
-        }, TimeSpan.FromSeconds(3));
-        await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3));
-        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
 
         // Phase 2: Kill the session actor child
         var escapedId = Uri.EscapeDataString(sessionId.Value);
         var childPath = $"/user/session-manager/{escapedId}";
-        var child = await Sys.ActorSelection(childPath).ResolveOne(TimeSpan.FromSeconds(3));
+        var child = await Sys.ActorSelection(childPath).ResolveOne(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
         Watch(child);
         Sys.Stop(child);
-        await ExpectTerminatedAsync(child);
+        await ExpectTerminatedAsync(child, cancellationToken: TestContext.Current.CancellationToken);
 
         // Phase 3: Recover — send JoinSession to the same session ID.
         // GenericChildPerEntityParent creates a new actor that recovers from journal.
@@ -955,8 +955,8 @@ public class LlmSessionIntegrationTests : TestKit
             SessionId = sessionId,
             Subscriber = recoverSub,
             Filter = OutputFilter.TextOnly
-        }, TimeSpan.FromSeconds(5));
-        await recoverSub.ExpectMsgAsync<SessionJoined>(); // Drain subscriber notification
+        }, TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        await recoverSub.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken); // Drain subscriber notification
         Assert.Equal(sessionId, recovered.SessionId);
         Assert.Equal(2, recovered.TurnCount); // Both turns recovered
 
@@ -965,11 +965,11 @@ public class LlmSessionIntegrationTests : TestKit
         {
             SessionId = sessionId,
             Content = "Third message after recovery"
-        }, TimeSpan.FromSeconds(3));
-        var text = await recoverSub.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3));
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        var text = await recoverSub.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Contains("fake", text.Text, StringComparison.OrdinalIgnoreCase);
 
-        var completed = await recoverSub.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
+        var completed = await recoverSub.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(3, completed.TurnNumber); // Continues from recovered state
     }
 
@@ -986,8 +986,8 @@ public class LlmSessionIntegrationTests : TestKit
             SessionId = sessionId,
             Subscriber = subscriber,
             Filter = OutputFilter.TextOnly
-        }, TimeSpan.FromSeconds(3));
-        await subscriber.ExpectMsgAsync<SessionJoined>();
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
 
         // Re-join via Tell (piggybacked path) — subscriber should NOT get a duplicate
         sessionManager.Tell(new JoinSession
@@ -997,7 +997,7 @@ public class LlmSessionIntegrationTests : TestKit
             Filter = OutputFilter.TextOnly
         }, ActorRefs.NoSender);
 
-        await subscriber.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(300));
+        await subscriber.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(300), cancellationToken: TestContext.Current.CancellationToken);
 
         // Re-join via Ask still returns SessionJoined to the caller (not the subscriber)
         var rejoined = await sessionManager.Ask<SessionJoined>(new JoinSession
@@ -1005,11 +1005,11 @@ public class LlmSessionIntegrationTests : TestKit
             SessionId = sessionId,
             Subscriber = subscriber,
             Filter = OutputFilter.TextOnly
-        }, TimeSpan.FromSeconds(3));
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(sessionId, rejoined.SessionId);
 
         // Subscriber still should not have received a duplicate
-        await subscriber.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(300));
+        await subscriber.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(300), cancellationToken: TestContext.Current.CancellationToken);
     }
 
     [Fact]
@@ -1024,30 +1024,30 @@ public class LlmSessionIntegrationTests : TestKit
             SessionId = sessionId,
             Subscriber = subscriber,
             Filter = OutputFilter.TextOnly
-        }, TimeSpan.FromSeconds(3));
-        await subscriber.ExpectMsgAsync<SessionJoined>();
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
 
         // Resolve session actor
         var escapedId = Uri.EscapeDataString(sessionId.Value);
         var childPath = $"/user/session-manager/{escapedId}";
-        var child = await Sys.ActorSelection(childPath).ResolveOne(TimeSpan.FromSeconds(3));
+        var child = await Sys.ActorSelection(childPath).ResolveOne(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
         Watch(child);
 
         // Send ReceiveTimeout directly — with active subscriber, should be deferred
         child.Tell(ReceiveTimeout.Instance);
 
         // Actor should still be alive
-        await ExpectNoMsgAsync(TimeSpan.FromMilliseconds(300));
+        await ExpectNoMsgAsync(TimeSpan.FromMilliseconds(300), cancellationToken: TestContext.Current.CancellationToken);
 
         // Session should still process messages
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = sessionId,
             Content = "Still alive?"
-        }, TimeSpan.FromSeconds(3));
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
 
-        await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3));
-        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
+        await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
     }
 
     [Fact]
@@ -1062,16 +1062,16 @@ public class LlmSessionIntegrationTests : TestKit
             SessionId = sessionId,
             Subscriber = subscriber,
             Filter = OutputFilter.TextOnly
-        }, TimeSpan.FromSeconds(3));
-        await subscriber.ExpectMsgAsync<SessionJoined>();
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
 
         var escapedId = Uri.EscapeDataString(sessionId.Value);
         var childPath = $"/user/session-manager/{escapedId}";
-        var child = await Sys.ActorSelection(childPath).ResolveOne(TimeSpan.FromSeconds(3));
+        var child = await Sys.ActorSelection(childPath).ResolveOne(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
         Watch(child);
 
         child.Tell(ReceiveTimeout.Instance);
-        await ExpectNoMsgAsync(TimeSpan.FromMilliseconds(300));
+        await ExpectNoMsgAsync(TimeSpan.FromMilliseconds(300), cancellationToken: TestContext.Current.CancellationToken);
         Assert.DoesNotContain(sessionId.Value, _lifecycleObserver.DeactivatedSessionIds);
 
         child.Tell(new LeaveSession
@@ -1081,7 +1081,7 @@ public class LlmSessionIntegrationTests : TestKit
         });
 
         child.Tell(ReceiveTimeout.Instance);
-        await ExpectTerminatedAsync(child, TimeSpan.FromSeconds(5));
+        await ExpectTerminatedAsync(child, TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Contains(sessionId.Value, _lifecycleObserver.DeactivatedSessionIds);
     }
@@ -1098,21 +1098,21 @@ public class LlmSessionIntegrationTests : TestKit
             SessionId = sessionId,
             Subscriber = subscriber,
             Filter = OutputFilter.TextOnly
-        }, TimeSpan.FromSeconds(3));
-        await subscriber.ExpectMsgAsync<SessionJoined>();
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
 
         var escapedId = Uri.EscapeDataString(sessionId.Value);
-        var child = await Sys.ActorSelection($"/user/session-manager/{escapedId}").ResolveOne(TimeSpan.FromSeconds(3));
+        var child = await Sys.ActorSelection($"/user/session-manager/{escapedId}").ResolveOne(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
         Watch(child);
 
         var ack = await sessionManager.Ask<CommandAck>(new PrepareForDaemonRestart
         {
             SessionId = sessionId,
             Reason = "config-reload"
-        }, TimeSpan.FromSeconds(3));
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(sessionId, ack.SessionId);
-        await ExpectTerminatedAsync(child, TimeSpan.FromSeconds(5));
+        await ExpectTerminatedAsync(child, TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Contains(sessionId.Value, _lifecycleObserver.DeactivatedSessionIds);
     }
 
@@ -1130,30 +1130,30 @@ public class LlmSessionIntegrationTests : TestKit
             SessionId = sessionId,
             Subscriber = subscriber,
             Filter = OutputFilter.TextOnly
-        }, TimeSpan.FromSeconds(3));
-        await subscriber.ExpectMsgAsync<SessionJoined>();
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = sessionId,
             Content = "First message"
-        }, TimeSpan.FromSeconds(3));
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
 
         var escapedId = Uri.EscapeDataString(sessionId.Value);
-        var child = await Sys.ActorSelection($"/user/session-manager/{escapedId}").ResolveOne(TimeSpan.FromSeconds(3));
+        var child = await Sys.ActorSelection($"/user/session-manager/{escapedId}").ResolveOne(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
         Watch(child);
 
         var drainTask = sessionManager.Ask<CommandAck>(new PrepareForDaemonRestart
         {
             SessionId = sessionId,
             Reason = "config-reload"
-        }, TimeSpan.FromSeconds(5));
+        }, TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
 
         var nack = await sessionManager.Ask<CommandNack>(new SendUserMessage
         {
             SessionId = sessionId,
             Content = "Should be rejected"
-        }, TimeSpan.FromSeconds(3));
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(SessionIngressGate.RestartInProgressMessage, nack.Reason);
 
@@ -1168,10 +1168,10 @@ public class LlmSessionIntegrationTests : TestKit
 
         responseGate.TrySetResult();
 
-        await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3));
-        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
+        await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(sessionId, (await drainTask).SessionId);
-        await ExpectTerminatedAsync(child, TimeSpan.FromSeconds(5));
+        await ExpectTerminatedAsync(child, TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
         Assert.DoesNotContain(_fakeChatClient.ReceivedMessages, conversation =>
             conversation.Any(msg =>
                 msg.Text is not null
@@ -1197,33 +1197,33 @@ public class LlmSessionIntegrationTests : TestKit
             SessionId = sessionId,
             Subscriber = subscriber,
             Filter = OutputFilter.TextOnly
-        }, TimeSpan.FromSeconds(3));
-        await subscriber.ExpectMsgAsync<SessionJoined>();
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = sessionId,
             Content = "Trigger compaction"
-        }, TimeSpan.FromSeconds(3));
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
 
-        await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3));
-        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
+        await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
 
         var escapedId = Uri.EscapeDataString(sessionId.Value);
-        var child = await Sys.ActorSelection($"/user/session-manager/{escapedId}").ResolveOne(TimeSpan.FromSeconds(3));
+        var child = await Sys.ActorSelection($"/user/session-manager/{escapedId}").ResolveOne(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
         Watch(child);
 
         var drainTask = sessionManager.Ask<CommandAck>(new PrepareForDaemonRestart
         {
             SessionId = sessionId,
             Reason = "config-reload"
-        }, TimeSpan.FromSeconds(5));
+        }, TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
 
         var nack = await sessionManager.Ask<CommandNack>(new SendUserMessage
         {
             SessionId = sessionId,
             Content = "Should be rejected during compaction"
-        }, TimeSpan.FromSeconds(3));
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(SessionIngressGate.RestartInProgressMessage, nack.Reason);
 
@@ -1233,7 +1233,7 @@ public class LlmSessionIntegrationTests : TestKit
         });
 
         Assert.Equal(sessionId, (await drainTask).SessionId);
-        await ExpectTerminatedAsync(child, TimeSpan.FromSeconds(5));
+        await ExpectTerminatedAsync(child, TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Contains(sessionId.Value, _lifecycleObserver.DeactivatedSessionIds);
     }
 
@@ -1248,24 +1248,24 @@ public class LlmSessionIntegrationTests : TestKit
         {
             SessionId = sessionId,
             RestartNotice = "The daemon restarted due to a configuration change. Recovery resumed from the last durable checkpoint."
-        }, TimeSpan.FromSeconds(3));
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
 
         await sessionManager.Ask<SessionJoined>(new JoinSession
         {
             SessionId = sessionId,
             Subscriber = subscriber,
             Filter = OutputFilter.TextOnly
-        }, TimeSpan.FromSeconds(3));
-        await subscriber.ExpectMsgAsync<SessionJoined>();
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = sessionId,
             Content = "Hello after restart"
-        }, TimeSpan.FromSeconds(3));
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
 
-        await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3));
-        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
+        await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Contains(_fakeChatClient.ReceivedMessages, conversation =>
             conversation.Any(msg =>
@@ -1287,24 +1287,24 @@ public class LlmSessionIntegrationTests : TestKit
             SessionId = sessionId,
             Subscriber = subscriberA,
             Filter = OutputFilter.TextOnly
-        }, TimeSpan.FromSeconds(3));
-        await subscriberA.ExpectMsgAsync<SessionJoined>();
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriberA.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = sessionId,
             Content = "First message"
-        }, TimeSpan.FromSeconds(3));
-        await subscriberA.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3));
-        await subscriberA.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriberA.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriberA.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
 
         // Phase 2: Kill session actor (simulating passivation)
         var escapedId = Uri.EscapeDataString(sessionId.Value);
         var childPath = $"/user/session-manager/{escapedId}";
-        var child = await Sys.ActorSelection(childPath).ResolveOne(TimeSpan.FromSeconds(3));
+        var child = await Sys.ActorSelection(childPath).ResolveOne(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
         Watch(child);
         Sys.Stop(child);
-        await ExpectTerminatedAsync(child);
+        await ExpectTerminatedAsync(child, cancellationToken: TestContext.Current.CancellationToken);
 
         // Phase 3: Join with subscriber B (triggers re-creation)
         var subscriberB = CreateTestProbe("sub-b");
@@ -1313,8 +1313,8 @@ public class LlmSessionIntegrationTests : TestKit
             SessionId = sessionId,
             Subscriber = subscriberB,
             Filter = OutputFilter.TextOnly
-        }, TimeSpan.FromSeconds(5));
-        await subscriberB.ExpectMsgAsync<SessionJoined>();
+        }, TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriberB.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
 
         // Phase 4: Piggybacked JoinSession for A + SendUserMessage
         // This simulates what ChannelPipeline does on each inbound message
@@ -1325,20 +1325,20 @@ public class LlmSessionIntegrationTests : TestKit
             Filter = OutputFilter.TextOnly
         }, ActorRefs.NoSender);
 
-        await subscriberA.ExpectMsgAsync<SessionJoined>(TimeSpan.FromSeconds(3));
+        await subscriberA.ExpectMsgAsync<SessionJoined>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = sessionId,
             Content = "After passivation"
-        }, TimeSpan.FromSeconds(3));
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
 
         // Both subscribers should receive output
-        await subscriberA.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3));
-        await subscriberA.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
+        await subscriberA.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriberA.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
 
-        await subscriberB.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3));
-        await subscriberB.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
+        await subscriberB.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriberB.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
     }
 
     [Fact]
@@ -1353,12 +1353,12 @@ public class LlmSessionIntegrationTests : TestKit
             SessionId = sessionId,
             Subscriber = subscriber,
             Filter = OutputFilter.TextOnly
-        }, TimeSpan.FromSeconds(3));
-        await subscriber.ExpectMsgAsync<SessionJoined>();
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
 
         var escapedId = Uri.EscapeDataString(sessionId.Value);
         var childPath = $"/user/session-manager/{escapedId}";
-        var child = await Sys.ActorSelection(childPath).ResolveOne(TimeSpan.FromSeconds(3));
+        var child = await Sys.ActorSelection(childPath).ResolveOne(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
         Watch(child);
 
         child.Tell(new LeaveSession
@@ -1373,25 +1373,25 @@ public class LlmSessionIntegrationTests : TestKit
         {
             SessionId = sessionId,
             Content = "Interrupt passivation"
-        }, TimeSpan.FromSeconds(3));
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(sessionId, ack.SessionId);
         await AwaitAssertAsync(() =>
         {
             Assert.Equal(1, _fakeChatClient.CallCount);
             return Task.CompletedTask;
-        }, TimeSpan.FromSeconds(3), TimeSpan.FromMilliseconds(100));
+        }, TimeSpan.FromSeconds(3), TimeSpan.FromMilliseconds(100), cancellationToken: TestContext.Current.CancellationToken);
 
         var rejoined = await sessionManager.Ask<SessionJoined>(new JoinSession
         {
             SessionId = sessionId,
             Subscriber = subscriber,
             Filter = OutputFilter.TextOnly
-        }, TimeSpan.FromSeconds(3));
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(1, rejoined.TurnCount);
-        await subscriber.ExpectMsgAsync<SessionJoined>(TimeSpan.FromSeconds(3));
-        await ExpectNoMsgAsync(TimeSpan.FromMilliseconds(300));
+        await subscriber.ExpectMsgAsync<SessionJoined>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await ExpectNoMsgAsync(TimeSpan.FromMilliseconds(300), cancellationToken: TestContext.Current.CancellationToken);
         Assert.DoesNotContain(sessionId.Value, _lifecycleObserver.DeactivatedSessionIds);
     }
 
@@ -1407,21 +1407,21 @@ public class LlmSessionIntegrationTests : TestKit
             SessionId = sessionId,
             Subscriber = subscriber,
             Filter = OutputFilter.TextOnly
-        }, TimeSpan.FromSeconds(3));
-        await subscriber.ExpectMsgAsync<SessionJoined>();
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = sessionId,
             Content = "Original message"
-        }, TimeSpan.FromSeconds(3));
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
 
-        await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3));
-        var completed = await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
+        await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        var completed = await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
 
         var escapedId = Uri.EscapeDataString(sessionId.Value);
         var childPath = $"/user/session-manager/{escapedId}";
-        var child = await Sys.ActorSelection(childPath).ResolveOne(TimeSpan.FromSeconds(3));
+        var child = await Sys.ActorSelection(childPath).ResolveOne(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
         Watch(child);
 
         child.Tell(new LeaveSession
@@ -1452,18 +1452,18 @@ public class LlmSessionIntegrationTests : TestKit
                     && msg.Text is not null
                     && msg.Text.Contains("msg_too_long", StringComparison.OrdinalIgnoreCase)));
             return Task.CompletedTask;
-        }, TimeSpan.FromSeconds(3), TimeSpan.FromMilliseconds(100));
+        }, TimeSpan.FromSeconds(3), TimeSpan.FromMilliseconds(100), cancellationToken: TestContext.Current.CancellationToken);
 
         var rejoined = await sessionManager.Ask<SessionJoined>(new JoinSession
         {
             SessionId = sessionId,
             Subscriber = subscriber,
             Filter = OutputFilter.TextOnly
-        }, TimeSpan.FromSeconds(3));
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(2, rejoined.TurnCount);
-        await subscriber.ExpectMsgAsync<SessionJoined>(TimeSpan.FromSeconds(3));
-        await ExpectNoMsgAsync(TimeSpan.FromMilliseconds(300));
+        await subscriber.ExpectMsgAsync<SessionJoined>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await ExpectNoMsgAsync(TimeSpan.FromMilliseconds(300), cancellationToken: TestContext.Current.CancellationToken);
         Assert.DoesNotContain(sessionId.Value, _lifecycleObserver.DeactivatedSessionIds);
     }
 
@@ -1485,19 +1485,19 @@ public class LlmSessionIntegrationTests : TestKit
             SessionId = sessionId,
             Subscriber = subscriber,
             Filter = OutputFilter.Full
-        });
-        await subscriber.ExpectMsgAsync<SessionJoined>();
+        }, cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = sessionId,
             Content = "Message that should succeed after retries"
-        });
+        }, cancellationToken: TestContext.Current.CancellationToken);
 
         // Should succeed after retries — response arrives
-        var text = await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(15));
+        var text = await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(15), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Contains("fake", text.Text, StringComparison.OrdinalIgnoreCase);
-        var completed = await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
+        var completed = await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(TurnOutcome.Completed, completed.Outcome);
     }
 
@@ -1519,19 +1519,19 @@ public class LlmSessionIntegrationTests : TestKit
             SessionId = sessionId,
             Subscriber = subscriber,
             Filter = OutputFilter.Full
-        });
-        await subscriber.ExpectMsgAsync<SessionJoined>();
+        }, cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = sessionId,
             Content = "Message that will fail after exhausting retries"
-        });
+        }, cancellationToken: TestContext.Current.CancellationToken);
 
         // Should fail with error after exhausting retries
-        var error = await subscriber.ExpectMsgAsync<ErrorOutput>(TimeSpan.FromSeconds(20));
+        var error = await subscriber.ExpectMsgAsync<ErrorOutput>(TimeSpan.FromSeconds(20), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(ErrorCategory.ProviderFailure, error.Category);
-        var completed = await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
+        var completed = await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(TurnOutcome.Failed, completed.Outcome);
     }
 }

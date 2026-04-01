@@ -73,7 +73,7 @@ public sealed class SessionMemoryObserverActorTests : TestKit
 
         observer.Tell(ReceiveTimeout.Instance, parentProbe.Ref);
 
-        await parentProbe.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(300));
+        await parentProbe.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(300), TestContext.Current.CancellationToken);
     }
 
     [Fact]
@@ -84,7 +84,7 @@ public sealed class SessionMemoryObserverActorTests : TestKit
 
         observer.Tell(new DistillMemories(), parentProbe.Ref);
 
-        var reply = await parentProbe.ExpectMsgAsync<SessionDistillationCompleted>(TimeSpan.FromSeconds(3));
+        var reply = await parentProbe.ExpectMsgAsync<SessionDistillationCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Empty(reply.Proposals);
         Assert.Null(reply.FailureReason);
     }
@@ -107,7 +107,7 @@ public sealed class SessionMemoryObserverActorTests : TestKit
         observer.Tell(new SessionPhaseChanged(SessionPhase.Passivating));
 
         // Wait longer than idle timeout — no distillation should fire
-        await parentProbe.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(500));
+        await parentProbe.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(500), TestContext.Current.CancellationToken);
     }
 
     [Fact]
@@ -130,7 +130,7 @@ public sealed class SessionMemoryObserverActorTests : TestKit
         // Idle timer should be re-enabled — wait for distillation to fire
         // The FakeChatClient returns non-JSON text, so proposals will be empty,
         // but the reply itself proves the idle distillation ran.
-        var reply = await parentProbe.ExpectMsgAsync<SessionDistillationCompleted>(TimeSpan.FromSeconds(3));
+        var reply = await parentProbe.ExpectMsgAsync<SessionDistillationCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
         Assert.NotNull(reply);
     }
 
@@ -173,7 +173,7 @@ public sealed class SessionMemoryObserverActorTests : TestKit
         // Request distillation
         observer.Tell(new DistillMemories(), parentProbe.Ref);
 
-        var reply = await parentProbe.ExpectMsgAsync<SessionDistillationCompleted>(TimeSpan.FromSeconds(5));
+        var reply = await parentProbe.ExpectMsgAsync<SessionDistillationCompleted>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Single(reply.Proposals);
         Assert.Equal("test-preference", reply.Proposals[0].Anchor?.CanonicalName);
         Assert.Null(reply.FailureReason);
@@ -203,7 +203,7 @@ public sealed class SessionMemoryObserverActorTests : TestKit
 
         // Wait until the distillation task has started (reached the gated LLM call)
         await AwaitAssertAsync(() => Assert.True(client.CallCount >= 1,
-            $"Expected distillation to start, but CallCount={client.CallCount}"));
+            $"Expected distillation to start, but CallCount={client.CallCount}"), cancellationToken: TestContext.Current.CancellationToken);
 
         // Now send passivation DistillMemories while idle distillation is in-flight
         observer.Tell(new DistillMemories(), passivationProbe.Ref);
@@ -212,12 +212,12 @@ public sealed class SessionMemoryObserverActorTests : TestKit
         gate.SetResult();
 
         // The idle distillation result goes to Context.Parent (parentProbe)
-        var idleReply = await parentProbe.ExpectMsgAsync<SessionDistillationCompleted>(TimeSpan.FromSeconds(5));
+        var idleReply = await parentProbe.ExpectMsgAsync<SessionDistillationCompleted>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
         Assert.NotNull(idleReply);
 
         // A distinct passivation caller gets the follow-up Empty reply
         var passivationReply = await passivationProbe.ExpectMsgAsync<SessionDistillationCompleted>(
-            TimeSpan.FromSeconds(5));
+            TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
         Assert.NotNull(passivationReply);
         Assert.Empty(passivationReply.Proposals);
     }
@@ -245,7 +245,7 @@ public sealed class SessionMemoryObserverActorTests : TestKit
 
         // Wait until the distillation task has started (reached the gated LLM call)
         await AwaitAssertAsync(() => Assert.True(client.CallCount >= 1,
-            $"Expected distillation to start, but CallCount={client.CallCount}"));
+            $"Expected distillation to start, but CallCount={client.CallCount}"), cancellationToken: TestContext.Current.CancellationToken);
 
         // Enter passivation and send DistillMemories (stashes reply)
         observer.Tell(new SessionPhaseChanged(SessionPhase.Passivating));
@@ -258,10 +258,10 @@ public sealed class SessionMemoryObserverActorTests : TestKit
         gate.SetResult();
 
         // The idle distillation result goes to parentProbe (Context.Parent)
-        await parentProbe.ExpectMsgAsync<SessionDistillationCompleted>(TimeSpan.FromSeconds(5));
+        await parentProbe.ExpectMsgAsync<SessionDistillationCompleted>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
 
         // The passivation probe should NOT receive a reply (stash was cleared on abort)
-        await passivationProbe.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(500));
+        await passivationProbe.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(500), TestContext.Current.CancellationToken);
 
         // Verify observer is still functional after abort
         observer.Tell(new SendUserMessage
@@ -270,7 +270,7 @@ public sealed class SessionMemoryObserverActorTests : TestKit
             Content = "new content after abort"
         });
         observer.Tell(new DistillMemories(), anotherProbe.Ref);
-        var reply = await anotherProbe.ExpectMsgAsync<SessionDistillationCompleted>(TimeSpan.FromSeconds(5));
+        var reply = await anotherProbe.ExpectMsgAsync<SessionDistillationCompleted>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
         Assert.NotNull(reply);
     }
 
@@ -290,7 +290,7 @@ public sealed class SessionMemoryObserverActorTests : TestKit
         observer.Tell(ReceiveTimeout.Instance);
 
         await AwaitAssertAsync(() => Assert.True(client.CallCount >= 1,
-            $"Expected distillation to start, but CallCount={client.CallCount}"));
+            $"Expected distillation to start, but CallCount={client.CallCount}"), cancellationToken: TestContext.Current.CancellationToken);
 
         observer.Tell(new SendUserMessage
         {
@@ -300,13 +300,13 @@ public sealed class SessionMemoryObserverActorTests : TestKit
 
         gate.SetResult();
 
-        await parentProbe.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(500));
+        await parentProbe.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(500), TestContext.Current.CancellationToken);
 
         observer.Tell(ReceiveTimeout.Instance);
         await AwaitAssertAsync(() => Assert.True(client.CallCount >= 2,
-            $"Expected follow-up distillation to start, but CallCount={client.CallCount}"));
-        await parentProbe.ExpectMsgAsync<SessionDistillationCompleted>(TimeSpan.FromSeconds(5));
-        await parentProbe.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(500));
+            $"Expected follow-up distillation to start, but CallCount={client.CallCount}"), cancellationToken: TestContext.Current.CancellationToken);
+        await parentProbe.ExpectMsgAsync<SessionDistillationCompleted>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        await parentProbe.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(500), TestContext.Current.CancellationToken);
     }
 
     [Fact]
@@ -325,14 +325,14 @@ public sealed class SessionMemoryObserverActorTests : TestKit
         observer.Tell(ReceiveTimeout.Instance);
 
         await AwaitAssertAsync(() => Assert.True(client.CallCount >= 1,
-            $"Expected distillation to start, but CallCount={client.CallCount}"));
+            $"Expected distillation to start, but CallCount={client.CallCount}"), cancellationToken: TestContext.Current.CancellationToken);
 
         observer.Tell(new DistillMemories(), parentActor);
         gate.SetResult();
 
-        var reply = await parentProbe.ExpectMsgAsync<SessionDistillationCompleted>(TimeSpan.FromSeconds(5));
+        var reply = await parentProbe.ExpectMsgAsync<SessionDistillationCompleted>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
         Assert.NotNull(reply);
-        await parentProbe.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(500));
+        await parentProbe.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(500), TestContext.Current.CancellationToken);
     }
 
     [Fact]
@@ -370,11 +370,11 @@ public sealed class SessionMemoryObserverActorTests : TestKit
         });
 
         observer.Tell(new DistillMemories(), replyProbe.Ref);
-        await replyProbe.ExpectMsgAsync<SessionDistillationCompleted>(TimeSpan.FromSeconds(5));
+        await replyProbe.ExpectMsgAsync<SessionDistillationCompleted>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
 
         Watch(observer);
         Sys.Stop(observer);
-        await ExpectTerminatedAsync(observer, TimeSpan.FromSeconds(5));
+        await ExpectTerminatedAsync(observer, TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
 
         var secondClient = new FakeChatClient();
         var recoveredObserver = CreateObserver("persist-before-reply", client: secondClient);
@@ -387,7 +387,7 @@ public sealed class SessionMemoryObserverActorTests : TestKit
         });
 
         recoveredObserver.Tell(new DistillMemories(), replayProbe.Ref);
-        await replayProbe.ExpectMsgAsync<SessionDistillationCompleted>(TimeSpan.FromSeconds(5));
+        await replayProbe.ExpectMsgAsync<SessionDistillationCompleted>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
 
         var skipPrompt = secondClient.ReceivedMessages[0]
             .LastOrDefault(msg => msg.Role == Microsoft.Extensions.AI.ChatRole.User)?.Text;

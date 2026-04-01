@@ -25,15 +25,12 @@ dotnet_diagnostic.IDE0072.severity = suggestion
 dotnet_diagnostic.CA1307.severity = suggestion
 dotnet_diagnostic.CA1309.severity = suggestion
 dotnet_diagnostic.CA1310.severity = suggestion
-# xUnit1051 requires TestContext.Current.CancellationToken — defer migration to follow-up PR (#517).
-dotnet_diagnostic.xUnit1051.severity = suggestion
 
 [**/*Tests/*.cs]
 # Same suppressions for test files at the root of a *.Tests project folder.
 dotnet_diagnostic.CA1307.severity = suggestion
 dotnet_diagnostic.CA1309.severity = suggestion
 dotnet_diagnostic.CA1310.severity = suggestion
-dotnet_diagnostic.xUnit1051.severity = suggestion
 
 [*.{md,json,yml,yaml}]
 trim_trailing_whitespace = false

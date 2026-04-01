@@ -78,28 +78,28 @@ public sealed class LlmSessionWatchdogTests(ITestOutputHelper output) : TestKit(
             SessionId = sessionId,
             Subscriber = subscriber,
             Filter = OutputFilter.TextOnly
-        }, TimeSpan.FromSeconds(3));
-        await subscriber.ExpectMsgAsync<SessionJoined>();
+        }, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = sessionId,
             Content = "first"
-        }, TimeSpan.FromSeconds(3));
+        }, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
 
-        var firstError = await subscriber.ExpectMsgAsync<ErrorOutput>(TimeSpan.FromSeconds(6));
+        var firstError = await subscriber.ExpectMsgAsync<ErrorOutput>(TimeSpan.FromSeconds(6), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Contains("did not respond", firstError.Message, StringComparison.OrdinalIgnoreCase);
-        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
+        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = sessionId,
             Content = "second"
-        }, TimeSpan.FromSeconds(3));
+        }, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
 
-        var secondError = await subscriber.ExpectMsgAsync<ErrorOutput>(TimeSpan.FromSeconds(6));
+        var secondError = await subscriber.ExpectMsgAsync<ErrorOutput>(TimeSpan.FromSeconds(6), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Contains("did not respond", secondError.Message, StringComparison.OrdinalIgnoreCase);
-        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
+        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.True(_chatClient.CallCount >= 2);
     }
@@ -118,28 +118,28 @@ public sealed class LlmSessionWatchdogTests(ITestOutputHelper output) : TestKit(
             SessionId = sessionId,
             Subscriber = subscriber,
             Filter = OutputFilter.TextOnly
-        }, TimeSpan.FromSeconds(3));
-        await subscriber.ExpectMsgAsync<SessionJoined>();
+        }, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = sessionId,
             Content = "first"
-        }, TimeSpan.FromSeconds(3));
+        }, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = sessionId,
             Content = "second"
-        }, TimeSpan.FromSeconds(3));
+        }, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
 
-        var firstError = await subscriber.ExpectMsgAsync<ErrorOutput>(TimeSpan.FromSeconds(6));
+        var firstError = await subscriber.ExpectMsgAsync<ErrorOutput>(TimeSpan.FromSeconds(6), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Contains("did not respond", firstError.Message, StringComparison.OrdinalIgnoreCase);
-        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
+        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
 
-        var recoveredText = await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(6));
+        var recoveredText = await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(6), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Contains("recovered after timeout", recoveredText.Text, StringComparison.OrdinalIgnoreCase);
-        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
+        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(2, _chatClient.CallCount);
     }

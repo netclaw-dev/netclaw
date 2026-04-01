@@ -46,7 +46,7 @@ public sealed class DaemonClientReconnectIntegrationTests
                 reconnectedOutput.TrySetResult();
         });
 
-        var sessionId = await client.CreateSessionAsync(ChannelType.Tui);
+        var sessionId = await client.CreateSessionAsync(ChannelType.Tui, TestContext.Current.CancellationToken);
 
         try
         {
@@ -55,7 +55,7 @@ public sealed class DaemonClientReconnectIntegrationTests
                 SenderId = "test",
                 Contents = [new TextContent("drop")],
                 ReceivedAt = DateTimeOffset.UtcNow
-            });
+            }, TestContext.Current.CancellationToken);
         }
         catch (Exception ex)
         {
@@ -65,7 +65,7 @@ public sealed class DaemonClientReconnectIntegrationTests
         await WaitFor(disconnected.Task, TimeSpan.FromSeconds(5));
         await WaitFor(reconnected.Task, TimeSpan.FromSeconds(10));
 
-        var ensured = await client.EnsureSessionAsync(ChannelType.Tui);
+        var ensured = await client.EnsureSessionAsync(ChannelType.Tui, TestContext.Current.CancellationToken);
         Assert.Equal(sessionId, ensured);
 
         await client.SendAsync(new ChannelInput
@@ -73,7 +73,7 @@ public sealed class DaemonClientReconnectIntegrationTests
             SenderId = "test",
             Contents = [new TextContent("after")],
             ReceivedAt = DateTimeOffset.UtcNow
-        });
+        }, TestContext.Current.CancellationToken);
 
         await WaitFor(reconnectedOutput.Task, TimeSpan.FromSeconds(5));
     }
@@ -126,17 +126,17 @@ public sealed class DaemonClientReconnectIntegrationTests
                 secondResponseReceived.TrySetResult();
         });
 
-        await client.CreateSessionAsync(ChannelType.Tui);
+        await client.CreateSessionAsync(ChannelType.Tui, TestContext.Current.CancellationToken);
         await client.SendAsync(new ChannelInput
         {
             SenderId = "test",
             Contents = [new TextContent("first")],
             ReceivedAt = DateTimeOffset.UtcNow
-        });
+        }, TestContext.Current.CancellationToken);
 
         await WaitFor(firstResponseReceived.Task, TimeSpan.FromSeconds(5));
 
-        await host1.StopAsync();
+        await host1.StopAsync(TestContext.Current.CancellationToken);
         host1.Dispose();
 
         // Wait for the client to observe Disconnected (auto-reconnect exhausted,
@@ -152,13 +152,13 @@ public sealed class DaemonClientReconnectIntegrationTests
 
         await WaitFor(reconnectedAfterRestart.Task, TimeSpan.FromSeconds(15));
 
-        await client.EnsureSessionAsync(ChannelType.Tui);
+        await client.EnsureSessionAsync(ChannelType.Tui, TestContext.Current.CancellationToken);
         await client.SendAsync(new ChannelInput
         {
             SenderId = "test",
             Contents = [new TextContent("second")],
             ReceivedAt = DateTimeOffset.UtcNow
-        });
+        }, TestContext.Current.CancellationToken);
 
         await WaitFor(secondResponseReceived.Task, TimeSpan.FromSeconds(10));
 

@@ -10,7 +10,7 @@ public class NoOpSkillContentScannerTests
     {
         var scanner = new NoOpSkillContentScanner();
 
-        var result = await scanner.ScanAsync("test-skill", "any content here");
+        var result = await scanner.ScanAsync("test-skill", "any content here", TestContext.Current.CancellationToken);
 
         Assert.Equal(ScanVerdict.Allowed, result.Verdict);
         Assert.True(result.IsAllowed);

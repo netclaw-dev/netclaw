@@ -80,8 +80,8 @@ public class ModalityGateTextOnlyTests : TestKit
             SessionId = sessionId,
             Subscriber = subscriber,
             Filter = OutputFilter.Full
-        }, TimeSpan.FromSeconds(5));
-        await subscriber.ExpectMsgAsync<SessionJoined>(); // Drain subscriber notification
+        }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken); // Drain subscriber notification
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
@@ -96,17 +96,17 @@ public class ModalityGateTextOnlyTests : TestKit
                     Modality = (int)MediaModality.Image
                 }
             }
-        }, TimeSpan.FromSeconds(5));
+        }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         // Should receive the "images removed" acknowledgement
-        var ack = await subscriber.ExpectMsgAsync<TextOutput>();
+        var ack = await subscriber.ExpectMsgAsync<TextOutput>(cancellationToken: TestContext.Current.CancellationToken);
         Assert.Contains("Images removed", ack.Text);
 
         // The LLM should still be called with the text content
-        var textOutput = await subscriber.ExpectMsgAsync<TextOutput>();
+        var textOutput = await subscriber.ExpectMsgAsync<TextOutput>(cancellationToken: TestContext.Current.CancellationToken);
         Assert.Contains("fake", textOutput.Text, StringComparison.OrdinalIgnoreCase);
 
-        await subscriber.ExpectMsgAsync<TurnCompleted>();
+        await subscriber.ExpectMsgAsync<TurnCompleted>(cancellationToken: TestContext.Current.CancellationToken);
 
         // LLM was called (text was sent through despite images being stripped)
         Assert.Equal(1, _fakeChatClient.CallCount);
@@ -124,8 +124,8 @@ public class ModalityGateTextOnlyTests : TestKit
             SessionId = sessionId,
             Subscriber = subscriber,
             Filter = OutputFilter.Full
-        }, TimeSpan.FromSeconds(5));
-        await subscriber.ExpectMsgAsync<SessionJoined>(); // Drain subscriber notification
+        }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken); // Drain subscriber notification
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
@@ -140,17 +140,17 @@ public class ModalityGateTextOnlyTests : TestKit
                     Modality = (int)MediaModality.Image
                 }
             }
-        }, TimeSpan.FromSeconds(5));
+        }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         // Should receive the "images removed" acknowledgement first
-        var stripped = await subscriber.ExpectMsgAsync<TextOutput>();
+        var stripped = await subscriber.ExpectMsgAsync<TextOutput>(cancellationToken: TestContext.Current.CancellationToken);
         Assert.Contains("Images removed", stripped.Text);
 
         // Then the "only images" explanation
-        var explanation = await subscriber.ExpectMsgAsync<TextOutput>();
+        var explanation = await subscriber.ExpectMsgAsync<TextOutput>(cancellationToken: TestContext.Current.CancellationToken);
         Assert.Contains("only images", explanation.Text, StringComparison.OrdinalIgnoreCase);
 
-        var tc = await subscriber.ExpectMsgAsync<TurnCompleted>();
+        var tc = await subscriber.ExpectMsgAsync<TurnCompleted>(cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(TurnOutcome.Skipped, tc.Outcome);
 
         // LLM was NOT called
@@ -223,8 +223,8 @@ public class ModalityGateVisionTests : TestKit
             SessionId = sessionId,
             Subscriber = subscriber,
             Filter = OutputFilter.Full
-        }, TimeSpan.FromSeconds(5));
-        await subscriber.ExpectMsgAsync<SessionJoined>(); // Drain subscriber notification
+        }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken); // Drain subscriber notification
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
@@ -239,14 +239,14 @@ public class ModalityGateVisionTests : TestKit
                     Modality = (int)MediaModality.Image
                 }
             }
-        }, TimeSpan.FromSeconds(5));
+        }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         // Should NOT receive an "images removed" acknowledgement — go straight to LLM response
-        var textOutput = await subscriber.ExpectMsgAsync<TextOutput>();
+        var textOutput = await subscriber.ExpectMsgAsync<TextOutput>(cancellationToken: TestContext.Current.CancellationToken);
         Assert.Contains("fake", textOutput.Text, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("Images removed", textOutput.Text);
 
-        await subscriber.ExpectMsgAsync<TurnCompleted>();
+        await subscriber.ExpectMsgAsync<TurnCompleted>(cancellationToken: TestContext.Current.CancellationToken);
 
         // LLM was called
         Assert.Equal(1, _fakeChatClient.CallCount);

@@ -38,7 +38,7 @@ public class ModelCapabilityActorTests : TestKit
 
         var capActor = ActorRegistry.Get<ModelCapabilityActorKey>();
         var result = await capActor.Ask<ModelCapabilitiesResponse>(
-            new GetModelCapabilities("vision-model"), TimeSpan.FromSeconds(5));
+            new GetModelCapabilities("vision-model"), TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         Assert.Equal(ModelModality.Text | ModelModality.Image, result.InputModalities);
         Assert.Equal(ModelModality.Text, result.OutputModalities);
@@ -56,11 +56,11 @@ public class ModelCapabilityActorTests : TestKit
 
         // First query
         await capActor.Ask<ModelCapabilitiesResponse>(
-            new GetModelCapabilities("cached-model"), TimeSpan.FromSeconds(5));
+            new GetModelCapabilities("cached-model"), TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         // Second query — should come from cache
         var result = await capActor.Ask<ModelCapabilitiesResponse>(
-            new GetModelCapabilities("cached-model"), TimeSpan.FromSeconds(5));
+            new GetModelCapabilities("cached-model"), TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         Assert.Equal(ModelModality.Text | ModelModality.Audio, result.InputModalities);
         Assert.Equal(1, _resolver.CallCount); // only called once
@@ -73,7 +73,7 @@ public class ModelCapabilityActorTests : TestKit
 
         var capActor = ActorRegistry.Get<ModelCapabilityActorKey>();
         var result = await capActor.Ask<ModelCapabilitiesResponse>(
-            new GetModelCapabilities("failing-model"), TimeSpan.FromSeconds(5));
+            new GetModelCapabilities("failing-model"), TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         Assert.Equal(ModelModality.Text, result.InputModalities);
         Assert.Equal(ModelModality.Text, result.OutputModalities);

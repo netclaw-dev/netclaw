@@ -42,7 +42,7 @@ public class SetReminderToolTests : TestKit
             return result;
         });
 
-        var cmd = await probe.ExpectMsgAsync<SaveReminderCommand>(TimeSpan.FromSeconds(5));
+        var cmd = await probe.ExpectMsgAsync<SaveReminderCommand>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal("test-reminder", cmd.Definition.Id);
         Assert.Equal("Check the server", cmd.Definition.Instructions);
         Assert.Equal(ReminderScheduleType.OneShot, cmd.Definition.Schedule.Type);
@@ -81,7 +81,7 @@ public class SetReminderToolTests : TestKit
             return result;
         });
 
-        var cmd = await probe.ExpectMsgAsync<SaveReminderCommand>(TimeSpan.FromSeconds(5));
+        var cmd = await probe.ExpectMsgAsync<SaveReminderCommand>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal("interval-check", cmd.Definition.Id);
         Assert.Equal(ReminderScheduleType.Interval, cmd.Definition.Schedule.Type);
         Assert.Equal(TimeSpan.FromHours(2), cmd.Definition.Schedule.Interval);
@@ -115,7 +115,7 @@ public class SetReminderToolTests : TestKit
             return result;
         });
 
-        var cmd = await probe.ExpectMsgAsync<SaveReminderCommand>(TimeSpan.FromSeconds(5));
+        var cmd = await probe.ExpectMsgAsync<SaveReminderCommand>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal("cron-check", cmd.Definition.Id);
         Assert.Equal(ReminderScheduleType.Cron, cmd.Definition.Schedule.Type);
         Assert.Equal("0 */6 * * *", cmd.Definition.Schedule.CronExpression);
@@ -143,11 +143,11 @@ public class SetReminderToolTests : TestKit
             ["Prompt"] = "Test",
             ["ScheduleType"] = "cron",
             ["Schedule"] = "not valid cron"
-        });
+        }, TestContext.Current.CancellationToken);
 
         Assert.Contains("Error:", result);
         Assert.Contains("Invalid cron expression", result);
-        await probe.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(100));
+        await probe.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(100), TestContext.Current.CancellationToken);
     }
 
     [Fact]
@@ -163,7 +163,7 @@ public class SetReminderToolTests : TestKit
             ["Prompt"] = "Test",
             ["ScheduleType"] = "weekly",
             ["Schedule"] = "1h"
-        });
+        }, TestContext.Current.CancellationToken);
 
         Assert.Contains("Error:", result);
         Assert.Contains("Unknown schedule type", result);
@@ -182,7 +182,7 @@ public class SetReminderToolTests : TestKit
             ["Prompt"] = "Test",
             ["ScheduleType"] = "interval",
             ["Schedule"] = "10s"
-        });
+        }, TestContext.Current.CancellationToken);
 
         Assert.Contains("Error:", result);
         Assert.Contains("Minimum interval", result);
@@ -208,7 +208,7 @@ public class SetReminderToolTests : TestKit
             return result;
         });
 
-        var cmd = await probe.ExpectMsgAsync<SaveReminderCommand>(TimeSpan.FromSeconds(5));
+        var cmd = await probe.ExpectMsgAsync<SaveReminderCommand>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal("self-target", cmd.Definition.Id);
         Assert.Equal("C0123ABC", cmd.Definition.ReportToChannel);
         Assert.Equal("1234567890.123456", cmd.Definition.ReportToThreadTs);
@@ -243,7 +243,7 @@ public class SetReminderToolTests : TestKit
             return result;
         });
 
-        var cmd = await probe.ExpectMsgAsync<SaveReminderCommand>(TimeSpan.FromSeconds(5));
+        var cmd = await probe.ExpectMsgAsync<SaveReminderCommand>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal("ram-price-tracking", cmd.Definition.Id);
         Assert.Equal("RAM Price Tracking", cmd.Definition.Title);
         Assert.Equal(ReminderWriteMode.Upsert, cmd.WriteMode);

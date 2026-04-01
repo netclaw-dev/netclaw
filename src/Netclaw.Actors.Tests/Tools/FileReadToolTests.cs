@@ -30,7 +30,7 @@ public class FileReadToolTests : IDisposable
     public async Task Read_existing_file_returns_content()
     {
         var filePath = Path.Combine(_tempDir, "test.txt");
-        await File.WriteAllTextAsync(filePath, "hello world");
+        await File.WriteAllTextAsync(filePath, "hello world", TestContext.Current.CancellationToken);
 
         var args = new Dictionary<string, object?> { ["Path"] = filePath };
         var result = await _tool.ExecuteAsync(args, CreatePersonalContext(), CancellationToken.None);
@@ -54,7 +54,7 @@ public class FileReadToolTests : IDisposable
     {
         var filePath = Path.Combine(_tempDir, "lines.txt");
         var lines = Enumerable.Range(1, 10).Select(i => $"Line {i}");
-        await File.WriteAllLinesAsync(filePath, lines);
+        await File.WriteAllLinesAsync(filePath, lines, TestContext.Current.CancellationToken);
 
         var args = new Dictionary<string, object?>
         {
@@ -76,7 +76,7 @@ public class FileReadToolTests : IDisposable
     {
         var tool = new FileReadTool(new ToolConfig { MaxOutputChars = 100 });
         var filePath = Path.Combine(_tempDir, "large.txt");
-        await File.WriteAllTextAsync(filePath, new string('x', 500));
+        await File.WriteAllTextAsync(filePath, new string('x', 500), TestContext.Current.CancellationToken);
 
         var args = new Dictionary<string, object?> { ["Path"] = filePath };
         var result = await tool.ExecuteAsync(args, CreatePersonalContext(), CancellationToken.None);
@@ -105,7 +105,7 @@ public class FileReadToolTests : IDisposable
     public async Task Read_denied_path_returns_access_denied()
     {
         var filePath = Path.Combine(_tempDir, "secrets.json");
-        await File.WriteAllTextAsync(filePath, """{"secret": "value"}""");
+        await File.WriteAllTextAsync(filePath, """{"secret": "value"}""", TestContext.Current.CancellationToken);
 
         var policy = new ToolPathPolicy([filePath]);
         var tool = new FileReadTool(new ToolConfig(), policy);
@@ -121,7 +121,7 @@ public class FileReadToolTests : IDisposable
     public async Task Public_context_can_read_file_inside_session_directory()
     {
         var filePath = Path.Combine(_sessionDir, "public-note.txt");
-        await File.WriteAllTextAsync(filePath, "session scoped");
+        await File.WriteAllTextAsync(filePath, "session scoped", TestContext.Current.CancellationToken);
 
         var args = new Dictionary<string, object?> { ["Path"] = filePath };
         var result = await _tool.ExecuteAsync(args, CreatePublicContext(), CancellationToken.None);
@@ -133,7 +133,7 @@ public class FileReadToolTests : IDisposable
     public async Task Public_context_cannot_read_file_outside_session_directory()
     {
         var filePath = Path.Combine(_tempDir, "host-secret.txt");
-        await File.WriteAllTextAsync(filePath, "do not read");
+        await File.WriteAllTextAsync(filePath, "do not read", TestContext.Current.CancellationToken);
 
         var args = new Dictionary<string, object?> { ["Path"] = filePath };
         var result = await _tool.ExecuteAsync(args, CreatePublicContext(), CancellationToken.None);
@@ -150,7 +150,7 @@ public class FileReadToolTests : IDisposable
         Directory.CreateDirectory(skillsDir);
         var skillFile = Path.Combine(skillsDir, "test-skill", "SKILL.md");
         Directory.CreateDirectory(Path.GetDirectoryName(skillFile)!);
-        await File.WriteAllTextAsync(skillFile, "# Test Skill");
+        await File.WriteAllTextAsync(skillFile, "# Test Skill", TestContext.Current.CancellationToken);
 
         var paths = new NetclawPaths(_tempDir);
         var tool = new FileReadTool(new ToolConfig(), paths: paths);
@@ -167,7 +167,7 @@ public class FileReadToolTests : IDisposable
         var identityDir = Path.Combine(_tempDir, "identity");
         Directory.CreateDirectory(identityDir);
         var soulFile = Path.Combine(identityDir, "SOUL.md");
-        await File.WriteAllTextAsync(soulFile, "# Soul");
+        await File.WriteAllTextAsync(soulFile, "# Soul", TestContext.Current.CancellationToken);
 
         var paths = new NetclawPaths(_tempDir);
         var tool = new FileReadTool(new ToolConfig(), paths: paths);
@@ -183,7 +183,7 @@ public class FileReadToolTests : IDisposable
     {
         var secretFile = Path.Combine(_tempDir, "config", "secrets.json");
         Directory.CreateDirectory(Path.GetDirectoryName(secretFile)!);
-        await File.WriteAllTextAsync(secretFile, "secret data");
+        await File.WriteAllTextAsync(secretFile, "secret data", TestContext.Current.CancellationToken);
 
         var paths = new NetclawPaths(_tempDir);
         var tool = new FileReadTool(new ToolConfig(), paths: paths);
@@ -202,7 +202,7 @@ public class FileReadToolTests : IDisposable
         Directory.CreateDirectory(skillsDir);
         var skillFile = Path.Combine(skillsDir, "test-skill", "SKILL.md");
         Directory.CreateDirectory(Path.GetDirectoryName(skillFile)!);
-        await File.WriteAllTextAsync(skillFile, "# Test Skill");
+        await File.WriteAllTextAsync(skillFile, "# Test Skill", TestContext.Current.CancellationToken);
 
         // No paths injected — no global read roots
         var tool = new FileReadTool(new ToolConfig());
@@ -219,7 +219,7 @@ public class FileReadToolTests : IDisposable
         var sharedDir = Path.Combine(_tempDir, "shared-data");
         Directory.CreateDirectory(sharedDir);
         var dataFile = Path.Combine(sharedDir, "data.txt");
-        await File.WriteAllTextAsync(dataFile, "shared content");
+        await File.WriteAllTextAsync(dataFile, "shared content", TestContext.Current.CancellationToken);
 
         var config = new ToolConfig
         {
@@ -243,7 +243,7 @@ public class FileReadToolTests : IDisposable
         var sharedDir = Path.Combine(_tempDir, "shared-data");
         Directory.CreateDirectory(sharedDir);
         var dataFile = Path.Combine(sharedDir, "data.txt");
-        await File.WriteAllTextAsync(dataFile, "shared content");
+        await File.WriteAllTextAsync(dataFile, "shared content", TestContext.Current.CancellationToken);
 
         var config = new ToolConfig
         {

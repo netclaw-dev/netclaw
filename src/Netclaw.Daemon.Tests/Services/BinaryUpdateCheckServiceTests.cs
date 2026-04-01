@@ -127,7 +127,7 @@ public sealed class BinaryUpdateCheckServiceTests : IDisposable
 
         using var httpClient = new HttpClient(handler);
         var result = await UpdateCheckService.CheckForUpdateAsync(
-            httpClient, "0.1.0");
+            httpClient, "0.1.0", TestContext.Current.CancellationToken);
 
         Assert.True(result.IsUpdateAvailable);
         Assert.Equal("0.1.0", result.CurrentVersion);
@@ -143,7 +143,7 @@ public sealed class BinaryUpdateCheckServiceTests : IDisposable
 
         using var httpClient = new HttpClient(handler);
         var result = await UpdateCheckService.CheckForUpdateAsync(
-            httpClient, "0.1.0");
+            httpClient, "0.1.0", TestContext.Current.CancellationToken);
 
         Assert.False(result.IsUpdateAvailable);
     }
@@ -156,7 +156,7 @@ public sealed class BinaryUpdateCheckServiceTests : IDisposable
 
         using var httpClient = new HttpClient(handler);
         var result = await UpdateCheckService.CheckForUpdateAsync(
-            httpClient, "0.2.0");
+            httpClient, "0.2.0", TestContext.Current.CancellationToken);
 
         Assert.False(result.IsUpdateAvailable);
     }
@@ -169,7 +169,7 @@ public sealed class BinaryUpdateCheckServiceTests : IDisposable
 
         using var httpClient = new HttpClient(handler);
         var result = await UpdateCheckService.CheckForUpdateAsync(
-            httpClient, "0.1.0");
+            httpClient, "0.1.0", TestContext.Current.CancellationToken);
 
         Assert.False(result.IsUpdateAvailable);
         Assert.Equal("0.1.0", result.CurrentVersion);
@@ -183,7 +183,7 @@ public sealed class BinaryUpdateCheckServiceTests : IDisposable
 
         using var httpClient = new HttpClient(handler);
         var result = await UpdateCheckService.CheckForUpdateAsync(
-            httpClient, "0.1.0");
+            httpClient, "0.1.0", TestContext.Current.CancellationToken);
 
         Assert.True(result.IsUpdateAvailable);
         Assert.Equal("0.2.0", result.LatestVersion);
@@ -199,7 +199,7 @@ public sealed class BinaryUpdateCheckServiceTests : IDisposable
 
         using var httpClient = new HttpClient(handler);
         var result = await UpdateCheckService.CheckForUpdateAsync(
-            httpClient, "0.1.0");
+            httpClient, "0.1.0", TestContext.Current.CancellationToken);
 
         // Signature failure treated as network failure → no update
         Assert.False(result.IsUpdateAvailable);
@@ -214,7 +214,7 @@ public sealed class BinaryUpdateCheckServiceTests : IDisposable
         // No signature URL → 404
 
         using var httpClient = new HttpClient(handler);
-        var result = await UpdateCheckService.FetchVerifiedManifestAsync(httpClient);
+        var result = await UpdateCheckService.FetchVerifiedManifestAsync(httpClient, TestContext.Current.CancellationToken);
 
         Assert.False(result.IsSuccess);
         Assert.Equal(ManifestFetchStatus.SignatureFailure, result.Status);
@@ -234,7 +234,7 @@ public sealed class BinaryUpdateCheckServiceTests : IDisposable
         handler.AddResponse(FeedConstants.BinaryManifestSignatureUrl, HttpStatusCode.OK, wrongSig, "text/plain");
 
         using var httpClient = new HttpClient(handler);
-        var result = await UpdateCheckService.FetchVerifiedManifestAsync(httpClient);
+        var result = await UpdateCheckService.FetchVerifiedManifestAsync(httpClient, TestContext.Current.CancellationToken);
 
         Assert.False(result.IsSuccess);
         Assert.Equal(ManifestFetchStatus.SignatureFailure, result.Status);

@@ -85,7 +85,7 @@ public sealed class DaemonRuntimeStatusServiceTests : IAsyncLifetime
             modelSelection: DefaultModelSelection,
             paths: CreatePaths());
 
-        var status = await service.GetStatusAsync();
+        var status = await service.GetStatusAsync(TestContext.Current.CancellationToken);
         var slack = status.Connectors.Single(c => c.Key == "slack");
 
         Assert.False(slack.Enabled);
@@ -106,7 +106,7 @@ public sealed class DaemonRuntimeStatusServiceTests : IAsyncLifetime
             modelSelection: DefaultModelSelection,
             paths: CreatePaths());
 
-        var status = await service.GetStatusAsync();
+        var status = await service.GetStatusAsync(TestContext.Current.CancellationToken);
         var slack = status.Connectors.Single(c => c.Key == "slack");
 
         Assert.True(slack.Enabled);
@@ -127,7 +127,7 @@ public sealed class DaemonRuntimeStatusServiceTests : IAsyncLifetime
             modelSelection: DefaultModelSelection,
             paths: CreatePaths());
 
-        var status = await service.GetStatusAsync();
+        var status = await service.GetStatusAsync(TestContext.Current.CancellationToken);
 
         var model = Assert.IsType<Netclaw.Configuration.DaemonRuntimeStatus.Model>(status.Model);
         Assert.Equal("test-model", model.ModelId);
@@ -188,7 +188,7 @@ public sealed class DaemonRuntimeStatusServiceTests : IAsyncLifetime
                 paths: CreatePaths(),
                 mcpClientManager: manager);
 
-            var status = await service.GetStatusAsync();
+            var status = await service.GetStatusAsync(TestContext.Current.CancellationToken);
 
             var disabled = status.Connectors.Single(c => c.Key == "mcp:browser_disabled");
             Assert.False(disabled.Enabled);
@@ -238,7 +238,7 @@ public sealed class DaemonRuntimeStatusServiceTests : IAsyncLifetime
         paths.EnsureDirectoriesExist();
 
         var sqliteStore = new SQLiteMemoryStore(paths.MemorySqliteDbPath, TimeProvider.System);
-        await sqliteStore.InitializeAsync();
+        await sqliteStore.InitializeAsync(TestContext.Current.CancellationToken);
 
         var service = new DaemonRuntimeStatusService(
             new DaemonStartClock(TimeProvider.System),
@@ -252,7 +252,7 @@ public sealed class DaemonRuntimeStatusServiceTests : IAsyncLifetime
             paths: paths,
             sqliteMemoryStore: sqliteStore);
 
-        var status = await service.GetStatusAsync();
+        var status = await service.GetStatusAsync(TestContext.Current.CancellationToken);
 
         Assert.NotNull(status.Memory);
         Assert.Equal("sqlite", status.Memory.Provider);
@@ -284,7 +284,7 @@ public sealed class DaemonRuntimeStatusServiceTests : IAsyncLifetime
             modelSelection: DefaultModelSelection,
             paths: CreatePaths());
 
-        var status = await service.GetStatusAsync();
+        var status = await service.GetStatusAsync(TestContext.Current.CancellationToken);
 
         Assert.NotNull(status.Telemetry.SlackCounters);
         Assert.True(status.Telemetry.SlackCounters!.EventsReceived >= before.SlackEventsReceived + 1);

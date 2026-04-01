@@ -21,7 +21,7 @@ public sealed class OpenAiCompatibleChatClientTests
         var endpoint = OpenAiCompatibleEndpoint.FromBaseUrl("http://localhost:8000");
         var client = new OpenAiCompatibleChatClient(httpClient, endpoint, "test-model");
 
-        var response = await client.GetResponseAsync([new ChatMessage(ChatRole.User, "hello")]);
+        var response = await client.GetResponseAsync([new ChatMessage(ChatRole.User, "hello")], cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal("/v1/chat/completions", handler.Requests.Single().RequestUri!.AbsolutePath);
         Assert.Equal("hi", response.Text);
@@ -52,7 +52,7 @@ data: [DONE]
         var client = new OpenAiCompatibleChatClient(httpClient, endpoint, "test-model");
 
         var updates = new List<ChatResponseUpdate>();
-        await foreach (var update in client.GetStreamingResponseAsync([new ChatMessage(ChatRole.User, "hello")]))
+        await foreach (var update in client.GetStreamingResponseAsync([new ChatMessage(ChatRole.User, "hello")], cancellationToken: TestContext.Current.CancellationToken))
             updates.Add(update);
 
         Assert.Equal(3, updates.Count);
@@ -84,7 +84,7 @@ data: [DONE]
 
         await client.GetResponseAsync(
             [new ChatMessage(ChatRole.User, "hello")],
-            new ChatOptions { Tools = [tool] });
+            new ChatOptions { Tools = [tool] }, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.NotNull(body);
         Assert.Contains("\"tools\":[{\"type\":\"function\"", body, StringComparison.Ordinal);
@@ -113,7 +113,7 @@ data: [DONE]
             new ChatMessage(ChatRole.System, "first system"),
             new ChatMessage(ChatRole.System, "second system"),
             new ChatMessage(ChatRole.User, "hello")
-        ]);
+        ], cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.NotNull(body);
         Assert.Contains("\"messages\":[{\"role\":\"system\",\"content\":\"first system\\n\\nsecond system\"},{\"role\":\"user\",\"content\":\"hello\"}]", body, StringComparison.Ordinal);
@@ -144,7 +144,7 @@ data: [DONE]
         var client = new OpenAiCompatibleChatClient(httpClient, endpoint, "test-model");
 
         var updates = new List<ChatResponseUpdate>();
-        await foreach (var update in client.GetStreamingResponseAsync([new ChatMessage(ChatRole.User, "hello")]))
+        await foreach (var update in client.GetStreamingResponseAsync([new ChatMessage(ChatRole.User, "hello")], cancellationToken: TestContext.Current.CancellationToken))
             updates.Add(update);
 
         Assert.Contains(updates, u => u.Contents.OfType<TextContent>().Any(c => c.Text == "I'll check. "));
@@ -190,7 +190,7 @@ data: [DONE]
             assistantWithToolCall,
             toolResult,
             new ChatMessage(ChatRole.User, "Thanks, and what about 3+3?")
-        ]);
+        ], cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.NotNull(body);
 
@@ -227,7 +227,7 @@ data: [DONE]
         var endpoint = OpenAiCompatibleEndpoint.FromBaseUrl("http://localhost:8000");
         var client = new OpenAiCompatibleChatClient(httpClient, endpoint, "test-model");
 
-        var response = await client.GetResponseAsync([new ChatMessage(ChatRole.User, "save this")]);
+        var response = await client.GetResponseAsync([new ChatMessage(ChatRole.User, "save this")], cancellationToken: TestContext.Current.CancellationToken);
 
         var toolCall = Assert.Single(response.Messages[^1].Contents.OfType<FunctionCallContent>());
         Assert.Equal("store_memory", toolCall.Name);
@@ -434,7 +434,7 @@ data: [DONE]
         var client = new OpenAiCompatibleChatClient(httpClient, endpoint, "test-model");
 
         var updates = new List<ChatResponseUpdate>();
-        await foreach (var update in client.GetStreamingResponseAsync([new ChatMessage(ChatRole.User, "search test")]))
+        await foreach (var update in client.GetStreamingResponseAsync([new ChatMessage(ChatRole.User, "search test")], cancellationToken: TestContext.Current.CancellationToken))
             updates.Add(update);
 
         // Should NOT contain any TextContent with XML tool call tags
@@ -476,7 +476,7 @@ data: [DONE]
                 new TextContent("What is this?"),
                 new DataContent(imageBytes, "image/png")
             ])
-        ]);
+        ], cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.NotNull(body);
         Assert.Contains("\"type\":\"text\"", body, StringComparison.Ordinal);
@@ -533,7 +533,7 @@ data: [DONE]
         var client = new OpenAiCompatibleChatClient(httpClient, endpoint, "test-model");
 
         var ex = await Assert.ThrowsAsync<Netclaw.Configuration.ProviderException>(
-            () => client.GetResponseAsync([new ChatMessage(ChatRole.User, "hello")]));
+            async () => await client.GetResponseAsync([new ChatMessage(ChatRole.User, "hello")], cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Contains("model not found", ex.UserMessage, StringComparison.Ordinal);
         Assert.Equal(404, ex.StatusCode);
@@ -555,7 +555,7 @@ data: [DONE]
         var endpoint = OpenAiCompatibleEndpoint.FromBaseUrl("http://localhost:8000");
         var client = new OpenAiCompatibleChatClient(httpClient, endpoint, "test-model");
 
-        var response = await client.GetResponseAsync([new ChatMessage(ChatRole.User, "hello")]);
+        var response = await client.GetResponseAsync([new ChatMessage(ChatRole.User, "hello")], cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.NotNull(response.Usage);
         Assert.Equal(100, response.Usage!.InputTokenCount);
@@ -584,7 +584,7 @@ data: [DONE]
         var client = new OpenAiCompatibleChatClient(httpClient, endpoint, "test-model");
 
         var updates = new List<ChatResponseUpdate>();
-        await foreach (var update in client.GetStreamingResponseAsync([new ChatMessage(ChatRole.User, "hello")]))
+        await foreach (var update in client.GetStreamingResponseAsync([new ChatMessage(ChatRole.User, "hello")], cancellationToken: TestContext.Current.CancellationToken))
             updates.Add(update);
 
         var usageContents = updates.SelectMany(u => u.Contents.OfType<UsageContent>()).ToList();
@@ -617,7 +617,7 @@ data: [DONE]
         var client = new OpenAiCompatibleChatClient(httpClient, endpoint, "test-model");
 
         var updates = new List<ChatResponseUpdate>();
-        await foreach (var update in client.GetStreamingResponseAsync([new ChatMessage(ChatRole.User, "hello")]))
+        await foreach (var update in client.GetStreamingResponseAsync([new ChatMessage(ChatRole.User, "hello")], cancellationToken: TestContext.Current.CancellationToken))
             updates.Add(update);
 
         var usageContents = updates.SelectMany(u => u.Contents.OfType<UsageContent>()).ToList();
@@ -651,7 +651,7 @@ data: [DONE]
         var endpoint = OpenAiCompatibleEndpoint.FromBaseUrl("http://localhost:8000");
         var client = new OpenAiCompatibleChatClient(httpClient, endpoint, "test-model");
 
-        await foreach (var _ in client.GetStreamingResponseAsync([new ChatMessage(ChatRole.User, "hello")]))
+        await foreach (var _ in client.GetStreamingResponseAsync([new ChatMessage(ChatRole.User, "hello")], cancellationToken: TestContext.Current.CancellationToken))
         {
             // consume
         }

@@ -370,9 +370,9 @@ public sealed class ProviderManagerViewModelTests : IDisposable
         vm.SubmitFixCredentials();
 
         // Wait for the single-provider probe to complete
-        await vm.ProbeCompletion!.WaitAsync(TimeSpan.FromSeconds(5));
+        await vm.ProbeCompletion!.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
         // Fix flow triggers RefreshAndProbeAll — wait for the eager re-probe too
-        await vm.EagerProbeCompletion!.WaitAsync(TimeSpan.FromSeconds(5));
+        await vm.EagerProbeCompletion!.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         Assert.Equal(ProviderManagerState.List, vm.CurrentState.Value);
         Assert.False(vm.IsFixFlow);
@@ -425,12 +425,12 @@ public sealed class ProviderManagerViewModelTests : IDisposable
         vm.NewApiKey = "sk-test-key";
         vm.SubmitCredentials();
 
-        await vm.ProbeCompletion!.WaitAsync(TimeSpan.FromSeconds(5));
+        await vm.ProbeCompletion!.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         vm.ConfirmAdd();
 
         // ConfirmAdd triggers RefreshAndProbeAll — wait for re-probe
-        await vm.EagerProbeCompletion!.WaitAsync(TimeSpan.FromSeconds(5));
+        await vm.EagerProbeCompletion!.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         Assert.Equal(ProviderManagerState.List, vm.CurrentState.Value);
 
@@ -461,7 +461,7 @@ public sealed class ProviderManagerViewModelTests : IDisposable
 
         vm.NewApiKey = "sk-test";
         vm.SubmitCredentials();
-        await vm.ProbeCompletion!.WaitAsync(TimeSpan.FromSeconds(5));
+        await vm.ProbeCompletion!.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         Assert.False(vm.IsProbing.Value);
         Assert.NotNull(vm.ProbeResult.Value);
@@ -491,7 +491,7 @@ public sealed class ProviderManagerViewModelTests : IDisposable
         });
 
         vm.SubmitCredentials();
-        await vm.ProbeCompletion!.WaitAsync(TimeSpan.FromSeconds(5));
+        await vm.ProbeCompletion!.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         Assert.Equal(false, isProbingAtResultPublish);
         Assert.False(vm.IsProbing.Value);
@@ -513,7 +513,7 @@ public sealed class ProviderManagerViewModelTests : IDisposable
         Assert.False(File.Exists(_paths.SecretsPath));
 
         vm.ConfirmAdd();
-        await vm.EagerProbeCompletion!.WaitAsync(TimeSpan.FromSeconds(5));
+        await vm.EagerProbeCompletion!.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         Assert.True(File.Exists(_paths.SecretsPath));
 

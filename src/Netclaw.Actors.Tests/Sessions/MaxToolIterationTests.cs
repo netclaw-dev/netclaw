@@ -110,26 +110,26 @@ public class MaxToolIterationTests : TestKit
             SessionId = sessionId,
             Subscriber = subscriber,
             Filter = OutputFilter.Full
-        }, TimeSpan.FromSeconds(3));
-        await subscriber.ExpectMsgAsync<SessionJoined>(); // Drain subscriber notification
+        }, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken); // Drain subscriber notification
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = sessionId,
             Content = "Keep calling tools forever"
-        }, TimeSpan.FromSeconds(3));
+        }, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
 
         // Expect 3 rounds of tool calls (the configured limit)
         for (var i = 0; i < 3; i++)
         {
-            await subscriber.ExpectMsgAsync<ToolCallOutput>(TimeSpan.FromSeconds(3));
+            await subscriber.ExpectMsgAsync<ToolCallOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
         }
 
         // After circuit breaker fires, LLM is called without tools → text response
-        var text = await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(5));
+        var text = await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Contains("fake", text.Text, StringComparison.OrdinalIgnoreCase);
 
-        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
+        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
 
         // 4 LLM calls total: 3 returned tool calls + 1 forced text (no tools)
         Assert.Equal(4, _fakeChatClient.CallCount);
@@ -159,23 +159,23 @@ public class MaxToolIterationTests : TestKit
             SessionId = sessionId,
             Subscriber = subscriber,
             Filter = OutputFilter.Full
-        }, TimeSpan.FromSeconds(3));
-        await subscriber.ExpectMsgAsync<SessionJoined>();
+        }, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = sessionId,
             Content = "Keep calling tools even when disabled"
-        }, TimeSpan.FromSeconds(3));
+        }, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
 
         for (var i = 0; i < 3; i++)
-            await subscriber.ExpectMsgAsync<ToolCallOutput>(TimeSpan.FromSeconds(3));
+            await subscriber.ExpectMsgAsync<ToolCallOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
 
-        var error = await subscriber.ExpectMsgAsync<ErrorOutput>(TimeSpan.FromSeconds(5));
+        var error = await subscriber.ExpectMsgAsync<ErrorOutput>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(ErrorCategory.ProviderFailure, error.Category);
         Assert.Contains("tool calls", error.Message, StringComparison.OrdinalIgnoreCase);
 
-        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
+        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(4, _fakeChatClient.CallCount);
         Assert.Equal(3, _fakeToolExecutor.CallCount);
@@ -202,32 +202,32 @@ public class MaxToolIterationTests : TestKit
             SessionId = sessionId,
             Subscriber = subscriber,
             Filter = OutputFilter.Full
-        }, TimeSpan.FromSeconds(3));
-        await subscriber.ExpectMsgAsync<SessionJoined>(); // Drain subscriber notification
+        }, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken); // Drain subscriber notification
 
         // Turn 1: hits the limit at 3
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = sessionId,
             Content = "First turn"
-        }, TimeSpan.FromSeconds(3));
+        }, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
 
         for (var i = 0; i < 3; i++)
-            await subscriber.ExpectMsgAsync<ToolCallOutput>(TimeSpan.FromSeconds(3));
-        await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(5));
-        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
+            await subscriber.ExpectMsgAsync<ToolCallOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
 
         // Turn 2: counter should be reset, so it also gets 3 tool iterations
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = sessionId,
             Content = "Second turn"
-        }, TimeSpan.FromSeconds(3));
+        }, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
 
         for (var i = 0; i < 3; i++)
-            await subscriber.ExpectMsgAsync<ToolCallOutput>(TimeSpan.FromSeconds(3));
-        await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(5));
-        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
+            await subscriber.ExpectMsgAsync<ToolCallOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
 
         // 8 LLM calls total: 2 turns × (3 tool + 1 text)
         Assert.Equal(8, _fakeChatClient.CallCount);
@@ -256,19 +256,19 @@ public class MaxToolIterationTests : TestKit
             SessionId = sessionId,
             Subscriber = subscriber,
             Filter = OutputFilter.Full
-        }, TimeSpan.FromSeconds(3));
-        await subscriber.ExpectMsgAsync<SessionJoined>(); // Drain subscriber notification
+        }, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken); // Drain subscriber notification
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = sessionId,
             Content = "Search for something"
-        }, TimeSpan.FromSeconds(3));
+        }, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
 
         // One tool call, then normal text response (well within limit of 3)
-        await subscriber.ExpectMsgAsync<ToolCallOutput>(TimeSpan.FromSeconds(3));
-        await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(5));
-        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
+        await subscriber.ExpectMsgAsync<ToolCallOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
 
         // 2 LLM calls: 1 tool call + 1 text
         Assert.Equal(2, _fakeChatClient.CallCount);

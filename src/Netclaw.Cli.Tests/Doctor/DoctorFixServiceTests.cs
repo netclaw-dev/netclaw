@@ -20,10 +20,10 @@ public sealed class DoctorFixServiceTests
                 "Enabled": true
               }
             }
-            """);
+            """, TestContext.Current.CancellationToken);
 
         var service = new DoctorFixService(paths);
-        var plan = await service.BuildPlanAsync();
+        var plan = await service.BuildPlanAsync(TestContext.Current.CancellationToken);
 
         Assert.True(plan.HasChanges);
         Assert.Single(plan.Fixes);
@@ -44,14 +44,14 @@ public sealed class DoctorFixServiceTests
                 "Enabled": true
               }
             }
-            """);
+            """, TestContext.Current.CancellationToken);
 
         var service = new DoctorFixService(paths);
-        var plan = await service.BuildPlanAsync();
+        var plan = await service.BuildPlanAsync(TestContext.Current.CancellationToken);
 
-        await service.ApplyAsync(plan);
+        await service.ApplyAsync(plan, TestContext.Current.CancellationToken);
 
-        var updated = await File.ReadAllTextAsync(paths.NetclawConfigPath);
+        var updated = await File.ReadAllTextAsync(paths.NetclawConfigPath, TestContext.Current.CancellationToken);
         Assert.Contains("\"configVersion\": 1", updated, StringComparison.Ordinal);
     }
 
@@ -74,10 +74,10 @@ public sealed class DoctorFixServiceTests
                 ]
               }
             }
-            """);
+            """, TestContext.Current.CancellationToken);
 
         var service = new DoctorFixService(paths);
-        var plan = await service.BuildPlanAsync();
+        var plan = await service.BuildPlanAsync(TestContext.Current.CancellationToken);
 
         Assert.True(plan.HasChanges);
         Assert.Single(plan.Fixes);
@@ -105,10 +105,10 @@ public sealed class DoctorFixServiceTests
                 }
               }
             }
-            """);
+            """, TestContext.Current.CancellationToken);
 
         var service = new DoctorFixService(paths);
-        var plan = await service.BuildPlanAsync();
+        var plan = await service.BuildPlanAsync(TestContext.Current.CancellationToken);
 
         Assert.True(plan.HasChanges);
         Assert.Single(plan.Fixes);
@@ -133,10 +133,10 @@ public sealed class DoctorFixServiceTests
                 "Enabled": true
               }
             }
-            """);
+            """, TestContext.Current.CancellationToken);
 
         var service = new DoctorFixService(paths);
-        var plan = await service.BuildPlanAsync();
+        var plan = await service.BuildPlanAsync(TestContext.Current.CancellationToken);
 
         Assert.True(plan.HasChanges);
         // Description should mention what was actually fixed

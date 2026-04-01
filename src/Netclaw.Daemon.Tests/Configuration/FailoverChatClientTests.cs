@@ -17,7 +17,7 @@ public sealed class FailoverChatClientTests
             Task.FromResult(new ChatResponse([new ChatMessage(ChatRole.Assistant, "fallback")])));
 
         var client = new FailoverChatClient(primary, fallback, NullLogger.Instance, NullNotificationSink.Instance, TimeProvider.System);
-        var response = await client.GetResponseAsync([new ChatMessage(ChatRole.User, "hi")]);
+        var response = await client.GetResponseAsync([new ChatMessage(ChatRole.User, "hi")], cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal("primary", response.Messages[0].Text);
     }
@@ -31,7 +31,7 @@ public sealed class FailoverChatClientTests
             Task.FromResult(new ChatResponse([new ChatMessage(ChatRole.Assistant, "fallback")])));
 
         var client = new FailoverChatClient(primary, fallback, NullLogger.Instance, NullNotificationSink.Instance, TimeProvider.System);
-        var response = await client.GetResponseAsync([new ChatMessage(ChatRole.User, "hi")]);
+        var response = await client.GetResponseAsync([new ChatMessage(ChatRole.User, "hi")], cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal("fallback", response.Messages[0].Text);
     }
@@ -47,7 +47,7 @@ public sealed class FailoverChatClientTests
         var client = new FailoverChatClient(primary, fallback, NullLogger.Instance, NullNotificationSink.Instance, TimeProvider.System);
 
         var ex = await Assert.ThrowsAsync<HttpRequestException>(() =>
-            client.GetResponseAsync([new ChatMessage(ChatRole.User, "hi")]));
+            client.GetResponseAsync([new ChatMessage(ChatRole.User, "hi")], cancellationToken: TestContext.Current.CancellationToken));
         Assert.Contains("fallback down", ex.Message);
     }
 
@@ -79,7 +79,7 @@ public sealed class FailoverChatClientTests
 
         var updates = new List<ChatResponseUpdate>();
         await foreach (var u in client.GetStreamingResponseAsync(
-            [new ChatMessage(ChatRole.User, "hi")]))
+            [new ChatMessage(ChatRole.User, "hi")], cancellationToken: TestContext.Current.CancellationToken))
         {
             updates.Add(u);
         }
@@ -105,7 +105,7 @@ public sealed class FailoverChatClientTests
 
         var updates = new List<ChatResponseUpdate>();
         await foreach (var u in client.GetStreamingResponseAsync(
-            [new ChatMessage(ChatRole.User, "hi")]))
+            [new ChatMessage(ChatRole.User, "hi")], cancellationToken: TestContext.Current.CancellationToken))
         {
             updates.Add(u);
         }
@@ -134,7 +134,7 @@ public sealed class FailoverChatClientTests
         var ex = await Assert.ThrowsAsync<HttpRequestException>(async () =>
         {
             await foreach (var u in client.GetStreamingResponseAsync(
-                [new ChatMessage(ChatRole.User, "hi")]))
+                [new ChatMessage(ChatRole.User, "hi")], cancellationToken: TestContext.Current.CancellationToken))
             {
                 updates.Add(u);
             }

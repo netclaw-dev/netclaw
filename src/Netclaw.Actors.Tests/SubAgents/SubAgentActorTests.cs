@@ -41,7 +41,7 @@ public class SubAgentActorTests : TestKit
 
         var result = await agent.Ask<SubAgentResult>(
             new RunSubAgent { Task = "Say hello", Timeout = TimeSpan.FromSeconds(5) },
-            TimeSpan.FromSeconds(5));
+            TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         Assert.True(result.Success);
         Assert.Contains("Response #1", result.Output);
@@ -67,7 +67,7 @@ public class SubAgentActorTests : TestKit
 
         var result = await agent.Ask<SubAgentResult>(
             new RunSubAgent { Task = "Greet the user", Timeout = TimeSpan.FromSeconds(5) },
-            TimeSpan.FromSeconds(5));
+            TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         Assert.True(result.Success);
         Assert.True(fakeTool.WasCalled);
@@ -93,7 +93,7 @@ public class SubAgentActorTests : TestKit
 
         var result = await agent.Ask<SubAgentResult>(
             new RunSubAgent { Task = "Loop forever", Timeout = TimeSpan.FromSeconds(10) },
-            TimeSpan.FromSeconds(10));
+            TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
 
         // After 10 tool iterations, forces a no-tools call which returns text
         Assert.True(result.Success);
@@ -113,7 +113,7 @@ public class SubAgentActorTests : TestKit
 
         var result = await agent.Ask<SubAgentResult>(
             new RunSubAgent { Task = "Slow task", Timeout = TimeSpan.FromMilliseconds(500) },
-            TimeSpan.FromSeconds(5));
+            TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         Assert.False(result.Success);
         Assert.Contains("timed out", result.Output, StringComparison.OrdinalIgnoreCase);
@@ -129,7 +129,7 @@ public class SubAgentActorTests : TestKit
 
         var result = await agent.Ask<SubAgentResult>(
             new RunSubAgent { Task = "Fail", Timeout = TimeSpan.FromSeconds(5) },
-            TimeSpan.FromSeconds(5));
+            TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         Assert.False(result.Success);
         Assert.Contains("LLM call failed", result.Output);
@@ -147,8 +147,8 @@ public class SubAgentActorTests : TestKit
         agent.Tell(new RunSubAgent { Task = "Done", Timeout = TimeSpan.FromSeconds(5) });
 
         // SubAgentResult arrives before Terminated — drain it first
-        await ExpectMsgAsync<SubAgentResult>();
-        await ExpectTerminatedAsync(agent, TimeSpan.FromSeconds(5));
+        await ExpectMsgAsync<SubAgentResult>(cancellationToken: TestContext.Current.CancellationToken);
+        await ExpectTerminatedAsync(agent, TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
     }
 
     [Fact]
@@ -182,7 +182,7 @@ public class SubAgentActorTests : TestKit
                 Timeout = TimeSpan.FromSeconds(5),
                 SessionScopeId = "session/subagent-scope"
             },
-            TimeSpan.FromSeconds(5));
+            TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         Assert.True(result.Success);
         Assert.Equal("session/subagent-scope", invoker.SessionId);
@@ -202,7 +202,7 @@ public class SubAgentActorTests : TestKit
 
         var result = await agent.Ask<SubAgentResult>(
             new RunSubAgent { Task = "Summarize research", Timeout = TimeSpan.FromSeconds(5) },
-            TimeSpan.FromSeconds(5));
+            TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         Assert.True(result.Success);
         Assert.Empty(result.Findings);
@@ -220,7 +220,7 @@ public class SubAgentActorTests : TestKit
 
         var result = await agent.Ask<SubAgentResult>(
             new RunSubAgent { Task = "Summarize research", Timeout = TimeSpan.FromSeconds(5) },
-            TimeSpan.FromSeconds(5));
+            TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         Assert.True(result.Success);
         Assert.Single(result.Findings);

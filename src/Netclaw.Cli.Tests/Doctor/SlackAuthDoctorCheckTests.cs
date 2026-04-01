@@ -18,7 +18,7 @@ public sealed class SlackAuthDoctorCheckTests
 
         var probe = new FakeSlackProbe();
         var check = new SlackAuthDoctorCheck(paths, probe);
-        var result = await check.RunAsync();
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(DoctorSeverity.Pass, result.Severity);
         Assert.Contains("disabled", result.Message, StringComparison.OrdinalIgnoreCase);
@@ -34,7 +34,7 @@ public sealed class SlackAuthDoctorCheckTests
 
         var probe = new FakeSlackProbe();
         var check = new SlackAuthDoctorCheck(paths, probe);
-        var result = await check.RunAsync();
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(DoctorSeverity.Error, result.Severity);
         Assert.Contains("no bot token", result.Message, StringComparison.OrdinalIgnoreCase);
@@ -55,7 +55,7 @@ public sealed class SlackAuthDoctorCheckTests
         };
 
         var check = new SlackAuthDoctorCheck(paths, probe);
-        var result = await check.RunAsync();
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(DoctorSeverity.Pass, result.Severity);
         Assert.Contains("Test Team", result.Message, StringComparison.Ordinal);
@@ -77,7 +77,7 @@ public sealed class SlackAuthDoctorCheckTests
         };
 
         var check = new SlackAuthDoctorCheck(paths, probe);
-        var result = await check.RunAsync();
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(DoctorSeverity.Error, result.Severity);
         Assert.Contains("invalid", result.Message, StringComparison.OrdinalIgnoreCase);
@@ -109,7 +109,7 @@ public sealed class SlackAuthDoctorCheckTests
         };
 
         var check = new SlackAuthDoctorCheck(paths, probe);
-        var result = await check.RunAsync();
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(DoctorSeverity.Pass, result.Severity);
         Assert.Equal("xoxb-valid-token", probe.LastBotToken);
@@ -134,7 +134,7 @@ public sealed class SlackAuthDoctorCheckTests
 
         var probe = new FakeSlackProbe();
         var check = new SlackAuthDoctorCheck(paths, probe);
-        var result = await check.RunAsync();
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(DoctorSeverity.Error, result.Severity);
         Assert.Contains("could not be decrypted", result.Message, StringComparison.OrdinalIgnoreCase);

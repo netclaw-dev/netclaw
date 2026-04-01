@@ -23,7 +23,7 @@ public sealed class DaemonClientSessionTests
         await using var client = new DaemonClient($"http://127.0.0.1:{port}");
 
         // Create an initial session to get a known session ID
-        var originalSessionId = await client.CreateSessionAsync(Netclaw.Actors.Channels.ChannelType.Tui);
+        var originalSessionId = await client.CreateSessionAsync(Netclaw.Actors.Channels.ChannelType.Tui, TestContext.Current.CancellationToken);
         Assert.StartsWith("signalr/", originalSessionId);
 
         // Simulate a "new client" by creating a fresh DaemonClient
@@ -37,7 +37,7 @@ public sealed class DaemonClientSessionTests
                 outputReceived.TrySetResult();
         });
 
-        var resumedSessionId = await client2.ResumeSessionAsync(originalSessionId);
+        var resumedSessionId = await client2.ResumeSessionAsync(originalSessionId, TestContext.Current.CancellationToken);
 
         // EnsureSession should return the same session ID, not create a new one
         Assert.Equal(originalSessionId, resumedSessionId);
@@ -48,9 +48,9 @@ public sealed class DaemonClientSessionTests
             SenderId = "test",
             Contents = [new Microsoft.Extensions.AI.TextContent("hello-resumed")],
             ReceivedAt = DateTimeOffset.UtcNow
-        });
+        }, TestContext.Current.CancellationToken);
 
-        await outputReceived.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await outputReceived.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
     }
 
     private static async Task<IHost> StartFakeHubAsync(int port)

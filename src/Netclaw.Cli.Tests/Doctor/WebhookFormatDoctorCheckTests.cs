@@ -29,7 +29,7 @@ public sealed class WebhookFormatDoctorCheckTests : IDisposable
         WriteConfig(new { configVersion = 1 });
 
         var check = new WebhookFormatDoctorCheck(_paths);
-        var result = await check.RunAsync();
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(DoctorSeverity.Pass, result.Severity);
     }
@@ -49,7 +49,7 @@ public sealed class WebhookFormatDoctorCheckTests : IDisposable
         });
 
         var check = new WebhookFormatDoctorCheck(_paths);
-        var result = await check.RunAsync();
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(DoctorSeverity.Pass, result.Severity);
     }
@@ -69,7 +69,7 @@ public sealed class WebhookFormatDoctorCheckTests : IDisposable
         });
 
         var check = new WebhookFormatDoctorCheck(_paths);
-        var result = await check.RunAsync();
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(DoctorSeverity.Warning, result.Severity);
         Assert.Contains("hooks.slack.com", result.Message, StringComparison.OrdinalIgnoreCase);
@@ -91,7 +91,7 @@ public sealed class WebhookFormatDoctorCheckTests : IDisposable
         });
 
         var check = new WebhookFormatDoctorCheck(_paths);
-        var result = await check.RunAsync();
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(DoctorSeverity.Warning, result.Severity);
     }
@@ -111,7 +111,7 @@ public sealed class WebhookFormatDoctorCheckTests : IDisposable
         });
 
         var check = new WebhookFormatDoctorCheck(_paths);
-        var result = await check.RunAsync();
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(DoctorSeverity.Pass, result.Severity);
     }

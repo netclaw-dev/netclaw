@@ -43,7 +43,7 @@ public sealed class StatusUpdateCheckerTests : IDisposable
         var handler = CreateSignedHandler(manifest);
 
         using var httpClient = new HttpClient(handler);
-        var result = await StatusUpdateChecker.CheckAsync(httpClient, "0.1.0");
+        var result = await StatusUpdateChecker.CheckAsync(httpClient, "0.1.0", TestContext.Current.CancellationToken);
 
         Assert.Equal("update-available", result.State);
         Assert.Equal("0.1.0", result.CurrentVersion);
@@ -57,7 +57,7 @@ public sealed class StatusUpdateCheckerTests : IDisposable
         var handler = CreateSignedHandler(manifest);
 
         using var httpClient = new HttpClient(handler);
-        var result = await StatusUpdateChecker.CheckAsync(httpClient, "0.1.0");
+        var result = await StatusUpdateChecker.CheckAsync(httpClient, "0.1.0", TestContext.Current.CancellationToken);
 
         Assert.Equal("up-to-date", result.State);
         Assert.Null(result.LatestVersion);
@@ -70,7 +70,7 @@ public sealed class StatusUpdateCheckerTests : IDisposable
         handler.AddErrorResponse(FeedConstants.BinaryManifestUrl, HttpStatusCode.ServiceUnavailable);
 
         using var httpClient = new HttpClient(handler);
-        var result = await StatusUpdateChecker.CheckAsync(httpClient, "0.1.0");
+        var result = await StatusUpdateChecker.CheckAsync(httpClient, "0.1.0", TestContext.Current.CancellationToken);
 
         Assert.Equal("unknown", result.State);
         Assert.Equal("0.1.0", result.CurrentVersion);
@@ -84,7 +84,7 @@ public sealed class StatusUpdateCheckerTests : IDisposable
 
         using var httpClient = new HttpClient(handler);
         var result = await StatusUpdateChecker.CheckAsync(
-            httpClient, "0.1.0", timeout: TimeSpan.FromMilliseconds(200));
+            httpClient, "0.1.0", timeout: TimeSpan.FromMilliseconds(200), cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal("unknown", result.State);
         Assert.Equal("0.1.0", result.CurrentVersion);
@@ -98,7 +98,7 @@ public sealed class StatusUpdateCheckerTests : IDisposable
         var handler = CreateSignedHandler(manifest);
 
         using var httpClient = new HttpClient(handler);
-        var result = await StatusUpdateChecker.CheckAsync(httpClient, "0.1.0");
+        var result = await StatusUpdateChecker.CheckAsync(httpClient, "0.1.0", TestContext.Current.CancellationToken);
 
         Assert.Equal("update-available", result.State);
         Assert.Equal("https://github.com/stannardlabs/netclaw/releases/tag/0.9.0", result.ReleaseNotesUrl);

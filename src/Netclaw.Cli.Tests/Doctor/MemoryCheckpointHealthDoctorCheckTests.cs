@@ -15,7 +15,7 @@ public sealed class MemoryCheckpointHealthDoctorCheckTests
         WriteMemoryProvider(paths, "sqlite");
 
         var store = new SQLiteMemoryStore(paths.MemorySqliteDbPath, TimeProvider.System);
-        await store.InitializeAsync();
+        await store.InitializeAsync(TestContext.Current.CancellationToken);
         await store.EnqueueCheckpointAsync(new SQLiteMemoryCheckpoint(
             CheckpointId: "cp-1",
             SessionId: "chan/thread",
@@ -26,10 +26,10 @@ public sealed class MemoryCheckpointHealthDoctorCheckTests
             PayloadJson: "{}",
             RetryCount: 0,
             CreatedAtMs: TimeProvider.System.GetUtcNow().ToUnixTimeMilliseconds(),
-            UpdatedAtMs: TimeProvider.System.GetUtcNow().ToUnixTimeMilliseconds()));
+            UpdatedAtMs: TimeProvider.System.GetUtcNow().ToUnixTimeMilliseconds()), TestContext.Current.CancellationToken);
 
         var check = new MemoryCheckpointHealthDoctorCheck(paths);
-        var result = await check.RunAsync();
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(DoctorSeverity.Pass, result.Severity);
         Assert.Contains("pending checkpoints", result.Message, StringComparison.OrdinalIgnoreCase);
@@ -42,7 +42,7 @@ public sealed class MemoryCheckpointHealthDoctorCheckTests
         WriteMemoryProvider(paths, "sqlite");
 
         var store = new SQLiteMemoryStore(paths.MemorySqliteDbPath, TimeProvider.System);
-        await store.InitializeAsync();
+        await store.InitializeAsync(TestContext.Current.CancellationToken);
 
         var now = TimeProvider.System.GetUtcNow().ToUnixTimeMilliseconds();
         for (var i = 0; i < 30; i++)
@@ -57,11 +57,11 @@ public sealed class MemoryCheckpointHealthDoctorCheckTests
                 PayloadJson: "{}",
                 RetryCount: 0,
                 CreatedAtMs: now,
-                UpdatedAtMs: now));
+                UpdatedAtMs: now), TestContext.Current.CancellationToken);
         }
 
         var check = new MemoryCheckpointHealthDoctorCheck(paths);
-        var result = await check.RunAsync();
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(DoctorSeverity.Warning, result.Severity);
         Assert.Contains("pending checkpoints", result.Message, StringComparison.OrdinalIgnoreCase);

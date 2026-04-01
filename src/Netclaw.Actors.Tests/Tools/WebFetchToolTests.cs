@@ -292,7 +292,7 @@ public class WebFetchToolTests : IDisposable
         Assert.Single(files);
 
         // File content should preserve HTML structure but strip scripts
-        var fileContent = await File.ReadAllTextAsync(files[0]);
+        var fileContent = await File.ReadAllTextAsync(files[0], TestContext.Current.CancellationToken);
         Assert.Contains("<h1>Welcome</h1>", fileContent);
         Assert.Contains("<p>", fileContent);
         Assert.DoesNotContain("<script>", fileContent);
@@ -325,7 +325,7 @@ public class WebFetchToolTests : IDisposable
         var files = Directory.GetFiles(_tempDir, "*.txt");
         Assert.Single(files);
 
-        var fileContent = await File.ReadAllTextAsync(files[0]);
+        var fileContent = await File.ReadAllTextAsync(files[0], TestContext.Current.CancellationToken);
         Assert.Contains("Welcome", fileContent);
         Assert.Contains("first paragraph", fileContent);
         Assert.DoesNotContain("<html>", fileContent);
@@ -354,7 +354,7 @@ public class WebFetchToolTests : IDisposable
         var files = Directory.GetFiles(_tempDir, "*.html");
         Assert.Single(files);
 
-        var fileContent = await File.ReadAllTextAsync(files[0]);
+        var fileContent = await File.ReadAllTextAsync(files[0], TestContext.Current.CancellationToken);
         Assert.Contains("<a href=", fileContent);
         Assert.Contains("<img src=", fileContent);
         Assert.Contains("<nav>", fileContent);
@@ -379,7 +379,7 @@ public class WebFetchToolTests : IDisposable
         var files = Directory.GetFiles(_tempDir, "*.json");
         Assert.Single(files);
 
-        var fileContent = await File.ReadAllTextAsync(files[0]);
+        var fileContent = await File.ReadAllTextAsync(files[0], TestContext.Current.CancellationToken);
         Assert.Contains("\"name\": \"test\"", fileContent);
     }
 
@@ -422,7 +422,7 @@ public class WebFetchToolTests : IDisposable
         var files = Directory.GetFiles(_tempDir, "*.sh");
         Assert.Single(files);
 
-        var fileContent = await File.ReadAllTextAsync(files[0]);
+        var fileContent = await File.ReadAllTextAsync(files[0], TestContext.Current.CancellationToken);
         Assert.Contains("echo 'hello world'", fileContent);
     }
 
@@ -565,7 +565,7 @@ public class WebFetchToolTests : IDisposable
         Assert.Single(files);
 
         // Verify byte-perfect round-trip
-        var savedBytes = await File.ReadAllBytesAsync(files[0]);
+        var savedBytes = await File.ReadAllBytesAsync(files[0], TestContext.Current.CancellationToken);
         Assert.Equal(imageBytes, savedBytes);
     }
 
@@ -589,7 +589,7 @@ public class WebFetchToolTests : IDisposable
         var files = Directory.GetFiles(_tempDir, "*.pdf");
         Assert.Single(files);
 
-        var savedBytes = await File.ReadAllBytesAsync(files[0]);
+        var savedBytes = await File.ReadAllBytesAsync(files[0], TestContext.Current.CancellationToken);
         Assert.Equal(pdfBytes, savedBytes);
     }
 

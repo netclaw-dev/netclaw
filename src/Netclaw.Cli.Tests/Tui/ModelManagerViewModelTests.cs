@@ -101,7 +101,7 @@ public sealed class ModelManagerViewModelTests : IDisposable
         vm.Refresh();
 
         vm.StartAssignment("Main");
-        await vm.ProbeCompletion!.WaitAsync(TimeSpan.FromSeconds(5));
+        await vm.ProbeCompletion!.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         Assert.Equal("oauth-access-token", _fakeProbe.LastApiKey);
     }
@@ -148,7 +148,7 @@ public sealed class ModelManagerViewModelTests : IDisposable
 
         // Simulate the full assignment flow
         vm.StartAssignment("Main");
-        await vm.ProbeCompletion!.WaitAsync(TimeSpan.FromSeconds(5));
+        await vm.ProbeCompletion!.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         vm.SelectModel("qwen3:30b");
         Assert.Equal(ModelManagerState.ConfirmAssignment, vm.CurrentState.Value);
@@ -187,7 +187,7 @@ public sealed class ModelManagerViewModelTests : IDisposable
         vm.Refresh();
 
         vm.StartAssignment("Main");
-        await vm.ProbeCompletion!.WaitAsync(TimeSpan.FromSeconds(5));
+        await vm.ProbeCompletion!.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         Assert.False(vm.IsProbing.Value);
         Assert.NotNull(vm.ProbeResult.Value);
@@ -225,7 +225,7 @@ public sealed class ModelManagerViewModelTests : IDisposable
         });
 
         vm.StartAssignment("Main");
-        await vm.ProbeCompletion!.WaitAsync(TimeSpan.FromSeconds(5));
+        await vm.ProbeCompletion!.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         Assert.Equal(false, isProbingAtResultPublish);
         Assert.False(vm.IsProbing.Value);

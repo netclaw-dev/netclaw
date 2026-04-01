@@ -447,8 +447,8 @@ public sealed class SlackProactiveThreadActorTests(ITestOutputHelper output) : T
             new SlackThreadTs("100.1"),
             sessionId));
 
-        await sink.ExpectMsgAsync<StartProactiveThread>(msg =>
-            Assert.Equal("C1/100.1", msg.SessionId.Value));
+        var proactiveMsg = await sink.ExpectMsgAsync<StartProactiveThread>(cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal("C1/100.1", proactiveMsg.SessionId.Value);
     }
 
     [Fact]
@@ -464,7 +464,7 @@ public sealed class SlackProactiveThreadActorTests(ITestOutputHelper output) : T
 
         // First: mention starts a thread
         conversation.Tell(CreateAppMention("C1:200", "C1", "200.1", "<@UBOT> start"));
-        var first = await sink.ExpectMsgAsync<SlackThreadInbound>();
+        var first = await sink.ExpectMsgAsync<SlackThreadInbound>(cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal("C1/200.1", first.SessionId.Value);
 
         // Second: proactive thread with the same thread ts reuses the existing actor
@@ -473,8 +473,8 @@ public sealed class SlackProactiveThreadActorTests(ITestOutputHelper output) : T
             new SlackThreadTs("200.1"),
             new SessionId("C1/200.1")));
 
-        await sink.ExpectMsgAsync<StartProactiveThread>(msg =>
-            Assert.Equal("C1/200.1", msg.SessionId.Value));
+        var reuseMsg = await sink.ExpectMsgAsync<StartProactiveThread>(cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal("C1/200.1", reuseMsg.SessionId.Value);
     }
 
     [Fact]
@@ -493,11 +493,11 @@ public sealed class SlackProactiveThreadActorTests(ITestOutputHelper output) : T
             new SlackThreadTs("400.1"),
             new SessionId("CBAD/400.1")));
 
-        await ExpectMsgAsync<Status.Failure>(failure =>
-            Assert.Contains("allowed channels", failure.Cause.Message, StringComparison.OrdinalIgnoreCase));
+        var disallowedFailure = await ExpectMsgAsync<Status.Failure>(cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Contains("allowed channels", disallowedFailure.Cause.Message, StringComparison.OrdinalIgnoreCase);
 
         // Message should be rejected before thread actor creation.
-        await sink.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(250));
+        await sink.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(250), TestContext.Current.CancellationToken);
     }
 
     [Fact]
@@ -517,9 +517,9 @@ public sealed class SlackProactiveThreadActorTests(ITestOutputHelper output) : T
             new SlackThreadTs("510.1"),
             new SessionId("DU1/510.1")));
 
-        await ExpectMsgAsync<Status.Failure>(failure =>
-            Assert.Contains("Direct messages are disabled", failure.Cause.Message, StringComparison.OrdinalIgnoreCase));
-        await sink.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(250));
+        var dmDisabledFailure = await ExpectMsgAsync<Status.Failure>(cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Contains("Direct messages are disabled", dmDisabledFailure.Cause.Message, StringComparison.OrdinalIgnoreCase);
+        await sink.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(250), TestContext.Current.CancellationToken);
     }
 
     [Fact]
@@ -540,8 +540,8 @@ public sealed class SlackProactiveThreadActorTests(ITestOutputHelper output) : T
             new SessionId("DU1/500.1")));
 
         // DM channels bypass the channel ACL check — should be forwarded
-        await sink.ExpectMsgAsync<StartProactiveThread>(msg =>
-            Assert.Equal("DU1/500.1", msg.SessionId.Value));
+        var dmBypassMsg = await sink.ExpectMsgAsync<StartProactiveThread>(cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal("DU1/500.1", dmBypassMsg.SessionId.Value);
     }
 
     [Fact]
@@ -560,8 +560,8 @@ public sealed class SlackProactiveThreadActorTests(ITestOutputHelper output) : T
             sessionId));
 
         // The ack should flow back to us (the sender) through Forward chain
-        await ExpectMsgAsync<ProactiveThreadAck>(ack =>
-            Assert.Equal("C1/300.1", ack.SessionId.Value));
+        var ack = await ExpectMsgAsync<ProactiveThreadAck>(cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal("C1/300.1", ack.SessionId.Value);
     }
 
     private static SlackGatewayDependencies CreateDependencies(

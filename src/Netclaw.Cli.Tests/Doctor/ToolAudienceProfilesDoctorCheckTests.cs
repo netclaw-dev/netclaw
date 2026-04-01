@@ -29,7 +29,7 @@ public sealed class ToolAudienceProfilesDoctorCheckTests : IDisposable
         WriteConfig(new { configVersion = 1 });
         var check = new ToolAudienceProfilesDoctorCheck(_paths);
 
-        var result = await check.RunAsync();
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(DoctorSeverity.Error, result.Severity);
         Assert.Contains("Tools section is missing", result.Message);
@@ -53,7 +53,7 @@ public sealed class ToolAudienceProfilesDoctorCheckTests : IDisposable
             """);
 
         var check = new ToolAudienceProfilesDoctorCheck(_paths);
-        var result = await check.RunAsync();
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(DoctorSeverity.Error, result.Severity);
         Assert.Contains("public profile cannot set ToolsMode=All", result.Message);
@@ -79,7 +79,7 @@ public sealed class ToolAudienceProfilesDoctorCheckTests : IDisposable
             """);
 
         var check = new ToolAudienceProfilesDoctorCheck(_paths);
-        var result = await check.RunAsync();
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(DoctorSeverity.Error, result.Severity);
         Assert.Contains("team profile cannot set ReadFiles.Mode=All", result.Message);
@@ -108,7 +108,7 @@ public sealed class ToolAudienceProfilesDoctorCheckTests : IDisposable
             """);
 
         var check = new ToolAudienceProfilesDoctorCheck(_paths);
-        var result = await check.RunAsync();
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(DoctorSeverity.Warning, result.Severity);
         Assert.Contains("Personal profile allows all tools", result.Message);
@@ -144,7 +144,7 @@ public sealed class ToolAudienceProfilesDoctorCheckTests : IDisposable
             """);
 
         var check = new ToolAudienceProfilesDoctorCheck(_paths);
-        var result = await check.RunAsync();
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(DoctorSeverity.Warning, result.Severity);
         Assert.Contains("memorizer", result.Message);
@@ -183,7 +183,7 @@ public sealed class ToolAudienceProfilesDoctorCheckTests : IDisposable
             """);
 
         var check = new ToolAudienceProfilesDoctorCheck(_paths);
-        var result = await check.RunAsync();
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
 
         // Should still warn about unrestricted personal, but NOT about tool grants
         Assert.DoesNotContain("McpServerToolGrants", result.Message);
@@ -205,7 +205,7 @@ public sealed class ToolAudienceProfilesDoctorCheckTests : IDisposable
         });
 
         var check = new ToolAudienceProfilesDoctorCheck(_paths);
-        var result = await check.RunAsync();
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(DoctorSeverity.Warning, result.Severity);
         Assert.Contains("Personal profile allows all tools", result.Message);

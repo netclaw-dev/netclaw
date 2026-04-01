@@ -29,7 +29,7 @@ public sealed class SlackAclDoctorCheckTests : IDisposable
         WriteConfig(new { Slack = new { Enabled = false } });
 
         var check = new SlackAclDoctorCheck(_paths);
-        var result = await check.RunAsync();
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(DoctorSeverity.Pass, result.Severity);
     }
@@ -40,7 +40,7 @@ public sealed class SlackAclDoctorCheckTests : IDisposable
         WriteConfig(new { Slack = new { Enabled = true } });
 
         var check = new SlackAclDoctorCheck(_paths);
-        var result = await check.RunAsync();
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(DoctorSeverity.Warning, result.Severity);
         Assert.Contains("no channel", result.Message, StringComparison.OrdinalIgnoreCase);
@@ -60,7 +60,7 @@ public sealed class SlackAclDoctorCheckTests : IDisposable
         });
 
         var check = new SlackAclDoctorCheck(_paths);
-        var result = await check.RunAsync();
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(DoctorSeverity.Pass, result.Severity);
     }
@@ -80,7 +80,7 @@ public sealed class SlackAclDoctorCheckTests : IDisposable
         });
 
         var check = new SlackAclDoctorCheck(_paths);
-        var result = await check.RunAsync();
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(DoctorSeverity.Pass, result.Severity);
     }
@@ -99,7 +99,7 @@ public sealed class SlackAclDoctorCheckTests : IDisposable
         });
 
         var check = new SlackAclDoctorCheck(_paths);
-        var result = await check.RunAsync();
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(DoctorSeverity.Warning, result.Severity);
         Assert.Contains("DMs enabled", result.Message, StringComparison.OrdinalIgnoreCase);

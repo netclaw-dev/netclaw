@@ -150,7 +150,7 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
         {
             Assert.True(_replyClient.PostedMessages.Count > 0,
                 "Expected at least one Slack reply to be posted");
-        }, duration: TimeSpan.FromSeconds(10));
+        }, duration: TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
 
         // Verify: the fake HTTP handler was called to download the file
         Assert.True(_httpHandler.RequestCount > 0, "Expected file download request");
@@ -172,7 +172,7 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
             $"Expected at least one file in session media directory: {mediaDir}");
 
         // Verify: the persisted file contains the expected bytes
-        var persistedBytes = await File.ReadAllBytesAsync(mediaFiles[0]);
+        var persistedBytes = await File.ReadAllBytesAsync(mediaFiles[0], TestContext.Current.CancellationToken);
         Assert.Equal(FakePngBytes, persistedBytes);
     }
 
@@ -228,7 +228,7 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
         {
             Assert.True(_replyClient.PostedMessages.Count > 0,
                 "Expected at least one Slack reply to be posted");
-        }, duration: TimeSpan.FromSeconds(10));
+        }, duration: TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.True(_httpHandler.RequestCount > 0, "Expected file download request");
         Assert.True(_chatClient.ReceivedImageContent,
@@ -295,7 +295,7 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
         {
             Assert.True(_replyClient.PostedMessages.Count > 0,
                 "Expected at least one Slack reply to be posted");
-        }, duration: TimeSpan.FromSeconds(10));
+        }, duration: TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.True(_httpHandler.RequestCount > 0, "Expected file download request");
         Assert.True(_chatClient.ReceivedImageContent,
@@ -353,7 +353,7 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
         {
             Assert.Contains(_replyClient.PostedMessages,
                 message => message.Text.Contains("blocked", StringComparison.OrdinalIgnoreCase));
-        }, duration: TimeSpan.FromSeconds(10));
+        }, duration: TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(0, _chatClient.CallCount);
     }
@@ -400,7 +400,7 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
         await AwaitAssertAsync(() =>
         {
             Assert.Single(_replyClient.PostedMessages);
-        }, duration: TimeSpan.FromSeconds(10));
+        }, duration: TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
 
         var posted = Assert.Single(_replyClient.PostedMessages);
         Assert.Contains(":warning:", posted.Text, StringComparison.OrdinalIgnoreCase);
@@ -450,7 +450,7 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
         {
             Assert.True(_replyClient.CanceledPostCount > 0,
                 "Expected the first Slack post attempt to be canceled by timeout");
-        }, duration: TimeSpan.FromSeconds(15));
+        }, duration: TimeSpan.FromSeconds(15), cancellationToken: TestContext.Current.CancellationToken);
 
         _replyClient.BlockPostsUntilCanceled = false;
 
@@ -472,7 +472,7 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
         {
             Assert.Contains(_replyClient.PostedMessages,
                 message => message.Text.Contains("call #2", StringComparison.OrdinalIgnoreCase));
-        }, duration: TimeSpan.FromSeconds(10));
+        }, duration: TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
     }
 
     [Fact]
@@ -521,7 +521,7 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
         {
             Assert.Contains(_replyClient.PostedMessages,
                 message => message.Text.Contains("call #2", StringComparison.OrdinalIgnoreCase));
-        }, duration: TimeSpan.FromSeconds(10));
+        }, duration: TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.DoesNotContain(_replyClient.PostedMessages,
             message => message.Text.Contains("call #1", StringComparison.OrdinalIgnoreCase));
@@ -531,7 +531,7 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
     public async Task Retryable_slack_file_upload_rejection_is_fed_back_to_session()
     {
         var tempFile = Path.Combine(_paths.BasePath, $"upload-{Guid.NewGuid():N}.txt");
-        await File.WriteAllTextAsync(tempFile, "test file");
+        await File.WriteAllTextAsync(tempFile, "test file", TestContext.Current.CancellationToken);
 
         var feedbackPipeline = new RecordingSessionPipeline([
             new FileOutput
@@ -583,11 +583,11 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
             var failure = Assert.IsType<DeliveryFailed>(feedback);
             Assert.Equal(DeliveryFailureKind.UnsupportedContent, failure.FailureKind);
             Assert.Equal(1, failure.TurnNumber);
-        }, duration: TimeSpan.FromSeconds(10));
+        }, duration: TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
 
         Watch(actor);
         Sys.Stop(actor);
-        await ExpectTerminatedAsync(actor);
+        await ExpectTerminatedAsync(actor, cancellationToken: TestContext.Current.CancellationToken);
     }
 
     [Fact]
@@ -638,11 +638,11 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
             var failure = Assert.IsType<DeliveryFailed>(feedback);
             Assert.Equal(DeliveryFailureKind.TransportFailure, failure.FailureKind);
             Assert.Equal(1, failure.TurnNumber);
-        }, duration: TimeSpan.FromSeconds(10));
+        }, duration: TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
 
         Watch(actor);
         Sys.Stop(actor);
-        await ExpectTerminatedAsync(actor);
+        await ExpectTerminatedAsync(actor, cancellationToken: TestContext.Current.CancellationToken);
     }
 
     [Fact]
@@ -693,11 +693,11 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
             var failure = Assert.IsType<DeliveryFailed>(feedback);
             Assert.Equal(DeliveryFailureKind.Unknown, failure.FailureKind);
             Assert.Equal(1, failure.TurnNumber);
-        }, duration: TimeSpan.FromSeconds(10));
+        }, duration: TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
 
         Watch(actor);
         Sys.Stop(actor);
-        await ExpectTerminatedAsync(actor);
+        await ExpectTerminatedAsync(actor, cancellationToken: TestContext.Current.CancellationToken);
     }
 
     [Fact]
@@ -752,11 +752,11 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
             Assert.Equal(DeliveryFailureKind.MessageTooLarge, failure.FailureKind);
             Assert.Equal(1, failure.TurnNumber);
             Assert.Contains("msg_too_long", failure.ErrorMessage);
-        }, duration: TimeSpan.FromSeconds(10));
+        }, duration: TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
 
         Watch(actor);
         Sys.Stop(actor);
-        await ExpectTerminatedAsync(actor);
+        await ExpectTerminatedAsync(actor, cancellationToken: TestContext.Current.CancellationToken);
     }
 
     [Fact]
@@ -811,11 +811,11 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
             Assert.Equal(DeliveryFailureKind.ContentRejected, failure.FailureKind);
             Assert.Equal(1, failure.TurnNumber);
             Assert.Contains("invalid_blocks", failure.ErrorMessage);
-        }, duration: TimeSpan.FromSeconds(10));
+        }, duration: TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
 
         Watch(actor);
         Sys.Stop(actor);
-        await ExpectTerminatedAsync(actor);
+        await ExpectTerminatedAsync(actor, cancellationToken: TestContext.Current.CancellationToken);
     }
 
     [Fact]
@@ -870,7 +870,7 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
         {
             Assert.True(_replyClient.PostedMessages.Count > 0,
                 "Expected at least one Slack reply to be posted");
-        }, duration: TimeSpan.FromSeconds(10));
+        }, duration: TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.True(_chatClient.ReceivedImageContent,
             "Expected LLM to receive DataContent (image) via real MagicByteContentScanner");
@@ -928,7 +928,7 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
         {
             Assert.True(_replyClient.PostedMessages.Count > 0,
                 "Expected at least one Slack reply to be posted");
-        }, duration: TimeSpan.FromSeconds(10));
+        }, duration: TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.True(_chatClient.ReceivedImageContent,
             "Expected LLM to receive image even when scanner is broken");

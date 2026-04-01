@@ -41,7 +41,7 @@ public sealed class OpenRouterStreamingSmokeTest
 
         var fullText = new System.Text.StringBuilder();
 
-        await foreach (var update in chatClient.GetStreamingResponseAsync(messages))
+        await foreach (var update in chatClient.GetStreamingResponseAsync(messages, cancellationToken: TestContext.Current.CancellationToken))
         {
             foreach (var content in update.Contents)
             {

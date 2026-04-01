@@ -23,7 +23,7 @@ public sealed class SqliteMemoryToolsTests : IDisposable
     [Fact]
     public async Task FindMemories_returns_evidence_but_filters_trace_from_normal_results()
     {
-        await _store.InitializeAsync();
+        await _store.InitializeAsync(TestContext.Current.CancellationToken);
         var now = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
 
         await _store.ApplyCurationBatchAsync(
@@ -108,7 +108,7 @@ public sealed class SqliteMemoryToolsTests : IDisposable
     [Fact]
     public async Task GetMemories_marks_stale_evidence()
     {
-        await _store.InitializeAsync();
+        await _store.InitializeAsync(TestContext.Current.CancellationToken);
         var now = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
 
         await _store.ApplyCurationBatchAsync(
@@ -149,7 +149,7 @@ public sealed class SqliteMemoryToolsTests : IDisposable
     [Fact]
     public async Task FindMemories_hides_stale_evidence_unless_include_stale_is_true()
     {
-        await _store.InitializeAsync();
+        await _store.InitializeAsync(TestContext.Current.CancellationToken);
         var now = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
 
         await _store.ApplyCurationBatchAsync(
@@ -206,7 +206,7 @@ public sealed class SqliteMemoryToolsTests : IDisposable
     [Fact]
     public async Task GetMemories_respects_active_boundary_and_audience()
     {
-        await _store.InitializeAsync();
+        await _store.InitializeAsync(TestContext.Current.CancellationToken);
         var now = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
 
         await _store.ApplyCurationBatchAsync(

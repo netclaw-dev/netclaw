@@ -22,7 +22,7 @@ public sealed class SqliteMemoryPolicyScopeTests : IDisposable
     [Fact]
     public async Task GetMemories_respects_explicit_context_policy_scope()
     {
-        await _store.InitializeAsync();
+        await _store.InitializeAsync(TestContext.Current.CancellationToken);
         var now = TimeProvider.System.GetUtcNow().ToUnixTimeMilliseconds();
 
         await _store.ApplyCurationBatchAsync(

@@ -100,22 +100,22 @@ public class CompactionIntegrationTests : TestKit
             SessionId = sessionId,
             Subscriber = subscriber,
             Filter = OutputFilter.Full
-        });
-        await subscriber.ExpectMsgAsync<SessionJoined>();
+        }, TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = sessionId,
             Content = "Hello, this should trigger compaction"
-        });
+        }, TestContext.Current.CancellationToken);
 
         // First: normal text response from the turn
-        await subscriber.ExpectMsgAsync<TextOutput>();
-        await subscriber.ExpectMsgAsync<UsageOutput>();
-        await subscriber.ExpectMsgAsync<TurnCompleted>();
+        await subscriber.ExpectMsgAsync<TextOutput>(cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<UsageOutput>(cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TurnCompleted>(cancellationToken: TestContext.Current.CancellationToken);
 
         // Then: compaction output (with observations from Observer)
-        var compaction = await subscriber.ExpectMsgAsync<CompactionOutput>();
+        var compaction = await subscriber.ExpectMsgAsync<CompactionOutput>(cancellationToken: TestContext.Current.CancellationToken);
         Assert.True(compaction.MessagesAfter < compaction.MessagesBefore);
 
         // At least one LLM call should have happened for the turn itself.
@@ -143,21 +143,21 @@ public class CompactionIntegrationTests : TestKit
             SessionId = sessionId,
             Subscriber = subscriber,
             Filter = OutputFilter.Full
-        });
-        await subscriber.ExpectMsgAsync<SessionJoined>();
+        }, TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = sessionId,
             Content = "Hello, this should NOT trigger compaction"
-        });
+        }, TestContext.Current.CancellationToken);
 
-        await subscriber.ExpectMsgAsync<TextOutput>();
-        await subscriber.ExpectMsgAsync<UsageOutput>();
-        await subscriber.ExpectMsgAsync<TurnCompleted>();
+        await subscriber.ExpectMsgAsync<TextOutput>(cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<UsageOutput>(cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TurnCompleted>(cancellationToken: TestContext.Current.CancellationToken);
 
         // No compaction output should appear
-        await subscriber.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(500));
+        await subscriber.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(500), TestContext.Current.CancellationToken);
 
         // Only 1 LLM call — no compaction
         Assert.Equal(1, _fakeChatClient.CallCount);
@@ -182,20 +182,20 @@ public class CompactionIntegrationTests : TestKit
             SessionId = sessionId,
             Subscriber = subscriber,
             Filter = OutputFilter.Full
-        });
-        await subscriber.ExpectMsgAsync<SessionJoined>();
+        }, TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = sessionId,
             Content = "Trigger compaction"
-        });
+        }, TestContext.Current.CancellationToken);
 
         // Wait for turn + compaction
-        await subscriber.ExpectMsgAsync<TextOutput>();
-        await subscriber.ExpectMsgAsync<UsageOutput>();
-        await subscriber.ExpectMsgAsync<TurnCompleted>();
-        await subscriber.ExpectMsgAsync<CompactionOutput>();
+        await subscriber.ExpectMsgAsync<TextOutput>(cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<UsageOutput>(cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TurnCompleted>(cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<CompactionOutput>(cancellationToken: TestContext.Current.CancellationToken);
 
         // After compaction, disable the high usage so next call doesn't trigger again
         _fakeChatClient.UsageOverride = new UsageDetails
@@ -210,12 +210,12 @@ public class CompactionIntegrationTests : TestKit
         {
             SessionId = sessionId,
             Content = "Post-compaction message"
-        });
+        }, TestContext.Current.CancellationToken);
 
-        var text = await subscriber.ExpectMsgAsync<TextOutput>();
+        var text = await subscriber.ExpectMsgAsync<TextOutput>(cancellationToken: TestContext.Current.CancellationToken);
         Assert.Contains("fake", text.Text, StringComparison.OrdinalIgnoreCase);
-        await subscriber.ExpectMsgAsync<UsageOutput>();
-        await subscriber.ExpectMsgAsync<TurnCompleted>();
+        await subscriber.ExpectMsgAsync<UsageOutput>(cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TurnCompleted>(cancellationToken: TestContext.Current.CancellationToken);
     }
 
     [Fact]
@@ -238,30 +238,30 @@ public class CompactionIntegrationTests : TestKit
             SessionId = sessionId,
             Subscriber = subscriber,
             Filter = OutputFilter.Full
-        });
-        await subscriber.ExpectMsgAsync<SessionJoined>();
+        }, TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
 
         // First message — triggers turn then compaction
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = sessionId,
             Content = "First message"
-        });
+        }, TestContext.Current.CancellationToken);
 
         // Buffer a second message during processing/compaction
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = sessionId,
             Content = "Second message (buffered)"
-        });
+        }, TestContext.Current.CancellationToken);
 
         // Wait for turn 1 output
-        await subscriber.ExpectMsgAsync<TextOutput>();
-        await subscriber.ExpectMsgAsync<UsageOutput>();
-        await subscriber.ExpectMsgAsync<TurnCompleted>();
+        await subscriber.ExpectMsgAsync<TextOutput>(cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<UsageOutput>(cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TurnCompleted>(cancellationToken: TestContext.Current.CancellationToken);
 
         // Wait for compaction
-        await subscriber.ExpectMsgAsync<CompactionOutput>();
+        await subscriber.ExpectMsgAsync<CompactionOutput>(cancellationToken: TestContext.Current.CancellationToken);
 
         // After compaction, lower the usage so the buffered message doesn't trigger again
         _fakeChatClient.UsageOverride = new UsageDetails
@@ -272,9 +272,9 @@ public class CompactionIntegrationTests : TestKit
         };
 
         // Buffered message should be drained and produce output
-        await subscriber.ExpectMsgAsync<TextOutput>();
-        await subscriber.ExpectMsgAsync<UsageOutput>();
-        await subscriber.ExpectMsgAsync<TurnCompleted>();
+        await subscriber.ExpectMsgAsync<TextOutput>(cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<UsageOutput>(cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TurnCompleted>(cancellationToken: TestContext.Current.CancellationToken);
     }
 
     [Fact]
@@ -297,32 +297,32 @@ public class CompactionIntegrationTests : TestKit
             SessionId = sessionId,
             Subscriber = subscriber,
             Filter = OutputFilter.Full
-        });
-        await subscriber.ExpectMsgAsync<SessionJoined>();
+        }, TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = sessionId,
             Content = "First message"
-        });
+        }, TestContext.Current.CancellationToken);
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = sessionId,
             Content = "Second message (buffered)"
-        });
+        }, TestContext.Current.CancellationToken);
 
-        await subscriber.ExpectMsgAsync<TextOutput>();
-        await subscriber.ExpectMsgAsync<UsageOutput>();
-        await subscriber.ExpectMsgAsync<TurnCompleted>();
+        await subscriber.ExpectMsgAsync<TextOutput>(cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<UsageOutput>(cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TurnCompleted>(cancellationToken: TestContext.Current.CancellationToken);
 
-        var error = await subscriber.ExpectMsgAsync<ErrorOutput>(TimeSpan.FromSeconds(6));
+        var error = await subscriber.ExpectMsgAsync<ErrorOutput>(TimeSpan.FromSeconds(6), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Contains("compaction timed out", error.Message, StringComparison.OrdinalIgnoreCase);
 
-        var bufferedText = await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(6));
+        var bufferedText = await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(6), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Contains("fake", bufferedText.Text, StringComparison.OrdinalIgnoreCase);
-        await subscriber.ExpectMsgAsync<UsageOutput>(TimeSpan.FromSeconds(3));
-        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
+        await subscriber.ExpectMsgAsync<UsageOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
     }
 
     [Fact]
@@ -345,27 +345,27 @@ public class CompactionIntegrationTests : TestKit
             SessionId = sessionId,
             Subscriber = subscriber,
             Filter = OutputFilter.Full
-        });
-        await subscriber.ExpectMsgAsync<SessionJoined>();
+        }, TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = sessionId,
             Content = "Message before compaction"
-        });
+        }, TestContext.Current.CancellationToken);
 
-        await subscriber.ExpectMsgAsync<TextOutput>();
-        await subscriber.ExpectMsgAsync<UsageOutput>();
-        await subscriber.ExpectMsgAsync<TurnCompleted>();
-        await subscriber.ExpectMsgAsync<CompactionOutput>();
+        await subscriber.ExpectMsgAsync<TextOutput>(cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<UsageOutput>(cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TurnCompleted>(cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<CompactionOutput>(cancellationToken: TestContext.Current.CancellationToken);
 
         // Phase 2: Kill the session actor
         var escapedId = Uri.EscapeDataString(sessionId.Value);
         var childPath = $"/user/session-manager/{escapedId}";
-        var child = await Sys.ActorSelection(childPath).ResolveOne(TimeSpan.FromSeconds(3));
+        var child = await Sys.ActorSelection(childPath).ResolveOne(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
         Watch(child);
         Sys.Stop(child);
-        await ExpectTerminatedAsync(child);
+        await ExpectTerminatedAsync(child, cancellationToken: TestContext.Current.CancellationToken);
 
         // Phase 3: Recover — join again
         var recoverSub = CreateTestProbe("recover-sub-2");
@@ -374,8 +374,8 @@ public class CompactionIntegrationTests : TestKit
             SessionId = sessionId,
             Subscriber = recoverSub,
             Filter = OutputFilter.Full
-        });
-        await recoverSub.ExpectMsgAsync<SessionJoined>();
+        }, TestContext.Current.CancellationToken);
+        await recoverSub.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(sessionId, recovered.SessionId);
 
         // Phase 4: Verify session still works after recovery
@@ -390,9 +390,9 @@ public class CompactionIntegrationTests : TestKit
         {
             SessionId = sessionId,
             Content = "Post-recovery message"
-        });
+        }, TestContext.Current.CancellationToken);
 
-        var text = await recoverSub.ExpectMsgAsync<TextOutput>();
+        var text = await recoverSub.ExpectMsgAsync<TextOutput>(cancellationToken: TestContext.Current.CancellationToken);
         Assert.Contains("fake", text.Text, StringComparison.OrdinalIgnoreCase);
     }
 
@@ -415,22 +415,22 @@ public class CompactionIntegrationTests : TestKit
             SessionId = sessionId,
             Subscriber = subscriber,
             Filter = OutputFilter.Full
-        });
-        await subscriber.ExpectMsgAsync<SessionJoined>();
+        }, TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = sessionId,
             Content = "Investigate ticket 579"
-        });
+        }, TestContext.Current.CancellationToken);
 
         // Turn output
-        await subscriber.ExpectMsgAsync<TextOutput>();
-        await subscriber.ExpectMsgAsync<UsageOutput>();
-        await subscriber.ExpectMsgAsync<TurnCompleted>();
+        await subscriber.ExpectMsgAsync<TextOutput>(cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<UsageOutput>(cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TurnCompleted>(cancellationToken: TestContext.Current.CancellationToken);
 
         // Compaction (with observations from Observer)
-        await subscriber.ExpectMsgAsync<CompactionOutput>();
+        await subscriber.ExpectMsgAsync<CompactionOutput>(cancellationToken: TestContext.Current.CancellationToken);
 
         // Verify post-compaction by sending another message (low usage to avoid re-compaction)
         _fakeChatClient.UsageOverride = new UsageDetails
@@ -444,10 +444,10 @@ public class CompactionIntegrationTests : TestKit
         {
             SessionId = sessionId,
             Content = "What was the ticket about?"
-        });
+        }, TestContext.Current.CancellationToken);
 
         // Session still works — the context-summary message is there as context
-        var text = await subscriber.ExpectMsgAsync<TextOutput>();
+        var text = await subscriber.ExpectMsgAsync<TextOutput>(cancellationToken: TestContext.Current.CancellationToken);
         Assert.Contains("fake", text.Text, StringComparison.OrdinalIgnoreCase);
     }
 
@@ -478,28 +478,28 @@ public class CompactionIntegrationTests : TestKit
             SessionId = sessionId,
             Subscriber = subscriber,
             Filter = OutputFilter.Full
-        });
-        await subscriber.ExpectMsgAsync<SessionJoined>();
+        }, TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = sessionId,
             Content = "This message triggers overflow then gets auto-resent"
-        });
+        }, TestContext.Current.CancellationToken);
 
         // ErrorOutput from context overflow — should NOT say "Please resend"
-        var error = await subscriber.ExpectMsgAsync<ErrorOutput>(TimeSpan.FromSeconds(5));
+        var error = await subscriber.ExpectMsgAsync<ErrorOutput>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Contains("compacting session history", error.Message, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("resend", error.Message, StringComparison.OrdinalIgnoreCase);
 
         // Compaction runs
-        await subscriber.ExpectMsgAsync<CompactionOutput>(TimeSpan.FromSeconds(5));
+        await subscriber.ExpectMsgAsync<CompactionOutput>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
 
         // Auto-resend fires and produces a response
-        var text = await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(5));
+        var text = await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Contains("fake", text.Text, StringComparison.OrdinalIgnoreCase);
-        await subscriber.ExpectMsgAsync<UsageOutput>(TimeSpan.FromSeconds(3));
-        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
+        await subscriber.ExpectMsgAsync<UsageOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
     }
 
     [Fact]
@@ -529,34 +529,34 @@ public class CompactionIntegrationTests : TestKit
             SessionId = sessionId,
             Subscriber = subscriber,
             Filter = OutputFilter.Full
-        });
-        await subscriber.ExpectMsgAsync<SessionJoined>();
+        }, TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
 
         // First message triggers overflow
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = sessionId,
             Content = "First message"
-        });
+        }, TestContext.Current.CancellationToken);
 
         // Buffer a second message during compaction
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = sessionId,
             Content = "Second message (buffered)"
-        });
+        }, TestContext.Current.CancellationToken);
 
         // ErrorOutput from overflow
-        await subscriber.ExpectMsgAsync<ErrorOutput>(TimeSpan.FromSeconds(5));
+        await subscriber.ExpectMsgAsync<ErrorOutput>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
 
         // Compaction
-        await subscriber.ExpectMsgAsync<CompactionOutput>(TimeSpan.FromSeconds(5));
+        await subscriber.ExpectMsgAsync<CompactionOutput>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
 
         // Buffer drain processes the buffered message — auto-resend is subsumed
-        var text = await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(5));
+        var text = await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Contains("fake", text.Text, StringComparison.OrdinalIgnoreCase);
-        await subscriber.ExpectMsgAsync<UsageOutput>(TimeSpan.FromSeconds(3));
-        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3));
+        await subscriber.ExpectMsgAsync<UsageOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
     }
 }
 

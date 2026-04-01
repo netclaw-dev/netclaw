@@ -18,7 +18,7 @@ public sealed class CompositeCapabilityResolverTests
             [first, second],
             NullLogger<CompositeCapabilityResolver>.Instance);
 
-        var result = await composite.ResolveAsync("test-model");
+        var result = await composite.ResolveAsync("test-model", TestContext.Current.CancellationToken);
 
         Assert.NotNull(result);
         Assert.Equal(ModelModality.Text | ModelModality.Image, result.InputModalities);
@@ -36,7 +36,7 @@ public sealed class CompositeCapabilityResolverTests
             [first, second],
             NullLogger<CompositeCapabilityResolver>.Instance);
 
-        var result = await composite.ResolveAsync("test-model");
+        var result = await composite.ResolveAsync("test-model", TestContext.Current.CancellationToken);
 
         Assert.NotNull(result);
         Assert.Equal(ModelModality.Text | ModelModality.Audio, result.InputModalities);
@@ -53,7 +53,7 @@ public sealed class CompositeCapabilityResolverTests
             [first, second],
             NullLogger<CompositeCapabilityResolver>.Instance);
 
-        var result = await composite.ResolveAsync("unknown-model");
+        var result = await composite.ResolveAsync("unknown-model", TestContext.Current.CancellationToken);
 
         Assert.NotNull(result);
         Assert.Equal(ModelModality.Text, result.InputModalities);
@@ -71,7 +71,7 @@ public sealed class CompositeCapabilityResolverTests
             [first, second],
             NullLogger<CompositeCapabilityResolver>.Instance);
 
-        var result = await composite.ResolveAsync("test-model");
+        var result = await composite.ResolveAsync("test-model", TestContext.Current.CancellationToken);
 
         Assert.NotNull(result);
         Assert.Equal(ModelModality.Text, result.InputModalities);

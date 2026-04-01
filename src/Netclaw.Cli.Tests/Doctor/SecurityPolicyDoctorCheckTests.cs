@@ -30,7 +30,7 @@ public sealed class SecurityPolicyDoctorCheckTests : IDisposable
         WriteConfig(new { configVersion = 1 });
         var check = new SecurityPolicyDoctorCheck(_paths);
 
-        var result = await check.RunAsync();
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(DoctorSeverity.Error, result.Severity);
         Assert.Contains("Security section is missing", result.Message);
@@ -49,7 +49,7 @@ public sealed class SecurityPolicyDoctorCheckTests : IDisposable
             """);
 
         var check = new SecurityPolicyDoctorCheck(_paths);
-        var result = await check.RunAsync();
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(DoctorSeverity.Error, result.Severity);
         Assert.Contains("silently assumes Personal posture", result.Message);
@@ -70,7 +70,7 @@ public sealed class SecurityPolicyDoctorCheckTests : IDisposable
             """);
 
         var check = new SecurityPolicyDoctorCheck(_paths);
-        var result = await check.RunAsync();
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(DoctorSeverity.Warning, result.Severity);
         Assert.Contains("full host access", result.Message);
@@ -91,7 +91,7 @@ public sealed class SecurityPolicyDoctorCheckTests : IDisposable
             """);
 
         var check = new SecurityPolicyDoctorCheck(_paths);
-        var result = await check.RunAsync();
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(DoctorSeverity.Pass, result.Severity);
         Assert.Contains("Team", result.Message);
@@ -102,7 +102,7 @@ public sealed class SecurityPolicyDoctorCheckTests : IDisposable
     {
         // Don't write any config — DoctorJsonConfigReader returns Warning for missing file
         var check = new SecurityPolicyDoctorCheck(_paths);
-        var result = await check.RunAsync();
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(DoctorSeverity.Warning, result.Severity);
         Assert.Equal("Config File", result.Name);
