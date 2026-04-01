@@ -934,8 +934,8 @@ Done when:
 **Verification:** L2
 
 Done when:
-- [ ] Pairing smoke test section in `scripts/smoke/check.sh` exercises full lifecycle: generate code → exchange → verify device list → connect with token → revoke → verify rejection.
-- [ ] Smoke test runs after existing session/stats tests, before teardown.
+- [x] Pairing smoke test section in `scripts/smoke/check.sh` exercises full lifecycle: generate code → exchange → verify device list → connect with token → revoke → verify rejection.
+- [x] Smoke test runs after existing session/stats tests, before teardown.
 
 ---
 

@@ -56,8 +56,8 @@
 
 ## 9. CI Smoke Test
 
-- [ ] 9.1 Add pairing smoke test section to `scripts/smoke/check.sh` that exercises the full pairing lifecycle inside the smoke sandbox container: generate pairing code via `netclaw daemon pair`, exchange via `curl POST /api/pair/exchange`, verify device appears in `netclaw daemon devices`, connect to hub with bearer token, revoke device, verify revoked token is rejected
-- [ ] 9.2 Ensure smoke test runs after daemon start and before teardown (after existing session/stats tests)
+- [x] 9.1 Add pairing smoke test section to `scripts/smoke/check.sh` that exercises the full pairing lifecycle inside the smoke sandbox container: generate pairing code via `netclaw daemon pair`, exchange via `curl POST /api/pair/exchange`, verify device appears in `netclaw daemon devices`, connect to hub with bearer token, revoke device, verify revoked token is rejected
+- [x] 9.2 Ensure smoke test runs after daemon start and before teardown (after existing session/stats tests)
 
 ## 10. Unit and Integration Tests
 

@@ -359,4 +359,71 @@ if [[ "$history_exit" -eq 0 ]]; then
 fi
 echo "History correctly returned exit $history_exit for deleted reminder."
 
+# ── Pairing lifecycle smoke tests ──
+# Exercises the full device pairing flow: generate code, exchange for bearer
+# token, verify device in registry, authenticate with token, revoke, and
+# verify the revoked token is rejected. Daemon must already be running (it is,
+# from the session/stats tests above).
+
+SMOKE_DEVICE_NAME="smoke-pairing-$$"
+
+echo "Generating pairing code via netclaw daemon pair..."
+pair_output="$(run_sandbox_timed "$STEP_TIMEOUT_SECONDS" netclaw daemon pair)"
+echo "$pair_output"
+
+pairing_code="$(echo "$pair_output" | grep 'Pairing code:' | awk '{print $NF}')"
+if [[ -z "$pairing_code" ]]; then
+  echo "Expected pairing code in 'netclaw daemon pair' output."
+  exit 1
+fi
+echo "Extracted pairing code: $pairing_code"
+
+echo "Exchanging pairing code for bearer token..."
+exchange_response="$(run_sandbox_timed "$STEP_TIMEOUT_SECONDS" \
+  curl -fsS \
+    -X POST http://127.0.0.1:5199/api/pair/exchange \
+    -H 'Content-Type: application/json' \
+    -d "{\"code\":\"$pairing_code\",\"deviceName\":\"$SMOKE_DEVICE_NAME\"}")"
+echo "$exchange_response"
+
+device_token="$(echo "$exchange_response" | sed 's/.*"token":"\([^"]*\)".*/\1/')"
+if [[ -z "$device_token" || "$device_token" == "$exchange_response" ]]; then
+  echo "Expected token field in exchange response."
+  exit 1
+fi
+echo "Exchange succeeded: bearer token received."
+
+echo "Verifying device appears in daemon devices list..."
+devices_output="$(run_sandbox_timed "$STEP_TIMEOUT_SECONDS" netclaw daemon devices)"
+echo "$devices_output"
+if [[ "$devices_output" != *"$SMOKE_DEVICE_NAME"* ]]; then
+  echo "Expected $SMOKE_DEVICE_NAME in 'netclaw daemon devices' output."
+  exit 1
+fi
+
+echo "Verifying bearer token authenticates protected endpoint (/api/pair/devices)..."
+auth_response="$(run_sandbox_timed "$STEP_TIMEOUT_SECONDS" \
+  curl -fsS \
+    -H "Authorization: Bearer $device_token" \
+    http://127.0.0.1:5199/api/pair/devices)"
+echo "$auth_response"
+if [[ "$auth_response" != *"$SMOKE_DEVICE_NAME"* ]]; then
+  echo "Expected $SMOKE_DEVICE_NAME in authenticated /api/pair/devices response."
+  exit 1
+fi
+
+echo "Revoking device $SMOKE_DEVICE_NAME..."
+run_sandbox_timed "$STEP_TIMEOUT_SECONDS" netclaw daemon devices revoke "$SMOKE_DEVICE_NAME"
+
+echo "Verifying revoked token is rejected (expect HTTP 401)..."
+revoke_status="$(run_sandbox_timed "$STEP_TIMEOUT_SECONDS" \
+  curl -sS -o /dev/null -w '%{http_code}' \
+    -H "Authorization: Bearer $device_token" \
+    http://127.0.0.1:5199/api/pair/devices)"
+echo "HTTP status after revoke: $revoke_status"
+if [[ "$revoke_status" != "401" ]]; then
+  echo "Expected 401 for revoked device token, got $revoke_status."
+  exit 1
+fi
+
 echo "Smoke sandbox checks passed."
