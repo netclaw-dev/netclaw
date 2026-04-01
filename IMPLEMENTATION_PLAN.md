@@ -657,11 +657,11 @@ Done when:
 **Verification:** L2
 
 Done when:
-- [ ] `ExposureModeValidationService : IHostedService` reads `DaemonConfig` and validates tunnel prerequisites.
-- [ ] Tailscale modes check for `tailscaled` process; Cloudflare mode checks for `cloudflared` process.
-- [ ] On failure: logs descriptive error naming the missing prerequisite and throws to fail startup.
-- [ ] `Local` mode skips all tunnel validation.
-- [ ] Unit tests verify local skips, non-local with missing process throws.
+- [x] `ExposureModeValidationService : IHostedService` reads `DaemonConfig` and validates tunnel prerequisites.
+- [x] Tailscale modes check for `tailscaled` process; Cloudflare mode checks for `cloudflared` process.
+- [x] On failure: logs descriptive error naming the missing prerequisite and throws to fail startup.
+- [x] `Local` mode skips all tunnel validation.
+- [x] Unit tests verify local skips, non-local with missing process throws.
 
 ### Task M7.A4: Doctor check for exposure health
 

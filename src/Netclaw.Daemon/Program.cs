@@ -324,6 +324,10 @@ static void ConfigureDaemonServices(
     var daemonConfig = DaemonConfig.BindFromConfiguration(configuration.GetSection("Daemon"));
     services.AddSingleton(daemonConfig);
 
+    // Validate tunnel prerequisites before the rest of the daemon starts.
+    // Throws from StartAsync to abort startup if the required process is missing.
+    services.AddHostedService<ExposureModeValidationService>();
+
     services
         .AddOptions<ModelSelection>()
         .Bind(configuration.GetSection("Models"))
