@@ -116,6 +116,7 @@ static async Task RunDaemonAsync(string[] args, DaemonRestartSignal restartSigna
     builder.Services.AddSignalR();
     builder.Services.AddSingleton<SessionCatalogService>();
     builder.Services.AddSingleton<ISessionLifecycleObserver>(sp => sp.GetRequiredService<SessionCatalogService>());
+    builder.Services.AddSingleton<ClaimsPrincipalMapper>();
     builder.Services.AddSingleton<SessionRegistry>();
     builder.Services.AddSingleton<DaemonStartClock>();
     builder.Services.AddSingleton<DaemonRuntimeStatusService>();

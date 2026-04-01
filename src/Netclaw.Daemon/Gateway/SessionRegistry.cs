@@ -1,3 +1,4 @@
+using System.Security.Claims;
 using Akka.Actor;
 using Akka.Hosting;
 using Microsoft.AspNetCore.SignalR;
@@ -25,6 +26,7 @@ public sealed class SessionRegistry
 {
     private readonly IRequiredActor<SignalRGatewayActorKey> _gatewayProvider;
     private readonly SessionIngressGate _ingressGate;
+    private readonly ClaimsPrincipalMapper _mapper;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<SessionRegistry> _logger;
 
@@ -37,11 +39,13 @@ public sealed class SessionRegistry
     public SessionRegistry(
         IRequiredActor<SignalRGatewayActorKey> gatewayProvider,
         SessionIngressGate ingressGate,
+        ClaimsPrincipalMapper mapper,
         TimeProvider timeProvider,
         ILogger<SessionRegistry> logger)
     {
         _gatewayProvider = gatewayProvider;
         _ingressGate = ingressGate;
+        _mapper = mapper;
         _timeProvider = timeProvider;
         _logger = logger;
     }
@@ -49,7 +53,7 @@ public sealed class SessionRegistry
     /// <summary>
     /// Creates a new session for the given SignalR connection.
     /// </summary>
-    public async Task<string> CreateSessionAsync(string connectionId, string channelType)
+    public async Task<string> CreateSessionAsync(string connectionId, string channelType, ClaimsPrincipal? principal = null)
     {
         var callerConnectionId = ParseConnectionId(connectionId);
         var ct = ParseChannelType(channelType);
@@ -96,7 +100,8 @@ public sealed class SessionRegistry
     public async Task<SessionEnsureResultDto> EnsureSessionAsync(
         string connectionId,
         string? sessionId,
-        string channelType)
+        string channelType,
+        ClaimsPrincipal? principal = null)
     {
         var callerConnectionId = ParseConnectionId(connectionId);
         var ct = ParseChannelType(channelType);
@@ -160,7 +165,7 @@ public sealed class SessionRegistry
     /// Attaches the current SignalR connection to an existing session.
     /// Supports reconnect flows where connection IDs rotate.
     /// </summary>
-    public async Task AttachSessionAsync(string connectionId, string sessionId)
+    public async Task AttachSessionAsync(string connectionId, string sessionId, ClaimsPrincipal? principal = null)
     {
         var callerConnectionId = ParseConnectionId(connectionId);
         var requestedSessionId = ParseSessionId(sessionId);
@@ -191,7 +196,7 @@ public sealed class SessionRegistry
     /// <summary>
     /// Pushes a user message into an existing session's input queue.
     /// </summary>
-    public async Task SendMessageAsync(string connectionId, string sessionId, string text)
+    public async Task SendMessageAsync(string connectionId, string sessionId, string text, ClaimsPrincipal? principal = null)
     {
         var callerConnectionId = ParseConnectionId(connectionId);
         var requestedSessionId = ParseSessionId(sessionId);
@@ -207,20 +212,22 @@ public sealed class SessionRegistry
 
         ThrowIfIngressClosed();
 
+        var identity = _mapper.Map(principal);
+
         var signalrMessageId = $"signalr:{callerConnectionId.Value}:{_timeProvider.GetUtcNow().ToUnixTimeMilliseconds()}:{Guid.NewGuid():N}";
         if (signalrMessageId.Length > 128)
             signalrMessageId = signalrMessageId[..128];
 
         var input = new ChannelInput
         {
-            SenderId = "signalr-user",
+            SenderId = identity.SenderId,
             MessageId = signalrMessageId,
             Audience = TrustAudience.Personal,
             Boundary = SecurityPolicyDefaults.LocalDaemonBoundary,
-            Principal = PrincipalClassification.Operator,
+            Principal = identity.Principal,
             Provenance = new SourceProvenance
             {
-                TransportAuthenticity = TransportAuthenticity.LocalProcess,
+                TransportAuthenticity = identity.Transport,
                 PayloadTaint = PayloadTaint.Trusted,
                 SourceKind = "signalr"
             },

@@ -35,22 +35,22 @@ public sealed class SessionHub : Hub<ISessionHubClient>
 
     public Task<string> CreateSession(string channelType)
     {
-        return _registry.CreateSessionAsync(Context.ConnectionId, channelType);
+        return _registry.CreateSessionAsync(Context.ConnectionId, channelType, Context.User);
     }
 
     public Task<SessionEnsureResultDto> EnsureSession(string? sessionId, string channelType)
     {
-        return _registry.EnsureSessionAsync(Context.ConnectionId, sessionId, channelType);
+        return _registry.EnsureSessionAsync(Context.ConnectionId, sessionId, channelType, Context.User);
     }
 
     public Task AttachSession(string sessionId)
     {
-        return _registry.AttachSessionAsync(Context.ConnectionId, sessionId);
+        return _registry.AttachSessionAsync(Context.ConnectionId, sessionId, Context.User);
     }
 
     public Task SendMessage(string sessionId, string text)
     {
-        return _registry.SendMessageAsync(Context.ConnectionId, sessionId, text);
+        return _registry.SendMessageAsync(Context.ConnectionId, sessionId, text, Context.User);
     }
 
     public override async Task OnDisconnectedAsync(Exception? exception)

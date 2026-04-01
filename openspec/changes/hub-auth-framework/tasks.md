@@ -13,26 +13,26 @@
 
 ## 3. Hub Authorization
 
-- [ ] 3.1 Add `AddAuthentication()` and `AddAuthorization()` to daemon `Program.cs` service registration
-- [ ] 3.2 Add `[Authorize]` attribute to `SessionHub`
-- [ ] 3.3 Add `app.UseAuthentication()` and `app.UseAuthorization()` to the middleware pipeline before hub mapping
+- [x] 3.1 Add `AddAuthentication()` and `AddAuthorization()` to daemon `Program.cs` service registration
+- [x] 3.2 Add `[Authorize]` attribute to `SessionHub`
+- [x] 3.3 Add `app.UseAuthentication()` and `app.UseAuthorization()` to the middleware pipeline before hub mapping
 
 ## 4. Identity Propagation into MessageSource
 
-- [ ] 4.1 Add `ClaimsPrincipal` parameter to `SessionRegistry.CreateSessionAsync` and `SendMessageAsync`
-- [ ] 4.2 Inject `ClaimsPrincipalMapper` into `SessionRegistry`
-- [ ] 4.3 Map `ConnectionIdentity` into `MessageSource.Principal`, `MessageSource.Provenance.TransportAuthenticity`, and `MessageSource.SenderId` when creating sessions and processing messages
-- [ ] 4.4 Update `SessionHub` to pass `Context.User` to all `SessionRegistry` method calls
+- [x] 4.1 Add `ClaimsPrincipal` parameter to `SessionRegistry.CreateSessionAsync` and `SendMessageAsync`
+- [x] 4.2 Inject `ClaimsPrincipalMapper` into `SessionRegistry`
+- [x] 4.3 Map `ConnectionIdentity` into `MessageSource.Principal`, `MessageSource.Provenance.TransportAuthenticity`, and `MessageSource.SenderId` when creating sessions and processing messages
+- [x] 4.4 Update `SessionHub` to pass `Context.User` to all `SessionRegistry` method calls
 
 ## 5. CLI Client Compatibility
 
-- [ ] 5.1 Verify CLI's `DaemonClient` / `HubConnectionBuilder` works without changes for loopback connections (loopback scheme authenticates automatically, no token needed)
-- [ ] 5.2 Add a `ConfigureAccessToken` extension point on `HubConnectionBuilder` that reads a bearer token from config/secrets when available (no-op for loopback, preparation for device pairing scheme)
+- [x] 5.1 Verify CLI's `DaemonClient` / `HubConnectionBuilder` works without changes for loopback connections (loopback scheme authenticates automatically, no token needed)
+- [x] 5.2 Add a `ConfigureAccessToken` extension point on `HubConnectionBuilder` that reads a bearer token from config/secrets when available (no-op for loopback, preparation for device pairing scheme)
 
 ## 6. Tests
 
 - [x] 6.1 Unit test `ClaimsPrincipalMapper` — loopback claims → `Operator`/`LocalProcess`, missing claims → `UntrustedExternal`/`Unknown`, bearer claims → `Operator`/`Verified`
 - [x] 6.2 Unit test `LoopbackAuthenticationHandler` — loopback IP → success with correct claims, non-loopback IP → `NoResult`
-- [ ] 6.3 Integration test — unauthenticated non-loopback connection gets 401
-- [ ] 6.4 Integration test — loopback connection succeeds and `MessageSource` carries `Operator` / `LocalProcess`
-- [ ] 6.5 Unit test `SessionRegistry` — verify `MessageSource` is populated from `ClaimsPrincipal` instead of hardcoded defaults
+- [x] 6.3 Integration test — unauthenticated non-loopback connection gets 401
+- [x] 6.4 Integration test — loopback connection succeeds and `MessageSource` carries `Operator` / `LocalProcess`
+- [x] 6.5 Unit test `SessionRegistry` — verify `MessageSource` is populated from `ClaimsPrincipal` instead of hardcoded defaults

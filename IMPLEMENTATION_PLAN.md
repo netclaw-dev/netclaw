@@ -799,13 +799,13 @@ Done when:
 **Verification:** L2
 
 Done when:
-- [ ] `SessionRegistry.CreateSessionAsync` and `SendMessageAsync` accept `ClaimsPrincipal` parameter.
-- [ ] `ClaimsPrincipalMapper` injected into `SessionRegistry`.
-- [ ] `MessageSource.Principal`, `Provenance.TransportAuthenticity`, and `SenderId` populated from `ConnectionIdentity`.
-- [ ] `SessionHub` passes `Context.User` to all `SessionRegistry` calls.
-- [ ] CLI `DaemonClient` works without changes for loopback (verified).
-- [ ] `ConfigureAccessToken` extension point on `HubConnectionBuilder` for future bearer token attachment.
-- [ ] Unit test verifies `MessageSource` populated from claims.
+- [x] `SessionRegistry.CreateSessionAsync` and `SendMessageAsync` accept `ClaimsPrincipal` parameter.
+- [x] `ClaimsPrincipalMapper` injected into `SessionRegistry`.
+- [x] `MessageSource.Principal`, `Provenance.TransportAuthenticity`, and `SenderId` populated from `ConnectionIdentity`.
+- [x] `SessionHub` passes `Context.User` to all `SessionRegistry` calls.
+- [x] CLI `DaemonClient` works without changes for loopback (verified).
+- [x] `ConfigureAccessToken` extension point on `HubConnectionBuilder` for future bearer token attachment.
+- [x] Unit test verifies `MessageSource` populated from claims.
 
 ### Phase C: Device Pairing (device-pairing change)
 

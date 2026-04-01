@@ -27,6 +27,7 @@ public sealed class DaemonClient : IAsyncDisposable
     private readonly HubConnection _connection;
     private readonly string _daemonEndpoint;
     private readonly string _hubUrl;
+    private readonly Func<Task<string?>>? _accessTokenProvider;
     private readonly Subject<SessionOutput> _outputSubject = new();
     private readonly Subject<DaemonConnectionEvent> _connectionSubject = new();
     private readonly TimeProvider _timeProvider;
@@ -45,7 +46,8 @@ public sealed class DaemonClient : IAsyncDisposable
         string daemonEndpoint,
         TimeProvider? timeProvider = null,
         TimeSpan[]? reconnectDelays = null,
-        TimeSpan? serverTimeout = null)
+        TimeSpan? serverTimeout = null,
+        Func<Task<string?>>? accessTokenProvider = null)
     {
         if (string.IsNullOrWhiteSpace(daemonEndpoint))
             throw new ArgumentException("Daemon endpoint cannot be empty.", nameof(daemonEndpoint));
@@ -54,9 +56,10 @@ public sealed class DaemonClient : IAsyncDisposable
         _hubUrl = BuildHubUrl(_daemonEndpoint);
         _timeProvider = timeProvider ?? TimeProvider.System;
         _reconnectDelays = reconnectDelays ?? DefaultReconnectDelays;
+        _accessTokenProvider = accessTokenProvider;
 
         _connection = new HubConnectionBuilder()
-            .WithUrl(_hubUrl)
+            .ConfigureAccessToken(_hubUrl, _accessTokenProvider)
             .WithAutomaticReconnect(_reconnectDelays)
             .Build();
 

@@ -1,8 +1,11 @@
+using System.Runtime.CompilerServices;
+using System.Security.Claims;
 using Akka.Actor;
 using Akka.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
+using Netclaw.Configuration;
 using Netclaw.Daemon.Gateway;
 using Xunit;
 
@@ -16,10 +19,13 @@ namespace Netclaw.Daemon.Tests.Gateway;
 /// </summary>
 public sealed class SessionRegistryTests
 {
-    private SessionRegistry BuildRegistry(SessionIngressGate? ingressGate = null)
+    private SessionRegistry BuildRegistry(
+        SessionIngressGate? ingressGate = null,
+        IRequiredActor<SignalRGatewayActorKey>? actorProvider = null)
         => new(
-            new StubRequiredActor(),
+            actorProvider ?? new StubRequiredActor(),
             ingressGate ?? new SessionIngressGate(),
+            new ClaimsPrincipalMapper(),
             TimeProvider.System,
             NullLogger<SessionRegistry>.Instance);
 
@@ -159,6 +165,45 @@ public sealed class SessionRegistryTests
         Assert.Equal(SessionIngressGate.RestartInProgressMessage, ex.Message);
     }
 
+    [Fact]
+    public async Task SendMessage_populates_channel_input_from_claims_principal()
+    {
+        var capturing = new CapturingRequiredActor();
+        var registry = BuildRegistry(actorProvider: capturing);
+        var sessionId = await registry.CreateSessionAsync("conn-1", "tui");
+
+        var claimsIdentity = new ClaimsIdentity(
+        [
+            new Claim(NetclawClaimTypes.PrincipalClassification, nameof(PrincipalClassification.Operator)),
+            new Claim(NetclawClaimTypes.TransportAuthenticity, nameof(TransportAuthenticity.LocalProcess)),
+            new Claim(NetclawClaimTypes.DeviceId, "local")
+        ], "test");
+        var principal = new ClaimsPrincipal(claimsIdentity);
+
+        await registry.SendMessageAsync("conn-1", sessionId, "hello", principal);
+
+        var enqueue = capturing.Messages.OfType<EnqueueSignalRInput>().Single();
+        Assert.Equal("local", enqueue.Input.SenderId);
+        Assert.Equal(PrincipalClassification.Operator, enqueue.Input.Principal);
+        Assert.Equal(TransportAuthenticity.LocalProcess, enqueue.Input.Provenance!.TransportAuthenticity);
+    }
+
+    [Fact]
+    public async Task SendMessage_uses_untrusted_defaults_when_no_principal_provided()
+    {
+        var capturing = new CapturingRequiredActor();
+        var registry = BuildRegistry(actorProvider: capturing);
+        var sessionId = await registry.CreateSessionAsync("conn-1", "tui");
+
+        // No principal — mapper should fall back to UntrustedExternal / Unknown
+        await registry.SendMessageAsync("conn-1", sessionId, "hello", principal: null);
+
+        var enqueue = capturing.Messages.OfType<EnqueueSignalRInput>().Single();
+        Assert.Equal("unknown", enqueue.Input.SenderId);
+        Assert.Equal(PrincipalClassification.UntrustedExternal, enqueue.Input.Principal);
+        Assert.Equal(TransportAuthenticity.Unknown, enqueue.Input.Provenance!.TransportAuthenticity);
+    }
+
     /// <summary>
     /// Stub implementation of <see cref="IRequiredActor{T}"/> that returns
     /// <see cref="ActorRefs.Nobody"/> for all requests. Used to isolate
@@ -170,5 +215,51 @@ public sealed class SessionRegistryTests
 
         public Task<IActorRef> GetAsync(CancellationToken cancellationToken = default)
             => Task.FromResult<IActorRef>(ActorRefs.Nobody);
+    }
+
+    /// <summary>
+    /// Capturing implementation of <see cref="IRequiredActor{T}"/> that records
+    /// all messages delivered via <see cref="IActorRef.Tell"/>. Used to verify
+    /// that <see cref="SessionRegistry"/> sends the expected actor messages.
+    /// </summary>
+    private sealed class CapturingRequiredActor : IRequiredActor<SignalRGatewayActorKey>
+    {
+        private readonly CapturingActorRef _ref = new();
+
+        public IActorRef ActorRef => _ref;
+        public IReadOnlyList<object> Messages => _ref.Messages;
+
+        public Task<IActorRef> GetAsync(CancellationToken cancellationToken = default)
+            => Task.FromResult<IActorRef>(_ref);
+    }
+
+    /// <summary>
+    /// Minimal <see cref="IActorRef"/> implementation that records all
+    /// <see cref="Tell"/> invocations without requiring a live actor system.
+    /// </summary>
+    private sealed class CapturingActorRef : IActorRef
+    {
+        private readonly List<object> _messages = [];
+        public IReadOnlyList<object> Messages => _messages;
+
+        public ActorPath Path => ActorRefs.Nobody.Path;
+
+        void ICanTell.Tell(object message, IActorRef sender) => _messages.Add(message);
+
+        bool IEquatable<IActorRef>.Equals(IActorRef? other) => ReferenceEquals(this, other);
+
+        int IComparable<IActorRef>.CompareTo(IActorRef? other)
+            => other is null ? 1 : string.Compare(Path.ToString(), other.Path.ToString(), StringComparison.Ordinal);
+
+        int IComparable.CompareTo(object? obj) => obj is IActorRef other
+            ? ((IComparable<IActorRef>)this).CompareTo(other)
+            : 1;
+
+        Akka.Util.ISurrogate Akka.Util.ISurrogated.ToSurrogate(ActorSystem system)
+            => ActorRefs.Nobody.ToSurrogate(system);
+
+        public override bool Equals(object? obj) => ReferenceEquals(this, obj);
+
+        public override int GetHashCode() => RuntimeHelpers.GetHashCode(this);
     }
 }
