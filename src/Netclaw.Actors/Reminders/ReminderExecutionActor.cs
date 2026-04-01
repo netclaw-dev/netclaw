@@ -146,9 +146,13 @@ internal sealed class ReminderExecutionActor : ReceiveActor
 
     private static string BuildPrompt(ReminderDefinition definition)
     {
+        var notifyHeader = definition.NotifyPolicy == NotificationPolicy.Conditional
+            ? "Notification instructions (only notify if results warrant it — it is OK to skip notification if there is nothing actionable):"
+            : "Notification instructions:";
+
         return
             $"{definition.Instructions}\n\n" +
-            "Notification instructions:\n" +
+            $"{notifyHeader}\n" +
             definition.NotifyInstructions;
     }
 
@@ -266,7 +270,13 @@ internal sealed class ReminderExecutionActor : ReceiveActor
             return null;
 
         if (!_notifyAttempted)
+        {
+            // Conditional policy: the LLM decided nothing warranted notification — that's OK.
+            if (_definition.NotifyPolicy == NotificationPolicy.Conditional)
+                return null;
+
             return "Notification instructions were provided but no notification tool was invoked.";
+        }
 
         if (_notifyFailed)
             return _notifyFailureDetail ?? "Notification tool returned an unspecified error.";

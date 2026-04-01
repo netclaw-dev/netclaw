@@ -25,6 +25,18 @@ public enum ReminderScheduleType
 }
 
 /// <summary>
+/// Controls whether the reminder execution system requires notification delivery.
+/// </summary>
+public enum NotificationPolicy
+{
+    /// <summary>Execution fails if notification instructions are present but no notification tool was invoked.</summary>
+    Required = 0,
+
+    /// <summary>Notification is optional — the LLM may skip it if results don't warrant it.</summary>
+    Conditional = 1
+}
+
+/// <summary>
 /// Describes when and how a reminder fires.
 /// </summary>
 [ProtoContract]
@@ -84,6 +96,7 @@ public sealed record ReminderDefinition
     public required ReminderSchedule Schedule { get; init; }
     public required string Instructions { get; init; }
     public required string NotifyInstructions { get; init; }
+    public NotificationPolicy NotifyPolicy { get; init; } = NotificationPolicy.Required;
     public bool Enabled { get; set; } = true;
 
     /// <summary>
@@ -188,6 +201,7 @@ public sealed record ReminderInfo(
     string Title,
     string Instructions,
     string NotifyInstructions,
+    NotificationPolicy NotifyPolicy,
     ReminderSchedule Schedule,
     DateTimeOffset? NextFire,
     bool Enabled,

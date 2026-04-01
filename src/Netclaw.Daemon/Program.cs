@@ -979,7 +979,8 @@ static void MapReminderEndpoints(WebApplication app)
                 ["ScheduleType"] = request.ScheduleType,
                 ["Schedule"] = request.Schedule,
                 ["ReportToChannel"] = reportToChannel,
-                ["NotifyInstructions"] = notifyInstructions
+                ["NotifyInstructions"] = notifyInstructions,
+                ["NotifyPolicy"] = request.NotifyPolicy
             }, ct);
 
         return result.StartsWith("Error", StringComparison.Ordinal)
@@ -1127,6 +1128,7 @@ static void MapReminderEndpoints(WebApplication app)
             nextFire = Netclaw.Actors.Reminders.SetReminderTool.FormatNextFire(r.NextFire),
             instructions = r.Instructions,
             notifyInstructions = r.NotifyInstructions,
+            notifyPolicy = r.NotifyPolicy.ToString().ToLowerInvariant(),
             sessionId = r.SessionId,
             reportToChannel = r.ReportToChannel,
         });
@@ -1174,6 +1176,7 @@ sealed record CreateReminderRequest
     public string? ReportToChannel { get; init; }
     public string? ReportTarget { get; init; }
     public string? NotifyInstructions { get; init; }
+    public string? NotifyPolicy { get; init; }
 }
 
 sealed record ImportReminderRequest

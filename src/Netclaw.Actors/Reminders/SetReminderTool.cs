@@ -33,7 +33,9 @@ public sealed partial class SetReminderTool : NetclawTool<SetReminderTool.Params
         [property: Description("Optional Slack channel ID for reporting. Omit for current-session targeting.")]
         string? ReportToChannel = null,
         [property: Description("Optional notify instructions describing how Netclaw should report results.")]
-        string? NotifyInstructions = null);
+        string? NotifyInstructions = null,
+        [property: Description("Notification policy: 'required' (default, fail if no notification sent) or 'conditional' (OK to skip notification if nothing actionable).")]
+        string? NotifyPolicy = null);
 
     public SetReminderTool(IActorRef reminderManager, TimeProvider timeProvider, ReminderConfig config)
     {
@@ -95,6 +97,10 @@ public sealed partial class SetReminderTool : NetclawTool<SetReminderTool.Params
                 : $"Post the result to Slack channel {reportToChannel}.";
         }
 
+        var notifyPolicy = string.Equals(args.NotifyPolicy, "conditional", StringComparison.OrdinalIgnoreCase)
+            ? NotificationPolicy.Conditional
+            : NotificationPolicy.Required;
+
         var definition = new ReminderDefinition
         {
             Id = id.Value,
@@ -102,6 +108,7 @@ public sealed partial class SetReminderTool : NetclawTool<SetReminderTool.Params
             Schedule = schedule,
             Instructions = args.Prompt,
             NotifyInstructions = notifyInstructions,
+            NotifyPolicy = notifyPolicy,
             Enabled = true,
             SessionId = sessionId,
             ReportToChannel = reportToChannel,

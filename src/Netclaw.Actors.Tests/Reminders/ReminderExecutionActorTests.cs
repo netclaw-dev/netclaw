@@ -138,6 +138,83 @@ public class ReminderExecutionActorTests : TestKit, IDisposable
     }
 
     [Fact]
+    public async Task Execution_succeeds_when_conditional_policy_and_no_notification_sent()
+    {
+        var pipeline = new ScriptedSessionPipeline(sessionId =>
+        [
+            new TextOutput { SessionId = sessionId, Text = "No new opportunities found." },
+            new TurnCompleted { SessionId = sessionId, TurnNumber = 1 }
+        ]);
+
+        var definition = CreateDefinition("conditional-no-notify") with
+        {
+            NotifyPolicy = NotificationPolicy.Conditional
+        };
+        var probe = CreateTestProbe();
+        Sys.ActorOf(
+            Props.Create(() => new ParentProxy(probe.Ref, definition, pipeline, _historyStore)),
+            "exec-conditional-no-notify");
+
+        var completed = await probe.ExpectMsgAsync<ReminderExecutionCompleted>(TimeSpan.FromSeconds(5));
+
+        Assert.True(completed.Success);
+        Assert.Null(completed.ErrorMessage);
+    }
+
+    [Fact]
+    public async Task Execution_fails_when_required_policy_and_no_notification_sent()
+    {
+        var pipeline = new ScriptedSessionPipeline(sessionId =>
+        [
+            new TextOutput { SessionId = sessionId, Text = "Some output." },
+            new TurnCompleted { SessionId = sessionId, TurnNumber = 1 }
+        ]);
+
+        // Default policy is Required — should fail when no notification tool is invoked
+        var definition = CreateDefinition("required-no-notify");
+        var probe = CreateTestProbe();
+        Sys.ActorOf(
+            Props.Create(() => new ParentProxy(probe.Ref, definition, pipeline, _historyStore)),
+            "exec-required-no-notify");
+
+        var completed = await probe.ExpectMsgAsync<ReminderExecutionCompleted>(TimeSpan.FromSeconds(5));
+
+        Assert.False(completed.Success);
+        Assert.Contains("no notification tool was invoked", completed.ErrorMessage);
+    }
+
+    [Fact]
+    public async Task Execution_fails_when_conditional_policy_and_notification_tool_errors()
+    {
+        var pipeline = new ScriptedSessionPipeline(sessionId =>
+        [
+            new ToolResultOutput
+            {
+                SessionId = sessionId,
+                CallId = "call-err",
+                ToolName = "send_slack_message",
+                Result = "Error: channel not found"
+            },
+            new TurnCompleted { SessionId = sessionId, TurnNumber = 1 }
+        ]);
+
+        var definition = CreateDefinition("conditional-notify-error") with
+        {
+            NotifyPolicy = NotificationPolicy.Conditional
+        };
+        var probe = CreateTestProbe();
+        Sys.ActorOf(
+            Props.Create(() => new ParentProxy(probe.Ref, definition, pipeline, _historyStore)),
+            "exec-conditional-notify-error");
+
+        var completed = await probe.ExpectMsgAsync<ReminderExecutionCompleted>(TimeSpan.FromSeconds(5));
+
+        // Even with conditional policy, a failed notification attempt is still a failure
+        Assert.False(completed.Success);
+        Assert.Contains("channel not found", completed.ErrorMessage);
+    }
+
+    [Fact]
     public async Task Execution_pipeline_requests_streaming_and_tool_call_output()
     {
         var pipeline = new ScriptedSessionPipeline(sessionId =>
