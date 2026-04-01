@@ -88,13 +88,17 @@ static async Task RunDaemonAsync(string[] args, DaemonRestartSignal restartSigna
 
     var builder = WebApplication.CreateBuilder(args);
 
-    // Use port 5199 to avoid conflicts with Aspire (5000) and other defaults
-    builder.WebHost.UseUrls("http://127.0.0.1:5199");
-
     // Register process-lifetime restart signal so services can trigger a restart
     builder.Services.AddSingleton(restartSignal);
 
+    // Load configuration first (netclaw.json, secrets.json, env vars) so that
+    // DaemonConfig.Host/Port can be read before binding the WebHost URL.
     var paths = ConfigureConfigServices(builder.Services, builder.Configuration);
+
+    // Bind listen address from DaemonConfig; falls back to 127.0.0.1:5199 if
+    // the Daemon section is absent from netclaw.json.
+    var daemonBindConfig = DaemonConfig.BindFromConfiguration(builder.Configuration.GetSection("Daemon"));
+    builder.WebHost.UseUrls($"http://{daemonBindConfig.Host}:{daemonBindConfig.Port}");
     var daemonLogLevel = builder.ConfigureNetclawLogging();
     builder.AddNetclawTelemetry();
     ConfigureDaemonServices(builder.Services, builder.Configuration, paths, daemonLogLevel);

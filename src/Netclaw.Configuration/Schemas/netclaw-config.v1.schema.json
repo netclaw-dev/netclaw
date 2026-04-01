@@ -423,6 +423,31 @@
       },
       "additionalProperties": false
     },
+    "Daemon": {
+      "type": "object",
+      "description": "Daemon network and exposure configuration.",
+      "properties": {
+        "Host": {
+          "type": "string",
+          "default": "127.0.0.1",
+          "description": "IP address the daemon binds to. Defaults to loopback (127.0.0.1)."
+        },
+        "Port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535,
+          "default": 5199,
+          "description": "TCP port the daemon listens on. Defaults to 5199."
+        },
+        "ExposureMode": {
+          "type": "string",
+          "enum": ["local", "tailscale-serve", "tailscale-funnel", "cloudflare-tunnel"],
+          "default": "local",
+          "description": "Tunnel infrastructure in front of the daemon. Defaults to local (loopback only, no tunnel)."
+        }
+      },
+      "additionalProperties": false
+    },
     "Workspaces": {
       "type": "object",
       "description": "Project workspace configuration.",

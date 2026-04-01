@@ -642,10 +642,10 @@ Done when:
 **Verification:** L2
 
 Done when:
-- [ ] `Daemon` section added to `netclaw-config.v1.schema.json` with `Host` (string), `Port` (integer), `ExposureMode` (string enum), all with defaults. Section is optional.
-- [ ] `Program.cs` reads `DaemonConfig.Host` and `DaemonConfig.Port` instead of hardcoded `UseUrls("http://127.0.0.1:5199")`.
-- [ ] Existing `DaemonApi.ResolveEndpoint()` in CLI continues to work (reads `Daemon:Endpoint`, unaffected).
-- [ ] Schema validation test verifies valid `Daemon` section accepted, invalid enum rejected, missing section accepted.
+- [x] `Daemon` section added to `netclaw-config.v1.schema.json` with `Host` (string), `Port` (integer), `ExposureMode` (string enum), all with defaults. Section is optional.
+- [x] `Program.cs` reads `DaemonConfig.Host` and `DaemonConfig.Port` instead of hardcoded `UseUrls("http://127.0.0.1:5199")`.
+- [x] Existing `DaemonApi.ResolveEndpoint()` in CLI continues to work (reads `Daemon:Endpoint`, unaffected).
+- [x] Schema validation test verifies valid `Daemon` section accepted, invalid enum rejected, missing section accepted.
 
 ### Task M7.A3: Startup prerequisite validation
 
