@@ -54,11 +54,16 @@
 - [ ] 8.1 Extend `ExposureModeValidationService` — after tunnel checks, verify at least one paired device exists or `IRemoteAuthSchemeRegistration` is registered when exposure mode is non-local
 - [ ] 8.2 On failure: log descriptive error explaining that remote access requires at least one paired device or auth scheme
 
-## 9. Tests
+## 9. CI Smoke Test
 
-- [ ] 9.1 Unit test `DeviceRegistry` — add, remove, lookup-by-hash, last-used update, file round-trip
-- [ ] 9.2 Unit test `PairingCodeService` — generation, validation, expiry, single-use, replacement
-- [ ] 9.3 Unit test `DeviceTokenAuthenticationHandler` — valid token → success with correct claims, invalid token → fail, missing header → no-result
-- [ ] 9.4 Integration test — full pairing flow: generate code → exchange → connect with token → authenticated session
-- [ ] 9.5 Integration test — non-local exposure with no devices fails startup
-- [ ] 9.6 Unit test CLI token attachment — non-loopback endpoint attaches token, loopback skips
+- [ ] 9.1 Add pairing smoke test section to `scripts/smoke/check.sh` that exercises the full pairing lifecycle inside the smoke sandbox container: generate pairing code via `netclaw daemon pair`, exchange via `curl POST /api/pair/exchange`, verify device appears in `netclaw daemon devices`, connect to hub with bearer token, revoke device, verify revoked token is rejected
+- [ ] 9.2 Ensure smoke test runs after daemon start and before teardown (after existing session/stats tests)
+
+## 10. Unit and Integration Tests
+
+- [ ] 10.1 Unit test `DeviceRegistry` — add, remove, lookup-by-hash, last-used update, file round-trip
+- [ ] 10.2 Unit test `PairingCodeService` — generation, validation, expiry, single-use, replacement
+- [ ] 10.3 Unit test `DeviceTokenAuthenticationHandler` — valid token → success with correct claims, invalid token → fail, missing header → no-result
+- [ ] 10.4 Integration test — full pairing flow: generate code → exchange → connect with token → authenticated session
+- [ ] 10.5 Integration test — non-local exposure with no devices fails startup
+- [ ] 10.6 Unit test CLI token attachment — non-loopback endpoint attaches token, loopback skips
