@@ -627,10 +627,10 @@ Phases below follow this order.
 **Verification:** L1
 
 Done when:
-- [ ] `ExposureMode` enum exists with `Local`, `TailscaleServe`, `TailscaleFunnel`, `CloudflareTunnel` values and `JsonStringEnumConverter` support for kebab-case.
-- [ ] `DaemonConfig` record exists with `Host` (string, default `"127.0.0.1"`), `Port` (int, default `5199`), `ExposureMode` (default `Local`).
-- [ ] `DaemonConfig` is registered in daemon DI bound from `IConfiguration` section `"Daemon"`.
-- [ ] Unit tests verify deserialization from JSON with kebab-case enum values, defaults, and missing section.
+- [x] `ExposureMode` enum exists with `Local`, `TailscaleServe`, `TailscaleFunnel`, `CloudflareTunnel` values and `JsonStringEnumConverter` support for kebab-case.
+- [x] `DaemonConfig` record exists with `Host` (string, default `"127.0.0.1"`), `Port` (int, default `5199`), `ExposureMode` (default `Local`).
+- [x] `DaemonConfig` is registered in daemon DI bound from `IConfiguration` section `"Daemon"`.
+- [x] Unit tests verify deserialization from JSON with kebab-case enum values, defaults, and missing section.
 
 ### Task M7.A2: JSON schema and daemon bind address
 

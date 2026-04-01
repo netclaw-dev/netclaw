@@ -316,6 +316,10 @@ static void ConfigureDaemonServices(
     NetclawPaths paths,
     LogLevel daemonLogLevel)
 {
+    // Daemon bind address and exposure mode
+    var daemonConfig = DaemonConfig.BindFromConfiguration(configuration.GetSection("Daemon"));
+    services.AddSingleton(daemonConfig);
+
     services
         .AddOptions<ModelSelection>()
         .Bind(configuration.GetSection("Models"))

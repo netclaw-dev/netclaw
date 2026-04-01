@@ -1,9 +1,9 @@
 ## 1. Configuration Types and Schema
 
-- [ ] 1.1 Add `ExposureMode` enum (`Local`, `TailscaleServe`, `TailscaleFunnel`, `CloudflareTunnel`) to `Netclaw.Configuration` with `JsonStringEnumConverter` support for kebab-case values
-- [ ] 1.2 Add `DaemonConfig` record to `Netclaw.Configuration` with `Host` (string, default `"127.0.0.1"`), `Port` (int, default `5199`), and `ExposureMode` (default `Local`) properties
+- [x] 1.1 Add `ExposureMode` enum (`Local`, `TailscaleServe`, `TailscaleFunnel`, `CloudflareTunnel`) to `Netclaw.Configuration` with `JsonStringEnumConverter` support for kebab-case values
+- [x] 1.2 Add `DaemonConfig` record to `Netclaw.Configuration` with `Host` (string, default `"127.0.0.1"`), `Port` (int, default `5199`), and `ExposureMode` (default `Local`) properties
 - [ ] 1.3 Add `Daemon` section to `netclaw-config.v1.schema.json` with `Host` (string), `Port` (integer), `ExposureMode` (string enum), all with defaults. Section itself is optional.
-- [ ] 1.4 Register `DaemonConfig` binding from `IConfiguration` section `"Daemon"` in daemon DI setup
+- [x] 1.4 Register `DaemonConfig` binding from `IConfiguration` section `"Daemon"` in daemon DI setup
 
 ## 2. Daemon Bind Address
 
