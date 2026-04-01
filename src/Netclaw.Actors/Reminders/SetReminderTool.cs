@@ -97,8 +97,8 @@ public sealed partial class SetReminderTool : NetclawTool<SetReminderTool.Params
                 : $"Post the result to Slack channel {reportToChannel}.";
         }
 
-        var notifyPolicy = string.Equals(args.NotifyPolicy, "conditional", StringComparison.OrdinalIgnoreCase)
-            ? NotificationPolicy.Conditional
+        var notifyPolicy = Enum.TryParse<NotificationPolicy>(args.NotifyPolicy, ignoreCase: true, out var parsed)
+            ? parsed
             : NotificationPolicy.Required;
 
         var definition = new ReminderDefinition

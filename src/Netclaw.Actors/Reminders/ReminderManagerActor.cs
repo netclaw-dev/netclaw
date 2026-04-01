@@ -331,19 +331,7 @@ public sealed partial class ReminderManagerActor : ReceiveActor
             var infos = definitions
                 .Where(d => cmd.IncludeDisabled || d.Enabled)
                 .OrderBy(d => d.Title, StringComparer.OrdinalIgnoreCase)
-                .Select(d => new ReminderInfo(
-                    Id: new ReminderId(d.Id),
-                    Title: d.Title,
-                    Instructions: d.Instructions,
-                    NotifyInstructions: d.NotifyInstructions,
-                    NotifyPolicy: d.NotifyPolicy,
-                    Schedule: d.Schedule,
-                    NextFire: schedules.GetValueOrDefault(d.Id),
-                    Enabled: d.Enabled,
-                    SessionId: d.SessionId,
-                    ReportToChannel: d.ReportToChannel,
-                    ReportToThreadTs: d.ReportToThreadTs,
-                    AgentDefinitionId: d.AgentDefinitionId))
+                .Select(d => ToReminderInfo(d, schedules.GetValueOrDefault(d.Id)))
                 .ToList();
 
             replyTo.Tell(new ReminderListResponse(infos));
@@ -368,19 +356,7 @@ public sealed partial class ReminderManagerActor : ReceiveActor
             }
 
             var schedules = await ListScheduledRemindersAsync();
-            var info = new ReminderInfo(
-                Id: cmd.Id,
-                Title: definition.Title,
-                Instructions: definition.Instructions,
-                NotifyInstructions: definition.NotifyInstructions,
-                NotifyPolicy: definition.NotifyPolicy,
-                Schedule: definition.Schedule,
-                NextFire: schedules.GetValueOrDefault(definition.Id),
-                Enabled: definition.Enabled,
-                SessionId: definition.SessionId,
-                ReportToChannel: definition.ReportToChannel,
-                ReportToThreadTs: definition.ReportToThreadTs,
-                AgentDefinitionId: definition.AgentDefinitionId);
+            var info = ToReminderInfo(definition, schedules.GetValueOrDefault(definition.Id));
 
             replyTo.Tell(new GetReminderResponse(info));
         }
@@ -751,6 +727,20 @@ public sealed partial class ReminderManagerActor : ReceiveActor
 
     [GeneratedRegex("[^a-zA-Z0-9_-]", RegexOptions.Compiled)]
     private static partial Regex InvalidActorNameChars();
+
+    private static ReminderInfo ToReminderInfo(ReminderDefinition d, DateTimeOffset? nextFire) => new(
+        Id: new ReminderId(d.Id),
+        Title: d.Title,
+        Instructions: d.Instructions,
+        NotifyInstructions: d.NotifyInstructions,
+        NotifyPolicy: d.NotifyPolicy,
+        Schedule: d.Schedule,
+        NextFire: nextFire,
+        Enabled: d.Enabled,
+        SessionId: d.SessionId,
+        ReportToChannel: d.ReportToChannel,
+        ReportToThreadTs: d.ReportToThreadTs,
+        AgentDefinitionId: d.AgentDefinitionId);
 
     private static string SanitizeActorName(string raw)
     {
