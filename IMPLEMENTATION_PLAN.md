@@ -10,6 +10,40 @@ Three OpenSpec changes: `exposure-modes`, `hub-auth-framework`, `device-pairing`
 
 ---
 
+## Fix-it (Review after iter-15) — NOW
+
+### Task R3.1: Add multi-scheme auth selector for DeviceBearer
+**Source:** Review after iteration 15, finding #1
+**Issue:** `DeviceTokenAuthenticationHandler` is registered but unreachable through the auth pipeline. `AddAuthentication(LoopbackAuthenticationHandler.SchemeName)` makes Loopback the only scheme tried by `[Authorize]`. Non-loopback connections with valid bearer tokens get 401 because DeviceBearer is never invoked. Need a `PolicyScheme` or `ForwardDefaultSelector` that delegates to DeviceBearer when an `Authorization: Bearer` header is present, otherwise falls back to Loopback.
+**Done when:**
+- [x] Auth pipeline uses a selector scheme (e.g., `PolicyScheme` with `ForwardDefaultSelector`) that tries DeviceBearer when `Authorization: Bearer` header is present, otherwise Loopback
+- [x] Integration test: remote connection with valid bearer token authenticates successfully through `[Authorize]` on SessionHub
+- [x] Integration test: loopback connection without bearer token still authenticates via Loopback scheme
+**Verification:** L2
+
+### Task R3.2: Add `.AllowAnonymous()` to exchange endpoint
+**Source:** Review after iteration 15, finding #2
+**Issue:** `POST /api/pair/exchange` is designed as unauthenticated but relies on implicit anonymity (no fallback authorization policy). Adding `options.FallbackPolicy` in the future would silently break pairing. Explicit `.AllowAnonymous()` documents intent and prevents breakage.
+**Done when:**
+- [ ] `MapPost("/api/pair/exchange", ...)` chain includes `.AllowAnonymous()`
+**Verification:** L1
+
+### Task R3.3: Narrow DeviceRegistry.VerifyToken catch to FormatException
+**Source:** Review after iteration 15, finding #3
+**Issue:** `DeviceRegistry.VerifyToken()` at line 176 uses bare `catch` that swallows all exceptions. Only `FormatException` (from malformed base64url/hex) is expected. Broader exceptions (e.g., `CryptographicException`) should propagate.
+**Done when:**
+- [ ] `catch` in `DeviceRegistry.VerifyToken` narrowed to `catch (FormatException)`
+**Verification:** L1
+
+### Task R3.4: Sync device-pairing/tasks.md section 10 checkboxes
+**Source:** Review after iteration 15, finding #4
+**Issue:** `openspec/changes/device-pairing/tasks.md` section 10 tasks 10.1 (DeviceRegistry tests), 10.2 (PairingCodeService tests), 10.3 (DeviceTokenAuthenticationHandler tests) are unchecked despite being implemented in iterations 14-15.
+**Done when:**
+- [ ] Tasks 10.1, 10.2, 10.3 in `openspec/changes/device-pairing/tasks.md` marked `[x]`
+**Verification:** L1
+
+---
+
 ## Fix-it (Review after iter-05) — NOW
 
 ### Task R1.1: Sync OpenSpec tasks.md checkboxes for exposure-modes

@@ -108,13 +108,24 @@ static async Task RunDaemonAsync(string[] args, DaemonRestartSignal restartSigna
     builder.AddNetclawTelemetry();
     ConfigureDaemonServices(builder.Services, builder.Configuration, paths, daemonLogLevel, daemonConfig);
 
-    // Authentication — loopback scheme is the default (local operator).
-    // Device bearer token scheme authenticates remote clients paired via the pairing flow.
+    // Authentication — a PolicyScheme selector is the default scheme.
+    // It routes to DeviceBearer when an Authorization: Bearer header is present,
+    // otherwise to Loopback (local operator).  This ensures [Authorize] endpoints
+    // are reachable by both loopback clients and paired remote devices.
     builder.Services.AddSingleton<DeviceRegistry>();
     builder.Services.AddSingleton<PairingCodeService>();
     builder.Services.AddSingleton<IRemoteAuthSchemeRegistration, DevicePairingSchemeRegistration>();
     builder.Services
-        .AddAuthentication(LoopbackAuthenticationHandler.SchemeName)
+        .AddAuthentication("AuthSelector")
+        .AddPolicyScheme("AuthSelector", "Bearer or Loopback selector", options =>
+        {
+            options.ForwardDefaultSelector = ctx =>
+                ctx.Request.Headers.ContainsKey("Authorization") &&
+                ctx.Request.Headers.Authorization.ToString()
+                    .StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase)
+                    ? DeviceTokenAuthenticationHandler.SchemeName
+                    : LoopbackAuthenticationHandler.SchemeName;
+        })
         .AddScheme<Microsoft.AspNetCore.Authentication.AuthenticationSchemeOptions, LoopbackAuthenticationHandler>(
             LoopbackAuthenticationHandler.SchemeName, _ => { })
         .AddScheme<Microsoft.AspNetCore.Authentication.AuthenticationSchemeOptions, DeviceTokenAuthenticationHandler>(
