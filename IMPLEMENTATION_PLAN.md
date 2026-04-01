@@ -690,14 +690,14 @@ Done when:
 **Verification:** L1
 
 Done when:
-- [ ] `DaemonConfigSection` record added to `WizardConfigBuilder` typed sections.
-- [ ] `ExposureModeStepViewModel : IWizardStepViewModel` with `SelectionListNode` for four modes, `local` pre-selected.
-- [ ] `ExposureModeStepView` renders mode descriptions and risk indicators.
-- [ ] High-risk warning panel with explicit confirmation for `tailscale-funnel` and `cloudflare-tunnel`.
-- [ ] Informational notice for `tailscale-serve`.
-- [ ] `ContributeConfig` writes `Daemon` section only for non-default mode (local = omit).
-- [ ] Step inserted after security posture, before Slack in `InitWizardViewModel`.
-- [ ] Unit tests verify config contribution per mode.
+- [x] `DaemonConfigSection` record added to `WizardConfigBuilder` typed sections.
+- [x] `ExposureModeStepViewModel : IWizardStepViewModel` with `SelectionListNode` for four modes, `local` pre-selected.
+- [x] `ExposureModeStepView` renders mode descriptions and risk indicators.
+- [x] High-risk warning panel with explicit confirmation for `tailscale-funnel` and `cloudflare-tunnel`.
+- [x] Informational notice for `tailscale-serve`.
+- [x] `ContributeConfig` writes `Daemon` section only for non-default mode (local = omit).
+- [x] Step inserted after security posture, before Slack in `InitWizardViewModel`.
+- [x] Unit tests verify config contribution per mode.
 
 ### Task M7.A6: Hot-reload exclusion and spec updates
 
