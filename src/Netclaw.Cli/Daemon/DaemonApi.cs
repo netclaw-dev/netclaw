@@ -1,3 +1,4 @@
+using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using Microsoft.Extensions.Configuration;
@@ -229,6 +230,31 @@ public sealed class DaemonApi
         var client = _factory.CreateClient();
         return await client.GetAsync(
             $"{_endpoint}/api/provider/oauth/callback?code={Uri.EscapeDataString(code)}&state={Uri.EscapeDataString(state)}", cts.Token);
+    }
+
+    // ── Device pairing ────────────────────────────────────────────────
+
+    public async Task<List<PairedDeviceInfoDto>> ListPairedDevicesAsync(CancellationToken ct = default)
+    {
+        using var cts = CreateTimeoutCts(DefaultTimeout, ct);
+        var client = _factory.CreateClient();
+        using var response = await client.GetAsync($"{_endpoint}/api/pair/devices", cts.Token);
+        response.EnsureSuccessStatusCode();
+        var stream = await response.Content.ReadAsStreamAsync(cts.Token);
+        return await JsonSerializer.DeserializeAsync<List<PairedDeviceInfoDto>>(stream, WebJsonOptions, cts.Token) ?? [];
+    }
+
+    /// <summary>
+    /// Revokes a paired device by name.
+    /// Returns <c>true</c> if removed, <c>false</c> if not found.
+    /// </summary>
+    public async Task<bool> RevokePairedDeviceAsync(string name, CancellationToken ct = default)
+    {
+        using var cts = CreateTimeoutCts(DefaultTimeout, ct);
+        var client = _factory.CreateClient();
+        using var response = await client.DeleteAsync(
+            $"{_endpoint}/api/pair/devices/{Uri.EscapeDataString(name)}", cts.Token);
+        return response.StatusCode is HttpStatusCode.NoContent;
     }
 
     // ── Health (for init wizard polling) ──────────────────────────────

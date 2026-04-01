@@ -222,6 +222,23 @@ static async Task RunDaemonAsync(string[] args, DaemonRestartSignal restartSigna
         return Results.Ok(new { token = rawToken });
     }).RequireRateLimiting("pairing-exchange").AllowAnonymous();
 
+    // Device registry management — authenticated (loopback or valid bearer token required).
+    // Returns a sanitized view of paired devices (no TokenHash/Salt).
+    app.MapGet("/api/pair/devices", async (DeviceRegistry deviceRegistry, CancellationToken ct) =>
+    {
+        var devices = await deviceRegistry.ListAsync(ct);
+        var sanitized = devices.Select(d => new PairedDeviceInfoDto(d.Name, d.CreatedAt, d.LastUsedAt));
+        return Results.Ok(sanitized);
+    }).RequireAuthorization();
+
+    app.MapDelete("/api/pair/devices/{name}", async (string name, DeviceRegistry deviceRegistry, CancellationToken ct) =>
+    {
+        var removed = await deviceRegistry.RemoveAsync(name, ct);
+        return removed
+            ? Results.NoContent()
+            : Results.NotFound(new { error = $"Device '{name}' not found." });
+    }).RequireAuthorization();
+
     // MCP OAuth 2.1 endpoints
     app.MapPost("/api/mcp/oauth/start/{name}", async (
         string name,

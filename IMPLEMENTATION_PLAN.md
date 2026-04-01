@@ -888,13 +888,13 @@ Done when:
 **Verification:** L2
 
 Done when:
-- [ ] `netclaw daemon pair` connects via SignalR, invokes `GeneratePairingCode()`, displays code + expiry.
-- [ ] `GeneratePairingCode()` hub method requires `Operator` principal.
-- [ ] `netclaw daemon devices` lists paired devices (name, created, last-used).
-- [ ] `netclaw daemon devices revoke <name>` removes device.
-- [ ] Daemon logs pairing code to stdout for Docker container log access.
-- [ ] `netclaw pair <endpoint>` prompts for code + device name, POSTs to exchange endpoint.
-- [ ] On success: stores token in `secrets.json`, endpoint in `netclaw.json`.
+- [x] `netclaw daemon pair` connects via SignalR, invokes `GeneratePairingCode()`, displays code + expiry.
+- [x] `GeneratePairingCode()` hub method requires `Operator` principal.
+- [x] `netclaw daemon devices` lists paired devices (name, created, last-used).
+- [x] `netclaw daemon devices revoke <name>` removes device.
+- [x] Daemon logs pairing code to stdout for Docker container log access.
+- [x] `netclaw pair <endpoint>` prompts for code + device name, POSTs to exchange endpoint.
+- [x] On success: stores token in `secrets.json`, endpoint in `netclaw.json`.
 
 ### Task M7.C4: CLI token attachment and startup validation
 

@@ -30,18 +30,18 @@
 
 ## 5. Daemon-Side CLI Commands
 
-- [ ] 5.1 Add `netclaw daemon pair` command — connects to daemon via SignalR, invokes `GeneratePairingCode()` hub method, displays code and expiration
-- [ ] 5.2 Add `GeneratePairingCode()` method to `SessionHub` (requires `Operator` principal — loopback only)
-- [ ] 5.3 Add `netclaw daemon devices` command — lists paired devices (name, created, last-used)
-- [ ] 5.4 Add `netclaw daemon devices revoke <name>` command — removes device from registry
-- [ ] 5.5 Daemon logs pairing code to stdout so Docker operators can read from container logs
+- [x] 5.1 Add `netclaw daemon pair` command — connects to daemon via SignalR, invokes `GeneratePairingCode()` hub method, displays code and expiration
+- [x] 5.2 Add `GeneratePairingCode()` method to `SessionHub` (requires `Operator` principal — loopback only)
+- [x] 5.3 Add `netclaw daemon devices` command — lists paired devices (name, created, last-used)
+- [x] 5.4 Add `netclaw daemon devices revoke <name>` command — removes device from registry
+- [x] 5.5 Daemon logs pairing code to stdout so Docker operators can read from container logs
 
 ## 6. Remote CLI Pairing Command
 
-- [ ] 6.1 Add `netclaw pair <endpoint>` command — prompts for pairing code and device name (default: hostname)
-- [ ] 6.2 POST to `<endpoint>/api/pair/exchange` with code and device name
-- [ ] 6.3 On success: store token in `~/.netclaw/config/secrets.json` under `DeviceToken`, store endpoint in `netclaw.json` as `Daemon:Endpoint`
-- [ ] 6.4 On failure: display error and suggest checking the pairing code or trying again
+- [x] 6.1 Add `netclaw pair <endpoint>` command — prompts for pairing code and device name (default: hostname)
+- [x] 6.2 POST to `<endpoint>/api/pair/exchange` with code and device name
+- [x] 6.3 On success: store token in `~/.netclaw/config/secrets.json` under `DeviceToken`, store endpoint in `netclaw.json` as `Daemon:Endpoint`
+- [x] 6.4 On failure: display error and suggest checking the pairing code or trying again
 
 ## 7. CLI Token Attachment
 

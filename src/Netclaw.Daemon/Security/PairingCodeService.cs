@@ -17,7 +17,7 @@ namespace Netclaw.Daemon.Security;
 /// <para>Code format: 8 characters drawn from <c>23456789ABCDEFGHJKLMNPQRSTUVWXYZ</c>
 /// (no ambiguous 0/O/1/I characters), displayed as <c>XXXX-XXXX</c>.</para>
 /// </summary>
-internal sealed class PairingCodeService
+public sealed class PairingCodeService
 {
     private static readonly char[] Alphabet =
         "23456789ABCDEFGHJKLMNPQRSTUVWXYZ".ToCharArray();
