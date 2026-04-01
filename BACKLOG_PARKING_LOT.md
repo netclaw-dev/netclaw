@@ -19,4 +19,8 @@
 
 -->
 
-_(No items currently awaiting decision.)_
+### Extract shared ExposureMode parse/wire-value utility
+- **Source:** RALPH run 20260401-171023, review after iteration 5 (finding #4)
+- **Issue:** ExposureMode parsing and wire-value conversion logic is duplicated in 6 locations across 3 assemblies (`Netclaw.Configuration`, `Netclaw.Cli`, `Netclaw.Daemon`). The doctor check duplicates `ParseMode`/`ToWireValue` because `Netclaw.Cli` doesn't have `InternalsVisibleTo` for `Netclaw.Configuration`. Adding a new ExposureMode variant requires synchronized changes in all 6 locations.
+- **Decision needed:** Should `DaemonConfig.ParseExposureMode()` and a canonical `ToWireValue()` be made `public` on the `Netclaw.Configuration` assembly so other assemblies can reuse them? Or create a new `ExposureModeSerializer` public utility type? Or accept the duplication given assembly boundary constraints?
+- **Date parked:** 2026-04-01

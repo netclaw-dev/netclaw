@@ -10,6 +10,33 @@ Three OpenSpec changes: `exposure-modes`, `hub-auth-framework`, `device-pairing`
 
 ---
 
+## Fix-it (Review after iter-05) — NOW
+
+### Task R1.1: Sync OpenSpec tasks.md checkboxes for exposure-modes
+**Source:** Review after iteration 5, finding #1
+**Issue:** `openspec/changes/exposure-modes/tasks.md` only has tasks 1.1, 1.2, 1.4 checked. All tasks completed in M7.A2-A5 (1.3, 2.1, 2.2, 3.1-3.5, 4.1-4.5, 5.1-5.7, 7.1-7.5) remain unchecked despite being implemented and verified.
+**Done when:**
+- [x] All tasks in `openspec/changes/exposure-modes/tasks.md` that were implemented in iterations 1-5 have their checkboxes marked `[x]`
+**Verification:** L1
+
+### Task R1.2: Eliminate silent fallback in ExposureModeExtensions.ToWireValue()
+**Source:** Review after iteration 5, finding #2
+**Issue:** `ExposureModeExtensions.ToWireValue()` in `WizardConfigBuilder.cs:340-347` uses `_ => "local"` — a silent fallback that violates CLAUDE.md's "No silent fallbacks" rule. Also: `ExposureModeDoctorCheck.ToWireValue()` and `ExposureModeValidationService` inline switch each use different fallback strategies.
+**Done when:**
+- [ ] `ExposureModeExtensions.ToWireValue()` in `WizardConfigBuilder.cs` throws on unknown enum values instead of defaulting to "local"
+- [ ] `ExposureModeDoctorCheck.ToWireValue()` throws on unknown enum values instead of using `ToString()`
+- [ ] `ExposureModeValidationService.StartAsync()` inline wire-value switch at line 60-66 throws on unknown enum values instead of using `ToString()`
+**Verification:** L1
+
+### Task R1.3: DaemonConfig single-bind refactor in Program.cs
+**Source:** Review after iteration 5, finding #3
+**Issue:** `DaemonConfig.BindFromConfiguration()` is called twice in `Program.cs` (line ~100 for WebHost URL, line ~324 for DI singleton), creating two separate instances. If config were modified between calls, WebHost bind address and DI singleton would silently diverge.
+**Done when:**
+- [ ] `DaemonConfig` is computed once in `RunDaemonAsync`, used for `UseUrls`, and passed into `ConfigureDaemonServices` for DI registration (instead of re-parsing)
+**Verification:** L1
+
+---
+
 ## Review Fix-it: Sessions `--json` flag does not imply `--once`
 
 **Source:** RALPH run 20260306-185029, review-after-iter-06 (finding F.1)
