@@ -45,6 +45,12 @@ public sealed record SessionPipelineOptions
     /// Which output categories the channel wants to receive.
     /// </summary>
     public OutputFilter Filter { get; init; } = OutputFilter.Full;
+
+    /// <summary>
+    /// Optional additive prompt overlay installed on the session before channel
+    /// input is dispatched.
+    /// </summary>
+    public string? PromptOverlay { get; init; }
 }
 
 public static class MessageSourceFactory
@@ -215,6 +221,16 @@ public sealed class SessionPipeline : ISessionPipeline
             Filter = options.Filter
         };
 
+        SetSessionPromptOverlay? promptOverlayMsg = null;
+        if (!string.IsNullOrWhiteSpace(options.PromptOverlay))
+        {
+            promptOverlayMsg = new SetSessionPromptOverlay
+            {
+                SessionId = sessionId,
+                PromptOverlay = options.PromptOverlay!.Trim()
+            };
+        }
+
         // Ordering safety: both Tell calls target the same SessionId, so
         // GenericChildPerEntityParent routes them to the same child actor.
         // Akka guarantees FIFO delivery from a single sender (this stream
@@ -226,6 +242,8 @@ public sealed class SessionPipeline : ISessionPipeline
             .To(Sink.ForEach<SendUserMessage>(cmd =>
             {
                 sessionManager.Tell(joinMsg, ActorRefs.NoSender);
+                if (promptOverlayMsg is not null)
+                    sessionManager.Tell(promptOverlayMsg, ActorRefs.NoSender);
                 sessionManager.Tell(cmd, ActorRefs.NoSender);
             }));
 

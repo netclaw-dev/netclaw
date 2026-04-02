@@ -13,6 +13,7 @@ public enum AlertType
     ProviderUnreachable,
     ReminderExecutionFailed,
     ReminderAutoDisabled,
+    WebhookReceived,
     DaemonStarted,
     DaemonStopping,
     UpdateAvailable,

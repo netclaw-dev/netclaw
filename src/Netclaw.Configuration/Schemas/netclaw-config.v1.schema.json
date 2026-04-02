@@ -423,6 +423,27 @@
       },
       "additionalProperties": false
     },
+    "Webhooks": {
+      "type": "object",
+      "description": "Inbound webhook route configuration.",
+      "properties": {
+        "Enabled": {
+          "type": "boolean",
+          "default": false
+        },
+        "ExecutionTimeoutSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3600,
+          "default": 300
+        },
+        "Routes": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/WebhookRoute" }
+        }
+      },
+      "additionalProperties": false
+    },
     "Daemon": {
       "type": "object",
       "description": "Daemon network and exposure configuration.",
@@ -579,6 +600,95 @@
           "type": "array",
           "items": { "$ref": "#/$defs/ModelModality" },
           "description": "Manual override for output modalities. Bypasses automated detection."
+        }
+      },
+      "additionalProperties": false
+    },
+    "NotificationTarget": {
+      "type": "object",
+      "properties": {
+        "Kind": {
+          "type": "string",
+          "enum": ["Slack"],
+          "default": "Slack"
+        },
+        "ChannelId": {
+          "type": ["string", "null"]
+        }
+      },
+      "additionalProperties": false
+    },
+    "WebhookVerification": {
+      "type": "object",
+      "properties": {
+        "Kind": {
+          "type": "string",
+          "enum": ["GitHubHmacSha256", "HeaderSecret"],
+          "default": "GitHubHmacSha256"
+        },
+        "Secret": {
+          "type": ["string", "null"]
+        },
+        "SecretHeaderName": {
+          "type": ["string", "null"]
+        },
+        "EventHeaderName": {
+          "type": ["string", "null"]
+        },
+        "DeliveryIdHeaderName": {
+          "type": ["string", "null"]
+        }
+      },
+      "additionalProperties": false
+    },
+    "WebhookRoute": {
+      "type": "object",
+      "properties": {
+        "Enabled": {
+          "type": "boolean",
+          "default": true
+        },
+        "Verification": {
+          "$ref": "#/$defs/WebhookVerification"
+        },
+        "Events": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "Audience": {
+          "type": "string",
+          "enum": ["Public", "Team", "Personal"],
+          "default": "Public"
+        },
+        "Prompt": {
+          "type": "string",
+          "default": ""
+        },
+        "NotifyInstructions": {
+          "type": "string",
+          "default": ""
+        },
+        "NotifyPolicy": {
+          "type": "string",
+          "enum": ["Required", "Conditional"],
+          "default": "Conditional"
+        },
+        "NotificationTarget": {
+          "anyOf": [
+            { "$ref": "#/$defs/NotificationTarget" },
+            { "type": "null" }
+          ],
+          "default": null
+        },
+        "MaxBodyBytes": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 1048576
+        },
+        "RateLimitPerMinute": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 30
         }
       },
       "additionalProperties": false

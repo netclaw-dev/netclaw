@@ -9,7 +9,8 @@ public enum ChannelType
     Tui,
     Headless,
     SignalR,
-    Reminder
+    Reminder,
+    Webhook
 }
 
 public static class ChannelTypeExtensions
@@ -21,6 +22,7 @@ public static class ChannelTypeExtensions
         ChannelType.Headless => "headless",
         ChannelType.SignalR => "signalr",
         ChannelType.Reminder => "reminder",
+        ChannelType.Webhook => "webhook",
         _ => throw new ArgumentOutOfRangeException(nameof(value), value, null)
     };
 
@@ -36,6 +38,8 @@ public static class ChannelTypeExtensions
         { value = ChannelType.SignalR; return true; }
         if (string.Equals(wire, "reminder", StringComparison.OrdinalIgnoreCase))
         { value = ChannelType.Reminder; return true; }
+        if (string.Equals(wire, "webhook", StringComparison.OrdinalIgnoreCase))
+        { value = ChannelType.Webhook; return true; }
         value = default;
         return false;
     }

@@ -1,5 +1,6 @@
 using System.Text.Json.Serialization;
 using ProtoBuf;
+using Netclaw.Configuration;
 
 namespace Netclaw.Actors.Reminders;
 
@@ -22,18 +23,6 @@ public enum ReminderScheduleType
     OneShot = 0,
     Interval = 1,
     Cron = 2
-}
-
-/// <summary>
-/// Controls whether the reminder execution system requires notification delivery.
-/// </summary>
-public enum NotificationPolicy
-{
-    /// <summary>Execution fails if notification instructions are present but no notification tool was invoked.</summary>
-    Required = 0,
-
-    /// <summary>Notification is optional — the LLM may skip it if results don't warrant it.</summary>
-    Conditional = 1
 }
 
 /// <summary>

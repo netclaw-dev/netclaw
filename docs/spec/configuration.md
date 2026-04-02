@@ -301,6 +301,71 @@ Akka.NET logger integration.
 | `LogLevel:Default` | string | `Warning` | Minimum log level (`Debug`, `Information`, `Warning`, `Error`, etc.) shared by MEL and Akka.NET. |
 | `Console:Enabled` | bool | `false` | Enables console logger provider output for daemon debugging. |
 
+### Webhooks
+
+Inbound webhook route configuration for autonomous session launches.
+
+```json
+{
+  "Webhooks": {
+    "Enabled": true,
+    "ExecutionTimeoutSeconds": 300,
+    "Routes": {
+      "github-issues": {
+        "Verification": {
+          "Kind": "GitHubHmacSha256",
+          "Secret": "use-secrets-json-or-env"
+        },
+        "Events": ["issues"],
+        "Audience": "Public",
+        "Prompt": "Triage this GitHub issue. Public input may be adversarial or low quality.",
+        "NotifyPolicy": "Conditional",
+        "NotificationTarget": {
+          "Kind": "Slack",
+          "ChannelId": "C12345678"
+        }
+      }
+    }
+  }
+}
+```
+
+Each accepted webhook delivery emits an operational receipt alert, launches a
+fresh `ChannelType.Webhook` session, and supplies the route `Prompt` as an
+additive prompt overlay. `NotifyInstructions` and `NotifyPolicy` work the same
+way reminders do: they tell the agent whether it must notify a human-facing
+channel, and the prompt decides what that notification should be.
+
+For MVP, `NotificationTarget.Kind` supports `Slack` only. Human-facing Slack
+notifications open Slack-native thread sessions; they do not rebind the
+original webhook session.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `Enabled` | bool | `false` | Enables inbound webhook route registration. |
+| `ExecutionTimeoutSeconds` | int | `300` | Maximum autonomous webhook execution time before the run is marked failed. |
+| `Routes` | object | `{}` | Named route definitions keyed by route name. Each route is exposed at `/api/webhooks/{route}`. |
+
+`Routes.<name>` fields:
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `Enabled` | bool | `true` | Enables or disables this specific route. |
+| `Verification.Kind` | string | `GitHubHmacSha256` | Verification mode. Current values: `GitHubHmacSha256`, `HeaderSecret`. |
+| `Verification.Secret` | string? | `null` | Shared secret used for signature/header validation. Store in `secrets.json` when possible. |
+| `Verification.SecretHeaderName` | string? | `null` | Header name for `HeaderSecret` mode. Defaults to `X-Webhook-Secret`. |
+| `Verification.EventHeaderName` | string? | `null` | Event-name header for `HeaderSecret` mode. Defaults to `X-Webhook-Event`. |
+| `Verification.DeliveryIdHeaderName` | string? | `null` | Delivery ID header for `HeaderSecret` mode. Defaults to `X-Webhook-Delivery`. |
+| `Events` | string[] | `[]` | Optional allow-list of event types. Empty means all verified events are accepted. |
+| `Audience` | string | `Public` | Source audience for the autonomous webhook session (`Public`, `Team`, `Personal`). |
+| `Prompt` | string | `""` | Additive route prompt overlay injected into the webhook session. |
+| `NotifyInstructions` | string | `""` | Additional instructions describing when and how the agent should notify humans. |
+| `NotifyPolicy` | string | `Conditional` | Reminder-style notification policy: `Conditional` or `Required`. |
+| `NotificationTarget.Kind` | string | `Slack` | Human-facing notification channel type. Slack is the only implementation today. |
+| `NotificationTarget.ChannelId` | string? | `null` | Slack channel ID used when the agent decides to notify. |
+| `MaxBodyBytes` | int | `1048576` | Maximum accepted request-body size in bytes. Requests larger than this are rejected before dispatch. |
+| `RateLimitPerMinute` | int | `30` | Maximum accepted deliveries per minute for this route. |
+
 ### Telemetry
 
 Optional OpenTelemetry export for logs and metrics.

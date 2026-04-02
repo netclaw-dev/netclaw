@@ -138,6 +138,62 @@ public class LlmSessionIntegrationTests : TestKit
     }
 
     [Fact]
+    public async Task Session_prompt_overlay_is_additive_to_base_system_prompt()
+    {
+        var sessionId = new SessionId("webhook/prompt-overlay-test");
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("overlay-probe");
+
+        await sessionManager.Ask<SessionJoined>(new JoinSession
+        {
+            SessionId = sessionId,
+            Subscriber = subscriber,
+            Filter = OutputFilter.TextOnly
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+
+        sessionManager.Tell(new SetSessionPromptOverlay
+        {
+            SessionId = sessionId,
+            PromptOverlay = "Route overlay: triage the webhook payload before deciding whether to notify."
+        });
+
+        sessionManager.Tell(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "payload json",
+            Source = new MessageSource
+            {
+                ChannelType = ChannelType.Webhook,
+                SenderId = "webhook:test",
+                ChannelId = "github-issues",
+                MessageId = "delivery-1",
+                TurnId = "delivery-1",
+                Audience = TrustAudience.Public,
+                Boundary = SecurityPolicyDefaults.ResolveBoundaryFromAudience(TrustAudience.Public),
+                Principal = PrincipalClassification.VerifiedAutomation,
+                Provenance = new SourceProvenance
+                {
+                    TransportAuthenticity = TransportAuthenticity.Verified,
+                    PayloadTaint = PayloadTaint.Public,
+                    SourceKind = "issues"
+                },
+                ReceivedAt = _timeProvider.GetUtcNow()
+            }
+        });
+
+        await subscriber.ExpectMsgAsync<SessionJoined>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+
+        var systemText = string.Join("\n\n", _fakeChatClient.ReceivedMessages.Last()
+            .Where(message => message.Role == Microsoft.Extensions.AI.ChatRole.System)
+            .Select(message => message.Text)
+            .Where(text => !string.IsNullOrWhiteSpace(text)));
+
+        Assert.Contains("You are a test assistant.", systemText);
+        Assert.Contains("Route overlay: triage the webhook payload before deciding whether to notify.", systemText);
+    }
+
+    [Fact]
     public async Task SendUserMessage_delivers_TextOutput_and_TurnCompleted()
     {
         var sessionId = new SessionId("test-channel/test-thread");

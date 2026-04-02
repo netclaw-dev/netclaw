@@ -311,6 +311,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     private void Ready()
     {
         CommandSubscriptionMessages();
+        CommandSessionContextMessages();
         CommandSnapshotMessages();
 
         // Passivation: stop after idle timeout, snapshot first for fast recovery
@@ -348,6 +349,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         // Disable idle timeout while processing — re-enabled on transition to Ready
         Context.SetReceiveTimeout(null);
         CommandSubscriptionMessages();
+        CommandSessionContextMessages();
         CommandSnapshotMessages();
 
         Command<SendUserMessage>(cmd =>
@@ -828,6 +830,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         // Disable idle timeout while compacting — re-enabled on transition to Ready
         Context.SetReceiveTimeout(null);
         CommandSubscriptionMessages();
+        CommandSessionContextMessages();
         CommandSnapshotMessages();
 
         // Buffer user messages during compaction (same as Processing)
@@ -1114,6 +1117,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         });
 
         CommandSubscriptionMessages();
+        CommandSessionContextMessages();
         CommandSnapshotMessages();
         Command<PrepareForDaemonRestart>(_ => RequestRestartDrain());
 
@@ -1184,6 +1188,16 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         => _config.TurnLlmTimeout > _config.SidecarLlmTimeout
             ? _config.TurnLlmTimeout
             : _config.SidecarLlmTimeout;
+
+    private void CommandSessionContextMessages()
+    {
+        Command<SetSessionPromptOverlay>(msg =>
+        {
+            _sessionPromptOverlay = string.IsNullOrWhiteSpace(msg.PromptOverlay)
+                ? null
+                : msg.PromptOverlay.Trim();
+        });
+    }
 
     private bool IsCurrentCompactionOperation(long operationId)
         => _watchdog.IsCurrentOperation("compaction", operationId);
@@ -2167,6 +2181,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     // Transient: skill body injected by slash-command dispatch for the current turn
     private string? _slashCommandSkillContent;
+    private string? _sessionPromptOverlay;
 
     /// <summary>
     /// Inject dynamic context layers as system messages after the persisted system prompt
@@ -2191,6 +2206,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         // inject the skill body as a system context part
         if (_slashCommandSkillContent is not null)
             parts.Add(_slashCommandSkillContent);
+
+        if (_sessionPromptOverlay is not null)
+            parts.Add(_sessionPromptOverlay);
 
         if (_turnRestartNotice is not null)
             parts.Add(_turnRestartNotice);
