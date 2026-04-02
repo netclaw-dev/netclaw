@@ -114,6 +114,7 @@ static async Task RunDaemonAsync(string[] args, DaemonRestartSignal restartSigna
     // are reachable by both loopback clients and paired remote devices.
     builder.Services.AddSingleton<DeviceRegistry>();
     builder.Services.AddSingleton<PairingCodeService>();
+    builder.Services.AddSingleton<PairingExchangeGuard>();
     builder.Services.AddSingleton<IRemoteAuthSchemeRegistration, DevicePairingSchemeRegistration>();
     builder.Services.AddNetclawAuthSchemes();
     builder.Services.AddAuthorization();
@@ -170,22 +171,43 @@ static async Task RunDaemonAsync(string[] args, DaemonRestartSignal restartSigna
     app.MapGet("/api/stats", async (DaemonStatsService statsService, int? days, CancellationToken ct) =>
         Results.Ok(await statsService.GetStatsAsync(days, ct)));
 
-    // Device pairing exchange — unauthenticated, rate-limited.
+    // Device pairing exchange — unauthenticated, rate-limited, with per-IP lockout guard.
     // Accepts a time-limited pairing code and a device name; returns a bearer token on success.
     app.MapPost("/api/pair/exchange", async (
+        HttpContext httpContext,
         PairingCodeExchangeRequest request,
         PairingCodeService pairingCodeService,
+        PairingExchangeGuard exchangeGuard,
         DeviceRegistry deviceRegistry,
         TimeProvider timeProvider,
         CancellationToken ct) =>
     {
+        var remoteIp = httpContext.Connection.RemoteIpAddress;
+
+        // Layer 1: Per-IP failure lockout — blocked IPs get 429 before any processing.
+        if (exchangeGuard.IsBlocked(remoteIp))
+        {
+            var retryAfter = exchangeGuard.GetRetryAfterSeconds(remoteIp);
+            httpContext.Response.Headers.RetryAfter = retryAfter?.ToString() ?? "900";
+            return Results.Json(
+                new { error = "Too many failed attempts. Try again later." },
+                statusCode: StatusCodes.Status429TooManyRequests);
+        }
+
+        // Layer 2: No-code-pending gate — if no code exists, hide the endpoint entirely.
+        if (pairingCodeService.GetPendingExpiry() is null)
+            return Results.NotFound();
+
         if (string.IsNullOrWhiteSpace(request.Code) || string.IsNullOrWhiteSpace(request.DeviceName))
             return Results.BadRequest(new { error = "code and deviceName are required." });
 
         if (!pairingCodeService.TryConsume(request.Code))
+        {
+            exchangeGuard.RecordFailure(remoteIp);
             return Results.Json(
                 new { error = "Invalid, expired, or already-used pairing code." },
                 statusCode: StatusCodes.Status401Unauthorized);
+        }
 
         var tokenBytes = RandomNumberGenerator.GetBytes(32);
         var rawToken = Base64Url.EncodeToString(tokenBytes);

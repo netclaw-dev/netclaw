@@ -27,6 +27,7 @@ public sealed class PairingExchangeEndpointTests : IDisposable
     private readonly FakeTimeProvider _time;
     private readonly DeviceRegistry _registry;
     private readonly PairingCodeService _pairingCodeService;
+    private readonly PairingExchangeGuard _exchangeGuard;
 
     public PairingExchangeEndpointTests()
     {
@@ -35,6 +36,7 @@ public sealed class PairingExchangeEndpointTests : IDisposable
         _time = new FakeTimeProvider(new DateTimeOffset(2026, 4, 1, 0, 0, 0, TimeSpan.Zero));
         _registry = new DeviceRegistry(new NetclawPaths(_tempDir), _time, NullLogger<DeviceRegistry>.Instance);
         _pairingCodeService = new PairingCodeService(_time);
+        _exchangeGuard = new PairingExchangeGuard(_time);
     }
 
     public void Dispose() => Directory.Delete(_tempDir, recursive: true);
@@ -46,6 +48,7 @@ public sealed class PairingExchangeEndpointTests : IDisposable
 
         builder.Services.AddSingleton(_registry);
         builder.Services.AddSingleton(_pairingCodeService);
+        builder.Services.AddSingleton(_exchangeGuard);
         builder.Services.AddSingleton<TimeProvider>(_time);
         builder.Services.AddNetclawAuthSchemes();
         builder.Services.AddAuthorization();
@@ -58,19 +61,38 @@ public sealed class PairingExchangeEndpointTests : IDisposable
         // Mirror the production exchange endpoint (from Program.cs) without rate limiting,
         // since TestServer doesn't set RemoteIpAddress and rate limiting is orthogonal.
         app.MapPost("/api/pair/exchange", async (
+            HttpContext httpContext,
             PairingCodeExchangeRequest request,
             PairingCodeService pairingCodeService,
+            PairingExchangeGuard exchangeGuard,
             DeviceRegistry deviceRegistry,
             TimeProvider timeProvider,
             CancellationToken ct) =>
         {
+            var remoteIp = httpContext.Connection.RemoteIpAddress;
+
+            if (exchangeGuard.IsBlocked(remoteIp))
+            {
+                var retryAfter = exchangeGuard.GetRetryAfterSeconds(remoteIp);
+                httpContext.Response.Headers.RetryAfter = retryAfter?.ToString() ?? "900";
+                return Results.Json(
+                    new { error = "Too many failed attempts. Try again later." },
+                    statusCode: StatusCodes.Status429TooManyRequests);
+            }
+
+            if (pairingCodeService.GetPendingExpiry() is null)
+                return Results.NotFound();
+
             if (string.IsNullOrWhiteSpace(request.Code) || string.IsNullOrWhiteSpace(request.DeviceName))
                 return Results.BadRequest(new { error = "code and deviceName are required." });
 
             if (!pairingCodeService.TryConsume(request.Code))
+            {
+                exchangeGuard.RecordFailure(remoteIp);
                 return Results.Json(
                     new { error = "Invalid, expired, or already-used pairing code." },
                     statusCode: 401);
+            }
 
             var tokenBytes = System.Security.Cryptography.RandomNumberGenerator.GetBytes(32);
             var rawToken = System.Buffers.Text.Base64Url.EncodeToString(tokenBytes);
@@ -157,6 +179,8 @@ public sealed class PairingExchangeEndpointTests : IDisposable
     public async Task Exchange_returns_400_when_code_missing()
     {
         var ct = TestContext.Current.CancellationToken;
+        _pairingCodeService.GenerateCode(); // ensure a code is pending so the gate lets us through
+
         await using var app = await CreateAppAsync();
         var client = app.GetTestClient();
 
@@ -197,7 +221,7 @@ public sealed class PairingExchangeEndpointTests : IDisposable
     }
 
     [Fact]
-    public async Task Exchange_returns_401_when_no_code_pending()
+    public async Task Exchange_returns_404_when_no_code_pending()
     {
         var ct = TestContext.Current.CancellationToken;
         await using var app = await CreateAppAsync();
@@ -206,11 +230,11 @@ public sealed class PairingExchangeEndpointTests : IDisposable
         var response = await client.PostAsJsonAsync("/api/pair/exchange",
             new { code = "ABCD-EFGH", deviceName = "laptop" }, ct);
 
-        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
 
     [Fact]
-    public async Task Exchange_returns_401_when_code_already_consumed()
+    public async Task Exchange_returns_404_when_code_already_consumed()
     {
         var ct = TestContext.Current.CancellationToken;
         var (code, _) = _pairingCodeService.GenerateCode();
@@ -223,14 +247,14 @@ public sealed class PairingExchangeEndpointTests : IDisposable
             new { code, deviceName = "laptop" }, ct);
         Assert.Equal(HttpStatusCode.OK, first.StatusCode);
 
-        // Second exchange with same code fails
+        // Second exchange with same code fails — no pending code means 404
         var second = await client.PostAsJsonAsync("/api/pair/exchange",
             new { code, deviceName = "phone" }, ct);
-        Assert.Equal(HttpStatusCode.Unauthorized, second.StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, second.StatusCode);
     }
 
     [Fact]
-    public async Task Exchange_returns_401_when_code_expired()
+    public async Task Exchange_returns_404_when_code_expired()
     {
         var ct = TestContext.Current.CancellationToken;
         var (code, _) = _pairingCodeService.GenerateCode();
@@ -241,9 +265,10 @@ public sealed class PairingExchangeEndpointTests : IDisposable
         await using var app = await CreateAppAsync();
         var client = app.GetTestClient();
 
+        // Expired code means GetPendingExpiry() returns null → 404
         var response = await client.PostAsJsonAsync("/api/pair/exchange",
             new { code, deviceName = "laptop" }, ct);
 
-        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
 }

@@ -4,7 +4,7 @@ description: "REQUIRED when the user asks about Netclaw capabilities, scheduling
 disable-model-invocation: true
 metadata:
   author: netclaw
-  version: "1.2.0"
+  version: "1.3.0"
 ---
 
 # Netclaw Operations
@@ -21,6 +21,7 @@ problems, how to update preferences, or how to maintain itself.
 | Discover MCP tools | [Tool Discovery](#tool-discovery) |
 | Something is broken, debug it | [Diagnostics](#diagnostics) |
 | Update preferences, tone, profile | [Identity](#identity) |
+| Pair remote devices, manage access | [Device Pairing](#device-pairing) |
 | Check health, update self | [Self-Maintenance](#self-maintenance) |
 
 ## Scheduling
@@ -75,7 +76,12 @@ When something seems wrong with Netclaw itself:
 | Memory recall degraded | `netclaw status` memory section |
 | Daemon won't start | crash logs at `~/.netclaw/logs/crash-*.log` |
 
-Config files: `~/.netclaw/config/netclaw.json` (base config),
+Doctor checks include `exposure-mode`, which validates that the `Daemon`
+config section (if present) specifies a supported exposure mode and that
+the corresponding tunnel integration is reachable.
+
+Config files: `~/.netclaw/config/netclaw.json` (base config, optional
+`Daemon` section for `Host`, `Port`, `ExposureMode`),
 `~/.netclaw/config/secrets.json` (credentials — never display API keys).
 
 ## Identity
@@ -105,3 +111,54 @@ file. If it should be recalled when relevant → SQLite memory.
 | Memory/token stats | `netclaw stats` |
 | List past sessions | `netclaw sessions --once` |
 | Inspect reminder history | `netclaw reminder history <id> --last 5` |
+
+## Device Pairing
+
+Remote devices authenticate with the daemon using a two-sided pairing protocol.
+
+### Pairing flow
+
+**Daemon side** (requires local/SSH access):
+
+```
+shell_execute: netclaw daemon pair
+```
+
+This generates a single-use pairing code (8 chars, 5-minute TTL). The code
+generation endpoint is loopback-only.
+
+**Client side** (remote device):
+
+```
+shell_execute: netclaw pair https://my-daemon.tail1234.ts.net:5000
+```
+
+The user is prompted for the pairing code. On success, the bearer token is
+saved to `secrets.json` (`DeviceToken` field) and the endpoint is saved to
+`netclaw.json`.
+
+### Device management
+
+| Action | Command |
+|--------|---------|
+| List paired devices | `netclaw daemon devices` |
+| Revoke a device | `netclaw daemon devices revoke <name>` |
+
+### Security notes
+
+- Codes: single-use, 8 chars from 32-char alphabet (~1.1 trillion
+  combinations), 5-minute TTL
+- Rate limiting: 5 attempts/min/IP; after 10 failures, the IP is blocked for
+  15 minutes
+- When no code is pending, the exchange endpoint returns 404 (invisible to
+  scanners)
+- Tokens are stored as salted SHA-256 hashes on the daemon; the raw token is
+  never persisted server-side
+
+### Config locations
+
+- `~/.netclaw/config/devices.json` — paired device registry (daemon side)
+- `~/.netclaw/config/secrets.json` — `DeviceToken` field (client side, added
+  by `netclaw pair`)
+- `~/.netclaw/config/netclaw.json` — `Daemon` section (`Host`, `Port`,
+  `ExposureMode`)
