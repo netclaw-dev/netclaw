@@ -97,7 +97,7 @@ PanelNode (outer: "Netclaw Setup")
 │  ✓  Slack bot token valid                                    │
 │  ✓  Slack app token valid                                    │
 │  ✓  MCP: memorizer connected (12 tools)                      │
-│  ●  Exposure: local-only (no public endpoint)                │
+│  ●  Exposure: local-only (loopback-only daemon access)       │
 │                                                              │
 │  All checks passed. Run `netclaw run` to start.              │
 │                                                              │

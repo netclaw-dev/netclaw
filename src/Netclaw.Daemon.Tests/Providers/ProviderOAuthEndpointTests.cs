@@ -1,11 +1,16 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Security.Claims;
 using System.Text;
+using System.Text.Encodings.Web;
 using System.Text.Json;
+using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Netclaw.Configuration;
 using Netclaw.Daemon.Providers;
 using Netclaw.Providers;
@@ -17,10 +22,22 @@ namespace Netclaw.Daemon.Tests.Providers;
 public sealed class ProviderOAuthEndpointTests
 {
     [Fact]
+    public async Task StartEndpoint_RequiresAuthorization()
+    {
+        await using var host = await CreateHostAsync(_ => SuccessfulTokenResponse());
+        var client = host.GetTestClient();
+
+        var response = await client.PostAsync("/api/provider/oauth/start?provider=test-oauth", null, TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [Fact]
     public async Task StartEndpoint_ReturnsAuthorizationUrl_AndPendingStatus()
     {
         await using var host = await CreateHostAsync(_ => SuccessfulTokenResponse());
         var client = host.GetTestClient();
+        client.DefaultRequestHeaders.Add(TestAuthHandler.HeaderName, TestAuthHandler.HeaderValue);
 
         var startResponse = await client.PostAsync("/api/provider/oauth/start?provider=test-oauth", null, TestContext.Current.CancellationToken);
         startResponse.EnsureSuccessStatusCode();
@@ -44,6 +61,7 @@ public sealed class ProviderOAuthEndpointTests
     {
         await using var host = await CreateHostAsync(_ => SuccessfulTokenResponse());
         var client = host.GetTestClient();
+        client.DefaultRequestHeaders.Add(TestAuthHandler.HeaderName, TestAuthHandler.HeaderValue);
 
         var startResponse = await client.PostAsync("/api/provider/oauth/start?provider=test-oauth", null, TestContext.Current.CancellationToken);
         var startPayload = await startResponse.Content.ReadFromJsonAsync<JsonElement>(TestContext.Current.CancellationToken);
@@ -67,6 +85,7 @@ public sealed class ProviderOAuthEndpointTests
         await using var host = await CreateHostAsync(_ =>
             JsonResponse(new { error = "invalid_request" }, HttpStatusCode.BadRequest));
         var client = host.GetTestClient();
+        client.DefaultRequestHeaders.Add(TestAuthHandler.HeaderName, TestAuthHandler.HeaderValue);
 
         var startResponse = await client.PostAsync("/api/provider/oauth/start?provider=test-oauth", null, TestContext.Current.CancellationToken);
         var startPayload = await startResponse.Content.ReadFromJsonAsync<JsonElement>(TestContext.Current.CancellationToken);
@@ -87,11 +106,17 @@ public sealed class ProviderOAuthEndpointTests
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseTestServer();
 
+        builder.Services
+            .AddAuthentication(TestAuthHandler.SchemeName)
+            .AddScheme<AuthenticationSchemeOptions, TestAuthHandler>(TestAuthHandler.SchemeName, _ => { });
+        builder.Services.AddAuthorization();
         builder.Services.AddSingleton(new OAuthPkceService(new HttpClient(new FakeHttpMessageHandler(tokenHandler))));
         builder.Services.AddSingleton<IProviderOAuthCallbackListener, NoOpProviderOAuthCallbackListener>();
         builder.Services.AddSingleton(new ProviderDescriptorRegistry([new TestOAuthDescriptor()]));
 
         var app = builder.Build();
+        app.UseAuthentication();
+        app.UseAuthorization();
         app.MapProviderOAuthEndpoints();
         await app.StartAsync();
         return app;
@@ -135,6 +160,31 @@ public sealed class ProviderOAuthEndpointTests
     {
         public void StartListening(string redirectUri, string state)
         {
+        }
+    }
+
+    private sealed class TestAuthHandler : AuthenticationHandler<AuthenticationSchemeOptions>
+    {
+        public const string SchemeName = "TestAuth";
+        public const string HeaderName = "X-Test-Auth";
+        public const string HeaderValue = "ok";
+
+        public TestAuthHandler(
+            IOptionsMonitor<AuthenticationSchemeOptions> options,
+            ILoggerFactory logger,
+            UrlEncoder encoder)
+            : base(options, logger, encoder)
+        {
+        }
+
+        protected override Task<AuthenticateResult> HandleAuthenticateAsync()
+        {
+            if (!Request.Headers.TryGetValue(HeaderName, out var value) || value != HeaderValue)
+                return Task.FromResult(AuthenticateResult.NoResult());
+
+            var identity = new ClaimsIdentity([new Claim(ClaimTypes.Name, "test-user")], SchemeName);
+            var principal = new ClaimsPrincipal(identity);
+            return Task.FromResult(AuthenticateResult.Success(new AuthenticationTicket(principal, SchemeName)));
         }
     }
 

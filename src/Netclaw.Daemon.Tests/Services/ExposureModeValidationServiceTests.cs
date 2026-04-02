@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging.Abstractions;
 using Netclaw.Configuration;
+using Netclaw.Daemon.Security;
 using Netclaw.Daemon.Services;
 using Xunit;
 
@@ -139,7 +140,7 @@ public sealed class ExposureModeValidationServiceTests
     [Fact]
     public async Task NonLocal_WithRemoteAuthScheme_NoPairedDevices_StartSucceeds()
     {
-        // Auth scheme is registered → devices can be paired later; startup is allowed.
+        // An alternative remote auth scheme is registered → startup is allowed.
         var config = new DaemonConfig { ExposureMode = ExposureMode.TailscaleServe };
         var sut = BuildService(
             config,
@@ -148,6 +149,22 @@ public sealed class ExposureModeValidationServiceTests
             deviceCount: 0);
 
         await sut.StartAsync(TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task NonLocal_WithOnlyDeviceBearerRegistration_NoPairedDevices_Throws()
+    {
+        var config = new DaemonConfig { ExposureMode = ExposureMode.TailscaleServe };
+        var sut = BuildService(
+            config,
+            name => name == "tailscaled",
+            remoteAuthSchemes: [new FakeRemoteAuthScheme(DeviceTokenAuthenticationHandler.SchemeName)],
+            deviceCount: 0);
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => sut.StartAsync(TestContext.Current.CancellationToken));
+
+        Assert.Contains("No remote authentication available", ex.Message);
     }
 
     // ── StopAsync is always a no-op ──────────────────────────────────────────

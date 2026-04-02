@@ -37,13 +37,22 @@ internal static class DaemonClientFactory
     internal static Func<Task<string?>>? CreateAccessTokenProvider(
         string endpoint, NetclawPaths paths)
     {
-        if (IsLoopback(endpoint))
-            return null;
-
-        var token = ReadDeviceToken(paths);
+        var token = ResolveDeviceToken(endpoint, paths);
         return token is not null
             ? () => Task.FromResult<string?>(token)
             : null;
+    }
+
+    /// <summary>
+    /// Resolves the device bearer token for a non-loopback endpoint, or <c>null</c>
+    /// when the endpoint is loopback or no token is configured.
+    /// </summary>
+    internal static string? ResolveDeviceToken(string endpoint, NetclawPaths paths)
+    {
+        if (IsLoopback(endpoint))
+            return null;
+
+        return ReadDeviceToken(paths);
     }
 
     /// <summary>

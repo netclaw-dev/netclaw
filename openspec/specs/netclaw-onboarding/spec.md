@@ -25,14 +25,19 @@ The system SHALL avoid echoing sensitive credentials in plain text output.
 - **WHEN** operator enters a provider API key
 - **THEN** the input is masked and not logged in clear text
 
-### Requirement: Security warnings for public modes
+### Requirement: Security warnings for internet-reachable modes
 
-The system SHALL show explicit warnings before enabling public exposure modes.
+The system SHALL show explicit warnings before enabling internet-reachable
+exposure modes. `Public` deployment posture remains a channel-audience term,
+not an anonymous network-access term. Audience selection and exposure-mode
+selection are independent choices: audience controls chat participants, while
+exposure mode controls daemon network reachability.
 
 #### Scenario: Enable funnel mode
 
 - **WHEN** operator selects `tailscale-funnel`
-- **THEN** onboarding requires explicit confirmation and auth policy validation
+- **THEN** onboarding requires explicit confirmation and validation that remote
+  access is restricted to authenticated users
 
 ### Requirement: Guided onboarding
 
@@ -61,7 +66,7 @@ run a health check to verify the baseline configuration is functional.
 - **WHEN** onboarding reaches the exposure step
 - **THEN** the wizard presents available exposure modes (local, tailscale-serve,
   tailscale-funnel, cloudflare-tunnel)
-- **AND** applies security warnings for public modes
+- **AND** applies security warnings for internet-reachable modes
 
 #### Scenario: Health check on completion
 

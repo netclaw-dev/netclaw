@@ -124,4 +124,32 @@ public sealed class PairingExchangeGuardTests
         _guard.RecordFailure(ip);
         Assert.False(_guard.IsBlocked(ip));
     }
+
+    [Fact]
+    public void RecordFailure_OldFailuresOutsideWindow_DoNotCountTowardThreshold()
+    {
+        var ip = IPAddress.Parse("10.0.0.3");
+
+        for (var i = 0; i < PairingExchangeGuard.FailureThreshold - 1; i++)
+            _guard.RecordFailure(ip);
+
+        _time.Advance(PairingExchangeGuard.FailureWindow + TimeSpan.FromSeconds(1));
+
+        _guard.RecordFailure(ip);
+        Assert.False(_guard.IsBlocked(ip));
+    }
+
+    [Fact]
+    public void RecordFailure_HitsThresholdOnlyWithinRollingWindow()
+    {
+        var ip = IPAddress.Parse("10.0.0.4");
+
+        for (var i = 0; i < PairingExchangeGuard.FailureThreshold - 1; i++)
+            _guard.RecordFailure(ip);
+
+        _time.Advance(PairingExchangeGuard.FailureWindow - TimeSpan.FromMinutes(1));
+        _guard.RecordFailure(ip);
+
+        Assert.True(_guard.IsBlocked(ip));
+    }
 }

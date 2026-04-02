@@ -39,10 +39,12 @@ The UI SHALL validate ACL changes before apply.
 
 The UI SHALL surface exposure mode and approval state prominently.
 
-#### Scenario: Public exposure warning
+#### Scenario: Internet-reachable exposure warning
 
-- **WHEN** system runs in public exposure mode
+- **WHEN** system runs in an internet-reachable exposure mode
 - **THEN** security page shows elevated warning status
+- **AND** indicates that remote daemon access is restricted to authenticated
+  users
 
 ### Requirement: Phase 5 deferral
 

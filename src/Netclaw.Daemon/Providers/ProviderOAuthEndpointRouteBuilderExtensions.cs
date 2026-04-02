@@ -35,7 +35,7 @@ internal static class ProviderOAuthEndpointRouteBuilderExtensions
             callbackListener.StartListening(oauth.RedirectUri.AbsoluteUri, state);
 
             return Results.Ok(new { authorizationUrl = authUrl, state });
-        });
+        }).RequireAuthorization();
 
         app.MapGet("/api/provider/oauth/callback", async (
             HttpContext context,
@@ -67,7 +67,7 @@ internal static class ProviderOAuthEndpointRouteBuilderExtensions
                 await context.Response.WriteAsync(
                     $"<html><body><h2>Authorization failed</h2><p>{System.Net.WebUtility.HtmlEncode(ex.Message)}</p></body></html>", ct);
             }
-        });
+        }).AllowAnonymous();
 
         app.MapGet("/api/provider/oauth/status/{state}", (
             string state,
@@ -83,7 +83,7 @@ internal static class ProviderOAuthEndpointRouteBuilderExtensions
                 refreshToken = result?.RefreshToken?.Value,
                 expiresAt = result?.ExpiresAt?.ToString("o"),
             });
-        });
+        }).RequireAuthorization();
 
         return app;
     }

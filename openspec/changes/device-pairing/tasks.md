@@ -64,6 +64,6 @@
 - [x] 10.1 Unit test `DeviceRegistry` — add, remove, lookup-by-hash, last-used update, file round-trip
 - [x] 10.2 Unit test `PairingCodeService` — generation, validation, expiry, single-use, replacement
 - [x] 10.3 Unit test `DeviceTokenAuthenticationHandler` — valid token → success with correct claims, invalid token → fail, missing header → no-result
-- [ ] 10.4 Integration test — full pairing flow: generate code → exchange → connect with token → authenticated session
+- [x] 10.4 Integration test — full pairing flow: generate code → exchange → connect with token → authenticated session
 - [ ] 10.5 Integration test — non-local exposure with no devices fails startup
 - [x] 10.6 Unit test CLI token attachment — non-loopback endpoint attaches token, loopback skips

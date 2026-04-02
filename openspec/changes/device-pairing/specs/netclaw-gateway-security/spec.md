@@ -13,9 +13,9 @@ modes SHALL fail startup if no remote authentication mechanism is configured
 - **WHEN** no exposure mode is configured
 - **THEN** the system binds loopback-only
 
-#### Scenario: Public mode requires auth policy
+#### Scenario: Internet-reachable mode requires authenticated users
 
-- **GIVEN** exposure mode is public (`tailscale-funnel` or
+- **GIVEN** exposure mode is internet-reachable (`tailscale-funnel` or
   `cloudflare-tunnel`)
 - **WHEN** access policy prerequisites are missing
 - **THEN** configuration validation fails

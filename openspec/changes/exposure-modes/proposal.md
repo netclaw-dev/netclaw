@@ -25,8 +25,8 @@ onboarding wizard).
   declared but its tunnel prerequisites are not met (e.g., `tailscaled` not
   running, `cloudflared` not reachable).
 - Add `netclaw doctor` checks for exposure mode health: tunnel process liveness,
-  unsafe non-loopback bind without exposure mode, public mode without auth
-  policy.
+  unsafe non-loopback bind without exposure mode, and internet-reachable modes
+  without an authenticated remote-access policy.
 - Add an exposure mode selection step to the `netclaw init` wizard.
 - The daemon does NOT manage tunnels — it validates their presence. Tunnel
   lifecycle is the operator's responsibility.
@@ -46,9 +46,9 @@ onboarding wizard).
   PRD-004). The wizard currently handles security posture but not network
   exposure configuration.
 - `netclaw-gateway-security`: The "Controlled exposure modes" requirement
-  currently has scenarios for default-local and public-mode-requires-auth, but
-  no implementation backing. This change fulfills those requirements and adds
-  startup fail-closed validation.
+  currently has scenarios for default-local and internet-reachable-mode-
+  requires-authenticated-users, but no implementation backing. This change
+  fulfills those requirements and adds startup fail-closed validation.
 
 ## Impact
 

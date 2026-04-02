@@ -88,28 +88,31 @@ internal sealed class ExposureModeValidationService : IHostedService
         // (i.e., the production DI path). Tests that don't inject this skip the check.
         if (_remoteAuthSchemes is not null)
         {
-            var hasRemoteAuthScheme = _remoteAuthSchemes.Any();
-            if (!hasRemoteAuthScheme)
+            var hasAlternativeRemoteAuthScheme = _remoteAuthSchemes.Any(s =>
+                !string.Equals(
+                    s.SchemeName,
+                    DeviceTokenAuthenticationHandler.SchemeName,
+                    StringComparison.Ordinal));
+
+            var deviceCount = _deviceCounter is not null
+                ? await _deviceCounter(cancellationToken)
+                : 0;
+
+            if (!hasAlternativeRemoteAuthScheme && deviceCount == 0)
             {
-                var deviceCount = _deviceCounter is not null
-                    ? await _deviceCounter(cancellationToken)
-                    : 0;
+                var modeWireValue = _config.ExposureMode.ToWireValue();
 
-                if (deviceCount == 0)
-                {
-                    var modeWireValue = _config.ExposureMode.ToWireValue();
+                _logger.LogCritical(
+                    "Daemon startup aborted: ExposureMode is '{Mode}' but no paired devices exist " +
+                    "and no alternative remote authentication scheme is configured. Pair a device " +
+                    "with 'netclaw daemon pair' or configure another remote auth scheme before " +
+                    "starting Netclaw.",
+                    modeWireValue);
 
-                    _logger.LogCritical(
-                        "Daemon startup aborted: ExposureMode is '{Mode}' but no remote authentication " +
-                        "scheme is registered and no paired devices exist. Either register a remote " +
-                        "authentication scheme or run 'netclaw daemon pair' to pair a device.",
-                        modeWireValue);
-
-                    throw new InvalidOperationException(
-                        $"No remote authentication available: ExposureMode='{modeWireValue}' requires " +
-                        "either a registered remote auth scheme or at least one paired device. " +
-                        "Run 'netclaw daemon pair' to pair a device, or check your auth configuration.");
-                }
+                throw new InvalidOperationException(
+                    $"No remote authentication available: ExposureMode='{modeWireValue}' requires " +
+                    "either at least one paired device or an alternative remote auth scheme. " +
+                    "Run 'netclaw daemon pair' to pair a device, or check your auth configuration.");
             }
         }
     }

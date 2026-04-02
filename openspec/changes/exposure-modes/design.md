@@ -13,7 +13,9 @@ determines *who can reach the daemon* does not exist.
 
 This change adds the exposure mode declaration, configurable bind address,
 startup validation, doctor checks, and wizard step. It does NOT add
-authentication on the SignalR hub — that is a separate change (device pairing).
+authentication on the SignalR hub; that is a separate change (device pairing),
+but the intended semantics remain that any host-network reachable daemon access
+must be limited to authenticated users.
 
 ## Goals / Non-Goals
 
@@ -74,8 +76,11 @@ kebab-case string values (`"tailscale-serve"`) with a `JsonStringEnumConverter`
 for deserialization.
 
 **Alternative considered**: Reusing `DeploymentPosture` to infer exposure mode
-(Personal → local, Team → tailscale-serve, Public → tailscale-funnel).
-Rejected because deployment posture is about trust level, not network topology.
+(Personal → local, Team → tailscale-serve, Public-channel posture →
+tailscale-funnel). Rejected because deployment posture is about trust level and
+chat audience, not network topology. The two are parallel concepts, not a
+mapping: audience controls who can interact with the bot in chat channels,
+while exposure mode controls how the daemon is reachable over the network.
 A personal-mode daemon might run behind Tailscale Serve for remote access, and
 a team-mode daemon might run local-only on a shared server.
 
@@ -121,13 +126,21 @@ step in the wizard sequence. This position is natural because:
 - Exposure mode sets the network reach (who can contact the bot)
 - Slack configuration depends on knowing whether the daemon is local-only
 
+Audience types (`personal`, `team`, `public`) and exposure modes (`local`,
+`tailscale-serve`, `tailscale-funnel`, `cloudflare-tunnel`) are selected
+independently; neither implies the other.
+
 The step follows the `SecurityPostureStepViewModel` pattern: single sub-step,
 `SelectionListNode` for mode choice, no async operations, contributes a
 `DaemonConfigSection` to `WizardConfigBuilder`.
 
-When a public mode is selected (`tailscale-funnel`, `cloudflare-tunnel`), the
-step displays a warning panel and requires explicit confirmation before
-allowing progression. `tailscale-serve` shows an informational notice only.
+When an internet-reachable mode is selected (`tailscale-funnel`,
+`cloudflare-tunnel`), the step displays a warning panel and requires explicit
+confirmation before allowing progression. `tailscale-serve` shows a tailnet-
+only informational notice. This is distinct from `Public` deployment posture,
+which describes public Slack or Discord channel participation rather than
+anonymous network access. A `Public` audience deployment may still use `local`
+exposure, and a `personal` audience deployment may still use a tunnel.
 
 ### D6: Daemon bind address reads from config with loopback default
 
@@ -167,11 +180,12 @@ misconfiguration (tunnel not installed/running) without coupling to
 tunnel-specific APIs. Doctor checks can be enhanced later with deeper probes.
 
 **[No auth on non-local binding]** → Until device pairing ships, an operator
-could configure `Daemon.Host=0.0.0.0` and expose an unauthenticated hub. The
-doctor warning flags this, and startup validation for tunnel modes provides a
-safety net, but direct non-loopback binding with `ExposureMode=local` is
-allowed with a warning only. Mitigation: the doctor warning is prominent, and
-the device pairing change will add the actual auth gate.
+could configure `Daemon.Host=0.0.0.0` and make the hub host-network reachable
+without the required authenticated-user gate. The doctor warning flags this,
+and startup validation for tunnel modes provides a safety net, but direct non-
+loopback binding with `ExposureMode=local` is allowed with a warning only.
+Mitigation: the doctor warning is prominent, and the device pairing change
+will add the actual auth gate.
 
 **[Wizard step count increases]** → Adding the exposure mode step increases
 the wizard from its current step count. This is a minor UX cost. Mitigation:

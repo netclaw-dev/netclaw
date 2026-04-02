@@ -34,7 +34,8 @@ functional.
 - **WHEN** onboarding reaches the exposure step
 - **THEN** the wizard presents available exposure modes (local, tailscale-serve,
   tailscale-funnel, cloudflare-tunnel)
-- **AND** applies security warnings for public modes
+- **AND** applies security warnings for internet-reachable modes and explains
+  that remote daemon access must still require authenticated users
 
 #### Scenario: Health check on completion
 

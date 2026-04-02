@@ -74,6 +74,20 @@ public sealed class DeviceRegistryTests : IDisposable
         Assert.Equal(2, result.Count);
     }
 
+    [Fact]
+    public async Task Add_duplicate_name_throws_case_insensitively()
+    {
+        var (_, original) = MakeDevice("Laptop", _time.GetUtcNow());
+        var (_, duplicate) = MakeDevice("laptop", _time.GetUtcNow());
+
+        await _registry.AddAsync(original, TestContext.Current.CancellationToken);
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => _registry.AddAsync(duplicate, TestContext.Current.CancellationToken));
+
+        Assert.Contains("already exists", ex.Message);
+    }
+
     // ── Remove ───────────────────────────────────────────────────────────────
 
     [Fact]
@@ -192,5 +206,20 @@ public sealed class DeviceRegistryTests : IDisposable
         var found = await registry2.LookupByTokenAsync(rawToken, TestContext.Current.CancellationToken);
         Assert.NotNull(found);
         Assert.Equal("laptop", found!.Name);
+    }
+
+    [Fact]
+    public async Task List_returns_defensive_copy()
+    {
+        var (_, device) = MakeDevice("laptop", _time.GetUtcNow());
+        await _registry.AddAsync(device, TestContext.Current.CancellationToken);
+
+        var firstResult = await _registry.ListAsync(TestContext.Current.CancellationToken);
+        var mutable = Assert.IsType<List<PairedDevice>>(firstResult);
+        mutable.Clear();
+
+        var secondResult = await _registry.ListAsync(TestContext.Current.CancellationToken);
+        Assert.Single(secondResult);
+        Assert.Equal("laptop", secondResult[0].Name);
     }
 }

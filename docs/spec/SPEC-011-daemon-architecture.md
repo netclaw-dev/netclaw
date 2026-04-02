@@ -53,7 +53,7 @@ SDK: `Microsoft.NET.Sdk.Web`
 Key dependencies: Akka.NET, Akka.Persistence, ASP.NET Core (SignalR server),
 Netclaw.Actors, Netclaw.Configuration, OllamaSharp / OpenAI client
 
-Binds: address and port from `DaemonConfig` (`Host`, `Port`); defaults to `http://127.0.0.1:5199` (loopback only). `ExposureMode` declares tunnel infrastructure.
+Binds: address and port from `DaemonConfig` (`Host`, `Port`); defaults to `http://127.0.0.1:5199` (loopback only). `ExposureMode` declares network reachability and tunnel infrastructure, separately from chat audience/profile selection.
 
 ### `Netclaw.Cli`
 

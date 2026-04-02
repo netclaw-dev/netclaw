@@ -58,24 +58,30 @@ run a health check to verify the baseline configuration is functional.
 - **THEN** the health check reports a warning (degraded, not failed)
 - **AND** displays "Memorizer unreachable — memory will use local files"
 
-### Requirement: Security warnings for public modes
+### Requirement: Security warnings for internet-reachable modes
 
-The system SHALL show explicit warnings before enabling public exposure modes.
-The wizard SHALL distinguish between tailnet-only modes (lower risk) and
-public-facing modes (higher risk) with appropriately scaled warnings.
+The system SHALL show explicit warnings before enabling internet-reachable
+exposure modes. The wizard SHALL distinguish between tailnet-only modes (lower
+risk) and internet-reachable modes (higher risk) with appropriately scaled
+warnings. `Public` deployment posture remains a channel-audience term, not an
+anonymous network-access term. Audience selection and exposure-mode selection
+are independent choices: audience controls chat participants, while exposure
+mode controls daemon network reachability.
 
 #### Scenario: Enable funnel mode
 
 - **WHEN** operator selects `tailscale-funnel`
 - **THEN** onboarding displays a high-risk warning explaining the daemon will
-  be accessible from the public internet
+  be reachable from the public internet and must still require authenticated
+  users
 - **AND** requires explicit confirmation before proceeding
 
 #### Scenario: Enable cloudflare-tunnel mode
 
 - **WHEN** operator selects `cloudflare-tunnel`
 - **THEN** onboarding displays a high-risk warning explaining the daemon will
-  be accessible from the public internet
+  be reachable from the public internet and must still require authenticated
+  users
 - **AND** requires explicit confirmation before proceeding
 
 #### Scenario: Enable tailscale-serve mode

@@ -160,6 +160,10 @@ Configuration for first-party tool execution.
 validates unsafe profile combinations such as unrestricted `public` or `team`
 settings.
 
+Audience profiles are independent from `Daemon.ExposureMode`: audience controls
+who can interact with the bot in chat channels, while exposure mode controls
+how the daemon is reachable over the network.
+
 Use `netclaw doctor` when you want to inspect the effective audience-profile
 shape, confirm that strict-default fallback is active, or verify that
 `SandboxOnly` shell mode is still blocked until a sandbox backend is configured.

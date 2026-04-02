@@ -116,7 +116,8 @@ validate tunnel infrastructure status and flag unsafe configurations.
 - **AND** `Daemon.ExposureMode` is `local`
 - **WHEN** `netclaw doctor` runs
 - **THEN** a warning is reported: non-loopback bind address without a declared
-  exposure mode may expose an unauthenticated hub
+  exposure mode may make the daemon host-network reachable without the
+  required authenticated-user gate
 
 #### Scenario: Tailscale mode with healthy tunnel
 

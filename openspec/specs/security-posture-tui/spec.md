@@ -11,7 +11,10 @@ Define the interactive TUI step for deployment posture selection during
 
 The wizard SHALL present an interactive step where the user selects a
 deployment posture (Personal, Team, or Public) with explanatory text for
-each option.
+each option. In this context, `Public` refers to the agent participating in
+public Slack or Discord channels; it does NOT refer to anonymous daemon
+network exposure. Audience/posture selection is independent from exposure-mode
+selection, which separately controls daemon network reachability.
 
 #### Scenario: User selects Personal posture
 

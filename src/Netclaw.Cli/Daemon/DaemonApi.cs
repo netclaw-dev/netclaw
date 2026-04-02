@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
 using Microsoft.Extensions.Configuration;
@@ -20,16 +21,23 @@ public sealed class DaemonApi
 
     private readonly IHttpClientFactory _factory;
     private readonly string _endpoint;
+    private readonly string? _deviceToken;
 
     /// <summary>
     /// Default daemon endpoint when no override is configured.
     /// </summary>
     public const string DefaultEndpoint = "http://127.0.0.1:5199";
 
-    public DaemonApi(IHttpClientFactory factory, IConfiguration configuration)
+    public DaemonApi(IHttpClientFactory factory, IConfiguration configuration, NetclawPaths paths)
     {
         _factory = factory;
         _endpoint = ResolveEndpoint(configuration);
+        _deviceToken = DaemonClientFactory.ResolveDeviceToken(_endpoint, paths);
+    }
+
+    internal DaemonApi(IHttpClientFactory factory, IConfiguration configuration)
+        : this(factory, configuration, new NetclawPaths())
+    {
     }
 
     /// <summary>
@@ -54,7 +62,7 @@ public sealed class DaemonApi
     public async Task<DaemonRuntimeStatus.Response?> GetStatusAsync(CancellationToken ct = default)
     {
         using var cts = CreateTimeoutCts(DefaultTimeout, ct);
-        var client = _factory.CreateClient();
+        var client = CreateHttpClient();
         using var response = await client.GetAsync($"{_endpoint}/api/health/status", cts.Token);
         response.EnsureSuccessStatusCode();
         var stream = await response.Content.ReadAsStreamAsync(cts.Token);
@@ -66,7 +74,7 @@ public sealed class DaemonApi
     public async Task<List<SessionCatalogEntryDto>> ListSessionsAsync(CancellationToken ct = default)
     {
         using var cts = CreateTimeoutCts(DefaultTimeout, ct);
-        var client = _factory.CreateClient();
+        var client = CreateHttpClient();
         using var response = await client.GetAsync($"{_endpoint}/api/sessions", cts.Token);
         response.EnsureSuccessStatusCode();
         var stream = await response.Content.ReadAsStreamAsync(cts.Token);
@@ -81,7 +89,7 @@ public sealed class DaemonApi
         var url = $"{_endpoint}/api/stats";
         if (days.HasValue)
             url += $"?days={days.Value}";
-        var client = _factory.CreateClient();
+        var client = CreateHttpClient();
         using var response = await client.GetAsync(url, cts.Token);
         response.EnsureSuccessStatusCode();
         var stream = await response.Content.ReadAsStreamAsync(cts.Token);
@@ -93,63 +101,63 @@ public sealed class DaemonApi
     public async Task<HttpResponseMessage> ListRemindersAsync(CancellationToken ct = default)
     {
         using var cts = CreateTimeoutCts(DefaultTimeout, ct);
-        var client = _factory.CreateClient();
+        var client = CreateHttpClient();
         return await client.GetAsync($"{_endpoint}/api/reminders", cts.Token);
     }
 
     public async Task<HttpResponseMessage> CreateReminderAsync(object request, CancellationToken ct = default)
     {
         using var cts = CreateTimeoutCts(DefaultTimeout, ct);
-        var client = _factory.CreateClient();
+        var client = CreateHttpClient();
         return await client.PostAsJsonAsync($"{_endpoint}/api/reminders", request, cts.Token);
     }
 
     public async Task<HttpResponseMessage> DeleteReminderAsync(string id, CancellationToken ct = default)
     {
         using var cts = CreateTimeoutCts(DefaultTimeout, ct);
-        var client = _factory.CreateClient();
+        var client = CreateHttpClient();
         return await client.DeleteAsync($"{_endpoint}/api/reminders/{id}", cts.Token);
     }
 
     public async Task<HttpResponseMessage> GetReminderAsync(string id, CancellationToken ct = default)
     {
         using var cts = CreateTimeoutCts(DefaultTimeout, ct);
-        var client = _factory.CreateClient();
+        var client = CreateHttpClient();
         return await client.GetAsync($"{_endpoint}/api/reminders/{id}", cts.Token);
     }
 
     public async Task<HttpResponseMessage> GetReminderHistoryAsync(string id, int last = 20, CancellationToken ct = default)
     {
         using var cts = CreateTimeoutCts(DefaultTimeout, ct);
-        var client = _factory.CreateClient();
+        var client = CreateHttpClient();
         return await client.GetAsync($"{_endpoint}/api/reminders/{id}/history?last={last}", cts.Token);
     }
 
     public async Task<HttpResponseMessage> EnableReminderAsync(string id, CancellationToken ct = default)
     {
         using var cts = CreateTimeoutCts(DefaultTimeout, ct);
-        var client = _factory.CreateClient();
+        var client = CreateHttpClient();
         return await client.PostAsync($"{_endpoint}/api/reminders/{id}/enable", content: null, cts.Token);
     }
 
     public async Task<HttpResponseMessage> DisableReminderAsync(string id, CancellationToken ct = default)
     {
         using var cts = CreateTimeoutCts(DefaultTimeout, ct);
-        var client = _factory.CreateClient();
+        var client = CreateHttpClient();
         return await client.PostAsync($"{_endpoint}/api/reminders/{id}/disable", content: null, cts.Token);
     }
 
     public async Task<HttpResponseMessage> ValidateReminderAsync(object request, CancellationToken ct = default)
     {
         using var cts = CreateTimeoutCts(DefaultTimeout, ct);
-        var client = _factory.CreateClient();
+        var client = CreateHttpClient();
         return await client.PostAsJsonAsync($"{_endpoint}/api/reminders/validate", request, cts.Token);
     }
 
     public async Task<HttpResponseMessage> ImportReminderAsync(object request, JsonSerializerOptions? options = null, CancellationToken ct = default)
     {
         using var cts = CreateTimeoutCts(DefaultTimeout, ct);
-        var client = _factory.CreateClient();
+        var client = CreateHttpClient();
         return options is not null
             ? await client.PostAsJsonAsync($"{_endpoint}/api/reminders/import", request, options, cts.Token)
             : await client.PostAsJsonAsync($"{_endpoint}/api/reminders/import", request, cts.Token);
@@ -160,14 +168,14 @@ public sealed class DaemonApi
     public async Task<HttpResponseMessage> StartMcpOAuthAsync(string name, CancellationToken ct = default)
     {
         using var cts = CreateTimeoutCts(LongTimeout, ct);
-        var client = _factory.CreateClient();
+        var client = CreateHttpClient();
         return await client.PostAsync($"{_endpoint}/api/mcp/oauth/start/{Uri.EscapeDataString(name)}", null, cts.Token);
     }
 
     public async Task<JsonElement> GetMcpOAuthStatusAsync(string name, CancellationToken ct = default)
     {
         using var cts = CreateTimeoutCts(DefaultTimeout, ct);
-        var client = _factory.CreateClient();
+        var client = CreateHttpClient();
         return await client.GetFromJsonAsync<JsonElement>(
             $"{_endpoint}/api/mcp/oauth/status/{Uri.EscapeDataString(name)}", cts.Token);
     }
@@ -175,7 +183,7 @@ public sealed class DaemonApi
     public async Task<JsonElement> GetMcpOAuthStatusByStateAsync(string state, CancellationToken ct = default)
     {
         using var cts = CreateTimeoutCts(DefaultTimeout, ct);
-        var client = _factory.CreateClient();
+        var client = CreateHttpClient();
         return await client.GetFromJsonAsync<JsonElement>(
             $"{_endpoint}/api/mcp/oauth/status-by-state/{Uri.EscapeDataString(state)}", cts.Token);
     }
@@ -183,7 +191,7 @@ public sealed class DaemonApi
     public async Task<HttpResponseMessage> McpOAuthCallbackAsync(string code, string state, CancellationToken ct = default)
     {
         using var cts = CreateTimeoutCts(LongTimeout, ct);
-        var client = _factory.CreateClient();
+        var client = CreateHttpClient();
         return await client.GetAsync(
             $"{_endpoint}/api/mcp/oauth/callback?code={Uri.EscapeDataString(code)}&state={Uri.EscapeDataString(state)}", cts.Token);
     }
@@ -191,7 +199,7 @@ public sealed class DaemonApi
     public async Task<JsonElement> GetMcpServerStatusesAsync(CancellationToken ct = default)
     {
         using var cts = CreateTimeoutCts(DefaultTimeout, ct);
-        var client = _factory.CreateClient();
+        var client = CreateHttpClient();
         using var response = await client.GetAsync($"{_endpoint}/api/mcp/statuses", cts.Token);
         response.EnsureSuccessStatusCode();
         var stream = await response.Content.ReadAsStreamAsync(cts.Token);
@@ -201,7 +209,7 @@ public sealed class DaemonApi
     public async Task<List<string>> GetMcpToolNamesAsync(string serverName, CancellationToken ct = default)
     {
         using var cts = CreateTimeoutCts(DefaultTimeout, ct);
-        var client = _factory.CreateClient();
+        var client = CreateHttpClient();
         return await client.GetFromJsonAsync<List<string>>(
             $"{_endpoint}/api/mcp/tools/{Uri.EscapeDataString(serverName)}", cts.Token) ?? [];
     }
@@ -211,7 +219,7 @@ public sealed class DaemonApi
     public async Task<HttpResponseMessage> StartProviderOAuthAsync(string providerType, CancellationToken ct = default)
     {
         using var cts = CreateTimeoutCts(LongTimeout, ct);
-        var client = _factory.CreateClient();
+        var client = CreateHttpClient();
         return await client.PostAsync(
             $"{_endpoint}/api/provider/oauth/start?provider={Uri.EscapeDataString(providerType)}", null, cts.Token);
     }
@@ -219,7 +227,7 @@ public sealed class DaemonApi
     public async Task<JsonElement> GetProviderOAuthStatusAsync(string state, CancellationToken ct = default)
     {
         using var cts = CreateTimeoutCts(DefaultTimeout, ct);
-        var client = _factory.CreateClient();
+        var client = CreateHttpClient();
         return await client.GetFromJsonAsync<JsonElement>(
             $"{_endpoint}/api/provider/oauth/status/{Uri.EscapeDataString(state)}", cts.Token);
     }
@@ -227,7 +235,7 @@ public sealed class DaemonApi
     public async Task<HttpResponseMessage> ProviderOAuthCallbackAsync(string code, string state, CancellationToken ct = default)
     {
         using var cts = CreateTimeoutCts(LongTimeout, ct);
-        var client = _factory.CreateClient();
+        var client = CreateHttpClient();
         return await client.GetAsync(
             $"{_endpoint}/api/provider/oauth/callback?code={Uri.EscapeDataString(code)}&state={Uri.EscapeDataString(state)}", cts.Token);
     }
@@ -237,7 +245,7 @@ public sealed class DaemonApi
     public async Task<List<PairedDeviceInfoDto>> ListPairedDevicesAsync(CancellationToken ct = default)
     {
         using var cts = CreateTimeoutCts(DefaultTimeout, ct);
-        var client = _factory.CreateClient();
+        var client = CreateHttpClient();
         using var response = await client.GetAsync($"{_endpoint}/api/pair/devices", cts.Token);
         response.EnsureSuccessStatusCode();
         var stream = await response.Content.ReadAsStreamAsync(cts.Token);
@@ -251,7 +259,7 @@ public sealed class DaemonApi
     public async Task<bool> RevokePairedDeviceAsync(string name, CancellationToken ct = default)
     {
         using var cts = CreateTimeoutCts(DefaultTimeout, ct);
-        var client = _factory.CreateClient();
+        var client = CreateHttpClient();
         using var response = await client.DeleteAsync(
             $"{_endpoint}/api/pair/devices/{Uri.EscapeDataString(name)}", cts.Token);
         return response.StatusCode is HttpStatusCode.NoContent;
@@ -262,7 +270,7 @@ public sealed class DaemonApi
     public async Task<bool> IsHealthyAsync(CancellationToken ct = default)
     {
         using var cts = CreateTimeoutCts(DefaultTimeout, ct);
-        var client = _factory.CreateClient();
+        var client = CreateHttpClient();
         var response = await client.GetAsync($"{_endpoint}/api/health/ready", cts.Token);
         return response.IsSuccessStatusCode;
     }
@@ -274,5 +282,14 @@ public sealed class DaemonApi
         var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         cts.CancelAfter(timeout);
         return cts;
+    }
+
+    private HttpClient CreateHttpClient()
+    {
+        var client = _factory.CreateClient();
+        if (!string.IsNullOrWhiteSpace(_deviceToken))
+            client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", _deviceToken);
+
+        return client;
     }
 }

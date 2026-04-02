@@ -111,7 +111,15 @@ public sealed class PairingExchangeEndpointTests : IDisposable
                 LastUsedAt = now,
             };
 
-            await deviceRegistry.AddAsync(device, ct);
+            try
+            {
+                await deviceRegistry.AddAsync(device, ct);
+            }
+            catch (InvalidOperationException ex)
+            {
+                return Results.Conflict(new { error = ex.Message });
+            }
+
             return Results.Ok(new { token = rawToken });
         }).AllowAnonymous();
 
@@ -270,5 +278,23 @@ public sealed class PairingExchangeEndpointTests : IDisposable
             new { code, deviceName = "laptop" }, ct);
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Exchange_returns_409_for_duplicate_device_name()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (_, existingDevice) = DeviceTestHelpers.MakeDevice("laptop", _time.GetUtcNow());
+        await _registry.AddAsync(existingDevice, ct);
+
+        var (code, _) = _pairingCodeService.GenerateCode();
+
+        await using var app = await CreateAppAsync();
+        var client = app.GetTestClient();
+
+        var response = await client.PostAsJsonAsync("/api/pair/exchange",
+            new { code, deviceName = "Laptop" }, ct);
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
     }
 }

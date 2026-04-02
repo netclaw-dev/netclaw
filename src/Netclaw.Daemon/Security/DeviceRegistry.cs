@@ -54,7 +54,7 @@ internal sealed class DeviceRegistry
         await _lock.WaitAsync(ct);
         try
         {
-            return await ReadDevicesAsync(ct);
+            return new List<PairedDevice>(await ReadDevicesAsync(ct));
         }
         finally
         {
@@ -72,6 +72,14 @@ internal sealed class DeviceRegistry
         try
         {
             var devices = await ReadDevicesAsync(ct);
+
+            if (devices.Any(existing =>
+                string.Equals(existing.Name, device.Name, StringComparison.OrdinalIgnoreCase)))
+            {
+                throw new InvalidOperationException(
+                    $"A paired device named '{device.Name}' already exists. Revoke it before pairing again.");
+            }
+
             var updated = new List<PairedDevice>(devices) { device };
             await WriteDevicesAsync(updated, ct);
             _logger.LogInformation("Registered new paired device '{Name}'.", device.Name);

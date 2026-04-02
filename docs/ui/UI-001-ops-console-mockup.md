@@ -87,7 +87,8 @@ Workflow:
 
 Displays:
 
-- bind mode: loopback/public
+- audience profile: personal/team/public-channel
+- exposure mode: local/tailnet-only/internet-reachable
 - transport mode: Slack Socket Mode
 - pairing pending count
 - privileged approval queue
@@ -132,7 +133,7 @@ Wizard requirements:
 - resumable progress
 - secret-safe inputs
 - inline validation before next step
-- explicit warnings for public exposure modes
+- explicit warnings for internet-reachable exposure modes
 
 ## Component States
 

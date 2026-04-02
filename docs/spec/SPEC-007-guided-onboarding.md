@@ -59,5 +59,6 @@ Define the guided onboarding flow for first-time Netclaw setup.
 ## Safety Requirements
 
 - secrets are never echoed in plain text
-- risky public exposure modes require explicit confirmation text
+- risky internet-reachable exposure modes require explicit confirmation text
+- audience/posture choice and exposure mode remain separate decisions
 - onboarding must fail closed if validation fails

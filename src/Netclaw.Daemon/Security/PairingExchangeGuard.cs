@@ -18,6 +18,7 @@ namespace Netclaw.Daemon.Security;
 public sealed class PairingExchangeGuard
 {
     internal const int FailureThreshold = 10;
+    internal static readonly TimeSpan FailureWindow = TimeSpan.FromMinutes(15);
     internal static readonly TimeSpan LockoutDuration = TimeSpan.FromMinutes(15);
 
     private readonly TimeProvider _timeProvider;
@@ -91,24 +92,31 @@ public sealed class PairingExchangeGuard
 
         _records.AddOrUpdate(
             key,
-            _ => new IpRecord(1, null),
+            _ => new IpRecord([now], null),
             (_, existing) =>
             {
+                if (existing.BlockedUntil is { } activeBlock && now < activeBlock)
+                    return existing;
+
                 // If a previous lockout expired, start fresh.
                 if (existing.BlockedUntil is { } blockedUntil && now >= blockedUntil)
-                    return new IpRecord(1, null);
+                    return new IpRecord([now], null);
 
-                var newCount = existing.FailCount + 1;
-                var blocked = newCount >= FailureThreshold
+                var activeFailures = existing.FailureTimes
+                    .Where(failureTime => now - failureTime < FailureWindow)
+                    .Append(now)
+                    .ToArray();
+
+                DateTimeOffset? blocked = activeFailures.Length >= FailureThreshold
                     ? now.Add(LockoutDuration)
-                    : existing.BlockedUntil;
+                    : null;
 
-                return new IpRecord(newCount, blocked);
+                return new IpRecord(activeFailures, blocked);
             });
     }
 
     /// <summary>
     /// Internal record holding per-IP failure state.
     /// </summary>
-    private sealed record IpRecord(int FailCount, DateTimeOffset? BlockedUntil);
+    private sealed record IpRecord(DateTimeOffset[] FailureTimes, DateTimeOffset? BlockedUntil);
 }
