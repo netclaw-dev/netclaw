@@ -9,10 +9,12 @@ Netclaw uses a **daemon + thin client** architecture:
 
 - **`netclawd`** (`src/Netclaw.Daemon/`) — always-on daemon process hosting
   the Akka actor system, LLM sessions, tool execution, and persistence.
-  Exposes a SignalR hub at `/hub/session` for remote clients.
+  Exposes a SignalR hub at `/hub/session` plus authenticated management
+  endpoints for remote clients.
 
 - **`netclaw`** (`src/Netclaw.Cli/`) — thin CLI client for interactive chat,
-  daemon management, and configuration. Connects to the daemon via SignalR.
+  daemon management, and configuration. Connects to the daemon via SignalR and
+  authenticated HTTP.
 
 ## Quick Start
 
@@ -174,6 +176,11 @@ netclaw daemon stop
 If the daemon is exposed over the network (via Tailscale or Cloudflare Tunnel),
 remote devices can authenticate using a two-sided pairing protocol.
 
+`Audience` and `ExposureMode` are separate controls:
+
+- `Audience` controls who can interact with the bot in chat channels
+- `ExposureMode` controls how the daemon is reachable over the network
+
 **Exposure modes** are configured during `netclaw init` or in
 `netclaw.json` under the `Daemon` section:
 
@@ -181,8 +188,12 @@ remote devices can authenticate using a two-sided pairing protocol.
 |------|-------------|
 | `local` (default) | Loopback only |
 | `tailscale-serve` | Within your tailnet |
-| `tailscale-funnel` | Public internet via Tailscale |
-| `cloudflare-tunnel` | Public internet via Cloudflare |
+| `tailscale-funnel` | Internet-reachable via Tailscale |
+| `cloudflare-tunnel` | Internet-reachable or private via Cloudflare |
+
+Any host-network reachable daemon access must still require authenticated users.
+Selecting a `public` chat audience does not make the daemon anonymously
+accessible over the network.
 
 **Pairing a remote device:**
 
@@ -200,6 +211,9 @@ netclaw pair https://my-daemon.tail1234.ts.net:5000
 # Prompted for the pairing code
 # On success: token saved to secrets.json, endpoint saved to netclaw.json
 ```
+
+Choose a unique device name when prompted. Pairing a second device with the
+same name is rejected until the existing device is revoked.
 
 All subsequent CLI commands from the remote device authenticate automatically
 using the saved bearer token.
