@@ -1591,6 +1591,20 @@ internal sealed class FakeChatClient : IChatClient
     public UsageDetails? UsageOverride { get; set; }
 
     /// <summary>
+    /// When populated, tool-call decisions are dequeued per main-model response
+    /// before falling back to <see cref="AlwaysReturnToolCalls"/> or the first-call behavior.
+    /// Observation compressor and sidecar calls do not consume this queue.
+    /// </summary>
+    public Queue<bool> PlannedToolCallDecisions { get; } = new();
+
+    /// <summary>
+    /// When populated, usage details are dequeued per main-model response before
+    /// falling back to <see cref="UsageOverride"/>. Observation compressor and
+    /// sidecar calls do not consume this queue.
+    /// </summary>
+    public Queue<UsageDetails?> PlannedUsageOverrides { get; } = new();
+
+    /// <summary>
     /// Number of compaction observation sidecar calls that should hang until cancellation.
     /// Used to simulate providers that never return during compaction.
     /// </summary>
@@ -1767,12 +1781,19 @@ internal sealed class FakeChatClient : IChatClient
                 "- compacted observation"));
         }
 
+        var plannedToolCallDecision = PlannedToolCallDecisions.Count > 0
+            ? PlannedToolCallDecisions.Dequeue()
+            : (bool?)null;
+        var usageOverride = PlannedUsageOverrides.Count > 0
+            ? PlannedUsageOverrides.Dequeue()
+            : UsageOverride;
+
         // Return tool calls if configured
         if (ToolCallsOnFirstCall is not null)
         {
-            var returnToolCalls = AlwaysReturnToolCalls
+            var returnToolCalls = plannedToolCallDecision ?? (AlwaysReturnToolCalls
                 ? (IgnoreToolAvailability || options?.Tools?.Count > 0)   // Every call, even when tools are withheld
-                : _callCount == 1;            // First call only (existing behavior)
+                : _callCount == 1);            // First call only (existing behavior)
 
             if (returnToolCalls)
             {
@@ -1784,8 +1805,8 @@ internal sealed class FakeChatClient : IChatClient
                     Microsoft.Extensions.AI.ChatRole.Assistant,
                     toolCallContents);
                 var toolResponse = new ChatResponse(toolCallMessage);
-                if (UsageOverride is not null)
-                    toolResponse.Usage = UsageOverride;
+                if (usageOverride is not null)
+                    toolResponse.Usage = usageOverride;
                 return toolResponse;
             }
         }
@@ -1796,8 +1817,8 @@ internal sealed class FakeChatClient : IChatClient
             var plannedResponse = new ChatResponse(new ChatMessage(
                 Microsoft.Extensions.AI.ChatRole.Assistant,
                 new List<AIContent>(plannedContents)));
-            if (UsageOverride is not null)
-                plannedResponse.Usage = UsageOverride;
+            if (usageOverride is not null)
+                plannedResponse.Usage = usageOverride;
             return plannedResponse;
         }
 
@@ -1816,9 +1837,9 @@ internal sealed class FakeChatClient : IChatClient
 
         var response = new ChatResponse(responseMessage);
 
-        if (UsageOverride is not null)
+        if (usageOverride is not null)
         {
-            response.Usage = UsageOverride;
+            response.Usage = usageOverride;
         }
         else if (IncludeThinking)
         {

@@ -95,21 +95,28 @@ public class ToolLoopCompactionTests : TestKit
     [Fact]
     public async Task Compaction_triggers_during_tool_loop_when_token_threshold_exceeded()
     {
-        // Configure: LLM always returns tool calls with usage exceeding compaction threshold.
-        // Before the fix, _lastInputTokenCount was never updated during tool-call responses,
-        // so ShouldCompact() would never fire mid-loop.
+        // Configure a deterministic two-call sequence:
+        // 1. tool call with high usage to trigger compaction during the tool loop
+        // 2. plain text with low usage after compaction so the turn completes
         _fakeChatClient.ToolCallsOnFirstCall =
         [
             new FunctionCallContent("call-1", "web_search",
                 new Dictionary<string, object?> { ["query"] = "test" })
         ];
-        _fakeChatClient.AlwaysReturnToolCalls = true;
-        _fakeChatClient.UsageOverride = new UsageDetails
+        _fakeChatClient.PlannedToolCallDecisions.Enqueue(true);
+        _fakeChatClient.PlannedToolCallDecisions.Enqueue(false);
+        _fakeChatClient.PlannedUsageOverrides.Enqueue(new UsageDetails
         {
             InputTokenCount = 800, // Exceeds 750 threshold (0.75 * 1000)
             OutputTokenCount = 50,
             TotalTokenCount = 850
-        };
+        });
+        _fakeChatClient.PlannedUsageOverrides.Enqueue(new UsageDetails
+        {
+            InputTokenCount = 100,
+            OutputTokenCount = 20,
+            TotalTokenCount = 120
+        });
 
         var sessionId = new SessionId("test-channel/tool-loop-compaction");
         var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
@@ -135,16 +142,6 @@ public class ToolLoopCompactionTests : TestKit
         // of firing another LLM call.
         await subscriber.ExpectMsgAsync<ToolCallOutput>(cancellationToken: TestContext.Current.CancellationToken);
         await subscriber.ExpectMsgAsync<UsageOutput>(cancellationToken: TestContext.Current.CancellationToken);
-
-        // Compaction should trigger after the tool execution completes.
-        // Lower usage for post-compaction calls so we don't loop forever.
-        _fakeChatClient.UsageOverride = new UsageDetails
-        {
-            InputTokenCount = 100,
-            OutputTokenCount = 20,
-            TotalTokenCount = 120
-        };
-        _fakeChatClient.AlwaysReturnToolCalls = false;
 
         var compaction = await subscriber.ExpectMsgAsync<CompactionOutput>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
         Assert.True(compaction.MessagesAfter < compaction.MessagesBefore,
