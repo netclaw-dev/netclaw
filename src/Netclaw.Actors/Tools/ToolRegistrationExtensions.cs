@@ -22,11 +22,12 @@ public static class ToolRegistrationExtensions
         ToolConfig config,
         ISearchBackend? searchBackend = null,
         ToolPathPolicy? pathPolicy = null,
+        ShellCommandPolicy? shellCommandPolicy = null,
         ToolAccessPolicy? toolAccessPolicy = null,
         NetclawPaths? paths = null,
         WebhookRouteStore? webhookRouteStore = null)
     {
-        registry.Register(new ShellTool(config, pathPolicy));
+        registry.Register(new ShellTool(config, pathPolicy, shellCommandPolicy));
         registry.Register(new FileReadTool(config, pathPolicy, paths));
         registry.Register(new FileWriteTool(config, pathPolicy));
         registry.Register(new FileEditTool(config, pathPolicy));

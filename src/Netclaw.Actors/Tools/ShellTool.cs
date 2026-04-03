@@ -18,21 +18,30 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
 {
     private readonly ToolConfig _config;
     private readonly ToolPathPolicy? _pathPolicy;
+    private readonly ShellCommandPolicy? _commandPolicy;
 
     public record Params(
         [property: Description("The shell command to execute")] string Command,
         [property: Description("Working directory to run the command in (optional)")] string? WorkingDirectory = null);
 
-    public ShellTool(ToolConfig config, ToolPathPolicy? pathPolicy = null)
+    public ShellTool(ToolConfig config, ToolPathPolicy? pathPolicy = null, ShellCommandPolicy? commandPolicy = null)
     {
         _config = config;
         _pathPolicy = pathPolicy;
+        _commandPolicy = commandPolicy;
     }
 
     protected override async Task<string> ExecuteAsync(Params args, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(args.Command))
             return "Error: 'command' parameter is required.";
+
+        if (_commandPolicy is not null)
+        {
+            var commandDecision = _commandPolicy.Evaluate(args.Command);
+            if (!commandDecision.Allowed)
+                return $"Error: Command blocked by hard deny policy: {commandDecision.DenyReason}";
+        }
 
         if (_pathPolicy?.CommandReferencesDeniedPath(args.Command, args.WorkingDirectory) == true)
             return "Error: Command references a protected file path. Access denied by security policy.";

@@ -1,6 +1,7 @@
 using Microsoft.Extensions.AI;
 using Netclaw.Actors.Channels;
 using Netclaw.Configuration;
+using Netclaw.Security;
 using Netclaw.Tools;
 
 namespace Netclaw.Actors.Tools;
@@ -66,6 +67,13 @@ public sealed class ToolAccessPolicy
     }
 
     public ToolAccessDecision AuthorizeInvocation(INetclawTool tool, ToolExecutionContext? context)
+        => AuthorizeInvocation(tool, context, arguments: null, approvalCache: null);
+
+    public ToolAccessDecision AuthorizeInvocation(
+        INetclawTool tool,
+        ToolExecutionContext? context,
+        IDictionary<string, object?>? arguments,
+        CommandApprovalCache? approvalCache)
     {
         if (tool is McpToolAdapter mcp)
         {
@@ -75,14 +83,14 @@ public sealed class ToolAccessPolicy
             if (!_profileResolver.IsMcpToolAllowed(mcp.ServerName, mcp.BareToolName, context))
                 return ToolAccessDecision.Deny("mcp_tool_not_allowed_for_audience_profile");
 
-            return ToolAccessDecision.Allow();
+            return CheckApprovalGate(tool.Name, context, arguments, approvalCache, DefaultApprovalMatcher.Instance);
         }
 
         if (!_profileResolver.IsToolAllowed(tool.Name, context))
             return ToolAccessDecision.Deny("tool_not_allowed_for_audience_profile");
 
         if (!IsShellTool(tool))
-            return ToolAccessDecision.Allow();
+            return CheckApprovalGate(tool.Name, context, arguments, approvalCache, DefaultApprovalMatcher.Instance);
 
         var shellMode = ResolveShellMode();
         if (shellMode == ShellExecutionMode.Off)
@@ -92,9 +100,75 @@ public sealed class ToolAccessPolicy
             return ToolAccessDecision.Deny("shell_requires_sandbox_backend");
 
         var shellAudience = ResolveAudience(context);
-        return shellAudience == TrustAudience.Personal
-            ? ToolAccessDecision.Allow()
-            : ToolAccessDecision.Deny("shell_requires_personal_context");
+        if (shellAudience != TrustAudience.Personal)
+            return ToolAccessDecision.Deny("shell_requires_personal_context");
+
+        return CheckApprovalGate(tool.Name, context, arguments, approvalCache, ShellApprovalMatcher.Instance);
+    }
+
+    private ToolAccessDecision CheckApprovalGate(
+        string toolName,
+        ToolExecutionContext? context,
+        IDictionary<string, object?>? arguments,
+        CommandApprovalCache? approvalCache,
+        IToolApprovalMatcher matcher)
+    {
+        var audience = ResolveAudience(context);
+        var profile = ToolAudienceProfileDefaults.GetResolvedProfile(_toolConfig.AudienceProfiles, audience);
+        var approvalPolicy = profile.ApprovalPolicy;
+
+        if (approvalPolicy is null)
+            return ToolAccessDecision.Allow();
+
+        var mode = approvalPolicy.GetEffectiveMode(toolName);
+
+        if (mode == ToolApprovalMode.Deny)
+            return ToolAccessDecision.Deny("tool_denied_by_approval_policy");
+
+        if (mode == ToolApprovalMode.Auto)
+            return ToolAccessDecision.Allow();
+
+        // Mode is Approval — check if already approved
+        if (approvalCache is not null)
+        {
+            var allPatterns = matcher.ExtractPatterns(toolName, arguments);
+            var persistedPatterns = approvalCache;
+            var unapproved = new List<string>();
+
+            foreach (var pattern in allPatterns)
+            {
+                if (!approvalCache.IsApproved(audience, toolName, pattern))
+                    unapproved.Add(pattern);
+            }
+
+            if (unapproved.Count == 0)
+                return ToolAccessDecision.Allow();
+
+            // Channel doesn't support approval → auto-deny
+            if (context?.SupportsInteractiveApproval == false)
+                return ToolAccessDecision.Deny("channel_does_not_support_approval");
+
+            var displayText = matcher.FormatForDisplay(toolName, arguments);
+            var approvalContext = new ToolApprovalContext(
+                toolName,
+                displayText,
+                unapproved,
+                [
+                    new ToolApprovalOption("approve_once", "Approve Once"),
+                    new ToolApprovalOption("approve_always", "Approve Always"),
+                    new ToolApprovalOption("deny", "Deny")
+                ]);
+
+            return ToolAccessDecision.RequiresApproval(approvalContext);
+        }
+
+        // No approval cache available — if channel doesn't support approval, deny
+        if (context?.SupportsInteractiveApproval == false)
+            return ToolAccessDecision.Deny("channel_does_not_support_approval");
+
+        // Approval cache not provided but mode requires approval — allow
+        // (the pipeline will handle the approval flow)
+        return ToolAccessDecision.Allow();
     }
 
     private ShellExecutionMode ResolveShellMode()
@@ -121,12 +195,29 @@ public sealed class ToolAccessPolicy
         => tool is AIFunction function ? function.Name : null;
 }
 
-public sealed record ToolAccessDecision(bool Allowed, string? DenyReason = null)
+public sealed record ToolAccessDecision(bool Allowed, string? DenyReason = null, ToolApprovalContext? ApprovalContext = null)
 {
+    /// <summary>True when the decision is <see cref="RequiresApproval"/>.</summary>
+    public bool NeedsApproval => ApprovalContext is not null && Allowed;
+
     public static ToolAccessDecision Allow() => new(true);
 
     public static ToolAccessDecision Deny(string reason) => new(false, reason);
+
+    public static ToolAccessDecision RequiresApproval(ToolApprovalContext context) => new(true, null, context);
 }
+
+/// <summary>
+/// Context for an approval-gated tool invocation. Contains the information
+/// needed to present the approval prompt and cache the decision.
+/// </summary>
+public sealed record ToolApprovalContext(
+    string ToolName,
+    string DisplayText,
+    IReadOnlyList<string> UnapprovedPatterns,
+    IReadOnlyList<ToolApprovalOption> Options);
+
+public sealed record ToolApprovalOption(string Key, string Label);
 
 public sealed class ToolAccessDeniedException : InvalidOperationException
 {
@@ -137,4 +228,20 @@ public sealed class ToolAccessDeniedException : InvalidOperationException
     }
 
     public string DenyReason { get; }
+}
+
+/// <summary>
+/// Thrown by the executor when a tool invocation requires interactive user
+/// approval before execution. Caught by the pipeline to initiate the
+/// approval flow.
+/// </summary>
+public sealed class ToolApprovalRequiredException : InvalidOperationException
+{
+    public ToolApprovalRequiredException(ToolApprovalContext context)
+        : base($"Tool '{context.ToolName}' requires approval")
+    {
+        ApprovalContext = context;
+    }
+
+    public ToolApprovalContext ApprovalContext { get; }
 }

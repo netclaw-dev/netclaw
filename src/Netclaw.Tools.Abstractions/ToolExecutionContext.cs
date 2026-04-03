@@ -64,6 +64,12 @@ public sealed class ToolExecutionContext
     public string? ChannelType { get; set; }
 
     /// <summary>
+    /// Whether the originating channel supports interactive approval prompts.
+    /// When false, approval-gated tools are automatically denied.
+    /// </summary>
+    public bool? SupportsInteractiveApproval { get; set; }
+
+    /// <summary>
     /// Optional callback for tools that spawn subagents.
     /// The session wires this to relay notifications as <c>SubAgentOutput</c> events.
     /// </summary>
