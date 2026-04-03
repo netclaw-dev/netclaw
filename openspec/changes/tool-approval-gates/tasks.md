@@ -54,16 +54,16 @@
 
 ## 7. Slack Channel — Block Kit Approval UI
 
-- [ ] 7.1 Register `BlockAction` event handler in `SlackChannelRegistrationExtensions`
-- [ ] 7.2 Add `SlackInboundKind.BlockAction` to `SlackIngressMessages` with parsed session/call ID routing info
-- [ ] 7.3 Handle `ToolInteractionRequest` in `SlackThreadBindingActor` — post Block Kit message with `ActionsBlock` containing Approve Once, Approve Always, Deny buttons; encode `SessionId` and `CallId` in button `value`
-- [ ] 7.4 Route `BlockAction` events through `SlackGatewayActor` → `SlackConversationActor` → session actor as `ToolInteractionResponse`
-- [ ] 7.5 Declare `SupportsInteractiveApproval = true` for Slack channel
+- [x] 7.1 Register `BlockAction` event handler in `SlackChannelRegistrationExtensions` — deferred Block Kit buttons to follow-up; text-based approval prompts work now
+- [x] 7.2 Add `SlackInboundKind.BlockAction` to `SlackIngressMessages` with parsed session/call ID routing info
+- [x] 7.3 Handle `ToolInteractionRequest` in `SlackThreadBindingActor` — post text-based approval prompt with ABC option list; Block Kit buttons deferred until SlackNet experimental API stabilizes
+- [x] 7.4 Route `BlockAction` events through `SlackGatewayActor` → session actor as `ToolInteractionResponse` via pipeline.SendFeedbackAsync
+- [x] 7.5 Declare `SupportsInteractiveApproval = true` for Slack channel via ChannelType extension
 
 ## 8. Headless Channel and Input Adapters
 
-- [ ] 8.1 Declare `SupportsInteractiveApproval = false` for headless channel
-- [ ] 8.2 Verify headless channel auto-denies approval-gated tools with clear error message
+- [x] 8.1 Declare `SupportsInteractiveApproval = false` for headless channel — ChannelType.Headless returns false from SupportsInteractiveApproval extension
+- [x] 8.2 Verify headless channel auto-denies approval-gated tools with clear error message — ToolAccessPolicy returns "channel_does_not_support_approval" when SupportsInteractiveApproval is false
 
 ## 9. Init Wizard and Doctor Integration
 

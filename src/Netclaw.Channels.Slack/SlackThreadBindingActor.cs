@@ -695,6 +695,10 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
             // BufferFlush and TextDeltaOutput are not received — Slack subscribes
             // to OutputFilter.Text (final assembled text), not TextStreaming.
 
+            case ToolInteractionRequest interaction:
+                await HandleApprovalRequestAsync(interaction);
+                break;
+
             case ErrorOutput err:
                 var refId = err.CorrelationId.ToString("N")[..8];
                 var errorResult = await SafePostAsync($":warning: {err.Message} (ref: {refId})");
@@ -792,6 +796,26 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
         public bool Success => ErrorMessage is null;
 
         public bool ShouldNotifySession => FailureKind is not null;
+    }
+
+    private async Task HandleApprovalRequestAsync(ToolInteractionRequest request)
+    {
+        try
+        {
+            var text = SlackApprovalBlockBuilder.BuildApprovalText(request);
+
+            using var cts = new CancellationTokenSource(ReplyOperationTimeout);
+            await _dependencies.ReplyClient.PostThreadReplyAsync(
+                new SlackPostMessage(_channelId, _threadTs, text),
+                cts.Token);
+
+            _log.Info("Posted approval request for tool {ToolName} call={CallId}",
+                request.ToolName, request.CallId);
+        }
+        catch (Exception ex)
+        {
+            _log.Error(ex, "Failed to post approval request for {CallId}", request.CallId);
+        }
     }
 
     private async Task<PostResult> SafeUploadFileAsync(FileOutput file)

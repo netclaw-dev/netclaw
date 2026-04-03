@@ -26,6 +26,14 @@ public static class ChannelTypeExtensions
         _ => throw new ArgumentOutOfRangeException(nameof(value), value, null)
     };
 
+    public static bool SupportsInteractiveApproval(this ChannelType value) => value switch
+    {
+        ChannelType.Slack => true,
+        ChannelType.Tui => true,
+        ChannelType.SignalR => true,
+        _ => false
+    };
+
     public static bool TryFromWireValue(string? wire, out ChannelType value)
     {
         if (string.Equals(wire, "slack", StringComparison.OrdinalIgnoreCase))

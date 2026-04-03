@@ -7,7 +7,8 @@ namespace Netclaw.Channels.Slack;
 public enum SlackInboundKind
 {
     Message,
-    AppMention
+    AppMention,
+    BlockAction
 }
 
 public sealed record SlackFileReference(
@@ -65,3 +66,12 @@ public sealed record StartProactiveThread(
 /// Returned by <see cref="SlackThreadBindingActor"/> in response to <see cref="StartProactiveThread"/>.
 /// </summary>
 public sealed record ProactiveThreadAck(SessionId SessionId);
+
+/// <summary>
+/// Routes a tool approval response from the Slack Block Kit button handler
+/// to the session actor. Sent to the gateway for routing by session ID.
+/// </summary>
+public sealed record SlackApprovalResponse(
+    SessionId SessionId,
+    string CallId,
+    string SelectedKey);

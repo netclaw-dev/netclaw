@@ -56,6 +56,29 @@ public sealed class SlackGatewayActor : ReceiveActor
             _log.Debug("Routing proactive thread to conversation {0}", message.ChannelId);
             conversation.Forward(message);
         });
+
+        ReceiveAsync<SlackApprovalResponse>(async message =>
+        {
+            _log.Info("Routing approval response for session {0} call={1}",
+                message.SessionId, message.CallId);
+
+            var response = new ToolInteractionResponse
+            {
+                SessionId = message.SessionId,
+                CallId = message.CallId,
+                SelectedKey = message.SelectedKey
+            };
+
+            try
+            {
+                await _dependencies.Pipeline.SendFeedbackAsync(response);
+            }
+            catch (Exception ex)
+            {
+                _log.Warning(ex, "Failed to route approval response for session {0}",
+                    message.SessionId);
+            }
+        });
     }
 
     public static Props CreateProps(SlackGatewayDependencies dependencies) =>
