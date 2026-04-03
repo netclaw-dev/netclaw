@@ -3,6 +3,7 @@ using Akka.Pattern;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Netclaw.Actors.Channels;
+using Netclaw.Actors.Protocol;
 using Netclaw.Configuration;
 using Netclaw.Security;
 using SlackNet;
@@ -77,6 +78,18 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
     /// Exposed for proactive tools that need runtime-resolved channel IDs for ACL checks.
     /// </summary>
     internal SlackChannelId? DefaultChannelId => _defaultChannelId;
+
+    /// <summary>
+    /// Called by <see cref="SlackApprovalHandler"/> when a user clicks an approval button.
+    /// Routes the response to the gateway actor for delivery to the correct session.
+    /// </summary>
+    internal void HandleApprovalResponse(string sessionId, string callId, string selectedKey)
+    {
+        _gateway?.Tell(new SlackApprovalResponse(
+            new SessionId(sessionId),
+            callId,
+            selectedKey));
+    }
 
     public ValueTask<ChannelHealth> GetHealthAsync(CancellationToken cancellationToken = default)
     {

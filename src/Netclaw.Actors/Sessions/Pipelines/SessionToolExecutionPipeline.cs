@@ -115,6 +115,7 @@ internal static class SessionToolExecutionPipeline
         context.Audience = source is null ? null : source.Audience.ToWireValue();
         context.Boundary = source?.Boundary;
         context.ChannelType = source is null ? null : source.ChannelType.ToWireValue();
+        context.SupportsInteractiveApproval = source?.ChannelType.SupportsInteractiveApproval();
         context.SpawnChildActor = spawnChildActor;
         var completedRuns = new List<CompletedSubAgentRun>();
         var acceptedFindings = new List<AcceptedSubAgentFinding>();
