@@ -11,8 +11,9 @@ namespace Netclaw.Cli.Tui.Wizard.Steps;
 /// <summary>
 /// Termina view for the ExposureMode wizard step.
 /// Sub-step 0: mode selection list (four modes, local pre-selected).
-/// Sub-step 1: informational notice (tailscale-serve) or high-risk warning
+/// Sub-step 1 (non-local only): informational notice (tailscale-serve) or high-risk warning
 ///             with explicit confirmation (tailscale-funnel, cloudflare-tunnel).
+/// Last sub-step: inbound webhook enable/disable toggle.
 /// </summary>
 public sealed class ExposureModeStepView : IWizardStepView
 {
@@ -26,12 +27,14 @@ public sealed class ExposureModeStepView : IWizardStepView
     {
         var vm = (ExposureModeStepViewModel)stepVm;
 
-        return vm.CurrentSubStep switch
-        {
-            0 => BuildModeSelection(vm, callbacks),
-            1 => BuildConfirmation(vm, callbacks),
-            _ => Layouts.Empty()
-        };
+        if (vm.CurrentSubStep == 0)
+            return BuildModeSelection(vm, callbacks);
+
+        if (vm.CurrentSubStep == vm.WebhookSubStep)
+            return BuildWebhookToggle(vm, callbacks);
+
+        // Sub-step 1 confirmation (non-Local modes only)
+        return BuildConfirmation(vm, callbacks);
     }
 
     private ILayoutNode BuildModeSelection(ExposureModeStepViewModel vm, StepViewCallbacks callbacks)
@@ -138,6 +141,42 @@ public sealed class ExposureModeStepView : IWizardStepView
                 .WithForeground(Color.BrightBlack))
             .WithSpacing(1)
             .WithChild(_confirmList);
+    }
+
+    private ILayoutNode BuildWebhookToggle(ExposureModeStepViewModel vm, StepViewCallbacks callbacks)
+    {
+        const string enableLabel = "Yes \u2014 accept inbound webhook requests";
+        const string disableLabel = "No \u2014 do not accept inbound webhooks (default)";
+
+        _modeList = null;
+
+        _confirmList = Layouts.SelectionList(disableLabel, enableLabel)
+            .WithMode(SelectionMode.Single)
+            .WithHighlightColors(Color.Black, Color.Cyan);
+
+        _confirmList.OnFocused();
+        _lastFocusedList = _confirmList;
+
+        _confirmList.SelectionConfirmed
+            .Subscribe(selected =>
+            {
+                if (selected.Count > 0)
+                {
+                    vm.WebhooksEnabled = selected[0] == enableLabel;
+                    callbacks.AdvanceStep();
+                }
+            })
+            .DisposeWith(callbacks.Subscriptions);
+
+        return Layouts.Vertical()
+            .WithChild(new TextNode("  Should this daemon accept inbound webhooks?").WithForeground(Color.White))
+            .WithSpacing(1)
+            .WithChild(_confirmList)
+            .WithSpacing(1)
+            .WithChild(new TextNode("  Inbound webhooks let external services trigger autonomous runs via HTTP POST.")
+                .WithForeground(Color.BrightBlack))
+            .WithChild(new TextNode("  This is separate from outbound notification webhooks.")
+                .WithForeground(Color.BrightBlack));
     }
 
     public bool HandleKeyPress(KeyPressed key)

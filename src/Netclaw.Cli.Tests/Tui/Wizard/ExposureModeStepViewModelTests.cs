@@ -168,10 +168,77 @@ public sealed class ExposureModeStepViewModelTests : IDisposable
         Assert.False(config.ContainsKey("Daemon"));
     }
 
+    // ── ContributeConfig — Webhooks ─────────────────────────────────────────
+
+    [Fact]
+    public void ContributeConfig_WebhooksEnabled_WritesWebhooksSection()
+    {
+        using var step = new ExposureModeStepViewModel();
+        step.WebhooksEnabled = true;
+
+        var builder = new WizardConfigBuilder(_context.Paths);
+        step.ContributeConfig(builder);
+
+        Assert.NotNull(builder.Webhooks);
+        Assert.True(builder.Webhooks.Enabled);
+    }
+
+    [Fact]
+    public void ContributeConfig_WebhooksDisabled_OmitsWebhooksSection()
+    {
+        using var step = new ExposureModeStepViewModel();
+        // WebhooksEnabled defaults to false
+
+        var builder = new WizardConfigBuilder(_context.Paths);
+        step.ContributeConfig(builder);
+
+        Assert.Null(builder.Webhooks);
+    }
+
+    // ── BuildConfigDictionary — Webhooks ─────────────────────────────────────
+
+    [Fact]
+    public void BuildConfigDictionary_WebhooksEnabled_WritesEnabledTrue()
+    {
+        var builder = new WizardConfigBuilder(_context.Paths)
+        {
+            Webhooks = new WebhooksConfigSection { Enabled = true }
+        };
+
+        var config = builder.BuildConfigDictionary();
+
+        Assert.True(config.ContainsKey("Webhooks"));
+        var webhooks = (Dictionary<string, object>)config["Webhooks"];
+        Assert.Equal(true, webhooks["Enabled"]);
+    }
+
+    [Fact]
+    public void BuildConfigDictionary_WebhooksDisabled_OmitsWebhooksKey()
+    {
+        var builder = new WizardConfigBuilder(_context.Paths)
+        {
+            Webhooks = new WebhooksConfigSection { Enabled = false }
+        };
+
+        var config = builder.BuildConfigDictionary();
+
+        Assert.False(config.ContainsKey("Webhooks"));
+    }
+
+    [Fact]
+    public void BuildConfigDictionary_NullWebhooks_OmitsWebhooksKey()
+    {
+        var builder = new WizardConfigBuilder(_context.Paths);
+
+        var config = builder.BuildConfigDictionary();
+
+        Assert.False(config.ContainsKey("Webhooks"));
+    }
+
     // ── Sub-step navigation ───────────────────────────────────────────────────
 
     [Fact]
-    public void TryAdvance_LocalMode_ReturnsFalse()
+    public void TryAdvance_LocalMode_AdvancesToWebhookSubStep()
     {
         using var step = new ExposureModeStepViewModel();
         step.OnEnter(_context, NavigationDirection.Forward);
@@ -179,12 +246,12 @@ public sealed class ExposureModeStepViewModelTests : IDisposable
 
         var result = step.TryAdvance();
 
-        Assert.False(result);
-        Assert.Equal(0, step.CurrentSubStep);
+        Assert.True(result);
+        Assert.Equal(1, step.CurrentSubStep); // webhook toggle
     }
 
     [Fact]
-    public void TryAdvance_TailscaleServe_AdvancesToSubStep1()
+    public void TryAdvance_TailscaleServe_AdvancesToConfirmation()
     {
         using var step = new ExposureModeStepViewModel();
         step.OnEnter(_context, NavigationDirection.Forward);
@@ -193,11 +260,11 @@ public sealed class ExposureModeStepViewModelTests : IDisposable
         var result = step.TryAdvance();
 
         Assert.True(result);
-        Assert.Equal(1, step.CurrentSubStep);
+        Assert.Equal(1, step.CurrentSubStep); // confirmation
     }
 
     [Fact]
-    public void TryAdvance_TailscaleFunnel_AdvancesToSubStep1()
+    public void TryAdvance_TailscaleFunnel_AdvancesToConfirmation()
     {
         using var step = new ExposureModeStepViewModel();
         step.OnEnter(_context, NavigationDirection.Forward);
@@ -206,16 +273,31 @@ public sealed class ExposureModeStepViewModelTests : IDisposable
         var result = step.TryAdvance();
 
         Assert.True(result);
-        Assert.Equal(1, step.CurrentSubStep);
+        Assert.Equal(1, step.CurrentSubStep); // confirmation
     }
 
     [Fact]
-    public void TryAdvance_FromSubStep1_ReturnsFalse()
+    public void TryAdvance_NonLocal_FromConfirmation_AdvancesToWebhookSubStep()
     {
         using var step = new ExposureModeStepViewModel();
         step.OnEnter(_context, NavigationDirection.Forward);
         step.SelectedMode = ExposureMode.TailscaleFunnel;
-        step.TryAdvance(); // advance to sub-step 1
+        step.TryAdvance(); // → confirmation (sub-step 1)
+
+        var result = step.TryAdvance();
+
+        Assert.True(result);
+        Assert.Equal(2, step.CurrentSubStep); // webhook toggle
+    }
+
+    [Fact]
+    public void TryAdvance_FromWebhookSubStep_ReturnsFalse()
+    {
+        using var step = new ExposureModeStepViewModel();
+        step.OnEnter(_context, NavigationDirection.Forward);
+        step.SelectedMode = ExposureMode.TailscaleFunnel;
+        step.TryAdvance(); // → confirmation
+        step.TryAdvance(); // → webhook toggle
 
         var result = step.TryAdvance();
 
@@ -223,12 +305,40 @@ public sealed class ExposureModeStepViewModelTests : IDisposable
     }
 
     [Fact]
-    public void TryGoBack_FromSubStep1_ReturnsTrue()
+    public void TryAdvance_Local_FromWebhookSubStep_ReturnsFalse()
+    {
+        using var step = new ExposureModeStepViewModel();
+        step.OnEnter(_context, NavigationDirection.Forward);
+        step.SelectedMode = ExposureMode.Local;
+        step.TryAdvance(); // → webhook toggle
+
+        var result = step.TryAdvance();
+
+        Assert.False(result); // step complete
+    }
+
+    [Fact]
+    public void TryGoBack_FromWebhookSubStep_ReturnsTrue()
     {
         using var step = new ExposureModeStepViewModel();
         step.OnEnter(_context, NavigationDirection.Forward);
         step.SelectedMode = ExposureMode.TailscaleServe;
-        step.TryAdvance(); // go to sub-step 1
+        step.TryAdvance(); // → confirmation
+        step.TryAdvance(); // → webhook toggle
+
+        var result = step.TryGoBack();
+
+        Assert.True(result);
+        Assert.Equal(1, step.CurrentSubStep); // back to confirmation
+    }
+
+    [Fact]
+    public void TryGoBack_FromConfirmation_ReturnsTrue()
+    {
+        using var step = new ExposureModeStepViewModel();
+        step.OnEnter(_context, NavigationDirection.Forward);
+        step.SelectedMode = ExposureMode.TailscaleServe;
+        step.TryAdvance(); // → confirmation
 
         var result = step.TryGoBack();
 
@@ -284,20 +394,38 @@ public sealed class ExposureModeStepViewModelTests : IDisposable
     }
 
     [Fact]
-    public void SubStepCount_Local_IsOne()
+    public void SubStepCount_Local_IsTwo()
     {
         using var step = new ExposureModeStepViewModel();
         step.SelectedMode = ExposureMode.Local;
 
-        Assert.Equal(1, step.SubStepCount);
+        Assert.Equal(2, step.SubStepCount);
     }
 
     [Fact]
-    public void SubStepCount_NonLocal_IsTwo()
+    public void SubStepCount_NonLocal_IsThree()
     {
         using var step = new ExposureModeStepViewModel();
         step.SelectedMode = ExposureMode.TailscaleFunnel;
 
-        Assert.Equal(2, step.SubStepCount);
+        Assert.Equal(3, step.SubStepCount);
+    }
+
+    [Fact]
+    public void WebhookSubStep_Local_IsOne()
+    {
+        using var step = new ExposureModeStepViewModel();
+        step.SelectedMode = ExposureMode.Local;
+
+        Assert.Equal(1, step.WebhookSubStep);
+    }
+
+    [Fact]
+    public void WebhookSubStep_NonLocal_IsTwo()
+    {
+        using var step = new ExposureModeStepViewModel();
+        step.SelectedMode = ExposureMode.TailscaleFunnel;
+
+        Assert.Equal(2, step.WebhookSubStep);
     }
 }

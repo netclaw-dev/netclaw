@@ -34,6 +34,7 @@ public sealed class WizardConfigBuilder
     public NotificationsConfigSection? Notifications { get; set; }
     public List<ExternalSkillSource>? ExternalSkillSources { get; set; }
     public DaemonConfigSection? Daemon { get; set; }
+    public WebhooksConfigSection? Webhooks { get; set; }
 
     /// <summary>
     /// Assemble the typed sections into netclaw.json and write it.
@@ -217,6 +218,15 @@ public sealed class WizardConfigBuilder
             };
         }
 
+        // Webhooks section — only written when enabled (disabled = default, omit)
+        if (Webhooks is { Enabled: true })
+        {
+            config["Webhooks"] = new Dictionary<string, object>
+            {
+                ["Enabled"] = true
+            };
+        }
+
         // Notifications
         if (Notifications is { WebhookUrl: not null })
         {
@@ -332,5 +342,10 @@ public sealed class IdentityConfigSection
 public sealed class DaemonConfigSection
 {
     public ExposureMode ExposureMode { get; init; } = ExposureMode.Local;
+}
+
+public sealed class WebhooksConfigSection
+{
+    public bool Enabled { get; init; }
 }
 

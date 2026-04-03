@@ -3,8 +3,8 @@ using Netclaw.Configuration;
 namespace Netclaw.Cli.Tui.Wizard.Steps;
 
 /// <summary>
-/// Wizard step for selecting the daemon network exposure mode.
-/// Two sub-steps: mode selection, then a confirmation/notice screen for non-local modes.
+/// Wizard step for selecting the daemon network exposure mode and inbound webhook enablement.
+/// Sub-steps: mode selection → optional confirmation/notice → webhook toggle.
 /// </summary>
 public sealed class ExposureModeStepViewModel : IWizardStepViewModel
 {
@@ -17,39 +17,58 @@ public sealed class ExposureModeStepViewModel : IWizardStepViewModel
     /// <summary>The selected exposure mode. Defaults to <see cref="ExposureMode.Local"/>.</summary>
     public ExposureMode SelectedMode { get; set; } = ExposureMode.Local;
 
+    /// <summary>Whether inbound webhook ingestion is enabled.</summary>
+    public bool WebhooksEnabled { get; set; }
+
     public bool IsApplicable(WizardContext context) => true;
 
     public int CurrentSubStep => _currentSubStep;
 
     /// <summary>
-    /// Two sub-steps when a non-local mode is selected (confirmation/notice screen);
-    /// one sub-step for Local.
+    /// Sub-steps: mode selection + optional confirmation/notice + webhook toggle.
     /// </summary>
-    public int SubStepCount => NeedsSecondStep ? 2 : 1;
+    public int SubStepCount => NeedsConfirmation ? 3 : 2;
 
     /// <summary>True when the selected mode requires a confirmation or notice screen.</summary>
-    internal bool NeedsSecondStep => SelectedMode != ExposureMode.Local;
+    internal bool NeedsConfirmation => SelectedMode != ExposureMode.Local;
 
     /// <summary>True for modes that expose the daemon to the public internet.</summary>
     public bool IsHighRisk =>
         SelectedMode is ExposureMode.TailscaleFunnel or ExposureMode.CloudflareTunnel;
 
-    public string GetHelpText() => (_currentSubStep, IsHighRisk) switch
+    /// <summary>The sub-step index for the inbound webhook toggle (always last).</summary>
+    internal int WebhookSubStep => NeedsConfirmation ? 2 : 1;
+
+    public string GetHelpText()
     {
-        (0, _) => "  Local is safest — daemon only reachable from this machine. Use tunnels for remote access.",
-        (1, true) => "  This mode exposes your daemon beyond your tailnet. Ensure hub authentication is configured.",
-        (1, false) => "  Tailscale Serve limits access to your tailnet only. Press Enter to confirm.",
-        _ => ""
-    };
+        if (_currentSubStep == 0)
+            return "  Local is safest — daemon only reachable from this machine. Use tunnels for remote access.";
+
+        if (_currentSubStep == WebhookSubStep)
+            return "  Inbound webhooks let external services trigger autonomous runs via HTTP POST.";
+
+        // Sub-step 1 confirmation (non-Local modes only)
+        return IsHighRisk
+            ? "  This mode exposes your daemon beyond your tailnet. Ensure hub authentication is configured."
+            : "  Tailscale Serve limits access to your tailnet only. Press Enter to confirm.";
+    }
 
     public bool TryAdvance()
     {
-        if (_currentSubStep == 0 && NeedsSecondStep)
+        if (_currentSubStep == 0 && NeedsConfirmation)
         {
             _currentSubStep = 1;
             _highWaterSubStep = 1;
-            return true; // handled internally
+            return true; // mode selection → confirmation
         }
+
+        if (_currentSubStep < WebhookSubStep)
+        {
+            _currentSubStep = WebhookSubStep;
+            _highWaterSubStep = WebhookSubStep;
+            return true; // → webhook toggle
+        }
+
         return false; // step complete, orchestrator advances
     }
 
@@ -74,8 +93,7 @@ public sealed class ExposureModeStepViewModel : IWizardStepViewModel
     public void OnLeave() { }
 
     /// <summary>
-    /// Writes the Daemon section only when exposure mode is non-default (non-local).
-    /// Local mode is the schema default and is omitted to keep configs minimal.
+    /// Writes the Daemon section (non-local modes) and Webhooks section (when enabled).
     /// </summary>
     public void ContributeConfig(WizardConfigBuilder builder)
     {
@@ -85,6 +103,11 @@ public sealed class ExposureModeStepViewModel : IWizardStepViewModel
             {
                 ExposureMode = SelectedMode
             };
+        }
+
+        if (WebhooksEnabled)
+        {
+            builder.Webhooks = new WebhooksConfigSection { Enabled = true };
         }
     }
 
