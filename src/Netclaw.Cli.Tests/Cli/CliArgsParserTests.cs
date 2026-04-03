@@ -110,7 +110,7 @@ public sealed class CliArgsParserTests
         {
             "chat", "sessions", "init", "doctor", "status", "stats",
             "daemon", "mcp", "provider", "model", "reminder",
-            "secrets", "config", "update", "pair",
+            "secrets", "config", "update", "pair", "skill",
         };
 
         Assert.Equal(expected, CliArgsParser.KnownCommands);

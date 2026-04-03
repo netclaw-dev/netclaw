@@ -17,6 +17,7 @@ using Netclaw.Cli.Secrets;
 using Netclaw.Cli.Model;
 using Netclaw.Cli.Provider;
 using Netclaw.Cli.Tui;
+using Netclaw.Cli.Skills;
 using Netclaw.Cli.Update;
 using Netclaw.Configuration;
 using Netclaw.Providers;
@@ -752,6 +753,16 @@ static async Task RunAsync(string[] args)
         return;
     }
 
+    // ── Skill management ──
+    if (mode is "skill")
+    {
+        var paths = new NetclawPaths();
+        paths.EnsureDirectoriesExist();
+        // All skill subcommands are offline — no daemon needed
+        Environment.ExitCode = await SkillCommand.RunAsync(args, paths);
+        return;
+    }
+
     // ── Secrets management ──
     if (mode is "secrets")
     {
@@ -939,6 +950,7 @@ static void WriteGeneralHelp()
     Console.WriteLine("  provider                 Manage LLM providers (TUI) or use subcommands");
     Console.WriteLine("  model                    Manage model assignments (TUI) or use subcommands");
     Console.WriteLine("  reminder                 Manage scheduled reminders (daemon-required)");
+    Console.WriteLine("  skill                    Manage skills and skill sources");
     Console.WriteLine("  secrets                  Manage encrypted secrets (set key/value pairs)");
     Console.WriteLine("  init                     First-run setup wizard");
     Console.WriteLine("  update                   Check for and install updates");

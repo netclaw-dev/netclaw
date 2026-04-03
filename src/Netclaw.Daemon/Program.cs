@@ -730,6 +730,12 @@ static void ConfigureDaemonServices(
         client.Timeout = FeedConstants.FeedHttpTimeout);
     services.AddHostedService<SystemSkillSyncService>();
 
+    // Skill directory watcher — auto-rescan when skill files change on disk.
+    // Covers native skills directory and all external sources.
+    // Registered after SystemSkillSyncService so initial sync completes first.
+    services.AddSingleton<SkillDirectoryWatcherService>();
+    services.AddHostedService(sp => sp.GetRequiredService<SkillDirectoryWatcherService>());
+
     // Binary update check — logs a warning at startup if a newer version is available.
     // Never blocks startup, never downloads anything.
     // Result is cached in UpdateCheckService for 1 hour; DaemonRuntimeStatusService

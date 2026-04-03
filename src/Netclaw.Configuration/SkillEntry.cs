@@ -61,4 +61,11 @@ public sealed record SkillEntry(
     /// From frontmatter <c>argument-hint</c>. Example: <c>[subsystem]</c>.
     /// </summary>
     public string? ArgumentHint { get; init; }
+
+    /// <summary>
+    /// When <c>true</c>, this skill was loaded from a flat <c>.md</c> file
+    /// rather than the standard <c>skill-name/SKILL.md</c> directory layout.
+    /// Flat-file skills cannot have resources (no subdirectories).
+    /// </summary>
+    public bool IsFlatFile { get; init; }
 }
