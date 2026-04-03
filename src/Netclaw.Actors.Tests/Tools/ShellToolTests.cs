@@ -164,4 +164,43 @@ public class ShellToolTests
         Assert.Contains("protected file path", result);
         Assert.Contains("Access denied", result);
     }
+
+    [Fact]
+    public async Task Hard_deny_blocks_daemon_stop()
+    {
+        var commandPolicy = new ShellCommandPolicy();
+        var tool = new ShellTool(new ToolConfig(), commandPolicy: commandPolicy);
+
+        var args = new Dictionary<string, object?> { ["Command"] = "netclaw daemon stop" };
+        var result = await tool.ExecuteAsync(args, CancellationToken.None);
+
+        Assert.Contains("hard deny policy", result);
+    }
+
+    [Fact]
+    public async Task Hard_deny_blocks_kill_command()
+    {
+        var commandPolicy = new ShellCommandPolicy();
+        var tool = new ShellTool(new ToolConfig(), commandPolicy: commandPolicy);
+
+        var args = new Dictionary<string, object?> { ["Command"] = "kill -9 12345" };
+        var result = await tool.ExecuteAsync(args, CancellationToken.None);
+
+        Assert.Contains("hard deny policy", result);
+    }
+
+    [Fact]
+    public async Task Hard_deny_checked_before_path_policy()
+    {
+        var commandPolicy = new ShellCommandPolicy();
+        var pathPolicy = new ToolPathPolicy(["/some/path"]);
+        var tool = new ShellTool(new ToolConfig(), pathPolicy, commandPolicy);
+
+        var args = new Dictionary<string, object?> { ["Command"] = "netclaw daemon stop" };
+        var result = await tool.ExecuteAsync(args, CancellationToken.None);
+
+        // Should hit hard deny, not path policy
+        Assert.Contains("hard deny policy", result);
+        Assert.DoesNotContain("protected file path", result);
+    }
 }

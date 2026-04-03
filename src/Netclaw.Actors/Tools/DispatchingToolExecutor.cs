@@ -3,6 +3,7 @@ using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Netclaw.Configuration;
+using Netclaw.Security;
 using Netclaw.Tools;
 
 namespace Netclaw.Actors.Tools;
@@ -15,6 +16,7 @@ public sealed class DispatchingToolExecutor : IToolExecutor
 {
     private readonly ToolRegistry _registry;
     private readonly ToolAccessPolicy _policy;
+    private readonly CommandApprovalCache? _approvalCache;
     private readonly ILogger _logger;
 
     public DispatchingToolExecutor(ToolRegistry registry, ILogger<DispatchingToolExecutor>? logger = null)
@@ -27,14 +29,17 @@ public sealed class DispatchingToolExecutor : IToolExecutor
                     TrustAudience.Personal,
                     ShellExecutionMode.HostAllowed,
                     UsedStrictFallback: false)),
+            approvalCache: null,
             logger)
     {
     }
 
-    public DispatchingToolExecutor(ToolRegistry registry, ToolAccessPolicy policy, ILogger<DispatchingToolExecutor>? logger = null)
+    public DispatchingToolExecutor(ToolRegistry registry, ToolAccessPolicy policy,
+        CommandApprovalCache? approvalCache = null, ILogger<DispatchingToolExecutor>? logger = null)
     {
         _registry = registry;
         _policy = policy;
+        _approvalCache = approvalCache;
         _logger = logger ?? (ILogger)NullLogger.Instance;
     }
 
@@ -47,7 +52,13 @@ public sealed class DispatchingToolExecutor : IToolExecutor
             return $"Unknown tool: {toolCall.Name}";
         }
 
-        var accessDecision = _policy.AuthorizeInvocation(tool, context);
+        var accessDecision = _policy.AuthorizeInvocation(tool, context, toolCall.Arguments, _approvalCache);
+        if (accessDecision.NeedsApproval)
+        {
+            _logger.LogInformation("Tool requires approval: {ToolName}", toolCall.Name);
+            throw new ToolApprovalRequiredException(accessDecision.ApprovalContext!);
+        }
+
         if (!accessDecision.Allowed)
         {
             _logger.LogWarning("Tool denied by policy: {ToolName} reason={Reason}", toolCall.Name, accessDecision.DenyReason);

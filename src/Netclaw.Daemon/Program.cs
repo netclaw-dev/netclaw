@@ -551,8 +551,17 @@ static void ConfigureDaemonServices(
     var toolAccessPolicy = new ToolAccessPolicy(toolConfig, effectivePolicyDefaults);
     services.AddSingleton(toolAccessPolicy);
 
+    var shellCommandPolicy = new ShellCommandPolicy(toolConfig.HardDenyPatterns);
+    services.AddSingleton(shellCommandPolicy);
+
+    var toolApprovalStore = new ToolApprovalStore(paths.ToolApprovalsPath);
+    services.AddSingleton(toolApprovalStore);
+
+    var commandApprovalCache = new CommandApprovalCache(toolApprovalStore);
+    services.AddSingleton(commandApprovalCache);
+
     var toolRegistry = new ToolRegistry();
-    toolRegistry.WithFirstPartyTools(toolConfig, searchBackend, toolPathPolicy, toolAccessPolicy, paths, webhookRouteStore);
+    toolRegistry.WithFirstPartyTools(toolConfig, searchBackend, toolPathPolicy, shellCommandPolicy, toolAccessPolicy, paths, webhookRouteStore);
 
     // Skills system: seed built-in skills to .system/, register sync service
     CopyBuiltInSkills(paths.SystemSkillsDirectory);
@@ -620,6 +629,7 @@ static void ConfigureDaemonServices(
         new DispatchingToolExecutor(
             toolRegistry,
             toolAccessPolicy,
+            commandApprovalCache,
             sp.GetRequiredService<ILogger<DispatchingToolExecutor>>()));
 
     // Operational notification webhooks
