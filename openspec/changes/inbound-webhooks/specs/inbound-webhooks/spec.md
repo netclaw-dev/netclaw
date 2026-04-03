@@ -10,18 +10,30 @@ alerts, and reminder-style human notification behavior.
 
 ### Requirement: Named webhook routes
 
-The daemon SHALL expose config-driven named webhook routes. Each route SHALL be
-reachable at a stable HTTP path derived from its route name and SHALL define the
-audience, prompt overlay, notify instructions, notify policy, verifier settings,
-and optional notification target used for accepted deliveries.
+The daemon SHALL expose named inbound webhook routes from one JSON file per
+route under `NetclawPaths/config/webhooks/`. Top-level `netclaw.json` SHALL only
+control whether the inbound webhook feature is enabled. Each route SHALL be
+reachable at a stable HTTP path derived from its route filename/name and SHALL
+define the audience, prompt overlay, notify instructions, notify policy,
+verification settings, and optional notification target used for accepted
+deliveries.
 
 #### Scenario: Configured route resolves by name
 
-- **GIVEN** a route named `github-issues` is configured
+- **GIVEN** a route file named `github-issues.json` exists under
+  `config/webhooks`
 - **WHEN** an HTTP POST arrives at the webhook ingress path for `github-issues`
 - **THEN** the daemon resolves that route definition
 - **AND** uses that route's audience, prompt overlay, verifier, and notify
   settings for the delivery
+
+#### Scenario: Top-level config only enables the feature
+
+- **GIVEN** inbound webhooks are enabled in top-level `netclaw.json`
+- **AND** route definitions exist only in `config/webhooks/*.json`
+- **WHEN** the daemon starts or handles an inbound webhook request
+- **THEN** route configuration is discovered from `config/webhooks`
+- **AND** route definitions are not required to be embedded in `netclaw.json`
 
 #### Scenario: Unknown route is rejected
 
@@ -124,3 +136,73 @@ identify the route, delivery, and event that fired.
 - **AND** the agent chooses not to notify a human-facing channel
 - **WHEN** the delivery is accepted and processed
 - **THEN** the operational receipt alert is still emitted
+
+### Requirement: Route files are hot-reloaded and fail closed
+
+The daemon SHALL reload route definitions from `config/webhooks` without daemon
+restart. Request-time mtime-gated reload is acceptable for MVP. If a route file
+is missing, malformed, or invalid, that route SHALL not be loaded, and a
+previously loaded version SHALL be removed immediately instead of serving stale
+config.
+
+#### Scenario: Route file edit is picked up without restart
+
+- **GIVEN** route `github-issues` is loaded from `github-issues.json`
+- **AND** the route file changes on disk
+- **WHEN** the next request arrives for `github-issues`
+- **THEN** the daemon reloads the route definition before processing the request
+
+#### Scenario: Invalid edit removes previously loaded route
+
+- **GIVEN** route `github-issues` was previously valid and loaded
+- **WHEN** `github-issues.json` is edited into an invalid state
+- **THEN** the daemon stops serving route `github-issues`
+- **AND** no stale prior route definition is used for later requests
+
+### Requirement: Verification kinds are generic and minimal
+
+Route verification SHALL be modeled as generic verification kinds rather than
+one first-class verifier type per provider. MVP SHALL support a minimal set that
+includes generic HMAC verification and shared-header secret verification.
+
+#### Scenario: Generic HMAC verification is configured
+
+- **GIVEN** a route file configures HMAC verification with header metadata and a
+  shared secret
+- **WHEN** a request arrives with a valid matching signature
+- **THEN** the route verification succeeds without requiring a provider-specific
+  verifier type
+
+#### Scenario: Shared-header secret verification is configured
+
+- **GIVEN** a route file configures shared-header secret verification
+- **WHEN** a request arrives with the expected secret header value
+- **THEN** the route verification succeeds without requiring a provider-specific
+  verifier type
+
+### Requirement: Route files are secret-bearing config
+
+Route files MAY store inline verification secrets. The system SHALL treat
+`config/webhooks` as secret-bearing configuration and SHALL NOT assume generic
+file tools have unrestricted access to that directory.
+
+#### Scenario: Route file contains inline verification secret
+
+- **GIVEN** a route file stores an inline verification secret for HMAC or shared
+  header validation
+- **WHEN** tool access policy is evaluated for generic file tools
+- **THEN** `config/webhooks` is treated as secret-bearing config
+- **AND** unrestricted generic file access is not implied
+
+### Requirement: Route file load failures emit operational alerts
+
+Route file load, reload, or unload failures SHALL emit operational alerts via
+the existing operational notification sink so route failures are never silent.
+
+#### Scenario: Invalid route reload emits operational alert
+
+- **GIVEN** a previously valid route file becomes invalid on edit
+- **WHEN** the daemon attempts to reload that route
+- **THEN** an operational alert is emitted identifying the route and reload
+  failure
+- **AND** the route remains unavailable until the file is valid again

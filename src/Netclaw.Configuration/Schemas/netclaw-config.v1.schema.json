@@ -425,7 +425,7 @@
     },
     "Webhooks": {
       "type": "object",
-      "description": "Inbound webhook route configuration.",
+      "description": "Inbound webhook feature settings. Individual route definitions live under ~/.netclaw/config/webhooks/*.json.",
       "properties": {
         "Enabled": {
           "type": "boolean",
@@ -436,10 +436,6 @@
           "minimum": 1,
           "maximum": 3600,
           "default": 300
-        },
-        "Routes": {
-          "type": "object",
-          "additionalProperties": { "$ref": "#/$defs/WebhookRoute" }
         }
       },
       "additionalProperties": false
@@ -623,10 +619,21 @@
       "properties": {
         "Kind": {
           "type": "string",
-          "enum": ["GitHubHmacSha256", "HeaderSecret"],
-          "default": "GitHubHmacSha256"
+          "enum": ["Hmac", "HeaderSecret"],
+          "default": "Hmac"
+        },
+        "HmacAlgorithm": {
+          "type": "string",
+          "enum": ["Sha256"],
+          "default": "Sha256"
         },
         "Secret": {
+          "type": ["string", "null"]
+        },
+        "SignatureHeaderName": {
+          "type": ["string", "null"]
+        },
+        "SignaturePrefix": {
           "type": ["string", "null"]
         },
         "SecretHeaderName": {

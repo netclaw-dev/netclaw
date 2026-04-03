@@ -23,13 +23,20 @@ public static class ToolRegistrationExtensions
         ISearchBackend? searchBackend = null,
         ToolPathPolicy? pathPolicy = null,
         ToolAccessPolicy? toolAccessPolicy = null,
-        NetclawPaths? paths = null)
+        NetclawPaths? paths = null,
+        WebhookRouteStore? webhookRouteStore = null)
     {
         registry.Register(new ShellTool(config, pathPolicy));
         registry.Register(new FileReadTool(config, pathPolicy, paths));
         registry.Register(new FileWriteTool(config, pathPolicy));
         registry.Register(new FileEditTool(config, pathPolicy));
         registry.Register(new AttachFileTool(config));
+        if (webhookRouteStore is not null)
+        {
+            registry.Register(new SetWebhookTool(webhookRouteStore));
+            registry.Register(new ListWebhooksTool(webhookRouteStore));
+            registry.Register(new DeleteWebhookTool(webhookRouteStore));
+        }
         if (searchBackend is not null)
             registry.Register(new WebSearchTool(searchBackend));
         registry.Register(new WebFetchTool(config));

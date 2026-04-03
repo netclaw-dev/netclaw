@@ -12,15 +12,19 @@ public sealed class WebhookRequestVerifierTests
     private readonly WebhookRequestVerifier _sut = new();
 
     [Fact]
-    public void GitHubHmac_accepts_valid_signature_and_reads_headers()
+    public void Hmac_accepts_valid_signature_and_reads_headers()
     {
-        var route = new RegisteredWebhookRoute("github-issues", new WebhookRouteConfig
+        var route = CreateRoute(new WebhookRouteConfig
         {
             Prompt = "triage",
             Verification = new WebhookVerificationConfig
             {
-                Kind = WebhookVerifierKind.GitHubHmacSha256,
-                Secret = new SensitiveString("super-secret")
+                Kind = WebhookVerifierKind.Hmac,
+                Secret = new SensitiveString("super-secret"),
+                SignatureHeaderName = "X-Hub-Signature-256",
+                SignaturePrefix = "sha256=",
+                EventHeaderName = "X-GitHub-Event",
+                DeliveryIdHeaderName = "X-GitHub-Delivery"
             }
         });
 
@@ -40,15 +44,17 @@ public sealed class WebhookRequestVerifierTests
     }
 
     [Fact]
-    public void GitHubHmac_rejects_invalid_signature()
+    public void Hmac_rejects_invalid_signature()
     {
-        var route = new RegisteredWebhookRoute("github-issues", new WebhookRouteConfig
+        var route = CreateRoute(new WebhookRouteConfig
         {
             Prompt = "triage",
             Verification = new WebhookVerificationConfig
             {
-                Kind = WebhookVerifierKind.GitHubHmacSha256,
-                Secret = new SensitiveString("super-secret")
+                Kind = WebhookVerifierKind.Hmac,
+                Secret = new SensitiveString("super-secret"),
+                SignatureHeaderName = "X-Hub-Signature-256",
+                SignaturePrefix = "sha256="
             }
         });
 
@@ -64,7 +70,7 @@ public sealed class WebhookRequestVerifierTests
     [Fact]
     public void HeaderSecret_accepts_matching_secret_and_custom_headers()
     {
-        var route = new RegisteredWebhookRoute("internal-alerts", new WebhookRouteConfig
+        var route = CreateRoute(new WebhookRouteConfig
         {
             Prompt = "triage",
             Verification = new WebhookVerificationConfig
@@ -88,6 +94,33 @@ public sealed class WebhookRequestVerifierTests
         Assert.Equal("alert.created", result.EventType);
         Assert.Equal("evt-1", result.DeliveryId);
     }
+
+    [Fact]
+    public void HeaderSecret_rejects_missing_secret_header()
+    {
+        var route = CreateRoute(new WebhookRouteConfig
+        {
+            Prompt = "triage",
+            Verification = new WebhookVerificationConfig
+            {
+                Kind = WebhookVerifierKind.HeaderSecret,
+                Secret = new SensitiveString("header-secret"),
+                SecretHeaderName = "X-Internal-Secret"
+            }
+        });
+
+        var result = _sut.Verify(route, new HeaderDictionary(), Encoding.UTF8.GetBytes("{}"));
+
+        Assert.False(result.IsAccepted);
+        Assert.Equal("missing_secret_header", result.RejectionReason);
+    }
+
+    private static RegisteredWebhookRoute CreateRoute(WebhookRouteConfig config)
+        => new(
+            "github-issues",
+            "/tmp/github-issues.json",
+            DateTimeOffset.Parse("2026-04-02T18:30:00Z"),
+            config);
 
     private static string CreateGitHubSignature(string secret, byte[] body)
     {

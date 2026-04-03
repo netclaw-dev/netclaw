@@ -14,25 +14,27 @@ public sealed class WebhookRequestVerifier
     {
         return route.Config.Verification.Kind switch
         {
-            WebhookVerifierKind.GitHubHmacSha256 => VerifyGitHub(route, headers, bodyBytes),
+            WebhookVerifierKind.Hmac => VerifyHmac(route, headers, bodyBytes),
             WebhookVerifierKind.HeaderSecret => VerifyHeaderSecret(route, headers),
             _ => throw new ArgumentOutOfRangeException(nameof(route.Config.Verification.Kind), route.Config.Verification.Kind, null)
         };
     }
 
-    private static WebhookVerificationResult VerifyGitHub(
+    private static WebhookVerificationResult VerifyHmac(
         RegisteredWebhookRoute route,
         IHeaderDictionary headers,
         byte[] bodyBytes)
     {
-        var signature = RegisteredWebhookRoute.GetHeaderValue(headers, route.SecretHeaderName);
+        var signature = RegisteredWebhookRoute.GetHeaderValue(headers, route.SignatureHeaderName);
         if (string.IsNullOrWhiteSpace(signature))
             return WebhookVerificationResult.Reject("missing_signature");
 
         var secret = route.Config.Verification.Secret!.Value;
-        using var hmac = new HMACSHA256(Encoding.UTF8.GetBytes(secret));
-        var hash = Convert.ToHexString(hmac.ComputeHash(bodyBytes)).ToLowerInvariant();
-        var expected = $"sha256={hash}";
+        var expected = route.Config.Verification.HmacAlgorithm switch
+        {
+            WebhookHmacAlgorithm.Sha256 => ComputeExpectedSha256(secret, bodyBytes, route.SignaturePrefix),
+            _ => throw new ArgumentOutOfRangeException(nameof(route.Config.Verification.HmacAlgorithm), route.Config.Verification.HmacAlgorithm, null)
+        };
 
         if (!FixedTimeEquals(signature, expected))
             return WebhookVerificationResult.Reject("invalid_signature");
@@ -63,6 +65,13 @@ public sealed class WebhookRequestVerifier
         var leftBytes = Encoding.UTF8.GetBytes(left);
         var rightBytes = Encoding.UTF8.GetBytes(right);
         return CryptographicOperations.FixedTimeEquals(leftBytes, rightBytes);
+    }
+
+    private static string ComputeExpectedSha256(string secret, byte[] bodyBytes, string prefix)
+    {
+        using var hmac = new HMACSHA256(Encoding.UTF8.GetBytes(secret));
+        var hash = Convert.ToHexString(hmac.ComputeHash(bodyBytes)).ToLowerInvariant();
+        return string.Concat(prefix, hash);
     }
 }
 

@@ -1,0 +1,97 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.netclaw.local/webhook-route/v1",
+  "title": "Netclaw Webhook Route v1",
+  "type": "object",
+  "properties": {
+    "Enabled": {
+      "type": "boolean",
+      "default": true
+    },
+    "Verification": {
+      "type": "object",
+      "properties": {
+        "Kind": {
+          "type": "string",
+          "enum": ["Hmac", "HeaderSecret"],
+          "default": "Hmac"
+        },
+        "HmacAlgorithm": {
+          "type": "string",
+          "enum": ["Sha256"],
+          "default": "Sha256"
+        },
+        "Secret": {
+          "type": ["string", "null"]
+        },
+        "SignatureHeaderName": {
+          "type": ["string", "null"]
+        },
+        "SignaturePrefix": {
+          "type": ["string", "null"]
+        },
+        "SecretHeaderName": {
+          "type": ["string", "null"]
+        },
+        "EventHeaderName": {
+          "type": ["string", "null"]
+        },
+        "DeliveryIdHeaderName": {
+          "type": ["string", "null"]
+        }
+      },
+      "additionalProperties": false,
+      "required": ["Kind"]
+    },
+    "Events": {
+      "type": "array",
+      "items": { "type": "string" },
+      "default": []
+    },
+    "Audience": {
+      "type": "string",
+      "enum": ["Public", "Team", "Personal"],
+      "default": "Public"
+    },
+    "Prompt": {
+      "type": "string",
+      "default": ""
+    },
+    "NotifyInstructions": {
+      "type": "string",
+      "default": ""
+    },
+    "NotifyPolicy": {
+      "type": "string",
+      "enum": ["Required", "Conditional"],
+      "default": "Conditional"
+    },
+    "NotificationTarget": {
+      "type": ["object", "null"],
+      "properties": {
+        "Kind": {
+          "type": "string",
+          "enum": ["Slack"],
+          "default": "Slack"
+        },
+        "ChannelId": {
+          "type": ["string", "null"]
+        }
+      },
+      "additionalProperties": false,
+      "default": null
+    },
+    "MaxBodyBytes": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 1048576
+    },
+    "RateLimitPerMinute": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 30
+    }
+  },
+  "required": ["Prompt", "Verification"],
+  "additionalProperties": false
+}

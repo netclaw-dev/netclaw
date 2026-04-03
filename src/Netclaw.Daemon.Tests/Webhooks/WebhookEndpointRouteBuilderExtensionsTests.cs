@@ -7,6 +7,7 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
 using Netclaw.Configuration;
 using Netclaw.Daemon.Webhooks;
@@ -14,8 +15,21 @@ using Xunit;
 
 namespace Netclaw.Daemon.Tests.Webhooks;
 
-public sealed class WebhookEndpointRouteBuilderExtensionsTests
+public sealed class WebhookEndpointRouteBuilderExtensionsTests : IDisposable
 {
+    private int _writeVersion;
+    private readonly string _tempDir;
+    private readonly NetclawPaths _paths;
+    private readonly Netclaw.Configuration.WebhookRouteStore _store;
+
+    public WebhookEndpointRouteBuilderExtensionsTests()
+    {
+        _tempDir = Path.Combine(Path.GetTempPath(), $"netclaw-webhook-endpoints-{Guid.NewGuid():N}");
+        _paths = new NetclawPaths(_tempDir);
+        _paths.EnsureDirectoriesExist();
+        _store = new Netclaw.Configuration.WebhookRouteStore(_paths);
+    }
+
     [Fact]
     public async Task Unknown_route_returns_404()
     {
@@ -28,8 +42,29 @@ public sealed class WebhookEndpointRouteBuilderExtensionsTests
     }
 
     [Fact]
+    public async Task Route_file_added_after_start_becomes_active_without_restart()
+    {
+        await using var app = await CreateHostAsync();
+        var client = app.GetTestClient();
+
+        var initialResponse = await client.PostAsync("/api/webhooks/github-issues", JsonContent.Create(new { hello = "world" }), TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.NotFound, initialResponse.StatusCode);
+
+        _store.Save("github-issues", CreateRoute());
+        BumpWriteTime("github-issues");
+
+        using var request = BuildGitHubRequest("/api/webhooks/github-issues", "{\"repository\":{\"full_name\":\"petabridge/netclaw\"}}", "issues", "delivery-1", "secret");
+        var response = await client.SendAsync(request, TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
+        Assert.Single(app.Services.GetRequiredService<FakeWebhookExecutionService>().Invocations);
+    }
+
+    [Fact]
     public async Task Invalid_signature_returns_401()
     {
+        _store.Save("github-issues", CreateRoute());
+        BumpWriteTime("github-issues");
         await using var app = await CreateHostAsync();
         var client = app.GetTestClient();
 
@@ -49,8 +84,9 @@ public sealed class WebhookEndpointRouteBuilderExtensionsTests
     [Fact]
     public async Task Oversized_body_returns_413()
     {
-        await using var app = await CreateHostAsync(configure: config =>
-            config.Routes["github-issues"].MaxBodyBytes = 8);
+        _store.Save("github-issues", CreateRoute(maxBodyBytes: 8));
+        BumpWriteTime("github-issues");
+        await using var app = await CreateHostAsync();
         var client = app.GetTestClient();
         var body = "{\"payload\":\"too-large\"}";
 
@@ -63,6 +99,8 @@ public sealed class WebhookEndpointRouteBuilderExtensionsTests
     [Fact]
     public async Task Duplicate_delivery_returns_202_and_does_not_start_second_execution()
     {
+        _store.Save("github-issues", CreateRoute());
+        BumpWriteTime("github-issues");
         await using var app = await CreateHostAsync();
         var client = app.GetTestClient();
         var body = "{\"repository\":{\"full_name\":\"petabridge/netclaw\"}}";
@@ -84,6 +122,8 @@ public sealed class WebhookEndpointRouteBuilderExtensionsTests
     [Fact]
     public async Task Accepted_request_starts_execution_and_emits_receipt_alert()
     {
+        _store.Save("github-issues", CreateRoute());
+        BumpWriteTime("github-issues");
         await using var app = await CreateHostAsync();
         var client = app.GetTestClient();
         var body = "{\"repository\":{\"full_name\":\"petabridge/netclaw\"}}";
@@ -98,52 +138,68 @@ public sealed class WebhookEndpointRouteBuilderExtensionsTests
         Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
         Assert.Single(execution.Invocations);
         Assert.Equal("github-issues", execution.Invocations[0].Route.Name);
-        Assert.Equal(AlertType.WebhookReceived, Assert.Single(notifications.Alerts).Category);
+        Assert.Contains(notifications.Alerts, x => x.Category == AlertType.WebhookReceived);
         Assert.Equal("accepted", payload.GetProperty("status").GetString());
     }
 
-    private static async Task<WebApplication> CreateHostAsync(Action<WebhooksConfig>? configure = null)
+    [Fact]
+    public async Task Invalid_edit_removes_route_without_restart_and_emits_route_alert()
+    {
+        _store.Save("github-issues", CreateRoute());
+        BumpWriteTime("github-issues");
+        await using var app = await CreateHostAsync();
+        var client = app.GetTestClient();
+        var body = "{\"repository\":{\"full_name\":\"petabridge/netclaw\"}}";
+
+        using var first = BuildGitHubRequest("/api/webhooks/github-issues", body, "issues", "delivery-1", "secret");
+        var firstResponse = await client.SendAsync(first, TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.Accepted, firstResponse.StatusCode);
+
+        File.WriteAllText(Path.Combine(_paths.WebhooksDirectory, "github-issues.json"), "{ not valid json");
+        BumpWriteTime("github-issues");
+
+        using var second = BuildGitHubRequest("/api/webhooks/github-issues", body, "issues", "delivery-2", "secret");
+        var secondResponse = await client.SendAsync(second, TestContext.Current.CancellationToken);
+
+        var notifications = app.Services.GetRequiredService<RecordingNotificationSink>();
+        Assert.Equal(HttpStatusCode.NotFound, secondResponse.StatusCode);
+        Assert.Contains(notifications.Alerts, x => x.Category == AlertType.WebhookRouteInvalid);
+    }
+
+    public void Dispose()
+    {
+        if (Directory.Exists(_tempDir))
+            Directory.Delete(_tempDir, recursive: true);
+    }
+
+    private void BumpWriteTime(string routeName)
+    {
+        var filePath = Path.Combine(_paths.WebhooksDirectory, $"{routeName}.json");
+        File.SetLastWriteTimeUtc(filePath, DateTime.UtcNow.AddSeconds(++_writeVersion));
+    }
+
+    private async Task<WebApplication> CreateHostAsync()
     {
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseTestServer();
 
-        var config = new WebhooksConfig
-        {
-            Enabled = true,
-            Routes = new Dictionary<string, WebhookRouteConfig>
-            {
-                ["github-issues"] = new()
-                {
-                    Prompt = "triage",
-                    Verification = new WebhookVerificationConfig
-                    {
-                        Kind = WebhookVerifierKind.GitHubHmacSha256,
-                        Secret = new SensitiveString("secret")
-                    },
-                    Events = ["issues"],
-                    NotificationTarget = new NotificationTargetConfig
-                    {
-                        Kind = NotificationTargetKind.Slack,
-                        ChannelId = "C123"
-                    }
-                }
-            }
-        };
-        configure?.Invoke(config);
-
-        builder.Services.AddSingleton(config);
+        builder.Services.AddSingleton(_paths);
+        builder.Services.AddSingleton(_store);
+        builder.Services.AddSingleton(new WebhooksConfig { Enabled = true });
         builder.Services.AddSingleton<TimeProvider>(new FakeTimeProvider(DateTimeOffset.Parse("2026-04-02T18:30:00Z")));
         builder.Services.AddSingleton<WebhookRouteCatalog>();
         builder.Services.AddSingleton<WebhookRequestVerifier>();
-        builder.Services.AddSingleton<WebhookIngressGuard>();
+        builder.Services.AddSingleton<WebhookIngressGuard>(sp =>
+            new WebhookIngressGuard(sp.GetRequiredService<TimeProvider>(), NullLogger<WebhookIngressGuard>.Instance));
         builder.Services.AddSingleton<FakeWebhookExecutionService>();
         builder.Services.AddSingleton<IWebhookExecutionService>(sp => sp.GetRequiredService<FakeWebhookExecutionService>());
         builder.Services.AddSingleton<RecordingNotificationSink>();
         builder.Services.AddSingleton<IOperationalNotificationSink>(sp => sp.GetRequiredService<RecordingNotificationSink>());
+        builder.Services.AddLogging();
 
         var app = builder.Build();
         app.MapWebhookEndpoints();
-        await app.StartAsync();
+        await app.StartAsync(TestContext.Current.CancellationToken);
         return app;
     }
 
@@ -162,6 +218,28 @@ public sealed class WebhookEndpointRouteBuilderExtensionsTests
         request.Headers.Add("X-GitHub-Delivery", deliveryId);
         return request;
     }
+
+    private static WebhookRouteConfig CreateRoute(int maxBodyBytes = 1024 * 1024) => new()
+    {
+        Prompt = "triage this event",
+        Events = ["issues"],
+        NotificationTarget = new NotificationTargetConfig
+        {
+            Kind = NotificationTargetKind.Slack,
+            ChannelId = "C123"
+        },
+        Verification = new WebhookVerificationConfig
+        {
+            Kind = WebhookVerifierKind.Hmac,
+            Secret = new SensitiveString("secret"),
+            SignatureHeaderName = "X-Hub-Signature-256",
+            SignaturePrefix = "sha256=",
+            EventHeaderName = "X-GitHub-Event",
+            DeliveryIdHeaderName = "X-GitHub-Delivery"
+        },
+        MaxBodyBytes = maxBodyBytes,
+        RateLimitPerMinute = 30
+    };
 
     private sealed class FakeWebhookExecutionService : IWebhookExecutionService
     {

@@ -4,7 +4,7 @@ description: "REQUIRED when the user asks about Netclaw capabilities, scheduling
 disable-model-invocation: true
 metadata:
   author: netclaw
-  version: "1.3.0"
+  version: "1.4.0"
 ---
 
 # Netclaw Operations
@@ -23,6 +23,7 @@ problems, how to update preferences, or how to maintain itself.
 | Update preferences, tone, profile | [Identity](#identity) |
 | Pair remote devices, manage access | [Device Pairing](#device-pairing) |
 | Check health, update self | [Self-Maintenance](#self-maintenance) |
+| Manage inbound webhooks | [Webhook Management](#webhook-management) |
 
 ## Scheduling
 
@@ -56,6 +57,32 @@ After discovery, matched tools become callable for the session.
 Sessions receive granted tool categories. `builtin` is always granted.
 Other categories (`web`, `file`, `shell`, `scheduling`) depend on ACL
 config. If a tool is missing, it may not be granted for this session.
+
+## Webhook Management
+
+Inbound webhooks use a split config model:
+
+- `~/.netclaw/config/netclaw.json` -> `Webhooks.Enabled` toggles the feature
+- `~/.netclaw/config/webhooks/*.json` -> one route per file; filename is the
+  route name used at `/api/webhooks/{route}`
+
+Use the dedicated tools instead of generic file tools when available:
+
+- `set_webhook`
+- `list_webhooks`
+- `delete_webhook`
+
+Route files are secret-bearing config because they may contain inline
+verification secrets. Treat `config/webhooks` like `secrets.json` and avoid
+broad file reads/writes there unless the user explicitly wants raw config work.
+
+Verification kinds are generic:
+
+- `Hmac`
+- `HeaderSecret`
+
+Route files hot-reload without restarting the daemon. If a route file becomes
+invalid, Netclaw removes that route immediately and emits an operational alert.
 
 ## Diagnostics
 

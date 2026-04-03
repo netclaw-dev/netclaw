@@ -110,6 +110,23 @@ public sealed class ToolPathPolicyTests
     }
 
     [Fact]
+    public void IsDenied_blocks_children_of_webhooks_directory()
+    {
+        var policy = new ToolPathPolicy(["/home/user/.netclaw/config/webhooks"]);
+
+        Assert.True(policy.IsDenied("/home/user/.netclaw/config/webhooks/github-issues.json"));
+    }
+
+    [Fact]
+    public void CommandReferencesDeniedPath_detects_webhooks_directory_access()
+    {
+        var policy = new ToolPathPolicy(["/home/user/.netclaw/config/webhooks"]);
+
+        Assert.True(policy.CommandReferencesDeniedPath("cat ~/.netclaw/config/webhooks/github-issues.json"));
+        Assert.True(policy.CommandReferencesDeniedPath("tar czf /tmp/webhooks.tgz ~/.netclaw/config/webhooks"));
+    }
+
+    [Fact]
     public void CommandReferencesDeniedPath_detects_high_risk_glob_in_config_directory()
     {
         var policy = new ToolPathPolicy(["/home/user/.netclaw/config/secrets.json"]);

@@ -15,11 +15,6 @@ public sealed class WebhooksConfig
     /// autonomous run failed.
     /// </summary>
     public int ExecutionTimeoutSeconds { get; set; } = 300;
-
-    /// <summary>
-    /// Named route definitions keyed by route name.
-    /// </summary>
-    public Dictionary<string, WebhookRouteConfig> Routes { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 }
 
 /// <summary>
@@ -53,9 +48,15 @@ public sealed class WebhookRouteConfig
 /// </summary>
 public sealed class WebhookVerificationConfig
 {
-    public WebhookVerifierKind Kind { get; set; } = WebhookVerifierKind.GitHubHmacSha256;
+    public WebhookVerifierKind Kind { get; set; } = WebhookVerifierKind.Hmac;
+
+    public WebhookHmacAlgorithm HmacAlgorithm { get; set; } = WebhookHmacAlgorithm.Sha256;
 
     public SensitiveString? Secret { get; set; }
+
+    public string? SignatureHeaderName { get; set; }
+
+    public string? SignaturePrefix { get; set; }
 
     public string? SecretHeaderName { get; set; }
 
@@ -66,8 +67,13 @@ public sealed class WebhookVerificationConfig
 
 public enum WebhookVerifierKind
 {
-    GitHubHmacSha256 = 0,
+    Hmac = 0,
     HeaderSecret = 1
+}
+
+public enum WebhookHmacAlgorithm
+{
+    Sha256 = 0,
 }
 
 /// <summary>

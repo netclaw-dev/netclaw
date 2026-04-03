@@ -168,5 +168,12 @@ internal sealed class ToolAudienceProfileResolver
     }
 
     private static bool IsProfileManagedTool(string toolName)
-        => toolName is "shell_execute" or "file_read" or "file_write" or "attach_file" or "skill_manage";
+        => toolName is "shell_execute"
+            or "file_read"
+            or "file_write"
+            or "attach_file"
+            or "skill_manage"
+            or "set_webhook"
+            or "list_webhooks"
+            or "delete_webhook";
 }

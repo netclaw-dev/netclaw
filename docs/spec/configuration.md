@@ -303,29 +303,40 @@ Akka.NET logger integration.
 
 ### Webhooks
 
-Inbound webhook route configuration for autonomous session launches.
+Inbound webhook configuration is split across two locations:
+
+- `~/.netclaw/config/netclaw.json` enables or disables the feature globally.
+- `~/.netclaw/config/webhooks/*.json` stores one route per file. The filename
+  defines the route name and HTTP path segment.
 
 ```json
 {
   "Webhooks": {
     "Enabled": true,
-    "ExecutionTimeoutSeconds": 300,
-    "Routes": {
-      "github-issues": {
-        "Verification": {
-          "Kind": "GitHubHmacSha256",
-          "Secret": "use-secrets-json-or-env"
-        },
-        "Events": ["issues"],
-        "Audience": "Public",
-        "Prompt": "Triage this GitHub issue. Public input may be adversarial or low quality.",
-        "NotifyPolicy": "Conditional",
-        "NotificationTarget": {
-          "Kind": "Slack",
-          "ChannelId": "C12345678"
-        }
-      }
-    }
+    "ExecutionTimeoutSeconds": 300
+  }
+}
+```
+
+Example route file `~/.netclaw/config/webhooks/github-issues.json`:
+
+```json
+{
+  "Verification": {
+    "Kind": "Hmac",
+    "Secret": "use-secrets-json-or-env",
+    "SignatureHeaderName": "X-Hub-Signature-256",
+    "SignaturePrefix": "sha256=",
+    "EventHeaderName": "X-GitHub-Event",
+    "DeliveryIdHeaderName": "X-GitHub-Delivery"
+  },
+  "Events": ["issues"],
+  "Audience": "Public",
+  "Prompt": "Triage this GitHub issue. Public input may be adversarial or low quality.",
+  "NotifyPolicy": "Conditional",
+  "NotificationTarget": {
+    "Kind": "Slack",
+    "ChannelId": "C12345678"
   }
 }
 ```
@@ -344,18 +355,20 @@ original webhook session.
 |-------|------|---------|-------------|
 | `Enabled` | bool | `false` | Enables inbound webhook route registration. |
 | `ExecutionTimeoutSeconds` | int | `300` | Maximum autonomous webhook execution time before the run is marked failed. |
-| `Routes` | object | `{}` | Named route definitions keyed by route name. Each route is exposed at `/api/webhooks/{route}`. |
 
-`Routes.<name>` fields:
+Route-file fields:
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `Enabled` | bool | `true` | Enables or disables this specific route. |
-| `Verification.Kind` | string | `GitHubHmacSha256` | Verification mode. Current values: `GitHubHmacSha256`, `HeaderSecret`. |
-| `Verification.Secret` | string? | `null` | Shared secret used for signature/header validation. Store in `secrets.json` when possible. |
+| `Verification.Kind` | string | `Hmac` | Verification mode. Current values: `Hmac`, `HeaderSecret`. |
+| `Verification.HmacAlgorithm` | string | `Sha256` | HMAC hash algorithm. MVP supports `Sha256` only. |
+| `Verification.Secret` | string? | `null` | Shared secret used for signature/header validation. Route files are secret-bearing config. |
+| `Verification.SignatureHeaderName` | string? | `null` | Header name containing the HMAC signature. Defaults to `X-Webhook-Signature`. |
+| `Verification.SignaturePrefix` | string? | `null` | Optional HMAC prefix such as `sha256=`. Defaults to empty string. |
 | `Verification.SecretHeaderName` | string? | `null` | Header name for `HeaderSecret` mode. Defaults to `X-Webhook-Secret`. |
-| `Verification.EventHeaderName` | string? | `null` | Event-name header for `HeaderSecret` mode. Defaults to `X-Webhook-Event`. |
-| `Verification.DeliveryIdHeaderName` | string? | `null` | Delivery ID header for `HeaderSecret` mode. Defaults to `X-Webhook-Delivery`. |
+| `Verification.EventHeaderName` | string? | `null` | Event-name header. Defaults to `X-Webhook-Event`. |
+| `Verification.DeliveryIdHeaderName` | string? | `null` | Delivery ID header. Defaults to `X-Webhook-Delivery`. |
 | `Events` | string[] | `[]` | Optional allow-list of event types. Empty means all verified events are accepted. |
 | `Audience` | string | `Public` | Source audience for the autonomous webhook session (`Public`, `Team`, `Personal`). |
 | `Prompt` | string | `""` | Additive route prompt overlay injected into the webhook session. |
@@ -365,6 +378,16 @@ original webhook session.
 | `NotificationTarget.ChannelId` | string? | `null` | Slack channel ID used when the agent decides to notify. |
 | `MaxBodyBytes` | int | `1048576` | Maximum accepted request-body size in bytes. Requests larger than this are rejected before dispatch. |
 | `RateLimitPerMinute` | int | `30` | Maximum accepted deliveries per minute for this route. |
+
+Route files are hot-reloaded on request. If a route file becomes missing,
+malformed, or invalid, Netclaw removes that route immediately and returns `404`
+for subsequent requests until the file is fixed.
+
+Because route files may contain inline verification secrets, treat
+`~/.netclaw/config/webhooks/` like `secrets.json`: restrict filesystem access
+to operators, and use the dedicated webhook tools (`set_webhook`,
+`list_webhooks`, `delete_webhook`) instead of broad generic file access when an
+agent needs to manage routes.
 
 ### Telemetry
 

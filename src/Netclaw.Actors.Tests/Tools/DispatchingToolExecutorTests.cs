@@ -306,7 +306,9 @@ public class DispatchingToolExecutorTests
                 UsedStrictFallback: false));
 
         var registry = new ToolRegistry();
-        registry.WithFirstPartyTools(config, toolAccessPolicy: policy);
+        var paths = new NetclawPaths(Path.Combine(Path.GetTempPath(), $"netclaw-webhook-tools-{Guid.NewGuid():N}"));
+        paths.EnsureDirectoriesExist();
+        registry.WithFirstPartyTools(config, toolAccessPolicy: policy, paths: paths, webhookRouteStore: new WebhookRouteStore(paths));
 
         var teamContext = new Netclaw.Tools.ToolExecutionContext("slack/thread-1", Path.GetTempPath())
         {
@@ -317,6 +319,9 @@ public class DispatchingToolExecutorTests
 
         Assert.False(policy.IsToolExposed(registry.GetByName("shell_execute")!, teamContext));
         Assert.False(policy.IsToolExposed(registry.GetByName("file_write")!, teamContext));
+        Assert.False(policy.IsToolExposed(registry.GetByName("set_webhook")!, teamContext));
+        Assert.False(policy.IsToolExposed(registry.GetByName("list_webhooks")!, teamContext));
+        Assert.False(policy.IsToolExposed(registry.GetByName("delete_webhook")!, teamContext));
         Assert.True(policy.IsToolExposed(registry.GetByName("file_read")!, teamContext));
         Assert.True(policy.IsToolExposed(registry.GetByName("attach_file")!, teamContext));
     }

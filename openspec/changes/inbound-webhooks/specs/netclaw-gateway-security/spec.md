@@ -35,3 +35,10 @@ created.
 - **WHEN** another request arrives for that route
 - **THEN** the daemon rejects the request with a rate-limit response
 - **AND** no webhook session is created
+
+#### Scenario: Invalid route file fails closed before dispatch
+
+- **GIVEN** a route file exists for a webhook route but is malformed or invalid
+- **WHEN** a request arrives for that route
+- **THEN** the daemon does not use any stale cached route definition
+- **AND** the request is rejected before a webhook session is created

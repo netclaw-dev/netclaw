@@ -531,12 +531,13 @@ static void ConfigureDaemonServices(
     var webhooksConfig = configuration.GetSection("Webhooks")
         .Get<WebhooksConfig>() ?? new WebhooksConfig();
     services.AddSingleton(webhooksConfig);
+    var webhookRouteStore = new Netclaw.Configuration.WebhookRouteStore(paths);
+    services.AddSingleton(webhookRouteStore);
     services.AddSingleton<WebhookRouteCatalog>();
     services.AddSingleton<WebhookRequestVerifier>();
     services.AddSingleton<WebhookIngressGuard>();
     services.AddSingleton<WebhookExecutionService>();
     services.AddSingleton<IWebhookExecutionService>(sp => sp.GetRequiredService<WebhookExecutionService>());
-    services.AddHostedService<WebhookRouteValidationService>();
 
     // Search backend selection
     var searchConfig = configuration.GetSection("Search")
@@ -544,14 +545,14 @@ static void ConfigureDaemonServices(
     var searchBackend = CreateSearchBackend(searchConfig);
 
     // Tool path deny-list: prevent agent tools from accessing secrets
-    var toolPathPolicy = new ToolPathPolicy([paths.SecretsPath, paths.KeysDirectory]);
+    var toolPathPolicy = new ToolPathPolicy([paths.SecretsPath, paths.WebhooksDirectory, paths.KeysDirectory]);
     services.AddSingleton(toolPathPolicy);
 
     var toolAccessPolicy = new ToolAccessPolicy(toolConfig, effectivePolicyDefaults);
     services.AddSingleton(toolAccessPolicy);
 
     var toolRegistry = new ToolRegistry();
-    toolRegistry.WithFirstPartyTools(toolConfig, searchBackend, toolPathPolicy, toolAccessPolicy, paths);
+    toolRegistry.WithFirstPartyTools(toolConfig, searchBackend, toolPathPolicy, toolAccessPolicy, paths, webhookRouteStore);
 
     // Skills system: seed built-in skills to .system/, register sync service
     CopyBuiltInSkills(paths.SystemSkillsDirectory);

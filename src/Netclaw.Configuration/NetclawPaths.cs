@@ -61,6 +61,7 @@ public sealed class NetclawPaths
     public string SchedulesDirectory => Path.Combine(BasePath, "schedules");
     public string RemindersDirectory => Path.Combine(SchedulesDirectory, "reminders");
     public string ConfigDirectory => Path.Combine(BasePath, "config");
+    public string WebhooksDirectory => Path.Combine(ConfigDirectory, "webhooks");
     public string NetclawConfigPath => Path.Combine(ConfigDirectory, "netclaw.json");
     public string SecretsPath => Path.Combine(ConfigDirectory, "secrets.json");
     public string DevicesPath => Path.Combine(ConfigDirectory, "devices.json");
@@ -106,6 +107,7 @@ public sealed class NetclawPaths
         Directory.CreateDirectory(SchedulesDirectory);
         Directory.CreateDirectory(RemindersDirectory);
         Directory.CreateDirectory(ConfigDirectory);
+        Directory.CreateDirectory(WebhooksDirectory);
         Directory.CreateDirectory(LogsDirectory);
         // Note: per-session log directories (sessions/{id}/logs/) are created
         // on-demand by SessionLogActor, not pre-created here.

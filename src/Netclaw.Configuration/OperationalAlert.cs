@@ -14,6 +14,7 @@ public enum AlertType
     ReminderExecutionFailed,
     ReminderAutoDisabled,
     WebhookReceived,
+    WebhookRouteInvalid,
     DaemonStarted,
     DaemonStopping,
     UpdateAvailable,
