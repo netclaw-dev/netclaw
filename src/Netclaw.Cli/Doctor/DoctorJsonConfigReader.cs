@@ -7,8 +7,9 @@ namespace Netclaw.Cli.Doctor;
 
 internal static class DoctorJsonConfigReader
 {
-    internal static readonly JsonSerializerOptions JsonOptions = new()
+    internal static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
+        PropertyNameCaseInsensitive = true,
         Converters = { new JsonStringEnumConverter() }
     };
 

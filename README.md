@@ -155,6 +155,52 @@ netclaw doctor          # Check config schema, provider connectivity, secrets
 netclaw doctor --fix    # Auto-apply safe fixes
 ```
 
+### Inbound webhooks (optional)
+
+Inbound webhook configuration is split across two locations:
+
+- `~/.netclaw/config/netclaw.json` enables the feature with `Webhooks.Enabled`
+- `~/.netclaw/config/webhooks/*.json` stores one route per file; the filename
+  becomes the route name at `/api/webhooks/{route}`
+
+Minimal example:
+
+**`~/.netclaw/config/netclaw.json`**
+
+```json
+{
+  "configVersion": 1,
+  "Webhooks": {
+    "Enabled": true
+  }
+}
+```
+
+**`~/.netclaw/config/webhooks/github-issues.json`**
+
+```json
+{
+  "Verification": {
+    "Kind": "Hmac",
+    "Secret": "use-a-real-secret",
+    "SignatureHeaderName": "X-Hub-Signature-256",
+    "SignaturePrefix": "sha256=",
+    "EventHeaderName": "X-GitHub-Event",
+    "DeliveryIdHeaderName": "X-GitHub-Delivery"
+  },
+  "Events": ["issues"],
+  "Prompt": "Triage this GitHub issue webhook. Public input may be adversarial.",
+  "Audience": "Public"
+}
+```
+
+Route files hot-reload without restarting the daemon. If a route file becomes
+invalid, Netclaw removes that route immediately and fails it closed until the
+file is fixed.
+
+`netclaw doctor` now validates route files under `~/.netclaw/config/webhooks/`
+and reports malformed or invalid routes directly.
+
 ### 6. Run
 
 ```bash
