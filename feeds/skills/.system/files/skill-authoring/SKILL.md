@@ -3,7 +3,7 @@ name: skill-authoring
 description: "How to create, edit, and manage Netclaw skills. Read this when you need to synthesize a new skill from a session, understand the skill file format, or use the skill_manage tool."
 metadata:
   author: netclaw
-  version: "1.3.0"
+  version: "1.4.0"
 ---
 
 # Skill Authoring
@@ -26,7 +26,9 @@ Do **not** create a skill for:
 
 ## Skill File Format
 
-Skills follow the [AgentSkills.io](https://agentskills.io) directory layout:
+Skills support two layouts:
+
+### Directory layout (recommended)
 
 ```
 skill-name/
@@ -35,6 +37,18 @@ skill-name/
   scripts/          # Optional: executable helpers
   assets/           # Optional: templates, static resources
 ```
+
+### Flat-file layout
+
+```
+skill-name.md       # YAML frontmatter + markdown instructions (no resources)
+```
+
+Flat `.md` files with valid YAML frontmatter are accepted as skills for
+compatibility with Claude Code and other platforms. The frontmatter `name`
+must match the filename (without `.md`). Flat-file skills cannot have
+resource subdirectories. If both `skill-name/SKILL.md` and `skill-name.md`
+exist, the directory version takes precedence.
 
 ### YAML Frontmatter (Required)
 
@@ -120,12 +134,14 @@ them on demand via `skill_read_resource`.
 
 ## Creating Skills with skill_manage
 
-**IMPORTANT: NEVER use `file_write` to create or modify skill files.** The
-`file_write` tool writes to disk but does NOT register the skill in the
-in-memory `SkillRegistry`. The skill will exist on disk but be invisible to
-`skill_load`, the skill index, and `netclaw stats` until the next daemon
-restart. Always use `skill_manage` — it validates frontmatter, writes
-atomically, and triggers an immediate registry rescan.
+**Always use `skill_manage` to create or modify skill files.** The
+`skill_manage` tool validates frontmatter, scans for prompt injection,
+writes atomically, and triggers an immediate registry rescan.
+
+If `file_write` is used instead, the `SkillDirectoryWatcherService` will
+detect the change and trigger a rescan automatically (within ~500ms). However,
+`skill_manage` is still preferred because it validates content *before*
+writing — the watcher only rescans after the fact.
 
 Use the `skill_manage` tool for all skill mutations:
 

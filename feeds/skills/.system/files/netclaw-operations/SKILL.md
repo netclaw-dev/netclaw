@@ -4,7 +4,7 @@ description: "REQUIRED when the user asks about Netclaw capabilities, scheduling
 disable-model-invocation: true
 metadata:
   author: netclaw
-  version: "1.4.0"
+  version: "1.5.0"
 ---
 
 # Netclaw Operations
@@ -19,6 +19,7 @@ problems, how to update preferences, or how to maintain itself.
 |-------------|---------------|
 | Schedule reminders, cron jobs | [Scheduling](#scheduling) |
 | Discover MCP tools | [Tool Discovery](#tool-discovery) |
+| Manage skills and sources | [Skill Management](#skill-management) |
 | Something is broken, debug it | [Diagnostics](#diagnostics) |
 | Update preferences, tone, profile | [Identity](#identity) |
 | Pair remote devices, manage access | [Device Pairing](#device-pairing) |
@@ -57,6 +58,36 @@ After discovery, matched tools become callable for the session.
 Sessions receive granted tool categories. `builtin` is always granted.
 Other categories (`web`, `file`, `shell`, `scheduling`) depend on ACL
 config. If a tool is missing, it may not be granted for this session.
+
+## Skill Management
+
+The `netclaw skill` CLI manages skills and skill sources. All subcommands
+are offline — no daemon required.
+
+| Command | What it does |
+|---------|--------------|
+| `netclaw skill list` | List all discovered skills with source, version, status |
+| `netclaw skill show <name>` | Show skill metadata and full content |
+| `netclaw skill validate <path>` | Validate a SKILL.md file's frontmatter format |
+| `netclaw skill remove <name>` | Remove a native skill (refuses system/external) |
+| `netclaw skill issues` | Show only scanner issues (rejected items with reasons) |
+| `netclaw skill search <query>` | Search skills by name or description |
+
+### External skill sources
+
+Register additional skill directories (e.g. `~/.claude/skills/`):
+
+| Command | What it does |
+|---------|--------------|
+| `netclaw skill source list` | Show configured external sources |
+| `netclaw skill source add <name> --well-known claude-code` | Add Claude Code skills |
+| `netclaw skill source add <name> --path /shared/skills` | Add a custom directory |
+| `netclaw skill source remove <name>` | Remove a source |
+| `netclaw skill source enable <name>` | Enable a disabled source |
+| `netclaw skill source disable <name>` | Disable without removing |
+
+The daemon's `SkillDirectoryWatcherService` automatically rescans all skill
+directories (native + external) when files change on disk. No restart needed.
 
 ## Webhook Management
 
@@ -136,6 +167,7 @@ file. If it should be recalled when relevant → SQLite memory.
 | Self-diagnose | `netclaw doctor` |
 | Runtime health | `netclaw status` |
 | Memory/token stats | `netclaw stats` |
+| List/manage skills | `netclaw skill list` |
 | List past sessions | `netclaw sessions --once` |
 | Inspect reminder history | `netclaw reminder history <id> --last 5` |
 
