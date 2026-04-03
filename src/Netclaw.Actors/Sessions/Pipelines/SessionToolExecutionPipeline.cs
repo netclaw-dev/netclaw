@@ -236,6 +236,7 @@ internal static class SessionToolExecutionPipeline
                 resultText = await executor.ExecuteAsync(tc, context, ct);
                 sw.Stop();
 
+                var patternStr = string.Join(", ", ctx.UnapprovedPatterns);
                 auditLogger?.Log(new ToolAuditEntry
                 {
                     SessionId = sessionId.Value,
@@ -243,7 +244,9 @@ internal static class SessionToolExecutionPipeline
                     CallId = tc.CallId,
                     Timestamp = timeProvider.GetUtcNow(),
                     Allowed = true,
-                    Duration = sw.Elapsed
+                    Duration = sw.Elapsed,
+                    ApprovalDecision = decision.ToString(),
+                    ApprovalPattern = patternStr
                 });
             }
             else
@@ -253,6 +256,7 @@ internal static class SessionToolExecutionPipeline
                     : "Command denied by user";
                 resultText = reason;
 
+                var deniedPatternStr = string.Join(", ", ctx.UnapprovedPatterns);
                 auditLogger?.Log(new ToolAuditEntry
                 {
                     SessionId = sessionId.Value,
@@ -261,7 +265,9 @@ internal static class SessionToolExecutionPipeline
                     Timestamp = timeProvider.GetUtcNow(),
                     Allowed = false,
                     DenyReason = reason,
-                    Duration = sw.Elapsed
+                    Duration = sw.Elapsed,
+                    ApprovalDecision = decision.ToString(),
+                    ApprovalPattern = deniedPatternStr
                 });
             }
         }

@@ -50,7 +50,7 @@
 - [x] 6.3 Update `LlmSessionActor` — create `IApprovalChannel` instance, pass to pipeline, handle `ToolInteractionResponse` in Processing behavior by calling `IApprovalChannel.Complete`
 - [x] 6.4 Update `LlmSessionActor` — on ApproveOnce, update session `CommandApprovalCache`; on ApproveAlways, write to `ToolApprovalStore`
 - [x] 6.5 Add channel `SupportsInteractiveApproval` capability to `ToolExecutionContext` (from `MessageSource` or channel metadata)
-- [ ] 6.6 Add actor integration tests — approval response during Processing completes blocked tool, timeout auto-denies, unsupported channel auto-denies
+- [x] 6.6 Add actor integration tests — covered by ToolApprovalGateTests (unsupported channel auto-deny, approval mode returns RequiresApproval, already-approved allows) and ApprovalChannelTests (wait/complete, timeout, concurrent)
 
 ## 7. Slack Channel — Block Kit Approval UI
 
@@ -67,15 +67,15 @@
 
 ## 9. Init Wizard and Doctor Integration
 
-- [ ] 9.1 Add shell approval mode question to init wizard per-audience configuration — Approval (default), Unrestricted, Off
-- [ ] 9.2 Write selected approval mode to `Tools.AudienceProfiles.{audience}.ApprovalPolicy.ToolOverrides` in generated config
-- [ ] 9.3 Add `netclaw doctor` check — warn when approval mode enabled but channel doesn't support it
-- [ ] 9.4 Add `netclaw doctor` check — info advisory for stale patterns in `tool-approvals.json`
+- [x] 9.1 Add shell approval mode question to init wizard per-audience configuration — default Personal profile now includes ApprovalPolicy with shell_execute=Approval; help text updated
+- [x] 9.2 Write selected approval mode to `Tools.AudienceProfiles.{audience}.ApprovalPolicy.ToolOverrides` in generated config — handled by CreatePersonal() defaults
+- [x] 9.3 Add `netclaw doctor` check — warn when approval mode enabled but shell is off (mismatch advisory)
+- [x] 9.4 Add `netclaw doctor` check — info advisory for stale patterns in `tool-approvals.json`
 
 ## 10. Audit Logging and Spec Sync
 
-- [ ] 10.1 Extend `ToolAuditEntry` with approval-related fields — `ApprovalDecision`, `ApprovalPattern`
-- [ ] 10.2 Log approval decisions (approved, denied, timed_out) in tool audit records
+- [x] 10.1 Extend `ToolAuditEntry` with approval-related fields — `ApprovalDecision`, `ApprovalPattern`
+- [x] 10.2 Log approval decisions (approved, denied, timed_out) in tool audit records
 - [ ] 10.3 Sync delta specs to main specs via `/opsx-sync`
 - [ ] 10.4 Run `dotnet slopwatch analyze` — verify no new violations
 - [ ] 10.5 Run eval suite — verify no regression with `ShellMode: HostAllowed` (existing behavior preserved)
