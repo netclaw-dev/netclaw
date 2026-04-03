@@ -17,12 +17,12 @@
 
 ## 3. Approval Cache and Matcher Infrastructure
 
-- [ ] 3.1 Create `CommandApprovalCache` in `Netclaw.Security` — thread-safe in-memory cache, session-scoped entries, backed by persistent `ToolApprovalStore`, per-audience lookups
-- [ ] 3.2 Define `IToolApprovalMatcher` interface — `ExtractPattern(toolCall)`, `IsApproved(toolCall, approvedPatterns)`, `FormatForDisplay(toolCall)`
-- [ ] 3.3 Implement `ShellApprovalMatcher` — verb-chain prefix extraction, compound command pattern collection, prefix matching against approved patterns
-- [ ] 3.4 Implement `DefaultApprovalMatcher` — tool-name-level matching for non-shell tools
-- [ ] 3.5 Add `CommandApprovalCache` tests — session-scoped add/lookup, persistent backing, per-audience isolation
-- [ ] 3.6 Add `ShellApprovalMatcher` tests — pattern extraction from various commands, prefix matching, compound pattern collection
+- [x] 3.1 Create `CommandApprovalCache` in `Netclaw.Security` — thread-safe in-memory cache, session-scoped entries, backed by persistent `ToolApprovalStore`, per-audience lookups
+- [x] 3.2 Define `IToolApprovalMatcher` interface — `ExtractPattern(toolCall)`, `IsApproved(toolCall, approvedPatterns)`, `FormatForDisplay(toolCall)`
+- [x] 3.3 Implement `ShellApprovalMatcher` — verb-chain prefix extraction, compound command pattern collection, prefix matching against approved patterns
+- [x] 3.4 Implement `DefaultApprovalMatcher` — tool-name-level matching for non-shell tools
+- [x] 3.5 Add `CommandApprovalCache` tests — session-scoped add/lookup, persistent backing, per-audience isolation
+- [x] 3.6 Add `ShellApprovalMatcher` tests — pattern extraction from various commands, prefix matching, compound pattern collection
 
 ## 4. ToolAccessPolicy and Executor Integration
 
