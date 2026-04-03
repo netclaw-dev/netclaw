@@ -236,4 +236,77 @@ public sealed class CurationRulesEvaluatorTests
         Assert.Equal(CurationDecisionKind.Update, decision.Kind);
         Assert.Equal("doc-recent", decision.TargetDocumentId);
     }
+
+    // ── TryAutoResolveAmbiguous ─────────────────────────────────────
+
+    [Fact]
+    public void TryAutoResolveAmbiguous_returns_Skip_when_high_overlap_and_anchor_similarity()
+    {
+        // Content overlap > 60% and anchor Jaccard > 50%
+        var proposal = MakeProposal(
+            anchor: "netclaw-github-repo",
+            content: "Netclaw GitHub repository at https://github.com/Aaronontheweb/netclaw, private repo");
+        var candidates = new[]
+        {
+            MakeCandidate(
+                anchorName: "netclaw-github-repository",
+                content: "Netclaw GitHub repository: https://github.com/Aaronontheweb/netclaw. The repository is private.",
+                isExact: false)
+        };
+
+        var decision = CurationRulesEvaluator.TryAutoResolveAmbiguous(proposal, candidates);
+
+        Assert.NotNull(decision);
+        Assert.Equal(CurationDecisionKind.Skip, decision.Kind);
+        Assert.Contains("auto-resolved", decision.Reason);
+    }
+
+    [Fact]
+    public void TryAutoResolveAmbiguous_returns_null_when_content_overlap_below_threshold()
+    {
+        // High anchor similarity but low content overlap
+        var proposal = MakeProposal(
+            anchor: "akka-net-release",
+            content: "The CI pipeline deploys to staging on every merge");
+        var candidates = new[]
+        {
+            MakeCandidate(
+                anchorName: "akka-net-latest-release",
+                content: "PostgreSQL 15 is the primary datastore for user profiles",
+                isExact: false)
+        };
+
+        var decision = CurationRulesEvaluator.TryAutoResolveAmbiguous(proposal, candidates);
+
+        Assert.Null(decision);
+    }
+
+    [Fact]
+    public void TryAutoResolveAmbiguous_returns_null_when_anchor_jaccard_below_threshold()
+    {
+        // High content overlap but very different anchor names
+        var proposal = MakeProposal(
+            anchor: "snake-game-location",
+            content: "The project is at /home/user/projects/snakey-trail with HTML and CSS");
+        var candidates = new[]
+        {
+            MakeCandidate(
+                anchorName: "deployment-url-config",
+                content: "The project is at /home/user/projects/snakey-trail with HTML and JavaScript",
+                isExact: false)
+        };
+
+        var decision = CurationRulesEvaluator.TryAutoResolveAmbiguous(proposal, candidates);
+
+        Assert.Null(decision);
+    }
+
+    [Fact]
+    public void TryAutoResolveAmbiguous_returns_null_for_empty_candidates()
+    {
+        var proposal = MakeProposal();
+        var decision = CurationRulesEvaluator.TryAutoResolveAmbiguous(proposal, []);
+
+        Assert.Null(decision);
+    }
 }

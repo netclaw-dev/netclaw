@@ -138,11 +138,12 @@ public sealed class AnchorNameMatcherTests
 
         // "akka-net-release-1.5.62" tokens = {akka, net, release, 1.5.62}
         // "akka-net-release" tokens = {akka, net, release} -> subset of proposal -> match
-        // "akka-net-latest-release" tokens = {akka, net, latest, release} -> NOT subset (has "latest"), and
-        //   Jaccard = 3/5 = 0.6 but symmetric diff = 2 -> no match
+        // "akka-net-latest-release" tokens = {akka, net, latest, release} -> Jaccard = 3/5 = 0.6,
+        //   unmatched = 2 which is <= MaxTokenDifference(2) -> also matches
         var matches = AnchorNameMatcher.FindFuzzyMatches("akka-net-release-1.5.62", existing);
 
         Assert.Contains("akka-net-release", matches);
+        Assert.Contains("akka-net-latest-release", matches);
         Assert.DoesNotContain("user-preferred-color", matches);
         Assert.DoesNotContain("database-config", matches);
     }
@@ -215,5 +216,77 @@ public sealed class AnchorNameMatcherTests
         Assert.Equal(0.0, AnchorNameMatcher.ComputeContentOverlap("", "something"));
         Assert.Equal(0.0, AnchorNameMatcher.ComputeContentOverlap("something", ""));
         Assert.Equal(0.0, AnchorNameMatcher.ComputeContentOverlap("", ""));
+    }
+
+    // ── IsFuzzyMatch: two-token difference (MaxTokenDifference = 2) ──
+
+    [Fact]
+    public void IsFuzzyMatch_returns_true_for_two_token_difference()
+    {
+        // {email, draft, editing, preference} vs {email, draft, editing, workflow}
+        // Jaccard = 3/5 = 0.60, unmatched = 2 <= MaxTokenDifference(2)
+        var tokensA = AnchorNameMatcher.Tokenize("email-draft-editing-preference");
+        var tokensB = AnchorNameMatcher.Tokenize("email-draft-editing-workflow");
+        Assert.True(AnchorNameMatcher.IsFuzzyMatch(tokensA, tokensB));
+    }
+
+    // ── IsFuzzyMatch: prefix matching ───────────────────────────────
+
+    [Fact]
+    public void IsFuzzyMatch_returns_true_for_prefix_match_repo_vs_repository()
+    {
+        // "repo" prefix-matches "repository" -> treated as same token for Jaccard
+        var tokensA = AnchorNameMatcher.Tokenize("netclaw-github-repo");
+        var tokensB = AnchorNameMatcher.Tokenize("netclaw-github-repository");
+        Assert.True(AnchorNameMatcher.IsFuzzyMatch(tokensA, tokensB));
+    }
+
+    [Fact]
+    public void IsFuzzyMatch_returns_true_for_prefix_match_snake_vs_snakey()
+    {
+        // "snake" prefix-matches "snakey"; combined with MaxTokenDifference=2
+        // this catches different descriptors (game vs trail) as long as enough tokens overlap
+        var tokensA = AnchorNameMatcher.Tokenize("snake-game-project-location");
+        var tokensB = AnchorNameMatcher.Tokenize("snakey-trail-project-location");
+        Assert.True(AnchorNameMatcher.IsFuzzyMatch(tokensA, tokensB));
+    }
+
+    [Fact]
+    public void IsFuzzyMatch_prefix_requires_minimum_length()
+    {
+        // "in" is only 2 chars — too short to prefix-match "integration"
+        var tokensA = new[] { "in", "memory", "store" };
+        var tokensB = new[] { "integration", "memory", "store" };
+        // Without prefix: Jaccard = 2/4 = 0.5 < 0.6 -> no match
+        // "in" is too short (< 3 chars) for prefix matching, so it stays at 0.5
+        Assert.False(AnchorNameMatcher.IsFuzzyMatch(tokensA, tokensB));
+    }
+
+    // ── ComputeAnchorJaccard ────────────────────────────────────────
+
+    [Fact]
+    public void ComputeAnchorJaccard_returns_1_for_identical_tokens()
+    {
+        var tokens = new[] { "akka", "net", "release" };
+        Assert.Equal(1.0, AnchorNameMatcher.ComputeAnchorJaccard(tokens, tokens), 2);
+    }
+
+    [Fact]
+    public void ComputeAnchorJaccard_accounts_for_prefix_matching()
+    {
+        // "repo" prefix-matches "repository", so soft intersection = 3
+        // union = {netclaw, github, repo, repository} = 4
+        // Jaccard = 3/4 = 0.75
+        var tokensA = AnchorNameMatcher.Tokenize("netclaw-github-repo");
+        var tokensB = AnchorNameMatcher.Tokenize("netclaw-github-repository");
+        var jaccard = AnchorNameMatcher.ComputeAnchorJaccard(tokensA, tokensB);
+        Assert.True(jaccard > 0.7);
+    }
+
+    [Fact]
+    public void ComputeAnchorJaccard_returns_0_for_empty_tokens()
+    {
+        Assert.Equal(0.0, AnchorNameMatcher.ComputeAnchorJaccard([], new[] { "a" }));
+        Assert.Equal(0.0, AnchorNameMatcher.ComputeAnchorJaccard(new[] { "a" }, []));
     }
 }
