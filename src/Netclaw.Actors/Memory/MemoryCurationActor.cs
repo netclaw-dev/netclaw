@@ -256,8 +256,7 @@ public sealed class MemoryCurationActor : ReceiveActor, IWithUnboundedStash
                 return llmDecision;
             }
 
-            // LLM failed — try deterministic auto-resolution before defaulting to Create
-            _log.Warning("curation_llm_fallback anchor={0}", operation.AnchorCanonicalName);
+            // LLM failed — fall through to deterministic auto-resolution below
         }
 
         // Ambiguous (LLM unavailable or failed) — try deterministic auto-resolution
@@ -274,7 +273,8 @@ public sealed class MemoryCurationActor : ReceiveActor, IWithUnboundedStash
                 return autoResolved;
             }
 
-            _log.Warning("curation_ambiguous_create_fallback anchor={0}", operation.AnchorCanonicalName);
+            _log.Warning("curation_ambiguous_create_fallback anchor={0} llm_available={1}",
+                operation.AnchorCanonicalName, _llmClient is not null);
             return new CurationDecision(CurationDecisionKind.Create, null, null, null,
                 "ambiguous: auto-resolve insufficient, defaulting to create");
         }

@@ -198,14 +198,15 @@ public static class CurationRulesEvaluator
             .ThenByDescending(c => c.FreshnessAtMs ?? 0)
             .First();
 
-        var contentOverlap = AnchorNameMatcher.ComputeContentOverlap(proposal.Content, best.Content);
-        if (contentOverlap < AmbiguousAutoResolveContentThreshold)
-            return null;
-
+        // Check anchor similarity first (cheap: 2-6 tokens) before content overlap (expensive: full text)
         var proposalTokens = AnchorNameMatcher.Tokenize(proposal.AnchorCanonicalName);
         var bestTokens = AnchorNameMatcher.Tokenize(best.AnchorCanonicalName);
         var anchorJaccard = AnchorNameMatcher.ComputeAnchorJaccard(proposalTokens, bestTokens);
         if (anchorJaccard < AmbiguousAutoResolveAnchorJaccard)
+            return null;
+
+        var contentOverlap = AnchorNameMatcher.ComputeContentOverlap(proposal.Content, best.Content);
+        if (contentOverlap < AmbiguousAutoResolveContentThreshold)
             return null;
 
         return new CurationDecision(

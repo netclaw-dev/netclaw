@@ -36,12 +36,7 @@ public static class AnchorNameMatcher
         var setA = new HashSet<string>(tokensA, StringComparer.OrdinalIgnoreCase);
         var setB = new HashSet<string>(tokensB, StringComparer.OrdinalIgnoreCase);
 
-        var softIntersection = SoftIntersectionCount(setA, setB);
-
-        // Use inclusion-exclusion with soft intersection so that prefix-matched
-        // pairs (e.g., "repo" / "repository") count as one item, not two.
-        var softUnion = setA.Count + setB.Count - softIntersection;
-        return softUnion == 0 ? 0.0 : (double)softIntersection / softUnion;
+        return ComputeSoftJaccard(setA, setB);
     }
 
     /// <summary>
@@ -58,15 +53,7 @@ public static class AnchorNameMatcher
         var setA = new HashSet<string>(tokensA, StringComparer.OrdinalIgnoreCase);
         var setB = new HashSet<string>(tokensB, StringComparer.OrdinalIgnoreCase);
 
-        var softIntersection = SoftIntersectionCount(setA, setB);
-
-        // Use inclusion-exclusion with soft intersection so that prefix-matched
-        // pairs (e.g., "repo" / "repository") count as one item, not two.
-        var softUnion = setA.Count + setB.Count - softIntersection;
-        if (softUnion == 0)
-            return false;
-
-        var jaccard = (double)softIntersection / softUnion;
+        var (jaccard, softIntersection, softUnion) = ComputeSoftJaccardDetail(setA, setB);
         if (jaccard < JaccardThreshold)
             return false;
 
@@ -83,19 +70,34 @@ public static class AnchorNameMatcher
         return unmatchedCount <= MaxTokenDifference;
     }
 
-    /// <summary>
-    /// Count tokens from setA that prefix-match at least one token in setB (or vice versa).
-    /// Two tokens match if they are equal or one is a prefix of the other (min 3 chars).
-    /// </summary>
-    private static int SoftIntersectionCount(HashSet<string> setA, HashSet<string> setB)
+    private static double ComputeSoftJaccard(HashSet<string> setA, HashSet<string> setB)
     {
-        var count = 0;
+        var (jaccard, _, _) = ComputeSoftJaccardDetail(setA, setB);
+        return jaccard;
+    }
+
+    /// <summary>
+    /// Compute prefix-aware Jaccard similarity, returning the score plus the raw
+    /// soft-intersection and soft-union counts for callers that need them.
+    /// </summary>
+    private static (double Jaccard, int SoftIntersection, int SoftUnion) ComputeSoftJaccardDetail(
+        HashSet<string> setA, HashSet<string> setB)
+    {
+        var rawCount = 0;
         foreach (var a in setA)
         {
             if (setB.Any(b => IsPrefixMatch(a, b)))
-                count++;
+                rawCount++;
         }
-        return count;
+
+        // Cap at min(|A|, |B|) to prevent many-to-one prefix matches
+        // (e.g., {"repo", "repos"} both matching "repository") from inflating
+        // the intersection beyond what inclusion-exclusion allows.
+        var softIntersection = Math.Min(rawCount, Math.Min(setA.Count, setB.Count));
+        var softUnion = setA.Count + setB.Count - softIntersection;
+        var jaccard = softUnion == 0 ? 0.0 : (double)softIntersection / softUnion;
+
+        return (jaccard, softIntersection, softUnion);
     }
 
     /// <summary>
