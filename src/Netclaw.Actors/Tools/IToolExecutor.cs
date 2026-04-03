@@ -24,6 +24,18 @@ public sealed record ToolAuditEntry
     public required bool Allowed { get; init; }
     public string? DenyReason { get; init; }
     public TimeSpan? Duration { get; init; }
+
+    /// <summary>
+    /// Approval decision when the tool was gated by the approval system.
+    /// Null for tools not in approval mode.
+    /// </summary>
+    public string? ApprovalDecision { get; init; }
+
+    /// <summary>
+    /// The command pattern that was approved/denied (for shell commands).
+    /// Null for non-shell tools or tools not in approval mode.
+    /// </summary>
+    public string? ApprovalPattern { get; init; }
 }
 
 /// <summary>

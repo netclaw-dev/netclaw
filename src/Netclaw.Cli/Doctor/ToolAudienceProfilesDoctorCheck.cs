@@ -84,6 +84,12 @@ public sealed class ToolAudienceProfilesDoctorCheck(NetclawPaths paths) : IDocto
                 warnings.Add("Personal profile also enables host shell, which has a high blast radius.");
         }
 
+        // Advisory: approval mode configured but shell is off
+        CheckApprovalMismatch(toolConfig, warnings);
+
+        // Advisory: stale patterns in tool-approvals.json
+        CheckStaleApprovals(toolConfig, paths, warnings);
+
         // Advisory: MCP servers allowed by any audience but with no McpServerToolGrants
         var ungatedServers = FindUngatedMcpServers(toolConfig.AudienceProfiles, mcpServers);
         if (ungatedServers.Count > 0)
@@ -166,5 +172,64 @@ public sealed class ToolAudienceProfilesDoctorCheck(NetclawPaths paths) : IDocto
         }
 
         return allowedServers.Except(grantedServers, StringComparer.OrdinalIgnoreCase).Order().ToList();
+    }
+
+    private static void CheckApprovalMismatch(ToolConfig toolConfig, List<string> warnings)
+    {
+        var profiles = new (string Name, ToolAudienceProfile Profile)[]
+        {
+            ("personal", toolConfig.AudienceProfiles.Personal),
+            ("team", toolConfig.AudienceProfiles.Team),
+            ("public", toolConfig.AudienceProfiles.Public)
+        };
+
+        foreach (var (name, profile) in profiles)
+        {
+            if (profile.ApprovalPolicy is null)
+                continue;
+
+            var shellOverride = profile.ApprovalPolicy.GetEffectiveMode("shell_execute");
+            if (shellOverride == ToolApprovalMode.Approval && toolConfig.ShellMode == ShellExecutionMode.Off)
+            {
+                warnings.Add(
+                    $"{name} profile has shell_execute in Approval mode but ShellMode is Off — " +
+                    "approval config has no effect.");
+            }
+        }
+    }
+
+    private static void CheckStaleApprovals(ToolConfig toolConfig, NetclawPaths netclawPaths, List<string> warnings)
+    {
+        var approvalsPath = netclawPaths.ToolApprovalsPath;
+        if (!File.Exists(approvalsPath))
+            return;
+
+        try
+        {
+            var store = new ToolApprovalStore(approvalsPath);
+            var data = store.Load();
+
+            foreach (var (audienceKey, tools) in data.Audiences)
+            {
+                if (!SecurityPolicyDefaults.TryParseAudience(audienceKey, out var audience))
+                    continue;
+
+                var profile = ToolAudienceProfileDefaults.GetResolvedProfile(toolConfig.AudienceProfiles, audience);
+
+                foreach (var (toolName, patterns) in tools)
+                {
+                    if (toolName == "shell_execute" && toolConfig.ShellMode == ShellExecutionMode.Off)
+                    {
+                        warnings.Add(
+                            $"Persistent approvals exist for {audienceKey}.shell_execute " +
+                            "but shell is disabled for this audience.");
+                    }
+                }
+            }
+        }
+        catch
+        {
+            // Malformed file — don't fail doctor over it
+        }
     }
 }
