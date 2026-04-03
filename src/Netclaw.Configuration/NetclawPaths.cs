@@ -63,6 +63,7 @@ public sealed class NetclawPaths
     public string RemindersDirectory => Path.Combine(SchedulesDirectory, "reminders");
     public string ConfigDirectory => Path.Combine(BasePath, "config");
     public string WebhooksDirectory => Path.Combine(ConfigDirectory, "webhooks");
+    public string ToolApprovalsPath => Path.Combine(ConfigDirectory, "tool-approvals.json");
     public string NetclawConfigPath => Path.Combine(ConfigDirectory, "netclaw.json");
     public string ClientConfigPath => Path.Combine(ClientDirectory, "config.json");
     public string SecretsPath => Path.Combine(ConfigDirectory, "secrets.json");

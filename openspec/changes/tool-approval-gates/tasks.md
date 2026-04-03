@@ -1,19 +1,19 @@
 ## 1. Shell Tokenizer and Command Policy Foundation
 
-- [ ] 1.1 Create `ShellTokenizer` in `Netclaw.Security` — extract `Tokenize()` from `ToolPathPolicy` into shared utility, add compound command splitting (`&&`, `||`, `;`, `|`), add `bash -c`/`sh -c` inner command extraction
-- [ ] 1.2 Refactor `ToolPathPolicy` to delegate tokenization to `ShellTokenizer` (no behavior change, verify existing tests still pass)
-- [ ] 1.3 Create `ShellCommandPolicy` in `Netclaw.Security` — hard deny list with structural verb+subcommand+flag matching, configurable defaults (self-destructive commands), `Evaluate(command)` returns `ShellCommandDecision`
-- [ ] 1.4 Add `ShellTokenizer` tests — tokenization, compound splitting, `bash -c` extraction, quoting edge cases
-- [ ] 1.5 Add `ShellCommandPolicy` tests — each default deny category (self-destruction, system-destructive), compound commands with denied segments, configurable additions/removals, case insensitivity
+- [x] 1.1 Create `ShellTokenizer` in `Netclaw.Security` — extract `Tokenize()` from `ToolPathPolicy` into shared utility, add compound command splitting (`&&`, `||`, `;`, `|`), add `bash -c`/`sh -c` inner command extraction
+- [x] 1.2 Refactor `ToolPathPolicy` to delegate tokenization to `ShellTokenizer` (no behavior change, verify existing tests still pass)
+- [x] 1.3 Create `ShellCommandPolicy` in `Netclaw.Security` — hard deny list with structural verb+subcommand+flag matching, configurable defaults (self-destructive commands), `Evaluate(command)` returns `ShellCommandDecision`
+- [x] 1.4 Add `ShellTokenizer` tests — tokenization, compound splitting, `bash -c` extraction, quoting edge cases
+- [x] 1.5 Add `ShellCommandPolicy` tests — each default deny category (self-destruction, system-destructive), compound commands with denied segments, configurable additions/removals, case insensitivity
 
 ## 2. Approval Configuration Types
 
-- [ ] 2.1 Create `ToolApprovalMode` enum (Auto, Approval, Deny) and `ToolApprovalConfig` class (`DefaultMode`, `ToolOverrides` dictionary) in `Netclaw.Configuration`
-- [ ] 2.2 Add `ApprovalPolicy` property to `ToolAudienceProfile` — default Personal profile sets `shell_execute` to Approval mode
-- [ ] 2.3 Create `ToolApprovalStore` in `Netclaw.Configuration` — reads/writes `tool-approvals.json`, per-audience sections, thread-safe file I/O
-- [ ] 2.4 Add `ToolApprovalsPath` property to `NetclawPaths` (resolves to `~/.netclaw/config/tool-approvals.json`)
-- [ ] 2.5 Add `HardDenyPatterns` list to `ToolConfig` for operator-configurable hard deny patterns
-- [ ] 2.6 Update `netclaw-config.v1.schema.json` — add `ApprovalPolicy` to audience profile definition, add `HardDenyPatterns` to Tools section, add `ToolApprovalMode` enum
+- [x] 2.1 Create `ToolApprovalMode` enum (Auto, Approval, Deny) and `ToolApprovalConfig` class (`DefaultMode`, `ToolOverrides` dictionary) in `Netclaw.Configuration`
+- [x] 2.2 Add `ApprovalPolicy` property to `ToolAudienceProfile` — default Personal profile sets `shell_execute` to Approval mode
+- [x] 2.3 Create `ToolApprovalStore` in `Netclaw.Configuration` — reads/writes `tool-approvals.json`, per-audience sections, thread-safe file I/O
+- [x] 2.4 Add `ToolApprovalsPath` property to `NetclawPaths` (resolves to `~/.netclaw/config/tool-approvals.json`)
+- [x] 2.5 Add `HardDenyPatterns` list to `ToolConfig` for operator-configurable hard deny patterns
+- [x] 2.6 Update `netclaw-config.v1.schema.json` — add `ApprovalPolicy` to audience profile definition, add `HardDenyPatterns` to Tools section, add `ToolApprovalMode` enum
 
 ## 3. Approval Cache and Matcher Infrastructure
 
