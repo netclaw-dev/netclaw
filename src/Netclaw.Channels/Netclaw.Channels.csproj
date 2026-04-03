@@ -11,6 +11,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <PackageReference Include="Cronos" />
     <PackageReference Include="ModelContextProtocol.Core" />
     <PackageReference Include="protobuf-net" />
     <ProjectReference Include="..\Netclaw.Actors\Netclaw.Actors.csproj" />

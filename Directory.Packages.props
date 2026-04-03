@@ -43,7 +43,7 @@
     <PackageVersion Include="SauceControl.Blake2Fast" Version="2.0.0" />
     <PackageVersion Include="SlackNet" Version="$(SlackNetVersion)" />
     <PackageVersion Include="SlackNet.Extensions.DependencyInjection" Version="$(SlackNetVersion)" />
-    <PackageVersion Include="Cronos" Version="0.8.4" />
+    <PackageVersion Include="Cronos" Version="0.11.1" />
     <PackageVersion Include="Termina" Version="0.8.0" />
   </ItemGroup>
   <!-- Serialization -->
