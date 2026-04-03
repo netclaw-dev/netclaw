@@ -37,6 +37,13 @@ public sealed class ToolAudienceProfile
     public ToolFilesystemAccessProfile ReadFiles { get; set; } = new();
     public ToolFilesystemAccessProfile WriteFiles { get; set; } = new();
     public ToolFilesystemAccessProfile AttachFiles { get; set; } = new();
+
+    /// <summary>
+    /// Per-audience approval gate configuration. When set, tools listed in
+    /// <see cref="ToolApprovalConfig.ToolOverrides"/> require interactive user
+    /// approval before execution. Null means no approval gates (all tools auto-approved).
+    /// </summary>
+    public ToolApprovalConfig? ApprovalPolicy { get; set; }
 }
 
 public sealed class ToolAudienceProfiles
@@ -107,7 +114,14 @@ public static class ToolAudienceProfileDefaults
         McpServersMode = ToolProfileMode.All,
         ReadFiles = new ToolFilesystemAccessProfile { Mode = ToolFilesystemMode.All },
         WriteFiles = new ToolFilesystemAccessProfile { Mode = ToolFilesystemMode.All },
-        AttachFiles = new ToolFilesystemAccessProfile { Mode = ToolFilesystemMode.All }
+        AttachFiles = new ToolFilesystemAccessProfile { Mode = ToolFilesystemMode.All },
+        ApprovalPolicy = new ToolApprovalConfig
+        {
+            ToolOverrides = new Dictionary<string, ToolApprovalMode>(StringComparer.Ordinal)
+            {
+                ["shell_execute"] = ToolApprovalMode.Approval
+            }
+        }
     };
 
     public static ToolFilesystemAccessProfile CreateSessionScopedFilesystemAccess() => new()

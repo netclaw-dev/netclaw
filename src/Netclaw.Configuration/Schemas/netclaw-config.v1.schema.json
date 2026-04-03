@@ -252,6 +252,12 @@
             }
           },
           "additionalProperties": false
+        },
+        "HardDenyPatterns": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "description": "Additional shell command patterns to add to the hard deny list. Verb-chain prefixes that are categorically blocked and cannot be approved."
         }
       },
       "additionalProperties": false
@@ -554,7 +560,29 @@
         },
         "ReadFiles": { "$ref": "#/$defs/ToolFilesystemAccessProfile" },
         "WriteFiles": { "$ref": "#/$defs/ToolFilesystemAccessProfile" },
-        "AttachFiles": { "$ref": "#/$defs/ToolFilesystemAccessProfile" }
+        "AttachFiles": { "$ref": "#/$defs/ToolFilesystemAccessProfile" },
+        "ApprovalPolicy": { "$ref": "#/$defs/ToolApprovalConfig" }
+      },
+      "additionalProperties": false
+    },
+    "ToolApprovalConfig": {
+      "type": ["object", "null"],
+      "description": "Per-audience tool approval gate configuration. Controls which tools require interactive user approval before execution.",
+      "properties": {
+        "DefaultMode": {
+          "type": "string",
+          "enum": ["Auto", "Approval", "Deny"],
+          "default": "Auto",
+          "description": "Default approval mode for tools not explicitly overridden."
+        },
+        "ToolOverrides": {
+          "type": "object",
+          "description": "Per-tool approval mode overrides. Keys are tool names (e.g., shell_execute, mcp:server:tool).",
+          "additionalProperties": {
+            "type": "string",
+            "enum": ["Auto", "Approval", "Deny"]
+          }
+        }
       },
       "additionalProperties": false
     },

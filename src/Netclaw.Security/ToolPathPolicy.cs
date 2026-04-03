@@ -64,7 +64,7 @@ public sealed class ToolPathPolicy
         if (string.IsNullOrWhiteSpace(command))
             return false;
 
-        var tokens = Tokenize(command).ToList();
+        var tokens = ShellTokenizer.Tokenize(command).ToList();
         var slashCommand = command.Replace('\\', '/');
         foreach (var indicator in _commandIndicators)
         {
@@ -109,17 +109,12 @@ public sealed class ToolPathPolicy
     {
         foreach (var token in tokens)
         {
-            var verb = TrimShellPunctuation(token);
+            var verb = ShellTokenizer.TrimShellPunctuation(token);
             if (HighRiskVerbs.Contains(verb))
                 return true;
         }
 
         return false;
-    }
-
-    private static string TrimShellPunctuation(string token)
-    {
-        return token.Trim().TrimStart(';', '|', '&').TrimEnd(';', '|', '&');
     }
 
     private bool IsDeniedNormalized(string candidate)
@@ -199,43 +194,6 @@ public sealed class ToolPathPolicy
         {
             return false;
         }
-    }
-
-    private static IEnumerable<string> Tokenize(string command)
-    {
-        var current = new System.Text.StringBuilder();
-        char? quote = null;
-
-        foreach (var ch in command)
-        {
-            if (quote is null && (ch == '\'' || ch == '"'))
-            {
-                quote = ch;
-                continue;
-            }
-
-            if (quote is not null && ch == quote)
-            {
-                quote = null;
-                continue;
-            }
-
-            if (quote is null && char.IsWhiteSpace(ch))
-            {
-                if (current.Length > 0)
-                {
-                    yield return current.ToString();
-                    current.Clear();
-                }
-
-                continue;
-            }
-
-            current.Append(ch);
-        }
-
-        if (current.Length > 0)
-            yield return current.ToString();
     }
 
     private static bool LooksLikePath(string token)
