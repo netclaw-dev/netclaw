@@ -3,6 +3,7 @@ using Akka.Actor;
 using Microsoft.Extensions.AI;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
+using Netclaw.Actors.Sessions;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 using Netclaw.Tools;
@@ -37,7 +38,10 @@ internal static class SessionToolExecutionPipeline
         TimeSpan timeout,
         IActorRef self,
         Action<SubAgentOutput> emitSubAgentOutput,
-        Func<object, string, CancellationToken, Task<object>> spawnChildActor)
+        Func<object, string, CancellationToken, Task<object>> spawnChildActor,
+        IApprovalChannel? approvalChannel = null,
+        Action<ToolInteractionRequest>? emitApprovalRequest = null,
+        TimeSpan? approvalTimeout = null)
     {
         try
         {
@@ -55,7 +59,10 @@ internal static class SessionToolExecutionPipeline
                 maxInlineToolResultChars,
                 emitSubAgentOutput,
                 spawnChildActor,
-                cts.Token));
+                cts.Token,
+                approvalChannel,
+                emitApprovalRequest,
+                approvalTimeout ?? TimeSpan.FromMinutes(5)));
             var results = await Task.WhenAll(tasks);
 
             var fileAttachments = results.SelectMany(r => r.FileAttachments).ToList();
@@ -97,7 +104,10 @@ internal static class SessionToolExecutionPipeline
         int maxInlineToolResultChars,
         Action<SubAgentOutput> emitSubAgentOutput,
         Func<object, string, CancellationToken, Task<object>> spawnChildActor,
-        CancellationToken ct)
+        CancellationToken ct,
+        IApprovalChannel? approvalChannel = null,
+        Action<ToolInteractionRequest>? emitApprovalRequest = null,
+        TimeSpan? approvalTimeout = null)
     {
         var sw = Stopwatch.StartNew();
         string resultText;
@@ -189,6 +199,85 @@ internal static class SessionToolExecutionPipeline
                 CallId = tc.CallId,
                 Timestamp = timeProvider.GetUtcNow(),
                 Allowed = true,
+                Duration = sw.Elapsed
+            });
+        }
+        catch (ToolApprovalRequiredException approvalEx)
+            when (approvalChannel is not null && emitApprovalRequest is not null)
+        {
+            // Mid-turn approval pause: emit request to channel, block on TCS
+            var ctx = approvalEx.ApprovalContext;
+            emitApprovalRequest(new ToolInteractionRequest
+            {
+                SessionId = sessionId,
+                Kind = "approval",
+                CallId = tc.CallId,
+                ToolName = ctx.ToolName,
+                DisplayText = ctx.DisplayText,
+                Patterns = ctx.UnapprovedPatterns,
+                Options = ctx.Options
+                    .Select(o => new ToolInteractionOption(o.Key, o.Label))
+                    .ToList()
+            });
+
+            var decision = await approvalChannel.WaitForApprovalAsync(
+                tc.CallId,
+                approvalTimeout ?? TimeSpan.FromMinutes(5),
+                ct);
+
+            sw.Stop();
+
+            if (decision is ApprovalDecision.ApprovedOnce or ApprovalDecision.ApprovedAlways)
+            {
+                // Retry execution now that approval is granted
+                // (The approval cache will be updated by the session actor)
+                sw = Stopwatch.StartNew();
+                resultText = await executor.ExecuteAsync(tc, context, ct);
+                sw.Stop();
+
+                auditLogger?.Log(new ToolAuditEntry
+                {
+                    SessionId = sessionId.Value,
+                    ToolName = tc.Name,
+                    CallId = tc.CallId,
+                    Timestamp = timeProvider.GetUtcNow(),
+                    Allowed = true,
+                    Duration = sw.Elapsed
+                });
+            }
+            else
+            {
+                var reason = decision == ApprovalDecision.TimedOut
+                    ? "Approval timed out"
+                    : "Command denied by user";
+                resultText = reason;
+
+                auditLogger?.Log(new ToolAuditEntry
+                {
+                    SessionId = sessionId.Value,
+                    ToolName = tc.Name,
+                    CallId = tc.CallId,
+                    Timestamp = timeProvider.GetUtcNow(),
+                    Allowed = false,
+                    DenyReason = reason,
+                    Duration = sw.Elapsed
+                });
+            }
+        }
+        catch (ToolApprovalRequiredException approvalEx)
+        {
+            // No approval channel available — treat as denied
+            sw.Stop();
+            resultText = $"Tool requires approval but no approval channel is available: {approvalEx.ApprovalContext.ToolName}";
+
+            auditLogger?.Log(new ToolAuditEntry
+            {
+                SessionId = sessionId.Value,
+                ToolName = tc.Name,
+                CallId = tc.CallId,
+                Timestamp = timeProvider.GetUtcNow(),
+                Allowed = false,
+                DenyReason = "no_approval_channel",
                 Duration = sw.Elapsed
             });
         }

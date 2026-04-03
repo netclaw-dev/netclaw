@@ -2,6 +2,7 @@ using Netclaw.Actors.Channels;
 using Netclaw.Actors.Memory;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
+using Netclaw.Security;
 using Netclaw.Tools;
 
 namespace Netclaw.Actors.Sessions;
@@ -25,7 +26,9 @@ public sealed record SessionToolServices(
     ToolRegistry ToolRegistry,
     ToolAccessPolicy? AccessPolicy,
     TrustContextDeriver? TrustDeriver,
-    Skills.SkillRegistry? SkillRegistry);
+    Skills.SkillRegistry? SkillRegistry,
+    CommandApprovalCache? ApprovalCache = null,
+    ToolApprovalStore? ApprovalStore = null);
 
 /// <summary>
 /// Memory infrastructure for recall, checkpoint, and curation.

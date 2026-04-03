@@ -37,18 +37,18 @@
 
 ## 5. Protocol Types and Approval Channel
 
-- [ ] 5.1 Create `ToolInteractionRequest` session output in `SessionOutput.cs` — `Kind` (approval), `CallId`, `ToolName`, `DisplayText`, `Patterns`, `Options` list; lifecycle (always delivered)
-- [ ] 5.2 Create `ToolInteractionResponse` session command — `CallId`, `SelectedKey` (approve_once, approve_always, deny), `SessionId`
-- [ ] 5.3 Create `ApprovalDecision` enum — ApprovedOnce, ApprovedAlways, Denied, TimedOut
-- [ ] 5.4 Create `IApprovalChannel` interface and implementation — `WaitForApprovalAsync(callId, timeout, ct)` returns `Task<ApprovalDecision>`, `Complete(callId, decision)` resolves the TCS
-- [ ] 5.5 Add `IApprovalChannel` tests — wait/complete lifecycle, timeout behavior, unknown callId handling
+- [x] 5.1 Create `ToolInteractionRequest` session output in `SessionOutput.cs` — `Kind` (approval), `CallId`, `ToolName`, `DisplayText`, `Patterns`, `Options` list; lifecycle (always delivered)
+- [x] 5.2 Create `ToolInteractionResponse` session command — `CallId`, `SelectedKey` (approve_once, approve_always, deny), `SessionId`
+- [x] 5.3 Create `ApprovalDecision` enum — ApprovedOnce, ApprovedAlways, Denied, TimedOut
+- [x] 5.4 Create `IApprovalChannel` interface and implementation — `WaitForApprovalAsync(callId, timeout, ct)` returns `Task<ApprovalDecision>`, `Complete(callId, decision)` resolves the TCS
+- [x] 5.5 Add `IApprovalChannel` tests — wait/complete lifecycle, timeout behavior, unknown callId handling
 
 ## 6. Session Actor and Pipeline Integration
 
-- [ ] 6.1 Update `SessionToolExecutionPipeline.ExecuteSingleToolAsync` — catch `ToolApprovalRequiredException`, emit `ToolInteractionRequest` via callback, block on `IApprovalChannel.WaitForApprovalAsync`, execute on approval or return denial
-- [ ] 6.2 Update `SessionToolExecutionPipeline.ExecuteToolsAsync` signature — accept `IApprovalChannel` and approval request emission callback
-- [ ] 6.3 Update `LlmSessionActor` — create `IApprovalChannel` instance, pass to pipeline, handle `ToolInteractionResponse` in Processing behavior by calling `IApprovalChannel.Complete`
-- [ ] 6.4 Update `LlmSessionActor` — on ApproveOnce, update session `CommandApprovalCache`; on ApproveAlways, write to `ToolApprovalStore`
+- [x] 6.1 Update `SessionToolExecutionPipeline.ExecuteSingleToolAsync` — catch `ToolApprovalRequiredException`, emit `ToolInteractionRequest` via callback, block on `IApprovalChannel.WaitForApprovalAsync`, execute on approval or return denial
+- [x] 6.2 Update `SessionToolExecutionPipeline.ExecuteToolsAsync` signature — accept `IApprovalChannel` and approval request emission callback
+- [x] 6.3 Update `LlmSessionActor` — create `IApprovalChannel` instance, pass to pipeline, handle `ToolInteractionResponse` in Processing behavior by calling `IApprovalChannel.Complete`
+- [x] 6.4 Update `LlmSessionActor` — on ApproveOnce, update session `CommandApprovalCache`; on ApproveAlways, write to `ToolApprovalStore`
 - [x] 6.5 Add channel `SupportsInteractiveApproval` capability to `ToolExecutionContext` (from `MessageSource` or channel metadata)
 - [ ] 6.6 Add actor integration tests — approval response during Processing completes blocked tool, timeout auto-denies, unsupported channel auto-denies
 
