@@ -23,6 +23,7 @@ public sealed class SkillDirectoryWatcherService : BackgroundService
     private readonly List<FileSystemWatcher> _watchers = [];
     private Timer? _debounceTimer;
     private int _rescanInProgress;
+    private int _pendingRescan;
 
     public SkillDirectoryWatcherService(
         NetclawPaths paths,
@@ -51,7 +52,6 @@ public sealed class SkillDirectoryWatcherService : BackgroundService
             TryCreateWatcher(source.Path, source.Name);
         }
 
-        // Keep the service alive until cancellation
         return Task.CompletedTask;
     }
 
@@ -114,10 +114,11 @@ public sealed class SkillDirectoryWatcherService : BackgroundService
 
     private void OnDebounceTimerFired()
     {
-        // Prevent overlapping rescans
+        // Prevent overlapping rescans — if one is running, mark pending so it retries after
         if (Interlocked.CompareExchange(ref _rescanInProgress, 1, 0) != 0)
         {
-            _logger.LogDebug("Rescan already in progress, skipping");
+            Interlocked.Exchange(ref _pendingRescan, 1);
+            _logger.LogDebug("Rescan already in progress, marked pending");
             return;
         }
 
@@ -140,6 +141,13 @@ public sealed class SkillDirectoryWatcherService : BackgroundService
         finally
         {
             Interlocked.Exchange(ref _rescanInProgress, 0);
+
+            // If changes arrived while we were scanning, schedule another debounced rescan
+            if (Interlocked.CompareExchange(ref _pendingRescan, 0, 1) == 1)
+            {
+                _logger.LogDebug("Pending rescan detected, scheduling another debounce cycle");
+                ResetDebounceTimer();
+            }
         }
     }
 

@@ -294,7 +294,6 @@ public static partial class SkillScanner
             ? NormalizeSkillName(frontmatter.Name)
             : NormalizeSkillName(fileNameWithoutExt);
 
-        // Validate frontmatter name matches filename if explicitly specified
         if (!string.IsNullOrWhiteSpace(frontmatter.Name))
         {
             var expectedName = NormalizeSkillName(fileNameWithoutExt);
@@ -309,36 +308,8 @@ public static partial class SkillScanner
             }
         }
 
-        // Extract display name from first # heading in the body
-        var body = ExtractBody(content);
-        var headingMatch = HeadingRegex().Match(body);
-        var displayName = headingMatch.Success
-            ? headingMatch.Groups[1].Value.Trim()
-            : TitleCase(name);
-
-        // Extract version from metadata
-        string? version = null;
-        if (frontmatter.Metadata is not null && frontmatter.Metadata.TryGetValue("version", out var versionValue))
-            version = versionValue;
-
-        return new SkillEntry(
-            Name: name,
-            DisplayName: displayName,
-            Description: Truncate(frontmatter.Description.Trim(), MaxDescriptionLength),
-            FilePath: canonicalPath,
-            SkillDirectory: canonicalRoot, // flat files use the skills root as their directory
-            Category: null) // flat files are always root-level
-        {
-            Version = version,
-            License = frontmatter.License,
-            Compatibility = frontmatter.Compatibility,
-            AllowedTools = frontmatter.AllowedTools,
-            ResourcePaths = null, // flat files cannot have resources
-            DisableModelInvocation = frontmatter.DisableModelInvocation,
-            UserInvocable = frontmatter.UserInvocable,
-            ArgumentHint = frontmatter.ArgumentHint,
-            IsFlatFile = true
-        };
+        return BuildSkillEntry(frontmatter, content, name, canonicalPath, canonicalRoot, category: null)
+            with { ResourcePaths = null, IsFlatFile = true };
     }
 
     /// <summary>
@@ -415,36 +386,44 @@ public static partial class SkillScanner
             return null;
         }
 
-        // Extract display name from first # heading in the body
-        var body = ExtractBody(content);
-        var headingMatch = HeadingRegex().Match(body);
-        var displayName = headingMatch.Success
-            ? headingMatch.Groups[1].Value.Trim()
-            : TitleCase(name);
-
         // Resolve category from directory structure
-        // For skill at root/skill-name/SKILL.md → category is null
-        // For skill at root/category/skill-name/SKILL.md → category is "category"
         var relativePath = Path.GetRelativePath(rootDirectory, filePath);
         string? category = null;
         var parentOfSkillDir = Path.GetDirectoryName(Path.GetDirectoryName(relativePath));
         if (!string.IsNullOrEmpty(parentOfSkillDir) && parentOfSkillDir != ".")
             category = parentOfSkillDir.Replace(Path.DirectorySeparatorChar, '/');
 
-        // Extract version from metadata
-        string? version = null;
-        if (fm.Metadata is not null && fm.Metadata.TryGetValue("version", out var versionValue))
-            version = versionValue;
-
         var issueCountBeforeResourceScan = issues.Count;
         var resourcePaths = EnumerateResources(skillDirectory, rootDirectory, issues, allowSymlinks);
         if (issues.Count > issueCountBeforeResourceScan)
             return null;
 
+        return BuildSkillEntry(fm, content, name, filePath, skillDirectory, category)
+            with { ResourcePaths = resourcePaths };
+    }
+
+    /// <summary>
+    /// Shared SkillEntry construction from validated frontmatter. Used by both
+    /// directory-based and flat-file parsing paths.
+    /// </summary>
+    private static SkillEntry BuildSkillEntry(
+        SkillFrontmatter fm, string content, string name,
+        string filePath, string skillDirectory, string? category)
+    {
+        var body = ExtractBody(content);
+        var headingMatch = HeadingRegex().Match(body);
+        var displayName = headingMatch.Success
+            ? headingMatch.Groups[1].Value.Trim()
+            : TitleCase(name);
+
+        string? version = null;
+        if (fm.Metadata is not null && fm.Metadata.TryGetValue("version", out var versionValue))
+            version = versionValue;
+
         return new SkillEntry(
             Name: name,
             DisplayName: displayName,
-            Description: Truncate(fm.Description.Trim(), MaxDescriptionLength),
+            Description: Truncate(fm.Description!.Trim(), MaxDescriptionLength),
             FilePath: filePath,
             SkillDirectory: skillDirectory,
             Category: category)
@@ -453,7 +432,6 @@ public static partial class SkillScanner
             License = fm.License,
             Compatibility = fm.Compatibility,
             AllowedTools = fm.AllowedTools,
-            ResourcePaths = resourcePaths,
             DisableModelInvocation = fm.DisableModelInvocation,
             UserInvocable = fm.UserInvocable,
             ArgumentHint = fm.ArgumentHint

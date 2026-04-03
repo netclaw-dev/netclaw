@@ -19,34 +19,31 @@ internal static class SkillCommand
         Converters = { new JsonStringEnumConverter() }
     };
 
-    public static async Task<int> RunAsync(string[] args, NetclawPaths paths)
+    public static Task<int> RunAsync(string[] args, NetclawPaths paths)
     {
-        // default to "list" when no subcommand is provided
         var subcommand = args.Length > 1 ? args[1] : "list";
 
         if (subcommand is "help" or "-h" or "--help")
         {
             WriteHelp();
-            return 0;
+            return Task.FromResult(0);
         }
 
-        // Handle "source" compound subcommands: source list, source add, etc.
         if (subcommand is "source")
         {
             var sourceAction = args.Length > 2 ? args[2] : "list";
-            return sourceAction switch
+            return Task.FromResult(sourceAction switch
             {
                 "list" => RunSourceList(paths),
                 "add" => RunSourceAdd(args, paths),
                 "remove" => RunSourceRemove(args, paths),
                 "enable" => RunSourceToggle(args, paths, enable: true),
                 "disable" => RunSourceToggle(args, paths, enable: false),
-                "help" or "-h" or "--help" => WriteSourceHelp(),
                 _ => WriteSourceHelp()
-            };
+            });
         }
 
-        return subcommand switch
+        return Task.FromResult(subcommand switch
         {
             "list" => RunList(paths),
             "show" => RunShow(args, paths),
@@ -55,7 +52,7 @@ internal static class SkillCommand
             "issues" => RunIssues(paths),
             "search" => RunSearch(args, paths),
             _ => WriteHelp()
-        };
+        });
     }
 
     // ── Subcommand implementations ──
@@ -82,14 +79,9 @@ internal static class SkillCommand
         {
             var source = ClassifySource(skill, paths);
             var version = skill.Version ?? "-";
-            var status = skill.IsFlatFile ? "flat file (no frontmatter)" : "ok";
-
-            // Flat files with frontmatter that parsed successfully are actually fine
-            if (skill.IsFlatFile && skill.Description.Length > 0)
-                status = "ok";
 
             Console.WriteLine(
-                $"{skill.Name,-colName}  {source,-colSource}  {version,-colVersion}  {status}");
+                $"{skill.Name,-colName}  {source,-colSource}  {version,-colVersion}  ok");
         }
 
         // Also show issues inline
@@ -168,33 +160,7 @@ internal static class SkillCommand
             return 1;
         }
 
-        string content;
-        try
-        {
-            content = File.ReadAllText(filePath);
-        }
-        catch (Exception ex)
-        {
-            Console.Error.WriteLine($"[FAIL] cannot read file: {ex.Message}");
-            return 1;
-        }
-
-        // Check frontmatter structure: must start with --- and have a closing ---
-        if (!content.StartsWith("---", StringComparison.Ordinal))
-        {
-            Console.Error.WriteLine("[FAIL] file does not start with YAML frontmatter (---).");
-            return 1;
-        }
-
-        var closingIndex = content.IndexOf("\n---", 3, StringComparison.Ordinal);
-        if (closingIndex < 0)
-        {
-            Console.Error.WriteLine("[FAIL] YAML frontmatter is not properly closed (missing closing ---).");
-            return 1;
-        }
-
-        // Use the scanner to validate — create a temp directory with the file
-        // and scan it to get full validation including frontmatter parsing.
+        // Delegate to the scanner for full validation (frontmatter, description, name matching).
         var parentDir = Path.GetDirectoryName(filePath)!;
         var fileName = Path.GetFileName(filePath);
 
@@ -275,7 +241,6 @@ internal static class SkillCommand
             return 1;
         }
 
-        // Native skill — delete directory or flat file
         if (skill.IsFlatFile)
         {
             File.Delete(skill.FilePath);
@@ -284,6 +249,15 @@ internal static class SkillCommand
         else
         {
             Directory.Delete(skill.SkillDirectory, recursive: true);
+
+            // Clean empty parent category directories (consistent with SkillManageTool)
+            var parent = Path.GetDirectoryName(skill.SkillDirectory);
+            if (parent is not null && parent != paths.SkillsDirectory
+                && Directory.Exists(parent) && !Directory.EnumerateFileSystemEntries(parent).Any())
+            {
+                Directory.Delete(parent);
+            }
+
             Console.WriteLine($"Removed skill directory: {skill.SkillDirectory}");
         }
 
