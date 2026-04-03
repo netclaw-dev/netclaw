@@ -1,3 +1,29 @@
+#### 0.10.0 2026-04-03 ####
+
+Netclaw v0.10.0 — Remote access foundation (exposure modes, device pairing, hub auth), inbound webhooks, and skill management CLI
+
+**Features**
+
+* Added exposure modes, hub authentication, and device pairing — Netclaw can now run in `Local`, `Tailscale`, `Cloudflare`, or `Ngrok` exposure modes, controlling how the hub is reachable from remote devices. Hub authentication uses a multi-scheme pipeline that routes between loopback and device-token handlers based on connection origin. Device pairing uses single-use 5-minute pairing codes with salted SHA-256 token storage; paired devices are managed via `netclaw pair`, `netclaw devices`, and `netclaw devices revoke` CLI commands. Non-local exposure modes require at least one paired device or configured auth scheme at startup. ([#523](https://github.com/Aaronontheweb/netclaw/pull/523))
+
+* Added inbound webhooks with hot-reloaded route files — external services can now push events into Netclaw via verified webhook routes stored as JSON files under `~/.netclaw/config/webhooks/`. Routes are hot-reloaded on file change with fail-closed invalidation: malformed or invalid route files are rejected and trigger operational alerts rather than silently degrading. Includes generic verified ingress for autonomous webhook sessions and dedicated webhook admin tools for managing secret-bearing route config. `netclaw doctor` validates webhook route files. ([#525](https://github.com/Aaronontheweb/netclaw/pull/525))
+
+* Added inbound webhook toggle to `netclaw init` wizard — the exposure-mode wizard step now includes a sub-step to enable or disable inbound webhook ingestion. The toggle appears after mode selection, and the copy clearly distinguishes inbound webhook ingestion from outbound notification webhooks. Enabled webhooks write `Webhooks.Enabled = true` to `netclaw.json`. ([#531](https://github.com/Aaronontheweb/netclaw/pull/531))
+
+* Added `netclaw skill` CLI command family for offline skill management — new subcommands include `list` (table of all skills with source/version/status), `show` (display metadata and content), `validate` (check SKILL.md format), `remove` (delete native skills), `issues` (show scanner issues), `search` (substring search across all sources), and `source list/add/remove/enable/disable` (manage external skill sources in config). ([#534](https://github.com/Aaronontheweb/netclaw/pull/534))
+
+* Added `SkillDirectoryWatcherService` for automatic skill rescanning — a `BackgroundService` with `FileSystemWatcher` monitors native and external skill directories for changes, triggering a debounced rescan without requiring daemon restart. Ignores `.staging/` and `.tmp` files from atomic write operations. ([#534](https://github.com/Aaronontheweb/netclaw/pull/534))
+
+* Added flat-file `.md` skill support — `SkillScanner` now accepts single `.md` files with valid YAML frontmatter as first-class skills, enabling compatibility with Claude Code's `~/.claude/skills/` flat-file format. Directory skills take precedence over flat files with the same name. ([#534](https://github.com/Aaronontheweb/netclaw/pull/534))
+
+**Bug Fixes**
+
+* Improved memory deduplication accuracy — content-based search now runs whenever there is no exact anchor match (not just zero matches), catching semantically identical content stored under different anchor names. Anchor matching now uses prefix-aware comparison ("repo" matches "repository", min 3-char prefix) and allows up to 2-token differences. Ambiguous dedup decisions (40-80% overlap) are auto-resolved to Skip when content overlap is 60% or higher and anchor Jaccard is 50% or higher, instead of always defaulting to Create when the LLM tier is unavailable. ([#535](https://github.com/Aaronontheweb/netclaw/pull/535))
+
+**Dependencies**
+
+* Bumped Anthropic SDK from 12.9.0 to 12.11.0. ([#526](https://github.com/Aaronontheweb/netclaw/pull/526))
+
 #### 0.9.4 2026-04-01 ####
 
 Netclaw v0.9.4 — Conditional reminder notifications, llama.cpp MCP schema compatibility, and MCP SDK 1.2.0
