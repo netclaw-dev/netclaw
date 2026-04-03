@@ -1,0 +1,87 @@
+using Netclaw.Actors.Sessions;
+using Xunit;
+
+namespace Netclaw.Actors.Tests.Sessions;
+
+public sealed class ApprovalChannelTests
+{
+    [Fact]
+    public async Task WaitAndComplete_returns_decision()
+    {
+        var channel = new ApprovalChannel();
+
+        var waitTask = channel.WaitForApprovalAsync("call-1", TimeSpan.FromSeconds(30), CancellationToken.None);
+
+        // Complete from another context (simulating actor mailbox)
+        channel.Complete("call-1", ApprovalDecision.ApprovedOnce);
+
+        var result = await waitTask;
+        Assert.Equal(ApprovalDecision.ApprovedOnce, result);
+    }
+
+    [Fact]
+    public async Task WaitAndComplete_approve_always()
+    {
+        var channel = new ApprovalChannel();
+
+        var waitTask = channel.WaitForApprovalAsync("call-2", TimeSpan.FromSeconds(30), CancellationToken.None);
+        channel.Complete("call-2", ApprovalDecision.ApprovedAlways);
+
+        Assert.Equal(ApprovalDecision.ApprovedAlways, await waitTask);
+    }
+
+    [Fact]
+    public async Task WaitAndComplete_denied()
+    {
+        var channel = new ApprovalChannel();
+
+        var waitTask = channel.WaitForApprovalAsync("call-3", TimeSpan.FromSeconds(30), CancellationToken.None);
+        channel.Complete("call-3", ApprovalDecision.Denied);
+
+        Assert.Equal(ApprovalDecision.Denied, await waitTask);
+    }
+
+    [Fact]
+    public async Task Timeout_returns_TimedOut()
+    {
+        var channel = new ApprovalChannel();
+
+        var result = await channel.WaitForApprovalAsync("call-timeout", TimeSpan.FromMilliseconds(50), CancellationToken.None);
+
+        Assert.Equal(ApprovalDecision.TimedOut, result);
+    }
+
+    [Fact]
+    public async Task Cancellation_returns_TimedOut()
+    {
+        var channel = new ApprovalChannel();
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(50));
+
+        var result = await channel.WaitForApprovalAsync("call-cancel", TimeSpan.FromSeconds(30), cts.Token);
+
+        Assert.Equal(ApprovalDecision.TimedOut, result);
+    }
+
+    [Fact]
+    public void Complete_unknown_callId_is_noop()
+    {
+        var channel = new ApprovalChannel();
+        // Should not throw
+        channel.Complete("nonexistent", ApprovalDecision.Denied);
+    }
+
+    [Fact]
+    public async Task Multiple_concurrent_waits()
+    {
+        var channel = new ApprovalChannel();
+
+        var wait1 = channel.WaitForApprovalAsync("call-a", TimeSpan.FromSeconds(30), CancellationToken.None);
+        var wait2 = channel.WaitForApprovalAsync("call-b", TimeSpan.FromSeconds(30), CancellationToken.None);
+
+        channel.Complete("call-b", ApprovalDecision.Denied);
+        channel.Complete("call-a", ApprovalDecision.ApprovedAlways);
+
+        Assert.Equal(ApprovalDecision.ApprovedAlways, await wait1);
+        Assert.Equal(ApprovalDecision.Denied, await wait2);
+    }
+}

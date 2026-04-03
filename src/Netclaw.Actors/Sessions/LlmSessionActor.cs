@@ -15,6 +15,7 @@ using Netclaw.Actors.Sessions.Pipelines;
 using Netclaw.Actors.Text;
 using Netclaw.Configuration;
 using Netclaw.Actors.Tools;
+using Netclaw.Security;
 using Netclaw.Tools;
 using AiChatMessage = Microsoft.Extensions.AI.ChatMessage;
 
@@ -45,6 +46,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     private readonly IReadOnlyList<IContextLayerProvider> _contextLayers;
     private readonly IToolExecutor? _toolExecutor;
     private readonly IToolAuditLogger? _auditLogger;
+    private readonly CommandApprovalCache? _approvalCache;
+    private readonly ToolApprovalStore? _approvalStore;
+    private readonly ApprovalChannel _approvalChannel = new();
     private readonly IMemoryExtractor _memoryExtractor;
     private readonly IMemoryRecallCoordinator _memoryRecallCoordinator;
     private readonly IMemoryCheckpointSink _memoryCheckpointSink;
@@ -178,6 +182,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         _toolExecutor = tools?.ToolExecutor;
         _auditLogger = tools?.AuditLogger;
         _toolAccessPolicy = tools?.AccessPolicy;
+        _approvalCache = tools?.ApprovalCache;
+        _approvalStore = tools?.ApprovalStore;
         _memoryExtractor = memory?.MemoryExtractor ?? NullMemoryExtractor.Instance;
         _memoryRecallCoordinator = memory?.RecallCoordinator ?? NullMemoryRecallCoordinator.Instance;
         _memoryCheckpointSink = memory?.CheckpointSink ?? NullMemoryCheckpointSink.Instance;
@@ -665,6 +671,32 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             const string errorMessage = "I encountered an error executing a tool. Please try again.";
             var category = msg.Cause is TimeoutException ? ErrorCategory.Timeout : ErrorCategory.ToolFailure;
             FailCurrentTurn(errorMessage, msg.Cause, category);
+        });
+
+        Command<ToolInteractionResponse>(msg =>
+        {
+            var decision = msg.SelectedKey switch
+            {
+                "approve_once" => ApprovalDecision.ApprovedOnce,
+                "approve_always" => ApprovalDecision.ApprovedAlways,
+                "deny" => ApprovalDecision.Denied,
+                _ => ApprovalDecision.Denied
+            };
+
+            _log.Info("Approval response for {CallId}: {Decision}", msg.CallId, decision);
+
+            // Update approval cache based on decision
+            if (decision is ApprovalDecision.ApprovedOnce or ApprovalDecision.ApprovedAlways
+                && _approvalCache is not null && _currentTurnSource is not null)
+            {
+                var audience = _currentTurnSource.Audience;
+                // Extract the patterns from the pending approval context
+                // The tool name and patterns are embedded in the interaction request
+                // For now, complete the TCS — the pipeline will retry the tool
+            }
+
+            // Complete the TCS so the blocked pipeline task can proceed
+            _approvalChannel.Complete(msg.CallId, decision);
         });
 
         Command<LlmCallFailed>(msg =>
@@ -1422,7 +1454,10 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 timeout: toolExecutionTimeout,
                 cancellationToken: ct);
 
-        _ = SessionToolExecutionPipeline.ExecuteToolsAsync(executor, toolCalls, sessionId, _currentTurnSource, auditLogger, tp, sessionDir, maxInlineToolResultChars, toolExecutionTimeout, self, emitSubAgentOutput, spawnChildActor);
+        _ = SessionToolExecutionPipeline.ExecuteToolsAsync(executor, toolCalls, sessionId, _currentTurnSource, auditLogger, tp, sessionDir, maxInlineToolResultChars, toolExecutionTimeout, self, emitSubAgentOutput, spawnChildActor,
+            approvalChannel: _approvalChannel,
+            emitApprovalRequest: request => EmitOutput(request),
+            approvalTimeout: TimeSpan.FromMinutes(5));
     }
 
     private void HandleTextResponse(
