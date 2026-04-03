@@ -200,7 +200,7 @@ public sealed class IdentityStepViewModel : IWizardStepViewModel
             reminders work — create the reminder.
 
             **Full scheduling parameters, CLI commands, and Netclaw operations:**
-            `file_read("{paths.SystemSkillsDirectory}/netclaw-manual/SKILL.md")`
+            `file_read("{paths.SystemSkillsDirectory}/netclaw-operations/SKILL.md")`
 
             ## Subagent Delegation
 
@@ -229,10 +229,10 @@ public sealed class IdentityStepViewModel : IWizardStepViewModel
             | Load when... | Skill |
             |-------------|-------|
             | Doing web searches, need citation format, verifying facts | `{paths.SystemSkillsDirectory}/search-citation/SKILL.md` |
-            | Need tool catalog, grant categories, scheduling params, MCP discovery, subagent delegation, CLI commands, health endpoints | `{paths.SystemSkillsDirectory}/netclaw-manual/SKILL.md` |
+            | Need tool catalog, grant categories, scheduling params, MCP discovery, subagent delegation, CLI commands, health endpoints | `{paths.SystemSkillsDirectory}/netclaw-operations/SKILL.md` |
             | User asks what you remember, wants to save/recall/correct cross-session knowledge, or you need more than automatic recall | `{paths.SystemSkillsDirectory}/netclaw-memory/SKILL.md` |
             | User wants to update lasting preferences, profile, tone, workflow rules, or environment capabilities | `{paths.SystemSkillsDirectory}/netclaw-identity/SKILL.md` |
-            | Session/tool failure, missing capabilities, daemon health issues, debugging what happened | `{paths.SystemSkillsDirectory}/netclaw-diagnostics/SKILL.md` |
+            | Session/tool failure, missing capabilities, daemon health issues, debugging what happened | `{paths.SystemSkillsDirectory}/netclaw-operations/SKILL.md` |
             | A repeatable workflow emerges and should become a skill file | `{paths.SystemSkillsDirectory}/skill-authoring/SKILL.md` |
             | User references a project, asks to organize work, or you need a sustained workspace | `{paths.SystemSkillsDirectory}/netclaw-projects/SKILL.md` |
 

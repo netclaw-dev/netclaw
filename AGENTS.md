@@ -208,9 +208,9 @@ feature area, the corresponding skill **must** be updated in the same PR.
 |----------------------|-----------------|
 | Identity files, SOUL/AGENTS/TOOLING paths, progressive disclosure | `netclaw-identity` |
 | Memory provider routing, SQLite memory tools, general memory guidance | `netclaw-memory` |
-| Config format, daemon health, logs, MCP wiring, diagnostics CLI, doctor | `netclaw-diagnostics` |
+| Config format, daemon health, logs, MCP wiring, diagnostics CLI, doctor | `netclaw-operations` |
 | Skill file format, discovery, authoring workflow | `skill-authoring` |
-| Tool definitions, CLI commands, grant categories, search_tools, scheduling tools | `netclaw-manual` |
+| Tool definitions, CLI commands, grant categories, search_tools, scheduling tools | `netclaw-operations` |
 | Search tool behavior, citation policy, web_search/web_fetch usage guidance | `search-citation` |
 | Workspaces, project creation/discovery | `netclaw-projects` |
 

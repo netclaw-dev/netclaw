@@ -52,7 +52,7 @@ public sealed class MemoryIndexContextLayer : IContextLayerProvider
                 Do not call explicit memory write tools as a reflex on every turn.
 
                 For full guidance: file_read netclaw-memory.
-                On errors or degraded memory: file_read netclaw-diagnostics.
+                On errors or degraded memory: file_read netclaw-operations.
                 """,
 
             MemoryContextState.SqliteDegraded => """
@@ -60,7 +60,7 @@ public sealed class MemoryIndexContextLayer : IContextLayerProvider
                 Automatic durable recall is currently degraded.
                 Continue the turn without assuming recall data is complete.
                 Use explicit memory tools only for deliberate/manual control paths.
-                Check netclaw-diagnostics for memory health and recovery guidance.
+                Check netclaw-operations for memory health and recovery guidance.
                 """,
 
             _ => string.Empty
