@@ -2,6 +2,9 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Routing;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Netclaw.Actors.Protocol;
 using Netclaw.Configuration;
 
@@ -11,6 +14,10 @@ public static class WebhookEndpointRouteBuilderExtensions
 {
     public static IEndpointRouteBuilder MapWebhookEndpoints(this IEndpointRouteBuilder app)
     {
+        var logger = app.ServiceProvider
+            .GetRequiredService<ILoggerFactory>()
+            .CreateLogger("Netclaw.Daemon.Webhooks.Endpoint");
+
         app.MapPost("/api/webhooks/{route}", async (
             string route,
             HttpContext httpContext,
@@ -22,25 +29,52 @@ public static class WebhookEndpointRouteBuilderExtensions
             TimeProvider timeProvider,
             CancellationToken ct) =>
         {
+            var remoteIp = httpContext.Connection.RemoteIpAddress?.ToString();
+
             if (!routeCatalog.TryGetRoute(route, out var registeredRoute))
+            {
+                WebhookTelemetry.RecordRouteNotFound(route);
+                logger.LogWarning(
+                    "Webhook rejected route={Route} reason={Reason} remote_ip={RemoteIp} delivery_id={DeliveryId} event_type={EventType}",
+                    route, "route_not_found", remoteIp, (string?)null, (string?)null);
                 return Results.NotFound();
+            }
 
             var bodyRead = await ReadRequestBodyAsync(httpContext.Request, registeredRoute.Config.MaxBodyBytes, ct);
             if (!bodyRead.Success)
             {
-                return bodyRead.Reason switch
+                if (bodyRead.Reason == "body_too_large")
                 {
-                    "body_too_large" => Results.StatusCode(StatusCodes.Status413PayloadTooLarge),
-                    _ => Results.BadRequest(new { error = "Invalid JSON request body." })
-                };
+                    WebhookTelemetry.RecordBodyTooLarge(registeredRoute.Name);
+                    logger.LogWarning(
+                        "Webhook rejected route={Route} reason={Reason} remote_ip={RemoteIp} delivery_id={DeliveryId} event_type={EventType}",
+                        registeredRoute.Name, "body_too_large", remoteIp, (string?)null, (string?)null);
+                    return Results.StatusCode(StatusCodes.Status413PayloadTooLarge);
+                }
+
+                WebhookTelemetry.RecordInvalidJson(registeredRoute.Name);
+                logger.LogWarning(
+                    "Webhook rejected route={Route} reason={Reason} remote_ip={RemoteIp} delivery_id={DeliveryId} event_type={EventType}",
+                    registeredRoute.Name, "invalid_json", remoteIp, (string?)null, (string?)null);
+                return Results.BadRequest(new { error = "Invalid JSON request body." });
             }
 
             var verification = verifier.Verify(registeredRoute, httpContext.Request.Headers, bodyRead.BodyBytes!);
             if (!verification.IsAccepted)
+            {
+                WebhookTelemetry.RecordVerificationFailed(registeredRoute.Name);
+                logger.LogWarning(
+                    "Webhook rejected route={Route} reason={Reason} remote_ip={RemoteIp} delivery_id={DeliveryId} event_type={EventType}",
+                    registeredRoute.Name, "verification_failed", remoteIp, verification.DeliveryId, verification.EventType);
                 return Results.Unauthorized();
+            }
 
             if (!registeredRoute.IsEventAllowed(verification.EventType))
             {
+                WebhookTelemetry.RecordEventFiltered(registeredRoute.Name);
+                logger.LogDebug(
+                    "Webhook filtered route={Route} reason={Reason} remote_ip={RemoteIp} delivery_id={DeliveryId} event_type={EventType}",
+                    registeredRoute.Name, "event_filtered", remoteIp, verification.DeliveryId, verification.EventType);
                 return Results.Json(
                     new { status = "ignored", reason = "event_filtered" },
                     statusCode: StatusCodes.Status202Accepted);
@@ -53,6 +87,10 @@ public static class WebhookEndpointRouteBuilderExtensions
 
             if (guardDecision.Kind == WebhookIngressDecisionKind.Duplicate)
             {
+                WebhookTelemetry.RecordDuplicateDelivery(registeredRoute.Name);
+                logger.LogDebug(
+                    "Webhook filtered route={Route} reason={Reason} remote_ip={RemoteIp} delivery_id={DeliveryId} event_type={EventType}",
+                    registeredRoute.Name, "duplicate_delivery", remoteIp, verification.DeliveryId, verification.EventType);
                 return Results.Json(
                     new { status = "ignored", reason = "duplicate_delivery" },
                     statusCode: StatusCodes.Status202Accepted);
@@ -60,6 +98,11 @@ public static class WebhookEndpointRouteBuilderExtensions
 
             if (guardDecision.Kind == WebhookIngressDecisionKind.RateLimited)
             {
+                WebhookTelemetry.RecordRateLimited(registeredRoute.Name);
+                logger.LogWarning(
+                    "Webhook rejected route={Route} reason={Reason} remote_ip={RemoteIp} delivery_id={DeliveryId} event_type={EventType}",
+                    registeredRoute.Name, "rate_limited", remoteIp, verification.DeliveryId, verification.EventType);
+
                 if (guardDecision.RetryAfterSeconds is { } retryAfter)
                     httpContext.Response.Headers.RetryAfter = retryAfter.ToString();
 
@@ -79,6 +122,11 @@ public static class WebhookEndpointRouteBuilderExtensions
                 bodyRead.BodyJson!,
                 sessionId,
                 now);
+
+            WebhookTelemetry.RecordAccepted(registeredRoute.Name);
+            logger.LogInformation(
+                "Webhook accepted route={Route} reason={Reason} remote_ip={RemoteIp} delivery_id={DeliveryId} event_type={EventType}",
+                registeredRoute.Name, "accepted", remoteIp, verification.DeliveryId, verification.EventType);
 
             notificationSink.Emit(new OperationalAlert
             {

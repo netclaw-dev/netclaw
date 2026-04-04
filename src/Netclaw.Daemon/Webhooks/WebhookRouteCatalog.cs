@@ -59,6 +59,32 @@ public sealed class WebhookRouteCatalog
         }
     }
 
+    /// <summary>
+    /// Returns per-state route tallies for stats reporting.
+    /// Disabled routes sit on disk but are removed from the live catalog,
+    /// so they are computed as <c>total - enabled - invalid</c>.
+    /// </summary>
+    public WebhookRouteCounts GetRouteCounts()
+    {
+        if (!_config.Enabled)
+            return new WebhookRouteCounts(0, 0, 0, 0);
+
+        lock (_sync)
+        {
+            Directory.CreateDirectory(_paths.WebhooksDirectory);
+            RefreshAllRoutes();
+
+            var total = Directory
+                .EnumerateFiles(_paths.WebhooksDirectory, "*.json", SearchOption.TopDirectoryOnly)
+                .Count();
+            var enabled = _routes.Count;
+            var invalid = _failedRouteVersions.Count;
+            var disabled = Math.Max(0, total - enabled - invalid);
+
+            return new WebhookRouteCounts(total, enabled, disabled, invalid);
+        }
+    }
+
     private void RefreshRoutes(string? routeNameHint)
     {
         lock (_sync)
@@ -225,3 +251,5 @@ public sealed class WebhookRouteCatalog
     private static string GetRouteName(string filePath)
         => Path.GetFileNameWithoutExtension(filePath);
 }
+
+public sealed record WebhookRouteCounts(int Total, int Enabled, int Disabled, int Invalid);

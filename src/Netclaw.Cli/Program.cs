@@ -1059,6 +1059,7 @@ static void WriteStatsHelp()
     Console.WriteLine("  - skill auto-load counts");
     Console.WriteLine("  - memory store statistics");
     Console.WriteLine("  - Slack activity counters");
+    Console.WriteLine("  - webhook route counts and delivery counters");
     Console.WriteLine("  - reminder statistics");
     Console.WriteLine();
     Console.WriteLine("Options:");
@@ -1472,6 +1473,12 @@ static void WriteStatsResult(DaemonStats.Response stats, int? days)
     Console.WriteLine("slack:");
     Console.WriteLine($"  events: recv={stats.SlackActivity.EventsReceived} routed={stats.SlackActivity.EventsRouted} dropped={stats.SlackActivity.EventsDropped}");
     Console.WriteLine($"  replies: posted={stats.SlackActivity.RepliesPosted} rejected={stats.SlackActivity.RepliesRejected} failed={stats.SlackActivity.RepliesFailed}");
+
+    Console.WriteLine();
+    Console.WriteLine("webhooks:");
+    Console.WriteLine($"  routes: total={stats.Webhooks.TotalRoutes} enabled={stats.Webhooks.EnabledRoutes} disabled={stats.Webhooks.DisabledRoutes} invalid={stats.Webhooks.InvalidRoutes}");
+    Console.WriteLine($"  deliveries: accepted={stats.Webhooks.Accepted} filtered={stats.Webhooks.EventFiltered} duplicate={stats.Webhooks.DuplicateDelivery}");
+    Console.WriteLine($"  rejected: 404={stats.Webhooks.RouteNotFound} 401={stats.Webhooks.VerificationFailed} 413={stats.Webhooks.BodyTooLarge} 400={stats.Webhooks.InvalidJson} 429={stats.Webhooks.RateLimited}");
 
     if (stats.Reminders is { } reminders)
     {

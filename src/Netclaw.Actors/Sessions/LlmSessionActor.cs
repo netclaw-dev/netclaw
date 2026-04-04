@@ -551,7 +551,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 }, OutputFilter.ToolCalls);
             }
 
-            // Add tool results to history and log each result
+            // Add tool results to history, log each result, and emit as session output
             foreach (var result in msg.ToolResults)
             {
                 _state = _state with { History = _state.History.Add(result) };
@@ -561,6 +561,14 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                     : result.Content ?? "(null)";
                 _log.Info("Tool [{ToolName}] (call={CallId}) result: {Result}",
                     result.Name ?? "unknown", result.ToolCallId ?? "?", preview);
+
+                EmitOutput(new ToolResultOutput
+                {
+                    SessionId = _sessionId,
+                    CallId = result.ToolCallId ?? string.Empty,
+                    ToolName = result.Name ?? "unknown",
+                    Result = result.Content ?? string.Empty
+                }, OutputFilter.ToolCalls);
             }
 
             // Dynamic tool loading: if load_tool was called, activate the requested tool.

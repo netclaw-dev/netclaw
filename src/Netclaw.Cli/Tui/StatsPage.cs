@@ -93,10 +93,10 @@ public sealed class StatsPage : ReactivePage<StatsViewModel>
         }
         else
         {
-            // Bottom row: Memory + Slack side by side
-            var bottomRow = Layouts.Horizontal();
+            // Middle row: Memory + Slack side by side
+            var middleRow = Layouts.Horizontal();
 
-            bottomRow.WithChild(
+            middleRow.WithChild(
                 new PanelNode()
                     .WithTitle("Memory")
                     .WithBorder(BorderStyle.Rounded)
@@ -104,7 +104,7 @@ public sealed class StatsPage : ReactivePage<StatsViewModel>
                     .WithContent(BuildMemoryPanel(stats))
                     .Fill());
 
-            bottomRow.WithChild(
+            middleRow.WithChild(
                 new PanelNode()
                     .WithTitle("Slack")
                     .WithBorder(BorderStyle.Rounded)
@@ -112,7 +112,16 @@ public sealed class StatsPage : ReactivePage<StatsViewModel>
                     .WithContent(BuildSlackPanel(stats))
                     .Fill());
 
-            root.WithChild(bottomRow.Height(6));
+            root.WithChild(middleRow.Height(6));
+
+            // Bottom row: Webhooks (full width)
+            root.WithChild(
+                new PanelNode()
+                    .WithTitle("Webhooks")
+                    .WithBorder(BorderStyle.Rounded)
+                    .WithBorderColor(Color.Red)
+                    .WithContent(BuildWebhooksPanel(stats))
+                    .Height(6));
         }
 
         // Status bar
@@ -173,6 +182,19 @@ public sealed class StatsPage : ReactivePage<StatsViewModel>
         var content = Layouts.Vertical();
         content.WithChild(new TextNode($"  Events: recv={sl.EventsReceived} routed={sl.EventsRouted} dropped={sl.EventsDropped}").WithForeground(Color.White).Height(1));
         content.WithChild(new TextNode($"  Replies: posted={sl.RepliesPosted} rejected={sl.RepliesRejected} failed={sl.RepliesFailed}").WithForeground(sl.RepliesFailed > 0 || sl.RepliesRejected > 0 ? Color.Yellow : Color.White).Height(1));
+        return content;
+    }
+
+    private static ILayoutNode BuildWebhooksPanel(DaemonStats.Response stats)
+    {
+        var w = stats.Webhooks;
+        var content = Layouts.Vertical();
+        content.WithChild(new TextNode($"  Routes: total={w.TotalRoutes} enabled={w.EnabledRoutes} disabled={w.DisabledRoutes} invalid={w.InvalidRoutes}")
+            .WithForeground(w.InvalidRoutes > 0 ? Color.Yellow : Color.White).Height(1));
+        content.WithChild(new TextNode($"  Deliveries: accepted={w.Accepted} filtered={w.EventFiltered} duplicate={w.DuplicateDelivery}").WithForeground(Color.White).Height(1));
+        var rejectedAny = w.RouteNotFound + w.VerificationFailed + w.BodyTooLarge + w.InvalidJson + w.RateLimited;
+        content.WithChild(new TextNode($"  Rejected: 404={w.RouteNotFound} 401={w.VerificationFailed} 413={w.BodyTooLarge} 400={w.InvalidJson} 429={w.RateLimited}")
+            .WithForeground(rejectedAny > 0 ? Color.Yellow : Color.White).Height(1));
         return content;
     }
 
