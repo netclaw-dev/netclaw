@@ -15,6 +15,10 @@ using Xunit;
 
 namespace Netclaw.Daemon.Tests.Webhooks;
 
+[CollectionDefinition("WebhookTelemetry", DisableParallelization = true)]
+public sealed class WebhookTelemetryCollection;
+
+[Collection("WebhookTelemetry")]
 public sealed class WebhookEndpointRouteBuilderExtensionsTests : IDisposable
 {
     private int _writeVersion;

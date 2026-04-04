@@ -60,9 +60,9 @@ public sealed class WebhookRouteCatalog
     }
 
     /// <summary>
-    /// Returns per-state route tallies for stats reporting.
-    /// Disabled routes sit on disk but are removed from the live catalog,
-    /// so they are computed as <c>total - enabled - invalid</c>.
+    /// Returns per-state route tallies for stats reporting. Disabled routes sit on
+    /// disk but are removed from the live catalog during refresh, so we enumerate
+    /// once and classify each file by looking it up in the catalog's maps.
     /// </summary>
     public WebhookRouteCounts GetRouteCounts()
     {
@@ -74,12 +74,21 @@ public sealed class WebhookRouteCatalog
             Directory.CreateDirectory(_paths.WebhooksDirectory);
             RefreshAllRoutes();
 
-            var total = Directory
-                .EnumerateFiles(_paths.WebhooksDirectory, "*.json", SearchOption.TopDirectoryOnly)
-                .Count();
-            var enabled = _routes.Count;
-            var invalid = _failedRouteVersions.Count;
-            var disabled = Math.Max(0, total - enabled - invalid);
+            int total = 0, enabled = 0, disabled = 0, invalid = 0;
+            foreach (var file in Directory.EnumerateFiles(_paths.WebhooksDirectory, "*.json", SearchOption.TopDirectoryOnly))
+            {
+                var name = GetRouteName(file);
+                if (string.IsNullOrWhiteSpace(name))
+                    continue;
+
+                total++;
+                if (_failedRouteVersions.ContainsKey(name))
+                    invalid++;
+                else if (_routes.ContainsKey(name))
+                    enabled++;
+                else
+                    disabled++;
+            }
 
             return new WebhookRouteCounts(total, enabled, disabled, invalid);
         }

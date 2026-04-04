@@ -41,22 +41,21 @@ public static class WebhookEndpointRouteBuilderExtensions
             }
 
             var bodyRead = await ReadRequestBodyAsync(httpContext.Request, registeredRoute.Config.MaxBodyBytes, ct);
-            if (!bodyRead.Success)
+            switch (bodyRead.Status)
             {
-                if (bodyRead.Reason == "body_too_large")
-                {
+                case WebhookBodyReadStatus.TooLarge:
                     WebhookTelemetry.RecordBodyTooLarge(registeredRoute.Name);
                     logger.LogWarning(
                         "Webhook rejected route={Route} reason={Reason} remote_ip={RemoteIp} delivery_id={DeliveryId} event_type={EventType}",
                         registeredRoute.Name, "body_too_large", remoteIp, (string?)null, (string?)null);
                     return Results.StatusCode(StatusCodes.Status413PayloadTooLarge);
-                }
 
-                WebhookTelemetry.RecordInvalidJson(registeredRoute.Name);
-                logger.LogWarning(
-                    "Webhook rejected route={Route} reason={Reason} remote_ip={RemoteIp} delivery_id={DeliveryId} event_type={EventType}",
-                    registeredRoute.Name, "invalid_json", remoteIp, (string?)null, (string?)null);
-                return Results.BadRequest(new { error = "Invalid JSON request body." });
+                case WebhookBodyReadStatus.InvalidJson:
+                    WebhookTelemetry.RecordInvalidJson(registeredRoute.Name);
+                    logger.LogWarning(
+                        "Webhook rejected route={Route} reason={Reason} remote_ip={RemoteIp} delivery_id={DeliveryId} event_type={EventType}",
+                        registeredRoute.Name, "invalid_json", remoteIp, (string?)null, (string?)null);
+                    return Results.BadRequest(new { error = "Invalid JSON request body." });
             }
 
             var verification = verifier.Verify(registeredRoute, httpContext.Request.Headers, bodyRead.BodyBytes!);
@@ -205,9 +204,17 @@ public static class WebhookEndpointRouteBuilderExtensions
     }
 }
 
-internal sealed record WebhookBodyReadResult(bool Success, string? Reason, byte[]? BodyBytes, string? BodyJson)
+internal enum WebhookBodyReadStatus
 {
-    public static WebhookBodyReadResult Ok(byte[] bodyBytes, string bodyJson) => new(true, null, bodyBytes, bodyJson);
-    public static WebhookBodyReadResult TooLarge() => new(false, "body_too_large", null, null);
-    public static WebhookBodyReadResult InvalidJson() => new(false, "invalid_json", null, null);
+    Ok,
+    TooLarge,
+    InvalidJson
+}
+
+internal sealed record WebhookBodyReadResult(WebhookBodyReadStatus Status, byte[]? BodyBytes, string? BodyJson)
+{
+    public static WebhookBodyReadResult Ok(byte[] bodyBytes, string bodyJson)
+        => new(WebhookBodyReadStatus.Ok, bodyBytes, bodyJson);
+    public static WebhookBodyReadResult TooLarge() => new(WebhookBodyReadStatus.TooLarge, null, null);
+    public static WebhookBodyReadResult InvalidJson() => new(WebhookBodyReadStatus.InvalidJson, null, null);
 }

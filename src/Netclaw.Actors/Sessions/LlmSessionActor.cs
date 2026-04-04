@@ -551,7 +551,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 }, OutputFilter.ToolCalls);
             }
 
-            // Add tool results to history, log each result, and emit as session output
             foreach (var result in msg.ToolResults)
             {
                 _state = _state with { History = _state.History.Add(result) };

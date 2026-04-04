@@ -138,16 +138,7 @@ internal sealed class DaemonStatsService(
 
     private DaemonStats.Webhooks BuildWebhookStats()
     {
-        WebhookRouteCounts counts;
-        try
-        {
-            counts = webhookRouteCatalog.GetRouteCounts();
-        }
-        catch
-        {
-            counts = new WebhookRouteCounts(0, 0, 0, 0);
-        }
-
+        var counts = webhookRouteCatalog.GetRouteCounts();
         var snapshot = WebhookTelemetry.GetSnapshot();
         return new DaemonStats.Webhooks
         {
