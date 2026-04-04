@@ -77,5 +77,5 @@
 - [x] 10.1 Extend `ToolAuditEntry` with approval-related fields — `ApprovalDecision`, `ApprovalPattern`
 - [x] 10.2 Log approval decisions (approved, denied, timed_out) in tool audit records
 - [x] 10.3 Sync delta specs to main specs via `/opsx-sync`
-- [ ] 10.4 Run `dotnet slopwatch analyze` — verify no new violations
-- [ ] 10.5 Run eval suite — verify no regression with `ShellMode: HostAllowed` (existing behavior preserved)
+- [x] 10.4 Run `dotnet slopwatch analyze` — verified 0 violations after all changes
+- [ ] 10.5 Run eval suite — deferred to operator (requires running daemon with configured credentials; existing behavior preserved when ApprovalPolicy is unset)
