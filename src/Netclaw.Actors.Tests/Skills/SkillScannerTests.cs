@@ -408,6 +408,93 @@ public class SkillScannerTests : IDisposable
     }
 
     [Fact]
+    public void Nested_skill_md_under_a_claimed_root_is_not_scanned()
+    {
+        // prepare-ralph/SKILL.md is a valid skill; prepare-ralph/skills/ralph-after-action/SKILL.md
+        // is an internal resource (even if it happens to contain YAML frontmatter) and must not be
+        // picked up as a separate skill.
+        WriteSkill("prepare-ralph", """
+            ---
+            name: prepare-ralph
+            description: Bootstrap RALPH infrastructure.
+            ---
+
+            # Prepare RALPH
+            """);
+
+        var nestedDir = Path.Combine(_skillsDir, "prepare-ralph", "skills", "ralph-after-action");
+        Directory.CreateDirectory(nestedDir);
+        File.WriteAllText(Path.Combine(nestedDir, "SKILL.md"), """
+            ---
+            name: ralph-after-action
+            description: Nested internal resource masquerading as a skill.
+            ---
+
+            # Ralph After Action
+            """);
+
+        var result = SkillScanner.Scan(_skillsDir);
+
+        Assert.Single(result.AcceptedSkills);
+        Assert.Equal("prepare-ralph", result.AcceptedSkills[0].Name);
+        Assert.Empty(result.Issues);
+    }
+
+    [Fact]
+    public void NonStrict_name_match_accepts_frontmatter_name_over_directory()
+    {
+        // meta-agent-os-bootstrap/ with frontmatter name: agent-os-bootstrap
+        // Mirrors Claude Code skills where the frontmatter name is canonical.
+        var skillDir = Path.Combine(_skillsDir, "meta-agent-os-bootstrap");
+        Directory.CreateDirectory(skillDir);
+        File.WriteAllText(Path.Combine(skillDir, "SKILL.md"), """
+            ---
+            name: agent-os-bootstrap
+            description: Bootstrap the agent OS constitution.
+            ---
+
+            # Agent OS Bootstrap
+            """);
+
+        var result = SkillScanner.Scan(_skillsDir, strictNameMatch: false);
+
+        Assert.Single(result.AcceptedSkills);
+        Assert.Equal("agent-os-bootstrap", result.AcceptedSkills[0].Name);
+        Assert.DoesNotContain(result.Issues, i => i.Kind == SkillScanIssueKind.FrontmatterNameMismatch);
+    }
+
+    [Fact]
+    public void NonStrict_name_match_accepts_flat_file_with_mismatching_frontmatter_name()
+    {
+        // Flat .md file where filename and frontmatter name differ.
+        File.WriteAllText(Path.Combine(_skillsDir, "daily-plan.md"), """
+            ---
+            name: daily-plan
+            description: Run the daily planning workflow.
+            ---
+
+            # Daily Plan
+            """);
+
+        // Make a second one where names differ (simulating a Claude Code command).
+        File.WriteAllText(Path.Combine(_skillsDir, "weird-filename.md"), """
+            ---
+            name: actual-command-name
+            description: Frontmatter name wins over filename.
+            ---
+
+            # Actual Command
+            """);
+
+        var result = SkillScanner.Scan(_skillsDir, strictNameMatch: false);
+
+        Assert.Equal(2, result.AcceptedSkills.Count);
+        Assert.Contains(result.AcceptedSkills, s => s.Name == "daily-plan");
+        Assert.Contains(result.AcceptedSkills, s => s.Name == "actual-command-name");
+        Assert.DoesNotContain(result.Issues, i => i.Kind == SkillScanIssueKind.FrontmatterNameMismatch);
+    }
+
+    [Fact]
     public void Symlinked_resource_tree_is_rejected_with_issue()
     {
         WriteSkill("linked-skill", """

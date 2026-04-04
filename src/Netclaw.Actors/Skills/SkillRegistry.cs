@@ -86,13 +86,14 @@ public sealed class SkillRegistry
 
         var sb = new StringBuilder();
 
-        // Build roots header — single root for backward compat, multi-root when external sources exist
+        // Build roots header — single root for backward compat, multi-root when external sources exist.
+        // An external source may cover multiple paths; join them with ';' so the agent sees every root.
         var hasExternal = externalSources is { Count: > 0 };
         if (hasExternal)
         {
             sb.Append($"[skills]|roots: native={skillsRoot}");
             foreach (var src in externalSources!)
-                sb.Append($",{src.Name}={src.Path}");
+                sb.Append($",{src.Name}={string.Join(';', src.Paths)}");
             sb.AppendLine("|invoke via /name");
         }
         else

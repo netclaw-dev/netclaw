@@ -255,13 +255,32 @@ public class SkillRegistryTests
 
         var externalSources = new[]
         {
-            new ResolvedExternalSource("claude-code", "/home/user/.claude/skills", true)
+            new ResolvedExternalSource("claude-code", new[] { "/home/user/.claude/skills" }, true)
         };
 
         var index = registry.GenerateIndex("/home/user/.netclaw/skills", externalSources);
 
         Assert.Contains("roots: native=/home/user/.netclaw/skills,claude-code=/home/user/.claude/skills", index);
         Assert.DoesNotContain("[skills]|root:", index);
+    }
+
+    [Fact]
+    public void GenerateIndex_with_multi_path_external_source_joins_paths_with_semicolon()
+    {
+        var registry = new SkillRegistry();
+        registry.Register(MakeEntry("my-skill", "desc"));
+
+        var externalSources = new[]
+        {
+            new ResolvedExternalSource(
+                "claude-code",
+                new[] { "/home/user/.claude/skills", "/home/user/.claude/commands" },
+                true)
+        };
+
+        var index = registry.GenerateIndex("/home/user/.netclaw/skills", externalSources);
+
+        Assert.Contains("claude-code=/home/user/.claude/skills;/home/user/.claude/commands", index);
     }
 
     [Fact]

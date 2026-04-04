@@ -46,10 +46,14 @@ public sealed class SkillDirectoryWatcherService : BackgroundService
         // Watch the native skills directory
         TryCreateWatcher(_paths.SkillsDirectory, "native");
 
-        // Watch each external source directory
+        // Watch each external source directory. A single source may cover multiple
+        // paths (e.g. claude-code = ~/.claude/skills + ~/.claude/commands).
         foreach (var source in _externalSources)
         {
-            TryCreateWatcher(source.Path, source.Name);
+            foreach (var path in source.Paths)
+            {
+                TryCreateWatcher(path, source.Name);
+            }
         }
 
         return Task.CompletedTask;
