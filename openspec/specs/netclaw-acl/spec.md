@@ -51,6 +51,13 @@ For MCP tools, the system SHALL support an additional per-tool grant layer via
 only explicitly listed tools SHALL pass the audience check. This per-tool
 check SHALL execute after the server-level `AllowedMcpServers` check.
 
+Each `ToolAudienceProfile` SHALL support an optional `ApprovalPolicy` of type
+`ToolApprovalConfig`. The `ApprovalPolicy` SHALL define a `DefaultMode` (Auto,
+Approval, Deny) and per-tool overrides via `ToolOverrides`. The approval check
+SHALL execute after the tool access grant check passes. Tools in Approval mode
+SHALL consult the approval cache (session-scoped and persistent) before
+execution. Tools in Deny mode SHALL be blocked without an approval prompt.
+
 #### Scenario: Missing grant blocks tool call
 
 - **WHEN** a tool call is attempted without a matching grant
@@ -82,6 +89,23 @@ check SHALL execute after the server-level `AllowedMcpServers` check.
 - **AND** `McpServerToolGrants` for this audience lists `["search_memories", "get"]`
 - **WHEN** the agent invokes `memorizer/search_memories`
 - **THEN** the invocation is allowed
+
+#### Scenario: Tool granted but requires approval
+
+- **GIVEN** the session has a grant for `shell_execute`
+- **AND** the Personal `ApprovalPolicy` sets `shell_execute` to Approval mode
+- **AND** the command pattern `git push` is not in the approval cache
+- **WHEN** the agent invokes `shell_execute` with `git push origin main`
+- **THEN** the grant check passes
+- **AND** the approval check returns `RequiresApproval`
+
+#### Scenario: Tool granted with approval already cached
+
+- **GIVEN** the session has a grant for `shell_execute`
+- **AND** `git push` is in the session or persistent approval cache
+- **WHEN** the agent invokes `shell_execute` with `git push origin main`
+- **THEN** both the grant check and approval check pass
+- **AND** the tool executes immediately
 
 #### Scenario: Config write grant required for self-configuration
 

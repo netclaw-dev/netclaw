@@ -129,7 +129,9 @@ returned to prevent context flooding.
 The system SHALL provide a shell execution tool that runs commands as the
 Netclaw process user context. Stdin SHALL be closed (no interactive commands).
 Execution SHALL enforce a configurable timeout (default: 60 seconds). Output
-SHALL be truncated to a configurable limit.
+SHALL be truncated to a configurable limit. Before execution, the shell tool
+SHALL check the hard deny list via `ShellCommandPolicy`. Hard-denied commands
+SHALL be rejected before `ToolPathPolicy` path checks.
 
 #### Scenario: Execute command and return output
 
@@ -138,6 +140,13 @@ SHALL be truncated to a configurable limit.
 - **THEN** the command is executed as the Netclaw process user
 - **AND** stdout and stderr are captured
 - **AND** the combined output is returned to the LLM
+
+#### Scenario: Hard-denied command rejected before execution
+
+- **GIVEN** the agent invokes `shell_execute` with `netclaw daemon stop`
+- **WHEN** `ShellCommandPolicy` evaluates the command
+- **THEN** the command is rejected with "Command blocked by hard deny policy"
+- **AND** the shell process is never started
 
 #### Scenario: Execution timeout enforced
 
@@ -256,13 +265,20 @@ registered and SHALL report the missing dependency.
 
 ### Requirement: Policy-gated tool invocation
 
-The system SHALL check ACL grants before every tool execution. Tool
-invocations SHALL be logged with audit records including tool name, invoking
-session, timestamp, and allow/deny result.
+The system SHALL check ACL grants and approval policy before every tool
+execution. Tool invocations SHALL be logged with audit records including tool
+name, invoking session, timestamp, allow/deny/approval result, and approval
+decision details when applicable. The `ToolAccessDecision` SHALL support three
+outcomes: `Allow`, `Deny(reason)`, and `RequiresApproval(context)`.
+
+When `RequiresApproval` is returned, the tool execution pipeline SHALL pause
+the individual tool task and emit a `ToolInteractionRequest` to session
+subscribers. The pipeline SHALL NOT block other tool calls in the same batch.
 
 #### Scenario: Granted tool executes successfully
 
 - **GIVEN** the session has an ACL grant for `web_search`
+- **AND** `web_search` is in Auto approval mode
 - **WHEN** the LLM requests a web search tool call
 - **THEN** the ACL check passes
 - **AND** the tool executes
@@ -279,12 +295,30 @@ session, timestamp, and allow/deny result.
 - **AND** an audit record is logged with tool name, session ID, timestamp, and
   `deny` result
 
+#### Scenario: Tool requires approval and is approved
+
+- **GIVEN** the session has an ACL grant for `shell`
+- **AND** `shell_execute` is in Approval mode for the session's audience
+- **AND** the command pattern is not in the approval cache
+- **WHEN** the LLM requests a shell tool call
+- **THEN** `ToolAccessPolicy` returns `RequiresApproval`
+- **AND** the pipeline emits a `ToolInteractionRequest` and pauses the task
+- **AND** when the user approves, the tool executes
+- **AND** an audit record is logged with `approved` result
+
+#### Scenario: Tool requires approval and is denied by user
+
+- **GIVEN** the pipeline has emitted an approval prompt
+- **WHEN** the user denies
+- **THEN** the tool result is "Command denied by user"
+- **AND** an audit record is logged with `denied_by_user` result
+
 #### Scenario: Audit records available in diagnostics
 
 - **GIVEN** tool invocations have occurred
 - **WHEN** the operator views diagnostics
 - **THEN** audit records show tool name, invoking session, timestamp, and
-  allow/deny result for each invocation
+  allow/deny/approval result for each invocation
 
 ### Requirement: Configurable search backend
 
