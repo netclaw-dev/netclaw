@@ -580,7 +580,7 @@ static async Task RunAsync(string[] args)
                             foreach (var d in devices)
                             {
                                 Console.WriteLine(
-                                    $"{d.Name,-24} {d.CreatedAt.ToLocalTime():yyyy-MM-dd HH:mm,-22} {d.LastUsedAt.ToLocalTime():yyyy-MM-dd HH:mm,-22}");
+                                    $"{d.Name,-24} {d.CreatedAt.ToLocalTime(),-22:yyyy-MM-dd HH:mm} {d.LastUsedAt.ToLocalTime(),-22:yyyy-MM-dd HH:mm}");
                             }
                         }
                     }
@@ -1537,8 +1537,8 @@ static NetclawPaths ConfigureConfigServices(IServiceCollection services, IConfig
     services.AddSingleton<ISecretsProtector>(protector);
     SensitiveStringTypeConverter.Protector = protector;
 
-    // Layered configuration chain:
-    // 1. netclaw.json (base config, optional)
+    // Layered daemon/operator configuration chain:
+    // 1. netclaw.json (daemon-owned config, optional)
     // 2. secrets.json (credentials overlay, optional)
     // 3. NETCLAW_* environment variables (highest priority)
     configuration

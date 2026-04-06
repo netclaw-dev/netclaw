@@ -267,14 +267,11 @@ public sealed class McpServersDoctorCheckTests : IDisposable
 
     private static DaemonApi CreateDaemonApi(Func<HttpRequestMessage, HttpResponseMessage> handler)
     {
-        var configuration = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                ["Daemon:Endpoint"] = "http://127.0.0.1:5199"
-            })
-            .Build();
+        var configuration = new ConfigurationBuilder().Build();
+        var paths = new NetclawPaths(Path.Combine(Path.GetTempPath(), $"netclaw-daemon-api-test-{Guid.NewGuid():N}"));
+        paths.EnsureDirectoriesExist();
 
-        return new DaemonApi(new StubHttpClientFactory(handler), configuration);
+        return new DaemonApi(new StubHttpClientFactory(handler), configuration, paths);
     }
 
     private static HttpResponseMessage JsonResponse(object body, HttpStatusCode status = HttpStatusCode.OK)
