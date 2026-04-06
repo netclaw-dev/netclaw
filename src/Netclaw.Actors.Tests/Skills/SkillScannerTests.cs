@@ -518,6 +518,28 @@ public class SkillScannerTests : IDisposable
     }
 
     [Fact]
+    public void Symlinked_skill_directory_is_rejected_with_issue()
+    {
+        var externalDir = Path.Combine(_skillsDir, "external-linked-skill");
+        Directory.CreateDirectory(externalDir);
+        File.WriteAllText(Path.Combine(externalDir, "SKILL.md"), """
+            ---
+            name: linked-skill
+            description: Lives outside the configured root.
+            ---
+
+            # Linked Skill
+            """);
+
+        Directory.CreateSymbolicLink(Path.Combine(_skillsDir, "linked-skill"), externalDir);
+
+        var result = SkillScanner.Scan(_skillsDir);
+
+        Assert.Empty(result.AcceptedSkills);
+        Assert.Contains(result.Issues, issue => issue.Kind == SkillScanIssueKind.SymlinkNotAllowed);
+    }
+
+    [Fact]
     public void Symlinked_resource_tree_accepted_when_allowSymlinks_is_true()
     {
         WriteSkill("linked-skill", """
@@ -538,6 +560,40 @@ public class SkillScannerTests : IDisposable
 
         Assert.Single(result.AcceptedSkills);
         Assert.Equal("linked-skill", result.AcceptedSkills[0].Name);
+    }
+
+    [Fact]
+    public void Unreadable_skill_file_is_reported_with_issue()
+    {
+        WriteSkill("unreadable-skill", """
+            ---
+            name: unreadable-skill
+            description: Cannot be read.
+            ---
+
+            # Unreadable
+            """);
+
+        var skillFile = Path.Combine(_skillsDir, "unreadable-skill", "SKILL.md");
+
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var originalMode = File.GetUnixFileMode(skillFile);
+
+        try
+        {
+            File.SetUnixFileMode(skillFile, UnixFileMode.UserWrite);
+
+            var result = SkillScanner.Scan(_skillsDir);
+
+            Assert.Empty(result.AcceptedSkills);
+            Assert.Contains(result.Issues, issue => issue.Kind == SkillScanIssueKind.UnreadableFile);
+        }
+        finally
+        {
+            File.SetUnixFileMode(skillFile, originalMode);
+        }
     }
 
     [Fact]

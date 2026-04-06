@@ -77,18 +77,20 @@ public static partial class SkillScanner
                 acceptedCandidates.Add(entry);
         }
 
-        // Pass 1: root-level directory skills (skill-name/SKILL.md)
-        // Record the roots claimed here so Pass 2 cannot rediscover skills nested
-        // beneath them. Any `SKILL.md` deeper than a claimed root is an internal
-        // resource of that skill, not a separate skill.
+        // Pass 1 & 2 iterate the same set of root children — enumerate once.
+        var rootDirs = Directory.GetDirectories(rootFull);
+
+        // Pass 1: root-level directory skills (skill-name/SKILL.md).
+        // A directory that owns a SKILL.md is a claimed root — any SKILL.md
+        // nested beneath it is an internal resource, not a separate skill.
         var claimedRoots = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var dir in Directory.GetDirectories(rootFull))
+        foreach (var dir in rootDirs)
         {
             var skillMdPath = Path.Combine(dir, SkillFileName);
             if (!File.Exists(skillMdPath))
                 continue;
 
-            claimedRoots.Add(NormalizeDirectoryPath(dir));
+            claimedRoots.Add(dir);
 
             var entry = ParseSkillFile(skillMdPath, rootFull, issues, allowSymlinks, strictNameMatch);
             if (entry is not null)
@@ -96,10 +98,9 @@ public static partial class SkillScanner
         }
 
         // Pass 2: nested directory skills (.system/skill-name/SKILL.md, category/skill-name/SKILL.md)
-        foreach (var subDir in Directory.GetDirectories(rootFull))
+        foreach (var subDir in rootDirs)
         {
-            // A directory that already produced a Pass 1 skill owns its entire subtree.
-            if (claimedRoots.Contains(NormalizeDirectoryPath(subDir)))
+            if (claimedRoots.Contains(subDir))
                 continue;
 
             var subDirName = Path.GetFileName(subDir);
