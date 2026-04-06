@@ -597,6 +597,40 @@ public class SkillScannerTests : IDisposable
     }
 
     [Fact]
+    public void NonStrict_within_source_duplicate_frontmatter_names_are_rejected()
+    {
+        // Two directories in the same external source both declare name: my-skill.
+        // The duplicate detection must fire even though strictNameMatch is false.
+        var dir1 = Path.Combine(_skillsDir, "foo-bar");
+        Directory.CreateDirectory(dir1);
+        File.WriteAllText(Path.Combine(dir1, "SKILL.md"), """
+            ---
+            name: my-skill
+            description: First copy with mismatched directory name.
+            ---
+
+            # My Skill (copy 1)
+            """);
+
+        var dir2 = Path.Combine(_skillsDir, "baz-qux");
+        Directory.CreateDirectory(dir2);
+        File.WriteAllText(Path.Combine(dir2, "SKILL.md"), """
+            ---
+            name: my-skill
+            description: Second copy with mismatched directory name.
+            ---
+
+            # My Skill (copy 2)
+            """);
+
+        var result = SkillScanner.Scan(_skillsDir, strictNameMatch: false);
+
+        Assert.Empty(result.AcceptedSkills);
+        Assert.Equal(2, result.Issues.Count(issue =>
+            issue.Kind == SkillScanIssueKind.DuplicateName && issue.SkillName == "my-skill"));
+    }
+
+    [Fact]
     public void AllowSymlinks_does_not_affect_normal_skills()
     {
         WriteSkill("normal-skill", """
