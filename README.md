@@ -335,6 +335,7 @@ STEP_TIMEOUT_SECONDS=120 scripts/smoke/check.sh
 
 - Daemon upgrade and rollback planning: `docs/runbooks/daemon-upgrade.md`
 - Behavior debugging and telemetry triage: `docs/runbooks/behavior-debugging.md`
+- Tool approval gates and permission configuration: `docs/runbooks/tool-approval-gates.md`
 
 ## Integrations
 

@@ -114,14 +114,7 @@ public static class ToolAudienceProfileDefaults
         McpServersMode = ToolProfileMode.All,
         ReadFiles = new ToolFilesystemAccessProfile { Mode = ToolFilesystemMode.All },
         WriteFiles = new ToolFilesystemAccessProfile { Mode = ToolFilesystemMode.All },
-        AttachFiles = new ToolFilesystemAccessProfile { Mode = ToolFilesystemMode.All },
-        ApprovalPolicy = new ToolApprovalConfig
-        {
-            ToolOverrides = new Dictionary<string, ToolApprovalMode>(StringComparer.Ordinal)
-            {
-                ["shell_execute"] = ToolApprovalMode.Approval
-            }
-        }
+        AttachFiles = new ToolFilesystemAccessProfile { Mode = ToolFilesystemMode.All }
     };
 
     public static ToolFilesystemAccessProfile CreateSessionScopedFilesystemAccess() => new()
