@@ -45,7 +45,14 @@ public static partial class SkillScanner
     /// Resolved paths are still validated to stay within the root. Used for external
     /// skill directories (e.g., Claude Code) that rely on symlinks.
     /// </param>
-    public static SkillScanResult Scan(string skillsDirectory, bool allowSymlinks = false)
+    /// <param name="strictNameMatch">
+    /// When <c>true</c> (default), the frontmatter <c>name</c> field must match the
+    /// directory or file name; mismatches are emitted as <see cref="SkillScanIssueKind.FrontmatterNameMismatch"/>
+    /// and reject the skill. When <c>false</c>, the frontmatter name is treated as
+    /// canonical — used for external sources like Claude Code where skill directory
+    /// names don't have to align with the declared name.
+    /// </param>
+    public static SkillScanResult Scan(string skillsDirectory, bool allowSymlinks = false, bool strictNameMatch = true)
     {
         if (!Directory.Exists(skillsDirectory))
             return SkillScanResult.Empty;
@@ -65,31 +72,38 @@ public static partial class SkillScanner
                 || fileName.StartsWith('.'))
                 continue;
 
-            var entry = ParseFlatSkillFile(mdFile, rootFull, issues, allowSymlinks);
+            var entry = ParseFlatSkillFile(mdFile, rootFull, issues, allowSymlinks, strictNameMatch);
             if (entry is not null)
                 acceptedCandidates.Add(entry);
         }
 
-        // Pass 1: root-level directory skills (skill-name/SKILL.md)
-        foreach (var dir in Directory.GetDirectories(rootFull))
+        // Pass 1 & 2 iterate the same set of root children — enumerate once.
+        var rootDirs = Directory.GetDirectories(rootFull);
+
+        // Pass 1: root-level directory skills (skill-name/SKILL.md).
+        // A directory that owns a SKILL.md is a claimed root — any SKILL.md
+        // nested beneath it is an internal resource, not a separate skill.
+        var claimedRoots = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var dir in rootDirs)
         {
             var skillMdPath = Path.Combine(dir, SkillFileName);
             if (!File.Exists(skillMdPath))
                 continue;
 
-            var entry = ParseSkillFile(skillMdPath, rootFull, issues, allowSymlinks);
+            claimedRoots.Add(dir);
+
+            var entry = ParseSkillFile(skillMdPath, rootFull, issues, allowSymlinks, strictNameMatch);
             if (entry is not null)
                 acceptedCandidates.Add(entry);
         }
 
         // Pass 2: nested directory skills (.system/skill-name/SKILL.md, category/skill-name/SKILL.md)
-        foreach (var subDir in Directory.GetDirectories(rootFull))
+        foreach (var subDir in rootDirs)
         {
-            var subDirName = Path.GetFileName(subDir);
-
-            // Skip directories that are skills themselves (have SKILL.md — handled in Pass 1)
-            if (File.Exists(Path.Combine(subDir, SkillFileName)))
+            if (claimedRoots.Contains(subDir))
                 continue;
+
+            var subDirName = Path.GetFileName(subDir);
 
             // Skip hidden directories except known skill tier directories
             if (subDirName.StartsWith('.') && !IsAllowedHiddenDirectory(subDirName))
@@ -101,7 +115,7 @@ public static partial class SkillScanner
                 if (!File.Exists(skillMdPath))
                     continue;
 
-                var entry = ParseSkillFile(skillMdPath, rootFull, issues, allowSymlinks);
+                var entry = ParseSkillFile(skillMdPath, rootFull, issues, allowSymlinks, strictNameMatch);
                 if (entry is not null)
                     acceptedCandidates.Add(entry);
             }
@@ -162,14 +176,17 @@ public static partial class SkillScanner
 
     /// <summary>
     /// Scans the native skills directory and all external sources, merging results.
-    /// Native skills take highest precedence; external sources follow config order.
-    /// Duplicate names from lower-precedence sources are logged as issues and skipped.
+    /// Native skills take highest precedence (strict frontmatter-name matching);
+    /// external sources follow config order and use relaxed name matching (trust
+    /// the frontmatter <c>name</c>, since platforms like Claude Code treat it as
+    /// canonical). Duplicate names from lower-precedence sources are logged as
+    /// issues and skipped.
     /// </summary>
     public static MergedSkillScanResult ScanAndMerge(
         string nativeSkillsDirectory,
         IReadOnlyList<ResolvedExternalSource> externalSources)
     {
-        var nativeScan = Scan(nativeSkillsDirectory);
+        var nativeScan = Scan(nativeSkillsDirectory, allowSymlinks: false, strictNameMatch: true);
         var allAccepted = new List<SkillEntry>(nativeScan.AcceptedSkills);
         var allIssues = new List<SkillScanIssue>(nativeScan.Issues);
 
@@ -178,29 +195,32 @@ public static partial class SkillScanner
 
         foreach (var source in externalSources)
         {
-            var externalScan = Scan(source.Path, allowSymlinks: source.AllowSymlinks);
-            allIssues.AddRange(externalScan.Issues);
-
-            foreach (var skill in externalScan.AcceptedSkills)
+            foreach (var path in source.Paths)
             {
-                if (!knownNames.Add(skill.Name))
-                {
-                    allIssues.Add(new SkillScanIssue(
-                        Path: skill.FilePath,
-                        Kind: SkillScanIssueKind.DuplicateName,
-                        Message: $"Skill '{skill.Name}' from external source '{source.Name}' is shadowed by a higher-precedence skill.",
-                        SkillName: skill.Name));
-                    continue;
-                }
+                var externalScan = Scan(path, allowSymlinks: source.AllowSymlinks, strictNameMatch: false);
+                allIssues.AddRange(externalScan.Issues);
 
-                allAccepted.Add(skill);
+                foreach (var skill in externalScan.AcceptedSkills)
+                {
+                    if (!knownNames.Add(skill.Name))
+                    {
+                        allIssues.Add(new SkillScanIssue(
+                            Path: skill.FilePath,
+                            Kind: SkillScanIssueKind.DuplicateName,
+                            Message: $"Skill '{skill.Name}' from external source '{source.Name}' is shadowed by a higher-precedence skill.",
+                            SkillName: skill.Name));
+                        continue;
+                    }
+
+                    allAccepted.Add(skill);
+                }
             }
         }
 
         return new MergedSkillScanResult(allAccepted, allIssues);
     }
 
-    private static SkillEntry? ParseSkillFile(string filePath, string rootDirectory, List<SkillScanIssue> issues, bool allowSymlinks = false)
+    private static SkillEntry? ParseSkillFile(string filePath, string rootDirectory, List<SkillScanIssue> issues, bool allowSymlinks = false, bool strictNameMatch = true)
     {
         var canonicalRoot = NormalizeDirectoryPath(rootDirectory);
         var canonicalSkillFilePath = ValidateCanonicalPath(filePath, canonicalRoot, issues, "skill file", allowSymlinks);
@@ -240,7 +260,7 @@ public static partial class SkillScanner
             return null;
         }
 
-        return BuildEntryFromFrontmatter(frontmatter, content, canonicalSkillFilePath, canonicalSkillDirectory, canonicalRoot, issues, allowSymlinks);
+        return BuildEntryFromFrontmatter(frontmatter, content, canonicalSkillFilePath, canonicalSkillDirectory, canonicalRoot, issues, allowSymlinks, strictNameMatch);
     }
 
     /// <summary>
@@ -248,7 +268,7 @@ public static partial class SkillScanner
     /// files with valid YAML frontmatter — supported for compatibility with Claude Code
     /// and other platforms that allow skills without the directory wrapper.
     /// </summary>
-    private static SkillEntry? ParseFlatSkillFile(string filePath, string rootDirectory, List<SkillScanIssue> issues, bool allowSymlinks = false)
+    private static SkillEntry? ParseFlatSkillFile(string filePath, string rootDirectory, List<SkillScanIssue> issues, bool allowSymlinks = false, bool strictNameMatch = true)
     {
         var canonicalRoot = NormalizeDirectoryPath(rootDirectory);
         var canonicalPath = ValidateCanonicalPath(filePath, canonicalRoot, issues, "flat skill file", allowSymlinks);
@@ -294,7 +314,7 @@ public static partial class SkillScanner
             ? NormalizeSkillName(frontmatter.Name)
             : NormalizeSkillName(fileNameWithoutExt);
 
-        if (!string.IsNullOrWhiteSpace(frontmatter.Name))
+        if (strictNameMatch && !string.IsNullOrWhiteSpace(frontmatter.Name))
         {
             var expectedName = NormalizeSkillName(fileNameWithoutExt);
             if (!string.Equals(name, expectedName, StringComparison.OrdinalIgnoreCase))
@@ -358,7 +378,8 @@ public static partial class SkillScanner
         string skillDirectory,
         string rootDirectory,
         List<SkillScanIssue> issues,
-        bool allowSymlinks = false)
+        bool allowSymlinks = false,
+        bool strictNameMatch = true)
     {
         // Description is required per AgentSkills.io spec
         if (string.IsNullOrWhiteSpace(fm.Description))
@@ -374,16 +395,18 @@ public static partial class SkillScanner
             ? NormalizeSkillName(fm.Name)
             : NormalizeSkillName(Path.GetFileName(skillDirectory));
 
-        var expectedName = NormalizeSkillName(Path.GetFileName(skillDirectory));
-        if (!string.IsNullOrWhiteSpace(fm.Name)
-            && !string.Equals(name, expectedName, StringComparison.OrdinalIgnoreCase))
+        if (strictNameMatch && !string.IsNullOrWhiteSpace(fm.Name))
         {
-            issues.Add(new SkillScanIssue(
-                Path: filePath,
-                Kind: SkillScanIssueKind.FrontmatterNameMismatch,
-                Message: $"Frontmatter name '{name}' does not match directory name '{expectedName}'.",
-                SkillName: name));
-            return null;
+            var expectedName = NormalizeSkillName(Path.GetFileName(skillDirectory));
+            if (!string.Equals(name, expectedName, StringComparison.OrdinalIgnoreCase))
+            {
+                issues.Add(new SkillScanIssue(
+                    Path: filePath,
+                    Kind: SkillScanIssueKind.FrontmatterNameMismatch,
+                    Message: $"Frontmatter name '{name}' does not match directory name '{expectedName}'.",
+                    SkillName: name));
+                return null;
+            }
         }
 
         // Resolve category from directory structure
