@@ -14,16 +14,10 @@ public readonly record struct SessionId(
 
     /// <summary>
     /// Derives the memory domain from the session identity.
-    /// Extracts the prefix before the first '/' (e.g. "slack" from "slack/C123/1234.5678")
-    /// and wraps it as "project:{prefix}". Falls back to "project:default".
+    /// Returns "project:default" for all transport-scoped sessions until
+    /// a proper domain-scoping mechanism is designed. See GitHub #203.
     /// </summary>
-    public string ToMemoryDomain()
-    {
-        var slash = Value.IndexOf('/', StringComparison.Ordinal);
-        return slash > 0
-            ? $"project:{Value[..slash].ToLowerInvariant()}"
-            : "project:default";
-    }
+    public string ToMemoryDomain() => "project:default";
 
     public override string ToString() => Value;
 }

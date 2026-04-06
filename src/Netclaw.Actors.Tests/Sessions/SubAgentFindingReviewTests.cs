@@ -87,7 +87,7 @@ public class SubAgentFindingReviewTests
             Title = "subagent:research-assistant",
             Content = "Netclaw uses SQLite journal persistence for session durability in the current deployment.",
             Kind = "record",
-            Domain = "project:project-a",
+            Domain = "project:default",
             Sensitivity = SubAgentFindingSensitivity.Normal,
             RecallMode = SubAgentFindingRecallMode.Searchable,
             UpdateSemantics = "append-document",

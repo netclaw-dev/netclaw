@@ -57,9 +57,8 @@ public sealed partial class SqliteFindMemoriesTool : NetclawTool<SqliteFindMemor
             limit);
         var plan = _gate.Clamp(null, request);
 
-        var results = await _store.SearchByPlanAsync(
+        var results = await _store.SearchAcrossDomainsByPlanAsync(
             plan.SearchTerms,
-            domain,
             plan.MemoryClasses,
             limit,
             MemoryPolicyScopeResolver.ResolveBoundary(context.Boundary, audience, sessionId, domain),
