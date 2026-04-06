@@ -4,7 +4,7 @@ description: "REQUIRED when the user asks about Netclaw capabilities, scheduling
 disable-model-invocation: true
 metadata:
   author: netclaw
-  version: "1.5.0"
+  version: "1.6.0"
 ---
 
 # Netclaw Operations
@@ -114,6 +114,28 @@ Verification kinds are generic:
 
 Route files hot-reload without restarting the daemon. If a route file becomes
 invalid, Netclaw removes that route immediately and emits an operational alert.
+
+### Webhook observability
+
+`netclaw stats` includes a `webhooks:` section with:
+
+- **Route counts** — `total`, `enabled`, `disabled`, `invalid` (files on disk,
+  classified by parse/validation status plus the per-route `Enabled` flag).
+- **Delivery counters** — `accepted`, `filtered` (event not in allowlist),
+  `duplicate` (delivery id already seen), plus per-rejection counts:
+  `404` (route_not_found), `401` (verification_failed), `413` (body_too_large),
+  `400` (invalid_json), `429` (rate_limited).
+
+Every ingress outcome writes a structured line to `daemon-{date}.log`:
+
+```
+Webhook rejected route={Route} reason={Reason} remote_ip={RemoteIp}
+  delivery_id={DeliveryId} event_type={EventType}
+```
+
+Rejection paths only log + increment counters — they do NOT fire outbound
+operational notifications, so bad or adversarial traffic does not spam the
+configured notification target.
 
 ## Diagnostics
 

@@ -72,6 +72,52 @@ public sealed class WebhookRouteCatalogTests : IDisposable
         Assert.Equal(AlertType.WebhookRouteInvalid, Assert.Single(_sink.Alerts).Category);
     }
 
+    [Fact]
+    public void GetRouteCounts_returns_zero_when_feature_disabled()
+    {
+        WriteRouteFile("alpha", CreateRoute());
+        var sut = new WebhookRouteCatalog(
+            _paths,
+            new WebhooksConfig { Enabled = false },
+            _sink,
+            _timeProvider,
+            NullLogger<WebhookRouteCatalog>.Instance);
+
+        var counts = sut.GetRouteCounts();
+
+        Assert.Equal(new WebhookRouteCounts(0, 0, 0, 0), counts);
+    }
+
+    [Fact]
+    public void GetRouteCounts_classifies_enabled_disabled_and_invalid()
+    {
+        WriteRouteFile("alpha", CreateRoute());
+        WriteRouteFile("beta", CreateRoute());
+        var disabled = CreateRoute();
+        disabled.Enabled = false;
+        WriteRouteFile("gamma", disabled);
+        WriteRouteText("delta", "{ not valid json");
+
+        var sut = CreateCatalog();
+
+        var counts = sut.GetRouteCounts();
+
+        Assert.Equal(4, counts.Total);
+        Assert.Equal(2, counts.Enabled);
+        Assert.Equal(1, counts.Disabled);
+        Assert.Equal(1, counts.Invalid);
+    }
+
+    [Fact]
+    public void GetRouteCounts_returns_zero_when_directory_is_empty()
+    {
+        var sut = CreateCatalog();
+
+        var counts = sut.GetRouteCounts();
+
+        Assert.Equal(new WebhookRouteCounts(0, 0, 0, 0), counts);
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_tempDir))

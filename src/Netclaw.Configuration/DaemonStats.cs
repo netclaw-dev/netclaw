@@ -20,6 +20,8 @@ public static class DaemonStats
 
         public required SlackActivity SlackActivity { get; init; }
 
+        public required Webhooks Webhooks { get; init; }
+
         public Reminders? Reminders { get; init; }
 
         /// <summary>
@@ -99,6 +101,45 @@ public static class DaemonStats
         public long RepliesRejected { get; init; }
 
         public long RepliesFailed { get; init; }
+    }
+
+    public sealed class Webhooks : IWireType
+    {
+        /// <summary>Total webhook route definition files present on disk.</summary>
+        public int TotalRoutes { get; init; }
+
+        /// <summary>Routes currently loaded and serving traffic.</summary>
+        public int EnabledRoutes { get; init; }
+
+        /// <summary>Routes whose file has <c>Enabled=false</c> (parsed but disabled).</summary>
+        public int DisabledRoutes { get; init; }
+
+        /// <summary>Routes whose file failed to parse or validate.</summary>
+        public int InvalidRoutes { get; init; }
+
+        /// <summary>Deliveries accepted and dispatched to a webhook session.</summary>
+        public long Accepted { get; init; }
+
+        /// <summary>Requests for unknown routes (HTTP 404).</summary>
+        public long RouteNotFound { get; init; }
+
+        /// <summary>Requests with invalid HMAC signature or header secret (HTTP 401).</summary>
+        public long VerificationFailed { get; init; }
+
+        /// <summary>Requests exceeding the route's <c>MaxBodyBytes</c> (HTTP 413).</summary>
+        public long BodyTooLarge { get; init; }
+
+        /// <summary>Requests with an unparseable JSON body (HTTP 400).</summary>
+        public long InvalidJson { get; init; }
+
+        /// <summary>Requests rejected by the per-route rate limiter (HTTP 429).</summary>
+        public long RateLimited { get; init; }
+
+        /// <summary>Deliveries filtered out because their event type is not allowed by the route.</summary>
+        public long EventFiltered { get; init; }
+
+        /// <summary>Deliveries ignored because their delivery identifier was seen recently.</summary>
+        public long DuplicateDelivery { get; init; }
     }
 
     public sealed class Reminders : IWireType
