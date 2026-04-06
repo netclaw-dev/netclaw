@@ -227,9 +227,9 @@ public sealed class ToolAudienceProfilesDoctorCheck(NetclawPaths paths) : IDocto
                 }
             }
         }
-        catch
+        catch (Exception ex)
         {
-            // Malformed file — don't fail doctor over it
+            warnings.Add($"Could not read tool-approvals.json: {ex.Message}");
         }
     }
 }
