@@ -14,7 +14,7 @@ same key path):
 3. Environment variables with `NETCLAW_` prefix (highest priority)
 
 Local CLI connection state is stored separately in
-`~/.netclaw/config/client.json`. The daemon does not read this file.
+`~/.netclaw/client/config.json`. The daemon does not read this file.
 
 With no configuration files present, Netclaw defaults to a local Ollama
 instance at `http://localhost:11434` using `qwen3:30b`.
@@ -25,9 +25,10 @@ All configuration lives under `~/.netclaw/`:
 
 ```
 ~/.netclaw/
+├── client/
+│   └── config.json        # Local CLI endpoint state
 ├── config/
 │   ├── netclaw.json        # Daemon runtime settings
-│   ├── client.json         # Local CLI endpoint state
 │   └── secrets.json        # Credentials (chmod 600 recommended)
 ├── soul/
 │   ├── PERSONALITY.md       # Agent personality (seeded on first run)
@@ -46,7 +47,7 @@ Directories are created automatically on first run.
 Daemon-backed CLI commands resolve the target daemon in this order:
 
 1. `NETCLAW_DAEMON_ENDPOINT`
-2. `~/.netclaw/config/client.json`
+2. `~/.netclaw/client/config.json`
 3. built-in default `http://127.0.0.1:5199`
 
 `netclaw.json` is reserved for daemon-owned configuration and is not used to

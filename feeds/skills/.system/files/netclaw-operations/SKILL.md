@@ -4,7 +4,7 @@ description: "REQUIRED when the user asks about Netclaw capabilities, scheduling
 disable-model-invocation: true
 metadata:
   author: netclaw
-  version: "1.7.0"
+  version: "1.8.0"
 ---
 
 # Netclaw Operations
@@ -162,7 +162,7 @@ the corresponding tunnel integration is reachable.
 
 Config files: `~/.netclaw/config/netclaw.json` (daemon-owned base config,
 including `Daemon.Host`, `Daemon.Port`, `Daemon.ExposureMode`),
-`~/.netclaw/config/client.json` (local CLI endpoint state),
+`~/.netclaw/client/config.json` (local CLI endpoint state),
 `~/.netclaw/config/secrets.json` (credentials — never display API keys).
 
 ## Identity
@@ -217,7 +217,7 @@ shell_execute: netclaw pair https://my-daemon.tail1234.ts.net:5000
 
 The user is prompted for the pairing code. On success, the bearer token is
 saved to `secrets.json` (`DeviceToken` field) and the endpoint is saved to
-`client.json`.
+`~/.netclaw/client/config.json`.
 
 ### Device management
 

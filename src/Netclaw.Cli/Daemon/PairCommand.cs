@@ -109,7 +109,7 @@ internal static class PairCommand
         Console.WriteLine("  5. Choose a device name (default: hostname)");
         Console.WriteLine();
         Console.WriteLine("On success, the device token is stored in secrets.json and the endpoint");
-        Console.WriteLine("is saved to client.json for future CLI connections.");
+        Console.WriteLine("is saved to ~/.netclaw/client/config.json for future CLI connections.");
     }
 
     private sealed record ExchangeResponse(string Token);
