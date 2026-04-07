@@ -173,10 +173,6 @@ public sealed class ExposureModeStepViewModel : IWizardStepViewModel
             return;
 
         var json = JsonSerializer.Serialize(new[] { _bootstrapDevice }, DevicesJsonOptions);
-        var dir = Path.GetDirectoryName(paths.DevicesPath);
-        if (dir is not null)
-            Directory.CreateDirectory(dir);
-
         File.WriteAllText(paths.DevicesPath, json);
         if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows) && File.Exists(paths.DevicesPath))
             File.SetUnixFileMode(paths.DevicesPath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
