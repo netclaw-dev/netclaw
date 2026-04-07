@@ -240,6 +240,11 @@ assert_memory_formation() {
     daemon_log_contains 'turn_memory_checkpoint_enqueued'
 }
 
+assert_memory_recall_filters() {
+    # After overfetch fix: candidate selection should run with score filtering.
+    daemon_log_contains 'memory_retrieval_candidate_selection.*selectedCount='
+}
+
 # Category 4: Tool Discovery & Use
 assert_tool_discovery() {
     stdout_contains '\[tool:call\] search_tools'
@@ -436,6 +441,9 @@ run_all() {
 
     run_case memory_formation "checkpoint enqueued" \
         "Remember that my favorite color is blue"
+
+    run_case memory_recall_filters "candidate selection with score filtering" \
+        "Tell me about my travel preferences"
 
     end_category
 

@@ -468,7 +468,10 @@ def main():
                 continue
             id_hit = any(exp in ev["itemIds"] for exp in c["expectedRecallIds"])
             marker_hit = any(c.get("markerHits", {}).values())
-            if id_hit or marker_hit:
+            # If forbiddenRecallIds present, also check no forbidden docs leaked in.
+            forbidden_ids = c.get("forbiddenRecallIds", [])
+            precision_ok = not any(fid in ev["itemIds"] for fid in forbidden_ids)
+            if (id_hit or marker_hit) and precision_ok:
                 recall_hits += 1
 
         recall_hit_rate = (recall_hits / recall_total) if recall_total else 1.0
@@ -517,10 +520,12 @@ def main():
         privacy_score = 20.0 if privacy_leaks == 0 else 0.0
 
         # update correctness via deterministic DB presence of seeded docs
+        seeded_ids = [d["documentId"] for d in fixtures.get("seedDocuments", [])]
+        placeholders = ",".join(f"'{sid}'" for sid in seeded_ids)
         seeded_ok = conn.execute(
-            "SELECT COUNT(*) as c FROM memory_documents WHERE document_id IN ('doc-eval-alpha','doc-eval-beta','doc-eval-secret')"
+            f"SELECT COUNT(*) as c FROM memory_documents WHERE document_id IN ({placeholders})"
         ).fetchone()["c"]
-        update_correctness = 10.0 if seeded_ok == 3 else 0.0
+        update_correctness = 10.0 if seeded_ok == len(seeded_ids) else 0.0
 
         reliability_score = (
             10.0
