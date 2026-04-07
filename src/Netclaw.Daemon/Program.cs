@@ -836,8 +836,16 @@ static void ConfigureDaemonServices(
     {
         // Prevent coordinated shutdown from calling Environment.Exit(),
         // which would kill the process before the restart loop can iterate.
+        // The before-service-unbind phase needs a generous timeout because sessions
+        // mid-LLM-call (TurnLlmTimeout defaults to 3 minutes) must finish before
+        // passivation can begin.
         akkaBuilder.AddHocon(
-            "akka.coordinated-shutdown.exit-clr = off",
+            """
+            akka.coordinated-shutdown {
+                exit-clr = off
+                phases.before-service-unbind.timeout = 200s
+            }
+            """,
             HoconAddMode.Prepend);
 
         akkaBuilder = akkaBuilder.ConfigureLoggers(setup =>
@@ -887,6 +895,8 @@ static void ConfigureDaemonServices(
             // Runs in an early CoordinatedShutdown phase while actors are still alive.
             // If DaemonRestartCoordinator already drained sessions (config reload), the ingress
             // gate will be closed and this task skips its drain to avoid double-draining.
+            // The phase timeout (200s) is generous because sessions mid-LLM-call must finish
+            // before passivation can begin.
             var cs = CoordinatedShutdown.Get(system);
             var sessionManager = registry.Get<SessionManagerActorKey>();
             var ingressGate = sp.GetRequiredService<SessionIngressGate>();
@@ -903,29 +913,10 @@ static void ConfigureDaemonServices(
 
                 try
                 {
-                    var activeIdsResponse = await sessionManager.Ask<ActiveEntityIds>(
-                        GetActiveEntityIds.Instance,
-                        timeout: TimeSpan.FromSeconds(5));
-
-                    var sessionIds = activeIdsResponse.EntityIds
-                        .Select(id => new Netclaw.Actors.Protocol.SessionId(id))
-                        .ToArray();
-
-                    if (sessionIds.Length == 0)
-                    {
-                        drainLogger.LogDebug("No active sessions to drain during shutdown.");
-                        return Akka.Done.Instance;
-                    }
-
-                    drainLogger.LogInformation(
-                        "Draining {SessionCount} active session(s) during daemon shutdown.",
-                        sessionIds.Length);
-
                     var drainResult = await SessionDrainHelper.DrainAsync(
-                        sessionManager, sessionIds, "daemon-stop",
-                        timeout: TimeSpan.FromSeconds(15), drainLogger, CancellationToken.None);
+                        sessionManager, "daemon-stop", drainLogger, CancellationToken.None);
 
-                    lifecycleNotifier.NotifyShutdown("daemon-stop", drainResult.ToNotificationContext(sessionIds.Length));
+                    lifecycleNotifier.NotifyShutdown("daemon-stop", drainResult.ToNotificationContext());
                 }
                 catch (Exception ex)
                 {

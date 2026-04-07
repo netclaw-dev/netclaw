@@ -1,6 +1,7 @@
 using System.Globalization;
 using Akka.Actor;
 using Microsoft.Extensions.Logging;
+using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Protocol;
 
 namespace Netclaw.Daemon.Services;
@@ -12,25 +13,35 @@ namespace Netclaw.Daemon.Services;
 internal static class SessionDrainHelper
 {
     /// <summary>
-    /// Sends <see cref="PrepareForDaemonRestart"/> to each session in parallel and waits
-    /// for acknowledgement or timeout.
+    /// Queries the session manager for active sessions, sends <see cref="PrepareForDaemonRestart"/>
+    /// to each in parallel, and waits for acknowledgement or cancellation.
     /// </summary>
+    /// <remarks>
+    /// Callers control the timeout by providing a <see cref="CancellationToken"/> from a
+    /// <see cref="CancellationTokenSource"/> with the desired deadline.
+    /// </remarks>
     public static async Task<DrainResult> DrainAsync(
         IActorRef sessionManager,
-        IReadOnlyList<SessionId> sessionIds,
         string reason,
-        TimeSpan timeout,
         ILogger logger,
         CancellationToken cancellationToken)
     {
-        if (sessionIds.Count == 0)
+        var activeIdsResponse = await sessionManager.Ask<ActiveEntityIds>(
+            GetActiveEntityIds.Instance,
+            timeout: Timeout.InfiniteTimeSpan,
+            cancellationToken: cancellationToken);
+
+        var sessionIds = activeIdsResponse.EntityIds
+            .Select(id => new SessionId(id))
+            .ToArray();
+
+        if (sessionIds.Length == 0)
             return DrainResult.Empty;
 
-        using var drainCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        drainCts.CancelAfter(timeout);
+        logger.LogInformation(
+            "Draining {SessionCount} active session(s) for {Reason}.",
+            sessionIds.Length, reason);
 
-        // Per-session Ask uses Timeout.InfiniteTimeSpan so the CTS is the sole
-        // timeout authority — avoids a race between Ask timeout and CTS cancellation.
         var drainTasks = sessionIds.Select(async sessionId =>
         {
             try
@@ -42,7 +53,7 @@ internal static class SessionDrainHelper
                         Reason = reason
                     },
                     timeout: Timeout.InfiniteTimeSpan,
-                    cancellationToken: drainCts.Token);
+                    cancellationToken: cancellationToken);
 
                 return new DrainOutcome(sessionId, ack.SessionId == sessionId);
             }
@@ -73,19 +84,22 @@ internal static class SessionDrainHelper
                 timedOut.Length);
         }
 
-        return new DrainResult(drained, timedOut);
+        return new DrainResult(sessionIds, drained, timedOut);
     }
 
     internal sealed record DrainOutcome(SessionId SessionId, bool Drained);
 
-    internal sealed record DrainResult(IReadOnlyList<SessionId> DrainedSessionIds, IReadOnlyList<SessionId> TimedOutSessionIds)
+    internal sealed record DrainResult(
+        IReadOnlyList<SessionId> AllSessionIds,
+        IReadOnlyList<SessionId> DrainedSessionIds,
+        IReadOnlyList<SessionId> TimedOutSessionIds)
     {
-        public static readonly DrainResult Empty = new([], []);
+        public static readonly DrainResult Empty = new([], [], []);
 
-        public Dictionary<string, string> ToNotificationContext(int totalActiveSessions) => new()
+        public Dictionary<string, string> ToNotificationContext() => new()
         {
             ["drainOutcome"] = TimedOutSessionIds.Count == 0 ? "drained" : "timeout",
-            ["activeSessions"] = totalActiveSessions.ToString(CultureInfo.InvariantCulture),
+            ["activeSessions"] = AllSessionIds.Count.ToString(CultureInfo.InvariantCulture),
             ["drainedSessions"] = DrainedSessionIds.Count.ToString(CultureInfo.InvariantCulture),
             ["timedOutSessions"] = TimedOutSessionIds.Count.ToString(CultureInfo.InvariantCulture)
         };

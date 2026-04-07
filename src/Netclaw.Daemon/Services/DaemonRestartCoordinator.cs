@@ -1,5 +1,4 @@
 using System.Linq;
-using Akka.Actor;
 using Akka.Hosting;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -65,27 +64,18 @@ public sealed class DaemonRestartCoordinator : IDaemonRestartCoordinator
         try
         {
             var sessionManager = await _sessionManagerProvider.GetAsync(cancellationToken);
-            var activeIdsResponse = await sessionManager.Ask<ActiveEntityIds>(
-                GetActiveEntityIds.Instance,
-                timeout: _restartDrainTimeout,
-                cancellationToken: cancellationToken);
 
-            var sessionIds = activeIdsResponse.EntityIds
-                .Select(id => new SessionId(id))
-                .ToArray();
-
-            _logger.LogInformation(
-                "Starting coordinated config restart for {SessionCount} active session(s).",
-                sessionIds.Length);
+            using var drainCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            drainCts.CancelAfter(_restartDrainTimeout);
 
             var drainResult = await SessionDrainHelper.DrainAsync(
-                sessionManager, sessionIds, "config-reload", _restartDrainTimeout, _logger, cancellationToken);
+                sessionManager, "config-reload", _logger, drainCts.Token);
 
             var manifest = new RestartManifest
             {
                 Reason = "config-reload",
                 RequestedAt = _timeProvider.GetUtcNow(),
-                SessionIds = sessionIds.Select(static id => id.Value).ToList(),
+                SessionIds = drainResult.AllSessionIds.Select(static id => id.Value).ToList(),
                 TimedOutSessionIds = drainResult.TimedOutSessionIds.Select(static id => id.Value).ToList()
             };
 
@@ -94,7 +84,7 @@ public sealed class DaemonRestartCoordinator : IDaemonRestartCoordinator
             else
                 await _manifestStore.WriteAsync(manifest, cancellationToken);
 
-            _lifecycleNotifier.NotifyShutdown("config-reload", drainResult.ToNotificationContext(sessionIds.Length));
+            _lifecycleNotifier.NotifyShutdown("config-reload", drainResult.ToNotificationContext());
             _restartSignal.RequestRestart();
             _appLifetime.StopApplication();
         }
