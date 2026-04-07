@@ -279,7 +279,7 @@ public sealed class MemoryProposalGate
             UpdateSemantics: updateSemantics.ToWireValue(),
             Domain: domain,
             Boundary: MemoryPolicyScopeResolver.ResolveBoundary(boundary, audience, sessionId: null, domain),
-            Audience: audience.ToWireValue(),
+            Audience: audience,
             Sensitivity: sensitivity,
             RecallMode: recallMode.ToWireValue(),
             Confidence: Math.Clamp(proposal.Confidence, 0.0, 1.0),

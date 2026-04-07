@@ -1,4 +1,5 @@
 using Netclaw.Actors.Memory;
+using Netclaw.Configuration;
 using Xunit;
 
 namespace Netclaw.Actors.Tests.Memory;
@@ -25,6 +26,8 @@ public sealed class CurationRulesEvaluatorTests
             Relations: null,
             UpdateSemantics: updateSemantics,
             Domain: "project:test",
+            Boundary: SecurityPolicyDefaults.TrustedInstanceBoundary,
+            Audience: TrustAudience.Team,
             Sensitivity: "normal",
             RecallMode: "auto",
             Confidence: 0.9,

@@ -1355,7 +1355,7 @@ public sealed class SQLiteMemoryStore
                 recordCmd.Parameters.AddWithValue("$semantics", operation.UpdateSemantics);
                 recordCmd.Parameters.AddWithValue("$domain", operation.Domain);
                 recordCmd.Parameters.AddWithValue("$boundary", resolvedBoundary);
-                recordCmd.Parameters.AddWithValue("$audience", operation.Audience);
+                recordCmd.Parameters.AddWithValue("$audience", operation.Audience.ToWireValue());
                 recordCmd.Parameters.AddWithValue("$sensitivity", operation.Sensitivity);
                 recordCmd.Parameters.AddWithValue("$recallMode", operation.RecallMode);
                 recordCmd.Parameters.AddWithValue("$confidence", operation.Confidence);
@@ -1438,7 +1438,7 @@ public sealed class SQLiteMemoryStore
             documentCmd.Parameters.AddWithValue("$semantics", operation.UpdateSemantics);
             documentCmd.Parameters.AddWithValue("$domain", operation.Domain);
             documentCmd.Parameters.AddWithValue("$boundary", resolvedBoundary);
-            documentCmd.Parameters.AddWithValue("$audience", operation.Audience);
+            documentCmd.Parameters.AddWithValue("$audience", operation.Audience.ToWireValue());
             documentCmd.Parameters.AddWithValue("$sensitivity", operation.Sensitivity);
             documentCmd.Parameters.AddWithValue("$recallMode", resolvedRecallMode);
             documentCmd.Parameters.AddWithValue("$confidence", operation.Confidence);
@@ -1513,7 +1513,7 @@ public sealed class SQLiteMemoryStore
                 recordCmd.Parameters.AddWithValue("$semantics", operation.UpdateSemantics);
                 recordCmd.Parameters.AddWithValue("$domain", operation.Domain);
                 recordCmd.Parameters.AddWithValue("$boundary", resolvedBoundary);
-                recordCmd.Parameters.AddWithValue("$audience", operation.Audience);
+                recordCmd.Parameters.AddWithValue("$audience", operation.Audience.ToWireValue());
                 recordCmd.Parameters.AddWithValue("$sensitivity", operation.Sensitivity);
                 recordCmd.Parameters.AddWithValue("$recallMode", operation.RecallMode);
                 recordCmd.Parameters.AddWithValue("$confidence", operation.Confidence);
@@ -1599,7 +1599,7 @@ public sealed class SQLiteMemoryStore
             documentCmd.Parameters.AddWithValue("$semantics", operation.UpdateSemantics);
             documentCmd.Parameters.AddWithValue("$domain", operation.Domain);
             documentCmd.Parameters.AddWithValue("$boundary", resolvedBoundary);
-            documentCmd.Parameters.AddWithValue("$audience", operation.Audience);
+            documentCmd.Parameters.AddWithValue("$audience", operation.Audience.ToWireValue());
             documentCmd.Parameters.AddWithValue("$sensitivity", operation.Sensitivity);
             documentCmd.Parameters.AddWithValue("$recallMode", resolvedRecallMode);
             documentCmd.Parameters.AddWithValue("$confidence", operation.Confidence);
@@ -1913,14 +1913,14 @@ public sealed record SQLiteMemoryCurationOperation(
     IReadOnlyList<SQLiteMemoryRelationOperation>? Relations,
     string UpdateSemantics,
     string Domain,
+    string Boundary,
+    TrustAudience Audience,
     string Sensitivity,
     string RecallMode,
     double Confidence,
     long? FreshnessAtMs,
     long? ExpiresAtMs,
-    string? SupersedesRecordId = null,
-    string Boundary = SecurityPolicyDefaults.LegacyRestrictedBoundary,
-    string Audience = "public");
+    string? SupersedesRecordId = null);
 
 public sealed record SQLiteMemoryRelationOperation(
     string RelationType,

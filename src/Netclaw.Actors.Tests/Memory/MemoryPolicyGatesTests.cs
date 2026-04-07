@@ -385,6 +385,6 @@ public sealed class MemoryPolicyGatesTests
 
         var operation = Assert.Single(result.MemoryOperations);
         Assert.Equal(SecurityPolicyDefaults.PersonalBoundary, operation.Boundary);
-        Assert.Equal(TrustAudience.Personal.ToWireValue(), operation.Audience);
+        Assert.Equal(TrustAudience.Personal, operation.Audience);
     }
 }
