@@ -9,18 +9,24 @@ public sealed class DeterministicCandidateSelector
     public IReadOnlyList<SQLiteMemoryHydratedItem> Select(
         DeterministicRetrievalRequestPlan plan,
         IReadOnlyList<SQLiteMemoryHydratedItem> documents)
+        => SelectWithScores(plan, documents).Select(x => x.Item).ToArray();
+
+    public IReadOnlyList<ScoredCandidate> SelectWithScores(
+        DeterministicRetrievalRequestPlan plan,
+        IReadOnlyList<SQLiteMemoryHydratedItem> documents)
     {
         return documents
             .Where(d => plan.AllowedMemoryClasses.Contains(d.MemoryClass, StringComparer.OrdinalIgnoreCase))
             .Where(d => !plan.ExcludedSensitivity.Contains(d.Sensitivity, StringComparer.OrdinalIgnoreCase))
-            .Select(d => new { Document = d, Score = Score(plan, d) })
-            .Where(x => x.Score > 0)
-            .OrderByDescending(x => x.Score)
-            .ThenBy(x => x.Document.Id, StringComparer.Ordinal)
+            .Select(d => new ScoredCandidate(d, Score(plan, d)))
+            .Where(x => x.SelectorScore > 0)
+            .OrderByDescending(x => x.SelectorScore)
+            .ThenBy(x => x.Item.Id, StringComparer.Ordinal)
             .Take(plan.CandidateLimit)
-            .Select(x => x.Document)
             .ToArray();
     }
+
+    public sealed record ScoredCandidate(SQLiteMemoryHydratedItem Item, double SelectorScore);
 
     private static double Score(DeterministicRetrievalRequestPlan plan, SQLiteMemoryHydratedItem document)
     {
