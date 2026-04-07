@@ -1050,7 +1050,7 @@ public sealed class SQLiteMemoryStore
         {
         await using var read = conn.CreateCommand();
         read.CommandText = """
-            SELECT anchor_id, record_type, domain, sensitivity, recall_mode, confidence, freshness_at, boundary, audience
+            SELECT anchor_id, record_type, domain, sensitivity, recall_mode, confidence, freshness_at, boundary, audience, memory_class
             FROM memory_records
             WHERE record_id = $id;
             """;
@@ -1069,6 +1069,7 @@ public sealed class SQLiteMemoryStore
         var freshnessAt = reader.IsDBNull(6) ? (long?)null : reader.GetInt64(6);
         var boundary = reader.IsDBNull(7) ? SecurityPolicyDefaults.LegacyRestrictedBoundary : reader.GetString(7);
         var audience = reader.IsDBNull(8) ? TrustAudience.Personal.ToWireValue() : reader.GetString(8);
+        var memoryClass = reader.IsDBNull(9) ? MemoryClass.Evidence.ToWireValue() : reader.GetString(9);
         await reader.CloseAsync();
 
         var now = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
@@ -1077,13 +1078,14 @@ public sealed class SQLiteMemoryStore
         await using var insert = conn.CreateCommand();
         insert.CommandText = """
             INSERT INTO memory_records(
-              record_id, anchor_id, record_type, payload_json, supersedes_record_id,
+              record_id, anchor_id, memory_class, record_type, payload_json, supersedes_record_id,
               update_semantics, domain, boundary, audience, sensitivity, recall_mode, confidence, freshness_at, created_at)
-            VALUES($id, $anchorId, $recordType, $payload, $supersedes,
+            VALUES($id, $anchorId, $memoryClass, $recordType, $payload, $supersedes,
               '{MemoryUpdateSemantics.SupersedeRecord.ToWireValue()}', $domain, $boundary, $audience, $sensitivity, $recallMode, $confidence, $freshnessAt, $createdAt);
             """;
         insert.Parameters.AddWithValue("$id", newId);
         insert.Parameters.AddWithValue("$anchorId", anchorId);
+        insert.Parameters.AddWithValue("$memoryClass", memoryClass);
         insert.Parameters.AddWithValue("$recordType", recordType);
         insert.Parameters.AddWithValue("$payload", payloadJson);
         insert.Parameters.AddWithValue("$supersedes", recordId);
@@ -1435,8 +1437,8 @@ public sealed class SQLiteMemoryStore
             documentCmd.Parameters.AddWithValue("$slotsJson", (object?)operation.SlotsJson ?? DBNull.Value);
             documentCmd.Parameters.AddWithValue("$semantics", operation.UpdateSemantics);
             documentCmd.Parameters.AddWithValue("$domain", operation.Domain);
-            documentCmd.Parameters.AddWithValue("$boundary", (object?)operation.Boundary ?? DBNull.Value);
-            documentCmd.Parameters.AddWithValue("$audience", (object?)operation.Audience ?? DBNull.Value);
+            documentCmd.Parameters.AddWithValue("$boundary", resolvedBoundary);
+            documentCmd.Parameters.AddWithValue("$audience", operation.Audience);
             documentCmd.Parameters.AddWithValue("$sensitivity", operation.Sensitivity);
             documentCmd.Parameters.AddWithValue("$recallMode", resolvedRecallMode);
             documentCmd.Parameters.AddWithValue("$confidence", operation.Confidence);
