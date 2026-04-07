@@ -79,7 +79,8 @@ public sealed class DaemonRestartCoordinator : IDaemonRestartCoordinator
                 "Starting coordinated config restart for {SessionCount} active session(s).",
                 sessionIds.Length);
 
-            var drainResult = await DrainSessionsAsync(sessionManager, sessionIds, cancellationToken);
+            var drainResult = await SessionDrainHelper.DrainAsync(
+                sessionManager, sessionIds, "config-reload", _restartDrainTimeout, _logger, cancellationToken);
 
             var manifest = new RestartManifest
             {
@@ -111,65 +112,5 @@ public sealed class DaemonRestartCoordinator : IDaemonRestartCoordinator
             _ingressGate.Reopen();
             throw;
         }
-    }
-
-    private async Task<DrainResult> DrainSessionsAsync(IActorRef sessionManager, IReadOnlyList<SessionId> sessionIds, CancellationToken cancellationToken)
-    {
-        if (sessionIds.Count == 0)
-            return DrainResult.Empty;
-
-        using var drainCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        drainCts.CancelAfter(_restartDrainTimeout);
-
-        var drainTasks = sessionIds.Select(async sessionId =>
-        {
-            try
-            {
-                var ack = await sessionManager.Ask<CommandAck>(
-                    new PrepareForDaemonRestart
-                    {
-                        SessionId = sessionId,
-                        Reason = "config-reload"
-                    },
-                    timeout: _restartDrainTimeout,
-                    cancellationToken: drainCts.Token);
-
-                return new DrainOutcome(sessionId, ack.SessionId == sessionId);
-            }
-            catch (OperationCanceledException)
-            {
-                return new DrainOutcome(sessionId, false);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Failed to drain session {SessionId} before restart.", sessionId.Value);
-                return new DrainOutcome(sessionId, false);
-            }
-        }).ToArray();
-
-        var outcomes = await Task.WhenAll(drainTasks);
-        var drained = outcomes.Where(static x => x.Drained).Select(static x => x.SessionId).ToArray();
-        var timedOut = outcomes.Where(static x => !x.Drained).Select(static x => x.SessionId).ToArray();
-
-        if (timedOut.Length == 0)
-        {
-            _logger.LogInformation("All {SessionCount} active session(s) drained before restart.", drained.Length);
-        }
-        else
-        {
-            _logger.LogWarning(
-                "Proceeding with restart after drain timeout; {DrainedCount} session(s) drained and {TimedOutCount} will recover from the last durable checkpoint.",
-                drained.Length,
-                timedOut.Length);
-        }
-
-        return new DrainResult(drained, timedOut);
-    }
-
-    private sealed record DrainOutcome(SessionId SessionId, bool Drained);
-
-    private sealed record DrainResult(IReadOnlyList<SessionId> DrainedSessionIds, IReadOnlyList<SessionId> TimedOutSessionIds)
-    {
-        public static readonly DrainResult Empty = new([], []);
     }
 }

@@ -882,6 +882,66 @@ static void ConfigureDaemonServices(
             var rc = sp.GetRequiredService<ReminderConfig>();
             var historyStore = sp.GetRequiredService<ReminderHistoryStore>();
             toolRegistry.WithReminderTools(reminderManager, tp, rc, historyStore);
+
+            // Drain all active LLM sessions during any actor system termination (SIGTERM, daemon stop).
+            // Runs in an early CoordinatedShutdown phase while actors are still alive.
+            // If DaemonRestartCoordinator already drained sessions (config reload), the ingress
+            // gate will be closed and this task skips its drain to avoid double-draining.
+            var cs = CoordinatedShutdown.Get(system);
+            var sessionManager = registry.Get<SessionManagerActorKey>();
+            var ingressGate = sp.GetRequiredService<SessionIngressGate>();
+            var lifecycleNotifier = sp.GetRequiredService<DaemonLifecycleNotifier>();
+            var drainLogger = sp.GetRequiredService<ILoggerFactory>().CreateLogger("Netclaw.Daemon.SessionDrain");
+
+            cs.AddTask(CoordinatedShutdown.PhaseBeforeServiceUnbind, "drain-llm-sessions", async () =>
+            {
+                if (!ingressGate.TryClose("Daemon shutting down."))
+                {
+                    drainLogger.LogDebug("Ingress gate already closed; skipping CoordinatedShutdown session drain.");
+                    return Akka.Done.Instance;
+                }
+
+                try
+                {
+                    var activeIdsResponse = await sessionManager.Ask<ActiveEntityIds>(
+                        GetActiveEntityIds.Instance,
+                        timeout: TimeSpan.FromSeconds(5));
+
+                    var sessionIds = activeIdsResponse.EntityIds
+                        .Select(id => new Netclaw.Actors.Protocol.SessionId(id))
+                        .ToArray();
+
+                    if (sessionIds.Length == 0)
+                    {
+                        drainLogger.LogDebug("No active sessions to drain during shutdown.");
+                        return Akka.Done.Instance;
+                    }
+
+                    drainLogger.LogInformation(
+                        "Draining {SessionCount} active session(s) during daemon shutdown.",
+                        sessionIds.Length);
+
+                    var drainResult = await SessionDrainHelper.DrainAsync(
+                        sessionManager, sessionIds, "daemon-stop",
+                        timeout: TimeSpan.FromSeconds(15), drainLogger, CancellationToken.None);
+
+                    var notificationContext = new Dictionary<string, string>
+                    {
+                        ["drainOutcome"] = drainResult.TimedOutSessionIds.Count == 0 ? "drained" : "timeout",
+                        ["activeSessions"] = sessionIds.Length.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                        ["drainedSessions"] = drainResult.DrainedSessionIds.Count.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                        ["timedOutSessions"] = drainResult.TimedOutSessionIds.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                    };
+
+                    lifecycleNotifier.NotifyShutdown("daemon-stop", notificationContext);
+                }
+                catch (Exception ex)
+                {
+                    drainLogger.LogWarning(ex, "Session drain during shutdown failed; sessions will recover from last durable checkpoint.");
+                }
+
+                return Akka.Done.Instance;
+            });
         });
     });
 

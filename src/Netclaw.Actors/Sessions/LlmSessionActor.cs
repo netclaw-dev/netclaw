@@ -1821,6 +1821,13 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     protected override void PostStop()
     {
         CancelAndDisposeLlmCts();
+
+        // Safety net: if the actor was killed without going through CompletePassivation()
+        // (e.g., Akka shutdown timeout, OOM, or any non-graceful stop path), ensure the
+        // session catalog is updated. OnSessionDeactivated is idempotent — calling it
+        // after CompletePassivation() already ran is a harmless no-op UPDATE.
+        _lifecycleObserver?.OnSessionDeactivated(_sessionId);
+
         base.PostStop();
     }
 

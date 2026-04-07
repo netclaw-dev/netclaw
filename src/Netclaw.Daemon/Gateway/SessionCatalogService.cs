@@ -280,6 +280,37 @@ public sealed class SessionCatalogService : ISessionLifecycleObserver
         return entries;
     }
 
+    /// <summary>
+    /// Marks all 'active' sessions as 'inactive'. Called during daemon startup
+    /// before any sessions are materialized, to clean up stale state from
+    /// unclean shutdowns (crash, kill -9, power loss).
+    /// </summary>
+    public int ReconcileStaleActiveSessions()
+    {
+        try
+        {
+            using var conn = new SqliteConnection(_connectionString);
+            conn.Open();
+
+            EnsureSchemaUpToDate(conn, _logger);
+
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = "UPDATE sessions SET status = 'inactive' WHERE status = 'active'";
+            var affected = cmd.ExecuteNonQuery();
+
+            if (affected > 0)
+                _logger.LogInformation(
+                    "Reconciled {Count} stale active session(s) from previous run.", affected);
+
+            return affected;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to reconcile stale active sessions during startup.");
+            return 0;
+        }
+    }
+
     public void MarkSessionActive(SessionId sessionId)
     {
         var persistenceId = $"session-{sessionId.Value}";
