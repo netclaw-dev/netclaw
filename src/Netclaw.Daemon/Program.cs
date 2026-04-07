@@ -925,15 +925,7 @@ static void ConfigureDaemonServices(
                         sessionManager, sessionIds, "daemon-stop",
                         timeout: TimeSpan.FromSeconds(15), drainLogger, CancellationToken.None);
 
-                    var notificationContext = new Dictionary<string, string>
-                    {
-                        ["drainOutcome"] = drainResult.TimedOutSessionIds.Count == 0 ? "drained" : "timeout",
-                        ["activeSessions"] = sessionIds.Length.ToString(System.Globalization.CultureInfo.InvariantCulture),
-                        ["drainedSessions"] = drainResult.DrainedSessionIds.Count.ToString(System.Globalization.CultureInfo.InvariantCulture),
-                        ["timedOutSessions"] = drainResult.TimedOutSessionIds.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)
-                    };
-
-                    lifecycleNotifier.NotifyShutdown("daemon-stop", notificationContext);
+                    lifecycleNotifier.NotifyShutdown("daemon-stop", drainResult.ToNotificationContext(sessionIds.Length));
                 }
                 catch (Exception ex)
                 {

@@ -1,4 +1,3 @@
-using System.Globalization;
 using System.Linq;
 using Akka.Actor;
 using Akka.Hosting;
@@ -95,15 +94,7 @@ public sealed class DaemonRestartCoordinator : IDaemonRestartCoordinator
             else
                 await _manifestStore.WriteAsync(manifest, cancellationToken);
 
-            var notificationContext = new Dictionary<string, string>
-            {
-                ["drainOutcome"] = drainResult.TimedOutSessionIds.Count == 0 ? "drained" : "timeout",
-                ["activeSessions"] = sessionIds.Length.ToString(CultureInfo.InvariantCulture),
-                ["drainedSessions"] = drainResult.DrainedSessionIds.Count.ToString(CultureInfo.InvariantCulture),
-                ["timedOutSessions"] = drainResult.TimedOutSessionIds.Count.ToString(CultureInfo.InvariantCulture)
-            };
-
-            _lifecycleNotifier.NotifyShutdown("config-reload", notificationContext);
+            _lifecycleNotifier.NotifyShutdown("config-reload", drainResult.ToNotificationContext(sessionIds.Length));
             _restartSignal.RequestRestart();
             _appLifetime.StopApplication();
         }

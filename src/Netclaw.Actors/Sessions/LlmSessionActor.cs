@@ -139,6 +139,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     private readonly Telemetry.ISessionMetrics? _sessionMetrics;
 
     private bool _restartDrainRequested;
+    private bool _passivationCompleted;
     private IActorRef? _restartDrainReplyTo;
     private string? _pendingRestartNotice;
     private string? _turnRestartNotice;
@@ -1184,6 +1185,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     private void CompletePassivation()
     {
+        _passivationCompleted = true;
         _lifecycleObserver?.OnSessionDeactivated(_sessionId);
         SaveSnapshot(BuildSnapshot());
         _restartDrainReplyTo?.Tell(CommandAck.For(_sessionId));
@@ -1822,11 +1824,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     {
         CancelAndDisposeLlmCts();
 
-        // Safety net: if the actor was killed without going through CompletePassivation()
-        // (e.g., Akka shutdown timeout, OOM, or any non-graceful stop path), ensure the
-        // session catalog is updated. OnSessionDeactivated is idempotent — calling it
-        // after CompletePassivation() already ran is a harmless no-op UPDATE.
-        _lifecycleObserver?.OnSessionDeactivated(_sessionId);
+        // Safety net for non-graceful stop paths (shutdown timeout, OOM, etc.).
+        if (!_passivationCompleted)
+            _lifecycleObserver?.OnSessionDeactivated(_sessionId);
 
         base.PostStop();
     }
