@@ -29,6 +29,7 @@ public sealed class MemoryProposalGate
         int IdentityUpdates,
         IReadOnlyDictionary<string, int> RejectionReasons);
 
+    private const int MaxProposalsPerRun = 3;
     private static readonly TimeSpan EvidenceExpiry = TimeSpan.FromDays(30);
     private static readonly TimeSpan TraceExpiry = TimeSpan.FromHours(72);
     private static readonly Regex IdentityTitlePattern = new(
@@ -129,6 +130,17 @@ public sealed class MemoryProposalGate
             }
 
             accepted.Add(BuildMemoryOperation(proposal, operation, memoryClass, domain, sensitivity, recallMode, freshnessAt, expiry, content, boundary, audience));
+        }
+
+        // Cap at 3 proposals per distillation run — keep the highest confidence.
+        if (accepted.Count > MaxProposalsPerRun)
+        {
+            var trimmed = accepted.Count - MaxProposalsPerRun;
+            accepted = accepted
+                .OrderByDescending(a => a.Confidence)
+                .Take(MaxProposalsPerRun)
+                .ToList();
+            rejectionReasons["max-proposals-exceeded"] = trimmed;
         }
 
         return new MemoryProposalGateResult(

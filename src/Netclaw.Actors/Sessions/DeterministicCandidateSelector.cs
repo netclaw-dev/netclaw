@@ -5,6 +5,7 @@ namespace Netclaw.Actors.Sessions;
 
 public sealed class DeterministicCandidateSelector
 {
+    private const double MinimumSelectorScore = 2.0;
 
     public IReadOnlyList<SQLiteMemoryHydratedItem> Select(
         DeterministicRetrievalRequestPlan plan,
@@ -19,7 +20,7 @@ public sealed class DeterministicCandidateSelector
             .Where(d => plan.AllowedMemoryClasses.Contains(d.MemoryClass, StringComparer.OrdinalIgnoreCase))
             .Where(d => !plan.ExcludedSensitivity.Contains(d.Sensitivity, StringComparer.OrdinalIgnoreCase))
             .Select(d => new ScoredCandidate(d, Score(plan, d)))
-            .Where(x => x.SelectorScore > 0)
+            .Where(x => x.SelectorScore >= MinimumSelectorScore)
             .OrderByDescending(x => x.SelectorScore)
             .ThenBy(x => x.Item.Id, StringComparer.Ordinal)
             .Take(plan.CandidateLimit)

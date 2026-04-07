@@ -131,6 +131,26 @@ public sealed class DeterministicRetrievalPlanningTests
     }
 
     [Fact]
+    public void Planner_caps_lexical_terms_for_long_messages()
+    {
+        var planner = new DeterministicRetrievalRequestPlanner();
+        var longMessage = "I need to book a flight from Houston to Columbus for the Stir Trek conference " +
+            "and I want to know about hotel recommendations near the venue and also " +
+            "what restaurants are good for dinner with speakers and attendees and organizers " +
+            "because we are planning a group outing after the keynote sessions conclude";
+
+        var plan = planner.Plan(new AutomaticRecallRequest(
+            SessionId: "signalr/thread-long",
+            Query: longMessage,
+            RecentUserMessages: [longMessage],
+            MaxItems: 3,
+            HardScopeOverride: "user:aaron"));
+
+        Assert.True(plan.LexicalTerms.Count <= 12,
+            $"Expected at most 12 lexical terms but got {plan.LexicalTerms.Count}: [{string.Join(", ", plan.LexicalTerms)}]");
+    }
+
+    [Fact]
     public void Planner_includes_evidence_in_allowed_memory_classes()
     {
         var planner = new DeterministicRetrievalRequestPlanner();

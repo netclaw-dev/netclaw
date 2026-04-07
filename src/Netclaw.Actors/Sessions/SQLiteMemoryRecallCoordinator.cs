@@ -78,23 +78,22 @@ public sealed class SQLiteMemoryRecallCoordinator(
 
                 var deterministicMaxItems = normalizedRequest.MaxItems <= 0 ? 3 : normalizedRequest.MaxItems;
                 var deterministicItems = scoredCandidates
-                    .Select(x => x.Item)
-                    .OrderByDescending(RecallRank)
+                    .OrderByDescending(x => x.SelectorScore + (RecallRank(x.Item) / 100.0))
                     .Take(deterministicMaxItems)
-                    .Select(d => new AutomaticRecallItem(
-                        d.Id,
-                        d.Title,
-                        d.Content,
-                        d.Domain,
-                        d.Sensitivity,
-                        RecallRank(d)))
+                    .Select(x => new AutomaticRecallItem(
+                        x.Item.Id,
+                        x.Item.Title,
+                        x.Item.Content,
+                        x.Item.Domain,
+                        x.Item.Sensitivity,
+                        x.SelectorScore))
                     .ToArray();
 
                 logger.LogInformation(
                     "memory_retrieval_final session={SessionId} injectedCount={InjectedCount} items={Items}",
                     normalizedRequest.SessionId,
                     deterministicItems.Length,
-                    string.Join("|", deterministicItems.Select(i => $"{i.Id}=rank{i.Score}")));
+                    string.Join("|", deterministicItems.Select(i => $"{i.Id}=score{i.Score:F1}")));
 
                 logger.LogDebug(
                     "memory_retrieval_final_detail session={SessionId} items={Items}",
