@@ -111,7 +111,7 @@ public sealed class SqliteMemoryPolicyScopeTests : IDisposable
 
         var request = Assert.Single(sink.Requests);
         var payload = Assert.IsType<MemoryCheckpointPayload>(request.Payload);
-        Assert.Equal("project:default", payload.Domain);
+        Assert.Equal(SecurityPolicyDefaults.DefaultMemoryDomain, payload.Domain);
         Assert.Equal(TrustAudience.Personal.ToWireValue(), payload.Audience);
         Assert.Equal(SecurityPolicyDefaults.PersonalBoundary, payload.Boundary);
     }

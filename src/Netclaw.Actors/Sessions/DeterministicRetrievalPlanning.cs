@@ -1,6 +1,7 @@
 using System.Text.RegularExpressions;
 using Netclaw.Actors.Memory;
 using Netclaw.Actors.Text;
+using Netclaw.Configuration;
 
 namespace Netclaw.Actors.Sessions;
 
@@ -57,18 +58,18 @@ public sealed class DeterministicRetrievalRequestPlanner
 
         var sessionId = request.SessionId;
         if (string.IsNullOrWhiteSpace(sessionId))
-            return "project:default";
+            return SecurityPolicyDefaults.DefaultMemoryDomain;
 
         var slash = sessionId.IndexOf('/', StringComparison.Ordinal);
         if (slash <= 0)
-            return "project:default";
+            return SecurityPolicyDefaults.DefaultMemoryDomain;
 
         var prefix = sessionId[..slash].Trim();
         if (IsTransportScopedSession(prefix))
-            return "project:default";
+            return SecurityPolicyDefaults.DefaultMemoryDomain;
 
         return string.IsNullOrWhiteSpace(prefix)
-            ? "project:default"
+            ? SecurityPolicyDefaults.DefaultMemoryDomain
             : $"project:{prefix.ToLowerInvariant()}";
     }
 

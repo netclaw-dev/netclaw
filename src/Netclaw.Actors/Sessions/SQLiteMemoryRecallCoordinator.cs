@@ -196,7 +196,7 @@ public sealed class SQLiteMemoryRecallCoordinator(
             return request;
 
         var hardScope = string.IsNullOrWhiteSpace(request.SessionId)
-            ? "project:default"
+            ? SecurityPolicyDefaults.DefaultMemoryDomain
             : new Protocol.SessionId(request.SessionId).ToMemoryDomain();
 
         return request with { HardScopeOverride = hardScope };

@@ -98,6 +98,7 @@ public static class SecurityPolicyDefaults
     public const string SlackWorkspaceBoundary = TrustedInstanceBoundary;
     public const string LocalDaemonBoundary = TrustedInstanceBoundary;
     public const string LegacyRestrictedBoundary = "boundary:legacy-restricted";
+    public const string DefaultMemoryDomain = "project:default";
 
     public static string ToWireValue(this TrustAudience audience) => audience switch
     {
@@ -200,7 +201,7 @@ public static class SecurityPolicyDefaults
             return LegacyRestrictedBoundary;
 
         var normalized = domain.Trim().ToLowerInvariant();
-        if (normalized is "project:signalr" or "project:tui" or "project:headless" or "project:manual" or "project:default")
+        if (normalized is "project:signalr" or "project:tui" or "project:headless" or "project:manual" or DefaultMemoryDomain)
             return TrustedInstanceBoundary;
 
         if (normalized.StartsWith("user:", StringComparison.Ordinal) || normalized.StartsWith("person:", StringComparison.Ordinal))

@@ -1,3 +1,4 @@
+using Netclaw.Configuration;
 using ProtoBuf;
 
 namespace Netclaw.Actors.Protocol;
@@ -17,7 +18,7 @@ public readonly record struct SessionId(
     /// Returns "project:default" for all transport-scoped sessions until
     /// a proper domain-scoping mechanism is designed. See GitHub #203.
     /// </summary>
-    public string ToMemoryDomain() => "project:default";
+    public string ToMemoryDomain() => SecurityPolicyDefaults.DefaultMemoryDomain;
 
     public override string ToString() => Value;
 }

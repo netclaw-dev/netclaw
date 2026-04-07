@@ -55,7 +55,7 @@ public sealed class DeterministicRetrievalPlanningTests
             RecentUserMessages: ["what is TextForge"],
             MaxItems: 3));
 
-        Assert.Equal("project:default", plan.HardScope);
+        Assert.Equal(SecurityPolicyDefaults.DefaultMemoryDomain, plan.HardScope);
     }
 
     [Fact]

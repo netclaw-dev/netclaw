@@ -1791,7 +1791,7 @@ public sealed class SQLiteMemoryStore
         await records.ExecuteNonQueryAsync(ct);
     }
 
-    public SQLiteMemoryAnchor CreateDefaultAnchor(string canonicalName, string domain = "project:default")
+    public SQLiteMemoryAnchor CreateDefaultAnchor(string canonicalName, string domain = SecurityPolicyDefaults.DefaultMemoryDomain)
     {
         var nowMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
         return new SQLiteMemoryAnchor(
