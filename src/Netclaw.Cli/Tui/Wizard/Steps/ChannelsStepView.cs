@@ -27,6 +27,9 @@ public sealed class ChannelsStepView : IWizardStepView
 
     public string StepId => "channels";
 
+    /// <summary>Whether the view is in add-channel mode. Exposed for headless testing.</summary>
+    internal bool IsAddMode => _addMode;
+
     public ILayoutNode BuildContent(IWizardStepViewModel stepVm, StepViewCallbacks callbacks)
     {
         _callbacks = callbacks;
