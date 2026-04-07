@@ -266,6 +266,9 @@ public sealed class WizardSecretsBuilder
         _secrets[key] = section;
     }
 
+    /// <summary>Add a top-level value to the secrets file (e.g., DeviceToken).</summary>
+    public void AddValue(string key, object value) => _secrets[key] = value;
+
     /// <summary>Write secrets.json if any secrets were contributed.</summary>
     public void WriteSecretsFile()
     {
