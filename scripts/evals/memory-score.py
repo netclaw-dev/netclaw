@@ -31,12 +31,16 @@ def sqlite_conn(db_path):
 
 
 def seed_documents(conn, fixtures):
-    conn.execute(
-        "DELETE FROM memory_documents WHERE document_id IN ('doc-eval-alpha','doc-eval-beta','doc-eval-secret')"
-    )
-    conn.execute(
-        "DELETE FROM memory_anchors WHERE anchor_id IN ('anchor:eval-alpha','anchor:eval-beta','anchor:eval-secret')"
-    )
+    # Clean up all seeded documents dynamically from the fixture.
+    doc_ids = [d["documentId"] for d in fixtures.get("seedDocuments", [])]
+    anchor_ids = [d["anchorId"] for d in fixtures.get("seedDocuments", [])]
+    if doc_ids:
+        placeholders = ",".join("?" for _ in doc_ids)
+        conn.execute(f"DELETE FROM memory_documents_fts WHERE document_id IN ({placeholders})", doc_ids)
+        conn.execute(f"DELETE FROM memory_documents WHERE document_id IN ({placeholders})", doc_ids)
+    if anchor_ids:
+        placeholders = ",".join("?" for _ in anchor_ids)
+        conn.execute(f"DELETE FROM memory_anchors WHERE anchor_id IN ({placeholders})", anchor_ids)
 
     ts = now_ms()
     for doc in fixtures["seedDocuments"]:
@@ -77,13 +81,17 @@ def seed_documents(conn, fixtures):
 
         conn.execute(
             """
-            INSERT INTO memory_documents(document_id, anchor_id, title, markdown_body, update_semantics,
-              domain, sensitivity, recall_mode, confidence, freshness_at, created_at, updated_at)
-            VALUES(?, ?, ?, ?, 'merge-document', ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO memory_documents(document_id, anchor_id, memory_class, title, markdown_body,
+              update_semantics, domain, boundary, audience, sensitivity, recall_mode, confidence,
+              freshness_at, created_at, updated_at)
+            VALUES(?, ?, 'durable_fact', ?, ?, 'merge-document', ?, 'boundary:trusted-instance', 'public',
+              ?, ?, ?, ?, ?, ?)
             ON CONFLICT(document_id) DO UPDATE SET
               title=excluded.title,
               markdown_body=excluded.markdown_body,
               domain=excluded.domain,
+              boundary=excluded.boundary,
+              audience=excluded.audience,
               sensitivity=excluded.sensitivity,
               recall_mode=excluded.recall_mode,
               confidence=excluded.confidence,
@@ -103,6 +111,15 @@ def seed_documents(conn, fixtures):
                 ts,
                 ts,
             ),
+        )
+
+        # Populate FTS5 index so deterministic retrieval can find the document.
+        conn.execute(
+            """
+            INSERT INTO memory_documents_fts(document_id, title, body, aliases, facets)
+            VALUES(?, ?, ?, '', '')
+            """,
+            (doc["documentId"], doc["title"], doc["markdownBody"]),
         )
     conn.commit()
 
