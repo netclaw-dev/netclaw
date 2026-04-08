@@ -96,15 +96,15 @@ public sealed class MemoryPolicyGatesTests
         "normal",
         now);
 
-        Assert.Equal(2, result.MemoryOperations.Count);
+        Assert.Single(result.MemoryOperations);
         Assert.Contains(result.MemoryOperations, x => x.MemoryClass == "durable_fact" && x.Kind == "document");
-        Assert.Contains(result.MemoryOperations, x => x.MemoryClass == "evidence" && x.Kind == "record");
         Assert.DoesNotContain(result.MemoryOperations, x => x.Title == "Communication style");
         Assert.DoesNotContain(result.MemoryOperations, x => x.Title == "Identity profile update");
 
         Assert.Equal(2, result.IdentityUpdates.Count);
         Assert.Contains(result.IdentityUpdates, x => x.Title == "Communication style");
         Assert.Contains(result.IdentityUpdates, x => x.Title == "Identity profile update");
+        Assert.Equal(3, result.AcceptedProposals.Count);
     }
 
     [Fact]
@@ -386,5 +386,101 @@ public sealed class MemoryPolicyGatesTests
         var operation = Assert.Single(result.MemoryOperations);
         Assert.Equal(SecurityPolicyDefaults.PersonalBoundary, operation.Boundary);
         Assert.Equal(TrustAudience.Personal, operation.Audience);
+    }
+
+    [Fact]
+    public void ProposalGate_caps_total_accepted_proposals_including_identity_only_entries()
+    {
+        var gate = new MemoryProposalGate();
+        var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+        var result = gate.Evaluate(
+        [
+            new MemoryProposal(
+                "upsert_document",
+                "durable_fact",
+                "user",
+                "self",
+                new MemoryAnchor("accepted-1", "preference"),
+                "Accepted 1",
+                "Content 1",
+                ["accepted 1"],
+                ["travel_profile"],
+                null,
+                null,
+                "auto",
+                "normal",
+                0.99,
+                now,
+                null,
+                null,
+                null),
+            new MemoryProposal(
+                "upsert_document",
+                "durable_fact",
+                "user",
+                "self",
+                new MemoryAnchor("accepted-2", "preference"),
+                "Accepted 2",
+                "Content 2",
+                ["accepted 2"],
+                ["travel_profile"],
+                null,
+                null,
+                "auto",
+                "normal",
+                0.98,
+                now,
+                null,
+                null,
+                null),
+            new MemoryProposal(
+                "upsert_document",
+                "durable_fact",
+                "assistant",
+                "self",
+                new MemoryAnchor("identity-accepted", "preference"),
+                "Communication style",
+                "Prefer concise responses.",
+                ["communication preference"],
+                ["user_preference"],
+                null,
+                null,
+                "auto",
+                "normal",
+                0.97,
+                now,
+                null,
+                "identity_profile",
+                "standing communication preference"),
+            new MemoryProposal(
+                "upsert_document",
+                "durable_fact",
+                "user",
+                "self",
+                new MemoryAnchor("trimmed", "preference"),
+                "Trimmed",
+                "Content trimmed by cap.",
+                ["trimmed"],
+                ["travel_profile"],
+                null,
+                null,
+                "auto",
+                "normal",
+                0.10,
+                now,
+                null,
+                null,
+                null)
+        ],
+        "project:test",
+        "normal",
+        now);
+
+        Assert.Equal(3, result.AcceptedProposals.Count);
+        Assert.Equal(2, result.MemoryOperations.Count);
+        Assert.Single(result.IdentityUpdates);
+        Assert.DoesNotContain(result.AcceptedProposals, x => x.Title == "Trimmed");
+        Assert.Equal(1, result.Summary.RejectionReasons["max-proposals-exceeded"]);
     }
 }

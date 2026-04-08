@@ -241,8 +241,15 @@ assert_memory_formation() {
 }
 
 assert_memory_recall_filters() {
-    # After overfetch fix: candidate selection should run with score filtering.
-    daemon_log_contains 'memory_retrieval_candidate_selection.*selectedCount='
+    # After overfetch fix: at least one candidate selection should reduce the set.
+    daemon_log_tail | awk '
+        match($0, /rawCount=([0-9]+).*selectedCount=([0-9]+)/, m) {
+            if ((m[1] + 0) > (m[2] + 0)) {
+                found = 1
+            }
+        }
+        END { exit found ? 0 : 1 }
+    '
 }
 
 # Category 4: Tool Discovery & Use

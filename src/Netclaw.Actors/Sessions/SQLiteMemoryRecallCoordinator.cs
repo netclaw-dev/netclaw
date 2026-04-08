@@ -91,7 +91,7 @@ public sealed class SQLiteMemoryRecallCoordinator(
                         x.Item.Content,
                         x.Item.Domain,
                         x.Item.Sensitivity,
-                        x.SelectorScore))
+                        x.Composite))
                     .ToArray();
 
                 logger.LogInformation(

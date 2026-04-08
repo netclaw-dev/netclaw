@@ -84,7 +84,10 @@ public sealed class SessionMemoryObserverActor : ReceivePersistentActor
         Recover<MemoriesDistilled>(evt =>
         {
             foreach (var anchor in evt.Anchors)
+            {
                 _proposedAnchors.Add(anchor);
+                _proposedMemories.Add(new ProposedMemoryContext(anchor, anchor, string.Empty));
+            }
         });
 
         Recover<MemoriesDistilledV2>(evt =>
@@ -152,6 +155,7 @@ public sealed class SessionMemoryObserverActor : ReceivePersistentActor
         });
 
         Command<DistillationRunCompleted>(HandleDistillationRunCompleted);
+        Command<RecordAcceptedDistillationProposals>(HandleRecordAcceptedDistillationProposals);
 
         Context.SetReceiveTimeout(_idleTimeout);
     }
@@ -270,27 +274,48 @@ public sealed class SessionMemoryObserverActor : ReceivePersistentActor
             }
         }
 
-        if (msg.FailureReason is null && msg.Anchors.Count > 0)
+        Dispatch();
+    }
+
+    private void HandleRecordAcceptedDistillationProposals(RecordAcceptedDistillationProposals msg)
+    {
+        if (msg.Proposals.Count == 0)
         {
-            var proposalContexts = msg.Proposals
-                .Where(p => p.Anchor is not null && !string.IsNullOrWhiteSpace(p.Anchor.CanonicalName))
-                .Select(p => new ProposedMemoryContext(p.Anchor!.CanonicalName, p.Title, p.Content))
-                .ToArray();
-
-            var evt = new MemoriesDistilledV2(msg.Anchors, proposalContexts, _timeProvider.GetUtcNow().ToUnixTimeMilliseconds());
-            Persist(evt, e =>
-            {
-                foreach (var anchor in e.Anchors)
-                    _proposedAnchors.Add(anchor);
-                _proposedMemories.AddRange(e.Proposals);
-
-                _log.Info("session_observer_anchors_persisted count={Count}", e.Anchors.Count);
-                Dispatch();
-            });
+            Sender.Tell(AcceptedDistillationProposalsRecorded.Instance);
             return;
         }
 
-        Dispatch();
+        var proposalContexts = msg.Proposals
+            .Where(p => p.Anchor is not null && !string.IsNullOrWhiteSpace(p.Anchor.CanonicalName))
+            .Select(p => new ProposedMemoryContext(p.Anchor!.CanonicalName, p.Title, p.Content))
+            .DistinctBy(p => p.Anchor, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        if (proposalContexts.Length == 0)
+        {
+            Sender.Tell(AcceptedDistillationProposalsRecorded.Instance);
+            return;
+        }
+
+        var anchors = proposalContexts
+            .Select(p => p.Anchor)
+            .ToArray();
+
+        var evt = new MemoriesDistilledV2(anchors, proposalContexts, _timeProvider.GetUtcNow().ToUnixTimeMilliseconds());
+        Persist(evt, e =>
+        {
+            foreach (var anchor in e.Anchors)
+                _proposedAnchors.Add(anchor);
+
+            foreach (var proposal in e.Proposals)
+            {
+                _proposedMemories.RemoveAll(existing => string.Equals(existing.Anchor, proposal.Anchor, StringComparison.OrdinalIgnoreCase));
+                _proposedMemories.Add(proposal);
+            }
+
+            _log.Info("session_observer_accepted_proposals_persisted count={Count}", e.Proposals.Count);
+            Sender.Tell(AcceptedDistillationProposalsRecorded.Instance);
+        });
     }
 
     private void AppendTranscriptLine(string line)
@@ -583,6 +608,19 @@ public sealed record MemoriesDistilledV2(
 
 /// <summary>Context for a previously proposed memory, used for semantic dedup in subsequent distillation runs.</summary>
 public sealed record ProposedMemoryContext(string Anchor, string Title, string Content);
+
+/// <summary>Sent by the session actor after proposals survive gating and are accepted for curation.</summary>
+public sealed record RecordAcceptedDistillationProposals(IReadOnlyList<MemoryProposal> Proposals);
+
+/// <summary>Ack from the observer once accepted proposal dedup state has been persisted.</summary>
+public sealed class AcceptedDistillationProposalsRecorded
+{
+    public static readonly AcceptedDistillationProposalsRecorded Instance = new();
+
+    private AcceptedDistillationProposalsRecorded()
+    {
+    }
+}
 
 /// <summary>System context injection forwarded to the observer (recalled memories, loaded skills).</summary>
 public sealed record ObserverSystemContext(string Label, string Content);

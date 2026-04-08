@@ -3,6 +3,7 @@ using Akka.Hosting;
 using Akka.Hosting.TestKit;
 using Akka.Persistence.Hosting;
 using Microsoft.Extensions.AI;
+using Netclaw.Actors.Memory;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Sessions;
 using Xunit;
@@ -336,7 +337,7 @@ public sealed class SessionMemoryObserverActorTests : TestKit
     }
 
     [Fact]
-    public async Task DistillMemories_with_anchors_persists_before_reply()
+    public async Task DistillMemories_records_accepted_proposals_for_recovery_after_ack()
     {
         var firstClient = new FakeChatClient();
         firstClient.PlannedResponses.Enqueue([new TextContent("""
@@ -370,7 +371,18 @@ public sealed class SessionMemoryObserverActorTests : TestKit
         });
 
         observer.Tell(new DistillMemories(), replyProbe.Ref);
-        await replyProbe.ExpectMsgAsync<SessionDistillationCompleted>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        var reply = await replyProbe.ExpectMsgAsync<SessionDistillationCompleted>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+
+        var gate = new MemoryProposalGate();
+        var gateResult = gate.Evaluate(
+            reply.Proposals,
+            new SessionId("test-channel/persist-before-reply").ToMemoryDomain(),
+            "normal",
+            DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+
+        var persistProbe = CreateTestProbe("persist-before-reply-ack");
+        observer.Tell(new RecordAcceptedDistillationProposals(gateResult.AcceptedProposals), persistProbe.Ref);
+        await persistProbe.ExpectMsgAsync<AcceptedDistillationProposalsRecorded>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
 
         Watch(observer);
         Sys.Stop(observer);
@@ -394,6 +406,109 @@ public sealed class SessionMemoryObserverActorTests : TestKit
 
         Assert.NotNull(skipPrompt);
         Assert.Contains("persisted-anchor", skipPrompt, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task DistillMemories_only_persists_accepted_proposals_for_future_dedup()
+    {
+        var firstClient = new FakeChatClient();
+        firstClient.PlannedResponses.Enqueue([new TextContent("""
+            {
+                "proposals": [
+                    {
+                        "operation": "upsert_document",
+                        "memoryClass": "durable_fact",
+                        "subjectKind": "user",
+                        "subjectValue": "self",
+                        "anchor": { "canonicalName": "accepted-anchor", "anchorType": "preference" },
+                        "title": "Accepted Anchor",
+                        "content": "Valid retained fact.",
+                        "aliases": ["accepted"],
+                        "facets": ["travel_profile"],
+                        "recallMode": "auto",
+                        "sensitivity": "normal",
+                        "confidence": 0.95
+                    },
+                    {
+                        "operation": "upsert_document",
+                        "memoryClass": "durable_fact",
+                        "subjectKind": "user",
+                        "subjectValue": "self",
+                        "anchor": { "canonicalName": "rejected-anchor", "anchorType": "preference" },
+                        "title": "Rejected Anchor",
+                        "content": "Missing retrieval metadata should be dropped.",
+                        "aliases": [],
+                        "facets": [],
+                        "recallMode": "auto",
+                        "sensitivity": "normal",
+                        "confidence": 0.90
+                    }
+                ]
+            }
+            """)]);
+
+        var observer = CreateObserver("accepted-only", client: firstClient);
+        var replyProbe = CreateTestProbe("accepted-only-probe");
+
+        observer.Tell(new SendUserMessage
+        {
+            SessionId = new SessionId("test-channel/accepted-only"),
+            Content = "remember this"
+        });
+
+        observer.Tell(new DistillMemories(), replyProbe.Ref);
+        var reply = await replyProbe.ExpectMsgAsync<SessionDistillationCompleted>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal(2, reply.Proposals.Count);
+
+        var gate = new MemoryProposalGate();
+        var gateResult = gate.Evaluate(
+            reply.Proposals,
+            new SessionId("test-channel/accepted-only").ToMemoryDomain(),
+            "normal",
+            DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+
+        var persistProbe = CreateTestProbe("accepted-only-persist-probe");
+        observer.Tell(new RecordAcceptedDistillationProposals(gateResult.AcceptedProposals), persistProbe.Ref);
+        await persistProbe.ExpectMsgAsync<AcceptedDistillationProposalsRecorded>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+
+        Watch(observer);
+        Sys.Stop(observer);
+        await ExpectTerminatedAsync(observer, TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+
+        var secondClient = new FakeChatClient();
+        var recoveredObserver = CreateObserver("accepted-only", client: secondClient);
+        var replayProbe = CreateTestProbe("accepted-only-replay-probe");
+
+        recoveredObserver.Tell(new SendUserMessage
+        {
+            SessionId = new SessionId("test-channel/accepted-only"),
+            Content = "what do you already know"
+        });
+
+        recoveredObserver.Tell(new DistillMemories(), replayProbe.Ref);
+        await replayProbe.ExpectMsgAsync<SessionDistillationCompleted>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+
+        var replayPrompt = secondClient.ReceivedMessages[0]
+            .LastOrDefault(msg => msg.Role == Microsoft.Extensions.AI.ChatRole.User)?.Text;
+
+        Assert.NotNull(replayPrompt);
+        Assert.Contains("accepted-anchor", replayPrompt, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("rejected-anchor", replayPrompt, StringComparison.OrdinalIgnoreCase);
+
+    }
+
+    [Fact]
+    public void BuildDistillationUserPrompt_includes_existing_proposals_for_legacy_anchor_context()
+    {
+        var prompt = SessionMemoryObserverActor.BuildDistillationUserPrompt(
+            "test-channel/legacy-recovery",
+            new SessionId("test-channel/legacy-recovery").ToMemoryDomain(),
+            1,
+            "check legacy skip context",
+            [new ProposedMemoryContext("legacy-anchor", "legacy-anchor", string.Empty)]);
+
+        Assert.Contains("legacy-anchor", prompt, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("existingProposals", prompt, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
