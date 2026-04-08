@@ -1,4 +1,5 @@
 using System.Buffers.Text;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -259,6 +260,8 @@ internal sealed class DeviceRegistry
     {
         var json = JsonSerializer.Serialize(devices, JsonOptions);
         await File.WriteAllTextAsync(_devicesPath, json, ct);
+        if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows) && File.Exists(_devicesPath))
+            File.SetUnixFileMode(_devicesPath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
         _cachedDevices = devices;
     }
 }

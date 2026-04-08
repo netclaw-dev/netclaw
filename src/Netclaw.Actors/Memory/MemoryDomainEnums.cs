@@ -46,6 +46,7 @@ public enum MemorySensitivity
 public enum MemoryUpdateSemantics
 {
     MergeDocument,
+    AppendDocument,
     ImmutableRecord,
     ConversationTrace,
     Tombstone,
@@ -170,6 +171,7 @@ public static class MemoryDomainEnumExtensions
     public static string ToWireValue(this MemoryUpdateSemantics value) => value switch
     {
         MemoryUpdateSemantics.MergeDocument => "merge-document",
+        MemoryUpdateSemantics.AppendDocument => "append-document",
         MemoryUpdateSemantics.ImmutableRecord => "immutable-record",
         MemoryUpdateSemantics.ConversationTrace => "conversation_trace",
         MemoryUpdateSemantics.Tombstone => "tombstone",
@@ -181,6 +183,8 @@ public static class MemoryDomainEnumExtensions
     {
         if (string.Equals(wire, "merge-document", StringComparison.OrdinalIgnoreCase))
         { value = MemoryUpdateSemantics.MergeDocument; return true; }
+        if (string.Equals(wire, "append-document", StringComparison.OrdinalIgnoreCase))
+        { value = MemoryUpdateSemantics.AppendDocument; return true; }
         if (string.Equals(wire, "immutable-record", StringComparison.OrdinalIgnoreCase))
         { value = MemoryUpdateSemantics.ImmutableRecord; return true; }
         if (string.Equals(wire, "conversation_trace", StringComparison.OrdinalIgnoreCase))

@@ -157,6 +157,40 @@ public sealed class DaemonRestartCoordinatorTests : IDisposable
         }
     }
 
+    [Fact]
+    public async Task SessionDrainHelper_queries_manager_drains_sessions_and_reports_timeouts()
+    {
+        // One session acks normally, the other times out
+        var activeIds = new[] { "slack/drain-ok", "slack/drain-timeout" };
+        var timedOut = new[] { "slack/drain-timeout" };
+        var sessionManager = _system.ActorOf(Props.Create(() => new StubSessionManagerActor(
+            activeIds, timedOut, false)));
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(500));
+
+        var result = await SessionDrainHelper.DrainAsync(
+            sessionManager,
+            "integration-test",
+            NullLogger<DaemonRestartCoordinator>.Instance,
+            cts.Token);
+
+        // All sessions were discovered
+        Assert.Equal(2, result.AllSessionIds.Count);
+
+        // One drained, one timed out
+        Assert.Single(result.DrainedSessionIds);
+        Assert.Equal("slack/drain-ok", result.DrainedSessionIds[0].Value);
+        Assert.Single(result.TimedOutSessionIds);
+        Assert.Equal("slack/drain-timeout", result.TimedOutSessionIds[0].Value);
+
+        // Notification context reflects the outcome
+        var ctx = result.ToNotificationContext();
+        Assert.Equal("timeout", ctx["drainOutcome"]);
+        Assert.Equal("2", ctx["activeSessions"]);
+        Assert.Equal("1", ctx["drainedSessions"]);
+        Assert.Equal("1", ctx["timedOutSessions"]);
+    }
+
     private sealed class FakeApplicationLifetime : IHostApplicationLifetime
     {
         public bool StopRequested { get; private set; }

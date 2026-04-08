@@ -43,6 +43,7 @@ public sealed record MemoryCheckpointCandidate(
     MemoryUpdateSemantics UpdateSemantics,
     string Domain,
     string Boundary,
+    TrustAudience Audience,
     string Sensitivity,
     MemoryRecallMode RecallMode,
     double Confidence,
@@ -52,8 +53,7 @@ public sealed record MemoryCheckpointCandidate(
     long? FreshnessAtMs,
     long? ExpiresAtMs,
     string? MemoryId,
-    string? SupersedesRecordId = null,
-    string Audience = "public");
+    string? SupersedesRecordId = null);
 
 public sealed class MemoryRulesFirstExtractor(MemoryPolicyEvaluator policy)
 {
@@ -107,8 +107,8 @@ public sealed class MemoryRulesFirstExtractor(MemoryPolicyEvaluator policy)
         if (memoryClass == MemoryClass.Trace && !payload.IsExplicitRequest)
             return results;
 
-        var resolvedAudience = MemoryPolicyEvaluator.ResolveAudience(payload.Audience, TrustAudience.Public);
-        SecurityPolicyDefaults.TryParseAudience(resolvedAudience, out var parsedAudience);
+        var resolvedAudienceWire = MemoryPolicyEvaluator.ResolveAudience(payload.Audience, TrustAudience.Public);
+        SecurityPolicyDefaults.TryParseAudience(resolvedAudienceWire, out var parsedAudience);
         var resolvedBoundary = MemoryPolicyScopeResolver.ResolveBoundary(payload.Boundary, parsedAudience, sessionId: null, payload.Domain);
 
         var kind = ResolveKind(payload);
@@ -130,7 +130,7 @@ public sealed class MemoryRulesFirstExtractor(MemoryPolicyEvaluator policy)
             UpdateSemantics: updateSemantics,
             Domain: payload.Domain,
             Boundary: resolvedBoundary,
-            Audience: resolvedAudience,
+            Audience: parsedAudience,
             Sensitivity: payload.Sensitivity,
             RecallMode: ResolveRecallMode(payload, memoryClass),
             Confidence: payload.Confidence,
@@ -303,6 +303,8 @@ public sealed class MemoryRulesFirstExtractor(MemoryPolicyEvaluator policy)
 
             var normalizedObject = NormalizeSentence(rawObject);
             var title = $"Project Milestone: {SummarizeObject(rawObject)}";
+            var milestoneAudienceWire = MemoryPolicyEvaluator.ResolveAudience(payload.Audience, TrustAudience.Public);
+            SecurityPolicyDefaults.TryParseAudience(milestoneAudienceWire, out var milestoneAudience);
             matched = new MemoryCheckpointCandidate(
                 Kind: MemoryKind.Document,
                 MemoryClass: MemoryClass.DurableFact,
@@ -315,7 +317,7 @@ public sealed class MemoryRulesFirstExtractor(MemoryPolicyEvaluator policy)
                 Boundary: !string.IsNullOrWhiteSpace(payload.Boundary)
                     ? payload.Boundary!
                     : SecurityPolicyDefaults.InferLegacyBoundaryFromDomain(payload.Domain),
-                Audience: MemoryPolicyEvaluator.ResolveAudience(payload.Audience, Netclaw.Configuration.TrustAudience.Public),
+                Audience: milestoneAudience,
                 Sensitivity: payload.Sensitivity,
                 RecallMode: MemoryDomainEnumExtensions.TryFromWireValue(payload.RecallMode, out MemoryRecallMode rm)
                     ? rm : MemoryRecallMode.Auto,
@@ -375,6 +377,7 @@ public sealed class MemoryRulesFirstExtractor(MemoryPolicyEvaluator policy)
             ? "Project Constraint"
             : "Project Fact";
 
+        var stmtAudience = MemoryPolicyScopeResolver.ResolveAudience(audience, sessionId: null);
         candidate = new MemoryCheckpointCandidate(
             Kind: MemoryKind.Document,
             MemoryClass: MemoryClass.DurableFact,
@@ -388,10 +391,10 @@ public sealed class MemoryRulesFirstExtractor(MemoryPolicyEvaluator policy)
             Domain: domain,
             Boundary: MemoryPolicyScopeResolver.ResolveBoundary(
                 boundary,
-                MemoryPolicyScopeResolver.ResolveAudience(audience, sessionId: null),
+                stmtAudience,
                 sessionId: null,
                 domain),
-            Audience: MemoryPolicyEvaluator.ResolveAudience(audience, Netclaw.Configuration.TrustAudience.Public),
+            Audience: stmtAudience,
             Sensitivity: MemorySensitivity.Normal.ToWireValue(),
             RecallMode: MemoryRecallMode.Auto,
             Confidence: 0.88,
@@ -499,8 +502,8 @@ public sealed class MemoryCurationEngine(SQLiteMemoryStore store, MemoryRulesFir
         if (payload is null)
             return [];
 
-        var resolvedAudience = MemoryPolicyEvaluator.ResolveAudience(payload.Audience, TrustAudience.Public);
-        SecurityPolicyDefaults.TryParseAudience(resolvedAudience, out var parsedAudience);
+        var resolvedAudienceWire = MemoryPolicyEvaluator.ResolveAudience(payload.Audience, TrustAudience.Public);
+        SecurityPolicyDefaults.TryParseAudience(resolvedAudienceWire, out var parsedAudience);
         var resolvedBoundary = !string.IsNullOrWhiteSpace(payload.Boundary)
             ? payload.Boundary!
             : SecurityPolicyDefaults.InferLegacyBoundaryFromDomain(payload.Domain);

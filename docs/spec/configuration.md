@@ -5,12 +5,16 @@ Source PRDs: PRD-001
 ## Overview
 
 Netclaw uses a layered configuration system based on standard
-`Microsoft.Extensions.Configuration`. Settings are loaded from three sources
-in priority order (later sources override earlier ones at the same key path):
+`Microsoft.Extensions.Configuration`. Daemon runtime settings are loaded from
+three sources in priority order (later sources override earlier ones at the
+same key path):
 
-1. `~/.netclaw/config/netclaw.json` — base configuration (optional)
+1. `~/.netclaw/config/netclaw.json` — daemon-only base configuration (optional)
 2. `~/.netclaw/config/secrets.json` — credential overlay (optional)
 3. Environment variables with `NETCLAW_` prefix (highest priority)
+
+Local CLI connection state is stored separately in
+`~/.netclaw/client/config.json`. The daemon does not read this file.
 
 With no configuration files present, Netclaw defaults to a local Ollama
 instance at `http://localhost:11434` using `qwen3:30b`.
@@ -21,8 +25,10 @@ All configuration lives under `~/.netclaw/`:
 
 ```
 ~/.netclaw/
+├── client/
+│   └── config.json        # Local CLI endpoint state
 ├── config/
-│   ├── netclaw.json        # Base settings
+│   ├── netclaw.json        # Daemon runtime settings
 │   └── secrets.json        # Credentials (chmod 600 recommended)
 ├── soul/
 │   ├── PERSONALITY.md       # Agent personality (seeded on first run)
@@ -35,6 +41,17 @@ All configuration lives under `~/.netclaw/`:
 ```
 
 Directories are created automatically on first run.
+
+## CLI Endpoint Resolution
+
+Daemon-backed CLI commands resolve the target daemon in this order:
+
+1. `NETCLAW_DAEMON_ENDPOINT`
+2. `~/.netclaw/client/config.json`
+3. built-in default `http://127.0.0.1:5199`
+
+`netclaw.json` is reserved for daemon-owned configuration and is not used to
+store the CLI's preferred daemon endpoint.
 
 ## Schema Versioning
 

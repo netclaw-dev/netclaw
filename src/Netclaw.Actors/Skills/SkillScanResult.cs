@@ -13,6 +13,8 @@ public enum SkillScanIssueKind
     DuplicateName,
     FrontmatterNameMismatch,
     ResourceEnumerationFailed,
+    FlatFileMissingFrontmatter,
+    FlatFileNoDescription,
 }
 
 public sealed record SkillScanIssue(

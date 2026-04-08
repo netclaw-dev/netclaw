@@ -1,3 +1,8 @@
+using System.Buffers.Text;
+using System.Runtime.InteropServices;
+using System.Security.Cryptography;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using Netclaw.Configuration;
 
 namespace Netclaw.Cli.Tui.Wizard.Steps;
@@ -8,8 +13,18 @@ namespace Netclaw.Cli.Tui.Wizard.Steps;
 /// </summary>
 public sealed class ExposureModeStepViewModel : IWizardStepViewModel
 {
+    private static readonly JsonSerializerOptions DevicesJsonOptions = new()
+    {
+        WriteIndented = true,
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+    };
+
     private int _currentSubStep;
     private int _highWaterSubStep;
+
+    // Bootstrap device state — populated during ContributeSecrets for non-Local modes.
+    private string? _bootstrapRawToken;
+    private PairedDevice? _bootstrapDevice;
 
     public string StepId => "exposure-mode";
     public string DisplayTitle => "Network Exposure";
@@ -111,10 +126,63 @@ public sealed class ExposureModeStepViewModel : IWizardStepViewModel
         }
     }
 
-    public void ContributeSecrets(WizardSecretsBuilder builder) { }
+    public void ContributeSecrets(WizardSecretsBuilder builder)
+    {
+        if (SelectedMode == ExposureMode.Local)
+            return;
+
+        // Generate a bootstrap device token so the daemon can start with at least
+        // one paired device — satisfies ExposureModeValidationService's requirement.
+        var tokenBytes = RandomNumberGenerator.GetBytes(32);
+        var rawToken = Base64Url.EncodeToString(tokenBytes);
+
+        var saltBytes = RandomNumberGenerator.GetBytes(16);
+        var saltHex = Convert.ToHexString(saltBytes).ToLowerInvariant();
+
+        // SHA256(token_bytes || salt_bytes) — matches DeviceRegistry.ComputeTokenHash
+        Span<byte> combined = stackalloc byte[tokenBytes.Length + saltBytes.Length];
+        tokenBytes.CopyTo(combined);
+        saltBytes.CopyTo(combined[tokenBytes.Length..]);
+        var tokenHash = Convert.ToHexString(SHA256.HashData(combined)).ToLowerInvariant();
+
+        var now = DateTimeOffset.UtcNow;
+        _bootstrapDevice = new PairedDevice
+        {
+            Name = Environment.MachineName,
+            TokenHash = tokenHash,
+            Salt = saltHex,
+            CreatedAt = now,
+            LastUsedAt = now,
+        };
+        _bootstrapRawToken = rawToken;
+
+        builder.AddValue("DeviceToken", rawToken);
+    }
 
     public Task ContributeHealthChecksAsync(HealthCheckRunner runner, CancellationToken ct)
         => Task.CompletedTask;
+
+    /// <summary>
+    /// Write the bootstrap paired device to <c>devices.json</c> so the daemon can start
+    /// with at least one paired device. No-op for Local mode.
+    /// Called from <see cref="WizardOrchestrator.WriteConfig"/> after secrets are written.
+    /// </summary>
+    public void WriteBootstrapDevice(NetclawPaths paths)
+    {
+        if (_bootstrapDevice is null)
+            return;
+
+        var json = JsonSerializer.Serialize(new[] { _bootstrapDevice }, DevicesJsonOptions);
+        File.WriteAllText(paths.DevicesPath, json);
+        if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows) && File.Exists(paths.DevicesPath))
+            File.SetUnixFileMode(paths.DevicesPath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+    }
+
+    /// <summary>The raw bootstrap token, exposed for testing.</summary>
+    internal string? BootstrapRawToken => _bootstrapRawToken;
+
+    /// <summary>The bootstrap device, exposed for testing.</summary>
+    internal PairedDevice? BootstrapDevice => _bootstrapDevice;
 
     public void Dispose() { }
 }

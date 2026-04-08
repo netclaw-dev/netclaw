@@ -113,7 +113,7 @@ public sealed class MemoryEvalSeedSuiteTests : IAsyncLifetime
             HasVerifiedToolFinding: false,
             IsCompactionBoundary: false,
             HasAcceptedSubAgentFinding: false,
-            Domain: "project:default",
+            Domain: SecurityPolicyDefaults.DefaultMemoryDomain,
             Sensitivity: "normal",
             RecallMode: "auto",
             Confidence: 0.99,

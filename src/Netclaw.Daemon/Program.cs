@@ -740,6 +740,12 @@ static void ConfigureDaemonServices(
         client.Timeout = FeedConstants.FeedHttpTimeout);
     services.AddHostedService<SystemSkillSyncService>();
 
+    // Skill directory watcher — auto-rescan when skill files change on disk.
+    // Covers native skills directory and all external sources.
+    // Registered after SystemSkillSyncService so initial sync completes first.
+    services.AddSingleton<SkillDirectoryWatcherService>();
+    services.AddHostedService(sp => sp.GetRequiredService<SkillDirectoryWatcherService>());
+
     // Binary update check — logs a warning at startup if a newer version is available.
     // Never blocks startup, never downloads anything.
     // Result is cached in UpdateCheckService for 1 hour; DaemonRuntimeStatusService
@@ -842,8 +848,16 @@ static void ConfigureDaemonServices(
     {
         // Prevent coordinated shutdown from calling Environment.Exit(),
         // which would kill the process before the restart loop can iterate.
+        // The before-service-unbind phase needs a generous timeout because sessions
+        // mid-LLM-call (TurnLlmTimeout defaults to 3 minutes) must finish before
+        // passivation can begin.
         akkaBuilder.AddHocon(
-            "akka.coordinated-shutdown.exit-clr = off",
+            """
+            akka.coordinated-shutdown {
+                exit-clr = off
+                phases.before-service-unbind.timeout = 200s
+            }
+            """,
             HoconAddMode.Prepend);
 
         akkaBuilder = akkaBuilder.ConfigureLoggers(setup =>
@@ -888,6 +902,41 @@ static void ConfigureDaemonServices(
             var rc = sp.GetRequiredService<ReminderConfig>();
             var historyStore = sp.GetRequiredService<ReminderHistoryStore>();
             toolRegistry.WithReminderTools(reminderManager, tp, rc, historyStore);
+
+            // Drain all active LLM sessions during any actor system termination (SIGTERM, daemon stop).
+            // Runs in an early CoordinatedShutdown phase while actors are still alive.
+            // If DaemonRestartCoordinator already drained sessions (config reload), the ingress
+            // gate will be closed and this task skips its drain to avoid double-draining.
+            // The phase timeout (200s) is generous because sessions mid-LLM-call must finish
+            // before passivation can begin.
+            var cs = CoordinatedShutdown.Get(system);
+            var sessionManager = registry.Get<SessionManagerActorKey>();
+            var ingressGate = sp.GetRequiredService<SessionIngressGate>();
+            var lifecycleNotifier = sp.GetRequiredService<DaemonLifecycleNotifier>();
+            var drainLogger = sp.GetRequiredService<ILoggerFactory>().CreateLogger("Netclaw.Daemon.SessionDrain");
+
+            cs.AddTask(CoordinatedShutdown.PhaseBeforeServiceUnbind, "drain-llm-sessions", async () =>
+            {
+                if (!ingressGate.TryClose("Daemon shutting down."))
+                {
+                    drainLogger.LogDebug("Ingress gate already closed; skipping CoordinatedShutdown session drain.");
+                    return Akka.Done.Instance;
+                }
+
+                try
+                {
+                    var drainResult = await SessionDrainHelper.DrainAsync(
+                        sessionManager, "daemon-stop", drainLogger, CancellationToken.None);
+
+                    lifecycleNotifier.NotifyShutdown("daemon-stop", drainResult.ToNotificationContext());
+                }
+                catch (Exception ex)
+                {
+                    drainLogger.LogWarning(ex, "Session drain during shutdown failed; sessions will recover from last durable checkpoint.");
+                }
+
+                return Akka.Done.Instance;
+            });
         });
     });
 

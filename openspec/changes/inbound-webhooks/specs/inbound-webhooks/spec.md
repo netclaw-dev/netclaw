@@ -206,3 +206,98 @@ the existing operational notification sink so route failures are never silent.
 - **THEN** an operational alert is emitted identifying the route and reload
   failure
 - **AND** the route remains unavailable until the file is valid again
+
+### Requirement: Webhook rejections emit structured logs and counters
+
+Every webhook ingress outcome — accepted, rejected, filtered, or rate-limited —
+SHALL increment a durable in-process counter and emit a structured daemon log
+line with at minimum the route name, outcome reason, client remote IP, and
+delivery identifier (when available). Rejection paths SHALL NOT emit outbound
+operational notification alerts, to avoid spamming operator channels on
+adversarial or misconfigured traffic.
+
+Counters SHALL cover: `accepted`, `route_not_found`, `verification_failed`,
+`body_too_large`, `invalid_json`, `rate_limited`, `event_filtered`, and
+`duplicate_delivery`.
+
+#### Scenario: Route-not-found emits log and counter
+
+- **GIVEN** no route file exists for `unknown-route`
+- **WHEN** an HTTP POST arrives at the webhook ingress path for `unknown-route`
+- **THEN** the daemon returns `404 Not Found`
+- **AND** the `route_not_found` counter is incremented
+- **AND** a structured warning log line is emitted with `route=unknown-route`,
+  `reason=route_not_found`, and the client remote IP
+- **AND** no outbound operational notification alert is emitted for the rejection
+
+#### Scenario: Verification failure emits log and counter
+
+- **GIVEN** a route with HMAC verification is configured
+- **WHEN** a request arrives with an invalid signature
+- **THEN** the daemon returns `401 Unauthorized`
+- **AND** the `verification_failed` counter is incremented
+- **AND** a structured warning log line is emitted including the route name,
+  the delivery identifier (when the provider supplied one), and
+  `reason=verification_failed`
+
+#### Scenario: Duplicate delivery increments counter
+
+- **GIVEN** a webhook delivery has already been processed within the
+  deduplication window
+- **WHEN** the same delivery identifier arrives again for the same route
+- **THEN** the daemon returns `202 Accepted` with `reason=duplicate_delivery`
+- **AND** the `duplicate_delivery` counter is incremented
+
+### Requirement: Stats surface exposes webhook route counts and delivery counters
+
+The `netclaw stats` CLI surface and `/api/stats` daemon endpoint SHALL include
+webhook metrics covering both route registry counts and delivery counters, so
+operators can see at a glance how many routes are configured and how ingress
+traffic is being handled.
+
+Route counts SHALL cover `total`, `enabled`, `disabled`, and `invalid` routes.
+Delivery counters SHALL cover the same set defined by the rejection
+observability requirement above.
+
+#### Scenario: Stats response includes webhook section
+
+- **GIVEN** webhook routes are configured under `config/webhooks`
+- **WHEN** an operator requests `netclaw stats`
+- **THEN** the response includes a dedicated webhooks section
+- **AND** the section reports route counts (total, enabled, disabled, invalid)
+- **AND** the section reports delivery counters (accepted, filtered, duplicate,
+  and each rejection reason)
+
+#### Scenario: Invalid route files counted as invalid
+
+- **GIVEN** three route files exist under `config/webhooks` and one fails to
+  parse or validate
+- **WHEN** an operator requests `netclaw stats`
+- **THEN** the invalid route counter reflects the single unparseable file
+- **AND** the enabled counter reflects only the successfully loaded routes
+
+### Requirement: Notification tool invocation surfaces as session output
+
+The session actor SHALL emit a tool-result session output for every tool
+invocation whose results are fed back into the conversation. Subscribers that
+track notification-tool completion (such as webhook and reminder execution
+actors) SHALL rely on those session outputs to determine whether the agent
+fulfilled a required notification, rather than waiting on information that is
+never emitted in production.
+
+#### Scenario: Required notification succeeds when agent invokes notification tool
+
+- **GIVEN** a webhook route configures `NotifyPolicy = Required` with a Slack
+  notification target
+- **WHEN** the agent successfully invokes the Slack notification tool during
+  the webhook session
+- **THEN** the webhook execution completes successfully
+- **AND** the daemon does not log a false-positive warning that no notification
+  tool was invoked
+
+#### Scenario: Required notification still fails when no notification tool invoked
+
+- **GIVEN** a webhook route configures `NotifyPolicy = Required`
+- **WHEN** the agent completes its turn without invoking any notification tool
+- **THEN** the webhook execution is marked failed with the "no notification
+  tool was invoked" reason

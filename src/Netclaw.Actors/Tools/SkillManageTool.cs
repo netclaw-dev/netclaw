@@ -283,14 +283,22 @@ public sealed partial class SkillManageTool : NetclawTool<SkillManageTool.Params
         if (IsExternalSkill(skill))
             return "Cannot delete external skills. External skill directories are read-only.";
 
-        Directory.Delete(skill.SkillDirectory, recursive: true);
-
-        // Clean empty parent category directories
-        var parent = Path.GetDirectoryName(skill.SkillDirectory);
-        if (parent is not null && parent != _paths.SkillsDirectory
-            && Directory.Exists(parent) && !Directory.EnumerateFileSystemEntries(parent).Any())
+        if (skill.IsFlatFile)
         {
-            Directory.Delete(parent);
+            // Flat-file skill: delete the single .md file
+            File.Delete(skill.FilePath);
+        }
+        else
+        {
+            Directory.Delete(skill.SkillDirectory, recursive: true);
+
+            // Clean empty parent category directories
+            var parent = Path.GetDirectoryName(skill.SkillDirectory);
+            if (parent is not null && parent != _paths.SkillsDirectory
+                && Directory.Exists(parent) && !Directory.EnumerateFileSystemEntries(parent).Any())
+            {
+                Directory.Delete(parent);
+            }
         }
 
         return AppendScanWarnings($"Skill '{name}' deleted.", RescanAndUpdateIndex());

@@ -7,7 +7,8 @@ namespace Netclaw.Actors.Memory;
 public static class AnchorNameMatcher
 {
     private const double JaccardThreshold = 0.6;
-    private const int MaxTokenDifference = 1;
+    private const int MaxTokenDifference = 2;
+    private const int MinPrefixLength = 3;
 
     /// <summary>
     /// Tokenize an anchor name by splitting on '-' and lowering.
@@ -24,10 +25,25 @@ public static class AnchorNameMatcher
     }
 
     /// <summary>
+    /// Compute Jaccard similarity between two sets of anchor tokens,
+    /// using prefix-aware matching (one token is a prefix of the other, min 3 chars).
+    /// </summary>
+    public static double ComputeAnchorJaccard(string[] tokensA, string[] tokensB)
+    {
+        if (tokensA.Length == 0 || tokensB.Length == 0)
+            return 0.0;
+
+        var setA = new HashSet<string>(tokensA, StringComparer.OrdinalIgnoreCase);
+        var setB = new HashSet<string>(tokensB, StringComparer.OrdinalIgnoreCase);
+
+        return ComputeSoftJaccard(setA, setB);
+    }
+
+    /// <summary>
     /// Check if two token arrays are a fuzzy match.
     /// Two anchors are fuzzy matches if:
-    /// - Jaccard similarity >= 0.6
-    /// - AND (the shorter is a subset of the longer, OR they differ by at most 1 token)
+    /// - Jaccard similarity >= 0.6 (using prefix-aware token matching)
+    /// - AND (the shorter is a soft-subset of the longer, OR they differ by at most 2 tokens)
     /// </summary>
     public static bool IsFuzzyMatch(string[] tokensA, string[] tokensB)
     {
@@ -37,30 +53,68 @@ public static class AnchorNameMatcher
         var setA = new HashSet<string>(tokensA, StringComparer.OrdinalIgnoreCase);
         var setB = new HashSet<string>(tokensB, StringComparer.OrdinalIgnoreCase);
 
-        var intersection = new HashSet<string>(setA, StringComparer.OrdinalIgnoreCase);
-        intersection.IntersectWith(setB);
-
-        var union = new HashSet<string>(setA, StringComparer.OrdinalIgnoreCase);
-        union.UnionWith(setB);
-
-        if (union.Count == 0)
-            return false;
-
-        var jaccard = (double)intersection.Count / union.Count;
+        var (jaccard, softIntersection, softUnion) = ComputeSoftJaccardDetail(setA, setB);
         if (jaccard < JaccardThreshold)
             return false;
 
-        // Check subset: all tokens of the shorter set are in the longer set
+        // Check soft-subset: all tokens of the shorter set prefix-match something in the longer set
         var shorter = setA.Count <= setB.Count ? setA : setB;
         var longer = setA.Count <= setB.Count ? setB : setA;
-        var isSubset = shorter.All(t => longer.Contains(t));
+        var isSoftSubset = shorter.All(t => longer.Any(l => IsPrefixMatch(t, l)));
 
-        if (isSubset)
+        if (isSoftSubset)
             return true;
 
-        // Check token difference: symmetric difference <= 1
-        var symmetricDifference = union.Count - intersection.Count;
-        return symmetricDifference <= MaxTokenDifference;
+        // Check token difference: unmatched tokens <= MaxTokenDifference
+        var unmatchedCount = softUnion - softIntersection;
+        return unmatchedCount <= MaxTokenDifference;
+    }
+
+    private static double ComputeSoftJaccard(HashSet<string> setA, HashSet<string> setB)
+    {
+        var (jaccard, _, _) = ComputeSoftJaccardDetail(setA, setB);
+        return jaccard;
+    }
+
+    /// <summary>
+    /// Compute prefix-aware Jaccard similarity, returning the score plus the raw
+    /// soft-intersection and soft-union counts for callers that need them.
+    /// </summary>
+    private static (double Jaccard, int SoftIntersection, int SoftUnion) ComputeSoftJaccardDetail(
+        HashSet<string> setA, HashSet<string> setB)
+    {
+        var rawCount = 0;
+        foreach (var a in setA)
+        {
+            if (setB.Any(b => IsPrefixMatch(a, b)))
+                rawCount++;
+        }
+
+        // Cap at min(|A|, |B|) to prevent many-to-one prefix matches
+        // (e.g., {"repo", "repos"} both matching "repository") from inflating
+        // the intersection beyond what inclusion-exclusion allows.
+        var softIntersection = Math.Min(rawCount, Math.Min(setA.Count, setB.Count));
+        var softUnion = setA.Count + setB.Count - softIntersection;
+        var jaccard = softUnion == 0 ? 0.0 : (double)softIntersection / softUnion;
+
+        return (jaccard, softIntersection, softUnion);
+    }
+
+    /// <summary>
+    /// Two tokens match if they are equal (case-insensitive) or one is a prefix
+    /// of the other with minimum prefix length of 3 characters.
+    /// </summary>
+    private static bool IsPrefixMatch(string a, string b)
+    {
+        if (string.Equals(a, b, StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        // The shorter string must be at least MinPrefixLength chars to count as a prefix
+        var shorter = a.Length <= b.Length ? a : b;
+        var longer = a.Length <= b.Length ? b : a;
+
+        return shorter.Length >= MinPrefixLength
+            && longer.StartsWith(shorter, StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>

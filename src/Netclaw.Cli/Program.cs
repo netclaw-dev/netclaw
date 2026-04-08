@@ -17,6 +17,7 @@ using Netclaw.Cli.Secrets;
 using Netclaw.Cli.Model;
 using Netclaw.Cli.Provider;
 using Netclaw.Cli.Tui;
+using Netclaw.Cli.Skills;
 using Netclaw.Cli.Update;
 using Netclaw.Configuration;
 using Netclaw.Providers;
@@ -579,7 +580,7 @@ static async Task RunAsync(string[] args)
                             foreach (var d in devices)
                             {
                                 Console.WriteLine(
-                                    $"{d.Name,-24} {d.CreatedAt.ToLocalTime():yyyy-MM-dd HH:mm,-22} {d.LastUsedAt.ToLocalTime():yyyy-MM-dd HH:mm,-22}");
+                                    $"{d.Name,-24} {d.CreatedAt.ToLocalTime(),-22:yyyy-MM-dd HH:mm} {d.LastUsedAt.ToLocalTime(),-22:yyyy-MM-dd HH:mm}");
                             }
                         }
                     }
@@ -749,6 +750,16 @@ static async Task RunAsync(string[] args)
             using var host = builder.Build();
             Environment.ExitCode = await ReminderCommand.RunAsync(args, host.Services.GetRequiredService<DaemonApi>());
         }
+        return;
+    }
+
+    // ── Skill management ──
+    if (mode is "skill")
+    {
+        var paths = new NetclawPaths();
+        paths.EnsureDirectoriesExist();
+        // All skill subcommands are offline — no daemon needed
+        Environment.ExitCode = await SkillCommand.RunAsync(args, paths);
         return;
     }
 
@@ -939,6 +950,7 @@ static void WriteGeneralHelp()
     Console.WriteLine("  provider                 Manage LLM providers (TUI) or use subcommands");
     Console.WriteLine("  model                    Manage model assignments (TUI) or use subcommands");
     Console.WriteLine("  reminder                 Manage scheduled reminders (daemon-required)");
+    Console.WriteLine("  skill                    Manage skills and skill sources");
     Console.WriteLine("  secrets                  Manage encrypted secrets (set key/value pairs)");
     Console.WriteLine("  init                     First-run setup wizard");
     Console.WriteLine("  update                   Check for and install updates");
@@ -1047,6 +1059,7 @@ static void WriteStatsHelp()
     Console.WriteLine("  - skill auto-load counts");
     Console.WriteLine("  - memory store statistics");
     Console.WriteLine("  - Slack activity counters");
+    Console.WriteLine("  - webhook route counts and delivery counters");
     Console.WriteLine("  - reminder statistics");
     Console.WriteLine();
     Console.WriteLine("Options:");
@@ -1461,6 +1474,12 @@ static void WriteStatsResult(DaemonStats.Response stats, int? days)
     Console.WriteLine($"  events: recv={stats.SlackActivity.EventsReceived} routed={stats.SlackActivity.EventsRouted} dropped={stats.SlackActivity.EventsDropped}");
     Console.WriteLine($"  replies: posted={stats.SlackActivity.RepliesPosted} rejected={stats.SlackActivity.RepliesRejected} failed={stats.SlackActivity.RepliesFailed}");
 
+    Console.WriteLine();
+    Console.WriteLine("webhooks:");
+    Console.WriteLine($"  routes: total={stats.Webhooks.TotalRoutes} enabled={stats.Webhooks.EnabledRoutes} disabled={stats.Webhooks.DisabledRoutes} invalid={stats.Webhooks.InvalidRoutes}");
+    Console.WriteLine($"  deliveries: accepted={stats.Webhooks.Accepted} filtered={stats.Webhooks.EventFiltered} duplicate={stats.Webhooks.DuplicateDelivery}");
+    Console.WriteLine($"  rejected: 404={stats.Webhooks.RouteNotFound} 401={stats.Webhooks.VerificationFailed} 413={stats.Webhooks.BodyTooLarge} 400={stats.Webhooks.InvalidJson} 429={stats.Webhooks.RateLimited}");
+
     if (stats.Reminders is { } reminders)
     {
         Console.WriteLine();
@@ -1518,8 +1537,8 @@ static NetclawPaths ConfigureConfigServices(IServiceCollection services, IConfig
     services.AddSingleton<ISecretsProtector>(protector);
     SensitiveStringTypeConverter.Protector = protector;
 
-    // Layered configuration chain:
-    // 1. netclaw.json (base config, optional)
+    // Layered daemon/operator configuration chain:
+    // 1. netclaw.json (daemon-owned config, optional)
     // 2. secrets.json (credentials overlay, optional)
     // 3. NETCLAW_* environment variables (highest priority)
     configuration

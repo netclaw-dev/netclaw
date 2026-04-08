@@ -200,6 +200,14 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
                 return providerView.BuildContent(step, CreateCallbacks());
             }
 
+            // Channels step manages its own state (cursor position, add mode)
+            // across invalidations — don't clear it on content refresh.
+            if (step is ChannelsStepViewModel)
+            {
+                var channelsView = ViewModel.StepViews["channels"];
+                return channelsView.BuildContent(step, CreateCallbacks());
+            }
+
             // Normal: clear state, build fresh
             _stepSubs.Clear();
             var currentView = ViewModel.StepViews[step.StepId];
@@ -253,6 +261,45 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
     // Input handling
     // ═══════════════════════════════════════════════════════════════════
 
+    /// <summary>
+    /// Capture-phase input handler — runs BEFORE the focus manager routes keys
+    /// to focused components. This prevents stale IFocusable nodes (SelectionListNode,
+    /// TextInputNode) from consuming keys meant for steps with custom key handling.
+    /// </summary>
+    public override bool HandlePageInput(ConsoleKeyInfo keyInfo)
+    {
+        // Let base key bindings run first
+        if (base.HandlePageInput(keyInfo))
+            return true;
+
+        // Global: Ctrl+Q always shuts down — must be captured here so stale
+        // focused components (TextInputNode in add mode) can't consume it.
+        if (keyInfo.Key == ConsoleKey.Q && keyInfo.Modifiers.HasFlag(ConsoleModifiers.Control))
+        {
+            ViewModel.RequestQuit();
+            return true;
+        }
+
+        // Channels step: intercept keys before the focus manager can consume them.
+        // Stale IFocusable components (SelectionListNode, TextInputNode) from prior
+        // steps remain on the focus stack and consume ↑/↓ arrows and letter keys.
+        // Escape is only intercepted in add-channel mode (to cancel the dialog);
+        // in normal mode it flows through ViewModel.Input for back-navigation.
+        if (ViewModel.Orchestrator.CurrentStep is ChannelsStepViewModel
+            && (keyInfo.Key != ConsoleKey.Escape
+                || ((ChannelsStepView)ViewModel.StepViews["channels"]).IsAddMode))
+        {
+            var channelsView = ViewModel.StepViews["channels"];
+            if (channelsView.HandleKeyPress(new KeyPressed(keyInfo)))
+            {
+                ViewModel.RequestRedraw();
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private void HandleKeyPress(KeyPressed key)
     {
         var keyInfo = key.KeyInfo;
@@ -266,17 +313,6 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
         }
 
         var currentStep = ViewModel.Orchestrator.CurrentStep;
-
-        // Channels step: custom keyboard handling (delegated to view)
-        if (currentStep is ChannelsStepViewModel)
-        {
-            var channelsView = ViewModel.StepViews["channels"];
-            if (channelsView.HandleKeyPress(key))
-            {
-                ViewModel.RequestRedraw();
-                return;
-            }
-        }
 
         // Provider step special keys
         if (currentStep is ProviderStepViewModel providerVm)

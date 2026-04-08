@@ -25,8 +25,8 @@ public sealed class SecurityPostureStepView : IWizardStepView
 
         _postureList = Layouts.SelectionList(
                 "Personal \u2014 Only you on this machine",
-                "Team \u2014 Shared with trusted teammates (Slack/VPN)",
-                "Public \u2014 Open to untrusted users (webhooks/public)")
+                "Team \u2014 Shared with trusted teammates",
+                "Public \u2014 Open to untrusted users")
             .WithMode(SelectionMode.Single)
             .WithHighlightColors(Color.Black, Color.Cyan);
 
@@ -51,7 +51,7 @@ public sealed class SecurityPostureStepView : IWizardStepView
             .DisposeWith(callbacks.Subscriptions);
 
         return Layouts.Vertical()
-            .WithChild(new TextNode("  How will this Netclaw instance be accessed?").WithForeground(Color.White))
+            .WithChild(new TextNode("  Who will interact with this Netclaw instance?").WithForeground(Color.White))
             .WithSpacing(1)
             .WithChild(_postureList)
             .WithSpacing(1)

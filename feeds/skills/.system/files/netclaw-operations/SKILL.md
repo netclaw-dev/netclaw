@@ -4,7 +4,7 @@ description: "REQUIRED when the user asks about Netclaw capabilities, scheduling
 disable-model-invocation: true
 metadata:
   author: netclaw
-  version: "1.4.0"
+  version: "1.8.0"
 ---
 
 # Netclaw Operations
@@ -19,6 +19,7 @@ problems, how to update preferences, or how to maintain itself.
 |-------------|---------------|
 | Schedule reminders, cron jobs | [Scheduling](#scheduling) |
 | Discover MCP tools | [Tool Discovery](#tool-discovery) |
+| Manage skills and sources | [Skill Management](#skill-management) |
 | Something is broken, debug it | [Diagnostics](#diagnostics) |
 | Update preferences, tone, profile | [Identity](#identity) |
 | Pair remote devices, manage access | [Device Pairing](#device-pairing) |
@@ -58,6 +59,36 @@ Sessions receive granted tool categories. `builtin` is always granted.
 Other categories (`web`, `file`, `shell`, `scheduling`) depend on ACL
 config. If a tool is missing, it may not be granted for this session.
 
+## Skill Management
+
+The `netclaw skill` CLI manages skills and skill sources. All subcommands
+are offline — no daemon required.
+
+| Command | What it does |
+|---------|--------------|
+| `netclaw skill list` | List all discovered skills with source, version, status |
+| `netclaw skill show <name>` | Show skill metadata and full content |
+| `netclaw skill validate <path>` | Validate a SKILL.md file's frontmatter format |
+| `netclaw skill remove <name>` | Remove a native skill (refuses system/external) |
+| `netclaw skill issues` | Show only scanner issues (rejected items with reasons) |
+| `netclaw skill search <query>` | Search skills by name or description |
+
+### External skill sources
+
+Register additional skill directories (e.g. `~/.claude/skills/`):
+
+| Command | What it does |
+|---------|--------------|
+| `netclaw skill source list` | Show configured external sources |
+| `netclaw skill source add <name> --well-known claude-code` | Add Claude Code skills |
+| `netclaw skill source add <name> --path /shared/skills` | Add a custom directory |
+| `netclaw skill source remove <name>` | Remove a source |
+| `netclaw skill source enable <name>` | Enable a disabled source |
+| `netclaw skill source disable <name>` | Disable without removing |
+
+The daemon's `SkillDirectoryWatcherService` automatically rescans all skill
+directories (native + external) when files change on disk. No restart needed.
+
 ## Webhook Management
 
 Inbound webhooks use a split config model:
@@ -84,6 +115,28 @@ Verification kinds are generic:
 Route files hot-reload without restarting the daemon. If a route file becomes
 invalid, Netclaw removes that route immediately and emits an operational alert.
 
+### Webhook observability
+
+`netclaw stats` includes a `webhooks:` section with:
+
+- **Route counts** — `total`, `enabled`, `disabled`, `invalid` (files on disk,
+  classified by parse/validation status plus the per-route `Enabled` flag).
+- **Delivery counters** — `accepted`, `filtered` (event not in allowlist),
+  `duplicate` (delivery id already seen), plus per-rejection counts:
+  `404` (route_not_found), `401` (verification_failed), `413` (body_too_large),
+  `400` (invalid_json), `429` (rate_limited).
+
+Every ingress outcome writes a structured line to `daemon-{date}.log`:
+
+```
+Webhook rejected route={Route} reason={Reason} remote_ip={RemoteIp}
+  delivery_id={DeliveryId} event_type={EventType}
+```
+
+Rejection paths only log + increment counters — they do NOT fire outbound
+operational notifications, so bad or adversarial traffic does not spam the
+configured notification target.
+
 ## Diagnostics
 
 When something seems wrong with Netclaw itself:
@@ -107,8 +160,9 @@ Doctor checks include `exposure-mode`, which validates that the `Daemon`
 config section (if present) specifies a supported exposure mode and that
 the corresponding tunnel integration is reachable.
 
-Config files: `~/.netclaw/config/netclaw.json` (base config, optional
-`Daemon` section for `Host`, `Port`, `ExposureMode`),
+Config files: `~/.netclaw/config/netclaw.json` (daemon-owned base config,
+including `Daemon.Host`, `Daemon.Port`, `Daemon.ExposureMode`),
+`~/.netclaw/client/config.json` (local CLI endpoint state),
 `~/.netclaw/config/secrets.json` (credentials — never display API keys).
 
 ## Identity
@@ -136,6 +190,7 @@ file. If it should be recalled when relevant → SQLite memory.
 | Self-diagnose | `netclaw doctor` |
 | Runtime health | `netclaw status` |
 | Memory/token stats | `netclaw stats` |
+| List/manage skills | `netclaw skill list` |
 | List past sessions | `netclaw sessions --once` |
 | Inspect reminder history | `netclaw reminder history <id> --last 5` |
 
@@ -162,7 +217,7 @@ shell_execute: netclaw pair https://my-daemon.tail1234.ts.net:5000
 
 The user is prompted for the pairing code. On success, the bearer token is
 saved to `secrets.json` (`DeviceToken` field) and the endpoint is saved to
-`netclaw.json`.
+`~/.netclaw/client/config.json`.
 
 ### Device management
 

@@ -1,3 +1,6 @@
+using System.Buffers.Text;
+using System.Security.Cryptography;
+using System.Text.Json;
 using Netclaw.Cli.Tui;
 using Netclaw.Cli.Tui.Wizard;
 using Netclaw.Cli.Tui.Wizard.Steps;
@@ -427,5 +430,89 @@ public sealed class ExposureModeStepViewModelTests : IDisposable
         step.SelectedMode = ExposureMode.TailscaleFunnel;
 
         Assert.Equal(2, step.WebhookSubStep);
+    }
+
+    // ── Bootstrap device pairing (#540) ──────────────────────────────────────
+
+    [Fact]
+    public void ContributeSecrets_NonLocal_AddsDeviceToken()
+    {
+        using var step = new ExposureModeStepViewModel();
+        step.SelectedMode = ExposureMode.TailscaleFunnel;
+
+        var builder = new WizardSecretsBuilder(_context.Paths);
+        step.ContributeSecrets(builder);
+
+        Assert.NotNull(step.BootstrapRawToken);
+        Assert.NotNull(step.BootstrapDevice);
+        Assert.Equal(Environment.MachineName, step.BootstrapDevice.Name);
+    }
+
+    [Fact]
+    public void ContributeSecrets_Local_DoesNotAddDeviceToken()
+    {
+        using var step = new ExposureModeStepViewModel();
+        step.SelectedMode = ExposureMode.Local;
+
+        var builder = new WizardSecretsBuilder(_context.Paths);
+        step.ContributeSecrets(builder);
+
+        Assert.Null(step.BootstrapRawToken);
+        Assert.Null(step.BootstrapDevice);
+    }
+
+    [Fact]
+    public void WriteBootstrapDevice_NonLocal_WritesDevicesJson()
+    {
+        using var step = new ExposureModeStepViewModel();
+        step.SelectedMode = ExposureMode.TailscaleServe;
+
+        var builder = new WizardSecretsBuilder(_context.Paths);
+        step.ContributeSecrets(builder);
+        step.WriteBootstrapDevice(_context.Paths);
+
+        Assert.True(File.Exists(_context.Paths.DevicesPath));
+
+        var json = File.ReadAllText(_context.Paths.DevicesPath);
+        var devices = JsonSerializer.Deserialize<List<PairedDevice>>(json);
+        Assert.NotNull(devices);
+        Assert.Single(devices);
+        Assert.Equal(Environment.MachineName, devices[0].Name);
+    }
+
+    [Fact]
+    public void WriteBootstrapDevice_Local_DoesNotWriteFile()
+    {
+        using var step = new ExposureModeStepViewModel();
+        step.SelectedMode = ExposureMode.Local;
+
+        var builder = new WizardSecretsBuilder(_context.Paths);
+        step.ContributeSecrets(builder);
+        step.WriteBootstrapDevice(_context.Paths);
+
+        Assert.False(File.Exists(_context.Paths.DevicesPath));
+    }
+
+    [Fact]
+    public void WriteBootstrapDevice_TokenVerifiesAgainstDevice()
+    {
+        using var step = new ExposureModeStepViewModel();
+        step.SelectedMode = ExposureMode.CloudflareTunnel;
+
+        var builder = new WizardSecretsBuilder(_context.Paths);
+        step.ContributeSecrets(builder);
+
+        // Re-compute the hash from the raw token and device salt to verify consistency
+        var rawToken = step.BootstrapRawToken!;
+        var device = step.BootstrapDevice!;
+
+        var tokenBytes = Base64Url.DecodeFromChars(rawToken);
+        var saltBytes = Convert.FromHexString(device.Salt);
+        Span<byte> combined = stackalloc byte[tokenBytes.Length + saltBytes.Length];
+        tokenBytes.CopyTo(combined);
+        saltBytes.CopyTo(combined[tokenBytes.Length..]);
+        var expectedHash = Convert.ToHexString(SHA256.HashData(combined)).ToLowerInvariant();
+
+        Assert.Equal(expectedHash, device.TokenHash);
     }
 }

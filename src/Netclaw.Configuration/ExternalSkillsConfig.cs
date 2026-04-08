@@ -10,11 +10,20 @@ public sealed class ExternalSkillsConfig
     /// Single catalog of well-known external skill sources. Both
     /// <see cref="ResolveWellKnownPath"/> and <see cref="ProbeWellKnownSources"/>
     /// consume this so alias/display/symlink metadata stays in one place.
+    /// Each alias can own multiple relative paths — e.g. <c>claude-code</c>
+    /// scans both <c>~/.claude/skills/</c> and <c>~/.claude/commands/</c>
+    /// because Claude Code user slash commands live alongside skills and
+    /// share the same YAML-frontmatter format. The first path is the primary
+    /// (used for display/validation); all existing paths are scanned.
     /// </summary>
-    private static readonly (string Alias, string DisplayName, string RelativePath, bool DefaultAllowSymlinks)[] WellKnownCatalog =
+    private static readonly (string Alias, string DisplayName, string[] RelativePaths, bool DefaultAllowSymlinks)[] WellKnownCatalog =
     [
-        ("claude-code", "Claude Code", Path.Combine(".claude", "skills"), true),
-        ("open-code", "Open Code", Path.Combine(".open-code", "skills"), false)
+        ("claude-code", "Claude Code",
+            new[] { Path.Combine(".claude", "skills"), Path.Combine(".claude", "commands") },
+            true),
+        ("open-code", "Open Code",
+            new[] { Path.Combine(".open-code", "skills") },
+            false)
     ];
 
     /// <summary>
@@ -26,9 +35,18 @@ public sealed class ExternalSkillsConfig
 
     /// <summary>
     /// Resolves well-known aliases to absolute paths, filters to enabled sources
-    /// whose directories exist, and returns the resolved list.
+    /// whose directories exist, and returns the resolved list. Each returned
+    /// <see cref="ResolvedExternalSource"/> carries all existing scan paths
+    /// for its alias — a single configured source may scan multiple directories.
     /// </summary>
     public IReadOnlyList<ResolvedExternalSource> ResolveEnabledSources()
+        => ResolveEnabledSources(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile));
+
+    /// <summary>
+    /// Testable overload that resolves sources against a given home directory
+    /// rather than the current user's profile.
+    /// </summary>
+    internal IReadOnlyList<ResolvedExternalSource> ResolveEnabledSources(string homeDirectory)
     {
         var results = new List<ResolvedExternalSource>();
 
@@ -37,18 +55,27 @@ public sealed class ExternalSkillsConfig
             if (!source.Enabled)
                 continue;
 
-            var resolvedPath = source.WellKnown is not null
-                ? ResolveWellKnownPath(source.WellKnown)
-                : source.Path;
+            IReadOnlyList<string> candidatePaths = source.WellKnown is not null
+                ? ResolveWellKnownPaths(source.WellKnown, homeDirectory)
+                : source.Path is not null ? new[] { source.Path } : Array.Empty<string>();
 
-            if (string.IsNullOrWhiteSpace(resolvedPath))
+            var existingPaths = new List<string>();
+            foreach (var candidate in candidatePaths)
+            {
+                if (string.IsNullOrWhiteSpace(candidate))
+                    continue;
+
+                var fullPath = Path.GetFullPath(candidate);
+                if (!Directory.Exists(fullPath))
+                    continue;
+
+                existingPaths.Add(fullPath);
+            }
+
+            if (existingPaths.Count == 0)
                 continue;
 
-            var fullPath = Path.GetFullPath(resolvedPath);
-            if (!Directory.Exists(fullPath))
-                continue;
-
-            results.Add(new ResolvedExternalSource(source.Name, fullPath, source.AllowSymlinks));
+            results.Add(new ResolvedExternalSource(source.Name, existingPaths, source.AllowSymlinks));
         }
 
         return results;
@@ -56,38 +83,68 @@ public sealed class ExternalSkillsConfig
 
     /// <summary>
     /// Probes the filesystem for well-known external skill directories and returns
-    /// those that exist on disk, with their default configuration values.
+    /// those where at least one configured path exists on disk. <see cref="WellKnownProbeResult.ResolvedPath"/>
+    /// is the first existing path (primary preferred).
     /// </summary>
     public static IReadOnlyList<WellKnownProbeResult> ProbeWellKnownSources()
+        => ProbeWellKnownSources(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile));
+
+    /// <summary>
+    /// Testable overload that probes against a given home directory.
+    /// </summary>
+    internal static IReadOnlyList<WellKnownProbeResult> ProbeWellKnownSources(string homeDirectory)
     {
-        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         var results = new List<WellKnownProbeResult>();
 
-        foreach (var (alias, displayName, relativePath, allowSymlinks) in WellKnownCatalog)
+        foreach (var (alias, displayName, relativePaths, allowSymlinks) in WellKnownCatalog)
         {
-            var path = Path.Combine(home, relativePath);
-            if (Directory.Exists(path))
-                results.Add(new WellKnownProbeResult(alias, displayName, path, allowSymlinks));
+            string? firstExisting = null;
+            foreach (var relativePath in relativePaths)
+            {
+                var path = Path.Combine(homeDirectory, relativePath);
+                if (Directory.Exists(path))
+                {
+                    firstExisting = path;
+                    break;
+                }
+            }
+
+            if (firstExisting is not null)
+                results.Add(new WellKnownProbeResult(alias, displayName, firstExisting, allowSymlinks));
         }
 
         return results;
     }
 
     /// <summary>
-    /// Maps well-known source aliases to their standard directory paths.
+    /// Maps a well-known source alias to its primary directory path. Returns
+    /// <c>null</c> for unknown aliases. Used for validation and display — for
+    /// the full scan-path set, use <see cref="ResolveWellKnownPaths(string)"/>.
     /// </summary>
     public static string? ResolveWellKnownPath(string wellKnown)
     {
-        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        var paths = ResolveWellKnownPaths(wellKnown);
+        return paths.Count > 0 ? paths[0] : null;
+    }
+
+    /// <summary>
+    /// Maps a well-known source alias to all of its standard directory paths.
+    /// Returns an empty list for unknown aliases.
+    /// </summary>
+    public static IReadOnlyList<string> ResolveWellKnownPaths(string wellKnown)
+        => ResolveWellKnownPaths(wellKnown, Environment.GetFolderPath(Environment.SpecialFolder.UserProfile));
+
+    internal static IReadOnlyList<string> ResolveWellKnownPaths(string wellKnown, string homeDirectory)
+    {
         var normalized = wellKnown.ToLowerInvariant();
 
-        foreach (var (alias, _, relativePath, _) in WellKnownCatalog)
+        foreach (var (alias, _, relativePaths, _) in WellKnownCatalog)
         {
             if (alias == normalized)
-                return Path.Combine(home, relativePath);
+                return relativePaths.Select(p => Path.Combine(homeDirectory, p)).ToArray();
         }
 
-        return null;
+        return Array.Empty<string>();
     }
 }
 
@@ -127,9 +184,11 @@ public sealed class ExternalSkillSource
 }
 
 /// <summary>
-/// A resolved external skill source with an absolute path ready for scanning.
+/// A resolved external skill source with one or more absolute paths ready for
+/// scanning. A single configured source (e.g. <c>claude-code</c>) may expand
+/// to multiple paths when its well-known alias covers more than one directory.
 /// </summary>
-public sealed record ResolvedExternalSource(string Name, string Path, bool AllowSymlinks);
+public sealed record ResolvedExternalSource(string Name, IReadOnlyList<string> Paths, bool AllowSymlinks);
 
 /// <summary>
 /// Result of probing for a well-known external skill directory.

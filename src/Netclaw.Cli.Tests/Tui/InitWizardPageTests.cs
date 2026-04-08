@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using Netclaw.Actors.Channels;
 using Netclaw.Cli.Provider;
 using Netclaw.Cli.Tui;
 using Netclaw.Cli.Tui.Wizard.Steps;
@@ -98,6 +99,82 @@ public sealed class InitWizardPageTests : IDisposable
         await app.RunAsync(cts.Token);
 
         Assert.Equal(_registry.KnownTypeKeys[1], vm.ProviderStep.SelectedProviderType);
+    }
+
+    // ── Channels step key routing (#539) ───────────────────────────────────
+
+    /// <summary>
+    /// Verifies that DownArrow reaches the Channels step view through
+    /// HandlePageInput, even when a stale SelectionListNode is on the
+    /// focus stack from a previous step.
+    /// </summary>
+    [Fact]
+    public async Task ChannelsStep_DownArrow_RendersChannelList()
+    {
+        var (terminal, app, vm) = CreateHeadlessApp(out var input);
+
+        // Make Channels step applicable
+        vm.Context.AnyChatServicesEnabled = true;
+
+        // Skip: provider → security-posture → slack → channels
+        vm.Orchestrator.GoNext(); // provider → security-posture
+        vm.Orchestrator.GoNext(); // security-posture → slack
+        vm.Orchestrator.GoNext(); // slack → channels (Slack.OnLeave clears entries)
+
+        Assert.Equal("channels", vm.Orchestrator.CurrentStep?.StepId);
+
+        // Populate entries AFTER Slack.OnLeave has run (it removes Slack entries when disabled)
+        vm.Context.ChannelEntries[ChannelType.Slack] =
+        [
+            new ChannelEntry("#general", "C123", TrustAudience.Team),
+            new ChannelEntry("#random", "C456", TrustAudience.Team),
+        ];
+
+        // Send DownArrow (the key that was broken) then Ctrl+Q to exit
+        input.EnqueueKey(ConsoleKey.DownArrow);
+        input.EnqueueKey(ConsoleKey.Q, control: true);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await app.RunAsync(cts.Token);
+
+        // Terminal should contain both channel names
+        Assert.True(terminal.Contains("#general"),
+            $"Expected #general in terminal. Screen:\n{terminal}");
+        Assert.True(terminal.Contains("#random"),
+            $"Expected #random in terminal. Screen:\n{terminal}");
+    }
+
+    /// <summary>
+    /// Verifies that the 'A' key enters add-channel mode on the Channels step.
+    /// </summary>
+    [Fact]
+    public async Task ChannelsStep_AKey_EntersAddMode()
+    {
+        var (terminal, app, vm) = CreateHeadlessApp(out var input);
+
+        vm.Context.AnyChatServicesEnabled = true;
+
+        // Skip to channels
+        vm.Orchestrator.GoNext();
+        vm.Orchestrator.GoNext();
+        vm.Orchestrator.GoNext();
+
+        Assert.Equal("channels", vm.Orchestrator.CurrentStep?.StepId);
+
+        // No entries needed — testing add mode ('A' key should work regardless)
+
+        // Send 'A' key then Ctrl+Q to exit
+        input.EnqueueKey(ConsoleKey.A);
+        input.EnqueueKey(ConsoleKey.Q, control: true);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await app.RunAsync(cts.Token);
+
+        // Verify the Channels view entered add mode
+        var channelsView = (ChannelsStepView)vm.StepViews["channels"];
+        Assert.True(channelsView.IsAddMode,
+            $"Expected Channels view to be in add mode after pressing 'A'. " +
+            $"CurrentStep={vm.Orchestrator.CurrentStep?.StepId}, Screen:\n{terminal}");
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────

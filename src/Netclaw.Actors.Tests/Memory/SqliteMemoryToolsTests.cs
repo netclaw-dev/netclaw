@@ -43,6 +43,8 @@ public sealed class SqliteMemoryToolsTests : IDisposable
                     Relations: null,
                     UpdateSemantics: "merge-document",
                     Domain: "project:slack",
+                    Boundary: SecurityPolicyDefaults.TrustedInstanceBoundary,
+                    Audience: TrustAudience.Team,
                     Sensitivity: "normal",
                     RecallMode: "auto",
                     Confidence: 0.9,
@@ -62,6 +64,8 @@ public sealed class SqliteMemoryToolsTests : IDisposable
                     Relations: null,
                     UpdateSemantics: "immutable-record",
                     Domain: "project:slack",
+                    Boundary: SecurityPolicyDefaults.TrustedInstanceBoundary,
+                    Audience: TrustAudience.Team,
                     Sensitivity: "normal",
                     RecallMode: "searchable",
                     Confidence: 0.8,
@@ -81,6 +85,8 @@ public sealed class SqliteMemoryToolsTests : IDisposable
                     Relations: null,
                     UpdateSemantics: "conversation_trace",
                     Domain: "project:slack",
+                    Boundary: SecurityPolicyDefaults.TrustedInstanceBoundary,
+                    Audience: TrustAudience.Team,
                     Sensitivity: "normal",
                     RecallMode: "never",
                     Confidence: 0.5,
@@ -128,6 +134,8 @@ public sealed class SqliteMemoryToolsTests : IDisposable
                     Relations: null,
                     UpdateSemantics: "immutable-record",
                     Domain: "project:slack",
+                    Boundary: SecurityPolicyDefaults.TrustedInstanceBoundary,
+                    Audience: TrustAudience.Team,
                     Sensitivity: "normal",
                     RecallMode: "searchable",
                     Confidence: 0.7,
@@ -169,6 +177,8 @@ public sealed class SqliteMemoryToolsTests : IDisposable
                     Relations: null,
                     UpdateSemantics: "immutable-record",
                     Domain: "project:slack",
+                    Boundary: SecurityPolicyDefaults.TrustedInstanceBoundary,
+                    Audience: TrustAudience.Team,
                     Sensitivity: "normal",
                     RecallMode: "searchable",
                     Confidence: 0.7,
@@ -232,7 +242,7 @@ public sealed class SqliteMemoryToolsTests : IDisposable
                     FreshnessAtMs: now,
                     ExpiresAtMs: null,
                     Boundary: SecurityPolicyDefaults.TrustedInstanceBoundary,
-                    Audience: TrustAudience.Team.ToWireValue()),
+                    Audience: TrustAudience.Team),
                 new SQLiteMemoryCurationOperation(
                     Kind: "document",
                     MemoryClass: "durable_fact",
@@ -253,7 +263,7 @@ public sealed class SqliteMemoryToolsTests : IDisposable
                     FreshnessAtMs: now,
                     ExpiresAtMs: null,
                     Boundary: SecurityPolicyDefaults.TrustedInstanceBoundary,
-                    Audience: TrustAudience.Personal.ToWireValue())
+                    Audience: TrustAudience.Personal)
             ],
             CancellationToken.None);
 

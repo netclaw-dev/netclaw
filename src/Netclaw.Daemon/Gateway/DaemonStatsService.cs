@@ -7,6 +7,7 @@ using Netclaw.Actors.Skills;
 using Netclaw.Channels.Telemetry;
 using Netclaw.Configuration;
 using Netclaw.Daemon.Services;
+using Netclaw.Daemon.Webhooks;
 
 namespace Netclaw.Daemon.Gateway;
 
@@ -16,6 +17,7 @@ internal sealed class DaemonStatsService(
     SessionCatalogService sessionCatalog,
     SkillRegistry skillRegistry,
     IRequiredActor<DailyStatsActorKey> dailyStatsActor,
+    WebhookRouteCatalog webhookRouteCatalog,
     SQLiteMemoryStore? sqliteMemoryStore = null,
     IRequiredActor<ReminderManagerActorKey>? reminderManagerActor = null)
 {
@@ -76,6 +78,7 @@ internal sealed class DaemonStatsService(
                 RepliesRejected = slackSnapshot.SlackRepliesRejected,
                 RepliesFailed = slackSnapshot.SlackRepliesFailed
             },
+            Webhooks = BuildWebhookStats(),
             Reminders = await BuildReminderStatsAsync(ct),
             DailyBreakdown = dailyBreakdown
         };
@@ -131,6 +134,27 @@ internal sealed class DaemonStatsService(
         {
             return new DaemonStats.Memory { Status = "degraded" };
         }
+    }
+
+    private DaemonStats.Webhooks BuildWebhookStats()
+    {
+        var counts = webhookRouteCatalog.GetRouteCounts();
+        var snapshot = WebhookTelemetry.GetSnapshot();
+        return new DaemonStats.Webhooks
+        {
+            TotalRoutes = counts.Total,
+            EnabledRoutes = counts.Enabled,
+            DisabledRoutes = counts.Disabled,
+            InvalidRoutes = counts.Invalid,
+            Accepted = snapshot.Accepted,
+            RouteNotFound = snapshot.RouteNotFound,
+            VerificationFailed = snapshot.VerificationFailed,
+            BodyTooLarge = snapshot.BodyTooLarge,
+            InvalidJson = snapshot.InvalidJson,
+            RateLimited = snapshot.RateLimited,
+            EventFiltered = snapshot.EventFiltered,
+            DuplicateDelivery = snapshot.DuplicateDelivery,
+        };
     }
 
     private async Task<DaemonStats.Reminders?> BuildReminderStatsAsync(CancellationToken ct)

@@ -396,7 +396,7 @@ public sealed class SQLiteMemoryStore
                 UpdateSemantics: reader.GetString(11),
                 Domain: reader.GetString(12),
                 Boundary: reader.IsDBNull(13) ? SecurityPolicyDefaults.LegacyRestrictedBoundary : reader.GetString(13),
-                Audience: reader.IsDBNull(14) ? TrustAudience.Public.ToWireValue() : reader.GetString(14),
+                Audience: reader.IsDBNull(14) ? TrustAudience.Personal.ToWireValue() : reader.GetString(14),
                 Sensitivity: reader.GetString(15),
                 RecallMode: reader.GetString(16),
                 Confidence: reader.GetDouble(17),
@@ -662,7 +662,7 @@ public sealed class SQLiteMemoryStore
         cmd.Parameters.AddWithValue("$query", matchQuery);
         cmd.Parameters.AddWithValue("$boundary", boundary);
         cmd.Parameters.AddWithValue("$legacyBoundary", SecurityPolicyDefaults.LegacyRestrictedBoundary);
-        cmd.Parameters.AddWithValue("$fallbackAudience", audience.ToWireValue());
+        cmd.Parameters.AddWithValue("$fallbackAudience", TrustAudience.Personal.ToWireValue());
         cmd.Parameters.AddWithValue("$overfetch", limit * 5);
         cmd.Parameters.AddWithValue("$limit", limit);
 
@@ -741,7 +741,7 @@ public sealed class SQLiteMemoryStore
                     SlotsJson: reader.IsDBNull(6) ? null : reader.GetString(6),
                     Domain: reader.GetString(7),
                     Boundary: reader.IsDBNull(8) ? SecurityPolicyDefaults.LegacyRestrictedBoundary : reader.GetString(8),
-                    Audience: reader.IsDBNull(9) ? TrustAudience.Public.ToWireValue() : reader.GetString(9),
+                    Audience: reader.IsDBNull(9) ? TrustAudience.Personal.ToWireValue() : reader.GetString(9),
                     Sensitivity: reader.GetString(10),
                     RecallMode: reader.GetString(11),
                     UpdateSemantics: reader.GetString(12),
@@ -779,7 +779,7 @@ public sealed class SQLiteMemoryStore
                     SlotsJson: reader.IsDBNull(6) ? null : reader.GetString(6),
                     Domain: reader.GetString(7),
                     Boundary: reader.IsDBNull(8) ? SecurityPolicyDefaults.LegacyRestrictedBoundary : reader.GetString(8),
-                    Audience: reader.IsDBNull(9) ? TrustAudience.Public.ToWireValue() : reader.GetString(9),
+                    Audience: reader.IsDBNull(9) ? TrustAudience.Personal.ToWireValue() : reader.GetString(9),
                     Sensitivity: reader.GetString(10),
                     RecallMode: reader.GetString(11),
                     UpdateSemantics: reader.GetString(12),
@@ -943,7 +943,7 @@ public sealed class SQLiteMemoryStore
             cmd.Parameters.AddWithValue("$domain", domain);
         cmd.Parameters.AddWithValue("$boundary", boundary);
         cmd.Parameters.AddWithValue("$planLegacyBoundary", SecurityPolicyDefaults.LegacyRestrictedBoundary);
-        cmd.Parameters.AddWithValue("$planFallbackAudience", audience.ToWireValue());
+        cmd.Parameters.AddWithValue("$planFallbackAudience", TrustAudience.Personal.ToWireValue());
         cmd.Parameters.AddWithValue("$now", now);
         cmd.Parameters.AddWithValue("$allowExpiredEvidence", allowExpiredEvidence ? 1 : 0);
         cmd.Parameters.AddWithValue("$overfetch", limit * 5);
@@ -1050,7 +1050,7 @@ public sealed class SQLiteMemoryStore
         {
         await using var read = conn.CreateCommand();
         read.CommandText = """
-            SELECT anchor_id, record_type, domain, sensitivity, recall_mode, confidence, freshness_at
+            SELECT anchor_id, record_type, domain, sensitivity, recall_mode, confidence, freshness_at, boundary, audience, memory_class
             FROM memory_records
             WHERE record_id = $id;
             """;
@@ -1067,6 +1067,9 @@ public sealed class SQLiteMemoryStore
         var recallMode = reader.GetString(4);
         var confidence = reader.GetDouble(5);
         var freshnessAt = reader.IsDBNull(6) ? (long?)null : reader.GetInt64(6);
+        var boundary = reader.IsDBNull(7) ? SecurityPolicyDefaults.LegacyRestrictedBoundary : reader.GetString(7);
+        var audience = reader.IsDBNull(8) ? TrustAudience.Personal.ToWireValue() : reader.GetString(8);
+        var memoryClass = reader.IsDBNull(9) ? MemoryClass.Evidence.ToWireValue() : reader.GetString(9);
         await reader.CloseAsync();
 
         var now = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
@@ -1075,17 +1078,20 @@ public sealed class SQLiteMemoryStore
         await using var insert = conn.CreateCommand();
         insert.CommandText = """
             INSERT INTO memory_records(
-              record_id, anchor_id, record_type, payload_json, supersedes_record_id,
-              update_semantics, domain, sensitivity, recall_mode, confidence, freshness_at, created_at)
-            VALUES($id, $anchorId, $recordType, $payload, $supersedes,
-              '{MemoryUpdateSemantics.SupersedeRecord.ToWireValue()}', $domain, $sensitivity, $recallMode, $confidence, $freshnessAt, $createdAt);
+              record_id, anchor_id, memory_class, record_type, payload_json, supersedes_record_id,
+              update_semantics, domain, boundary, audience, sensitivity, recall_mode, confidence, freshness_at, created_at)
+            VALUES($id, $anchorId, $memoryClass, $recordType, $payload, $supersedes,
+              '{MemoryUpdateSemantics.SupersedeRecord.ToWireValue()}', $domain, $boundary, $audience, $sensitivity, $recallMode, $confidence, $freshnessAt, $createdAt);
             """;
         insert.Parameters.AddWithValue("$id", newId);
         insert.Parameters.AddWithValue("$anchorId", anchorId);
+        insert.Parameters.AddWithValue("$memoryClass", memoryClass);
         insert.Parameters.AddWithValue("$recordType", recordType);
         insert.Parameters.AddWithValue("$payload", payloadJson);
         insert.Parameters.AddWithValue("$supersedes", recordId);
         insert.Parameters.AddWithValue("$domain", domain);
+        insert.Parameters.AddWithValue("$boundary", boundary);
+        insert.Parameters.AddWithValue("$audience", audience);
         insert.Parameters.AddWithValue("$sensitivity", sensitivity);
         insert.Parameters.AddWithValue("$recallMode", recallMode);
         insert.Parameters.AddWithValue("$confidence", confidence);
@@ -1304,6 +1310,9 @@ public sealed class SQLiteMemoryStore
         foreach (var operation in operations)
         {
             var now = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
+            var resolvedBoundary = string.Equals(operation.Boundary, SecurityPolicyDefaults.LegacyRestrictedBoundary, StringComparison.Ordinal)
+                ? SecurityPolicyDefaults.InferLegacyBoundaryFromDomain(operation.Domain)
+                : operation.Boundary;
             var canonicalName = string.IsNullOrWhiteSpace(operation.AnchorCanonicalName)
                 ? operation.Title
                 : operation.AnchorCanonicalName;
@@ -1328,10 +1337,10 @@ public sealed class SQLiteMemoryStore
                 recordCmd.CommandText = """
                     INSERT INTO memory_records(
                       record_id, anchor_id, memory_class, record_type, payload_json, aliases_json, facets_json, slots_json, supersedes_record_id,
-                      update_semantics, domain, sensitivity, recall_mode, confidence,
+                      update_semantics, domain, boundary, audience, sensitivity, recall_mode, confidence,
                       freshness_at, expires_at, created_at)
                     VALUES($id, $anchorId, $memoryClass, $recordType, $payloadJson, $aliasesJson, $facetsJson, $slotsJson, $supersedes,
-                      $semantics, $domain, $sensitivity, $recallMode, $confidence,
+                      $semantics, $domain, $boundary, $audience, $sensitivity, $recallMode, $confidence,
                       $freshnessAt, $expiresAt, $createdAt);
                     """;
                 recordCmd.Parameters.AddWithValue("$id", recId);
@@ -1345,6 +1354,8 @@ public sealed class SQLiteMemoryStore
                 recordCmd.Parameters.AddWithValue("$supersedes", (object?)operation.SupersedesRecordId ?? DBNull.Value);
                 recordCmd.Parameters.AddWithValue("$semantics", operation.UpdateSemantics);
                 recordCmd.Parameters.AddWithValue("$domain", operation.Domain);
+                recordCmd.Parameters.AddWithValue("$boundary", resolvedBoundary);
+                recordCmd.Parameters.AddWithValue("$audience", operation.Audience.ToWireValue());
                 recordCmd.Parameters.AddWithValue("$sensitivity", operation.Sensitivity);
                 recordCmd.Parameters.AddWithValue("$recallMode", operation.RecallMode);
                 recordCmd.Parameters.AddWithValue("$confidence", operation.Confidence);
@@ -1426,8 +1437,8 @@ public sealed class SQLiteMemoryStore
             documentCmd.Parameters.AddWithValue("$slotsJson", (object?)operation.SlotsJson ?? DBNull.Value);
             documentCmd.Parameters.AddWithValue("$semantics", operation.UpdateSemantics);
             documentCmd.Parameters.AddWithValue("$domain", operation.Domain);
-            documentCmd.Parameters.AddWithValue("$boundary", (object?)operation.Boundary ?? DBNull.Value);
-            documentCmd.Parameters.AddWithValue("$audience", (object?)operation.Audience ?? DBNull.Value);
+            documentCmd.Parameters.AddWithValue("$boundary", resolvedBoundary);
+            documentCmd.Parameters.AddWithValue("$audience", operation.Audience.ToWireValue());
             documentCmd.Parameters.AddWithValue("$sensitivity", operation.Sensitivity);
             documentCmd.Parameters.AddWithValue("$recallMode", resolvedRecallMode);
             documentCmd.Parameters.AddWithValue("$confidence", operation.Confidence);
@@ -1502,7 +1513,7 @@ public sealed class SQLiteMemoryStore
                 recordCmd.Parameters.AddWithValue("$semantics", operation.UpdateSemantics);
                 recordCmd.Parameters.AddWithValue("$domain", operation.Domain);
                 recordCmd.Parameters.AddWithValue("$boundary", resolvedBoundary);
-                recordCmd.Parameters.AddWithValue("$audience", operation.Audience);
+                recordCmd.Parameters.AddWithValue("$audience", operation.Audience.ToWireValue());
                 recordCmd.Parameters.AddWithValue("$sensitivity", operation.Sensitivity);
                 recordCmd.Parameters.AddWithValue("$recallMode", operation.RecallMode);
                 recordCmd.Parameters.AddWithValue("$confidence", operation.Confidence);
@@ -1588,7 +1599,7 @@ public sealed class SQLiteMemoryStore
             documentCmd.Parameters.AddWithValue("$semantics", operation.UpdateSemantics);
             documentCmd.Parameters.AddWithValue("$domain", operation.Domain);
             documentCmd.Parameters.AddWithValue("$boundary", resolvedBoundary);
-            documentCmd.Parameters.AddWithValue("$audience", operation.Audience);
+            documentCmd.Parameters.AddWithValue("$audience", operation.Audience.ToWireValue());
             documentCmd.Parameters.AddWithValue("$sensitivity", operation.Sensitivity);
             documentCmd.Parameters.AddWithValue("$recallMode", resolvedRecallMode);
             documentCmd.Parameters.AddWithValue("$confidence", operation.Confidence);
@@ -1791,7 +1802,7 @@ public sealed class SQLiteMemoryStore
         await records.ExecuteNonQueryAsync(ct);
     }
 
-    public SQLiteMemoryAnchor CreateDefaultAnchor(string canonicalName, string domain = "project:default")
+    public SQLiteMemoryAnchor CreateDefaultAnchor(string canonicalName, string domain = SecurityPolicyDefaults.DefaultMemoryDomain)
     {
         var nowMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
         return new SQLiteMemoryAnchor(
@@ -1902,14 +1913,14 @@ public sealed record SQLiteMemoryCurationOperation(
     IReadOnlyList<SQLiteMemoryRelationOperation>? Relations,
     string UpdateSemantics,
     string Domain,
+    string Boundary,
+    TrustAudience Audience,
     string Sensitivity,
     string RecallMode,
     double Confidence,
     long? FreshnessAtMs,
     long? ExpiresAtMs,
-    string? SupersedesRecordId = null,
-    string Boundary = SecurityPolicyDefaults.LegacyRestrictedBoundary,
-    string Audience = "public");
+    string? SupersedesRecordId = null);
 
 public sealed record SQLiteMemoryRelationOperation(
     string RelationType,

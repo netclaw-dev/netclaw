@@ -43,7 +43,7 @@ public sealed class SqliteMemoryPolicyScopeTests : IDisposable
                     UpdateSemantics: "merge-document",
                     Domain: "project:netclaw",
                     Boundary: SecurityPolicyDefaults.TrustedInstanceBoundary,
-                    Audience: TrustAudience.Public.ToWireValue(),
+                    Audience: TrustAudience.Public,
                     Sensitivity: "normal",
                     RecallMode: "auto",
                     Confidence: 0.9,
@@ -64,7 +64,7 @@ public sealed class SqliteMemoryPolicyScopeTests : IDisposable
                     UpdateSemantics: "merge-document",
                     Domain: "project:netclaw",
                     Boundary: SecurityPolicyDefaults.TrustedInstanceBoundary,
-                    Audience: TrustAudience.Team.ToWireValue(),
+                    Audience: TrustAudience.Team,
                     Sensitivity: "normal",
                     RecallMode: "auto",
                     Confidence: 0.9,
@@ -111,7 +111,7 @@ public sealed class SqliteMemoryPolicyScopeTests : IDisposable
 
         var request = Assert.Single(sink.Requests);
         var payload = Assert.IsType<MemoryCheckpointPayload>(request.Payload);
-        Assert.Equal("project:slack", payload.Domain);
+        Assert.Equal(SecurityPolicyDefaults.DefaultMemoryDomain, payload.Domain);
         Assert.Equal(TrustAudience.Personal.ToWireValue(), payload.Audience);
         Assert.Equal(SecurityPolicyDefaults.PersonalBoundary, payload.Boundary);
     }

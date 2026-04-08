@@ -165,6 +165,11 @@ public sealed class WizardOrchestrator : IDisposable
             identityStep.WriteIdentityFiles(_context.Paths);
             identityStep.SeedBuiltInAgents(_context.Paths);
         }
+
+        // Write bootstrap paired device for non-Local exposure modes so the daemon
+        // can start with at least one paired device (satisfies ExposureModeValidationService).
+        var exposureStep = _allSteps.OfType<ExposureModeStepViewModel>().FirstOrDefault();
+        exposureStep?.WriteBootstrapDevice(_context.Paths);
     }
 
     /// <summary>

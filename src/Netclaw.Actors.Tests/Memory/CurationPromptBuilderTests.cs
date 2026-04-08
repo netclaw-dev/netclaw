@@ -1,4 +1,5 @@
 using Netclaw.Actors.Memory;
+using Netclaw.Configuration;
 using Xunit;
 
 namespace Netclaw.Actors.Tests.Memory;
@@ -86,6 +87,8 @@ public sealed class CurationPromptBuilderTests
             Relations: null,
             UpdateSemantics: "merge-document",
             Domain: "project:test",
+            Boundary: SecurityPolicyDefaults.TrustedInstanceBoundary,
+            Audience: TrustAudience.Team,
             Sensitivity: "normal",
             RecallMode: "auto",
             Confidence: 0.9,
@@ -118,6 +121,8 @@ public sealed class CurationPromptBuilderTests
             Relations: null,
             UpdateSemantics: "merge-document",
             Domain: "project:test",
+            Boundary: SecurityPolicyDefaults.TrustedInstanceBoundary,
+            Audience: TrustAudience.Team,
             Sensitivity: "normal",
             RecallMode: "auto",
             Confidence: 0.9,
@@ -161,6 +166,8 @@ public sealed class CurationPromptBuilderTests
             Relations: null,
             UpdateSemantics: "merge-document",
             Domain: "project:test",
+            Boundary: SecurityPolicyDefaults.TrustedInstanceBoundary,
+            Audience: TrustAudience.Team,
             Sensitivity: "normal",
             RecallMode: "auto",
             Confidence: 0.9,

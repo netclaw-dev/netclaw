@@ -1,5 +1,6 @@
 using Netclaw.Actors.Sessions;
 using Netclaw.Actors.Sessions.Pipelines;
+using Netclaw.Configuration;
 using Netclaw.Tools;
 using Xunit;
 
@@ -87,7 +88,7 @@ public class SubAgentFindingReviewTests
             Title = "subagent:research-assistant",
             Content = "Netclaw uses SQLite journal persistence for session durability in the current deployment.",
             Kind = "record",
-            Domain = "project:project-a",
+            Domain = SecurityPolicyDefaults.DefaultMemoryDomain,
             Sensitivity = SubAgentFindingSensitivity.Normal,
             RecallMode = SubAgentFindingRecallMode.Searchable,
             UpdateSemantics = "append-document",

@@ -71,16 +71,13 @@ internal static class PairCommand
             secrets["DeviceToken"] = result.Token;
             ConfigFileHelper.WriteSecretsFile(paths, secrets);
 
-            // Persist daemon endpoint to netclaw.json so subsequent CLI commands
-            // (chat, status, sessions, etc.) automatically use this remote endpoint.
-            var config = ConfigFileHelper.LoadJsonDict(paths.NetclawConfigPath);
-            var daemonSection = ConfigFileHelper.GetOrCreateSection(config, "Daemon");
-            daemonSection["Endpoint"] = endpoint;
-            ConfigFileHelper.WriteConfigFile(paths.NetclawConfigPath, config);
+            // Persist the local client's preferred daemon endpoint separately from
+            // daemon-owned netclaw.json.
+            ClientConfigFile.WriteEndpoint(paths, endpoint);
 
             Console.WriteLine($"Paired successfully as '{deviceName}'.");
             Console.WriteLine($"Token stored in:     {paths.SecretsPath}");
-            Console.WriteLine($"Endpoint saved in:   {paths.NetclawConfigPath}");
+            Console.WriteLine($"Endpoint saved in:   {paths.ClientConfigPath}");
             Console.WriteLine();
             Console.WriteLine($"You can now use `netclaw chat`, `netclaw status`, etc. against {endpoint}.");
             return 0;
@@ -112,7 +109,7 @@ internal static class PairCommand
         Console.WriteLine("  5. Choose a device name (default: hostname)");
         Console.WriteLine();
         Console.WriteLine("On success, the device token is stored in secrets.json and the endpoint");
-        Console.WriteLine("is saved to netclaw.json for future CLI connections.");
+        Console.WriteLine("is saved to ~/.netclaw/client/config.json for future CLI connections.");
     }
 
     private sealed record ExchangeResponse(string Token);

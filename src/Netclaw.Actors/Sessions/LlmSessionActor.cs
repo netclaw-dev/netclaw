@@ -143,6 +143,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     private readonly Telemetry.ISessionMetrics? _sessionMetrics;
 
     private bool _restartDrainRequested;
+    private bool _passivationCompleted;
     private IActorRef? _restartDrainReplyTo;
     private string? _pendingRestartNotice;
     private string? _turnRestartNotice;
@@ -557,7 +558,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 }, OutputFilter.ToolCalls);
             }
 
-            // Add tool results to history and log each result
             foreach (var result in msg.ToolResults)
             {
                 _state = _state with { History = _state.History.Add(result) };
@@ -567,6 +567,14 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                     : result.Content ?? "(null)";
                 _log.Info("Tool [{ToolName}] (call={CallId}) result: {Result}",
                     result.Name ?? "unknown", result.ToolCallId ?? "?", preview);
+
+                EmitOutput(new ToolResultOutput
+                {
+                    SessionId = _sessionId,
+                    CallId = result.ToolCallId ?? string.Empty,
+                    ToolName = result.Name ?? "unknown",
+                    Result = result.Content ?? string.Empty
+                }, OutputFilter.ToolCalls);
             }
 
             // Dynamic tool loading: if load_tool was called, activate the requested tool.
@@ -803,6 +811,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     }
 
     private void HandleDistillationResult(SessionDistillationCompleted msg)
+        => HandleDistillationResult(msg, stopAfterAcceptedProposalPersistence: false);
+
+    private void HandleDistillationResult(SessionDistillationCompleted msg, bool stopAfterAcceptedProposalPersistence)
     {
         _log.Info(
             "session_distillation_completed proposals={ProposalCount} inputTokens={InputTokens} outputTokens={OutputTokens} failure={Failure}",
@@ -841,6 +852,21 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
             var accepted = gateResult.MemoryOperations;
 
+            if (gateResult.AcceptedProposals.Count > 0)
+            {
+                if (stopAfterAcceptedProposalPersistence && _observerActor is not null)
+                {
+                    _observerActor.Ask<AcceptedDistillationProposalsRecorded>(
+                        new RecordAcceptedDistillationProposals(gateResult.AcceptedProposals),
+                        TimeSpan.FromSeconds(2))
+                        .PipeTo(Self);
+                }
+                else
+                {
+                    _observerActor?.Tell(new RecordAcceptedDistillationProposals(gateResult.AcceptedProposals));
+                }
+            }
+
             _log.Info(
                 "session_distillation_gate_result total={Total} accepted={Accepted} rejections={Rejections}",
                 gateResult.Summary.Total,
@@ -854,6 +880,13 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 _curationActor.Tell(new Memory.EvaluateProposals(accepted, _sessionId.ToMemoryDomain()));
                 _sessionMetrics?.RecordMemoriesFormed(accepted.Count);
             }
+
+            if (stopAfterAcceptedProposalPersistence && gateResult.AcceptedProposals.Count == 0)
+                CompletePassivation();
+        }
+        else if (stopAfterAcceptedProposalPersistence)
+        {
+            CompletePassivation();
         }
     }
 
@@ -1142,9 +1175,14 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         Command<SessionDistillationCompleted>(msg =>
         {
-            _log.Info("Passivation distillation complete, stopping");
+            _log.Info("Passivation distillation complete, finalizing");
+            HandleDistillationResult(msg, stopAfterAcceptedProposalPersistence: true);
+        });
+
+        Command<AcceptedDistillationProposalsRecorded>(_ =>
+        {
+            _log.Info("Passivation distillation dedup persistence complete, stopping");
             Timers.Cancel(PassivationTimerKey);
-            HandleDistillationResult(msg);
             CompletePassivation();
         });
 
@@ -1209,6 +1247,10 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     private void CompletePassivation()
     {
+        if (_passivationCompleted)
+            return;
+
+        _passivationCompleted = true;
         _lifecycleObserver?.OnSessionDeactivated(_sessionId);
         SaveSnapshot(BuildSnapshot());
         _restartDrainReplyTo?.Tell(CommandAck.For(_sessionId));
@@ -1849,6 +1891,11 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     protected override void PostStop()
     {
         CancelAndDisposeLlmCts();
+
+        // Safety net for non-graceful stop paths (shutdown timeout, OOM, etc.).
+        if (!_passivationCompleted)
+            _lifecycleObserver?.OnSessionDeactivated(_sessionId);
+
         base.PostStop();
     }
 

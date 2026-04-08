@@ -152,6 +152,9 @@ public class SubAgentSpawnIntegrationTests : TestKit
         Assert.Equal(0, completed.FindingsCount);
         Assert.Null(completed.MemoryDecision);
 
+        // Drain the tool result output for spawn_agent emitted after tool execution
+        await subscriber.ExpectMsgAsync<ToolResultOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+
         var text = await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Contains("fake", text.Text, StringComparison.OrdinalIgnoreCase);
 

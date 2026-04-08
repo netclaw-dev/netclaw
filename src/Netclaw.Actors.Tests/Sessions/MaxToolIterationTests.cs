@@ -119,10 +119,11 @@ public class MaxToolIterationTests : TestKit
             Content = "Keep calling tools forever"
         }, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
 
-        // Expect 3 rounds of tool calls (the configured limit)
+        // Expect 3 rounds of tool calls (the configured limit); each call is followed by a tool result
         for (var i = 0; i < 3; i++)
         {
             await subscriber.ExpectMsgAsync<ToolCallOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+            await subscriber.ExpectMsgAsync<ToolResultOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
         }
 
         // After circuit breaker fires, LLM is called without tools → text response
@@ -169,7 +170,10 @@ public class MaxToolIterationTests : TestKit
         }, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
 
         for (var i = 0; i < 3; i++)
+        {
             await subscriber.ExpectMsgAsync<ToolCallOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+            await subscriber.ExpectMsgAsync<ToolResultOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        }
 
         var error = await subscriber.ExpectMsgAsync<ErrorOutput>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(ErrorCategory.ProviderFailure, error.Category);
@@ -213,7 +217,10 @@ public class MaxToolIterationTests : TestKit
         }, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
 
         for (var i = 0; i < 3; i++)
+        {
             await subscriber.ExpectMsgAsync<ToolCallOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+            await subscriber.ExpectMsgAsync<ToolResultOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        }
         await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
         await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
 
@@ -225,7 +232,10 @@ public class MaxToolIterationTests : TestKit
         }, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
 
         for (var i = 0; i < 3; i++)
+        {
             await subscriber.ExpectMsgAsync<ToolCallOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+            await subscriber.ExpectMsgAsync<ToolResultOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        }
         await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
         await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
 
@@ -267,6 +277,7 @@ public class MaxToolIterationTests : TestKit
 
         // One tool call, then normal text response (well within limit of 3)
         await subscriber.ExpectMsgAsync<ToolCallOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<ToolResultOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
         await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
         await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
 

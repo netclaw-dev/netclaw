@@ -38,12 +38,13 @@ public sealed class SQLiteMemoryRecallCoordinator(
                 }
                 catch (Exception ex)
                 {
-                    logger.LogWarning(ex, "memory_recall_degraded stage=planning reason={Reason}", ex.Message);
+                    logger.LogWarning(ex, "memory_recall_degraded session={SessionId} stage=planning reason={Reason}", normalizedRequest.SessionId, ex.Message);
                     return new AutomaticRecallResult([], true, ex.Message, "planning");
                 }
 
                 logger.LogInformation(
-                    "memory_retrieval_request_plan hardScope={HardScope} mode={Mode} candidateLimit={CandidateLimit} facets={Facets} softScopes={SoftScopes} anchorHints={AnchorHints} lexicalTerms={LexicalTerms}",
+                    "memory_retrieval_request_plan session={SessionId} hardScope={HardScope} mode={Mode} candidateLimit={CandidateLimit} facets={Facets} softScopes={SoftScopes} anchorHints={AnchorHints} lexicalTerms={LexicalTerms}",
+                    normalizedRequest.SessionId,
                     deterministicPlan.HardScope,
                     deterministicPlan.RetrievalMode,
                     deterministicPlan.CandidateLimit,
@@ -66,25 +67,43 @@ public sealed class SQLiteMemoryRecallCoordinator(
                     allowExpiredEvidence: false,
                     ct);
 
-                var candidates = _candidateSelector.Select(deterministicPlan, rawCandidates);
+                var scoredCandidates = _candidateSelector.SelectWithScores(deterministicPlan, rawCandidates);
                 logger.LogInformation(
-                    "memory_retrieval_candidate_selection hardScope={HardScope} rawCount={RawCount} selectedCount={SelectedCount} ids={Ids}",
+                    "memory_retrieval_candidate_selection session={SessionId} hardScope={HardScope} rawCount={RawCount} selectedCount={SelectedCount} scored={Scored}",
+                    normalizedRequest.SessionId,
                     deterministicPlan.HardScope,
                     rawCandidates.Count,
-                    candidates.Count,
-                    string.Join("|", candidates.Select(x => x.Id)));
+                    scoredCandidates.Count,
+                    string.Join("|", scoredCandidates.Select(x => $"{x.Item.Id}={x.SelectorScore:F1}")));
 
-                var deterministicItems = candidates
-                    .OrderByDescending(RecallRank)
-                    .Take(normalizedRequest.MaxItems <= 0 ? 3 : normalizedRequest.MaxItems)
-                    .Select(d => new AutomaticRecallItem(
-                        d.Id,
-                        d.Title,
-                        d.Content,
-                        d.Domain,
-                        d.Sensitivity,
-                        RecallRank(d)))
+                // RecallRank dampened by 100x so it acts as a tiebreaker (~2 points
+                // for DurableFact+MergeDocument) rather than overriding SelectorScore
+                // (~4 points per lexical match).
+                const double RecallRankDampeningFactor = 100.0;
+                var deterministicMaxItems = normalizedRequest.MaxItems <= 0 ? 3 : normalizedRequest.MaxItems;
+                var deterministicItems = scoredCandidates
+                    .Select(x => (x.Item, x.SelectorScore, Composite: x.SelectorScore + (RecallRank(x.Item) / RecallRankDampeningFactor)))
+                    .OrderByDescending(x => x.Composite)
+                    .Take(deterministicMaxItems)
+                    .Select(x => new AutomaticRecallItem(
+                        x.Item.Id,
+                        x.Item.Title,
+                        x.Item.Content,
+                        x.Item.Domain,
+                        x.Item.Sensitivity,
+                        x.Composite))
                     .ToArray();
+
+                logger.LogInformation(
+                    "memory_retrieval_final session={SessionId} injectedCount={InjectedCount} items={Items}",
+                    normalizedRequest.SessionId,
+                    deterministicItems.Length,
+                    string.Join("|", deterministicItems.Select(i => $"{i.Id}=score{i.Score:F1}")));
+
+                logger.LogDebug(
+                    "memory_retrieval_final_detail session={SessionId} items={Items}",
+                    normalizedRequest.SessionId,
+                    string.Join("|", deterministicItems.Select(i => $"{i.Id}={i.Title}")));
 
                 return new AutomaticRecallResult(deterministicItems);
             }
@@ -125,7 +144,8 @@ public sealed class SQLiteMemoryRecallCoordinator(
                     fallbackRequest);
 
             logger.LogInformation(
-                "memory_recall_plan_resolved mode={Mode} intent={Intent} classes={Classes} allowExpiredEvidence={AllowExpiredEvidence} searchTerms={SearchTerms}",
+                "memory_recall_plan_resolved session={SessionId} mode={Mode} intent={Intent} classes={Classes} allowExpiredEvidence={AllowExpiredEvidence} searchTerms={SearchTerms}",
+                normalizedRequest.SessionId,
                 plan.Mode,
                 plan.Intent,
                 string.Join("|", plan.MemoryClasses),
@@ -161,6 +181,7 @@ public sealed class SQLiteMemoryRecallCoordinator(
             }
 
             LogRecallTrace(
+                normalizedRequest.SessionId,
                 searchQuery,
                 fallbackQuery,
                 domain,
@@ -185,7 +206,7 @@ public sealed class SQLiteMemoryRecallCoordinator(
         }
         catch (Exception ex)
         {
-            logger.LogWarning(ex, "memory_recall_degraded stage=execution reason={Reason}", ex.Message);
+            logger.LogWarning(ex, "memory_recall_degraded session={SessionId} stage=execution reason={Reason}", request.SessionId, ex.Message);
             return new AutomaticRecallResult([], true, ex.Message, "execution");
         }
     }
@@ -196,7 +217,7 @@ public sealed class SQLiteMemoryRecallCoordinator(
             return request;
 
         var hardScope = string.IsNullOrWhiteSpace(request.SessionId)
-            ? "project:default"
+            ? SecurityPolicyDefaults.DefaultMemoryDomain
             : new Protocol.SessionId(request.SessionId).ToMemoryDomain();
 
         return request with { HardScopeOverride = hardScope };
@@ -262,6 +283,7 @@ public sealed class SQLiteMemoryRecallCoordinator(
     }
 
     private void LogRecallTrace(
+        string sessionId,
         string query,
         string? fallbackQuery,
         string domain,
@@ -277,7 +299,8 @@ public sealed class SQLiteMemoryRecallCoordinator(
         var selectedIds = string.Join(",", selectedDocumentIds.Take(maxItems));
 
         logger.LogInformation(
-            "memory_recall_query_trace domain={Domain} maxItems={MaxItems} primaryCount={PrimaryCount} selectedCount={SelectedCount} queryTerms={QueryTerms} fallbackTerms={FallbackTerms} selectedIds={SelectedIds}",
+            "memory_recall_query_trace session={SessionId} domain={Domain} maxItems={MaxItems} primaryCount={PrimaryCount} selectedCount={SelectedCount} queryTerms={QueryTerms} fallbackTerms={FallbackTerms} selectedIds={SelectedIds}",
+            sessionId,
             domain,
             maxItems,
             primaryCount,
@@ -330,7 +353,7 @@ public sealed class SQLiteMemoryRecallCoordinator(
 
         if (string.Equals(document.UpdateSemantics, Memory.MemoryUpdateSemantics.MergeDocument.ToWireValue(), StringComparison.OrdinalIgnoreCase))
             score += 80;
-        else if (string.Equals(document.UpdateSemantics, "append-document", StringComparison.OrdinalIgnoreCase))
+        else if (string.Equals(document.UpdateSemantics, Memory.MemoryUpdateSemantics.AppendDocument.ToWireValue(), StringComparison.OrdinalIgnoreCase))
             score += 60;
         else if (string.Equals(document.UpdateSemantics, Memory.MemoryUpdateSemantics.ConversationTrace.ToWireValue(), StringComparison.OrdinalIgnoreCase))
             score -= 300;

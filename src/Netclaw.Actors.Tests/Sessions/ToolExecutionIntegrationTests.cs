@@ -125,6 +125,9 @@ public class ToolExecutionIntegrationTests : TestKit
         Assert.Equal("web_search", toolCall.ToolName);
         Assert.Equal("call-1", toolCall.CallId);
 
+        // Drain the tool result output emitted after tool execution
+        await subscriber.ExpectMsgAsync<ToolResultOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+
         // Then: subscriber receives final text response (after tool result fed back)
         var text = await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Contains("fake", text.Text, StringComparison.OrdinalIgnoreCase);
@@ -179,6 +182,10 @@ public class ToolExecutionIntegrationTests : TestKit
         await subscriber.ExpectMsgAsync<ToolCallOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
         await subscriber.ExpectMsgAsync<ToolCallOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
 
+        // Drain two tool result outputs emitted after tool execution
+        await subscriber.ExpectMsgAsync<ToolResultOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<ToolResultOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+
         // Final text response
         await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
         await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
@@ -217,6 +224,9 @@ public class ToolExecutionIntegrationTests : TestKit
 
         // Tool call output emitted
         await subscriber.ExpectMsgAsync<ToolCallOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+
+        // Drain the tool result output (error text is fed back as a tool result)
+        await subscriber.ExpectMsgAsync<ToolResultOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
 
         // LLM gets called again with the error message as tool result,
         // then returns normal text
@@ -258,6 +268,7 @@ public class ToolExecutionIntegrationTests : TestKit
         }, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
 
         await subscriber.ExpectMsgAsync<ToolCallOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<ToolResultOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
         await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
         await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
 

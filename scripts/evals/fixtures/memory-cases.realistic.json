@@ -35,6 +35,30 @@
       "sensitivity": "secret",
       "recallMode": "auto",
       "confidence": 0.99
+    },
+    {
+      "documentId": "doc-eval-kegerator",
+      "anchorId": "anchor:homebrew-kegerator",
+      "anchorType": "preference",
+      "canonicalName": "homebrew-kegerator",
+      "title": "Homebrew Draft System Hardware",
+      "markdownBody": "Kegerator uses Hilangsan EVA tubing (3/16 ID, 3/8 OD) with KegLand stainless disconnect fittings. Soak tubing ends in hot water for easier barb install.",
+      "domain": "project:signalr",
+      "sensitivity": "normal",
+      "recallMode": "auto",
+      "confidence": 0.88
+    },
+    {
+      "documentId": "doc-eval-reddit",
+      "anchorId": "anchor:akkanet-reddit-monitor",
+      "anchorType": "project",
+      "canonicalName": "akkanet-reddit-monitor",
+      "title": "Akka.NET Reddit Monitoring",
+      "markdownBody": "Daily Reddit scanner checks r/dotnet and r/csharp for Akka.NET discussion threads and community questions. Results saved to home directory for review.",
+      "domain": "project:signalr",
+      "sensitivity": "normal",
+      "recallMode": "auto",
+      "confidence": 0.90
     }
   ],
   "cases": [
@@ -53,9 +77,31 @@
       "expectedRecallMarkers": ["restart worker-b"]
     },
     {
+      "id": "recall-precision-kegerator-indirect",
+      "kind": "recall_positive",
+      "prompt": "I need to replace a fitting on my draft system. What hardware am I using?",
+      "expectedRecallIds": ["doc-eval-kegerator"],
+      "expectedRecallMarkers": ["KegLand"],
+      "forbiddenRecallIds": ["doc-eval-alpha", "doc-eval-beta", "doc-eval-reddit"]
+    },
+    {
+      "id": "recall-precision-reddit-indirect",
+      "kind": "recall_positive",
+      "prompt": "Which subreddits are we monitoring for community mentions?",
+      "expectedRecallIds": ["doc-eval-reddit"],
+      "expectedRecallMarkers": ["r/dotnet"],
+      "forbiddenRecallIds": ["doc-eval-alpha", "doc-eval-beta", "doc-eval-kegerator"]
+    },
+    {
       "id": "noise-suppression-smalltalk",
       "kind": "noise_suppression",
       "prompt": "Quick vibe check only ___NONCE__",
+      "expectEmptyRecall": true
+    },
+    {
+      "id": "noise-suppression-conversational",
+      "kind": "noise_suppression",
+      "prompt": "Good morning, how are you doing today?",
       "expectEmptyRecall": true
     },
     {

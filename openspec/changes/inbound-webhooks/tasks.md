@@ -25,3 +25,13 @@
 - [x] 4.2 Add tests that route load/reload/unload failures emit operational alerts and that accepted-delivery receipt alerts remain separate from reminder-style human notifications.
 - [x] 4.3 Update config and operator docs for webhook feature enablement in `netclaw.json`, per-route file registration under `config/webhooks`, ingress security expectations, secret-bearing config handling, and Slack notification-target setup.
 - [ ] 4.4 Update any required system skill/docs for config-format changes and run the relevant test/quality gates (`dotnet test`, `dotnet slopwatch analyze`, and evals if skill content changes).
+
+## 5. Observability polish (0.10.1)
+
+- [ ] 5.1 Emit `ToolResultOutput` for every tool result in `LlmSessionActor.ToolExecutionCompleted` so webhook/reminder execution actors can correctly track notification-tool completion (fixes false-positive "no notification tool was invoked" warning — Aaronontheweb/netclaw#546). Update existing session integration tests to drain the new output between `ToolCallOutput` and following assertions.
+- [ ] 5.2 Add a `WebhookTelemetry` static class mirroring `ChannelTelemetry` with per-outcome `Interlocked` counters (`accepted`, `route_not_found`, `verification_failed`, `body_too_large`, `invalid_json`, `rate_limited`, `event_filtered`, `duplicate_delivery`), OpenTelemetry `Meter` instruments, `GetSnapshot()`, and `ResetForTests()`.
+- [ ] 5.3 Instrument `/api/webhooks/{route}` ingress in `WebhookEndpointRouteBuilderExtensions` with structured daemon logs per outcome (fields: `route`, `reason`, `remote_ip`, `delivery_id`, `event_type`) and matching `WebhookTelemetry.Record*()` calls. Rejection paths MUST NOT emit outbound operational notification alerts (Aaronontheweb/netclaw#545).
+- [ ] 5.4 Add `WebhookRouteCatalog.GetRouteCounts()` returning total / enabled / disabled / invalid route tallies; gate on the webhook feature flag.
+- [ ] 5.5 Add `DaemonStats.Webhooks` to the stats contract, wire it through `DaemonStatsService`, and render a `webhooks:` section in `netclaw stats` text output, TUI, and help text (Aaronontheweb/netclaw#543).
+- [ ] 5.6 Add tests covering rejection counter increments per reason, route-count tallies across enabled/disabled/invalid states, and the webhook stats contract surface.
+- [ ] 5.7 Update `feeds/skills/.system/files/netclaw-operations/SKILL.md` to describe the new stats section and structured rejection log fields; bump `metadata.version`.

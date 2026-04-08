@@ -190,15 +190,18 @@ public sealed class MemoryCurationActor : ReceiveActor, IWithUnboundedStash
         }
 
         // Query existing anchors for matches (by name)
-        var candidates = await _store.FindFuzzyAnchorMatchesAsync(
+        var anchorCandidates = await _store.FindFuzzyAnchorMatchesAsync(
             operation.AnchorCanonicalName,
             domain);
 
-        // If anchor-based search found nothing, fall back to content-based search
-        // using the same per-term scoring strategy the recall system uses.
-        // This catches "favorite color is blue" under anchor "favorite" when the
-        // existing copy is under "user-preferred-color" — different names, same content.
-        if (candidates.Count == 0 && !string.IsNullOrWhiteSpace(operation.Content))
+        // Build a mutable candidate list — content search may add more candidates below.
+        var candidates = new List<ExistingMemoryCandidate>(anchorCandidates);
+
+        // Run content-based search when there is no exact anchor match.
+        // This catches semantically identical content under very different anchor names
+        // (e.g., "netclaw-github-repo" vs "netclaw-source-location" — different names, same info).
+        var hasExactAnchorMatch = anchorCandidates.Any(c => c.IsExactAnchorMatch);
+        if (!hasExactAnchorMatch && !string.IsNullOrWhiteSpace(operation.Content))
         {
             var contentTerms = operation.Content
                 .Split([' ', '\t', '\n', '\r', '.', ',', ':', ';', '!', '?', '"', '\''],
@@ -215,8 +218,24 @@ public sealed class MemoryCurationActor : ReceiveActor, IWithUnboundedStash
                     contentTerms,
                     domain);
 
+                // Merge content candidates with anchor candidates, deduplicating by DocumentId.
                 if (contentCandidates.Count > 0)
-                    candidates = contentCandidates;
+                {
+                    var existingDocIds = new HashSet<string>(
+                        candidates.Select(c => c.DocumentId), StringComparer.OrdinalIgnoreCase);
+                    foreach (var cc in contentCandidates)
+                    {
+                        if (!existingDocIds.Contains(cc.DocumentId))
+                            candidates.Add(cc);
+                    }
+
+                    _log.Debug(
+                        "curation_dual_search anchor={0} anchor_hits={1} content_hits={2} merged={3}",
+                        operation.AnchorCanonicalName,
+                        anchorCandidates.Count,
+                        contentCandidates.Count,
+                        candidates.Count);
+                }
             }
         }
 
@@ -237,15 +256,27 @@ public sealed class MemoryCurationActor : ReceiveActor, IWithUnboundedStash
                 return llmDecision;
             }
 
-            // LLM failed — fall back to Create (safe default for ambiguous cases)
-            _log.Warning("curation_llm_fallback anchor={0} falling_back_to=Create", operation.AnchorCanonicalName);
-            return new CurationDecision(CurationDecisionKind.Create, null, null, null, "LLM timeout/failure fallback");
+            // LLM failed — fall through to deterministic auto-resolution below
         }
 
-        // Ambiguous with no LLM available -> default to Create
+        // Ambiguous (LLM unavailable or failed) — try deterministic auto-resolution
         if (rulesDecision.Kind == CurationDecisionKind.Ambiguous)
         {
-            return new CurationDecision(CurationDecisionKind.Create, null, null, null, "ambiguous without LLM, defaulting to create");
+            var autoResolved = CurationRulesEvaluator.TryAutoResolveAmbiguous(operation, candidates);
+            if (autoResolved is not null)
+            {
+                _log.Info(
+                    "curation_ambiguous_auto_resolved anchor={0} decision={1} reason={2}",
+                    operation.AnchorCanonicalName,
+                    autoResolved.Kind,
+                    autoResolved.Reason);
+                return autoResolved;
+            }
+
+            _log.Warning("curation_ambiguous_create_fallback anchor={0} llm_available={1}",
+                operation.AnchorCanonicalName, _llmClient is not null);
+            return new CurationDecision(CurationDecisionKind.Create, null, null, null,
+                "ambiguous: auto-resolve insufficient, defaulting to create");
         }
 
         return rulesDecision;

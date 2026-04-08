@@ -3,6 +3,7 @@ using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
 using Microsoft.Extensions.Configuration;
+using Netclaw.Cli.Config;
 using Netclaw.Configuration;
 
 namespace Netclaw.Cli.Daemon;
@@ -31,7 +32,7 @@ public sealed class DaemonApi
     public DaemonApi(IHttpClientFactory factory, IConfiguration configuration, NetclawPaths paths)
     {
         _factory = factory;
-        _endpoint = ResolveEndpoint(configuration);
+        _endpoint = ResolveEndpoint(paths);
         _deviceToken = DaemonClientFactory.ResolveDeviceToken(_endpoint, paths);
     }
 
@@ -41,13 +42,15 @@ public sealed class DaemonApi
     }
 
     /// <summary>
-    /// Resolves the daemon endpoint from config, environment, or default.
-    /// Usable without DI for callers that don't have <see cref="IConfiguration"/>.
+    /// Resolves the daemon endpoint from environment, local client state, or default.
+    /// Usable without DI for callers that don't have the CLI service provider.
     /// </summary>
-    public static string ResolveEndpoint(IConfiguration? configuration = null)
+    public static string ResolveEndpoint(NetclawPaths? paths = null)
     {
-        return (configuration?["Daemon:Endpoint"]
-            ?? Environment.GetEnvironmentVariable("NETCLAW_DAEMON_ENDPOINT")
+        paths ??= new NetclawPaths();
+
+        return (Environment.GetEnvironmentVariable("NETCLAW_DAEMON_ENDPOINT")
+            ?? ClientConfigFile.ReadEndpoint(paths)
             ?? DefaultEndpoint).TrimEnd('/');
     }
 

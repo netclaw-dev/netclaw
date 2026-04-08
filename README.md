@@ -255,7 +255,7 @@ On the remote device:
 ```bash
 netclaw pair https://my-daemon.tail1234.ts.net:5000
 # Prompted for the pairing code
-# On success: token saved to secrets.json, endpoint saved to netclaw.json
+# On success: token saved to secrets.json, endpoint saved to ~/.netclaw/client/config.json
 ```
 
 Choose a unique device name when prompted. Pairing a second device with the

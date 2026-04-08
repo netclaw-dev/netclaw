@@ -15,6 +15,10 @@ using Xunit;
 
 namespace Netclaw.Daemon.Tests.Webhooks;
 
+[CollectionDefinition("WebhookTelemetry", DisableParallelization = true)]
+public sealed class WebhookTelemetryCollection;
+
+[Collection("WebhookTelemetry")]
 public sealed class WebhookEndpointRouteBuilderExtensionsTests : IDisposable
 {
     private int _writeVersion;
@@ -28,6 +32,7 @@ public sealed class WebhookEndpointRouteBuilderExtensionsTests : IDisposable
         _paths = new NetclawPaths(_tempDir);
         _paths.EnsureDirectoriesExist();
         _store = new Netclaw.Configuration.WebhookRouteStore(_paths);
+        WebhookTelemetry.ResetForTests();
     }
 
     [Fact]
@@ -172,6 +177,108 @@ public sealed class WebhookEndpointRouteBuilderExtensionsTests : IDisposable
             Directory.Delete(_tempDir, recursive: true);
     }
 
+    [Fact]
+    public async Task Telemetry_counts_accepted_deliveries_and_each_rejection_reason()
+    {
+        _store.Save("github-issues", CreateRoute(maxBodyBytes: 16));
+        BumpWriteTime("github-issues");
+        await using var app = await CreateHostAsync();
+        var client = app.GetTestClient();
+        var body = "{\"repository\":{\"full_name\":\"petabridge/netclaw\"}}";
+
+        // route_not_found
+        var unknown = await client.PostAsync("/api/webhooks/missing", JsonContent.Create(new { hello = "world" }), TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.NotFound, unknown.StatusCode);
+
+        // verification_failed
+        using var badSig = new HttpRequestMessage(HttpMethod.Post, "/api/webhooks/github-issues")
+        {
+            Content = new StringContent("{}", Encoding.UTF8, "application/json")
+        };
+        badSig.Headers.Add("X-Hub-Signature-256", "sha256=deadbeef");
+        badSig.Headers.Add("X-GitHub-Event", "issues");
+        badSig.Headers.Add("X-GitHub-Delivery", "d-verification");
+        var badSigResponse = await client.SendAsync(badSig, TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.Unauthorized, badSigResponse.StatusCode);
+
+        // body_too_large — MaxBodyBytes=64, so this body overflows
+        using var tooLarge = BuildGitHubRequest("/api/webhooks/github-issues", body, "issues", "d-toolarge", "secret");
+        var tooLargeResponse = await client.SendAsync(tooLarge, TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.RequestEntityTooLarge, tooLargeResponse.StatusCode);
+
+        // event_filtered — small body but event type not in allowlist
+        var smallBody = "{\"x\":1}";
+        using var filtered = BuildGitHubRequest("/api/webhooks/github-issues", smallBody, "pull_request", "d-filtered", "secret");
+        var filteredResponse = await client.SendAsync(filtered, TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.Accepted, filteredResponse.StatusCode);
+
+        // accepted — small body, allowed event
+        using var accepted = BuildGitHubRequest("/api/webhooks/github-issues", smallBody, "issues", "d-accepted", "secret");
+        var acceptedResponse = await client.SendAsync(accepted, TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.Accepted, acceptedResponse.StatusCode);
+
+        // duplicate_delivery — same delivery id as accepted
+        using var dup = BuildGitHubRequest("/api/webhooks/github-issues", smallBody, "issues", "d-accepted", "secret");
+        var dupResponse = await client.SendAsync(dup, TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.Accepted, dupResponse.StatusCode);
+
+        var snapshot = WebhookTelemetry.GetSnapshot();
+        Assert.Equal(1, snapshot.RouteNotFound);
+        Assert.Equal(1, snapshot.VerificationFailed);
+        Assert.Equal(1, snapshot.BodyTooLarge);
+        Assert.Equal(1, snapshot.EventFiltered);
+        Assert.Equal(1, snapshot.Accepted);
+        Assert.Equal(1, snapshot.DuplicateDelivery);
+        Assert.Equal(0, snapshot.InvalidJson);
+        Assert.Equal(0, snapshot.RateLimited);
+
+        // rejection paths MUST NOT emit outbound operational alerts — only the
+        // accepted delivery emits a receipt alert
+        var notifications = app.Services.GetRequiredService<RecordingNotificationSink>();
+        Assert.Single(notifications.Alerts, x => x.Category == AlertType.WebhookReceived);
+    }
+
+    [Fact]
+    public async Task Telemetry_counts_rate_limited_requests()
+    {
+        _store.Save("github-issues", CreateRoute(rateLimitPerMinute: 1));
+        BumpWriteTime("github-issues");
+        await using var app = await CreateHostAsync();
+        var client = app.GetTestClient();
+        var body = "{\"x\":1}";
+
+        using var first = BuildGitHubRequest("/api/webhooks/github-issues", body, "issues", "rate-1", "secret");
+        var firstResponse = await client.SendAsync(first, TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.Accepted, firstResponse.StatusCode);
+
+        using var second = BuildGitHubRequest("/api/webhooks/github-issues", body, "issues", "rate-2", "secret");
+        var secondResponse = await client.SendAsync(second, TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.TooManyRequests, secondResponse.StatusCode);
+
+        var snapshot = WebhookTelemetry.GetSnapshot();
+        Assert.Equal(1, snapshot.RateLimited);
+        Assert.Equal(1, snapshot.Accepted);
+    }
+
+    [Fact]
+    public async Task Telemetry_counts_invalid_json()
+    {
+        _store.Save("github-issues", CreateRoute());
+        BumpWriteTime("github-issues");
+        await using var app = await CreateHostAsync();
+        var client = app.GetTestClient();
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/api/webhooks/github-issues")
+        {
+            Content = new StringContent("{ not valid json", Encoding.UTF8, "application/json")
+        };
+        var response = await client.SendAsync(request, TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+
+        var snapshot = WebhookTelemetry.GetSnapshot();
+        Assert.Equal(1, snapshot.InvalidJson);
+    }
+
     private void BumpWriteTime(string routeName)
     {
         var filePath = Path.Combine(_paths.WebhooksDirectory, $"{routeName}.json");
@@ -219,7 +326,7 @@ public sealed class WebhookEndpointRouteBuilderExtensionsTests : IDisposable
         return request;
     }
 
-    private static WebhookRouteConfig CreateRoute(int maxBodyBytes = 1024 * 1024) => new()
+    private static WebhookRouteConfig CreateRoute(int maxBodyBytes = 1024 * 1024, int rateLimitPerMinute = 30) => new()
     {
         Prompt = "triage this event",
         Events = ["issues"],
@@ -238,7 +345,7 @@ public sealed class WebhookEndpointRouteBuilderExtensionsTests : IDisposable
             DeliveryIdHeaderName = "X-GitHub-Delivery"
         },
         MaxBodyBytes = maxBodyBytes,
-        RateLimitPerMinute = 30
+        RateLimitPerMinute = rateLimitPerMinute
     };
 
     private sealed class FakeWebhookExecutionService : IWebhookExecutionService

@@ -2,6 +2,7 @@ using System.Net;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Configuration;
+using Netclaw.Cli.Config;
 using Netclaw.Cli.Daemon;
 using Netclaw.Configuration;
 using Xunit;
@@ -23,6 +24,7 @@ public sealed class DaemonApiAuthenticationTests : IDisposable
 
     public void Dispose()
     {
+        Environment.SetEnvironmentVariable("NETCLAW_DAEMON_ENDPOINT", null);
         if (Directory.Exists(_tempDir))
             Directory.Delete(_tempDir, recursive: true);
     }
@@ -70,14 +72,21 @@ public sealed class DaemonApiAuthenticationTests : IDisposable
         Assert.Empty(devices);
     }
 
+    [Fact]
+    public void ResolveEndpoint_EnvironmentOverride_WinsOverClientConfig()
+    {
+        ClientConfigFile.WriteEndpoint(_paths, "http://192.168.1.50:5199");
+        Environment.SetEnvironmentVariable("NETCLAW_DAEMON_ENDPOINT", "http://override-host:6000/");
+
+        var endpoint = DaemonApi.ResolveEndpoint(_paths);
+
+        Assert.Equal("http://override-host:6000", endpoint);
+    }
+
     private DaemonApi CreateDaemonApi(string endpoint, Func<HttpRequestMessage, HttpResponseMessage> handler)
     {
-        var configuration = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                ["Daemon:Endpoint"] = endpoint
-            })
-            .Build();
+        ClientConfigFile.WriteEndpoint(_paths, endpoint);
+        var configuration = new ConfigurationBuilder().Build();
 
         return new DaemonApi(new StubHttpClientFactory(handler), configuration, _paths);
     }

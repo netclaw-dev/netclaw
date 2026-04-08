@@ -53,6 +53,11 @@ public static class CurationRulesEvaluator
     private const double HighOverlapThreshold = 0.80;
     private const double AmbiguousLowerThreshold = 0.40;
 
+    // Auto-resolution thresholds for Ambiguous decisions when LLM is unavailable.
+    // Both thresholds must be exceeded to auto-resolve to Skip.
+    private const double AmbiguousAutoResolveContentThreshold = 0.60;
+    private const double AmbiguousAutoResolveAnchorJaccard = 0.50;
+
     /// <summary>
     /// Evaluate a single proposal against existing candidates and return a decision.
     /// </summary>
@@ -173,5 +178,42 @@ public static class CurationRulesEvaluator
             null,
             null,
             $"fuzzy anchor match but low content overlap ({overlap:P0})");
+    }
+
+    /// <summary>
+    /// Attempt to resolve an Ambiguous decision without LLM involvement.
+    /// Returns a Skip decision when both content overlap and anchor Jaccard exceed
+    /// auto-resolution thresholds. Returns null if the case is too uncertain —
+    /// caller should fall back to Create.
+    /// </summary>
+    public static CurationDecision? TryAutoResolveAmbiguous(
+        SQLiteMemoryCurationOperation proposal,
+        IReadOnlyList<ExistingMemoryCandidate> candidates)
+    {
+        if (candidates.Count == 0)
+            return null;
+
+        var best = candidates
+            .OrderByDescending(c => c.Confidence)
+            .ThenByDescending(c => c.FreshnessAtMs ?? 0)
+            .First();
+
+        // Check anchor similarity first (cheap: 2-6 tokens) before content overlap (expensive: full text)
+        var proposalTokens = AnchorNameMatcher.Tokenize(proposal.AnchorCanonicalName);
+        var bestTokens = AnchorNameMatcher.Tokenize(best.AnchorCanonicalName);
+        var anchorJaccard = AnchorNameMatcher.ComputeAnchorJaccard(proposalTokens, bestTokens);
+        if (anchorJaccard < AmbiguousAutoResolveAnchorJaccard)
+            return null;
+
+        var contentOverlap = AnchorNameMatcher.ComputeContentOverlap(proposal.Content, best.Content);
+        if (contentOverlap < AmbiguousAutoResolveContentThreshold)
+            return null;
+
+        return new CurationDecision(
+            CurationDecisionKind.Skip,
+            best.DocumentId,
+            null,
+            null,
+            $"auto-resolved ambiguous: content overlap ({contentOverlap:P0}) + anchor similarity ({anchorJaccard:F2})");
     }
 }

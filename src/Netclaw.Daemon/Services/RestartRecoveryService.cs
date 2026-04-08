@@ -35,6 +35,11 @@ public sealed class RestartRecoveryService : IHostedService
 
     public async Task StartAsync(CancellationToken cancellationToken)
     {
+        // Reconcile stale 'active' sessions from the previous daemon lifetime.
+        // Must run before reading the manifest so that re-warmed sessions get
+        // a clean 'inactive' → 'active' transition via MarkSessionActive().
+        _sessionCatalog.ReconcileStaleActiveSessions();
+
         var manifest = await _manifestStore.ReadAsync(cancellationToken);
         if (manifest is null)
             return;
