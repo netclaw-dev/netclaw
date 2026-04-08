@@ -38,7 +38,12 @@ public sealed class SessionMemoryObserverActor : ReceivePersistentActor
     private readonly ILoggingAdapter _log = Context.GetLogger();
 
     private readonly StringBuilder _transcript = new();
+    // V1 backward compat: sessions with existing MemoriesDistilled journal
+    // entries only carry anchor slugs. _proposedAnchors is populated during
+    // V1 recovery so those anchors are not lost. New sessions use V2 events
+    // and populate _proposedMemories instead.
     private readonly HashSet<string> _proposedAnchors = new(StringComparer.OrdinalIgnoreCase);
+    private readonly List<ProposedMemoryContext> _proposedMemories = new();
     private bool _hasNewContent;
     private bool _draining;
     private long _contentVersion;
@@ -79,7 +84,17 @@ public sealed class SessionMemoryObserverActor : ReceivePersistentActor
         Recover<MemoriesDistilled>(evt =>
         {
             foreach (var anchor in evt.Anchors)
+            {
                 _proposedAnchors.Add(anchor);
+                _proposedMemories.Add(new ProposedMemoryContext(anchor, anchor, string.Empty));
+            }
+        });
+
+        Recover<MemoriesDistilledV2>(evt =>
+        {
+            foreach (var anchor in evt.Anchors)
+                _proposedAnchors.Add(anchor);
+            _proposedMemories.AddRange(evt.Proposals);
         });
 
         Recover<RecoveryCompleted>(_ =>
@@ -140,6 +155,7 @@ public sealed class SessionMemoryObserverActor : ReceivePersistentActor
         });
 
         Command<DistillationRunCompleted>(HandleDistillationRunCompleted);
+        Command<RecordAcceptedDistillationProposals>(HandleRecordAcceptedDistillationProposals);
 
         Context.SetReceiveTimeout(_idleTimeout);
     }
@@ -186,7 +202,7 @@ public sealed class SessionMemoryObserverActor : ReceivePersistentActor
             _sessionId.ToMemoryDomain(),
             _turnCount,
             transcriptText,
-            _proposedAnchors.ToArray(),
+            _proposedMemories.ToArray(),
             _sidecarTimeout,
             Self,
             run.RunId,
@@ -258,21 +274,48 @@ public sealed class SessionMemoryObserverActor : ReceivePersistentActor
             }
         }
 
-        if (msg.FailureReason is null && msg.Anchors.Count > 0)
-        {
-            var evt = new MemoriesDistilled(msg.Anchors, _timeProvider.GetUtcNow().ToUnixTimeMilliseconds());
-            Persist(evt, e =>
-            {
-                foreach (var anchor in e.Anchors)
-                    _proposedAnchors.Add(anchor);
+        Dispatch();
+    }
 
-                _log.Info("session_observer_anchors_persisted count={Count}", e.Anchors.Count);
-                Dispatch();
-            });
+    private void HandleRecordAcceptedDistillationProposals(RecordAcceptedDistillationProposals msg)
+    {
+        if (msg.Proposals.Count == 0)
+        {
+            Sender.Tell(AcceptedDistillationProposalsRecorded.Instance);
             return;
         }
 
-        Dispatch();
+        var proposalContexts = msg.Proposals
+            .Where(p => p.Anchor is not null && !string.IsNullOrWhiteSpace(p.Anchor.CanonicalName))
+            .Select(p => new ProposedMemoryContext(p.Anchor!.CanonicalName, p.Title, p.Content))
+            .DistinctBy(p => p.Anchor, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        if (proposalContexts.Length == 0)
+        {
+            Sender.Tell(AcceptedDistillationProposalsRecorded.Instance);
+            return;
+        }
+
+        var anchors = proposalContexts
+            .Select(p => p.Anchor)
+            .ToArray();
+
+        var evt = new MemoriesDistilledV2(anchors, proposalContexts, _timeProvider.GetUtcNow().ToUnixTimeMilliseconds());
+        Persist(evt, e =>
+        {
+            foreach (var anchor in e.Anchors)
+                _proposedAnchors.Add(anchor);
+
+            foreach (var proposal in e.Proposals)
+            {
+                _proposedMemories.RemoveAll(existing => string.Equals(existing.Anchor, proposal.Anchor, StringComparison.OrdinalIgnoreCase));
+                _proposedMemories.Add(proposal);
+            }
+
+            _log.Info("session_observer_accepted_proposals_persisted count={Count}", e.Proposals.Count);
+            Sender.Tell(AcceptedDistillationProposalsRecorded.Instance);
+        });
     }
 
     private void AppendTranscriptLine(string line)
@@ -288,7 +331,7 @@ public sealed class SessionMemoryObserverActor : ReceivePersistentActor
         string domain,
         int turnCount,
         string transcript,
-        IReadOnlyList<string> skipAnchors,
+        IReadOnlyList<ProposedMemoryContext> existingProposals,
         TimeSpan timeout,
         IActorRef self,
         long runId,
@@ -302,9 +345,9 @@ public sealed class SessionMemoryObserverActor : ReceivePersistentActor
             using var cts = new CancellationTokenSource(timeout);
             var messages = new List<ChatMessage>
             {
-                new(Microsoft.Extensions.AI.ChatRole.System, BuildDistillationSystemPrompt()),
+                new(Microsoft.Extensions.AI.ChatRole.System, DistillationSystemPrompt),
                 new(Microsoft.Extensions.AI.ChatRole.User, BuildDistillationUserPrompt(
-                    sessionId, domain, turnCount, transcript, skipAnchors))
+                    sessionId, domain, turnCount, transcript, existingProposals))
             };
 
             var response = await client.GetResponseAsync(messages, cancellationToken: cts.Token);
@@ -394,32 +437,78 @@ public sealed class SessionMemoryObserverActor : ReceivePersistentActor
         _ => null
     };
 
+    private static readonly string DistillationSystemPrompt = BuildDistillationSystemPrompt();
+
     internal static string BuildDistillationSystemPrompt() => $$"""
         You are a session memory distillation sidecar.
-        You receive the full transcript of a conversation session.
+        You receive a conversation transcript and a list of memories already
+        proposed in this session (existingProposals).
         Return JSON only: { "proposals": [ ... ] }
 
-        Your job: identify the 2-5 most valuable things learned in this session.
+        Your job: curate the user's memory store based on this session.
 
-        What to extract:
-        - Stable user preferences, decisions, or assertions -> durable_fact (recallMode: "auto")
-        - Agent conclusions from research, analysis, or tool use -> evidence (recallMode: "searchable")
-        - Project facts, constraints, or architectural decisions -> durable_fact (recallMode: "auto")
-        - Task outcomes and significant results -> evidence (recallMode: "searchable")
+        ## Workflow
+
+        1. Identify what was learned in this session worth retaining
+        2. Check existingProposals — if new information enriches an existing
+           memory, re-use that anchor canonicalName. The system will merge
+           your content into the existing entry.
+        3. Only create a new anchor for genuinely new topics not covered by
+           any existing proposal
+        4. Skip anything trivial, sensitive, or already fully captured
+
+        Yield 1-3 proposals. Fewer, richer entries beat many thin ones.
+        Consolidate related facts into a single proposal.
+
+        ## What to store (operational facts the agent can act on)
+
+        - Tool, service, and account preferences (airlines, CRMs, editors)
+        - Business and project context (company, products, team structure)
+        - Travel logistics (home airport, loyalty programs, preferences)
+        - Communication preferences and routines
+        - Technical decisions, constraints, architectural choices
+        - Workflow patterns and automation requirements
+
+        ## What to never store
+
+        - Credentials, API keys, tokens, passwords
+        - Financial account numbers or balances
+        - Medical or health information
+
+        ## What to skip unless the user explicitly says "remember this"
+
+        - Family or relationship dynamics
+        - Personal opinions about specific people
+        - Emotional processing or venting
+        - Content shared as context that isn't itself a fact worth retaining
+
+        ## What to skip (always)
+
+        - Greetings, pleasantries, task coordination ("can you do X" / "sure")
+        - Intermediate reasoning superseded by a later conclusion
+        - Information already in [recalled-memory] entries — already stored
+        - Information from [loaded-skill] entries — system knowledge, not memories
+        - Raw data or tool output summarized later (keep summary, skip raw)
+        - Anything the user corrected or walked back
 
         {{MemorySidecarPromptBuilder.BuildClassificationRules()}}
 
-        What to skip:
-        - Greetings, pleasantries, task coordination ("can you do X" / "sure")
-        - Intermediate reasoning superseded by a later conclusion
-        - Information already present in [recalled-memory] entries - those are already stored
-        - Information from [loaded-skill] entries - those are system knowledge, not memories
-        - Raw data or tool output that was summarized later (keep the summary, skip the raw)
-        - Anything the user corrected or walked back
-        - Anchors listed in the "skipAnchors" field - those were already proposed
+        ## Title rules
 
-        Focus on the narrative arc: What did this session accomplish?
-        What would be useful to know in a future session?
+        - Clean, concise noun phrases (3-8 words)
+        - Never use raw user quotes or speech artifacts as titles
+        - Never prefix with the memory class ("Project Fact: ...")
+        - Good: "Petabridge Marketing Automation Stack"
+        - Bad: "Project Fact: Biggest need I has Right now is I need to monitor a"
+
+        ## Deduplication
+
+        For each entry in existingProposals:
+        - If you have NEW information to add → re-use the same anchor name
+        - If the transcript just restates what was captured → skip entirely
+        - Only create a new anchor if the topic is clearly distinct
+
+        ## Proposal format
 
         For each proposal, include:
         - operation: "upsert_document" for durable_fact, "append_record" for evidence (see rules above)
@@ -472,12 +561,17 @@ public sealed class SessionMemoryObserverActor : ReceivePersistentActor
         string domain,
         int turnCount,
         string transcript,
-        IReadOnlyList<string> skipAnchors) => JsonSerializer.Serialize(new
+        IReadOnlyList<ProposedMemoryContext> existingProposals) => JsonSerializer.Serialize(new
     {
         sessionId,
         domain,
         turnCount,
-        skipAnchors,
+        existingProposals = existingProposals.Select(p => new
+        {
+            anchor = p.Anchor,
+            title = p.Title,
+            content = p.Content
+        }),
         transcript
     });
 
@@ -505,6 +599,28 @@ public sealed class SessionMemoryObserverActor : ReceivePersistentActor
 
 /// <summary>Journaled event recording which anchors were proposed in a distillation.</summary>
 public sealed record MemoriesDistilled(IReadOnlyList<string> Anchors, long TimestampMs);
+
+/// <summary>Journaled event recording proposed anchors with title and content context for deduplication.</summary>
+public sealed record MemoriesDistilledV2(
+    IReadOnlyList<string> Anchors,
+    IReadOnlyList<ProposedMemoryContext> Proposals,
+    long TimestampMs);
+
+/// <summary>Context for a previously proposed memory, used for semantic dedup in subsequent distillation runs.</summary>
+public sealed record ProposedMemoryContext(string Anchor, string Title, string Content);
+
+/// <summary>Sent by the session actor after proposals survive gating and are accepted for curation.</summary>
+public sealed record RecordAcceptedDistillationProposals(IReadOnlyList<MemoryProposal> Proposals);
+
+/// <summary>Ack from the observer once accepted proposal dedup state has been persisted.</summary>
+public sealed class AcceptedDistillationProposalsRecorded
+{
+    public static readonly AcceptedDistillationProposalsRecorded Instance = new();
+
+    private AcceptedDistillationProposalsRecorded()
+    {
+    }
+}
 
 /// <summary>System context injection forwarded to the observer (recalled memories, loaded skills).</summary>
 public sealed record ObserverSystemContext(string Label, string Content);

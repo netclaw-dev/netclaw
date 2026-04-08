@@ -283,9 +283,11 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
         // Channels step: intercept keys before the focus manager can consume them.
         // Stale IFocusable components (SelectionListNode, TextInputNode) from prior
         // steps remain on the focus stack and consume ↑/↓ arrows and letter keys.
-        // Escape is NOT intercepted — it flows through ViewModel.Input for back-navigation.
+        // Escape is only intercepted in add-channel mode (to cancel the dialog);
+        // in normal mode it flows through ViewModel.Input for back-navigation.
         if (ViewModel.Orchestrator.CurrentStep is ChannelsStepViewModel
-            && keyInfo.Key != ConsoleKey.Escape)
+            && (keyInfo.Key != ConsoleKey.Escape
+                || ((ChannelsStepView)ViewModel.StepViews["channels"]).IsAddMode))
         {
             var channelsView = ViewModel.StepViews["channels"];
             if (channelsView.HandleKeyPress(new KeyPressed(keyInfo)))

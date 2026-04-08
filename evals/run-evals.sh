@@ -240,6 +240,18 @@ assert_memory_formation() {
     daemon_log_contains 'turn_memory_checkpoint_enqueued'
 }
 
+assert_memory_recall_filters() {
+    # After overfetch fix: at least one candidate selection should reduce the set.
+    daemon_log_tail | awk '
+        match($0, /rawCount=([0-9]+).*selectedCount=([0-9]+)/, m) {
+            if ((m[1] + 0) > (m[2] + 0)) {
+                found = 1
+            }
+        }
+        END { exit found ? 0 : 1 }
+    '
+}
+
 # Category 4: Tool Discovery & Use
 assert_tool_discovery() {
     stdout_contains '\[tool:call\] search_tools'
@@ -436,6 +448,9 @@ run_all() {
 
     run_case memory_formation "checkpoint enqueued" \
         "Remember that my favorite color is blue"
+
+    run_case memory_recall_filters "candidate selection with score filtering" \
+        "Tell me about my travel preferences"
 
     end_category
 

@@ -42,10 +42,10 @@ public sealed class DeterministicRetrievalRequestPlanner
             HardScope: hardScope,
             SoftScopes: softScopes,
             RetrievalMode: retrievalMode,
-            LexicalTerms: tokens,
+            LexicalTerms: CapLexicalTerms(tokens, anchorHints),
             Facets: facets,
             AnchorHints: anchorHints,
-            CandidateLimit: retrievalMode == DeterministicRetrievalMode.Bundle ? 60 : 30,
+            CandidateLimit: retrievalMode == DeterministicRetrievalMode.Bundle ? BundleCandidateLimit : RankedCandidateLimit,
             AllowedMemoryClasses: [MemoryClass.DurableFact.ToWireValue(), MemoryClass.Evidence.ToWireValue()],
             ExcludedSensitivity: [MemorySensitivity.Secret.ToWireValue()],
             ExcludeExpired: true);
@@ -131,6 +131,26 @@ public sealed class DeterministicRetrievalRequestPlanner
 
         if (tokens.Any(x => x is "pricing" || x == "homepage") || anchorHints.Any(x => x.Contains("textforge", StringComparison.OrdinalIgnoreCase)))
             yield return "project_fact";
+    }
+
+    private const int RankedCandidateLimit = 15;
+    private const int BundleCandidateLimit = 20;
+    private const int MaxLexicalTerms = 12;
+
+    private static IReadOnlyList<string> CapLexicalTerms(IReadOnlyList<string> tokens, IReadOnlyList<string> anchorHints)
+    {
+        if (tokens.Count <= MaxLexicalTerms)
+            return tokens;
+
+        var anchorSet = new HashSet<string>(anchorHints, StringComparer.OrdinalIgnoreCase);
+
+        // Promote tokens that appear in anchor hints, then sort remaining by
+        // length descending (longer tokens are more discriminative).
+        return tokens
+            .OrderByDescending(t => anchorSet.Contains(t) ? 1 : 0)
+            .ThenByDescending(t => t.Length)
+            .Take(MaxLexicalTerms)
+            .ToArray();
     }
 
     private static DeterministicRetrievalMode InferMode(IReadOnlyList<string> tokens, IReadOnlyList<string> facets)

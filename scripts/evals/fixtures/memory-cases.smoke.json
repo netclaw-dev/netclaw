@@ -35,6 +35,30 @@
       "sensitivity": "secret",
       "recallMode": "auto",
       "confidence": 0.99
+    },
+    {
+      "documentId": "doc-eval-kegerator",
+      "anchorId": "anchor:eval-kegerator",
+      "anchorType": "preference",
+      "canonicalName": "eval-kegerator-setup",
+      "title": "Kegerator Hardware Setup",
+      "markdownBody": "KEGERATOR_SETUP_004: Using Hilangsan EVA tubing 3/16 ID with KegLand stainless disconnect fittings. Soak tubing in hot water before install.",
+      "domain": "project:signalr",
+      "sensitivity": "normal",
+      "recallMode": "auto",
+      "confidence": 0.88
+    },
+    {
+      "documentId": "doc-eval-reddit",
+      "anchorId": "anchor:eval-reddit",
+      "anchorType": "project",
+      "canonicalName": "eval-reddit-scanner",
+      "title": "Reddit Scanner Configuration",
+      "markdownBody": "REDDIT_SCAN_005: Daily scanner targets r/dotnet and r/csharp for Akka.NET mentions. Output saved to home directory.",
+      "domain": "project:signalr",
+      "sensitivity": "normal",
+      "recallMode": "auto",
+      "confidence": 0.90
     }
   ],
   "cases": [
@@ -53,9 +77,31 @@
       "expectedRecallMarkers": ["BETA_INCIDENT_002"]
     },
     {
+      "id": "recall-precision-kegerator",
+      "kind": "recall_positive",
+      "prompt": "What tubing do I use for my kegerator?",
+      "expectedRecallIds": ["doc-eval-kegerator"],
+      "expectedRecallMarkers": ["KEGERATOR_SETUP_004"],
+      "forbiddenRecallIds": ["doc-eval-alpha", "doc-eval-beta", "doc-eval-reddit"]
+    },
+    {
+      "id": "recall-precision-reddit",
+      "kind": "recall_positive",
+      "prompt": "How is my Reddit scanner configured?",
+      "expectedRecallIds": ["doc-eval-reddit"],
+      "expectedRecallMarkers": ["REDDIT_SCAN_005"],
+      "forbiddenRecallIds": ["doc-eval-alpha", "doc-eval-beta", "doc-eval-kegerator"]
+    },
+    {
       "id": "noise-suppression-random",
       "kind": "noise_suppression",
       "prompt": "Reply with exactly NO_MEMORY_EXPECTED_003___NONCE__",
+      "expectEmptyRecall": true
+    },
+    {
+      "id": "noise-suppression-common-terms",
+      "kind": "noise_suppression",
+      "prompt": "Can you help me set up my new project?",
       "expectEmptyRecall": true
     },
     {

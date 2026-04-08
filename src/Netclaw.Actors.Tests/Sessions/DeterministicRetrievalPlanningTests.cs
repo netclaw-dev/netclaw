@@ -131,6 +131,73 @@ public sealed class DeterministicRetrievalPlanningTests
     }
 
     [Fact]
+    public async Task Coordinator_reports_composite_score_used_for_final_ordering()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "netclaw-deterministic-score-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        var store = new SQLiteMemoryStore(Path.Combine(dir, "memory.db"), TimeProvider.System);
+        await store.InitializeAsync(TestContext.Current.CancellationToken);
+
+        var anchor = store.CreateDefaultAnchor("textforge-pricing-model", "user:aaron");
+        var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+        await store.UpsertDocumentAsync(new SQLiteMemoryDocument(
+            DocumentId: "doc-textforge-pricing-score",
+            Anchor: anchor,
+            MemoryClass: "durable_fact",
+            Title: "TextForge Pricing Model",
+            MarkdownBody: "TextForge pricing uses a monthly subscription.",
+            AliasesJson: "[\"textforge\",\"pricing model\"]",
+            FacetsJson: "[\"project_fact\"]",
+            SlotsJson: null,
+            UpdateSemantics: "merge-document",
+            Domain: "user:aaron",
+            Sensitivity: "normal",
+            RecallMode: "auto",
+            Confidence: 0.9,
+            FreshnessAtMs: now,
+            ExpiresAtMs: null,
+            CreatedAtMs: now,
+            UpdatedAtMs: now), TestContext.Current.CancellationToken);
+
+        var coordinator = new SQLiteMemoryRecallCoordinator(
+            store,
+            NullLogger<SQLiteMemoryRecallCoordinator>.Instance,
+            sessionTuning: new SessionTuning { DeterministicRetrievalEnabled = true, MemorySidecarsEnabled = false });
+
+        var result = await coordinator.RecallAsync(new AutomaticRecallRequest(
+            SessionId: "signalr/thread-score",
+            Query: "What's the pricing model for TextForge?",
+            RecentUserMessages: ["What's the pricing model for TextForge?"],
+            MaxItems: 3,
+            HardScopeOverride: "user:aaron",
+            ThreadTitle: "Product planning"), TestContext.Current.CancellationToken);
+
+        var item = Assert.Single(result.Items, x => x.Id == "doc-textforge-pricing-score");
+        Assert.True(item.Score > 4.0, $"Expected composite score to exceed raw lexical score, got {item.Score:F2}");
+    }
+
+    [Fact]
+    public void Planner_caps_lexical_terms_for_long_messages()
+    {
+        var planner = new DeterministicRetrievalRequestPlanner();
+        var longMessage = "I need to book a flight from Houston to Columbus for the Stir Trek conference " +
+            "and I want to know about hotel recommendations near the venue and also " +
+            "what restaurants are good for dinner with speakers and attendees and organizers " +
+            "because we are planning a group outing after the keynote sessions conclude";
+
+        var plan = planner.Plan(new AutomaticRecallRequest(
+            SessionId: "signalr/thread-long",
+            Query: longMessage,
+            RecentUserMessages: [longMessage],
+            MaxItems: 3,
+            HardScopeOverride: "user:aaron"));
+
+        Assert.True(plan.LexicalTerms.Count <= 12,
+            $"Expected at most 12 lexical terms but got {plan.LexicalTerms.Count}: [{string.Join(", ", plan.LexicalTerms)}]");
+    }
+
+    [Fact]
     public void Planner_includes_evidence_in_allowed_memory_classes()
     {
         var planner = new DeterministicRetrievalRequestPlanner();

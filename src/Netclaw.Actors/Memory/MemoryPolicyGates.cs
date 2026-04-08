@@ -7,6 +7,12 @@ namespace Netclaw.Actors.Memory;
 
 public sealed class MemoryProposalGate
 {
+    private sealed record AcceptedProposal(
+        MemoryProposal Proposal,
+        SQLiteMemoryCurationOperation? MemoryOperation,
+        IdentityProfileUpdate? IdentityUpdate,
+        int OriginalIndex);
+
     private static readonly string[] StableIdentityFacets =
     [
         "travel_profile",
@@ -29,6 +35,7 @@ public sealed class MemoryProposalGate
         int IdentityUpdates,
         IReadOnlyDictionary<string, int> RejectionReasons);
 
+    private const int MaxProposalsPerRun = 3;
     private static readonly TimeSpan EvidenceExpiry = TimeSpan.FromDays(30);
     private static readonly TimeSpan TraceExpiry = TimeSpan.FromHours(72);
     private static readonly Regex IdentityTitlePattern = new(
@@ -55,12 +62,12 @@ public sealed class MemoryProposalGate
         string? boundary = null,
         TrustAudience audience = TrustAudience.Public)
     {
-        var accepted = new List<SQLiteMemoryCurationOperation>();
-        var identityUpdates = new List<IdentityProfileUpdate>();
+        var accepted = new List<AcceptedProposal>();
         var rejectionReasons = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
 
-        foreach (var proposal in proposals)
+        for (var index = 0; index < proposals.Count; index++)
         {
+            var proposal = proposals[index];
             if (proposal is null)
             {
                 CountReject("null-proposal");
@@ -94,14 +101,13 @@ public sealed class MemoryProposalGate
                     continue;
                 }
 
-                identityUpdates.Add(new IdentityProfileUpdate(
+                var identityUpdate = new IdentityProfileUpdate(
                     proposal.Title,
                     proposal.Content,
-                    proposal.Rationale));
+                    proposal.Rationale);
 
                 var mirrorOperation = TryBuildIdentityMirrorOperation(proposal, operation, memoryClass, domain, defaultSensitivity, nowMs, boundary, audience);
-                if (mirrorOperation is not null)
-                    accepted.Add(mirrorOperation);
+                accepted.Add(new AcceptedProposal(proposal, mirrorOperation, identityUpdate, index));
 
                 continue;
             }
@@ -128,16 +134,47 @@ public sealed class MemoryProposalGate
                 content = JsonSerializer.Serialize(envelope);
             }
 
-            accepted.Add(BuildMemoryOperation(proposal, operation, memoryClass, domain, sensitivity, recallMode, freshnessAt, expiry, content, boundary, audience));
+            accepted.Add(new AcceptedProposal(
+                proposal,
+                BuildMemoryOperation(proposal, operation, memoryClass, domain, sensitivity, recallMode, freshnessAt, expiry, content, boundary, audience),
+                null,
+                index));
         }
 
+        // Cap at 3 accepted proposals per run, including identity-only proposals.
+        if (accepted.Count > MaxProposalsPerRun)
+        {
+            var trimmed = accepted.Count - MaxProposalsPerRun;
+            accepted = accepted
+                .OrderByDescending(a => a.Proposal.Confidence)
+                .ThenBy(a => a.OriginalIndex)
+                .Take(MaxProposalsPerRun)
+                .ToList();
+            rejectionReasons["max-proposals-exceeded"] = trimmed;
+        }
+
+        var memoryOperations = accepted
+            .Where(a => a.MemoryOperation is not null)
+            .Select(a => a.MemoryOperation!)
+            .ToArray();
+
+        var identityUpdates = accepted
+            .Where(a => a.IdentityUpdate is not null)
+            .Select(a => a.IdentityUpdate!)
+            .ToArray();
+
+        var acceptedProposals = accepted
+            .Select(a => a.Proposal)
+            .ToArray();
+
         return new MemoryProposalGateResult(
-            accepted,
+            memoryOperations,
             identityUpdates,
+            acceptedProposals,
             new ProposalDecisionSummary(
                 Total: proposals.Count,
-                Accepted: accepted.Count,
-                IdentityUpdates: identityUpdates.Count,
+                Accepted: acceptedProposals.Length,
+                IdentityUpdates: identityUpdates.Length,
                 RejectionReasons: rejectionReasons));
 
         void CountReject(string reason)
@@ -363,6 +400,7 @@ public sealed record IdentityProfileUpdate(
 public sealed record MemoryProposalGateResult(
     IReadOnlyList<SQLiteMemoryCurationOperation> MemoryOperations,
     IReadOnlyList<IdentityProfileUpdate> IdentityUpdates,
+    IReadOnlyList<MemoryProposal> AcceptedProposals,
     MemoryProposalGate.ProposalDecisionSummary Summary);
 
 public sealed class RecallPlanGate

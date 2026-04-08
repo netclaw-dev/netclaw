@@ -47,16 +47,44 @@ public sealed class DeterministicCandidateSelectorTests
         UpdatedAtMs: DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
 
     [Fact]
-    public void Candidate_with_no_lexical_overlap_survives_baseline_score()
+    public void Candidate_with_no_feature_match_is_rejected()
     {
         var selector = new DeterministicCandidateSelector();
         var plan = MakePlan(lexicalTerms: ["session"]);
-        var item = MakeItem("doc-1", "User Identity Profile", "Aaron runs Petabridge.");
+        // Cross-domain item with no lexical overlap — baseline score only.
+        var item = MakeItem("doc-1", "User Identity Profile", "Aaron runs Petabridge.", domain: "project:other");
+
+        var result = selector.Select(plan, [item]);
+
+        Assert.Empty(result);
+    }
+
+    [Fact]
+    public void Candidate_with_single_lexical_match_survives_threshold()
+    {
+        var selector = new DeterministicCandidateSelector();
+        var plan = MakePlan(lexicalTerms: ["petabridge"]);
+        var item = MakeItem("doc-1", "Company Profile", "Petabridge builds Akka.NET.");
 
         var result = selector.Select(plan, [item]);
 
         Assert.Single(result);
-        Assert.Equal("doc-1", result[0].Id);
+    }
+
+    [Fact]
+    public void Baseline_only_candidates_excluded_from_scored_results()
+    {
+        var selector = new DeterministicCandidateSelector();
+        var plan = MakePlan(lexicalTerms: ["kubernetes"]);
+        // Cross-domain noise item has no lexical or domain match — baseline only.
+        var noise = MakeItem("doc-noise", "Unrelated", "Something about databases.", domain: "project:other");
+        var relevant = MakeItem("doc-relevant", "K8s Guide", "Deploy to kubernetes cluster.");
+
+        var result = selector.SelectWithScores(plan, [noise, relevant]);
+
+        Assert.Single(result);
+        Assert.Equal("doc-relevant", result[0].Item.Id);
+        Assert.True(result[0].SelectorScore >= 2.0);
     }
 
     [Fact]
