@@ -45,7 +45,7 @@ public sealed class DeterministicRetrievalRequestPlanner
             LexicalTerms: CapLexicalTerms(tokens, anchorHints),
             Facets: facets,
             AnchorHints: anchorHints,
-            CandidateLimit: retrievalMode == DeterministicRetrievalMode.Bundle ? 20 : 15,
+            CandidateLimit: retrievalMode == DeterministicRetrievalMode.Bundle ? BundleCandidateLimit : RankedCandidateLimit,
             AllowedMemoryClasses: [MemoryClass.DurableFact.ToWireValue(), MemoryClass.Evidence.ToWireValue()],
             ExcludedSensitivity: [MemorySensitivity.Secret.ToWireValue()],
             ExcludeExpired: true);
@@ -133,6 +133,8 @@ public sealed class DeterministicRetrievalRequestPlanner
             yield return "project_fact";
     }
 
+    private const int RankedCandidateLimit = 15;
+    private const int BundleCandidateLimit = 20;
     private const int MaxLexicalTerms = 12;
 
     private static IReadOnlyList<string> CapLexicalTerms(IReadOnlyList<string> tokens, IReadOnlyList<string> anchorHints)

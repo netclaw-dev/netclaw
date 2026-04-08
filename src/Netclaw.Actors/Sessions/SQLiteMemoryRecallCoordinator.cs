@@ -76,9 +76,14 @@ public sealed class SQLiteMemoryRecallCoordinator(
                     scoredCandidates.Count,
                     string.Join("|", scoredCandidates.Select(x => $"{x.Item.Id}={x.SelectorScore:F1}")));
 
+                // RecallRank dampened by 100x so it acts as a tiebreaker (~2 points
+                // for DurableFact+MergeDocument) rather than overriding SelectorScore
+                // (~4 points per lexical match).
+                const double RecallRankDampeningFactor = 100.0;
                 var deterministicMaxItems = normalizedRequest.MaxItems <= 0 ? 3 : normalizedRequest.MaxItems;
                 var deterministicItems = scoredCandidates
-                    .OrderByDescending(x => x.SelectorScore + (RecallRank(x.Item) / 100.0))
+                    .Select(x => (x.Item, x.SelectorScore, Composite: x.SelectorScore + (RecallRank(x.Item) / RecallRankDampeningFactor)))
+                    .OrderByDescending(x => x.Composite)
                     .Take(deterministicMaxItems)
                     .Select(x => new AutomaticRecallItem(
                         x.Item.Id,
@@ -348,7 +353,7 @@ public sealed class SQLiteMemoryRecallCoordinator(
 
         if (string.Equals(document.UpdateSemantics, Memory.MemoryUpdateSemantics.MergeDocument.ToWireValue(), StringComparison.OrdinalIgnoreCase))
             score += 80;
-        else if (string.Equals(document.UpdateSemantics, "append-document", StringComparison.OrdinalIgnoreCase))
+        else if (string.Equals(document.UpdateSemantics, Memory.MemoryUpdateSemantics.AppendDocument.ToWireValue(), StringComparison.OrdinalIgnoreCase))
             score += 60;
         else if (string.Equals(document.UpdateSemantics, Memory.MemoryUpdateSemantics.ConversationTrace.ToWireValue(), StringComparison.OrdinalIgnoreCase))
             score -= 300;

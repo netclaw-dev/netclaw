@@ -538,9 +538,10 @@ def main():
 
         # update correctness via deterministic DB presence of seeded docs
         seeded_ids = [d["documentId"] for d in fixtures.get("seedDocuments", [])]
-        placeholders = ",".join(f"'{sid}'" for sid in seeded_ids)
+        placeholders = ",".join("?" for _ in seeded_ids)
         seeded_ok = conn.execute(
-            f"SELECT COUNT(*) as c FROM memory_documents WHERE document_id IN ({placeholders})"
+            f"SELECT COUNT(*) as c FROM memory_documents WHERE document_id IN ({placeholders})",
+            seeded_ids,
         ).fetchone()["c"]
         update_correctness = 10.0 if seeded_ok == len(seeded_ids) else 0.0
 

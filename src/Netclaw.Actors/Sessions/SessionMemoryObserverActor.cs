@@ -38,6 +38,10 @@ public sealed class SessionMemoryObserverActor : ReceivePersistentActor
     private readonly ILoggingAdapter _log = Context.GetLogger();
 
     private readonly StringBuilder _transcript = new();
+    // V1 backward compat: sessions with existing MemoriesDistilled journal
+    // entries only carry anchor slugs. _proposedAnchors is populated during
+    // V1 recovery so those anchors are not lost. New sessions use V2 events
+    // and populate _proposedMemories instead.
     private readonly HashSet<string> _proposedAnchors = new(StringComparer.OrdinalIgnoreCase);
     private readonly List<ProposedMemoryContext> _proposedMemories = new();
     private bool _hasNewContent;
@@ -316,7 +320,7 @@ public sealed class SessionMemoryObserverActor : ReceivePersistentActor
             using var cts = new CancellationTokenSource(timeout);
             var messages = new List<ChatMessage>
             {
-                new(Microsoft.Extensions.AI.ChatRole.System, BuildDistillationSystemPrompt()),
+                new(Microsoft.Extensions.AI.ChatRole.System, DistillationSystemPrompt),
                 new(Microsoft.Extensions.AI.ChatRole.User, BuildDistillationUserPrompt(
                     sessionId, domain, turnCount, transcript, existingProposals))
             };
@@ -407,6 +411,8 @@ public sealed class SessionMemoryObserverActor : ReceivePersistentActor
             => $"[error] {error.Message}",
         _ => null
     };
+
+    private static readonly string DistillationSystemPrompt = BuildDistillationSystemPrompt();
 
     internal static string BuildDistillationSystemPrompt() => $$"""
         You are a session memory distillation sidecar.
