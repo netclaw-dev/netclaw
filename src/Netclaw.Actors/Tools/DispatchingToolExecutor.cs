@@ -58,6 +58,15 @@ public sealed class DispatchingToolExecutor : IToolExecutor
         {
             var approvalContext = accessDecision.ApprovalContext
                 ?? throw new InvalidOperationException("Approval decision missing approval context.");
+            if (context is not null
+                && string.Equals(context.OneTimeApprovedToolName, toolCall.Name, StringComparison.Ordinal)
+                && approvalContext.UnapprovedPatterns.All(pattern =>
+                    context.OneTimeApprovedPatterns.Contains(pattern)))
+            {
+                accessDecision = ToolAccessDecision.Allow();
+            }
+            else
+            {
             var audience = SecurityPolicyDefaults.TryParseAudience(context?.Audience, out var parsed)
                 ? parsed
                 : SecurityPolicyDefaults.ResolveAudienceFromSessionId(context?.SessionId);
@@ -79,6 +88,7 @@ public sealed class DispatchingToolExecutor : IToolExecutor
                     approvalContext.DisplayText,
                     unapproved,
                     approvalContext.Options));
+            }
             }
         }
 

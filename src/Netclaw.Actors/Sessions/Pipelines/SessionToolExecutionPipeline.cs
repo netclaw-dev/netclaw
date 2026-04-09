@@ -231,10 +231,17 @@ internal static class SessionToolExecutionPipeline
 
             sw.Stop();
 
-            if (decision is ApprovalDecision.ApprovedOnce or ApprovalDecision.ApprovedAlways)
+            if (decision is ApprovalDecision.ApprovedOnce or ApprovalDecision.ApprovedSession or ApprovalDecision.ApprovedAlways)
             {
                 // Retry execution now that approval is granted
-                // (The approval cache will be updated by the session actor)
+                // (Approve-once is retried through transient context state; broader scopes
+                // are also recorded by the session actor into the shared approval service.)
+                if (decision == ApprovalDecision.ApprovedOnce)
+                {
+                    context.OneTimeApprovedToolName = tc.Name;
+                    context.SetOneTimeApprovedPatterns(ctx.UnapprovedPatterns);
+                }
+
                 sw = Stopwatch.StartNew();
                 resultText = await executor.ExecuteAsync(tc, context, ct);
                 sw.Stop();

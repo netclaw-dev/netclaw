@@ -6,7 +6,10 @@ The `netclaw init` wizard SHALL ask about shell approval mode when configuring
 each audience profile that has shell access enabled. The wizard SHALL present
 three options: Approval (recommended default), Unrestricted (HostAllowed with
 no approval), and Off (shell disabled). The selected mode SHALL be written to
-the audience profile's `ApprovalPolicy` in `netclaw.json`.
+the audience profile's `ApprovalPolicy` in `netclaw.json`. For Personal,
+selecting Approval SHALL explicitly write
+`Tools.AudienceProfiles.Personal.ApprovalPolicy.ToolOverrides.shell_execute = "approval"`
+rather than relying on runtime audience defaults.
 
 #### Scenario: Init wizard prompts for Personal shell mode
 
@@ -32,19 +35,20 @@ the audience profile's `ApprovalPolicy` in `netclaw.json`.
 ### Requirement: Doctor checks for approval configuration
 
 `netclaw doctor` SHALL validate approval configuration consistency. It SHALL
-warn when approval mode is enabled for a tool on an audience but the primary
-channel does not support interactive approval. It SHALL warn when
-`tool-approvals.json` contains patterns for audiences or tools that are no
+warn when the Personal audience enables host shell access without an explicit
+`shell_execute` approval gate in `ApprovalPolicy.ToolOverrides`. It SHALL warn
+when `tool-approvals.json` contains patterns for audiences or tools that are no
 longer configured.
 
-#### Scenario: Doctor warns about approval on unsupported channel
+#### Scenario: Doctor warns about Personal host shell without explicit approval gate
 
-- **GIVEN** `shell_execute` is in Approval mode for Personal
-- **AND** the only active channel is headless
+- **GIVEN** the Personal audience has host shell access enabled
+- **AND** `ApprovalPolicy.ToolOverrides` does not contain `shell_execute`
 - **WHEN** `netclaw doctor` runs
-- **THEN** it emits a warning: "Approval mode enabled for shell_execute but
-  active channel does not support interactive approval. Tool calls will be
-  auto-denied."
+- **THEN** it emits a warning that Personal host shell is enabled without an
+  explicit `shell_execute` approval gate
+- **AND** the warning recommends running `netclaw init` again or setting
+  `Tools.AudienceProfiles.Personal.ApprovalPolicy.ToolOverrides.shell_execute = "approval"`
 
 #### Scenario: Doctor warns about stale approval patterns
 

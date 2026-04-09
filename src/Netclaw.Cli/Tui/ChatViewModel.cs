@@ -189,7 +189,7 @@ public partial class ChatViewModel : ReactiveViewModel
 
         if (!ToolInteractionResponseParser.TryParseApprovalResponse(text, out var selectedKey) || selectedKey is null)
         {
-            StatusMessage.Value = "Approval required: reply A, B, or C.";
+            StatusMessage.Value = "Approval required: reply A, B, C, or D.";
             RequestRedraw();
             return;
         }

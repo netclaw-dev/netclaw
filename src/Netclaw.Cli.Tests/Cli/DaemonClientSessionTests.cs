@@ -68,6 +68,21 @@ public sealed class DaemonClientSessionTests
         Assert.Equal(("call-1", "approve_once"), state.LastInteractionResponse);
     }
 
+    [Fact]
+    public async Task RespondToInteractionAsync_supports_session_scope()
+    {
+        var port = GetFreeTcpPort();
+        using var host = await StartFakeHubAsync(port);
+        var state = host.Services.GetRequiredService<FakeSessionState>();
+
+        await using var client = new DaemonClient($"http://127.0.0.1:{port}");
+        await client.CreateSessionAsync(Netclaw.Actors.Channels.ChannelType.Tui, TestContext.Current.CancellationToken);
+
+        await client.RespondToInteractionAsync("call-2", "approve_session", TestContext.Current.CancellationToken);
+
+        Assert.Equal(("call-2", "approve_session"), state.LastInteractionResponse);
+    }
+
     private static async Task<IHost> StartFakeHubAsync(int port)
     {
         var builder = WebApplication.CreateBuilder();

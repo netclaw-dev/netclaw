@@ -264,6 +264,7 @@ public sealed class DaemonClientMappingTests
             Options =
             [
                 new ToolInteractionOption("approve_once", "Approve Once"),
+                new ToolInteractionOption("approve_session", "Approve For This Chat"),
                 new ToolInteractionOption("approve_always", "Approve Always"),
                 new ToolInteractionOption("deny", "Deny")
             ]
@@ -282,7 +283,7 @@ public sealed class DaemonClientMappingTests
         Assert.Equal("git push origin main", result.DisplayText);
         Assert.Equal("device-1", result.RequesterSenderId);
         Assert.Equal(["git push"], result.Patterns);
-        Assert.Equal(3, result.Options.Count);
+        Assert.Equal(4, result.Options.Count);
     }
 
     [Fact]

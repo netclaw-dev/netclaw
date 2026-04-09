@@ -173,9 +173,10 @@ lookup/recording through actor-backed `IToolApprovalService`.
 
 **Rationale:** The separate file is not watched by `ConfigWatcherService`.
 `DispatchingToolExecutor` asks `IToolApprovalService` which patterns remain
-unapproved for the current call, and `LlmSessionActor` records Approve Once /
-Approve Always decisions through the same service. This matches the shipped
-single-writer actor boundary and keeps approval state out of `ToolAccessPolicy`.
+unapproved for the current call, and `LlmSessionActor` records Approve For This
+Chat / Approve Always decisions through the same service. Approve Once is kept
+on the in-memory retry path only. This matches the shipped single-writer actor
+boundary and keeps approval state out of `ToolAccessPolicy`.
 
 **File format:**
 ```json

@@ -31,6 +31,17 @@ public sealed class ApprovalChannelTests
     }
 
     [Fact]
+    public async Task WaitAndComplete_approve_session()
+    {
+        var channel = new ApprovalChannel();
+
+        var waitTask = channel.WaitForApprovalAsync("call-2b", TimeSpan.FromSeconds(30), CancellationToken.None);
+        channel.Complete("call-2b", ApprovalDecision.ApprovedSession);
+
+        Assert.Equal(ApprovalDecision.ApprovedSession, await waitTask);
+    }
+
+    [Fact]
     public async Task WaitAndComplete_denied()
     {
         var channel = new ApprovalChannel();
@@ -78,9 +89,9 @@ public sealed class ApprovalChannelTests
         var wait2 = channel.WaitForApprovalAsync("call-b", TimeSpan.FromSeconds(30), CancellationToken.None);
 
         channel.Complete("call-b", ApprovalDecision.Denied);
-        channel.Complete("call-a", ApprovalDecision.ApprovedAlways);
+        channel.Complete("call-a", ApprovalDecision.ApprovedSession);
 
-        Assert.Equal(ApprovalDecision.ApprovedAlways, await wait1);
+        Assert.Equal(ApprovalDecision.ApprovedSession, await wait1);
         Assert.Equal(ApprovalDecision.Denied, await wait2);
     }
 }

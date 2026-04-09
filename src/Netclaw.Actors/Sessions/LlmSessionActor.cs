@@ -715,6 +715,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             var decision = msg.SelectedKey switch
             {
                 "approve_once" => ApprovalDecision.ApprovedOnce,
+                "approve_session" => ApprovalDecision.ApprovedSession,
                 "approve_always" => ApprovalDecision.ApprovedAlways,
                 "deny" => ApprovalDecision.Denied,
                 _ => ApprovalDecision.Denied
@@ -722,7 +723,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
             _log.Info("Approval response for {CallId}: {Decision}", msg.CallId, decision);
 
-            if (decision is ApprovalDecision.ApprovedOnce or ApprovalDecision.ApprovedAlways
+            if (decision is ApprovalDecision.ApprovedSession or ApprovalDecision.ApprovedAlways
                 && _approvalService is not null)
             {
                 _approvalService.RecordApprovalAsync(

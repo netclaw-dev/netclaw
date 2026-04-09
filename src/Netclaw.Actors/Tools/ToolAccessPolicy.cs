@@ -161,6 +161,7 @@ public sealed class ToolAccessPolicy
             allPatterns,
             [
                 new ToolApprovalOption("approve_once", "Approve Once"),
+                new ToolApprovalOption("approve_session", "Approve For This Chat"),
                 new ToolApprovalOption("approve_always", "Approve Always"),
                 new ToolApprovalOption("deny", "Deny")
             ]);

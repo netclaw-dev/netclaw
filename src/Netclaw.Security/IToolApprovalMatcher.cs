@@ -39,14 +39,8 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         if (string.IsNullOrWhiteSpace(command))
             return [];
 
-        var segments = ShellTokenizer.SplitCompoundCommand(command);
         var patterns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var segment in segments)
-        {
-            var verbChain = ShellTokenizer.ExtractVerbChain(segment);
-            if (!string.IsNullOrEmpty(verbChain))
-                patterns.Add(verbChain);
-        }
+        CollectPatterns(command, patterns);
 
         return patterns.ToList();
     }
@@ -98,6 +92,25 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         }
 
         return false;
+    }
+
+    private static void CollectPatterns(string command, ISet<string> patterns)
+    {
+        foreach (var segment in ShellTokenizer.SplitCompoundCommand(command))
+        {
+            var innerCommands = ShellTokenizer.ExtractInnerCommands(segment);
+            if (innerCommands.Count > 0)
+            {
+                foreach (var inner in innerCommands)
+                    CollectPatterns(inner, patterns);
+
+                continue;
+            }
+
+            var verbChain = ShellTokenizer.ExtractVerbChain(segment);
+            if (!string.IsNullOrEmpty(verbChain))
+                patterns.Add(verbChain);
+        }
     }
 }
 

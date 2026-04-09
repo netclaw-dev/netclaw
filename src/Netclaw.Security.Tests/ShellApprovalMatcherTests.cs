@@ -38,6 +38,25 @@ public sealed class ShellApprovalMatcherTests
     }
 
     [Fact]
+    public void ExtractPatterns_recurses_into_bash_c_wrapper()
+    {
+        var patterns = _matcher.ExtractPatterns("shell_execute", Args("bash -c \"git push --force\""));
+
+        Assert.Single(patterns);
+        Assert.Equal("git push", patterns[0]);
+    }
+
+    [Fact]
+    public void ExtractPatterns_batches_outer_and_inner_segments()
+    {
+        var patterns = _matcher.ExtractPatterns("shell_execute", Args("echo ok && bash -c \"git push --force\""));
+
+        Assert.Equal(2, patterns.Count);
+        Assert.Contains("echo ok", patterns);
+        Assert.Contains("git push", patterns);
+    }
+
+    [Fact]
     public void ExtractPatterns_empty_command()
     {
         var patterns = _matcher.ExtractPatterns("shell_execute", Args(""));
@@ -66,6 +85,15 @@ public sealed class ShellApprovalMatcherTests
         var approved = new[] { "git" };
         Assert.True(_matcher.IsApproved("shell_execute",
             Args("git push origin main"), approved));
+    }
+
+    [Fact]
+    public void IsApproved_recurses_into_bash_c_wrapper()
+    {
+        var approved = new[] { "git push" };
+
+        Assert.True(_matcher.IsApproved("shell_execute",
+            Args("bash -c \"git push --force\""), approved));
     }
 
     [Fact]

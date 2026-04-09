@@ -128,6 +128,31 @@ public sealed class ToolApprovalActorTests : TestKit
         Assert.Equal(["git push"], await service.GetUnapprovedPatternsAsync("session-b", TrustAudience.Personal, "shell_execute", ["git push"], ct));
     }
 
+    [Fact]
+    public async Task Non_persistent_approval_is_session_scoped_only()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var tempFile = Path.GetTempFileName();
+        try
+        {
+            var store = new ToolApprovalStore(tempFile);
+            var actor = Sys.ActorOf(ToolApprovalActor.CreateProps(store));
+            var service = CreateService(actor);
+
+            await service.RecordApprovalAsync("session-a", TrustAudience.Personal, "shell_execute", ["git push"], persistent: false, ct);
+
+            Assert.Empty(await service.GetUnapprovedPatternsAsync("session-a", TrustAudience.Personal, "shell_execute", ["git push"], ct));
+
+            var actor2 = Sys.ActorOf(ToolApprovalActor.CreateProps(store));
+            var service2 = CreateService(actor2);
+            Assert.Equal(["git push"], await service2.GetUnapprovedPatternsAsync("different-session", TrustAudience.Personal, "shell_execute", ["git push"], ct));
+        }
+        finally
+        {
+            File.Delete(tempFile);
+        }
+    }
+
     private static AkkaToolApprovalService CreateService(IActorRef actor)
         => new(new StubRequiredActor(actor));
 

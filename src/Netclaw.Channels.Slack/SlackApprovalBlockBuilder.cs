@@ -34,8 +34,9 @@ internal static class SlackApprovalBlockBuilder
         lines.Add("");
         lines.Add("Reply with:");
         lines.Add("  *A)* Approve once");
-        lines.Add("  *B)* Approve always");
-        lines.Add("  *C)* Deny");
+        lines.Add("  *B)* Approve for this chat");
+        lines.Add("  *C)* Approve always");
+        lines.Add("  *D)* Deny");
 
         return string.Join("\n", lines);
     }
