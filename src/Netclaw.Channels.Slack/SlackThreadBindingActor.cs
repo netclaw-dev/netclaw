@@ -311,18 +311,8 @@ internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStas
         }
     }
 
-    private async Task<ReadOnlyMemory<byte>> DownloadSlackFileAsync(SlackFileReference file, CancellationToken ct)
-    {
-        using var request = new HttpRequestMessage(HttpMethod.Get, file.UrlPrivateDownload);
-        if (_dependencies.Options.BotToken is { Value: { Length: > 0 } token })
-            request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
-
-        using var response = await _dependencies.HttpClient!.SendAsync(request, ct);
-        response.EnsureSuccessStatusCode();
-
-        var bytes = await response.Content.ReadAsByteArrayAsync(ct);
-        return bytes;
-    }
+    private Task<ReadOnlyMemory<byte>> DownloadSlackFileAsync(SlackFileReference file, CancellationToken ct)
+        => SlackFileDownloader.DownloadAsync(_dependencies.HttpClient!, file.UrlPrivateDownload, _dependencies.Options.BotToken, ct);
 
     private async Task EnsureInitializedAsync()
     {

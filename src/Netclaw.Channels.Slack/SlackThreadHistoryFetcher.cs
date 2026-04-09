@@ -164,7 +164,6 @@ public sealed class SlackThreadHistoryFetcher : IThreadHistoryFetcher
         if (contents.Count == 0)
             return null;
 
-        // Parse Slack timestamp to DateTimeOffset
         var receivedAt = ParseSlackTs(message.Ts);
 
         return new ChannelInput
@@ -217,16 +216,7 @@ public sealed class SlackThreadHistoryFetcher : IThreadHistoryFetcher
     {
         using var downloadCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         downloadCts.CancelAfter(FileDownloadTimeout);
-
-        using var request = new HttpRequestMessage(HttpMethod.Get, url);
-        if (_options.BotToken is { Value: { Length: > 0 } token })
-            request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
-
-        using var response = await _httpClient.SendAsync(request, downloadCts.Token);
-        response.EnsureSuccessStatusCode();
-
-        var bytes = await response.Content.ReadAsByteArrayAsync(downloadCts.Token);
-        return bytes;
+        return await SlackFileDownloader.DownloadAsync(_httpClient, url, _options.BotToken, downloadCts.Token);
     }
 
     private static DateTimeOffset ParseSlackTs(string? ts)
