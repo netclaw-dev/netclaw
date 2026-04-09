@@ -21,6 +21,7 @@ internal sealed class ReminderExecutionActor : ReceiveActor
     private readonly ReminderDefinition _definition;
     private readonly ISessionPipeline _pipeline;
     private readonly ReminderHistoryStore _historyStore;
+    private readonly EffectivePolicyDefaults _defaults;
     private readonly TimeProvider _timeProvider;
     private readonly ILoggingAdapter _log;
     private readonly DateTimeOffset _dispatchedAt;
@@ -42,15 +43,17 @@ internal sealed class ReminderExecutionActor : ReceiveActor
         ReminderDefinition definition,
         ISessionPipeline pipeline,
         ReminderConfig config,
+        EffectivePolicyDefaults defaults,
         TimeProvider timeProvider,
         ReminderHistoryStore historyStore) =>
-        Props.Create(() => new ReminderExecutionActor(executionId, definition, pipeline, config, timeProvider, historyStore));
+        Props.Create(() => new ReminderExecutionActor(executionId, definition, pipeline, config, defaults, timeProvider, historyStore));
 
     public ReminderExecutionActor(
         Guid executionId,
         ReminderDefinition definition,
         ISessionPipeline pipeline,
         ReminderConfig config,
+        EffectivePolicyDefaults defaults,
         TimeProvider timeProvider,
         ReminderHistoryStore historyStore)
     {
@@ -58,6 +61,7 @@ internal sealed class ReminderExecutionActor : ReceiveActor
         _definition = definition;
         _pipeline = pipeline;
         _historyStore = historyStore;
+        _defaults = defaults;
         _timeProvider = timeProvider;
         _dispatchedAt = timeProvider.GetUtcNow();
         _log = Context.GetLogger();
@@ -93,15 +97,16 @@ internal sealed class ReminderExecutionActor : ReceiveActor
                 : new SessionId($"reminder/{_definition.Id}/{_timeProvider.GetUtcNow().ToUnixTimeMilliseconds()}");
 
             _sessionIdValue = sessionId.Value;
+            var audience = _definition.Audience ?? _defaults.Audience;
             _log.Info(
-                $"ReminderExecution Initialized: execution_id={_executionId} reminder_id={_definition.Id} session_id={sessionId.Value}");
+                $"ReminderExecution Initialized: execution_id={_executionId} reminder_id={_definition.Id} session_id={sessionId.Value} audience={audience}");
 
             _materializer = Context.Materializer(namePrefix: "reminder-exec");
 
             var materialized = await _pipeline.CreateAsync(sessionId, new SessionPipelineOptions
             {
                 ChannelType = Channels.ChannelType.Reminder,
-                DefaultAudience = TrustAudience.Team,
+                DefaultAudience = audience,
                 DefaultBoundary = SecurityPolicyDefaults.LocalDaemonBoundary,
                 DefaultPrincipal = PrincipalClassification.VerifiedAutomation,
                 DefaultProvenance = new SourceProvenance

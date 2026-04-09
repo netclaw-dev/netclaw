@@ -261,7 +261,12 @@ public class ReminderExecutionActorTests : TestKit, IDisposable
     /// </summary>
     private sealed class ParentProxy : ReceiveActor
     {
-        public ParentProxy(IActorRef probe, ReminderDefinition definition, ISessionPipeline pipeline, ReminderHistoryStore historyStore)
+        public ParentProxy(
+            IActorRef probe,
+            ReminderDefinition definition,
+            ISessionPipeline pipeline,
+            ReminderHistoryStore historyStore,
+            EffectivePolicyDefaults? defaults = null)
         {
             var executionId = Guid.NewGuid();
             Context.ActorOf(
@@ -270,6 +275,7 @@ public class ReminderExecutionActorTests : TestKit, IDisposable
                     definition,
                     pipeline,
                     new ReminderConfig(),
+                    defaults ?? DefaultPolicyDefaults,
                     TimeProvider.System,
                     historyStore),
                 "exec");
@@ -277,6 +283,12 @@ public class ReminderExecutionActorTests : TestKit, IDisposable
             ReceiveAny(msg => probe.Tell(msg));
         }
     }
+
+    private static readonly EffectivePolicyDefaults DefaultPolicyDefaults = new(
+        DeploymentPosture.Team,
+        TrustAudience.Team,
+        ShellExecutionMode.Off,
+        UsedStrictFallback: false);
 
     /// <summary>Fake pipeline that throws a pre-configured exception on CreateAsync.</summary>
     private sealed class FailingSessionPipeline(Exception exception) : ISessionPipeline
@@ -318,6 +330,76 @@ public class ReminderExecutionActorTests : TestKit, IDisposable
 
         public Task SendFeedbackAsync(IWithSessionId feedback, CancellationToken ct = default) =>
             Task.CompletedTask;
+    }
+
+    // ── Audience resolution tests ─────────────────────────────────────────────
+
+    [Fact]
+    public async Task Execution_uses_definition_audience_when_set()
+    {
+        var pipeline = new ScriptedSessionPipeline(sessionId =>
+        [
+            new TurnCompleted { SessionId = sessionId, TurnNumber = 1 }
+        ]);
+
+        var definition = CreateDefinition("audience-override") with
+        {
+            Audience = TrustAudience.Personal,
+            NotifyInstructions = string.Empty
+        };
+        var teamDefaults = new EffectivePolicyDefaults(
+            DeploymentPosture.Team, TrustAudience.Team, ShellExecutionMode.Off, false);
+        var probe = CreateTestProbe();
+        Sys.ActorOf(
+            Props.Create(() => new ParentProxy(probe.Ref, definition, pipeline, _historyStore, teamDefaults)),
+            "exec-audience-override");
+
+        await probe.ExpectMsgAsync<ReminderExecutionCompleted>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.NotNull(pipeline.CapturedOptions);
+        Assert.Equal(TrustAudience.Personal, pipeline.CapturedOptions!.DefaultAudience);
+    }
+
+    [Fact]
+    public async Task Execution_falls_back_to_deployment_posture_when_definition_audience_null()
+    {
+        var pipeline = new ScriptedSessionPipeline(sessionId =>
+        [
+            new TurnCompleted { SessionId = sessionId, TurnNumber = 1 }
+        ]);
+
+        var definition = CreateDefinition("audience-fallback") with { NotifyInstructions = string.Empty };
+        var personalDefaults = new EffectivePolicyDefaults(
+            DeploymentPosture.Personal, TrustAudience.Personal, ShellExecutionMode.HostAllowed, false);
+        var probe = CreateTestProbe();
+        Sys.ActorOf(
+            Props.Create(() => new ParentProxy(probe.Ref, definition, pipeline, _historyStore, personalDefaults)),
+            "exec-audience-fallback");
+
+        await probe.ExpectMsgAsync<ReminderExecutionCompleted>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.NotNull(pipeline.CapturedOptions);
+        Assert.Equal(TrustAudience.Personal, pipeline.CapturedOptions!.DefaultAudience);
+    }
+
+    [Fact]
+    public async Task Execution_uses_team_audience_when_no_override_and_team_posture()
+    {
+        var pipeline = new ScriptedSessionPipeline(sessionId =>
+        [
+            new TurnCompleted { SessionId = sessionId, TurnNumber = 1 }
+        ]);
+
+        var definition = CreateDefinition("audience-team-default") with { NotifyInstructions = string.Empty };
+        var probe = CreateTestProbe();
+        Sys.ActorOf(
+            Props.Create(() => new ParentProxy(probe.Ref, definition, pipeline, _historyStore)),
+            "exec-audience-team-default");
+
+        await probe.ExpectMsgAsync<ReminderExecutionCompleted>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.NotNull(pipeline.CapturedOptions);
+        Assert.Equal(TrustAudience.Team, pipeline.CapturedOptions!.DefaultAudience);
     }
 
     // ── History integration tests ─────────────────────────────────────────────

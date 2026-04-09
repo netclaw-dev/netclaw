@@ -50,10 +50,13 @@ public class ReminderManagerActorTests : TestKit
                 system,
                 new RequiredActor<SessionManagerActorKey>(ActorRegistry.For(system)));
 
+            var defaults = new EffectivePolicyDefaults(
+                DeploymentPosture.Team, TrustAudience.Team, ShellExecutionMode.Off, false);
             var reminderManager = system.ActorOf(
                 Props.Create(() => new ReminderManagerActor(
                     reminderConfig,
                     pipeline,
+                    defaults,
                     TimeProvider.System,
                     definitionStore,
                     historyStore,

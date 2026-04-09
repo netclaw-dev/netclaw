@@ -257,6 +257,90 @@ public class SetReminderToolTests : TestKit
         await execution;
     }
 
+    [Fact]
+    public async Task Sets_audience_when_provided()
+    {
+        var probe = CreateTestProbe();
+        var tool = new SetReminderTool(probe, _timeProvider, new ReminderConfig());
+
+        var execution = Task.Run(async () =>
+        {
+            var result = await tool.ExecuteAsync(new Dictionary<string, object?>
+            {
+                ["Id"] = "audience-test",
+                ["Name"] = "audience-test",
+                ["Prompt"] = "Search the web",
+                ["ScheduleType"] = "once",
+                ["Schedule"] = "30m",
+                ["Audience"] = "personal"
+            });
+            return result;
+        });
+
+        var cmd = await probe.ExpectMsgAsync<SaveReminderCommand>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal(TrustAudience.Personal, cmd.Definition.Audience);
+
+        probe.Reply(new ReminderSavedResponse(
+            new ReminderId(cmd.Definition.Id),
+            cmd.Definition.Title,
+            Success: true,
+            NextFire: _timeProvider.GetUtcNow().AddMinutes(30)));
+
+        await execution;
+    }
+
+    [Fact]
+    public async Task Rejects_invalid_audience()
+    {
+        var probe = CreateTestProbe();
+        var tool = new SetReminderTool(probe, _timeProvider, new ReminderConfig());
+
+        var result = await tool.ExecuteAsync(new Dictionary<string, object?>
+        {
+            ["Id"] = "bad-audience",
+            ["Name"] = "bad-audience",
+            ["Prompt"] = "Test",
+            ["ScheduleType"] = "once",
+            ["Schedule"] = "30m",
+            ["Audience"] = "superadmin"
+        }, TestContext.Current.CancellationToken);
+
+        Assert.Contains("Error:", result);
+        Assert.Contains("Invalid audience", result);
+        await probe.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(100), TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task Audience_is_null_when_omitted()
+    {
+        var probe = CreateTestProbe();
+        var tool = new SetReminderTool(probe, _timeProvider, new ReminderConfig());
+
+        var execution = Task.Run(async () =>
+        {
+            var result = await tool.ExecuteAsync(new Dictionary<string, object?>
+            {
+                ["Id"] = "no-audience",
+                ["Name"] = "no-audience",
+                ["Prompt"] = "Check something",
+                ["ScheduleType"] = "once",
+                ["Schedule"] = "1h"
+            });
+            return result;
+        });
+
+        var cmd = await probe.ExpectMsgAsync<SaveReminderCommand>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Null(cmd.Definition.Audience);
+
+        probe.Reply(new ReminderSavedResponse(
+            new ReminderId(cmd.Definition.Id),
+            cmd.Definition.Title,
+            Success: true,
+            NextFire: _timeProvider.GetUtcNow().AddHours(1)));
+
+        await execution;
+    }
+
     private sealed class FakeTimeProvider(DateTimeOffset utcNow) : TimeProvider
     {
         public override DateTimeOffset GetUtcNow() => utcNow;

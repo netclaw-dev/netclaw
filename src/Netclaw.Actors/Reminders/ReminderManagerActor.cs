@@ -19,6 +19,7 @@ public sealed partial class ReminderManagerActor : ReceiveActor
 
     private readonly ReminderConfig _config;
     private readonly ISessionPipeline _pipeline;
+    private readonly EffectivePolicyDefaults _defaults;
     private readonly TimeProvider _timeProvider;
     private readonly ReminderDefinitionStore _definitionStore;
     private readonly ReminderHistoryStore _historyStore;
@@ -34,6 +35,7 @@ public sealed partial class ReminderManagerActor : ReceiveActor
     public ReminderManagerActor(
         ReminderConfig config,
         ISessionPipeline pipeline,
+        EffectivePolicyDefaults defaults,
         TimeProvider timeProvider,
         ReminderDefinitionStore definitionStore,
         ReminderHistoryStore historyStore,
@@ -41,6 +43,7 @@ public sealed partial class ReminderManagerActor : ReceiveActor
     {
         _config = config;
         _pipeline = pipeline;
+        _defaults = defaults;
         _timeProvider = timeProvider;
         _definitionStore = definitionStore;
         _historyStore = historyStore;
@@ -575,6 +578,7 @@ public sealed partial class ReminderManagerActor : ReceiveActor
                 definition,
                 _pipeline,
                 _config,
+                _defaults,
                 _timeProvider,
                 _historyStore),
             actorName);
@@ -740,7 +744,8 @@ public sealed partial class ReminderManagerActor : ReceiveActor
         SessionId: d.SessionId,
         ReportToChannel: d.ReportToChannel,
         ReportToThreadTs: d.ReportToThreadTs,
-        AgentDefinitionId: d.AgentDefinitionId);
+        AgentDefinitionId: d.AgentDefinitionId,
+        Audience: d.Audience);
 
     private static string SanitizeActorName(string raw)
     {

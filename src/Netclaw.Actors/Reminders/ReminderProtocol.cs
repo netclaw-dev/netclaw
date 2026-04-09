@@ -103,6 +103,14 @@ public sealed record ReminderDefinition
     /// </summary>
     public string? AgentDefinitionId { get; init; }
 
+    /// <summary>
+    /// Optional per-reminder audience override.
+    /// When null, falls back to the deployment posture's default audience
+    /// (<see cref="Configuration.EffectivePolicyDefaults.Audience"/>).
+    /// Controls which tools are available during this reminder's execution.
+    /// </summary>
+    public TrustAudience? Audience { get; init; }
+
     public string CreatedBy { get; init; } = "system";
     public long CreatedAtMs { get; set; }
     public long UpdatedAtMs { get; set; }
@@ -197,7 +205,8 @@ public sealed record ReminderInfo(
     string? SessionId,
     string? ReportToChannel,
     string? ReportToThreadTs,
-    string? AgentDefinitionId);
+    string? AgentDefinitionId,
+    TrustAudience? Audience);
 
 // ── Internal messages ──
 
