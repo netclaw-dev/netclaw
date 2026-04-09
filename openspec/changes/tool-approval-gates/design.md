@@ -35,8 +35,8 @@ Key constraints:
 - Implement mid-turn approval pause that blocks individual tool tasks without
   blocking the session actor or other parallel tool calls
 - Define a general `ToolInteractionRequest`/`ToolInteractionResponse` protocol
-  that channels render as structured UI (Slack Block Kit, TUI prompts, text
-  ABC lists)
+  that channels render using their shipped approval UX (MVP Slack text A/B/C
+  replies)
 - Build shell-specific command-pattern matching via `IToolApprovalMatcher` with
   verb-chain prefix extraction, compound command splitting, and `bash -c`
   recursion
@@ -46,8 +46,8 @@ Key constraints:
 
 **Non-Goals:**
 
-- Argument-level pattern matching for non-shell tools (MCP tools use tool-name
-  approval only; future matchers can be added via `IToolApprovalMatcher`)
+- Broader approval semantics for non-shell tools beyond the currently shipped
+  matcher infrastructure
 - Sandboxed shell execution (reserved behind `ShellExecutionMode.SandboxOnly`)
 - Hot-reload of approval config (file read at startup; new approvals written
   immediately but existing sessions use their cached copy)
@@ -117,31 +117,30 @@ response). The `Task.WhenAll` in `SessionToolExecutionPipeline.ExecuteToolsAsync
 naturally waits for all tasks, including the approval-blocked one.
 
 **Actor boundary implications:** The `IApprovalChannel` is created by the session
-actor and passed into the pipeline. The actor owns the TCS dictionary. When an
-`ApprovalResponse` message arrives during the Processing behavior, the actor
-looks up the TCS by `CallId` and completes it. This preserves the actor's
-single-threaded mailbox model — the TCS completion is safe because the pipeline
-task is on the thread pool, not the actor thread.
+actor and passed into the pipeline. The actor owns the TCS dictionary. When a
+`ToolInteractionResponse` message arrives during the Processing behavior, the
+actor looks up the TCS by `CallId` and completes it. This preserves the actor's
+single-threaded mailbox model because the pipeline task is waiting asynchronously,
+not on the actor thread.
 
 **Failure mode:** If the approval response never arrives, a configurable timeout
 (default: 5 minutes) on the TCS causes the task to unblock with
 `ApprovalDecision.TimedOut`, which is treated as a deny. The tool result
 includes a timeout explanation.
 
-### Decision 4: ToolInteractionRequest/Response as general protocol
+### Decision 4: ToolInteractionRequest/Response as current approval protocol
 
-**Choice:** Define a general `ToolInteractionRequest` (session output) and
-`ToolInteractionResponse` (session command) with an interaction `Kind`. Approval
-is the first kind. The protocol supports future interactive tool patterns.
+**Choice:** Define `ToolInteractionRequest` (session output) and
+`ToolInteractionResponse` (session command) with an interaction `Kind`, but keep
+the change scoped to the currently shipped approval interaction.
 
 **Alternatives considered:**
-- Approval-specific `ApprovalRequestOutput`/`ApprovalResponse`: simpler but
-  creates one-off protocol types for each future interactive pattern.
+- Approval-specific `ApprovalRequestOutput`/`ApprovalResponse`: rejected because
+  the shipped protocol already exists and is sufficient for MVP.
 
-**Rationale:** The cost of generality is low (one enum field). The protocol
-shape is the same: present options to user, get response, route to blocked
-tool. Future use cases (confirmation, disambiguation) plug in without new
-protocol types.
+**Rationale:** The shipped protocol already covers the approval flow without
+expanding scope. The important property for MVP is that the session can emit a
+prompt and receive a keyed response that unblocks the waiting tool task.
 
 ### Decision 5: Channel capability determines approval behavior
 
@@ -160,10 +159,11 @@ that can't support it, `netclaw doctor` warns at startup. At runtime, the
 tool is denied with reason `channel_does_not_support_approval`. The LLM gets
 a clear error.
 
-### Decision 6: Persistent approvals in separate file
+### Decision 6: Persistent approvals behind actor-backed service
 
 **Choice:** Store persistent approvals in
-`~/.netclaw/config/tool-approvals.json`, not in `netclaw.json`.
+`~/.netclaw/config/tool-approvals.json`, not in `netclaw.json`, and mediate
+lookup/recording through actor-backed `IToolApprovalService`.
 
 **Alternatives considered:**
 - Store in `netclaw.json` under `Tools.ShellApprovals`: rejected because
@@ -171,10 +171,11 @@ a clear error.
   daemon restart. Every "Approve Always" click would restart the daemon.
 - Store in SQLite database: rejected as over-engineered for a simple JSON list.
 
-**Rationale:** The separate file is read at startup and written on "Approve
-Always" decisions. It is not watched by `ConfigWatcherService`. Session-scoped
-approvals remain in-memory on the session actor (transient
-`CommandApprovalCache`).
+**Rationale:** The separate file is not watched by `ConfigWatcherService`.
+`DispatchingToolExecutor` asks `IToolApprovalService` which patterns remain
+unapproved for the current call, and `LlmSessionActor` records Approve Once /
+Approve Always decisions through the same service. This matches the shipped
+single-writer actor boundary and keeps approval state out of `ToolAccessPolicy`.
 
 **File format:**
 ```json
@@ -188,8 +189,8 @@ approvals remain in-memory on the session actor (transient
 }
 ```
 
-Per-audience sections. Shell uses pattern lists. Other tools use `true` for
-tool-level approval.
+Per-audience sections. Shell uses pattern lists. The current MVP behavior is
+driven by the shipped shell/text approval flow.
 
 ### Decision 7: Verb-chain prefix extraction for shell patterns
 
@@ -298,18 +299,15 @@ commands separately.
 
 - **Stale persistent approvals**: Operator approves a pattern, later decides
   it's too broad. → Mitigation: Operators can edit
-  `tool-approvals.json` directly. Future: `netclaw approvals` CLI subcommand
-  for listing and revoking.
+  `tool-approvals.json` directly.
 
-- **Slack BlockAction routing**: Socket Mode must correctly route button clicks
-  back to the originating session. → Mitigation: Include `SessionId` and
-  `CallId` in the button `value` field. `SlackGatewayActor` routes by session.
+- **Slack text reply parsing**: Slack must associate an A/B/C reply with the
+  correct pending approval and requesting user. → Mitigation:
+  `SlackThreadBindingActor` keeps pending requests for the thread, only accepts
+  matching requester replies, and forwards a keyed `ToolInteractionResponse`
+  through the session pipeline.
 
 ## Open Questions
 
 - Should the starter set of pre-approved safe patterns be configurable per
   audience, or always include read-only commands like `ls`, `git log`, etc.?
-- Should `netclaw doctor` warn when Approval mode is enabled but the active
-  channel is headless (auto-deny)?
-- Should approval responses support a "Deny and explain" option where the user
-  provides a reason that's fed back to the LLM?

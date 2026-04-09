@@ -16,7 +16,7 @@ public sealed class DispatchingToolExecutor : IToolExecutor
 {
     private readonly ToolRegistry _registry;
     private readonly ToolAccessPolicy _policy;
-    private readonly CommandApprovalCache? _approvalCache;
+    private readonly IToolApprovalService? _approvalService;
     private readonly ILogger _logger;
 
     public DispatchingToolExecutor(ToolRegistry registry, ILogger<DispatchingToolExecutor>? logger = null)
@@ -25,22 +25,22 @@ public sealed class DispatchingToolExecutor : IToolExecutor
             new ToolAccessPolicy(
                 new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed },
                 new EffectivePolicyDefaults(
-                    DeploymentPosture.Personal,
-                    TrustAudience.Personal,
-                    ShellExecutionMode.HostAllowed,
-                    UsedStrictFallback: false),
+                DeploymentPosture.Personal,
+                TrustAudience.Personal,
+                ShellExecutionMode.HostAllowed,
+                UsedStrictFallback: false),
                 new ShellCommandPolicy()),
-            approvalCache: null,
+            approvalService: null,
             logger)
     {
     }
 
     public DispatchingToolExecutor(ToolRegistry registry, ToolAccessPolicy policy,
-        CommandApprovalCache? approvalCache = null, ILogger<DispatchingToolExecutor>? logger = null)
+        IToolApprovalService? approvalService = null, ILogger<DispatchingToolExecutor>? logger = null)
     {
         _registry = registry;
         _policy = policy;
-        _approvalCache = approvalCache;
+        _approvalService = approvalService;
         _logger = logger ?? (ILogger)NullLogger.Instance;
     }
 
@@ -53,7 +53,35 @@ public sealed class DispatchingToolExecutor : IToolExecutor
             return $"Unknown tool: {toolCall.Name}";
         }
 
-        var accessDecision = _policy.AuthorizeInvocation(tool, context, toolCall.Arguments, _approvalCache);
+        var accessDecision = _policy.AuthorizeInvocation(tool, context, toolCall.Arguments);
+        if (accessDecision.NeedsApproval && _approvalService is not null)
+        {
+            var approvalContext = accessDecision.ApprovalContext
+                ?? throw new InvalidOperationException("Approval decision missing approval context.");
+            var audience = SecurityPolicyDefaults.TryParseAudience(context?.Audience, out var parsed)
+                ? parsed
+                : SecurityPolicyDefaults.ResolveAudienceFromSessionId(context?.SessionId);
+            var unapproved = await _approvalService.GetUnapprovedPatternsAsync(
+                context?.SessionId,
+                audience,
+                toolCall.Name,
+                approvalContext.UnapprovedPatterns,
+                ct);
+
+            if (unapproved.Count == 0)
+            {
+                accessDecision = ToolAccessDecision.Allow();
+            }
+            else
+            {
+                accessDecision = ToolAccessDecision.RequiresApproval(new ToolApprovalContext(
+                    approvalContext.ToolName,
+                    approvalContext.DisplayText,
+                    unapproved,
+                    approvalContext.Options));
+            }
+        }
+
         if (accessDecision.NeedsApproval)
         {
             _logger.LogInformation("Tool requires approval: {ToolName}", toolCall.Name);

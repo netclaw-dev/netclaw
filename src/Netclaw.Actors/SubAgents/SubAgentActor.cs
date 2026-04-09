@@ -29,7 +29,7 @@ public sealed class SubAgentActor : ReceiveActor
     private readonly SubAgentDefinition _definition;
     private readonly IChatClient _chatClient;
     private readonly ToolAccessPolicy _toolAccessPolicy;
-    private readonly CommandApprovalCache? _approvalCache;
+    private readonly IToolApprovalService? _approvalService;
     private readonly ToolRegistry _toolRegistry;
     private readonly IReadOnlyList<AITool> _aiTools;
     private readonly ILoggingAdapter _log;
@@ -48,7 +48,7 @@ public sealed class SubAgentActor : ReceiveActor
         SubAgentDefinition definition,
         IChatClient chatClient,
         ToolAccessPolicy? toolAccessPolicy = null,
-        CommandApprovalCache? approvalCache = null)
+        IToolApprovalService? approvalService = null)
     {
         _definition = definition;
         _chatClient = chatClient;
@@ -60,7 +60,7 @@ public sealed class SubAgentActor : ReceiveActor
                 ShellExecutionMode.HostAllowed,
                 UsedStrictFallback: false),
             new ShellCommandPolicy());
-        _approvalCache = approvalCache;
+        _approvalService = approvalService;
         _log = Context.GetLogger();
 
         // Build a private ToolRegistry for this subagent's tool subset
@@ -79,9 +79,9 @@ public sealed class SubAgentActor : ReceiveActor
         SubAgentDefinition definition,
         IChatClient chatClient,
         ToolAccessPolicy? toolAccessPolicy = null,
-        CommandApprovalCache? approvalCache = null)
+        IToolApprovalService? approvalService = null)
     {
-        return Props.Create(() => new SubAgentActor(definition, chatClient, toolAccessPolicy, approvalCache));
+        return Props.Create(() => new SubAgentActor(definition, chatClient, toolAccessPolicy, approvalService));
     }
 
     private void Idle()
@@ -202,7 +202,7 @@ public sealed class SubAgentActor : ReceiveActor
             _definition.Name, toolNames);
 
         var self = Self;
-        var executor = new DispatchingToolExecutor(_toolRegistry, _toolAccessPolicy, _approvalCache);
+        var executor = new DispatchingToolExecutor(_toolRegistry, _toolAccessPolicy, _approvalService);
 
         _ = ExecuteToolsAsync(
             executor,

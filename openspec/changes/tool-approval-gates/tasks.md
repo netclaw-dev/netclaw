@@ -15,24 +15,24 @@
 - [x] 2.5 Add `HardDenyPatterns` list to `ToolConfig` for operator-configurable hard deny patterns
 - [x] 2.6 Update `netclaw-config.v1.schema.json` — add `ApprovalPolicy` to audience profile definition, add `HardDenyPatterns` to Tools section, add `ToolApprovalMode` enum
 
-## 3. Approval Cache and Matcher Infrastructure
+## 3. Approval Service and Matcher Infrastructure
 
-- [x] 3.1 Create `CommandApprovalCache` in `Netclaw.Security` — thread-safe in-memory cache, session-scoped entries, backed by persistent `ToolApprovalStore`, per-audience lookups
+- [x] 3.1 Create actor-backed approval state infrastructure in `Netclaw.Security` / `Netclaw.Actors` — `IToolApprovalService` backed by the tool approval actor with session-scoped and persistent per-audience lookups
 - [x] 3.2 Define `IToolApprovalMatcher` interface — `ExtractPattern(toolCall)`, `IsApproved(toolCall, approvedPatterns)`, `FormatForDisplay(toolCall)`
 - [x] 3.3 Implement `ShellApprovalMatcher` — verb-chain prefix extraction, compound command pattern collection, prefix matching against approved patterns
 - [x] 3.4 Implement `DefaultApprovalMatcher` — tool-name-level matching for non-shell tools
-- [x] 3.5 Add `CommandApprovalCache` tests — session-scoped add/lookup, persistent backing, per-audience isolation
+- [x] 3.5 Add approval service / actor tests — session-scoped add/lookup, persistent backing, per-audience isolation
 - [x] 3.6 Add `ShellApprovalMatcher` tests — pattern extraction from various commands, prefix matching, compound pattern collection
 
 ## 4. ToolAccessPolicy and Executor Integration
 
 - [x] 4.1 Extend `ToolAccessDecision` with `RequiresApproval` variant — includes approval context (tool name, display text, extracted patterns, available options)
 - [x] 4.2 Create `ToolApprovalRequiredException` in `Netclaw.Actors.Tools` — thrown by executor when `RequiresApproval` is returned
-- [x] 4.3 Update `ToolAccessPolicy.AuthorizeInvocation()` — after existing Allow/Deny logic, consult `ToolApprovalConfig` for the resolved audience, check `CommandApprovalCache`, return `RequiresApproval` if unapproved
-- [x] 4.4 Update `DispatchingToolExecutor.ExecuteAsync()` — handle `RequiresApproval` decision by throwing `ToolApprovalRequiredException`
+- [x] 4.3 Update `ToolAccessPolicy.AuthorizeInvocation()` — after existing Allow/Deny logic, consult `ToolApprovalConfig` for the resolved audience and return `RequiresApproval` context when the tool is approval-gated
+- [x] 4.4 Update `DispatchingToolExecutor.ExecuteAsync()` — when `RequiresApproval` is returned, consult `IToolApprovalService` for still-unapproved patterns and throw `ToolApprovalRequiredException` only when approval is still needed
 - [x] 4.5 Update `ShellTool` — add `ShellCommandPolicy` parameter, check hard deny before `ToolPathPolicy` in `ExecuteAsync`
 - [x] 4.6 Update `ToolRegistrationExtensions.WithFirstPartyTools` — thread `ShellCommandPolicy` and approval dependencies through registration
-- [x] 4.7 Add `ToolAccessPolicy` tests for `RequiresApproval` path — tool in Approval mode returns RequiresApproval, already-approved tool returns Allow, tool in Deny mode returns Deny
+- [x] 4.7 Add approval gate tests for `RequiresApproval` path — tool in Approval mode returns `RequiresApproval`, executor/service combination allows already-approved patterns to proceed, tool in Deny mode returns Deny
 - [x] 4.8 Update `ShellToolTests` — hard-denied commands rejected before execution
 
 ## 5. Protocol Types and Approval Channel
@@ -48,16 +48,16 @@
 - [x] 6.1 Update `SessionToolExecutionPipeline.ExecuteSingleToolAsync` — catch `ToolApprovalRequiredException`, emit `ToolInteractionRequest` via callback, block on `IApprovalChannel.WaitForApprovalAsync`, execute on approval or return denial
 - [x] 6.2 Update `SessionToolExecutionPipeline.ExecuteToolsAsync` signature — accept `IApprovalChannel` and approval request emission callback
 - [x] 6.3 Update `LlmSessionActor` — create `IApprovalChannel` instance, pass to pipeline, handle `ToolInteractionResponse` in Processing behavior by calling `IApprovalChannel.Complete`
-- [x] 6.4 Update `LlmSessionActor` — on ApproveOnce, update session `CommandApprovalCache`; on ApproveAlways, write to `ToolApprovalStore`
+- [x] 6.4 Update `LlmSessionActor` — on ApproveOnce or ApproveAlways, record approval through `IToolApprovalService` with session or persistent scope
 - [x] 6.5 Add channel `SupportsInteractiveApproval` capability to `ToolExecutionContext` (from `MessageSource` or channel metadata)
 - [x] 6.6 Add actor integration tests — covered by ToolApprovalGateTests (unsupported channel auto-deny, approval mode returns RequiresApproval, already-approved allows) and ApprovalChannelTests (wait/complete, timeout, concurrent)
 
-## 7. Slack Channel — Block Kit Approval UI
+## 7. Slack Channel — Text Approval UI
 
-- [x] 7.1 Register `BlockAction` event handler in `SlackChannelRegistrationExtensions` — deferred Block Kit buttons to follow-up; text-based approval prompts work now
-- [x] 7.2 Add `SlackInboundKind.BlockAction` to `SlackIngressMessages` with parsed session/call ID routing info
-- [x] 7.3 Handle `ToolInteractionRequest` in `SlackThreadBindingActor` — post text-based approval prompt with ABC option list; Block Kit buttons deferred until SlackNet experimental API stabilizes
-- [x] 7.4 Route `BlockAction` events through `SlackGatewayActor` → session actor as `ToolInteractionResponse` via pipeline.SendFeedbackAsync
+- [x] 7.1 Render approval prompts in `SlackThreadBindingActor` as text-based A/B/C reply prompts posted into the active thread
+- [x] 7.2 Parse matching Slack text replies into `ToolInteractionResponse` selections for the pending approval request
+- [x] 7.3 Restrict approval replies to the requesting Slack sender and reject other users with a visible warning
+- [x] 7.4 Route parsed approval replies through the session pipeline as `ToolInteractionResponse`
 - [x] 7.5 Declare `SupportsInteractiveApproval = true` for Slack channel via ChannelType extension
 
 ## 8. Headless Channel and Input Adapters

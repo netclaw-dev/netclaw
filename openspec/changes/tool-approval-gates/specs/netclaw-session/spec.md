@@ -19,9 +19,9 @@ The session actor SHALL create an `IApprovalChannel` instance at session start
 and pass it to the tool execution pipeline. During the Processing behavior
 phase, the session actor SHALL handle `ToolInteractionResponse` messages by
 completing the corresponding `TaskCompletionSource` in the approval channel.
-The session actor SHALL also update the `CommandApprovalCache` based on the
-approval decision (session-scoped for ApproveOnce, persistent via
-`ToolApprovalStore` for ApproveAlways).
+The session actor SHALL also record approvals through `IToolApprovalService`
+based on the approval decision (session-scoped for ApproveOnce, persistent for
+ApproveAlways).
 
 #### Scenario: Persist and emit assistant reply
 

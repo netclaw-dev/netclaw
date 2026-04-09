@@ -19,20 +19,20 @@ public sealed class SubAgentSpawner
     private readonly IChatClientProvider _chatClientProvider;
     private readonly ToolRegistry _toolRegistry;
     private readonly ToolAccessPolicy _toolAccessPolicy;
-    private readonly CommandApprovalCache? _approvalCache;
+    private readonly IToolApprovalService? _approvalService;
     private readonly ILogger<SubAgentSpawner> _logger;
 
     public SubAgentSpawner(
         IChatClientProvider chatClientProvider,
         ToolRegistry toolRegistry,
         ToolAccessPolicy toolAccessPolicy,
-        CommandApprovalCache? approvalCache,
+        IToolApprovalService? approvalService,
         ILogger<SubAgentSpawner> logger)
     {
         _chatClientProvider = chatClientProvider;
         _toolRegistry = toolRegistry;
         _toolAccessPolicy = toolAccessPolicy;
-        _approvalCache = approvalCache;
+        _approvalService = approvalService;
         _logger = logger;
     }
 
@@ -99,7 +99,7 @@ public sealed class SubAgentSpawner
             : $"subagent/{definition.Name}/{runId}";
 
         // Spawn as child of the session actor via the context factory
-        var props = SubAgentActor.CreateProps(definition, chatClient, _toolAccessPolicy, _approvalCache);
+        var props = SubAgentActor.CreateProps(definition, chatClient, _toolAccessPolicy, _approvalService);
         var actorName = $"subagent-{definition.Name}-{runId}";
         var subAgent = (IActorRef)await context.SpawnChildActor(props, actorName, ct);
 

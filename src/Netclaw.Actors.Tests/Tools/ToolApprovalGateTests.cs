@@ -42,10 +42,9 @@ public sealed class ToolApprovalGateTests
     public void Shell_in_approval_mode_returns_RequiresApproval_when_unapproved()
     {
         var policy = CreatePolicy(ToolApprovalMode.Approval);
-        var cache = new CommandApprovalCache();
         var args = new Dictionary<string, object?> { ["Command"] = "git push origin main" };
 
-        var decision = policy.AuthorizeInvocation(ShellTool(), PersonalContext(), args, cache);
+        var decision = policy.AuthorizeInvocation(ShellTool(), PersonalContext(), args);
 
         Assert.True(decision.NeedsApproval);
         Assert.NotNull(decision.ApprovalContext);
@@ -54,27 +53,12 @@ public sealed class ToolApprovalGateTests
     }
 
     [Fact]
-    public void Shell_in_approval_mode_allows_when_pattern_already_approved()
-    {
-        var policy = CreatePolicy(ToolApprovalMode.Approval);
-        var cache = new CommandApprovalCache();
-        cache.ApproveForSession("signalr/thread-1", TrustAudience.Personal, "shell_execute", "git push");
-        var args = new Dictionary<string, object?> { ["Command"] = "git push origin main" };
-
-        var decision = policy.AuthorizeInvocation(ShellTool(), PersonalContext(), args, cache);
-
-        Assert.True(decision.Allowed);
-        Assert.False(decision.NeedsApproval);
-    }
-
-    [Fact]
     public void Shell_in_deny_mode_returns_deny()
     {
         var policy = CreatePolicy(ToolApprovalMode.Deny);
-        var cache = new CommandApprovalCache();
         var args = new Dictionary<string, object?> { ["Command"] = "git push" };
 
-        var decision = policy.AuthorizeInvocation(ShellTool(), PersonalContext(), args, cache);
+        var decision = policy.AuthorizeInvocation(ShellTool(), PersonalContext(), args);
 
         Assert.False(decision.Allowed);
         Assert.Equal("tool_denied_by_approval_policy", decision.DenyReason);
@@ -84,10 +68,9 @@ public sealed class ToolApprovalGateTests
     public void Shell_in_auto_mode_allows_without_approval()
     {
         var policy = CreatePolicy(ToolApprovalMode.Auto);
-        var cache = new CommandApprovalCache();
         var args = new Dictionary<string, object?> { ["Command"] = "git push" };
 
-        var decision = policy.AuthorizeInvocation(ShellTool(), PersonalContext(), args, cache);
+        var decision = policy.AuthorizeInvocation(ShellTool(), PersonalContext(), args);
 
         Assert.True(decision.Allowed);
         Assert.False(decision.NeedsApproval);
@@ -97,29 +80,26 @@ public sealed class ToolApprovalGateTests
     public void Unsupported_channel_auto_denies()
     {
         var policy = CreatePolicy(ToolApprovalMode.Approval);
-        var cache = new CommandApprovalCache();
         var args = new Dictionary<string, object?> { ["Command"] = "git push" };
 
-        var decision = policy.AuthorizeInvocation(ShellTool(), PersonalContext(supportsApproval: false), args, cache);
+        var decision = policy.AuthorizeInvocation(ShellTool(), PersonalContext(supportsApproval: false), args);
 
         Assert.False(decision.Allowed);
         Assert.Equal("channel_does_not_support_approval", decision.DenyReason);
     }
 
     [Fact]
-    public void Compound_command_identifies_multiple_unapproved_patterns()
+    public void Compound_command_surfaces_all_approval_patterns_for_service_filtering()
     {
         var policy = CreatePolicy(ToolApprovalMode.Approval);
-        var cache = new CommandApprovalCache();
-        cache.ApproveForSession("signalr/thread-1", TrustAudience.Personal, "shell_execute", "git add");
         var args = new Dictionary<string, object?> { ["Command"] = "git add . && git commit -m fix && git push" };
 
-        var decision = policy.AuthorizeInvocation(ShellTool(), PersonalContext(), args, cache);
+        var decision = policy.AuthorizeInvocation(ShellTool(), PersonalContext(), args);
 
         Assert.True(decision.NeedsApproval);
+        Assert.Contains("git add", decision.ApprovalContext!.UnapprovedPatterns);
         Assert.Contains("git commit", decision.ApprovalContext!.UnapprovedPatterns);
         Assert.Contains("git push", decision.ApprovalContext.UnapprovedPatterns);
-        Assert.DoesNotContain("git add", decision.ApprovalContext.UnapprovedPatterns);
     }
 
     [Fact]
@@ -146,8 +126,7 @@ public sealed class ToolApprovalGateTests
         var decision = policy.AuthorizeInvocation(
             ShellTool(),
             PersonalContext(),
-            new Dictionary<string, object?> { ["Command"] = "netclaw daemon stop" },
-            new CommandApprovalCache());
+            new Dictionary<string, object?> { ["Command"] = "netclaw daemon stop" });
 
         Assert.False(decision.Allowed);
         Assert.False(decision.NeedsApproval);

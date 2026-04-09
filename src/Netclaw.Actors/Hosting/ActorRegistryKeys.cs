@@ -20,3 +20,8 @@ public sealed class ReminderManagerActorKey;
 /// Marker type for ActorRegistry lookup of the daily stats buffering actor.
 /// </summary>
 public sealed class DailyStatsActorKey;
+
+/// <summary>
+/// Marker type for ActorRegistry lookup of the tool approval actor.
+/// </summary>
+public sealed class ToolApprovalActorKey;

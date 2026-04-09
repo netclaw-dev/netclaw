@@ -29,11 +29,11 @@ messages back to the session actor.
   value
 - **AND** `ToolAccessPolicy` can use it to determine approval behavior
 
-### Requirement: Fallback text rendering for basic channels
+### Requirement: Text rendering for approval-capable basic channels
 
-Channels that support interactive approval but lack rich UI (e.g., future SMS
-or plain-text adapters) SHALL render approval prompts as numbered text option
-lists and parse user responses by option number or keyword matching.
+Channels that support interactive approval but use text interactions SHALL
+render approval prompts as numbered or lettered text option lists and parse
+user responses by option number, letter, or keyword matching.
 
 #### Scenario: Text-only channel renders ABC options
 

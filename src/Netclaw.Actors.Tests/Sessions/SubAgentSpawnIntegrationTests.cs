@@ -75,7 +75,7 @@ public class SubAgentSpawnIntegrationTests : TestKit
                 _clientProvider,
                 registry,
                 toolAccessPolicy,
-                approvalCache: null,
+                approvalService: null,
                 Microsoft.Extensions.Logging.Abstractions.NullLogger<SubAgentSpawner>.Instance)));
         registry.Register(new FakeNetclawTool("file_read", "stub file content", "file"));
 

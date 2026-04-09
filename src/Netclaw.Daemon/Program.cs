@@ -556,9 +556,7 @@ static void ConfigureDaemonServices(
 
     var toolApprovalStore = new ToolApprovalStore(paths.ToolApprovalsPath);
     services.AddSingleton(toolApprovalStore);
-
-    var commandApprovalCache = new CommandApprovalCache(toolApprovalStore);
-    services.AddSingleton(commandApprovalCache);
+    services.AddSingleton<IToolApprovalService, AkkaToolApprovalService>();
 
     var toolRegistry = new ToolRegistry();
     toolRegistry.WithFirstPartyTools(toolConfig, searchBackend, toolPathPolicy, shellCommandPolicy, toolAccessPolicy, paths, webhookRouteStore);
@@ -629,7 +627,7 @@ static void ConfigureDaemonServices(
         new DispatchingToolExecutor(
             toolRegistry,
             toolAccessPolicy,
-            commandApprovalCache,
+            sp.GetService<IToolApprovalService>(),
             sp.GetRequiredService<ILogger<DispatchingToolExecutor>>()));
 
     // Operational notification webhooks
@@ -830,7 +828,7 @@ static void ConfigureDaemonServices(
         sp.GetService<ToolAccessPolicy>(),
         sp.GetService<TrustContextDeriver>(),
         sp.GetService<SkillRegistry>(),
-        sp.GetService<CommandApprovalCache>(),
+        sp.GetService<IToolApprovalService>(),
         sp.GetService<ToolApprovalStore>()));
 
     services.AddSingleton(sp => new SessionMemoryServices(

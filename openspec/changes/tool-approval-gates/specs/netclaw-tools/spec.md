@@ -36,9 +36,10 @@ subscribers. The pipeline SHALL NOT block other tool calls in the same batch.
 
 - **GIVEN** the session has an ACL grant for `shell`
 - **AND** `shell_execute` is in Approval mode for the session's audience
-- **AND** the command pattern is not in the approval cache
+- **AND** the command pattern is not already approved in `IToolApprovalService`
 - **WHEN** the LLM requests a shell tool call
 - **THEN** `ToolAccessPolicy` returns `RequiresApproval`
+- **AND** `DispatchingToolExecutor` consults `IToolApprovalService`
 - **AND** the pipeline emits a `ToolInteractionRequest` and pauses the task
 - **AND** when the user approves, the tool executes
 - **AND** an audit record is logged with `approved` result
