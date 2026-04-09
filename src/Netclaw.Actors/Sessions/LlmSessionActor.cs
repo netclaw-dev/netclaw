@@ -79,6 +79,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     // Per-turn transient counters (tool budget, duplicate detection, empty-response retries)
     private readonly TurnStateTracker _turnState = new();
 
+    private const int MaxBackfillMessages = 500;
+
     private const string ToolBudgetExhaustedMessage =
         "I used all available tool calls for this turn and couldn't produce a final summary. "
         + "You can ask me to summarize what was done, or rephrase your request.";
@@ -1599,7 +1601,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         if (cmd.IsBackfill)
         {
             _pendingBackfill ??= new List<SendUserMessage>();
-            _pendingBackfill.Add(cmd);
+            if (_pendingBackfill.Count < MaxBackfillMessages)
+                _pendingBackfill.Add(cmd);
             TryReplyAck();
             return;
         }
@@ -1607,7 +1610,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         // Inject any accumulated backfill as thread history context before first live message.
         if (_pendingBackfill is { Count: > 0 })
         {
-            var historyBlock = ThreadHistoryContextBuilder.Build(_pendingBackfill, _sessionsBasePath);
+            var historyBlock = ThreadHistoryContextBuilder.Build(_pendingBackfill);
             _state = _state.AddUserMessage(historyBlock.Text, historyBlock.MediaReferences);
             _pendingBackfill = null;
         }

@@ -35,13 +35,13 @@ internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStas
     private ChannelWriter<ChannelInput>? _inputQueue;
     private int _pipelineGeneration;
     private bool _isReinitializing;
-    private bool _backfillComplete;
     private static readonly object ReinitializeTimerKey = new();
     private static readonly TimeSpan InboundProcessingTimeout = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan QueueWriteTimeout = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan FileDownloadTimeout = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan ContentScanTimeout = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan PipelineInitTimeout = TimeSpan.FromSeconds(15);
+    private static readonly TimeSpan BackfillTimeout = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan ReplyOperationTimeout = TimeSpan.FromSeconds(5);
 
     public IStash Stash { get; set; } = null!;
@@ -380,12 +380,12 @@ internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStas
         _inputQueue = inputQueue;
 
         // Backfill thread history on first initialization only (not reinit or recovery).
-        if (!_backfillComplete && _dependencies.ThreadHistoryFetcher is { } fetcher)
+        if (generation == 1 && _dependencies.ThreadHistoryFetcher is { } fetcher)
         {
-            _backfillComplete = true;
             try
             {
-                var history = await fetcher.FetchThreadHistoryAsync(_sessionId, initCts.Token);
+                using var backfillCts = new CancellationTokenSource(BackfillTimeout);
+                var history = await fetcher.FetchThreadHistoryAsync(_sessionId, backfillCts.Token);
                 if (history.Count > 0)
                 {
                     _log.Info("Backfilling {Count} thread history messages", history.Count);
@@ -401,10 +401,6 @@ internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStas
             {
                 _log.Warning(ex, "Thread history backfill failed; proceeding without history");
             }
-        }
-        else
-        {
-            _backfillComplete = true;
         }
 
         _log.Info("Slack thread binding pipeline initialized");

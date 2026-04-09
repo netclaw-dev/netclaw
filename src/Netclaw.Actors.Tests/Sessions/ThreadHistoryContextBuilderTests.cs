@@ -26,7 +26,7 @@ public sealed class ThreadHistoryContextBuilderTests
             }
         };
 
-        var result = ThreadHistoryContextBuilder.Build(messages, null);
+        var result = ThreadHistoryContextBuilder.Build(messages);
 
         Assert.Contains("[thread history", result.Text);
         Assert.Contains("[end thread history]", result.Text);
@@ -68,7 +68,7 @@ public sealed class ThreadHistoryContextBuilderTests
             }
         };
 
-        var result = ThreadHistoryContextBuilder.Build(messages, null);
+        var result = ThreadHistoryContextBuilder.Build(messages);
 
         Assert.NotNull(result.MediaReferences);
         Assert.Equal(2, result.MediaReferences.Count);
@@ -95,7 +95,7 @@ public sealed class ThreadHistoryContextBuilderTests
             }
         };
 
-        var result = ThreadHistoryContextBuilder.Build(messages, null);
+        var result = ThreadHistoryContextBuilder.Build(messages);
 
         Assert.Contains("<user: alice, 2026-04-09 10:15 UTC>", result.Text);
     }
@@ -103,7 +103,7 @@ public sealed class ThreadHistoryContextBuilderTests
     [Fact]
     public void Build_handles_empty_list()
     {
-        var result = ThreadHistoryContextBuilder.Build([], null);
+        var result = ThreadHistoryContextBuilder.Build([]);
 
         Assert.Contains("[thread history", result.Text);
         Assert.Contains("[end thread history]", result.Text);

@@ -143,47 +143,21 @@ public sealed class SlackThreadHistoryFetcher : IThreadHistoryFetcher
         if (!string.IsNullOrEmpty(message.Text))
             contents.Add(new TextContent(message.Text));
 
-        // Download and scan image attachments
         if (message.Files is { Count: > 0 })
         {
-            foreach (var file in message.Files)
+            var imageFiles = message.Files
+                .Where(f => f.Mimetype is not null
+                    && f.Mimetype.StartsWith("image/", StringComparison.OrdinalIgnoreCase)
+                    && !string.IsNullOrWhiteSpace(f.UrlPrivateDownload ?? f.UrlPrivate))
+                .ToList();
+
+            var downloadTasks = imageFiles.Select(file => DownloadAndScanFileAsync(file, cancellationToken));
+            var results = await Task.WhenAll(downloadTasks);
+
+            foreach (var result in results)
             {
-                if (file.Mimetype is null ||
-                    !file.Mimetype.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
-                    continue;
-
-                var downloadUrl = file.UrlPrivateDownload ?? file.UrlPrivate;
-                if (string.IsNullOrWhiteSpace(downloadUrl))
-                    continue;
-
-                try
-                {
-                    var bytes = await DownloadFileAsync(downloadUrl, cancellationToken);
-                    if (bytes.Length == 0)
-                        continue;
-
-                    using var scanCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                    scanCts.CancelAfter(ContentScanTimeout);
-                    var scanResult = await _contentScanner.ScanAsync(
-                        bytes, file.Name ?? "attachment", file.Mimetype, scanCts.Token);
-
-                    if (!scanResult.IsAllowed && scanResult.Error != ContentScanError.ScanFailure)
-                    {
-                        _logger.LogWarning("Content scan rejected backfill file {Name}: {Message}",
-                            file.Name, scanResult.Message ?? scanResult.Error?.ToString());
-                        continue;
-                    }
-
-                    contents.Add(new DataContent(bytes.ToArray(), file.Mimetype));
-                }
-                catch (OperationCanceledException)
-                {
-                    _logger.LogWarning("Timed out downloading backfill file {Name}, skipping", file.Name);
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogWarning(ex, "Failed to download backfill file {Name}, skipping", file.Name);
-                }
+                if (result is not null)
+                    contents.Add(result);
             }
         }
 
@@ -202,6 +176,41 @@ public sealed class SlackThreadHistoryFetcher : IThreadHistoryFetcher
             ReceivedAt = receivedAt,
             IsBackfill = true
         };
+    }
+
+    private async Task<DataContent?> DownloadAndScanFileAsync(SlackNet.File file, CancellationToken cancellationToken)
+    {
+        var downloadUrl = file.UrlPrivateDownload ?? file.UrlPrivate!;
+        try
+        {
+            var bytes = await DownloadFileAsync(downloadUrl, cancellationToken);
+            if (bytes.Length == 0)
+                return null;
+
+            using var scanCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            scanCts.CancelAfter(ContentScanTimeout);
+            var scanResult = await _contentScanner.ScanAsync(
+                bytes, file.Name ?? "attachment", file.Mimetype!, scanCts.Token);
+
+            if (!scanResult.IsAllowed && scanResult.Error != ContentScanError.ScanFailure)
+            {
+                _logger.LogWarning("Content scan rejected backfill file {Name}: {Message}",
+                    file.Name, scanResult.Message ?? scanResult.Error?.ToString());
+                return null;
+            }
+
+            return new DataContent(bytes.ToArray(), file.Mimetype!);
+        }
+        catch (OperationCanceledException)
+        {
+            _logger.LogWarning("Timed out downloading backfill file {Name}, skipping", file.Name);
+            return null;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to download backfill file {Name}, skipping", file.Name);
+            return null;
+        }
     }
 
     private async Task<ReadOnlyMemory<byte>> DownloadFileAsync(string url, CancellationToken cancellationToken)
@@ -228,6 +237,6 @@ public sealed class SlackThreadHistoryFetcher : IThreadHistoryFetcher
             return DateTimeOffset.FromUnixTimeMilliseconds((long)(unixSeconds * 1000));
         }
 
-        return DateTimeOffset.UtcNow;
+        return default;
     }
 }

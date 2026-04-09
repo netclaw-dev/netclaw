@@ -15,7 +15,7 @@ internal static class ThreadHistoryContextBuilder
     /// Builds a thread history context block from accumulated backfill messages.
     /// Media references from all messages are collected and included inline.
     /// </summary>
-    public static HistoryBlock Build(List<SendUserMessage> backfillMessages, string? sessionsBasePath)
+    public static HistoryBlock Build(List<SendUserMessage> backfillMessages)
     {
         var sb = new StringBuilder();
         sb.AppendLine("[thread history — messages exchanged before you were mentioned]");
