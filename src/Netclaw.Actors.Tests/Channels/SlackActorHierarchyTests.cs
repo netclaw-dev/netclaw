@@ -39,6 +39,40 @@ public sealed class SlackActorHierarchyTests(ITestOutputHelper output) : TestKit
     }
 
     [Fact]
+    public async Task Gateway_routes_thread_followups_to_original_session_id()
+    {
+        var sink = CreateTestProbe("gateway-thread-sink");
+
+        SlackGatewayDependencies? deps = null;
+        deps = CreateDependencies(
+            conversationPropsFactory: (channelId, _) => SlackConversationActor.CreateProps(channelId, deps!),
+            threadPropsFactory: (_, _, _, _) => Props.Create(() => new ForwardActor(sink.Ref)));
+
+        var gateway = Sys.ActorOf(SlackGatewayActor.CreateProps(deps), "slack-gateway-test-2");
+
+        gateway.Tell(CreateAppMention(
+            eventId: "C1:700",
+            channelId: "C1",
+            eventTs: "700.1",
+            text: "<@UBOT> start"));
+
+        var first = await sink.ExpectMsgAsync<SlackThreadInbound>(cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal("C1/700.1", first.SessionId.Value);
+        Assert.Equal("start", first.Text);
+
+        gateway.Tell(CreateMessage(
+            eventId: "C1:701",
+            channelId: "C1",
+            eventTs: "701.1",
+            text: "follow up",
+            threadTs: "700.1"));
+
+        var second = await sink.ExpectMsgAsync<SlackThreadInbound>(cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal("C1/700.1", second.SessionId.Value);
+        Assert.Equal("follow up", second.Text);
+    }
+
+    [Fact]
     public async Task Conversation_requires_mention_to_start_and_allows_thread_followups()
     {
         var sink = CreateTestProbe("conversation-sink");
