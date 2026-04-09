@@ -22,6 +22,7 @@ public partial class ChatViewModel : ReactiveViewModel
 
     private readonly Subject<SessionOutput> _outputSubject = new();
     private readonly Queue<string> _pendingMessages = new();
+    private readonly Queue<ToolInteractionRequest> _pendingInteractions = new();
     private IDisposable? _daemonOutputSubscription;
     private IDisposable? _daemonConnectionSubscription;
     private bool _sessionReady;
@@ -38,6 +39,8 @@ public partial class ChatViewModel : ReactiveViewModel
     /// to render chat messages, tool activity, usage, etc.
     /// </summary>
     public Observable<SessionOutput> SessionOutput => _outputSubject.AsObservable();
+
+    public bool HasPendingInteraction => _pendingInteractions.Count > 0;
 
     /// <summary>
     /// The configured model identifier for display in the status bar.
@@ -74,10 +77,17 @@ public partial class ChatViewModel : ReactiveViewModel
 
                 switch (output)
                 {
+                    case ToolInteractionRequest interaction:
+                        _pendingInteractions.Enqueue(interaction);
+                        IsGenerating.Value = false;
+                        StatusMessage.Value = "Approval required";
+                        break;
                     case TurnCompleted:
+                        _pendingInteractions.Clear();
                         IsGenerating.Value = false;
                         break;
                     case ErrorOutput:
+                        _pendingInteractions.Clear();
                         IsGenerating.Value = false;
                         break;
                 }
@@ -119,6 +129,12 @@ public partial class ChatViewModel : ReactiveViewModel
         if (string.IsNullOrWhiteSpace(text))
             return;
 
+        if (_pendingInteractions.Count > 0)
+        {
+            await SubmitInteractionResponseAsync(text);
+            return;
+        }
+
         if (!_sessionReady || !_daemonClient.IsConnected)
         {
             _pendingMessages.Enqueue(text);
@@ -159,6 +175,47 @@ public partial class ChatViewModel : ReactiveViewModel
     public void RequestAppShutdown()
     {
         Shutdown();
+    }
+
+    private async Task SubmitInteractionResponseAsync(string text)
+    {
+        if (!_sessionReady || !_daemonClient.IsConnected)
+        {
+            StatusMessage.Value = "Approval required. Reconnecting...";
+            RequestRedraw();
+            _ = ConnectUntilReadyAsync();
+            return;
+        }
+
+        if (!ToolInteractionResponseParser.TryParseApprovalResponse(text, out var selectedKey) || selectedKey is null)
+        {
+            StatusMessage.Value = "Approval required: reply A, B, or C.";
+            RequestRedraw();
+            return;
+        }
+
+        var pending = _pendingInteractions.Peek();
+
+        try
+        {
+            await _daemonClient.EnsureSessionAsync(DaemonClient.TuiChannelType);
+            await _daemonClient.RespondToInteractionAsync(pending.CallId, selectedKey);
+
+            _pendingInteractions.Dequeue();
+            IsGenerating.Value = _pendingInteractions.Count == 0;
+            StatusMessage.Value = _pendingInteractions.Count == 0
+                ? "Generating..."
+                : "Approval required";
+            RequestRedraw();
+        }
+        catch (Exception ex)
+        {
+            _sessionReady = false;
+            IsGenerating.Value = false;
+            StatusMessage.Value = $"Approval response failed ({ex.Message}). Reconnecting...";
+            RequestRedraw();
+            _ = ConnectUntilReadyAsync();
+        }
     }
 
     public override void Dispose()

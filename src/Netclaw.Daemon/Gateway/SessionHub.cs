@@ -21,6 +21,7 @@ namespace Netclaw.Daemon.Gateway;
 ///   CreateSession(channelType: string) → sessionId: string
 ///   AttachSession(sessionId: string) → void
 ///   SendMessage(sessionId: string, text: string) → void
+///   RespondToInteraction(sessionId: string, callId: string, selectedKey: string) → void
 ///   GeneratePairingCode() → PairingCodeResultDto (loopback Operator only)
 ///
 /// Server → Client:
@@ -62,6 +63,11 @@ public sealed class SessionHub : Hub<ISessionHubClient>
     public Task SendMessage(string sessionId, string text)
     {
         return _registry.SendMessageAsync(Context.ConnectionId, sessionId, text, Context.User);
+    }
+
+    public Task RespondToInteraction(string sessionId, string callId, string selectedKey)
+    {
+        return _registry.RespondToInteractionAsync(Context.ConnectionId, sessionId, callId, selectedKey, Context.User);
     }
 
     /// <summary>

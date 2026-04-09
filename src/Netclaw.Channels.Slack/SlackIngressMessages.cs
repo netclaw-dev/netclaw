@@ -74,4 +74,5 @@ public sealed record ProactiveThreadAck(SessionId SessionId);
 public sealed record SlackApprovalResponse(
     SessionId SessionId,
     string CallId,
-    string SelectedKey);
+    string SelectedKey,
+    string SenderId);

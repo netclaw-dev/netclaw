@@ -24,6 +24,7 @@ public sealed class SessionRegistryTests
         IRequiredActor<SignalRGatewayActorKey>? actorProvider = null)
         => new(
             actorProvider ?? new StubRequiredActor(),
+            new NoopSessionPipeline(),
             ingressGate ?? new SessionIngressGate(),
             new ClaimsPrincipalMapper(),
             TimeProvider.System,
@@ -261,5 +262,18 @@ public sealed class SessionRegistryTests
         public override bool Equals(object? obj) => ReferenceEquals(this, obj);
 
         public override int GetHashCode() => RuntimeHelpers.GetHashCode(this);
+    }
+
+    private sealed class NoopSessionPipeline : ISessionPipeline
+    {
+        public Task<MaterializedSession> CreateAsync(
+            SessionId sessionId,
+            SessionPipelineOptions options,
+            Akka.Streams.IMaterializer? materializer = null,
+            CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
+
+        public Task SendFeedbackAsync(IWithSessionId feedback, CancellationToken ct = default)
+            => Task.CompletedTask;
     }
 }

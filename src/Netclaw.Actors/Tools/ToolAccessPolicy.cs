@@ -11,12 +11,14 @@ public sealed class ToolAccessPolicy
     private readonly ToolConfig _toolConfig;
     private readonly EffectivePolicyDefaults _defaults;
     private readonly ToolAudienceProfileResolver _profileResolver;
+    private readonly ShellCommandPolicy? _shellCommandPolicy;
 
-    public ToolAccessPolicy(ToolConfig toolConfig, EffectivePolicyDefaults defaults)
+    public ToolAccessPolicy(ToolConfig toolConfig, EffectivePolicyDefaults defaults, ShellCommandPolicy? shellCommandPolicy = null)
     {
         _toolConfig = toolConfig;
         _defaults = defaults;
         _profileResolver = new ToolAudienceProfileResolver(toolConfig);
+        _shellCommandPolicy = shellCommandPolicy;
     }
 
     public IReadOnlyList<AITool> FilterExposedTools(
@@ -103,7 +105,29 @@ public sealed class ToolAccessPolicy
         if (shellAudience != TrustAudience.Personal)
             return ToolAccessDecision.Deny("shell_requires_personal_context");
 
+        var shellCommand = ExtractShellCommand(arguments);
+        if (_shellCommandPolicy is not null && shellCommand is not null)
+        {
+            var hardDenyDecision = _shellCommandPolicy.Evaluate(shellCommand);
+            if (!hardDenyDecision.Allowed)
+                return ToolAccessDecision.Deny($"hard_deny_{hardDenyDecision.DenyCategory ?? "unknown"}");
+        }
+
         return CheckApprovalGate(tool.Name, context, arguments, approvalCache, ShellApprovalMatcher.Instance);
+    }
+
+    private static string? ExtractShellCommand(IDictionary<string, object?>? arguments)
+    {
+        if (arguments is null)
+            return null;
+
+        if (arguments.TryGetValue("Command", out var command) && command is string text)
+            return text;
+
+        if (arguments.TryGetValue("command", out command) && command is string lowerText)
+            return lowerText;
+
+        return null;
     }
 
     private ToolAccessDecision CheckApprovalGate(
@@ -132,14 +156,13 @@ public sealed class ToolAccessPolicy
         if (approvalCache is not null)
         {
             var allPatterns = matcher.ExtractPatterns(toolName, arguments);
-            var persistedPatterns = approvalCache;
-            var unapproved = new List<string>();
+                var unapproved = new List<string>();
 
-            foreach (var pattern in allPatterns)
-            {
-                if (!approvalCache.IsApproved(audience, toolName, pattern))
-                    unapproved.Add(pattern);
-            }
+                foreach (var pattern in allPatterns)
+                {
+                    if (!approvalCache.IsApproved(context?.SessionId, audience, toolName, pattern))
+                        unapproved.Add(pattern);
+                }
 
             if (unapproved.Count == 0)
                 return ToolAccessDecision.Allow();

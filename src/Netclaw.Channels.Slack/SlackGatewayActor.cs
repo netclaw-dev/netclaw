@@ -66,7 +66,8 @@ public sealed class SlackGatewayActor : ReceiveActor
             {
                 SessionId = message.SessionId,
                 CallId = message.CallId,
-                SelectedKey = message.SelectedKey
+                SelectedKey = message.SelectedKey,
+                SenderId = message.SenderId
             };
 
             try

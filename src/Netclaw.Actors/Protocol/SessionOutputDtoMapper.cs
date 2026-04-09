@@ -158,6 +158,20 @@ public static class SessionOutputDtoMapper
             }).ToList()
         },
 
+        ToolInteractionRequest msg => new SessionOutputDto
+        {
+            Type = SessionOutputTypes.ToolInteraction,
+            SessionId = msg.SessionId.Value,
+            TimestampMs = msg.TimestampMs,
+            InteractionKind = msg.Kind,
+            CallId = msg.CallId,
+            ToolName = msg.ToolName,
+            InteractionDisplayText = msg.DisplayText,
+            RequesterSenderId = msg.RequesterSenderId,
+            InteractionPatterns = msg.Patterns.ToList(),
+            InteractionOptions = msg.Options.ToList()
+        },
+
         _ => new SessionOutputDto
         {
             Type = SessionOutputTypes.Unknown,
@@ -292,6 +306,18 @@ public static class SessionOutputDtoMapper
                 Title = dto.Title,
                 TurnCount = dto.TurnCount ?? 0,
                 RecentMessages = dto.RecentMessages
+            },
+            SessionOutputTypes.ToolInteraction => new ToolInteractionRequest
+            {
+                SessionId = sessionId,
+                TimestampMs = dto.TimestampMs,
+                Kind = dto.InteractionKind ?? "approval",
+                CallId = dto.CallId ?? string.Empty,
+                ToolName = dto.ToolName ?? "unknown",
+                DisplayText = dto.InteractionDisplayText ?? string.Empty,
+                RequesterSenderId = dto.RequesterSenderId,
+                Patterns = dto.InteractionPatterns ?? [],
+                Options = dto.InteractionOptions ?? []
             },
             _ => new ErrorOutput
             {

@@ -170,7 +170,7 @@ public static class ShellTokenizer
                 continue;
 
             // Look for -c flag
-            if (i + 1 < tokens.Count && tokens[i + 1] == "-c" && i + 2 < tokens.Count)
+            if (i + 1 < tokens.Count && IsShellCommandFlag(tokens[i + 1]) && i + 2 < tokens.Count)
             {
                 results.Add(tokens[i + 2]);
             }
@@ -208,6 +208,14 @@ public static class ShellTokenizer
     {
         return verb is "bash" or "sh" or "/bin/bash" or "/bin/sh"
             or "/usr/bin/bash" or "/usr/bin/sh" or "zsh" or "/bin/zsh";
+    }
+
+    private static bool IsShellCommandFlag(string token)
+    {
+        if (token.Length == 0 || token[0] != '-' || token.StartsWith("--", StringComparison.Ordinal))
+            return false;
+
+        return token.AsSpan(1).IndexOf('c') >= 0;
     }
 
     private static bool LooksLikeArgument(string token)

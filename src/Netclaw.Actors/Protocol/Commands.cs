@@ -42,4 +42,10 @@ public sealed class ToolInteractionResponse : IWithSessionId
 
     /// <summary>The selected option key (e.g., "approve_once", "approve_always", "deny").</summary>
     public required string SelectedKey { get; init; }
+
+    /// <summary>
+    /// Identity of the user who selected the option. Used to bind approvals to
+    /// the same principal that initiated the tool request.
+    /// </summary>
+    public required string SenderId { get; init; }
 }

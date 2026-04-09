@@ -208,6 +208,11 @@ internal static class SessionToolExecutionPipeline
         {
             // Mid-turn approval pause: emit request to channel, block on TCS
             var ctx = approvalEx.ApprovalContext;
+            var waitTask = approvalChannel.WaitForApprovalAsync(
+                tc.CallId,
+                approvalTimeout ?? TimeSpan.FromMinutes(5),
+                ct);
+
             emitApprovalRequest(new ToolInteractionRequest
             {
                 SessionId = sessionId,
@@ -215,16 +220,14 @@ internal static class SessionToolExecutionPipeline
                 CallId = tc.CallId,
                 ToolName = ctx.ToolName,
                 DisplayText = ctx.DisplayText,
+                RequesterSenderId = source?.SenderId,
                 Patterns = ctx.UnapprovedPatterns,
                 Options = ctx.Options
                     .Select(o => new ToolInteractionOption(o.Key, o.Label))
                     .ToList()
             });
 
-            var decision = await approvalChannel.WaitForApprovalAsync(
-                tc.CallId,
-                approvalTimeout ?? TimeSpan.FromMinutes(5),
-                ct);
+            var decision = await waitTask;
 
             sw.Stop();
 

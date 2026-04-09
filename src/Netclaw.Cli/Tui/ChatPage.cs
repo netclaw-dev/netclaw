@@ -293,6 +293,16 @@ public sealed class ChatPage : ReactivePage<ChatViewModel>
                 _chatHistory.AppendLine($"  [error] {msg.Message}", Color.Red);
                 break;
 
+            case ToolInteractionRequest msg:
+                RemoveThinkingSpinner();
+                _chatHistory.AppendLine($"System: Approval required for {msg.ToolName}", Color.Yellow);
+                _chatHistory.AppendLine($"  {msg.DisplayText}", Color.White);
+                if (msg.Patterns.Count > 0)
+                    _chatHistory.AppendLine($"  Patterns: {string.Join(", ", msg.Patterns)}", Color.BrightBlack);
+                _chatHistory.AppendLine("  Reply A to approve once, B to approve always, or C to deny.", Color.Yellow);
+                _chatHistory.ScrollToBottom();
+                break;
+
             case TurnCompleted:
                 RemoveThinkingSpinner();
                 FinalizeAssistantSegmentIfNeeded();

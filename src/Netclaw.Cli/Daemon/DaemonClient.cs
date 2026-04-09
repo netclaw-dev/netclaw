@@ -283,6 +283,35 @@ public sealed class DaemonClient : IAsyncDisposable
             cancellationToken);
     }
 
+    public async Task RespondToInteractionAsync(
+        string callId,
+        string selectedKey,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(callId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(selectedKey);
+
+        string sessionId;
+        await _sessionGate.WaitAsync(cancellationToken);
+        try
+        {
+            await ConnectAsync(cancellationToken);
+
+            sessionId = _sessionId
+                ?? throw new InvalidOperationException(
+                    "Session not initialized. Call CreateSessionAsync first.");
+        }
+        finally
+        {
+            _sessionGate.Release();
+        }
+
+        await _connection.InvokeCoreAsync(
+            "RespondToInteraction",
+            [sessionId, callId, selectedKey],
+            cancellationToken);
+    }
+
     public async ValueTask DisposeAsync()
     {
         _disposed = true;

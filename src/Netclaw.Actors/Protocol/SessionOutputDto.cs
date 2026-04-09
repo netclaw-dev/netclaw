@@ -22,6 +22,7 @@ public static class SessionOutputTypes
     public const string BufferFlush = "buffer_flush";
     public const string Compaction = "compaction";
     public const string SessionJoined = "session_joined";
+    public const string ToolInteraction = "tool_interaction";
     public const string Unknown = "unknown";
 }
 
@@ -89,6 +90,13 @@ public sealed record SessionOutputDto
     public string? Title { get; init; }
     public int? TurnCount { get; init; }
     public List<ChatMessageDto>? RecentMessages { get; init; }
+
+    // Tool Interaction
+    public string? InteractionKind { get; init; }
+    public string? InteractionDisplayText { get; init; }
+    public string? RequesterSenderId { get; init; }
+    public List<string>? InteractionPatterns { get; init; }
+    public List<ToolInteractionOption>? InteractionOptions { get; init; }
 
     // SubAgent
     public string? AgentName { get; init; }

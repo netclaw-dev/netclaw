@@ -182,6 +182,14 @@ public sealed class ShellCommandPolicyTests
         Assert.True(decision.Allowed);
     }
 
+    [Fact]
+    public void Denies_bash_lc_wrapping_denied_command()
+    {
+        var decision = _policy.Evaluate("bash -lc \"netclaw daemon stop\"");
+        Assert.False(decision.Allowed);
+        Assert.Equal("self_destructive", decision.DenyCategory);
+    }
+
     // ── Case insensitivity ──
 
     [Fact]
@@ -196,6 +204,22 @@ public sealed class ShellCommandPolicyTests
     {
         var decision = _policy.Evaluate("KILL -9 123");
         Assert.False(decision.Allowed);
+    }
+
+    [Fact]
+    public void Denies_rm_with_split_short_flags_targeting_root()
+    {
+        var decision = _policy.Evaluate("rm -r -f /");
+        Assert.False(decision.Allowed);
+        Assert.Equal("system_destructive", decision.DenyCategory);
+    }
+
+    [Fact]
+    public void Denies_rm_with_long_flags_targeting_root()
+    {
+        var decision = _policy.Evaluate("rm --recursive --force /");
+        Assert.False(decision.Allowed);
+        Assert.Equal("system_destructive", decision.DenyCategory);
     }
 
     // ── Custom patterns ──

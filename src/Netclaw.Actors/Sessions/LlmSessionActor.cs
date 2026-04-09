@@ -47,7 +47,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     private readonly IToolExecutor? _toolExecutor;
     private readonly IToolAuditLogger? _auditLogger;
     private readonly CommandApprovalCache? _approvalCache;
-    private readonly ToolApprovalStore? _approvalStore;
     private readonly ApprovalChannel _approvalChannel = new();
     private readonly IMemoryExtractor _memoryExtractor;
     private readonly IMemoryRecallCoordinator _memoryRecallCoordinator;
@@ -65,6 +64,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     private readonly List<SendUserMessage> _buffer = new();
     private readonly Dictionary<IActorRef, OutputFilter> _subscribers = new();
     private readonly List<AITool> _availableTools = new();
+    private readonly Dictionary<string, PendingToolInteraction> _pendingToolInteractions = new(StringComparer.Ordinal);
     private MessageSource? _currentTurnSource;
     private readonly ToolRegistry? _fullRegistry;
     private readonly ToolAccessPolicy? _toolAccessPolicy;
@@ -183,7 +183,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         _auditLogger = tools?.AuditLogger;
         _toolAccessPolicy = tools?.AccessPolicy;
         _approvalCache = tools?.ApprovalCache;
-        _approvalStore = tools?.ApprovalStore;
         _memoryExtractor = memory?.MemoryExtractor ?? NullMemoryExtractor.Instance;
         _memoryRecallCoordinator = memory?.RecallCoordinator ?? NullMemoryRecallCoordinator.Instance;
         _memoryCheckpointSink = memory?.CheckpointSink ?? NullMemoryCheckpointSink.Instance;
@@ -658,6 +657,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             }
 
             // Fire follow-up LLM call with tool results in context
+            _pendingToolInteractions.Clear();
             TurnLog().Info("turn_tool_execution_complete iteration={Iteration} callCount={CallCount} max={Max} resultCount={ResultCount}",
                 _turnState.ToolIterationCount, _turnState.ToolCallCount, _config.MaxToolCallsPerTurn, msg.ToolResults.Count);
             FireLlmCall();
@@ -673,8 +673,45 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             FailCurrentTurn(errorMessage, msg.Cause, category);
         });
 
+        Command<ToolInteractionRequest>(msg =>
+        {
+            var audience = _currentTurnSource?.Audience
+                ?? SecurityPolicyDefaults.ResolveAudienceFromSessionId(_sessionId.Value);
+
+            _pendingToolInteractions[msg.CallId] = new PendingToolInteraction(
+                msg.ToolName,
+                msg.Patterns,
+                audience,
+                msg.RequesterSenderId);
+
+            EmitOutput(msg);
+        });
+
         Command<ToolInteractionResponse>(msg =>
         {
+            if (!_pendingToolInteractions.TryGetValue(msg.CallId, out var pending))
+            {
+                _log.Warning("Ignoring tool interaction response for unknown call {CallId}", msg.CallId);
+                return;
+            }
+
+            if (!string.IsNullOrWhiteSpace(pending.RequesterSenderId)
+                && !string.Equals(pending.RequesterSenderId, msg.SenderId, StringComparison.Ordinal))
+            {
+                _log.Warning(
+                    "Ignoring tool interaction response for call {CallId} from sender {SenderId}; expected {ExpectedSenderId}",
+                    msg.CallId,
+                    msg.SenderId,
+                    pending.RequesterSenderId);
+
+                EmitOutput(new TextOutput
+                {
+                    SessionId = _sessionId,
+                    Text = "Approval response ignored: only the requesting user can approve this tool action."
+                }, OutputFilter.Text);
+                return;
+            }
+
             var decision = msg.SelectedKey switch
             {
                 "approve_once" => ApprovalDecision.ApprovedOnce,
@@ -685,15 +722,19 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
             _log.Info("Approval response for {CallId}: {Decision}", msg.CallId, decision);
 
-            // Update approval cache based on decision
             if (decision is ApprovalDecision.ApprovedOnce or ApprovalDecision.ApprovedAlways
-                && _approvalCache is not null && _currentTurnSource is not null)
+                && _approvalCache is not null)
             {
-                var audience = _currentTurnSource.Audience;
-                // Extract the patterns from the pending approval context
-                // The tool name and patterns are embedded in the interaction request
-                // For now, complete the TCS — the pipeline will retry the tool
+                foreach (var pattern in pending.Patterns)
+                {
+                    if (decision == ApprovalDecision.ApprovedAlways)
+                        _approvalCache.ApprovePersistent(_sessionId.Value, pending.Audience, pending.ToolName, pattern);
+                    else
+                        _approvalCache.ApproveForSession(_sessionId.Value, pending.Audience, pending.ToolName, pattern);
+                }
             }
+
+            _pendingToolInteractions.Remove(msg.CallId);
 
             // Complete the TCS so the blocked pipeline task can proceed
             _approvalChannel.Complete(msg.CallId, decision);
@@ -1456,7 +1497,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         _ = SessionToolExecutionPipeline.ExecuteToolsAsync(executor, toolCalls, sessionId, _currentTurnSource, auditLogger, tp, sessionDir, maxInlineToolResultChars, toolExecutionTimeout, self, emitSubAgentOutput, spawnChildActor,
             approvalChannel: _approvalChannel,
-            emitApprovalRequest: request => EmitOutput(request),
+            emitApprovalRequest: request => self.Tell(request),
             approvalTimeout: TimeSpan.FromMinutes(5));
     }
 
@@ -2488,6 +2529,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     private void FailCurrentTurn(string errorMessage, Exception cause, ErrorCategory category = ErrorCategory.Unknown)
     {
         _deliveryRetry.Clear();
+        _pendingToolInteractions.Clear();
         Timers.Cancel(StreamingRetryTimerKey);
         _state = _state.AddErrorReply(errorMessage);
 
@@ -2530,6 +2572,12 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         _logActor?.Tell(output);
         _observerActor?.Tell(output);
     }
+
+    private sealed record PendingToolInteraction(
+        string ToolName,
+        IReadOnlyList<string> Patterns,
+        TrustAudience Audience,
+        string? RequesterSenderId);
 
     private void BindTurnTelemetry(MessageSource? source)
     {

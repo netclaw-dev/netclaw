@@ -86,12 +86,13 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
     /// Called by <see cref="SlackApprovalHandler"/> when a user clicks an approval button.
     /// Routes the response to the gateway actor for delivery to the correct session.
     /// </summary>
-    internal void HandleApprovalResponse(string sessionId, string callId, string selectedKey)
+    internal void HandleApprovalResponse(string sessionId, string callId, string selectedKey, string senderId)
     {
         _gateway?.Tell(new SlackApprovalResponse(
             new SessionId(sessionId),
             callId,
-            selectedKey));
+            selectedKey,
+            senderId));
     }
 
     public ValueTask<ChannelHealth> GetHealthAsync(CancellationToken cancellationToken = default)

@@ -52,14 +52,13 @@ public sealed class ApprovalChannelTests
     }
 
     [Fact]
-    public async Task Cancellation_returns_TimedOut()
+    public async Task Cancellation_throws_operation_canceled()
     {
         var channel = new ApprovalChannel();
         using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(50));
 
-        var result = await channel.WaitForApprovalAsync("call-cancel", TimeSpan.FromSeconds(30), cts.Token);
-
-        Assert.Equal(ApprovalDecision.TimedOut, result);
+        await Assert.ThrowsAsync<OperationCanceledException>(async () =>
+            await channel.WaitForApprovalAsync("call-cancel", TimeSpan.FromSeconds(30), cts.Token));
     }
 
     [Fact]

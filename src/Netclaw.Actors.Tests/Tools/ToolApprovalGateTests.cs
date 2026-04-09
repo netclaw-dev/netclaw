@@ -29,8 +29,8 @@ public sealed class ToolApprovalGateTests
                 UsedStrictFallback: false));
     }
 
-    private static ToolExecutionContext PersonalContext(bool supportsApproval = true) =>
-        new(null, null) { Audience = "personal", SupportsInteractiveApproval = supportsApproval };
+    private static ToolExecutionContext PersonalContext(bool supportsApproval = true, string sessionId = "signalr/thread-1") =>
+        new(sessionId, null) { Audience = "personal", SupportsInteractiveApproval = supportsApproval };
 
     private static INetclawTool ShellTool()
     {
@@ -58,7 +58,7 @@ public sealed class ToolApprovalGateTests
     {
         var policy = CreatePolicy(ToolApprovalMode.Approval);
         var cache = new CommandApprovalCache();
-        cache.ApproveForSession(TrustAudience.Personal, "shell_execute", "git push");
+        cache.ApproveForSession("signalr/thread-1", TrustAudience.Personal, "shell_execute", "git push");
         var args = new Dictionary<string, object?> { ["Command"] = "git push origin main" };
 
         var decision = policy.AuthorizeInvocation(ShellTool(), PersonalContext(), args, cache);
@@ -111,7 +111,7 @@ public sealed class ToolApprovalGateTests
     {
         var policy = CreatePolicy(ToolApprovalMode.Approval);
         var cache = new CommandApprovalCache();
-        cache.ApproveForSession(TrustAudience.Personal, "shell_execute", "git add");
+        cache.ApproveForSession("signalr/thread-1", TrustAudience.Personal, "shell_execute", "git add");
         var args = new Dictionary<string, object?> { ["Command"] = "git add . && git commit -m fix && git push" };
 
         var decision = policy.AuthorizeInvocation(ShellTool(), PersonalContext(), args, cache);
@@ -120,5 +120,37 @@ public sealed class ToolApprovalGateTests
         Assert.Contains("git commit", decision.ApprovalContext!.UnapprovedPatterns);
         Assert.Contains("git push", decision.ApprovalContext.UnapprovedPatterns);
         Assert.DoesNotContain("git add", decision.ApprovalContext.UnapprovedPatterns);
+    }
+
+    [Fact]
+    public void Hard_denied_shell_command_is_blocked_before_approval()
+    {
+        var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
+        config.AudienceProfiles.Personal.ApprovalPolicy = new ToolApprovalConfig
+        {
+            ToolOverrides = new Dictionary<string, ToolApprovalMode>(StringComparer.Ordinal)
+            {
+                ["shell_execute"] = ToolApprovalMode.Approval
+            }
+        };
+
+        var policy = new ToolAccessPolicy(
+            config,
+            new EffectivePolicyDefaults(
+                DeploymentPosture.Personal,
+                TrustAudience.Personal,
+                ShellExecutionMode.HostAllowed,
+                UsedStrictFallback: false),
+            new ShellCommandPolicy());
+
+        var decision = policy.AuthorizeInvocation(
+            ShellTool(),
+            PersonalContext(),
+            new Dictionary<string, object?> { ["Command"] = "netclaw daemon stop" },
+            new CommandApprovalCache());
+
+        Assert.False(decision.Allowed);
+        Assert.False(decision.NeedsApproval);
+        Assert.Equal("hard_deny_self_destructive", decision.DenyReason);
     }
 }

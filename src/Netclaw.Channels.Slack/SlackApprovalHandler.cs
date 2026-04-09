@@ -1,5 +1,7 @@
 namespace Netclaw.Channels.Slack;
 
+using Netclaw.Actors.Protocol;
+
 /// <summary>
 /// Constants and utilities for Slack approval prompt formatting.
 /// Approval prompts are posted as text messages with letter-keyed options.
@@ -18,14 +20,7 @@ public static class SlackApprovalHandler
     /// </summary>
     public static (bool IsApproval, string? SelectedKey) TryParseApprovalResponse(string text)
     {
-        var trimmed = text.Trim().ToLowerInvariant();
-
-        return trimmed switch
-        {
-            "a" or "1" or "approve" or "approve once" or "yes" => (true, ApproveOnceKey),
-            "b" or "2" or "approve always" or "always" => (true, ApproveAlwaysKey),
-            "c" or "3" or "deny" or "no" or "reject" => (true, DenyKey),
-            _ => (false, null)
-        };
+        var parsed = ToolInteractionResponseParser.TryParseApprovalResponse(text, out var selectedKey);
+        return (parsed, selectedKey);
     }
 }

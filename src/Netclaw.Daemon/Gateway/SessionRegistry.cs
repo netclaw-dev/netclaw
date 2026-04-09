@@ -25,6 +25,7 @@ namespace Netclaw.Daemon.Gateway;
 public sealed class SessionRegistry
 {
     private readonly IRequiredActor<SignalRGatewayActorKey> _gatewayProvider;
+    private readonly ISessionPipeline _pipeline;
     private readonly SessionIngressGate _ingressGate;
     private readonly ClaimsPrincipalMapper _mapper;
     private readonly TimeProvider _timeProvider;
@@ -38,12 +39,14 @@ public sealed class SessionRegistry
 
     public SessionRegistry(
         IRequiredActor<SignalRGatewayActorKey> gatewayProvider,
+        ISessionPipeline pipeline,
         SessionIngressGate ingressGate,
         ClaimsPrincipalMapper mapper,
         TimeProvider timeProvider,
         ILogger<SessionRegistry> logger)
     {
         _gatewayProvider = gatewayProvider;
+        _pipeline = pipeline;
         _ingressGate = ingressGate;
         _mapper = mapper;
         _timeProvider = timeProvider;
@@ -237,6 +240,38 @@ public sealed class SessionRegistry
 
         var gateway = await _gatewayProvider.GetAsync();
         gateway.Tell(new EnqueueSignalRInput(attachedSessionId, input));
+    }
+
+    public async Task RespondToInteractionAsync(
+        string connectionId,
+        string sessionId,
+        string callId,
+        string selectedKey,
+        ClaimsPrincipal? principal = null)
+    {
+        var callerConnectionId = ParseConnectionId(connectionId);
+        var requestedSessionId = ParseSessionId(sessionId);
+
+        if (!_connections.TryGetSessionForConnection(callerConnectionId, out var attachedSessionId))
+            throw new HubException($"Session '{sessionId}' is not attached to this connection.");
+
+        if (!attachedSessionId.Equals(requestedSessionId))
+            throw new HubException($"Session '{sessionId}' is not attached to this connection.");
+
+        if (!_knownSessions.ContainsKey(attachedSessionId))
+            throw new HubException($"Session '{sessionId}' not found.");
+
+        ThrowIfIngressClosed();
+
+        var identity = _mapper.Map(principal);
+
+        await _pipeline.SendFeedbackAsync(new ToolInteractionResponse
+        {
+            SessionId = requestedSessionId,
+            CallId = callId,
+            SelectedKey = selectedKey,
+            SenderId = identity.SenderId
+        });
     }
 
     /// <summary>

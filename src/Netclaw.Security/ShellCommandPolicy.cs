@@ -219,7 +219,8 @@ public sealed class ShellCommandPolicy
             if (!string.Equals(verb, "rm", StringComparison.OrdinalIgnoreCase))
                 return false;
 
-            var hasRecursiveForce = false;
+            var hasRecursive = false;
+            var hasForce = false;
             var hasDangerousTarget = false;
 
             for (var i = 1; i < tokens.Count; i++)
@@ -229,12 +230,19 @@ public sealed class ShellCommandPolicy
                 // Check for -rf, -fr, --recursive + --force, etc.
                 if (token.StartsWith('-') && !token.StartsWith("--", StringComparison.Ordinal))
                 {
-                    if (token.Contains('r', StringComparison.Ordinal) && token.Contains('f', StringComparison.Ordinal))
-                        hasRecursiveForce = true;
+                    if (token.Contains('r', StringComparison.Ordinal) || token.Contains('R', StringComparison.Ordinal))
+                        hasRecursive = true;
+
+                    if (token.Contains('f', StringComparison.Ordinal))
+                        hasForce = true;
                 }
-                else if (token is "--recursive" or "--force")
+                else if (token == "--recursive")
                 {
-                    // Would need both, but check individually
+                    hasRecursive = true;
+                }
+                else if (token == "--force")
+                {
+                    hasForce = true;
                 }
 
                 // Check for dangerous targets
@@ -242,7 +250,7 @@ public sealed class ShellCommandPolicy
                     hasDangerousTarget = true;
             }
 
-            return hasRecursiveForce && hasDangerousTarget;
+            return hasRecursive && hasForce && hasDangerousTarget;
         }
 
         private static bool IsDangerousRmTarget(string token)
