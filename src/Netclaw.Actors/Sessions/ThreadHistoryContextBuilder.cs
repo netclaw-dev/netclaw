@@ -26,7 +26,10 @@ internal static class ThreadHistoryContextBuilder
         foreach (var msg in backfillMessages)
         {
             var sender = msg.Source?.SenderId ?? "unknown";
-            sb.AppendLine($"<user: {sender}>");
+            var ts = msg.Source?.ReceivedAt is { } r && r != default
+                ? $", {r:yyyy-MM-dd HH:mm} UTC"
+                : "";
+            sb.AppendLine($"<user: {sender}{ts}>");
 
             if (!string.IsNullOrWhiteSpace(msg.Content))
                 sb.AppendLine(msg.Content);

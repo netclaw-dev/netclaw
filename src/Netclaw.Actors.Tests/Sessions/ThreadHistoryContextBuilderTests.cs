@@ -77,6 +77,30 @@ public sealed class ThreadHistoryContextBuilderTests
     }
 
     [Fact]
+    public void Build_includes_utc_timestamps_when_available()
+    {
+        var ts = new DateTimeOffset(2026, 4, 9, 10, 15, 0, TimeSpan.Zero);
+        var messages = new List<SendUserMessage>
+        {
+            new()
+            {
+                SessionId = new SessionId("C1/T1"),
+                Content = "Has anyone looked at the dashboard?",
+                Source = new MessageSource
+                {
+                    ChannelType = Netclaw.Actors.Channels.ChannelType.Slack,
+                    SenderId = "alice",
+                    ReceivedAt = ts
+                }
+            }
+        };
+
+        var result = ThreadHistoryContextBuilder.Build(messages, null);
+
+        Assert.Contains("<user: alice, 2026-04-09 10:15 UTC>", result.Text);
+    }
+
+    [Fact]
     public void Build_handles_empty_list()
     {
         var result = ThreadHistoryContextBuilder.Build([], null);
