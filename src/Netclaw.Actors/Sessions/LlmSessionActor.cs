@@ -46,7 +46,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     private readonly IReadOnlyList<IContextLayerProvider> _contextLayers;
     private readonly IToolExecutor? _toolExecutor;
     private readonly IToolAuditLogger? _auditLogger;
-    private readonly CommandApprovalCache? _approvalCache;
+    private readonly IToolApprovalService? _approvalService;
     private readonly ApprovalChannel _approvalChannel = new();
     private readonly IMemoryExtractor _memoryExtractor;
     private readonly IMemoryRecallCoordinator _memoryRecallCoordinator;
@@ -182,7 +182,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         _toolExecutor = tools?.ToolExecutor;
         _auditLogger = tools?.AuditLogger;
         _toolAccessPolicy = tools?.AccessPolicy;
-        _approvalCache = tools?.ApprovalCache;
+        _approvalService = tools?.ApprovalService;
         _memoryExtractor = memory?.MemoryExtractor ?? NullMemoryExtractor.Instance;
         _memoryRecallCoordinator = memory?.RecallCoordinator ?? NullMemoryRecallCoordinator.Instance;
         _memoryCheckpointSink = memory?.CheckpointSink ?? NullMemoryCheckpointSink.Instance;
@@ -723,15 +723,15 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             _log.Info("Approval response for {CallId}: {Decision}", msg.CallId, decision);
 
             if (decision is ApprovalDecision.ApprovedOnce or ApprovalDecision.ApprovedAlways
-                && _approvalCache is not null)
+                && _approvalService is not null)
             {
-                foreach (var pattern in pending.Patterns)
-                {
-                    if (decision == ApprovalDecision.ApprovedAlways)
-                        _approvalCache.ApprovePersistent(_sessionId.Value, pending.Audience, pending.ToolName, pattern);
-                    else
-                        _approvalCache.ApproveForSession(_sessionId.Value, pending.Audience, pending.ToolName, pattern);
-                }
+                _approvalService.RecordApprovalAsync(
+                    _sessionId.Value,
+                    pending.Audience,
+                    pending.ToolName,
+                    pending.Patterns,
+                    persistent: decision == ApprovalDecision.ApprovedAlways,
+                    CancellationToken.None).GetAwaiter().GetResult();
             }
 
             _pendingToolInteractions.Remove(msg.CallId);

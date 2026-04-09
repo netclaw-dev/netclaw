@@ -8,6 +8,7 @@ using Akka.Reminders.Sqlite.Configuration;
 using Netclaw.Actors.Reminders;
 using Netclaw.Actors.Routing;
 using Netclaw.Actors.Sessions;
+using Netclaw.Actors.Tools;
 
 namespace Netclaw.Actors.Hosting;
 
@@ -102,6 +103,18 @@ public static class NetclawAkkaHostingExtensions
             });
     }
 
+    public static AkkaConfigurationBuilder WithToolApprovalActor(
+        this AkkaConfigurationBuilder builder)
+    {
+        return builder.StartActors((system, registry, resolver) =>
+        {
+            var actor = system.ActorOf(
+                resolver.Props<ToolApprovalActor>(),
+                "tool-approvals");
+            registry.Register<ToolApprovalActorKey>(actor);
+        });
+    }
+
     /// <summary>
     /// Convenience method that registers all Netclaw actor infrastructure.
     /// Requires <see cref="SessionConfig"/> and <see cref="Microsoft.Extensions.AI.IChatClient"/>
@@ -114,6 +127,7 @@ public static class NetclawAkkaHostingExtensions
         return builder
             .WithModelCapabilityCache()
             .WithSessionManager()
+            .WithToolApprovalActor()
             .WithReminderManager(reminderStorageOptions);
     }
 }

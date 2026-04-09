@@ -1,0 +1,105 @@
+using Akka.Actor;
+using Netclaw.Configuration;
+using Netclaw.Security;
+
+namespace Netclaw.Actors.Tools;
+
+internal sealed class ToolApprovalActor : ReceiveActor
+{
+    private readonly ToolApprovalStore? _persistentStore;
+    private readonly Dictionary<string, Dictionary<string, HashSet<string>>> _sessionApprovals = new(StringComparer.Ordinal);
+
+    public ToolApprovalActor(ToolApprovalStore? persistentStore = null)
+    {
+        _persistentStore = persistentStore;
+
+        Receive<GetUnapprovedPatterns>(msg =>
+        {
+            var unapproved = new List<string>(msg.Patterns.Count);
+
+            foreach (var pattern in msg.Patterns)
+            {
+                if (!IsApproved(msg.SessionId, msg.Audience, msg.ToolName, pattern))
+                    unapproved.Add(pattern);
+            }
+
+            Sender.Tell(new UnapprovedPatternsResponse(unapproved));
+        });
+
+        Receive<RecordToolApproval>(msg =>
+        {
+            foreach (var pattern in msg.Patterns)
+            {
+                AddSessionApproval(msg.SessionId, msg.Audience, msg.ToolName, pattern);
+
+                if (msg.Persistent)
+                    _persistentStore?.AddApproval(msg.Audience, msg.ToolName, pattern);
+            }
+
+            Sender.Tell(ToolApprovalRecorded.Instance);
+        });
+    }
+
+    public static Props CreateProps(ToolApprovalStore? persistentStore = null)
+        => Props.Create(() => new ToolApprovalActor(persistentStore));
+
+    private bool IsApproved(string? sessionId, TrustAudience audience, string toolName, string pattern)
+    {
+        if (!string.IsNullOrWhiteSpace(sessionId)
+            && _sessionApprovals.TryGetValue(BuildSessionKey(sessionId, audience), out var toolMap)
+            && toolMap.TryGetValue(toolName, out var patterns)
+            && MatchesAnyPattern(pattern, patterns))
+        {
+            return true;
+        }
+
+        if (_persistentStore is null)
+            return false;
+
+        return MatchesAnyPattern(pattern, _persistentStore.GetApprovedPatterns(audience, toolName));
+    }
+
+    private void AddSessionApproval(string sessionId, TrustAudience audience, string toolName, string pattern)
+    {
+        var sessionKey = BuildSessionKey(sessionId, audience);
+        if (!_sessionApprovals.TryGetValue(sessionKey, out var toolMap))
+        {
+            toolMap = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+            _sessionApprovals[sessionKey] = toolMap;
+        }
+
+        if (!toolMap.TryGetValue(toolName, out var patterns))
+        {
+            patterns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            toolMap[toolName] = patterns;
+        }
+
+        patterns.Add(pattern);
+    }
+
+    private static string BuildSessionKey(string sessionId, TrustAudience audience)
+        => $"{sessionId}|{audience.ToWireValue()}";
+
+    private static bool MatchesAnyPattern(string candidatePattern, IEnumerable<string> approvedPatterns)
+    {
+        foreach (var approved in approvedPatterns)
+        {
+            if (string.Equals(candidatePattern, approved, StringComparison.OrdinalIgnoreCase))
+                return true;
+
+            if (candidatePattern.StartsWith(approved, StringComparison.OrdinalIgnoreCase)
+                && candidatePattern.Length > approved.Length
+                && candidatePattern[approved.Length] == ' ')
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+}
+
+internal sealed record ToolApprovalRecorded
+{
+    public static ToolApprovalRecorded Instance { get; } = new();
+}

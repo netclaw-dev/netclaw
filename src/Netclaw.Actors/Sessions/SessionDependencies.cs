@@ -27,7 +27,7 @@ public sealed record SessionToolServices(
     ToolAccessPolicy? AccessPolicy,
     TrustContextDeriver? TrustDeriver,
     Skills.SkillRegistry? SkillRegistry,
-    CommandApprovalCache? ApprovalCache = null,
+    IToolApprovalService? ApprovalService = null,
     ToolApprovalStore? ApprovalStore = null);
 
 /// <summary>

@@ -107,7 +107,7 @@ public class SubAgentActorTests : TestKit
         };
 
         var definition = CreateDefinition([fakeTool]);
-        var agent = Sys.ActorOf(SubAgentActor.CreateProps(definition, fakeClient, policy, new CommandApprovalCache()));
+        var agent = Sys.ActorOf(SubAgentActor.CreateProps(definition, fakeClient, policy, approvalService: null));
 
         var result = await agent.Ask<SubAgentResult>(
             new RunSubAgent { Task = "Try the shell tool", Timeout = TimeSpan.FromSeconds(5) },

@@ -69,13 +69,12 @@ public sealed class ToolAccessPolicy
     }
 
     public ToolAccessDecision AuthorizeInvocation(INetclawTool tool, ToolExecutionContext? context)
-        => AuthorizeInvocation(tool, context, arguments: null, approvalCache: null);
+        => AuthorizeInvocation(tool, context, arguments: null);
 
     public ToolAccessDecision AuthorizeInvocation(
         INetclawTool tool,
         ToolExecutionContext? context,
-        IDictionary<string, object?>? arguments,
-        CommandApprovalCache? approvalCache)
+        IDictionary<string, object?>? arguments)
     {
         if (tool is McpToolAdapter mcp)
         {
@@ -85,14 +84,14 @@ public sealed class ToolAccessPolicy
             if (!_profileResolver.IsMcpToolAllowed(mcp.ServerName, mcp.BareToolName, context))
                 return ToolAccessDecision.Deny("mcp_tool_not_allowed_for_audience_profile");
 
-            return CheckApprovalGate(tool.Name, context, arguments, approvalCache, DefaultApprovalMatcher.Instance);
+            return CheckApprovalGate(tool.Name, context, arguments, DefaultApprovalMatcher.Instance);
         }
 
         if (!_profileResolver.IsToolAllowed(tool.Name, context))
             return ToolAccessDecision.Deny("tool_not_allowed_for_audience_profile");
 
         if (!IsShellTool(tool))
-            return CheckApprovalGate(tool.Name, context, arguments, approvalCache, DefaultApprovalMatcher.Instance);
+            return CheckApprovalGate(tool.Name, context, arguments, DefaultApprovalMatcher.Instance);
 
         var shellMode = ResolveShellMode();
         if (shellMode == ShellExecutionMode.Off)
@@ -113,7 +112,7 @@ public sealed class ToolAccessPolicy
                 return ToolAccessDecision.Deny($"hard_deny_{hardDenyDecision.DenyCategory ?? "unknown"}");
         }
 
-        return CheckApprovalGate(tool.Name, context, arguments, approvalCache, ShellApprovalMatcher.Instance);
+        return CheckApprovalGate(tool.Name, context, arguments, ShellApprovalMatcher.Instance);
     }
 
     private static string? ExtractShellCommand(IDictionary<string, object?>? arguments)
@@ -134,7 +133,6 @@ public sealed class ToolAccessPolicy
         string toolName,
         ToolExecutionContext? context,
         IDictionary<string, object?>? arguments,
-        CommandApprovalCache? approvalCache,
         IToolApprovalMatcher matcher)
     {
         var audience = ResolveAudience(context);
@@ -152,46 +150,22 @@ public sealed class ToolAccessPolicy
         if (mode == ToolApprovalMode.Auto)
             return ToolAccessDecision.Allow();
 
-        // Mode is Approval — check if already approved
-        if (approvalCache is not null)
-        {
-            var allPatterns = matcher.ExtractPatterns(toolName, arguments);
-                var unapproved = new List<string>();
-
-                foreach (var pattern in allPatterns)
-                {
-                    if (!approvalCache.IsApproved(context?.SessionId, audience, toolName, pattern))
-                        unapproved.Add(pattern);
-                }
-
-            if (unapproved.Count == 0)
-                return ToolAccessDecision.Allow();
-
-            // Channel doesn't support approval → auto-deny
-            if (context?.SupportsInteractiveApproval == false)
-                return ToolAccessDecision.Deny("channel_does_not_support_approval");
-
-            var displayText = matcher.FormatForDisplay(toolName, arguments);
-            var approvalContext = new ToolApprovalContext(
-                toolName,
-                displayText,
-                unapproved,
-                [
-                    new ToolApprovalOption("approve_once", "Approve Once"),
-                    new ToolApprovalOption("approve_always", "Approve Always"),
-                    new ToolApprovalOption("deny", "Deny")
-                ]);
-
-            return ToolAccessDecision.RequiresApproval(approvalContext);
-        }
-
-        // No approval cache available — if channel doesn't support approval, deny
         if (context?.SupportsInteractiveApproval == false)
             return ToolAccessDecision.Deny("channel_does_not_support_approval");
 
-        // Approval cache not provided but mode requires approval — allow
-        // (the pipeline will handle the approval flow)
-        return ToolAccessDecision.Allow();
+        var allPatterns = matcher.ExtractPatterns(toolName, arguments);
+        var displayText = matcher.FormatForDisplay(toolName, arguments);
+        var approvalContext = new ToolApprovalContext(
+            toolName,
+            displayText,
+            allPatterns,
+            [
+                new ToolApprovalOption("approve_once", "Approve Once"),
+                new ToolApprovalOption("approve_always", "Approve Always"),
+                new ToolApprovalOption("deny", "Deny")
+            ]);
+
+        return ToolAccessDecision.RequiresApproval(approvalContext);
     }
 
     private ShellExecutionMode ResolveShellMode()

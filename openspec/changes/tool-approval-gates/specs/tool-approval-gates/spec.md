@@ -13,7 +13,8 @@ approval required). The default Personal profile SHALL set `shell_execute` to
 
 - **GIVEN** a Personal audience session with default approval config
 - **WHEN** the agent invokes `shell_execute`
-- **THEN** the system checks the approval cache before execution
+- **THEN** `ToolAccessPolicy` marks the call as approval-gated
+- **AND** `DispatchingToolExecutor` consults `IToolApprovalService` before execution
 - **AND** if the command pattern is not approved, an approval prompt is emitted
 
 #### Scenario: Tool in Auto mode executes without approval
@@ -33,7 +34,8 @@ approval required). The default Personal profile SHALL set `shell_execute` to
 
 - **GIVEN** Personal sets `shell_execute` to `Approval` and Team sets it to `Deny`
 - **WHEN** a Personal session invokes `shell_execute`
-- **THEN** the system checks approval cache and may prompt
+- **THEN** `ToolAccessPolicy` marks the call as approval-gated
+- **AND** `DispatchingToolExecutor` may prompt if `IToolApprovalService` reports unapproved patterns
 - **AND** when a Team session invokes `shell_execute`
 - **THEN** the system denies immediately without prompting
 
@@ -103,7 +105,7 @@ scanned recursively.
 - **GIVEN** the command `git add . && git commit -m "fix" && git push`
 - **WHEN** approval is checked
 - **THEN** patterns `git add`, `git commit`, and `git push` are each checked
-  independently against the approval cache
+  independently against the approval state surfaced through `IToolApprovalService`
 
 #### Scenario: Unapproved compound segments batched in one prompt
 
@@ -117,26 +119,20 @@ scanned recursively.
 - **GIVEN** the command `bash -c "git push --force"`
 - **WHEN** approval and hard deny are checked
 - **THEN** the inner command `git push --force` is extracted and scanned
-- **AND** pattern `git push` is checked against the approval cache
+- **AND** pattern `git push` is checked through `IToolApprovalService`
 
 ### Requirement: IToolApprovalMatcher extension point
 
 The system SHALL define an `IToolApprovalMatcher` interface for tool-specific
 pattern extraction and matching. Shell SHALL implement verb-chain matching. A
 default implementation SHALL provide tool-name-level matching for tools without
-a custom matcher. New tool types MAY provide their own matchers.
+a custom matcher.
 
 #### Scenario: Shell uses verb-chain matcher
 
 - **GIVEN** a `shell_execute` tool call with command `npm install lodash`
 - **WHEN** the approval system extracts the pattern
 - **THEN** `ShellApprovalMatcher` extracts `npm install`
-
-#### Scenario: MCP tool uses default matcher
-
-- **GIVEN** an MCP tool `memorizer/store` in Approval mode
-- **WHEN** the approval system extracts the pattern
-- **THEN** `DefaultApprovalMatcher` extracts `memorizer/store` (the tool name)
 
 #### Scenario: Approved pattern matches invocation
 
@@ -184,8 +180,9 @@ response arrives.
 
 ### Requirement: ToolInteractionRequest/Response protocol
 
-The system SHALL define a general `ToolInteractionRequest` session output and
-`ToolInteractionResponse` session command for channel-mediated user interactions.
+The system SHALL define a `ToolInteractionRequest` session output and
+`ToolInteractionResponse` session command for channel-mediated approval
+interactions.
 The interaction `Kind` SHALL identify the interaction type (`approval` for v1).
 `ToolInteractionRequest` SHALL be a lifecycle output (always delivered regardless
 of `OutputFilter`).
@@ -201,7 +198,7 @@ of `OutputFilter`).
 #### Scenario: Channel routes response back to session
 
 - **GIVEN** a `ToolInteractionRequest` has been emitted
-- **WHEN** the user selects an option (via button click, text reply, etc.)
+- **WHEN** the user selects an option (for MVP Slack, via text reply)
 - **THEN** the channel sends a `ToolInteractionResponse` to the session actor
 - **AND** the response includes `CallId` and the selected option key
 
@@ -210,10 +207,9 @@ of `OutputFilter`).
 The system SHALL store persistent approvals ("Approve Always" decisions) in
 `~/.netclaw/config/tool-approvals.json`, separate from `netclaw.json`. The file
 SHALL NOT be monitored by `ConfigWatcherService`. The file SHALL contain
-per-audience sections with per-tool approval lists. For shell, the lists SHALL
-contain command patterns. For other tools, approval SHALL be tool-level
-(`true`). The file SHALL be read at startup and written immediately on "Approve
-Always" decisions.
+per-audience sections with per-tool approval lists. For the shipped MVP shell
+flow, the lists SHALL contain command patterns. Approval lookup and recording
+SHALL be mediated by `IToolApprovalService`.
 
 #### Scenario: Approve Always persists to file
 
@@ -257,4 +253,4 @@ support it, the system SHALL immediately deny the tool with reason
 - **GIVEN** the Slack channel (supports interactive approval)
 - **AND** `shell_execute` is in Approval mode
 - **WHEN** the agent invokes an unapproved `shell_execute` command
-- **THEN** the channel renders the approval prompt as Block Kit buttons
+- **THEN** the channel renders the approval prompt as a text A/B/C reply flow

@@ -32,14 +32,13 @@ grant controls, SEC-006 approval surfaces, SEC-009 shell execution boundaries).
   run independently. Session actor handles `ToolInteractionResponse` during
   Processing phase.
 - **Channel-rendered approval UI**: New `ToolInteractionRequest` session output.
-  Channels MUST render structured approval prompts and route responses back.
-  Slack uses Block Kit buttons via Socket Mode. TUI uses inline keyboard
-  prompts. Plain text channels use ABC option lists. Channels that cannot
-  support approvals auto-deny.
+  Channels MUST render approval prompts and route responses back. MVP Slack
+  uses a text-based A/B/C reply flow in-thread. Channels that cannot support
+  approvals auto-deny.
 - **Persistent approval storage**: `~/.netclaw/config/tool-approvals.json`
   (separate from `netclaw.json` to avoid triggering config watcher restart).
-  Per-audience sections. Session-scoped approvals in transient
-  `CommandApprovalCache`.
+  Per-audience sections. Approval lookup and recording are mediated by an
+  actor-backed `IToolApprovalService`.
 - **Configurable hard deny list**: Defaults block self-destructive commands
   (kill daemon, `rm -rf /`, fork bombs). Operators can add or remove patterns.
 - **Init wizard integration**: Asks about shell approval mode per audience
@@ -50,26 +49,29 @@ grant controls, SEC-006 approval surfaces, SEC-009 shell execution boundaries).
 ### New Capabilities
 
 - `tool-approval-gates`: Core approval infrastructure — `ToolApprovalConfig`,
-  `IToolApprovalMatcher`, `CommandApprovalCache`, `ToolApprovalStore`,
-  `ToolInteractionRequest`/`ToolInteractionResponse` protocol,
-  `ShellCommandPolicy`, `ShellTokenizer`, and configurable hard deny list.
+  `IToolApprovalMatcher`, actor-backed `IToolApprovalService`,
+  `ToolApprovalStore`, `ToolInteractionRequest`/`ToolInteractionResponse`
+  protocol, `ShellCommandPolicy`, `ShellTokenizer`, and configurable hard deny
+  list.
 
 ### Modified Capabilities
 
 - `netclaw-tools`: Tool invocation gains a third outcome (`RequiresApproval`)
-  alongside Allow and Deny. Shell tool gains hard deny check before execution.
-  `ToolAccessDecision` extended. Audit logging records approval decisions.
+  alongside Allow and Deny. `ToolAccessPolicy` decides when approval is needed;
+  `DispatchingToolExecutor` consults `IToolApprovalService` to filter already-
+  approved patterns before throwing `ToolApprovalRequiredException`. Shell tool
+  gains hard deny check before execution. `ToolAccessDecision` extended. Audit
+  logging records approval decisions.
 - `netclaw-acl`: `ToolAudienceProfile` gains `ApprovalPolicy` property.
   Per-audience approval configuration with tool-level mode overrides. Persistent
   approval file per audience.
 - `netclaw-session`: Session actor creates `IApprovalChannel`, passes it to tool
   execution pipeline, handles `ToolInteractionResponse` messages during
-  Processing phase. New `ToolInteractionRequest` session output type (lifecycle,
-  always delivered). `OutputFilter` updated if needed.
-- `netclaw-slack-socket`: Slack channel registers `BlockAction` event handler
-  for Socket Mode interactive responses. Renders `ToolInteractionRequest` as
-  Block Kit `ActionsBlock` with approve/deny buttons. Routes `BlockAction`
-  events back as `ToolInteractionResponse` through actor hierarchy.
+  Processing phase, and records approvals through `IToolApprovalService`. New
+  `ToolInteractionRequest` session output type (lifecycle, always delivered).
+- `netclaw-slack-socket`: Slack channel renders `ToolInteractionRequest` as a
+  text approval prompt with A/B/C reply options and routes matching text
+  replies back as `ToolInteractionResponse` through the session pipeline.
 - `netclaw-input-adapters`: Channel capability metadata includes
   `SupportsInteractiveApproval` flag. Channels that cannot support approvals
   trigger automatic deny for approval-gated tools.
@@ -80,20 +82,23 @@ grant controls, SEC-006 approval surfaces, SEC-009 shell execution boundaries).
 ## Impact
 
 - **Netclaw.Security**: New `ShellTokenizer`, `ShellCommandPolicy`,
-  `CommandApprovalCache` types. `ToolPathPolicy` refactored to share tokenizer.
+  `IToolApprovalService`, and approval-matcher types. `ToolPathPolicy`
+  refactored to share tokenizer.
 - **Netclaw.Configuration**: `ToolApprovalConfig`, `ToolApprovalMode` types.
   `ToolAudienceProfile` gains `ApprovalPolicy`. `ToolApprovalStore` for
   persistent file I/O. `NetclawPaths` gains `ToolApprovalsPath`. JSON schema
   updated.
 - **Netclaw.Actors**: `ToolAccessPolicy` and `ToolAccessDecision` extended with
-  `RequiresApproval`. `DispatchingToolExecutor` handles new decision type.
-  `SessionToolExecutionPipeline` catches `ToolApprovalRequiredException` and
-  blocks on `IApprovalChannel`. `LlmSessionActor` creates approval channel,
-  handles responses during Processing. New protocol types in
-  `SessionOutput.cs`.
-- **Netclaw.Channels.Slack**: `BlockAction` event handler registration. Button
-  rendering in `SlackThreadBindingActor`. Response routing through
-  `SlackConversationActor` and `SlackGatewayActor`.
+  `RequiresApproval`. `DispatchingToolExecutor` handles the new decision type
+  and consults the actor-backed `IToolApprovalService` before requiring user
+  interaction. `SessionToolExecutionPipeline` catches
+  `ToolApprovalRequiredException` and blocks on `IApprovalChannel`.
+  `LlmSessionActor` creates the approval channel, records approvals through
+  `IToolApprovalService`, and handles responses during Processing. New protocol
+  types in `SessionOutput.cs`.
+- **Netclaw.Channels.Slack**: Text approval rendering in
+  `SlackThreadBindingActor` and text reply parsing back into
+  `ToolInteractionResponse`.
 - **Netclaw.Channels**: `IChannel` or related interface gains approval support
   metadata.
 - **Netclaw.Cli**: Init wizard step for approval mode. Doctor checks for
