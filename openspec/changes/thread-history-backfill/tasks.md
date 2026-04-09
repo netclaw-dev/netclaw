@@ -36,11 +36,11 @@
 
 - [x] 5.1 Unit test `SlackThreadHistoryFetcher` — pagination, bot filtering, error handling
 - [x] 5.2 Unit test `ChannelInput.IsBackfill` propagation through `MapToCommand`
-- [ ] 5.3 Integration test: backfill with mixed text+image messages flows through pipeline to session
-- [ ] 5.4 Integration test: new session triggers backfill, recovered session skips it
-- [ ] 5.5 Integration test: backfill context appears before live message in LLM context assembly
+- [x] 5.3 Integration test: backfill with mixed text+image messages flows through pipeline to session
+- [x] 5.4 Integration test: new session triggers backfill, recovered session skips it
+- [x] 5.5 Integration test: backfill context appears before live message in LLM context assembly
 
 ## 6. Spec and documentation sync
 
-- [ ] 6.1 Update `netclaw-operations` system skill if thread backfill introduces operator-visible behavior
+- [x] 6.1 Update `netclaw-operations` system skill if thread backfill introduces operator-visible behavior
 - [x] 6.2 Run `dotnet slopwatch analyze` — no new violations
