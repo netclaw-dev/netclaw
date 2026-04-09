@@ -299,7 +299,7 @@ public sealed class ChatPage : ReactivePage<ChatViewModel>
                 _chatHistory.AppendLine($"  {msg.DisplayText}", Color.White);
                 if (msg.Patterns.Count > 0)
                     _chatHistory.AppendLine($"  Patterns: {string.Join(", ", msg.Patterns)}", Color.BrightBlack);
-                _chatHistory.AppendLine("  Reply A to approve once, B to approve always, or C to deny.", Color.Yellow);
+                _chatHistory.AppendLine("  Reply A to approve once, B for this chat, C to approve always, or D to deny.", Color.Yellow);
                 _chatHistory.ScrollToBottom();
                 break;
 

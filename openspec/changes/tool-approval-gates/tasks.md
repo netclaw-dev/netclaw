@@ -9,7 +9,7 @@
 ## 2. Approval Configuration Types
 
 - [x] 2.1 Create `ToolApprovalMode` enum (Auto, Approval, Deny) and `ToolApprovalConfig` class (`DefaultMode`, `ToolOverrides` dictionary) in `Netclaw.Configuration`
-- [x] 2.2 Add `ApprovalPolicy` property to `ToolAudienceProfile` — default Personal profile sets `shell_execute` to Approval mode
+- [x] 2.2 Add `ApprovalPolicy` property to `ToolAudienceProfile` — runtime default remains `Auto`; init-generated Personal config explicitly sets `shell_execute` to Approval mode
 - [x] 2.3 Create `ToolApprovalStore` in `Netclaw.Configuration` — reads/writes `tool-approvals.json`, per-audience sections, thread-safe file I/O
 - [x] 2.4 Add `ToolApprovalsPath` property to `NetclawPaths` (resolves to `~/.netclaw/config/tool-approvals.json`)
 - [x] 2.5 Add `HardDenyPatterns` list to `ToolConfig` for operator-configurable hard deny patterns
@@ -38,8 +38,8 @@
 ## 5. Protocol Types and Approval Channel
 
 - [x] 5.1 Create `ToolInteractionRequest` session output in `SessionOutput.cs` — `Kind` (approval), `CallId`, `ToolName`, `DisplayText`, `Patterns`, `Options` list; lifecycle (always delivered)
-- [x] 5.2 Create `ToolInteractionResponse` session command — `CallId`, `SelectedKey` (approve_once, approve_always, deny), `SessionId`
-- [x] 5.3 Create `ApprovalDecision` enum — ApprovedOnce, ApprovedAlways, Denied, TimedOut
+- [x] 5.2 Create `ToolInteractionResponse` session command — `CallId`, `SelectedKey` (approve_once, approve_session, approve_always, deny), `SessionId`
+- [x] 5.3 Create `ApprovalDecision` enum — ApprovedOnce, ApprovedSession, ApprovedAlways, Denied, TimedOut
 - [x] 5.4 Create `IApprovalChannel` interface and implementation — `WaitForApprovalAsync(callId, timeout, ct)` returns `Task<ApprovalDecision>`, `Complete(callId, decision)` resolves the TCS
 - [x] 5.5 Add `IApprovalChannel` tests — wait/complete lifecycle, timeout behavior, unknown callId handling
 
@@ -67,9 +67,9 @@
 
 ## 9. Init Wizard and Doctor Integration
 
-- [x] 9.1 Add shell approval mode question to init wizard per-audience configuration — default Personal profile now includes ApprovalPolicy with shell_execute=Approval; help text updated
-- [x] 9.2 Write selected approval mode to `Tools.AudienceProfiles.{audience}.ApprovalPolicy.ToolOverrides` in generated config — handled by CreatePersonal() defaults
-- [x] 9.3 Add `netclaw doctor` check — warn when approval mode enabled but shell is off (mismatch advisory)
+- [x] 9.1 Add shell approval mode question to init wizard per-audience configuration — Approval remains the recommended Personal option; help text updated
+- [x] 9.2 Write selected approval mode to `Tools.AudienceProfiles.{audience}.ApprovalPolicy.ToolOverrides` in generated config — Personal init output explicitly writes `shell_execute=Approval` instead of relying on runtime defaults
+- [x] 9.3 Add `netclaw doctor` check — warn when Personal host shell is enabled without an explicit `shell_execute` approval gate
 - [x] 9.4 Add `netclaw doctor` check — info advisory for stale patterns in `tool-approvals.json`
 
 ## 10. Audit Logging and Spec Sync

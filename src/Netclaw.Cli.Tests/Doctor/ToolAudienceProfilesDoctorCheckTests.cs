@@ -209,6 +209,69 @@ public sealed class ToolAudienceProfilesDoctorCheckTests : IDisposable
 
         Assert.Equal(DoctorSeverity.Warning, result.Severity);
         Assert.Contains("Personal profile allows all tools", result.Message);
+        Assert.Contains("without an explicit shell_execute approval gate", result.Message);
+    }
+
+    [Fact]
+    public async Task PersonalShellWithoutExplicitApprovalPolicy_Warns()
+    {
+        WriteConfig(
+            """
+            {
+              "configVersion": 1,
+              "Tools": {
+                "ShellMode": "HostAllowed",
+                "AudienceProfiles": {
+                  "Personal": {
+                    "ToolsMode": "All",
+                    "McpServersMode": "All",
+                    "ReadFiles": { "Mode": "All" },
+                    "WriteFiles": { "Mode": "All" },
+                    "AttachFiles": { "Mode": "All" }
+                  }
+                }
+              }
+            }
+            """);
+
+        var check = new ToolAudienceProfilesDoctorCheck(_paths);
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(DoctorSeverity.Warning, result.Severity);
+        Assert.Contains("without an explicit shell_execute approval gate", result.Message);
+    }
+
+    [Fact]
+    public async Task PersonalShellWithExplicitApprovalPolicy_DoesNotWarnAboutMissingGate()
+    {
+        WriteConfig(
+            """
+            {
+              "configVersion": 1,
+              "Tools": {
+                "ShellMode": "HostAllowed",
+                "AudienceProfiles": {
+                  "Personal": {
+                    "ToolsMode": "All",
+                    "McpServersMode": "All",
+                    "ApprovalPolicy": {
+                      "ToolOverrides": {
+                        "shell_execute": "Approval"
+                      }
+                    },
+                    "ReadFiles": { "Mode": "All" },
+                    "WriteFiles": { "Mode": "All" },
+                    "AttachFiles": { "Mode": "All" }
+                  }
+                }
+              }
+            }
+            """);
+
+        var check = new ToolAudienceProfilesDoctorCheck(_paths);
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.DoesNotContain("without an explicit shell_execute approval gate", result.Message);
     }
 
     private void WriteConfig(object config)

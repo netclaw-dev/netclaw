@@ -7,8 +7,11 @@ namespace Netclaw.Actors.Sessions;
 /// </summary>
 public enum ApprovalDecision
 {
-    /// <summary>Approved for this session only.</summary>
+    /// <summary>Approved for the current blocked tool call retry only.</summary>
     ApprovedOnce,
+
+    /// <summary>Approved for the current session/thread only.</summary>
+    ApprovedSession,
 
     /// <summary>Approved permanently (persisted to tool-approvals.json).</summary>
     ApprovedAlways,

@@ -49,17 +49,18 @@ transport operation, including interactive approval responses.
 ### Requirement: Approval prompt rendering via text reply flow
 
 The Slack channel SHALL render `ToolInteractionRequest` outputs as in-thread
-text prompts. For approval-type interactions, the prompt SHALL present three
-reply options: `A` = Approve Once, `B` = Approve Always, and `C` = Deny. The
+text prompts. For approval-type interactions, the prompt SHALL present four
+reply options: `A` = Approve Once, `B` = Approve For This Chat, `C` = Approve
+Always, and `D` = Deny. The
 message SHALL include the tool name and a display of what the tool wants to do
 (e.g., the shell command).
 
-#### Scenario: Approval prompt posted with A/B/C text options
+#### Scenario: Approval prompt posted with A/B/C/D text options
 
 - **GIVEN** the session emits a `ToolInteractionRequest` with `Kind=approval`
 - **WHEN** the Slack subscriber receives the output
 - **THEN** it posts a text message in the session's thread with the tool name,
-  command, and A/B/C approval instructions
+  command, and A/B/C/D approval instructions
 
 #### Scenario: Only requesting user may reply to approval prompt
 
@@ -82,22 +83,29 @@ to the correct `CallId` and requester.
 - **THEN** the Slack channel parses the text reply against the pending approval request
 - **AND** sends a `ToolInteractionResponse` with `ApprovedOnce` to the session
 
-#### Scenario: User replies Approve Always
+#### Scenario: User replies Approve For This Chat
 
 - **GIVEN** an approval prompt is displayed in a Slack thread
 - **WHEN** the user replies `B`
+- **THEN** a `ToolInteractionResponse` with `ApprovedSession` is sent to the session
+- **AND** the approval is retained only for the current Slack thread session
+
+#### Scenario: User replies Approve Always
+
+- **GIVEN** an approval prompt is displayed in a Slack thread
+- **WHEN** the user replies `C`
 - **THEN** a `ToolInteractionResponse` with `ApprovedAlways` is sent to the session
 - **AND** the approval is persisted to `tool-approvals.json`
 
 #### Scenario: User replies Deny
 
 - **GIVEN** an approval prompt is displayed
-- **WHEN** the user replies `C`
+- **WHEN** the user replies `D`
 - **THEN** a `ToolInteractionResponse` with `Denied` is sent to the session
 - **AND** the tool receives a denial result
 
 #### Scenario: No pending approval means reply falls through as normal message
 
 - **GIVEN** no approval request is pending for the Slack thread
-- **WHEN** a user sends `A`, `B`, or `C`
+- **WHEN** a user sends `A`, `B`, `C`, or `D`
 - **THEN** the message is not treated as an approval response

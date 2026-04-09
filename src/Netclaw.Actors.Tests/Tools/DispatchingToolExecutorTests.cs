@@ -1,6 +1,10 @@
+using Akka.Actor;
+using Akka.Hosting;
 using Microsoft.Extensions.AI;
+using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
+using Netclaw.Security;
 using Xunit;
 
 namespace Netclaw.Actors.Tests.Tools;
@@ -357,6 +361,161 @@ public class DispatchingToolExecutorTests
 
         var ex = await Assert.ThrowsAsync<ToolAccessDeniedException>(() => executor.ExecuteAsync(toolCall, context, TestContext.Current.CancellationToken));
         Assert.Equal("mcp_server_not_allowed_for_audience_profile", ex.DenyReason);
+    }
+
+    [Fact]
+    public async Task One_time_approval_allows_immediate_retry_only()
+    {
+        var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
+        config.AudienceProfiles.Personal.ApprovalPolicy = new ToolApprovalConfig
+        {
+            ToolOverrides = new Dictionary<string, ToolApprovalMode>(StringComparer.Ordinal)
+            {
+                ["shell_execute"] = ToolApprovalMode.Approval
+            }
+        };
+
+        var registry = new ToolRegistry();
+        registry.WithFirstPartyTools(config);
+
+        var system = ActorSystem.Create($"tool-approval-{Guid.NewGuid():N}");
+        try
+        {
+            var approvalActor = system.ActorOf(ToolApprovalActor.CreateProps(), "tool-approval");
+            var approvalService = new AkkaToolApprovalService(new StubRequiredActor(approvalActor));
+            var executor = new DispatchingToolExecutor(
+                registry,
+                new ToolAccessPolicy(
+                    config,
+                    new EffectivePolicyDefaults(
+                        DeploymentPosture.Personal,
+                        TrustAudience.Personal,
+                        ShellExecutionMode.HostAllowed,
+                        UsedStrictFallback: false)),
+                approvalService);
+
+            var toolCall = new FunctionCallContent(
+                "call-approve-once",
+                "shell_execute",
+                new Dictionary<string, object?> { ["Command"] = "echo once" });
+
+            var context = new Netclaw.Tools.ToolExecutionContext("signalr/thread-1", null)
+            {
+                Audience = TrustAudience.Personal.ToWireValue(),
+                Boundary = SecurityPolicyDefaults.TrustedInstanceBoundary,
+                ChannelType = "signalr",
+                SupportsInteractiveApproval = true
+            };
+
+            var firstAttempt = await Assert.ThrowsAsync<ToolApprovalRequiredException>(() =>
+                executor.ExecuteAsync(toolCall, context, TestContext.Current.CancellationToken));
+
+            context.OneTimeApprovedToolName = toolCall.Name;
+            context.SetOneTimeApprovedPatterns(firstAttempt.ApprovalContext.UnapprovedPatterns);
+
+            var retryResult = await executor.ExecuteAsync(toolCall, context, TestContext.Current.CancellationToken);
+            Assert.Contains("once", retryResult);
+
+            context.OneTimeApprovedToolName = null;
+            context.SetOneTimeApprovedPatterns([]);
+
+            await Assert.ThrowsAsync<ToolApprovalRequiredException>(() =>
+                executor.ExecuteAsync(toolCall, context, TestContext.Current.CancellationToken));
+        }
+        finally
+        {
+            await system.Terminate();
+        }
+    }
+
+    [Fact]
+    public async Task Session_approval_allows_same_session_but_not_different_session()
+    {
+        var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
+        config.AudienceProfiles.Personal.ApprovalPolicy = new ToolApprovalConfig
+        {
+            ToolOverrides = new Dictionary<string, ToolApprovalMode>(StringComparer.Ordinal)
+            {
+                ["shell_execute"] = ToolApprovalMode.Approval
+            }
+        };
+
+        var registry = new ToolRegistry();
+        registry.WithFirstPartyTools(config);
+
+        var system = ActorSystem.Create($"tool-approval-session-{Guid.NewGuid():N}");
+        try
+        {
+            var approvalActor = system.ActorOf(ToolApprovalActor.CreateProps(), "tool-approval");
+            var approvalService = new AkkaToolApprovalService(new StubRequiredActor(approvalActor));
+            var executor = new DispatchingToolExecutor(
+                registry,
+                new ToolAccessPolicy(
+                    config,
+                    new EffectivePolicyDefaults(
+                        DeploymentPosture.Personal,
+                        TrustAudience.Personal,
+                        ShellExecutionMode.HostAllowed,
+                        UsedStrictFallback: false)),
+                approvalService);
+
+            var toolCall = new FunctionCallContent(
+                "call-session-approve",
+                "shell_execute",
+                new Dictionary<string, object?> { ["Command"] = "echo session" });
+
+            var firstContext = new Netclaw.Tools.ToolExecutionContext("signalr/thread-1", null)
+            {
+                Audience = TrustAudience.Personal.ToWireValue(),
+                Boundary = SecurityPolicyDefaults.TrustedInstanceBoundary,
+                ChannelType = "signalr",
+                SupportsInteractiveApproval = true
+            };
+
+            var secondContext = new Netclaw.Tools.ToolExecutionContext("signalr/thread-2", null)
+            {
+                Audience = TrustAudience.Personal.ToWireValue(),
+                Boundary = SecurityPolicyDefaults.TrustedInstanceBoundary,
+                ChannelType = "signalr",
+                SupportsInteractiveApproval = true
+            };
+
+            var firstAttempt = await Assert.ThrowsAsync<ToolApprovalRequiredException>(() =>
+                executor.ExecuteAsync(toolCall, firstContext, TestContext.Current.CancellationToken));
+
+            await approvalService.RecordApprovalAsync(
+                "signalr/thread-1",
+                TrustAudience.Personal,
+                toolCall.Name,
+                firstAttempt.ApprovalContext.UnapprovedPatterns,
+                persistent: false,
+                TestContext.Current.CancellationToken);
+
+            var sameSessionResult = await executor.ExecuteAsync(toolCall, firstContext, TestContext.Current.CancellationToken);
+            Assert.Contains("session", sameSessionResult);
+
+            await Assert.ThrowsAsync<ToolApprovalRequiredException>(() =>
+                executor.ExecuteAsync(toolCall, secondContext, TestContext.Current.CancellationToken));
+        }
+        finally
+        {
+            await system.Terminate();
+        }
+    }
+
+    private sealed class StubRequiredActor : IRequiredActor<ToolApprovalActorKey>
+    {
+        private readonly IActorRef _actor;
+
+        public StubRequiredActor(IActorRef actor)
+        {
+            _actor = actor;
+        }
+
+        public IActorRef ActorRef => _actor;
+
+        public Task<IActorRef> GetAsync(CancellationToken cancellationToken = default)
+            => Task.FromResult(_actor);
     }
 
 }

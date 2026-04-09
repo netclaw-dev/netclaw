@@ -19,7 +19,9 @@ grant controls, SEC-006 approval surfaces, SEC-009 shell execution boundaries).
 
 - **Tool approval config per audience**: `ToolApprovalConfig` on
   `ToolAudienceProfile` with per-tool approval mode overrides (Auto, Approval,
-  Deny). Default Personal profile sets `shell_execute` to Approval mode.
+  Deny). Runtime defaults remain `Auto`; the init-generated Personal config
+  explicitly writes `ApprovalPolicy.ToolOverrides.shell_execute = Approval` as
+  the recommended shell-safe setting.
 - **Three-layer invocation pipeline**: Hard deny floor (configurable, blocks
   self-destructive commands before approval) → tool access gate (existing
   audience allowlists) → approval gate (new, per-audience, per-tool).
@@ -33,12 +35,14 @@ grant controls, SEC-006 approval surfaces, SEC-009 shell execution boundaries).
   Processing phase.
 - **Channel-rendered approval UI**: New `ToolInteractionRequest` session output.
   Channels MUST render approval prompts and route responses back. MVP Slack
-  uses a text-based A/B/C reply flow in-thread. Channels that cannot support
+  uses a text-based A/B/C/D reply flow in-thread for approve once, approve for
+  this chat, approve always, and deny. Channels that cannot support
   approvals auto-deny.
 - **Persistent approval storage**: `~/.netclaw/config/tool-approvals.json`
   (separate from `netclaw.json` to avoid triggering config watcher restart).
-  Per-audience sections. Approval lookup and recording are mediated by an
-  actor-backed `IToolApprovalService`.
+  Per-audience sections. Only persistent approvals are written to disk;
+  one-shot and current-session approvals stay in memory. Approval lookup and
+  recording are mediated by an actor-backed `IToolApprovalService`.
 - **Configurable hard deny list**: Defaults block self-destructive commands
   (kill daemon, `rm -rf /`, fork bombs). Operators can add or remove patterns.
 - **Init wizard integration**: Asks about shell approval mode per audience
@@ -67,17 +71,20 @@ grant controls, SEC-006 approval surfaces, SEC-009 shell execution boundaries).
   approval file per audience.
 - `netclaw-session`: Session actor creates `IApprovalChannel`, passes it to tool
   execution pipeline, handles `ToolInteractionResponse` messages during
-  Processing phase, and records approvals through `IToolApprovalService`. New
-  `ToolInteractionRequest` session output type (lifecycle, always delivered).
+  Processing phase, and records current-session or persistent approvals through
+  `IToolApprovalService` while handling one-shot approvals in-memory for the
+  blocked retry only. New `ToolInteractionRequest` session output type
+  (lifecycle, always delivered).
 - `netclaw-slack-socket`: Slack channel renders `ToolInteractionRequest` as a
-  text approval prompt with A/B/C reply options and routes matching text
+  text approval prompt with A/B/C/D reply options and routes matching text
   replies back as `ToolInteractionResponse` through the session pipeline.
 - `netclaw-input-adapters`: Channel capability metadata includes
   `SupportsInteractiveApproval` flag. Channels that cannot support approvals
   trigger automatic deny for approval-gated tools.
-- `netclaw-cli`: Init wizard asks about shell approval mode per audience.
-  `netclaw doctor` validates approval config consistency (e.g., approval mode
-  enabled but channel doesn't support it).
+- `netclaw-cli`: Init wizard asks about shell approval mode per audience and
+  writes the selected `shell_execute` approval override into generated config.
+  `netclaw doctor` validates approval config consistency (e.g., Personal host
+  shell enabled without an explicit `shell_execute` approval gate).
 
 ## Impact
 

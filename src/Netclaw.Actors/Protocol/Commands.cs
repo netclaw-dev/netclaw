@@ -40,7 +40,7 @@ public sealed class ToolInteractionResponse : IWithSessionId
     /// <summary>The tool call ID from the original <see cref="ToolInteractionRequest"/>.</summary>
     public required string CallId { get; init; }
 
-    /// <summary>The selected option key (e.g., "approve_once", "approve_always", "deny").</summary>
+    /// <summary>The selected option key (e.g., "approve_once", "approve_session", "approve_always", "deny").</summary>
     public required string SelectedKey { get; init; }
 
     /// <summary>

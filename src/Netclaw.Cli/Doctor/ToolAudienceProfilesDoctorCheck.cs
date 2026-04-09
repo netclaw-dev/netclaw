@@ -84,6 +84,8 @@ public sealed class ToolAudienceProfilesDoctorCheck(NetclawPaths paths) : IDocto
                 warnings.Add("Personal profile also enables host shell, which has a high blast radius.");
         }
 
+        CheckMissingPersonalShellApproval(toolConfig, warnings);
+
         // Advisory: approval mode configured but shell is off
         CheckApprovalMismatch(toolConfig, warnings);
 
@@ -196,6 +198,32 @@ public sealed class ToolAudienceProfilesDoctorCheck(NetclawPaths paths) : IDocto
                     "approval config has no effect.");
             }
         }
+    }
+
+    private static void CheckMissingPersonalShellApproval(ToolConfig toolConfig, List<string> warnings)
+    {
+        if (toolConfig.ShellMode != ShellExecutionMode.HostAllowed)
+            return;
+
+        var personal = toolConfig.AudienceProfiles.Personal;
+        if (!PersonalProfileAllowsShell(personal))
+            return;
+
+        var approvalMode = personal.ApprovalPolicy?.GetEffectiveMode("shell_execute") ?? ToolApprovalMode.Auto;
+        if (approvalMode is ToolApprovalMode.Approval or ToolApprovalMode.Deny)
+            return;
+
+        warnings.Add(
+            "Personal profile enables host shell without an explicit shell_execute approval gate. " +
+            "Run `netclaw init` again or set Tools.AudienceProfiles.Personal.ApprovalPolicy.ToolOverrides.shell_execute to Approval.");
+    }
+
+    private static bool PersonalProfileAllowsShell(ToolAudienceProfile profile)
+    {
+        if (profile.ToolsMode == ToolProfileMode.All)
+            return true;
+
+        return profile.AllowedTools.Contains("shell_execute", StringComparer.Ordinal);
     }
 
     private static void CheckStaleApprovals(ToolConfig toolConfig, NetclawPaths netclawPaths, List<string> warnings)

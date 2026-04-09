@@ -35,7 +35,7 @@ Channels that support interactive approval but use text interactions SHALL
 render approval prompts as numbered or lettered text option lists and parse
 user responses by option number, letter, or keyword matching.
 
-#### Scenario: Text-only channel renders ABC options
+#### Scenario: Text-only channel renders ABCD options
 
 - **GIVEN** a channel with interactive approval support but no rich UI
 - **WHEN** a `ToolInteractionRequest` is received
@@ -44,8 +44,9 @@ user responses by option number, letter, or keyword matching.
   I'd like to run: git push origin main
   Reply with:
     A) Approve once
-    B) Approve always
-    C) Deny
+    B) Approve for this chat
+    C) Approve always
+    D) Deny
   ```
 - **AND** user replies "A", "a", or "approve once" are accepted
 
@@ -53,4 +54,4 @@ user responses by option number, letter, or keyword matching.
 
 - **GIVEN** the user replies "B" to an approval prompt
 - **WHEN** the channel parses the reply
-- **THEN** it sends a `ToolInteractionResponse` with `ApprovedAlways`
+- **THEN** it sends a `ToolInteractionResponse` with `ApprovedSession`

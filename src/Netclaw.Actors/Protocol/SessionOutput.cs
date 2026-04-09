@@ -326,7 +326,7 @@ public sealed record ToolInteractionRequest : SessionOutput
     /// <summary>Patterns requiring approval (for shell: verb chains like "git push").</summary>
     public IReadOnlyList<string> Patterns { get; init; } = [];
 
-    /// <summary>Available response options (e.g., approve once, approve always, deny).</summary>
+    /// <summary>Available response options (e.g., approve once, approve for this chat, approve always, deny).</summary>
     public required IReadOnlyList<ToolInteractionOption> Options { get; init; }
 }
 

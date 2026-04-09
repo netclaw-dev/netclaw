@@ -10,12 +10,14 @@ using Netclaw.Actors.Protocol;
 public static class SlackApprovalHandler
 {
     public const string ApproveOnceKey = "approve_once";
+    public const string ApproveSessionKey = "approve_session";
     public const string ApproveAlwaysKey = "approve_always";
     public const string DenyKey = "deny";
 
     /// <summary>
     /// Attempts to parse a user message as an approval response.
-    /// Matches: "a", "b", "c", "approve once", "approve always", "deny",
+    /// Matches: "a", "b", "c", "d", "approve once", "approve session",
+    /// "approve always", "deny",
     /// and common variations.
     /// </summary>
     public static (bool IsApproval, string? SelectedKey) TryParseApprovalResponse(string text)

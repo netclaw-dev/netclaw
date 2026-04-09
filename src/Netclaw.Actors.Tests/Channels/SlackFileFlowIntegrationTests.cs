@@ -661,6 +661,7 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
                 Options =
                 [
                     new ToolInteractionOption("approve_once", "Approve Once"),
+                    new ToolInteractionOption("approve_session", "Approve For This Chat"),
                     new ToolInteractionOption("approve_always", "Approve Always"),
                     new ToolInteractionOption("deny", "Deny")
                 ]

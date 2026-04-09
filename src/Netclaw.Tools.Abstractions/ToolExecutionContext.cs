@@ -48,8 +48,10 @@ public sealed record SubAgentFinding
 public sealed class ToolExecutionContext
 {
     public static readonly ToolExecutionContext Empty = new(null, null);
+    private static readonly IReadOnlySet<string> EmptyApprovedPatternSet = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
     private List<FileAttachmentInfo>? _fileAttachments;
+    private HashSet<string>? _oneTimeApprovedPatterns;
 
     public ToolExecutionContext(string? sessionId, string? sessionDirectory)
     {
@@ -89,6 +91,18 @@ public sealed class ToolExecutionContext
     /// </remarks>
     public Func<object, string, CancellationToken, Task<object>>? SpawnChildActor { get; set; }
 
+    /// <summary>
+    /// Tool name granted a one-shot approval for the current execution retry.
+    /// This is not persisted and only applies to the current in-memory context.
+    /// </summary>
+    public string? OneTimeApprovedToolName { get; set; }
+
+    /// <summary>
+    /// Approval patterns granted for a single retry of the current tool call.
+    /// </summary>
+    public IReadOnlySet<string> OneTimeApprovedPatterns
+        => _oneTimeApprovedPatterns ?? EmptyApprovedPatternSet;
+
     /// <summary>The session that initiated this tool call.</summary>
     public string? SessionId { get; }
 
@@ -111,5 +125,10 @@ public sealed class ToolExecutionContext
     {
         _fileAttachments ??= [];
         _fileAttachments.Add(new FileAttachmentInfo(filePath, fileName, mimeType));
+    }
+
+    public void SetOneTimeApprovedPatterns(IEnumerable<string> patterns)
+    {
+        _oneTimeApprovedPatterns = new HashSet<string>(patterns, StringComparer.OrdinalIgnoreCase);
     }
 }

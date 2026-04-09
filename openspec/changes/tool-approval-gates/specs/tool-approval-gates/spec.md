@@ -6,12 +6,16 @@ The system SHALL support per-audience tool approval configuration via
 `ToolApprovalConfig` on `ToolAudienceProfile`. Each audience profile SHALL
 independently specify a `DefaultMode` (Auto, Approval, Deny) and per-tool
 overrides in `ToolOverrides`. The default `DefaultMode` SHALL be `Auto` (no
-approval required). The default Personal profile SHALL set `shell_execute` to
-`Approval` mode.
+approval required). Runtime audience defaults SHALL NOT implicitly place
+`shell_execute` in `Approval` mode. Instead, the init-generated Personal config
+SHALL explicitly write
+`ApprovalPolicy.ToolOverrides.shell_execute = Approval` as the recommended
+shell-safe default.
 
-#### Scenario: Shell requires approval in default Personal profile
+#### Scenario: Shell requires approval in init-generated Personal config
 
-- **GIVEN** a Personal audience session with default approval config
+- **GIVEN** a Personal audience session whose generated config explicitly sets
+  `ApprovalPolicy.ToolOverrides.shell_execute` to `Approval`
 - **WHEN** the agent invokes `shell_execute`
 - **THEN** `ToolAccessPolicy` marks the call as approval-gated
 - **AND** `DispatchingToolExecutor` consults `IToolApprovalService` before execution
@@ -193,7 +197,7 @@ of `OutputFilter`).
 - **WHEN** the pipeline detects the approval requirement
 - **THEN** a `ToolInteractionRequest` with `Kind=approval` is emitted
 - **AND** it includes `CallId`, `ToolName`, the command/pattern, and available
-  options (approve once, approve always, deny)
+  options (approve once, approve for this chat, approve always, deny)
 
 #### Scenario: Channel routes response back to session
 
@@ -225,9 +229,17 @@ SHALL be mediated by `IToolApprovalService`.
 - **WHEN** the daemon starts
 - **THEN** `git push` is pre-approved for Personal audience shell commands
 
-#### Scenario: Approve Once is session-scoped only
+#### Scenario: Approve Once is retry-scoped only
 
 - **GIVEN** the user clicks "Approve Once" for pattern `docker build`
+- **WHEN** the approval is processed
+- **THEN** the blocked `docker build` call is retried immediately
+- **AND** a later `docker build` call in the same session prompts again
+- **AND** `tool-approvals.json` is NOT modified
+
+#### Scenario: Approve For This Chat is session-scoped only
+
+- **GIVEN** the user clicks "Approve For This Chat" for pattern `docker build`
 - **WHEN** the approval is processed
 - **THEN** `docker build` is approved for the current session only
 - **AND** `tool-approvals.json` is NOT modified
@@ -253,4 +265,4 @@ support it, the system SHALL immediately deny the tool with reason
 - **GIVEN** the Slack channel (supports interactive approval)
 - **AND** `shell_execute` is in Approval mode
 - **WHEN** the agent invokes an unapproved `shell_execute` command
-- **THEN** the channel renders the approval prompt as a text A/B/C reply flow
+- **THEN** the channel renders the approval prompt as a text A/B/C/D reply flow
