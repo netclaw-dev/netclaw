@@ -578,7 +578,7 @@ public sealed partial class ReminderManagerActor : ReceiveActor
                 definition,
                 _pipeline,
                 _config,
-                _defaults,
+                _defaults.Audience,
                 _timeProvider,
                 _historyStore),
             actorName);

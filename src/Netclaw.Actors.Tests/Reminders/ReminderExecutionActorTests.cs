@@ -266,7 +266,7 @@ public class ReminderExecutionActorTests : TestKit, IDisposable
             ReminderDefinition definition,
             ISessionPipeline pipeline,
             ReminderHistoryStore historyStore,
-            EffectivePolicyDefaults? defaults = null)
+            TrustAudience defaultAudience = TrustAudience.Team)
         {
             var executionId = Guid.NewGuid();
             Context.ActorOf(
@@ -275,7 +275,7 @@ public class ReminderExecutionActorTests : TestKit, IDisposable
                     definition,
                     pipeline,
                     new ReminderConfig(),
-                    defaults ?? DefaultPolicyDefaults,
+                    defaultAudience,
                     TimeProvider.System,
                     historyStore),
                 "exec");
@@ -283,12 +283,6 @@ public class ReminderExecutionActorTests : TestKit, IDisposable
             ReceiveAny(msg => probe.Tell(msg));
         }
     }
-
-    private static readonly EffectivePolicyDefaults DefaultPolicyDefaults = new(
-        DeploymentPosture.Team,
-        TrustAudience.Team,
-        ShellExecutionMode.Off,
-        UsedStrictFallback: false);
 
     /// <summary>Fake pipeline that throws a pre-configured exception on CreateAsync.</summary>
     private sealed class FailingSessionPipeline(Exception exception) : ISessionPipeline
@@ -347,11 +341,9 @@ public class ReminderExecutionActorTests : TestKit, IDisposable
             Audience = TrustAudience.Personal,
             NotifyInstructions = string.Empty
         };
-        var teamDefaults = new EffectivePolicyDefaults(
-            DeploymentPosture.Team, TrustAudience.Team, ShellExecutionMode.Off, false);
         var probe = CreateTestProbe();
         Sys.ActorOf(
-            Props.Create(() => new ParentProxy(probe.Ref, definition, pipeline, _historyStore, teamDefaults)),
+            Props.Create(() => new ParentProxy(probe.Ref, definition, pipeline, _historyStore, TrustAudience.Team)),
             "exec-audience-override");
 
         await probe.ExpectMsgAsync<ReminderExecutionCompleted>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
@@ -369,11 +361,9 @@ public class ReminderExecutionActorTests : TestKit, IDisposable
         ]);
 
         var definition = CreateDefinition("audience-fallback") with { NotifyInstructions = string.Empty };
-        var personalDefaults = new EffectivePolicyDefaults(
-            DeploymentPosture.Personal, TrustAudience.Personal, ShellExecutionMode.HostAllowed, false);
         var probe = CreateTestProbe();
         Sys.ActorOf(
-            Props.Create(() => new ParentProxy(probe.Ref, definition, pipeline, _historyStore, personalDefaults)),
+            Props.Create(() => new ParentProxy(probe.Ref, definition, pipeline, _historyStore, TrustAudience.Personal)),
             "exec-audience-fallback");
 
         await probe.ExpectMsgAsync<ReminderExecutionCompleted>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);

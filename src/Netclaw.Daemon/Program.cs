@@ -1122,7 +1122,7 @@ static void MapReminderEndpoints(WebApplication app)
             enabled = r.Enabled,
             schedule = Netclaw.Actors.Reminders.ListRemindersTool.DescribeSchedule(r.Schedule),
             nextFire = Netclaw.Actors.Reminders.SetReminderTool.FormatNextFire(r.NextFire),
-            audience = r.Audience?.ToString().ToLowerInvariant(),
+            audience = r.Audience?.ToWireValue(),
         });
         return Results.Ok(projected);
     });
@@ -1332,7 +1332,7 @@ static void MapReminderEndpoints(WebApplication app)
             notifyPolicy = r.NotifyPolicy.ToString().ToLowerInvariant(),
             sessionId = r.SessionId,
             reportToChannel = r.ReportToChannel,
-            audience = r.Audience?.ToString().ToLowerInvariant(),
+            audience = r.Audience?.ToWireValue(),
         });
     });
 
