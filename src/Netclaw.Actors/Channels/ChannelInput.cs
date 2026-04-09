@@ -58,4 +58,10 @@ public sealed record ChannelInput
     /// When the message was received by the channel.
     /// </summary>
     public DateTimeOffset ReceivedAt { get; init; }
+
+    /// <summary>
+    /// When true, this message is backfilled thread history — not a live message.
+    /// Backfilled messages are injected as read-only context before the first LLM turn.
+    /// </summary>
+    public bool IsBackfill { get; init; }
 }

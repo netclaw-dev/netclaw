@@ -122,6 +122,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     // Startup context layers: injected on first LLM call, re-injected after compaction
     private bool _startupContextInjected;
 
+    // Thread history backfill: accumulated before first live turn
+    private List<SendUserMessage>? _pendingBackfill;
+
     // Guards against infinite compaction loops: if a post-compaction buffer drain
     // overflows again, fail the turn. Reset at the start of each new user turn.
     private int _compactionOverflowRetryCount;
@@ -1592,6 +1595,23 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     private void HandleIncomingUserMessage(SendUserMessage cmd)
     {
+        // Backfill messages are accumulated and injected as context before the first live turn.
+        if (cmd.IsBackfill)
+        {
+            _pendingBackfill ??= new List<SendUserMessage>();
+            _pendingBackfill.Add(cmd);
+            TryReplyAck();
+            return;
+        }
+
+        // Inject any accumulated backfill as thread history context before first live message.
+        if (_pendingBackfill is { Count: > 0 })
+        {
+            var historyBlock = ThreadHistoryContextBuilder.Build(_pendingBackfill, _sessionsBasePath);
+            _state = _state.AddUserMessage(historyBlock.Text, historyBlock.MediaReferences);
+            _pendingBackfill = null;
+        }
+
         _deliveryRetry.Clear();
         _currentTurnSource = cmd.Source;
         _currentTrustContext = _trustContextDeriver?.Derive(cmd.Source);

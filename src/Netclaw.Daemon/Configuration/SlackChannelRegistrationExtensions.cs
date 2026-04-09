@@ -1,3 +1,4 @@
+using Netclaw.Actors.Channels;
 using Netclaw.Channels;
 using Netclaw.Channels.Slack;
 using Netclaw.Channels.Slack.Tools;
@@ -27,6 +28,14 @@ public static class SlackChannelRegistrationExtensions
 
         services.AddHttpClient("slack-files");
         services.AddSingleton<ISlackReplyClient, SlackReplyClient>();
+        services.AddSingleton<IThreadHistoryFetcher>(sp =>
+        {
+            var slackApi = sp.GetRequiredService<SlackNet.ISlackApiClient>();
+            var httpFactory = sp.GetRequiredService<IHttpClientFactory>();
+            var contentScanner = sp.GetRequiredService<Netclaw.Security.IContentScanner>();
+            var logger = sp.GetRequiredService<ILoggerFactory>().CreateLogger<SlackThreadHistoryFetcher>();
+            return new SlackThreadHistoryFetcher(slackApi.Conversations, slackOptions, httpFactory.CreateClient("slack-files"), contentScanner, logger);
+        });
         services.AddSingleton<ISlackOutboundClient, SlackOutboundClient>();
         services.AddSingleton<ISlackTargetLookupClient, SlackApiTargetLookupClient>();
         services.AddSingleton<ISlackTargetResolver, SlackTargetResolver>();

@@ -35,6 +35,7 @@ internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStas
     private ChannelWriter<ChannelInput>? _inputQueue;
     private int _pipelineGeneration;
     private bool _isReinitializing;
+    private bool _backfillComplete;
     private static readonly object ReinitializeTimerKey = new();
     private static readonly TimeSpan InboundProcessingTimeout = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan QueueWriteTimeout = TimeSpan.FromSeconds(10);
@@ -377,6 +378,34 @@ internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStas
 
         _session = materialized;
         _inputQueue = inputQueue;
+
+        // Backfill thread history on first initialization only (not reinit or recovery).
+        if (!_backfillComplete && _dependencies.ThreadHistoryFetcher is { } fetcher)
+        {
+            _backfillComplete = true;
+            try
+            {
+                var history = await fetcher.FetchThreadHistoryAsync(_sessionId, initCts.Token);
+                if (history.Count > 0)
+                {
+                    _log.Info("Backfilling {Count} thread history messages", history.Count);
+                    foreach (var item in history)
+                        await inputQueue.WriteAsync(item);
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                _log.Warning("Thread history backfill timed out; proceeding without history");
+            }
+            catch (Exception ex)
+            {
+                _log.Warning(ex, "Thread history backfill failed; proceeding without history");
+            }
+        }
+        else
+        {
+            _backfillComplete = true;
+        }
 
         _log.Info("Slack thread binding pipeline initialized");
     }
