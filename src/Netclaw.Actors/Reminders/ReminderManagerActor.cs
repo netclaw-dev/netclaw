@@ -77,6 +77,15 @@ public sealed partial class ReminderManagerActor : ReceiveActor
     {
         var replyTo = Sender;
 
+        static ReminderSavedResponse ValidationFailure(ReminderId id, string title, string message)
+            => new(
+                id,
+                title,
+                Success: false,
+                NextFire: null,
+                Error: ReminderSaveError.Validation,
+                ErrorMessage: message);
+
         if (cmd.Definition is null)
         {
             replyTo.Tell(new ReminderSavedResponse(
@@ -132,10 +141,18 @@ public sealed partial class ReminderManagerActor : ReceiveActor
         }
 
         var now = _timeProvider.GetUtcNow();
+        var authorization = ValidateRequestedAudience(cmd.Definition.Audience, cmd.Authorization);
+        if (!authorization.IsSuccess)
+        {
+            replyTo.Tell(ValidationFailure(id, title, authorization.ErrorMessage!));
+            return;
+        }
+
         var normalized = cmd.Definition with
         {
             Id = id.Value,
             Title = title,
+            Audience = authorization.EffectiveAudience,
             CreatedBy = string.IsNullOrWhiteSpace(cmd.Definition.CreatedBy)
                 ? "system"
                 : cmd.Definition.CreatedBy
@@ -195,6 +212,30 @@ public sealed partial class ReminderManagerActor : ReceiveActor
             normalized.Title,
             Success: true,
             NextFire: nextFire));
+    }
+
+    private static ReminderAudienceAuthorizationResult ValidateRequestedAudience(
+        TrustAudience? requestedAudience,
+        ReminderAudienceAuthorizationContext? authorization)
+    {
+        if (authorization?.SourceAudience is not { } sourceAudience)
+        {
+            return ReminderAudienceAuthorizationResult.Fail(
+                "Reminder audience authorization context is required.");
+        }
+
+        var effectiveAudience = requestedAudience ?? sourceAudience;
+        if (effectiveAudience > sourceAudience)
+        {
+            var sourceDescription = string.IsNullOrWhiteSpace(authorization.SourceDescription)
+                ? sourceAudience.ToWireValue()
+                : authorization.SourceDescription;
+
+            return ReminderAudienceAuthorizationResult.Fail(
+                $"Requested audience '{effectiveAudience.ToWireValue()}' exceeds creator authority '{sourceDescription}' ({sourceAudience.ToWireValue()}).");
+        }
+
+        return ReminderAudienceAuthorizationResult.Success(effectiveAudience);
     }
 
     private async Task HandleCancelAsync(CancelReminderCommand cmd)
@@ -578,7 +619,6 @@ public sealed partial class ReminderManagerActor : ReceiveActor
                 definition,
                 _pipeline,
                 _config,
-                _defaults.Audience,
                 _timeProvider,
                 _historyStore),
             actorName);
@@ -770,6 +810,15 @@ public sealed partial class ReminderManagerActor : ReceiveActor
     {
         public static ScheduleAttempt Ok(DateTimeOffset? nextFire) => new(true, nextFire, null);
         public static ScheduleAttempt Fail(string message) => new(false, null, message);
+    }
+
+    private sealed record ReminderAudienceAuthorizationResult(bool IsSuccess, TrustAudience? EffectiveAudience, string? ErrorMessage)
+    {
+        public static ReminderAudienceAuthorizationResult Success(TrustAudience effectiveAudience)
+            => new(true, effectiveAudience, null);
+
+        public static ReminderAudienceAuthorizationResult Fail(string errorMessage)
+            => new(false, null, errorMessage);
     }
 
     internal sealed record ReconcileReminders

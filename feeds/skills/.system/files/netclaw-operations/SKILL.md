@@ -4,7 +4,7 @@ description: "REQUIRED when the user asks about Netclaw capabilities, scheduling
 disable-model-invocation: true
 metadata:
   author: netclaw
-  version: "1.8.0"
+  version: "1.9.0"
 ---
 
 # Netclaw Operations
@@ -38,7 +38,13 @@ problems, how to update preferences, or how to maintain itself.
 
 Parameters: `name` (human-readable), `prompt` (what to execute),
 `schedule_type`, `schedule`, `report_to_channel` (optional Slack channel),
-`notify_instructions` (optional formatting).
+`notify_instructions` (optional formatting), `audience` (optional execution
+audience: `public`, `team`, or `personal`).
+
+If `audience` is omitted during conversational scheduling, the reminder inherits
+the audience of the channel/session that created it. A reminder cannot be
+minted with broader audience than the creator currently holds; lowering the
+audience is always allowed.
 
 Other scheduling tools: `list_reminders`, `cancel_reminder`,
 `get_reminder_history`.

@@ -104,10 +104,10 @@ public sealed record ReminderDefinition
     public string? AgentDefinitionId { get; init; }
 
     /// <summary>
-    /// Optional per-reminder audience override.
-    /// When null, falls back to the deployment posture's default audience
-    /// (<see cref="Configuration.EffectivePolicyDefaults.Audience"/>).
-    /// Controls which tools are available during this reminder's execution.
+    /// Persisted execution audience for this reminder.
+    /// Conversational and tool-created reminders inherit the creating
+    /// session/channel audience when omitted at mint time. Reminder save paths
+    /// fail closed if they cannot resolve or authorize this audience.
     /// </summary>
     public TrustAudience? Audience { get; init; }
 
@@ -160,7 +160,12 @@ public enum ReminderSaveError
 
 public sealed record SaveReminderCommand(
     ReminderDefinition Definition,
-    ReminderWriteMode WriteMode = ReminderWriteMode.CreateOnly);
+    ReminderWriteMode WriteMode = ReminderWriteMode.CreateOnly,
+    ReminderAudienceAuthorizationContext? Authorization = null);
+
+public sealed record ReminderAudienceAuthorizationContext(
+    TrustAudience? SourceAudience,
+    string? SourceDescription = null);
 
 /// <summary>
 /// Permanently deletes a reminder definition and cancels any active schedule.

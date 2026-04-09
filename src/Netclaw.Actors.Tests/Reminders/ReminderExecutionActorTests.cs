@@ -248,6 +248,7 @@ public class ReminderExecutionActorTests : TestKit, IDisposable
                 Type = ReminderScheduleType.OneShot,
                 FireAt = now.AddHours(1)
             },
+            Audience = TrustAudience.Team,
             Enabled = true,
             CreatedBy = "test",
             CreatedAt = now,
@@ -265,8 +266,7 @@ public class ReminderExecutionActorTests : TestKit, IDisposable
             IActorRef probe,
             ReminderDefinition definition,
             ISessionPipeline pipeline,
-            ReminderHistoryStore historyStore,
-            TrustAudience defaultAudience = TrustAudience.Team)
+            ReminderHistoryStore historyStore)
         {
             var executionId = Guid.NewGuid();
             Context.ActorOf(
@@ -275,7 +275,6 @@ public class ReminderExecutionActorTests : TestKit, IDisposable
                     definition,
                     pipeline,
                     new ReminderConfig(),
-                    defaultAudience,
                     TimeProvider.System,
                     historyStore),
                 "exec");
@@ -343,7 +342,7 @@ public class ReminderExecutionActorTests : TestKit, IDisposable
         };
         var probe = CreateTestProbe();
         Sys.ActorOf(
-            Props.Create(() => new ParentProxy(probe.Ref, definition, pipeline, _historyStore, TrustAudience.Team)),
+            Props.Create(() => new ParentProxy(probe.Ref, definition, pipeline, _historyStore)),
             "exec-audience-override");
 
         await probe.ExpectMsgAsync<ReminderExecutionCompleted>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
@@ -353,34 +352,43 @@ public class ReminderExecutionActorTests : TestKit, IDisposable
     }
 
     [Fact]
-    public async Task Execution_falls_back_to_deployment_posture_when_definition_audience_null()
+    public async Task Execution_fails_when_definition_audience_missing()
     {
         var pipeline = new ScriptedSessionPipeline(sessionId =>
         [
             new TurnCompleted { SessionId = sessionId, TurnNumber = 1 }
         ]);
 
-        var definition = CreateDefinition("audience-fallback") with { NotifyInstructions = string.Empty };
+        var definition = CreateDefinition("audience-fallback") with
+        {
+            NotifyInstructions = string.Empty,
+            Audience = null
+        };
         var probe = CreateTestProbe();
         Sys.ActorOf(
-            Props.Create(() => new ParentProxy(probe.Ref, definition, pipeline, _historyStore, TrustAudience.Personal)),
+            Props.Create(() => new ParentProxy(probe.Ref, definition, pipeline, _historyStore)),
             "exec-audience-fallback");
 
-        await probe.ExpectMsgAsync<ReminderExecutionCompleted>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        var completed = await probe.ExpectMsgAsync<ReminderExecutionCompleted>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
 
-        Assert.NotNull(pipeline.CapturedOptions);
-        Assert.Equal(TrustAudience.Personal, pipeline.CapturedOptions!.DefaultAudience);
+        Assert.False(completed.Success);
+        Assert.Contains("missing a persisted execution audience", completed.ErrorMessage);
+        Assert.Null(pipeline.CapturedOptions);
     }
 
     [Fact]
-    public async Task Execution_uses_team_audience_when_no_override_and_team_posture()
+    public async Task Execution_uses_stored_audience_directly()
     {
         var pipeline = new ScriptedSessionPipeline(sessionId =>
         [
             new TurnCompleted { SessionId = sessionId, TurnNumber = 1 }
         ]);
 
-        var definition = CreateDefinition("audience-team-default") with { NotifyInstructions = string.Empty };
+        var definition = CreateDefinition("audience-team-default") with
+        {
+            NotifyInstructions = string.Empty,
+            Audience = TrustAudience.Team
+        };
         var probe = CreateTestProbe();
         Sys.ActorOf(
             Props.Create(() => new ParentProxy(probe.Ref, definition, pipeline, _historyStore)),

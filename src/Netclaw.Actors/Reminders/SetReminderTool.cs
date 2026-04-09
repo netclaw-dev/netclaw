@@ -36,7 +36,7 @@ public sealed partial class SetReminderTool : NetclawTool<SetReminderTool.Params
         string? NotifyInstructions = null,
         [property: Description("Notification policy: 'required' (default, fail if no notification sent) or 'conditional' (OK to skip notification if nothing actionable).")]
         string? NotifyPolicy = null,
-        [property: Description("Trust audience for this reminder's execution: 'personal' (all tools including web_search, shell), 'team' (restricted tools), or 'public' (minimal tools). Omit to use the deployment default.")]
+        [property: Description("Trust audience for this reminder's execution: 'personal' (all tools including web_search, shell), 'team' (restricted tools), or 'public' (minimal tools). Omit to inherit the creating session/channel audience.")]
         string? Audience = null);
 
     public SetReminderTool(IActorRef reminderManager, TimeProvider timeProvider, ReminderConfig config)
@@ -111,6 +111,15 @@ public sealed partial class SetReminderTool : NetclawTool<SetReminderTool.Params
             audience = parsedAudience;
         }
 
+        TrustAudience? sourceAudience = null;
+        if (!string.IsNullOrWhiteSpace(context.Audience))
+        {
+            if (!SecurityPolicyDefaults.TryParseAudience(context.Audience, out var parsedSourceAudience))
+                return $"Error: Invalid source audience '{context.Audience}' in tool execution context.";
+
+            sourceAudience = parsedSourceAudience;
+        }
+
         var definition = new ReminderDefinition
         {
             Id = id.Value,
@@ -130,10 +139,20 @@ public sealed partial class SetReminderTool : NetclawTool<SetReminderTool.Params
         };
 
         var response = await _reminderManager.Ask<ReminderSavedResponse>(
-            new SaveReminderCommand(definition, ReminderWriteMode.Upsert), TimeSpan.FromSeconds(10), ct);
+            new SaveReminderCommand(
+                definition,
+                ReminderWriteMode.Upsert,
+                new ReminderAudienceAuthorizationContext(sourceAudience, context.SessionId ?? context.ChannelType)),
+            TimeSpan.FromSeconds(10),
+            ct);
 
         if (!response.Success)
-            return $"Failed to schedule reminder '{args.Name}': {response.ErrorMessage ?? "unknown error"}";
+        {
+            var message = response.ErrorMessage ?? "unknown error";
+            return response.Error == ReminderSaveError.Validation
+                ? $"Error: {message}"
+                : $"Failed to schedule reminder '{args.Name}': {message}";
+        }
 
         var nextFireStr = FormatNextFire(response.NextFire);
 

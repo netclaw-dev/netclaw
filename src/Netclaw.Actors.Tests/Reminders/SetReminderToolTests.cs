@@ -193,7 +193,10 @@ public class SetReminderToolTests : TestKit
     {
         var probe = CreateTestProbe();
         var tool = new SetReminderTool(probe, _timeProvider, new ReminderConfig());
-        var context = new ToolExecutionContext("C0123ABC/1234567890.123456", null);
+        var context = new ToolExecutionContext("C0123ABC/1234567890.123456", null)
+        {
+            Audience = "team"
+        };
 
         var execution = Task.Run(async () =>
         {
@@ -213,6 +216,7 @@ public class SetReminderToolTests : TestKit
         Assert.Equal("C0123ABC", cmd.Definition.ReportToChannel);
         Assert.Equal("1234567890.123456", cmd.Definition.ReportToThreadTs);
         Assert.Equal("C0123ABC/1234567890.123456", cmd.Definition.SessionId);
+        Assert.Equal(TrustAudience.Team, cmd.Authorization?.SourceAudience);
         Assert.Equal(ReminderWriteMode.Upsert, cmd.WriteMode);
 
         probe.Reply(new ReminderSavedResponse(
@@ -262,6 +266,10 @@ public class SetReminderToolTests : TestKit
     {
         var probe = CreateTestProbe();
         var tool = new SetReminderTool(probe, _timeProvider, new ReminderConfig());
+        var context = new ToolExecutionContext("slack/thread-1", null)
+        {
+            Audience = "personal"
+        };
 
         var execution = Task.Run(async () =>
         {
@@ -273,12 +281,13 @@ public class SetReminderToolTests : TestKit
                 ["ScheduleType"] = "once",
                 ["Schedule"] = "30m",
                 ["Audience"] = "personal"
-            });
+            }, context);
             return result;
         });
 
         var cmd = await probe.ExpectMsgAsync<SaveReminderCommand>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(TrustAudience.Personal, cmd.Definition.Audience);
+        Assert.Equal(TrustAudience.Personal, cmd.Authorization?.SourceAudience);
 
         probe.Reply(new ReminderSavedResponse(
             new ReminderId(cmd.Definition.Id),
@@ -311,10 +320,14 @@ public class SetReminderToolTests : TestKit
     }
 
     [Fact]
-    public async Task Audience_is_null_when_omitted()
+    public async Task Omitted_audience_inherits_source_audience()
     {
         var probe = CreateTestProbe();
         var tool = new SetReminderTool(probe, _timeProvider, new ReminderConfig());
+        var context = new ToolExecutionContext("slack/thread-1", null)
+        {
+            Audience = "team"
+        };
 
         var execution = Task.Run(async () =>
         {
@@ -325,12 +338,13 @@ public class SetReminderToolTests : TestKit
                 ["Prompt"] = "Check something",
                 ["ScheduleType"] = "once",
                 ["Schedule"] = "1h"
-            });
+            }, context);
             return result;
         });
 
         var cmd = await probe.ExpectMsgAsync<SaveReminderCommand>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Null(cmd.Definition.Audience);
+        Assert.Equal(TrustAudience.Team, cmd.Authorization?.SourceAudience);
 
         probe.Reply(new ReminderSavedResponse(
             new ReminderId(cmd.Definition.Id),
@@ -339,6 +353,69 @@ public class SetReminderToolTests : TestKit
             NextFire: _timeProvider.GetUtcNow().AddHours(1)));
 
         await execution;
+    }
+
+    [Fact]
+    public async Task Rejects_invalid_source_audience_context()
+    {
+        var probe = CreateTestProbe();
+        var tool = new SetReminderTool(probe, _timeProvider, new ReminderConfig());
+        var context = new ToolExecutionContext("slack/thread-1", null)
+        {
+            Audience = "superadmin"
+        };
+
+        var result = await tool.ExecuteAsync(new Dictionary<string, object?>
+        {
+            ["Id"] = "bad-source-audience",
+            ["Name"] = "bad-source-audience",
+            ["Prompt"] = "Test",
+            ["ScheduleType"] = "once",
+            ["Schedule"] = "1h"
+        }, context, TestContext.Current.CancellationToken);
+
+        Assert.Contains("Invalid source audience", result);
+        await probe.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(100), TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task Manager_validation_failure_returns_error_prefix()
+    {
+        var probe = CreateTestProbe();
+        var tool = new SetReminderTool(probe, _timeProvider, new ReminderConfig());
+        var context = new ToolExecutionContext("slack/thread-1", null)
+        {
+            Audience = "team"
+        };
+
+        var execution = Task.Run(async () =>
+        {
+            var result = await tool.ExecuteAsync(new Dictionary<string, object?>
+            {
+                ["Id"] = "manager-validation-failure",
+                ["Name"] = "manager-validation-failure",
+                ["Prompt"] = "Check something",
+                ["ScheduleType"] = "once",
+                ["Schedule"] = "1h",
+                ["Audience"] = "personal"
+            }, context);
+            return result;
+        });
+
+        var cmd = await probe.ExpectMsgAsync<SaveReminderCommand>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal(TrustAudience.Team, cmd.Authorization?.SourceAudience);
+
+        probe.Reply(new ReminderSavedResponse(
+            new ReminderId(cmd.Definition.Id),
+            cmd.Definition.Title,
+            Success: false,
+            NextFire: null,
+            Error: ReminderSaveError.Validation,
+            ErrorMessage: "Requested audience 'personal' exceeds creator authority 'team' (team)."));
+
+        var result = await execution;
+        Assert.StartsWith("Error:", result);
+        Assert.Contains("exceeds creator authority", result);
     }
 
     private sealed class FakeTimeProvider(DateTimeOffset utcNow) : TimeProvider

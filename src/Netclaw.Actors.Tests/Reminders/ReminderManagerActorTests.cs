@@ -80,9 +80,10 @@ public class ReminderManagerActorTests : TestKit
         var manager = await GetManagerAsync();
 
         var definition = CreateDefinition("test-list", "Check status");
+        var authorization = new ReminderAudienceAuthorizationContext(TrustAudience.Team, "test");
 
         var scheduled = await manager.Ask<ReminderSavedResponse>(
-            new SaveReminderCommand(definition), TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+            new SaveReminderCommand(definition, Authorization: authorization), TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         Assert.Equal("test-list", scheduled.Title);
         Assert.NotNull(scheduled.NextFire);
@@ -101,9 +102,10 @@ public class ReminderManagerActorTests : TestKit
         var manager = await GetManagerAsync();
 
         var definition = CreateDefinition("test-cancel", "Check it");
+        var authorization = new ReminderAudienceAuthorizationContext(TrustAudience.Team, "test");
 
         await manager.Ask<ReminderSavedResponse>(
-            new SaveReminderCommand(definition), TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+            new SaveReminderCommand(definition, Authorization: authorization), TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         var cancelled = await manager.Ask<ReminderCancelledResponse>(
             new CancelReminderCommand(new ReminderId(definition.Id)), TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
@@ -129,9 +131,10 @@ public class ReminderManagerActorTests : TestKit
         var manager = await GetManagerAsync();
 
         var definition = CreateDefinition("test-health", "Check health");
+        var authorization = new ReminderAudienceAuthorizationContext(TrustAudience.Team, "test");
 
         await manager.Ask<ReminderSavedResponse>(
-            new SaveReminderCommand(definition), TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+            new SaveReminderCommand(definition, Authorization: authorization), TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         var health = await manager.Ask<ReminderHealthResponse>(
             GetReminderHealthQuery.Instance, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
@@ -203,6 +206,72 @@ public class ReminderManagerActorTests : TestKit
         // Verify definition has been deleted from the store
         var afterReconcile = _definitionStore.Get(new ReminderId("zombie-oneshot"));
         Assert.Null(afterReconcile);
+    }
+
+    [Theory]
+    [InlineData(TrustAudience.Team, TrustAudience.Team, true)]
+    [InlineData(TrustAudience.Public, TrustAudience.Personal, true)]
+    [InlineData(TrustAudience.Personal, TrustAudience.Team, false)]
+    public async Task Save_authorizes_requested_audience_against_source_authority(
+        TrustAudience requestedAudience,
+        TrustAudience sourceAudience,
+        bool shouldSucceed)
+    {
+        var manager = await GetManagerAsync();
+        var definition = CreateDefinition($"audience-{requestedAudience}-{sourceAudience}", "Check audience") with
+        {
+            Audience = requestedAudience
+        };
+
+        var response = await manager.Ask<ReminderSavedResponse>(
+            new SaveReminderCommand(
+                definition,
+                Authorization: new ReminderAudienceAuthorizationContext(sourceAudience, "test")),
+            TimeSpan.FromSeconds(5),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(shouldSucceed, response.Success);
+        if (!shouldSucceed)
+            Assert.Contains("exceeds creator authority", response.ErrorMessage);
+    }
+
+    [Fact]
+    public async Task Save_rejects_missing_authorization_context()
+    {
+        var manager = await GetManagerAsync();
+        var definition = CreateDefinition("missing-auth", "Check auth");
+
+        var response = await manager.Ask<ReminderSavedResponse>(
+            new SaveReminderCommand(definition),
+            TimeSpan.FromSeconds(5),
+            TestContext.Current.CancellationToken);
+
+        Assert.False(response.Success);
+        Assert.Equal(ReminderSaveError.Validation, response.Error);
+        Assert.Contains("authorization context is required", response.ErrorMessage);
+    }
+
+    [Fact]
+    public async Task Save_omitted_audience_persists_source_audience()
+    {
+        var manager = await GetManagerAsync();
+        var definition = CreateDefinition("inherit-source", "Check inheritance") with
+        {
+            Audience = null
+        };
+
+        var response = await manager.Ask<ReminderSavedResponse>(
+            new SaveReminderCommand(
+                definition,
+                Authorization: new ReminderAudienceAuthorizationContext(TrustAudience.Team, "test")),
+            TimeSpan.FromSeconds(5),
+            TestContext.Current.CancellationToken);
+
+        Assert.True(response.Success);
+
+        var saved = _definitionStore.Get(response.Id);
+        Assert.NotNull(saved);
+        Assert.Equal(TrustAudience.Team, saved!.Audience);
     }
 
     private static ReminderDefinition CreateDefinition(string name, string instructions)
