@@ -317,6 +317,12 @@ public sealed record ToolInteractionRequest : SessionOutput
     /// <summary>Human-readable description of what the tool wants to do.</summary>
     public required string DisplayText { get; init; }
 
+    /// <summary>
+    /// Identity of the user who initiated the turn that triggered this request.
+    /// Channels can use this to ensure responses are routed for the correct user.
+    /// </summary>
+    public string? RequesterSenderId { get; init; }
+
     /// <summary>Patterns requiring approval (for shell: verb chains like "git push").</summary>
     public IReadOnlyList<string> Patterns { get; init; } = [];
 

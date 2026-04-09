@@ -646,6 +646,83 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
     }
 
     [Fact]
+    public async Task Text_approval_reply_routes_tool_interaction_response()
+    {
+        var feedbackPipeline = new RecordingSessionPipeline([
+            new ToolInteractionRequest
+            {
+                SessionId = new SessionId("D7/9050.1"),
+                Kind = "approval",
+                CallId = "call-1",
+                ToolName = "shell_execute",
+                DisplayText = "git push origin main",
+                RequesterSenderId = "U123",
+                Patterns = ["git push"],
+                Options =
+                [
+                    new ToolInteractionOption("approve_once", "Approve Once"),
+                    new ToolInteractionOption("approve_always", "Approve Always"),
+                    new ToolInteractionOption("deny", "Deny")
+                ]
+            }
+        ]);
+
+        var deps = new SlackGatewayDependencies(
+            Pipeline: feedbackPipeline,
+            IngressGate: null,
+            ActorSystem: Sys,
+            TimeProvider: TimeProvider.System,
+            Options: new SlackChannelOptions
+            {
+                Enabled = true,
+                MentionOnly = false,
+                AllowDirectMessages = true,
+                BotToken = new SensitiveString("xoxb-fake-token")
+            },
+            BotUserId: new SlackUserId("UBOT"),
+            DefaultChannelId: null,
+            ReplyClient: _replyClient,
+            ContentScanner: new NullContentScanner());
+
+        var actor = Sys.ActorOf(SlackThreadBindingActor.CreateProps(
+            new SessionId("D7/9050.1"),
+            new SlackChannelId("D7"),
+            new SlackThreadTs("9050.1"),
+            deps), "slack-thread-approval-routing-test");
+
+        await AwaitAssertAsync(() =>
+        {
+            Assert.Single(_replyClient.PostedMessages);
+        }, duration: TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
+
+        actor.Tell(new SlackThreadInbound(
+            SessionId: new SessionId("D7/9050.1"),
+            ChannelId: new SlackChannelId("D7"),
+            ThreadTs: new SlackThreadTs("9050.1"),
+            EventId: new SlackEventId("D7:approval-reply"),
+            TurnId: "approval-turn",
+            SenderId: "U123",
+            Audience: TrustAudience.Personal,
+            Principal: PrincipalClassification.Operator,
+            Provenance: SourceProvenance.StrictDefault(),
+            Text: "a",
+            ReceivedAt: TimeProvider.System.GetUtcNow()));
+
+        await AwaitAssertAsync(() =>
+        {
+            var feedback = Assert.Single(feedbackPipeline.Feedback);
+            var response = Assert.IsType<ToolInteractionResponse>(feedback);
+            Assert.Equal("call-1", response.CallId);
+            Assert.Equal("approve_once", response.SelectedKey);
+            Assert.Equal("U123", response.SenderId);
+        }, duration: TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
+
+        Watch(actor);
+        Sys.Stop(actor);
+        await ExpectTerminatedAsync(actor, cancellationToken: TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
     public async Task Generic_exception_during_post_sends_unknown_failure_feedback_to_session()
     {
         var feedbackPipeline = new RecordingSessionPipeline([

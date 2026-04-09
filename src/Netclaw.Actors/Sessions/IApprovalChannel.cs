@@ -55,14 +55,17 @@ public sealed class ApprovalChannel : IApprovalChannel
 
         try
         {
-            using var timeoutCts = new CancellationTokenSource(timeout);
-            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
+            var timeoutTask = Task.Delay(timeout, CancellationToken.None);
+            var cancellationTask = Task.Delay(Timeout.InfiniteTimeSpan, ct);
+            var completed = await Task.WhenAny(tcs.Task, timeoutTask, cancellationTask);
 
-            // Register cancellation to complete the TCS with TimedOut
-            await using var reg = linkedCts.Token.Register(() =>
-                tcs.TrySetResult(ApprovalDecision.TimedOut));
+            if (completed == tcs.Task)
+                return await tcs.Task;
 
-            return await tcs.Task;
+            if (completed == cancellationTask)
+                throw new OperationCanceledException(ct);
+
+            return ApprovalDecision.TimedOut;
         }
         finally
         {

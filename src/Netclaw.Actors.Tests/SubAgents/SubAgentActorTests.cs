@@ -7,6 +7,8 @@ using Microsoft.Extensions.Hosting;
 using Netclaw.Actors.SubAgents;
 using Netclaw.Actors.Tools;
 using Netclaw.Actors.Tests.Memory;
+using Netclaw.Configuration;
+using Netclaw.Security;
 using Netclaw.Tools;
 using Xunit;
 
@@ -72,6 +74,47 @@ public class SubAgentActorTests : TestKit
         Assert.True(result.Success);
         Assert.True(fakeTool.WasCalled);
         // Second LLM call returns text (tool calls only on first call)
+        Assert.Contains("Response #2", result.Output);
+    }
+
+    [Fact]
+    public async Task Approval_gated_tool_is_denied_inside_subagent()
+    {
+        var fakeTool = new FakeNetclawTool("shell_execute", "should not run");
+        var toolConfig = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
+        toolConfig.AudienceProfiles.Personal.ApprovalPolicy = new ToolApprovalConfig
+        {
+            ToolOverrides = new Dictionary<string, ToolApprovalMode>(StringComparer.Ordinal)
+            {
+                ["shell_execute"] = ToolApprovalMode.Approval
+            }
+        };
+        var policy = new ToolAccessPolicy(
+            toolConfig,
+            new EffectivePolicyDefaults(
+                DeploymentPosture.Personal,
+                TrustAudience.Personal,
+                ShellExecutionMode.HostAllowed,
+                UsedStrictFallback: false),
+            new ShellCommandPolicy());
+        var fakeClient = new FakeChatClient
+        {
+            ToolCallsOnFirstCall =
+            [
+                new FunctionCallContent("call-approval", "shell_execute",
+                    new Dictionary<string, object?> { ["Command"] = "git push origin main" })
+            ]
+        };
+
+        var definition = CreateDefinition([fakeTool]);
+        var agent = Sys.ActorOf(SubAgentActor.CreateProps(definition, fakeClient, policy, new CommandApprovalCache()));
+
+        var result = await agent.Ask<SubAgentResult>(
+            new RunSubAgent { Task = "Try the shell tool", Timeout = TimeSpan.FromSeconds(5) },
+            TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        Assert.True(result.Success);
+        Assert.False(fakeTool.WasCalled);
         Assert.Contains("Response #2", result.Output);
     }
 

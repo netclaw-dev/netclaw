@@ -249,6 +249,43 @@ public sealed class DaemonClientMappingTests
     }
 
     [Fact]
+    public void ToolInteractionRequest_roundtrips_through_dto()
+    {
+        var original = new ToolInteractionRequest
+        {
+            SessionId = new SessionId("signalr/test"),
+            TimestampMs = 888,
+            Kind = "approval",
+            CallId = "call-1",
+            ToolName = "shell_execute",
+            DisplayText = "git push origin main",
+            RequesterSenderId = "device-1",
+            Patterns = ["git push"],
+            Options =
+            [
+                new ToolInteractionOption("approve_once", "Approve Once"),
+                new ToolInteractionOption("approve_always", "Approve Always"),
+                new ToolInteractionOption("deny", "Deny")
+            ]
+        };
+
+        var dto = SessionOutputDtoMapper.ToDto(original);
+        Assert.Equal(SessionOutputTypes.ToolInteraction, dto.Type);
+        Assert.Equal("approval", dto.InteractionKind);
+        Assert.Equal("git push origin main", dto.InteractionDisplayText);
+        Assert.Equal("device-1", dto.RequesterSenderId);
+
+        var roundTripped = DaemonClient.FromDto(dto);
+        var result = Assert.IsType<ToolInteractionRequest>(roundTripped);
+        Assert.Equal("call-1", result.CallId);
+        Assert.Equal("shell_execute", result.ToolName);
+        Assert.Equal("git push origin main", result.DisplayText);
+        Assert.Equal("device-1", result.RequesterSenderId);
+        Assert.Equal(["git push"], result.Patterns);
+        Assert.Equal(3, result.Options.Count);
+    }
+
+    [Fact]
     public void ErrorOutput_defaults_to_unknown_category_when_dto_field_missing()
     {
         var dto = new SessionOutputDto

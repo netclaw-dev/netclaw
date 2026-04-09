@@ -14,6 +14,7 @@ using Netclaw.Actors.Memory;
 using Netclaw.Actors.Tests.Memory;
 using Netclaw.Actors.Tests.SubAgents;
 using Netclaw.Configuration;
+using Netclaw.Security;
 using Xunit;
 
 namespace Netclaw.Actors.Tests.Sessions;
@@ -48,6 +49,14 @@ public class SubAgentSpawnIntegrationTests : TestKit
             "You are a test assistant with subagent support."));
 
         var registry = new ToolRegistry();
+        var toolAccessPolicy = new ToolAccessPolicy(
+            new ToolConfig(),
+            new EffectivePolicyDefaults(
+                DeploymentPosture.Personal,
+                TrustAudience.Personal,
+                ShellExecutionMode.HostAllowed,
+                UsedStrictFallback: false),
+            new ShellCommandPolicy());
         var subAgentRegistry = new SubAgentDefinitionRegistry();
         subAgentRegistry.Register(new SubAgentProfile
         {
@@ -65,6 +74,8 @@ public class SubAgentSpawnIntegrationTests : TestKit
             new SubAgentSpawner(
                 _clientProvider,
                 registry,
+                toolAccessPolicy,
+                approvalCache: null,
                 Microsoft.Extensions.Logging.Abstractions.NullLogger<SubAgentSpawner>.Instance)));
         registry.Register(new FakeNetclawTool("file_read", "stub file content", "file"));
 

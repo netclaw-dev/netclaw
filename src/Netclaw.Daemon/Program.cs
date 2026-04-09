@@ -548,11 +548,11 @@ static void ConfigureDaemonServices(
     var toolPathPolicy = new ToolPathPolicy([paths.SecretsPath, paths.WebhooksDirectory, paths.KeysDirectory]);
     services.AddSingleton(toolPathPolicy);
 
-    var toolAccessPolicy = new ToolAccessPolicy(toolConfig, effectivePolicyDefaults);
-    services.AddSingleton(toolAccessPolicy);
-
     var shellCommandPolicy = new ShellCommandPolicy(toolConfig.HardDenyPatterns);
     services.AddSingleton(shellCommandPolicy);
+
+    var toolAccessPolicy = new ToolAccessPolicy(toolConfig, effectivePolicyDefaults, shellCommandPolicy);
+    services.AddSingleton(toolAccessPolicy);
 
     var toolApprovalStore = new ToolApprovalStore(paths.ToolApprovalsPath);
     services.AddSingleton(toolApprovalStore);

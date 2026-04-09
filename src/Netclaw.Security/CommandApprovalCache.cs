@@ -11,7 +11,7 @@ public sealed class CommandApprovalCache
 {
     private readonly ToolApprovalStore? _persistentStore;
 
-    // audience -> tool -> set of approved patterns
+    // session+audience -> tool -> set of approved patterns
     private readonly ConcurrentDictionary<string, ConcurrentDictionary<string, ConcurrentBag<string>>> _sessionApprovals = new();
 
     public CommandApprovalCache(ToolApprovalStore? persistentStore = null)
@@ -23,10 +23,10 @@ public sealed class CommandApprovalCache
     /// Checks if a pattern is approved for the given audience and tool,
     /// checking session-scoped cache first, then persistent store.
     /// </summary>
-    public bool IsApproved(TrustAudience audience, string toolName, string pattern)
+    public bool IsApproved(string? sessionId, TrustAudience audience, string toolName, string pattern)
     {
         // Check session-scoped approvals first
-        if (IsSessionApproved(audience, toolName, pattern))
+        if (IsSessionApproved(sessionId, audience, toolName, pattern))
             return true;
 
         // Check persistent store
@@ -40,10 +40,10 @@ public sealed class CommandApprovalCache
     /// <summary>
     /// Adds a session-scoped approval (lost when the session ends).
     /// </summary>
-    public void ApproveForSession(TrustAudience audience, string toolName, string pattern)
+    public void ApproveForSession(string sessionId, TrustAudience audience, string toolName, string pattern)
     {
-        var audienceKey = audience.ToWireValue();
-        var toolMap = _sessionApprovals.GetOrAdd(audienceKey, _ => new ConcurrentDictionary<string, ConcurrentBag<string>>(StringComparer.Ordinal));
+        var sessionKey = BuildSessionKey(sessionId, audience);
+        var toolMap = _sessionApprovals.GetOrAdd(sessionKey, _ => new ConcurrentDictionary<string, ConcurrentBag<string>>(StringComparer.Ordinal));
         var patterns = toolMap.GetOrAdd(toolName, _ => []);
 
         // Avoid duplicates (ConcurrentBag doesn't deduplicate)
@@ -55,16 +55,18 @@ public sealed class CommandApprovalCache
     /// Adds a persistent approval (written to disk immediately, survives restart).
     /// Also caches in session for immediate use.
     /// </summary>
-    public void ApprovePersistent(TrustAudience audience, string toolName, string pattern)
+    public void ApprovePersistent(string sessionId, TrustAudience audience, string toolName, string pattern)
     {
-        ApproveForSession(audience, toolName, pattern);
+        ApproveForSession(sessionId, audience, toolName, pattern);
         _persistentStore?.AddApproval(audience, toolName, pattern);
     }
 
-    private bool IsSessionApproved(TrustAudience audience, string toolName, string pattern)
+    private bool IsSessionApproved(string? sessionId, TrustAudience audience, string toolName, string pattern)
     {
-        var audienceKey = audience.ToWireValue();
-        if (!_sessionApprovals.TryGetValue(audienceKey, out var toolMap))
+        if (string.IsNullOrWhiteSpace(sessionId))
+            return false;
+
+        if (!_sessionApprovals.TryGetValue(BuildSessionKey(sessionId, audience), out var toolMap))
             return false;
 
         if (!toolMap.TryGetValue(toolName, out var patterns))
@@ -72,6 +74,9 @@ public sealed class CommandApprovalCache
 
         return MatchesAnyPattern(pattern, patterns);
     }
+
+    private static string BuildSessionKey(string sessionId, TrustAudience audience)
+        => $"{sessionId}|{audience.ToWireValue()}";
 
     /// <summary>
     /// Checks if the given pattern matches any approved pattern using

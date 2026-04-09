@@ -29,6 +29,7 @@ internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStas
     private bool _postedThisTurn;
     private bool _uploadedFileThisTurn;
     private PostResult? _lastFailedPost;
+    private readonly List<ToolInteractionRequest> _pendingApprovalRequests = [];
 
     private ActorMaterializer? _materializer;
     private MaterializedSession? _session;
@@ -158,6 +159,14 @@ internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStas
             inboundLog.Info("slack_turn_received textChars={TextLength} fileCount={FileCount}",
                 message.Text?.Length ?? 0,
                 message.Files?.Count ?? 0);
+
+            if (!string.IsNullOrWhiteSpace(message.Text)
+                && ToolInteractionResponseParser.TryParseApprovalResponse(message.Text, out var selectedKey)
+                && selectedKey is not null
+                && await TryHandleApprovalResponseAsync(message, selectedKey))
+            {
+                return;
+            }
 
             if (!string.IsNullOrWhiteSpace(message.Text))
             {
@@ -448,6 +457,7 @@ internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStas
             // to OutputFilter.Text (final assembled text), not TextStreaming.
 
             case ToolInteractionRequest interaction:
+                _pendingApprovalRequests.Add(interaction);
                 await HandleApprovalRequestAsync(interaction);
                 break;
 
@@ -480,9 +490,53 @@ internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStas
                 _postedThisTurn = false;
                 _uploadedFileThisTurn = false;
                 _lastFailedPost = null;
+                _pendingApprovalRequests.Clear();
 
                 break;
         }
+    }
+
+    private async Task<bool> TryHandleApprovalResponseAsync(SlackThreadInbound message, string selectedKey)
+    {
+        if (_pendingApprovalRequests.Count == 0)
+            return false;
+
+        var pendingIndex = _pendingApprovalRequests.FindIndex(request =>
+            string.IsNullOrWhiteSpace(request.RequesterSenderId)
+            || string.Equals(request.RequesterSenderId, message.SenderId, StringComparison.Ordinal));
+
+        if (pendingIndex < 0)
+        {
+            await SafePostAsync(":warning: Only the requesting user can approve this tool action.");
+            return true;
+        }
+
+        var pending = _pendingApprovalRequests[pendingIndex];
+
+        try
+        {
+            await _dependencies.Pipeline.SendFeedbackAsync(new ToolInteractionResponse
+            {
+                SessionId = _sessionId,
+                CallId = pending.CallId,
+                SelectedKey = selectedKey,
+                SenderId = message.SenderId
+            });
+
+            _pendingApprovalRequests.RemoveAt(pendingIndex);
+
+            _log.Info(
+                "Recorded Slack approval response for call {CallId} sender={SenderId} selection={SelectedKey}",
+                pending.CallId,
+                message.SenderId,
+                selectedKey);
+        }
+        catch (Exception ex)
+        {
+            _log.Error(ex, "Failed to route Slack approval response for call {CallId}", pending.CallId);
+        }
+
+        return true;
     }
 
     private async Task<PostResult> SafePostAsync(string text)

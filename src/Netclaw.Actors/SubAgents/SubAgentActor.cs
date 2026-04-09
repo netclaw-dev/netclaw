@@ -7,6 +7,7 @@ using Netclaw.Actors.Sessions;
 using Netclaw.Actors.Tools;
 using Netclaw.Actors.Memory;
 using Netclaw.Configuration;
+using Netclaw.Security;
 using Netclaw.Tools;
 using AiChatMessage = Microsoft.Extensions.AI.ChatMessage;
 
@@ -27,6 +28,8 @@ public sealed class SubAgentActor : ReceiveActor
 
     private readonly SubAgentDefinition _definition;
     private readonly IChatClient _chatClient;
+    private readonly ToolAccessPolicy _toolAccessPolicy;
+    private readonly CommandApprovalCache? _approvalCache;
     private readonly ToolRegistry _toolRegistry;
     private readonly IReadOnlyList<AITool> _aiTools;
     private readonly ILoggingAdapter _log;
@@ -43,10 +46,21 @@ public sealed class SubAgentActor : ReceiveActor
 
     public SubAgentActor(
         SubAgentDefinition definition,
-        IChatClient chatClient)
+        IChatClient chatClient,
+        ToolAccessPolicy? toolAccessPolicy = null,
+        CommandApprovalCache? approvalCache = null)
     {
         _definition = definition;
         _chatClient = chatClient;
+        _toolAccessPolicy = toolAccessPolicy ?? new ToolAccessPolicy(
+            new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed },
+            new EffectivePolicyDefaults(
+                DeploymentPosture.Personal,
+                TrustAudience.Personal,
+                ShellExecutionMode.HostAllowed,
+                UsedStrictFallback: false),
+            new ShellCommandPolicy());
+        _approvalCache = approvalCache;
         _log = Context.GetLogger();
 
         // Build a private ToolRegistry for this subagent's tool subset
@@ -61,9 +75,13 @@ public sealed class SubAgentActor : ReceiveActor
         Become(Idle);
     }
 
-    public static Props CreateProps(SubAgentDefinition definition, IChatClient chatClient)
+    public static Props CreateProps(
+        SubAgentDefinition definition,
+        IChatClient chatClient,
+        ToolAccessPolicy? toolAccessPolicy = null,
+        CommandApprovalCache? approvalCache = null)
     {
-        return Props.Create(() => new SubAgentActor(definition, chatClient));
+        return Props.Create(() => new SubAgentActor(definition, chatClient, toolAccessPolicy, approvalCache));
     }
 
     private void Idle()
@@ -79,6 +97,7 @@ public sealed class SubAgentActor : ReceiveActor
             _toolExecutionContext.Audience = msg.Audience ?? TrustAudience.Personal.ToWireValue();
             _toolExecutionContext.Boundary = msg.Boundary;
             _toolExecutionContext.ChannelType = msg.ChannelType;
+            _toolExecutionContext.SupportsInteractiveApproval = false;
             _executionCts = new CancellationTokenSource();
             _externalCancellationRegistration = msg.Cancellation.Register(() => Self.Tell(SubAgentCancelled.Instance));
 
@@ -183,7 +202,7 @@ public sealed class SubAgentActor : ReceiveActor
             _definition.Name, toolNames);
 
         var self = Self;
-        var executor = new DispatchingToolExecutor(_toolRegistry);
+        var executor = new DispatchingToolExecutor(_toolRegistry, _toolAccessPolicy, _approvalCache);
 
         _ = ExecuteToolsAsync(
             executor,
