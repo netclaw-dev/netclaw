@@ -164,11 +164,9 @@ public sealed class SlackThreadBackfillIntegrationTests : TestKit
         Assert.Contains("can you help with this?", mergedText);
         Assert.Equal(1, CountOccurrences(mergedText, "can you help with this?"));
 
-        // Gap image bytes are deliberately NOT forwarded to the session —
-        // the summary line records them instead. Live mention carries no
-        // image, so no DataContent should reach the session at all.
         Assert.Contains("[image attachments:", mergedText);
-        Assert.Empty(mergedUserTurn.Contents.OfType<DataContent>());
+        Assert.True(mergedUserTurn.Contents.OfType<DataContent>().Any(),
+            "Expected merged user turn to include image DataContent from backfill");
     }
 
     [Fact]

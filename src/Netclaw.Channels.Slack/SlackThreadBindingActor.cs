@@ -607,9 +607,19 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
 
         var merged = new List<AIContent> { new TextContent(mergedText) };
 
-        // Gap image bytes are intentionally NOT copied into the merged input:
-        // the summary line above already records the count. Copying the raw
-        // bytes duplicates multi-MB payloads on every hydrated first turn.
+        // Gap image DataContent is carried through to the session so vision-
+        // capable models see the prior-thread images. The session actor's
+        // modality gate strips them when the resolved model doesn't support
+        // image input, so non-vision models are unaffected.
+        foreach (var item in gap)
+        {
+            foreach (var content in item.Contents)
+            {
+                if (content is not TextContent)
+                    merged.Add(content);
+            }
+        }
+
         foreach (var content in liveContents)
         {
             if (content is not TextContent)
