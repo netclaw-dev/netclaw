@@ -41,7 +41,6 @@ public class SubAgentSpawnIntegrationTests : TestKit
             {
                 SnapshotInterval = 5,
                 TitleGenerationInterval = 0,
-                MemorySidecarsEnabled = false,
             }
         });
         services.AddSingleton<ISystemPromptProvider>(new StaticSystemPromptProvider(

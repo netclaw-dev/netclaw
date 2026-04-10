@@ -60,7 +60,7 @@ public sealed class MemoryRedesignedEvalSuiteTests : IDisposable
         var recall = new SQLiteMemoryRecallCoordinator(
             _store,
             NullLogger<SQLiteMemoryRecallCoordinator>.Instance,
-            sessionTuning: new SessionTuning { MemorySidecarsEnabled = true });
+            sessionTuning: new SessionTuning());
 
         var result = await recall.RecallAsync(new AutomaticRecallRequest(
             "slack/thread-1",
@@ -122,14 +122,13 @@ public sealed class MemoryRedesignedEvalSuiteTests : IDisposable
         var recall = new SQLiteMemoryRecallCoordinator(
             _store,
             NullLogger<SQLiteMemoryRecallCoordinator>.Instance,
-            sessionTuning: new SessionTuning { DeterministicRetrievalEnabled = true, MemorySidecarsEnabled = false });
+            sessionTuning: new SessionTuning { DeterministicRetrievalEnabled = true });
 
         var result = await recall.RecallAsync(new AutomaticRecallRequest(
             "signalr/thread-iah",
             "What airport do I usually fly out of?",
             ["What airport do I usually fly out of?"],
             3,
-            HardScopeOverride: "user:aaron",
             ThreadTitle: "Travel preferences"), TestContext.Current.CancellationToken);
 
         Assert.False(result.Degraded);
@@ -185,14 +184,13 @@ public sealed class MemoryRedesignedEvalSuiteTests : IDisposable
         var recall = new SQLiteMemoryRecallCoordinator(
             _store,
             NullLogger<SQLiteMemoryRecallCoordinator>.Instance,
-            sessionTuning: new SessionTuning { DeterministicRetrievalEnabled = true, MemorySidecarsEnabled = false });
+            sessionTuning: new SessionTuning { DeterministicRetrievalEnabled = true });
 
         var result = await recall.RecallAsync(new AutomaticRecallRequest(
             "signalr/thread-united",
             "What airline do I usually take?",
             ["What airline do I usually take?"],
             3,
-            HardScopeOverride: "user:aaron",
             ThreadTitle: "Travel preferences"), TestContext.Current.CancellationToken);
 
         Assert.False(result.Degraded);
@@ -256,7 +254,7 @@ public sealed class MemoryRedesignedEvalSuiteTests : IDisposable
         var recall = new SQLiteMemoryRecallCoordinator(
             _store,
             NullLogger<SQLiteMemoryRecallCoordinator>.Instance,
-            sessionTuning: new SessionTuning { MemorySidecarsEnabled = true });
+            sessionTuning: new SessionTuning());
 
         var auto = await recall.RecallAsync(new AutomaticRecallRequest(
             "slack/thread-2",
@@ -407,7 +405,7 @@ public sealed class MemoryRedesignedEvalSuiteTests : IDisposable
         now);
 
         await _store.ApplyCurationBatchAsync("cp-eval-3", accepted, CancellationToken.None);
-        var items = await _store.SearchByPlanAsync(["deploys", "east-2"], "project:ops", ["durable_fact"], 5, SecurityPolicyDefaults.InferLegacyBoundaryFromDomain("project:ops"), TrustAudience.Public, false, TestContext.Current.CancellationToken);
+        var items = await _store.SearchAcrossDomainsByPlanAsync(["deploys", "east-2"], ["durable_fact"], 5, SecurityPolicyDefaults.TrustedInstanceBoundary, TrustAudience.Public, false, TestContext.Current.CancellationToken);
 
         Assert.Single(items);
         Assert.Equal("Deployment region", items[0].Title);
@@ -479,7 +477,7 @@ public sealed class MemoryRedesignedEvalSuiteTests : IDisposable
         var recall = new SQLiteMemoryRecallCoordinator(
             _store,
             NullLogger<SQLiteMemoryRecallCoordinator>.Instance,
-            sessionTuning: new SessionTuning { MemorySidecarsEnabled = true });
+            sessionTuning: new SessionTuning());
 
         var acceptedFact = proposalGate.Accept(
         [

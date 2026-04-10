@@ -12,13 +12,6 @@ namespace Netclaw.Configuration.Tests;
 public sealed class SessionConfigDefaultsTests
 {
     [Fact]
-    public void Memory_sidecars_enabled_by_default()
-    {
-        var tuning = new SessionTuning();
-        Assert.True(tuning.MemorySidecarsEnabled);
-    }
-
-    [Fact]
     public void Deterministic_retrieval_enabled_by_default()
     {
         var tuning = new SessionTuning();

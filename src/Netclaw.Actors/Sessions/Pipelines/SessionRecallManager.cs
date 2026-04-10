@@ -63,7 +63,6 @@ internal sealed class SessionRecallManager
                 .TakeLast(3)
                 .ToArray(),
             RecentEntities: [],
-            HardScopeOverride: sessionId.ToMemoryDomain(),
             ThreadTitle: state.Title);
 
         try

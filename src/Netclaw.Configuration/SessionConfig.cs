@@ -126,7 +126,6 @@ public sealed record SessionConfig
             DiscoveredToolMaxCount = ResolveValue(tuningSection, section, nameof(SessionTuning.DiscoveredToolMaxCount), nested.DiscoveredToolMaxCount),
             KeepRecentMessages = ResolveValue(tuningSection, section, nameof(SessionTuning.KeepRecentMessages), nested.KeepRecentMessages),
             TitleGenerationInterval = ResolveValue(tuningSection, section, nameof(SessionTuning.TitleGenerationInterval), nested.TitleGenerationInterval),
-            MemorySidecarsEnabled = ResolveValue(tuningSection, section, nameof(SessionTuning.MemorySidecarsEnabled), nested.MemorySidecarsEnabled),
             DeterministicRetrievalEnabled = ResolveValue(tuningSection, section, nameof(SessionTuning.DeterministicRetrievalEnabled), nested.DeterministicRetrievalEnabled),
             MemoryDistillationTurnInterval = ResolveValue(tuningSection, section, nameof(SessionTuning.MemoryDistillationTurnInterval), nested.MemoryDistillationTurnInterval),
             MaxToolDescriptionChars = ResolveValue(tuningSection, section, nameof(SessionTuning.MaxToolDescriptionChars), nested.MaxToolDescriptionChars),

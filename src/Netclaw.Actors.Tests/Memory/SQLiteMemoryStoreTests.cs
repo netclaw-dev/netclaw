@@ -261,21 +261,19 @@ public sealed class SQLiteMemoryStoreTests : IAsyncLifetime
             UpdatedAtMs: now,
             Audience: TrustAudience.Personal.ToWireValue()), TestContext.Current.CancellationToken);
 
-        var publicResults = await _store.SearchByPlanAsync(
+        var publicResults = await _store.SearchAcrossDomainsByPlanAsync(
             ["visible"],
-            "project:test",
             [MemoryClass.DurableFact.ToWireValue()],
             10,
-            SecurityPolicyDefaults.InferLegacyBoundaryFromDomain("project:test"),
+            SecurityPolicyDefaults.TrustedInstanceBoundary,
             TrustAudience.Public,
             false, TestContext.Current.CancellationToken);
 
-        var personalResults = await _store.SearchByPlanAsync(
+        var personalResults = await _store.SearchAcrossDomainsByPlanAsync(
             ["visible"],
-            "project:test",
             [MemoryClass.DurableFact.ToWireValue()],
             10,
-            SecurityPolicyDefaults.InferLegacyBoundaryFromDomain("project:test"),
+            SecurityPolicyDefaults.TrustedInstanceBoundary,
             TrustAudience.Personal,
             false, TestContext.Current.CancellationToken);
 

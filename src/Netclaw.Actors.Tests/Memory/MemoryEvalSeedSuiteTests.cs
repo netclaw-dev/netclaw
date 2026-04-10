@@ -46,7 +46,7 @@ public sealed class MemoryEvalSeedSuiteTests : IAsyncLifetime
             CreatedAtMs: now,
             UpdatedAtMs: now), TestContext.Current.CancellationToken);
 
-        var coordinator = new SQLiteMemoryRecallCoordinator(_store, NullLogger<SQLiteMemoryRecallCoordinator>.Instance, sessionTuning: new SessionTuning { MemorySidecarsEnabled = true });
+        var coordinator = new SQLiteMemoryRecallCoordinator(_store, NullLogger<SQLiteMemoryRecallCoordinator>.Instance, sessionTuning: new SessionTuning());
         var result = await coordinator.RecallAsync(new AutomaticRecallRequest(
             SessionId: "ops/thread-1",
             Query: "router failover",
@@ -84,7 +84,7 @@ public sealed class MemoryEvalSeedSuiteTests : IAsyncLifetime
             CreatedAtMs: now,
             UpdatedAtMs: now), TestContext.Current.CancellationToken);
 
-        var coordinator = new SQLiteMemoryRecallCoordinator(_store, NullLogger<SQLiteMemoryRecallCoordinator>.Instance, sessionTuning: new SessionTuning { MemorySidecarsEnabled = true });
+        var coordinator = new SQLiteMemoryRecallCoordinator(_store, NullLogger<SQLiteMemoryRecallCoordinator>.Instance, sessionTuning: new SessionTuning());
         var result = await coordinator.RecallAsync(new AutomaticRecallRequest(
             SessionId: "ops/thread-1",
             Query: "token",
@@ -314,7 +314,7 @@ public sealed class MemoryEvalSeedSuiteTests : IAsyncLifetime
                 UpdatedAtMs: now), TestContext.Current.CancellationToken);
         }
 
-        var coordinator = new SQLiteMemoryRecallCoordinator(_store, NullLogger<SQLiteMemoryRecallCoordinator>.Instance, sessionTuning: new SessionTuning { MemorySidecarsEnabled = true });
+        var coordinator = new SQLiteMemoryRecallCoordinator(_store, NullLogger<SQLiteMemoryRecallCoordinator>.Instance, sessionTuning: new SessionTuning());
         var start = TimeProvider.System.GetTimestamp();
         var result = await coordinator.RecallAsync(new AutomaticRecallRequest(
             SessionId: "latency/thread-1",

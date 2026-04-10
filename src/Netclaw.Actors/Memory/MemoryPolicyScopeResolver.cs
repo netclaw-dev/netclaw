@@ -9,17 +9,16 @@ internal static class MemoryPolicyScopeResolver
             ? parsed
             : SecurityPolicyDefaults.ResolveAudienceFromSessionId(sessionId);
 
-    public static string ResolveBoundary(string? configuredBoundary, TrustAudience audience, string? sessionId, string? domain = null)
+    public static string ResolveBoundary(string? configuredBoundary, TrustAudience audience, string? sessionId)
     {
         if (!string.IsNullOrWhiteSpace(configuredBoundary))
             return configuredBoundary.Trim();
 
-        if (!string.IsNullOrWhiteSpace(sessionId))
-            return SecurityPolicyDefaults.ResolveBoundaryFromSessionId(sessionId, audience);
-
-        if (!string.IsNullOrWhiteSpace(domain))
-            return SecurityPolicyDefaults.InferLegacyBoundaryFromDomain(domain);
-
-        return SecurityPolicyDefaults.ResolveBoundaryFromAudience(audience);
+        // All Netclaw memory runs inside a trusted local daemon instance.
+        // Session ID / audience used to be used to derive a boundary, but
+        // audience is now the only security axis — boundary is effectively
+        // a single-valued constant. Kept as a stored field for potential
+        // future cross-trust-boundary federation.
+        return SecurityPolicyDefaults.TrustedInstanceBoundary;
     }
 }

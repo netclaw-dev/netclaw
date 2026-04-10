@@ -285,7 +285,6 @@ public sealed class MemoryPolicyGatesTests
         var gate = new RecallPlanGate();
         var request = new RecallPlanningRequest(
             "slack/thread",
-            "project:slack",
             "automatic",
             "What hotel should I stay in there",
             ["I am speaking at Stir Trek in Ohio"],

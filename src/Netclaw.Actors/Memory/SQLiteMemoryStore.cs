@@ -236,7 +236,7 @@ public sealed class SQLiteMemoryStore
         await EnsureAnchorAsync(conn, tx, document.Anchor, ct);
 
         var resolvedBoundary = string.Equals(document.Boundary, SecurityPolicyDefaults.LegacyRestrictedBoundary, StringComparison.Ordinal)
-            ? SecurityPolicyDefaults.InferLegacyBoundaryFromDomain(document.Domain)
+            ? SecurityPolicyDefaults.TrustedInstanceBoundary
             : document.Boundary;
 
         await using var cmd = conn.CreateCommand();
@@ -798,17 +798,6 @@ public sealed class SQLiteMemoryStore
         }, ct);
     }
 
-    public async Task<IReadOnlyList<SQLiteMemoryHydratedItem>> SearchByPlanAsync(
-        IReadOnlyList<string> queryTerms,
-        string domain,
-        IReadOnlyList<string> memoryClasses,
-        int limit,
-        string boundary,
-        TrustAudience audience,
-        bool allowExpiredEvidence,
-        CancellationToken ct = default)
-        => await SearchByPlanInternalAsync(queryTerms, domain, memoryClasses, limit, boundary, audience, allowExpiredEvidence, ct);
-
     public async Task<IReadOnlyList<SQLiteMemoryHydratedItem>> SearchAcrossDomainsByPlanAsync(
         IReadOnlyList<string> queryTerms,
         IReadOnlyList<string> memoryClasses,
@@ -817,17 +806,6 @@ public sealed class SQLiteMemoryStore
         TrustAudience audience,
         bool allowExpiredEvidence,
         CancellationToken ct = default)
-        => await SearchByPlanInternalAsync(queryTerms, null, memoryClasses, limit, boundary, audience, allowExpiredEvidence, ct);
-
-    private async Task<IReadOnlyList<SQLiteMemoryHydratedItem>> SearchByPlanInternalAsync(
-        IReadOnlyList<string> queryTerms,
-        string? domain,
-        IReadOnlyList<string> memoryClasses,
-        int limit,
-        string boundary,
-        TrustAudience audience,
-        bool allowExpiredEvidence,
-        CancellationToken ct)
     {
         var matchQuery = BuildFtsMatchQuery(queryTerms);
         if (matchQuery is null || limit <= 0)
@@ -855,8 +833,6 @@ public sealed class SQLiteMemoryStore
         }
 
         var whereAudiences = string.Join(",", audiencePlanClauses);
-        var documentDomainClause = domain is null ? string.Empty : "AND d.domain = $domain";
-        var recordDomainClause = domain is null ? string.Empty : "AND r.domain = $domain";
 
         cmd.CommandText = $"""
             WITH doc_hits AS (
@@ -896,7 +872,6 @@ public sealed class SQLiteMemoryStore
                 FROM doc_hits dh
                 JOIN memory_documents d ON d.document_id = dh.document_id
                 WHERE 1 = 1
-                  {documentDomainClause}
                   AND d.recall_mode IN ('{MemoryRecallMode.Auto.ToWireValue()}', '{MemoryRecallMode.Searchable.ToWireValue()}')
                   AND COALESCE(d.boundary, $planLegacyBoundary) = $boundary
                   AND COALESCE(d.audience, $planFallbackAudience) IN ({whereAudiences})
@@ -927,7 +902,6 @@ public sealed class SQLiteMemoryStore
                 FROM rec_hits rh
                 JOIN memory_records r ON r.record_id = rh.record_id
                 WHERE 1 = 1
-                  {recordDomainClause}
                   AND r.recall_mode IN ('{MemoryRecallMode.Auto.ToWireValue()}', '{MemoryRecallMode.Searchable.ToWireValue()}')
                   AND COALESCE(r.boundary, $planLegacyBoundary) = $boundary
                   AND COALESCE(r.audience, $planFallbackAudience) IN ({whereAudiences})
@@ -939,8 +913,6 @@ public sealed class SQLiteMemoryStore
             LIMIT $limit;
             """;
         cmd.Parameters.AddWithValue("$query", matchQuery);
-        if (domain is not null)
-            cmd.Parameters.AddWithValue("$domain", domain);
         cmd.Parameters.AddWithValue("$boundary", boundary);
         cmd.Parameters.AddWithValue("$planLegacyBoundary", SecurityPolicyDefaults.LegacyRestrictedBoundary);
         cmd.Parameters.AddWithValue("$planFallbackAudience", TrustAudience.Personal.ToWireValue());
@@ -1311,7 +1283,7 @@ public sealed class SQLiteMemoryStore
         {
             var now = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
             var resolvedBoundary = string.Equals(operation.Boundary, SecurityPolicyDefaults.LegacyRestrictedBoundary, StringComparison.Ordinal)
-                ? SecurityPolicyDefaults.InferLegacyBoundaryFromDomain(operation.Domain)
+                ? SecurityPolicyDefaults.TrustedInstanceBoundary
                 : operation.Boundary;
             var canonicalName = string.IsNullOrWhiteSpace(operation.AnchorCanonicalName)
                 ? operation.Title
@@ -1469,7 +1441,7 @@ public sealed class SQLiteMemoryStore
         {
             var now = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
             var resolvedBoundary = string.Equals(operation.Boundary, SecurityPolicyDefaults.LegacyRestrictedBoundary, StringComparison.Ordinal)
-                ? SecurityPolicyDefaults.InferLegacyBoundaryFromDomain(operation.Domain)
+                ? SecurityPolicyDefaults.TrustedInstanceBoundary
                 : operation.Boundary;
             var canonicalName = string.IsNullOrWhiteSpace(operation.AnchorCanonicalName)
                 ? operation.Title

@@ -7,12 +7,10 @@ namespace Netclaw.Actors.Tests.Sessions;
 public sealed class DeterministicCandidateSelectorTests
 {
     private static DeterministicRetrievalRequestPlan MakePlan(
-        string hardScope = "project:d0ac6ckbk5k",
         IReadOnlyList<string>? lexicalTerms = null,
         IReadOnlyList<string>? anchorHints = null,
         IReadOnlyList<string>? facets = null,
         IReadOnlyList<string>? softScopes = null) => new(
-        HardScope: hardScope,
         SoftScopes: softScopes ?? [],
         RetrievalMode: DeterministicRetrievalMode.Ranked,
         LexicalTerms: lexicalTerms ?? [],
@@ -99,7 +97,6 @@ public sealed class DeterministicCandidateSelectorTests
         // must score identically. Tracked in #584.
         var selector = new DeterministicCandidateSelector();
         var plan = MakePlan(
-            hardScope: "project:d0ac6ckbk5k",
             lexicalTerms: ["petabridge"]);
 
         var sameDomain = MakeItem("doc-same", "Company: Petabridge", "Petabridge builds Akka.NET.", domain: "project:d0ac6ckbk5k");
@@ -116,7 +113,6 @@ public sealed class DeterministicCandidateSelectorTests
     {
         var selector = new DeterministicCandidateSelector();
         var plan = MakePlan(
-            hardScope: "project:d0ac6ckbk5k",
             lexicalTerms: ["petabridge"]);
 
         var crossDomain = MakeItem("doc-cross", "Company: Petabridge", "Petabridge builds Akka.NET.", domain: "project:signalr");
@@ -155,8 +151,7 @@ public sealed class DeterministicCandidateSelectorTests
     {
         var selector = new DeterministicCandidateSelector();
         var plan = MakePlan(
-            lexicalTerms: ["akka", "stream", "backpressure", "demand"],
-            hardScope: "project:d0ac6ckbk5k");
+            lexicalTerms: ["akka", "stream", "backpressure", "demand"]);
 
         var weak = MakeItem(
             "doc-weak",
@@ -196,8 +191,7 @@ public sealed class DeterministicCandidateSelectorTests
         var selector = new DeterministicCandidateSelector();
         var plan = MakePlan(
             lexicalTerms: ["stream"],
-            facets: ["akka-streams"],
-            hardScope: "project:other");
+            facets: ["akka-streams"]);
 
         var withoutFacet = MakeItem(
             "doc-no-facet",
@@ -237,8 +231,7 @@ public sealed class DeterministicCandidateSelectorTests
         var selector = new DeterministicCandidateSelector();
         var plan = MakePlan(
             lexicalTerms: ["stream"],
-            anchorHints: ["Akka Stream Backpressure"],
-            hardScope: "project:other");
+            anchorHints: ["Akka Stream Backpressure"]);
 
         var noAnchor = MakeItem(
             "doc-no-anchor",

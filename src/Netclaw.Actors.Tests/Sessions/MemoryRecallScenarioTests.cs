@@ -170,7 +170,7 @@ public sealed class MemoryRecallScenarioTests : IAsyncLifetime
         var coordinator = new SQLiteMemoryRecallCoordinator(
             _store,
             NullLogger<SQLiteMemoryRecallCoordinator>.Instance,
-            sessionTuning: new SessionTuning { MemorySidecarsEnabled = false });
+            sessionTuning: new SessionTuning());
 
         var request = new AutomaticRecallRequest(
             SessionId: TestSessionId,

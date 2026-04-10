@@ -315,7 +315,7 @@ public sealed class MemoryProposalGate
             Relations: BuildRelations(proposal, memoryClass),
             UpdateSemantics: updateSemantics.ToWireValue(),
             Domain: domain,
-            Boundary: MemoryPolicyScopeResolver.ResolveBoundary(boundary, audience, sessionId: null, domain),
+            Boundary: MemoryPolicyScopeResolver.ResolveBoundary(boundary, audience, sessionId: null),
             Audience: audience,
             Sensitivity: sensitivity,
             RecallMode: recallMode.ToWireValue(),

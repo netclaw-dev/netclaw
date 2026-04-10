@@ -12,7 +12,6 @@ public enum DeterministicRetrievalMode
 }
 
 public sealed record DeterministicRetrievalRequestPlan(
-    string HardScope,
     IReadOnlyList<string> SoftScopes,
     DeterministicRetrievalMode RetrievalMode,
     IReadOnlyList<string> LexicalTerms,
@@ -27,7 +26,6 @@ public sealed class DeterministicRetrievalRequestPlanner
 {
     public DeterministicRetrievalRequestPlan Plan(AutomaticRecallRequest request)
     {
-        var hardScope = ResolveHardScope(request);
         var prompt = string.IsNullOrWhiteSpace(request.Query)
             ? request.RecentUserMessages.LastOrDefault() ?? string.Empty
             : request.Query;
@@ -39,7 +37,6 @@ public sealed class DeterministicRetrievalRequestPlanner
         var retrievalMode = InferMode(tokens, facets);
 
         return new DeterministicRetrievalRequestPlan(
-            HardScope: hardScope,
             SoftScopes: softScopes,
             RetrievalMode: retrievalMode,
             LexicalTerms: CapLexicalTerms(tokens, anchorHints),
@@ -50,38 +47,6 @@ public sealed class DeterministicRetrievalRequestPlanner
             ExcludedSensitivity: [MemorySensitivity.Secret.ToWireValue()],
             ExcludeExpired: true);
     }
-
-    public static string ResolveHardScope(AutomaticRecallRequest request)
-    {
-        if (!string.IsNullOrWhiteSpace(request.HardScopeOverride))
-            return request.HardScopeOverride!;
-
-        var sessionId = request.SessionId;
-        if (string.IsNullOrWhiteSpace(sessionId))
-            return SecurityPolicyDefaults.DefaultMemoryDomain;
-
-        var slash = sessionId.IndexOf('/', StringComparison.Ordinal);
-        if (slash <= 0)
-            return SecurityPolicyDefaults.DefaultMemoryDomain;
-
-        var prefix = sessionId[..slash].Trim();
-        if (IsTransportScopedSession(prefix))
-            return SecurityPolicyDefaults.DefaultMemoryDomain;
-
-        return string.IsNullOrWhiteSpace(prefix)
-            ? SecurityPolicyDefaults.DefaultMemoryDomain
-            : $"project:{prefix.ToLowerInvariant()}";
-    }
-
-    private static bool IsTransportScopedSession(string prefix)
-        => prefix.Equals("signalr", StringComparison.OrdinalIgnoreCase)
-           || prefix.Equals("slack", StringComparison.OrdinalIgnoreCase)
-           || prefix.Equals("reminder", StringComparison.OrdinalIgnoreCase)
-           || prefix.Equals("timer", StringComparison.OrdinalIgnoreCase)
-           || prefix.Equals("tui", StringComparison.OrdinalIgnoreCase)
-           || prefix.Equals("headless", StringComparison.OrdinalIgnoreCase)
-           || prefix.Equals("console", StringComparison.OrdinalIgnoreCase)
-           || prefix.Equals("manual", StringComparison.OrdinalIgnoreCase);
 
     // Capitalized words that commonly start English sentences and questions
     // but carry no semantic weight as anchors. Broader than the tokenizer's

@@ -38,7 +38,6 @@ public class ModalityGateTextOnlyTests : TestKit
             Tuning = new SessionTuning
             {
                 TitleGenerationInterval = 0,
-                MemorySidecarsEnabled = false,
             }
         });
         services.AddSingleton<ISystemPromptProvider>(new StaticSystemPromptProvider(
@@ -181,7 +180,6 @@ public class ModalityGateVisionTests : TestKit
             Tuning = new SessionTuning
             {
                 TitleGenerationInterval = 0,
-                MemorySidecarsEnabled = false,
             }
         });
         services.AddSingleton<ISystemPromptProvider>(new StaticSystemPromptProvider(
