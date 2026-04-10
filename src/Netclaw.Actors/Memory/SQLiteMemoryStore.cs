@@ -153,23 +153,6 @@ public sealed class SQLiteMemoryStore
         await EnsureColumnExistsAsync(conn, "memory_records", "boundary", "TEXT NULL", ct);
         await EnsureColumnExistsAsync(conn, "memory_records", "audience", "TEXT NULL", ct);
 
-        await DropIndexIfExistsAsync(conn, "idx_memory_anchors_domain_mode", ct);
-        await DropIndexIfExistsAsync(conn, "idx_memory_documents_policy", ct);
-        await DropIndexIfExistsAsync(conn, "idx_memory_records_policy", ct);
-        await DropColumnIfExistsAsync(conn, "memory_anchors", "domain", ct);
-        await DropColumnIfExistsAsync(conn, "memory_documents", "domain", ct);
-        await DropColumnIfExistsAsync(conn, "memory_records", "domain", ct);
-        await DropColumnIfExistsAsync(conn, "memory_edges", "domain", ct);
-
-        await using var recreateIndexesCmd = conn.CreateCommand();
-        recreateIndexesCmd.CommandText = """
-            CREATE INDEX IF NOT EXISTS idx_memory_documents_policy
-              ON memory_documents(sensitivity, recall_mode, updated_at DESC);
-            CREATE INDEX IF NOT EXISTS idx_memory_records_policy
-              ON memory_records(sensitivity, recall_mode, created_at DESC);
-            """;
-        await recreateIndexesCmd.ExecuteNonQueryAsync(ct);
-
         // Phase A hygiene: conversation turn snapshots are diagnostic trace, not
         // durable auto-recall memory. This repo is prototype-only; normalize any
         // existing rows aggressively to prevent recall pollution.
@@ -1720,45 +1703,6 @@ public sealed class SQLiteMemoryStore
 
         await using var alter = conn.CreateCommand();
         alter.CommandText = $"ALTER TABLE {tableName} ADD COLUMN {columnName} {columnSql};";
-        await alter.ExecuteNonQueryAsync(ct);
-    }
-
-    private static async Task DropIndexIfExistsAsync(
-        SqliteConnection conn,
-        string indexName,
-        CancellationToken ct)
-    {
-        await using var cmd = conn.CreateCommand();
-        cmd.CommandText = $"DROP INDEX IF EXISTS {indexName};";
-        await cmd.ExecuteNonQueryAsync(ct);
-    }
-
-    private static async Task DropColumnIfExistsAsync(
-        SqliteConnection conn,
-        string tableName,
-        string columnName,
-        CancellationToken ct)
-    {
-        await using var pragma = conn.CreateCommand();
-        pragma.CommandText = $"PRAGMA table_info({tableName});";
-        var exists = false;
-        await using (var reader = await pragma.ExecuteReaderAsync(ct))
-        {
-            while (await reader.ReadAsync(ct))
-            {
-                if (string.Equals(reader.GetString(1), columnName, StringComparison.OrdinalIgnoreCase))
-                {
-                    exists = true;
-                    break;
-                }
-            }
-        }
-
-        if (!exists)
-            return;
-
-        await using var alter = conn.CreateCommand();
-        alter.CommandText = $"ALTER TABLE {tableName} DROP COLUMN {columnName};";
         await alter.ExecuteNonQueryAsync(ct);
     }
 
