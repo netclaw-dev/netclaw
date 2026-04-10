@@ -195,24 +195,6 @@ public static class SecurityPolicyDefaults
         return ResolveAudienceFromChannelType(prefix);
     }
 
-    public static string InferLegacyBoundaryFromDomain(string? domain)
-    {
-        if (string.IsNullOrWhiteSpace(domain))
-            return LegacyRestrictedBoundary;
-
-        var normalized = domain.Trim().ToLowerInvariant();
-        if (normalized is "project:signalr" or "project:tui" or "project:headless" or "project:manual" or DefaultMemoryDomain)
-            return TrustedInstanceBoundary;
-
-        if (normalized.StartsWith("user:", StringComparison.Ordinal) || normalized.StartsWith("person:", StringComparison.Ordinal))
-            return TrustedInstanceBoundary;
-
-        if (normalized.StartsWith("project:", StringComparison.Ordinal))
-            return TrustedInstanceBoundary;
-
-        return LegacyRestrictedBoundary;
-    }
-
     public static string ResolveBoundaryFromAudience(TrustAudience audience) => audience switch
     {
         TrustAudience.Public => PublicBoundary,

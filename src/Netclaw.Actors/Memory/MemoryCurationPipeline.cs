@@ -316,7 +316,7 @@ public sealed class MemoryRulesFirstExtractor(MemoryPolicyEvaluator policy)
                 Domain: payload.Domain,
                 Boundary: !string.IsNullOrWhiteSpace(payload.Boundary)
                     ? payload.Boundary!
-                    : SecurityPolicyDefaults.InferLegacyBoundaryFromDomain(payload.Domain),
+                    : SecurityPolicyDefaults.TrustedInstanceBoundary,
                 Audience: milestoneAudience,
                 Sensitivity: payload.Sensitivity,
                 RecallMode: MemoryDomainEnumExtensions.TryFromWireValue(payload.RecallMode, out MemoryRecallMode rm)
@@ -502,7 +502,7 @@ public sealed class MemoryCurationEngine(SQLiteMemoryStore store, MemoryRulesFir
         SecurityPolicyDefaults.TryParseAudience(resolvedAudienceWire, out var parsedAudience);
         var resolvedBoundary = !string.IsNullOrWhiteSpace(payload.Boundary)
             ? payload.Boundary!
-            : SecurityPolicyDefaults.InferLegacyBoundaryFromDomain(payload.Domain);
+            : SecurityPolicyDefaults.TrustedInstanceBoundary;
 
         var existing = await store.SearchMemoriesAsync(payload.Content, 8, resolvedBoundary, parsedAudience, ct);
         var fingerprints = existing
