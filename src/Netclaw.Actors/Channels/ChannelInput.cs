@@ -58,5 +58,4 @@ public sealed record ChannelInput
     /// When the message was received by the channel.
     /// </summary>
     public DateTimeOffset ReceivedAt { get; init; }
-
 }

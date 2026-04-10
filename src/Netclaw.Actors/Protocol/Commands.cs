@@ -26,5 +26,4 @@ public sealed class SendUserMessage : IWithSessionId
     /// </summary>
     [ProtoIgnore]
     public MessageSource? Source { get; set; }
-
 }

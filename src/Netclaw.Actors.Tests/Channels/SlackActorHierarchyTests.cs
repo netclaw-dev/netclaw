@@ -201,6 +201,7 @@ public sealed class SlackActorHierarchyTests(ITestOutputHelper output) : TestKit
             DefaultChannelId: null,
             ReplyClient: new NoopReplyClient(),
             ContentScanner: new NullContentScanner(),
+            ThreadHistoryFetcher: EmptyThreadHistoryFetcher.Instance,
             ConversationPropsFactory: conversationPropsFactory,
             ThreadPropsFactory: threadPropsFactory);
     }

@@ -162,22 +162,16 @@ public sealed class SlackThreadHistoryFetcher : IThreadHistoryFetcher
         if (contents.Count == 0)
             return null;
 
-        var receivedAt = ParseSlackTs(message.Ts);
+        var receivedAt = new SlackEventTs(message.Ts ?? string.Empty).ToDateTimeOffset() ?? default;
 
         return new ChannelInput
         {
             SenderId = message.User,
             ChannelId = channelId,
-            MessageId = BuildMessageId(channelId, message.Ts),
+            MessageId = $"{channelId}:{message.Ts ?? string.Empty}",
             Contents = contents,
             ReceivedAt = receivedAt
         };
-    }
-
-    private static string BuildMessageId(string channelId, string? messageTs)
-    {
-        var ts = messageTs ?? string.Empty;
-        return $"{channelId}:{ts}";
     }
 
     private async Task<DataContent?> DownloadAndScanFileAsync(SlackNet.File file, CancellationToken cancellationToken)
@@ -220,16 +214,5 @@ public sealed class SlackThreadHistoryFetcher : IThreadHistoryFetcher
         using var downloadCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         downloadCts.CancelAfter(FileDownloadTimeout);
         return await SlackFileDownloader.DownloadAsync(_httpClient, url, _options.BotToken, downloadCts.Token);
-    }
-
-    private static DateTimeOffset ParseSlackTs(string? ts)
-    {
-        if (ts is not null && double.TryParse(ts, System.Globalization.NumberStyles.Float,
-                System.Globalization.CultureInfo.InvariantCulture, out var unixSeconds))
-        {
-            return DateTimeOffset.FromUnixTimeMilliseconds((long)(unixSeconds * 1000));
-        }
-
-        return default;
     }
 }
