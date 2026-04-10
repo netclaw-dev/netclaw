@@ -138,11 +138,8 @@ public sealed class ToolAccessPolicy
         var audience = ResolveAudience(context);
         var profile = ToolAudienceProfileDefaults.GetResolvedProfile(_toolConfig.AudienceProfiles, audience);
         var approvalPolicy = profile.ApprovalPolicy;
-
-        if (approvalPolicy is null)
-            return ToolAccessDecision.Allow();
-
-        var mode = approvalPolicy.GetEffectiveMode(toolName);
+        var mode = approvalPolicy?.GetEffectiveMode(toolName)
+            ?? GetMissingApprovalPolicyDefaultMode(toolName, audience);
 
         if (mode == ToolApprovalMode.Deny)
             return ToolAccessDecision.Deny("tool_denied_by_approval_policy");
@@ -167,6 +164,16 @@ public sealed class ToolAccessPolicy
             ]);
 
         return ToolAccessDecision.RequiresApproval(approvalContext);
+    }
+
+    private static ToolApprovalMode GetMissingApprovalPolicyDefaultMode(string toolName, TrustAudience audience)
+    {
+        // Fail-closed for personal shell: if the approval policy was omitted,
+        // still require interactive approval rather than silently auto-approving.
+        if (audience == TrustAudience.Personal && string.Equals(toolName, "shell_execute", StringComparison.Ordinal))
+            return ToolApprovalMode.Approval;
+
+        return ToolApprovalMode.Auto;
     }
 
     private ShellExecutionMode ResolveShellMode()

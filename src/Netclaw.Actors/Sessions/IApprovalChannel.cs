@@ -58,7 +58,9 @@ public sealed class ApprovalChannel : IApprovalChannel
 
         try
         {
-            var timeoutTask = Task.Delay(timeout, CancellationToken.None);
+            var timeoutTask = timeout == Timeout.InfiniteTimeSpan
+                ? Task.Delay(Timeout.InfiniteTimeSpan, CancellationToken.None)
+                : Task.Delay(timeout, CancellationToken.None);
             var cancellationTask = Task.Delay(Timeout.InfiniteTimeSpan, ct);
             var completed = await Task.WhenAny(tcs.Task, timeoutTask, cancellationTask);
 

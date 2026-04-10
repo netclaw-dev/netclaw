@@ -39,6 +39,38 @@ public sealed class SlackActorHierarchyTests(ITestOutputHelper output) : TestKit
     }
 
     [Fact]
+    public async Task Gateway_routes_approval_response_through_conversation_to_thread()
+    {
+        var sink = CreateTestProbe("approval-sink");
+        var deps = CreateDependencies(
+            threadPropsFactory: (_, _, _, _) => Props.Create(() => new ForwardActor(sink.Ref)));
+
+        var gateway = Sys.ActorOf(SlackGatewayActor.CreateProps(deps), "slack-gateway-approval-test");
+
+        gateway.Tell(CreateMessage(
+            eventId: "D1:401",
+            channelId: "D1",
+            eventTs: "401.1",
+            text: "hello from dm",
+            isDirectMessage: true,
+            threadTs: null));
+
+        await sink.ExpectMsgAsync<SlackThreadInbound>(cancellationToken: TestContext.Current.CancellationToken);
+
+        gateway.Tell(new SlackApprovalResponse(
+            new SlackChannelId("D1"),
+            new SlackThreadTs("401.1"),
+            "call-1",
+            "approve_once",
+            "U1"));
+
+        var routed = await sink.ExpectMsgAsync<SlackApprovalResponse>(cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal("call-1", routed.CallId);
+        Assert.Equal("approve_once", routed.SelectedKey);
+        Assert.Equal("U1", routed.SenderId);
+    }
+
+    [Fact]
     public async Task Conversation_requires_mention_to_start_and_allows_thread_followups()
     {
         var sink = CreateTestProbe("conversation-sink");

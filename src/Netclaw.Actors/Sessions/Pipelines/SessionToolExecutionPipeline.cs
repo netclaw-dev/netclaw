@@ -45,8 +45,6 @@ internal static class SessionToolExecutionPipeline
     {
         try
         {
-            using var cts = new CancellationTokenSource(timeout);
-
             // Execute all tool calls in parallel -- each is independent
             var tasks = toolCalls.Select(tc => ExecuteSingleToolAsync(
                 executor,
@@ -59,7 +57,8 @@ internal static class SessionToolExecutionPipeline
                 maxInlineToolResultChars,
                 emitSubAgentOutput,
                 spawnChildActor,
-                cts.Token,
+                timeout,
+                CancellationToken.None,
                 approvalChannel,
                 emitApprovalRequest,
                 approvalTimeout ?? TimeSpan.FromMinutes(5)));
@@ -77,6 +76,10 @@ internal static class SessionToolExecutionPipeline
                     .SelectMany(r => r.AcceptedSubAgentFindings)
                     .ToList()
             });
+        }
+        catch (TimeoutException ex)
+        {
+            self.Tell(new ToolExecutionFailed { Cause = ex });
         }
         catch (OperationCanceledException ex)
         {
@@ -104,6 +107,7 @@ internal static class SessionToolExecutionPipeline
         int maxInlineToolResultChars,
         Action<SubAgentOutput> emitSubAgentOutput,
         Func<object, string, CancellationToken, Task<object>> spawnChildActor,
+        TimeSpan timeout,
         CancellationToken ct,
         IApprovalChannel? approvalChannel = null,
         Action<ToolInteractionRequest>? emitApprovalRequest = null,
@@ -190,7 +194,7 @@ internal static class SessionToolExecutionPipeline
         };
         try
         {
-            resultText = await executor.ExecuteAsync(tc, context, ct);
+            resultText = await ExecuteToolAttemptAsync(executor, tc, context, timeout, ct);
             sw.Stop();
 
             auditLogger?.Log(new ToolAuditEntry
@@ -208,10 +212,11 @@ internal static class SessionToolExecutionPipeline
         {
             // Mid-turn approval pause: emit request to channel, block on TCS
             var ctx = approvalEx.ApprovalContext;
+            var approvalWaitTimeout = approvalTimeout ?? Timeout.InfiniteTimeSpan;
             var waitTask = approvalChannel.WaitForApprovalAsync(
                 tc.CallId,
-                approvalTimeout ?? TimeSpan.FromMinutes(5),
-                ct);
+                approvalWaitTimeout,
+                CancellationToken.None);
 
             emitApprovalRequest(new ToolInteractionRequest
             {
@@ -243,7 +248,7 @@ internal static class SessionToolExecutionPipeline
                 }
 
                 sw = Stopwatch.StartNew();
-                resultText = await executor.ExecuteAsync(tc, context, ct);
+                resultText = await ExecuteToolAttemptAsync(executor, tc, context, timeout, ct);
                 sw.Stop();
 
                 var patternStr = string.Join(", ", ctx.UnapprovedPatterns);
@@ -262,8 +267,8 @@ internal static class SessionToolExecutionPipeline
             else
             {
                 var reason = decision == ApprovalDecision.TimedOut
-                    ? "Approval timed out"
-                    : "Command denied by user";
+                    ? "Tool access denied: approval_timed_out"
+                    : $"Tool access denied: approval_denied_by_user ({tc.Name} requires interactive approval and the user declined it)";
                 resultText = reason;
 
                 var deniedPatternStr = string.Join(", ", ctx.UnapprovedPatterns);
@@ -345,6 +350,32 @@ internal static class SessionToolExecutionPipeline
             context.FileAttachments,
             completedRuns,
             acceptedFindings);
+    }
+
+    private static async Task<string> ExecuteToolAttemptAsync(
+        IToolExecutor executor,
+        FunctionCallContent toolCall,
+        ToolExecutionContext context,
+        TimeSpan timeout,
+        CancellationToken cancellationToken)
+    {
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        if (timeout != Timeout.InfiniteTimeSpan)
+            timeoutCts.CancelAfter(timeout);
+
+        try
+        {
+            return await executor.ExecuteAsync(toolCall, context, timeoutCts.Token);
+        }
+        catch (OperationCanceledException ex)
+            when (!cancellationToken.IsCancellationRequested
+                  && timeout != Timeout.InfiniteTimeSpan
+                  && timeoutCts.IsCancellationRequested)
+        {
+            throw new TimeoutException(
+                $"Tool execution exceeded timeout of {timeout.TotalSeconds:F0}s",
+                ex);
+        }
     }
 
     /// <summary>

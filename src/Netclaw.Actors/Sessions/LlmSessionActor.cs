@@ -336,6 +336,14 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 return;
             }
 
+            if (_pendingToolInteractions.Count > 0)
+            {
+                _log.Info(
+                    "Session idle but {PendingApprovalCount} approval(s) are pending; deferring passivation",
+                    _pendingToolInteractions.Count);
+                return;
+            }
+
             _log.Info("Session idle, entering passivation (timeout={Timeout})", _config.IdleTimeout);
             TransitionTo(SessionPhase.Passivating);
         });
@@ -684,6 +692,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 audience,
                 msg.RequesterSenderId);
 
+            PauseToolExecutionWatchdogForApprovalWait(msg.CallId);
+
             EmitOutput(msg);
         });
 
@@ -736,6 +746,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             }
 
             _pendingToolInteractions.Remove(msg.CallId);
+
+            ResumeToolExecutionWatchdogAfterApprovalWait();
 
             // Complete the TCS so the blocked pipeline task can proceed
             _approvalChannel.Complete(msg.CallId, decision);
@@ -1499,7 +1511,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         _ = SessionToolExecutionPipeline.ExecuteToolsAsync(executor, toolCalls, sessionId, _currentTurnSource, auditLogger, tp, sessionDir, maxInlineToolResultChars, toolExecutionTimeout, self, emitSubAgentOutput, spawnChildActor,
             approvalChannel: _approvalChannel,
             emitApprovalRequest: request => self.Tell(request),
-            approvalTimeout: TimeSpan.FromMinutes(5));
+            approvalTimeout: Timeout.InfiniteTimeSpan);
     }
 
     private void HandleTextResponse(
@@ -2525,6 +2537,30 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             ContextWindowTokens = contextWindow,
             UsagePercent = usagePercent
         }, OutputFilter.Usage);
+    }
+
+    private void PauseToolExecutionWatchdogForApprovalWait(string callId)
+    {
+        if (!string.Equals(_watchdog.CurrentOperationName, "tool-execution", StringComparison.Ordinal))
+            return;
+
+        _watchdog.Stop(Timers);
+        _log.Info("Paused tool-execution watchdog while waiting for approval for call {CallId}", callId);
+    }
+
+    private void ResumeToolExecutionWatchdogAfterApprovalWait()
+    {
+        if (_pendingToolInteractions.Count > 0)
+            return;
+
+        if (_currentPhase != SessionPhase.Processing)
+            return;
+
+        if (_watchdog.CurrentOperationName is not null)
+            return;
+
+        _watchdog.Start("tool-execution", _config.ToolExecutionTimeout, Timers);
+        _log.Info("Resumed tool-execution watchdog after approval response");
     }
 
     private void FailCurrentTurn(string errorMessage, Exception cause, ErrorCategory category = ErrorCategory.Unknown)

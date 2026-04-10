@@ -16,11 +16,35 @@ public class DispatchingToolExecutorTests
 
     public DispatchingToolExecutorTests()
     {
+        var baseConfig = new ToolConfig();
+        baseConfig.AudienceProfiles.Personal.ApprovalPolicy = new ToolApprovalConfig
+        {
+            ToolOverrides = new Dictionary<string, ToolApprovalMode>(StringComparer.Ordinal)
+            {
+                ["shell_execute"] = ToolApprovalMode.Auto
+            }
+        };
+
         var registry = new ToolRegistry();
-        registry.WithFirstPartyTools(new ToolConfig());
-        _executor = new DispatchingToolExecutor(registry);
+        registry.WithFirstPartyTools(baseConfig);
+        _executor = new DispatchingToolExecutor(
+            registry,
+            new ToolAccessPolicy(
+                baseConfig,
+                new EffectivePolicyDefaults(
+                    DeploymentPosture.Personal,
+                    TrustAudience.Personal,
+                    ShellExecutionMode.HostAllowed,
+                    UsedStrictFallback: false)));
 
         var restrictedConfig = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
+        restrictedConfig.AudienceProfiles.Personal.ApprovalPolicy = new ToolApprovalConfig
+        {
+            ToolOverrides = new Dictionary<string, ToolApprovalMode>(StringComparer.Ordinal)
+            {
+                ["shell_execute"] = ToolApprovalMode.Auto
+            }
+        };
         restrictedConfig.AudienceProfiles.Team.AllowedTools = ["file_read", "attach_file", "shell_execute"];
         restrictedConfig.AudienceProfiles.Public.AllowedTools = ["file_read", "file_write", "attach_file"];
         var restrictedRegistry = new ToolRegistry();

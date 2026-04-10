@@ -59,26 +59,17 @@ public sealed class SlackGatewayActor : ReceiveActor
 
         ReceiveAsync<SlackApprovalResponse>(async message =>
         {
-            _log.Info("Routing approval response for session {0} call={1}",
-                message.SessionId, message.CallId);
+            var actorName = Uri.EscapeDataString(message.ChannelId.Value);
+            var conversationProps = _dependencies.ConversationPropsFactory?.Invoke(message.ChannelId, _dependencies)
+                ?? SlackConversationActor.CreateProps(message.ChannelId, _dependencies);
+            var conversation = Context.Child(actorName)
+                .GetOrElse(() => Context.ActorOf(conversationProps, actorName));
 
-            var response = new ToolInteractionResponse
-            {
-                SessionId = message.SessionId,
-                CallId = message.CallId,
-                SelectedKey = message.SelectedKey,
-                SenderId = message.SenderId
-            };
+            _log.Info("Routing Slack approval response for channel {0} thread={1} call={2}",
+                message.ChannelId, message.ThreadTs, message.CallId);
+            conversation.Forward(message);
 
-            try
-            {
-                await _dependencies.Pipeline.SendFeedbackAsync(response);
-            }
-            catch (Exception ex)
-            {
-                _log.Warning(ex, "Failed to route approval response for session {0}",
-                    message.SessionId);
-            }
+            await Task.CompletedTask;
         });
     }
 

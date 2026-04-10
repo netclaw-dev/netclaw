@@ -1,4 +1,5 @@
 using SlackNet;
+using SlackNet.Blocks;
 using SlackNet.WebApi;
 using Netclaw.Actors.Protocol;
 
@@ -6,11 +7,16 @@ namespace Netclaw.Channels.Slack;
 
 public sealed class SlackReplyClient(ISlackApiClient slackApiClient) : ISlackReplyClient
 {
-    public async Task PostThreadReplyAsync(SlackPostMessage message, CancellationToken cancellationToken = default)
+    public Task PostThreadReplyAsync(SlackPostMessage message, CancellationToken cancellationToken = default)
+        => PostThreadReplyWithTsAsync(message, cancellationToken);
+
+    public async Task<string> PostThreadReplyWithTsAsync(SlackPostMessage message, CancellationToken cancellationToken = default)
     {
         try
         {
-            var blocks = SlackBlockConverter.Convert(message.Text);
+            var blocks = message.Blocks?.Count > 0
+                ? message.Blocks.ToList()
+                : SlackBlockConverter.Convert(message.Text);
 
             var response = await slackApiClient.Chat.PostMessage(new Message
             {
@@ -27,6 +33,35 @@ public sealed class SlackReplyClient(ISlackApiClient slackApiClient) : ISlackRep
                     DeliveryFailureKind.TransportFailure,
                     "Slack returned no message timestamp — the message was not delivered");
             }
+
+            return response.Ts;
+        }
+        catch (SlackException ex)
+        {
+            throw new SlackMessageDeliveryException(
+                ex.ErrorCode,
+                MapFailureKind(ex.ErrorCode),
+                ex.Message,
+                ex);
+        }
+    }
+
+    public async Task UpdateThreadMessageAsync(
+        SlackChannelId channelId,
+        string messageTs,
+        string text,
+        IReadOnlyList<Block>? blocks = null,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            await slackApiClient.Chat.Update(new MessageUpdate
+            {
+                ChannelId = channelId.Value,
+                Ts = messageTs,
+                Text = text,
+                Blocks = blocks?.ToList()
+            }, cancellationToken);
         }
         catch (SlackException ex)
         {

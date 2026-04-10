@@ -19,6 +19,7 @@ using Netclaw.Actors.Tests.Sessions;
 using Netclaw.Channels.Slack;
 using Netclaw.Configuration;
 using Netclaw.Security;
+using SlackNet.Blocks;
 using Xunit;
 
 namespace Netclaw.Actors.Tests.Channels;
@@ -692,7 +693,8 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
             BotUserId: new SlackUserId("UBOT"),
             DefaultChannelId: null,
             ReplyClient: _replyClient,
-            ContentScanner: new NullContentScanner());
+            ContentScanner: new NullContentScanner(),
+            ThreadHistoryFetcher: EmptyThreadHistoryFetcher.Instance);
 
         var actor = Sys.ActorOf(SlackThreadBindingActor.CreateProps(
             new SessionId("D7/9050.1"),
@@ -725,6 +727,163 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
             Assert.Equal("call-1", response.CallId);
             Assert.Equal("approve_once", response.SelectedKey);
             Assert.Equal("U123", response.SenderId);
+        }, duration: TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
+
+        await AwaitAssertAsync(() =>
+        {
+            var updated = Assert.Single(_replyClient.UpdatedMessages);
+            Assert.Equal("1.0", updated.MessageTs);
+            Assert.Contains("Tool approval resolved", updated.Text, StringComparison.Ordinal);
+            Assert.DoesNotContain(updated.Blocks ?? [], block => block is ActionsBlock);
+        }, duration: TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
+
+        Watch(actor);
+        Sys.Stop(actor);
+        await ExpectTerminatedAsync(actor, cancellationToken: TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task Approval_request_posts_block_buttons_with_text_fallback()
+    {
+        var feedbackPipeline = new RecordingSessionPipeline([
+            new ToolInteractionRequest
+            {
+                SessionId = new SessionId("D7/9055.1"),
+                Kind = "approval",
+                CallId = "call-blocks",
+                ToolName = "shell_execute",
+                DisplayText = "git push origin dev",
+                RequesterSenderId = "U123",
+                Patterns = ["git push"],
+                Options =
+                [
+                    new ToolInteractionOption("approve_once", "Approve Once"),
+                    new ToolInteractionOption("approve_session", "Approve For This Chat"),
+                    new ToolInteractionOption("approve_always", "Approve Always"),
+                    new ToolInteractionOption("deny", "Deny")
+                ]
+            }
+        ]);
+
+        var deps = new SlackGatewayDependencies(
+            Pipeline: feedbackPipeline,
+            IngressGate: null,
+            ActorSystem: Sys,
+            TimeProvider: TimeProvider.System,
+            Options: new SlackChannelOptions
+            {
+                Enabled = true,
+                MentionOnly = false,
+                AllowDirectMessages = true,
+                BotToken = new SensitiveString("xoxb-fake-token")
+            },
+            BotUserId: new SlackUserId("UBOT"),
+            DefaultChannelId: null,
+            ReplyClient: _replyClient,
+            ContentScanner: new NullContentScanner(),
+            ThreadHistoryFetcher: EmptyThreadHistoryFetcher.Instance);
+
+        var actor = Sys.ActorOf(SlackThreadBindingActor.CreateProps(
+            new SessionId("D7/9055.1"),
+            new SlackChannelId("D7"),
+            new SlackThreadTs("9055.1"),
+            deps), "slack-thread-approval-blocks-test");
+
+        await AwaitAssertAsync(() =>
+        {
+            Assert.Single(_replyClient.PostedMessages);
+        }, duration: TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
+
+        var posted = Assert.Single(_replyClient.PostedMessages);
+
+        Assert.NotNull(posted.Blocks);
+        Assert.Contains("Reply with:", posted.Text, StringComparison.Ordinal);
+        var actions = Assert.IsType<ActionsBlock>(posted.Blocks!.Single(block => block is ActionsBlock));
+        Assert.Equal(4, actions.Elements.Count);
+        var firstButton = Assert.IsType<Button>(actions.Elements[0]);
+        Assert.True(SlackApprovalBlockBuilder.IsApprovalActionId(firstButton.ActionId));
+        Assert.Equal("Approve Once", firstButton.Text.Text);
+        Assert.Equal(4, actions.Elements.Cast<Button>().Select(button => button.ActionId).Distinct(StringComparer.Ordinal).Count());
+
+        Watch(actor);
+        Sys.Stop(actor);
+        await ExpectTerminatedAsync(actor, cancellationToken: TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task Button_approval_reply_routes_tool_interaction_response()
+    {
+        var feedbackPipeline = new RecordingSessionPipeline([
+            new ToolInteractionRequest
+            {
+                SessionId = new SessionId("D7/9060.1"),
+                Kind = "approval",
+                CallId = "call-button",
+                ToolName = "shell_execute",
+                DisplayText = "git push origin main",
+                RequesterSenderId = "U123",
+                Patterns = ["git push"],
+                Options =
+                [
+                    new ToolInteractionOption("approve_once", "Approve Once"),
+                    new ToolInteractionOption("approve_session", "Approve For This Chat"),
+                    new ToolInteractionOption("approve_always", "Approve Always"),
+                    new ToolInteractionOption("deny", "Deny")
+                ]
+            }
+        ]);
+
+        var deps = new SlackGatewayDependencies(
+            Pipeline: feedbackPipeline,
+            IngressGate: null,
+            ActorSystem: Sys,
+            TimeProvider: TimeProvider.System,
+            Options: new SlackChannelOptions
+            {
+                Enabled = true,
+                MentionOnly = false,
+                AllowDirectMessages = true,
+                BotToken = new SensitiveString("xoxb-fake-token")
+            },
+            BotUserId: new SlackUserId("UBOT"),
+            DefaultChannelId: null,
+            ReplyClient: _replyClient,
+            ContentScanner: new NullContentScanner(),
+            ThreadHistoryFetcher: EmptyThreadHistoryFetcher.Instance);
+
+        var actor = Sys.ActorOf(SlackThreadBindingActor.CreateProps(
+            new SessionId("D7/9060.1"),
+            new SlackChannelId("D7"),
+            new SlackThreadTs("9060.1"),
+            deps), "slack-thread-button-approval-routing-test");
+
+        await AwaitAssertAsync(() =>
+        {
+            Assert.Single(_replyClient.PostedMessages);
+        }, duration: TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
+
+        actor.Tell(new SlackApprovalResponse(
+            new SlackChannelId("D7"),
+            new SlackThreadTs("9060.1"),
+            "call-button",
+            "approve_session",
+            "U123"));
+
+        await AwaitAssertAsync(() =>
+        {
+            var feedback = Assert.Single(feedbackPipeline.Feedback);
+            var response = Assert.IsType<ToolInteractionResponse>(feedback);
+            Assert.Equal("call-button", response.CallId);
+            Assert.Equal("approve_session", response.SelectedKey);
+            Assert.Equal("U123", response.SenderId);
+        }, duration: TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
+
+        await AwaitAssertAsync(() =>
+        {
+            var updated = Assert.Single(_replyClient.UpdatedMessages);
+            Assert.Equal("1.0", updated.MessageTs);
+            Assert.Contains("Approve for this chat", updated.Text, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain(updated.Blocks ?? [], block => block is ActionsBlock);
         }, duration: TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
 
         Watch(actor);
@@ -1073,15 +1232,22 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
     private sealed class RecordingReplyClient : ISlackReplyClient
     {
         public List<SlackPostMessage> PostedMessages { get; } = [];
+        public List<(SlackChannelId ChannelId, string MessageTs, string Text, IReadOnlyList<Block>? Blocks)> UpdatedMessages { get; } = [];
         public List<(SlackChannelId ChannelId, SlackThreadTs ThreadTs, string FilePath, string? FileName)> UploadedFiles { get; } = [];
         public Queue<Exception> PostFailures { get; } = new();
         public Queue<Exception> UploadFailures { get; } = new();
         public volatile bool BlockPostsUntilCanceled;
         private int _canceledPostCount;
+        private int _postSequence;
 
         public int CanceledPostCount => _canceledPostCount;
 
         public async Task PostThreadReplyAsync(SlackPostMessage message, CancellationToken cancellationToken = default)
+        {
+            _ = await PostThreadReplyWithTsAsync(message, cancellationToken);
+        }
+
+        public async Task<string> PostThreadReplyWithTsAsync(SlackPostMessage message, CancellationToken cancellationToken = default)
         {
             if (PostFailures.Count > 0)
                 throw PostFailures.Dequeue();
@@ -1103,6 +1269,19 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
             }
 
             PostedMessages.Add(message);
+            var next = Interlocked.Increment(ref _postSequence);
+            return $"{next}.0";
+        }
+
+        public Task UpdateThreadMessageAsync(
+            SlackChannelId channelId,
+            string messageTs,
+            string text,
+            IReadOnlyList<Block>? blocks = null,
+            CancellationToken cancellationToken = default)
+        {
+            UpdatedMessages.Add((channelId, messageTs, text, blocks));
+            return Task.CompletedTask;
         }
 
         public Task UploadFileToThreadAsync(

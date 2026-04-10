@@ -164,6 +164,19 @@ public sealed class SlackConversationActor : ReceiveActor
             _log.Debug("Routing proactive thread setup to thread actor {0}", message.ThreadTs);
             thread.Forward(message);
         });
+
+        Receive<SlackApprovalResponse>(message =>
+        {
+            var threadActorName = Uri.EscapeDataString(message.ThreadTs.Value);
+            var thread = Context.Child(threadActorName);
+            if (thread.IsNobody())
+            {
+                _log.Info("Ignoring Slack approval response for missing thread {0}", message.ThreadTs.Value);
+                return;
+            }
+
+            thread.Forward(message);
+        });
     }
 
     public static Props CreateProps(SlackChannelId conversationId, SlackGatewayDependencies dependencies) =>

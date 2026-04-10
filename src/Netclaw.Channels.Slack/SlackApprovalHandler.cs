@@ -1,28 +1,77 @@
+using Microsoft.Extensions.Logging;
+using SlackNet.Blocks;
+using SlackNet.Interaction;
+using SlackNet.Interaction.Experimental;
+
 namespace Netclaw.Channels.Slack;
 
-using Netclaw.Actors.Protocol;
-
-/// <summary>
-/// Constants and utilities for Slack approval prompt formatting.
-/// Approval prompts are posted as text messages with letter-keyed options.
-/// User responses are parsed from regular Slack messages by the conversation actor.
-/// </summary>
-public static class SlackApprovalHandler
+#pragma warning disable CS0618
+public sealed class SlackApprovalHandler : IAsyncBlockActionHandler
 {
     public const string ApproveOnceKey = "approve_once";
     public const string ApproveSessionKey = "approve_session";
     public const string ApproveAlwaysKey = "approve_always";
     public const string DenyKey = "deny";
 
-    /// <summary>
-    /// Attempts to parse a user message as an approval response.
-    /// Matches: "a", "b", "c", "d", "approve once", "approve session",
-    /// "approve always", "deny",
-    /// and common variations.
-    /// </summary>
-    public static (bool IsApproval, string? SelectedKey) TryParseApprovalResponse(string text)
+    private readonly SlackChannel _channel;
+    private readonly ILogger<SlackApprovalHandler> _logger;
+
+    public SlackApprovalHandler(SlackChannel channel, ILogger<SlackApprovalHandler> logger)
     {
-        var parsed = ToolInteractionResponseParser.TryParseApprovalResponse(text, out var selectedKey);
-        return (parsed, selectedKey);
+        _channel = channel;
+        _logger = logger;
+    }
+
+    public Task Handle(BlockActionRequest request, Responder respond)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(respond);
+
+        if (request.Action is not ButtonAction action)
+        {
+            _logger.LogDebug("Ignoring non-button Slack block action");
+            return respond();
+        }
+
+        if (!SlackApprovalBlockBuilder.IsApprovalActionId(action.ActionId))
+            return respond();
+
+        if (!SlackApprovalBlockBuilder.TryParseButtonValue(action.Value, out var callId, out var selectedKey, out var requesterSenderId))
+        {
+            _logger.LogWarning("Ignoring Slack approval button click with malformed value");
+            return respond();
+        }
+
+        var channelId = request.Channel?.Id ?? request.Container?.ChannelId;
+        var threadTs = request.Container?.ThreadTs
+            ?? request.Container?.MessageTs
+            ?? request.Message?.ThreadTs
+            ?? request.Message?.Ts;
+        var senderId = request.User?.Id;
+
+        if (string.IsNullOrWhiteSpace(channelId)
+            || string.IsNullOrWhiteSpace(threadTs)
+            || string.IsNullOrWhiteSpace(senderId)
+            || callId is null
+            || selectedKey is null)
+        {
+            _logger.LogWarning(
+                "Ignoring Slack approval button click with missing routing data channel={ChannelId} thread={ThreadTs} sender={SenderId}",
+                channelId,
+                threadTs,
+                senderId);
+            return respond();
+        }
+
+        _channel.HandleApprovalResponse(
+            new SlackChannelId(channelId),
+            new SlackThreadTs(threadTs),
+            callId,
+            selectedKey,
+            senderId,
+            requesterSenderId);
+
+        return respond();
     }
 }
+#pragma warning restore CS0618

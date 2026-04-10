@@ -77,6 +77,29 @@ public sealed class ToolApprovalGateTests
     }
 
     [Fact]
+    public void Missing_personal_approval_policy_fails_closed_for_shell()
+    {
+        var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
+        config.AudienceProfiles.Personal.ApprovalPolicy = null;
+
+        var policy = new ToolAccessPolicy(
+            config,
+            new EffectivePolicyDefaults(
+                DeploymentPosture.Personal,
+                TrustAudience.Personal,
+                ShellExecutionMode.HostAllowed,
+                UsedStrictFallback: false));
+
+        var args = new Dictionary<string, object?> { ["Command"] = "git pull --ff-only" };
+
+        var decision = policy.AuthorizeInvocation(ShellTool(), PersonalContext(), args);
+
+        Assert.True(decision.NeedsApproval);
+        Assert.NotNull(decision.ApprovalContext);
+        Assert.Equal("shell_execute", decision.ApprovalContext!.ToolName);
+    }
+
+    [Fact]
     public void Unsupported_channel_auto_denies()
     {
         var policy = CreatePolicy(ToolApprovalMode.Approval);

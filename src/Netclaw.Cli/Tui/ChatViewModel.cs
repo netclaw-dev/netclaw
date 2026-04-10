@@ -1,4 +1,5 @@
 using Microsoft.Extensions.AI;
+using System.Collections.ObjectModel;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
 using Netclaw.Cli.Daemon;
@@ -27,12 +28,14 @@ public partial class ChatViewModel : ReactiveViewModel
     private IDisposable? _daemonConnectionSubscription;
     private bool _sessionReady;
     private int _connectAttempts;
+    private readonly ObservableCollection<string> _approvalOptions = [];
 
     public ReactiveProperty<bool> IsGenerating { get; } = new(false);
     public ReactiveProperty<bool> IsInputEnabled { get; } = new(true);
     public ReactiveProperty<string> StatusMessage { get; } = new("Connecting...");
     public ReactiveProperty<string?> SessionIdDisplay { get; } = new(null);
     public ReactiveProperty<string?> UsageDisplay { get; } = new(null);
+    public ReactiveProperty<int> UiVersion { get; } = new(0);
 
     /// <summary>
     /// Observable stream of session output events. The page subscribes to this
@@ -41,6 +44,10 @@ public partial class ChatViewModel : ReactiveViewModel
     public Observable<SessionOutput> SessionOutput => _outputSubject.AsObservable();
 
     public bool HasPendingInteraction => _pendingInteractions.Count > 0;
+
+    public IReadOnlyList<string> ApprovalOptions => _approvalOptions;
+
+    public ToolInteractionRequest? CurrentInteraction => _pendingInteractions.Count > 0 ? _pendingInteractions.Peek() : null;
 
     /// <summary>
     /// The configured model identifier for display in the status bar.
@@ -79,15 +86,18 @@ public partial class ChatViewModel : ReactiveViewModel
                 {
                     case ToolInteractionRequest interaction:
                         _pendingInteractions.Enqueue(interaction);
+                        RefreshApprovalOptions();
                         IsGenerating.Value = false;
                         StatusMessage.Value = "Approval required";
                         break;
                     case TurnCompleted:
                         _pendingInteractions.Clear();
+                        RefreshApprovalOptions();
                         IsGenerating.Value = false;
                         break;
                     case ErrorOutput:
                         _pendingInteractions.Clear();
+                        RefreshApprovalOptions();
                         IsGenerating.Value = false;
                         break;
                 }
@@ -202,6 +212,7 @@ public partial class ChatViewModel : ReactiveViewModel
             await _daemonClient.RespondToInteractionAsync(pending.CallId, selectedKey);
 
             _pendingInteractions.Dequeue();
+            RefreshApprovalOptions();
             IsGenerating.Value = _pendingInteractions.Count == 0;
             StatusMessage.Value = _pendingInteractions.Count == 0
                 ? "Generating..."
@@ -218,6 +229,38 @@ public partial class ChatViewModel : ReactiveViewModel
         }
     }
 
+    public Task SubmitInteractionOptionAsync(string optionLabel)
+    {
+        if (CurrentInteraction is null)
+            return Task.CompletedTask;
+
+        var option = CurrentInteraction.Options.FirstOrDefault(candidate =>
+            string.Equals(FormatApprovalOption(candidate), optionLabel, StringComparison.Ordinal));
+        if (option is null)
+            return Task.CompletedTask;
+
+        return SubmitInteractionSelectionAsync(option.Key);
+    }
+
+    public string GetApprovalPrompt()
+    {
+        if (CurrentInteraction is not { } interaction)
+            return "Approval required";
+
+        var patterns = interaction.Patterns.Count > 0
+            ? $" Patterns: {string.Join(", ", interaction.Patterns)}"
+            : string.Empty;
+        return $"Approval required for {interaction.ToolName}. {interaction.DisplayText}{patterns}";
+    }
+
+    public string? GetApprovalHint()
+    {
+        if (!HasPendingInteraction)
+            return null;
+
+        return "Select an option and press Enter.";
+    }
+
     public override void Dispose()
     {
         _daemonOutputSubscription?.Dispose();
@@ -229,6 +272,7 @@ public partial class ChatViewModel : ReactiveViewModel
         StatusMessage.Dispose();
         SessionIdDisplay.Dispose();
         UsageDisplay.Dispose();
+        UiVersion.Dispose();
         base.Dispose();
     }
 
@@ -310,4 +354,64 @@ public partial class ChatViewModel : ReactiveViewModel
 
         RequestRedraw();
     }
+
+    private async Task SubmitInteractionSelectionAsync(string selectedKey)
+    {
+        if (CurrentInteraction is null)
+            return;
+
+        if (!_sessionReady || !_daemonClient.IsConnected)
+        {
+            StatusMessage.Value = "Approval required. Reconnecting...";
+            RequestRedraw();
+            _ = ConnectUntilReadyAsync();
+            return;
+        }
+
+        var pending = _pendingInteractions.Peek();
+
+        try
+        {
+            await _daemonClient.EnsureSessionAsync(DaemonClient.TuiChannelType);
+            await _daemonClient.RespondToInteractionAsync(pending.CallId, selectedKey);
+
+            _pendingInteractions.Dequeue();
+            RefreshApprovalOptions();
+            IsGenerating.Value = _pendingInteractions.Count == 0;
+            StatusMessage.Value = _pendingInteractions.Count == 0
+                ? "Generating..."
+                : "Approval required";
+            RequestRedraw();
+        }
+        catch (Exception ex)
+        {
+            _sessionReady = false;
+            IsGenerating.Value = false;
+            StatusMessage.Value = $"Approval response failed ({ex.Message}). Reconnecting...";
+            RequestRedraw();
+            _ = ConnectUntilReadyAsync();
+        }
+    }
+
+    private void RefreshApprovalOptions()
+    {
+        _approvalOptions.Clear();
+        if (CurrentInteraction is { } interaction)
+        {
+            foreach (var option in interaction.Options)
+                _approvalOptions.Add(FormatApprovalOption(option));
+        }
+
+        UiVersion.Value++;
+    }
+
+    private static string FormatApprovalOption(ToolInteractionOption option)
+        => option.Key switch
+        {
+            "approve_once" => "Approve once",
+            "approve_session" => "Approve for this chat",
+            "approve_always" => "Approve always",
+            "deny" => "Deny",
+            _ => option.Label
+        };
 }

@@ -280,7 +280,8 @@ public sealed class SlackThreadBackfillIntegrationTests : TestKit
         var recoveredMessages = _chatClient.Calls[^1];
         var recoveredLastUser = recoveredMessages.Last(m => m.Role == AiChatRole.User);
         var recoveredUserText = string.Join("", recoveredLastUser.Contents.OfType<TextContent>().Select(t => t.Text));
-        Assert.DoesNotContain("[thread history", recoveredUserText, StringComparison.Ordinal);
+        Assert.Contains("[thread history", recoveredUserText, StringComparison.Ordinal);
+        Assert.Contains("I think it's the new query", recoveredUserText, StringComparison.Ordinal);
         Assert.Contains("after restart", recoveredUserText);
     }
 
@@ -527,6 +528,20 @@ public sealed class SlackThreadBackfillIntegrationTests : TestKit
             PostedMessages.Add(message);
             return Task.CompletedTask;
         }
+
+        public Task<string> PostThreadReplyWithTsAsync(SlackPostMessage message, CancellationToken cancellationToken = default)
+        {
+            PostedMessages.Add(message);
+            return Task.FromResult("1.0");
+        }
+
+        public Task UpdateThreadMessageAsync(
+            SlackChannelId channelId,
+            string messageTs,
+            string text,
+            IReadOnlyList<SlackNet.Blocks.Block>? blocks = null,
+            CancellationToken cancellationToken = default)
+            => Task.CompletedTask;
 
         public Task UploadFileToThreadAsync(
             SlackChannelId channelId, SlackThreadTs threadTs, string filePath,

@@ -5,6 +5,7 @@ using Netclaw.Channels.Slack.Tools;
 using Netclaw.Tools;
 using SlackNet.Events;
 using SlackNet.Extensions.DependencyInjection;
+using SlackNet.Interaction.Experimental;
 
 namespace Netclaw.Daemon.Configuration;
 
@@ -39,6 +40,7 @@ public static class SlackChannelRegistrationExtensions
         services.AddSingleton<ISlackOutboundClient, SlackOutboundClient>();
         services.AddSingleton<ISlackTargetLookupClient, SlackApiTargetLookupClient>();
         services.AddSingleton<ISlackTargetResolver, SlackTargetResolver>();
+        services.AddSingleton<SlackApprovalHandler>();
         services.AddKeyedSingleton<IChannel, SlackChannel>(SlackChannelKey);
         services.AddSingleton<IChannel>(sp =>
             sp.GetRequiredKeyedService<IChannel>(SlackChannelKey));
@@ -54,6 +56,8 @@ public static class SlackChannelRegistrationExtensions
 
             c.RegisterEventHandler<MessageEvent, SlackChannel>();
             c.RegisterEventHandler<AppMention, SlackChannel>();
+            c.ReplaceBlockActionHandling(context =>
+                context.ServiceProvider().GetRequiredService<SlackApprovalHandler>());
         });
 
         // Channel-specific LLM tools: registered as INetclawTool singletons.

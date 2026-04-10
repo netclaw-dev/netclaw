@@ -94,6 +94,62 @@ public sealed class SlackReplyClientTests
             Text: "hello"), TestContext.Current.CancellationToken);
     }
 
+    [Fact]
+    public async Task PostThreadReplyAsync_uses_explicit_blocks_when_provided()
+    {
+        var fakeChat = new FakeChatApi(response: new PostMessageResponse { Ts = "1234.5678", Channel = "C123" });
+        var fakeClient = new FakeSlackApiClient(fakeChat);
+        var client = new SlackReplyClient(fakeClient);
+        var blocks = new List<Block>
+        {
+            new SectionBlock { Text = new PlainText("custom approval") }
+        };
+
+        await client.PostThreadReplyAsync(new SlackPostMessage(
+            ChannelId: new SlackChannelId("C123"),
+            ThreadTs: new SlackThreadTs("1234.5678"),
+            Text: "fallback text",
+            Blocks: blocks), TestContext.Current.CancellationToken);
+
+        Assert.NotNull(fakeChat.LastPostedMessage);
+        Assert.Single(fakeChat.LastPostedMessage!.Blocks);
+        var section = Assert.IsType<SectionBlock>(fakeChat.LastPostedMessage.Blocks.Single());
+        Assert.Equal("custom approval", section.Text.ToString());
+    }
+
+    [Fact]
+    public void Approval_block_builder_uses_unique_action_ids_per_button()
+    {
+        var request = new ToolInteractionRequest
+        {
+            SessionId = new SessionId("D1/123.456"),
+            Kind = "approval",
+            CallId = "call-1",
+            ToolName = "shell_execute",
+            DisplayText = "git status",
+            RequesterSenderId = "U1",
+            Patterns = ["git status"],
+            Options =
+            [
+                new ToolInteractionOption("approve_once", "Approve Once"),
+                new ToolInteractionOption("approve_session", "Approve For This Chat"),
+                new ToolInteractionOption("approve_always", "Approve Always"),
+                new ToolInteractionOption("deny", "Deny")
+            ]
+        };
+
+        var blocks = SlackApprovalBlockBuilder.BuildApprovalBlocks(request);
+        var actions = Assert.IsType<ActionsBlock>(blocks.Single(block => block is ActionsBlock));
+        var actionIds = actions.Elements
+            .Cast<Button>()
+            .Select(button => button.ActionId)
+            .ToList();
+
+        Assert.Equal(4, actionIds.Count);
+        Assert.Equal(4, actionIds.Distinct(StringComparer.Ordinal).Count());
+        Assert.All(actionIds, actionId => Assert.True(SlackApprovalBlockBuilder.IsApprovalActionId(actionId)));
+    }
+
     [Theory]
     [InlineData("invalid_blocks", DeliveryFailureKind.ContentRejected)]
     [InlineData("invalid_arguments", DeliveryFailureKind.ContentRejected)]
@@ -115,10 +171,13 @@ public sealed class SlackReplyClientTests
     /// </summary>
     private sealed class FakeChatApi(PostMessageResponse? response = null, SlackException? throwOnPost = null) : IChatApi
     {
+        public Message? LastPostedMessage { get; private set; }
+
         public Task<PostMessageResponse> PostMessage(Message message, CancellationToken cancellationToken = default)
         {
             if (throwOnPost is not null)
                 throw throwOnPost;
+            LastPostedMessage = message;
             return Task.FromResult(response!);
         }
 

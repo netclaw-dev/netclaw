@@ -73,6 +73,20 @@ public sealed class ApprovalChannelTests
     }
 
     [Fact]
+    public async Task Infinite_timeout_waits_until_completed()
+    {
+        var channel = new ApprovalChannel();
+
+        var waitTask = channel.WaitForApprovalAsync("call-infinite", Timeout.InfiniteTimeSpan, CancellationToken.None);
+        await Task.Delay(50, TestContext.Current.CancellationToken);
+        Assert.False(waitTask.IsCompleted);
+
+        channel.Complete("call-infinite", ApprovalDecision.Denied);
+
+        Assert.Equal(ApprovalDecision.Denied, await waitTask);
+    }
+
+    [Fact]
     public void Complete_unknown_callId_is_noop()
     {
         var channel = new ApprovalChannel();
