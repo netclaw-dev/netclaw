@@ -94,4 +94,5 @@ public sealed record SlackGatewayDependencies(
     Func<SlackChannelId, SlackGatewayDependencies, Props>? ConversationPropsFactory = null,
     Func<SessionId, SlackChannelId, SlackThreadTs, SlackGatewayDependencies, Props>? ThreadPropsFactory = null,
     IPromptInjectionDetector? PromptInjectionDetector = null,
-    IThreadHistoryFetcher? ThreadHistoryFetcher = null);
+    IThreadHistoryFetcher? ThreadHistoryFetcher = null,
+    ISlackThreadCursorStore? ThreadCursorStore = null);

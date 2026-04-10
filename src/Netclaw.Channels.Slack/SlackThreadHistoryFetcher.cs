@@ -112,13 +112,11 @@ public sealed class SlackThreadHistoryFetcher : IThreadHistoryFetcher
 
             foreach (var message in response.Messages)
             {
-                // Skip the parent message (its Ts == threadTs) — it's the thread root
-                // and will be part of the live context, not backfill.
-                // Also skip bot messages (ours or others).
-                if (message.Ts == threadTs)
+                // Include only human-authored thread messages.
+                if (!string.IsNullOrWhiteSpace(message.BotId))
                     continue;
 
-                if (!string.IsNullOrEmpty(message.BotId))
+                if (string.IsNullOrWhiteSpace(message.User))
                     continue;
 
                 var input = await ConvertMessageAsync(message, channelId, cancellationToken);
@@ -168,13 +166,19 @@ public sealed class SlackThreadHistoryFetcher : IThreadHistoryFetcher
 
         return new ChannelInput
         {
-            SenderId = message.User ?? "unknown",
+            SenderId = message.User,
             ChannelId = channelId,
-            MessageId = message.Ts,
+            MessageId = BuildMessageId(channelId, message.Ts),
             Contents = contents,
             ReceivedAt = receivedAt,
             IsBackfill = true
         };
+    }
+
+    private static string BuildMessageId(string channelId, string? messageTs)
+    {
+        var ts = messageTs ?? string.Empty;
+        return $"{channelId}:{ts}";
     }
 
     private async Task<DataContent?> DownloadAndScanFileAsync(SlackNet.File file, CancellationToken cancellationToken)

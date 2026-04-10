@@ -28,6 +28,7 @@ public static class SlackChannelRegistrationExtensions
 
         services.AddHttpClient("slack-files");
         services.AddSingleton<ISlackReplyClient, SlackReplyClient>();
+        services.AddSingleton<ISlackThreadCursorStore, FileSlackThreadCursorStore>();
         services.AddSingleton<IThreadHistoryFetcher>(sp =>
         {
             var slackApi = sp.GetRequiredService<SlackNet.ISlackApiClient>();

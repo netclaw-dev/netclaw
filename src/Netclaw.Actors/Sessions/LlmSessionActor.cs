@@ -79,8 +79,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     // Per-turn transient counters (tool budget, duplicate detection, empty-response retries)
     private readonly TurnStateTracker _turnState = new();
 
-    private const int MaxBackfillMessages = 500;
-
     private const string ToolBudgetExhaustedMessage =
         "I used all available tool calls for this turn and couldn't produce a final summary. "
         + "You can ask me to summarize what was done, or rephrase your request.";
@@ -123,9 +121,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     // Startup context layers: injected on first LLM call, re-injected after compaction
     private bool _startupContextInjected;
-
-    // Thread history backfill: accumulated before first live turn
-    private List<SendUserMessage>? _pendingBackfill;
 
     // Guards against infinite compaction loops: if a post-compaction buffer drain
     // overflows again, fail the turn. Reset at the start of each new user turn.
@@ -1597,34 +1592,21 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     private void HandleIncomingUserMessage(SendUserMessage cmd)
     {
-        // Backfill messages are accumulated and injected as context before the first live turn.
-        if (cmd.IsBackfill)
-        {
-            _pendingBackfill ??= new List<SendUserMessage>();
-            if (_pendingBackfill.Count < MaxBackfillMessages)
-                _pendingBackfill.Add(cmd);
-            TryReplyAck();
-            return;
-        }
-
-        // Inject any accumulated backfill as thread history context before first live message.
-        if (_pendingBackfill is { Count: > 0 })
-        {
-            var historyBlock = ThreadHistoryContextBuilder.Build(_pendingBackfill);
-            _state = _state.AddUserMessage(historyBlock.Text, historyBlock.MediaReferences);
-            _pendingBackfill = null;
-        }
-
         _deliveryRetry.Clear();
         _currentTurnSource = cmd.Source;
         _currentTrustContext = _trustContextDeriver?.Derive(cmd.Source);
         BindTurnTelemetry(cmd.Source);
+
+        var userContent = cmd.Content ?? string.Empty;
+        var mediaRefs = cmd.MediaReferences;
+
         TurnLog().Info(
             "turn_received channel={ChannelType} sender={SenderId} hasMedia={HasMedia} textChars={TextLength}",
             cmd.Source?.ChannelType.ToWireValue() ?? "unknown",
             cmd.Source?.SenderId ?? "unknown",
-            cmd.MediaReferences.Count > 0,
-            cmd.Content?.Length ?? 0);
+            mediaRefs.Count > 0,
+            userContent.Length);
+
         _logActor?.Tell(cmd);
         _observerActor?.Tell(cmd);
 
@@ -1635,7 +1617,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             _config.Tuning.DiscoveredToolMaxCount,
             _fullRegistry);
 
-        var mediaRefs = cmd.MediaReferences;
         if (mediaRefs.Count > 0 && !_model.InputModalities.HasFlag(Configuration.ModelModality.Image))
         {
             var imageRefs = mediaRefs.Where(r => r.Modality == (int)MediaModality.Image).ToList();
@@ -1671,7 +1652,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             return;
         }
 
-        var userContent = cmd.Content ?? string.Empty;
         if (TryHandleSlashCommand(userContent, mediaRefs))
             return;
 

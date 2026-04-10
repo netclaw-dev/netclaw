@@ -21,6 +21,7 @@ internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStas
     private readonly SlackThreadTs _threadTs;
     private readonly SlackGatewayDependencies _dependencies;
     private readonly IPromptInjectionDetector _promptInjectionDetector;
+    private readonly ISlackThreadCursorStore _threadCursorStore;
     private readonly ILoggingAdapter _log;
 
     // Slack subscribes to OutputFilter.Text (final assembled text), not TextStreaming.
@@ -35,6 +36,7 @@ internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStas
     private ChannelWriter<ChannelInput>? _inputQueue;
     private int _pipelineGeneration;
     private bool _isReinitializing;
+    private bool _threadHistoryHydrated;
     private static readonly object ReinitializeTimerKey = new();
     private static readonly TimeSpan InboundProcessingTimeout = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan QueueWriteTimeout = TimeSpan.FromSeconds(10);
@@ -58,6 +60,7 @@ internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStas
         _threadTs = threadTs;
         _dependencies = dependencies;
         _promptInjectionDetector = dependencies.PromptInjectionDetector ?? new NullPromptInjectionDetector();
+        _threadCursorStore = dependencies.ThreadCursorStore ?? NullSlackThreadCursorStore.Instance;
         _log = Context.GetLogger()
             .WithContext("Adapter", "slack")
             .WithContext("SessionId", _sessionId.Value)
@@ -268,22 +271,20 @@ internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStas
                 return;
             }
 
+            var needsHydration = !_threadHistoryHydrated;
+            var input = await BuildInputForInboundAsync(message, contents, inboundCts.Token);
+
             try
             {
                 using var queueWriteCts = CancellationTokenSource.CreateLinkedTokenSource(inboundCts.Token);
                 queueWriteCts.CancelAfter(QueueWriteTimeout);
 
-                await writer.WriteAsync(new ChannelInput
-                {
-                    SenderId = message.SenderId,
-                    ChannelId = _channelId.Value,
-                    MessageId = message.EventId.Value,
-                    Audience = message.Audience,
-                    Principal = message.Principal,
-                    Provenance = message.Provenance,
-                    Contents = contents,
-                    ReceivedAt = message.ReceivedAt
-                }, queueWriteCts.Token);
+                await writer.WriteAsync(input, queueWriteCts.Token);
+
+                if (needsHydration)
+                    _threadHistoryHydrated = true;
+
+                await TryAdvanceCursorAsync(message.EventId.Value, queueWriteCts.Token);
             }
             catch (OperationCanceledException ex)
             {
@@ -298,7 +299,7 @@ internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStas
                 return;
             }
 
-            inboundLog.Info("slack_turn_enqueued contentItems={ContentCount}", contents.Count);
+            inboundLog.Info("slack_turn_enqueued contentItems={ContentCount}", input.Contents.Count);
             ChannelTelemetry.RecordSlackMessageEnqueued();
         }
         catch (OperationCanceledException ex)
@@ -369,31 +370,223 @@ internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStas
         _session = materialized;
         _inputQueue = inputQueue;
 
-        // Backfill thread history on first initialization only (not reinit or recovery).
-        if (generation == 1 && _dependencies.ThreadHistoryFetcher is { } fetcher)
+        _log.Info("Slack thread binding pipeline initialized");
+    }
+
+    private async Task<ChannelInput> BuildInputForInboundAsync(
+        SlackThreadInbound triggeringMessage,
+        IReadOnlyList<AIContent> liveContents,
+        CancellationToken cancellationToken)
+    {
+        var baseInput = new ChannelInput
         {
-            try
+            SenderId = triggeringMessage.SenderId,
+            ChannelId = _channelId.Value,
+            MessageId = triggeringMessage.EventId.Value,
+            Audience = triggeringMessage.Audience,
+            Principal = triggeringMessage.Principal,
+            Provenance = triggeringMessage.Provenance,
+            Contents = [.. liveContents],
+            ReceivedAt = triggeringMessage.ReceivedAt
+        };
+
+        if (_threadHistoryHydrated || _dependencies.ThreadHistoryFetcher is not { } fetcher)
+            return baseInput;
+
+        using var backfillCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        backfillCts.CancelAfter(BackfillTimeout);
+
+        var currentTs = TryExtractTsFromEventId(triggeringMessage.EventId.Value);
+        var cursor = await _threadCursorStore.GetCursorAsync(_sessionId.Value, backfillCts.Token);
+
+        var history = await fetcher.FetchThreadHistoryAsync(_sessionId, backfillCts.Token);
+        if (history.Count == 0 || string.IsNullOrWhiteSpace(currentTs))
+            return baseInput;
+
+        var gap = new List<ChannelInput>(history.Count);
+        var blockedForRisk = 0;
+
+        foreach (var item in history)
+        {
+            var itemTs = TryExtractTsFromMessageId(item.MessageId);
+            if (string.IsNullOrWhiteSpace(itemTs))
+                continue;
+
+            if (!IsTsBefore(itemTs, currentTs))
+                continue;
+
+            if (!string.IsNullOrWhiteSpace(cursor) && !IsTsAfter(itemTs, cursor))
+                continue;
+
+            if (!await IsBackfillMessageAllowedAsync(item, backfillCts.Token))
             {
-                using var backfillCts = new CancellationTokenSource(BackfillTimeout);
-                var history = await fetcher.FetchThreadHistoryAsync(_sessionId, backfillCts.Token);
-                if (history.Count > 0)
-                {
-                    _log.Info("Backfilling {Count} thread history messages", history.Count);
-                    foreach (var item in history)
-                        await inputQueue.WriteAsync(item);
-                }
+                blockedForRisk++;
+                continue;
             }
-            catch (OperationCanceledException)
-            {
-                _log.Warning("Thread history backfill timed out; proceeding without history");
-            }
-            catch (Exception ex)
-            {
-                _log.Warning(ex, "Thread history backfill failed; proceeding without history");
-            }
+
+            gap.Add(item);
         }
 
-        _log.Info("Slack thread binding pipeline initialized");
+        if (gap.Count == 0)
+        {
+            _log.Info(
+                "Thread history hydrated fetched={FetchedCount} gapCount=0 blockedHighRisk={BlockedHighRiskCount} cursor={Cursor}",
+                history.Count,
+                blockedForRisk,
+                string.IsNullOrWhiteSpace(cursor) ? "none" : cursor);
+            return baseInput;
+        }
+
+        var mergedContents = MergeGapWithLiveContents(gap, liveContents);
+        _log.Info(
+            "Thread history hydrated fetched={FetchedCount} gapCount={GapCount} blockedHighRisk={BlockedHighRiskCount} cursor={Cursor}",
+            history.Count,
+            gap.Count,
+            blockedForRisk,
+            string.IsNullOrWhiteSpace(cursor) ? "none" : cursor);
+
+        return baseInput with { Contents = mergedContents };
+    }
+
+    private async Task<bool> IsBackfillMessageAllowedAsync(ChannelInput input, CancellationToken cancellationToken)
+    {
+        var text = string.Join("\n", input.Contents
+            .OfType<TextContent>()
+            .Select(t => t.Text)
+            .Where(t => !string.IsNullOrWhiteSpace(t)));
+
+        if (string.IsNullOrWhiteSpace(text))
+            return true;
+
+        PromptInjectionResult detection;
+        try
+        {
+            detection = await _promptInjectionDetector.DetectAsync(text, "slack-backfill", cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            _log.Warning(ex, "Prompt injection detector failed for backfill message; allowing message through");
+            return true;
+        }
+
+        if (detection.Risk != PromptInjectionRisk.High)
+            return true;
+
+        _log.Warning(
+            "Dropped backfill message due to prompt injection risk sender={SenderId} messageId={MessageId} reason={Reason}",
+            input.SenderId,
+            input.MessageId ?? "none",
+            string.IsNullOrWhiteSpace(detection.Message) ? "high-risk pattern detected" : detection.Message);
+        return false;
+    }
+
+    private async Task TryAdvanceCursorAsync(string eventId, CancellationToken cancellationToken)
+    {
+        var ts = TryExtractTsFromEventId(eventId);
+        if (string.IsNullOrWhiteSpace(ts))
+            return;
+
+        var advanced = await _threadCursorStore.TryAdvanceAsync(_sessionId.Value, ts, cancellationToken);
+        if (advanced)
+            return;
+
+        _log.Debug("Slack thread cursor did not advance stream={StreamKey} ts={Ts}", _sessionId.Value, ts);
+    }
+
+    private static List<AIContent> MergeGapWithLiveContents(IReadOnlyList<ChannelInput> gap, IReadOnlyList<AIContent> liveContents)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("[thread history — messages exchanged before this inbound event]");
+        sb.AppendLine();
+
+        foreach (var item in gap)
+        {
+            var ts = item.ReceivedAt == default ? string.Empty : $", {item.ReceivedAt:yyyy-MM-dd HH:mm} UTC";
+            sb.AppendLine($"<user: {item.SenderId}{ts}>");
+
+            foreach (var text in item.Contents.OfType<TextContent>())
+            {
+                if (!string.IsNullOrWhiteSpace(text.Text))
+                    sb.AppendLine(text.Text);
+            }
+
+            var imageCount = item.Contents.OfType<DataContent>().Count();
+            if (imageCount > 0)
+                sb.AppendLine($"[image attachments: {imageCount}]");
+
+            sb.AppendLine();
+        }
+
+        sb.AppendLine("[end thread history]");
+
+        var liveText = string.Join("\n", liveContents
+            .OfType<TextContent>()
+            .Select(t => t.Text)
+            .Where(t => !string.IsNullOrWhiteSpace(t)));
+
+        var mergedText = string.IsNullOrWhiteSpace(liveText)
+            ? sb.ToString()
+            : $"{sb}\n\n{liveText}";
+
+        var merged = new List<AIContent>
+        {
+            new TextContent(mergedText)
+        };
+
+        foreach (var content in gap.SelectMany(g => g.Contents).Where(c => c is not TextContent))
+            merged.Add(content);
+
+        foreach (var content in liveContents.Where(c => c is not TextContent))
+            merged.Add(content);
+
+        return merged;
+    }
+
+    private static string? TryExtractTsFromEventId(string eventId)
+    {
+        if (string.IsNullOrWhiteSpace(eventId))
+            return null;
+
+        var separator = eventId.IndexOf(':', StringComparison.Ordinal);
+        if (separator < 0 || separator == eventId.Length - 1)
+            return null;
+
+        var ts = eventId[(separator + 1)..];
+        return IsValidTs(ts) ? ts : null;
+    }
+
+    private static string? TryExtractTsFromMessageId(string? messageId)
+    {
+        if (string.IsNullOrWhiteSpace(messageId))
+            return null;
+
+        var separator = messageId.IndexOf(':', StringComparison.Ordinal);
+        var ts = separator >= 0 ? messageId[(separator + 1)..] : messageId;
+        return IsValidTs(ts) ? ts : null;
+    }
+
+    private static bool IsTsAfter(string left, string right)
+    {
+        if (!TryParseTs(left, out var leftTs) || !TryParseTs(right, out var rightTs))
+            return false;
+        return leftTs > rightTs;
+    }
+
+    private static bool IsTsBefore(string left, string right)
+    {
+        if (!TryParseTs(left, out var leftTs) || !TryParseTs(right, out var rightTs))
+            return false;
+        return leftTs < rightTs;
+    }
+
+    private static bool IsValidTs(string value)
+    {
+        return TryParseTs(value, out _);
+    }
+
+    private static bool TryParseTs(string value, out decimal ts)
+    {
+        return decimal.TryParse(value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out ts);
     }
 
     private async Task ReinitializePipelineAsync(string reason)
