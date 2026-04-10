@@ -44,7 +44,6 @@ public sealed class SlackThreadHistoryFetcherTests
         var result = await CreateFetcher().FetchThreadHistoryAsync(new SessionId("C1/1000.0"), TestContext.Current.CancellationToken);
 
         Assert.Equal(3, result.Count);
-        Assert.All(result, item => Assert.True(item.IsBackfill));
         Assert.Contains(result, r => r.MessageId == "C1:1000.0");
         Assert.Contains(result, r => r.Contents.OfType<TextContent>().Any(t => t.Text == "reply one"));
         Assert.Contains(result, r => r.Contents.OfType<TextContent>().Any(t => t.Text == "reply two"));

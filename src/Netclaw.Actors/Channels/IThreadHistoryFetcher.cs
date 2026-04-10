@@ -10,7 +10,7 @@ public interface IThreadHistoryFetcher
 {
     /// <summary>
     /// Fetches all prior messages in the thread identified by <paramref name="sessionId"/>.
-    /// Returns messages in chronological order with <see cref="ChannelInput.IsBackfill"/> set to true.
+    /// Returns messages in chronological order.
     /// Returns an empty list if the thread has no prior messages or if the fetch fails.
     /// </summary>
     Task<IReadOnlyList<ChannelInput>> FetchThreadHistoryAsync(

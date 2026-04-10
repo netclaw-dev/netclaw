@@ -337,8 +337,7 @@ public sealed class SessionPipeline : ISessionPipeline
             SessionId = sessionId,
             Content = content,
             MediaReferences = mediaRefs,
-            Source = MessageSourceFactory.Create(input, options, turnId),
-            IsBackfill = input.IsBackfill
+            Source = MessageSourceFactory.Create(input, options, turnId)
         };
     }
 }

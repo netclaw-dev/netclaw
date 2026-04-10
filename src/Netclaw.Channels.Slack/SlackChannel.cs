@@ -27,7 +27,6 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
     private readonly SlackChannelOptions _options;
     private readonly ILogger<SlackChannel> _logger;
     private readonly IThreadHistoryFetcher? _threadHistoryFetcher;
-    private readonly ISlackThreadCursorStore _threadCursorStore;
 
     private IActorRef? _gateway;
     private SlackUserId? _botUserId;
@@ -48,8 +47,7 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
         TimeProvider timeProvider,
         SlackChannelOptions options,
         ILogger<SlackChannel> logger,
-        IThreadHistoryFetcher? threadHistoryFetcher = null,
-        ISlackThreadCursorStore? threadCursorStore = null)
+        IThreadHistoryFetcher? threadHistoryFetcher = null)
     {
         _pipeline = pipeline;
         _system = system;
@@ -65,7 +63,6 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
         _options = options;
         _logger = logger;
         _threadHistoryFetcher = threadHistoryFetcher;
-        _threadCursorStore = threadCursorStore ?? NullSlackThreadCursorStore.Instance;
     }
 
     public Actors.Channels.ChannelType ChannelType => Actors.Channels.ChannelType.Slack;
@@ -128,8 +125,7 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
                     ContentScanner: _contentScanner,
                     HttpClient: httpClient,
                     PromptInjectionDetector: _promptInjectionDetector,
-                    ThreadHistoryFetcher: _threadHistoryFetcher,
-                    ThreadCursorStore: _threadCursorStore)),
+                    ThreadHistoryFetcher: _threadHistoryFetcher)),
                 "slack-gateway");
 
             await _socketModeClient.Connect(cancellationToken: cancellationToken);

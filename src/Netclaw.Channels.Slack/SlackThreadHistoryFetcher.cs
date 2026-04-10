@@ -11,7 +11,7 @@ namespace Netclaw.Channels.Slack;
 
 /// <summary>
 /// Fetches prior messages from a Slack thread via <c>conversations.replies</c>
-/// and returns them as <see cref="ChannelInput"/> items with <see cref="ChannelInput.IsBackfill"/> set.
+/// and returns them as <see cref="ChannelInput"/> items in chronological order.
 /// </summary>
 public sealed class SlackThreadHistoryFetcher : IThreadHistoryFetcher
 {
@@ -170,8 +170,7 @@ public sealed class SlackThreadHistoryFetcher : IThreadHistoryFetcher
             ChannelId = channelId,
             MessageId = BuildMessageId(channelId, message.Ts),
             Contents = contents,
-            ReceivedAt = receivedAt,
-            IsBackfill = true
+            ReceivedAt = receivedAt
         };
     }
 

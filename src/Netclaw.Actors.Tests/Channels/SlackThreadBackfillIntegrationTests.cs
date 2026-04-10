@@ -97,7 +97,6 @@ public sealed class SlackThreadBackfillIntegrationTests : TestKit
     {
         var pipeline = Host.Services.GetRequiredService<SessionPipeline>();
         var httpClient = new HttpClient(_httpHandler);
-        var cursorStore = new FileSlackThreadCursorStore(_paths);
 
         // Fake thread history fetcher returns root + prior replies and includes
         // the triggering message to verify it gets excluded from backfill.
@@ -125,8 +124,7 @@ public sealed class SlackThreadBackfillIntegrationTests : TestKit
             ReplyClient: _replyClient,
             ContentScanner: new NullContentScanner(),
             HttpClient: httpClient,
-            ThreadHistoryFetcher: fetcher,
-            ThreadCursorStore: cursorStore);
+            ThreadHistoryFetcher: fetcher);
 
         var gateway = Sys.ActorOf(SlackGatewayActor.CreateProps(deps), "slack-gw-backfill");
 
@@ -175,7 +173,6 @@ public sealed class SlackThreadBackfillIntegrationTests : TestKit
     {
         var pipeline = Host.Services.GetRequiredService<SessionPipeline>();
         var httpClient = new HttpClient(_httpHandler);
-        var cursorStore = new FileSlackThreadCursorStore(_paths);
 
         var fetchCount = 0;
         var countingFetcher = new SlackThreadHistoryFetcher(
@@ -206,8 +203,7 @@ public sealed class SlackThreadBackfillIntegrationTests : TestKit
             ReplyClient: _replyClient,
             ContentScanner: new NullContentScanner(),
             HttpClient: httpClient,
-            ThreadHistoryFetcher: countingFetcher,
-            ThreadCursorStore: cursorStore);
+            ThreadHistoryFetcher: countingFetcher);
 
         var gateway = Sys.ActorOf(SlackGatewayActor.CreateProps(deps), "slack-gw-recovery");
 
@@ -292,7 +288,6 @@ public sealed class SlackThreadBackfillIntegrationTests : TestKit
     {
         var pipeline = Host.Services.GetRequiredService<SessionPipeline>();
         var httpClient = new HttpClient(_httpHandler);
-        var cursorStore = new FileSlackThreadCursorStore(_paths);
 
         var fetcher = new SlackThreadHistoryFetcher(
             (channelId, threadTs, limit, cursor, ct) =>
@@ -337,8 +332,7 @@ public sealed class SlackThreadBackfillIntegrationTests : TestKit
             ContentScanner: new NullContentScanner(),
             HttpClient: httpClient,
             PromptInjectionDetector: new ContainsIgnorePromptInjectionDetector(),
-            ThreadHistoryFetcher: fetcher,
-            ThreadCursorStore: cursorStore);
+            ThreadHistoryFetcher: fetcher);
 
         var gateway = Sys.ActorOf(SlackGatewayActor.CreateProps(deps), "slack-gw-risk-backfill");
 

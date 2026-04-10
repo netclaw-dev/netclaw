@@ -27,11 +27,4 @@ public sealed class SendUserMessage : IWithSessionId
     [ProtoIgnore]
     public MessageSource? Source { get; set; }
 
-    /// <summary>
-    /// When true, this message is backfilled thread history — not a live message.
-    /// The session actor injects backfill messages as read-only context rather than
-    /// triggering an LLM turn.
-    /// </summary>
-    [ProtoIgnore]
-    public bool IsBackfill { get; set; }
 }
