@@ -75,6 +75,21 @@ public sealed record SessionTuning
     public bool DeterministicRetrievalEnabled { get; init; } = true;
 
     /// <summary>
+    /// Optional override for the minimum composite score a memory must reach
+    /// before it is injected into a turn via automatic recall. Candidates
+    /// below this floor are dropped silently, which lets automatic recall
+    /// return zero items when nothing in the memory store is a strong enough
+    /// match for the current query.
+    ///
+    /// When null (the default), the coordinator uses its own baked-in floor.
+    /// This property is a power-user knob: lower values let weaker matches
+    /// through (increasing the risk of unrelated-memory pollution), higher
+    /// values are stricter (at the cost of erasing legitimate marginal
+    /// matches). Set to 0 to effectively disable the floor.
+    /// </summary>
+    public double? MinimumRecallCompositeScore { get; init; }
+
+    /// <summary>
     /// Number of completed turns between memory distillation triggers.
     /// When set, the observer distills every N turns regardless of idle state,
     /// ensuring memories form during long active sessions (e.g., 25-turn tool loops).

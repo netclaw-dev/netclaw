@@ -75,10 +75,12 @@ public sealed class DeterministicCandidateSelectorTests
     public void Baseline_only_candidates_excluded_from_scored_results()
     {
         var selector = new DeterministicCandidateSelector();
-        var plan = MakePlan(lexicalTerms: ["kubernetes"]);
-        // Cross-domain noise item has no lexical or domain match — baseline only.
+        // Use a lexical term that matches document text exactly (no plural
+        // normalization mismatch). Token "docker" is unaffected by the
+        // tokenizer's plural rules.
+        var plan = MakePlan(lexicalTerms: ["docker"]);
         var noise = MakeItem("doc-noise", "Unrelated", "Something about databases.", domain: "project:other");
-        var relevant = MakeItem("doc-relevant", "K8s Guide", "Deploy to kubernetes cluster.");
+        var relevant = MakeItem("doc-relevant", "Docker Guide", "Docker container deployment notes.");
 
         var result = selector.SelectWithScores(plan, [noise, relevant]);
 
@@ -88,8 +90,13 @@ public sealed class DeterministicCandidateSelectorTests
     }
 
     [Fact]
-    public void Same_domain_candidate_ranks_higher_than_cross_domain()
+    public void Domain_is_not_a_scoring_signal()
     {
+        // Domain affinity was intentionally removed — the concept is
+        // half-implemented (Protocol.SessionId.ToMemoryDomain always returns
+        // project:default) and it was polluting the composite-score floor.
+        // Same-domain and cross-domain candidates with identical content
+        // must score identically. Tracked in #584.
         var selector = new DeterministicCandidateSelector();
         var plan = MakePlan(
             hardScope: "project:d0ac6ckbk5k",
@@ -98,10 +105,10 @@ public sealed class DeterministicCandidateSelectorTests
         var sameDomain = MakeItem("doc-same", "Company: Petabridge", "Petabridge builds Akka.NET.", domain: "project:d0ac6ckbk5k");
         var crossDomain = MakeItem("doc-cross", "Company: Petabridge", "Petabridge builds Akka.NET.", domain: "project:signalr");
 
-        var result = selector.Select(plan, [crossDomain, sameDomain]);
+        var result = selector.SelectWithScores(plan, [crossDomain, sameDomain]);
 
         Assert.Equal(2, result.Count);
-        Assert.Equal("doc-same", result[0].Id);
+        Assert.Equal(result[0].SelectorScore, result[1].SelectorScore);
     }
 
     [Fact]
@@ -131,4 +138,126 @@ public sealed class DeterministicCandidateSelectorTests
 
         Assert.Single(result);
     }
+
+    // Score geometry documentation. These tests document the gradient a
+    // downstream composite-score floor will see: weaker matches score lower
+    // than stronger matches, and the spread between "single feature hit" and
+    // "multi-feature hit" is large enough to be a useful discriminator.
+    //
+    // Note: TextTokenizer normalizes plurals ("streams" -> "stream") and
+    // treats hyphenated words as single tokens. Lexical terms here are kept
+    // in normalized singular form so they match what the tokenizer produces.
+    // In production, the planner also runs prompts through TextTokenizer so
+    // plan.LexicalTerms is consistent with document tokens by construction.
+
+    [Fact]
+    public void Score_geometry_stronger_matches_outrank_weaker_matches()
+    {
+        var selector = new DeterministicCandidateSelector();
+        var plan = MakePlan(
+            lexicalTerms: ["akka", "stream", "backpressure", "demand"],
+            hardScope: "project:d0ac6ckbk5k");
+
+        var weak = MakeItem(
+            "doc-weak",
+            "Unrelated Guide",
+            "This note mentions akka once, nothing else.",
+            domain: "project:other");
+        var medium = MakeItem(
+            "doc-medium",
+            "Akka Stream Overview",
+            "Akka stream uses demand signalling.",
+            domain: "project:other");
+        var strong = MakeItem(
+            "doc-strong",
+            "Akka Stream Backpressure",
+            "Demand backpressure flow control in akka stream.",
+            domain: "project:d0ac6ckbk5k");
+
+        var result = selector.SelectWithScores(plan, [weak, medium, strong]);
+
+        Assert.Equal(3, result.Count);
+        // Results are returned in descending order of SelectorScore.
+        Assert.Equal("doc-strong", result[0].Item.Id);
+        Assert.Equal("doc-medium", result[1].Item.Id);
+        Assert.Equal("doc-weak", result[2].Item.Id);
+
+        // Document the spread: strongest match should be at least 2x the
+        // weakest. If this ever drops below that, the composite floor loses
+        // its ability to discriminate and we need to rebalance.
+        Assert.True(
+            result[0].SelectorScore >= result[2].SelectorScore * 2,
+            $"Expected strong/weak spread of 2x+, got {result[0].SelectorScore}/{result[2].SelectorScore}");
+    }
+
+    [Fact]
+    public void Score_geometry_facet_match_adds_meaningful_weight()
+    {
+        var selector = new DeterministicCandidateSelector();
+        var plan = MakePlan(
+            lexicalTerms: ["stream"],
+            facets: ["akka-streams"],
+            hardScope: "project:other");
+
+        var withoutFacet = MakeItem(
+            "doc-no-facet",
+            "Akka Stream",
+            "Backpressure in akka stream.",
+            domain: "project:other");
+        var withFacet = new SQLiteMemoryHydratedItem(
+            Id: "doc-with-facet",
+            Kind: "document",
+            MemoryClass: "durable_fact",
+            Title: "Akka Stream",
+            Content: "Backpressure in akka stream.",
+            AliasesJson: null,
+            FacetsJson: "[\"akka-streams\"]",
+            SlotsJson: null,
+            Domain: "project:other",
+            Boundary: "boundary:trusted-instance",
+            Audience: "public",
+            Sensitivity: "normal",
+            RecallMode: "auto",
+            UpdateSemantics: "merge-document",
+            ExpiresAtMs: null,
+            UpdatedAtMs: DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+
+        var result = selector.SelectWithScores(plan, [withoutFacet, withFacet]);
+
+        Assert.Equal(2, result.Count);
+        Assert.Equal("doc-with-facet", result[0].Item.Id);
+        Assert.True(
+            result[0].SelectorScore - result[1].SelectorScore >= 5.0,
+            $"Facet match should add at least 5 points; got delta {result[0].SelectorScore - result[1].SelectorScore}");
+    }
+
+    [Fact]
+    public void Score_geometry_anchor_match_adds_meaningful_weight()
+    {
+        var selector = new DeterministicCandidateSelector();
+        var plan = MakePlan(
+            lexicalTerms: ["stream"],
+            anchorHints: ["Akka Stream Backpressure"],
+            hardScope: "project:other");
+
+        var noAnchor = MakeItem(
+            "doc-no-anchor",
+            "Something Else",
+            "Akka stream is useful.",
+            domain: "project:other");
+        var withAnchor = MakeItem(
+            "doc-with-anchor",
+            "Akka Stream Backpressure",
+            "Demand in akka stream.",
+            domain: "project:other");
+
+        var result = selector.SelectWithScores(plan, [noAnchor, withAnchor]);
+
+        Assert.Equal(2, result.Count);
+        Assert.Equal("doc-with-anchor", result[0].Item.Id);
+        Assert.True(
+            result[0].SelectorScore - result[1].SelectorScore >= 7.0,
+            $"Anchor match should add at least 7 points; got delta {result[0].SelectorScore - result[1].SelectorScore}");
+    }
+
 }

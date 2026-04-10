@@ -83,6 +83,30 @@ public sealed class DeterministicRetrievalRequestPlanner
            || prefix.Equals("console", StringComparison.OrdinalIgnoreCase)
            || prefix.Equals("manual", StringComparison.OrdinalIgnoreCase);
 
+    // Capitalized words that commonly start English sentences and questions
+    // but carry no semantic weight as anchors. Broader than the tokenizer's
+    // stopword list because anchor hints are substring-matched against doc
+    // content, so even common function words ("the", "my", "our") can cause
+    // false positives (issue #582). Kept distinct from tokenizer stopwords
+    // so lexical matching on nouns like "can" and "will" still works.
+    private static readonly HashSet<string> AnchorHintStopWords = new(StringComparer.OrdinalIgnoreCase)
+    {
+        // Question/modal words
+        "which", "what", "when", "where", "how", "why", "who", "whose",
+        "can", "could", "should", "would", "may", "might", "will", "shall",
+        // Determiners and demonstratives
+        "the", "this", "that", "these", "those", "there", "here",
+        // Be/have/do auxiliaries
+        "does", "did", "has", "have", "had", "was", "were", "are", "is", "be", "been", "being",
+        // Pronouns that commonly start sentences
+        "my", "our", "your", "their", "his", "her", "its",
+        "i", "you", "we", "they", "he", "she", "it",
+        // Imperative lead-ins
+        "tell", "show", "give", "let", "please", "kindly",
+        // Conjunctions / sentence glue
+        "but", "so", "yet", "and", "or", "nor", "for",
+    };
+
     private static IEnumerable<string> InferAnchorHints(AutomaticRecallRequest request, string prompt, IReadOnlyList<string> tokens)
     {
         foreach (var entity in request.RecentEntities ?? [])
@@ -90,7 +114,13 @@ public sealed class DeterministicRetrievalRequestPlanner
                 yield return entity.Trim();
 
         foreach (Match match in Regex.Matches(prompt, "\\b[A-Z][A-Za-z0-9._-]{2,}\\b"))
+        {
+            // Filter sentence-start capitalized stopwords. These pull
+            // unrelated ops/eval docs into recall (issue #582).
+            if (AnchorHintStopWords.Contains(match.Value))
+                continue;
             yield return match.Value;
+        }
 
         if (tokens.Contains("textforge"))
             yield return "textforge";

@@ -131,6 +131,7 @@ public sealed record SessionConfig
             MemoryDistillationTurnInterval = ResolveValue(tuningSection, section, nameof(SessionTuning.MemoryDistillationTurnInterval), nested.MemoryDistillationTurnInterval),
             MaxToolDescriptionChars = ResolveValue(tuningSection, section, nameof(SessionTuning.MaxToolDescriptionChars), nested.MaxToolDescriptionChars),
             MaxToolSchemaWarnChars = ResolveValue(tuningSection, section, nameof(SessionTuning.MaxToolSchemaWarnChars), nested.MaxToolSchemaWarnChars),
+            MinimumRecallCompositeScore = ResolveValue(tuningSection, section, nameof(SessionTuning.MinimumRecallCompositeScore), nested.MinimumRecallCompositeScore),
         };
     }
 

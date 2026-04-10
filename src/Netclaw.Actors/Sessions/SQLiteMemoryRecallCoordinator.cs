@@ -23,6 +23,18 @@ public sealed class SQLiteMemoryRecallCoordinator(
     private readonly DeterministicRetrievalRequestPlanner _deterministicPlanner = new();
     private readonly DeterministicCandidateSelector _candidateSelector = new();
 
+    /// <summary>
+    /// Default minimum composite score a candidate must reach to survive
+    /// recall. Chosen so that a single lexical-token collision against an
+    /// out-of-domain durable fact (selector ~5, composite ~7) is rejected,
+    /// while a legitimate two-lexical match in a durable fact (selector ~9,
+    /// composite ~11) still passes. Callers who need stricter or looser
+    /// filtering can override via <see cref="SessionTuning.MinimumRecallCompositeScore"/>.
+    /// See <see cref="MemoryRecallScenarioTests"/> and issue #582 for the
+    /// pollution patterns this guards against.
+    /// </summary>
+    private const double DefaultMinimumRecallCompositeScore = 10.0;
+
     public async Task<AutomaticRecallResult> RecallAsync(AutomaticRecallRequest request, CancellationToken ct = default)
     {
         try
@@ -55,9 +67,10 @@ public sealed class SQLiteMemoryRecallCoordinator(
 
                 var effectiveBoundary = ResolveBoundary(normalizedRequest, deterministicPlan.HardScope);
 
-                // Audience-primary recall: domain is a ranking preference (via
-                // DeterministicCandidateSelector domain affinity boost), not a
-                // security gate. Audience+boundary are the SQL security filters.
+                // Audience-primary recall: audience+boundary are the SQL
+                // security filters. Domain is not used as a ranking preference
+                // (see #584 — the affinity concept was disabled because
+                // ToMemoryDomain() always resolves to project:default).
                 var rawCandidates = await store.SearchAcrossDomainsByPlanAsync(
                     deterministicPlan.LexicalTerms.Count > 0 ? deterministicPlan.LexicalTerms : [normalizedRequest.Query],
                     deterministicPlan.AllowedMemoryClasses,
@@ -81,9 +94,15 @@ public sealed class SQLiteMemoryRecallCoordinator(
                 // (~4 points per lexical match).
                 const double RecallRankDampeningFactor = 100.0;
                 var deterministicMaxItems = normalizedRequest.MaxItems <= 0 ? 3 : normalizedRequest.MaxItems;
-                var deterministicItems = scoredCandidates
+                var minimumCompositeScore = _sessionTuning.MinimumRecallCompositeScore ?? DefaultMinimumRecallCompositeScore;
+                var rankedCandidates = scoredCandidates
                     .Select(x => (x.Item, x.SelectorScore, Composite: x.SelectorScore + (RecallRank(x.Item) / RecallRankDampeningFactor)))
                     .OrderByDescending(x => x.Composite)
+                    .ToArray();
+                var aboveFloor = rankedCandidates
+                    .Where(x => x.Composite >= minimumCompositeScore)
+                    .ToArray();
+                var deterministicItems = aboveFloor
                     .Take(deterministicMaxItems)
                     .Select(x => new AutomaticRecallItem(
                         x.Item.Id,
@@ -95,9 +114,11 @@ public sealed class SQLiteMemoryRecallCoordinator(
                     .ToArray();
 
                 logger.LogInformation(
-                    "memory_retrieval_final session={SessionId} injectedCount={InjectedCount} items={Items}",
+                    "memory_retrieval_final session={SessionId} injectedCount={InjectedCount} filteredByFloor={FilteredByFloor} appliedFloor={AppliedFloor:F1} items={Items}",
                     normalizedRequest.SessionId,
                     deterministicItems.Length,
+                    rankedCandidates.Length - aboveFloor.Length,
+                    minimumCompositeScore,
                     string.Join("|", deterministicItems.Select(i => $"{i.Id}=score{i.Score:F1}")));
 
                 logger.LogDebug(
