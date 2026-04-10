@@ -120,6 +120,7 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
             DefaultChannelId: null,
             ReplyClient: _replyClient,
             ContentScanner: new NullContentScanner(),
+            ThreadHistoryFetcher: EmptyThreadHistoryFetcher.Instance,
             HttpClient: httpClient);
 
         var gateway = Sys.ActorOf(SlackGatewayActor.CreateProps(deps), "slack-gw-file-test");
@@ -199,6 +200,7 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
             DefaultChannelId: null,
             ReplyClient: _replyClient,
             ContentScanner: new NullContentScanner(),
+            ThreadHistoryFetcher: EmptyThreadHistoryFetcher.Instance,
             HttpClient: httpClient);
 
         var gateway = Sys.ActorOf(SlackGatewayActor.CreateProps(deps), "slack-gw-mention-test");
@@ -267,6 +269,7 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
             DefaultChannelId: null,
             ReplyClient: _replyClient,
             ContentScanner: new NullContentScanner(),
+            ThreadHistoryFetcher: EmptyThreadHistoryFetcher.Instance,
             HttpClient: httpClient);
 
         var gateway = Sys.ActorOf(SlackGatewayActor.CreateProps(deps), "slack-gw-fileshare-test");
@@ -331,6 +334,7 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
             DefaultChannelId: null,
             ReplyClient: _replyClient,
             ContentScanner: new NullContentScanner(),
+            ThreadHistoryFetcher: EmptyThreadHistoryFetcher.Instance,
             PromptInjectionDetector: new AlwaysHighRiskPromptInjectionDetector());
 
         var gateway = Sys.ActorOf(SlackGatewayActor.CreateProps(deps), "slack-gw-prompt-block-test");
@@ -379,7 +383,8 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
             BotUserId: new SlackUserId("UBOT"),
             DefaultChannelId: null,
             ReplyClient: _replyClient,
-            ContentScanner: new NullContentScanner());
+            ContentScanner: new NullContentScanner(),
+            ThreadHistoryFetcher: EmptyThreadHistoryFetcher.Instance);
 
         var gateway = Sys.ActorOf(SlackGatewayActor.CreateProps(deps), "slack-gw-error-turn-test");
 
@@ -428,7 +433,8 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
             BotUserId: new SlackUserId("UBOT"),
             DefaultChannelId: null,
             ReplyClient: _replyClient,
-            ContentScanner: new NullContentScanner());
+            ContentScanner: new NullContentScanner(),
+            ThreadHistoryFetcher: EmptyThreadHistoryFetcher.Instance);
 
         var gateway = Sys.ActorOf(SlackGatewayActor.CreateProps(deps), "slack-gw-post-timeout-test");
 
@@ -499,7 +505,8 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
             BotUserId: new SlackUserId("UBOT"),
             DefaultChannelId: null,
             ReplyClient: _replyClient,
-            ContentScanner: new NullContentScanner());
+            ContentScanner: new NullContentScanner(),
+            ThreadHistoryFetcher: EmptyThreadHistoryFetcher.Instance);
 
         var gateway = Sys.ActorOf(SlackGatewayActor.CreateProps(deps), "slack-gw-delivery-feedback-test");
 
@@ -569,7 +576,8 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
             BotUserId: new SlackUserId("UBOT"),
             DefaultChannelId: null,
             ReplyClient: _replyClient,
-            ContentScanner: new NullContentScanner());
+            ContentScanner: new NullContentScanner(),
+            ThreadHistoryFetcher: EmptyThreadHistoryFetcher.Instance);
 
         var actor = Sys.ActorOf(SlackThreadBindingActor.CreateProps(
             new SessionId("D7/8000.1"),
@@ -624,7 +632,8 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
             BotUserId: new SlackUserId("UBOT"),
             DefaultChannelId: null,
             ReplyClient: _replyClient,
-            ContentScanner: new NullContentScanner());
+            ContentScanner: new NullContentScanner(),
+            ThreadHistoryFetcher: EmptyThreadHistoryFetcher.Instance);
 
         var actor = Sys.ActorOf(SlackThreadBindingActor.CreateProps(
             new SessionId("D7/9000.1"),
@@ -679,7 +688,8 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
             BotUserId: new SlackUserId("UBOT"),
             DefaultChannelId: null,
             ReplyClient: _replyClient,
-            ContentScanner: new NullContentScanner());
+            ContentScanner: new NullContentScanner(),
+            ThreadHistoryFetcher: EmptyThreadHistoryFetcher.Instance);
 
         var actor = Sys.ActorOf(SlackThreadBindingActor.CreateProps(
             new SessionId("D7/9100.1"),
@@ -737,7 +747,8 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
             BotUserId: new SlackUserId("UBOT"),
             DefaultChannelId: null,
             ReplyClient: _replyClient,
-            ContentScanner: new NullContentScanner());
+            ContentScanner: new NullContentScanner(),
+            ThreadHistoryFetcher: EmptyThreadHistoryFetcher.Instance);
 
         var actor = Sys.ActorOf(SlackThreadBindingActor.CreateProps(
             new SessionId("D7/9200.1"),
@@ -796,7 +807,8 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
             BotUserId: new SlackUserId("UBOT"),
             DefaultChannelId: null,
             ReplyClient: _replyClient,
-            ContentScanner: new NullContentScanner());
+            ContentScanner: new NullContentScanner(),
+            ThreadHistoryFetcher: EmptyThreadHistoryFetcher.Instance);
 
         var actor = Sys.ActorOf(SlackThreadBindingActor.CreateProps(
             new SessionId("D7/9300.1"),
@@ -842,6 +854,7 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
             DefaultChannelId: null,
             ReplyClient: _replyClient,
             ContentScanner: new MagicByteContentScanner(new ContentPolicy()),
+            ThreadHistoryFetcher: EmptyThreadHistoryFetcher.Instance,
             HttpClient: httpClient);
 
         var gateway = Sys.ActorOf(SlackGatewayActor.CreateProps(deps), "slack-gw-real-scanner-test");
@@ -900,6 +913,7 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
             DefaultChannelId: null,
             ReplyClient: _replyClient,
             ContentScanner: new FailingContentScanner(),
+            ThreadHistoryFetcher: EmptyThreadHistoryFetcher.Instance,
             HttpClient: httpClient);
 
         var gateway = Sys.ActorOf(SlackGatewayActor.CreateProps(deps), "slack-gw-failing-scanner-test");

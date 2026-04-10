@@ -26,6 +26,7 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
     private readonly TimeProvider _timeProvider;
     private readonly SlackChannelOptions _options;
     private readonly ILogger<SlackChannel> _logger;
+    private readonly IThreadHistoryFetcher _threadHistoryFetcher;
 
     private IActorRef? _gateway;
     private SlackUserId? _botUserId;
@@ -45,7 +46,8 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
         IOperationalNotificationSink notificationSink,
         TimeProvider timeProvider,
         SlackChannelOptions options,
-        ILogger<SlackChannel> logger)
+        ILogger<SlackChannel> logger,
+        IThreadHistoryFetcher threadHistoryFetcher)
     {
         _pipeline = pipeline;
         _system = system;
@@ -60,6 +62,7 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
         _timeProvider = timeProvider;
         _options = options;
         _logger = logger;
+        _threadHistoryFetcher = threadHistoryFetcher ?? throw new ArgumentNullException(nameof(threadHistoryFetcher));
     }
 
     public Actors.Channels.ChannelType ChannelType => Actors.Channels.ChannelType.Slack;
@@ -121,7 +124,8 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
                     ReplyClient: _replyClient,
                     ContentScanner: _contentScanner,
                     HttpClient: httpClient,
-                    PromptInjectionDetector: _promptInjectionDetector)),
+                    PromptInjectionDetector: _promptInjectionDetector,
+                    ThreadHistoryFetcher: _threadHistoryFetcher)),
                 "slack-gateway");
 
             await _socketModeClient.Connect(cancellationToken: cancellationToken);

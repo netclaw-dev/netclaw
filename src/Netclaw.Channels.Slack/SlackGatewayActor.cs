@@ -90,6 +90,7 @@ public sealed record SlackGatewayDependencies(
     SlackChannelId? DefaultChannelId,
     ISlackReplyClient ReplyClient,
     IContentScanner ContentScanner,
+    IThreadHistoryFetcher ThreadHistoryFetcher,
     HttpClient? HttpClient = null,
     Func<SlackChannelId, SlackGatewayDependencies, Props>? ConversationPropsFactory = null,
     Func<SessionId, SlackChannelId, SlackThreadTs, SlackGatewayDependencies, Props>? ThreadPropsFactory = null,

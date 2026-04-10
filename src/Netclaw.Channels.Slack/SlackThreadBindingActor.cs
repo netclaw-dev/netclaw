@@ -3,6 +3,7 @@ using System.Threading.Channels;
 using System.Threading.Tasks;
 using Akka.Actor;
 using Akka.Event;
+using Akka.Persistence;
 using Akka.Streams;
 using Akka.Streams.Dsl;
 using Microsoft.Extensions.AI;
@@ -14,7 +15,7 @@ using Netclaw.Security;
 
 namespace Netclaw.Channels.Slack;
 
-internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStash, IWithTimers
+internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTimers
 {
     private readonly SessionId _sessionId;
     private readonly SlackChannelId _channelId;
@@ -35,15 +36,15 @@ internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStas
     private ChannelWriter<ChannelInput>? _inputQueue;
     private int _pipelineGeneration;
     private bool _isReinitializing;
+    private bool _threadHistoryFetchAttempted;
+    private SlackEventTs? _cursorTs;
     private static readonly object ReinitializeTimerKey = new();
     private static readonly TimeSpan InboundProcessingTimeout = TimeSpan.FromSeconds(30);
-    private static readonly TimeSpan QueueWriteTimeout = TimeSpan.FromSeconds(10);
-    private static readonly TimeSpan FileDownloadTimeout = TimeSpan.FromSeconds(10);
-    private static readonly TimeSpan ContentScanTimeout = TimeSpan.FromSeconds(5);
-    private static readonly TimeSpan PipelineInitTimeout = TimeSpan.FromSeconds(15);
-    private static readonly TimeSpan ReplyOperationTimeout = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan OperationTimeout = TimeSpan.FromSeconds(10);
+    private const string BackfillDetectorWarning = ":warning: I couldn't safely analyze some earlier thread messages, so they were excluded from context.";
+    private const string LiveDetectorUnavailableWarning = ":warning: I couldn't safely analyze your message — please try again in a moment.";
+    private const string LiveInjectionBlockedWarning = ":warning: Message blocked by prompt-injection policy.";
 
-    public IStash Stash { get; set; } = null!;
     public ITimerScheduler Timers { get; set; } = null!;
 
     public SlackThreadBindingActor(
@@ -63,6 +64,8 @@ internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStas
             .WithContext("SlackChannelId", _channelId)
             .WithContext("SlackThreadTs", _threadTs);
 
+        Recover<CursorAdvanced>(ApplyCursorAdvanced);
+
         Initializing();
 
         Context.SetReceiveTimeout(TimeSpan.FromHours(1));
@@ -74,6 +77,8 @@ internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStas
         SlackThreadTs threadTs,
         SlackGatewayDependencies dependencies) =>
         Props.Create(() => new SlackThreadBindingActor(sessionId, channelId, threadTs, dependencies));
+
+    public override string PersistenceId => $"slack-thread-cursor-{Uri.EscapeDataString(_sessionId.Value)}";
 
     protected override void PreStart()
     {
@@ -91,7 +96,7 @@ internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStas
 
     private void Initializing()
     {
-        ReceiveAsync<InitializePipeline>(async _ =>
+        CommandAsync<InitializePipeline>(async _ =>
         {
             try
             {
@@ -106,7 +111,7 @@ internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStas
             }
         });
 
-        ReceiveAny(msg =>
+        CommandAny(msg =>
         {
             if (msg is not InitializePipeline)
                 Stash.Stash();
@@ -115,10 +120,10 @@ internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStas
 
     private void Active()
     {
-        ReceiveAsync<SlackThreadInbound>(HandleInboundAsync);
-        ReceiveAsync<StartProactiveThread>(HandleProactiveThreadAsync);
-        ReceiveAsync<ThreadOutput>(HandleOutputAsync);
-        Receive<OutputStreamTerminated>(msg =>
+        CommandAsync<SlackThreadInbound>(HandleInboundAsync);
+        CommandAsync<StartProactiveThread>(HandleProactiveThreadAsync);
+        CommandAsync<ThreadOutput>(HandleOutputAsync);
+        Command<OutputStreamTerminated>(msg =>
         {
             if (msg.Generation != _pipelineGeneration)
                 return;
@@ -130,8 +135,8 @@ internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStas
             _log.Warning("Slack output stream terminated ({Reason}); reinitializing pipeline", reason);
             Self.Tell(new ReinitializePipeline(reason));
         });
-        ReceiveAsync<ReinitializePipeline>(async msg => await ReinitializePipelineAsync(msg.Reason));
-        Receive<ReceiveTimeout>(_ =>
+        CommandAsync<ReinitializePipeline>(async msg => await ReinitializePipelineAsync(msg.Reason));
+        Command<ReceiveTimeout>(_ =>
         {
             _log.Info("Slack thread idle for 1 hour, passivating");
             Context.Stop(Self);
@@ -159,29 +164,27 @@ internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStas
                 message.Text?.Length ?? 0,
                 message.Files?.Count ?? 0);
 
+            var currentTs = new SlackEventId(message.EventId.Value).TryGetEventTs();
+
             if (!string.IsNullOrWhiteSpace(message.Text))
             {
-                PromptInjectionResult detection;
-                try
+                var classification = await ClassifyAsync(message.Text, "slack-live", inboundCts.Token);
+                switch (classification.Outcome)
                 {
-                    detection = await _promptInjectionDetector.DetectAsync(message.Text, "slack", inboundCts.Token);
-                }
-                catch (Exception ex)
-                {
-                    _log.Warning(ex, "Prompt injection detector failed; allowing message through");
-                    detection = PromptInjectionResult.Safe();
-                }
+                    case ClassificationOutcome.Block:
+                        _log.Warning("Blocked Slack message due to prompt injection risk: {Reason}", classification.Reason);
+                        ChannelTelemetry.RecordSlackEventDropped("prompt_injection_high");
+                        await SafePostAsync(LiveInjectionBlockedWarning);
+                        return;
 
-                if (detection.Risk == PromptInjectionRisk.High)
-                {
-                    var reason = string.IsNullOrWhiteSpace(detection.Message)
-                        ? "High-risk prompt injection pattern detected"
-                        : detection.Message;
+                    case ClassificationOutcome.DetectorUnavailable:
+                        _log.Warning("Prompt injection detector unavailable for live message — dropping");
+                        ChannelTelemetry.RecordSlackEventDropped("prompt_injection_detector_unavailable");
+                        await SafePostAsync(LiveDetectorUnavailableWarning);
+                        return;
 
-                    _log.Warning("Blocked Slack message due to prompt injection risk: {Reason}", reason);
-                    ChannelTelemetry.RecordSlackEventDropped("prompt_injection_high");
-                    await SafePostAsync(":warning: Message blocked by prompt-injection policy.");
-                    return;
+                    case ClassificationOutcome.Allow:
+                        break;
                 }
             }
 
@@ -205,13 +208,13 @@ internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStas
                     try
                     {
                         using var downloadCts = CancellationTokenSource.CreateLinkedTokenSource(inboundCts.Token);
-                        downloadCts.CancelAfter(FileDownloadTimeout);
+                        downloadCts.CancelAfter(OperationTimeout);
                         var bytes = await DownloadSlackFileAsync(file, downloadCts.Token);
                         if (bytes.Length == 0)
                             continue;
 
                         using var scanCts = CancellationTokenSource.CreateLinkedTokenSource(inboundCts.Token);
-                        scanCts.CancelAfter(ContentScanTimeout);
+                        scanCts.CancelAfter(OperationTimeout);
                         var scanResult = await _dependencies.ContentScanner.ScanAsync(
                             bytes, file.Name, file.MimeType, scanCts.Token);
 
@@ -267,22 +270,30 @@ internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStas
                 return;
             }
 
+            if (IsStaleInboundEvent(currentTs))
+            {
+                _log.Info("Dropping stale Slack inbound event eventId={EventId} cursor={Cursor}",
+                    message.EventId.Value,
+                    _cursorTs?.Value ?? "none");
+                ChannelTelemetry.RecordSlackEventDropped("stale_event");
+                return;
+            }
+
+            var buildResult = await BuildInputForInboundAsync(message, contents, currentTs, inboundCts.Token);
+            var input = buildResult.Input;
+
+            if (buildResult.BackfillDetectorUnavailable)
+                await SafePostAsync(BackfillDetectorWarning);
+
             try
             {
                 using var queueWriteCts = CancellationTokenSource.CreateLinkedTokenSource(inboundCts.Token);
-                queueWriteCts.CancelAfter(QueueWriteTimeout);
+                queueWriteCts.CancelAfter(OperationTimeout);
 
-                await writer.WriteAsync(new ChannelInput
-                {
-                    SenderId = message.SenderId,
-                    ChannelId = _channelId.Value,
-                    MessageId = message.EventId.Value,
-                    Audience = message.Audience,
-                    Principal = message.Principal,
-                    Provenance = message.Provenance,
-                    Contents = contents,
-                    ReceivedAt = message.ReceivedAt
-                }, queueWriteCts.Token);
+                await writer.WriteAsync(input, queueWriteCts.Token);
+
+                if (currentTs is { } ts)
+                    AdvanceCursor(ts);
             }
             catch (OperationCanceledException ex)
             {
@@ -297,7 +308,7 @@ internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStas
                 return;
             }
 
-            inboundLog.Info("slack_turn_enqueued contentItems={ContentCount}", contents.Count);
+            inboundLog.Info("slack_turn_enqueued contentItems={ContentCount}", input.Contents.Count);
             ChannelTelemetry.RecordSlackMessageEnqueued();
         }
         catch (OperationCanceledException ex)
@@ -310,18 +321,8 @@ internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStas
         }
     }
 
-    private async Task<ReadOnlyMemory<byte>> DownloadSlackFileAsync(SlackFileReference file, CancellationToken ct)
-    {
-        using var request = new HttpRequestMessage(HttpMethod.Get, file.UrlPrivateDownload);
-        if (_dependencies.Options.BotToken is { Value: { Length: > 0 } token })
-            request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
-
-        using var response = await _dependencies.HttpClient!.SendAsync(request, ct);
-        response.EnsureSuccessStatusCode();
-
-        var bytes = await response.Content.ReadAsByteArrayAsync(ct);
-        return bytes;
-    }
+    private Task<ReadOnlyMemory<byte>> DownloadSlackFileAsync(SlackFileReference file, CancellationToken ct)
+        => SlackFileDownloader.DownloadAsync(_dependencies.HttpClient!, file.UrlPrivateDownload, _dependencies.Options.BotToken, ct);
 
     private async Task EnsureInitializedAsync()
     {
@@ -335,7 +336,7 @@ internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStas
         // children and are stopped automatically when this actor passivates.
         _materializer = Context.Materializer(namePrefix: "slack-thread");
 
-        using var initCts = new CancellationTokenSource(PipelineInitTimeout);
+        using var initCts = new CancellationTokenSource(OperationTimeout);
         var materialized = await _dependencies.Pipeline.CreateAsync(
             _sessionId,
             new SessionPipelineOptions
@@ -379,6 +380,253 @@ internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStas
         _inputQueue = inputQueue;
 
         _log.Info("Slack thread binding pipeline initialized");
+    }
+
+    private async Task<InboundBuildResult> BuildInputForInboundAsync(
+        SlackThreadInbound triggeringMessage,
+        IReadOnlyList<AIContent> liveContents,
+        SlackEventTs? currentTs,
+        CancellationToken cancellationToken)
+    {
+        var baseInput = new ChannelInput
+        {
+            SenderId = triggeringMessage.SenderId,
+            ChannelId = _channelId.Value,
+            MessageId = triggeringMessage.EventId.Value,
+            Audience = triggeringMessage.Audience,
+            Principal = triggeringMessage.Principal,
+            Provenance = triggeringMessage.Provenance,
+            Contents = liveContents,
+            ReceivedAt = triggeringMessage.ReceivedAt
+        };
+
+        // Only attempt hydration once per actor runtime. Setting the flag up front
+        // avoids re-fetching the entire thread if any downstream step throws.
+        if (_threadHistoryFetchAttempted || currentTs is not { } triggerTs)
+            return new InboundBuildResult(baseInput, false);
+
+        _threadHistoryFetchAttempted = true;
+
+        var history = await _dependencies.ThreadHistoryFetcher.FetchThreadHistoryAsync(_sessionId, cancellationToken);
+        if (history.Count == 0)
+            return new InboundBuildResult(baseInput, false);
+
+        var cursor = _cursorTs;
+
+        // Phase 1: filter gap candidates by ts bounds (cheap, sync).
+        var candidates = new List<ChannelInput>();
+        foreach (var item in history)
+        {
+            if (new SlackEventId(item.MessageId ?? string.Empty).TryGetEventTs() is not { } itemTs)
+                continue;
+
+            if (itemTs.CompareTo(triggerTs) >= 0)
+                continue;
+
+            if (cursor is { } c && itemTs.CompareTo(c) <= 0)
+                continue;
+
+            candidates.Add(item);
+        }
+
+        if (candidates.Count == 0)
+        {
+            _log.Info(
+                "Thread history hydrated fetched={FetchedCount} gapCount=0 cursor={Cursor}",
+                history.Count,
+                cursor?.Value ?? "none");
+            return new InboundBuildResult(baseInput, false);
+        }
+
+        // Phase 2: classify candidates in parallel — detector calls are the
+        // latency bottleneck on large gaps.
+        var classifications = await Task.WhenAll(candidates.Select(c => ClassifyGapMessageAsync(c, cancellationToken)));
+
+        // Phase 3: assemble gap preserving chronological order.
+        var gap = new List<ChannelInput>(candidates.Count);
+        var blockedForRisk = 0;
+        var detectorUnavailable = false;
+
+        for (var i = 0; i < candidates.Count; i++)
+        {
+            var item = candidates[i];
+            switch (classifications[i].Outcome)
+            {
+                case ClassificationOutcome.Allow:
+                    gap.Add(item);
+                    break;
+
+                case ClassificationOutcome.Block:
+                    blockedForRisk++;
+                    _log.Warning(
+                        "Dropped backfill message due to prompt injection risk sender={SenderId} messageId={MessageId} reason={Reason}",
+                        item.SenderId,
+                        item.MessageId ?? "none",
+                        classifications[i].Reason ?? "high-risk pattern detected");
+                    break;
+
+                case ClassificationOutcome.DetectorUnavailable:
+                    blockedForRisk++;
+                    detectorUnavailable = true;
+                    break;
+            }
+        }
+
+        _log.Info(
+            "Thread history hydrated fetched={FetchedCount} gapCount={GapCount} blockedHighRisk={BlockedHighRiskCount} cursor={Cursor}",
+            history.Count,
+            gap.Count,
+            blockedForRisk,
+            cursor?.Value ?? "none");
+
+        if (gap.Count == 0)
+            return new InboundBuildResult(baseInput, detectorUnavailable);
+
+        var mergedContents = MergeGapWithLiveContents(gap, liveContents);
+        return new InboundBuildResult(baseInput with { Contents = mergedContents }, detectorUnavailable);
+    }
+
+    private Task<Classification> ClassifyGapMessageAsync(ChannelInput input, CancellationToken cancellationToken)
+    {
+        var text = string.Join("\n", input.Contents
+            .OfType<TextContent>()
+            .Select(t => t.Text)
+            .Where(t => !string.IsNullOrWhiteSpace(t)));
+
+        return ClassifyAsync(text, "slack-backfill", cancellationToken);
+    }
+
+    private async Task<Classification> ClassifyAsync(string? text, string sourceContext, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return new Classification(ClassificationOutcome.Allow, null);
+
+        PromptInjectionResult detection;
+        try
+        {
+            detection = await _promptInjectionDetector.DetectAsync(text, sourceContext, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            _log.Warning(ex, "Prompt injection detector failed for source={Source}", sourceContext);
+            return new Classification(ClassificationOutcome.DetectorUnavailable, ex.Message);
+        }
+
+        if (detection.Risk != PromptInjectionRisk.High)
+            return new Classification(ClassificationOutcome.Allow, null);
+
+        var reason = string.IsNullOrWhiteSpace(detection.Message)
+            ? "High-risk prompt injection pattern detected"
+            : detection.Message;
+        return new Classification(ClassificationOutcome.Block, reason);
+    }
+
+    private void AdvanceCursor(SlackEventTs candidateTs)
+    {
+        if (_cursorTs is { } c && candidateTs.CompareTo(c) <= 0)
+        {
+            _log.Debug("Slack thread cursor did not advance stream={StreamKey} ts={Ts}", _sessionId.Value, candidateTs.Value);
+            return;
+        }
+
+        PersistAsync(new CursorAdvanced(candidateTs.Value), ApplyCursorAdvanced);
+    }
+
+    private bool IsStaleInboundEvent(SlackEventTs? eventTs)
+    {
+        if (_cursorTs is not { } c || eventTs is not { } ts)
+            return false;
+
+        return ts.CompareTo(c) <= 0;
+    }
+
+    private void ApplyCursorAdvanced(CursorAdvanced advanced)
+    {
+        _cursorTs = new SlackEventTs(advanced.CursorTs);
+
+        // Skip journal truncation during recovery replay — we only need to run
+        // it when new events are being persisted.
+        if (!IsRecovering && LastSequenceNr > 1 && LastSequenceNr % 10 == 0)
+            DeleteMessages(LastSequenceNr - 1);
+    }
+
+    private enum ClassificationOutcome
+    {
+        Allow,
+        Block,
+        DetectorUnavailable
+    }
+
+    private readonly record struct Classification(ClassificationOutcome Outcome, string? Reason);
+
+    private readonly record struct InboundBuildResult(ChannelInput Input, bool BackfillDetectorUnavailable);
+
+    private readonly record struct CursorAdvanced(string CursorTs);
+
+    private static List<AIContent> MergeGapWithLiveContents(IReadOnlyList<ChannelInput> gap, IReadOnlyList<AIContent> liveContents)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("[thread history — messages exchanged before this inbound event]");
+        sb.AppendLine();
+
+        foreach (var item in gap)
+        {
+            var ts = item.ReceivedAt == default ? string.Empty : $", {item.ReceivedAt:yyyy-MM-dd HH:mm} UTC";
+            sb.AppendLine($"<user: {item.SenderId}{ts}>");
+
+            var imageCount = 0;
+            foreach (var content in item.Contents)
+            {
+                switch (content)
+                {
+                    case TextContent text when !string.IsNullOrWhiteSpace(text.Text):
+                        sb.AppendLine(text.Text);
+                        break;
+                    case DataContent:
+                        imageCount++;
+                        break;
+                }
+            }
+
+            if (imageCount > 0)
+                sb.AppendLine($"[image attachments: {imageCount}]");
+
+            sb.AppendLine();
+        }
+
+        sb.AppendLine("[end thread history]");
+
+        var liveText = string.Join("\n", liveContents
+            .OfType<TextContent>()
+            .Select(t => t.Text)
+            .Where(t => !string.IsNullOrWhiteSpace(t)));
+
+        var mergedText = string.IsNullOrWhiteSpace(liveText)
+            ? sb.ToString()
+            : $"{sb}\n\n{liveText}";
+
+        var merged = new List<AIContent> { new TextContent(mergedText) };
+
+        // Gap image DataContent is carried through to the session so vision-
+        // capable models see the prior-thread images. The session actor's
+        // modality gate strips them when the resolved model doesn't support
+        // image input, so non-vision models are unaffected.
+        foreach (var item in gap)
+        {
+            foreach (var content in item.Contents)
+            {
+                if (content is not TextContent)
+                    merged.Add(content);
+            }
+        }
+
+        foreach (var content in liveContents)
+        {
+            if (content is not TextContent)
+                merged.Add(content);
+        }
+
+        return merged;
     }
 
     private async Task ReinitializePipelineAsync(string reason)
@@ -486,7 +734,7 @@ internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStas
         var startedAt = _dependencies.TimeProvider.GetTimestamp();
         try
         {
-            using var cts = new CancellationTokenSource(ReplyOperationTimeout);
+            using var cts = new CancellationTokenSource(OperationTimeout);
             await _dependencies.ReplyClient.PostThreadReplyAsync(new SlackPostMessage(
                 ChannelId: _channelId,
                 ThreadTs: _threadTs,
@@ -557,7 +805,7 @@ internal sealed class SlackThreadBindingActor : ReceiveActor, IWithUnboundedStas
                 return new PostResult($"File not found for upload: {file.FilePath}", DeliveryFailureKind.Unknown);
             }
 
-            using var cts = new CancellationTokenSource(ReplyOperationTimeout);
+            using var cts = new CancellationTokenSource(OperationTimeout);
             await _dependencies.ReplyClient.UploadFileToThreadAsync(
                 _channelId,
                 _threadTs,

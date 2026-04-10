@@ -1596,12 +1596,17 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         _currentTurnSource = cmd.Source;
         _currentTrustContext = _trustContextDeriver?.Derive(cmd.Source);
         BindTurnTelemetry(cmd.Source);
+
+        var userContent = cmd.Content ?? string.Empty;
+        var mediaRefs = cmd.MediaReferences;
+
         TurnLog().Info(
             "turn_received channel={ChannelType} sender={SenderId} hasMedia={HasMedia} textChars={TextLength}",
             cmd.Source?.ChannelType.ToWireValue() ?? "unknown",
             cmd.Source?.SenderId ?? "unknown",
-            cmd.MediaReferences.Count > 0,
-            cmd.Content?.Length ?? 0);
+            mediaRefs.Count > 0,
+            userContent.Length);
+
         _logActor?.Tell(cmd);
         _observerActor?.Tell(cmd);
 
@@ -1612,7 +1617,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             _config.Tuning.DiscoveredToolMaxCount,
             _fullRegistry);
 
-        var mediaRefs = cmd.MediaReferences;
         if (mediaRefs.Count > 0 && !_model.InputModalities.HasFlag(Configuration.ModelModality.Image))
         {
             var imageRefs = mediaRefs.Where(r => r.Modality == (int)MediaModality.Image).ToList();
@@ -1648,7 +1652,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             return;
         }
 
-        var userContent = cmd.Content ?? string.Empty;
         if (TryHandleSlashCommand(userContent, mediaRefs))
             return;
 

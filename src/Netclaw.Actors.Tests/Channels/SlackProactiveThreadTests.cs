@@ -584,6 +584,7 @@ public sealed class SlackProactiveThreadActorTests(ITestOutputHelper output) : T
             DefaultChannelId: null,
             ReplyClient: new NoopReplyClient(),
             ContentScanner: new NullContentScanner(),
+            ThreadHistoryFetcher: EmptyThreadHistoryFetcher.Instance,
             ConversationPropsFactory: conversationPropsFactory,
             ThreadPropsFactory: threadPropsFactory);
     }
