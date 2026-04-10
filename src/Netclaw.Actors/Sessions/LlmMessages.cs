@@ -170,16 +170,6 @@ internal sealed record TitleGenerationCompleted
     public required string Title { get; init; }
 }
 
-internal sealed record MemoryObservationFailed
-{
-    public required string Reason { get; init; }
-}
-
-internal sealed record RecallPlanningFailed
-{
-    public required string Reason { get; init; }
-}
-
 /// <summary>
 /// Sent to child actors (e.g., observer) when the session changes phase.
 /// Enables child actors to react to lifecycle events (e.g., trigger

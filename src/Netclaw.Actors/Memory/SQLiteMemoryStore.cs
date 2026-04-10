@@ -871,8 +871,7 @@ public sealed class SQLiteMemoryStore
                     dh.fts_rank AS score
                 FROM doc_hits dh
                 JOIN memory_documents d ON d.document_id = dh.document_id
-                WHERE 1 = 1
-                  AND d.recall_mode IN ('{MemoryRecallMode.Auto.ToWireValue()}', '{MemoryRecallMode.Searchable.ToWireValue()}')
+                WHERE d.recall_mode IN ('{MemoryRecallMode.Auto.ToWireValue()}', '{MemoryRecallMode.Searchable.ToWireValue()}')
                   AND COALESCE(d.boundary, $planLegacyBoundary) = $boundary
                   AND COALESCE(d.audience, $planFallbackAudience) IN ({whereAudiences})
                   AND d.sensitivity != '{MemorySensitivity.Secret.ToWireValue()}'
@@ -901,8 +900,7 @@ public sealed class SQLiteMemoryStore
                     rh.fts_rank AS score
                 FROM rec_hits rh
                 JOIN memory_records r ON r.record_id = rh.record_id
-                WHERE 1 = 1
-                  AND r.recall_mode IN ('{MemoryRecallMode.Auto.ToWireValue()}', '{MemoryRecallMode.Searchable.ToWireValue()}')
+                WHERE r.recall_mode IN ('{MemoryRecallMode.Auto.ToWireValue()}', '{MemoryRecallMode.Searchable.ToWireValue()}')
                   AND COALESCE(r.boundary, $planLegacyBoundary) = $boundary
                   AND COALESCE(r.audience, $planFallbackAudience) IN ({whereAudiences})
                   AND r.sensitivity != '{MemorySensitivity.Secret.ToWireValue()}'

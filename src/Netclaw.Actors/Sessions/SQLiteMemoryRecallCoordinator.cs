@@ -55,12 +55,8 @@ public sealed class SQLiteMemoryRecallCoordinator(
                     string.Join("|", deterministicPlan.AnchorHints),
                     string.Join("|", deterministicPlan.LexicalTerms));
 
-                var effectiveBoundary = ResolveBoundary(request);
+                var effectiveBoundary = Memory.MemoryPolicyScopeResolver.ResolveBoundary(request.Boundary);
 
-                // Audience-primary recall: audience + boundary are the SQL
-                // security filters. No domain / hard-scope concept — we rely
-                // on audience for isolation and on lexical / facet / anchor
-                // matching for relevance.
                 var rawCandidates = await store.SearchAcrossDomainsByPlanAsync(
                     deterministicPlan.LexicalTerms.Count > 0 ? deterministicPlan.LexicalTerms : [request.Query],
                     deterministicPlan.AllowedMemoryClasses,
@@ -130,11 +126,6 @@ public sealed class SQLiteMemoryRecallCoordinator(
             return new AutomaticRecallResult([], true, ex.Message, "execution");
         }
     }
-
-    private static string ResolveBoundary(AutomaticRecallRequest request)
-        => !string.IsNullOrWhiteSpace(request.Boundary)
-            ? request.Boundary!
-            : SecurityPolicyDefaults.TrustedInstanceBoundary;
 
     private static int RecallRank(SQLiteMemoryHydratedItem document)
     {

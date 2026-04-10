@@ -109,7 +109,7 @@ public sealed class MemoryRulesFirstExtractor(MemoryPolicyEvaluator policy)
 
         var resolvedAudienceWire = MemoryPolicyEvaluator.ResolveAudience(payload.Audience, TrustAudience.Public);
         SecurityPolicyDefaults.TryParseAudience(resolvedAudienceWire, out var parsedAudience);
-        var resolvedBoundary = MemoryPolicyScopeResolver.ResolveBoundary(payload.Boundary, parsedAudience, sessionId: null);
+        var resolvedBoundary = MemoryPolicyScopeResolver.ResolveBoundary(payload.Boundary);
 
         var kind = ResolveKind(payload);
         var title = ResolveTitle(payload, kind, content);
@@ -389,10 +389,7 @@ public sealed class MemoryRulesFirstExtractor(MemoryPolicyEvaluator policy)
             Content: normalizedContent,
             UpdateSemantics: MemoryUpdateSemantics.MergeDocument,
             Domain: domain,
-            Boundary: MemoryPolicyScopeResolver.ResolveBoundary(
-                boundary,
-                stmtAudience,
-                sessionId: null),
+            Boundary: MemoryPolicyScopeResolver.ResolveBoundary(boundary),
             Audience: stmtAudience,
             Sensitivity: MemorySensitivity.Normal.ToWireValue(),
             RecallMode: MemoryRecallMode.Auto,
