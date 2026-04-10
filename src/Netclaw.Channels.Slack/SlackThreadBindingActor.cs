@@ -270,6 +270,15 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
                 return;
             }
 
+            if (IsStaleInboundEvent(message.EventId.Value))
+            {
+                _log.Info("Dropping stale Slack inbound event eventId={EventId} cursor={Cursor}",
+                    message.EventId.Value,
+                    _cursorTs ?? "none");
+                ChannelTelemetry.RecordSlackEventDropped("stale_event");
+                return;
+            }
+
             var needsHydration = !_threadHistoryHydrated;
             var buildResult = await BuildInputForInboundAsync(message, contents, inboundCts.Token);
             var input = buildResult.Input;
@@ -510,6 +519,18 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
             return true;
 
         return IsTsAfter(candidateTs, _cursorTs);
+    }
+
+    private bool IsStaleInboundEvent(string eventId)
+    {
+        if (string.IsNullOrWhiteSpace(_cursorTs))
+            return false;
+
+        var eventTs = TryExtractTsFromEventId(eventId);
+        if (string.IsNullOrWhiteSpace(eventTs))
+            return false;
+
+        return !IsTsAfter(eventTs, _cursorTs);
     }
 
     private void ApplyCursorAdvanced(CursorAdvanced advanced)

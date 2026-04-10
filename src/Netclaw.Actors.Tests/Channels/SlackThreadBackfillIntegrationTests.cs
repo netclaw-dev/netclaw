@@ -363,6 +363,77 @@ public sealed class SlackThreadBackfillIntegrationTests : TestKit
         Assert.Contains("please summarize", mergedText);
     }
 
+    [Fact]
+    public async Task Older_out_of_order_live_event_is_dropped_after_cursor_advances()
+    {
+        var pipeline = Host.Services.GetRequiredService<SessionPipeline>();
+        var httpClient = new HttpClient(_httpHandler);
+
+        var fetcher = new SlackThreadHistoryFetcher(
+            FakeRepliesFetcher,
+            new SlackChannelOptions { BotToken = new SensitiveString("xoxb-fake") },
+            httpClient,
+            new NullContentScanner(),
+            NullLogger<SlackThreadHistoryFetcher>.Instance);
+
+        var deps = new SlackGatewayDependencies(
+            Pipeline: pipeline,
+            IngressGate: null,
+            ActorSystem: Sys,
+            TimeProvider: TimeProvider.System,
+            Options: new SlackChannelOptions
+            {
+                Enabled = true,
+                MentionOnly = true,
+                AllowedChannelIds = ["C_STALE"],
+                BotToken = new SensitiveString("xoxb-fake-token")
+            },
+            BotUserId: new SlackUserId("UBOT"),
+            DefaultChannelId: null,
+            ReplyClient: _replyClient,
+            ContentScanner: new NullContentScanner(),
+            HttpClient: httpClient,
+            ThreadHistoryFetcher: fetcher);
+
+        var gateway = Sys.ActorOf(SlackGatewayActor.CreateProps(deps), "slack-gw-stale-ordering");
+
+        gateway.Tell(new SlackInboundMessage(
+            Kind: SlackInboundKind.AppMention,
+            EventId: new SlackEventId("C_STALE:6000.5"),
+            ChannelId: new SlackChannelId("C_STALE"),
+            ThreadTs: new SlackThreadTs("6000.0"),
+            EventTs: new SlackEventTs("6000.5"),
+            UserId: new SlackUserId("U_USER"),
+            BotId: null,
+            Text: "<@UBOT> newest event",
+            Subtype: null,
+            Hidden: false,
+            IsDirectMessage: false));
+
+        await AwaitAssertAsync(() =>
+        {
+            Assert.Equal(1, _chatClient.CallCount);
+        }, duration: TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
+
+        gateway.Tell(new SlackInboundMessage(
+            Kind: SlackInboundKind.AppMention,
+            EventId: new SlackEventId("C_STALE:6000.4"),
+            ChannelId: new SlackChannelId("C_STALE"),
+            ThreadTs: new SlackThreadTs("6000.0"),
+            EventTs: new SlackEventTs("6000.4"),
+            UserId: new SlackUserId("U_USER"),
+            BotId: null,
+            Text: "<@UBOT> stale event",
+            Subtype: null,
+            Hidden: false,
+            IsDirectMessage: false));
+
+        await AwaitAssertAsync(() =>
+        {
+            Assert.Equal(1, _chatClient.CallCount);
+        }, duration: TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+    }
+
     // --- Fake replies fetcher ---
 
     private Task<SlackNet.WebApi.ConversationMessagesResponse> FakeRepliesFetcher(
