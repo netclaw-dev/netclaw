@@ -71,24 +71,12 @@ public class SubAgentFindingReviewTests
         Assert.Equal("secret cannot auto-recall", result.Reason);
     }
 
-    [Fact]
-    public void Review_defers_domain_mismatch()
-    {
-        var finding = CreateFinding() with { Domain = "project:other" };
-
-        var result = SessionToolExecutionPipeline.ReviewSubAgentFinding(finding, "project-a/thread-1");
-
-        Assert.Equal(SubAgentFindingReviewDecision.Deferred, result.Decision);
-        Assert.Contains("domain mismatch", result.Reason);
-    }
-
     private static SubAgentFinding CreateFinding()
         => new()
         {
             Title = "subagent:research-assistant",
             Content = "Netclaw uses SQLite journal persistence for session durability in the current deployment.",
             Kind = "record",
-            Domain = SecurityPolicyDefaults.DefaultMemoryDomain,
             Sensitivity = SubAgentFindingSensitivity.Normal,
             RecallMode = SubAgentFindingRecallMode.Searchable,
             UpdateSemantics = "append-document",

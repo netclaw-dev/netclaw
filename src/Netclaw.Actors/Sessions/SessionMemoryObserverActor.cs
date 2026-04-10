@@ -199,7 +199,6 @@ public sealed class SessionMemoryObserverActor : ReceivePersistentActor
         _ = RunDistillationAsync(
             _client,
             _sessionId.Value,
-            _sessionId.ToMemoryDomain(),
             _turnCount,
             transcriptText,
             _proposedMemories.ToArray(),
@@ -328,7 +327,6 @@ public sealed class SessionMemoryObserverActor : ReceivePersistentActor
     private async Task RunDistillationAsync(
         IChatClient client,
         string sessionId,
-        string domain,
         int turnCount,
         string transcript,
         IReadOnlyList<ProposedMemoryContext> existingProposals,
@@ -347,7 +345,7 @@ public sealed class SessionMemoryObserverActor : ReceivePersistentActor
             {
                 new(Microsoft.Extensions.AI.ChatRole.System, DistillationSystemPrompt),
                 new(Microsoft.Extensions.AI.ChatRole.User, BuildDistillationUserPrompt(
-                    sessionId, domain, turnCount, transcript, existingProposals))
+                    sessionId, turnCount, transcript, existingProposals))
             };
 
             var response = await client.GetResponseAsync(messages, cancellationToken: cts.Token);
@@ -558,13 +556,11 @@ public sealed class SessionMemoryObserverActor : ReceivePersistentActor
 
     internal static string BuildDistillationUserPrompt(
         string sessionId,
-        string domain,
         int turnCount,
         string transcript,
         IReadOnlyList<ProposedMemoryContext> existingProposals) => JsonSerializer.Serialize(new
     {
         sessionId,
-        domain,
         turnCount,
         existingProposals = existingProposals.Select(p => new
         {

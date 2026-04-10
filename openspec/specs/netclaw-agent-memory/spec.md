@@ -240,15 +240,17 @@ relevant entity without flattening all memory into note blobs.
 ### Requirement: Durable memory policy envelope
 
 Every durable anchor, document, record, and edge SHALL carry policy metadata
-including `domain`, `sensitivity`, `recallMode`, `confidence`, `freshness`, and
-`updateSemantics`. The write path SHALL assign or reject these values before
-persistence, and the recall path SHALL filter by them before prompt injection.
+including `audience`, `sensitivity`, `recallMode`, `confidence`, `freshness`,
+and `updateSemantics`. The write path SHALL assign or reject these values
+before persistence, and the recall path SHALL filter by them before prompt
+injection.
 
 #### Scenario: Sensitive memory is blocked from auto recall
 
-- **GIVEN** a stored memory item is marked `domain=business`,
+- **GIVEN** a stored memory item is marked `audience=personal`,
   `sensitivity=secret`, and `recallMode=manual`
-- **WHEN** a personal-domain session runs automatic pre-turn recall
+- **WHEN** a session whose audience does not include `personal` runs automatic
+  pre-turn recall
 - **THEN** the item is excluded from the automatic recall bundle
 - **AND** it remains available only to explicit authorized workflows if policy
   allows

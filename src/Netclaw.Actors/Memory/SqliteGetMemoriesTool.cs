@@ -54,7 +54,7 @@ public sealed partial class SqliteGetMemoriesTool : NetclawTool<SqliteGetMemorie
                 && entry.ExpiresAtMs is long expiresAt
                 && expiresAt <= _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
             sb.AppendLine($"━━━ {entry.Title} [{typedId.ToWireValue()}] ━━━");
-            sb.AppendLine($"kind={entry.Kind} class={entry.MemoryClass} domain={entry.Domain} sensitivity={entry.Sensitivity} recall={entry.RecallMode} semantics={entry.UpdateSemantics}{(isStaleEvidence ? " stale=true" : string.Empty)}");
+            sb.AppendLine($"kind={entry.Kind} class={entry.MemoryClass} sensitivity={entry.Sensitivity} recall={entry.RecallMode} semantics={entry.UpdateSemantics}{(isStaleEvidence ? " stale=true" : string.Empty)}");
             sb.AppendLine(entry.Content);
             sb.AppendLine();
         }

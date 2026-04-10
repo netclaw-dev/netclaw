@@ -16,7 +16,6 @@ public sealed record MemoryCheckpointPayload(
     bool HasVerifiedToolFinding,
     bool IsCompactionBoundary,
     bool HasAcceptedSubAgentFinding,
-    string Domain,
     string Sensitivity,
     string RecallMode,
     double Confidence,
@@ -41,7 +40,6 @@ public sealed record MemoryCheckpointCandidate(
     string Title,
     string Content,
     MemoryUpdateSemantics UpdateSemantics,
-    string Domain,
     string Boundary,
     TrustAudience Audience,
     string Sensitivity,
@@ -83,7 +81,6 @@ public sealed class MemoryRulesFirstExtractor(MemoryPolicyEvaluator policy)
             return results;
 
         var decision = policy.EvaluateWrite(
-            payload.Domain,
             payload.Sensitivity,
             payload.RecallMode,
             payload.Confidence,
@@ -116,7 +113,7 @@ public sealed class MemoryRulesFirstExtractor(MemoryPolicyEvaluator policy)
         var updateSemantics = ResolveUpdateSemantics(payload, kind, memoryClass);
         var anchor = ResolveAnchor(content, payload.SessionId);
         var anchorType = kind == MemoryKind.Record ? "event" : "concept";
-        var fingerprint = BuildFingerprint(kind.ToWireValue(), payload.Domain, title, content);
+        var fingerprint = BuildFingerprint(kind.ToWireValue(), title, content);
         if (fingerprintSet.Contains(fingerprint))
             return results;
 
@@ -128,7 +125,6 @@ public sealed class MemoryRulesFirstExtractor(MemoryPolicyEvaluator policy)
             Title: title,
             Content: content,
             UpdateSemantics: updateSemantics,
-            Domain: payload.Domain,
             Boundary: resolvedBoundary,
             Audience: parsedAudience,
             Sensitivity: payload.Sensitivity,
@@ -251,38 +247,34 @@ public sealed class MemoryRulesFirstExtractor(MemoryPolicyEvaluator policy)
         return slash > 0 ? sessionId[..slash].ToLowerInvariant() : "session";
     }
 
-    public static string BuildFingerprint(string kind, string domain, string title, string content)
+    public static string BuildFingerprint(string kind, string title, string content)
     {
-        return $"{kind}|{domain}|{title.Trim().ToLowerInvariant()}|{content.Trim().ToLowerInvariant()}";
+        return $"{kind}|{title.Trim().ToLowerInvariant()}|{content.Trim().ToLowerInvariant()}";
     }
 
     private static MemoryCheckpointCandidate? TryExtractProjectOperatingFact(
         MemoryCheckpointPayload payload,
         IReadOnlySet<string> fingerprintSet)
     {
-        if (!payload.Domain.StartsWith("project:", StringComparison.OrdinalIgnoreCase))
-            return null;
-
         var userText = payload.UserContent?.Trim();
         if (string.IsNullOrWhiteSpace(userText) || IsEphemeral(userText))
             return null;
 
         if (TryMatchCompletedStatement(userText, out var completedCandidate))
         {
-            var completedFingerprint = BuildFingerprint(completedCandidate.Kind.ToWireValue(), completedCandidate.Domain, completedCandidate.Title, completedCandidate.Content);
+            var completedFingerprint = BuildFingerprint(completedCandidate.Kind.ToWireValue(), completedCandidate.Title, completedCandidate.Content);
             return fingerprintSet.Contains(completedFingerprint) ? null : completedCandidate;
         }
 
         if (!TryMatchProjectStatement(
                 userText,
-                payload.Domain,
                 payload.FreshnessAtMs,
                 payload.Boundary,
                 payload.Audience,
                 out var candidate))
             return null;
 
-        var fingerprint = BuildFingerprint(candidate.Kind.ToWireValue(), candidate.Domain, candidate.Title, candidate.Content);
+        var fingerprint = BuildFingerprint(candidate.Kind.ToWireValue(), candidate.Title, candidate.Content);
         return fingerprintSet.Contains(fingerprint) ? null : candidate;
 
         bool TryMatchCompletedStatement(string text, out MemoryCheckpointCandidate matched)
@@ -313,7 +305,6 @@ public sealed class MemoryRulesFirstExtractor(MemoryPolicyEvaluator policy)
                 Title: title,
                 Content: normalizedObject,
                 UpdateSemantics: MemoryUpdateSemantics.MergeDocument,
-                Domain: payload.Domain,
                 Boundary: !string.IsNullOrWhiteSpace(payload.Boundary)
                     ? payload.Boundary!
                     : SecurityPolicyDefaults.TrustedInstanceBoundary,
@@ -334,7 +325,6 @@ public sealed class MemoryRulesFirstExtractor(MemoryPolicyEvaluator policy)
 
     private static bool TryMatchProjectStatement(
         string text,
-        string domain,
         long? freshnessAtMs,
         string? boundary,
         string? audience,
@@ -388,7 +378,6 @@ public sealed class MemoryRulesFirstExtractor(MemoryPolicyEvaluator policy)
             Title: $"{titlePrefix}: {subjectLabel} {NormalizeVerb(rawVerb)} {objectLabel}",
             Content: normalizedContent,
             UpdateSemantics: MemoryUpdateSemantics.MergeDocument,
-            Domain: domain,
             Boundary: MemoryPolicyScopeResolver.ResolveBoundary(boundary),
             Audience: stmtAudience,
             Sensitivity: MemorySensitivity.Normal.ToWireValue(),
@@ -506,7 +495,7 @@ public sealed class MemoryCurationEngine(SQLiteMemoryStore store, MemoryRulesFir
 
         var existing = await store.SearchMemoriesAsync(payload.Content, 8, resolvedBoundary, parsedAudience, ct);
         var fingerprints = existing
-            .Select(x => MemoryRulesFirstExtractor.BuildFingerprint(x.Kind, x.Domain, x.Title, x.Snippet))
+            .Select(x => MemoryRulesFirstExtractor.BuildFingerprint(x.Kind, x.Title, x.Snippet))
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
         var candidates = rules.Extract(payload, fingerprints);
@@ -523,7 +512,6 @@ public sealed class MemoryCurationEngine(SQLiteMemoryStore store, MemoryRulesFir
             Content: c.Content,
             Relations: null,
             UpdateSemantics: c.UpdateSemantics.ToWireValue(),
-            Domain: c.Domain,
             Boundary: c.Boundary,
             Audience: c.Audience,
             Sensitivity: c.Sensitivity,

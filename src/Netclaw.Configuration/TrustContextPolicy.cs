@@ -98,7 +98,6 @@ public static class SecurityPolicyDefaults
     public const string SlackWorkspaceBoundary = TrustedInstanceBoundary;
     public const string LocalDaemonBoundary = TrustedInstanceBoundary;
     public const string LegacyRestrictedBoundary = "boundary:legacy-restricted";
-    public const string DefaultMemoryDomain = "project:default";
 
     public static string ToWireValue(this TrustAudience audience) => audience switch
     {

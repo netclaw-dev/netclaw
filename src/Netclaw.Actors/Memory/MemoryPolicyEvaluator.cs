@@ -7,16 +7,12 @@ public sealed record MemoryPolicyDecision(bool Allowed, string? Reason = null);
 public sealed class MemoryPolicyEvaluator
 {
     public MemoryPolicyDecision EvaluateWrite(
-        string domain,
         string sensitivity,
         string recallMode,
         double confidence,
         bool isExplicitRequest,
         string? audience = null)
     {
-        if (string.IsNullOrWhiteSpace(domain))
-            return new MemoryPolicyDecision(false, "missing-domain");
-
         if (!string.IsNullOrWhiteSpace(audience)
             && !SecurityPolicyDefaults.TryParseAudience(audience, out _))
             return new MemoryPolicyDecision(false, "invalid-audience");

@@ -18,7 +18,6 @@ public sealed class MemoryRulesFirstExtractorTests
         HasVerifiedToolFinding: false,
         IsCompactionBoundary: false,
         HasAcceptedSubAgentFinding: false,
-        Domain: "project:d0ac6ckbk5k",
         Sensitivity: "normal",
         RecallMode: "auto",
         Confidence: 0.88);

@@ -376,7 +376,6 @@ public sealed class SessionMemoryObserverActorTests : TestKit
         var gate = new MemoryProposalGate();
         var gateResult = gate.Evaluate(
             reply.Proposals,
-            new SessionId("test-channel/persist-before-reply").ToMemoryDomain(),
             "normal",
             DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
 
@@ -463,7 +462,6 @@ public sealed class SessionMemoryObserverActorTests : TestKit
         var gate = new MemoryProposalGate();
         var gateResult = gate.Evaluate(
             reply.Proposals,
-            new SessionId("test-channel/accepted-only").ToMemoryDomain(),
             "normal",
             DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
 
@@ -502,7 +500,6 @@ public sealed class SessionMemoryObserverActorTests : TestKit
     {
         var prompt = SessionMemoryObserverActor.BuildDistillationUserPrompt(
             "test-channel/legacy-recovery",
-            new SessionId("test-channel/legacy-recovery").ToMemoryDomain(),
             1,
             "check legacy skip context",
             [new ProposedMemoryContext("legacy-anchor", "legacy-anchor", string.Empty)]);

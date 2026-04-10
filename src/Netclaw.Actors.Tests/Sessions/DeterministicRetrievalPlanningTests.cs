@@ -73,7 +73,7 @@ public sealed class DeterministicRetrievalPlanningTests
         var store = new SQLiteMemoryStore(Path.Combine(dir, "memory.db"), TimeProvider.System);
         await store.InitializeAsync(TestContext.Current.CancellationToken);
 
-        var anchor = store.CreateDefaultAnchor("textforge-pricing-model", "user:aaron");
+        var anchor = store.CreateDefaultAnchor("textforge-pricing-model");
         var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
         await store.UpsertDocumentAsync(new SQLiteMemoryDocument(
@@ -86,7 +86,6 @@ public sealed class DeterministicRetrievalPlanningTests
             FacetsJson: "[\"project_fact\"]",
             SlotsJson: null,
             UpdateSemantics: "merge-document",
-            Domain: "user:aaron",
             Sensitivity: "normal",
             RecallMode: "auto",
             Confidence: 0.9,
@@ -119,7 +118,7 @@ public sealed class DeterministicRetrievalPlanningTests
         var store = new SQLiteMemoryStore(Path.Combine(dir, "memory.db"), TimeProvider.System);
         await store.InitializeAsync(TestContext.Current.CancellationToken);
 
-        var anchor = store.CreateDefaultAnchor("textforge-pricing-model", "user:aaron");
+        var anchor = store.CreateDefaultAnchor("textforge-pricing-model");
         var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
         await store.UpsertDocumentAsync(new SQLiteMemoryDocument(
@@ -132,7 +131,6 @@ public sealed class DeterministicRetrievalPlanningTests
             FacetsJson: "[\"project_fact\"]",
             SlotsJson: null,
             UpdateSemantics: "merge-document",
-            Domain: "user:aaron",
             Sensitivity: "normal",
             RecallMode: "auto",
             Confidence: 0.9,
@@ -198,7 +196,7 @@ public sealed class DeterministicRetrievalPlanningTests
         var store = new SQLiteMemoryStore(Path.Combine(dir, "memory.db"), TimeProvider.System);
         await store.InitializeAsync(TestContext.Current.CancellationToken);
 
-        var anchor = store.CreateDefaultAnchor("reelfarm-research", "project:d0ac6ckbk5k");
+        var anchor = store.CreateDefaultAnchor("reelfarm-research");
         var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
         await store.UpsertDocumentAsync(new SQLiteMemoryDocument(
@@ -211,7 +209,6 @@ public sealed class DeterministicRetrievalPlanningTests
             FacetsJson: "[\"project_artifact\",\"marketing_tools\"]",
             SlotsJson: null,
             UpdateSemantics: "merge-document",
-            Domain: "project:d0ac6ckbk5k",
             Sensitivity: "normal",
             RecallMode: "searchable",
             Confidence: 0.85,
@@ -236,15 +233,14 @@ public sealed class DeterministicRetrievalPlanningTests
     }
 
     [Fact]
-    public async Task Coordinator_recalls_cross_domain_memories_via_audience_primary_path()
+    public async Task Coordinator_recalls_memories_via_audience_primary_path()
     {
         var dir = Path.Combine(Path.GetTempPath(), "netclaw-audience-primary-tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(dir);
         var store = new SQLiteMemoryStore(Path.Combine(dir, "memory.db"), TimeProvider.System);
         await store.InitializeAsync(TestContext.Current.CancellationToken);
 
-        // Store a memory under project:signalr (old domain)
-        var anchor = store.CreateDefaultAnchor("user-company", "project:signalr");
+        var anchor = store.CreateDefaultAnchor("user-company");
         var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
         await store.UpsertDocumentAsync(new SQLiteMemoryDocument(
@@ -257,7 +253,6 @@ public sealed class DeterministicRetrievalPlanningTests
             FacetsJson: "[\"personal_profile\"]",
             SlotsJson: null,
             UpdateSemantics: "merge-document",
-            Domain: "project:signalr",
             Sensitivity: "normal",
             RecallMode: "auto",
             Confidence: 0.94,
@@ -271,7 +266,6 @@ public sealed class DeterministicRetrievalPlanningTests
             NullLogger<SQLiteMemoryRecallCoordinator>.Instance,
             sessionTuning: new SessionTuning { DeterministicRetrievalEnabled = true });
 
-        // Query from a different domain (project:d0ac6ckbk5k — Slack DM)
         var result = await coordinator.RecallAsync(new AutomaticRecallRequest(
             SessionId: "D0AC6CKBK5K/1774371415.126439",
             Query: "what company does Aaron work at",
@@ -283,14 +277,14 @@ public sealed class DeterministicRetrievalPlanningTests
     }
 
     [Fact]
-    public async Task Coordinator_widens_across_domains_for_named_project_entities()
+    public async Task Coordinator_recalls_named_project_entities()
     {
-        var dir = Path.Combine(Path.GetTempPath(), "netclaw-deterministic-cross-domain-tests", Guid.NewGuid().ToString("N"));
+        var dir = Path.Combine(Path.GetTempPath(), "netclaw-deterministic-project-entity-tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(dir);
         var store = new SQLiteMemoryStore(Path.Combine(dir, "memory.db"), TimeProvider.System);
         await store.InitializeAsync(TestContext.Current.CancellationToken);
 
-        var anchor = store.CreateDefaultAnchor("textforge-project", "project:d0ac6ckbk5k");
+        var anchor = store.CreateDefaultAnchor("textforge-project");
         var now = TimeProvider.System.GetUtcNow().ToUnixTimeMilliseconds();
 
         await store.UpsertDocumentAsync(new SQLiteMemoryDocument(
@@ -303,7 +297,6 @@ public sealed class DeterministicRetrievalPlanningTests
             FacetsJson: "[\"project_fact\"]",
             SlotsJson: null,
             UpdateSemantics: "merge-document",
-            Domain: "project:d0ac6ckbk5k",
             Sensitivity: "normal",
             RecallMode: "auto",
             Confidence: 0.95,

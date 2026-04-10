@@ -25,7 +25,6 @@ public sealed class DeterministicCandidateSelectorTests
         string id,
         string title,
         string content,
-        string domain = "project:d0ac6ckbk5k",
         string memoryClass = "durable_fact") => new(
         Id: id,
         Kind: "document",
@@ -35,7 +34,6 @@ public sealed class DeterministicCandidateSelectorTests
         AliasesJson: null,
         FacetsJson: null,
         SlotsJson: null,
-        Domain: domain,
         Boundary: "boundary:trusted-instance",
         Audience: "public",
         Sensitivity: "normal",
@@ -49,8 +47,7 @@ public sealed class DeterministicCandidateSelectorTests
     {
         var selector = new DeterministicCandidateSelector();
         var plan = MakePlan(lexicalTerms: ["session"]);
-        // Cross-domain item with no lexical overlap — baseline score only.
-        var item = MakeItem("doc-1", "User Identity Profile", "Aaron runs Petabridge.", domain: "project:other");
+        var item = MakeItem("doc-1", "User Identity Profile", "Aaron runs Petabridge.");
 
         var result = selector.Select(plan, [item]);
 
@@ -77,7 +74,7 @@ public sealed class DeterministicCandidateSelectorTests
         // normalization mismatch). Token "docker" is unaffected by the
         // tokenizer's plural rules.
         var plan = MakePlan(lexicalTerms: ["docker"]);
-        var noise = MakeItem("doc-noise", "Unrelated", "Something about databases.", domain: "project:other");
+        var noise = MakeItem("doc-noise", "Unrelated", "Something about databases.");
         var relevant = MakeItem("doc-relevant", "Docker Guide", "Docker container deployment notes.");
 
         var result = selector.SelectWithScores(plan, [noise, relevant]);
@@ -85,41 +82,6 @@ public sealed class DeterministicCandidateSelectorTests
         Assert.Single(result);
         Assert.Equal("doc-relevant", result[0].Item.Id);
         Assert.True(result[0].SelectorScore >= 2.0);
-    }
-
-    [Fact]
-    public void Domain_is_not_a_scoring_signal()
-    {
-        // Domain affinity was intentionally removed — the concept is
-        // half-implemented (Protocol.SessionId.ToMemoryDomain always returns
-        // project:default) and it was polluting the composite-score floor.
-        // Same-domain and cross-domain candidates with identical content
-        // must score identically. Tracked in #584.
-        var selector = new DeterministicCandidateSelector();
-        var plan = MakePlan(
-            lexicalTerms: ["petabridge"]);
-
-        var sameDomain = MakeItem("doc-same", "Company: Petabridge", "Petabridge builds Akka.NET.", domain: "project:d0ac6ckbk5k");
-        var crossDomain = MakeItem("doc-cross", "Company: Petabridge", "Petabridge builds Akka.NET.", domain: "project:signalr");
-
-        var result = selector.SelectWithScores(plan, [crossDomain, sameDomain]);
-
-        Assert.Equal(2, result.Count);
-        Assert.Equal(result[0].SelectorScore, result[1].SelectorScore);
-    }
-
-    [Fact]
-    public void Cross_domain_candidate_not_excluded()
-    {
-        var selector = new DeterministicCandidateSelector();
-        var plan = MakePlan(
-            lexicalTerms: ["petabridge"]);
-
-        var crossDomain = MakeItem("doc-cross", "Company: Petabridge", "Petabridge builds Akka.NET.", domain: "project:signalr");
-
-        var result = selector.Select(plan, [crossDomain]);
-
-        Assert.Single(result);
     }
 
     [Fact]
@@ -156,18 +118,15 @@ public sealed class DeterministicCandidateSelectorTests
         var weak = MakeItem(
             "doc-weak",
             "Unrelated Guide",
-            "This note mentions akka once, nothing else.",
-            domain: "project:other");
+            "This note mentions akka once, nothing else.");
         var medium = MakeItem(
             "doc-medium",
             "Akka Stream Overview",
-            "Akka stream uses demand signalling.",
-            domain: "project:other");
+            "Akka stream uses demand signalling.");
         var strong = MakeItem(
             "doc-strong",
             "Akka Stream Backpressure",
-            "Demand backpressure flow control in akka stream.",
-            domain: "project:d0ac6ckbk5k");
+            "Demand backpressure flow control in akka stream.");
 
         var result = selector.SelectWithScores(plan, [weak, medium, strong]);
 
@@ -196,8 +155,7 @@ public sealed class DeterministicCandidateSelectorTests
         var withoutFacet = MakeItem(
             "doc-no-facet",
             "Akka Stream",
-            "Backpressure in akka stream.",
-            domain: "project:other");
+            "Backpressure in akka stream.");
         var withFacet = new SQLiteMemoryHydratedItem(
             Id: "doc-with-facet",
             Kind: "document",
@@ -207,7 +165,6 @@ public sealed class DeterministicCandidateSelectorTests
             AliasesJson: null,
             FacetsJson: "[\"akka-streams\"]",
             SlotsJson: null,
-            Domain: "project:other",
             Boundary: "boundary:trusted-instance",
             Audience: "public",
             Sensitivity: "normal",
@@ -236,13 +193,11 @@ public sealed class DeterministicCandidateSelectorTests
         var noAnchor = MakeItem(
             "doc-no-anchor",
             "Something Else",
-            "Akka stream is useful.",
-            domain: "project:other");
+            "Akka stream is useful.");
         var withAnchor = MakeItem(
             "doc-with-anchor",
             "Akka Stream Backpressure",
-            "Demand in akka stream.",
-            domain: "project:other");
+            "Demand in akka stream.");
 
         var result = selector.SelectWithScores(plan, [noAnchor, withAnchor]);
 

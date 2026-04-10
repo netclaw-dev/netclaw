@@ -30,7 +30,6 @@ public sealed record SubAgentFinding
     public required string Title { get; init; }
     public required string Content { get; init; }
     public string Kind { get; init; } = "record";
-    public string Domain { get; init; } = "project:default";
     public SubAgentFindingSensitivity Sensitivity { get; init; } = SubAgentFindingSensitivity.Normal;
     public SubAgentFindingRecallMode RecallMode { get; init; } = SubAgentFindingRecallMode.Auto;
     public string UpdateSemantics { get; init; } = "append-document";

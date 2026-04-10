@@ -33,7 +33,7 @@ public sealed class SQLiteMemoryStoreTests : IAsyncLifetime
     {
         await _store.InitializeAsync(TestContext.Current.CancellationToken);
 
-        var anchor = _store.CreateDefaultAnchor("netclaw", "project:test");
+        var anchor = _store.CreateDefaultAnchor("netclaw");
         var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
         await _store.UpsertDocumentAsync(new SQLiteMemoryDocument(
@@ -46,7 +46,6 @@ public sealed class SQLiteMemoryStoreTests : IAsyncLifetime
             FacetsJson: "[\"project_fact\"]",
             SlotsJson: null,
             UpdateSemantics: "merge-document",
-            Domain: "project:test",
             Sensitivity: "normal",
             RecallMode: "auto",
             Confidence: 0.95,
@@ -65,7 +64,6 @@ public sealed class SQLiteMemoryStoreTests : IAsyncLifetime
             FacetsJson: "[\"project_fact\"]",
             SlotsJson: null,
             UpdateSemantics: "merge-document",
-            Domain: "project:test",
             Sensitivity: "secret",
             RecallMode: "auto",
             Confidence: 0.99,
@@ -74,7 +72,7 @@ public sealed class SQLiteMemoryStoreTests : IAsyncLifetime
             CreatedAtMs: now,
             UpdatedAtMs: now), TestContext.Current.CancellationToken);
 
-        var results = await _store.SearchAutoRecallDocumentsAsync("sqlite", "project:test", 5, ct: TestContext.Current.CancellationToken);
+        var results = await _store.SearchAutoRecallDocumentsAsync("sqlite", 5, ct: TestContext.Current.CancellationToken);
 
         Assert.Single(results);
         Assert.Equal("doc-1", results[0].DocumentId);
@@ -107,7 +105,7 @@ public sealed class SQLiteMemoryStoreTests : IAsyncLifetime
     {
         await _store.InitializeAsync(TestContext.Current.CancellationToken);
 
-        var anchor = _store.CreateDefaultAnchor("netclaw", "project:test");
+        var anchor = _store.CreateDefaultAnchor("netclaw");
         var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
         await _store.UpsertDocumentAsync(new SQLiteMemoryDocument(
@@ -120,7 +118,6 @@ public sealed class SQLiteMemoryStoreTests : IAsyncLifetime
             FacetsJson: "[\"project_fact\"]",
             SlotsJson: null,
             UpdateSemantics: "merge-document",
-            Domain: "project:test",
             Sensitivity: "normal",
             RecallMode: "auto",
             Confidence: 0.95,
@@ -139,7 +136,6 @@ public sealed class SQLiteMemoryStoreTests : IAsyncLifetime
             FacetsJson: "[\"project_fact\"]",
             SlotsJson: null,
             UpdateSemantics: "merge-document",
-            Domain: "project:test",
             Sensitivity: "normal",
             RecallMode: "auto",
             Confidence: 0.8,
@@ -158,7 +154,6 @@ public sealed class SQLiteMemoryStoreTests : IAsyncLifetime
             FacetsJson: null,
             SlotsJson: null,
             UpdateSemantics: "conversation_trace",
-            Domain: "project:test",
             Sensitivity: "normal",
             RecallMode: "auto",
             Confidence: 0.5,
@@ -167,7 +162,7 @@ public sealed class SQLiteMemoryStoreTests : IAsyncLifetime
             CreatedAtMs: now,
             UpdatedAtMs: now), TestContext.Current.CancellationToken);
 
-        var results = await _store.SearchAutoRecallDocumentsAsync("visible excluded", "project:test", 10, ct: TestContext.Current.CancellationToken);
+        var results = await _store.SearchAutoRecallDocumentsAsync("visible excluded", 10, ct: TestContext.Current.CancellationToken);
 
         Assert.Contains(results, x => x.DocumentId == "doc-durable");
         Assert.DoesNotContain(results, x => x.DocumentId == "doc-expired-evidence");
@@ -179,7 +174,7 @@ public sealed class SQLiteMemoryStoreTests : IAsyncLifetime
     {
         await _store.InitializeAsync(TestContext.Current.CancellationToken);
 
-        var anchor = _store.CreateDefaultAnchor("textforge", "project:test");
+        var anchor = _store.CreateDefaultAnchor("textforge");
         var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
         await _store.UpsertDocumentAsync(new SQLiteMemoryDocument(
@@ -192,7 +187,6 @@ public sealed class SQLiteMemoryStoreTests : IAsyncLifetime
             FacetsJson: null,
             SlotsJson: null,
             UpdateSemantics: "merge-document",
-            Domain: "project:test",
             Sensitivity: "normal",
             RecallMode: "auto",
             Confidence: 0.8,
@@ -218,7 +212,7 @@ public sealed class SQLiteMemoryStoreTests : IAsyncLifetime
     {
         await _store.InitializeAsync(TestContext.Current.CancellationToken);
 
-        var anchor = _store.CreateDefaultAnchor("netclaw", "project:test");
+        var anchor = _store.CreateDefaultAnchor("netclaw");
         var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
         await _store.UpsertDocumentAsync(new SQLiteMemoryDocument(
@@ -231,7 +225,6 @@ public sealed class SQLiteMemoryStoreTests : IAsyncLifetime
             FacetsJson: "[\"project_fact\"]",
             SlotsJson: null,
             UpdateSemantics: "merge-document",
-            Domain: "project:test",
             Sensitivity: "normal",
             RecallMode: "auto",
             Confidence: 0.9,
@@ -251,7 +244,6 @@ public sealed class SQLiteMemoryStoreTests : IAsyncLifetime
             FacetsJson: "[\"project_fact\"]",
             SlotsJson: null,
             UpdateSemantics: "merge-document",
-            Domain: "project:test",
             Sensitivity: "normal",
             RecallMode: "auto",
             Confidence: 0.95,
@@ -261,7 +253,7 @@ public sealed class SQLiteMemoryStoreTests : IAsyncLifetime
             UpdatedAtMs: now,
             Audience: TrustAudience.Personal.ToWireValue()), TestContext.Current.CancellationToken);
 
-        var publicResults = await _store.SearchAcrossDomainsByPlanAsync(
+        var publicResults = await _store.SearchByPlanAsync(
             ["visible"],
             [MemoryClass.DurableFact.ToWireValue()],
             10,
@@ -269,7 +261,7 @@ public sealed class SQLiteMemoryStoreTests : IAsyncLifetime
             TrustAudience.Public,
             false, TestContext.Current.CancellationToken);
 
-        var personalResults = await _store.SearchAcrossDomainsByPlanAsync(
+        var personalResults = await _store.SearchByPlanAsync(
             ["visible"],
             [MemoryClass.DurableFact.ToWireValue()],
             10,

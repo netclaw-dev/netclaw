@@ -41,7 +41,6 @@ public sealed class SqliteMemoryPolicyScopeTests : IDisposable
                     SlotsJson: null,
                     Relations: null,
                     UpdateSemantics: "merge-document",
-                    Domain: "project:netclaw",
                     Boundary: SecurityPolicyDefaults.TrustedInstanceBoundary,
                     Audience: TrustAudience.Public,
                     Sensitivity: "normal",
@@ -62,7 +61,6 @@ public sealed class SqliteMemoryPolicyScopeTests : IDisposable
                     SlotsJson: null,
                     Relations: null,
                     UpdateSemantics: "merge-document",
-                    Domain: "project:netclaw",
                     Boundary: SecurityPolicyDefaults.TrustedInstanceBoundary,
                     Audience: TrustAudience.Team,
                     Sensitivity: "normal",
@@ -111,7 +109,6 @@ public sealed class SqliteMemoryPolicyScopeTests : IDisposable
 
         var request = Assert.Single(sink.Requests);
         var payload = Assert.IsType<MemoryCheckpointPayload>(request.Payload);
-        Assert.Equal(SecurityPolicyDefaults.DefaultMemoryDomain, payload.Domain);
         Assert.Equal(TrustAudience.Personal.ToWireValue(), payload.Audience);
         Assert.Equal(SecurityPolicyDefaults.PersonalBoundary, payload.Boundary);
     }

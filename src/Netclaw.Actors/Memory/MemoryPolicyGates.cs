@@ -47,16 +47,14 @@ public sealed class MemoryProposalGate
 
     public IReadOnlyList<SQLiteMemoryCurationOperation> Accept(
         IReadOnlyList<MemoryProposal> proposals,
-        string domain,
         string defaultSensitivity,
         long nowMs,
         string? boundary = null,
         TrustAudience audience = TrustAudience.Public)
-        => Evaluate(proposals, domain, defaultSensitivity, nowMs, boundary, audience).MemoryOperations;
+        => Evaluate(proposals, defaultSensitivity, nowMs, boundary, audience).MemoryOperations;
 
     public MemoryProposalGateResult Evaluate(
         IReadOnlyList<MemoryProposal> proposals,
-        string domain,
         string defaultSensitivity,
         long nowMs,
         string? boundary = null,
@@ -106,7 +104,7 @@ public sealed class MemoryProposalGate
                     proposal.Content,
                     proposal.Rationale);
 
-                var mirrorOperation = TryBuildIdentityMirrorOperation(proposal, operation, memoryClass, domain, defaultSensitivity, nowMs, boundary, audience);
+                var mirrorOperation = TryBuildIdentityMirrorOperation(proposal, operation, memoryClass, defaultSensitivity, nowMs, boundary, audience);
                 accepted.Add(new AcceptedProposal(proposal, mirrorOperation, identityUpdate, index));
 
                 continue;
@@ -136,7 +134,7 @@ public sealed class MemoryProposalGate
 
             accepted.Add(new AcceptedProposal(
                 proposal,
-                BuildMemoryOperation(proposal, operation, memoryClass, domain, sensitivity, recallMode, freshnessAt, expiry, content, boundary, audience),
+                BuildMemoryOperation(proposal, operation, memoryClass, sensitivity, recallMode, freshnessAt, expiry, content, boundary, audience),
                 null,
                 index));
         }
@@ -237,7 +235,6 @@ public sealed class MemoryProposalGate
         MemoryProposal proposal,
         MemoryProposalOperation operation,
         MemoryClass memoryClass,
-        string domain,
         string defaultSensitivity,
         long nowMs,
         string? boundary,
@@ -266,14 +263,13 @@ public sealed class MemoryProposalGate
         var freshnessAt = proposal.FreshUntilMs ?? nowMs;
         var expiry = ResolveExpiry(memoryClass, proposal.ExpiresAtMs, freshnessAt);
         var recallMode = ResolveRecallMode(memoryClass, sensitivity);
-        return BuildMemoryOperation(proposal, operation, memoryClass, domain, sensitivity, recallMode, freshnessAt, expiry, proposal.Content, boundary, audience);
+        return BuildMemoryOperation(proposal, operation, memoryClass, sensitivity, recallMode, freshnessAt, expiry, proposal.Content, boundary, audience);
     }
 
     private static SQLiteMemoryCurationOperation BuildMemoryOperation(
         MemoryProposal proposal,
         MemoryProposalOperation operation,
         MemoryClass memoryClass,
-        string domain,
         string sensitivity,
         MemoryRecallMode recallMode,
         long freshnessAt,
@@ -314,7 +310,6 @@ public sealed class MemoryProposalGate
             SlotsJson: SerializeSlots(proposal, memoryClass),
             Relations: BuildRelations(proposal, memoryClass),
             UpdateSemantics: updateSemantics.ToWireValue(),
-            Domain: domain,
             Boundary: MemoryPolicyScopeResolver.ResolveBoundary(boundary),
             Audience: audience,
             Sensitivity: sensitivity,

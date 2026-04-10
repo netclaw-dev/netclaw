@@ -92,7 +92,6 @@ public sealed class MemoryPolicyGatesTests
                 "identity_profile",
                 "identity path")
         ],
-        "project:test",
         "normal",
         now);
 
@@ -135,7 +134,6 @@ public sealed class MemoryPolicyGatesTests
                 "identity_profile",
                 "Stable personal fact useful for future recall")
         ],
-        "project:test",
         "normal",
         now);
 
@@ -177,7 +175,6 @@ public sealed class MemoryPolicyGatesTests
                 "identity_profile",
                 "Current temporary status update")
         ],
-        "project:test",
         "normal",
         now);
 
@@ -232,7 +229,6 @@ public sealed class MemoryPolicyGatesTests
                 null,
                 "execution trace")
         ],
-        "project:test",
         "normal",
         now);
 
@@ -272,7 +268,6 @@ public sealed class MemoryPolicyGatesTests
                 null,
                 "missing retrieval metadata")
         ],
-        "project:test",
         "normal",
         now);
 
@@ -338,7 +333,6 @@ public sealed class MemoryPolicyGatesTests
                 null,
                 "agent research finding")
         ],
-        "project:test",
         "normal",
         now);
 
@@ -376,7 +370,6 @@ public sealed class MemoryPolicyGatesTests
                 null,
                 "stable preference")
         ],
-        "user:aaron",
         "normal",
         now,
         boundary: SecurityPolicyDefaults.PersonalBoundary,
@@ -472,7 +465,6 @@ public sealed class MemoryPolicyGatesTests
                 null,
                 null)
         ],
-        "project:test",
         "normal",
         now);
 

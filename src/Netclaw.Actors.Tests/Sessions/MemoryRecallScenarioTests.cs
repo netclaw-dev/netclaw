@@ -29,13 +29,6 @@ namespace Netclaw.Actors.Tests.Sessions;
 /// </summary>
 public sealed class MemoryRecallScenarioTests : IAsyncLifetime
 {
-    // The coordinator normalizes every session's hard scope to
-    // SecurityPolicyDefaults.DefaultMemoryDomain via ToMemoryDomain() before
-    // the planner runs (tracked in #584). Seeding here into the same domain
-    // reproduces the actual production DB layout that caused issue #582 —
-    // cross-domain test fixtures were silently exercising a different
-    // scoring regime than the real bug.
-    private const string TestDomain = "project:default";
     private const string TestSessionId = "test/thread-1";
 
     private readonly string _baseDir = Path.Combine(
@@ -286,7 +279,7 @@ public sealed class MemoryRecallScenarioTests : IAsyncLifetime
         long now,
         CancellationToken ct)
     {
-        var anchor = _store.CreateDefaultAnchor(id, TestDomain);
+        var anchor = _store.CreateDefaultAnchor(id);
         await _store.UpsertDocumentAsync(new SQLiteMemoryDocument(
             DocumentId: id,
             Anchor: anchor,
@@ -297,7 +290,6 @@ public sealed class MemoryRecallScenarioTests : IAsyncLifetime
             FacetsJson: facets,
             SlotsJson: null,
             UpdateSemantics: "merge-document",
-            Domain: TestDomain,
             Sensitivity: "normal",
             RecallMode: "auto",
             Confidence: 0.9,

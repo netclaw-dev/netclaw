@@ -40,7 +40,6 @@ public sealed record AutomaticRecallItem(
     string Id,
     string Title,
     string Content,
-    string Domain,
     string Sensitivity,
     double Score);
 

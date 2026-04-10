@@ -57,7 +57,7 @@ public sealed class SQLiteMemoryRecallCoordinator(
 
                 var effectiveBoundary = Memory.MemoryPolicyScopeResolver.ResolveBoundary(request.Boundary);
 
-                var rawCandidates = await store.SearchAcrossDomainsByPlanAsync(
+                var rawCandidates = await store.SearchByPlanAsync(
                     deterministicPlan.LexicalTerms.Count > 0 ? deterministicPlan.LexicalTerms : [request.Query],
                     deterministicPlan.AllowedMemoryClasses,
                     deterministicPlan.CandidateLimit,
@@ -93,7 +93,6 @@ public sealed class SQLiteMemoryRecallCoordinator(
                         x.Item.Id,
                         x.Item.Title,
                         x.Item.Content,
-                        x.Item.Domain,
                         x.Item.Sensitivity,
                         x.Composite))
                     .ToArray();

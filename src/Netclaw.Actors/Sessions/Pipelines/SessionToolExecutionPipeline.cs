@@ -162,7 +162,6 @@ internal static class SessionToolExecutionPipeline
                         Title = finding.Title,
                         Content = finding.Content,
                         Kind = finding.Kind,
-                        Domain = finding.Domain,
                         Sensitivity = finding.Sensitivity.ToWireValue(),
                         RecallMode = finding.RecallMode.ToWireValue(),
                         UpdateSemantics = finding.UpdateSemantics,
@@ -274,10 +273,6 @@ internal static class SessionToolExecutionPipeline
         if (finding.Sensitivity == SubAgentFindingSensitivity.Secret
             && finding.RecallMode == SubAgentFindingRecallMode.Auto)
             return new(SubAgentFindingReviewDecision.Rejected, "secret cannot auto-recall");
-
-        var expectedDomain = new SessionId(sessionId).ToMemoryDomain();
-        if (!string.Equals(finding.Domain, expectedDomain, StringComparison.OrdinalIgnoreCase))
-            return new(SubAgentFindingReviewDecision.Deferred, $"domain mismatch: expected {expectedDomain}");
 
         if (finding.Durability != SubAgentFindingDurability.Durable)
             return new(SubAgentFindingReviewDecision.Deferred, "insufficient durability");

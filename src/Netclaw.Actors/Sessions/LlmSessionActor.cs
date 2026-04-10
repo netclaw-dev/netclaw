@@ -520,7 +520,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                         HasVerifiedToolFinding: false,
                         IsCompactionBoundary: false,
                         HasAcceptedSubAgentFinding: true,
-                        Domain: finding.Domain,
                         Boundary: CurrentMemoryBoundary(),
                         Audience: CurrentMemoryAudience(),
                         Sensitivity: finding.Sensitivity,
@@ -812,7 +811,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 ?? SecurityPolicyDefaults.ResolveAudienceFromSessionId(_sessionId.Value);
             var gateResult = _memoryProposalGate.Evaluate(
                 msg.Proposals,
-                _sessionId.ToMemoryDomain(),
                 Memory.MemorySensitivity.Normal.ToWireValue(),
                 NowMs(),
                 boundary: CurrentMemoryBoundary(),
@@ -845,7 +843,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
             if (accepted.Count > 0)
             {
-                _curationActor.Tell(new Memory.EvaluateProposals(accepted, _sessionId.ToMemoryDomain()));
+                _curationActor.Tell(new Memory.EvaluateProposals(accepted));
                 _sessionMetrics?.RecordMemoriesFormed(accepted.Count);
             }
 
@@ -976,7 +974,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                         HasVerifiedToolFinding: false,
                         IsCompactionBoundary: true,
                         HasAcceptedSubAgentFinding: false,
-                        Domain: _sessionId.ToMemoryDomain(),
                         Boundary: CurrentMemoryBoundary(),
                         Audience: CurrentMemoryAudience(),
                         Sensitivity: Memory.MemorySensitivity.Normal.ToWireValue(),
@@ -1485,7 +1482,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                     HasVerifiedToolFinding: false,
                     IsCompactionBoundary: false,
                     HasAcceptedSubAgentFinding: false,
-                    Domain: _sessionId.ToMemoryDomain(),
                     Boundary: CurrentMemoryBoundary(),
                     Audience: CurrentMemoryAudience(),
                     Sensitivity: Memory.MemorySensitivity.Normal.ToWireValue(),

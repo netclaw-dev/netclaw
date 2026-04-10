@@ -51,7 +51,6 @@ public sealed class MemoryRedesignedEvalSuiteTests : IDisposable
                 null,
                 "strong user assertion")
         ],
-        "project:slack",
         "normal",
         now);
 
@@ -102,7 +101,6 @@ public sealed class MemoryRedesignedEvalSuiteTests : IDisposable
                 null,
                 "stable explicit user travel preference")
         ],
-        "user:aaron",
         "normal",
         now);
 
@@ -113,7 +111,7 @@ public sealed class MemoryRedesignedEvalSuiteTests : IDisposable
 
         await _store.ApplyCurationBatchAsync("cp-formation-iah", gateResult.MemoryOperations, TestContext.Current.CancellationToken);
 
-        var stored = await _store.SearchAutoRecallDocumentsAsync("airport IAH fly", "user:aaron", 5, ct: TestContext.Current.CancellationToken);
+        var stored = await _store.SearchAutoRecallDocumentsAsync("airport IAH fly", 5, ct: TestContext.Current.CancellationToken);
         var storedDoc = Assert.Single(stored, x => x.Title == "Travel Profile: Primary Origin Airport");
         Assert.Contains("IAH", storedDoc.AliasesJson ?? string.Empty, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("travel_profile", storedDoc.FacetsJson ?? string.Empty, StringComparison.OrdinalIgnoreCase);
@@ -164,7 +162,6 @@ public sealed class MemoryRedesignedEvalSuiteTests : IDisposable
                 null,
                 "stable explicit user airline preference")
         ],
-        "user:aaron",
         "normal",
         now);
 
@@ -175,7 +172,7 @@ public sealed class MemoryRedesignedEvalSuiteTests : IDisposable
 
         await _store.ApplyCurationBatchAsync("cp-formation-united", gateResult.MemoryOperations, TestContext.Current.CancellationToken);
 
-        var stored = await _store.SearchAutoRecallDocumentsAsync("airline United status", "user:aaron", 5, ct: TestContext.Current.CancellationToken);
+        var stored = await _store.SearchAutoRecallDocumentsAsync("airline United status", 5, ct: TestContext.Current.CancellationToken);
         var storedDoc = Assert.Single(stored, x => x.Title == "Travel Profile: Preferred Airline");
         Assert.Contains("United Airlines", storedDoc.AliasesJson ?? string.Empty, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("travel_profile", storedDoc.FacetsJson ?? string.Empty, StringComparison.OrdinalIgnoreCase);
@@ -219,7 +216,6 @@ public sealed class MemoryRedesignedEvalSuiteTests : IDisposable
                     SlotsJson: null,
                     Relations: null,
                     UpdateSemantics: "merge-document",
-                    Domain: "project:slack",
                     Boundary: SecurityPolicyDefaults.TrustedInstanceBoundary,
                     Audience: TrustAudience.Team,
                     Sensitivity: "normal",
@@ -240,7 +236,6 @@ public sealed class MemoryRedesignedEvalSuiteTests : IDisposable
                     SlotsJson: null,
                     Relations: null,
                     UpdateSemantics: "immutable-record",
-                    Domain: "project:slack",
                     Boundary: SecurityPolicyDefaults.TrustedInstanceBoundary,
                     Audience: TrustAudience.Team,
                     Sensitivity: "normal",
@@ -343,7 +338,6 @@ public sealed class MemoryRedesignedEvalSuiteTests : IDisposable
                 "identity_profile",
                 "standing communication preference")
         ],
-        "project:test",
         "normal",
         now);
 
@@ -400,12 +394,11 @@ public sealed class MemoryRedesignedEvalSuiteTests : IDisposable
                 null,
                 "project fact")
         ],
-        "project:ops",
         "normal",
         now);
 
         await _store.ApplyCurationBatchAsync("cp-eval-3", accepted, CancellationToken.None);
-        var items = await _store.SearchAcrossDomainsByPlanAsync(["deploys", "east-2"], ["durable_fact"], 5, SecurityPolicyDefaults.TrustedInstanceBoundary, TrustAudience.Public, false, TestContext.Current.CancellationToken);
+        var items = await _store.SearchByPlanAsync(["deploys", "east-2"], ["durable_fact"], 5, SecurityPolicyDefaults.TrustedInstanceBoundary, TrustAudience.Public, false, TestContext.Current.CancellationToken);
 
         Assert.Single(items);
         Assert.Equal("Deployment region", items[0].Title);
@@ -433,7 +426,6 @@ public sealed class MemoryRedesignedEvalSuiteTests : IDisposable
                     SlotsJson: null,
                     Relations: null,
                     UpdateSemantics: "immutable-record",
-                    Domain: "project:slack",
                     Boundary: SecurityPolicyDefaults.TrustedInstanceBoundary,
                     Audience: TrustAudience.Team,
                     Sensitivity: "normal",
@@ -501,7 +493,6 @@ public sealed class MemoryRedesignedEvalSuiteTests : IDisposable
                 null,
                 "strong user assertion")
         ],
-        "project:slack",
         "normal",
         now);
         await _store.ApplyCurationBatchAsync("cp-report-1", acceptedFact, CancellationToken.None);
@@ -522,7 +513,6 @@ public sealed class MemoryRedesignedEvalSuiteTests : IDisposable
                     SlotsJson: null,
                     Relations: null,
                     UpdateSemantics: "immutable-record",
-                    Domain: "project:slack",
                     Boundary: SecurityPolicyDefaults.TrustedInstanceBoundary,
                     Audience: TrustAudience.Team,
                     Sensitivity: "normal",
@@ -543,7 +533,6 @@ public sealed class MemoryRedesignedEvalSuiteTests : IDisposable
                     SlotsJson: null,
                     Relations: null,
                     UpdateSemantics: "immutable-record",
-                    Domain: "project:slack",
                     Boundary: SecurityPolicyDefaults.TrustedInstanceBoundary,
                     Audience: TrustAudience.Team,
                     Sensitivity: "normal",

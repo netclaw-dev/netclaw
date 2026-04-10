@@ -77,7 +77,6 @@ internal sealed record AcceptedSubAgentFinding
     public required string Title { get; init; }
     public required string Content { get; init; }
     public required string Kind { get; init; }
-    public required string Domain { get; init; }
     public required string Sensitivity { get; init; }
     public required string RecallMode { get; init; }
     public required string UpdateSemantics { get; init; }
