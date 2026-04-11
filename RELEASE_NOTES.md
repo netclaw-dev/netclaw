@@ -1,3 +1,41 @@
+#### 0.11.0 2026-04-11 ####
+
+Netclaw v0.11.0 — Slack thread backfill, approval flow fixes, memory recall improvements, and internal cleanup
+
+**Features**
+
+* Added thread history backfill on mid-thread @-mention — when Netclaw is mentioned mid-thread (rather than at the start), it now fetches and hydrates the full prior thread history so the LLM has complete context for the conversation. ([#576](https://github.com/Aaronontheweb/netclaw/pull/576))
+
+* Added inbound webhook observability and stats surface — the webhooks ingress layer now exposes per-route call counters, last-call timestamps, and error rates, giving operators a live view of webhook activity without digging through logs. ([#550](https://github.com/Aaronontheweb/netclaw/pull/550))
+
+**Bug Fixes**
+
+* Fixed approval wait handling and Slack prompt resolution after selection — approval flows could hang or leave stale interactive prompts in Slack after a user selected an option. Both issues are resolved. ([#587](https://github.com/Aaronontheweb/netclaw/pull/587))
+
+* Fixed missing gap image in Slack thread hydration — `DataContent` for gap images was dropped during thread reconstruction, causing broken display when Netclaw replayed thread history. ([#583](https://github.com/Aaronontheweb/netclaw/pull/583))
+
+* Fixed reminder notifications using a hardcoded audience instead of the deployment posture audience — reminders now correctly derive the notification audience from the active deployment posture rather than always targeting `Team`. ([#570](https://github.com/Aaronontheweb/netclaw/pull/570))
+
+* Fixed memory recall under-returning results — recall overfetch and formation over-production were reduced; the composite-score ranker now applies a score floor so weak matches are excluded rather than surfaced. ([#567](https://github.com/Aaronontheweb/netclaw/pull/567), [#582](https://github.com/Aaronontheweb/netclaw/pull/582), [#585](https://github.com/Aaronontheweb/netclaw/pull/585))
+
+* Fixed per-channel memory domains collapsing to a shared namespace — memory was written to `project:default` instead of the per-channel domain, causing cross-channel knowledge bleed. Channels now have properly isolated memory audiences. ([#557](https://github.com/Aaronontheweb/netclaw/pull/557))
+
+* Fixed `netclaw init` wizard issues from 0.10.1 — resolved several init wizard regressions including config write ordering and step skip logic. ([#537](https://github.com/Aaronontheweb/netclaw/pull/537), [#538](https://github.com/Aaronontheweb/netclaw/pull/538), [#540](https://github.com/Aaronontheweb/netclaw/pull/540), [#559](https://github.com/Aaronontheweb/netclaw/pull/559))
+
+* Fixed LLM sessions not draining on SIGTERM — active sessions were abandoned rather than drained during shutdown, causing stale active session counts to persist after restart. Sessions are now given a grace period to complete their current turn before the process exits. ([#564](https://github.com/Aaronontheweb/netclaw/pull/564))
+
+* Fixed CLI endpoint state being entangled with daemon config — CLI connection state is now tracked separately from the daemon's runtime configuration, preventing config mutations from affecting active CLI sessions. ([#556](https://github.com/Aaronontheweb/netclaw/pull/556))
+
+* Hardened skill scanning — duplicate frontmatter names from the same source are now rejected in non-strict mode, and several edge cases in skill directory scanning are closed out. ([#552](https://github.com/Aaronontheweb/netclaw/pull/552), [#555](https://github.com/Aaronontheweb/netclaw/pull/555))
+
+**Internal**
+
+* Removed dead memory migration cruft, sidecar infrastructure, HardScope plumbing, and the Domain concept in favor of proper audience isolation. These are internal refactors with no user-visible behavior changes. ([#586](https://github.com/Aaronontheweb/netclaw/pull/586), [#588](https://github.com/Aaronontheweb/netclaw/pull/588), [#589](https://github.com/Aaronontheweb/netclaw/pull/589))
+
+**Dependencies**
+
+* Bumped Anthropic SDK from 12.11.0 to 12.13.0. ([#571](https://github.com/Aaronontheweb/netclaw/pull/571))
+
 #### 0.10.0 2026-04-03 ####
 
 Netclaw v0.10.0 — Remote access foundation (exposure modes, device pairing, hub auth), inbound webhooks, and skill management CLI
