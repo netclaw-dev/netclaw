@@ -453,6 +453,55 @@ public class DispatchingToolExecutorTests
     }
 
     [Fact]
+    public async Task One_time_approval_bypasses_policy_for_matching_shell_patterns()
+    {
+        var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
+        config.AudienceProfiles.Personal.ApprovalPolicy = new ToolApprovalConfig
+        {
+            ToolOverrides = new Dictionary<string, ToolApprovalMode>(StringComparer.Ordinal)
+            {
+                ["shell_execute"] = ToolApprovalMode.Approval
+            }
+        };
+
+        var registry = new ToolRegistry();
+        registry.WithFirstPartyTools(config);
+
+        var executor = new DispatchingToolExecutor(
+            registry,
+            new ToolAccessPolicy(
+                config,
+                new EffectivePolicyDefaults(
+                    DeploymentPosture.Personal,
+                    TrustAudience.Personal,
+                    ShellExecutionMode.HostAllowed,
+                    UsedStrictFallback: false)));
+
+        var toolCall = new FunctionCallContent(
+            "call-approve-once-bypass",
+            "shell_execute",
+            new Dictionary<string, object?> { ["Command"] = "echo bypass" });
+
+        var context = new Netclaw.Tools.ToolExecutionContext("signalr/thread-1", null)
+        {
+            Audience = TrustAudience.Personal.ToWireValue(),
+            Boundary = SecurityPolicyDefaults.TrustedInstanceBoundary,
+            ChannelType = "signalr",
+            SupportsInteractiveApproval = true
+        };
+
+        var firstAttempt = await Assert.ThrowsAsync<ToolApprovalRequiredException>(() =>
+            executor.ExecuteAsync(toolCall, context, TestContext.Current.CancellationToken));
+
+        context.OneTimeApprovedToolName = toolCall.Name;
+        context.SetOneTimeApprovedPatterns(firstAttempt.ApprovalContext.UnapprovedPatterns);
+
+        var retryResult = await executor.ExecuteAsync(toolCall, context, TestContext.Current.CancellationToken);
+
+        Assert.Contains("bypass", retryResult, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task Session_approval_allows_same_session_but_not_different_session()
     {
         var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };

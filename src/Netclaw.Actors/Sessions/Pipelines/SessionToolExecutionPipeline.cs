@@ -359,6 +359,9 @@ internal static class SessionToolExecutionPipeline
         TimeSpan timeout,
         CancellationToken cancellationToken)
     {
+        var grantedOneTimeToolName = context.OneTimeApprovedToolName;
+        var grantedOneTimePatterns = context.OneTimeApprovedPatterns;
+
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         if (timeout != Timeout.InfiniteTimeSpan)
             timeoutCts.CancelAfter(timeout);
@@ -376,6 +379,38 @@ internal static class SessionToolExecutionPipeline
                 $"Tool execution exceeded timeout of {timeout.TotalSeconds:F0}s",
                 ex);
         }
+        finally
+        {
+            // One-time approvals are valid for exactly one retry attempt.
+            // Clear any grant we consumed (or attempted to consume), while
+            // preserving whatever baseline state existed before this call.
+            if (!string.IsNullOrWhiteSpace(grantedOneTimeToolName))
+            {
+                if (!string.Equals(context.OneTimeApprovedToolName, grantedOneTimeToolName, StringComparison.Ordinal)
+                    || !SetsEqual(context.OneTimeApprovedPatterns, grantedOneTimePatterns))
+                {
+                    context.OneTimeApprovedToolName = null;
+                    context.SetOneTimeApprovedPatterns([]);
+                }
+            }
+        }
+    }
+
+    private static bool SetsEqual(IReadOnlySet<string> left, IReadOnlySet<string> right)
+    {
+        if (ReferenceEquals(left, right))
+            return true;
+
+        if (left.Count != right.Count)
+            return false;
+
+        foreach (var item in left)
+        {
+            if (!right.Contains(item))
+                return false;
+        }
+
+        return true;
     }
 
     /// <summary>

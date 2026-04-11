@@ -76,6 +76,56 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
         Assert.Equal("approved-and-ran", completed.ToolResults[0].Content);
     }
 
+    [Fact]
+    public async Task Approve_once_does_not_reprompt_on_retry_execution()
+    {
+        var executor = new ApprovalThenSuccessExecutor();
+        var approvalChannel = new ApprovalChannel();
+        var probe = CreateTestProbe("approve-once-no-reprompt-probe");
+        var approvals = new List<ToolInteractionRequest>();
+
+        var toolCalls = new List<FunctionCallContent>
+        {
+            new("call-approve-once", "shell_execute", new Dictionary<string, object?>
+            {
+                ["command"] = "echo once"
+            })
+        };
+
+        var pipelineTask = SessionToolExecutionPipeline.ExecuteToolsAsync(
+            executor,
+            toolCalls,
+            new SessionId("signalr/approve-once-no-reprompt"),
+            source: null,
+            auditLogger: null,
+            timeProvider: TimeProvider.System,
+            sessionDir: Path.GetTempPath(),
+            maxInlineToolResultChars: 4096,
+            timeout: TimeSpan.FromSeconds(5),
+            self: probe.Ref,
+            emitSubAgentOutput: _ => { },
+            spawnChildActor: static (_, _, _) => Task.FromResult<object>(new object()),
+            approvalChannel: approvalChannel,
+            emitApprovalRequest: request => approvals.Add(request),
+            approvalTimeout: Timeout.InfiniteTimeSpan);
+
+        await AwaitAssertAsync(() =>
+        {
+            var firstRequest = Assert.Single(approvals);
+            approvalChannel.Complete(firstRequest.CallId, ApprovalDecision.ApprovedOnce);
+        }, duration: TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+
+        var completed = await probe.ExpectMsgAsync<ToolExecutionCompleted>(
+            TimeSpan.FromSeconds(3),
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        await pipelineTask.WaitAsync(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+
+        Assert.Single(completed.ToolResults);
+        Assert.Equal("approved-and-ran", completed.ToolResults[0].Content);
+        Assert.Single(approvals);
+    }
+
     private sealed class ApprovalThenSuccessExecutor : IToolExecutor
     {
         private int _attempt;
