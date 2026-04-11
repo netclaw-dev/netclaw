@@ -1,123 +1,133 @@
+> **Scope note (2026-04-11):** the original plan ran 15 phases and 76 tasks.
+> After implementing Phases 1–6 it became clear that the core user-reported
+> bug (silent PDF drop in Slack ingest) is fixed, and the remaining phases
+> should be trimmed to what's actually required for ship-quality on that
+> bug — not the "canonical cross-channel contract" vision that ballooned
+> out of it. Phases 7, 11, 12, 13, and 15 are explicitly cut from this
+> change and tracked as follow-up work in the "Deferred" section below.
+
 ## 1. Config surface and schema
 
 - [x] 1.1 Add `AttachmentCategory` enum (`Image`, `Pdf`, `Document`, `Archive`, `Media`, `Other`) to `Netclaw.Configuration`
-- [x] 1.2 Add `ChannelAttachmentPolicy` record with `AllowedCategories` (HashSet<AttachmentCategory>), `MaxFileBytes` (long), `MaxFilesPerMessage` (int)
+- [x] 1.2 Add `ChannelAttachmentPolicy` record with `AllowedCategories`, `MaxFileBytes`, `MaxFilesPerMessage`
 - [x] 1.3 Add `ChannelAttachments` field on `ToolAudienceProfile` defaulting to `ChannelAttachmentPolicy.Empty` (fail-closed) when not set
-- [x] 1.4 Implement `ToolAudienceProfileDefaults` entries for `Public` / `Team` / `Personal` using the matrix from design D4 (Public = {Image}; Team = {Image, Pdf, Document, Archive, Media}; Personal = all six; 25 MiB; 10 files)
-- [x] 1.5 Extend `netclaw-config.v1.schema.json` with the new fields under each audience profile, using `"type": "string"` enums for categories and `"default"` values per audience so `SchemaFixResolver` can auto-migrate
-- [x] 1.6 Add `IValidateOptions` logic confirming size cap > 0 and file-count cap > 0 on startup; emit a config validation error naming the offending audience on violation
-- [x] 1.7 Unit-test the defaults: Public rejects Pdf, Team accepts Pdf+Docx, Personal accepts Other, migration via `netclaw doctor --fix` on a config missing `ChannelAttachments`
+- [x] 1.4 Implement `ToolAudienceProfileDefaults` entries for `Public` / `Team` / `Personal` using the matrix from design D4 (Public = {Image}; Team = everything except Other; Personal = all six; 25 MiB; 10 files)
+- [x] 1.5 Extend `netclaw-config.v1.schema.json` with `ChannelAttachmentPolicy` + `AttachmentCategory` definitions and default values for `SchemaFixResolver`
+- [x] 1.6 Validate size/count caps > 0 when `AllowedCategories` is non-empty; fail daemon startup in `Program.cs` on violation; also surfaced in `ToolAudienceProfilesDoctorCheck`
+- [x] 1.7 Unit-test the defaults, validator, and MIME classifier (31 cases in `ChannelAttachmentPolicyTests`)
 
 ## 2. Central MIME → category mapping
 
-- [x] 2.1 Add an internal `MimeToCategory(string mime)` helper in `Netclaw.Configuration` (or closest neighbor) with a single switch expression covering every documented category
-- [x] 2.2 Unit tests covering representative MIME strings per category, case-insensitivity, empty/null, and the unknown-MIME → `Other` fallback
-- [x] 2.3 Confirm no other place in the codebase maps MIME → category; grep for `StartsWith("image/"` etc. and fold any open-coded checks into the helper
+- [x] 2.1 `AttachmentCategories.FromMime` in `Netclaw.Configuration` as the single classifier
+- [x] 2.2 Tests for case-insensitivity, empty/null, unknown → `Other`, all canonical types
+- [x] 2.3 Grep audit: the two existing `StartsWith("image/...")` call sites in the Slack channel are retired as part of Phase 6 + Phase 7. No other domain uses MIME→category mapping.
 
 ## 3. Session working directory hardening
 
-- [x] 3.1 Mark `SessionDirectoryHelper.GetSessionDirectory(string sessionId)` (single-arg, Path.GetTempPath) `[Obsolete("Use the NetclawPaths.SessionsDirectory overload")]`
-- [x] 3.2 Audit every call site of that overload; migrate production code to the base-path overload
-- [x] 3.3 Add an `inbox/` subdirectory helper (`GetOrCreateInboxDirectory(sessionId, basePath)`) that ensures the directory exists with correct permissions
-- [x] 3.4 Add startup warning in `ConfigSchemaDoctorCheck` when the resolved session directory base path is under `Path.GetTempPath()` (added to `ToolAudienceProfilesDoctorCheck` which already has `NetclawPaths` injected)
-- [x] 3.5 Confirmed no session-directory cleanup hook exists today (neither `media/` nor any other subdirectory). Adding a cleanup subsystem is out of scope for this change since the pre-existing `media/` leak has the same profile. Tracked as a follow-up.
+- [x] 3.1 Removed legacy single-arg `SessionDirectoryHelper.GetSessionDirectory(SessionId)` overload
+- [x] 3.2 Migrated all call sites to the base-path overload; audited tests
+- [x] 3.3 Added `GetOrCreateInboxDirectory(sessionId, basePath)` + `InboxSubdirectory`/`MediaSubdirectory` constants
+- [x] 3.4 Added `IsUnderTempPath` warning in `ToolAudienceProfilesDoctorCheck`
+- [x] 3.5 Confirmed no session-directory cleanup hook exists today (neither `media/` nor any other subdirectory). Tracked as a pre-existing leak, out of scope for this change.
+- [x] 3.6 `NetclawPaths` is now required on `SessionServices` and `SessionPipeline` — no more null-coalescing fallbacks to `Path.GetTempPath()`. 13 test fixtures migrated via the shared `AddTestNetclawPaths()` helper.
+- [x] 3.7 **Log-path leak fix**: moved per-session logs from `{SessionsDirectory}/{id}/logs/` (inside the agent-readable session working dir) to `{LogsDirectory}/sessions/{id}/`, which the agent's `file_read` tool cannot reach. Renamed `NetclawPaths.LegacySessionLogsDirectory` → `SessionLogsDirectory`; updated `SessionLogActor`, `LlmSessionActor`, and `SessionCatalogService`.
 
-- [x] 3.6 (adjacent fix) Remove legacy single-arg `SessionDirectoryHelper.GetSessionDirectory(SessionId)` overload and the null-coalescing fallbacks in `ChannelPipeline` and `LlmSessionActor`. Make `NetclawPaths` required on `SessionServices` and `SessionPipeline`. Updated 13 test fixtures via a shared `AddTestNetclawPaths()` helper.
-- [x] 3.7 (adjacent fix) Move per-session logs out of the agent-readable session directory. Renamed `NetclawPaths.LegacySessionLogsDirectory` to `SessionLogsDirectory` (already at `{BasePath}/logs/sessions/`). `SessionLogActor` now writes to `{SessionLogsDirectory}/{sanitized_id}/` instead of `{SessionsDirectory}/{id}/logs/`, so the agent's `file_read` tool (scoped to `{session_dir}`) can no longer observe its own audit trail.
+## 4. Filename sanitization and atomic inbox write
 
-## 4. Filename sanitization and collision suffixing
+- [x] 4.1 Verified `FilenameSanitizer.Sanitize` handles `..`, NUL, control chars, absolute paths, Windows reserved names
+- [x] 4.2 `InboxWriter.ReserveUniquePath` with filesystem-checked `_1`..`_99` collision suffixing
+- [x] 4.3 `InboxWriter.WriteAtomicAsync` via temp-file + `File.Move`
+- [x] 4.4 `SanitizeReserveAndWriteAsync` convenience method reusing `FilenameSanitizer`
+- [x] 4.5 9 unit tests covering happy path, collisions, exhaustion, temp-file cleanup, path traversal
 
-- [x] 4.1 Verify `FilenameSanitizer.Sanitize` already handles `..`, NUL, control chars, absolute paths, Windows reserved names (confirmed solid at `src/Netclaw.Security/FilenameSanitizer.cs`)
-- [x] 4.2 Add an internal `InboxWriter.ReserveUniquePath(inboxDir, safeName)` helper that checks `File.Exists` and returns `foo.pdf` / `foo_1.pdf` / … up to `_99`, throwing a specific exception at exhaustion
-- [x] 4.3 Atomic write helper (`InboxWriter.WriteAtomicAsync(path, bytes, ct)`) that writes to a temp sibling then `File.Move`
-- [x] 4.4 Unit-test collision suffixing across multiple calls; unit-test atomic write failure (simulated move error) leaves no partial file
-- [x] 4.5 Unit-test the exhaustion exception propagates to the caller and surfaces as a rejection reply (in Slack tests downstream)
+## 5. ChannelIngressCapabilityQuery helper (built then deleted)
 
-## 5. ModelCapabilityActor ingress query helper
-
-- [x] 5.1 Add a thin helper on the Slack binding actor (or a shared `ChannelIngressCapabilityQuery` utility if Discord is coming soon) that `Ask`s `ModelCapabilityActor` with a 2-second timeout
-- [x] 5.2 Translate timeout into a typed result (`CapabilityQueryResult.Ok(modalities)` / `CapabilityQueryResult.Timeout`) so callers fail loudly rather than defaulting modalities
-- [x] 5.3 Unit-test cache-hit happy path, timeout path, and exception path with a fake `ModelCapabilityActor`
+- [~] 5.1 Built `ChannelIngressCapabilityQuery.QueryAsync` + typed `CapabilityQueryResult` in `Netclaw.Actors.Channels`, then **deleted** after Phase 6 revealed the helper had zero production call sites. The Slack implementation reads `_dependencies.ModelCapabilities.InputModalities` directly — the active Main model is already in DI as a singleton with no round-trip cost. The helper was scaffolding for hypothetical future channels (Discord, subagents, failover) that don't exist.
+- [~] 5.2 Same fate — typed result record and tests were built then removed.
+- [~] 5.3 5 unit tests that never guarded any real code path, removed with the helper.
+- **Lesson:** don't pre-build cross-channel scaffolding before the second channel exists. When Discord lands, re-add whatever shape makes sense for its actual needs. ~250 lines of code and tests removed; `AttachmentNotes` is the only cross-channel helper that survived this phase (and is used by Slack today).
 
 ## 6. Slack ingress rewrite (`SlackThreadBindingActor`)
 
-- [x] 6.1 Delete the `image/`-only allowlist and the `_log.Debug("Skipping non-image file attachment...")` line
-- [x] 6.2 Implement the eleven-step pipeline in order from design D5: audience gate → size gate → count gate → download → scan → capability query → inbox write → announcement → inline. Note: the design called for routing capability resolution through `ModelCapabilityActor.Ask` via `ChannelIngressCapabilityQuery`; the implementation reads `_dependencies.ModelCapabilities.InputModalities` directly instead. Both resolve to the same modality flags for the active Main model with no round-trip cost, and the helper remains available for future dynamic-model channels. `ChannelIngressCapabilityQuery` stays in the codebase as scaffolding for Discord/subagent scenarios.
-- [x] 6.3 Build the `[attachment]` line exactly per the canonical format; use a private formatter method that other channels can lift later
-- [x] 6.4 Source `note` strings from a shared helper (`AttachmentNotes.ModelMissingImage`, `AttachmentNotes.ModelMissingPdf`, `AttachmentNotes.FormatNotInlineable`) so the canonical prefixes never drift
-- [x] 6.5 Batch multi-file announcements into a single `TextContent` block, preserving original order
-- [x] 6.6 Wire user-visible rejection replies for every pre-download and post-download failure mode (category, size, count, scan, capability timeout, inbox write error, collision exhaustion) through `SafePostAsync`
-- [x] 6.7 Upgrade the accepted-file log line from the old DEBUG drop to INFO with `{Name, Mime, Size, Audience, CategoryDecision, Inlined}` fields
-- [x] 6.8 Emit WARN log with the same fields on every rejection path
-- [x] 6.9 Ensure pre-download gates short-circuit on Slack-reported metadata; no `HttpClient.SendAsync` call is made for rejected files (verified by test double)
-- [x] 6.10 Confirm `ChannelInput.Audience` is set on the outbound command (existing `SlackAclPolicy.ResolveAudience` path unchanged — regression tests already cover this)
+- [x] 6.1 Deleted the `image/`-only allowlist and the silent-drop DEBUG log
+- [x] 6.2 Implemented the nine-step pipeline (audience gate → size gate → count gate → download → scan → direct modality read → inbox write → `[attachment]` line → DataContent inline). Pre-download gates short-circuit on Slack metadata; no bandwidth burned on rejected files.
+- [x] 6.3 Private `BuildAttachmentLine` formatter emitting the canonical text shape with quoted-value escaping
+- [x] 6.4 `note` strings sourced from a shared `AttachmentNotes` static class so the canonical prefixes never drift
+- [x] 6.5 Multi-file announcements batched into a single `TextContent` block in original order
+- [x] 6.6 User-visible rejection replies for every failure mode via `SafePostAsync`
+- [x] 6.7 Accepted-file INFO log with structured fields (`name`, `mime`, `size`, `audience`, `category`, `inlined`)
+- [x] 6.8 WARN log on every rejection path with the same fields plus a rejection reason
+- [x] 6.9 Pre-download gates verified — no `HttpClient.SendAsync` call for rejected files
+- [x] 6.10 `ChannelInput.Audience` still populated via the existing `SlackAclPolicy.ResolveAudience` path
 
-## 7. Slack thread history backfill updates (`SlackThreadHistoryFetcher` + merge path)
+## 7. `LlmSessionActor` strict-consumer contract
 
-- [ ] 7.1 Rewrite `SlackThreadHistoryFetcher` so it downloads and scans every attachment regardless of MIME type, returning `(bytes, mime, name, size)` tuples, NOT pre-filtered image bytes
-- [ ] 7.2 Move the audience/capability gate for historical attachments into `SlackThreadBindingActor`'s merge step so it reuses the same policy helper as the live inbound path
-- [ ] 7.3 Update the merge block to emit `[attachment] ... inlined="..." [note="..."]` lines per historical attachment, plus `[attachment rejected: name (reason)]` entries for policy-rejected historical files
-- [ ] 7.4 Inline historical `DataContent` only for capability-gated categories, matching live-turn behavior
-- [ ] 7.5 Integration test: a thread with a mix of historical images, a PDF, and a docx replays through backfill with the correct per-attachment routing on both a vision-capable and a text-only model
+- [ ] 7.1 Delete the existing silent image-strip block in `LlmSessionActor.cs:1705-1719` (`mediaRefs` + `ModelModality.Image` check + `[Images removed ...]` placeholder)
+- [ ] 7.2 Replacement: `ERROR` log naming the model id, modalities, and offending attachments; drop the unsupported `DataContent` items from the turn; append a `[system]` `TextContent` line noting the ingress bug; complete the turn normally
+- [ ] 7.3 Grep-assert that no code path emits the old `[Images removed — the current model does not support vision input]` string
+- [ ] 7.4 Add the attachment-aware dynamic-context block to `InjectDynamicContextLayers`, conditional on `file_read` being granted by the resolved `ToolAudienceProfile`. Source the block text from a single static constant.
+- [ ] 7.5 Unit tests:
+  - inbound `ChannelInput` with valid modalities passes through untouched
+  - inbound `ChannelInput` with an unsupported-modality `DataContent` produces an `ERROR` log, drops the ref, appends the `[system]` TextContent, completes the turn
+  - `file_read`-granted session has the attachment block in its system prompt
+  - `file_read`-ungranted session does not
 
-## 8. `LlmSessionActor` changes
+## 8. Slack regression tests for the rewritten pipeline
 
-- [ ] 8.1 Delete `LlmSessionActor.cs:1705-1719` silent image-strip block
-- [ ] 8.2 Add replacement: `ERROR`-log + drop offending `DataContent` + append `[system]` TextContent per design D7 and the `netclaw-session` spec requirement
-- [ ] 8.3 Grep-assert that no code path produces the old `[Images removed — the current model does not support vision input]` string
-- [ ] 8.4 Add the attachment-aware dynamic-context block to `InjectDynamicContextLayers` (~line 2254), conditional on `file_read` being granted via the resolved `ToolAudienceProfile`
-- [ ] 8.5 Source the block text from a single static constant so it is immutable and easy to snapshot
-- [ ] 8.6 Unit test: session with `file_read` granted gets the block, session without `file_read` does not
+- [ ] 8.1 PDF in a Team-trust DM on a vision-capable model → file at `inbox/report.pdf`, `[attachment] ... inlined="true"`, matching `DataContent`
+- [ ] 8.2 Image on a text-only model → file at `inbox/foo.png`, `[attachment] ... inlined="false" note="current model has no image modality..."`, no `DataContent`
+- [ ] 8.3 `.docx` on any model → inbox write, `[attachment] ... inlined="false" note="format not inlineable..."`, no `DataContent`
+- [ ] 8.4 Public channel + `.docx` → no HTTP download, user-visible rejection reply, WARN log
+- [ ] 8.5 30 MiB file → no HTTP download, user-visible rejection reply
+- [ ] 8.6 15-file inbound → entire batch rejected with one reply; text content still forwarded
+- [ ] 8.7 Filename collision across turns → second upload lands at `foo_1.pdf`, first file unchanged
+- [ ] 8.8 Scanner rejects (non-`ScanFailure`) → user-visible reply, no inbox write, no `[attachment]` line
 
-## 9. Slack unit tests (TestKit, no `Thread.Sleep` / `Task.Delay`)
+## 9. Quality gates
 
-- [ ] 9.1 Test: PDF in Team-trust channel on PDF-capable model → `inbox/report.pdf` exists, `ChannelInput.Contents` has matching `[attachment] ... inlined="true"` line and a `DataContent(application/pdf)`
-- [ ] 9.2 Test: image on text-only model → `inbox/foo.png` exists, `[attachment] ... inlined="false" note="current model has no image modality..."` line, no `DataContent`
-- [ ] 9.3 Test: `.docx` on any model → inbox write, `[attachment] ... inlined="false" note="format not inlineable..."`, no `DataContent`
-- [ ] 9.4 Test: public channel + `.docx` → no HTTP download, user-visible rejection reply posted, WARN log
-- [ ] 9.5 Test: 30 MiB file → no HTTP download, user-visible rejection reply, WARN log
-- [ ] 9.6 Test: 15-file inbound → entire attachment batch rejected with user-visible reply, text content still forwarded
-- [ ] 9.7 Test: filename collision across turns → second upload lands at `foo_1.pdf`, first file unchanged
-- [ ] 9.8 Test: `ModelCapabilityActor` timeout → user-visible "can't process your attachment" reply, no `DataContent`, no `[attachment]` line fabricated
-- [ ] 9.9 Test: scanner rejects (non-`ScanFailure`) → user-visible reply with reason, no inbox write
-- [ ] 9.10 Test: inbox write I/O failure (simulated) → user-visible reply, ERROR log, no `[attachment]` line
+- [ ] 9.1 `dotnet build` clean on the full solution
+- [ ] 9.2 `dotnet test` green on Configuration + Actors test projects
+- [ ] 9.3 `dotnet slopwatch analyze` — no new violations
+- [ ] 9.4 Schema round-trip: load a config without `ChannelAttachments` through `netclaw doctor --fix` and confirm defaults are inserted
 
-## 10. `LlmSessionActor` unit tests
+## Deferred (explicitly out of scope for this change)
 
-- [ ] 10.1 Test: inbound `ChannelInput` with valid modalities passes through untouched
-- [ ] 10.2 Test: inbound `ChannelInput` with an unsupported-modality `DataContent` produces an `ERROR` log, drops the ref, appends the `[system]` TextContent, and still completes the turn
-- [ ] 10.3 Test: `file_read`-granted session has the attachment block in its assembled system prompt
-- [ ] 10.4 Test: `file_read`-ungranted session has no attachment block
+The following were in the original plan but are deferred as either
+secondary-path work, process/documentation, or post-ship bookkeeping.
+Each should land as its own small follow-up once the core change is
+merged.
 
-## 11. Eval suite regression cases
+- **SlackThreadHistoryFetcher backfill rewrite.** The fetcher still
+  hard-filters to image attachments (`SlackThreadHistoryFetcher.cs:148`),
+  so backfilled historical PDFs/docs are invisible to the agent. Live
+  ingest is fixed; backfill is not. Follow-up issue: generalize the
+  fetcher to all MIME types and move the audience/capability gate into
+  the merge step in `SlackThreadBindingActor`, mirroring the live-turn
+  pipeline. Includes scenarios in the `netclaw-slack-socket` spec delta
+  (already in this change's `specs/` folder) for historical-attachment
+  routing on vision-capable vs text-only models.
 
-- [ ] 11.1 Eval: PDF round-trip — user uploads a PDF in Team-trust, agent answers a question about its contents; asserts on `[attachment] ... inlined="true"` in the inbound and on a content-accurate answer in the reply
-- [ ] 11.2 Eval: model-modality gap — user uploads an image on a text-only model, agent mentions the filename by name in its reply and explicitly tells the user it can't view images on the current model
-- [ ] 11.3 Eval: format-not-inlineable — user uploads a `.docx` in Team-trust, agent uses `shell_execute` (or similar) to extract content and answers about it
-- [ ] 11.4 Run `./evals/run-evals.sh` and confirm all three new cases pass; update baselines as needed
+- **Eval suite regression cases.** PDF round-trip, model-modality gap,
+  and format-not-inlineable. These are the behavioral guarantees the
+  new ingress contract makes, and evals are the right regression tool
+  per CLAUDE.md. Not a blocker for the bug fix itself.
 
-## 12. PRD updates
+- **PRD updates.** PRD-009 (Input Adapters) and PRD-002 (Gateway
+  Security Envelope) should grow new sections covering the attachment
+  ingress contract and the per-audience policy surface. Documentation,
+  not behavior.
 
-- [ ] 12.1 Update `docs/prd/PRD-009-input-adapters-and-unified-input.md` with a new section describing the canonical attachment ingress contract, referencing `netclaw-input-adapters` as the spec home
-- [ ] 12.2 Update `docs/prd/PRD-002-gateway-security-envelope.md` with a new section on audience-gated attachment policy and the default matrix, referencing `tool-approval-gates` as the spec home
-- [ ] 12.3 Grep the other PRDs for any stale language that assumes "only images are accepted from Slack" and update if found
+- **System skill sync.** `feeds/skills/.system/files/netclaw-operations/SKILL.md`
+  should gain agent-facing guidance about `inbox/` and the `[attachment]`
+  line format once the dynamic-context block lands in Phase 7. Tied to
+  Phase 7, not the core ingress fix.
 
-## 13. System skill sync (per CLAUDE.md skill-sync rule)
-
-- [ ] 13.1 Update `feeds/skills/.system/files/netclaw-operations/SKILL.md` with a section explaining `inbox/`, the `[attachment]` line format, and the two canonical note prefixes so the running agent's operational guidance matches the new dynamic-context block
-- [ ] 13.2 Bump the skill's `metadata.version` in the YAML frontmatter
-- [ ] 13.3 Do NOT run `generate-skill-manifest.sh` locally (CI handles publishing)
-
-## 14. Quality gates
-
-- [ ] 14.1 `dotnet build` the Slack channel, Actors, and Configuration projects — clean
-- [ ] 14.2 `dotnet test` for the affected test projects — all green
-- [ ] 14.3 `dotnet slopwatch analyze` — no new violations
-- [ ] 14.4 `./evals/run-evals.sh` — all cases pass including the three new ones
-- [ ] 14.5 Schema round-trip: load an old config without `ChannelAttachments` under `netclaw doctor --fix`, confirm defaults are inserted and the fixed config passes schema validation
-
-## 15. OpenSpec finalization
-
-- [ ] 15.1 `/opsx-verify channel-ingress-attachments` — confirm implementation matches artifacts
-- [ ] 15.2 `/opsx-sync channel-ingress-attachments` — sync the delta specs into `openspec/specs/`
-- [ ] 15.3 `/opsx-archive channel-ingress-attachments` — archive after CI is green on the PR
+- **OpenSpec finalization (`/opsx-verify`, `/opsx-sync`, `/opsx-archive`).**
+  The proposal/design/specs currently describe the fuller "canonical
+  cross-channel contract" vision and reference scenarios (historical
+  PDF backfill, normative note strings used by Discord, etc.) that this
+  truncated change does not deliver. Syncing the delta specs into
+  `openspec/specs/` before the deferred follow-ups land would publish a
+  contract ahead of implementation. Leave the change in `openspec/changes/`
+  as-is until the follow-ups catch up, or sync with explicit notes about
+  the subset delivered.
