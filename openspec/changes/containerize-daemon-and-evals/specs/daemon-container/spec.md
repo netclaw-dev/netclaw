@@ -169,15 +169,21 @@ expected binary outputs are absent after `dotnet publish`.
 - **THEN** the script prints an error naming the missing path
 - **AND** exits with a non-zero status before running `docker build`
 
-### Requirement: PR validation builds and smoke-tests the image
+### Requirement: Dedicated Docker validation workflow
 
-The PR validation workflow SHALL include a `validate-docker-build` job that
-runs on every pull request. The job SHALL build the image via
-`scripts/docker/build-image.sh` with no registry push, then start the
-image with a minimal identity fixture and a stub provider env-var triple
-and verify that `GET /api/health/ready` returns `"healthy"` within 60
-seconds. The job SHALL NOT authenticate to any container registry and
-SHALL NOT push any image.
+The project SHALL ship a standalone GitHub Actions workflow
+(`.github/workflows/validate_docker_image.yml`) that builds and
+smoke-tests the release Docker image on every pull request and on
+pushes to `dev`/`main`/`master`. The workflow SHALL NOT be lumped
+into `pr_validation.yml` (.NET test suites + slopwatch) or
+`smoke_sandbox.yml` (Ollama-in-Docker end-to-end), because image
+construction is an orthogonal concern with its own failure mode.
+
+The workflow SHALL build the image via `scripts/docker/build-image.sh`
+with no registry push, then start the image with a stub ollama
+provider and verify that `GET /api/health/ready` returns `"healthy"`
+within 60 seconds. The workflow SHALL NOT authenticate to any
+container registry and SHALL NOT push any image.
 
 #### Scenario: Broken Dockerfile fails a PR
 

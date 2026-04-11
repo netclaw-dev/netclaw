@@ -23,15 +23,16 @@
 - [x] 3.5 Mark executable (`chmod +x`), commit with the Dockerfile
 - [x] 3.6 Test locally: `scripts/docker/build-image.sh dev` succeeds on a clean tree, `docker images` shows the new tag
 
-## 4. PR validation workflow: validate-docker-build
+## 4. Dedicated Docker validation workflow (validate_docker_image.yml)
 
-- [x] 4.1 Add `validate-docker-build` job to `.github/workflows/pr_validation.yml`, `runs-on: arc-netclaw`, `timeout-minutes: 20`
-- [x] 4.2 Job checks out the repo with `lfs: true`, installs .NET SDK from `global.json`, sets up `docker/setup-buildx-action@v3`
-- [x] 4.3 Job runs `scripts/docker/build-image.sh` with an ephemeral tag using the PR number (or `local` for manual dispatch)
-- [~] 4.4 ~~Add "verify fail-fast on empty config" step~~ — deferred, not enforced by current daemon (follow-up issue)
-- [x] 4.5 Add "verify happy path" step that starts the container with `-p 5399:5199` + ollama provider env vars (no API key needed), polls `GET http://127.0.0.1:5399/api/health/ready` for 60s, fails on timeout
-- [x] 4.6 Ensure both steps `docker stop` the container on success and on failure; no leaked containers between PR runs on the self-hosted runner
-- [ ] 4.7 Test by intentionally breaking `docker/Dockerfile` in a scratch branch and confirming the PR job fails at the build step
+- [x] 4.1 Create standalone `.github/workflows/validate_docker_image.yml` with `validate-docker-build` job, `runs-on: arc-netclaw`, `timeout-minutes: 20`. Separate from `pr_validation.yml` (tests + slopwatch) because image construction is its own concern with its own failure mode.
+- [x] 4.2 Trigger on `push` + `pull_request` to dev/main/master, scoped to `paths:` that actually affect the image (Dockerfile, build script, src/**, global.json, Directory.Build.props, the workflow itself). Saves runner minutes on unrelated PRs.
+- [x] 4.3 Job checks out the repo, installs .NET SDK from `global.json`, sets up `docker/setup-buildx-action@v3`
+- [x] 4.4 Job runs `scripts/docker/build-image.sh` with an ephemeral `pr-NNN` / `ci-RUNID` tag
+- [~] 4.5 ~~Add "verify fail-fast on empty config" step~~ — deferred, not enforced by current daemon (follow-up issue)
+- [x] 4.6 Add "verify happy path" step that starts the container with `-p 5399:5199` + ollama provider env vars (no API key needed), polls `GET http://127.0.0.1:5399/api/health/ready` for 60s, fails on timeout
+- [x] 4.7 Ensure both steps `docker stop` the container on success and on failure; no leaked containers between PR runs on the self-hosted runner
+- [ ] 4.8 Test by intentionally breaking `docker/Dockerfile` in a scratch branch and confirming the workflow fails at the build step
 
 ## 5. Release workflow: publish-docker
 
