@@ -330,7 +330,8 @@ internal static class SessionToolExecutionPipeline
                 ToolName = tc.Name,
                 CallId = tc.CallId,
                 Timestamp = timeProvider.GetUtcNow(),
-                Allowed = true,
+                Allowed = false,
+                DenyReason = $"tool_execution_error:{ex.GetType().Name}",
                 Duration = sw.Elapsed
             });
         }

@@ -720,7 +720,19 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
             case ToolInteractionRequest interaction:
                 var pendingApproval = new PendingApprovalRequest(interaction);
                 _pendingApprovalRequests.Add(pendingApproval);
-                pendingApproval.PromptMessageTs = await HandleApprovalRequestAsync(interaction);
+                var promptMessageTs = await HandleApprovalRequestAsync(interaction);
+                if (promptMessageTs is not null)
+                {
+                    pendingApproval.PromptMessageTs = promptMessageTs;
+                }
+                else
+                {
+                    // Posting the approval prompt failed. Drop the pending entry and
+                    // route a deny back to the session so the blocked tool task can
+                    // unwind instead of waiting on the infinite-timeout TCS.
+                    _pendingApprovalRequests.Remove(pendingApproval);
+                    await SendApprovalDenyOnFailureAsync(interaction);
+                }
                 break;
 
             case ErrorOutput err:
@@ -935,6 +947,32 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
             _log.Error(ex, "Failed to post approval request for {CallId}", request.CallId);
             return null;
         }
+    }
+
+    private async Task SendApprovalDenyOnFailureAsync(ToolInteractionRequest request)
+    {
+        _log.Warning(
+            "Auto-denying approval for {CallId} ({ToolName}) because the Slack prompt could not be posted",
+            request.CallId,
+            request.ToolName);
+
+        try
+        {
+            await _dependencies.Pipeline.SendFeedbackAsync(new ToolInteractionResponse
+            {
+                SessionId = _sessionId,
+                CallId = request.CallId,
+                SelectedKey = ApprovalOptionKeys.Deny,
+                SenderId = request.RequesterSenderId ?? string.Empty
+            });
+        }
+        catch (Exception ex)
+        {
+            _log.Error(ex, "Failed to send auto-deny feedback for {CallId}", request.CallId);
+        }
+
+        await SafePostAsync(
+            $":warning: I couldn't post the approval prompt for `{request.ToolName}`. The action was automatically denied — please ask me to try again.");
     }
 
     private async Task TryResolveApprovalPromptAsync(PendingApprovalRequest pending, string selectedKey, string senderId)

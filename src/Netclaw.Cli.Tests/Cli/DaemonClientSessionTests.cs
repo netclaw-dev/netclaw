@@ -63,9 +63,9 @@ public sealed class DaemonClientSessionTests
         await using var client = new DaemonClient($"http://127.0.0.1:{port}");
         await client.CreateSessionAsync(Netclaw.Actors.Channels.ChannelType.Tui, TestContext.Current.CancellationToken);
 
-        await client.RespondToInteractionAsync("call-1", "approve_once", TestContext.Current.CancellationToken);
+        await client.RespondToInteractionAsync("call-1", ApprovalOptionKeys.ApproveOnce, TestContext.Current.CancellationToken);
 
-        Assert.Equal(("call-1", "approve_once"), state.LastInteractionResponse);
+        Assert.Equal(("call-1", ApprovalOptionKeys.ApproveOnce), state.LastInteractionResponse);
     }
 
     [Fact]
@@ -78,9 +78,9 @@ public sealed class DaemonClientSessionTests
         await using var client = new DaemonClient($"http://127.0.0.1:{port}");
         await client.CreateSessionAsync(Netclaw.Actors.Channels.ChannelType.Tui, TestContext.Current.CancellationToken);
 
-        await client.RespondToInteractionAsync("call-2", "approve_session", TestContext.Current.CancellationToken);
+        await client.RespondToInteractionAsync("call-2", ApprovalOptionKeys.ApproveSession, TestContext.Current.CancellationToken);
 
-        Assert.Equal(("call-2", "approve_session"), state.LastInteractionResponse);
+        Assert.Equal(("call-2", ApprovalOptionKeys.ApproveSession), state.LastInteractionResponse);
     }
 
     private static async Task<IHost> StartFakeHubAsync(int port)

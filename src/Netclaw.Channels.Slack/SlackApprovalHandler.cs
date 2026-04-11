@@ -8,11 +8,6 @@ namespace Netclaw.Channels.Slack;
 #pragma warning disable CS0618
 public sealed class SlackApprovalHandler : IAsyncBlockActionHandler
 {
-    public const string ApproveOnceKey = "approve_once";
-    public const string ApproveSessionKey = "approve_session";
-    public const string ApproveAlwaysKey = "approve_always";
-    public const string DenyKey = "deny";
-
     private readonly SlackChannel _channel;
     private readonly ILogger<SlackApprovalHandler> _logger;
 

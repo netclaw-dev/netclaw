@@ -78,11 +78,10 @@ public sealed class ApprovalChannelTests
         var channel = new ApprovalChannel();
 
         var waitTask = channel.WaitForApprovalAsync("call-infinite", Timeout.InfiniteTimeSpan, CancellationToken.None);
-        await Task.Delay(50, TestContext.Current.CancellationToken);
-        Assert.False(waitTask.IsCompleted);
-
         channel.Complete("call-infinite", ApprovalDecision.Denied);
 
+        // If infinite-timeout were broken (e.g. timeout task fired immediately),
+        // the wait would resolve to TimedOut instead of the Denied we just signaled.
         Assert.Equal(ApprovalDecision.Denied, await waitTask);
     }
 

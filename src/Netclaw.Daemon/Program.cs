@@ -828,8 +828,7 @@ static void ConfigureDaemonServices(
         sp.GetService<ToolAccessPolicy>(),
         sp.GetService<TrustContextDeriver>(),
         sp.GetService<SkillRegistry>(),
-        sp.GetService<IToolApprovalService>(),
-        sp.GetService<ToolApprovalStore>()));
+        sp.GetService<IToolApprovalService>()));
 
     services.AddSingleton(sp => new SessionMemoryServices(
         sp.GetService<IMemoryExtractor>() ?? NullMemoryExtractor.Instance,

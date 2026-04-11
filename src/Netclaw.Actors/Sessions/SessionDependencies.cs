@@ -27,8 +27,7 @@ public sealed record SessionToolServices(
     ToolAccessPolicy? AccessPolicy,
     TrustContextDeriver? TrustDeriver,
     Skills.SkillRegistry? SkillRegistry,
-    IToolApprovalService? ApprovalService = null,
-    ToolApprovalStore? ApprovalStore = null);
+    IToolApprovalService? ApprovalService = null);
 
 /// <summary>
 /// Memory infrastructure for recall, checkpoint, and curation.

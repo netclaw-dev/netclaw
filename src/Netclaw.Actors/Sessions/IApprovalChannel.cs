@@ -28,7 +28,7 @@ public enum ApprovalDecision
 /// (mailbox). Allows tool tasks to block awaiting user approval while the actor
 /// remains responsive to incoming messages.
 /// </summary>
-public interface IApprovalChannel
+internal interface IApprovalChannel
 {
     /// <summary>
     /// Waits for an approval decision for the given tool call. Blocks the calling
@@ -48,7 +48,7 @@ public interface IApprovalChannel
 /// Default implementation using a dictionary of <see cref="TaskCompletionSource{T}"/>
 /// keyed by call ID.
 /// </summary>
-public sealed class ApprovalChannel : IApprovalChannel
+internal sealed class ApprovalChannel : IApprovalChannel
 {
     private readonly ConcurrentDictionary<string, TaskCompletionSource<ApprovalDecision>> _pending = new();
 

@@ -61,12 +61,12 @@ public sealed class SlackActorHierarchyTests(ITestOutputHelper output) : TestKit
             new SlackChannelId("D1"),
             new SlackThreadTs("401.1"),
             "call-1",
-            "approve_once",
+            ApprovalOptionKeys.ApproveOnce,
             "U1"));
 
         var routed = await sink.ExpectMsgAsync<SlackApprovalResponse>(cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal("call-1", routed.CallId);
-        Assert.Equal("approve_once", routed.SelectedKey);
+        Assert.Equal(ApprovalOptionKeys.ApproveOnce, routed.SelectedKey);
         Assert.Equal("U1", routed.SenderId);
     }
 

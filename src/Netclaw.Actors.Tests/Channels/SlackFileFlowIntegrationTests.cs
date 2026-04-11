@@ -670,10 +670,10 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
                 Patterns = ["git push"],
                 Options =
                 [
-                    new ToolInteractionOption("approve_once", "Approve Once"),
-                    new ToolInteractionOption("approve_session", "Approve For This Chat"),
-                    new ToolInteractionOption("approve_always", "Approve Always"),
-                    new ToolInteractionOption("deny", "Deny")
+                    new ToolInteractionOption(ApprovalOptionKeys.ApproveOnce, ApprovalOptionKeys.ApproveOnceLabel),
+                    new ToolInteractionOption(ApprovalOptionKeys.ApproveSession, ApprovalOptionKeys.ApproveSessionLabel),
+                    new ToolInteractionOption(ApprovalOptionKeys.ApproveAlways, ApprovalOptionKeys.ApproveAlwaysLabel),
+                    new ToolInteractionOption(ApprovalOptionKeys.Deny, ApprovalOptionKeys.DenyLabel)
                 ]
             }
         ]);
@@ -725,7 +725,7 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
             var feedback = Assert.Single(feedbackPipeline.Feedback);
             var response = Assert.IsType<ToolInteractionResponse>(feedback);
             Assert.Equal("call-1", response.CallId);
-            Assert.Equal("approve_once", response.SelectedKey);
+            Assert.Equal(ApprovalOptionKeys.ApproveOnce, response.SelectedKey);
             Assert.Equal("U123", response.SenderId);
         }, duration: TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
 
@@ -757,10 +757,10 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
                 Patterns = ["git push"],
                 Options =
                 [
-                    new ToolInteractionOption("approve_once", "Approve Once"),
-                    new ToolInteractionOption("approve_session", "Approve For This Chat"),
-                    new ToolInteractionOption("approve_always", "Approve Always"),
-                    new ToolInteractionOption("deny", "Deny")
+                    new ToolInteractionOption(ApprovalOptionKeys.ApproveOnce, ApprovalOptionKeys.ApproveOnceLabel),
+                    new ToolInteractionOption(ApprovalOptionKeys.ApproveSession, ApprovalOptionKeys.ApproveSessionLabel),
+                    new ToolInteractionOption(ApprovalOptionKeys.ApproveAlways, ApprovalOptionKeys.ApproveAlwaysLabel),
+                    new ToolInteractionOption(ApprovalOptionKeys.Deny, ApprovalOptionKeys.DenyLabel)
                 ]
             }
         ]);
@@ -802,7 +802,7 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
         Assert.Equal(4, actions.Elements.Count);
         var firstButton = Assert.IsType<Button>(actions.Elements[0]);
         Assert.True(SlackApprovalBlockBuilder.IsApprovalActionId(firstButton.ActionId));
-        Assert.Equal("Approve Once", firstButton.Text.Text);
+        Assert.Equal(ApprovalOptionKeys.ApproveOnceLabel, firstButton.Text.Text);
         Assert.Equal(4, actions.Elements.Cast<Button>().Select(button => button.ActionId).Distinct(StringComparer.Ordinal).Count());
 
         Watch(actor);
@@ -825,10 +825,10 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
                 Patterns = ["git push"],
                 Options =
                 [
-                    new ToolInteractionOption("approve_once", "Approve Once"),
-                    new ToolInteractionOption("approve_session", "Approve For This Chat"),
-                    new ToolInteractionOption("approve_always", "Approve Always"),
-                    new ToolInteractionOption("deny", "Deny")
+                    new ToolInteractionOption(ApprovalOptionKeys.ApproveOnce, ApprovalOptionKeys.ApproveOnceLabel),
+                    new ToolInteractionOption(ApprovalOptionKeys.ApproveSession, ApprovalOptionKeys.ApproveSessionLabel),
+                    new ToolInteractionOption(ApprovalOptionKeys.ApproveAlways, ApprovalOptionKeys.ApproveAlwaysLabel),
+                    new ToolInteractionOption(ApprovalOptionKeys.Deny, ApprovalOptionKeys.DenyLabel)
                 ]
             }
         ]);
@@ -866,7 +866,7 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
             new SlackChannelId("D7"),
             new SlackThreadTs("9060.1"),
             "call-button",
-            "approve_session",
+            ApprovalOptionKeys.ApproveSession,
             "U123"));
 
         await AwaitAssertAsync(() =>
@@ -874,7 +874,7 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
             var feedback = Assert.Single(feedbackPipeline.Feedback);
             var response = Assert.IsType<ToolInteractionResponse>(feedback);
             Assert.Equal("call-button", response.CallId);
-            Assert.Equal("approve_session", response.SelectedKey);
+            Assert.Equal(ApprovalOptionKeys.ApproveSession, response.SelectedKey);
             Assert.Equal("U123", response.SenderId);
         }, duration: TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
 
@@ -882,7 +882,7 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
         {
             var updated = Assert.Single(_replyClient.UpdatedMessages);
             Assert.Equal("1.0", updated.MessageTs);
-            Assert.Contains("Approve for this chat", updated.Text, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains(ApprovalOptionKeys.ApproveSessionLabel, updated.Text, StringComparison.OrdinalIgnoreCase);
             Assert.DoesNotContain(updated.Blocks ?? [], block => block is ActionsBlock);
         }, duration: TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
 

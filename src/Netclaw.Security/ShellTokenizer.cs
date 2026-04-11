@@ -123,7 +123,7 @@ public static class ShellTokenizer
     /// Extracts the verb chain (command name + subcommands) from a tokenized
     /// command. Stops at the first token that looks like a flag (starts with -)
     /// or an argument (path, URL, etc.), and caps at <paramref name="maxDepth"/>
-    /// tokens (default: 3) to avoid capturing positional arguments as subcommands.
+    /// tokens (default: 2) to avoid capturing positional arguments as subcommands.
     /// </summary>
     public static string ExtractVerbChain(string command, int maxDepth = 2)
     {

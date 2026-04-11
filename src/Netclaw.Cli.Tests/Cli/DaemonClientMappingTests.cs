@@ -263,10 +263,10 @@ public sealed class DaemonClientMappingTests
             Patterns = ["git push"],
             Options =
             [
-                new ToolInteractionOption("approve_once", "Approve Once"),
-                new ToolInteractionOption("approve_session", "Approve For This Chat"),
-                new ToolInteractionOption("approve_always", "Approve Always"),
-                new ToolInteractionOption("deny", "Deny")
+                new ToolInteractionOption(ApprovalOptionKeys.ApproveOnce, ApprovalOptionKeys.ApproveOnceLabel),
+                new ToolInteractionOption(ApprovalOptionKeys.ApproveSession, ApprovalOptionKeys.ApproveSessionLabel),
+                new ToolInteractionOption(ApprovalOptionKeys.ApproveAlways, ApprovalOptionKeys.ApproveAlwaysLabel),
+                new ToolInteractionOption(ApprovalOptionKeys.Deny, ApprovalOptionKeys.DenyLabel)
             ]
         };
 

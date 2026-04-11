@@ -31,10 +31,10 @@ internal static class SlackApprovalBlockBuilder
 
         lines.Add("");
         lines.Add("Reply with:");
-        lines.Add("  *A)* Approve once");
-        lines.Add("  *B)* Approve for this chat");
-        lines.Add("  *C)* Approve always");
-        lines.Add("  *D)* Deny");
+        lines.Add($"  *A)* {ApprovalOptionKeys.ApproveOnceLabel}");
+        lines.Add($"  *B)* {ApprovalOptionKeys.ApproveSessionLabel}");
+        lines.Add($"  *C)* {ApprovalOptionKeys.ApproveAlwaysLabel}");
+        lines.Add($"  *D)* {ApprovalOptionKeys.DenyLabel}");
 
         return string.Join("\n", lines);
     }
@@ -90,7 +90,7 @@ internal static class SlackApprovalBlockBuilder
         string selectedKey,
         string senderId)
     {
-        var statusPrefix = selectedKey == SlackApprovalHandler.DenyKey
+        var statusPrefix = selectedKey == ApprovalOptionKeys.Deny
             ? ":no_entry:"
             : ":white_check_mark:";
         var decisionLabel = GetDecisionLabel(selectedKey);
@@ -108,7 +108,7 @@ internal static class SlackApprovalBlockBuilder
         string selectedKey,
         string senderId)
     {
-        var statusPrefix = selectedKey == SlackApprovalHandler.DenyKey
+        var statusPrefix = selectedKey == ApprovalOptionKeys.Deny
             ? ":no_entry:"
             : ":white_check_mark:";
         var decisionLabel = GetDecisionLabel(selectedKey);
@@ -173,8 +173,8 @@ internal static class SlackApprovalBlockBuilder
     private static ButtonStyle GetButtonStyle(string optionKey)
         => optionKey switch
         {
-            SlackApprovalHandler.DenyKey => ButtonStyle.Danger,
-            SlackApprovalHandler.ApproveOnceKey => ButtonStyle.Primary,
+            ApprovalOptionKeys.Deny => ButtonStyle.Danger,
+            ApprovalOptionKeys.ApproveOnce => ButtonStyle.Primary,
             _ => ButtonStyle.Default
         };
 
@@ -188,11 +188,11 @@ internal static class SlackApprovalBlockBuilder
     private static string GetDecisionLabel(string optionKey)
         => optionKey switch
         {
-            SlackApprovalHandler.ApproveOnceKey => "Approve once",
-            SlackApprovalHandler.ApproveSessionKey => "Approve for this chat",
-            SlackApprovalHandler.ApproveAlwaysKey => "Approve always",
-            SlackApprovalHandler.DenyKey => "Deny",
-            _ => "Deny"
+            ApprovalOptionKeys.ApproveOnce => ApprovalOptionKeys.ApproveOnceLabel,
+            ApprovalOptionKeys.ApproveSession => ApprovalOptionKeys.ApproveSessionLabel,
+            ApprovalOptionKeys.ApproveAlways => ApprovalOptionKeys.ApproveAlwaysLabel,
+            ApprovalOptionKeys.Deny => ApprovalOptionKeys.DenyLabel,
+            _ => ApprovalOptionKeys.DenyLabel
         };
 
     private static string EscapeMarkdown(string value)

@@ -235,7 +235,7 @@ public partial class ChatViewModel : ReactiveViewModel
             return Task.CompletedTask;
 
         var option = CurrentInteraction.Options.FirstOrDefault(candidate =>
-            string.Equals(FormatApprovalOption(candidate), optionLabel, StringComparison.Ordinal));
+            string.Equals(candidate.Label, optionLabel, StringComparison.Ordinal));
         if (option is null)
             return Task.CompletedTask;
 
@@ -399,19 +399,9 @@ public partial class ChatViewModel : ReactiveViewModel
         if (CurrentInteraction is { } interaction)
         {
             foreach (var option in interaction.Options)
-                _approvalOptions.Add(FormatApprovalOption(option));
+                _approvalOptions.Add(option.Label);
         }
 
         UiVersion.Value++;
     }
-
-    private static string FormatApprovalOption(ToolInteractionOption option)
-        => option.Key switch
-        {
-            "approve_once" => "Approve once",
-            "approve_session" => "Approve for this chat",
-            "approve_always" => "Approve always",
-            "deny" => "Deny",
-            _ => option.Label
-        };
 }

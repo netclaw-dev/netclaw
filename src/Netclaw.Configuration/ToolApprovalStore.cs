@@ -27,8 +27,12 @@ public sealed class ToolApprovalStore
     }
 
     /// <summary>
-    /// Loads all persistent approvals from disk. Returns an empty store
-    /// if the file does not exist or is malformed.
+    /// Loads all persistent approvals from disk. Returns an empty store if the
+    /// file does not exist. If the file is malformed, the corrupt file is
+    /// quarantined to <c>tool-approvals.json.invalid</c> and an empty store is
+    /// returned — operators can inspect or restore the quarantined copy and
+    /// the system fails closed (no approvals) instead of silently dropping
+    /// every persisted grant.
     /// </summary>
     public ToolApprovalData Load()
     {
@@ -43,10 +47,28 @@ public sealed class ToolApprovalStore
                 return JsonSerializer.Deserialize<ToolApprovalData>(json, JsonOptions)
                     ?? new ToolApprovalData();
             }
-            catch (JsonException)
+            catch (JsonException ex)
             {
+                QuarantineCorruptFile(ex);
                 return new ToolApprovalData();
             }
+        }
+    }
+
+    private void QuarantineCorruptFile(JsonException cause)
+    {
+        var quarantinePath = _filePath + ".invalid";
+        try
+        {
+            if (File.Exists(quarantinePath))
+                File.Delete(quarantinePath);
+            File.Move(_filePath, quarantinePath);
+        }
+        catch (Exception moveEx)
+        {
+            throw new InvalidDataException(
+                $"Tool approvals file at '{_filePath}' is malformed and could not be quarantined to '{quarantinePath}'. Inspect the file manually before restarting.",
+                new AggregateException(cause, moveEx));
         }
     }
 

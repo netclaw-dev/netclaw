@@ -697,7 +697,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             EmitOutput(msg);
         });
 
-        Command<ToolInteractionResponse>(msg =>
+        CommandAsync<ToolInteractionResponse>(async msg =>
         {
             if (!_pendingToolInteractions.TryGetValue(msg.CallId, out var pending))
             {
@@ -724,10 +724,10 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
             var decision = msg.SelectedKey switch
             {
-                "approve_once" => ApprovalDecision.ApprovedOnce,
-                "approve_session" => ApprovalDecision.ApprovedSession,
-                "approve_always" => ApprovalDecision.ApprovedAlways,
-                "deny" => ApprovalDecision.Denied,
+                ApprovalOptionKeys.ApproveOnce => ApprovalDecision.ApprovedOnce,
+                ApprovalOptionKeys.ApproveSession => ApprovalDecision.ApprovedSession,
+                ApprovalOptionKeys.ApproveAlways => ApprovalDecision.ApprovedAlways,
+                ApprovalOptionKeys.Deny => ApprovalDecision.Denied,
                 _ => ApprovalDecision.Denied
             };
 
@@ -736,13 +736,13 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             if (decision is ApprovalDecision.ApprovedSession or ApprovalDecision.ApprovedAlways
                 && _approvalService is not null)
             {
-                _approvalService.RecordApprovalAsync(
+                await _approvalService.RecordApprovalAsync(
                     _sessionId.Value,
                     pending.Audience,
                     pending.ToolName,
                     pending.Patterns,
                     persistent: decision == ApprovalDecision.ApprovedAlways,
-                    CancellationToken.None).GetAwaiter().GetResult();
+                    CancellationToken.None);
             }
 
             _pendingToolInteractions.Remove(msg.CallId);

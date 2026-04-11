@@ -57,7 +57,7 @@ public sealed class SlackGatewayActor : ReceiveActor
             conversation.Forward(message);
         });
 
-        ReceiveAsync<SlackApprovalResponse>(async message =>
+        Receive<SlackApprovalResponse>(message =>
         {
             var actorName = Uri.EscapeDataString(message.ChannelId.Value);
             var conversationProps = _dependencies.ConversationPropsFactory?.Invoke(message.ChannelId, _dependencies)
@@ -68,8 +68,6 @@ public sealed class SlackGatewayActor : ReceiveActor
             _log.Info("Routing Slack approval response for channel {0} thread={1} call={2}",
                 message.ChannelId, message.ThreadTs, message.CallId);
             conversation.Forward(message);
-
-            await Task.CompletedTask;
         });
     }
 

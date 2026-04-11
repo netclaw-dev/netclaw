@@ -78,21 +78,7 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
     }
 
     private static bool PatternMatchesAny(string pattern, IReadOnlyList<string> approvedPatterns)
-    {
-        foreach (var approved in approvedPatterns)
-        {
-            if (string.Equals(pattern, approved, StringComparison.OrdinalIgnoreCase))
-                return true;
-
-            // Approved "git" matches pattern "git push" (prefix)
-            if (pattern.StartsWith(approved, StringComparison.OrdinalIgnoreCase)
-                && pattern.Length > approved.Length
-                && pattern[approved.Length] == ' ')
-                return true;
-        }
-
-        return false;
-    }
+        => ApprovalPatternMatching.MatchesAny(pattern, approvedPatterns);
 
     private static void CollectPatterns(string command, ISet<string> patterns)
     {

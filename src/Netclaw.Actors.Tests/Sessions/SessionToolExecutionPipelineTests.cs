@@ -142,10 +142,10 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
                     UnapprovedPatterns: ["git push"],
                     Options:
                     [
-                        new ToolApprovalOption("approve_once", "Approve once"),
-                        new ToolApprovalOption("approve_session", "Approve for this chat"),
-                        new ToolApprovalOption("approve_always", "Approve always"),
-                        new ToolApprovalOption("deny", "Deny")
+                        new ToolApprovalOption(ApprovalOptionKeys.ApproveOnce, ApprovalOptionKeys.ApproveOnceLabel),
+                        new ToolApprovalOption(ApprovalOptionKeys.ApproveSession, ApprovalOptionKeys.ApproveSessionLabel),
+                        new ToolApprovalOption(ApprovalOptionKeys.ApproveAlways, ApprovalOptionKeys.ApproveAlwaysLabel),
+                        new ToolApprovalOption(ApprovalOptionKeys.Deny, ApprovalOptionKeys.DenyLabel)
                     ]));
             }
 

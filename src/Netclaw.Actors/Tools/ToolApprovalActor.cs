@@ -48,7 +48,7 @@ internal sealed class ToolApprovalActor : ReceiveActor
         if (!string.IsNullOrWhiteSpace(sessionId)
             && _sessionApprovals.TryGetValue(BuildSessionKey(sessionId, audience), out var toolMap)
             && toolMap.TryGetValue(toolName, out var patterns)
-            && MatchesAnyPattern(pattern, patterns))
+            && ApprovalPatternMatching.MatchesAny(pattern, patterns))
         {
             return true;
         }
@@ -56,7 +56,7 @@ internal sealed class ToolApprovalActor : ReceiveActor
         if (_persistentStore is null)
             return false;
 
-        return MatchesAnyPattern(pattern, _persistentStore.GetApprovedPatterns(audience, toolName));
+        return ApprovalPatternMatching.MatchesAny(pattern, _persistentStore.GetApprovedPatterns(audience, toolName));
     }
 
     private void AddSessionApproval(string sessionId, TrustAudience audience, string toolName, string pattern)
@@ -79,24 +79,6 @@ internal sealed class ToolApprovalActor : ReceiveActor
 
     private static string BuildSessionKey(string sessionId, TrustAudience audience)
         => $"{sessionId}|{audience.ToWireValue()}";
-
-    private static bool MatchesAnyPattern(string candidatePattern, IEnumerable<string> approvedPatterns)
-    {
-        foreach (var approved in approvedPatterns)
-        {
-            if (string.Equals(candidatePattern, approved, StringComparison.OrdinalIgnoreCase))
-                return true;
-
-            if (candidatePattern.StartsWith(approved, StringComparison.OrdinalIgnoreCase)
-                && candidatePattern.Length > approved.Length
-                && candidatePattern[approved.Length] == ' ')
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
 }
 
 internal sealed record ToolApprovalRecorded

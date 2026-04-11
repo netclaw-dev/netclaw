@@ -11,11 +11,13 @@ namespace Netclaw.Actors.Tools;
 /// Executes shell commands via /bin/bash (Linux) or cmd.exe (Windows).
 /// Captures stdout+stderr, enforces timeout, closes stdin immediately.
 /// </summary>
-[NetclawTool("shell_execute",
+[NetclawTool(ToolName,
     "Execute a shell command and return stdout/stderr output with exit code",
     Grant = "shell")]
 public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
 {
+    public const string ToolName = "shell_execute";
+
     private readonly ToolConfig _config;
     private readonly ToolPathPolicy? _pathPolicy;
     private readonly ShellCommandPolicy? _commandPolicy;

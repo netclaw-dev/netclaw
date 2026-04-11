@@ -1,5 +1,6 @@
 using Microsoft.Extensions.AI;
 using Netclaw.Actors.Channels;
+using Netclaw.Actors.Protocol;
 using Netclaw.Configuration;
 using Netclaw.Security;
 using Netclaw.Tools;
@@ -43,12 +44,7 @@ public sealed class ToolAccessPolicy
         => tools.Where(tool => IsToolExposed(tool, context)).ToList();
 
     public bool IsToolExposed(ToolRegistration registration, EffectiveTrustContext? trustContext)
-    {
-        return IsToolExposed(registration.Tool, ResolveAudience(trustContext));
-    }
-
-    public bool IsToolExposed(INetclawTool tool, EffectiveTrustContext? trustContext)
-        => IsToolExposed(tool, ResolveAudience(trustContext));
+        => IsToolExposed(registration.Tool, ResolveAudience(trustContext));
 
     public bool IsToolExposed(INetclawTool tool, ToolExecutionContext? context)
         => IsToolExposed(tool, ResolveAudience(context));
@@ -157,10 +153,10 @@ public sealed class ToolAccessPolicy
             displayText,
             allPatterns,
             [
-                new ToolApprovalOption("approve_once", "Approve Once"),
-                new ToolApprovalOption("approve_session", "Approve For This Chat"),
-                new ToolApprovalOption("approve_always", "Approve Always"),
-                new ToolApprovalOption("deny", "Deny")
+                new ToolApprovalOption(ApprovalOptionKeys.ApproveOnce, ApprovalOptionKeys.ApproveOnceLabel),
+                new ToolApprovalOption(ApprovalOptionKeys.ApproveSession, ApprovalOptionKeys.ApproveSessionLabel),
+                new ToolApprovalOption(ApprovalOptionKeys.ApproveAlways, ApprovalOptionKeys.ApproveAlwaysLabel),
+                new ToolApprovalOption(ApprovalOptionKeys.Deny, ApprovalOptionKeys.DenyLabel)
             ]);
 
         return ToolAccessDecision.RequiresApproval(approvalContext);
@@ -170,7 +166,7 @@ public sealed class ToolAccessPolicy
     {
         // Fail-closed for personal shell: if the approval policy was omitted,
         // still require interactive approval rather than silently auto-approving.
-        if (audience == TrustAudience.Personal && string.Equals(toolName, "shell_execute", StringComparison.Ordinal))
+        if (audience == TrustAudience.Personal && string.Equals(toolName, ShellTool.ToolName, StringComparison.Ordinal))
             return ToolApprovalMode.Approval;
 
         return ToolApprovalMode.Auto;
@@ -194,7 +190,7 @@ public sealed class ToolAccessPolicy
         => registration.GrantCategory == "shell" || IsShellTool(registration.Tool);
 
     private static bool IsShellTool(INetclawTool tool)
-        => string.Equals(tool.Name, "shell_execute", StringComparison.Ordinal);
+        => string.Equals(tool.Name, ShellTool.ToolName, StringComparison.Ordinal);
 
     private static string? GetToolName(AITool tool)
         => tool is AIFunction function ? function.Name : null;

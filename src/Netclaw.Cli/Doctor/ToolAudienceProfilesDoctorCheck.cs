@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 
 namespace Netclaw.Cli.Doctor;
@@ -190,7 +191,7 @@ public sealed class ToolAudienceProfilesDoctorCheck(NetclawPaths paths) : IDocto
             if (profile.ApprovalPolicy is null)
                 continue;
 
-            var shellOverride = profile.ApprovalPolicy.GetEffectiveMode("shell_execute");
+            var shellOverride = profile.ApprovalPolicy.GetEffectiveMode(ShellTool.ToolName);
             if (shellOverride == ToolApprovalMode.Approval && toolConfig.ShellMode == ShellExecutionMode.Off)
             {
                 warnings.Add(
@@ -209,7 +210,7 @@ public sealed class ToolAudienceProfilesDoctorCheck(NetclawPaths paths) : IDocto
         if (!PersonalProfileAllowsShell(personal))
             return;
 
-        var approvalMode = personal.ApprovalPolicy?.GetEffectiveMode("shell_execute") ?? ToolApprovalMode.Auto;
+        var approvalMode = personal.ApprovalPolicy?.GetEffectiveMode(ShellTool.ToolName) ?? ToolApprovalMode.Auto;
         if (approvalMode is ToolApprovalMode.Approval or ToolApprovalMode.Deny)
             return;
 
@@ -223,13 +224,16 @@ public sealed class ToolAudienceProfilesDoctorCheck(NetclawPaths paths) : IDocto
         if (profile.ToolsMode == ToolProfileMode.All)
             return true;
 
-        return profile.AllowedTools.Contains("shell_execute", StringComparer.Ordinal);
+        return profile.AllowedTools.Contains(ShellTool.ToolName, StringComparer.Ordinal);
     }
 
     private static void CheckStaleApprovals(ToolConfig toolConfig, NetclawPaths netclawPaths, List<string> warnings)
     {
         var approvalsPath = netclawPaths.ToolApprovalsPath;
         if (!File.Exists(approvalsPath))
+            return;
+
+        if (toolConfig.ShellMode != ShellExecutionMode.Off)
             return;
 
         try
@@ -239,19 +243,11 @@ public sealed class ToolAudienceProfilesDoctorCheck(NetclawPaths paths) : IDocto
 
             foreach (var (audienceKey, tools) in data.Audiences)
             {
-                if (!SecurityPolicyDefaults.TryParseAudience(audienceKey, out var audience))
-                    continue;
-
-                var profile = ToolAudienceProfileDefaults.GetResolvedProfile(toolConfig.AudienceProfiles, audience);
-
-                foreach (var (toolName, patterns) in tools)
+                if (tools.ContainsKey(ShellTool.ToolName))
                 {
-                    if (toolName == "shell_execute" && toolConfig.ShellMode == ShellExecutionMode.Off)
-                    {
-                        warnings.Add(
-                            $"Persistent approvals exist for {audienceKey}.shell_execute " +
-                            "but shell is disabled for this audience.");
-                    }
+                    warnings.Add(
+                        $"Persistent approvals exist for {audienceKey}.{ShellTool.ToolName} " +
+                        "but shell is disabled.");
                 }
             }
         }
