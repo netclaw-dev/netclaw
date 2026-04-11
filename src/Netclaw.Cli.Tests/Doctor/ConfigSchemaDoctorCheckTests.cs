@@ -284,6 +284,81 @@ public sealed class ConfigSchemaDoctorCheckTests
         Assert.Equal(DoctorSeverity.Pass, result.Severity);
     }
 
+    [Fact]
+    public async Task ReturnsPass_WhenToolsSectionMissingChannelAttachments()
+    {
+        // Bear-trap test for the channel-ingress-attachments migration path:
+        // an existing config without any ChannelAttachments block must
+        // continue to validate against schema v1. New fields on
+        // ToolAudienceProfile are optional, so omitting them is legal.
+        var basePath = CreateTempBasePath();
+        var paths = new NetclawPaths(basePath);
+        paths.EnsureDirectoriesExist();
+
+        await File.WriteAllTextAsync(paths.NetclawConfigPath,
+            """
+            {
+              "configVersion": 1,
+              "Tools": {
+                "AudienceProfiles": {
+                  "Public": {
+                    "ToolsMode": "Allowlist",
+                    "AllowedTools": ["file_read"],
+                    "ReadFiles": { "Mode": "Roots", "Roots": ["{session_dir}"] }
+                  },
+                  "Team": {
+                    "ToolsMode": "Allowlist",
+                    "AllowedTools": ["file_read", "attach_file"],
+                    "ReadFiles": { "Mode": "Roots", "Roots": ["{session_dir}"] }
+                  },
+                  "Personal": {
+                    "ToolsMode": "All",
+                    "ReadFiles": { "Mode": "All" }
+                  }
+                }
+              }
+            }
+            """, TestContext.Current.CancellationToken);
+
+        var check = new ConfigSchemaDoctorCheck(paths);
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(DoctorSeverity.Pass, result.Severity);
+    }
+
+    [Fact]
+    public async Task ReturnsPass_WhenChannelAttachmentsBlockIsExplicit()
+    {
+        // Config that explicitly sets a ChannelAttachments block on one
+        // profile should also validate.
+        var basePath = CreateTempBasePath();
+        var paths = new NetclawPaths(basePath);
+        paths.EnsureDirectoriesExist();
+
+        await File.WriteAllTextAsync(paths.NetclawConfigPath,
+            """
+            {
+              "configVersion": 1,
+              "Tools": {
+                "AudienceProfiles": {
+                  "Public": {
+                    "ChannelAttachments": {
+                      "AllowedCategories": ["Image"],
+                      "MaxFileBytes": 26214400,
+                      "MaxFilesPerMessage": 10
+                    }
+                  }
+                }
+              }
+            }
+            """, TestContext.Current.CancellationToken);
+
+        var check = new ConfigSchemaDoctorCheck(paths);
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(DoctorSeverity.Pass, result.Severity);
+    }
+
     private static string CreateTempBasePath()
     {
         var path = Path.Combine(Path.GetTempPath(), "netclaw-tests", Guid.NewGuid().ToString("N"));
