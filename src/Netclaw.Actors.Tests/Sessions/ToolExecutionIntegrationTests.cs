@@ -56,6 +56,9 @@ public class ToolExecutionIntegrationTests : TestKit
         registry.Register(
             AIFunctionFactory.Create(() => "search result", "web_search"),
             "web_search");
+        registry.Register(
+            AIFunctionFactory.Create((string path) => $"contents of {path}", "file_read"),
+            "file_read");
         services.AddSingleton(registry);
         services.AddSingleton<IModelCapabilityResolver>(new FakeCapabilityResolver());
 
@@ -282,6 +285,79 @@ public class ToolExecutionIntegrationTests : TestKit
         Assert.NotNull(result);
         Assert.Contains("tool result truncated", result, StringComparison.OrdinalIgnoreCase);
         Assert.True(result!.Length < 300);
+    }
+
+    [Fact]
+    public async Task WorkingContext_populated_by_file_read_tool_execution()
+    {
+        // End-to-end: LLM emits a file_read tool call, the actor executes
+        // it and appends the result to history, the tool-execution hook
+        // pushes the path onto WorkingContext.RecentFiles, and the next
+        // LLM call receives a [working-context] block in its dynamic
+        // system message.
+        //
+        // CRITICAL: the argument key here ("Path", PascalCase) must match
+        // what NetclawToolGenerator emits for first-party file tools —
+        // the generator writes `param.Name` verbatim, so FileReadTool's
+        // `string Path` parameter becomes a JSON schema with key "Path",
+        // and the LLM emits `{"Path": "..."}`. A lowercase "path" here
+        // would hide the real-world bug where WorkingContextUpdater's
+        // field-name probe misses PascalCase arguments.
+        _fakeChatClient.ToolCallsOnFirstCall =
+        [
+            new FunctionCallContent("call-1", "file_read",
+                new Dictionary<string, object?> { ["Path"] = "src/Rect.cs" })
+        ];
+        _fakeToolExecutor.Results["file_read"] = "public readonly record struct Rect { ... }";
+
+        var sessionId = new SessionId("test-channel/working-context-populated");
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("wc-populated-sub");
+
+        await sessionManager.Ask<SessionJoined>(new JoinSession
+        {
+            SessionId = sessionId,
+            Subscriber = subscriber,
+            Filter = OutputFilter.Full
+        }, TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
+
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "please read Rect.cs"
+        }, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+
+        // Wait for the full tool-call loop: ToolCallOutput, ToolResultOutput,
+        // second LLM call's TextOutput, TurnCompleted.
+        await subscriber.ExpectMsgAsync<ToolCallOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<ToolResultOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+
+        // The second (follow-up) main-model call after the tool execution
+        // should see a `[working-context]` block in its system messages.
+        // Filter out observer sidecar calls.
+        var mainModelCalls = _fakeChatClient.ReceivedMessages
+            .Where(msgs => !(msgs.FirstOrDefault(m => m.Role == Microsoft.Extensions.AI.ChatRole.System)?.Text
+                ?? string.Empty).Contains("session summarizer", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        Assert.True(mainModelCalls.Count >= 2,
+            $"Expected at least 2 main-model calls (initial + tool-loop follow-up); got {mainModelCalls.Count}");
+
+        var followUpCall = mainModelCalls[^1];
+        var systemMessages = followUpCall
+            .Where(m => m.Role == Microsoft.Extensions.AI.ChatRole.System)
+            .Select(m => m.Text ?? string.Empty)
+            .ToList();
+
+        var hasWorkingContextBlock = systemMessages.Any(s =>
+            s.Contains("[working-context]", StringComparison.Ordinal)
+            && s.Contains("src/Rect.cs", StringComparison.Ordinal));
+
+        Assert.True(hasWorkingContextBlock,
+            $"Expected the follow-up LLM call to include a [working-context] block mentioning src/Rect.cs. System messages:\n{string.Join("\n---\n", systemMessages)}");
     }
 }
 

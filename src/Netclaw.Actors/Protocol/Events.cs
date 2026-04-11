@@ -84,5 +84,20 @@ public sealed class SessionCompacted
     [ProtoMember(5)]
     public long CompactedAtMs { get; set; }
 
+    // ProtoMember(6) reserved — formerly CompactionBoundaryIndex, removed
+    // before the compaction-rework change merged. Do not reuse this field
+    // number; local dev journals written during the rework development
+    // window may still contain an int at position 6, and re-binding it to
+    // a different type would fail deserialization silently.
+
+    /// <summary>
+    /// Updated working-context state carried on the event so
+    /// <see cref="Sessions.SessionState.Apply(SessionCompacted)"/> can
+    /// preserve it across compaction. Null means "no update — retain
+    /// the existing <see cref="Sessions.WorkingContext"/> unchanged."
+    /// </summary>
+    [ProtoMember(7)]
+    public Sessions.WorkingContext? WorkingContext { get; set; }
+
     public DateTimeOffset CompactedAt => DateTimeOffset.FromUnixTimeMilliseconds(CompactedAtMs);
 }

@@ -1,4 +1,5 @@
 using Netclaw.Actors.Protocol;
+using Netclaw.Actors.Sessions;
 using ProtoBuf;
 using Xunit;
 
@@ -227,6 +228,22 @@ public sealed class SerializationRoundTripTests
 
         Assert.Equal("Just text", result.Content);
         Assert.Empty(result.MediaReferences);
+    }
+
+    [Fact]
+    public void WorkingContext_round_trips()
+    {
+        // WorkingContext uses ImmutableList<string> which is not a standard
+        // ProtoBuf-net collection type. Verify the surrogate path works.
+        var original = WorkingContext.Empty
+            .AddRecentFile("src/Rect.cs")
+            .AddRecentFile("src/Thickness.cs");
+
+        var result = RoundTrip(original);
+
+        Assert.Equal(
+            new[] { "src/Thickness.cs", "src/Rect.cs" },
+            result.RecentFiles);
     }
 
     [Fact]

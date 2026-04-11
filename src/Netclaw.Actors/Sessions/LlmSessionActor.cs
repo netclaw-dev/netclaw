@@ -603,6 +603,22 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 }, OutputFilter.ToolCalls);
             }
 
+            // Processes ALL results in the batch, including failed tool
+            // calls. RecentFiles tracks "files the agent has recently
+            // interacted with," not "files the agent successfully read" —
+            // a tool that tried to read a non-existent file still reveals
+            // intent. The control-character rejection in AddRecentFile is
+            // the defense against adversarial paths flowing through here.
+            var updatedContext = WorkingContextUpdater.UpdateFromToolResults(
+                _state.WorkingContext,
+                _state.History,
+                msg.ToolResults,
+                _log);
+            if (!ReferenceEquals(updatedContext, _state.WorkingContext))
+            {
+                _state = _state with { WorkingContext = updatedContext };
+            }
+
             // Dynamic tool loading: if load_tool was called, activate the requested tool.
             // LoadToolTool returns the canonical tool name on success; the actor looks it
             // up in the registry. Error messages won't match any entry, so only valid
@@ -2309,6 +2325,15 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         var sessionBlock = $"[session]\nid: {_sessionId.Value}"
             + $"\nmedia_dir: {Path.Combine(sessionDir, SessionDirectoryHelper.MediaSubdirectory)}";
         parts.Add(sessionBlock);
+
+        // Working context — recent files, open goals, progress markers.
+        // Emitted every turn (not OnceAtStart) so mid-session updates take
+        // effect immediately. Suppressed entirely when the context is empty
+        // so the model doesn't see a barren header.
+        if (!_state.WorkingContext.IsEmpty)
+        {
+            parts.Add(_state.WorkingContext.ToContextBlock());
+        }
 
         // Attachment-handling hint: conditional on file_read being in the
         // resolved tool set. Without file_read the agent cannot inspect
