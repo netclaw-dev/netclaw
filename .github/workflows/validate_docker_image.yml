@@ -19,6 +19,7 @@ on:
       - 'src/**'
       - 'global.json'
       - 'Directory.Build.props'
+      - 'Directory.Packages.props'
       - '.github/workflows/validate_docker_image.yml'
   pull_request:
     branches:
@@ -31,6 +32,7 @@ on:
       - 'src/**'
       - 'global.json'
       - 'Directory.Build.props'
+      - 'Directory.Packages.props'
       - '.github/workflows/validate_docker_image.yml'
 
 jobs:

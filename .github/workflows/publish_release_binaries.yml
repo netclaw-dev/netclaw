@@ -204,6 +204,20 @@ jobs:
         name: checksums-${{ matrix.rid }}
         path: ./checksums/
 
+    # Share the self-contained binaries with publish-docker so it doesn't
+    # have to re-run `dotnet publish`. Only the linux-x64 variant is
+    # consumed by the Docker image today — if other RIDs get wired up
+    # they can share this same artifact upload pattern.
+    - name: Upload publish output for downstream jobs
+      if: matrix.rid == 'linux-x64'
+      uses: actions/upload-artifact@v7
+      with:
+        name: publish-output-${{ matrix.rid }}
+        path: |
+          ./publish/cli/netclaw
+          ./publish/daemon/netclawd
+        retention-days: 1
+
   # ────────────────────────────────────────────────────────────────────
   # Job 3: Build and publish netclawd Docker image to GHCR
   # ────────────────────────────────────────────────────────────────────
@@ -222,11 +236,6 @@ jobs:
         lfs: true
         fetch-depth: 0
 
-    - name: Install .NET SDK
-      uses: actions/setup-dotnet@v5.2.0
-      with:
-        global-json-file: "./global.json"
-
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
 
@@ -237,13 +246,30 @@ jobs:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
 
+    # Reuse the binaries produced by the publish-binaries job instead of
+    # re-running `dotnet publish`. The Docker build script falls through
+    # to its NO_BUILD=1 code path so it only invokes `docker build`.
+    - name: Download publish output from publish-binaries
+      uses: actions/download-artifact@v8
+      with:
+        name: publish-output-linux-x64
+        path: .
+
+    - name: Restore executable bit on published binaries
+      shell: bash
+      run: |
+        ls -la ./publish/cli/netclaw ./publish/daemon/netclawd
+        chmod +x ./publish/cli/netclaw ./publish/daemon/netclawd
+
     # Reuse the shared build script so the release image build matches the
-    # PR validation build byte-for-byte.
+    # PR validation build byte-for-byte. NO_BUILD=1 skips `dotnet publish`
+    # and reuses the downloaded binaries directly.
     - name: Build image via scripts/docker/build-image.sh
       shell: bash
       run: |
         chmod +x scripts/docker/build-image.sh
         IMAGE_REPO=ghcr.io/aaronontheweb/netclawd \
+        NO_BUILD=1 \
           scripts/docker/build-image.sh "${{ github.ref_name }}"
 
     - name: Tag additional aliases (latest + major.minor)

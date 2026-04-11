@@ -175,13 +175,17 @@ resolve_eval_target() {
 }
 
 cleanup_eval_env() {
+    # Container is launched with --rm, so `docker stop` also removes it.
     if [[ -n "${EVAL_CONTAINER_NAME:-}" ]]; then
         docker stop "$EVAL_CONTAINER_NAME" >/dev/null 2>&1 || true
-        docker rm "$EVAL_CONTAINER_NAME" >/dev/null 2>&1 || true
     fi
+    # TMPDIR_EVAL only holds host-owned per-prompt stdout captures, so a
+    # plain rm always succeeds — no force_rmrf fallback needed.
     if [[ -n "${TMPDIR_EVAL:-}" && -d "$TMPDIR_EVAL" ]]; then
-        force_rmrf "$TMPDIR_EVAL"
+        rm -rf "$TMPDIR_EVAL"
     fi
+    # EVAL_HOME holds bind-mounted directories the container wrote into as
+    # root, so force_rmrf's alpine fallback matters here.
     if [[ -n "${EVAL_HOME:-}" && -d "$EVAL_HOME" ]]; then
         force_rmrf "$EVAL_HOME"
     fi
@@ -243,9 +247,10 @@ start_eval_daemon() {
 
     docker_args+=("$NETCLAW_IMAGE")
 
-    if ! docker "${docker_args[@]}" >/dev/null 2>&1; then
+    local docker_err
+    if ! docker_err=$(docker "${docker_args[@]}" 2>&1 >/dev/null); then
         echo "ERROR: failed to start eval container" >&2
-        docker "${docker_args[@]}" >&2 2>&1 || true
+        [[ -n "$docker_err" ]] && echo "$docker_err" >&2
         exit 2
     fi
 

@@ -16,22 +16,26 @@ FROM ubuntu:24.04
 
 ARG NETCLAW_VERSION=unknown
 
-# Pre-install tooling the autonomous agent commonly invokes via its
-# shell_execute tool. An Ubuntu base (not a chiseled runtime) is used so
-# operators can apt-install additional tools at runtime for high-permissions
-# use cases.
+# Pre-install the minimal tooling the current eval suite exercises via
+# shell_execute. An Ubuntu base (not a chiseled runtime) is used so
+# operators and autonomous agents can `apt-get install` additional tools
+# at runtime when they need them — everything not strictly required is
+# left out to keep the image lean.
+#
+# What's here and why:
+#   ca-certificates  — HTTPS trust root, required by curl/gh/dotnet
+#   curl             — HTTP fetches inside shell_execute
+#   procps           — ps/top/free for diagnostics (~1 MB)
+#   git              — repo operations; common agent use case
+#   python3          — eval case complex_write_and_run runs a Fibonacci script
+#   gh               — eval case complex_gh_issues exercises `gh issue list`
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       ca-certificates \
       curl \
-      wget \
       procps \
       git \
-      jq \
-      sqlite3 \
       python3 \
-      python3-pip \
-      python3-venv \
       gh \
  && rm -rf /var/lib/apt/lists/*
 
