@@ -16,26 +16,31 @@ FROM ubuntu:24.04
 
 ARG NETCLAW_VERSION=unknown
 
-# Pre-install the minimal tooling the current eval suite exercises via
-# shell_execute. An Ubuntu base (not a chiseled runtime) is used so
-# operators and autonomous agents can `apt-get install` additional tools
-# at runtime when they need them — everything not strictly required is
-# left out to keep the image lean.
+# Pre-install the general-purpose toolkit an autonomous agent is expected
+# to reach for via its shell_execute tool. An Ubuntu base (not a chiseled
+# runtime) is used deliberately so operators can `apt-get install`
+# additional tools at runtime for high-permissions use cases the agent
+# discovers on its own — the pre-installed set is what the agent should
+# have on hand without needing to install anything first.
 #
-# What's here and why:
-#   ca-certificates  — HTTPS trust root, required by curl/gh/dotnet
-#   curl             — HTTP fetches inside shell_execute
-#   procps           — ps/top/free for diagnostics (~1 MB)
-#   git              — repo operations; common agent use case
-#   python3          — eval case complex_write_and_run runs a Fibonacci script
-#   gh               — eval case complex_gh_issues exercises `gh issue list`
+# Categories:
+#   TLS + HTTP:  ca-certificates, curl, wget
+#   Process/OS:  procps
+#   Data/JSON:   jq, sqlite3
+#   VCS/GitHub:  git, gh
+#   Python:      python3, python3-pip, python3-venv
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       ca-certificates \
       curl \
+      wget \
       procps \
       git \
+      jq \
+      sqlite3 \
       python3 \
+      python3-pip \
+      python3-venv \
       gh \
  && rm -rf /var/lib/apt/lists/*
 
