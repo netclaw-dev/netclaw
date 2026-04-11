@@ -7,7 +7,8 @@ namespace Netclaw.Actors.Protocol;
 /// subdirectory with filesystem-level collision suffixing and atomic
 /// file writes. Channel adapters call this from their ingress pipeline
 /// after the attachment has been downloaded, content-scanned, and
-/// audience-gated.
+/// audience-gated. Callers are responsible for ensuring the directory
+/// exists (use <see cref="SessionDirectoryHelper.GetOrCreateInboxDirectory"/>).
 /// </summary>
 public static class InboxWriter
 {
@@ -70,7 +71,8 @@ public static class InboxWriter
     /// atomically by first writing to a temp sibling file in the same
     /// directory and then using <see cref="File.Move(string, string)"/>
     /// to rename into place. Callers SHALL always pass a path returned
-    /// by <see cref="ReserveUniquePath"/>.
+    /// by <see cref="ReserveUniquePath"/> and ensure the parent directory
+    /// already exists.
     /// </summary>
     public static async Task WriteAtomicAsync(
         string targetPath,
@@ -79,8 +81,6 @@ public static class InboxWriter
     {
         var directory = Path.GetDirectoryName(targetPath)
             ?? throw new ArgumentException("targetPath must include a directory", nameof(targetPath));
-
-        Directory.CreateDirectory(directory);
 
         var tempPath = Path.Combine(directory, $".{Path.GetFileName(targetPath)}.{Guid.NewGuid():N}.tmp");
         try
@@ -121,7 +121,8 @@ public static class InboxWriter
     /// Convenience: sanitizes the incoming filename with
     /// <see cref="FilenameSanitizer.Sanitize"/>, reserves a unique
     /// slot, writes the bytes atomically, and returns the full path
-    /// that was written.
+    /// that was written. Callers SHALL ensure <paramref name="inboxDir"/>
+    /// already exists.
     /// </summary>
     public static async Task<string> SanitizeReserveAndWriteAsync(
         string inboxDir,
@@ -129,7 +130,6 @@ public static class InboxWriter
         ReadOnlyMemory<byte> bytes,
         CancellationToken ct)
     {
-        Directory.CreateDirectory(inboxDir);
         var safeName = FilenameSanitizer.Sanitize(rawFilename);
         var targetPath = ReserveUniquePath(inboxDir, safeName);
         await WriteAtomicAsync(targetPath, bytes, ct).ConfigureAwait(false);

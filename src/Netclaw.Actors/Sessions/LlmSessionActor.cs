@@ -1752,9 +1752,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 var offendingDesc = string.Join(",",
                     offendingRefs.Select(r => $"{r.RelativePath}:modality={r.Modality}"));
                 _log.Error(
-                    "ingress_bug session received unsupported modality refs: ModelId={ModelId} InputModalities={Modalities} OffendingRefs={Offending}. " +
-                    "The originating channel did not apply the cross-channel attachment ingress contract (netclaw-input-adapters) before inlining DataContent. " +
-                    "Dropping the unsupported refs and continuing the turn.",
+                    "ingress_bug model={ModelId} modalities={Modalities} offending={Offending}",
                     _model.ModelId, _model.InputModalities, offendingDesc);
 
                 mediaRefs = mediaRefs.Where(r => r.Modality != (int)MediaModality.Image).ToList();
@@ -1767,7 +1765,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                     : userContent + "\n\n" + ingressBugNotice;
             }
         }
-
 
         if (TryHandleSlashCommand(userContent, mediaRefs))
             return;
@@ -2280,22 +2277,22 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     private string? _slashCommandSkillContent;
     private string? _sessionPromptOverlay;
 
+    private bool HasFileReadGranted()
+    {
+        foreach (var tool in _availableTools)
+        {
+            if (tool is AIFunction fn && string.Equals(fn.Name, FileReadTool.ToolName, StringComparison.Ordinal))
+                return true;
+        }
+        return false;
+    }
+
     /// <summary>
     /// Inject dynamic context layers as system messages after the persisted system prompt
     /// but before user messages. Static (<see cref="ContextLayerTiming.OnceAtStart"/>) layers
     /// are injected on the first call and again after compaction resets
     /// <see cref="_startupContextInjected"/>. Per-turn layers are always injected.
     /// </summary>
-    private bool HasFileReadGranted()
-    {
-        foreach (var tool in _availableTools)
-        {
-            if (tool is AIFunction fn && string.Equals(fn.Name, "file_read", StringComparison.Ordinal))
-                return true;
-        }
-        return false;
-    }
-
     private void InjectDynamicContextLayers(List<AiChatMessage> messages)
     {
         var parts = new List<string>();

@@ -526,7 +526,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
 
         DataContent? inlineContent = null;
         if (inlined)
-            inlineContent = new DataContent(bytes.ToArray(), file.MimeType);
+            inlineContent = new DataContent(bytes, file.MimeType);
 
         _log.Info(
             "slack_attachment_accepted name={Name} mime={Mime} size={Size} audience={Audience} category={Category} inlined={Inlined}",

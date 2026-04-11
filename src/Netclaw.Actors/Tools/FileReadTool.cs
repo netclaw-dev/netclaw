@@ -9,11 +9,13 @@ namespace Netclaw.Actors.Tools;
 /// <summary>
 /// Reads file contents as UTF-8 text with optional line offset/limit.
 /// </summary>
-[NetclawTool("file_read",
+[NetclawTool(ToolName,
     "Read the contents of a file as text",
     Grant = "file")]
 public sealed partial class FileReadTool : NetclawTool<FileReadTool.Params>
 {
+    public const string ToolName = "file_read";
+
     private readonly ToolConfig _config;
     private readonly ToolPathPolicy? _pathPolicy;
     private readonly ScopedFileAccessPolicy _fileAccessPolicy;
