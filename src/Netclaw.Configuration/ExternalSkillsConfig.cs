@@ -87,6 +87,7 @@ public sealed class ExternalSkillsConfig
             }
 
             var existingPaths = new List<string>();
+            var seenPaths = new HashSet<string>(GetPathComparer());
             foreach (var candidate in candidatePaths)
             {
                 if (string.IsNullOrWhiteSpace(candidate))
@@ -96,7 +97,8 @@ public sealed class ExternalSkillsConfig
                 if (!Directory.Exists(fullPath))
                     continue;
 
-                existingPaths.Add(fullPath);
+                if (seenPaths.Add(fullPath))
+                    existingPaths.Add(fullPath);
             }
 
             if (existingPaths.Count == 0)
@@ -124,16 +126,14 @@ public sealed class ExternalSkillsConfig
         if (!Directory.Exists(marketplacesRoot))
             return Array.Empty<string>();
 
-        try
-        {
-            return Directory.EnumerateDirectories(marketplacesRoot)
-                .Select(d => Path.Combine(d, "skills"))
-                .ToList();
-        }
-        catch (UnauthorizedAccessException)
-        {
-            return Array.Empty<string>();
-        }
+        var pathComparer = GetPathComparer();
+
+        return Directory.EnumerateDirectories(marketplacesRoot)
+            .Select(d => Path.GetFullPath(Path.Combine(d, "skills")))
+            .Where(Directory.Exists)
+            .Distinct(pathComparer)
+            .OrderBy(p => p, pathComparer)
+            .ToList();
     }
 
     /// <summary>
@@ -162,6 +162,13 @@ public sealed class ExternalSkillsConfig
                     firstExisting = path;
                     break;
                 }
+            }
+
+            if (firstExisting is null
+                && string.Equals(alias, ClaudeCodeAlias, StringComparison.Ordinal)
+                && EnumerateClaudeCodeMarketplaceSkillPaths(homeDirectory) is { Count: > 0 } marketplacePaths)
+            {
+                firstExisting = marketplacePaths[0];
             }
 
             if (firstExisting is not null)
@@ -201,6 +208,9 @@ public sealed class ExternalSkillsConfig
 
         return Array.Empty<string>();
     }
+
+    private static StringComparer GetPathComparer()
+        => OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
 }
 
 /// <summary>
