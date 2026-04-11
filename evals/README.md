@@ -1,23 +1,63 @@
 # Netclaw Eval Suite
 
 Behavioral eval suite that tests identity, skill loading, memory, tool use,
-grounding, and autonomy against a running Netclaw daemon instance.
+grounding, and autonomy against an ephemeral `netclawd` Docker container.
+Completely isolated from the operator's real `~/.netclaw` state.
 
 ## Quick Start
 
 ```bash
-# Ensure daemon is running
-netclaw daemon start
+# One-time: run netclaw init on the host so the eval script can borrow
+# your identity files (SOUL.md, AGENTS.md, TOOLING.md).
+netclaw init
 
-# Run the full suite
-./evals/run-evals.sh
+# Run the full suite against your preferred LLM endpoint.
+NETCLAW_EVAL_PROVIDER_TYPE=ollama \
+NETCLAW_EVAL_PROVIDER_ENDPOINT=http://big-gpu.tailnet.ts.net:11434 \
+NETCLAW_EVAL_MODEL_ID=qwen3:30b \
+  ./evals/run-evals.sh
 ```
+
+If any of `NETCLAW_EVAL_PROVIDER_TYPE`, `NETCLAW_EVAL_PROVIDER_ENDPOINT`, or
+`NETCLAW_EVAL_MODEL_ID` is unset, the script prompts for the missing values
+on stdin (requires a terminal). In non-interactive contexts (CI, piped
+scripts) the script fails loudly — it never silently falls back to a
+default provider.
+
+## How It Works
+
+1. `scripts/docker/build-image.sh dev` (or a published release image) builds
+   the `netclawd` Docker image.
+2. On every invocation, `run-evals.sh` spins up an ephemeral container
+   from that image with `docker run --rm --network host`, a throwaway
+   `$EVAL_HOME` temp directory, and `NETCLAW_*` env vars that route it at
+   your LLM endpoint.
+3. Identity files are **copied** from `~/.netclaw/identity/` into
+   `$EVAL_HOME/identity/` (never bind-mounted from the real location, so
+   the operator's real identity cannot be mutated).
+4. Daemon logs land in `$EVAL_HOME/logs/daemon-YYYY-MM-DD.log` via a
+   writable bind-mount of `/root/.netclaw/logs`. Assertion helpers tail
+   this file with per-prompt offsets, exactly like the pre-container
+   version did.
+5. The CLI is pointed at the eval daemon via
+   `NETCLAW_DAEMON_ENDPOINT=http://127.0.0.1:$EVAL_PORT` and its own path
+   resolution is sandboxed via `NETCLAW_HOME=$EVAL_HOME`. The host's
+   `~/.netclaw/` is never touched by the CLI during the run.
+6. On exit (success, failure, or SIGINT) the container is stopped and
+   `$EVAL_HOME` is deleted. A throwaway root-in-container cleanup step
+   handles files the daemon wrote as UID 0.
+
+`--network host` is the default because operators often host their LLM on
+a Tailscale node — MagicDNS hostnames like `big-gpu.tailnet.ts.net` only
+resolve when the container shares the host's DNS resolver. macOS/Windows
+operators need a different endpoint resolution strategy (Docker Desktop
+reduces `--network host` to bridge mode).
 
 ## What It Tests
 
-The suite runs prompts via `netclaw -p` and verifies both **stdout output**
-(tool calls, text content) and **daemon log patterns** (skill loading, memory
-recall, checkpoint formation).
+The suite runs prompts via `netclaw -p` against the eval container and
+verifies both **stdout output** (tool calls, text content) and **daemon
+log patterns** (skill loading, memory recall, checkpoint formation).
 
 | Category | Cases | What It Validates |
 |----------|-------|-------------------|
@@ -29,81 +69,95 @@ recall, checkpoint formation).
 | Autonomy & Execution | 2 | Executes tasks rather than describing them |
 | Complex Task Execution | 3 | Multi-step tool chains complete successfully |
 
-## How It Works
-
-1. Verifies daemon is running via `netclaw daemon status`
-2. For each eval case, picks a random prompt variant from the case's list
-3. Runs the prompt via `netclaw -p "prompt"`, capturing stdout
-4. Records daemon log position before/after to isolate new entries
-5. Runs assertion functions against stdout and daemon log tail
-6. Repeats N times per case (default: 5) to account for LLM non-determinism
-7. A case passes if it meets the threshold across runs (default: 80%)
-
-### Prompt Variants
-
-Each case defines multiple natural phrasings of the same intent. Each run picks
-a random variant, testing whether behavior is robust across phrasing — not just
-one magic prompt.
+Each case defines multiple natural phrasings of the same intent. Each
+run picks a random variant, testing whether behavior is robust across
+phrasing — not just one magic prompt.
 
 ### Assertion Types
 
-- **stdout assertions** — check `netclaw -p` output for tool calls (`[tool:call]`),
-  text content, or absence of hallucinated content
-- **daemon log assertions** — check daemon log for structured patterns like
-  `turn_skill_auto_load`, `turn_memory_recall`, `turn_memory_checkpoint_enqueued`
+- **stdout assertions** — check `netclaw -p` output for tool calls
+  (`[tool:call]`), text content, or absence of hallucinated content.
+- **daemon log assertions** — check the daemon's file log (tailed from
+  `$EVAL_HOME/logs/daemon-$(date +%F).log`) for structured patterns like
+  `turn_skill_auto_load`, `turn_memory_recall`,
+  `turn_memory_checkpoint_enqueued`.
 
 ## Environment Variables
+
+### Eval target (required)
+
+| Variable | Description |
+|----------|-------------|
+| `NETCLAW_EVAL_PROVIDER_TYPE` | Provider type (`ollama`, `openai`, `openai-compatible`, `openrouter`, `anthropic`) |
+| `NETCLAW_EVAL_PROVIDER_ENDPOINT` | Provider URL the container should call |
+| `NETCLAW_EVAL_MODEL_ID` | Main model id |
+
+If any of these is unset and stdin is a terminal, the script prompts for
+the missing values. In non-interactive contexts it fails loudly.
+
+### Eval target (optional)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `NETCLAW_EVAL_FALLBACK_MODEL_ID` | `NETCLAW_EVAL_MODEL_ID` | Fallback model id |
+| `NETCLAW_EVAL_COMPACTION_MODEL_ID` | `NETCLAW_EVAL_MODEL_ID` | Compaction model id |
+| `NETCLAW_EVAL_CONTEXT_WINDOW` | — | Override `Models:Main:ContextWindowTokens` — useful for triggering compaction in future eval cases |
+
+### Container + runtime (optional)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `NETCLAW_IMAGE` | `ghcr.io/aaronontheweb/netclawd:latest` | Image ref |
+| `NETCLAW_EVAL_PORT` | `5299` | Host-side port for the eval daemon |
+| `NETCLAW_BIN` | `netclaw` | Path to the netclaw CLI on the host |
+
+### Eval suite knobs (optional)
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `NETCLAW_EVAL_RUNS` | `5` | Runs per case |
 | `NETCLAW_EVAL_THRESHOLD` | `0.80` | Pass threshold (0.0-1.0) |
-| `NETCLAW_EVAL_TIMEOUT` | `180` | Per-prompt timeout in seconds |
-| `NETCLAW_BIN` | `netclaw` | Path to netclaw binary |
-| `NETCLAW_HOME` | `~/.netclaw` | Netclaw home directory |
-| `NETCLAW_EVAL_DAEMON_LOG` | `~/.netclaw/logs/daemon-YYYY-MM-DD.log` | Daemon log path |
+| `NETCLAW_EVAL_TIMEOUT` | `60` | Per-prompt timeout in seconds |
 
 ### Examples
 
 ```bash
 # Quick smoke test (1 run, lower threshold)
-NETCLAW_EVAL_RUNS=1 NETCLAW_EVAL_THRESHOLD=0.50 ./evals/run-evals.sh
+NETCLAW_EVAL_PROVIDER_TYPE=ollama \
+NETCLAW_EVAL_PROVIDER_ENDPOINT=http://big-gpu:11434 \
+NETCLAW_EVAL_MODEL_ID=qwen3:30b \
+NETCLAW_EVAL_RUNS=1 NETCLAW_EVAL_THRESHOLD=0.50 \
+  ./evals/run-evals.sh
 
-# Thorough run (10 iterations)
-NETCLAW_EVAL_RUNS=10 ./evals/run-evals.sh
-
-# Use a specific netclaw binary
-NETCLAW_BIN=/usr/local/bin/netclaw ./evals/run-evals.sh
+# Run against a locally-built dev image
+NETCLAW_IMAGE=ghcr.io/aaronontheweb/netclawd:dev \
+NETCLAW_EVAL_PROVIDER_TYPE=ollama \
+NETCLAW_EVAL_PROVIDER_ENDPOINT=http://127.0.0.1:11434 \
+NETCLAW_EVAL_MODEL_ID=qwen3:30b \
+  ./evals/run-evals.sh
 ```
 
 ## Results Database
 
-Results are stored in `~/.netclaw/evals/results.db` (SQLite) for trend analysis.
-Requires `sqlite3` CLI — if not available, the script still runs but skips
-persistence.
+Results are stored in `$EVAL_HOME/evals/results.db` (SQLite) inside the
+per-run throwaway directory, NOT under `~/.netclaw/`. This means results
+don't persist across runs by default — on script exit, the database is
+deleted along with `$EVAL_HOME`.
 
-### Trend Queries
+If you want to retain results for trend analysis, copy the database out
+of `$EVAL_HOME` before the EXIT trap fires (look for the "Results:
+..."  line at the bottom of the script output to get the path). A
+dedicated results-retention follow-up may add a `NETCLAW_EVAL_RESULTS_DB`
+override.
 
-```bash
-# Score by version
-sqlite3 ~/.netclaw/evals/results.db \
-  "SELECT netclaw_ver, AVG(overall_score) FROM eval_runs GROUP BY netclaw_ver;"
-
-# Case pass rate over time
-sqlite3 ~/.netclaw/evals/results.db \
-  "SELECT r.netclaw_ver, e.case_name, AVG(e.passed)
-   FROM eval_results e JOIN eval_runs r ON e.run_id = r.run_id
-   GROUP BY r.netclaw_ver, e.case_name;"
-
-# Worst performing cases
-sqlite3 ~/.netclaw/evals/results.db \
-  "SELECT case_name, AVG(passed) as rate FROM eval_results
-   GROUP BY case_name ORDER BY rate ASC LIMIT 10;"
-```
+Requires `sqlite3` CLI — if not available, the script still runs but
+skips persistence.
 
 ## Adding New Cases
 
-1. Define an assertion function in the "Case Assertion Functions" section:
+1. Define an assertion function in the "Case Assertion Functions"
+   section:
+
    ```bash
    assert_my_new_case() {
        stdout_contains '\[tool:call\] my_tool' && stdout_contains 'expected text'
@@ -111,6 +165,7 @@ sqlite3 ~/.netclaw/evals/results.db \
    ```
 
 2. Add the case to the appropriate category in `run_all()`:
+
    ```bash
    run_case my_new_case "description of pass criteria" \
        "Prompt variant 1" \
@@ -128,23 +183,45 @@ sqlite3 ~/.netclaw/evals/results.db \
 
 ### When to Add Cases
 
-- New system skill added -> add a skill auto-load case
-- New tool added -> add a tool discovery/use case
-- Identity grounding rules changed -> update identity assertions
-- Production session failure -> add a regression case
+- New system skill added → add a skill auto-load case
+- New tool added → add a tool discovery/use case
+- Identity grounding rules changed → update identity assertions
+- Production session failure → add a regression case
 
 ## Scoring
 
-- **Per-case:** passes / total runs >= threshold -> case passes
+- **Per-case:** passes / total runs >= threshold → case passes
 - **Per-category:** GREEN (all pass), YELLOW (>= 80%), RED (< 80%)
 - **Overall:** cases passed / total cases
-- **Exit code:** 0 if all cases pass, 1 if any fail
+- **Exit code:** 0 if all cases pass, 1 if any fail, 2 if the eval
+  container died during startup or mid-run
 
-## Limitations (v1)
+## Prerequisites
 
-- **Local instance only** — tests against the running daemon, same database and
-  identity files. No isolation between evals and production.
-- **Single-turn only** — `netclaw -p` is one prompt per session. Multi-turn
+- `docker` (the host needs a working Docker daemon)
+- `netclaw` CLI installed on the host (`curl` install script or local build)
+- `~/.netclaw/identity/SOUL.md` — run `netclaw init` once on the host
+- `timeout`, `curl`, `awk` (coreutils, standard on most Linux distros)
+- `sqlite3` (optional — results persistence degrades gracefully without it)
+
+## Limitations (v2)
+
+- **Local LLM required**: the eval container needs to reach an LLM
+  endpoint the operator supplies. CI execution is not yet wired up — it
+  requires a remote LLM endpoint secret and runtime budget. Track as a
+  follow-up.
+- **`--network host` is Linux-only**: the Tailscale MagicDNS use case
+  depends on inheriting the host's DNS resolver. Docker Desktop
+  (macOS/Windows) degrades `--network host` to bridge mode; set
+  `NETCLAW_EVAL_PROVIDER_ENDPOINT` to a reachable IP/hostname instead.
+- **Single-turn only**: `netclaw -p` is one prompt per session. Multi-turn
   conversation evals are deferred.
-- **No clean-slate testing** — tests current production state, not fresh-install.
-  Isolated instance support depends on configurable `NETCLAW_HOME` and bind address.
+- **Identity is borrowed from host**: the container does not
+  self-bootstrap identity. CI will need a committed fixture under
+  `evals/fixtures/identity/` — tracked as a follow-up.
+- **Daemon does not fail fast on empty config**: a follow-up task will
+  make `netclawd` refuse to start when identity or provider config is
+  missing. Today, missing config produces a running-but-broken daemon
+  whose LLM calls fail at request time. Not relevant to the eval path
+  itself (the script always supplies valid config) but noted for anyone
+  exploring the Docker image directly.

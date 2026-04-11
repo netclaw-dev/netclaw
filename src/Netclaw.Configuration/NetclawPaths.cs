@@ -85,11 +85,16 @@ public sealed class NetclawPaths
 
     public NetclawPaths(string? basePath = null, string? workspacesDirectory = null)
     {
-        BasePath = basePath ?? Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-            ".netclaw");
+        BasePath = basePath
+            ?? NormalizeEnvHome(Environment.GetEnvironmentVariable("NETCLAW_HOME"))
+            ?? Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                ".netclaw");
         WorkspacesDirectory = workspacesDirectory ?? Path.Combine(BasePath, "workspaces");
     }
+
+    private static string? NormalizeEnvHome(string? value)
+        => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
     /// <summary>
     /// Create all standard subdirectories if they don't exist.
