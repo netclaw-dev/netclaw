@@ -10,6 +10,7 @@ namespace Netclaw.Actors.Sessions.Pipelines;
 /// Bundles the many parameters needed by the compaction pipeline into a single record.
 /// </summary>
 internal sealed record CompactionParameters(
+    SessionId SessionId,
     long PreCompactionInputTokens,
     int KeepRecentToolResults,
     int KeepRecentMessages,
@@ -85,6 +86,7 @@ internal static class SessionCompactionPipeline
 
             var observationText = await GenerateObservationsAsync(
                 client,
+                parameters.SessionId,
                 history,
                 systemOffset,
                 discardStartIndex,
@@ -97,9 +99,10 @@ internal static class SessionCompactionPipeline
                 var observationMsg = new SerializableChatMessage
                 {
                     Role = Protocol.ChatRole.User,
-                    Content = ObservationPromptBuilder.WrapObservations(observationText)
+                    Content = ObservationPromptBuilder.WrapObservations(observationText, parameters.SessionId)
                 };
                 compactedMessages.Insert(0, observationMsg);
+
                 log.Info("Observer: generated {ObsLength} chars of observations from {DiscardedCount} discarded messages",
                     observationText.Length, Math.Max(0, discardStartIndex - systemOffset));
             }
@@ -131,6 +134,7 @@ internal static class SessionCompactionPipeline
     /// </summary>
     public static async Task<string?> GenerateObservationsAsync(
         IChatClient client,
+        SessionId sessionId,
         IReadOnlyList<SerializableChatMessage> history,
         int systemOffset,
         int keepStartIndex,
@@ -147,6 +151,18 @@ internal static class SessionCompactionPipeline
         if (discardedMessages.Count == 0)
             return null;
 
+        // Lift any prior [session-summary ...] block out of the discarded
+        // window and include it in the observer's system prompt with an
+        // explicit "preserve verbatim" instruction. Structural defense
+        // against summary-over-summary decay: the prior summary becomes
+        // an anchor the model sees before the new material, reducing the
+        // chance of rewrite or decay.
+        var (priorSummary, remainingDiscarded) =
+            ObservationPromptBuilder.ExtractPriorSummary(discardedMessages);
+
+        if (priorSummary is not null)
+            log.Info("Observer: lifting prior session summary ({Length} chars) into system prompt for verbatim preservation", priorSummary.Length);
+
         try
         {
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -154,9 +170,9 @@ internal static class SessionCompactionPipeline
             var observerMessages = new List<AiChatMessage>
             {
                 new(Microsoft.Extensions.AI.ChatRole.System,
-                    ObservationPromptBuilder.BuildObservationSystemPrompt()),
+                    ObservationPromptBuilder.BuildObservationSystemPrompt(sessionId, priorSummary)),
                 new(Microsoft.Extensions.AI.ChatRole.User,
-                    ObservationPromptBuilder.BuildObservationUserPrompt(discardedMessages))
+                    ObservationPromptBuilder.BuildObservationUserPrompt(remainingDiscarded))
             };
 
             var response = await client.GetResponseAsync(

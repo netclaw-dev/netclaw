@@ -451,6 +451,211 @@ public class CompactionIntegrationTests : TestKit
     }
 
     [Fact]
+    public async Task Compaction_observation_wrapper_embeds_session_id_in_header()
+    {
+        // Observer wrapper must carry the session id in its header so that
+        // subsequent compactions (or a weaker model reading the observation
+        // text) can disambiguate the self session from any foreign session
+        // ids referenced in the observations.
+        _fakeChatClient.UsageOverride = new UsageDetails
+        {
+            InputTokenCount = 800,
+            OutputTokenCount = 50,
+            TotalTokenCount = 850
+        };
+
+        var sessionId = new SessionId("test-channel/observation-session-id");
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("obs-session-id-sub");
+
+        await sessionManager.Ask<SessionJoined>(new JoinSession
+        {
+            SessionId = sessionId,
+            Subscriber = subscriber,
+            Filter = OutputFilter.Full
+        }, TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
+
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Trigger compaction"
+        }, TestContext.Current.CancellationToken);
+
+        await subscriber.ExpectMsgAsync<TextOutput>(cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<UsageOutput>(cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TurnCompleted>(cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<CompactionOutput>(cancellationToken: TestContext.Current.CancellationToken);
+
+        _fakeChatClient.UsageOverride = new UsageDetails
+        {
+            InputTokenCount = 100,
+            OutputTokenCount = 20,
+            TotalTokenCount = 120
+        };
+
+        // Next turn — the observation message should now be in history.
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Post-compaction probe"
+        }, TestContext.Current.CancellationToken);
+
+        await subscriber.ExpectMsgAsync<TextOutput>(cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<UsageOutput>(cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TurnCompleted>(cancellationToken: TestContext.Current.CancellationToken);
+
+        // Inspect the main-model call that followed compaction. Filter out
+        // the observer sidecar calls by matching on the new session-summarizer
+        // system prompt marker.
+        var mainModelCalls = _fakeChatClient.ReceivedMessages
+            .Where(msgs => !(msgs.FirstOrDefault(m => m.Role == Microsoft.Extensions.AI.ChatRole.System)?.Text
+                ?? string.Empty).Contains("session summarizer", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        Assert.NotEmpty(mainModelCalls);
+        var lastMainCall = mainModelCalls[^1];
+        var observationHeader = $"[session-summary session:{sessionId.Value}]";
+        var hasObservationMessage = lastMainCall.Any(m =>
+            m.Role == Microsoft.Extensions.AI.ChatRole.User
+            && (m.Text ?? string.Empty).StartsWith(observationHeader, StringComparison.Ordinal));
+
+        Assert.True(hasObservationMessage,
+            $"Expected post-compaction main-model call to include a User message starting with '{observationHeader}'");
+    }
+
+    [Fact]
+    public async Task Compaction_observer_system_prompt_receives_self_session_id()
+    {
+        // The observer LLM call must see the self session id in its system
+        // prompt so it can disambiguate foreign session ids in the discarded
+        // window.
+        _fakeChatClient.UsageOverride = new UsageDetails
+        {
+            InputTokenCount = 800,
+            OutputTokenCount = 50,
+            TotalTokenCount = 850
+        };
+
+        var sessionId = new SessionId("test-channel/observer-grounding");
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("observer-grounding-sub");
+
+        await sessionManager.Ask<SessionJoined>(new JoinSession
+        {
+            SessionId = sessionId,
+            Subscriber = subscriber,
+            Filter = OutputFilter.Full
+        }, TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
+
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Trigger compaction"
+        }, TestContext.Current.CancellationToken);
+
+        await subscriber.ExpectMsgAsync<TextOutput>(cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<UsageOutput>(cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TurnCompleted>(cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<CompactionOutput>(cancellationToken: TestContext.Current.CancellationToken);
+
+        // Find the observer sidecar call
+        var observerCall = _fakeChatClient.ReceivedMessages.FirstOrDefault(msgs =>
+            (msgs.FirstOrDefault(m => m.Role == Microsoft.Extensions.AI.ChatRole.System)?.Text ?? string.Empty)
+                .Contains("session summarizer", StringComparison.OrdinalIgnoreCase));
+
+        Assert.NotNull(observerCall);
+        var systemText = observerCall!.First(m => m.Role == Microsoft.Extensions.AI.ChatRole.System).Text ?? string.Empty;
+        Assert.Contains(sessionId.Value, systemText);
+        Assert.Contains("SELF session", systemText, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Successive_compactions_preserve_prior_summary_in_observer_system_prompt()
+    {
+        // Anti-drift defense: on the second compaction, the observer's
+        // system prompt must include the prior summary as an explicit
+        // "preserve verbatim" block. This is the structural defense the
+        // spec requires (Conversation compaction → "preserve any prior
+        // structured summary block verbatim and update in place").
+        _fakeChatClient.UsageOverride = new UsageDetails
+        {
+            InputTokenCount = 800,
+            OutputTokenCount = 50,
+            TotalTokenCount = 850
+        };
+
+        // The observer returns a structured-looking summary so the wrapper
+        // produces a recognizable [session-summary session:{id}] block in
+        // history. The next compaction should lift this out of the
+        // discarded window and include it in the observer's system prompt.
+        _fakeChatClient.ObservationResponseOverride =
+            "## 1. Primary Request and Intent\nUser wants to debug the Rect struct\n## 6. Task Evolution\n- Original: \"help me with Rect\"";
+
+        var sessionId = new SessionId("test-channel/successive-compactions");
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("successive-sub");
+
+        await sessionManager.Ask<SessionJoined>(new JoinSession
+        {
+            SessionId = sessionId,
+            Subscriber = subscriber,
+            Filter = OutputFilter.Full
+        }, TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
+
+        // First compaction
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "First user turn that triggers compaction"
+        }, TestContext.Current.CancellationToken);
+
+        await subscriber.ExpectMsgAsync<TextOutput>(cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<UsageOutput>(cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TurnCompleted>(cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<CompactionOutput>(cancellationToken: TestContext.Current.CancellationToken);
+
+        // Snapshot how many calls happened before the second compaction.
+        var callsBeforeSecondCompaction = _fakeChatClient.ReceivedMessages.Count;
+
+        // Second compaction: keep usage high so another compaction fires
+        // after the next turn.
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Second user turn that also triggers compaction"
+        }, TestContext.Current.CancellationToken);
+
+        await subscriber.ExpectMsgAsync<TextOutput>(cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<UsageOutput>(cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TurnCompleted>(cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<CompactionOutput>(cancellationToken: TestContext.Current.CancellationToken);
+
+        // Find the SECOND observer sidecar call (the one that ran during
+        // the second compaction). It's the last observer-role call made.
+        var observerCalls = _fakeChatClient.ReceivedMessages
+            .Select((msgs, idx) => (msgs, idx))
+            .Where(x => (x.msgs.FirstOrDefault(m => m.Role == Microsoft.Extensions.AI.ChatRole.System)?.Text ?? string.Empty)
+                .Contains("session summarizer", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        Assert.True(observerCalls.Count >= 2,
+            $"Expected at least 2 observer sidecar calls across two compactions; got {observerCalls.Count}");
+
+        // The second observer call's system prompt must contain the prior
+        // summary lifted from the discarded window.
+        var secondObserverCall = observerCalls.Last(x => x.idx >= callsBeforeSecondCompaction);
+        var systemText = secondObserverCall.msgs
+            .First(m => m.Role == Microsoft.Extensions.AI.ChatRole.System).Text ?? string.Empty;
+
+        Assert.Contains("PRIOR SUMMARY", systemText, StringComparison.Ordinal);
+        Assert.Contains("preserve the bullets", systemText, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains($"[session-summary session:{sessionId.Value}]", systemText, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Emergency_compaction_auto_resends_pending_message()
     {
         // First call: context overflow (triggers emergency compaction)

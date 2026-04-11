@@ -1002,6 +1002,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             var compactionClient = _compactionClient;
 
             var compactionParams = new CompactionParameters(
+                _sessionId,
                 msg.InputTokenCount,
                 _config.Tuning.KeepRecentToolResults,
                 _config.Tuning.KeepRecentMessages,

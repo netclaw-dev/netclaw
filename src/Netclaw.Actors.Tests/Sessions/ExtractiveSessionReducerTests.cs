@@ -175,4 +175,155 @@ public class ExtractiveSessionReducerTests
         Assert.Equal("Second", result[0].Text);
         Assert.Equal("Reply 2", result[1].Text);
     }
+
+    [Fact]
+    public async Task Window_walks_backward_to_user_boundary_when_naive_cut_would_orphan_tool_result()
+    {
+        // keepCount=3 would place the naive cut on the Tool result, whose
+        // matching FunctionCallContent is in the discarded portion. The
+        // reducer must walk backward to the preceding User-role message.
+        var reducer = new ExtractiveSessionReducer(keepRecentMessages: 3);
+        var messages = new List<ChatMessage>
+        {
+            new(ChatRole.System, "System prompt"),
+            new(ChatRole.User, "Old user turn"),                                                 // index 1, discarded
+            new(ChatRole.Assistant, "Old assistant reply"),                                      // index 2, discarded
+            new(ChatRole.User, "Search for X"),                                                   // index 3, user boundary
+            new(ChatRole.Assistant, [new FunctionCallContent("call-1", "search", new Dictionary<string, object?> { ["q"] = "X" })]), // 4
+            new(ChatRole.Tool, [new FunctionResultContent("call-1", "Found X")]),               // 5, naive cut lands here
+            new(ChatRole.Assistant, "Let me check further.")                                    // 6
+        };
+
+        var result = (await reducer.ReduceAsync(messages, CancellationToken.None)).ToList();
+
+        // Expect: system + user "Search for X" + assistant tool_call + tool result + assistant
+        Assert.Equal(ChatRole.System, result[0].Role);
+        Assert.Equal("Search for X", result[1].Text);
+        Assert.Contains(result[2].Contents, c => c is FunctionCallContent);
+        Assert.Equal(ChatRole.Tool, result[3].Role);
+        Assert.Equal("Let me check further.", result[4].Text);
+    }
+
+    [Fact]
+    public async Task Window_walks_backward_past_assistant_tool_call_to_user_boundary()
+    {
+        // keepCount=2 naive cut lands on the Assistant tool_call. The reducer
+        // must walk back to the preceding User-role message so the tool_call
+        // is contextualized by the user turn that requested it.
+        var reducer = new ExtractiveSessionReducer(keepRecentMessages: 2);
+        var messages = new List<ChatMessage>
+        {
+            new(ChatRole.System, "System prompt"),
+            new(ChatRole.User, "Old user turn"),
+            new(ChatRole.Assistant, "Old assistant reply"),
+            new(ChatRole.User, "Please grep for foo"),
+            new(ChatRole.Assistant, [new FunctionCallContent("call-a", "grep", new Dictionary<string, object?> { ["pattern"] = "foo" })]),
+            new(ChatRole.Tool, [new FunctionResultContent("call-a", "3 matches")])
+        };
+
+        var result = (await reducer.ReduceAsync(messages, CancellationToken.None)).ToList();
+
+        Assert.Equal(ChatRole.System, result[0].Role);
+        Assert.Equal("Please grep for foo", result[1].Text);
+        Assert.Contains(result[2].Contents, c => c is FunctionCallContent);
+        Assert.Equal(ChatRole.Tool, result[3].Role);
+    }
+
+    [Fact]
+    public async Task Window_skips_system_nudges_when_finding_user_boundary()
+    {
+        // A system nudge uses User role but has the SystemNudgePrefix — it's
+        // actor-injected (recall content, empty-response nudges), not a real
+        // user turn. The backward walk must skip it.
+        var reducer = new ExtractiveSessionReducer(keepRecentMessages: 2);
+        var nudgeContent = $"{SessionState.SystemNudgePrefix} recalled-memory blah]";
+        var messages = new List<ChatMessage>
+        {
+            new(ChatRole.System, "System prompt"),
+            new(ChatRole.User, "Real user turn"),
+            new(ChatRole.Assistant, "Reply"),
+            new(ChatRole.User, nudgeContent),                                     // nudge — not a real user turn
+            new(ChatRole.Assistant, [new FunctionCallContent("call-x", "tool", null)]),
+            new(ChatRole.Tool, [new FunctionResultContent("call-x", "done")])
+        };
+
+        var result = (await reducer.ReduceAsync(messages, CancellationToken.None)).ToList();
+
+        // Walk should skip the nudge and land on "Real user turn".
+        Assert.Equal(ChatRole.System, result[0].Role);
+        Assert.Equal("Real user turn", result[1].Text);
+    }
+
+    [Fact]
+    public async Task Window_start_already_on_user_boundary_is_preserved()
+    {
+        // Naive cut lands on a User message — no walk needed.
+        var reducer = new ExtractiveSessionReducer(keepRecentMessages: 3);
+        var messages = new List<ChatMessage>
+        {
+            new(ChatRole.System, "System prompt"),
+            new(ChatRole.User, "Discarded"),
+            new(ChatRole.Assistant, "Discarded reply"),
+            new(ChatRole.User, "Kept user turn"),
+            new(ChatRole.Assistant, [new FunctionCallContent("call-1", "search", null)]),
+            new(ChatRole.Tool, [new FunctionResultContent("call-1", "result")])
+        };
+
+        var result = (await reducer.ReduceAsync(messages, CancellationToken.None)).ToList();
+
+        Assert.Equal(4, result.Count);
+        Assert.Equal(ChatRole.System, result[0].Role);
+        Assert.Equal("Kept user turn", result[1].Text);
+    }
+
+    [Fact]
+    public async Task Window_falls_back_to_keep_all_post_system_when_no_user_message_found()
+    {
+        // Degenerate case: no user message post-system, first post-system
+        // message is Assistant (not Tool). Keep everything post-system —
+        // the defense-in-depth advance-forward only triggers on leading Tool
+        // orphans, which this history doesn't have.
+        var reducer = new ExtractiveSessionReducer(keepRecentMessages: 2);
+        var messages = new List<ChatMessage>
+        {
+            new(ChatRole.System, "System prompt"),
+            new(ChatRole.Assistant, "Assistant only"),
+            new(ChatRole.Assistant, [new FunctionCallContent("c", "t", null)]),
+            new(ChatRole.Tool, [new FunctionResultContent("c", "r")]),
+            new(ChatRole.Assistant, "More assistant")
+        };
+
+        var result = (await reducer.ReduceAsync(messages, CancellationToken.None)).ToList();
+
+        Assert.Equal(5, result.Count);
+        Assert.Equal(ChatRole.System, result[0].Role);
+    }
+
+    [Fact]
+    public async Task Degenerate_orphan_tool_at_head_is_advanced_past_not_kept()
+    {
+        // Defense in depth: history starts (post-system) with Tool-role
+        // orphans whose matching Assistant tool_calls do not exist. This
+        // shouldn't happen in a well-formed session, but if it does via
+        // recovery from broken state, the reducer must not emit a kept
+        // window that starts with an orphan Tool — downstream providers
+        // would reject the request.
+        var reducer = new ExtractiveSessionReducer(keepRecentMessages: 2);
+        var messages = new List<ChatMessage>
+        {
+            new(ChatRole.System, "System prompt"),
+            new(ChatRole.Tool, [new FunctionResultContent("orphan-1", "r1")]),
+            new(ChatRole.Tool, [new FunctionResultContent("orphan-2", "r2")]),
+            new(ChatRole.Assistant, "Recovery assistant"),
+            new(ChatRole.Assistant, "More assistant")
+        };
+
+        var result = (await reducer.ReduceAsync(messages, CancellationToken.None)).ToList();
+
+        // The kept window must not start with a Tool orphan. Leading Tool
+        // messages are skipped, even if that shrinks the window below the
+        // requested keepCount.
+        Assert.Equal(ChatRole.System, result[0].Role);
+        Assert.DoesNotContain(result.Skip(1), m => m.Role == ChatRole.Tool);
+    }
 }

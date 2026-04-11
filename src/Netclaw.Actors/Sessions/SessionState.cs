@@ -42,7 +42,11 @@ public sealed record SessionState
 
     public SessionState Apply(SessionCompacted evt)
     {
-        // Preserve system prompt if present
+        // Preserve system prompt if present, then layer the compacted messages.
+        // Summaries are recognizable by their [session-summary session:{id}]
+        // header — no separate index is persisted. The reducer's
+        // user-message-boundary walk-back naturally preserves prior summary
+        // messages because they use User-role and are distinctive.
         var builder = ImmutableList.CreateBuilder<SerializableChatMessage>();
         if (History.Count > 0 && History[0].Role == ChatRole.System)
         {

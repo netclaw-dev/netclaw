@@ -1631,6 +1631,14 @@ internal sealed class FakeChatClient : IChatClient
     public int HangingObservationCallsRemaining { get; set; }
 
     /// <summary>
+    /// When set, the observer sidecar call returns this text instead of the
+    /// default <c>"- compacted observation"</c>. Used by tests that need the
+    /// observer output to look like a real structured summary so successive
+    /// compactions can be exercised.
+    /// </summary>
+    public string? ObservationResponseOverride { get; set; }
+
+    /// <summary>
     /// Number of compaction observation sidecar calls that should ignore cancellation
     /// entirely and never complete. Used to simulate a wedged compaction provider.
     /// </summary>
@@ -1716,7 +1724,7 @@ internal sealed class FakeChatClient : IChatClient
                 JsonSerializer.Serialize(plan)));
         }
 
-        if (systemText.Contains("You are an observation compressor", StringComparison.Ordinal))
+        if (systemText.Contains("You are a session summarizer", StringComparison.Ordinal))
         {
             if (StuckObservationCallsRemaining > 0)
             {
@@ -1735,7 +1743,7 @@ internal sealed class FakeChatClient : IChatClient
 
             return new ChatResponse(new ChatMessage(
                 Microsoft.Extensions.AI.ChatRole.Assistant,
-                "- compacted observation"));
+                ObservationResponseOverride ?? "- compacted observation"));
         }
 
         var plannedToolCallDecision = PlannedToolCallDecisions.Count > 0
