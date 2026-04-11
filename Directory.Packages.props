@@ -34,7 +34,7 @@
     <PackageVersion Include="Microsoft.Extensions.Configuration.Json" Version="$(MicrosoftAspNetCoreVersion)" />
     <PackageVersion Include="Microsoft.Extensions.Hosting" Version="$(MicrosoftAspNetCoreVersion)" />
     <PackageVersion Include="Microsoft.Extensions.Http" Version="$(MicrosoftAspNetCoreVersion)" />
-    <PackageVersion Include="JsonSchema.Net" Version="7.4.0" />
+    <PackageVersion Include="JsonSchema.Net" Version="9.1.4" />
     <PackageVersion Include="NSec.Cryptography" Version="24.4.0" />
     <PackageVersion Include="OpenTelemetry" Version="$(OpenTelemetryVersion)" />
     <PackageVersion Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="$(OpenTelemetryVersion)" />
