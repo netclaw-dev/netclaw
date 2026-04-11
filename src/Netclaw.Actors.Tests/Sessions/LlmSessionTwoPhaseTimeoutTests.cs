@@ -43,12 +43,13 @@ public sealed class LlmSessionTwoPhaseTimeoutTests(ITestOutputHelper output) : T
         services.AddSingleton<ISystemPromptProvider>(new StaticSystemPromptProvider("You are a test assistant."));
         services.AddSingleton<IModelCapabilityResolver>(new FakeCapabilityResolver());
 
+        services.AddTestNetclawPaths();
         services.AddSingleton(sp => new SessionServices(
             sp.GetRequiredService<IChatClientProvider>(),
             sp.GetRequiredService<ISystemPromptProvider>(),
             sp.GetService<IReadOnlyList<IContextLayerProvider>>() ?? Array.Empty<IContextLayerProvider>(),
             sp.GetService<TimeProvider>() ?? TimeProvider.System,
-            sp.GetService<NetclawPaths>()));
+            sp.GetRequiredService<NetclawPaths>()));
         services.AddSingleton(sp => new SessionMemoryServices(
             sp.GetService<IMemoryExtractor>() ?? NullMemoryExtractor.Instance,
             sp.GetService<IMemoryRecallCoordinator>() ?? NullMemoryRecallCoordinator.Instance,

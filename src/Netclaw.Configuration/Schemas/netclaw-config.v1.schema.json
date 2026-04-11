@@ -561,7 +561,38 @@
         "ReadFiles": { "$ref": "#/$defs/ToolFilesystemAccessProfile" },
         "WriteFiles": { "$ref": "#/$defs/ToolFilesystemAccessProfile" },
         "AttachFiles": { "$ref": "#/$defs/ToolFilesystemAccessProfile" },
-        "ApprovalPolicy": { "$ref": "#/$defs/ToolApprovalConfig" }
+        "ApprovalPolicy": { "$ref": "#/$defs/ToolApprovalConfig" },
+        "ChannelAttachments": { "$ref": "#/$defs/ChannelAttachmentPolicy" }
+      },
+      "additionalProperties": false
+    },
+    "AttachmentCategory": {
+      "type": "string",
+      "enum": ["Image", "Pdf", "Document", "Archive", "Media", "Other"],
+      "description": "Coarse MIME classification used for per-audience attachment policy."
+    },
+    "ChannelAttachmentPolicy": {
+      "type": "object",
+      "description": "Per-audience inbound channel attachment policy. Channel adapters query this before downloading or delivering any user-uploaded file.",
+      "properties": {
+        "AllowedCategories": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/AttachmentCategory" },
+          "default": [],
+          "description": "Attachment categories permitted for this audience. Empty rejects all inbound attachments."
+        },
+        "MaxFileBytes": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 26214400,
+          "description": "Maximum per-file size in bytes. Files whose transport-reported size exceeds this are rejected before download. Default: 25 MiB."
+        },
+        "MaxFilesPerMessage": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 10,
+          "description": "Maximum number of attachments accepted on a single inbound message. Messages exceeding this have all attachments rejected."
+        }
       },
       "additionalProperties": false
     },

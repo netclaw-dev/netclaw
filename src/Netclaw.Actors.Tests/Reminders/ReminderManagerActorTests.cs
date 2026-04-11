@@ -48,7 +48,8 @@ public class ReminderManagerActorTests : TestKit
 
             var pipeline = new SessionPipeline(
                 system,
-                new RequiredActor<SessionManagerActorKey>(ActorRegistry.For(system)));
+                new RequiredActor<SessionManagerActorKey>(ActorRegistry.For(system)),
+                new NetclawPaths(Path.Combine(Path.GetTempPath(), $"netclaw-test-{Guid.NewGuid():N}")));
 
             var defaults = new EffectivePolicyDefaults(
                 DeploymentPosture.Team, TrustAudience.Team, ShellExecutionMode.Off, false);

@@ -7,14 +7,16 @@ namespace Netclaw.Actors.Protocol;
 public static class SessionDirectoryHelper
 {
     /// <summary>
-    /// Computes the session directory path under the OS temp directory.
-    /// Prefer the overload that accepts a base path for daemon-mode sessions.
+    /// Name of the subdirectory under a session directory where inbound
+    /// user-uploaded attachments are written by channel adapters.
     /// </summary>
-    public static string GetSessionDirectory(SessionId sessionId)
-    {
-        var sanitized = SanitizeSessionId(sessionId.Value);
-        return Path.Combine(Path.GetTempPath(), "netclaw-sessions", sanitized);
-    }
+    public const string InboxSubdirectory = "inbox";
+
+    /// <summary>
+    /// Name of the subdirectory under a session directory where outbound
+    /// DataContent media bytes are persisted.
+    /// </summary>
+    public const string MediaSubdirectory = "media";
 
     /// <summary>
     /// Computes the session directory path under the given base directory
@@ -24,6 +26,46 @@ public static class SessionDirectoryHelper
     {
         var sanitized = SanitizeSessionId(sessionId.Value);
         return Path.Combine(basePath, sanitized);
+    }
+
+    /// <summary>
+    /// Computes and creates the <c>inbox/</c> subdirectory under the
+    /// session directory, returning its full path. Channel adapters call
+    /// this when writing user-uploaded attachments to disk. The parent
+    /// session directory is created if it does not already exist.
+    /// </summary>
+    public static string GetOrCreateInboxDirectory(SessionId sessionId, string basePath)
+    {
+        var sessionDir = GetSessionDirectory(sessionId, basePath);
+        var inboxDir = Path.Combine(sessionDir, InboxSubdirectory);
+        Directory.CreateDirectory(inboxDir);
+        return inboxDir;
+    }
+
+    /// <summary>
+    /// Returns true when the given base path resolves under
+    /// <see cref="Path.GetTempPath"/>. Used by diagnostics to warn
+    /// operators that attachments and session data will not survive a
+    /// reboot or <c>tmpfiles</c> cleanup.
+    /// </summary>
+    public static bool IsUnderTempPath(string basePath)
+    {
+        if (string.IsNullOrWhiteSpace(basePath))
+            return false;
+
+        var tempRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(Path.GetTempPath()));
+        string fullBase;
+        try
+        {
+            fullBase = Path.TrimEndingDirectorySeparator(Path.GetFullPath(basePath));
+        }
+        catch
+        {
+            return false;
+        }
+
+        return fullBase.Equals(tempRoot, StringComparison.Ordinal)
+               || fullBase.StartsWith(tempRoot + Path.DirectorySeparatorChar, StringComparison.Ordinal);
     }
 
     /// <summary>

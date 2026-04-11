@@ -162,14 +162,14 @@ public sealed class SessionPipeline : ISessionPipeline
     private readonly ActorSystem _system;
     private readonly IRequiredActor<SessionManagerActorKey> _sessionManagerProvider;
     private readonly ISessionLifecycleObserver? _lifecycleObserver;
-    private readonly NetclawPaths? _paths;
+    private readonly NetclawPaths _paths;
     private readonly SessionIngressGate? _ingressGate;
 
     public SessionPipeline(
         ActorSystem system,
         IRequiredActor<SessionManagerActorKey> sessionManagerProvider,
+        NetclawPaths paths,
         ISessionLifecycleObserver? lifecycleObserver = null,
-        NetclawPaths? paths = null,
         SessionIngressGate? ingressGate = null)
     {
         _system = system;
@@ -290,7 +290,7 @@ public sealed class SessionPipeline : ISessionPipeline
         ChannelInput input,
         SessionId sessionId,
         SessionPipelineOptions options,
-        NetclawPaths? paths)
+        NetclawPaths paths)
     {
         var turnId = string.IsNullOrWhiteSpace(input.MessageId)
             ? Guid.NewGuid().ToString("N")[..8]
@@ -304,10 +304,8 @@ public sealed class SessionPipeline : ISessionPipeline
         var dataContents = input.Contents.OfType<DataContent>().ToList();
         if (dataContents.Count > 0)
         {
-            var sessionDir = paths is not null
-                ? SessionDirectoryHelper.GetSessionDirectory(sessionId, paths.SessionsDirectory)
-                : SessionDirectoryHelper.GetSessionDirectory(sessionId);
-            var mediaDir = Path.Combine(sessionDir, "media");
+            var sessionDir = SessionDirectoryHelper.GetSessionDirectory(sessionId, paths.SessionsDirectory);
+            var mediaDir = Path.Combine(sessionDir, SessionDirectoryHelper.MediaSubdirectory);
             Directory.CreateDirectory(mediaDir);
 
             foreach (var data in dataContents)

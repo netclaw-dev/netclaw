@@ -1,34 +1,37 @@
 ## 1. Config surface and schema
 
-- [ ] 1.1 Add `AttachmentCategory` enum (`Image`, `Pdf`, `Document`, `Archive`, `Media`, `Other`) to `Netclaw.Configuration`
-- [ ] 1.2 Add `ChannelAttachmentPolicy` record with `AllowedCategories` (HashSet<AttachmentCategory>), `MaxFileBytes` (long), `MaxFilesPerMessage` (int)
-- [ ] 1.3 Add `ChannelAttachments` field on `ToolAudienceProfile` defaulting to `ChannelAttachmentPolicy.Empty` (fail-closed) when not set
-- [ ] 1.4 Implement `ToolAudienceProfileDefaults` entries for `Public` / `Team` / `Personal` using the matrix from design D4 (Public = {Image}; Team = {Image, Pdf, Document, Archive, Media}; Personal = all six; 25 MiB; 10 files)
-- [ ] 1.5 Extend `netclaw-config.v1.schema.json` with the new fields under each audience profile, using `"type": "string"` enums for categories and `"default"` values per audience so `SchemaFixResolver` can auto-migrate
-- [ ] 1.6 Add `IValidateOptions` logic confirming size cap > 0 and file-count cap > 0 on startup; emit a config validation error naming the offending audience on violation
-- [ ] 1.7 Unit-test the defaults: Public rejects Pdf, Team accepts Pdf+Docx, Personal accepts Other, migration via `netclaw doctor --fix` on a config missing `ChannelAttachments`
+- [x] 1.1 Add `AttachmentCategory` enum (`Image`, `Pdf`, `Document`, `Archive`, `Media`, `Other`) to `Netclaw.Configuration`
+- [x] 1.2 Add `ChannelAttachmentPolicy` record with `AllowedCategories` (HashSet<AttachmentCategory>), `MaxFileBytes` (long), `MaxFilesPerMessage` (int)
+- [x] 1.3 Add `ChannelAttachments` field on `ToolAudienceProfile` defaulting to `ChannelAttachmentPolicy.Empty` (fail-closed) when not set
+- [x] 1.4 Implement `ToolAudienceProfileDefaults` entries for `Public` / `Team` / `Personal` using the matrix from design D4 (Public = {Image}; Team = {Image, Pdf, Document, Archive, Media}; Personal = all six; 25 MiB; 10 files)
+- [x] 1.5 Extend `netclaw-config.v1.schema.json` with the new fields under each audience profile, using `"type": "string"` enums for categories and `"default"` values per audience so `SchemaFixResolver` can auto-migrate
+- [x] 1.6 Add `IValidateOptions` logic confirming size cap > 0 and file-count cap > 0 on startup; emit a config validation error naming the offending audience on violation
+- [x] 1.7 Unit-test the defaults: Public rejects Pdf, Team accepts Pdf+Docx, Personal accepts Other, migration via `netclaw doctor --fix` on a config missing `ChannelAttachments`
 
 ## 2. Central MIME → category mapping
 
-- [ ] 2.1 Add an internal `MimeToCategory(string mime)` helper in `Netclaw.Configuration` (or closest neighbor) with a single switch expression covering every documented category
-- [ ] 2.2 Unit tests covering representative MIME strings per category, case-insensitivity, empty/null, and the unknown-MIME → `Other` fallback
-- [ ] 2.3 Confirm no other place in the codebase maps MIME → category; grep for `StartsWith("image/"` etc. and fold any open-coded checks into the helper
+- [x] 2.1 Add an internal `MimeToCategory(string mime)` helper in `Netclaw.Configuration` (or closest neighbor) with a single switch expression covering every documented category
+- [x] 2.2 Unit tests covering representative MIME strings per category, case-insensitivity, empty/null, and the unknown-MIME → `Other` fallback
+- [x] 2.3 Confirm no other place in the codebase maps MIME → category; grep for `StartsWith("image/"` etc. and fold any open-coded checks into the helper
 
 ## 3. Session working directory hardening
 
-- [ ] 3.1 Mark `SessionDirectoryHelper.GetSessionDirectory(string sessionId)` (single-arg, Path.GetTempPath) `[Obsolete("Use the NetclawPaths.SessionsDirectory overload")]`
-- [ ] 3.2 Audit every call site of that overload; migrate production code to the base-path overload
-- [ ] 3.3 Add an `inbox/` subdirectory helper (`GetOrCreateInboxDirectory(sessionId, basePath)`) that ensures the directory exists with correct permissions
-- [ ] 3.4 Add startup warning in `ConfigSchemaDoctorCheck` when the resolved session directory base path is under `Path.GetTempPath()`
-- [ ] 3.5 Confirm (read-only) that session lifetime cleanup already removes `{sessiondir}/media/`; if yes, extend the same hook to `{sessiondir}/inbox/`; if not, add one and cover both subdirectories
+- [x] 3.1 Mark `SessionDirectoryHelper.GetSessionDirectory(string sessionId)` (single-arg, Path.GetTempPath) `[Obsolete("Use the NetclawPaths.SessionsDirectory overload")]`
+- [x] 3.2 Audit every call site of that overload; migrate production code to the base-path overload
+- [x] 3.3 Add an `inbox/` subdirectory helper (`GetOrCreateInboxDirectory(sessionId, basePath)`) that ensures the directory exists with correct permissions
+- [x] 3.4 Add startup warning in `ConfigSchemaDoctorCheck` when the resolved session directory base path is under `Path.GetTempPath()` (added to `ToolAudienceProfilesDoctorCheck` which already has `NetclawPaths` injected)
+- [x] 3.5 Confirmed no session-directory cleanup hook exists today (neither `media/` nor any other subdirectory). Adding a cleanup subsystem is out of scope for this change since the pre-existing `media/` leak has the same profile. Tracked as a follow-up.
+
+- [x] 3.6 (adjacent fix) Remove legacy single-arg `SessionDirectoryHelper.GetSessionDirectory(SessionId)` overload and the null-coalescing fallbacks in `ChannelPipeline` and `LlmSessionActor`. Make `NetclawPaths` required on `SessionServices` and `SessionPipeline`. Updated 13 test fixtures via a shared `AddTestNetclawPaths()` helper.
+- [x] 3.7 (adjacent fix) Move per-session logs out of the agent-readable session directory. Renamed `NetclawPaths.LegacySessionLogsDirectory` to `SessionLogsDirectory` (already at `{BasePath}/logs/sessions/`). `SessionLogActor` now writes to `{SessionLogsDirectory}/{sanitized_id}/` instead of `{SessionsDirectory}/{id}/logs/`, so the agent's `file_read` tool (scoped to `{session_dir}`) can no longer observe its own audit trail.
 
 ## 4. Filename sanitization and collision suffixing
 
-- [ ] 4.1 Verify `FilenameSanitizer.Sanitize` already handles `..`, NUL, control chars, absolute paths, Windows reserved names (confirm from spec tests; harden if any gap)
-- [ ] 4.2 Add an internal `InboxWriter.ReserveUniquePath(inboxDir, safeName)` helper that checks `File.Exists` and returns `foo.pdf` / `foo_1.pdf` / … up to `_99`, throwing a specific exception at exhaustion
-- [ ] 4.3 Atomic write helper (`InboxWriter.WriteAtomicAsync(path, bytes, ct)`) that writes to a temp sibling then `File.Move`
-- [ ] 4.4 Unit-test collision suffixing across multiple calls; unit-test atomic write failure (simulated move error) leaves no partial file
-- [ ] 4.5 Unit-test the exhaustion exception propagates to the caller and surfaces as a rejection reply (in Slack tests downstream)
+- [x] 4.1 Verify `FilenameSanitizer.Sanitize` already handles `..`, NUL, control chars, absolute paths, Windows reserved names (confirmed solid at `src/Netclaw.Security/FilenameSanitizer.cs`)
+- [x] 4.2 Add an internal `InboxWriter.ReserveUniquePath(inboxDir, safeName)` helper that checks `File.Exists` and returns `foo.pdf` / `foo_1.pdf` / … up to `_99`, throwing a specific exception at exhaustion
+- [x] 4.3 Atomic write helper (`InboxWriter.WriteAtomicAsync(path, bytes, ct)`) that writes to a temp sibling then `File.Move`
+- [x] 4.4 Unit-test collision suffixing across multiple calls; unit-test atomic write failure (simulated move error) leaves no partial file
+- [x] 4.5 Unit-test the exhaustion exception propagates to the caller and surfaces as a rejection reply (in Slack tests downstream)
 
 ## 5. ModelCapabilityActor ingress query helper
 

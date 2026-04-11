@@ -2,6 +2,7 @@ using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
+using Netclaw.Actors.Sessions;
 using Netclaw.Actors.Telemetry;
 using Netclaw.Configuration;
 
@@ -55,10 +56,7 @@ public sealed class SessionCatalogService : ISessionLifecycleObserver
 
         try
         {
-            // Compute expected log directory deterministically — the child SessionLogActor
-            // independently creates timestamped log files at this same directory.
-            var sanitized = SessionDirectoryHelper.SanitizeSessionId(sessionId.Value);
-            var logPath = Path.Combine(_paths.SessionsDirectory, sanitized, "logs");
+            var logPath = SessionLogActor.GetSessionLogsDirectory(sessionId, _paths.SessionLogsDirectory);
 
             using var conn = new SqliteConnection(_connectionString);
             conn.Open();

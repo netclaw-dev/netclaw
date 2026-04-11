@@ -74,7 +74,7 @@ public sealed class SlackThreadBackfillIntegrationTests : TestKit
             sp.GetRequiredService<ISystemPromptProvider>(),
             sp.GetService<IReadOnlyList<IContextLayerProvider>>() ?? Array.Empty<IContextLayerProvider>(),
             sp.GetService<TimeProvider>() ?? TimeProvider.System,
-            sp.GetService<NetclawPaths>()));
+            sp.GetRequiredService<NetclawPaths>()));
         services.AddSingleton(sp => new SessionMemoryServices(
             sp.GetService<IMemoryExtractor>() ?? NullMemoryExtractor.Instance,
             sp.GetService<IMemoryRecallCoordinator>() ?? NullMemoryRecallCoordinator.Instance,

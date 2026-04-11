@@ -58,13 +58,13 @@ public class MaxToolIterationTests : TestKit
         services.AddSingleton(registry);
         services.AddSingleton<IModelCapabilityResolver>(new FakeCapabilityResolver());
 
-        // Composite records for LlmSessionActor constructor
+        services.AddTestNetclawPaths();
         services.AddSingleton(sp => new SessionServices(
             sp.GetRequiredService<IChatClientProvider>(),
             sp.GetRequiredService<ISystemPromptProvider>(),
             sp.GetService<IReadOnlyList<IContextLayerProvider>>() ?? Array.Empty<IContextLayerProvider>(),
             sp.GetService<TimeProvider>() ?? TimeProvider.System,
-            sp.GetService<NetclawPaths>()));
+            sp.GetRequiredService<NetclawPaths>()));
         services.AddSingleton(sp => new SessionToolServices(
             sp.GetRequiredService<IToolExecutor>(),
             sp.GetService<IToolAuditLogger>(),

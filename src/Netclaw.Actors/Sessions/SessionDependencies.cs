@@ -15,7 +15,7 @@ public sealed record SessionServices(
     ISystemPromptProvider PromptProvider,
     IReadOnlyList<IContextLayerProvider> ContextLayers,
     TimeProvider TimeProvider,
-    NetclawPaths? Paths);
+    NetclawPaths Paths);
 
 /// <summary>
 /// Tool execution infrastructure. Null when the session operates without tools.

@@ -53,8 +53,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     private readonly IMemoryCheckpointSink _memoryCheckpointSink;
     private readonly MemoryProposalGate _memoryProposalGate = new();
     private readonly TimeProvider _timeProvider;
-    private readonly string? _sessionsBasePath;
-    private readonly string? _sessionLogsBasePath;
+    private readonly string _sessionsBasePath;
+    private readonly string _sessionLogsBasePath;
     private readonly ISessionLifecycleObserver? _lifecycleObserver;
     private readonly Memory.SQLiteMemoryStore? _memoryStore;
     private readonly IChatClientProvider _clientProvider;
@@ -188,8 +188,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         _memoryCheckpointSink = memory?.CheckpointSink ?? NullMemoryCheckpointSink.Instance;
         _memoryStore = memory?.MemoryStore;
         _timeProvider = services.TimeProvider;
-        _sessionsBasePath = services.Paths?.SessionsDirectory;
-        _sessionLogsBasePath = services.Paths?.SessionsDirectory;
+        _sessionsBasePath = services.Paths.SessionsDirectory;
+        _sessionLogsBasePath = services.Paths.SessionLogsDirectory;
         _trustContextDeriver = tools?.TrustDeriver;
         PersistenceId = $"session-{entityId}";
 
@@ -235,12 +235,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
             TransitionTo(SessionPhase.Ready);
 
-            if (_sessionLogsBasePath is not null)
-            {
-                _logActor = Context.ActorOf(
-                    SessionLogActor.CreateProps(_sessionId, _sessionLogsBasePath, _timeProvider),
-                    "session-log");
-            }
+            _logActor = Context.ActorOf(
+                SessionLogActor.CreateProps(_sessionId, _sessionLogsBasePath, _timeProvider),
+                "session-log");
 
             if (_memoryStore is not null)
             {
@@ -2047,9 +2044,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
 
     private string GetSessionDirectory() =>
-        _sessionsBasePath is not null
-            ? SessionDirectoryHelper.GetSessionDirectory(_sessionId, _sessionsBasePath)
-            : SessionDirectoryHelper.GetSessionDirectory(_sessionId);
+        SessionDirectoryHelper.GetSessionDirectory(_sessionId, _sessionsBasePath);
 
     private long NowMs() => _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
 

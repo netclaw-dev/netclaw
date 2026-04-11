@@ -512,6 +512,13 @@ static void ConfigureDaemonServices(
     // Tools (auto-bound, no required properties)
     var toolConfig = configuration.GetSection("Tools")
         .Get<ToolConfig>() ?? new ToolConfig();
+    var attachmentErrors = toolConfig.AudienceProfiles.ValidateChannelAttachments();
+    if (attachmentErrors.Count > 0)
+    {
+        throw new InvalidOperationException(
+            "Invalid Tools.AudienceProfiles.ChannelAttachments configuration: "
+            + string.Join("; ", attachmentErrors));
+    }
     services.AddSingleton(toolConfig);
 
     var securityPolicyConfig = configuration.GetSection("Security")
@@ -818,7 +825,7 @@ static void ConfigureDaemonServices(
         sp.GetRequiredService<ISystemPromptProvider>(),
         sp.GetRequiredService<IReadOnlyList<IContextLayerProvider>>(),
         sp.GetRequiredService<TimeProvider>(),
-        sp.GetService<NetclawPaths>()));
+        sp.GetRequiredService<NetclawPaths>()));
 
     services.AddSingleton(sp => new SessionToolServices(
         sp.GetRequiredService<IToolExecutor>(),

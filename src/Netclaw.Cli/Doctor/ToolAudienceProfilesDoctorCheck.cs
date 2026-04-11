@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 
@@ -64,12 +65,16 @@ public sealed class ToolAudienceProfilesDoctorCheck(NetclawPaths paths) : IDocto
         ValidateNonPersonalProfile("public", toolConfig.AudienceProfiles.Public, errors);
         ValidateNonPersonalProfile("team", toolConfig.AudienceProfiles.Team, errors);
 
+        // Channel attachment policy cap-vs-allowlist consistency.
+        foreach (var err in toolConfig.AudienceProfiles.ValidateChannelAttachments())
+            errors.Add(err);
+
         if (errors.Count > 0)
         {
             return Task.FromResult(DoctorCheckResult.Error(
                 "Tool Audience Profiles",
                 string.Join("; ", errors),
-                "Restrict public/team profiles to allowlists and rooted filesystem access. Unrestricted modes are only safe for personal profiles."));
+                "Restrict public/team profiles to allowlists and rooted filesystem access, and ensure ChannelAttachments caps are positive when categories are allowed."));
         }
 
         var warnings = new List<string>();
@@ -89,6 +94,17 @@ public sealed class ToolAudienceProfilesDoctorCheck(NetclawPaths paths) : IDocto
 
         // Advisory: approval mode configured but shell is off
         CheckApprovalMismatch(toolConfig, warnings);
+
+        // Advisory: session directory base path is under the OS temp directory.
+        // Attachment files and session journals will not survive reboots or
+        // tmpfiles cleanup in that configuration.
+        if (SessionDirectoryHelper.IsUnderTempPath(paths.SessionsDirectory))
+        {
+            warnings.Add(
+                $"Session directory base path ({paths.SessionsDirectory}) is under the OS temp directory. " +
+                "Inbound attachments written to inbox/ and other session files will be lost on reboot, " +
+                "leaving dangling references in the persisted turn journal.");
+        }
 
         // Advisory: stale patterns in tool-approvals.json
         CheckStaleApprovals(toolConfig, paths, warnings);

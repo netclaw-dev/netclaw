@@ -44,6 +44,16 @@ public sealed class ToolAudienceProfile
     /// approval before execution. Null means no approval gates (all tools auto-approved).
     /// </summary>
     public ToolApprovalConfig? ApprovalPolicy { get; set; }
+
+    /// <summary>
+    /// Per-audience inbound channel attachment policy. Channel adapters read
+    /// this from the resolved profile to decide which attachment classes are
+    /// accepted, the per-file size cap, and the per-message file-count cap.
+    /// Defaults to <see cref="ChannelAttachmentPolicy.Empty"/> (fail-closed:
+    /// nothing allowed) so an unconfigured profile rejects every attachment
+    /// until the operator opts in via the audience defaults.
+    /// </summary>
+    public ChannelAttachmentPolicy ChannelAttachments { get; set; } = ChannelAttachmentPolicy.Empty;
 }
 
 public sealed class ToolAudienceProfiles
@@ -61,6 +71,39 @@ public sealed class ToolAudienceProfiles
         yield return Public;
         yield return Team;
         yield return Personal;
+    }
+
+    /// <summary>
+    /// Validates per-audience channel attachment policy. A policy that
+    /// permits any category SHALL specify positive size and file-count caps,
+    /// otherwise an allowed category cannot be delivered (a silent
+    /// misconfiguration that this check converts into a loud startup error).
+    /// A policy with no allowed categories is valid with any cap (it is
+    /// already fail-closed).
+    /// </summary>
+    public IReadOnlyList<string> ValidateChannelAttachments()
+    {
+        var errors = new List<string>();
+        ValidateProfile("Public", Public, errors);
+        ValidateProfile("Team", Team, errors);
+        ValidateProfile("Personal", Personal, errors);
+        return errors;
+    }
+
+    private static void ValidateProfile(string name, ToolAudienceProfile profile, List<string> errors)
+    {
+        var policy = profile.ChannelAttachments;
+        if (policy is null)
+            return;
+
+        if (policy.AllowedCategories.Count == 0)
+            return;
+
+        if (policy.MaxFileBytes <= 0)
+            errors.Add($"Tools.AudienceProfiles.{name}.ChannelAttachments.MaxFileBytes must be > 0 when AllowedCategories is not empty.");
+
+        if (policy.MaxFilesPerMessage <= 0)
+            errors.Add($"Tools.AudienceProfiles.{name}.ChannelAttachments.MaxFilesPerMessage must be > 0 when AllowedCategories is not empty.");
     }
 
     /// <summary>
@@ -97,7 +140,8 @@ public static class ToolAudienceProfileDefaults
         AllowedTools = ["file_read", "file_write", "attach_file"],
         ReadFiles = CreateSessionScopedFilesystemAccess(),
         WriteFiles = CreateSessionScopedFilesystemAccess(),
-        AttachFiles = CreateSessionScopedFilesystemAccess()
+        AttachFiles = CreateSessionScopedFilesystemAccess(),
+        ChannelAttachments = CreatePublicChannelAttachments()
     };
 
     public static ToolAudienceProfile CreateTeam() => new()
@@ -105,7 +149,8 @@ public static class ToolAudienceProfileDefaults
         AllowedTools = ["file_read", "attach_file"],
         ReadFiles = CreateSessionScopedFilesystemAccess(),
         WriteFiles = CreateSessionScopedFilesystemAccess(),
-        AttachFiles = CreateSessionScopedFilesystemAccess()
+        AttachFiles = CreateSessionScopedFilesystemAccess(),
+        ChannelAttachments = CreateTeamChannelAttachments()
     };
 
     public static ToolAudienceProfile CreatePersonal() => new()
@@ -114,7 +159,44 @@ public static class ToolAudienceProfileDefaults
         McpServersMode = ToolProfileMode.All,
         ReadFiles = new ToolFilesystemAccessProfile { Mode = ToolFilesystemMode.All },
         WriteFiles = new ToolFilesystemAccessProfile { Mode = ToolFilesystemMode.All },
-        AttachFiles = new ToolFilesystemAccessProfile { Mode = ToolFilesystemMode.All }
+        AttachFiles = new ToolFilesystemAccessProfile { Mode = ToolFilesystemMode.All },
+        ChannelAttachments = CreatePersonalChannelAttachments()
+    };
+
+    public static ChannelAttachmentPolicy CreatePublicChannelAttachments() => new()
+    {
+        AllowedCategories = [AttachmentCategory.Image],
+        MaxFileBytes = ChannelAttachmentPolicy.DefaultMaxFileBytes,
+        MaxFilesPerMessage = ChannelAttachmentPolicy.DefaultMaxFilesPerMessage
+    };
+
+    public static ChannelAttachmentPolicy CreateTeamChannelAttachments() => new()
+    {
+        AllowedCategories =
+        [
+            AttachmentCategory.Image,
+            AttachmentCategory.Pdf,
+            AttachmentCategory.Document,
+            AttachmentCategory.Archive,
+            AttachmentCategory.Media
+        ],
+        MaxFileBytes = ChannelAttachmentPolicy.DefaultMaxFileBytes,
+        MaxFilesPerMessage = ChannelAttachmentPolicy.DefaultMaxFilesPerMessage
+    };
+
+    public static ChannelAttachmentPolicy CreatePersonalChannelAttachments() => new()
+    {
+        AllowedCategories =
+        [
+            AttachmentCategory.Image,
+            AttachmentCategory.Pdf,
+            AttachmentCategory.Document,
+            AttachmentCategory.Archive,
+            AttachmentCategory.Media,
+            AttachmentCategory.Other
+        ],
+        MaxFileBytes = ChannelAttachmentPolicy.DefaultMaxFileBytes,
+        MaxFilesPerMessage = ChannelAttachmentPolicy.DefaultMaxFilesPerMessage
     };
 
     public static ToolFilesystemAccessProfile CreateSessionScopedFilesystemAccess() => new()
