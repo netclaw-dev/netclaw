@@ -10,21 +10,44 @@ public sealed class ExternalSkillsConfig
     /// Single catalog of well-known external skill sources. Both
     /// <see cref="ResolveWellKnownPath"/> and <see cref="ProbeWellKnownSources"/>
     /// consume this so alias/display/symlink metadata stays in one place.
-    /// Each alias can own multiple relative paths — e.g. <c>claude-code</c>
-    /// scans both <c>~/.claude/skills/</c> and <c>~/.claude/commands/</c>
-    /// because Claude Code user slash commands live alongside skills and
-    /// share the same YAML-frontmatter format. The first path is the primary
-    /// (used for display/validation); all existing paths are scanned.
+    /// Each alias can own multiple relative paths — the first path is the
+    /// primary (used for display/validation); all existing paths are scanned.
     /// </summary>
+    /// <remarks>
+    /// The <c>claude-code</c> alias includes both <c>~/.claude/skills/</c> and
+    /// <c>~/.claude/commands/</c>. Claude Code treats command markdown files as
+    /// skills, so Netclaw must scan both locations. The alias is also expanded
+    /// at resolution time by <see cref="ResolveEnabledSources(string)"/> to
+    /// include every installed plugin marketplace under
+    /// <c>~/.claude/plugins/marketplaces/*/skills/</c>, so marketplace skills
+    /// (e.g. the dotnet-skills plugin) show up without needing a separate
+    /// configured source. That marketplace expansion is dynamic and lives
+    /// outside the static catalog.
+    /// </remarks>
     private static readonly (string Alias, string DisplayName, string[] RelativePaths, bool DefaultAllowSymlinks)[] WellKnownCatalog =
     [
-        ("claude-code", "Claude Code",
+        (ClaudeCodeAlias, "Claude Code",
             new[] { Path.Combine(".claude", "skills"), Path.Combine(".claude", "commands") },
             true),
         ("open-code", "Open Code",
             new[] { Path.Combine(".open-code", "skills") },
             false)
     ];
+
+    /// <summary>
+    /// Well-known alias whose resolution also enumerates Claude Code plugin
+    /// marketplaces. Kept as a constant so the dynamic-expansion branch in
+    /// <see cref="ResolveEnabledSources(string)"/> stays discoverable.
+    /// </summary>
+    internal const string ClaudeCodeAlias = "claude-code";
+
+    /// <summary>
+    /// Relative path from the home directory to the Claude Code plugins root
+    /// whose subdirectories each contain a <c>skills/</c> folder for an
+    /// installed marketplace.
+    /// </summary>
+    private static readonly string ClaudeCodeMarketplacesRelativePath =
+        Path.Combine(".claude", "plugins", "marketplaces");
 
     /// <summary>
     /// Ordered list of external skill sources. Precedence follows list order —
@@ -59,7 +82,15 @@ public sealed class ExternalSkillsConfig
                 ? ResolveWellKnownPaths(source.WellKnown, homeDirectory)
                 : source.Path is not null ? new[] { source.Path } : Array.Empty<string>();
 
+            if (string.Equals(source.WellKnown, ClaudeCodeAlias, StringComparison.OrdinalIgnoreCase))
+            {
+                var marketplacePaths = EnumerateClaudeCodeMarketplaceSkillPaths(homeDirectory);
+                if (marketplacePaths.Count > 0)
+                    candidatePaths = candidatePaths.Concat(marketplacePaths).ToList();
+            }
+
             var existingPaths = new List<string>();
+            var seenPaths = new HashSet<string>(GetPathComparer());
             foreach (var candidate in candidatePaths)
             {
                 if (string.IsNullOrWhiteSpace(candidate))
@@ -69,7 +100,8 @@ public sealed class ExternalSkillsConfig
                 if (!Directory.Exists(fullPath))
                     continue;
 
-                existingPaths.Add(fullPath);
+                if (seenPaths.Add(fullPath))
+                    existingPaths.Add(fullPath);
             }
 
             if (existingPaths.Count == 0)
@@ -79,6 +111,32 @@ public sealed class ExternalSkillsConfig
         }
 
         return results;
+    }
+
+    /// <summary>
+    /// Enumerates the live <c>skills/</c> directories of every Claude Code
+    /// plugin marketplace installed under <c>~/.claude/plugins/marketplaces/</c>.
+    /// The filesystem is the source of truth — we intentionally don't parse
+    /// <c>known_marketplaces.json</c> or <c>installed_plugins.json</c> so
+    /// Netclaw stays decoupled from Claude Code's plugin metadata format. The
+    /// version cache at <c>plugins/cache/</c> is skipped because Claude Code
+    /// itself reads the live marketplace path at runtime; scanning the cache
+    /// would duplicate entries.
+    /// </summary>
+    private static IReadOnlyList<string> EnumerateClaudeCodeMarketplaceSkillPaths(string homeDirectory)
+    {
+        var marketplacesRoot = Path.Combine(homeDirectory, ClaudeCodeMarketplacesRelativePath);
+        if (!Directory.Exists(marketplacesRoot))
+            return Array.Empty<string>();
+
+        var pathComparer = GetPathComparer();
+
+        return Directory.EnumerateDirectories(marketplacesRoot)
+            .Select(d => Path.GetFullPath(Path.Combine(d, "skills")))
+            .Where(Directory.Exists)
+            .Distinct(pathComparer)
+            .OrderBy(p => p, pathComparer)
+            .ToList();
     }
 
     /// <summary>
@@ -107,6 +165,13 @@ public sealed class ExternalSkillsConfig
                     firstExisting = path;
                     break;
                 }
+            }
+
+            if (firstExisting is null
+                && string.Equals(alias, ClaudeCodeAlias, StringComparison.Ordinal)
+                && EnumerateClaudeCodeMarketplaceSkillPaths(homeDirectory) is { Count: > 0 } marketplacePaths)
+            {
+                firstExisting = marketplacePaths[0];
             }
 
             if (firstExisting is not null)
@@ -146,6 +211,9 @@ public sealed class ExternalSkillsConfig
 
         return Array.Empty<string>();
     }
+
+    private static StringComparer GetPathComparer()
+        => OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
 }
 
 /// <summary>

@@ -19,13 +19,18 @@ public class ExternalSkillsConfigTests : IDisposable
             Directory.Delete(_homeDir, recursive: true);
     }
 
+    private static string ClaudeSkillsPath(string home) => Path.Combine(home, ".claude", "skills");
+
+    private static string MarketplacesRoot(string home) => Path.Combine(home, ".claude", "plugins", "marketplaces");
+
+    private static string MarketplaceSkillsPath(string home, string marketplace) =>
+        Path.Combine(home, ".claude", "plugins", "marketplaces", marketplace, "skills");
+
     [Fact]
-    public void ClaudeCode_resolves_to_one_source_with_both_paths_when_skills_and_commands_exist()
+    public void ClaudeCode_resolves_skills_and_commands_paths_when_no_marketplaces_installed()
     {
-        var skillsDir = Path.Combine(_homeDir, ".claude", "skills");
-        var commandsDir = Path.Combine(_homeDir, ".claude", "commands");
-        Directory.CreateDirectory(skillsDir);
-        Directory.CreateDirectory(commandsDir);
+        Directory.CreateDirectory(ClaudeSkillsPath(_homeDir));
+        Directory.CreateDirectory(Path.Combine(_homeDir, ".claude", "commands"));
 
         var config = new ExternalSkillsConfig
         {
@@ -40,14 +45,114 @@ public class ExternalSkillsConfigTests : IDisposable
         var source = Assert.Single(resolved);
         Assert.Equal("claude-code", source.Name);
         Assert.Equal(2, source.Paths.Count);
-        Assert.Contains(source.Paths, p => p.EndsWith(Path.Combine(".claude", "skills"), StringComparison.Ordinal));
-        Assert.Contains(source.Paths, p => p.EndsWith(Path.Combine(".claude", "commands"), StringComparison.Ordinal));
+        Assert.EndsWith(Path.Combine(".claude", "skills"), source.Paths[0]);
+        Assert.EndsWith(Path.Combine(".claude", "commands"), source.Paths[1]);
     }
 
     [Fact]
-    public void ClaudeCode_drops_missing_commands_path_silently()
+    public void ClaudeCode_expands_every_installed_marketplace_with_a_skills_subdir()
     {
-        Directory.CreateDirectory(Path.Combine(_homeDir, ".claude", "skills"));
+        Directory.CreateDirectory(ClaudeSkillsPath(_homeDir));
+        Directory.CreateDirectory(Path.Combine(_homeDir, ".claude", "commands"));
+        Directory.CreateDirectory(MarketplaceSkillsPath(_homeDir, "dotnet-skills"));
+        Directory.CreateDirectory(MarketplaceSkillsPath(_homeDir, "prose"));
+
+        var config = new ExternalSkillsConfig
+        {
+            Sources =
+            {
+                new ExternalSkillSource { Name = "claude-code", WellKnown = "claude-code", Enabled = true }
+            }
+        };
+
+        var resolved = config.ResolveEnabledSources(_homeDir);
+
+        var source = Assert.Single(resolved);
+        Assert.Equal(4, source.Paths.Count);
+        Assert.Contains(source.Paths, p => p.EndsWith(Path.Combine(".claude", "skills"), StringComparison.Ordinal));
+        Assert.Contains(source.Paths, p => p.EndsWith(Path.Combine(".claude", "commands"), StringComparison.Ordinal));
+        Assert.Contains(source.Paths, p => p.EndsWith(Path.Combine("marketplaces", "dotnet-skills", "skills"), StringComparison.Ordinal));
+        Assert.Contains(source.Paths, p => p.EndsWith(Path.Combine("marketplaces", "prose", "skills"), StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void ClaudeCode_marketplace_paths_are_sorted_for_stable_precedence()
+    {
+        Directory.CreateDirectory(ClaudeSkillsPath(_homeDir));
+        Directory.CreateDirectory(Path.Combine(_homeDir, ".claude", "commands"));
+        Directory.CreateDirectory(MarketplaceSkillsPath(_homeDir, "zeta"));
+        Directory.CreateDirectory(MarketplaceSkillsPath(_homeDir, "alpha"));
+
+        var config = new ExternalSkillsConfig
+        {
+            Sources =
+            {
+                new ExternalSkillSource { Name = "claude-code", WellKnown = "claude-code", Enabled = true }
+            }
+        };
+
+        var resolved = config.ResolveEnabledSources(_homeDir);
+
+        var source = Assert.Single(resolved);
+        Assert.Equal(4, source.Paths.Count);
+        Assert.EndsWith(Path.Combine(".claude", "skills"), source.Paths[0]);
+        Assert.EndsWith(Path.Combine(".claude", "commands"), source.Paths[1]);
+        Assert.EndsWith(Path.Combine("marketplaces", "alpha", "skills"), source.Paths[2]);
+        Assert.EndsWith(Path.Combine("marketplaces", "zeta", "skills"), source.Paths[3]);
+    }
+
+    [Fact]
+    public void ClaudeCode_skips_marketplaces_that_have_no_skills_subdir()
+    {
+        Directory.CreateDirectory(ClaudeSkillsPath(_homeDir));
+        Directory.CreateDirectory(Path.Combine(_homeDir, ".claude", "commands"));
+        Directory.CreateDirectory(MarketplaceSkillsPath(_homeDir, "dotnet-skills"));
+        Directory.CreateDirectory(Path.Combine(MarketplacesRoot(_homeDir), "empty-marketplace"));
+
+        var config = new ExternalSkillsConfig
+        {
+            Sources =
+            {
+                new ExternalSkillSource { Name = "claude-code", WellKnown = "claude-code", Enabled = true }
+            }
+        };
+
+        var resolved = config.ResolveEnabledSources(_homeDir);
+
+        var source = Assert.Single(resolved);
+        Assert.Equal(3, source.Paths.Count);
+        Assert.Contains(source.Paths, p => p.EndsWith(Path.Combine(".claude", "skills"), StringComparison.Ordinal));
+        Assert.Contains(source.Paths, p => p.EndsWith(Path.Combine(".claude", "commands"), StringComparison.Ordinal));
+        Assert.Contains(source.Paths, p => p.EndsWith(Path.Combine("marketplaces", "dotnet-skills", "skills"), StringComparison.Ordinal));
+        Assert.DoesNotContain(source.Paths, p => p.Contains("empty-marketplace", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void ClaudeCode_resolves_marketplace_only_when_primary_skills_dir_is_missing()
+    {
+        // No ~/.claude/skills directory — user has Claude Code plugins but never created a
+        // bare skills/ dir. The claude-code source should still resolve from the marketplace alone.
+        Directory.CreateDirectory(MarketplaceSkillsPath(_homeDir, "dotnet-skills"));
+
+        var config = new ExternalSkillsConfig
+        {
+            Sources =
+            {
+                new ExternalSkillSource { Name = "claude-code", WellKnown = "claude-code", Enabled = true }
+            }
+        };
+
+        var resolved = config.ResolveEnabledSources(_homeDir);
+
+        var source = Assert.Single(resolved);
+        Assert.Single(source.Paths);
+        Assert.EndsWith(Path.Combine("marketplaces", "dotnet-skills", "skills"), source.Paths[0]);
+    }
+
+    [Fact]
+    public void ClaudeCode_does_not_crash_when_marketplaces_root_is_missing()
+    {
+        Directory.CreateDirectory(ClaudeSkillsPath(_homeDir));
 
         var config = new ExternalSkillsConfig
         {
@@ -65,15 +170,17 @@ public class ExternalSkillsConfigTests : IDisposable
     }
 
     [Fact]
-    public void ClaudeCode_resolves_when_only_commands_dir_exists()
+    public void Marketplace_expansion_does_not_apply_to_open_code()
     {
-        Directory.CreateDirectory(Path.Combine(_homeDir, ".claude", "commands"));
+        Directory.CreateDirectory(Path.Combine(_homeDir, ".open-code", "skills"));
+        // Marketplaces exist under ~/.claude but this source is open-code, not claude-code.
+        Directory.CreateDirectory(MarketplaceSkillsPath(_homeDir, "dotnet-skills"));
 
         var config = new ExternalSkillsConfig
         {
             Sources =
             {
-                new ExternalSkillSource { Name = "claude-code", WellKnown = "claude-code", Enabled = true }
+                new ExternalSkillSource { Name = "open-code", WellKnown = "open-code", Enabled = true }
             }
         };
 
@@ -81,13 +188,37 @@ public class ExternalSkillsConfigTests : IDisposable
 
         var source = Assert.Single(resolved);
         Assert.Single(source.Paths);
-        Assert.EndsWith(Path.Combine(".claude", "commands"), source.Paths[0]);
+        Assert.EndsWith(Path.Combine(".open-code", "skills"), source.Paths[0]);
+    }
+
+    [Fact]
+    public void Marketplace_expansion_does_not_apply_to_custom_path_sources()
+    {
+        var customDir = Path.Combine(_homeDir, "team-skills");
+        Directory.CreateDirectory(customDir);
+        // Marketplaces exist but this source uses a custom Path, not WellKnown=claude-code.
+        Directory.CreateDirectory(MarketplaceSkillsPath(_homeDir, "dotnet-skills"));
+
+        var config = new ExternalSkillsConfig
+        {
+            Sources =
+            {
+                new ExternalSkillSource { Name = "team", Path = customDir, Enabled = true }
+            }
+        };
+
+        var resolved = config.ResolveEnabledSources(_homeDir);
+
+        var source = Assert.Single(resolved);
+        Assert.Single(source.Paths);
+        Assert.Equal(customDir, source.Paths[0]);
     }
 
     [Fact]
     public void Disabled_source_is_skipped_even_if_paths_exist()
     {
-        Directory.CreateDirectory(Path.Combine(_homeDir, ".claude", "skills"));
+        Directory.CreateDirectory(ClaudeSkillsPath(_homeDir));
+        Directory.CreateDirectory(MarketplaceSkillsPath(_homeDir, "dotnet-skills"));
 
         var config = new ExternalSkillsConfig
         {
@@ -105,13 +236,12 @@ public class ExternalSkillsConfigTests : IDisposable
     [Fact]
     public void Probe_returns_one_result_per_alias_when_any_path_exists()
     {
-        Directory.CreateDirectory(Path.Combine(_homeDir, ".claude", "skills"));
+        Directory.CreateDirectory(ClaudeSkillsPath(_homeDir));
 
         var probed = ExternalSkillsConfig.ProbeWellKnownSources(_homeDir);
 
         var result = Assert.Single(probed);
         Assert.Equal("claude-code", result.WellKnownAlias);
-        // Primary (skills) preferred when it exists
         Assert.EndsWith(Path.Combine(".claude", "skills"), result.ResolvedPath);
     }
 
@@ -124,18 +254,32 @@ public class ExternalSkillsConfigTests : IDisposable
     }
 
     [Fact]
-    public void Probe_uses_commands_dir_as_fallback_when_primary_skills_missing()
+    public void Probe_surfaces_commands_directory_for_claude_code()
     {
+        // Claude Code now treats ~/.claude/commands markdown files as skills.
         Directory.CreateDirectory(Path.Combine(_homeDir, ".claude", "commands"));
 
         var probed = ExternalSkillsConfig.ProbeWellKnownSources(_homeDir);
 
         var result = Assert.Single(probed);
+        Assert.Equal("claude-code", result.WellKnownAlias);
         Assert.EndsWith(Path.Combine(".claude", "commands"), result.ResolvedPath);
     }
 
     [Fact]
-    public void ResolveWellKnownPaths_returns_all_paths_for_claude_code()
+    public void Probe_detects_claude_code_when_only_marketplace_skills_exist()
+    {
+        Directory.CreateDirectory(MarketplaceSkillsPath(_homeDir, "dotnet-skills"));
+
+        var probed = ExternalSkillsConfig.ProbeWellKnownSources(_homeDir);
+
+        var result = Assert.Single(probed);
+        Assert.Equal("claude-code", result.WellKnownAlias);
+        Assert.EndsWith(Path.Combine("marketplaces", "dotnet-skills", "skills"), result.ResolvedPath);
+    }
+
+    [Fact]
+    public void ResolveWellKnownPaths_returns_skills_and_commands_paths_for_claude_code()
     {
         var paths = ExternalSkillsConfig.ResolveWellKnownPaths("claude-code", _homeDir);
 

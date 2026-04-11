@@ -52,7 +52,17 @@ public static partial class SkillScanner
     /// canonical — used for external sources like Claude Code where skill directory
     /// names don't have to align with the declared name.
     /// </param>
-    public static SkillScanResult Scan(string skillsDirectory, bool allowSymlinks = false, bool strictNameMatch = true)
+    /// <param name="allowFrontmatterlessFlatFiles">
+    /// When <c>true</c>, flat <c>.md</c> files without YAML frontmatter are treated
+    /// as valid skills with name derived from filename and description inferred from
+    /// first non-empty line. This compatibility mode is used for Claude Code
+    /// <c>~/.claude/commands</c> files.
+    /// </param>
+    public static SkillScanResult Scan(
+        string skillsDirectory,
+        bool allowSymlinks = false,
+        bool strictNameMatch = true,
+        bool allowFrontmatterlessFlatFiles = false)
     {
         if (!Directory.Exists(skillsDirectory))
             return SkillScanResult.Empty;
@@ -72,7 +82,7 @@ public static partial class SkillScanner
                 || fileName.StartsWith('.'))
                 continue;
 
-            var entry = ParseFlatSkillFile(mdFile, rootFull, issues, allowSymlinks, strictNameMatch);
+            var entry = ParseFlatSkillFile(mdFile, rootFull, issues, allowSymlinks, strictNameMatch, allowFrontmatterlessFlatFiles);
             if (entry is not null)
                 acceptedCandidates.Add(entry);
         }
@@ -197,7 +207,11 @@ public static partial class SkillScanner
         {
             foreach (var path in source.Paths)
             {
-                var externalScan = Scan(path, allowSymlinks: source.AllowSymlinks, strictNameMatch: false);
+                var externalScan = Scan(
+                    path,
+                    allowSymlinks: source.AllowSymlinks,
+                    strictNameMatch: false,
+                    allowFrontmatterlessFlatFiles: IsClaudeCommandsDirectory(path));
                 allIssues.AddRange(externalScan.Issues);
 
                 foreach (var skill in externalScan.AcceptedSkills)
@@ -268,7 +282,13 @@ public static partial class SkillScanner
     /// files with valid YAML frontmatter — supported for compatibility with Claude Code
     /// and other platforms that allow skills without the directory wrapper.
     /// </summary>
-    private static SkillEntry? ParseFlatSkillFile(string filePath, string rootDirectory, List<SkillScanIssue> issues, bool allowSymlinks = false, bool strictNameMatch = true)
+    private static SkillEntry? ParseFlatSkillFile(
+        string filePath,
+        string rootDirectory,
+        List<SkillScanIssue> issues,
+        bool allowSymlinks = false,
+        bool strictNameMatch = true,
+        bool allowFrontmatterlessFlatFiles = false)
     {
         var canonicalRoot = NormalizeDirectoryPath(rootDirectory);
         var canonicalPath = ValidateCanonicalPath(filePath, canonicalRoot, issues, "flat skill file", allowSymlinks);
@@ -292,6 +312,9 @@ public static partial class SkillScanner
         var frontmatter = ExtractFrontmatter(content);
         if (frontmatter is null)
         {
+            if (allowFrontmatterlessFlatFiles && !content.StartsWith("---", StringComparison.Ordinal))
+                return BuildFlatSkillEntryWithoutFrontmatter(canonicalPath, canonicalRoot, content, issues);
+
             issues.Add(new SkillScanIssue(
                 Path: canonicalPath,
                 Kind: SkillScanIssueKind.FlatFileMissingFrontmatter,
@@ -526,12 +549,82 @@ public static partial class SkillScanner
         return value[..(maxLength - 3)] + "...";
     }
 
+    private static SkillEntry? BuildFlatSkillEntryWithoutFrontmatter(
+        string canonicalPath,
+        string canonicalRoot,
+        string content,
+        List<SkillScanIssue> issues)
+    {
+        var description = ExtractFirstNonEmptyMarkdownLine(content);
+        if (string.IsNullOrWhiteSpace(description))
+        {
+            issues.Add(new SkillScanIssue(
+                Path: canonicalPath,
+                Kind: SkillScanIssueKind.FlatFileNoDescription,
+                Message: "Flat .md file without frontmatter must contain at least one non-empty line to infer a description."));
+            return null;
+        }
+
+        var fileNameWithoutExt = Path.GetFileNameWithoutExtension(canonicalPath);
+        var name = NormalizeSkillName(fileNameWithoutExt);
+
+        var headingMatch = HeadingRegex().Match(content);
+        var displayName = headingMatch.Success
+            ? headingMatch.Groups[1].Value.Trim()
+            : TitleCase(name);
+
+        return new SkillEntry(
+            Name: name,
+            DisplayName: displayName,
+            Description: Truncate(description, MaxDescriptionLength),
+            FilePath: canonicalPath,
+            SkillDirectory: canonicalRoot,
+            Category: null)
+        {
+            ResourcePaths = null,
+            IsFlatFile = true
+        };
+    }
+
+    private static string? ExtractFirstNonEmptyMarkdownLine(string content)
+    {
+        var lines = content.Split('\n');
+        foreach (var rawLine in lines)
+        {
+            var line = rawLine.Trim();
+            if (line.Length == 0)
+                continue;
+
+            if (line.StartsWith("#", StringComparison.Ordinal))
+                line = line.TrimStart('#').Trim();
+
+            if (line.Length > 0)
+                return line;
+        }
+
+        return null;
+    }
+
     /// <summary>
     /// Only <c>.system</c> is scanned as a hidden directory (system skills from CDN).
     /// All other hidden directories are ignored.
     /// </summary>
     private static bool IsAllowedHiddenDirectory(string dirName)
         => string.Equals(dirName, SystemCategory, StringComparison.Ordinal);
+
+    private static bool IsClaudeCommandsDirectory(string path)
+    {
+        var normalized = NormalizeDirectoryPath(path);
+        var directoryName = Path.GetFileName(normalized);
+        if (!string.Equals(directoryName, "commands", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        var parent = Path.GetDirectoryName(normalized);
+        if (string.IsNullOrEmpty(parent))
+            return false;
+
+        return string.Equals(Path.GetFileName(parent), ".claude", StringComparison.OrdinalIgnoreCase);
+    }
 
     internal static string NormalizeSkillName(string value)
         => value.Trim().ToLowerInvariant();

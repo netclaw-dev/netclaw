@@ -47,7 +47,9 @@ public sealed class SkillDirectoryWatcherService : BackgroundService
         TryCreateWatcher(_paths.SkillsDirectory, "native");
 
         // Watch each external source directory. A single source may cover multiple
-        // paths (e.g. claude-code = ~/.claude/skills + ~/.claude/commands).
+        // paths (e.g. claude-code = ~/.claude/skills + ~/.claude/commands + one
+        // path per installed plugin marketplace under
+        // ~/.claude/plugins/marketplaces/*/skills/).
         foreach (var source in _externalSources)
         {
             foreach (var path in source.Paths)

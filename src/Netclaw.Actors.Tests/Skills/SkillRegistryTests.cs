@@ -274,13 +274,20 @@ public class SkillRegistryTests
         {
             new ResolvedExternalSource(
                 "claude-code",
-                new[] { "/home/user/.claude/skills", "/home/user/.claude/commands" },
+                new[]
+                {
+                    "/home/user/.claude/skills",
+                    "/home/user/.claude/commands",
+                    "/home/user/.claude/plugins/marketplaces/dotnet-skills/skills"
+                },
                 true)
         };
 
         var index = registry.GenerateIndex("/home/user/.netclaw/skills", externalSources);
 
-        Assert.Contains("claude-code=/home/user/.claude/skills;/home/user/.claude/commands", index);
+        Assert.Contains(
+            "claude-code=/home/user/.claude/skills;/home/user/.claude/commands;/home/user/.claude/plugins/marketplaces/dotnet-skills/skills",
+            index);
     }
 
     [Fact]
