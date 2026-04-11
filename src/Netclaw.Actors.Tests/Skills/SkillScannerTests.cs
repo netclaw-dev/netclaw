@@ -495,6 +495,102 @@ public class SkillScannerTests : IDisposable
     }
 
     [Fact]
+    public void Frontmatterless_flat_file_is_accepted_in_compatibility_mode()
+    {
+        File.WriteAllText(Path.Combine(_skillsDir, "review-pr.md"),
+            "Use the pr-review-specialist subagent to review pull requests.");
+
+        var result = SkillScanner.Scan(_skillsDir, strictNameMatch: false, allowFrontmatterlessFlatFiles: true);
+
+        var skill = Assert.Single(result.AcceptedSkills);
+        Assert.Equal("review-pr", skill.Name);
+        Assert.Equal("Review Pr", skill.DisplayName);
+        Assert.Equal("Use the pr-review-specialist subagent to review pull requests.", skill.Description);
+        Assert.True(skill.IsFlatFile);
+    }
+
+    [Fact]
+    public void Frontmatterless_flat_file_is_rejected_without_compatibility_mode()
+    {
+        File.WriteAllText(Path.Combine(_skillsDir, "review-pr.md"),
+            "Use the pr-review-specialist subagent to review pull requests.");
+
+        var result = SkillScanner.Scan(_skillsDir, strictNameMatch: false, allowFrontmatterlessFlatFiles: false);
+
+        Assert.Empty(result.AcceptedSkills);
+        var issue = Assert.Single(result.Issues);
+        Assert.Equal(SkillScanIssueKind.FlatFileMissingFrontmatter, issue.Kind);
+    }
+
+    [Fact]
+    public void Frontmatterless_flat_file_uses_heading_for_display_name()
+    {
+        File.WriteAllText(Path.Combine(_skillsDir, "release.md"), """
+            # Create Release
+
+            Use the release-manager subagent to run release steps.
+            """);
+
+        var result = SkillScanner.Scan(_skillsDir, strictNameMatch: false, allowFrontmatterlessFlatFiles: true);
+
+        var skill = Assert.Single(result.AcceptedSkills);
+        Assert.Equal("release", skill.Name);
+        Assert.Equal("Create Release", skill.DisplayName);
+        Assert.Equal("Create Release", skill.Description);
+    }
+
+    [Fact]
+    public void Frontmatterless_empty_flat_file_is_rejected_with_no_description_issue()
+    {
+        File.WriteAllText(Path.Combine(_skillsDir, "empty.md"), "   \n\n");
+
+        var result = SkillScanner.Scan(_skillsDir, strictNameMatch: false, allowFrontmatterlessFlatFiles: true);
+
+        Assert.Empty(result.AcceptedSkills);
+        var issue = Assert.Single(result.Issues);
+        Assert.Equal(SkillScanIssueKind.FlatFileNoDescription, issue.Kind);
+    }
+
+    [Fact]
+    public void ScanAndMerge_accepts_frontmatterless_files_for_claude_commands_path()
+    {
+        var commandsDir = Path.Combine(_skillsDir, ".claude", "commands");
+        Directory.CreateDirectory(commandsDir);
+        File.WriteAllText(Path.Combine(commandsDir, "review-pr.md"),
+            "Use the pr-review-specialist subagent to review pull requests.");
+
+        var merged = SkillScanner.ScanAndMerge(
+            nativeSkillsDirectory: _skillsDir,
+            externalSources:
+            [
+                new ResolvedExternalSource("claude-code", [commandsDir], true)
+            ]);
+
+        var skill = Assert.Single(merged.AcceptedSkills);
+        Assert.Equal("review-pr", skill.Name);
+        Assert.DoesNotContain(merged.Issues, i => i.Kind == SkillScanIssueKind.FlatFileMissingFrontmatter);
+    }
+
+    [Fact]
+    public void ScanAndMerge_rejects_frontmatterless_files_for_non_commands_external_paths()
+    {
+        var externalDir = Path.Combine(_skillsDir, "team-skills");
+        Directory.CreateDirectory(externalDir);
+        File.WriteAllText(Path.Combine(externalDir, "review-pr.md"),
+            "Use the pr-review-specialist subagent to review pull requests.");
+
+        var merged = SkillScanner.ScanAndMerge(
+            nativeSkillsDirectory: _skillsDir,
+            externalSources:
+            [
+                new ResolvedExternalSource("team", [externalDir], true)
+            ]);
+
+        Assert.Empty(merged.AcceptedSkills);
+        Assert.Contains(merged.Issues, i => i.Kind == SkillScanIssueKind.FlatFileMissingFrontmatter);
+    }
+
+    [Fact]
     public void Symlinked_resource_tree_is_rejected_with_issue()
     {
         WriteSkill("linked-skill", """

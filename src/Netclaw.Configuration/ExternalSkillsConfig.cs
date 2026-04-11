@@ -14,17 +14,20 @@ public sealed class ExternalSkillsConfig
     /// primary (used for display/validation); all existing paths are scanned.
     /// </summary>
     /// <remarks>
-    /// The <c>claude-code</c> alias is also expanded at resolution time by
-    /// <see cref="ResolveEnabledSources(string)"/> to include every installed
-    /// plugin marketplace under <c>~/.claude/plugins/marketplaces/*/skills/</c>,
-    /// so marketplace skills (e.g. the dotnet-skills plugin) show up without
-    /// needing a separate configured source. That expansion is dynamic and
-    /// lives outside the static catalog.
+    /// The <c>claude-code</c> alias includes both <c>~/.claude/skills/</c> and
+    /// <c>~/.claude/commands/</c>. Claude Code treats command markdown files as
+    /// skills, so Netclaw must scan both locations. The alias is also expanded
+    /// at resolution time by <see cref="ResolveEnabledSources(string)"/> to
+    /// include every installed plugin marketplace under
+    /// <c>~/.claude/plugins/marketplaces/*/skills/</c>, so marketplace skills
+    /// (e.g. the dotnet-skills plugin) show up without needing a separate
+    /// configured source. That marketplace expansion is dynamic and lives
+    /// outside the static catalog.
     /// </remarks>
     private static readonly (string Alias, string DisplayName, string[] RelativePaths, bool DefaultAllowSymlinks)[] WellKnownCatalog =
     [
         (ClaudeCodeAlias, "Claude Code",
-            new[] { Path.Combine(".claude", "skills") },
+            new[] { Path.Combine(".claude", "skills"), Path.Combine(".claude", "commands") },
             true),
         ("open-code", "Open Code",
             new[] { Path.Combine(".open-code", "skills") },

@@ -27,9 +27,10 @@ public class ExternalSkillsConfigTests : IDisposable
         Path.Combine(home, ".claude", "plugins", "marketplaces", marketplace, "skills");
 
     [Fact]
-    public void ClaudeCode_resolves_only_the_skills_path_when_no_marketplaces_installed()
+    public void ClaudeCode_resolves_skills_and_commands_paths_when_no_marketplaces_installed()
     {
         Directory.CreateDirectory(ClaudeSkillsPath(_homeDir));
+        Directory.CreateDirectory(Path.Combine(_homeDir, ".claude", "commands"));
 
         var config = new ExternalSkillsConfig
         {
@@ -43,14 +44,16 @@ public class ExternalSkillsConfigTests : IDisposable
 
         var source = Assert.Single(resolved);
         Assert.Equal("claude-code", source.Name);
-        Assert.Single(source.Paths);
+        Assert.Equal(2, source.Paths.Count);
         Assert.EndsWith(Path.Combine(".claude", "skills"), source.Paths[0]);
+        Assert.EndsWith(Path.Combine(".claude", "commands"), source.Paths[1]);
     }
 
     [Fact]
     public void ClaudeCode_expands_every_installed_marketplace_with_a_skills_subdir()
     {
         Directory.CreateDirectory(ClaudeSkillsPath(_homeDir));
+        Directory.CreateDirectory(Path.Combine(_homeDir, ".claude", "commands"));
         Directory.CreateDirectory(MarketplaceSkillsPath(_homeDir, "dotnet-skills"));
         Directory.CreateDirectory(MarketplaceSkillsPath(_homeDir, "prose"));
 
@@ -65,8 +68,9 @@ public class ExternalSkillsConfigTests : IDisposable
         var resolved = config.ResolveEnabledSources(_homeDir);
 
         var source = Assert.Single(resolved);
-        Assert.Equal(3, source.Paths.Count);
+        Assert.Equal(4, source.Paths.Count);
         Assert.Contains(source.Paths, p => p.EndsWith(Path.Combine(".claude", "skills"), StringComparison.Ordinal));
+        Assert.Contains(source.Paths, p => p.EndsWith(Path.Combine(".claude", "commands"), StringComparison.Ordinal));
         Assert.Contains(source.Paths, p => p.EndsWith(Path.Combine("marketplaces", "dotnet-skills", "skills"), StringComparison.Ordinal));
         Assert.Contains(source.Paths, p => p.EndsWith(Path.Combine("marketplaces", "prose", "skills"), StringComparison.Ordinal));
     }
@@ -75,6 +79,7 @@ public class ExternalSkillsConfigTests : IDisposable
     public void ClaudeCode_marketplace_paths_are_sorted_for_stable_precedence()
     {
         Directory.CreateDirectory(ClaudeSkillsPath(_homeDir));
+        Directory.CreateDirectory(Path.Combine(_homeDir, ".claude", "commands"));
         Directory.CreateDirectory(MarketplaceSkillsPath(_homeDir, "zeta"));
         Directory.CreateDirectory(MarketplaceSkillsPath(_homeDir, "alpha"));
 
@@ -89,16 +94,18 @@ public class ExternalSkillsConfigTests : IDisposable
         var resolved = config.ResolveEnabledSources(_homeDir);
 
         var source = Assert.Single(resolved);
-        Assert.Equal(3, source.Paths.Count);
+        Assert.Equal(4, source.Paths.Count);
         Assert.EndsWith(Path.Combine(".claude", "skills"), source.Paths[0]);
-        Assert.EndsWith(Path.Combine("marketplaces", "alpha", "skills"), source.Paths[1]);
-        Assert.EndsWith(Path.Combine("marketplaces", "zeta", "skills"), source.Paths[2]);
+        Assert.EndsWith(Path.Combine(".claude", "commands"), source.Paths[1]);
+        Assert.EndsWith(Path.Combine("marketplaces", "alpha", "skills"), source.Paths[2]);
+        Assert.EndsWith(Path.Combine("marketplaces", "zeta", "skills"), source.Paths[3]);
     }
 
     [Fact]
     public void ClaudeCode_skips_marketplaces_that_have_no_skills_subdir()
     {
         Directory.CreateDirectory(ClaudeSkillsPath(_homeDir));
+        Directory.CreateDirectory(Path.Combine(_homeDir, ".claude", "commands"));
         Directory.CreateDirectory(MarketplaceSkillsPath(_homeDir, "dotnet-skills"));
         Directory.CreateDirectory(Path.Combine(MarketplacesRoot(_homeDir), "empty-marketplace"));
 
@@ -113,8 +120,9 @@ public class ExternalSkillsConfigTests : IDisposable
         var resolved = config.ResolveEnabledSources(_homeDir);
 
         var source = Assert.Single(resolved);
-        Assert.Equal(2, source.Paths.Count);
+        Assert.Equal(3, source.Paths.Count);
         Assert.Contains(source.Paths, p => p.EndsWith(Path.Combine(".claude", "skills"), StringComparison.Ordinal));
+        Assert.Contains(source.Paths, p => p.EndsWith(Path.Combine(".claude", "commands"), StringComparison.Ordinal));
         Assert.Contains(source.Paths, p => p.EndsWith(Path.Combine("marketplaces", "dotnet-skills", "skills"), StringComparison.Ordinal));
         Assert.DoesNotContain(source.Paths, p => p.Contains("empty-marketplace", StringComparison.Ordinal));
     }
@@ -246,16 +254,16 @@ public class ExternalSkillsConfigTests : IDisposable
     }
 
     [Fact]
-    public void Probe_does_not_surface_commands_directory_as_a_skill_source()
+    public void Probe_surfaces_commands_directory_for_claude_code()
     {
-        // Claude Code's flat slash-command files live at ~/.claude/commands. They
-        // use a different frontmatter schema and must not be reported as a
-        // valid claude-code source even when the skills/ dir is absent.
+        // Claude Code now treats ~/.claude/commands markdown files as skills.
         Directory.CreateDirectory(Path.Combine(_homeDir, ".claude", "commands"));
 
         var probed = ExternalSkillsConfig.ProbeWellKnownSources(_homeDir);
 
-        Assert.Empty(probed);
+        var result = Assert.Single(probed);
+        Assert.Equal("claude-code", result.WellKnownAlias);
+        Assert.EndsWith(Path.Combine(".claude", "commands"), result.ResolvedPath);
     }
 
     [Fact]
@@ -271,12 +279,13 @@ public class ExternalSkillsConfigTests : IDisposable
     }
 
     [Fact]
-    public void ResolveWellKnownPaths_returns_only_the_skills_path_for_claude_code()
+    public void ResolveWellKnownPaths_returns_skills_and_commands_paths_for_claude_code()
     {
         var paths = ExternalSkillsConfig.ResolveWellKnownPaths("claude-code", _homeDir);
 
-        Assert.Single(paths);
+        Assert.Equal(2, paths.Count);
         Assert.EndsWith(Path.Combine(".claude", "skills"), paths[0]);
+        Assert.EndsWith(Path.Combine(".claude", "commands"), paths[1]);
     }
 
     [Fact]

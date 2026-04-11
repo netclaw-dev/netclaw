@@ -277,6 +277,7 @@ public class SkillRegistryTests
                 new[]
                 {
                     "/home/user/.claude/skills",
+                    "/home/user/.claude/commands",
                     "/home/user/.claude/plugins/marketplaces/dotnet-skills/skills"
                 },
                 true)
@@ -285,7 +286,7 @@ public class SkillRegistryTests
         var index = registry.GenerateIndex("/home/user/.netclaw/skills", externalSources);
 
         Assert.Contains(
-            "claude-code=/home/user/.claude/skills;/home/user/.claude/plugins/marketplaces/dotnet-skills/skills",
+            "claude-code=/home/user/.claude/skills;/home/user/.claude/commands;/home/user/.claude/plugins/marketplaces/dotnet-skills/skills",
             index);
     }
 
