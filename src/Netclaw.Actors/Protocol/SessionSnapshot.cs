@@ -1,3 +1,4 @@
+using Netclaw.Actors.Sessions;
 using ProtoBuf;
 
 namespace Netclaw.Actors.Protocol;
@@ -25,4 +26,18 @@ public sealed class SessionSnapshot
     /// </summary>
     [ProtoMember(4)]
     public int? EligibleDeliveryTurnNumber { get; set; }
+
+    // ProtoMember(5) reserved — formerly CompactionBoundaryIndex, removed
+    // before the compaction-rework change merged. Do not reuse this field
+    // number; local dev snapshots written during the rework development
+    // window may still contain an int at position 5, and re-binding it to
+    // a different type would fail deserialization silently.
+
+    /// <summary>
+    /// Durable working-context state (recent files). Null when the session
+    /// has never set a non-empty context — <see cref="Sessions.SessionState.FromSnapshot"/>
+    /// defaults to <see cref="WorkingContext.Empty"/> in that case.
+    /// </summary>
+    [ProtoMember(6)]
+    public WorkingContext? WorkingContext { get; set; }
 }

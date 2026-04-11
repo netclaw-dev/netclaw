@@ -239,6 +239,122 @@ public class SessionStateTests
         Assert.Single(modified.History);
     }
 
+    [Fact]
+    public void Apply_SessionCompacted_retains_existing_WorkingContext_when_event_has_none()
+    {
+        // Compaction preserves WorkingContext across the event boundary.
+        // When the event's WorkingContext is null (the common case — the
+        // event is just transporting the compacted messages, not a
+        // working-context update), the existing WorkingContext on state
+        // is retained.
+        var state = WithSystemPrompt("System") with
+        {
+            WorkingContext = WorkingContext.Empty
+                .AddRecentFile("src/Rect.cs")
+                .AddRecentFile("src/Thickness.cs")
+        };
+
+        var compacted = state.Apply(new SessionCompacted
+        {
+            SessionId = TestSessionId,
+            CompactedMessages = new List<SerializableChatMessage>
+            {
+                new() { Role = ChatRole.User, Content = "[session-summary session:test/session]\nsummary" }
+            },
+            WorkingContext = null  // event does not carry an update
+        });
+
+        Assert.Equal(2, compacted.WorkingContext.RecentFiles.Count);
+        Assert.Equal("src/Thickness.cs", compacted.WorkingContext.RecentFiles[0]);
+        Assert.Equal("src/Rect.cs", compacted.WorkingContext.RecentFiles[1]);
+    }
+
+    [Fact]
+    public void Apply_SessionCompacted_replaces_WorkingContext_when_event_has_update()
+    {
+        // When a compaction event carries a WorkingContext field, the
+        // new state takes that value (replacing whatever was there).
+        var state = WithSystemPrompt("System") with
+        {
+            WorkingContext = WorkingContext.Empty.AddRecentFile("src/Old.cs")
+        };
+
+        var newContext = WorkingContext.Empty
+            .AddRecentFile("src/New1.cs")
+            .AddRecentFile("src/New2.cs");
+
+        var compacted = state.Apply(new SessionCompacted
+        {
+            SessionId = TestSessionId,
+            CompactedMessages = new List<SerializableChatMessage>
+            {
+                new() { Role = ChatRole.User, Content = "[session-summary session:test/session]\nsummary" }
+            },
+            WorkingContext = newContext
+        });
+
+        Assert.Equal(new[] { "src/New2.cs", "src/New1.cs" }, compacted.WorkingContext.RecentFiles);
+        Assert.DoesNotContain("src/Old.cs", compacted.WorkingContext.RecentFiles);
+    }
+
+    [Fact]
+    public void ToSnapshot_and_FromSnapshot_round_trip_preserves_WorkingContext()
+    {
+        // Actor recovery path: a session with populated WorkingContext
+        // must survive a snapshot + rehydrate cycle. This is the
+        // property the spec scenario "WorkingContext survives actor
+        // recovery" depends on.
+        var state = WithSystemPrompt("System") with
+        {
+            WorkingContext = WorkingContext.Empty
+                .AddRecentFile("src/A.cs")
+                .AddRecentFile("src/B.cs")
+                .AddRecentFile("src/C.cs")
+        };
+
+        var snapshot = state.ToSnapshot();
+        var restored = SessionState.FromSnapshot(snapshot);
+
+        Assert.Equal(
+            new[] { "src/C.cs", "src/B.cs", "src/A.cs" },
+            restored.WorkingContext.RecentFiles);
+    }
+
+    [Fact]
+    public void FromSnapshot_with_null_WorkingContext_defaults_to_empty()
+    {
+        // Backward-compat: snapshots written before this change have
+        // no WorkingContext field; rehydration must produce
+        // WorkingContext.Empty, not null.
+        var snapshot = new SessionSnapshot
+        {
+            History = new List<SerializableChatMessage>(),
+            TurnCount = 0,
+            Title = null,
+            WorkingContext = null
+        };
+
+        var restored = SessionState.FromSnapshot(snapshot);
+
+        Assert.NotNull(restored.WorkingContext);
+        Assert.True(restored.WorkingContext.IsEmpty);
+        Assert.Same(WorkingContext.Empty, restored.WorkingContext);
+    }
+
+    [Fact]
+    public void Empty_WorkingContext_survives_snapshot_round_trip()
+    {
+        // Behavioral property: a session with empty WorkingContext
+        // round-trips through snapshot + rehydrate producing a state
+        // whose WorkingContext is still IsEmpty. Doesn't assert the
+        // on-wire representation (null vs empty record) — that's an
+        // implementation detail.
+        var state = WithSystemPrompt("System");
+        var restored = SessionState.FromSnapshot(state.ToSnapshot());
+
+        Assert.True(restored.WorkingContext.IsEmpty);
+    }
+
     private static SessionState WithSystemPrompt(string content)
     {
         return SessionState.Empty with

@@ -24,6 +24,16 @@ public sealed record SessionState
 
     public string? Title { get; init; }
 
+    /// <summary>
+    /// Durable state for "what the agent is currently working on" — recent
+    /// files, open goals, and progress markers. Survives compaction, actor
+    /// recovery, and daemon restart. Injected as a <c>[working-context]</c>
+    /// block on every LLM call when non-empty. Updated primarily by
+    /// tool-execution hooks; observer output may opportunistically enrich
+    /// it after compaction.
+    /// </summary>
+    public WorkingContext WorkingContext { get; init; } = WorkingContext.Empty;
+
     // ── Event application (pure functions) ──
 
     public SessionState Apply(TurnRecorded evt)
@@ -54,7 +64,14 @@ public sealed record SessionState
         }
 
         builder.AddRange(evt.CompactedMessages);
-        return this with { History = builder.ToImmutable() };
+
+        return this with
+        {
+            History = builder.ToImmutable(),
+            // WorkingContext survives compaction. The event MAY carry an
+            // update; if null, retain the existing value on this state.
+            WorkingContext = evt.WorkingContext ?? WorkingContext
+        };
     }
 
     // ── Command helpers ──
@@ -195,7 +212,8 @@ public sealed record SessionState
         {
             History = new List<SerializableChatMessage>(History),
             TurnCount = TurnCount,
-            Title = Title
+            Title = Title,
+            WorkingContext = WorkingContext.IsEmpty ? null : WorkingContext
         };
     }
 
@@ -205,7 +223,8 @@ public sealed record SessionState
         {
             History = ImmutableList.CreateRange(snapshot.History),
             TurnCount = snapshot.TurnCount,
-            Title = snapshot.Title
+            Title = snapshot.Title,
+            WorkingContext = snapshot.WorkingContext ?? WorkingContext.Empty
         };
     }
 }
