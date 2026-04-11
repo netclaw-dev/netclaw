@@ -75,9 +75,7 @@ public class ExternalSkillsConfigTests : IDisposable
     public void ClaudeCode_skips_marketplaces_that_have_no_skills_subdir()
     {
         Directory.CreateDirectory(ClaudeSkillsPath(_homeDir));
-        // Populated marketplace with a skills/ subdir
         Directory.CreateDirectory(MarketplaceSkillsPath(_homeDir, "dotnet-skills"));
-        // Marketplace dir exists but has no skills/ subdir — should be silently skipped
         Directory.CreateDirectory(Path.Combine(MarketplacesRoot(_homeDir), "empty-marketplace"));
 
         var config = new ExternalSkillsConfig
@@ -123,7 +121,6 @@ public class ExternalSkillsConfigTests : IDisposable
     public void ClaudeCode_does_not_crash_when_marketplaces_root_is_missing()
     {
         Directory.CreateDirectory(ClaudeSkillsPath(_homeDir));
-        // Intentionally no .claude/plugins/marketplaces at all
 
         var config = new ExternalSkillsConfig
         {

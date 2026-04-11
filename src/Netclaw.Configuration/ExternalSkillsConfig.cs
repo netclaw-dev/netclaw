@@ -23,7 +23,7 @@ public sealed class ExternalSkillsConfig
     /// </remarks>
     private static readonly (string Alias, string DisplayName, string[] RelativePaths, bool DefaultAllowSymlinks)[] WellKnownCatalog =
     [
-        ("claude-code", "Claude Code",
+        (ClaudeCodeAlias, "Claude Code",
             new[] { Path.Combine(".claude", "skills") },
             true),
         ("open-code", "Open Code",
@@ -109,15 +109,14 @@ public sealed class ExternalSkillsConfig
     }
 
     /// <summary>
-    /// Enumerates the live <c>skills/</c> directories of every Claude Code plugin
-    /// marketplace installed under <c>~/.claude/plugins/marketplaces/</c>. Returns
-    /// an empty list if the marketplaces root doesn't exist or if no installed
-    /// marketplace has a <c>skills/</c> subdirectory. The filesystem is the source
-    /// of truth — we intentionally don't parse <c>known_marketplaces.json</c> or
-    /// <c>installed_plugins.json</c> so Netclaw stays decoupled from Claude Code's
-    /// plugin metadata format. The version cache at <c>plugins/cache/</c> is
-    /// skipped because Claude Code itself reads the live marketplace path at
-    /// runtime; scanning the cache would duplicate entries.
+    /// Enumerates the live <c>skills/</c> directories of every Claude Code
+    /// plugin marketplace installed under <c>~/.claude/plugins/marketplaces/</c>.
+    /// The filesystem is the source of truth — we intentionally don't parse
+    /// <c>known_marketplaces.json</c> or <c>installed_plugins.json</c> so
+    /// Netclaw stays decoupled from Claude Code's plugin metadata format. The
+    /// version cache at <c>plugins/cache/</c> is skipped because Claude Code
+    /// itself reads the live marketplace path at runtime; scanning the cache
+    /// would duplicate entries.
     /// </summary>
     private static IReadOnlyList<string> EnumerateClaudeCodeMarketplaceSkillPaths(string homeDirectory)
     {
@@ -132,10 +131,6 @@ public sealed class ExternalSkillsConfig
                 .ToList();
         }
         catch (UnauthorizedAccessException)
-        {
-            return Array.Empty<string>();
-        }
-        catch (DirectoryNotFoundException)
         {
             return Array.Empty<string>();
         }
