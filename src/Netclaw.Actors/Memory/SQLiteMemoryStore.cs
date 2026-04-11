@@ -138,21 +138,6 @@ public sealed class SQLiteMemoryStore
         cmd.CommandText = schemaSql;
         await cmd.ExecuteNonQueryAsync(ct);
 
-        await EnsureColumnExistsAsync(conn, "memory_documents", "memory_class", "TEXT NOT NULL DEFAULT 'durable_fact'", ct);
-        await EnsureColumnExistsAsync(conn, "memory_documents", "expires_at", "INTEGER NULL", ct);
-        await EnsureColumnExistsAsync(conn, "memory_documents", "aliases_json", "TEXT NULL", ct);
-        await EnsureColumnExistsAsync(conn, "memory_documents", "facets_json", "TEXT NULL", ct);
-        await EnsureColumnExistsAsync(conn, "memory_documents", "slots_json", "TEXT NULL", ct);
-        await EnsureColumnExistsAsync(conn, "memory_documents", "boundary", "TEXT NULL", ct);
-        await EnsureColumnExistsAsync(conn, "memory_documents", "audience", "TEXT NULL", ct);
-        await EnsureColumnExistsAsync(conn, "memory_records", "memory_class", "TEXT NOT NULL DEFAULT 'evidence'", ct);
-        await EnsureColumnExistsAsync(conn, "memory_records", "expires_at", "INTEGER NULL", ct);
-        await EnsureColumnExistsAsync(conn, "memory_records", "aliases_json", "TEXT NULL", ct);
-        await EnsureColumnExistsAsync(conn, "memory_records", "facets_json", "TEXT NULL", ct);
-        await EnsureColumnExistsAsync(conn, "memory_records", "slots_json", "TEXT NULL", ct);
-        await EnsureColumnExistsAsync(conn, "memory_records", "boundary", "TEXT NULL", ct);
-        await EnsureColumnExistsAsync(conn, "memory_records", "audience", "TEXT NULL", ct);
-
         // Phase A hygiene: conversation turn snapshots are diagnostic trace, not
         // durable auto-recall memory. This repo is prototype-only; normalize any
         // existing rows aggressively to prevent recall pollution.
@@ -1683,27 +1668,6 @@ public sealed class SQLiteMemoryStore
         cmd.Parameters.AddWithValue("$aliases", aliasesJson ?? "");
         cmd.Parameters.AddWithValue("$facets", facetsJson ?? "");
         await cmd.ExecuteNonQueryAsync(ct);
-    }
-
-    private static async Task EnsureColumnExistsAsync(
-        SqliteConnection conn,
-        string tableName,
-        string columnName,
-        string columnSql,
-        CancellationToken ct)
-    {
-        await using var pragma = conn.CreateCommand();
-        pragma.CommandText = $"PRAGMA table_info({tableName});";
-        await using var reader = await pragma.ExecuteReaderAsync(ct);
-        while (await reader.ReadAsync(ct))
-        {
-            if (string.Equals(reader.GetString(1), columnName, StringComparison.OrdinalIgnoreCase))
-                return;
-        }
-
-        await using var alter = conn.CreateCommand();
-        alter.CommandText = $"ALTER TABLE {tableName} ADD COLUMN {columnName} {columnSql};";
-        await alter.ExecuteNonQueryAsync(ct);
     }
 
     public SQLiteMemoryAnchor CreateDefaultAnchor(string canonicalName)
