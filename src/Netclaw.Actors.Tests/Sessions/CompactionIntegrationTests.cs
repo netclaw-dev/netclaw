@@ -10,6 +10,7 @@ using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Memory;
 using Netclaw.Actors.Sessions;
+using Netclaw.Actors.Tools;
 using Xunit;
 
 namespace Netclaw.Actors.Tests.Sessions;
@@ -23,6 +24,7 @@ public class CompactionIntegrationTests : TestKit
 {
     private readonly FakeChatClient _fakeChatClient = new();
     private readonly FakeMemoryExtractor _fakeMemoryExtractor = new();
+    private readonly FakeToolExecutor _fakeToolExecutor = new();
 
     public CompactionIntegrationTests(ITestOutputHelper output) : base(output: output)
     {
@@ -56,6 +58,16 @@ public class CompactionIntegrationTests : TestKit
         services.AddSingleton<IMemoryExtractor>(_fakeMemoryExtractor);
         services.AddSingleton<IModelCapabilityResolver>(new FakeCapabilityResolver());
 
+        // Tool registry + fake executor so tool-execution tests can exercise
+        // the WorkingContext-through-compaction path. Other tests in this
+        // class don't drive tool calls and are unaffected.
+        services.AddSingleton<IToolExecutor>(_fakeToolExecutor);
+        var registry = new ToolRegistry();
+        registry.Register(
+            AIFunctionFactory.Create((string path) => $"contents of {path}", "file_read"),
+            "file_read");
+        services.AddSingleton(registry);
+
         // Composite records for LlmSessionActor constructor
         services.AddSingleton(sp => new SessionServices(
             sp.GetRequiredService<IChatClientProvider>(),
@@ -63,6 +75,13 @@ public class CompactionIntegrationTests : TestKit
             sp.GetService<IReadOnlyList<IContextLayerProvider>>() ?? Array.Empty<IContextLayerProvider>(),
             sp.GetService<TimeProvider>() ?? TimeProvider.System,
             sp.GetService<NetclawPaths>()));
+        services.AddSingleton(sp => new SessionToolServices(
+            sp.GetRequiredService<IToolExecutor>(),
+            sp.GetService<IToolAuditLogger>(),
+            sp.GetRequiredService<ToolRegistry>(),
+            sp.GetService<ToolAccessPolicy>(),
+            sp.GetService<Netclaw.Actors.Channels.TrustContextDeriver>(),
+            sp.GetService<Netclaw.Actors.Skills.SkillRegistry>()));
         services.AddSingleton(sp => new SessionMemoryServices(
             sp.GetService<IMemoryExtractor>() ?? NullMemoryExtractor.Instance,
             sp.GetService<IMemoryRecallCoordinator>() ?? NullMemoryRecallCoordinator.Instance,
@@ -761,6 +780,128 @@ public class CompactionIntegrationTests : TestKit
         Assert.Contains("fake", text.Text, StringComparison.OrdinalIgnoreCase);
         await subscriber.ExpectMsgAsync<UsageOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
         await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task WorkingContext_survives_full_compaction_pipeline()
+    {
+        // End-to-end defense for the Slack failure this change addresses.
+        // Flow: turn 1 runs a file_read tool call at low usage so
+        // WorkingContext is populated without mid-loop compaction. Turn 2
+        // is a plain user message at high usage that triggers real
+        // compaction after it completes. Turn 3 verifies the post-
+        // compaction main-model call still sees the tracked file path
+        // in its [working-context] block. Exercises the full compaction
+        // pipeline — not a direct Apply(SessionCompacted) on state.
+        //
+        // PascalCase "Path" matches what NetclawToolGenerator emits for
+        // FileReadTool's `string Path` parameter. A lowercase key would
+        // hide the real-world bug where WorkingContextUpdater's probe
+        // list misses first-party tool arguments.
+
+        // Turn 1: file_read at low usage (no compaction interruption).
+        _fakeChatClient.ToolCallsOnFirstCall =
+        [
+            new FunctionCallContent("call-1", "file_read",
+                new Dictionary<string, object?> { ["Path"] = "src/Rect.cs" })
+        ];
+        _fakeToolExecutor.Results["file_read"] = "public readonly record struct Rect { ... }";
+        _fakeChatClient.UsageOverride = new UsageDetails
+        {
+            InputTokenCount = 100,
+            OutputTokenCount = 20,
+            TotalTokenCount = 120
+        };
+
+        var sessionId = new SessionId("test-channel/wc-survives-compaction");
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("wc-survives-sub");
+
+        await sessionManager.Ask<SessionJoined>(new JoinSession
+        {
+            SessionId = sessionId,
+            Subscriber = subscriber,
+            Filter = OutputFilter.Full
+        }, TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
+
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "please read Rect.cs"
+        }, TestContext.Current.CancellationToken);
+
+        // Tool-call loop at low usage. With UsageOverride set,
+        // LlmSessionActor emits an intermediate UsageOutput right after
+        // ToolCallOutput (before tool execution). Then ToolResultOutput,
+        // follow-up TextOutput, final UsageOutput, TurnCompleted. No
+        // CompactionOutput because usage stays under the threshold.
+        await subscriber.ExpectMsgAsync<ToolCallOutput>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<UsageOutput>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<ToolResultOutput>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<UsageOutput>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+
+        // Turn 2: plain text, high usage — triggers compaction after turn.
+        _fakeChatClient.ToolCallsOnFirstCall = null;
+        _fakeChatClient.UsageOverride = new UsageDetails
+        {
+            InputTokenCount = 800,
+            OutputTokenCount = 50,
+            TotalTokenCount = 850
+        };
+
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Trigger compaction"
+        }, TestContext.Current.CancellationToken);
+
+        await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<UsageOutput>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<CompactionOutput>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+
+        // Turn 3: post-compaction probe. Lower usage to avoid re-compaction.
+        _fakeChatClient.UsageOverride = new UsageDetails
+        {
+            InputTokenCount = 100,
+            OutputTokenCount = 20,
+            TotalTokenCount = 120
+        };
+
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Post-compaction probe"
+        }, TestContext.Current.CancellationToken);
+
+        await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<UsageOutput>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+
+        // The last main-model call (post-compaction turn 3) must still
+        // see the file path in its [working-context] block. Filter
+        // observer sidecar calls out by system-prompt marker.
+        var mainModelCalls = _fakeChatClient.ReceivedMessages
+            .Where(msgs => !(msgs.FirstOrDefault(m => m.Role == Microsoft.Extensions.AI.ChatRole.System)?.Text
+                ?? string.Empty).Contains("session summarizer", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        Assert.NotEmpty(mainModelCalls);
+        var lastMainCall = mainModelCalls[^1];
+        var systemMessages = lastMainCall
+            .Where(m => m.Role == Microsoft.Extensions.AI.ChatRole.System)
+            .Select(m => m.Text ?? string.Empty)
+            .ToList();
+
+        var hasWorkingContextBlock = systemMessages.Any(s =>
+            s.Contains("[working-context]", StringComparison.Ordinal)
+            && s.Contains("src/Rect.cs", StringComparison.Ordinal));
+
+        Assert.True(hasWorkingContextBlock,
+            $"Expected the post-compaction LLM call to include a [working-context] block mentioning src/Rect.cs. System messages:\n{string.Join("\n---\n", systemMessages)}");
     }
 }
 

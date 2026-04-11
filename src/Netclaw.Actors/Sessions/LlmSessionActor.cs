@@ -592,7 +592,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             var updatedContext = WorkingContextUpdater.UpdateFromToolResults(
                 _state.WorkingContext,
                 _state.History,
-                msg.ToolResults);
+                msg.ToolResults,
+                _log);
             if (!ReferenceEquals(updatedContext, _state.WorkingContext))
             {
                 _state = _state with { WorkingContext = updatedContext };

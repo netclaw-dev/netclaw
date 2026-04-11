@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Akka.Event;
 using Netclaw.Actors.Protocol;
 
 namespace Netclaw.Actors.Sessions;
@@ -42,11 +43,18 @@ internal static class WorkingContextUpdater
     /// argument, and return the updated <see cref="WorkingContext"/>.
     /// Pure — does not mutate inputs. Returns the same instance when no
     /// result produced a path change.
+    ///
+    /// Optionally takes an <see cref="ILoggingAdapter"/> so the actor can
+    /// emit debug-level observability when a tool call with non-empty
+    /// object arguments is processed but no recognized path field matches
+    /// (signalling potential schema drift — a new tool whose argument
+    /// keys aren't in <see cref="PathFieldNames"/>).
     /// </summary>
     public static WorkingContext UpdateFromToolResults(
         WorkingContext current,
         IReadOnlyList<SerializableChatMessage> history,
-        IReadOnlyList<SerializableChatMessage> results)
+        IReadOnlyList<SerializableChatMessage> results,
+        ILoggingAdapter? log = null)
     {
         if (results.Count == 0)
             return current;
@@ -91,9 +99,65 @@ internal static class WorkingContextUpdater
             }
 
             if (TryExtractFilePath(argumentsJson, out var path))
-                updated = updated.AddRecentFile(path);
+            {
+                var next = updated.AddRecentFile(path);
+                if (!ReferenceEquals(next, updated))
+                {
+                    log?.Debug(
+                        "WorkingContext: tracked file {Path} from tool call {CallId} ({ToolName})",
+                        path, result.ToolCallId, result.Name ?? "unknown");
+                }
+                updated = next;
+            }
+            else if (HasStringValuedObjectArgs(argumentsJson))
+            {
+                // The arguments parsed to a non-empty JSON object with at
+                // least one string-valued field, but none of our probe
+                // names matched. This is the schema-drift signal — a new
+                // tool whose path argument uses an unrecognized key, or
+                // a provider that renamed keys in transit. Operators
+                // hunting "why isn't this file showing up in
+                // [working-context]" will see this in debug logs.
+                log?.Debug(
+                    "WorkingContext: tool call {CallId} ({ToolName}) had string-valued arguments but no recognized path field matched (probed: Path/path/FilePath/file_path/filePath/File/file/FileName/filename/fileName); possible schema drift",
+                    result.ToolCallId, result.Name ?? "unknown");
+            }
         }
         return updated;
+    }
+
+    /// <summary>
+    /// Returns true when <paramref name="argumentsJson"/> parses to a
+    /// non-empty JSON object that contains at least one string-valued
+    /// property. Used to distinguish "tool has no path arg" (normal,
+    /// quiet) from "tool has string args we didn't recognize" (schema
+    /// drift, worth logging).
+    /// </summary>
+    private static bool HasStringValuedObjectArgs(string? argumentsJson)
+    {
+        if (string.IsNullOrWhiteSpace(argumentsJson) || argumentsJson == "{}")
+            return false;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(argumentsJson);
+            if (doc.RootElement.ValueKind != JsonValueKind.Object)
+                return false;
+
+            foreach (var prop in doc.RootElement.EnumerateObject())
+            {
+                if (prop.Value.ValueKind == JsonValueKind.String
+                    && !string.IsNullOrWhiteSpace(prop.Value.GetString()))
+                {
+                    return true;
+                }
+            }
+        }
+        catch (JsonException) // slopwatch-ignore: SW003 malformed JSON is benign — see TryExtractFilePath
+        {
+        }
+
+        return false;
     }
 
     /// <summary>
