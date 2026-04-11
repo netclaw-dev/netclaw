@@ -600,10 +600,14 @@ static void ConfigureDaemonServices(
     services.AddSingleton<MemoryCurationEngine>();
     services.AddSingleton<IMemoryCheckpointSink, SQLiteMemoryCheckpointSink>();
     services.AddSingleton<MemoryCurationWorkerService>();
-    services.AddSingleton<IHostedService>(sp => sp.GetRequiredService<MemoryCurationWorkerService>());
 
-    // Ensure memory schema exists on startup (idempotent)
-    memoryStore.InitializeAsync(CancellationToken.None).GetAwaiter().GetResult();
+    // Schema migration hosted service must start before any memory consumer so
+    // both akka-persistence migrations and memory table creation run first.
+    services.AddSingleton<SchemaMigrator>();
+    services.AddSingleton<SchemaMigrationHostedService>();
+    services.AddSingleton<IHostedService>(sp => sp.GetRequiredService<SchemaMigrationHostedService>());
+
+    services.AddSingleton<IHostedService>(sp => sp.GetRequiredService<MemoryCurationWorkerService>());
 
     // SQLite-first mode: explicit manual-control memory tools are always routed
     // through the SQLite memory + checkpoint/policy pipeline.
@@ -756,11 +760,6 @@ static void ConfigureDaemonServices(
     var sqlitePath = string.IsNullOrWhiteSpace(persistence.Sqlite.Path)
         ? paths.SqliteDbPath
         : persistence.Sqlite.Path!;
-
-    // Schema migration for SQLite persistence
-    services.AddSingleton<SchemaMigrator>();
-    services.AddSingleton<SchemaMigrationHostedService>();
-    services.AddSingleton<IHostedService>(sp => sp.GetRequiredService<SchemaMigrationHostedService>());
 
     // Model capability resolution chain:
     // Codex static catalog → [Ollama →] [OpenAI-compat →] OpenRouter oracle → HuggingFace → text-only default

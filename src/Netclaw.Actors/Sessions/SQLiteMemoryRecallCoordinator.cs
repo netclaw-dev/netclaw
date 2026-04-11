@@ -142,14 +142,9 @@ public sealed class SQLiteMemoryRecallCoordinator(
             score += 80;
         else if (string.Equals(document.UpdateSemantics, Memory.MemoryUpdateSemantics.AppendDocument.ToWireValue(), StringComparison.OrdinalIgnoreCase))
             score += 60;
-        else if (string.Equals(document.UpdateSemantics, Memory.MemoryUpdateSemantics.ConversationTrace.ToWireValue(), StringComparison.OrdinalIgnoreCase))
-            score -= 300;
 
         if (string.Equals(document.UpdateSemantics, Memory.MemoryUpdateSemantics.ImmutableRecord.ToWireValue(), StringComparison.OrdinalIgnoreCase))
             score += 30;
-
-        if (string.Equals(document.Title, "turn-completion", StringComparison.OrdinalIgnoreCase))
-            score -= 200;
 
         if (string.Equals(document.Title, "verified-tool-finding", StringComparison.OrdinalIgnoreCase))
             score += 25;

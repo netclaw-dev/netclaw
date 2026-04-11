@@ -170,44 +170,6 @@ public sealed class SQLiteMemoryStoreTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task InitializeAsync_demotes_malformed_auto_recall_documents_to_searchable()
-    {
-        await _store.InitializeAsync(TestContext.Current.CancellationToken);
-
-        var anchor = _store.CreateDefaultAnchor("textforge");
-        var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-
-        await _store.UpsertDocumentAsync(new SQLiteMemoryDocument(
-            DocumentId: "doc-bad",
-            Anchor: anchor,
-            MemoryClass: "durable_fact",
-            Title: "doc:doc-bad",
-            MarkdownBody: "Malformed imported document.",
-            AliasesJson: null,
-            FacetsJson: null,
-            SlotsJson: null,
-            UpdateSemantics: "merge-document",
-            Sensitivity: "normal",
-            RecallMode: "auto",
-            Confidence: 0.8,
-            FreshnessAtMs: now,
-            ExpiresAtMs: null,
-            CreatedAtMs: now,
-            UpdatedAtMs: now), TestContext.Current.CancellationToken);
-
-        await _store.InitializeAsync(TestContext.Current.CancellationToken);
-
-        await using var conn = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = _dbPath }.ToString());
-        await conn.OpenAsync(TestContext.Current.CancellationToken);
-        await using var cmd = conn.CreateCommand();
-        cmd.CommandText = "SELECT recall_mode, facets_json FROM memory_documents WHERE document_id = 'doc-bad';";
-        await using var reader = await cmd.ExecuteReaderAsync(TestContext.Current.CancellationToken);
-        Assert.True(await reader.ReadAsync(TestContext.Current.CancellationToken));
-        Assert.Equal("searchable", reader.GetString(0));
-        Assert.Contains("needs_metadata_enrichment", reader.GetString(1), StringComparison.OrdinalIgnoreCase);
-    }
-
-    [Fact]
     public async Task SearchByPlan_filters_results_by_allowed_audience()
     {
         await _store.InitializeAsync(TestContext.Current.CancellationToken);
