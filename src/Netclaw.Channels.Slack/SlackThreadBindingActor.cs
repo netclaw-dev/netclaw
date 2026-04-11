@@ -204,66 +204,18 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
                 }
             }
 
-            // Build content list: text + downloaded file attachments
+            // Build content list: text + attachment announcements + inline DataContent
             var contents = new List<AIContent>();
             if (!string.IsNullOrEmpty(message.Text))
                 contents.Add(new TextContent(message.Text));
 
-            // Download and scan file attachments
-            if (message.Files is { Count: > 0 } && _dependencies.HttpClient is not null)
+            if (message.Files is { Count: > 0 })
             {
-                foreach (var file in message.Files)
-                {
-                    // Only process image MIME types for now
-                    if (!file.MimeType.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
-                    {
-                        _log.Debug("Skipping non-image file attachment: {Name} ({MimeType})", file.Name, file.MimeType);
-                        continue;
-                    }
-
-                    try
-                    {
-                        using var downloadCts = CancellationTokenSource.CreateLinkedTokenSource(inboundCts.Token);
-                        downloadCts.CancelAfter(OperationTimeout);
-                        var bytes = await DownloadSlackFileAsync(file, downloadCts.Token);
-                        if (bytes.Length == 0)
-                            continue;
-
-                        using var scanCts = CancellationTokenSource.CreateLinkedTokenSource(inboundCts.Token);
-                        scanCts.CancelAfter(OperationTimeout);
-                        var scanResult = await _dependencies.ContentScanner.ScanAsync(
-                            bytes, file.Name, file.MimeType, scanCts.Token);
-
-                        if (!scanResult.IsAllowed)
-                        {
-                            if (scanResult.Error == ContentScanError.ScanFailure)
-                            {
-                                // Scanner itself is broken — allow the file through rather
-                                // than silently dropping valid images. The LLM provider
-                                // will still validate content on its end.
-                                _log.Error("Content scanner failed for file {Name}: {Message} — allowing file through",
-                                    file.Name, scanResult.Message);
-                            }
-                            else
-                            {
-                                _log.Warning("Content scan rejected file {Name}: {Message}",
-                                    file.Name, scanResult.Message ?? scanResult.Error?.ToString());
-                                continue;
-                            }
-                        }
-
-                        contents.Add(new DataContent(bytes.ToArray(), file.MimeType));
-                        _log.Info("Downloaded and scanned Slack file: {Name} ({Size} bytes)", file.Name, bytes.Length);
-                    }
-                    catch (OperationCanceledException ex)
-                    {
-                        _log.Warning(ex, "Timed out while processing Slack file {Name}, skipping", file.Name);
-                    }
-                    catch (Exception ex)
-                    {
-                        _log.Warning(ex, "Failed to download Slack file {Name}, skipping", file.Name);
-                    }
-                }
+                await ProcessInboundAttachmentsAsync(
+                    message.Files,
+                    message.Audience,
+                    contents,
+                    inboundCts.Token);
             }
 
             if (contents.Count == 0)
@@ -339,6 +291,310 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
 
     private Task<ReadOnlyMemory<byte>> DownloadSlackFileAsync(SlackFileReference file, CancellationToken ct)
         => SlackFileDownloader.DownloadAsync(_dependencies.HttpClient!, file.UrlPrivateDownload, _dependencies.Options.BotToken, ct);
+
+    /// <summary>
+    /// Applies the canonical cross-channel attachment ingress pipeline to
+    /// the inbound Slack file list: audience-gated policy check, per-file
+    /// and per-message cap checks, download, scan, inbox write, and
+    /// capability-gated inlining. Appends one batched
+    /// <c>[attachment]</c> <see cref="TextContent"/> block plus any
+    /// inlined <see cref="DataContent"/> items to <paramref name="contents"/>.
+    /// Every rejection path posts a user-visible reply — no silent drops.
+    /// </summary>
+    private async Task ProcessInboundAttachmentsAsync(
+        IReadOnlyList<SlackFileReference> files,
+        TrustAudience audience,
+        List<AIContent> contents,
+        CancellationToken cancellationToken)
+    {
+        if (_dependencies.HttpClient is null)
+        {
+            _log.Warning(
+                "Slack HTTP client is not configured; rejecting {Count} inbound attachment(s)",
+                files.Count);
+            await SafePostAsync(":warning: I can't download attachments right now — HTTP client is not configured.");
+            return;
+        }
+
+        var profile = ToolAudienceProfileDefaults.GetResolvedProfile(_dependencies.AudienceProfiles, audience);
+        var policy = profile.ChannelAttachments ?? ChannelAttachmentPolicy.Empty;
+
+        if (files.Count > policy.MaxFilesPerMessage)
+        {
+            _log.Warning(
+                "slack_attachments_rejected count={Count} limit={Limit} audience={Audience} reason=too-many-files",
+                files.Count,
+                policy.MaxFilesPerMessage,
+                audience);
+            await SafePostAsync(
+                $":warning: I can only accept up to {policy.MaxFilesPerMessage} attachments per message. " +
+                $"Please split your upload and try again. Text content was delivered.");
+            return;
+        }
+
+        // Resolve the capability view once per message — the active model's
+        // InputModalities determine which accepted categories get inlined
+        // as DataContent versus path-only announcements.
+        var modelCapabilities = _dependencies.ModelCapabilities;
+        var inlineImages = modelCapabilities.InputModalities.HasFlag(ModelModality.Image);
+        // Microsoft.Extensions.AI doesn't define a dedicated Pdf modality flag;
+        // provider plugins that natively accept application/pdf use the Image
+        // flag on the document pipeline. This matches how LlmSessionActor's
+        // existing mediaRefs gate surfaces modality support today.
+        var inlinePdfs = modelCapabilities.InputModalities.HasFlag(ModelModality.Image);
+
+        var acceptedLines = new List<string>(files.Count);
+        var dataContents = new List<DataContent>();
+        var rejections = new List<string>();
+
+        var inboxDir = SessionDirectoryHelper.GetOrCreateInboxDirectory(_sessionId, _dependencies.Paths.SessionsDirectory);
+
+        foreach (var file in files)
+        {
+            var attachmentResult = await TryIngestSingleAttachmentAsync(
+                file,
+                audience,
+                policy,
+                inlineImages,
+                inlinePdfs,
+                inboxDir,
+                cancellationToken);
+
+            switch (attachmentResult)
+            {
+                case AttachmentIngestResult.Accepted accepted:
+                    acceptedLines.Add(accepted.Line);
+                    if (accepted.Inline is { } inline)
+                        dataContents.Add(inline);
+                    break;
+
+                case AttachmentIngestResult.Rejected rejected:
+                    rejections.Add(rejected.UserFacingReason);
+                    break;
+            }
+        }
+
+        if (acceptedLines.Count > 0)
+        {
+            contents.Add(new TextContent(string.Join('\n', acceptedLines)));
+            contents.AddRange(dataContents);
+        }
+
+        if (rejections.Count > 0)
+        {
+            var joined = rejections.Count == 1
+                ? rejections[0]
+                : ":warning: Some attachments were not accepted:\n  - " + string.Join("\n  - ", rejections);
+            await SafePostAsync(joined);
+        }
+    }
+
+    private async Task<AttachmentIngestResult> TryIngestSingleAttachmentAsync(
+        SlackFileReference file,
+        TrustAudience audience,
+        ChannelAttachmentPolicy policy,
+        bool inlineImages,
+        bool inlinePdfs,
+        string inboxDir,
+        CancellationToken cancellationToken)
+    {
+        var category = AttachmentCategories.FromMime(file.MimeType);
+
+        // Pre-download policy gates — these all operate on Slack-reported
+        // metadata and avoid burning bandwidth on files that can't be accepted.
+        if (!policy.Allows(category))
+        {
+            _log.Warning(
+                "slack_attachment_rejected name={Name} mime={Mime} audience={Audience} category={Category} reason=category-not-allowed",
+                file.Name, file.MimeType, audience, category);
+            return new AttachmentIngestResult.Rejected(
+                $"`{file.Name}` ({category}) isn't allowed in {audience} channels. " +
+                "Please DM me if you want to share this class of file.");
+        }
+
+        if (file.Size > policy.MaxFileBytes)
+        {
+            _log.Warning(
+                "slack_attachment_rejected name={Name} mime={Mime} audience={Audience} size={Size} limit={Limit} reason=too-large",
+                file.Name, file.MimeType, audience, file.Size, policy.MaxFileBytes);
+            return new AttachmentIngestResult.Rejected(
+                $"`{file.Name}` ({FormatBytes(file.Size)}) exceeds the {FormatBytes(policy.MaxFileBytes)} per-file limit.");
+        }
+
+        ReadOnlyMemory<byte> bytes;
+        try
+        {
+            using var downloadCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            downloadCts.CancelAfter(OperationTimeout);
+            bytes = await DownloadSlackFileAsync(file, downloadCts.Token);
+        }
+        catch (OperationCanceledException ex)
+        {
+            _log.Warning(ex,
+                "slack_attachment_rejected name={Name} mime={Mime} reason=download-timeout",
+                file.Name, file.MimeType);
+            return new AttachmentIngestResult.Rejected(
+                $"Timed out downloading `{file.Name}`. Please try again.");
+        }
+        catch (Exception ex)
+        {
+            _log.Warning(ex,
+                "slack_attachment_rejected name={Name} mime={Mime} reason=download-failed",
+                file.Name, file.MimeType);
+            return new AttachmentIngestResult.Rejected(
+                $"Couldn't download `{file.Name}`: {ex.Message}.");
+        }
+
+        if (bytes.Length == 0)
+        {
+            _log.Warning(
+                "slack_attachment_rejected name={Name} mime={Mime} reason=empty-download",
+                file.Name, file.MimeType);
+            return new AttachmentIngestResult.Rejected(
+                $"`{file.Name}` downloaded as zero bytes.");
+        }
+
+        ContentScanResult scanResult;
+        try
+        {
+            using var scanCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            scanCts.CancelAfter(OperationTimeout);
+            scanResult = await _dependencies.ContentScanner.ScanAsync(
+                bytes, file.Name, file.MimeType, scanCts.Token);
+        }
+        catch (Exception ex)
+        {
+            _log.Warning(ex,
+                "slack_attachment_rejected name={Name} mime={Mime} reason=scan-exception",
+                file.Name, file.MimeType);
+            return new AttachmentIngestResult.Rejected(
+                $"Couldn't scan `{file.Name}`: {ex.Message}.");
+        }
+
+        if (!scanResult.IsAllowed)
+        {
+            if (scanResult.Error == ContentScanError.ScanFailure)
+            {
+                // Scanner itself is broken — allow the file through rather than
+                // silently dropping it. The LLM provider will still validate.
+                _log.Error(
+                    "Content scanner failed for file {Name}: {Message} — allowing file through",
+                    file.Name, scanResult.Message);
+            }
+            else
+            {
+                _log.Warning(
+                    "slack_attachment_rejected name={Name} mime={Mime} reason=scan-blocked message={ScanMessage}",
+                    file.Name, file.MimeType, scanResult.Message ?? scanResult.Error?.ToString());
+                return new AttachmentIngestResult.Rejected(
+                    $"Content scanner rejected `{file.Name}`: {scanResult.Message ?? scanResult.Error?.ToString()}.");
+            }
+        }
+
+        // Write to inbox with filesystem-level collision suffixing and atomic move.
+        string inboxPath;
+        try
+        {
+            inboxPath = await InboxWriter.SanitizeReserveAndWriteAsync(
+                inboxDir,
+                file.Name,
+                bytes,
+                cancellationToken);
+        }
+        catch (InboxWriter.CollisionExhaustedException ex)
+        {
+            _log.Warning(ex,
+                "slack_attachment_rejected name={Name} reason=collision-exhausted",
+                file.Name);
+            return new AttachmentIngestResult.Rejected(
+                $"Too many attachments named `{file.Name}` in this session — please rename and try again.");
+        }
+        catch (Exception ex)
+        {
+            _log.Error(ex,
+                "slack_attachment_rejected name={Name} reason=inbox-write-failed",
+                file.Name);
+            return new AttachmentIngestResult.Rejected(
+                $"Couldn't save `{file.Name}` to disk: {ex.Message}.");
+        }
+
+        // Decide inlining based on model modalities and category.
+        var (inlined, note) = ResolveInlineDecision(category, inlineImages, inlinePdfs);
+
+        var relativePath = $"{SessionDirectoryHelper.InboxSubdirectory}/{Path.GetFileName(inboxPath)}";
+        var line = BuildAttachmentLine(file.Name, file.MimeType, bytes.Length, relativePath, inlined, note);
+
+        DataContent? inlineContent = null;
+        if (inlined)
+            inlineContent = new DataContent(bytes.ToArray(), file.MimeType);
+
+        _log.Info(
+            "slack_attachment_accepted name={Name} mime={Mime} size={Size} audience={Audience} category={Category} inlined={Inlined}",
+            file.Name, file.MimeType, bytes.Length, audience, category, inlined);
+
+        return new AttachmentIngestResult.Accepted(line, inlineContent);
+    }
+
+    private static (bool Inlined, string? Note) ResolveInlineDecision(
+        AttachmentCategory category,
+        bool inlineImages,
+        bool inlinePdfs)
+    {
+        return category switch
+        {
+            AttachmentCategory.Image when inlineImages => (true, null),
+            AttachmentCategory.Image => (false, AttachmentNotes.ModelMissingImage),
+            AttachmentCategory.Pdf when inlinePdfs => (true, null),
+            AttachmentCategory.Pdf => (false, AttachmentNotes.ModelMissingPdf),
+            _ => (false, AttachmentNotes.FormatNotInlineable)
+        };
+    }
+
+    /// <summary>
+    /// Formats a single <c>[attachment]</c> announcement line in the
+    /// canonical cross-channel shape defined in netclaw-input-adapters.
+    /// </summary>
+    private static string BuildAttachmentLine(
+        string name,
+        string mimeType,
+        long size,
+        string relativePath,
+        bool inlined,
+        string? note)
+    {
+        var inlinedWire = inlined ? "true" : "false";
+        var sb = new StringBuilder(128);
+        sb.Append("[attachment] name=\"").Append(EscapeQuoted(name)).Append('"');
+        sb.Append(" mime=\"").Append(EscapeQuoted(mimeType)).Append('"');
+        sb.Append(" size=").Append(size);
+        sb.Append(" path=\"").Append(EscapeQuoted(relativePath)).Append('"');
+        sb.Append(" inlined=\"").Append(inlinedWire).Append('"');
+        if (!string.IsNullOrEmpty(note))
+            sb.Append(" note=\"").Append(EscapeQuoted(note)).Append('"');
+        return sb.ToString();
+    }
+
+    private static string EscapeQuoted(string value) =>
+        value.Replace("\\", "\\\\", StringComparison.Ordinal)
+             .Replace("\"", "\\\"", StringComparison.Ordinal);
+
+    private static string FormatBytes(long size)
+    {
+        const long Mib = 1024 * 1024;
+        const long Kib = 1024;
+        if (size >= Mib)
+            return $"{size / (double)Mib:F1} MiB";
+        if (size >= Kib)
+            return $"{size / (double)Kib:F1} KiB";
+        return $"{size} bytes";
+    }
+
+    private abstract record AttachmentIngestResult
+    {
+        public sealed record Accepted(string Line, DataContent? Inline) : AttachmentIngestResult;
+
+        public sealed record Rejected(string UserFacingReason) : AttachmentIngestResult;
+    }
 
     private async Task EnsureInitializedAsync()
     {

@@ -3,6 +3,7 @@ using Akka.Event;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
 using Netclaw.Channels.Telemetry;
+using Netclaw.Configuration;
 using Netclaw.Security;
 
 namespace Netclaw.Channels.Slack;
@@ -104,6 +105,9 @@ public sealed record SlackGatewayDependencies(
     ISlackReplyClient ReplyClient,
     IContentScanner ContentScanner,
     IThreadHistoryFetcher ThreadHistoryFetcher,
+    ToolAudienceProfiles AudienceProfiles,
+    Netclaw.Configuration.ModelCapabilities ModelCapabilities,
+    NetclawPaths Paths,
     HttpClient? HttpClient = null,
     Func<SlackChannelId, SlackGatewayDependencies, Props>? ConversationPropsFactory = null,
     Func<SessionId, SlackChannelId, SlackThreadTs, SlackGatewayDependencies, Props>? ThreadPropsFactory = null,

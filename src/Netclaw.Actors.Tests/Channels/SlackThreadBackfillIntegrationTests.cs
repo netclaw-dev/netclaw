@@ -123,7 +123,10 @@ public sealed class SlackThreadBackfillIntegrationTests : TestKit
             ReplyClient: _replyClient,
             ContentScanner: new NullContentScanner(),
             HttpClient: httpClient,
-            ThreadHistoryFetcher: fetcher);
+            ThreadHistoryFetcher: fetcher,
+            AudienceProfiles: TestSlackGatewayDeps.DefaultAudienceProfiles,
+            ModelCapabilities: TestSlackGatewayDeps.DefaultVisionCapableModel,
+            Paths: _paths);
 
         var gateway = Sys.ActorOf(SlackGatewayActor.CreateProps(deps), "slack-gw-backfill");
 
@@ -203,7 +206,10 @@ public sealed class SlackThreadBackfillIntegrationTests : TestKit
             ReplyClient: _replyClient,
             ContentScanner: new NullContentScanner(),
             HttpClient: httpClient,
-            ThreadHistoryFetcher: countingFetcher);
+            ThreadHistoryFetcher: countingFetcher,
+            AudienceProfiles: TestSlackGatewayDeps.DefaultAudienceProfiles,
+            ModelCapabilities: TestSlackGatewayDeps.DefaultVisionCapableModel,
+            Paths: _paths);
 
         var gateway = Sys.ActorOf(SlackGatewayActor.CreateProps(deps), "slack-gw-recovery");
 
@@ -331,9 +337,12 @@ public sealed class SlackThreadBackfillIntegrationTests : TestKit
             DefaultChannelId: null,
             ReplyClient: _replyClient,
             ContentScanner: new NullContentScanner(),
+            ThreadHistoryFetcher: fetcher,
+            AudienceProfiles: TestSlackGatewayDeps.DefaultAudienceProfiles,
+            ModelCapabilities: TestSlackGatewayDeps.DefaultVisionCapableModel,
+            Paths: _paths,
             HttpClient: httpClient,
-            PromptInjectionDetector: new ContainsIgnorePromptInjectionDetector(),
-            ThreadHistoryFetcher: fetcher);
+            PromptInjectionDetector: new ContainsIgnorePromptInjectionDetector());
 
         var gateway = Sys.ActorOf(SlackGatewayActor.CreateProps(deps), "slack-gw-risk-backfill");
 
@@ -394,7 +403,10 @@ public sealed class SlackThreadBackfillIntegrationTests : TestKit
             ReplyClient: _replyClient,
             ContentScanner: new NullContentScanner(),
             HttpClient: httpClient,
-            ThreadHistoryFetcher: fetcher);
+            ThreadHistoryFetcher: fetcher,
+            AudienceProfiles: TestSlackGatewayDeps.DefaultAudienceProfiles,
+            ModelCapabilities: TestSlackGatewayDeps.DefaultVisionCapableModel,
+            Paths: _paths);
 
         var gateway = Sys.ActorOf(SlackGatewayActor.CreateProps(deps), "slack-gw-stale-ordering");
 

@@ -35,22 +35,22 @@
 
 ## 5. ModelCapabilityActor ingress query helper
 
-- [ ] 5.1 Add a thin helper on the Slack binding actor (or a shared `ChannelIngressCapabilityQuery` utility if Discord is coming soon) that `Ask`s `ModelCapabilityActor` with a 2-second timeout
-- [ ] 5.2 Translate timeout into a typed result (`CapabilityQueryResult.Ok(modalities)` / `CapabilityQueryResult.Timeout`) so callers fail loudly rather than defaulting modalities
-- [ ] 5.3 Unit-test cache-hit happy path, timeout path, and exception path with a fake `ModelCapabilityActor`
+- [x] 5.1 Add a thin helper on the Slack binding actor (or a shared `ChannelIngressCapabilityQuery` utility if Discord is coming soon) that `Ask`s `ModelCapabilityActor` with a 2-second timeout
+- [x] 5.2 Translate timeout into a typed result (`CapabilityQueryResult.Ok(modalities)` / `CapabilityQueryResult.Timeout`) so callers fail loudly rather than defaulting modalities
+- [x] 5.3 Unit-test cache-hit happy path, timeout path, and exception path with a fake `ModelCapabilityActor`
 
 ## 6. Slack ingress rewrite (`SlackThreadBindingActor`)
 
-- [ ] 6.1 Delete the `image/`-only allowlist and the `_log.Debug("Skipping non-image file attachment...")` line
-- [ ] 6.2 Implement the eleven-step pipeline in order from design D5: audience gate → size gate → count gate → download → scan → capability query → inbox write → announcement → inline
-- [ ] 6.3 Build the `[attachment]` line exactly per the canonical format; use a private formatter method that other channels can lift later
-- [ ] 6.4 Source `note` strings from a shared helper (`AttachmentNotes.ModelMissingImage`, `AttachmentNotes.ModelMissingPdf`, `AttachmentNotes.FormatNotInlineable`) so the canonical prefixes never drift
-- [ ] 6.5 Batch multi-file announcements into a single `TextContent` block, preserving original order
-- [ ] 6.6 Wire user-visible rejection replies for every pre-download and post-download failure mode (category, size, count, scan, capability timeout, inbox write error, collision exhaustion) through `SafePostAsync`
-- [ ] 6.7 Upgrade the accepted-file log line from the old DEBUG drop to INFO with `{Name, Mime, Size, Audience, CategoryDecision, Inlined}` fields
-- [ ] 6.8 Emit WARN log with the same fields on every rejection path
-- [ ] 6.9 Ensure pre-download gates short-circuit on Slack-reported metadata; no `HttpClient.SendAsync` call is made for rejected files (verified by test double)
-- [ ] 6.10 Confirm `ChannelInput.Audience` is set on the outbound command (should already be — regression guard via test)
+- [x] 6.1 Delete the `image/`-only allowlist and the `_log.Debug("Skipping non-image file attachment...")` line
+- [x] 6.2 Implement the eleven-step pipeline in order from design D5: audience gate → size gate → count gate → download → scan → capability query → inbox write → announcement → inline. Note: the design called for routing capability resolution through `ModelCapabilityActor.Ask` via `ChannelIngressCapabilityQuery`; the implementation reads `_dependencies.ModelCapabilities.InputModalities` directly instead. Both resolve to the same modality flags for the active Main model with no round-trip cost, and the helper remains available for future dynamic-model channels. `ChannelIngressCapabilityQuery` stays in the codebase as scaffolding for Discord/subagent scenarios.
+- [x] 6.3 Build the `[attachment]` line exactly per the canonical format; use a private formatter method that other channels can lift later
+- [x] 6.4 Source `note` strings from a shared helper (`AttachmentNotes.ModelMissingImage`, `AttachmentNotes.ModelMissingPdf`, `AttachmentNotes.FormatNotInlineable`) so the canonical prefixes never drift
+- [x] 6.5 Batch multi-file announcements into a single `TextContent` block, preserving original order
+- [x] 6.6 Wire user-visible rejection replies for every pre-download and post-download failure mode (category, size, count, scan, capability timeout, inbox write error, collision exhaustion) through `SafePostAsync`
+- [x] 6.7 Upgrade the accepted-file log line from the old DEBUG drop to INFO with `{Name, Mime, Size, Audience, CategoryDecision, Inlined}` fields
+- [x] 6.8 Emit WARN log with the same fields on every rejection path
+- [x] 6.9 Ensure pre-download gates short-circuit on Slack-reported metadata; no `HttpClient.SendAsync` call is made for rejected files (verified by test double)
+- [x] 6.10 Confirm `ChannelInput.Audience` is set on the outbound command (existing `SlackAclPolicy.ResolveAudience` path unchanged — regression tests already cover this)
 
 ## 7. Slack thread history backfill updates (`SlackThreadHistoryFetcher` + merge path)
 

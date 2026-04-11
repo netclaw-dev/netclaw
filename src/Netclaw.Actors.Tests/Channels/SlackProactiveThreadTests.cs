@@ -585,6 +585,9 @@ public sealed class SlackProactiveThreadActorTests(ITestOutputHelper output) : T
             ReplyClient: new NoopReplyClient(),
             ContentScanner: new NullContentScanner(),
             ThreadHistoryFetcher: EmptyThreadHistoryFetcher.Instance,
+            AudienceProfiles: TestSlackGatewayDeps.DefaultAudienceProfiles,
+            ModelCapabilities: TestSlackGatewayDeps.DefaultVisionCapableModel,
+            Paths: TestSlackGatewayDeps.NewTestPaths(),
             ConversationPropsFactory: conversationPropsFactory,
             ThreadPropsFactory: threadPropsFactory);
     }

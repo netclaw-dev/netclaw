@@ -28,6 +28,9 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
     private readonly SlackChannelOptions _options;
     private readonly ILogger<SlackChannel> _logger;
     private readonly IThreadHistoryFetcher _threadHistoryFetcher;
+    private readonly ToolAudienceProfiles _audienceProfiles;
+    private readonly ModelCapabilities _modelCapabilities;
+    private readonly NetclawPaths _paths;
 
     private IActorRef? _gateway;
     private SlackUserId? _botUserId;
@@ -48,7 +51,10 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
         TimeProvider timeProvider,
         SlackChannelOptions options,
         ILogger<SlackChannel> logger,
-        IThreadHistoryFetcher threadHistoryFetcher)
+        IThreadHistoryFetcher threadHistoryFetcher,
+        ToolConfig toolConfig,
+        ModelCapabilities modelCapabilities,
+        NetclawPaths paths)
     {
         _pipeline = pipeline;
         _system = system;
@@ -64,6 +70,9 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
         _options = options;
         _logger = logger;
         _threadHistoryFetcher = threadHistoryFetcher ?? throw new ArgumentNullException(nameof(threadHistoryFetcher));
+        _audienceProfiles = toolConfig.AudienceProfiles;
+        _modelCapabilities = modelCapabilities;
+        _paths = paths;
     }
 
     public Actors.Channels.ChannelType ChannelType => Actors.Channels.ChannelType.Slack;
@@ -141,9 +150,12 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
                     DefaultChannelId: _defaultChannelId,
                     ReplyClient: _replyClient,
                     ContentScanner: _contentScanner,
+                    ThreadHistoryFetcher: _threadHistoryFetcher,
+                    AudienceProfiles: _audienceProfiles,
+                    ModelCapabilities: _modelCapabilities,
+                    Paths: _paths,
                     HttpClient: httpClient,
-                    PromptInjectionDetector: _promptInjectionDetector,
-                    ThreadHistoryFetcher: _threadHistoryFetcher)),
+                    PromptInjectionDetector: _promptInjectionDetector)),
                 "slack-gateway");
 
             await _socketModeClient.Connect(cancellationToken: cancellationToken);
