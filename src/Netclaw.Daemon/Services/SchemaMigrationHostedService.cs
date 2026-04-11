@@ -30,15 +30,15 @@ public sealed class SchemaMigrationHostedService : IHostedService
 
     public async Task StartAsync(CancellationToken cancellationToken)
     {
-        if (_options.Provider is not PersistenceProvider.Sqlite)
-            return;
+        if (_options.Provider is PersistenceProvider.Sqlite && _options.Sqlite.AutoMigrate)
+        {
+            var sqlitePath = ResolveSqlitePath();
+            _logger.LogInformation("Running SQLite schema migrations at {Path}", sqlitePath);
+            await _migrator.MigrateAsync(sqlitePath, cancellationToken);
+        }
 
-        if (!_options.Sqlite.AutoMigrate)
-            return;
-
-        var sqlitePath = ResolveSqlitePath();
-        _logger.LogInformation("Running SQLite schema migrations at {Path}", sqlitePath);
-        await _migrator.MigrateAsync(sqlitePath, cancellationToken);
+        // Memory store always uses SQLite regardless of akka persistence provider,
+        // so its schema must be initialized unconditionally.
         await _memoryStore.InitializeAsync(cancellationToken);
     }
 

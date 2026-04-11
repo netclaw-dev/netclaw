@@ -862,8 +862,10 @@ public sealed class SQLiteMemoryStore
     {
         return await WithConnectionAsync(async (conn, ct) =>
         {
+        await using var tx = (SqliteTransaction)await conn.BeginTransactionAsync(ct);
 
         await using var read = conn.CreateCommand();
+        read.Transaction = tx;
         read.CommandText = "SELECT markdown_body, title, aliases_json, facets_json, recall_mode FROM memory_documents WHERE document_id = $id;";
         read.Parameters.AddWithValue("$id", documentId);
 
@@ -889,6 +891,7 @@ public sealed class SQLiteMemoryStore
         var updated = current.Replace(oldText, newText, StringComparison.Ordinal);
 
         await using var write = conn.CreateCommand();
+        write.Transaction = tx;
         write.CommandText = """
             UPDATE memory_documents
             SET markdown_body = $body,
@@ -901,8 +904,9 @@ public sealed class SQLiteMemoryStore
         var affected = await write.ExecuteNonQueryAsync(ct);
 
         if (affected > 0 && IsSearchableRecallMode(recallMode))
-            await UpsertDocumentFtsAsync(conn, null, documentId, title, updated, aliasesJson, facetsJson, ct);
+            await UpsertDocumentFtsAsync(conn, tx, documentId, title, updated, aliasesJson, facetsJson, ct);
 
+        await tx.CommitAsync(ct);
         return affected > 0;
         }, ct);
     }
@@ -911,7 +915,10 @@ public sealed class SQLiteMemoryStore
     {
         return await WithConnectionAsync(async (conn, ct) =>
         {
+        await using var tx = (SqliteTransaction)await conn.BeginTransactionAsync(ct);
+
         await using var cmd = conn.CreateCommand();
+        cmd.Transaction = tx;
         cmd.CommandText = $"""
             UPDATE memory_documents
             SET update_semantics = '{MemoryUpdateSemantics.Tombstone.ToWireValue()}',
@@ -924,8 +931,9 @@ public sealed class SQLiteMemoryStore
         var affected = await cmd.ExecuteNonQueryAsync(ct);
 
         if (affected > 0)
-            await DeleteDocumentFtsAsync(conn, null, documentId, ct);
+            await DeleteDocumentFtsAsync(conn, tx, documentId, ct);
 
+        await tx.CommitAsync(ct);
         return affected > 0;
         }, ct);
     }
@@ -934,7 +942,10 @@ public sealed class SQLiteMemoryStore
     {
         return await WithConnectionAsync(async (conn, ct) =>
         {
+        await using var tx = (SqliteTransaction)await conn.BeginTransactionAsync(ct);
+
         await using var read = conn.CreateCommand();
+        read.Transaction = tx;
         read.CommandText = """
             SELECT anchor_id, record_type, sensitivity, recall_mode, confidence, freshness_at, boundary, audience, memory_class
             FROM memory_records
@@ -942,25 +953,36 @@ public sealed class SQLiteMemoryStore
             """;
         read.Parameters.AddWithValue("$id", recordId);
 
-        await using var reader = await read.ExecuteReaderAsync(ct);
-        if (!await reader.ReadAsync(ct))
-            return false;
+        string anchorId;
+        string recordType;
+        string sensitivity;
+        string recallMode;
+        double confidence;
+        long? freshnessAt;
+        string boundary;
+        string audience;
+        string memoryClass;
+        await using (var reader = await read.ExecuteReaderAsync(ct))
+        {
+            if (!await reader.ReadAsync(ct))
+                return false;
 
-        var anchorId = reader.GetString(0);
-        var recordType = reader.GetString(1);
-        var sensitivity = reader.GetString(2);
-        var recallMode = reader.GetString(3);
-        var confidence = reader.GetDouble(4);
-        var freshnessAt = reader.IsDBNull(5) ? (long?)null : reader.GetInt64(5);
-        var boundary = reader.IsDBNull(6) ? SecurityPolicyDefaults.LegacyRestrictedBoundary : reader.GetString(6);
-        var audience = reader.IsDBNull(7) ? TrustAudience.Personal.ToWireValue() : reader.GetString(7);
-        var memoryClass = reader.IsDBNull(8) ? MemoryClass.Evidence.ToWireValue() : reader.GetString(8);
-        await reader.CloseAsync();
+            anchorId = reader.GetString(0);
+            recordType = reader.GetString(1);
+            sensitivity = reader.GetString(2);
+            recallMode = reader.GetString(3);
+            confidence = reader.GetDouble(4);
+            freshnessAt = reader.IsDBNull(5) ? (long?)null : reader.GetInt64(5);
+            boundary = reader.IsDBNull(6) ? SecurityPolicyDefaults.LegacyRestrictedBoundary : reader.GetString(6);
+            audience = reader.IsDBNull(7) ? TrustAudience.Personal.ToWireValue() : reader.GetString(7);
+            memoryClass = reader.IsDBNull(8) ? MemoryClass.Evidence.ToWireValue() : reader.GetString(8);
+        }
 
         var now = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
         var newId = $"rec-{Guid.NewGuid():N}";
 
         await using var insert = conn.CreateCommand();
+        insert.Transaction = tx;
         insert.CommandText = $"""
             INSERT INTO memory_records(
               record_id, anchor_id, memory_class, record_type, payload_json, supersedes_record_id,
@@ -983,11 +1005,12 @@ public sealed class SQLiteMemoryStore
         insert.Parameters.AddWithValue("$createdAt", now);
         await insert.ExecuteNonQueryAsync(ct);
 
-        await DeleteRecordFtsAsync(conn, null, recordId, ct);
+        await DeleteRecordFtsAsync(conn, tx, recordId, ct);
 
         if (IsSearchableRecallMode(recallMode))
-            await UpsertRecordFtsAsync(conn, null, newId, recordType, payloadJson, null, null, ct);
+            await UpsertRecordFtsAsync(conn, tx, newId, recordType, payloadJson, null, null, ct);
 
+        await tx.CommitAsync(ct);
         return true;
         }, ct);
     }
