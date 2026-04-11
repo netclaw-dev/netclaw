@@ -44,7 +44,6 @@ public class ToolExecutionIntegrationTests : TestKit
                 SnapshotInterval = 5,
                 TitleGenerationInterval = 0,
                 MaxInlineToolResultChars = 120,
-                MemorySidecarsEnabled = false,
             }
         });
         services.AddSingleton<ISystemPromptProvider>(new StaticSystemPromptProvider(

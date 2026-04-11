@@ -17,10 +17,8 @@ public sealed class DeterministicRetrievalPlanningTests
             Query: "I'm speaking at Stir Trek 2026 - I fly out of IAH. What's the best flight / hotel combination for me?",
             RecentUserMessages: ["I'm speaking at Stir Trek 2026 - I fly out of IAH. What's the best flight / hotel combination for me?"],
             MaxItems: 3,
-            HardScopeOverride: "user:aaron",
             ThreadTitle: "Stir Trek 2026 travel planning"));
 
-        Assert.Equal("user:aaron", plan.HardScope);
         Assert.Equal(DeterministicRetrievalMode.Bundle, plan.RetrievalMode);
         Assert.Contains("travel_profile", plan.Facets);
         Assert.Contains("trip_planning", plan.Facets);
@@ -36,26 +34,11 @@ public sealed class DeterministicRetrievalPlanningTests
             Query: "What's the pricing model for TextForge?",
             RecentUserMessages: ["What's the pricing model for TextForge?"],
             MaxItems: 3,
-            HardScopeOverride: "user:aaron",
             ThreadTitle: "General DM"));
 
-        Assert.Equal("user:aaron", plan.HardScope);
         Assert.Equal(DeterministicRetrievalMode.Ranked, plan.RetrievalMode);
         Assert.Contains("project_fact", plan.Facets);
         Assert.Contains(plan.AnchorHints, x => x.Contains("TextForge", StringComparison.OrdinalIgnoreCase) || x.Contains("textforge", StringComparison.OrdinalIgnoreCase));
-    }
-
-    [Fact]
-    public void Planner_does_not_turn_transport_session_prefix_into_project_scope()
-    {
-        var planner = new DeterministicRetrievalRequestPlanner();
-        var plan = planner.Plan(new AutomaticRecallRequest(
-            SessionId: "signalr/thread-transport",
-            Query: "what is TextForge",
-            RecentUserMessages: ["what is TextForge"],
-            MaxItems: 3));
-
-        Assert.Equal(SecurityPolicyDefaults.DefaultMemoryDomain, plan.HardScope);
     }
 
     [Fact]
@@ -69,14 +52,13 @@ public sealed class DeterministicRetrievalPlanningTests
         var coordinator = new SQLiteMemoryRecallCoordinator(
             store,
             NullLogger<SQLiteMemoryRecallCoordinator>.Instance,
-            sessionTuning: new SessionTuning { DeterministicRetrievalEnabled = true, MemorySidecarsEnabled = false });
+            sessionTuning: new SessionTuning { DeterministicRetrievalEnabled = true });
 
         var result = await coordinator.RecallAsync(new AutomaticRecallRequest(
             SessionId: "signalr/thread-3",
             Query: "What's the pricing model for TextForge?",
             RecentUserMessages: ["What's the pricing model for TextForge?"],
             MaxItems: 3,
-            HardScopeOverride: "user:aaron",
             ThreadTitle: "General DM"), TestContext.Current.CancellationToken);
 
         Assert.False(result.Degraded);
@@ -91,7 +73,7 @@ public sealed class DeterministicRetrievalPlanningTests
         var store = new SQLiteMemoryStore(Path.Combine(dir, "memory.db"), TimeProvider.System);
         await store.InitializeAsync(TestContext.Current.CancellationToken);
 
-        var anchor = store.CreateDefaultAnchor("textforge-pricing-model", "user:aaron");
+        var anchor = store.CreateDefaultAnchor("textforge-pricing-model");
         var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
         await store.UpsertDocumentAsync(new SQLiteMemoryDocument(
@@ -104,7 +86,6 @@ public sealed class DeterministicRetrievalPlanningTests
             FacetsJson: "[\"project_fact\"]",
             SlotsJson: null,
             UpdateSemantics: "merge-document",
-            Domain: "user:aaron",
             Sensitivity: "normal",
             RecallMode: "auto",
             Confidence: 0.9,
@@ -116,14 +97,13 @@ public sealed class DeterministicRetrievalPlanningTests
         var coordinator = new SQLiteMemoryRecallCoordinator(
             store,
             NullLogger<SQLiteMemoryRecallCoordinator>.Instance,
-            sessionTuning: new SessionTuning { DeterministicRetrievalEnabled = true, MemorySidecarsEnabled = false });
+            sessionTuning: new SessionTuning { DeterministicRetrievalEnabled = true });
 
         var result = await coordinator.RecallAsync(new AutomaticRecallRequest(
             SessionId: "signalr/thread-4",
             Query: "What's the pricing model for TextForge?",
             RecentUserMessages: ["What's the pricing model for TextForge?"],
             MaxItems: 3,
-            HardScopeOverride: "user:aaron",
             ThreadTitle: "Product planning"), TestContext.Current.CancellationToken);
 
         Assert.False(result.Degraded);
@@ -138,7 +118,7 @@ public sealed class DeterministicRetrievalPlanningTests
         var store = new SQLiteMemoryStore(Path.Combine(dir, "memory.db"), TimeProvider.System);
         await store.InitializeAsync(TestContext.Current.CancellationToken);
 
-        var anchor = store.CreateDefaultAnchor("textforge-pricing-model", "user:aaron");
+        var anchor = store.CreateDefaultAnchor("textforge-pricing-model");
         var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
         await store.UpsertDocumentAsync(new SQLiteMemoryDocument(
@@ -151,7 +131,6 @@ public sealed class DeterministicRetrievalPlanningTests
             FacetsJson: "[\"project_fact\"]",
             SlotsJson: null,
             UpdateSemantics: "merge-document",
-            Domain: "user:aaron",
             Sensitivity: "normal",
             RecallMode: "auto",
             Confidence: 0.9,
@@ -163,14 +142,13 @@ public sealed class DeterministicRetrievalPlanningTests
         var coordinator = new SQLiteMemoryRecallCoordinator(
             store,
             NullLogger<SQLiteMemoryRecallCoordinator>.Instance,
-            sessionTuning: new SessionTuning { DeterministicRetrievalEnabled = true, MemorySidecarsEnabled = false });
+            sessionTuning: new SessionTuning { DeterministicRetrievalEnabled = true });
 
         var result = await coordinator.RecallAsync(new AutomaticRecallRequest(
             SessionId: "signalr/thread-score",
             Query: "What's the pricing model for TextForge?",
             RecentUserMessages: ["What's the pricing model for TextForge?"],
             MaxItems: 3,
-            HardScopeOverride: "user:aaron",
             ThreadTitle: "Product planning"), TestContext.Current.CancellationToken);
 
         var item = Assert.Single(result.Items, x => x.Id == "doc-textforge-pricing-score");
@@ -190,8 +168,7 @@ public sealed class DeterministicRetrievalPlanningTests
             SessionId: "signalr/thread-long",
             Query: longMessage,
             RecentUserMessages: [longMessage],
-            MaxItems: 3,
-            HardScopeOverride: "user:aaron"));
+            MaxItems: 3));
 
         Assert.True(plan.LexicalTerms.Count <= 12,
             $"Expected at most 12 lexical terms but got {plan.LexicalTerms.Count}: [{string.Join(", ", plan.LexicalTerms)}]");
@@ -219,7 +196,7 @@ public sealed class DeterministicRetrievalPlanningTests
         var store = new SQLiteMemoryStore(Path.Combine(dir, "memory.db"), TimeProvider.System);
         await store.InitializeAsync(TestContext.Current.CancellationToken);
 
-        var anchor = store.CreateDefaultAnchor("reelfarm-research", "project:d0ac6ckbk5k");
+        var anchor = store.CreateDefaultAnchor("reelfarm-research");
         var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
         await store.UpsertDocumentAsync(new SQLiteMemoryDocument(
@@ -232,7 +209,6 @@ public sealed class DeterministicRetrievalPlanningTests
             FacetsJson: "[\"project_artifact\",\"marketing_tools\"]",
             SlotsJson: null,
             UpdateSemantics: "merge-document",
-            Domain: "project:d0ac6ckbk5k",
             Sensitivity: "normal",
             RecallMode: "searchable",
             Confidence: 0.85,
@@ -244,7 +220,7 @@ public sealed class DeterministicRetrievalPlanningTests
         var coordinator = new SQLiteMemoryRecallCoordinator(
             store,
             NullLogger<SQLiteMemoryRecallCoordinator>.Instance,
-            sessionTuning: new SessionTuning { DeterministicRetrievalEnabled = true, MemorySidecarsEnabled = false });
+            sessionTuning: new SessionTuning { DeterministicRetrievalEnabled = true });
 
         var result = await coordinator.RecallAsync(new AutomaticRecallRequest(
             SessionId: "D0AC6CKBK5K/1774371415.126439",
@@ -257,15 +233,14 @@ public sealed class DeterministicRetrievalPlanningTests
     }
 
     [Fact]
-    public async Task Coordinator_recalls_cross_domain_memories_via_audience_primary_path()
+    public async Task Coordinator_recalls_memories_via_audience_primary_path()
     {
         var dir = Path.Combine(Path.GetTempPath(), "netclaw-audience-primary-tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(dir);
         var store = new SQLiteMemoryStore(Path.Combine(dir, "memory.db"), TimeProvider.System);
         await store.InitializeAsync(TestContext.Current.CancellationToken);
 
-        // Store a memory under project:signalr (old domain)
-        var anchor = store.CreateDefaultAnchor("user-company", "project:signalr");
+        var anchor = store.CreateDefaultAnchor("user-company");
         var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
         await store.UpsertDocumentAsync(new SQLiteMemoryDocument(
@@ -278,7 +253,6 @@ public sealed class DeterministicRetrievalPlanningTests
             FacetsJson: "[\"personal_profile\"]",
             SlotsJson: null,
             UpdateSemantics: "merge-document",
-            Domain: "project:signalr",
             Sensitivity: "normal",
             RecallMode: "auto",
             Confidence: 0.94,
@@ -290,9 +264,8 @@ public sealed class DeterministicRetrievalPlanningTests
         var coordinator = new SQLiteMemoryRecallCoordinator(
             store,
             NullLogger<SQLiteMemoryRecallCoordinator>.Instance,
-            sessionTuning: new SessionTuning { DeterministicRetrievalEnabled = true, MemorySidecarsEnabled = false });
+            sessionTuning: new SessionTuning { DeterministicRetrievalEnabled = true });
 
-        // Query from a different domain (project:d0ac6ckbk5k — Slack DM)
         var result = await coordinator.RecallAsync(new AutomaticRecallRequest(
             SessionId: "D0AC6CKBK5K/1774371415.126439",
             Query: "what company does Aaron work at",
@@ -304,14 +277,14 @@ public sealed class DeterministicRetrievalPlanningTests
     }
 
     [Fact]
-    public async Task Coordinator_widens_across_domains_for_named_project_entities()
+    public async Task Coordinator_recalls_named_project_entities()
     {
-        var dir = Path.Combine(Path.GetTempPath(), "netclaw-deterministic-cross-domain-tests", Guid.NewGuid().ToString("N"));
+        var dir = Path.Combine(Path.GetTempPath(), "netclaw-deterministic-project-entity-tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(dir);
         var store = new SQLiteMemoryStore(Path.Combine(dir, "memory.db"), TimeProvider.System);
         await store.InitializeAsync(TestContext.Current.CancellationToken);
 
-        var anchor = store.CreateDefaultAnchor("textforge-project", "project:d0ac6ckbk5k");
+        var anchor = store.CreateDefaultAnchor("textforge-project");
         var now = TimeProvider.System.GetUtcNow().ToUnixTimeMilliseconds();
 
         await store.UpsertDocumentAsync(new SQLiteMemoryDocument(
@@ -324,7 +297,6 @@ public sealed class DeterministicRetrievalPlanningTests
             FacetsJson: "[\"project_fact\"]",
             SlotsJson: null,
             UpdateSemantics: "merge-document",
-            Domain: "project:d0ac6ckbk5k",
             Sensitivity: "normal",
             RecallMode: "auto",
             Confidence: 0.95,
@@ -336,7 +308,7 @@ public sealed class DeterministicRetrievalPlanningTests
         var coordinator = new SQLiteMemoryRecallCoordinator(
             store,
             NullLogger<SQLiteMemoryRecallCoordinator>.Instance,
-            sessionTuning: new SessionTuning { DeterministicRetrievalEnabled = true, MemorySidecarsEnabled = false });
+            sessionTuning: new SessionTuning { DeterministicRetrievalEnabled = true });
 
         var result = await coordinator.RecallAsync(new AutomaticRecallRequest(
             SessionId: "signalr/thread-5",

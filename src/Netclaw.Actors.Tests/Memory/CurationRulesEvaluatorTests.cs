@@ -25,7 +25,6 @@ public sealed class CurationRulesEvaluatorTests
             SlotsJson: null,
             Relations: null,
             UpdateSemantics: updateSemantics,
-            Domain: "project:test",
             Boundary: SecurityPolicyDefaults.TrustedInstanceBoundary,
             Audience: TrustAudience.Team,
             Sensitivity: "normal",

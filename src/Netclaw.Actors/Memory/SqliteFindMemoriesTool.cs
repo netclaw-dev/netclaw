@@ -42,12 +42,10 @@ public sealed partial class SqliteFindMemoriesTool : NetclawTool<SqliteFindMemor
         var sessionId = string.IsNullOrWhiteSpace(context.SessionId)
             ? "manual/tool"
             : context.SessionId!;
-        var domain = new Protocol.SessionId(sessionId).ToMemoryDomain();
         var audience = MemoryPolicyScopeResolver.ResolveAudience(context.Audience, sessionId);
 
         var request = _planner.BuildRequest(
             sessionId,
-            domain,
             args.Query,
             [args.Query],
             [],
@@ -57,11 +55,11 @@ public sealed partial class SqliteFindMemoriesTool : NetclawTool<SqliteFindMemor
             limit);
         var plan = _gate.Clamp(null, request);
 
-        var results = await _store.SearchAcrossDomainsByPlanAsync(
+        var results = await _store.SearchByPlanAsync(
             plan.SearchTerms,
             plan.MemoryClasses,
             limit,
-            MemoryPolicyScopeResolver.ResolveBoundary(context.Boundary, audience, sessionId, domain),
+            MemoryPolicyScopeResolver.ResolveBoundary(context.Boundary),
             audience,
             allowExpiredEvidence: includeStale,
             ct);
@@ -81,7 +79,7 @@ public sealed partial class SqliteFindMemoriesTool : NetclawTool<SqliteFindMemor
             var snippet = BuildSnippet(result.Content);
 
             sb.AppendLine($"[{typedId.ToWireValue()}] {result.Title}");
-            sb.AppendLine($"  class={result.MemoryClass} domain={result.Domain} sensitivity={result.Sensitivity} recall={result.RecallMode}{(isStaleEvidence ? " stale=true" : string.Empty)}");
+            sb.AppendLine($"  class={result.MemoryClass} sensitivity={result.Sensitivity} recall={result.RecallMode}{(isStaleEvidence ? " stale=true" : string.Empty)}");
             sb.AppendLine($"  {snippet}");
             sb.AppendLine();
         }

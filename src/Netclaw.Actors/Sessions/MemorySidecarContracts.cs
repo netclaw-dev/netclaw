@@ -7,32 +7,6 @@ public enum MemoryProposalOperation
     Ignore
 }
 
-public sealed record MemoryObservationRequest(
-    string SessionId,
-    string TurnId,
-    string TriggerType,
-    DateTimeOffset ObservedAt,
-    MemoryObservationCurrentTurn CurrentTurn,
-    MemoryObservationRecentContext RecentContext,
-    MemoryObservationPolicyScope PolicyScope);
-
-public sealed record MemoryObservationCurrentTurn(
-    string UserSummary,
-    string AssistantSummary,
-    IReadOnlyList<string> StrongAssertions,
-    IReadOnlyList<string> ToolFindingSummaries);
-
-public sealed record MemoryObservationRecentContext(
-    string SessionSummary,
-    IReadOnlyList<string> RecentUserTurns,
-    IReadOnlyList<string> RecentAssistantTurns,
-    IReadOnlyList<string> ActiveAnchors);
-
-public sealed record MemoryObservationPolicyScope(
-    string Domain,
-    string Sensitivity,
-    bool IdentityProfileAllowed);
-
 public sealed record MemoryProposal(
     string Operation,
     string MemoryClass,
@@ -55,7 +29,6 @@ public sealed record MemoryProposal(
 
 public sealed record RecallPlanningRequest(
     string SessionId,
-    string Domain,
     string Mode,
     string UserText,
     IReadOnlyList<string> RecentUserTurns,
@@ -81,13 +54,3 @@ public sealed record MemoryAnchor(
 public sealed record MemoryRelation(
     string RelationType,
     MemoryAnchor TargetAnchor);
-
-internal sealed record MemoryObservationCompleted
-{
-    public required IReadOnlyList<MemoryProposal> Proposals { get; init; }
-}
-
-internal sealed record RecallPlanningCompleted
-{
-    public required RecallQueryPlan Plan { get; init; }
-}

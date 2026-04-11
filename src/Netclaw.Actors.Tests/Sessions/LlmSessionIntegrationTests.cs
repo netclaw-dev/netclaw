@@ -51,7 +51,6 @@ public class LlmSessionIntegrationTests : TestKit
             {
                 SnapshotInterval = 5,
                 TitleGenerationInterval = 0,
-                MemorySidecarsEnabled = false,
                 DiscoveredToolRetentionTurns = 3,
                 DiscoveredToolMaxCount = 12,
             }
@@ -59,18 +58,12 @@ public class LlmSessionIntegrationTests : TestKit
         services.AddSingleton(new ReminderConfig());
         services.AddSingleton<ISystemPromptProvider>(new StaticSystemPromptProvider(
             "You are a test assistant."));
-        services.AddSingleton<SidecarRecallPlanner>();
         services.AddSingleton<MemoryProposalGate>();
-        services.AddSingleton<RecallPlanGate>();
         services.AddSingleton<IMemoryCheckpointSink, NullMemoryCheckpointSink>();
         services.AddSingleton<SQLiteMemoryStore>(sp => new SQLiteMemoryStore(Path.Combine(Path.GetTempPath(), $"netclaw-sidecar-tests-{Guid.NewGuid():N}.db"), TimeProvider.System));
         services.AddSingleton<IMemoryRecallCoordinator>(sp => new SQLiteMemoryRecallCoordinator(
             sp.GetRequiredService<SQLiteMemoryStore>(),
-            Microsoft.Extensions.Logging.Abstractions.NullLogger<SQLiteMemoryRecallCoordinator>.Instance,
-            sp.GetRequiredService<IChatClientProvider>(),
-            sp.GetRequiredService<SidecarRecallPlanner>(),
-            sp.GetRequiredService<RecallPlanGate>(),
-            sessionConfig: sp.GetRequiredService<SessionConfig>()));
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<SQLiteMemoryRecallCoordinator>.Instance));
 
         var registry = new ToolRegistry();
         registry.Register(new McpToolAdapter(
@@ -610,43 +603,6 @@ public class LlmSessionIntegrationTests : TestKit
             msg.Role == Microsoft.Extensions.AI.ChatRole.User
             && msg.Text is not null
             && msg.Text.Contains("unknown delivery error", StringComparison.OrdinalIgnoreCase));
-    }
-
-    [Fact]
-    public async Task Sidecar_observation_promotes_strong_user_assertion_into_memory()
-    {
-        var gate = new MemoryProposalGate();
-        var observer = new SidecarMemoryObserver();
-        var request = observer.BuildRequest(
-            "slack/test-memory",
-            "turn-1",
-            "turn_completed",
-            "project:slack",
-            "normal",
-            "I always fly out of IAH and I use United Airlines.",
-            "Understood.",
-            ["I always fly out of IAH and I use United Airlines."],
-            [],
-            ["I always fly out of IAH and I use United Airlines."],
-            ["Understood."],
-            [],
-            false,
-            DateTimeOffset.UtcNow);
-
-        var response = await _fakeChatClient.GetResponseAsync(new[]
-        {
-            new ChatMessage(Microsoft.Extensions.AI.ChatRole.System, MemorySidecarPromptBuilder.BuildMemoryObservationSystemPrompt()),
-            new ChatMessage(Microsoft.Extensions.AI.ChatRole.User, MemorySidecarPromptBuilder.BuildMemoryObservationUserPrompt(request))
-        }, cancellationToken: TestContext.Current.CancellationToken);
-
-        var proposals = JsonSerializer.Deserialize<IReadOnlyList<MemoryProposal>>(
-            response.Messages[^1].Text!,
-            new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
-
-        var accepted = gate.Accept(proposals!, "project:slack", "normal", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
-
-        Assert.Contains(accepted, x => x.Title.Contains("Preferred Airline", StringComparison.OrdinalIgnoreCase));
-        Assert.Contains(accepted, x => x.Title.Contains("Origin Airport", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
@@ -1758,69 +1714,6 @@ internal sealed class FakeChatClient : IChatClient
             return new ChatResponse(new ChatMessage(
                 Microsoft.Extensions.AI.ChatRole.Assistant,
                 JsonSerializer.Serialize(plan)));
-        }
-
-        if (systemText.Contains("You are a memory observation sidecar", StringComparison.Ordinal))
-        {
-            var request = JsonSerializer.Deserialize<MemoryObservationRequest>(userText, new JsonSerializerOptions
-            {
-                PropertyNameCaseInsensitive = true
-            });
-
-            var proposals = new List<MemoryProposal>();
-            var assertions = request?.CurrentTurn.StrongAssertions ?? [];
-            foreach (var assertion in assertions)
-            {
-                if (assertion.Contains("IAH", StringComparison.OrdinalIgnoreCase))
-                {
-                    proposals.Add(new MemoryProposal(
-                        "upsert_document",
-                        "durable_fact",
-                        "user",
-                        "self",
-                        new MemoryAnchor("user-travel-origin", "preference"),
-                        "Travel Profile: Primary Origin Airport",
-                        "Primary origin airport: IAH",
-                        ["origin airport", "fly out of", "IAH"],
-                        ["travel_profile", "user_preference"],
-                        ["origin_airport"],
-                        null,
-                        "auto",
-                        "normal",
-                        0.95,
-                        null,
-                        null,
-                        null,
-                        "strong user assertion"));
-                }
-
-                if (assertion.Contains("United", StringComparison.OrdinalIgnoreCase))
-                {
-                    proposals.Add(new MemoryProposal(
-                        "upsert_document",
-                        "durable_fact",
-                        "user",
-                        "self",
-                        new MemoryAnchor("user-travel-airline", "preference"),
-                        "Travel Profile: Preferred Airline",
-                        "Preferred airline: United Airlines",
-                        ["preferred airline", "united airlines", "usually fly"],
-                        ["travel_profile", "user_preference"],
-                        ["preferred_airline"],
-                        null,
-                        "auto",
-                        "normal",
-                        0.95,
-                        null,
-                        null,
-                        null,
-                        "strong user assertion"));
-                }
-            }
-
-            return new ChatResponse(new ChatMessage(
-                Microsoft.Extensions.AI.ChatRole.Assistant,
-                JsonSerializer.Serialize<IReadOnlyList<MemoryProposal>>(proposals)));
         }
 
         if (systemText.Contains("You are an observation compressor", StringComparison.Ordinal))

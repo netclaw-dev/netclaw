@@ -49,7 +49,6 @@ public class CompactionIntegrationTests : TestKit
                 KeepRecentToolResults = 1,
                 KeepRecentMessages = 0,
                 TitleGenerationInterval = 0,
-                MemorySidecarsEnabled = false,
             }
         });
         services.AddSingleton<ISystemPromptProvider>(new StaticSystemPromptProvider(

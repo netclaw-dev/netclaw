@@ -42,7 +42,6 @@ public sealed class ErrorCorrelationTests(ITestOutputHelper output) : TestKit(ou
             {
                 SnapshotInterval = 5,
                 TitleGenerationInterval = 0,
-                MemorySidecarsEnabled = false,
             }
         });
         services.AddSingleton<ISystemPromptProvider>(new StaticSystemPromptProvider("You are a test assistant."));

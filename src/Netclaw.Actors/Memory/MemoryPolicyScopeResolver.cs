@@ -9,17 +9,10 @@ internal static class MemoryPolicyScopeResolver
             ? parsed
             : SecurityPolicyDefaults.ResolveAudienceFromSessionId(sessionId);
 
-    public static string ResolveBoundary(string? configuredBoundary, TrustAudience audience, string? sessionId, string? domain = null)
-    {
-        if (!string.IsNullOrWhiteSpace(configuredBoundary))
-            return configuredBoundary.Trim();
-
-        if (!string.IsNullOrWhiteSpace(sessionId))
-            return SecurityPolicyDefaults.ResolveBoundaryFromSessionId(sessionId, audience);
-
-        if (!string.IsNullOrWhiteSpace(domain))
-            return SecurityPolicyDefaults.InferLegacyBoundaryFromDomain(domain);
-
-        return SecurityPolicyDefaults.ResolveBoundaryFromAudience(audience);
-    }
+    // Boundary is stored for future cross-trust-boundary federation but is
+    // currently a single-valued constant. Audience is the sole security axis.
+    public static string ResolveBoundary(string? configuredBoundary)
+        => !string.IsNullOrWhiteSpace(configuredBoundary)
+            ? configuredBoundary.Trim()
+            : SecurityPolicyDefaults.TrustedInstanceBoundary;
 }

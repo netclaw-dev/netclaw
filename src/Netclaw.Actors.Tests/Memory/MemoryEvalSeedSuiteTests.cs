@@ -25,7 +25,7 @@ public sealed class MemoryEvalSeedSuiteTests : IAsyncLifetime
     {
         await _store.InitializeAsync(TestContext.Current.CancellationToken);
         var now = TimeProvider.System.GetUtcNow().ToUnixTimeMilliseconds();
-        var anchor = _store.CreateDefaultAnchor("netclaw", "project:ops");
+        var anchor = _store.CreateDefaultAnchor("netclaw");
 
         await _store.UpsertDocumentAsync(new SQLiteMemoryDocument(
             DocumentId: "doc-ops",
@@ -37,7 +37,6 @@ public sealed class MemoryEvalSeedSuiteTests : IAsyncLifetime
             FacetsJson: "[\"incident_recovery\"]",
             SlotsJson: null,
             UpdateSemantics: "merge-document",
-            Domain: "project:ops",
             Sensitivity: "normal",
             RecallMode: "auto",
             Confidence: 0.92,
@@ -46,7 +45,7 @@ public sealed class MemoryEvalSeedSuiteTests : IAsyncLifetime
             CreatedAtMs: now,
             UpdatedAtMs: now), TestContext.Current.CancellationToken);
 
-        var coordinator = new SQLiteMemoryRecallCoordinator(_store, NullLogger<SQLiteMemoryRecallCoordinator>.Instance, sessionTuning: new SessionTuning { MemorySidecarsEnabled = true });
+        var coordinator = new SQLiteMemoryRecallCoordinator(_store, NullLogger<SQLiteMemoryRecallCoordinator>.Instance, sessionTuning: new SessionTuning());
         var result = await coordinator.RecallAsync(new AutomaticRecallRequest(
             SessionId: "ops/thread-1",
             Query: "router failover",
@@ -63,7 +62,7 @@ public sealed class MemoryEvalSeedSuiteTests : IAsyncLifetime
     {
         await _store.InitializeAsync(TestContext.Current.CancellationToken);
         var now = TimeProvider.System.GetUtcNow().ToUnixTimeMilliseconds();
-        var anchor = _store.CreateDefaultAnchor("netclaw", "project:ops");
+        var anchor = _store.CreateDefaultAnchor("netclaw");
 
         await _store.UpsertDocumentAsync(new SQLiteMemoryDocument(
             DocumentId: "doc-secret",
@@ -75,7 +74,6 @@ public sealed class MemoryEvalSeedSuiteTests : IAsyncLifetime
             FacetsJson: "[\"project_fact\"]",
             SlotsJson: null,
             UpdateSemantics: "merge-document",
-            Domain: "project:ops",
             Sensitivity: "secret",
             RecallMode: "auto",
             Confidence: 0.99,
@@ -84,7 +82,7 @@ public sealed class MemoryEvalSeedSuiteTests : IAsyncLifetime
             CreatedAtMs: now,
             UpdatedAtMs: now), TestContext.Current.CancellationToken);
 
-        var coordinator = new SQLiteMemoryRecallCoordinator(_store, NullLogger<SQLiteMemoryRecallCoordinator>.Instance, sessionTuning: new SessionTuning { MemorySidecarsEnabled = true });
+        var coordinator = new SQLiteMemoryRecallCoordinator(_store, NullLogger<SQLiteMemoryRecallCoordinator>.Instance, sessionTuning: new SessionTuning());
         var result = await coordinator.RecallAsync(new AutomaticRecallRequest(
             SessionId: "ops/thread-1",
             Query: "token",
@@ -113,7 +111,6 @@ public sealed class MemoryEvalSeedSuiteTests : IAsyncLifetime
             HasVerifiedToolFinding: false,
             IsCompactionBoundary: false,
             HasAcceptedSubAgentFinding: false,
-            Domain: SecurityPolicyDefaults.DefaultMemoryDomain,
             Sensitivity: "normal",
             RecallMode: "auto",
             Confidence: 0.99,
@@ -142,7 +139,6 @@ public sealed class MemoryEvalSeedSuiteTests : IAsyncLifetime
             HasVerifiedToolFinding: false,
             IsCompactionBoundary: false,
             HasAcceptedSubAgentFinding: false,
-            Domain: "project:ops",
             Sensitivity: "normal",
             RecallMode: "auto",
             Confidence: 0.9);
@@ -169,7 +165,6 @@ public sealed class MemoryEvalSeedSuiteTests : IAsyncLifetime
             HasVerifiedToolFinding: false,
             IsCompactionBoundary: false,
             HasAcceptedSubAgentFinding: false,
-            Domain: "project:ops",
             Sensitivity: "normal",
             RecallMode: "auto",
             Confidence: 0.8,
@@ -200,7 +195,6 @@ public sealed class MemoryEvalSeedSuiteTests : IAsyncLifetime
             HasVerifiedToolFinding: true,
             IsCompactionBoundary: false,
             HasAcceptedSubAgentFinding: false,
-            Domain: "project:ops",
             Sensitivity: "normal",
             RecallMode: "auto",
             Confidence: 0.8,
@@ -233,7 +227,6 @@ public sealed class MemoryEvalSeedSuiteTests : IAsyncLifetime
             HasVerifiedToolFinding: false,
             IsCompactionBoundary: false,
             HasAcceptedSubAgentFinding: false,
-            Domain: "project:ops",
             Sensitivity: "normal",
             RecallMode: "auto",
             Confidence: 0.8,
@@ -269,7 +262,6 @@ public sealed class MemoryEvalSeedSuiteTests : IAsyncLifetime
             HasVerifiedToolFinding: false,
             IsCompactionBoundary: false,
             HasAcceptedSubAgentFinding: false,
-            Domain: "project:ops",
             Sensitivity: "normal",
             RecallMode: "auto",
             Confidence: 0.8,
@@ -290,7 +282,7 @@ public sealed class MemoryEvalSeedSuiteTests : IAsyncLifetime
     {
         await _store.InitializeAsync(TestContext.Current.CancellationToken);
         var now = TimeProvider.System.GetUtcNow().ToUnixTimeMilliseconds();
-        var anchor = _store.CreateDefaultAnchor("netclaw", "project:latency");
+        var anchor = _store.CreateDefaultAnchor("netclaw");
 
         for (var i = 0; i < 50; i++)
         {
@@ -304,7 +296,6 @@ public sealed class MemoryEvalSeedSuiteTests : IAsyncLifetime
                 FacetsJson: "[\"project_fact\"]",
                 SlotsJson: null,
                 UpdateSemantics: "merge-document",
-                Domain: "project:latency",
                 Sensitivity: "normal",
                 RecallMode: "auto",
                 Confidence: 0.8,
@@ -314,7 +305,7 @@ public sealed class MemoryEvalSeedSuiteTests : IAsyncLifetime
                 UpdatedAtMs: now), TestContext.Current.CancellationToken);
         }
 
-        var coordinator = new SQLiteMemoryRecallCoordinator(_store, NullLogger<SQLiteMemoryRecallCoordinator>.Instance, sessionTuning: new SessionTuning { MemorySidecarsEnabled = true });
+        var coordinator = new SQLiteMemoryRecallCoordinator(_store, NullLogger<SQLiteMemoryRecallCoordinator>.Instance, sessionTuning: new SessionTuning());
         var start = TimeProvider.System.GetTimestamp();
         var result = await coordinator.RecallAsync(new AutomaticRecallRequest(
             SessionId: "latency/thread-1",

@@ -39,7 +39,7 @@ public sealed partial class SqliteGetMemoriesTool : NetclawTool<SqliteGetMemorie
 
         var sessionId = string.IsNullOrWhiteSpace(context.SessionId) ? "manual/tool" : context.SessionId!;
         var audience = MemoryPolicyScopeResolver.ResolveAudience(context.Audience, sessionId);
-        var boundary = MemoryPolicyScopeResolver.ResolveBoundary(context.Boundary, audience, sessionId);
+        var boundary = MemoryPolicyScopeResolver.ResolveBoundary(context.Boundary);
         var entries = await _store.GetMemoriesByIdsAsync(ids, boundary, audience, ct);
         if (entries.Count == 0)
             return $"No memories found for IDs: {string.Join(", ", ids)}";
@@ -54,7 +54,7 @@ public sealed partial class SqliteGetMemoriesTool : NetclawTool<SqliteGetMemorie
                 && entry.ExpiresAtMs is long expiresAt
                 && expiresAt <= _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
             sb.AppendLine($"━━━ {entry.Title} [{typedId.ToWireValue()}] ━━━");
-            sb.AppendLine($"kind={entry.Kind} class={entry.MemoryClass} domain={entry.Domain} sensitivity={entry.Sensitivity} recall={entry.RecallMode} semantics={entry.UpdateSemantics}{(isStaleEvidence ? " stale=true" : string.Empty)}");
+            sb.AppendLine($"kind={entry.Kind} class={entry.MemoryClass} sensitivity={entry.Sensitivity} recall={entry.RecallMode} semantics={entry.UpdateSemantics}{(isStaleEvidence ? " stale=true" : string.Empty)}");
             sb.AppendLine(entry.Content);
             sb.AppendLine();
         }

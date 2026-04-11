@@ -168,10 +168,6 @@
           "minimum": 0,
           "description": "Legacy root-level alias for Session.Tuning.TitleGenerationInterval."
         },
-        "MemorySidecarsEnabled": {
-          "type": "boolean",
-          "description": "Legacy root-level alias for Session.Tuning.MemorySidecarsEnabled."
-        },
         "DeterministicRetrievalEnabled": {
           "type": "boolean",
           "description": "Legacy root-level alias for Session.Tuning.DeterministicRetrievalEnabled."
@@ -188,7 +184,6 @@
             "DiscoveredToolMaxCount": { "type": "integer", "minimum": 0 },
             "KeepRecentMessages": { "type": "integer", "minimum": 1 },
             "TitleGenerationInterval": { "type": "integer", "minimum": 0 },
-            "MemorySidecarsEnabled": { "type": "boolean" },
             "DeterministicRetrievalEnabled": { "type": "boolean" },
             "MemoryDistillationTurnInterval": { "type": "integer", "minimum": 0 },
             "MinimumRecallCompositeScore": {

@@ -63,7 +63,6 @@ internal sealed class SessionRecallManager
                 .TakeLast(3)
                 .ToArray(),
             RecentEntities: [],
-            HardScopeOverride: sessionId.ToMemoryDomain(),
             ThreadTitle: state.Title);
 
         try
@@ -136,7 +135,7 @@ internal sealed class SessionRecallManager
         sb.AppendLine("mode: automatic");
         foreach (var item in recall.Items)
         {
-            sb.AppendLine($"- {item.Title} [{item.Id}] domain={item.Domain} sensitivity={item.Sensitivity} score={item.Score:F2}");
+            sb.AppendLine($"- {item.Title} [{item.Id}] sensitivity={item.Sensitivity} score={item.Score:F2}");
             sb.AppendLine($"  {item.Content}");
         }
 

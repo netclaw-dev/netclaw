@@ -270,10 +270,8 @@ public sealed class SubAgentActor : ReceiveActor
             ? content
             : content[..1800];
 
-        var domain = new Protocol.SessionId(sessionId ?? string.Empty).ToMemoryDomain();
         var confidence = 0.65;
         var policy = _policyEvaluator.EvaluateWrite(
-            domain,
             sensitivity: SubAgentFindingSensitivity.Normal.ToWireValue(),
             recallMode: SubAgentFindingRecallMode.Auto.ToWireValue(),
             confidence,
@@ -290,7 +288,6 @@ public sealed class SubAgentActor : ReceiveActor
                 Title = $"subagent:{_definition.Name}",
                 Content = normalized,
                 Kind = "record",
-                Domain = domain,
                 Sensitivity = SubAgentFindingSensitivity.Normal,
                 RecallMode = SubAgentFindingRecallMode.Searchable,
                 UpdateSemantics = "append-document",

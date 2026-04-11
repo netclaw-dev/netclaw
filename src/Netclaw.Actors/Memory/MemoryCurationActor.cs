@@ -11,8 +11,7 @@ namespace Netclaw.Actors.Memory;
 /// Sent from LlmSessionActor to its curation child with accepted proposals.
 /// </summary>
 public sealed record EvaluateProposals(
-    IReadOnlyList<SQLiteMemoryCurationOperation> Operations,
-    string Domain);
+    IReadOnlyList<SQLiteMemoryCurationOperation> Operations);
 
 /// <summary>
 /// Reply from the curation actor when all proposals in a batch have been processed.
@@ -87,8 +86,8 @@ public sealed class MemoryCurationActor : ReceiveActor, IWithUnboundedStash
             }
 
             _currentRequester = Sender;
-            _log.Info("curation_actor_evaluating proposalCount={0} domain={1}", msg.Operations.Count, msg.Domain);
-            StartEvaluation(msg.Operations, msg.Domain);
+            _log.Info("curation_actor_evaluating proposalCount={0}", msg.Operations.Count);
+            StartEvaluation(msg.Operations);
         });
     }
 
@@ -151,7 +150,7 @@ public sealed class MemoryCurationActor : ReceiveActor, IWithUnboundedStash
 
     // ── Evaluation pipeline ─────────────────────────────────────────
 
-    private void StartEvaluation(IReadOnlyList<SQLiteMemoryCurationOperation> operations, string domain)
+    private void StartEvaluation(IReadOnlyList<SQLiteMemoryCurationOperation> operations)
     {
         Become(Evaluating);
         var self = Self;
@@ -165,7 +164,7 @@ public sealed class MemoryCurationActor : ReceiveActor, IWithUnboundedStash
 
                 foreach (var operation in operations)
                 {
-                    var decision = await EvaluateSingleAsync(operation, domain);
+                    var decision = await EvaluateSingleAsync(operation);
                     decisions.Add((operation, decision));
                 }
 
@@ -179,8 +178,7 @@ public sealed class MemoryCurationActor : ReceiveActor, IWithUnboundedStash
     }
 
     private async Task<CurationDecision> EvaluateSingleAsync(
-        SQLiteMemoryCurationOperation operation,
-        string domain)
+        SQLiteMemoryCurationOperation operation)
     {
         // Immutable records bypass evaluation
         if (MemoryDomainEnumExtensions.TryFromWireValue(operation.Kind, out MemoryKind kind)
@@ -191,8 +189,7 @@ public sealed class MemoryCurationActor : ReceiveActor, IWithUnboundedStash
 
         // Query existing anchors for matches (by name)
         var anchorCandidates = await _store.FindFuzzyAnchorMatchesAsync(
-            operation.AnchorCanonicalName,
-            domain);
+            operation.AnchorCanonicalName);
 
         // Build a mutable candidate list — content search may add more candidates below.
         var candidates = new List<ExistingMemoryCandidate>(anchorCandidates);
@@ -215,8 +212,7 @@ public sealed class MemoryCurationActor : ReceiveActor, IWithUnboundedStash
             if (contentTerms.Length > 0)
             {
                 var contentCandidates = await _store.FindCandidatesByContentAsync(
-                    contentTerms,
-                    domain);
+                    contentTerms);
 
                 // Merge content candidates with anchor candidates, deduplicating by DocumentId.
                 if (contentCandidates.Count > 0)
@@ -444,8 +440,7 @@ public sealed class MemoryCurationActor : ReceiveActor, IWithUnboundedStash
         // Find and tombstone anchors that are no longer canonical
         // We need to look up the anchor IDs for the consolidated documents
         var candidates = await _store.FindFuzzyAnchorMatchesAsync(
-            operation.AnchorCanonicalName,
-            operation.Domain);
+            operation.AnchorCanonicalName);
 
         foreach (var candidate in candidates)
         {

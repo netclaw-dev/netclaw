@@ -63,12 +63,6 @@ public sealed record SessionTuning
     public int TitleGenerationInterval { get; init; } = 10;
 
     /// <summary>
-    /// Enables structured memory sidecars for recall planning and post-turn
-    /// observation. Scheduled for removal — always true in production.
-    /// </summary>
-    public bool MemorySidecarsEnabled { get; init; } = true;
-
-    /// <summary>
     /// Enables deterministic retrieval request planning for automatic
     /// memory recall on each turn. Scheduled for removal — always true in production.
     /// </summary>

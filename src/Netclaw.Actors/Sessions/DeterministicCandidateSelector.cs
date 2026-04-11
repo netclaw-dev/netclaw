@@ -64,16 +64,6 @@ public sealed class DeterministicCandidateSelector
             if (text.Contains(scope.Replace("scope:", string.Empty, StringComparison.OrdinalIgnoreCase), StringComparison.OrdinalIgnoreCase))
                 score += SoftScopeWeight;
 
-        // Domain affinity is intentionally NOT applied here. The concept is
-        // half-implemented: Protocol.SessionId.ToMemoryDomain() unconditionally
-        // returns SecurityPolicyDefaults.DefaultMemoryDomain regardless of the
-        // session ID, so domain affinity would only fire for memories that
-        // happen to be seeded in "project:default" — which is a coin flip, not
-        // a signal. Worse, it adds +5 to in-domain single-lexical collisions
-        // and makes the composite-score floor unable to discriminate them
-        // from legitimate two-lexical cross-domain matches. Tracked in #584;
-        // restore this if per-project memory scoping is actually implemented.
-
         return score;
     }
 

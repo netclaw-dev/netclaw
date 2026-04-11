@@ -22,7 +22,6 @@ public sealed record AutomaticRecallRequest(
     string? Boundary = null,
     IReadOnlyList<string>? RecentAssistantMessages = null,
     IReadOnlyList<string>? RecentEntities = null,
-    string? HardScopeOverride = null,
     string? ThreadTitle = null);
 
 /// <summary>
@@ -41,7 +40,6 @@ public sealed record AutomaticRecallItem(
     string Id,
     string Title,
     string Content,
-    string Domain,
     string Sensitivity,
     double Score);
 

@@ -38,7 +38,6 @@ public sealed class LlmSessionTwoPhaseTimeoutTests(ITestOutputHelper output) : T
             {
                 SnapshotInterval = 5,
                 TitleGenerationInterval = 0,
-                MemorySidecarsEnabled = false,
             }
         });
         services.AddSingleton<ISystemPromptProvider>(new StaticSystemPromptProvider("You are a test assistant."));
