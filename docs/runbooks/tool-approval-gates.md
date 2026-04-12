@@ -7,13 +7,16 @@ channel.
 
 ## Overview
 
-Tool invocations pass through three layers:
+Tool invocations pass through four layers:
 
-1. **Hard deny** — commands that are always blocked (e.g., `netclaw daemon stop`,
-   `rm -rf /`). Never approvable. Checked first.
-2. **Tool access** — per-audience allowlists (`AllowedTools`,
+1. **Operation hard deny** — shell commands that are always blocked
+   (e.g., `netclaw daemon stop`, `rm -rf /`). Never approvable. Checked first.
+2. **Resource hard deny** — protected files and directories (secrets, keys,
+   lifecycle/control-plane files) that are blocked for file tools and shell
+   path references. Never approvable.
+3. **Tool access** — per-audience allowlists (`AllowedTools`,
    `AllowedMcpServers`). Binary: the tool is available or it isn't.
-3. **Approval gate** — for tools that pass layers 1 and 2, does this specific
+4. **Approval gate** — for tools that pass layers 1-3, does this specific
    invocation need user sign-off?
 
 The approval gate is transparent to the LLM — it never knows approval is
@@ -132,8 +135,14 @@ For **compound commands** (`&&`, `||`, `;`, `|`), each segment is checked
 independently. If any segment is unapproved, all unapproved patterns are
 batched into one prompt.
 
-For **non-shell tools** (MCP tools, `file_write`, etc.), approval is at the
-tool-name level — either the tool is approved or it isn't.
+For most **non-shell tools** (MCP tools, `file_read`, etc.), approval is at the
+tool-name level.
+
+For `file_write` and `file_edit`, approval is path-aware for Netclaw
+control-plane targets. Writes under the control-plane root use mode keys like
+`file_write:control-plane` / `file_edit:control-plane` and persist approvals as
+path-scoped patterns (for example,
+`file_write:control-plane:netclaw.json`).
 
 ### Persistent approvals
 
@@ -164,6 +173,11 @@ mode:
 | System-destructive | `rm -rf /`, `rm -rf ~/`, fork bombs, `mkfs` |
 
 The hard deny check runs even in `Auto` mode (no approval configured).
+
+In addition to command hard deny, Netclaw enforces path hard deny for protected
+resources (for example `secrets.json`, key material, webhook secrets, and
+control-plane lifecycle files). Those accesses are blocked for file tools and
+for shell commands that reference those paths.
 
 ### Custom hard deny patterns
 

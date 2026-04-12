@@ -608,7 +608,7 @@
         },
         "ToolOverrides": {
           "type": "object",
-          "description": "Per-tool approval mode overrides. Keys are tool names (e.g., shell_execute, mcp:server:tool).",
+          "description": "Per-tool approval mode overrides. Keys are tool names (e.g., shell_execute, mcp:server:tool) or matcher-specific keys such as file_write:control-plane and file_edit:control-plane.",
           "additionalProperties": {
             "type": "string",
             "enum": ["Auto", "Approval", "Deny"]

@@ -195,6 +195,32 @@ public sealed class ToolApprovalGateTests
     }
 
     [Fact]
+    public void file_write_to_control_plane_still_requires_approval_when_policy_exists_without_override()
+    {
+        var approvalPolicy = new ToolApprovalConfig
+        {
+            ToolOverrides = new Dictionary<string, ToolApprovalMode>(StringComparer.Ordinal)
+            {
+                ["shell_execute"] = ToolApprovalMode.Approval
+            }
+        };
+        var policy = CreateFileWritePolicy(approvalPolicy);
+        var args = new Dictionary<string, object?>
+        {
+            ["Path"] = ControlPlaneRoot + "/netclaw.json",
+            ["Content"] = "{}"
+        };
+
+        var decision = policy.AuthorizeInvocation(FileWriteToolInstance(), PersonalContext(), args);
+
+        Assert.True(decision.NeedsApproval);
+        Assert.NotNull(decision.ApprovalContext);
+        Assert.Contains(
+            decision.ApprovalContext!.UnapprovedPatterns,
+            p => p.StartsWith("file_write:control-plane:", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void file_write_to_non_control_plane_path_auto_approves_under_null_policy()
     {
         var policy = CreateFileWritePolicy(approvalPolicy: null);
@@ -253,6 +279,54 @@ public sealed class ToolApprovalGateTests
             ToolOverrides = new Dictionary<string, ToolApprovalMode>(StringComparer.Ordinal)
             {
                 ["file_write:control-plane"] = ToolApprovalMode.Auto
+            }
+        };
+        var policy = CreateFileWritePolicy(approvalPolicy);
+        var args = new Dictionary<string, object?>
+        {
+            ["Path"] = ControlPlaneRoot + "/netclaw.json",
+            ["Content"] = "{}"
+        };
+
+        var decision = policy.AuthorizeInvocation(FileWriteToolInstance(), PersonalContext(), args);
+
+        Assert.True(decision.Allowed);
+        Assert.False(decision.NeedsApproval);
+    }
+
+    [Fact]
+    public void file_write_control_plane_override_takes_precedence_over_base_tool_override()
+    {
+        var approvalPolicy = new ToolApprovalConfig
+        {
+            ToolOverrides = new Dictionary<string, ToolApprovalMode>(StringComparer.Ordinal)
+            {
+                ["file_write"] = ToolApprovalMode.Auto,
+                ["file_write:control-plane"] = ToolApprovalMode.Approval
+            }
+        };
+        var policy = CreateFileWritePolicy(approvalPolicy);
+        var args = new Dictionary<string, object?>
+        {
+            ["Path"] = ControlPlaneRoot + "/netclaw.json",
+            ["Content"] = "{}"
+        };
+
+        var decision = policy.AuthorizeInvocation(FileWriteToolInstance(), PersonalContext(), args);
+
+        Assert.True(decision.NeedsApproval);
+        Assert.NotNull(decision.ApprovalContext);
+    }
+
+    [Fact]
+    public void file_write_control_plane_falls_back_to_base_tool_override_when_specific_override_missing()
+    {
+        var approvalPolicy = new ToolApprovalConfig
+        {
+            DefaultMode = ToolApprovalMode.Approval,
+            ToolOverrides = new Dictionary<string, ToolApprovalMode>(StringComparer.Ordinal)
+            {
+                ["file_write"] = ToolApprovalMode.Auto
             }
         };
         var policy = CreateFileWritePolicy(approvalPolicy);

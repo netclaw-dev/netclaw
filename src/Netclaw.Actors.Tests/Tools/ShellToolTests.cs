@@ -203,4 +203,23 @@ public class ShellToolTests
         Assert.Contains("hard deny policy", result);
         Assert.DoesNotContain("protected file path", result);
     }
+
+    [Fact]
+    public async Task Path_policy_still_blocks_sensitive_paths_when_command_is_not_hard_denied()
+    {
+        var commandPolicy = new ShellCommandPolicy();
+        var pathPolicy = new ToolPathPolicy(["/home/user/.netclaw/config/secrets.json"]);
+        var tool = new ShellTool(new ToolConfig(), pathPolicy, commandPolicy);
+
+        var args = new Dictionary<string, object?>
+        {
+            ["Command"] = "cat /home/user/.netclaw/config/secrets.json"
+        };
+
+        var result = await tool.ExecuteAsync(args, CancellationToken.None);
+
+        Assert.DoesNotContain("hard deny policy", result);
+        Assert.Contains("protected file path", result);
+        Assert.Contains("Access denied", result);
+    }
 }

@@ -165,6 +165,10 @@ public sealed class ToolPathPolicyTests
             "/home/user/.netclaw/config/secrets.json",
             "/home/user/.netclaw/config/webhooks",
             "/home/user/.netclaw/keys",
+            "/home/user/.netclaw/netclaw.db",
+            "/home/user/.netclaw/netclaw.pid",
+            "/home/user/.netclaw/netclaw.lock",
+            "/home/user/.netclaw/cache/restart-manifest.json",
         };
         return new ToolPathPolicy(writeDeny, readDeny, shellIndicators);
     }
@@ -275,5 +279,16 @@ public sealed class ToolPathPolicyTests
     {
         var policy = CreateProductionPolicy();
         Assert.True(policy.CommandReferencesDeniedPath("cat ~/.netclaw/config/secrets.json"));
+    }
+
+    [Fact]
+    public void CommandReferencesDeniedPath_blocks_control_plane_lifecycle_files()
+    {
+        var policy = CreateProductionPolicy();
+
+        Assert.True(policy.CommandReferencesDeniedPath("cat ~/.netclaw/netclaw.db"));
+        Assert.True(policy.CommandReferencesDeniedPath("cat ~/.netclaw/netclaw.pid"));
+        Assert.True(policy.CommandReferencesDeniedPath("cat ~/.netclaw/netclaw.lock"));
+        Assert.True(policy.CommandReferencesDeniedPath("cat ~/.netclaw/cache/restart-manifest.json"));
     }
 }

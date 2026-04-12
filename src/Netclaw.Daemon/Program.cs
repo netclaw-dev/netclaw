@@ -571,6 +571,10 @@ static void ConfigureDaemonServices(
         paths.SecretsPath,
         paths.WebhooksDirectory,
         paths.KeysDirectory,
+        paths.SqliteDbPath,
+        paths.PidFilePath,
+        paths.LockFilePath,
+        paths.RestartManifestPath,
     };
     var toolPathPolicy = new ToolPathPolicy(writeDenyList, readDenyList, shellIndicatorList);
     services.AddSingleton(toolPathPolicy);

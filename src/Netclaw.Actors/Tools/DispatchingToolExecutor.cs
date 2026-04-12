@@ -53,39 +53,6 @@ public sealed class DispatchingToolExecutor : IToolExecutor
             return $"Unknown tool: {toolCall.Name}";
         }
 
-        if (context is not null
-            && string.Equals(context.OneTimeApprovedToolName, toolCall.Name, StringComparison.Ordinal)
-            && IsOneTimeApprovalSatisfied(context, toolCall))
-        {
-            _logger.LogInformation(
-                "Applying one-time approval bypass for tool {ToolName} in session {SessionId}",
-                toolCall.Name,
-                context.SessionId ?? "unknown");
-
-            var swBypass = Stopwatch.StartNew();
-            try
-            {
-                var bypassResult = await tool.ExecuteAsync(toolCall.Arguments, context, ct);
-                swBypass.Stop();
-                _logger.LogInformation(
-                    "Tool executed via one-time approval bypass: {ToolName} ({Duration}ms, {ResultLength} chars)",
-                    toolCall.Name,
-                    swBypass.ElapsedMilliseconds,
-                    bypassResult.Length);
-                return bypassResult;
-            }
-            catch (Exception ex)
-            {
-                swBypass.Stop();
-                _logger.LogError(
-                    ex,
-                    "Tool execution failed via one-time approval bypass: {ToolName} ({Duration}ms)",
-                    toolCall.Name,
-                    swBypass.ElapsedMilliseconds);
-                throw;
-            }
-        }
-
         var accessDecision = _policy.AuthorizeInvocation(tool, context, toolCall.Arguments);
 
         if (accessDecision.NeedsApproval && _approvalService is not null)
@@ -114,6 +81,17 @@ public sealed class DispatchingToolExecutor : IToolExecutor
                     unapproved,
                     approvalContext.Options));
             }
+        }
+
+        if (accessDecision.NeedsApproval
+            && context is not null
+            && IsOneTimeApprovalSatisfied(context, toolCall, accessDecision.ApprovalContext))
+        {
+            _logger.LogInformation(
+                "Applying one-time approval bypass for tool {ToolName} in session {SessionId}",
+                toolCall.Name,
+                context.SessionId ?? "unknown");
+            accessDecision = ToolAccessDecision.Allow();
         }
 
         if (accessDecision.NeedsApproval)
@@ -152,19 +130,23 @@ public sealed class DispatchingToolExecutor : IToolExecutor
         }
     }
 
-    private static bool IsOneTimeApprovalSatisfied(ToolExecutionContext context, FunctionCallContent toolCall)
+    private static bool IsOneTimeApprovalSatisfied(
+        ToolExecutionContext context,
+        FunctionCallContent toolCall,
+        ToolApprovalContext? approvalContext)
     {
+        if (approvalContext is null)
+            return false;
+
         if (context.OneTimeApprovedPatterns.Count == 0)
             return false;
 
-        if (!string.Equals(toolCall.Name, "shell_execute", StringComparison.Ordinal))
-            return context.OneTimeApprovedPatterns.Contains(toolCall.Name);
-
-        var matcher = ShellApprovalMatcher.Instance;
-        var commandPatterns = matcher.ExtractPatterns(toolCall.Name, toolCall.Arguments);
-        if (commandPatterns.Count == 0)
+        if (approvalContext.UnapprovedPatterns.Count == 0)
             return false;
 
-        return commandPatterns.All(pattern => context.OneTimeApprovedPatterns.Contains(pattern));
+        if (!string.Equals(context.OneTimeApprovedToolName, toolCall.Name, StringComparison.Ordinal))
+            return false;
+
+        return approvalContext.UnapprovedPatterns.All(pattern => context.OneTimeApprovedPatterns.Contains(pattern));
     }
 }

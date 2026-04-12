@@ -141,8 +141,13 @@ public sealed class ToolAccessPolicy
         var profile = ToolAudienceProfileDefaults.GetResolvedProfile(_toolConfig.AudienceProfiles, audience);
         var approvalPolicy = profile.ApprovalPolicy;
         var approvalModeKey = matcher.GetApprovalModeKey(toolName, arguments);
-        var mode = approvalPolicy?.GetEffectiveMode(approvalModeKey)
-            ?? GetMissingApprovalPolicyDefaultMode(toolName, arguments, audience, matcher);
+        var mode = ResolveApprovalMode(
+            approvalPolicy,
+            approvalModeKey,
+            toolName,
+            arguments,
+            audience,
+            matcher);
 
         if (mode == ToolApprovalMode.Deny)
             return ToolAccessDecision.Deny("tool_denied_by_approval_policy");
@@ -179,6 +184,32 @@ public sealed class ToolAccessPolicy
             return ToolApprovalMode.Approval;
 
         return ToolApprovalMode.Auto;
+    }
+
+    private static ToolApprovalMode ResolveApprovalMode(
+        ToolApprovalConfig? approvalPolicy,
+        string approvalModeKey,
+        string toolName,
+        IDictionary<string, object?>? arguments,
+        TrustAudience audience,
+        IToolApprovalMatcher matcher)
+    {
+        if (approvalPolicy is null)
+            return GetMissingApprovalPolicyDefaultMode(toolName, arguments, audience, matcher);
+
+        if (approvalPolicy.ToolOverrides.TryGetValue(approvalModeKey, out var mode))
+            return mode;
+
+        if (!string.Equals(approvalModeKey, toolName, StringComparison.Ordinal)
+            && approvalPolicy.ToolOverrides.TryGetValue(toolName, out mode))
+        {
+            return mode;
+        }
+
+        if (audience == TrustAudience.Personal && matcher.IsFailClosedOnPersonal(toolName, arguments))
+            return ToolApprovalMode.Approval;
+
+        return approvalPolicy.DefaultMode;
     }
 
     private IToolApprovalMatcher SelectMatcherForTool(string toolName)
