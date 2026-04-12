@@ -13,13 +13,19 @@ public sealed class ToolAccessPolicy
     private readonly EffectivePolicyDefaults _defaults;
     private readonly ToolAudienceProfileResolver _profileResolver;
     private readonly ShellCommandPolicy? _shellCommandPolicy;
+    private readonly IToolApprovalMatcher _fileApprovalMatcher;
 
-    public ToolAccessPolicy(ToolConfig toolConfig, EffectivePolicyDefaults defaults, ShellCommandPolicy? shellCommandPolicy = null)
+    public ToolAccessPolicy(
+        ToolConfig toolConfig,
+        EffectivePolicyDefaults defaults,
+        ShellCommandPolicy? shellCommandPolicy = null,
+        IToolApprovalMatcher? fileApprovalMatcher = null)
     {
         _toolConfig = toolConfig;
         _defaults = defaults;
         _profileResolver = new ToolAudienceProfileResolver(toolConfig);
         _shellCommandPolicy = shellCommandPolicy;
+        _fileApprovalMatcher = fileApprovalMatcher ?? DefaultApprovalMatcher.Instance;
     }
 
     public IReadOnlyList<AITool> FilterExposedTools(
@@ -87,7 +93,7 @@ public sealed class ToolAccessPolicy
             return ToolAccessDecision.Deny("tool_not_allowed_for_audience_profile");
 
         if (!IsShellTool(tool))
-            return CheckApprovalGate(tool.Name, context, arguments, DefaultApprovalMatcher.Instance);
+            return CheckApprovalGate(tool.Name, context, arguments, SelectMatcherForTool(tool.Name));
 
         var shellMode = ResolveShellMode();
         if (shellMode == ShellExecutionMode.Off)
@@ -134,8 +140,9 @@ public sealed class ToolAccessPolicy
         var audience = ResolveAudience(context);
         var profile = ToolAudienceProfileDefaults.GetResolvedProfile(_toolConfig.AudienceProfiles, audience);
         var approvalPolicy = profile.ApprovalPolicy;
-        var mode = approvalPolicy?.GetEffectiveMode(toolName)
-            ?? GetMissingApprovalPolicyDefaultMode(toolName, audience);
+        var approvalModeKey = matcher.GetApprovalModeKey(toolName, arguments);
+        var mode = approvalPolicy?.GetEffectiveMode(approvalModeKey)
+            ?? GetMissingApprovalPolicyDefaultMode(approvalModeKey, audience);
 
         if (mode == ToolApprovalMode.Deny)
             return ToolAccessDecision.Deny("tool_denied_by_approval_policy");
@@ -162,14 +169,36 @@ public sealed class ToolAccessPolicy
         return ToolAccessDecision.RequiresApproval(approvalContext);
     }
 
-    private static ToolApprovalMode GetMissingApprovalPolicyDefaultMode(string toolName, TrustAudience audience)
+    private static ToolApprovalMode GetMissingApprovalPolicyDefaultMode(string approvalModeKey, TrustAudience audience)
     {
         // Fail-closed for personal shell: if the approval policy was omitted,
         // still require interactive approval rather than silently auto-approving.
-        if (audience == TrustAudience.Personal && string.Equals(toolName, ShellTool.ToolName, StringComparison.Ordinal))
-            return ToolApprovalMode.Approval;
+        if (audience == TrustAudience.Personal)
+        {
+            if (string.Equals(approvalModeKey, ShellTool.ToolName, StringComparison.Ordinal))
+                return ToolApprovalMode.Approval;
+
+            // Fail-closed for control-plane file writes: even if the operator did
+            // not explicitly configure an approval policy, writes into
+            // ~/.netclaw/config/** require interactive approval. Without this the
+            // agent can silently edit netclaw.json and trigger a daemon restart
+            // that drops the current session (see the session-file-blown incident).
+            if (approvalModeKey.EndsWith(FilePathApprovalMatcher.ControlPlaneModeKeySuffix, StringComparison.Ordinal))
+                return ToolApprovalMode.Approval;
+        }
 
         return ToolApprovalMode.Auto;
+    }
+
+    private IToolApprovalMatcher SelectMatcherForTool(string toolName)
+    {
+        if (string.Equals(toolName, FileWriteTool.ToolName, StringComparison.Ordinal)
+            || string.Equals(toolName, FileEditTool.ToolName, StringComparison.Ordinal))
+        {
+            return _fileApprovalMatcher;
+        }
+
+        return DefaultApprovalMatcher.Instance;
     }
 
     private ShellExecutionMode ResolveShellMode()

@@ -142,4 +142,151 @@ public sealed class ToolPathPolicyTests
 
         Assert.True(policy.CommandReferencesDeniedPath("tar czf /tmp/netclaw-config.tgz ~/.netclaw/config"));
     }
+
+    // ── Three-list split tests (production Tier 1 hard-deny) ─────────────
+
+    private static ToolPathPolicy CreateProductionPolicy()
+    {
+        var writeDeny = new[]
+        {
+            "/home/user/.netclaw/config/secrets.json",
+            "/home/user/.netclaw/keys",
+            "/home/user/.netclaw/netclaw.db",
+            "/home/user/.netclaw/netclaw.pid",
+            "/home/user/.netclaw/netclaw.lock",
+            "/home/user/.netclaw/cache/restart-manifest.json",
+        };
+        var readDeny = new[]
+        {
+            "/home/user/.netclaw/config/secrets.json",
+            "/home/user/.netclaw/keys",
+            "/home/user/.netclaw/config/webhooks",
+        };
+        var shellIndicators = new[]
+        {
+            "/home/user/.netclaw/config/secrets.json",
+            "/home/user/.netclaw/config/webhooks",
+            "/home/user/.netclaw/keys",
+        };
+        return new ToolPathPolicy(writeDeny, readDeny, shellIndicators);
+    }
+
+    [Fact]
+    public void IsDenied_blocks_sqlite_db_when_listed()
+    {
+        var policy = CreateProductionPolicy();
+        Assert.True(policy.IsDenied("/home/user/.netclaw/netclaw.db"));
+    }
+
+    [Fact]
+    public void IsDenied_blocks_pid_and_lock_files()
+    {
+        var policy = CreateProductionPolicy();
+        Assert.True(policy.IsDenied("/home/user/.netclaw/netclaw.pid"));
+        Assert.True(policy.IsDenied("/home/user/.netclaw/netclaw.lock"));
+    }
+
+    [Fact]
+    public void IsDenied_blocks_restart_manifest()
+    {
+        var policy = CreateProductionPolicy();
+        Assert.True(policy.IsDenied("/home/user/.netclaw/cache/restart-manifest.json"));
+    }
+
+    [Fact]
+    public void IsDenied_allows_writes_to_netclaw_config_json_so_approval_gate_can_fire()
+    {
+        // Tier 2: netclaw.json is NOT in the hard-deny set so it reaches the
+        // approval gate. The incident fix relies on this split — hard-deny +
+        // approval-gate, not hard-deny everywhere.
+        var policy = CreateProductionPolicy();
+        Assert.False(policy.IsDenied("/home/user/.netclaw/config/netclaw.json"));
+        Assert.False(policy.IsDenied("/home/user/.netclaw/config/devices.json"));
+        Assert.False(policy.IsDenied("/home/user/.netclaw/config/tool-approvals.json"));
+        Assert.False(policy.IsDenied("/home/user/.netclaw/config/mcp-oauth-metadata.json"));
+    }
+
+    [Fact]
+    public void IsDenied_allows_writes_to_identity_directory()
+    {
+        var policy = CreateProductionPolicy();
+        Assert.False(policy.IsDenied("/home/user/.netclaw/identity/SOUL.md"));
+        Assert.False(policy.IsDenied("/home/user/.netclaw/identity/AGENTS.md"));
+    }
+
+    [Fact]
+    public void IsDenied_allows_writes_to_skills_directory()
+    {
+        var policy = CreateProductionPolicy();
+        Assert.False(policy.IsDenied("/home/user/.netclaw/skills/my-skill/SKILL.md"));
+    }
+
+    [Fact]
+    public void IsDenied_allows_writes_to_arbitrary_user_paths()
+    {
+        var policy = CreateProductionPolicy();
+        Assert.False(policy.IsDenied("/tmp/foo.json"));
+        Assert.False(policy.IsDenied("/home/user/Documents/notes.txt"));
+    }
+
+    [Fact]
+    public void IsReadDenied_blocks_secrets_json()
+    {
+        var policy = CreateProductionPolicy();
+        Assert.True(policy.IsReadDenied("/home/user/.netclaw/config/secrets.json"));
+    }
+
+    [Fact]
+    public void IsReadDenied_blocks_keys_directory_children()
+    {
+        var policy = CreateProductionPolicy();
+        Assert.True(policy.IsReadDenied("/home/user/.netclaw/keys/keyring.xml"));
+    }
+
+    [Fact]
+    public void IsReadDenied_blocks_webhook_configs()
+    {
+        // Webhook configs embed inline secrets, so read-deny applies.
+        var policy = CreateProductionPolicy();
+        Assert.True(policy.IsReadDenied("/home/user/.netclaw/config/webhooks/github-issues.json"));
+    }
+
+    [Fact]
+    public void IsReadDenied_allows_netclaw_json_even_though_write_is_denied_elsewhere()
+    {
+        // The asymmetry is the point: netclaw.json may be read for diagnostics
+        // (the agent can show it to the user) but must not be written silently.
+        // netclaw.json is not in writeDeny either — it's gated by approval.
+        var policy = CreateProductionPolicy();
+        Assert.False(policy.IsReadDenied("/home/user/.netclaw/config/netclaw.json"));
+    }
+
+    [Fact]
+    public void IsReadDenied_allows_netclaw_db_even_though_write_is_hard_denied()
+    {
+        // SQLite db: write-denied (corruption is unrecoverable), but reading
+        // the raw file is not a credential leak — it's binary SQLite anyway.
+        var policy = CreateProductionPolicy();
+        Assert.False(policy.IsReadDenied("/home/user/.netclaw/netclaw.db"));
+    }
+
+    [Fact]
+    public void CommandReferencesDeniedPath_still_allows_ls_of_config_directory()
+    {
+        // Regression guard for the ShellTool indicator footgun: if the split
+        // lists ever collapse back into one and ConfigDirectory ends up as a
+        // substring indicator, every shell command containing ".netclaw/config"
+        // would be blocked — including legit diagnostics the netclaw-operations
+        // skill tells agents to run.
+        var policy = CreateProductionPolicy();
+        Assert.False(policy.CommandReferencesDeniedPath("ls ~/.netclaw/config"));
+        Assert.False(policy.CommandReferencesDeniedPath("stat ~/.netclaw/config"));
+    }
+
+    [Fact]
+    public void CommandReferencesDeniedPath_still_blocks_cat_of_secrets_json()
+    {
+        var policy = CreateProductionPolicy();
+        Assert.True(policy.CommandReferencesDeniedPath("cat ~/.netclaw/config/secrets.json"));
+    }
 }

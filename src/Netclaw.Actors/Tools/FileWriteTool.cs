@@ -9,11 +9,13 @@ namespace Netclaw.Actors.Tools;
 /// <summary>
 /// Writes content to a file as UTF-8, creating parent directories if needed.
 /// </summary>
-[NetclawTool("file_write",
+[NetclawTool(ToolName,
     "Write content to a file, creating parent directories if needed",
     Grant = "file")]
 public sealed partial class FileWriteTool : NetclawTool<FileWriteTool.Params>
 {
+    public const string ToolName = "file_write";
+
     private readonly ToolPathPolicy? _pathPolicy;
     private readonly ScopedFileAccessPolicy _fileAccessPolicy;
 
@@ -45,7 +47,10 @@ public sealed partial class FileWriteTool : NetclawTool<FileWriteTool.Params>
             return accessError;
 
         if (_pathPolicy?.IsDenied(authorizedPath) == true)
-            return "Error: Access denied — this file is protected by security policy.";
+            return $"Error: Access denied: '{authorizedPath}' is part of Netclaw's control plane "
+                + "(secrets, keys, database, or lifecycle files) and cannot be modified by agent tools, "
+                + "even with approval. If the user wants this change, ask them to run a dedicated command "
+                + "(e.g. `netclaw doctor --fix`, `netclaw secrets set`) or edit the file directly.";
 
         try
         {

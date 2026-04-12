@@ -2,11 +2,32 @@ namespace Netclaw.Security;
 
 /// <summary>
 /// Evaluates whether a file path is denied for agent tool access.
-/// Used to prevent the LLM from reading/writing sensitive files like secrets.json.
+/// Used to prevent the LLM from reading/writing sensitive or control-plane files.
 /// </summary>
+/// <remarks>
+/// The policy holds three independent deny lists because the three callers have
+/// different risk profiles:
+/// <list type="bullet">
+///   <item><c>writeDeniedPaths</c> — checked by <c>FileWriteTool</c> and
+///     <c>FileEditTool</c> via <see cref="IsDenied"/>. Intended for control-plane
+///     files that must never be mutated by an agent (secrets, keys, SQLite DB,
+///     pid/lock files, etc.).</item>
+///   <item><c>readDeniedPaths</c> — checked by <c>FileReadTool</c> via
+///     <see cref="IsReadDenied"/>. Narrower: only files that leak credentials
+///     (secrets, keys, webhook configs with inline secrets). Read access to
+///     non-credential control-plane files like <c>netclaw.json</c> is allowed.</item>
+///   <item><c>shellIndicatorPaths</c> — drives the substring scan in
+///     <see cref="CommandReferencesDeniedPath"/>. Must stay narrow (file-level,
+///     not directory-level) because the scan does a raw <c>Contains</c> on the
+///     command string and over-broad indicators would block legitimate
+///     diagnostics like <c>ls ~/.netclaw/config</c>.</item>
+/// </list>
+/// </remarks>
 public sealed class ToolPathPolicy
 {
-    private readonly HashSet<string> _deniedPaths;
+    private readonly HashSet<string> _writeDeniedPaths;
+    private readonly HashSet<string> _readDeniedPaths;
+    private readonly HashSet<string> _shellDeniedPaths;
     private readonly HashSet<string> _commandIndicators;
     private static readonly HashSet<string> HighRiskVerbs = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -15,43 +36,90 @@ public sealed class ToolPathPolicy
         "python", "python3", "node", "ruby", "perl", "php"
     };
 
+    /// <summary>
+    /// Backward-compat single-list constructor. Forwards the same list to all
+    /// three enforcement surfaces. Existing call sites (and tests) that treat
+    /// the policy as a flat deny list continue to work.
+    /// </summary>
     public ToolPathPolicy(IEnumerable<string> deniedPaths)
     {
-        var paths = deniedPaths.ToList();
-        var normalizedPaths = paths.Select(NormalizePath).ToList();
-
-        _deniedPaths = new HashSet<string>(normalizedPaths, StringComparer.OrdinalIgnoreCase);
-        _commandIndicators = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-        foreach (var path in paths.Concat(normalizedPaths))
-        {
-            var slashPath = path.Replace('\\', '/');
-            _commandIndicators.Add(slashPath);
-
-            var netclawSegmentIdx = slashPath.IndexOf("/.netclaw/", StringComparison.OrdinalIgnoreCase);
-            if (netclawSegmentIdx >= 0)
-                _commandIndicators.Add(slashPath[(netclawSegmentIdx + 1)..]);
-
-            var fileName = Path.GetFileName(path);
-            if (!string.IsNullOrWhiteSpace(fileName) && fileName.Contains('.', StringComparison.Ordinal))
-                _commandIndicators.Add(fileName);
-        }
+        var materialized = deniedPaths.ToList();
+        _writeDeniedPaths = BuildNormalizedSet(materialized);
+        _readDeniedPaths = _writeDeniedPaths;
+        _shellDeniedPaths = _writeDeniedPaths;
+        _commandIndicators = BuildCommandIndicators(materialized);
     }
 
     /// <summary>
-    /// Returns true if the given path is denied by policy.
+    /// Three-list constructor. Use when write, read, and shell-indicator deny
+    /// surfaces need independent scopes — the production path does this because
+    /// the write-deny list is broader than the others.
+    /// </summary>
+    public ToolPathPolicy(
+        IEnumerable<string> writeDeniedPaths,
+        IEnumerable<string> readDeniedPaths,
+        IEnumerable<string> shellIndicatorPaths)
+    {
+        _writeDeniedPaths = BuildNormalizedSet(writeDeniedPaths);
+        _readDeniedPaths = BuildNormalizedSet(readDeniedPaths);
+        var shellList = shellIndicatorPaths.ToList();
+        _shellDeniedPaths = BuildNormalizedSet(shellList);
+        _commandIndicators = BuildCommandIndicators(shellList);
+    }
+
+    private static HashSet<string> BuildNormalizedSet(IEnumerable<string> paths)
+    {
+        var normalized = paths.Select(NormalizePath);
+        return new HashSet<string>(normalized, StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static HashSet<string> BuildCommandIndicators(IEnumerable<string> paths)
+    {
+        var materialized = paths.ToList();
+        var normalizedPaths = materialized.Select(NormalizePath).ToList();
+        var indicators = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var path in materialized.Concat(normalizedPaths))
+        {
+            var slashPath = path.Replace('\\', '/');
+            indicators.Add(slashPath);
+
+            var netclawSegmentIdx = slashPath.IndexOf("/.netclaw/", StringComparison.OrdinalIgnoreCase);
+            if (netclawSegmentIdx >= 0)
+                indicators.Add(slashPath[(netclawSegmentIdx + 1)..]);
+
+            var fileName = Path.GetFileName(path);
+            if (!string.IsNullOrWhiteSpace(fileName) && fileName.Contains('.', StringComparison.Ordinal))
+                indicators.Add(fileName);
+        }
+
+        return indicators;
+    }
+
+    /// <summary>
+    /// Returns true if the given path is denied for write by policy.
     /// Normalizes the path (resolves "..", removes trailing separators) before checking.
     /// </summary>
     public bool IsDenied(string path)
+        => IsDeniedAgainst(path, _writeDeniedPaths);
+
+    /// <summary>
+    /// Returns true if the given path is denied for read by policy. Narrower
+    /// than <see cref="IsDenied"/>: only covers files that leak credentials.
+    /// </summary>
+    public bool IsReadDenied(string path)
+        => IsDeniedAgainst(path, _readDeniedPaths);
+
+    private static bool IsDeniedAgainst(string path, HashSet<string> deniedSet)
     {
         if (string.IsNullOrWhiteSpace(path))
             return false;
 
-        if (TryNormalizePath(path, null, out var normalized) && IsDeniedNormalized(normalized))
+        if (TryNormalizePath(path, null, out var normalized) && IsDeniedNormalized(normalized, deniedSet))
             return true;
 
         return TryResolveSymlinkTarget(path, out var resolvedTarget)
-            && IsDeniedNormalized(resolvedTarget);
+            && IsDeniedNormalized(resolvedTarget, deniedSet);
     }
 
     /// <summary>
@@ -79,7 +147,7 @@ public sealed class ToolPathPolicy
 
             var expanded = ExpandHomeAndEnv(token);
             if (TryNormalizePath(expanded, workingDirectory, out var normalized)
-                && IsDeniedNormalized(normalized))
+                && IsDeniedNormalized(normalized, _shellDeniedPaths))
             {
                 return true;
             }
@@ -117,9 +185,9 @@ public sealed class ToolPathPolicy
         return false;
     }
 
-    private bool IsDeniedNormalized(string candidate)
+    private static bool IsDeniedNormalized(string candidate, HashSet<string> deniedSet)
     {
-        foreach (var denied in _deniedPaths)
+        foreach (var denied in deniedSet)
         {
             if (IsSamePathOrChild(candidate, denied))
                 return true;
