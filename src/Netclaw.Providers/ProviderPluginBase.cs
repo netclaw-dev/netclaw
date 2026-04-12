@@ -42,7 +42,7 @@ public abstract class ProviderPluginBase<TDescriptor> : ILlmProviderPlugin
     /// </summary>
     protected static HttpClient CreateLlmHttpClient(Uri? baseAddress = null)
     {
-        return new HttpClient
+        return new HttpClient(new SessionAffinityHandler())
         {
             BaseAddress = baseAddress,
             Timeout = TimeSpan.FromHours(1)

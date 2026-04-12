@@ -2186,7 +2186,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             forceNoTools,
             _activeCallId);
 
-        _ = SessionLlmInvoker.InvokeAsync(client, messages, options, self, _activeCallId, _activeLlmCts!.Token);
+        _ = SessionLlmInvoker.InvokeAsync(client, messages, options, self, _activeCallId, _sessionId.Value, _activeLlmCts!.Token);
     }
 
 
