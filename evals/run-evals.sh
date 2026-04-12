@@ -1,16 +1,35 @@
 #!/usr/bin/env bash
 # Netclaw Behavioral Eval Suite
 # Tests identity, skill loading, memory, tool use, grounding, and autonomy
-# against a running Netclaw daemon instance.
+# against an ephemeral netclawd Docker container — completely isolated from
+# the operator's real ~/.netclaw state.
 #
-# Usage: ./evals/run-evals.sh
+# Usage:
+#   NETCLAW_EVAL_PROVIDER_TYPE=ollama \
+#   NETCLAW_EVAL_PROVIDER_ENDPOINT=http://big-gpu.tailnet.ts.net:11434 \
+#   NETCLAW_EVAL_MODEL_ID=qwen3:30b \
+#     ./evals/run-evals.sh
 #
 # Environment variables:
-#   NETCLAW_EVAL_RUNS       — runs per case (default: 5)
-#   NETCLAW_EVAL_THRESHOLD  — pass threshold 0.0-1.0 (default: 0.80)
-#   NETCLAW_EVAL_TIMEOUT    — per-prompt timeout in seconds (default: 180)
-#   NETCLAW_BIN             — path to netclaw binary (default: netclaw)
-#   NETCLAW_HOME            — Netclaw home directory (default: ~/.netclaw)
+#   Eval target (required — if unset, prompted interactively):
+#     NETCLAW_EVAL_PROVIDER_TYPE        Provider type (e.g. ollama, openai, openrouter)
+#     NETCLAW_EVAL_PROVIDER_ENDPOINT    Provider URL the container should call
+#     NETCLAW_EVAL_MODEL_ID             Main model id
+#
+#   Eval target (optional — default to main):
+#     NETCLAW_EVAL_FALLBACK_MODEL_ID
+#     NETCLAW_EVAL_COMPACTION_MODEL_ID
+#
+#   Container + runtime:
+#     NETCLAW_IMAGE              Image ref (default: ghcr.io/aaronontheweb/netclawd:latest)
+#     NETCLAW_EVAL_PORT          Host-side port for the eval daemon (default 5299)
+#     NETCLAW_EVAL_CONTEXT_WINDOW  Override model context window (future compaction evals)
+#
+#   Eval suite knobs:
+#     NETCLAW_EVAL_RUNS          Runs per case (default: 5)
+#     NETCLAW_EVAL_THRESHOLD     Pass threshold 0.0-1.0 (default: 0.80)
+#     NETCLAW_EVAL_TIMEOUT       Per-prompt timeout in seconds (default: 60)
+#     NETCLAW_BIN                Path to netclaw CLI (default: netclaw)
 set -euo pipefail
 
 # ─── Configuration ────────────────────────────────────────────────────────────
@@ -19,10 +38,17 @@ RUNS="${NETCLAW_EVAL_RUNS:-5}"
 THRESHOLD="${NETCLAW_EVAL_THRESHOLD:-0.80}"
 PROMPT_TIMEOUT="${NETCLAW_EVAL_TIMEOUT:-60}"
 NETCLAW_BIN="${NETCLAW_BIN:-netclaw}"
-NETCLAW_HOME="${NETCLAW_HOME:-$HOME/.netclaw}"
-DAEMON_LOG="${NETCLAW_EVAL_DAEMON_LOG:-$NETCLAW_HOME/logs/daemon-$(date +%F).log}"
-RESULTS_DIR="$NETCLAW_HOME/evals"
-RESULTS_DB="$RESULTS_DIR/results.db"
+NETCLAW_IMAGE="${NETCLAW_IMAGE:-ghcr.io/aaronontheweb/netclawd:latest}"
+EVAL_PORT="${NETCLAW_EVAL_PORT:-5299}"
+EVAL_CONTAINER_NAME="netclaw-eval-$$"
+
+# Eval target — resolved by check_prerequisites after optional interactive prompt.
+EVAL_PROVIDER_TYPE="${NETCLAW_EVAL_PROVIDER_TYPE:-}"
+EVAL_PROVIDER_ENDPOINT="${NETCLAW_EVAL_PROVIDER_ENDPOINT:-}"
+EVAL_MODEL_ID="${NETCLAW_EVAL_MODEL_ID:-}"
+EVAL_FALLBACK_MODEL_ID="${NETCLAW_EVAL_FALLBACK_MODEL_ID:-}"
+EVAL_COMPACTION_MODEL_ID="${NETCLAW_EVAL_COMPACTION_MODEL_ID:-}"
+EVAL_CONTEXT_WINDOW="${NETCLAW_EVAL_CONTEXT_WINDOW:-}"
 
 # ─── State ────────────────────────────────────────────────────────────────────
 
@@ -36,6 +62,10 @@ RUN_ID=""
 NETCLAW_VER=""
 STARTED_AT=""
 TMPDIR_EVAL=""
+EVAL_HOME=""
+DAEMON_LOG=""
+RESULTS_DIR=""
+RESULTS_DB=""
 
 # Per-prompt state (set by run_prompt, read by assertion helpers)
 STDOUT_FILE=""
@@ -54,15 +84,32 @@ check_prerequisites() {
         exit 1
     fi
 
+    if ! command -v docker >/dev/null 2>&1; then
+        echo "ERROR: 'docker' not found. Install Docker to run the eval suite." >&2
+        exit 1
+    fi
+
+    if ! command -v curl >/dev/null 2>&1; then
+        echo "ERROR: 'curl' not found" >&2
+        exit 1
+    fi
+
+    # Operator must have run `netclaw init` so we can borrow the identity
+    # fixture for the eval container. We never read the host's netclaw.db,
+    # sessions, or config — only the identity markdown files.
+    if [[ ! -f "$HOME/.netclaw/identity/SOUL.md" ]]; then
+        echo "ERROR: no identity at $HOME/.netclaw/identity/SOUL.md." >&2
+        echo "       Run 'netclaw init' on the host first — evals borrow its identity files." >&2
+        exit 1
+    fi
+
+    # Eval-target credentials: env vars win; otherwise prompt on stdin if
+    # attached to a terminal; otherwise fail loudly (CI/piped use case).
+    resolve_eval_target
+
     if ! command -v sqlite3 >/dev/null 2>&1; then
         echo "WARN: sqlite3 not found — results will not be persisted" >&2
         RESULTS_DB=""
-    fi
-
-    # Check daemon is running
-    if ! "$NETCLAW_BIN" daemon status >/dev/null 2>&1; then
-        echo "ERROR: Netclaw daemon is not running. Start it with: netclaw daemon start" >&2
-        exit 1
     fi
 
     NETCLAW_VER=$("$NETCLAW_BIN" --version 2>/dev/null | head -1 || echo "unknown")
@@ -72,8 +119,165 @@ check_prerequisites() {
         exit 1
     fi
 
-    TMPDIR_EVAL=$(mktemp -d)
-    trap 'rm -rf "$TMPDIR_EVAL"' EXIT
+    # Eval-owned temp roots: everything under $EVAL_HOME is torn down by the
+    # EXIT trap. $TMPDIR_EVAL holds per-prompt stdout captures.
+    EVAL_HOME=$(mktemp -d -t netclaw-eval-home-XXXXXX)
+    TMPDIR_EVAL=$(mktemp -d -t netclaw-eval-tmp-XXXXXX)
+    RESULTS_DIR="$EVAL_HOME/evals"
+    if command -v sqlite3 >/dev/null 2>&1; then
+        RESULTS_DB="$RESULTS_DIR/results.db"
+    fi
+    DAEMON_LOG="$EVAL_HOME/logs/daemon-$(date +%F).log"
+
+    trap 'cleanup_eval_env' EXIT
+}
+
+resolve_eval_target() {
+    local missing=()
+    [[ -n "$EVAL_PROVIDER_TYPE" ]] || missing+=("NETCLAW_EVAL_PROVIDER_TYPE")
+    [[ -n "$EVAL_PROVIDER_ENDPOINT" ]] || missing+=("NETCLAW_EVAL_PROVIDER_ENDPOINT")
+    [[ -n "$EVAL_MODEL_ID" ]] || missing+=("NETCLAW_EVAL_MODEL_ID")
+
+    if [[ ${#missing[@]} -eq 0 ]]; then
+        : # All supplied non-interactively.
+    elif [[ -t 0 ]]; then
+        echo ""
+        echo "Eval-target credentials not fully provided via env vars."
+        echo "Prompting for missing values. Export them in your shell rc to skip."
+        echo ""
+        if [[ -z "$EVAL_PROVIDER_TYPE" ]]; then
+            read -r -p "  Provider type (e.g. ollama, openai, openrouter): " EVAL_PROVIDER_TYPE
+        fi
+        if [[ -z "$EVAL_PROVIDER_ENDPOINT" ]]; then
+            read -r -p "  Provider endpoint URL: " EVAL_PROVIDER_ENDPOINT
+        fi
+        if [[ -z "$EVAL_MODEL_ID" ]]; then
+            read -r -p "  Main model id: " EVAL_MODEL_ID
+        fi
+        echo ""
+
+        if [[ -z "$EVAL_PROVIDER_TYPE" || -z "$EVAL_PROVIDER_ENDPOINT" || -z "$EVAL_MODEL_ID" ]]; then
+            echo "ERROR: eval-target credentials are required. Aborting." >&2
+            exit 1
+        fi
+    else
+        echo "ERROR: eval-target credentials missing and stdin is not a terminal." >&2
+        echo "       Set these env vars before running:" >&2
+        for var in "${missing[@]}"; do
+            echo "         $var" >&2
+        done
+        exit 1
+    fi
+
+    # Default the fallback/compaction models to main when unset.
+    EVAL_FALLBACK_MODEL_ID="${EVAL_FALLBACK_MODEL_ID:-$EVAL_MODEL_ID}"
+    EVAL_COMPACTION_MODEL_ID="${EVAL_COMPACTION_MODEL_ID:-$EVAL_MODEL_ID}"
+}
+
+cleanup_eval_env() {
+    # Container is launched with --rm, so `docker stop` also removes it.
+    if [[ -n "${EVAL_CONTAINER_NAME:-}" ]]; then
+        docker stop "$EVAL_CONTAINER_NAME" >/dev/null 2>&1 || true
+    fi
+    # TMPDIR_EVAL only holds host-owned per-prompt stdout captures, so a
+    # plain rm always succeeds — no force_rmrf fallback needed.
+    if [[ -n "${TMPDIR_EVAL:-}" && -d "$TMPDIR_EVAL" ]]; then
+        rm -rf "$TMPDIR_EVAL"
+    fi
+    # EVAL_HOME holds bind-mounted directories the container wrote into as
+    # root, so force_rmrf's alpine fallback matters here.
+    if [[ -n "${EVAL_HOME:-}" && -d "$EVAL_HOME" ]]; then
+        force_rmrf "$EVAL_HOME"
+    fi
+}
+
+# Remove a directory even if it contains files owned by a different user
+# (the eval container runs as root inside a user namespace that maps to
+# uid 0 on Linux hosts, so files it writes into bind-mounts are owned by
+# host root and cannot be removed by the unprivileged eval runner).
+# First attempt a normal rm; fall back to a throwaway root container.
+force_rmrf() {
+    local path="$1"
+    [[ -z "$path" || ! -d "$path" ]] && return 0
+
+    if rm -rf "$path" 2>/dev/null; then
+        return 0
+    fi
+
+    docker run --rm \
+        -v "$path:/target" \
+        alpine:latest sh -c 'rm -rf /target/..?* /target/.[!.]* /target/*' \
+        >/dev/null 2>&1 || true
+    rmdir "$path" 2>/dev/null || true
+}
+
+# ─── Eval Daemon Lifecycle ────────────────────────────────────────────────────
+
+start_eval_daemon() {
+    # Copy host identity files into the eval home so the container sees a
+    # writable, throwaway copy. Mounting the operator's real
+    # ~/.netclaw/identity directly doesn't work — the daemon writes shadow
+    # index files under identity/tooling/shadow/ at startup and a :ro mount
+    # would crash it. The copy pattern gives us isolation (the container
+    # never touches host state) without forcing read-only semantics.
+    mkdir -p "$EVAL_HOME/identity" "$EVAL_HOME/logs"
+    cp -r "$HOME/.netclaw/identity/." "$EVAL_HOME/identity/"
+
+    local -a docker_args=(
+        run -d --rm
+        --name "$EVAL_CONTAINER_NAME"
+        --network host
+        -v "$EVAL_HOME/identity:/root/.netclaw/identity"
+        -v "$EVAL_HOME/logs:/root/.netclaw/logs"
+        -e "NETCLAW_Daemon__Host=127.0.0.1"
+        -e "NETCLAW_Daemon__Port=$EVAL_PORT"
+        -e "NETCLAW_Providers__eval__Type=$EVAL_PROVIDER_TYPE"
+        -e "NETCLAW_Providers__eval__Endpoint=$EVAL_PROVIDER_ENDPOINT"
+        -e "NETCLAW_Models__Main__Provider=eval"
+        -e "NETCLAW_Models__Main__ModelId=$EVAL_MODEL_ID"
+        -e "NETCLAW_Models__Fallback__Provider=eval"
+        -e "NETCLAW_Models__Fallback__ModelId=$EVAL_FALLBACK_MODEL_ID"
+        -e "NETCLAW_Models__Compaction__Provider=eval"
+        -e "NETCLAW_Models__Compaction__ModelId=$EVAL_COMPACTION_MODEL_ID"
+    )
+
+    if [[ -n "$EVAL_CONTEXT_WINDOW" ]]; then
+        docker_args+=(-e "NETCLAW_Models__Main__ContextWindowTokens=$EVAL_CONTEXT_WINDOW")
+    fi
+
+    docker_args+=("$NETCLAW_IMAGE")
+
+    local docker_err
+    if ! docker_err=$(docker "${docker_args[@]}" 2>&1 >/dev/null); then
+        echo "ERROR: failed to start eval container" >&2
+        [[ -n "$docker_err" ]] && echo "$docker_err" >&2
+        exit 2
+    fi
+
+    # Poll /api/health/ready up to 60s.
+    local deadline=$((SECONDS + 60))
+    while (( SECONDS < deadline )); do
+        if curl -fsS "http://127.0.0.1:$EVAL_PORT/api/health/ready" >/dev/null 2>&1; then
+            echo "Eval daemon ready at http://127.0.0.1:$EVAL_PORT"
+            return 0
+        fi
+
+        local running
+        running=$(docker inspect -f '{{.State.Running}}' "$EVAL_CONTAINER_NAME" 2>/dev/null || echo "false")
+        if [[ "$running" != "true" ]]; then
+            echo "ERROR: eval container exited during startup" >&2
+            docker logs "$EVAL_CONTAINER_NAME" >&2 2>&1 || true
+            [[ -f "$DAEMON_LOG" ]] && tail -50 "$DAEMON_LOG" >&2 || true
+            exit 2
+        fi
+
+        sleep 1
+    done
+
+    echo "ERROR: eval daemon did not become healthy within 60s" >&2
+    docker logs "$EVAL_CONTAINER_NAME" >&2 2>&1 || true
+    [[ -f "$DAEMON_LOG" ]] && tail -50 "$DAEMON_LOG" >&2 || true
+    exit 2
 }
 
 # ─── SQLite Setup ─────────────────────────────────────────────────────────────
@@ -138,16 +342,19 @@ pick_variant() {
 # ─── Prompt Runner ────────────────────────────────────────────────────────────
 
 check_daemon_alive() {
-    if ! "$NETCLAW_BIN" daemon status >/dev/null 2>&1; then
+    local running
+    running=$(docker inspect -f '{{.State.Running}}' "$EVAL_CONTAINER_NAME" 2>/dev/null || echo "false")
+    if [[ "$running" != "true" ]]; then
         echo ""
-        echo "ERROR: Daemon died mid-run. Aborting eval." >&2
+        echo "ERROR: Eval container died mid-run. Aborting eval." >&2
+        docker logs "$EVAL_CONTAINER_NAME" >&2 2>&1 || true
         # Finalize whatever results we have so far
         finalize_db
         local overall_score
         overall_score=$(awk "BEGIN {printf \"%.1f\", ($PASSED_CASES / ($TOTAL_CASES > 0 ? $TOTAL_CASES : 1)) * 100}")
         echo ""
         echo "─────────────────────────────────────────────────"
-        echo "ABORTED: Daemon not running. Partial results: $PASSED_CASES/$TOTAL_CASES ($overall_score%)"
+        echo "ABORTED: Eval container not running. Partial results: $PASSED_CASES/$TOTAL_CASES ($overall_score%)"
         if [[ -n "$RESULTS_DB" ]]; then
             echo "Results: $RESULTS_DB (run_id: $RUN_ID)"
         fi
@@ -161,15 +368,21 @@ run_prompt() {
     local prompt="$1"
     STDOUT_FILE="$TMPDIR_EVAL/stdout_$(date +%s%N).txt"
 
-    # Record daemon log position before the prompt
+    # Record daemon log position before the prompt (the daemon writes to a
+    # daily-rotating file at /root/.netclaw/logs/daemon-YYYY-MM-DD.log, and
+    # the container bind-mounts that directory from $EVAL_HOME/logs).
     if [[ -f "$DAEMON_LOG" ]]; then
         DAEMON_LOG_LINES_BEFORE=$(wc -l < "$DAEMON_LOG")
     else
         DAEMON_LOG_LINES_BEFORE=0
     fi
 
-    # Run prompt, capture all output
-    timeout "$PROMPT_TIMEOUT" "$NETCLAW_BIN" -p "$prompt" > "$STDOUT_FILE" 2>&1 || true
+    # Run prompt via the host CLI, but redirect it at the eval container's
+    # daemon and keep CLI-side path resolution inside the eval sandbox.
+    NETCLAW_DAEMON_ENDPOINT="http://127.0.0.1:$EVAL_PORT" \
+    NETCLAW_HOME="$EVAL_HOME" \
+        timeout "$PROMPT_TIMEOUT" "$NETCLAW_BIN" -p "$prompt" \
+        > "$STDOUT_FILE" 2>&1 || true
 
     # Brief pause for daemon log flush
     sleep 2
@@ -515,16 +728,23 @@ run_all() {
 
 main() {
     check_prerequisites
+    start_eval_daemon
     init_db
 
     RUN_ID=$(cat /proc/sys/kernel/random/uuid 2>/dev/null || python3 -c "import uuid; print(uuid.uuid4())")
     STARTED_AT=$(date -Iseconds)
 
     echo ""
-    echo "=== Netclaw Eval Suite ($RUNS runs per case, threshold: $THRESHOLD) ==="
-    echo "Version: $NETCLAW_VER"
-    echo "Run ID:  $RUN_ID"
-    echo "Started: $STARTED_AT"
+    echo "=== Netclaw Eval Suite (containerized, $RUNS runs per case, threshold: $THRESHOLD) ==="
+    echo "Image:     $NETCLAW_IMAGE"
+    echo "Container: $EVAL_CONTAINER_NAME"
+    echo "Endpoint:  http://127.0.0.1:$EVAL_PORT"
+    echo "Provider:  $EVAL_PROVIDER_TYPE @ $EVAL_PROVIDER_ENDPOINT"
+    echo "Model:     $EVAL_MODEL_ID"
+    echo "Eval home: $EVAL_HOME"
+    echo "Version:   $NETCLAW_VER"
+    echo "Run ID:    $RUN_ID"
+    echo "Started:   $STARTED_AT"
     echo "Daemon log: $DAEMON_LOG"
 
     run_all

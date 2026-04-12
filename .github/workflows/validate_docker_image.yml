@@ -1,0 +1,124 @@
+name: validate_docker_image
+
+# Builds and smoke-tests the release netclawd Docker image on every PR
+# and dev/main/master push. Intentionally separate from pr_validation.yml
+# (unit/integration tests + slopwatch) and smoke_sandbox.yml (Ollama-in-Docker
+# end-to-end smoke) because image construction is its own concern — when it
+# breaks, the fix lives in the Dockerfile or the shared build script, not
+# the .NET test suites.
+
+on:
+  push:
+    branches:
+      - master
+      - dev
+      - main
+    paths:
+      - 'docker/Dockerfile'
+      - 'scripts/docker/build-image.sh'
+      - 'src/**'
+      - 'global.json'
+      - 'Directory.Build.props'
+      - 'Directory.Packages.props'
+      - '.github/workflows/validate_docker_image.yml'
+  pull_request:
+    branches:
+      - master
+      - dev
+      - main
+    paths:
+      - 'docker/Dockerfile'
+      - 'scripts/docker/build-image.sh'
+      - 'src/**'
+      - 'global.json'
+      - 'Directory.Build.props'
+      - 'Directory.Packages.props'
+      - '.github/workflows/validate_docker_image.yml'
+
+jobs:
+  validate-docker-build:
+    name: Validate Docker Build
+    runs-on: arc-netclaw
+    timeout-minutes: 20
+
+    steps:
+      - name: "Checkout"
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - name: "Install .NET SDK"
+        uses: actions/setup-dotnet@v5.2.0
+        with:
+          global-json-file: "./global.json"
+
+      - name: "Set up Docker Buildx"
+        uses: docker/setup-buildx-action@v3
+
+      - name: "Compute ephemeral image tag"
+        id: tag
+        shell: bash
+        run: |
+          if [[ -n "${{ github.event.pull_request.number }}" ]]; then
+            echo "tag=pr-${{ github.event.pull_request.number }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=ci-${{ github.run_id }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: "Build netclawd image via shared script"
+        shell: bash
+        run: |
+          chmod +x scripts/docker/build-image.sh
+          IMAGE_REPO=netclawd-pr \
+            scripts/docker/build-image.sh "${{ steps.tag.outputs.tag }}"
+
+      - name: "Verify daemon reaches healthy state with minimal config"
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker rm -f netclaw-validate-ok >/dev/null 2>&1 || true
+
+          # Ollama provider type needs no API key, so this job can run
+          # without secrets. The endpoint is fake (:11434 on loopback) —
+          # the daemon doesn't actually call it during startup or health
+          # checks, so unreachable is fine.
+          docker run -d --name netclaw-validate-ok \
+            -p 5399:5199 \
+            -e NETCLAW_Daemon__Host=0.0.0.0 \
+            -e NETCLAW_Daemon__Port=5199 \
+            -e NETCLAW_Providers__validate__Type=ollama \
+            -e NETCLAW_Providers__validate__Endpoint=http://127.0.0.1:11434 \
+            -e NETCLAW_Models__Main__Provider=validate \
+            -e NETCLAW_Models__Main__ModelId=qwen2:0.5b \
+            "netclawd-pr:${{ steps.tag.outputs.tag }}" >/dev/null
+
+          # Poll /api/health/ready for up to 60s.
+          for i in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:5399/api/health/ready >/dev/null 2>&1; then
+              echo "✓ Daemon reported healthy after ${i}s"
+              docker rm -f netclaw-validate-ok >/dev/null 2>&1 || true
+              exit 0
+            fi
+
+            # Bail early if the container crashed mid-probe.
+            running=$(docker inspect -f '{{.State.Running}}' netclaw-validate-ok 2>/dev/null || echo "false")
+            if [[ "$running" != "true" ]]; then
+              echo "ERROR: daemon container exited during health probe" >&2
+              docker logs netclaw-validate-ok >&2 2>&1 || true
+              docker rm -f netclaw-validate-ok >/dev/null 2>&1 || true
+              exit 1
+            fi
+
+            sleep 1
+          done
+
+          echo "ERROR: daemon did not report healthy within 60s" >&2
+          docker logs netclaw-validate-ok >&2 2>&1 || true
+          docker rm -f netclaw-validate-ok >/dev/null 2>&1 || true
+          exit 1
+
+      - name: "Cleanup validation containers"
+        if: always()
+        shell: bash
+        run: |
+          docker rm -f netclaw-validate-ok 2>/dev/null || true

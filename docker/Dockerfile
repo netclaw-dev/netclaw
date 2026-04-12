@@ -1,0 +1,74 @@
+# Release image for netclawd: the Netclaw autonomous operations daemon.
+#
+# This is the published image (ghcr.io/aaronontheweb/netclawd) that ships
+# alongside the self-contained binary archives. It is distinct from
+# docker/smoke/Dockerfile, which is a test fixture for the CLI smoke suite.
+#
+# The image auto-starts netclawd as PID 1 and fails loudly when required
+# configuration is missing (no silent fallbacks). Operators supply
+# provider, model, and identity configuration via:
+#   * NETCLAW_*-prefixed environment variables at `docker run` time
+#   * A bind mount or volume at /root/.netclaw (identity, config, data)
+#
+# The companion `netclaw` CLI binary is also installed so shell_execute
+# can invoke it from inside the container (e.g., `netclaw doctor`).
+FROM ubuntu:24.04
+
+ARG NETCLAW_VERSION=unknown
+
+# Pre-install the general-purpose toolkit an autonomous agent is expected
+# to reach for via its shell_execute tool. An Ubuntu base (not a chiseled
+# runtime) is used deliberately so operators can `apt-get install`
+# additional tools at runtime for high-permissions use cases the agent
+# discovers on its own — the pre-installed set is what the agent should
+# have on hand without needing to install anything first.
+#
+# Categories:
+#   TLS + HTTP:  ca-certificates, curl, wget
+#   Process/OS:  procps
+#   Data/JSON:   jq, sqlite3
+#   VCS/GitHub:  git, gh
+#   Python:      python3, python3-pip, python3-venv
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      ca-certificates \
+      curl \
+      wget \
+      procps \
+      git \
+      jq \
+      sqlite3 \
+      python3 \
+      python3-pip \
+      python3-venv \
+      gh \
+ && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /opt/netclaw
+
+# Self-contained single-file binaries published on the host by the
+# shared build script (scripts/docker/build-image.sh) and copied in.
+COPY publish/cli/netclaw /opt/netclaw/cli/netclaw
+COPY publish/daemon/netclawd /opt/netclaw/daemon/netclawd
+
+RUN chmod +x /opt/netclaw/cli/netclaw /opt/netclaw/daemon/netclawd \
+ && ln -s /opt/netclaw/cli/netclaw /usr/local/bin/netclaw \
+ && ln -s /opt/netclaw/daemon/netclawd /usr/local/bin/netclawd
+
+ENV NETCLAW_DAEMON_PATH=/opt/netclaw/daemon/netclawd
+
+# Persist identity, config, data, and session state on an operator-mounted
+# volume. Real operators must `netclaw init` (or bind-mount a pre-initialized
+# tree) before starting the container; the daemon will fail loudly if
+# required config is missing.
+VOLUME /root/.netclaw
+
+EXPOSE 5199
+
+LABEL org.opencontainers.image.source="https://github.com/Aaronontheweb/netclaw" \
+      org.opencontainers.image.title="netclawd" \
+      org.opencontainers.image.description="Netclaw autonomous operations daemon" \
+      org.opencontainers.image.version="${NETCLAW_VERSION}" \
+      org.opencontainers.image.licenses="Apache-2.0"
+
+ENTRYPOINT ["/usr/local/bin/netclawd"]
