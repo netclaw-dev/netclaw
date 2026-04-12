@@ -336,8 +336,10 @@ public class ToolExecutionIntegrationTests : TestKit
         await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
 
         // The second (follow-up) main-model call after the tool execution
-        // should see a `[working-context]` block in its system messages.
-        // Filter out observer sidecar calls.
+        // should see a `[working-context]` block. Since #608, volatile
+        // content (including working-context) lives in a User-role tail
+        // message rather than a System message, so the agent sees it as
+        // runtime context appended after the user's message.
         var mainModelCalls = _fakeChatClient.ReceivedMessages
             .Where(msgs => !(msgs.FirstOrDefault(m => m.Role == Microsoft.Extensions.AI.ChatRole.System)?.Text
                 ?? string.Empty).Contains("session summarizer", StringComparison.OrdinalIgnoreCase))
@@ -347,17 +349,16 @@ public class ToolExecutionIntegrationTests : TestKit
             $"Expected at least 2 main-model calls (initial + tool-loop follow-up); got {mainModelCalls.Count}");
 
         var followUpCall = mainModelCalls[^1];
-        var systemMessages = followUpCall
-            .Where(m => m.Role == Microsoft.Extensions.AI.ChatRole.System)
+        var allContent = followUpCall
             .Select(m => m.Text ?? string.Empty)
             .ToList();
 
-        var hasWorkingContextBlock = systemMessages.Any(s =>
+        var hasWorkingContextBlock = allContent.Any(s =>
             s.Contains("[working-context]", StringComparison.Ordinal)
             && s.Contains("src/Rect.cs", StringComparison.Ordinal));
 
         Assert.True(hasWorkingContextBlock,
-            $"Expected the follow-up LLM call to include a [working-context] block mentioning src/Rect.cs. System messages:\n{string.Join("\n---\n", systemMessages)}");
+            $"Expected the follow-up LLM call to include a [working-context] block mentioning src/Rect.cs. All messages:\n{string.Join("\n---\n", allContent)}");
     }
 }
 

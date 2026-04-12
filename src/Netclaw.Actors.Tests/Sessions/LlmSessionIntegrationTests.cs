@@ -177,13 +177,15 @@ public class LlmSessionIntegrationTests : TestKit
         await subscriber.ExpectMsgAsync<SessionJoined>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
         await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
 
-        var systemText = string.Join("\n\n", _fakeChatClient.ReceivedMessages.Last()
-            .Where(message => message.Role == Microsoft.Extensions.AI.ChatRole.System)
+        // Base system prompt stays in the System role, but session prompt
+        // overlay moved into the volatile User-role tail as part of #608's
+        // cache-stability reorder. Search across all message text.
+        var allText = string.Join("\n\n", _fakeChatClient.ReceivedMessages.Last()
             .Select(message => message.Text)
             .Where(text => !string.IsNullOrWhiteSpace(text)));
 
-        Assert.Contains("You are a test assistant.", systemText);
-        Assert.Contains("Route overlay: triage the webhook payload before deciding whether to notify.", systemText);
+        Assert.Contains("You are a test assistant.", allText);
+        Assert.Contains("Route overlay: triage the webhook payload before deciding whether to notify.", allText);
     }
 
     [Fact]
@@ -1287,10 +1289,11 @@ public class LlmSessionIntegrationTests : TestKit
         await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
         await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
 
+        // Turn restart notice moved from System-role to the volatile
+        // User-role tail as part of #608's cache-stability reorder.
         Assert.Contains(_fakeChatClient.ReceivedMessages, conversation =>
             conversation.Any(msg =>
-                msg.Role == Microsoft.Extensions.AI.ChatRole.System
-                && msg.Text is not null
+                msg.Text is not null
                 && msg.Text.Contains("Recovery resumed from the last durable checkpoint", StringComparison.Ordinal)));
     }
 

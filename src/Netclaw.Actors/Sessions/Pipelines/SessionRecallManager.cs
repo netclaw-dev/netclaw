@@ -112,39 +112,6 @@ internal sealed class SessionRecallManager
     }
 
     /// <summary>
-    /// Injects automatic recall results into the transient message list as a system message.
-    /// </summary>
-    public static void InjectIntoMessages(List<AiChatMessage> messages, AutomaticRecallResult recall)
-    {
-        if (recall.Degraded)
-        {
-            var degraded = new AiChatMessage(
-                Microsoft.Extensions.AI.ChatRole.System,
-                "[memory-recall]\nstatus: degraded\nreason: automatic recall unavailable for this turn");
-            var insertAt = messages.FindLastIndex(m => m.Role == Microsoft.Extensions.AI.ChatRole.System);
-            messages.Insert(insertAt >= 0 ? insertAt + 1 : 0, degraded);
-            return;
-        }
-
-        if (recall.Items.Count == 0)
-            return;
-
-        var sb = new StringBuilder();
-        sb.AppendLine("[memory-recall]");
-        sb.AppendLine("status: healthy");
-        sb.AppendLine("mode: automatic");
-        foreach (var item in recall.Items)
-        {
-            sb.AppendLine($"- {item.Title} [{item.Id}] sensitivity={item.Sensitivity} score={item.Score:F2}");
-            sb.AppendLine($"  {item.Content}");
-        }
-
-        var recallMessage = new AiChatMessage(Microsoft.Extensions.AI.ChatRole.System, sb.ToString().TrimEnd());
-        var index = messages.FindLastIndex(m => m.Role == Microsoft.Extensions.AI.ChatRole.System);
-        messages.Insert(index >= 0 ? index + 1 : 0, recallMessage);
-    }
-
-    /// <summary>
     /// Formats recall results for persistence in session history.
     /// </summary>
     public static string FormatForHistory(AutomaticRecallResult recall)
