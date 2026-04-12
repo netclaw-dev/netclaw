@@ -21,26 +21,37 @@
 #     NETCLAW_EVAL_COMPACTION_MODEL_ID
 #
 #   Container + runtime:
-#     NETCLAW_IMAGE              Image ref (default: ghcr.io/aaronontheweb/netclawd:latest)
+#     NETCLAW_IMAGE              Image ref (default: ghcr.io/aaronontheweb/netclawd:dev — built locally)
 #     NETCLAW_EVAL_PORT          Host-side port for the eval daemon (default 5299)
 #     NETCLAW_EVAL_CONTEXT_WINDOW  Override model context window (future compaction evals)
+#
+#   Build:
+#     NETCLAW_EVAL_NO_BUILD      Set to 1 to skip `dotnet publish` + `docker build`
+#                                (reuse existing ./publish output and image)
+#     NETCLAW_BIN                Path to netclaw CLI (default: ./publish/cli/netclaw)
 #
 #   Eval suite knobs:
 #     NETCLAW_EVAL_RUNS          Runs per case (default: 5)
 #     NETCLAW_EVAL_THRESHOLD     Pass threshold 0.0-1.0 (default: 0.80)
 #     NETCLAW_EVAL_TIMEOUT       Per-prompt timeout in seconds (default: 60)
-#     NETCLAW_BIN                Path to netclaw CLI (default: netclaw)
 set -euo pipefail
 
 # ─── Configuration ────────────────────────────────────────────────────────────
 
+# Repo root — derived from this script's location (evals/ is one level deep).
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
 RUNS="${NETCLAW_EVAL_RUNS:-5}"
 THRESHOLD="${NETCLAW_EVAL_THRESHOLD:-0.80}"
 PROMPT_TIMEOUT="${NETCLAW_EVAL_TIMEOUT:-60}"
-NETCLAW_BIN="${NETCLAW_BIN:-netclaw}"
-NETCLAW_IMAGE="${NETCLAW_IMAGE:-ghcr.io/aaronontheweb/netclawd:latest}"
 EVAL_PORT="${NETCLAW_EVAL_PORT:-5299}"
 EVAL_CONTAINER_NAME="netclaw-eval-$$"
+NO_BUILD="${NETCLAW_EVAL_NO_BUILD:-0}"
+
+# Image and CLI binary default to the locally-built artifacts. Evals should
+# always test the current source tree, not a stale published image.
+NETCLAW_IMAGE="${NETCLAW_IMAGE:-ghcr.io/aaronontheweb/netclawd:dev}"
+NETCLAW_BIN="${NETCLAW_BIN:-$REPO_ROOT/publish/cli/netclaw}"
 
 # Eval target — resolved by check_prerequisites after optional interactive prompt.
 EVAL_PROVIDER_TYPE="${NETCLAW_EVAL_PROVIDER_TYPE:-}"
@@ -74,10 +85,8 @@ DAEMON_LOG_LINES_BEFORE=0
 # ─── Prerequisites ────────────────────────────────────────────────────────────
 
 check_prerequisites() {
-    if ! command -v "$NETCLAW_BIN" >/dev/null 2>&1; then
-        echo "ERROR: '$NETCLAW_BIN' not found in PATH" >&2
-        exit 1
-    fi
+    # NETCLAW_BIN existence is verified after build_local_image (the binary
+    # may not exist yet when the default points to ./publish/cli/netclaw).
 
     if ! command -v timeout >/dev/null 2>&1; then
         echo "ERROR: 'timeout' command not found (install coreutils)" >&2
@@ -209,6 +218,24 @@ force_rmrf() {
         alpine:latest sh -c 'rm -rf /target/..?* /target/.[!.]* /target/*' \
         >/dev/null 2>&1 || true
     rmdir "$path" 2>/dev/null || true
+}
+
+# ─── Local Build ─────────────────────────────────────────────────────────────
+
+build_local_image() {
+    if [[ "$NO_BUILD" == "1" ]]; then
+        echo "→ NETCLAW_EVAL_NO_BUILD=1 — skipping local build"
+        if [[ ! -x "$NETCLAW_BIN" ]]; then
+            echo "ERROR: NO_BUILD=1 but CLI binary not found at $NETCLAW_BIN" >&2
+            echo "       Run without NO_BUILD or publish the CLI first." >&2
+            exit 1
+        fi
+        return 0
+    fi
+
+    echo "→ Building netclaw from source (image + CLI)..."
+    "$REPO_ROOT/scripts/docker/build-image.sh"
+    echo "→ Local build complete: $NETCLAW_IMAGE"
 }
 
 # ─── Eval Daemon Lifecycle ────────────────────────────────────────────────────
@@ -728,6 +755,14 @@ run_all() {
 
 main() {
     check_prerequisites
+    build_local_image
+
+    # Verify CLI binary exists (may have just been built by build_local_image).
+    if [[ ! -x "$NETCLAW_BIN" ]]; then
+        echo "ERROR: CLI binary not found at '$NETCLAW_BIN'" >&2
+        exit 1
+    fi
+
     start_eval_daemon
     init_db
 
