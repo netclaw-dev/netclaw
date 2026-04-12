@@ -266,6 +266,15 @@ start_eval_daemon() {
         -e "NETCLAW_Models__Fallback__ModelId=$EVAL_FALLBACK_MODEL_ID"
         -e "NETCLAW_Models__Compaction__Provider=eval"
         -e "NETCLAW_Models__Compaction__ModelId=$EVAL_COMPACTION_MODEL_ID"
+        # Eval container runs as Operator/Personal posture so all tools
+        # (shell_execute, file_*, MCP servers) are available without gating.
+        # SignalR/headless sessions already resolve to TrustAudience.Personal —
+        # setting DeploymentPosture=Personal lets ShellExecutionMode default to
+        # HostAllowed and the Personal audience to ToolsMode=All.
+        -e "NETCLAW_Security__DeploymentPosture=Personal"
+        -e "NETCLAW_Security__ShellExecutionMode=HostAllowed"
+        -e "NETCLAW_Security__StrictDefaults=false"
+        -e "NETCLAW_Tools__ShellMode=HostAllowed"
     )
 
     if [[ -n "$EVAL_CONTEXT_WINDOW" ]]; then
@@ -339,12 +348,13 @@ CREATE TABLE IF NOT EXISTS eval_metrics (
     category          TEXT NOT NULL,
     case_name         TEXT NOT NULL,
     run_number        INTEGER NOT NULL,
+    turn_number       INTEGER NOT NULL DEFAULT 1,
     input_tokens      INTEGER,
     output_tokens     INTEGER,
     cached_tokens     INTEGER,
     prompt_ms         REAL,
     predicted_tok_s   REAL,
-    PRIMARY KEY (run_id, case_name, run_number)
+    PRIMARY KEY (run_id, case_name, run_number, turn_number)
 );
 SQL
 }
@@ -361,15 +371,21 @@ store_result() {
          VALUES ('$RUN_ID', '$esc_category', '$case_name', $run_number, '$esc_prompt', $passed, '$esc_details');"
 }
 
-## Parses the [usage] line from stdout and stores performance metrics.
-## Called after each run_prompt / store_result pair.
+## Parses a [usage] line and stores performance metrics.
+## Args: case_name, run_number, [turn_number (default 1)], [usage_line (default: last [usage] in STDOUT_FILE)]
+## Called after each run_prompt / run_prompt_resume.
 store_metrics() {
     [[ -z "$RESULTS_DB" ]] && return
     [[ ! -f "$STDOUT_FILE" ]] && return
 
     local case_name="$1" run_number="$2"
-    local usage_line
-    usage_line=$(grep -o '\[usage\].*' "$STDOUT_FILE" 2>/dev/null | tail -1) || return 0
+    local turn_number="${3:-1}"
+    local usage_line="${4:-}"
+
+    # When no explicit usage line is passed, read the last one in STDOUT_FILE.
+    if [[ -z "$usage_line" ]]; then
+        usage_line=$(grep -o '\[usage\].*' "$STDOUT_FILE" 2>/dev/null | tail -1) || return 0
+    fi
 
     # Parse fields from: [usage] in=X out=Y total=Z cached=C prompt_ms=P tok_s=T
     local input_tokens output_tokens cached_tokens prompt_ms tok_s
@@ -384,8 +400,8 @@ store_metrics() {
 
     local esc_category="${CURRENT_CATEGORY//\'/\'\'}"
     sqlite3 "$RESULTS_DB" \
-        "INSERT INTO eval_metrics (run_id, category, case_name, run_number, input_tokens, output_tokens, cached_tokens, prompt_ms, predicted_tok_s)
-         VALUES ('$RUN_ID', '$esc_category', '$case_name', $run_number,
+        "INSERT INTO eval_metrics (run_id, category, case_name, run_number, turn_number, input_tokens, output_tokens, cached_tokens, prompt_ms, predicted_tok_s)
+         VALUES ('$RUN_ID', '$esc_category', '$case_name', $run_number, $turn_number,
                  ${input_tokens:-NULL}, ${output_tokens:-NULL}, ${cached_tokens:-NULL},
                  ${prompt_ms:-NULL}, ${tok_s:-NULL});"
 }
@@ -426,6 +442,31 @@ SELECT
 FROM eval_metrics
 WHERE run_id='$RUN_ID' AND prompt_ms IS NOT NULL;
 SQL
+
+    # Per-turn breakdown for multi-turn cases — shows KV cache evolution.
+    local multi_turn_count
+    multi_turn_count=$(sqlite3 "$RESULTS_DB" \
+        "SELECT COUNT(*) FROM eval_metrics WHERE run_id='$RUN_ID' AND turn_number > 1;" 2>/dev/null || echo "0")
+    if [[ "$multi_turn_count" != "0" ]]; then
+        echo ""
+        echo "── Multi-Turn Cache Evolution (avg across runs) ──"
+        sqlite3 -header -column "$RESULTS_DB" <<SQL
+SELECT
+    case_name,
+    turn_number as turn,
+    CAST(ROUND(AVG(input_tokens)) AS INTEGER) as input,
+    CAST(ROUND(AVG(cached_tokens)) AS INTEGER) as cached,
+    CAST(ROUND(AVG(input_tokens) - AVG(cached_tokens)) AS INTEGER) as uncached,
+    ROUND(AVG(prompt_ms), 1) as prompt_ms,
+    ROUND(AVG(predicted_tok_s), 1) as tok_s
+FROM eval_metrics
+WHERE run_id='$RUN_ID'
+  AND case_name LIKE 'multi_turn_%'
+  AND prompt_ms IS NOT NULL
+GROUP BY case_name, turn_number
+ORDER BY case_name, turn_number;
+SQL
+    fi
 }
 
 finalize_db() {
@@ -492,6 +533,104 @@ run_prompt() {
 
     # Brief pause for daemon log flush
     sleep 2
+}
+
+## Runs a prompt against an existing (or new) named session via `chat -p --resume`.
+## Appends output to a per-turn file AND the shared STDOUT_FILE so existing
+## assertion helpers (stdout_contains, etc.) see the full concatenated output.
+## Args: session_id, prompt
+run_prompt_resume() {
+    local session_id="$1"
+    local prompt="$2"
+    local turn_file="$TMPDIR_EVAL/stdout_$(date +%s%N)_turn.txt"
+
+    # First call in a multi-turn case: open a fresh shared STDOUT_FILE.
+    if [[ -z "${MULTI_TURN_STDOUT_FILE:-}" ]]; then
+        MULTI_TURN_STDOUT_FILE="$TMPDIR_EVAL/stdout_$(date +%s%N)_multi.txt"
+        : > "$MULTI_TURN_STDOUT_FILE"
+    fi
+    STDOUT_FILE="$MULTI_TURN_STDOUT_FILE"
+
+    if [[ -f "$DAEMON_LOG" ]]; then
+        DAEMON_LOG_LINES_BEFORE=$(wc -l < "$DAEMON_LOG")
+    else
+        DAEMON_LOG_LINES_BEFORE=0
+    fi
+
+    NETCLAW_DAEMON_ENDPOINT="http://127.0.0.1:$EVAL_PORT" \
+    NETCLAW_HOME="$EVAL_HOME" \
+        timeout "$PROMPT_TIMEOUT" "$NETCLAW_BIN" chat -p --resume "$session_id" "$prompt" \
+        > "$turn_file" 2>&1 || true
+
+    # Append this turn's output to the shared file so assertions see all turns.
+    cat "$turn_file" >> "$STDOUT_FILE"
+
+    # Per-turn metrics — read the usage line from this turn's file only.
+    LAST_TURN_USAGE_LINE=$(grep -o '\[usage\].*' "$turn_file" 2>/dev/null | tail -1 || echo "")
+
+    sleep 2
+}
+
+## Runs a named multi-turn case. Each prompt is sent via --resume against
+## a dedicated session. Metrics are captured per turn. The assertion function
+## is called once against the concatenated output of all turns.
+## Args: case_name, description, prompt1, prompt2, ... promptN
+run_multi_turn_case() {
+    local case_name="$1"; shift
+    local description="$1"; shift
+    local -a prompts=("$@")
+    local assert_fn="assert_${case_name}"
+
+    check_daemon_alive
+
+    if ! declare -f "$assert_fn" >/dev/null 2>&1; then
+        printf "  [SKIP] %-30s — assertion function %s not defined\n" "$case_name" "$assert_fn"
+        return
+    fi
+
+    local passes=0
+    local run
+    for ((run = 1; run <= RUNS; run++)); do
+        # Fresh session per run so runs don't pollute each other.
+        local session_id="eval/${case_name}-run${run}-$$"
+        MULTI_TURN_STDOUT_FILE=""
+
+        local turn=1
+        local prompt
+        for prompt in "${prompts[@]}"; do
+            run_prompt_resume "$session_id" "$prompt"
+            store_metrics "$case_name" "$run" "$turn" "$LAST_TURN_USAGE_LINE"
+            turn=$((turn + 1))
+        done
+
+        local passed=0
+        local details="fail"
+        if $assert_fn 2>/dev/null; then
+            passed=1
+            passes=$((passes + 1))
+            details="pass"
+        fi
+
+        # Use the first prompt as the representative prompt_used for eval_results.
+        store_result "$case_name" "$run" "${prompts[0]}" "$passed" "$details"
+    done
+
+    local score
+    score=$(awk "BEGIN {printf \"%.2f\", $passes / $RUNS}")
+    local threshold_met
+    threshold_met=$(awk "BEGIN {print ($score >= $THRESHOLD) ? 1 : 0}")
+
+    CATEGORY_CASES=$((CATEGORY_CASES + 1))
+    TOTAL_CASES=$((TOTAL_CASES + 1))
+
+    if [[ "$threshold_met" == "1" ]]; then
+        CATEGORY_PASSED=$((CATEGORY_PASSED + 1))
+        PASSED_CASES=$((PASSED_CASES + 1))
+        printf "  [PASS] %-30s %d/%d (%s)  — %s\n" "$case_name" "$passes" "$RUNS" "$score" "$description"
+    else
+        FAILED_CASES=$((FAILED_CASES + 1))
+        printf "  [FAIL] %-30s %d/%d (%s)  — %s\n" "$case_name" "$passes" "$RUNS" "$score" "$description"
+    fi
 }
 
 # ─── Assertion Helpers ────────────────────────────────────────────────────────
@@ -631,6 +770,51 @@ assert_complex_gh_issues() {
 
 assert_complex_diagnose_self() {
     stdout_contains '\[tool:call\] shell_execute' && stdout_contains 'netclaw.*doctor'
+}
+
+# Category 8: Multi-Turn Conversation (tests session-resume + KV cache behavior)
+# All assertions run against the concatenated stdout of every turn in the case.
+
+assert_multi_turn_text_recall() {
+    # T1 establishes "chartreuse", T3 must recall it after a distractor.
+    stdout_contains 'chartreuse'
+}
+
+assert_multi_turn_text_growth() {
+    # 5 short chit-chat turns. Success = all turns produced output (no hard recall check).
+    # The point of this case is the per-turn metrics, not a behavioral assertion.
+    # We require that at least 5 [usage] lines were emitted (one per turn).
+    local usage_count
+    usage_count=$(grep -c '\[usage\]' "$STDOUT_FILE" 2>/dev/null)
+    usage_count="${usage_count:-0}"
+    [[ "$usage_count" -ge 5 ]]
+}
+
+assert_multi_turn_tool_carryover() {
+    # T1 uses shell_execute for `netclaw doctor`. T2 asks about the result.
+    # Must see at least one shell_execute tool call and some reference to the daemon/health.
+    stdout_contains '\[tool:call\] shell_execute' && \
+        (stdout_contains 'healthy' || stdout_contains 'daemon' || stdout_contains 'version')
+}
+
+assert_multi_turn_tool_repeat() {
+    # T1 reads /etc/hostname, T2 reads /etc/os-release, T3 must recall both filenames.
+    stdout_contains '\[tool:call\] shell_execute' && \
+        stdout_contains '/etc/hostname' && \
+        stdout_contains '/etc/os-release'
+}
+
+assert_multi_turn_python_app() {
+    # T1: write greet() function to /tmp/netclaw-eval-greeter.py
+    # T2: add __main__ block, run it — output "Hello, world!"
+    # T3: text recall of greet signature
+    # T4: add style='formal' variant, run twice — "Hello, world!" + "Good day"
+    stdout_contains '\[tool:call\] file_write' && \
+        stdout_contains 'netclaw-eval-greeter.py' && \
+        stdout_contains '\[tool:call\] shell_execute' && \
+        stdout_contains 'Hello, world!' && \
+        stdout_contains 'Good day' && \
+        stdout_contains 'greet'
 }
 
 # ─── Case & Category Runner ──────────────────────────────────────────────────
@@ -827,6 +1011,40 @@ run_all() {
 
     run_case complex_diagnose_self "shell_execute with netclaw doctor" \
         "Run netclaw doctor and summarize any problems"
+
+    end_category
+
+    # ── Category 8: Multi-Turn Conversation ──
+    # Each case runs N scripted turns through one named session via `chat -p --resume`.
+    # Per-turn metrics are captured so we can see KV cache growth / decay across turns.
+    print_category "Multi-Turn Conversation"
+
+    run_multi_turn_case multi_turn_text_recall "3-turn text recall across a distractor" \
+        "I want you to remember something for me: my favorite color is chartreuse. Just acknowledge and wait for my next question." \
+        "What's two plus two? Just give me the number." \
+        "What was my favorite color that I asked you to remember?"
+
+    run_multi_turn_case multi_turn_text_growth "5 short chit-chat turns (cache growth probe)" \
+        "Hi! Just say hello back in one word." \
+        "Count to three." \
+        "Name a primary color." \
+        "Name a fruit." \
+        "Say goodbye in one word."
+
+    run_multi_turn_case multi_turn_tool_carryover "tool result carries into a text recall turn" \
+        "Run 'netclaw doctor' via shell_execute and tell me if the daemon is healthy." \
+        "Based on what you just saw from netclaw doctor, without running any more tools, was there anything wrong with the daemon?"
+
+    run_multi_turn_case multi_turn_tool_repeat "two distinct file reads across turns" \
+        "Use shell_execute to cat /etc/hostname and tell me what's in it." \
+        "Now use shell_execute to cat /etc/os-release and tell me the first line." \
+        "Without running any more tools, what were the names of the two files you just read?"
+
+    run_multi_turn_case multi_turn_python_app "iteratively build and modify a Python script across 4 turns" \
+        "Create a Python script at /tmp/netclaw-eval-greeter.py that defines a function greet(name) which returns the string 'Hello, {name}!' with the name interpolated. Just write the file; don't run it yet." \
+        "Now add a __main__ block that calls greet('world') and prints the result. Then run the script using shell_execute to verify it outputs 'Hello, world!'." \
+        "Without reading the file or running any tools, what's the signature of the greet function you just wrote? Just answer from memory." \
+        "Modify the greet function to take an optional 'style' parameter. Default is 'friendly' which keeps current behavior (Hello, {name}!). When style='formal', return 'Good day, {name}.' instead. Then run the script twice using shell_execute: once calling greet('world'), once calling greet('world', style='formal'). Show me both outputs."
 
     end_category
 }

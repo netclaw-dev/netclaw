@@ -257,6 +257,11 @@ public sealed class HeadlessChannel : IChannel
                 }
                 else
                 {
+                    // If the turn streamed text deltas, they did NOT end with a newline
+                    // (each delta is Console.Write). Force the usage line onto its own
+                    // line so downstream parsers (evals, humans) can anchor on ^[usage].
+                    if (_receivedTextDeltaInCurrentTurn)
+                        Console.WriteLine();
                     Console.WriteLine($"[usage] in={msg.InputTokens} out={msg.OutputTokens} total={msg.TotalTokens} cached={msg.CachedInputTokens} prompt_ms={msg.PromptMs} tok_s={msg.PredictedPerSecond}");
                 }
                 Log(log, $"USAGE: in={msg.InputTokens} out={msg.OutputTokens} total={msg.TotalTokens} cached={msg.CachedInputTokens} reasoning={msg.ReasoningTokens} context_window={msg.ContextWindowTokens} prompt_ms={msg.PromptMs} predicted_tok_s={msg.PredictedPerSecond}");
