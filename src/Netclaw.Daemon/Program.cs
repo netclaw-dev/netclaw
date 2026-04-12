@@ -551,26 +551,20 @@ static void ConfigureDaemonServices(
         .Get<SearchConfig>() ?? new SearchConfig();
     var searchBackend = CreateSearchBackend(searchConfig);
 
-    // Tool path deny-list: prevent agent tools from touching Netclaw's control plane.
-    // Three independent surfaces so the write-deny set can be broad (covers the
-    // files whose edits would corrupt or destabilize the daemon) without letting
-    // over-broad directory entries bleed into the shell indicator substring scan,
-    // which would otherwise block legitimate diagnostic commands like
-    // `ls ~/.netclaw/config`. See ToolPathPolicy remarks.
     var writeDenyList = new[]
     {
-        paths.SecretsPath,         // credentials
-        paths.KeysDirectory,       // cryptographic keyring
-        paths.SqliteDbPath,        // memory/session store — corruption is unrecoverable
-        paths.PidFilePath,         // lifecycle files
+        paths.SecretsPath,
+        paths.KeysDirectory,
+        paths.SqliteDbPath,
+        paths.PidFilePath,
         paths.LockFilePath,
-        paths.RestartManifestPath, // cache/restart-manifest.json — agents writing this could spoof restart state
+        paths.RestartManifestPath,
     };
     var readDenyList = new[]
     {
         paths.SecretsPath,
         paths.KeysDirectory,
-        paths.WebhooksDirectory,   // webhook configs embed inline secrets
+        paths.WebhooksDirectory,
     };
     var shellIndicatorList = new[]
     {
@@ -584,10 +578,6 @@ static void ConfigureDaemonServices(
     var shellCommandPolicy = new ShellCommandPolicy(toolConfig.HardDenyPatterns);
     services.AddSingleton(shellCommandPolicy);
 
-    // Argument-aware matcher: routes file_write/file_edit into a control-plane
-    // approval bucket when the target is under ~/.netclaw/config/ so those
-    // writes fail-closed to interactive approval even when no explicit policy
-    // override is set.
     var fileApprovalMatcher = new FilePathApprovalMatcher(paths.ConfigDirectory);
     var toolAccessPolicy = new ToolAccessPolicy(
         toolConfig,

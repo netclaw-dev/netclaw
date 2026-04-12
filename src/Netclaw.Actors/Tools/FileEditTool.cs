@@ -56,10 +56,7 @@ public sealed partial class FileEditTool : NetclawTool<FileEditTool.Params>
             return accessError;
 
         if (_pathPolicy?.IsDenied(authorizedPath) == true)
-            return $"Error: Access denied: '{authorizedPath}' is part of Netclaw's control plane "
-                + "(secrets, keys, database, or lifecycle files) and cannot be modified by agent tools, "
-                + "even with approval. If the user wants this change, ask them to run a dedicated command "
-                + "(e.g. `netclaw doctor --fix`, `netclaw secrets set`) or edit the file directly.";
+            return FileToolErrors.ControlPlaneWriteDenied(authorizedPath);
 
         if (!File.Exists(authorizedPath))
             return $"Error: File not found: {authorizedPath}";

@@ -143,8 +143,6 @@ public sealed class ToolPathPolicyTests
         Assert.True(policy.CommandReferencesDeniedPath("tar czf /tmp/netclaw-config.tgz ~/.netclaw/config"));
     }
 
-    // ── Three-list split tests (production Tier 1 hard-deny) ─────────────
-
     private static ToolPathPolicy CreateProductionPolicy()
     {
         var writeDeny = new[]
@@ -196,9 +194,6 @@ public sealed class ToolPathPolicyTests
     [Fact]
     public void IsDenied_allows_writes_to_netclaw_config_json_so_approval_gate_can_fire()
     {
-        // Tier 2: netclaw.json is NOT in the hard-deny set so it reaches the
-        // approval gate. The incident fix relies on this split — hard-deny +
-        // approval-gate, not hard-deny everywhere.
         var policy = CreateProductionPolicy();
         Assert.False(policy.IsDenied("/home/user/.netclaw/config/netclaw.json"));
         Assert.False(policy.IsDenied("/home/user/.netclaw/config/devices.json"));
@@ -246,26 +241,20 @@ public sealed class ToolPathPolicyTests
     [Fact]
     public void IsReadDenied_blocks_webhook_configs()
     {
-        // Webhook configs embed inline secrets, so read-deny applies.
         var policy = CreateProductionPolicy();
         Assert.True(policy.IsReadDenied("/home/user/.netclaw/config/webhooks/github-issues.json"));
     }
 
     [Fact]
-    public void IsReadDenied_allows_netclaw_json_even_though_write_is_denied_elsewhere()
+    public void IsReadDenied_allows_netclaw_json()
     {
-        // The asymmetry is the point: netclaw.json may be read for diagnostics
-        // (the agent can show it to the user) but must not be written silently.
-        // netclaw.json is not in writeDeny either — it's gated by approval.
         var policy = CreateProductionPolicy();
         Assert.False(policy.IsReadDenied("/home/user/.netclaw/config/netclaw.json"));
     }
 
     [Fact]
-    public void IsReadDenied_allows_netclaw_db_even_though_write_is_hard_denied()
+    public void IsReadDenied_allows_netclaw_db()
     {
-        // SQLite db: write-denied (corruption is unrecoverable), but reading
-        // the raw file is not a credential leak — it's binary SQLite anyway.
         var policy = CreateProductionPolicy();
         Assert.False(policy.IsReadDenied("/home/user/.netclaw/netclaw.db"));
     }
@@ -273,11 +262,9 @@ public sealed class ToolPathPolicyTests
     [Fact]
     public void CommandReferencesDeniedPath_still_allows_ls_of_config_directory()
     {
-        // Regression guard for the ShellTool indicator footgun: if the split
-        // lists ever collapse back into one and ConfigDirectory ends up as a
-        // substring indicator, every shell command containing ".netclaw/config"
-        // would be blocked — including legit diagnostics the netclaw-operations
-        // skill tells agents to run.
+        // Regression guard: directory-scoped writeDeny entries must not bleed
+        // into the shell substring indicator set, otherwise every shell command
+        // whose text contains ".netclaw/config" would be rejected.
         var policy = CreateProductionPolicy();
         Assert.False(policy.CommandReferencesDeniedPath("ls ~/.netclaw/config"));
         Assert.False(policy.CommandReferencesDeniedPath("stat ~/.netclaw/config"));

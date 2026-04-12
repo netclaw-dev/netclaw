@@ -4,23 +4,13 @@ namespace Netclaw.Actors.Tools;
 
 /// <summary>
 /// Argument-aware approval matcher for the <c>file_write</c> and <c>file_edit</c>
-/// tools. Inspects the target path and, when it lands inside Netclaw's control
-/// plane (<c>~/.netclaw/config/</c>), routes the invocation to a distinct
-/// approval-mode key so operators can gate control-plane writes without
-/// requiring approval for every ordinary file write.
+/// tools. Routes writes under a configured control-plane root to a distinct
+/// approval-mode key so those invocations can be gated without requiring
+/// approval for every ordinary file write.
 /// </summary>
-/// <remarks>
-/// Tier split: Tier 1 files (secrets, keys, SQLite DB, pid/lock, restart
-/// manifest) are hard-denied earlier by <see cref="ToolPathPolicy.IsDenied"/>
-/// and never reach this matcher. Tier 2 files — the rest of
-/// <c>~/.netclaw/config/</c> — are routed here and surfaced through the
-/// standard approval flow with per-path patterns so approving
-/// <c>netclaw.json</c> does not implicitly approve <c>tool-approvals.json</c>.
-/// </remarks>
 public sealed class FilePathApprovalMatcher : IToolApprovalMatcher
 {
     public const string ControlPlaneModeKeySuffix = ":control-plane";
-    public const string ControlPlanePatternPrefix = "control-plane:";
 
     private readonly string _controlPlaneRoot;
 
@@ -35,6 +25,9 @@ public sealed class FilePathApprovalMatcher : IToolApprovalMatcher
             ? toolName + ControlPlaneModeKeySuffix
             : toolName;
     }
+
+    public bool IsFailClosedOnPersonal(string toolName, IDictionary<string, object?>? arguments)
+        => TryGetControlPlaneRelativePath(arguments, out _);
 
     public IReadOnlyList<string> ExtractPatterns(string toolName, IDictionary<string, object?>? arguments)
     {

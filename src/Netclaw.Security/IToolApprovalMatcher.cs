@@ -18,6 +18,14 @@ public interface IToolApprovalMatcher
     string GetApprovalModeKey(string toolName, IDictionary<string, object?>? arguments);
 
     /// <summary>
+    /// Returns true if this invocation must require interactive approval on
+    /// the Personal audience when no explicit approval policy is configured.
+    /// Encapsulates the fail-closed decision so callers do not have to inspect
+    /// tool names or approval-key string formats.
+    /// </summary>
+    bool IsFailClosedOnPersonal(string toolName, IDictionary<string, object?>? arguments);
+
+    /// <summary>
     /// Extracts the intent-level pattern from a tool call's arguments.
     /// For shell: verb-chain prefix (e.g., "git push" from "git push origin main").
     /// For other tools: the tool name itself.
@@ -45,6 +53,9 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
 
     public string GetApprovalModeKey(string toolName, IDictionary<string, object?>? arguments)
         => toolName;
+
+    public bool IsFailClosedOnPersonal(string toolName, IDictionary<string, object?>? arguments)
+        => true;
 
     public IReadOnlyList<string> ExtractPatterns(string toolName, IDictionary<string, object?>? arguments)
     {
@@ -123,6 +134,9 @@ public sealed class DefaultApprovalMatcher : IToolApprovalMatcher
 
     public string GetApprovalModeKey(string toolName, IDictionary<string, object?>? arguments)
         => toolName;
+
+    public bool IsFailClosedOnPersonal(string toolName, IDictionary<string, object?>? arguments)
+        => false;
 
     public IReadOnlyList<string> ExtractPatterns(string toolName, IDictionary<string, object?>? arguments)
     {

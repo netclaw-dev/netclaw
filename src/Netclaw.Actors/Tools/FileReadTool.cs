@@ -44,8 +44,7 @@ public sealed partial class FileReadTool : NetclawTool<FileReadTool.Params>
             return accessError;
 
         if (_pathPolicy?.IsReadDenied(authorizedPath) == true)
-            return $"Error: Access denied: '{authorizedPath}' contains credentials or keys "
-                + "and cannot be read by agent tools.";
+            return FileToolErrors.CredentialReadDenied(authorizedPath);
 
         if (!File.Exists(authorizedPath))
             return $"Error: File not found: {authorizedPath}";

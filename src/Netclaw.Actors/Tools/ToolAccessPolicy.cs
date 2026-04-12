@@ -142,7 +142,7 @@ public sealed class ToolAccessPolicy
         var approvalPolicy = profile.ApprovalPolicy;
         var approvalModeKey = matcher.GetApprovalModeKey(toolName, arguments);
         var mode = approvalPolicy?.GetEffectiveMode(approvalModeKey)
-            ?? GetMissingApprovalPolicyDefaultMode(approvalModeKey, audience);
+            ?? GetMissingApprovalPolicyDefaultMode(toolName, arguments, audience, matcher);
 
         if (mode == ToolApprovalMode.Deny)
             return ToolAccessDecision.Deny("tool_denied_by_approval_policy");
@@ -169,23 +169,14 @@ public sealed class ToolAccessPolicy
         return ToolAccessDecision.RequiresApproval(approvalContext);
     }
 
-    private static ToolApprovalMode GetMissingApprovalPolicyDefaultMode(string approvalModeKey, TrustAudience audience)
+    private static ToolApprovalMode GetMissingApprovalPolicyDefaultMode(
+        string toolName,
+        IDictionary<string, object?>? arguments,
+        TrustAudience audience,
+        IToolApprovalMatcher matcher)
     {
-        // Fail-closed for personal shell: if the approval policy was omitted,
-        // still require interactive approval rather than silently auto-approving.
-        if (audience == TrustAudience.Personal)
-        {
-            if (string.Equals(approvalModeKey, ShellTool.ToolName, StringComparison.Ordinal))
-                return ToolApprovalMode.Approval;
-
-            // Fail-closed for control-plane file writes: even if the operator did
-            // not explicitly configure an approval policy, writes into
-            // ~/.netclaw/config/** require interactive approval. Without this the
-            // agent can silently edit netclaw.json and trigger a daemon restart
-            // that drops the current session (see the session-file-blown incident).
-            if (approvalModeKey.EndsWith(FilePathApprovalMatcher.ControlPlaneModeKeySuffix, StringComparison.Ordinal))
-                return ToolApprovalMode.Approval;
-        }
+        if (audience == TrustAudience.Personal && matcher.IsFailClosedOnPersonal(toolName, arguments))
+            return ToolApprovalMode.Approval;
 
         return ToolApprovalMode.Auto;
     }

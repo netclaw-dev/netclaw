@@ -156,8 +156,6 @@ public sealed class ToolApprovalGateTests
         Assert.Equal("hard_deny_self_destructive", decision.DenyReason);
     }
 
-    // ── FilePathApprovalMatcher / control-plane approval tests ────────────
-
     private const string ControlPlaneRoot = "/home/user/.netclaw/config";
 
     private static ToolAccessPolicy CreateFileWritePolicy(ToolApprovalConfig? approvalPolicy = null)
@@ -180,8 +178,6 @@ public sealed class ToolApprovalGateTests
     [Fact]
     public void file_write_to_netclaw_json_requires_approval_under_fail_closed_default()
     {
-        // ApprovalPolicy is null → GetMissingApprovalPolicyDefaultMode fires.
-        // For Personal + control-plane key, fail-closed default is Approval.
         var policy = CreateFileWritePolicy(approvalPolicy: null);
         var args = new Dictionary<string, object?>
         {
@@ -236,8 +232,6 @@ public sealed class ToolApprovalGateTests
     [Fact]
     public void file_write_emits_distinct_per_path_patterns()
     {
-        // Per-path patterns so approving netclaw.json does not implicitly
-        // approve tool-approvals.json or devices.json.
         var matcher = new FilePathApprovalMatcher(ControlPlaneRoot);
         var netclawJson = matcher.ExtractPatterns("file_write",
             new Dictionary<string, object?> { ["Path"] = ControlPlaneRoot + "/netclaw.json" });
@@ -254,8 +248,6 @@ public sealed class ToolApprovalGateTests
     [Fact]
     public void file_write_control_plane_approval_honors_explicit_auto_override()
     {
-        // Escape hatch: operator who knows what they're doing can downgrade the
-        // control-plane key to Auto via ApprovalPolicy.ToolOverrides.
         var approvalPolicy = new ToolApprovalConfig
         {
             ToolOverrides = new Dictionary<string, ToolApprovalMode>(StringComparer.Ordinal)

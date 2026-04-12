@@ -2,26 +2,14 @@ namespace Netclaw.Security;
 
 /// <summary>
 /// Evaluates whether a file path is denied for agent tool access.
-/// Used to prevent the LLM from reading/writing sensitive or control-plane files.
 /// </summary>
 /// <remarks>
-/// The policy holds three independent deny lists because the three callers have
-/// different risk profiles:
-/// <list type="bullet">
-///   <item><c>writeDeniedPaths</c> — checked by <c>FileWriteTool</c> and
-///     <c>FileEditTool</c> via <see cref="IsDenied"/>. Intended for control-plane
-///     files that must never be mutated by an agent (secrets, keys, SQLite DB,
-///     pid/lock files, etc.).</item>
-///   <item><c>readDeniedPaths</c> — checked by <c>FileReadTool</c> via
-///     <see cref="IsReadDenied"/>. Narrower: only files that leak credentials
-///     (secrets, keys, webhook configs with inline secrets). Read access to
-///     non-credential control-plane files like <c>netclaw.json</c> is allowed.</item>
-///   <item><c>shellIndicatorPaths</c> — drives the substring scan in
-///     <see cref="CommandReferencesDeniedPath"/>. Must stay narrow (file-level,
-///     not directory-level) because the scan does a raw <c>Contains</c> on the
-///     command string and over-broad indicators would block legitimate
-///     diagnostics like <c>ls ~/.netclaw/config</c>.</item>
-/// </list>
+/// Three independent deny surfaces: write (<see cref="IsDenied"/>), read
+/// (<see cref="IsReadDenied"/>), and shell indicators
+/// (<see cref="CommandReferencesDeniedPath"/>). The shell indicator list must
+/// stay narrow — file-level only — because that path does a raw substring scan
+/// against the command text, so directory-scoped entries would block legitimate
+/// commands whose arguments happen to contain the directory name.
 /// </remarks>
 public sealed class ToolPathPolicy
 {
@@ -36,11 +24,6 @@ public sealed class ToolPathPolicy
         "python", "python3", "node", "ruby", "perl", "php"
     };
 
-    /// <summary>
-    /// Backward-compat single-list constructor. Forwards the same list to all
-    /// three enforcement surfaces. Existing call sites (and tests) that treat
-    /// the policy as a flat deny list continue to work.
-    /// </summary>
     public ToolPathPolicy(IEnumerable<string> deniedPaths)
     {
         var materialized = deniedPaths.ToList();
@@ -50,11 +33,6 @@ public sealed class ToolPathPolicy
         _commandIndicators = BuildCommandIndicators(materialized);
     }
 
-    /// <summary>
-    /// Three-list constructor. Use when write, read, and shell-indicator deny
-    /// surfaces need independent scopes — the production path does this because
-    /// the write-deny list is broader than the others.
-    /// </summary>
     public ToolPathPolicy(
         IEnumerable<string> writeDeniedPaths,
         IEnumerable<string> readDeniedPaths,
