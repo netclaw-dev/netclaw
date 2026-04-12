@@ -502,6 +502,170 @@ public class DispatchingToolExecutorTests
     }
 
     [Fact]
+    public async Task One_time_approval_bypasses_policy_for_path_aware_file_patterns()
+    {
+        var controlPlaneRoot = Path.Combine(Path.GetTempPath(), $"netclaw-control-plane-{Guid.NewGuid():N}");
+        var targetPath = Path.Combine(controlPlaneRoot, "netclaw.json");
+        var secondPath = Path.Combine(controlPlaneRoot, "devices.json");
+        Directory.CreateDirectory(controlPlaneRoot);
+
+        try
+        {
+            var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
+            config.AudienceProfiles.Personal.ApprovalPolicy = new ToolApprovalConfig
+            {
+                ToolOverrides = new Dictionary<string, ToolApprovalMode>(StringComparer.Ordinal)
+                {
+                    ["shell_execute"] = ToolApprovalMode.Approval
+                }
+            };
+
+            var registry = new ToolRegistry();
+            registry.WithFirstPartyTools(config);
+
+            var executor = new DispatchingToolExecutor(
+                registry,
+                new ToolAccessPolicy(
+                    config,
+                    new EffectivePolicyDefaults(
+                        DeploymentPosture.Personal,
+                        TrustAudience.Personal,
+                        ShellExecutionMode.HostAllowed,
+                        UsedStrictFallback: false),
+                    fileApprovalMatcher: new FilePathApprovalMatcher(controlPlaneRoot)));
+
+            var toolCall = new FunctionCallContent(
+                "call-file-approve-once-bypass",
+                "file_write",
+                new Dictionary<string, object?>
+                {
+                    ["Path"] = targetPath,
+                    ["Content"] = "approved once"
+                });
+
+            var context = new Netclaw.Tools.ToolExecutionContext("signalr/thread-1", null)
+            {
+                Audience = TrustAudience.Personal.ToWireValue(),
+                Boundary = SecurityPolicyDefaults.TrustedInstanceBoundary,
+                ChannelType = "signalr",
+                SupportsInteractiveApproval = true
+            };
+
+            var firstAttempt = await Assert.ThrowsAsync<ToolApprovalRequiredException>(() =>
+                executor.ExecuteAsync(toolCall, context, TestContext.Current.CancellationToken));
+
+            context.OneTimeApprovedToolName = toolCall.Name;
+            context.SetOneTimeApprovedPatterns(firstAttempt.ApprovalContext.UnapprovedPatterns);
+
+            var retryResult = await executor.ExecuteAsync(toolCall, context, TestContext.Current.CancellationToken);
+            Assert.Contains("Successfully wrote", retryResult, StringComparison.Ordinal);
+            Assert.True(File.Exists(targetPath));
+
+            var secondCall = new FunctionCallContent(
+                "call-file-approve-once-bypass-second",
+                "file_write",
+                new Dictionary<string, object?>
+                {
+                    ["Path"] = secondPath,
+                    ["Content"] = "different path"
+                });
+
+            await Assert.ThrowsAsync<ToolApprovalRequiredException>(() =>
+                executor.ExecuteAsync(secondCall, context, TestContext.Current.CancellationToken));
+
+            context.OneTimeApprovedToolName = null;
+            context.SetOneTimeApprovedPatterns([]);
+
+            await Assert.ThrowsAsync<ToolApprovalRequiredException>(() =>
+                executor.ExecuteAsync(toolCall, context, TestContext.Current.CancellationToken));
+        }
+        finally
+        {
+            if (Directory.Exists(controlPlaneRoot))
+                Directory.Delete(controlPlaneRoot, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task One_time_approval_uses_filtered_unapproved_patterns_on_retry()
+    {
+        var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
+        config.AudienceProfiles.Personal.ApprovalPolicy = new ToolApprovalConfig
+        {
+            ToolOverrides = new Dictionary<string, ToolApprovalMode>(StringComparer.Ordinal)
+            {
+                ["shell_execute"] = ToolApprovalMode.Approval
+            }
+        };
+
+        var registry = new ToolRegistry();
+        registry.WithFirstPartyTools(config);
+
+        var system = ActorSystem.Create($"tool-approval-filtered-once-{Guid.NewGuid():N}");
+        try
+        {
+            var approvalActor = system.ActorOf(ToolApprovalActor.CreateProps(), "tool-approval");
+            var approvalService = new AkkaToolApprovalService(new StubRequiredActor(approvalActor));
+            var executor = new DispatchingToolExecutor(
+                registry,
+                new ToolAccessPolicy(
+                    config,
+                    new EffectivePolicyDefaults(
+                        DeploymentPosture.Personal,
+                        TrustAudience.Personal,
+                        ShellExecutionMode.HostAllowed,
+                        UsedStrictFallback: false)),
+                approvalService);
+
+            var context = new Netclaw.Tools.ToolExecutionContext("signalr/thread-filtered", null)
+            {
+                Audience = TrustAudience.Personal.ToWireValue(),
+                Boundary = SecurityPolicyDefaults.TrustedInstanceBoundary,
+                ChannelType = "signalr",
+                SupportsInteractiveApproval = true
+            };
+
+            await approvalService.RecordApprovalAsync(
+                "signalr/thread-filtered",
+                TrustAudience.Personal,
+                "shell_execute",
+                ["pwd"],
+                persistent: false,
+                TestContext.Current.CancellationToken);
+
+            var call = new FunctionCallContent(
+                "call-filtered-once",
+                "shell_execute",
+                new Dictionary<string, object?>
+                {
+                    ["Command"] = "pwd && ls"
+                });
+
+            var firstAttempt = await Assert.ThrowsAsync<ToolApprovalRequiredException>(() =>
+                executor.ExecuteAsync(call, context, TestContext.Current.CancellationToken));
+
+            Assert.DoesNotContain("pwd", firstAttempt.ApprovalContext.UnapprovedPatterns);
+            Assert.Contains("ls", firstAttempt.ApprovalContext.UnapprovedPatterns);
+
+            context.OneTimeApprovedToolName = call.Name;
+            context.SetOneTimeApprovedPatterns(firstAttempt.ApprovalContext.UnapprovedPatterns);
+
+            var retryResult = await executor.ExecuteAsync(call, context, TestContext.Current.CancellationToken);
+            Assert.Contains("Exit code: 0", retryResult, StringComparison.Ordinal);
+
+            context.OneTimeApprovedToolName = null;
+            context.SetOneTimeApprovedPatterns([]);
+
+            await Assert.ThrowsAsync<ToolApprovalRequiredException>(() =>
+                executor.ExecuteAsync(call, context, TestContext.Current.CancellationToken));
+        }
+        finally
+        {
+            await system.Terminate();
+        }
+    }
+
+    [Fact]
     public async Task Session_approval_allows_same_session_but_not_different_session()
     {
         var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };

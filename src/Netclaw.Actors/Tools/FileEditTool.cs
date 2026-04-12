@@ -10,11 +10,13 @@ namespace Netclaw.Actors.Tools;
 /// Makes targeted text replacements in an existing file without rewriting the entire file.
 /// Matches literal text (not regex). Fails if OldString is not found or is ambiguous.
 /// </summary>
-[NetclawTool("file_edit",
+[NetclawTool(ToolName,
     "Make targeted text replacements in an existing file without rewriting the entire file",
     Grant = "file")]
 public sealed partial class FileEditTool : NetclawTool<FileEditTool.Params>
 {
+    public const string ToolName = "file_edit";
+
     private readonly ToolPathPolicy? _pathPolicy;
     private readonly ScopedFileAccessPolicy _fileAccessPolicy;
 
@@ -54,7 +56,7 @@ public sealed partial class FileEditTool : NetclawTool<FileEditTool.Params>
             return accessError;
 
         if (_pathPolicy?.IsDenied(authorizedPath) == true)
-            return "Error: Access denied — this file is protected by security policy.";
+            return FileToolErrors.ControlPlaneWriteDenied(authorizedPath);
 
         if (!File.Exists(authorizedPath))
             return $"Error: File not found: {authorizedPath}";

@@ -13,13 +13,19 @@ public sealed class ToolAccessPolicy
     private readonly EffectivePolicyDefaults _defaults;
     private readonly ToolAudienceProfileResolver _profileResolver;
     private readonly ShellCommandPolicy? _shellCommandPolicy;
+    private readonly IToolApprovalMatcher _fileApprovalMatcher;
 
-    public ToolAccessPolicy(ToolConfig toolConfig, EffectivePolicyDefaults defaults, ShellCommandPolicy? shellCommandPolicy = null)
+    public ToolAccessPolicy(
+        ToolConfig toolConfig,
+        EffectivePolicyDefaults defaults,
+        ShellCommandPolicy? shellCommandPolicy = null,
+        IToolApprovalMatcher? fileApprovalMatcher = null)
     {
         _toolConfig = toolConfig;
         _defaults = defaults;
         _profileResolver = new ToolAudienceProfileResolver(toolConfig);
         _shellCommandPolicy = shellCommandPolicy;
+        _fileApprovalMatcher = fileApprovalMatcher ?? DefaultApprovalMatcher.Instance;
     }
 
     public IReadOnlyList<AITool> FilterExposedTools(
@@ -87,7 +93,7 @@ public sealed class ToolAccessPolicy
             return ToolAccessDecision.Deny("tool_not_allowed_for_audience_profile");
 
         if (!IsShellTool(tool))
-            return CheckApprovalGate(tool.Name, context, arguments, DefaultApprovalMatcher.Instance);
+            return CheckApprovalGate(tool.Name, context, arguments, SelectMatcherForTool(tool.Name));
 
         var shellMode = ResolveShellMode();
         if (shellMode == ShellExecutionMode.Off)
@@ -134,8 +140,14 @@ public sealed class ToolAccessPolicy
         var audience = ResolveAudience(context);
         var profile = ToolAudienceProfileDefaults.GetResolvedProfile(_toolConfig.AudienceProfiles, audience);
         var approvalPolicy = profile.ApprovalPolicy;
-        var mode = approvalPolicy?.GetEffectiveMode(toolName)
-            ?? GetMissingApprovalPolicyDefaultMode(toolName, audience);
+        var approvalModeKey = matcher.GetApprovalModeKey(toolName, arguments);
+        var mode = ResolveApprovalMode(
+            approvalPolicy,
+            approvalModeKey,
+            toolName,
+            arguments,
+            audience,
+            matcher);
 
         if (mode == ToolApprovalMode.Deny)
             return ToolAccessDecision.Deny("tool_denied_by_approval_policy");
@@ -162,14 +174,53 @@ public sealed class ToolAccessPolicy
         return ToolAccessDecision.RequiresApproval(approvalContext);
     }
 
-    private static ToolApprovalMode GetMissingApprovalPolicyDefaultMode(string toolName, TrustAudience audience)
+    private static ToolApprovalMode GetMissingApprovalPolicyDefaultMode(
+        string toolName,
+        IDictionary<string, object?>? arguments,
+        TrustAudience audience,
+        IToolApprovalMatcher matcher)
     {
-        // Fail-closed for personal shell: if the approval policy was omitted,
-        // still require interactive approval rather than silently auto-approving.
-        if (audience == TrustAudience.Personal && string.Equals(toolName, ShellTool.ToolName, StringComparison.Ordinal))
+        if (audience == TrustAudience.Personal && matcher.IsFailClosedOnPersonal(toolName, arguments))
             return ToolApprovalMode.Approval;
 
         return ToolApprovalMode.Auto;
+    }
+
+    private static ToolApprovalMode ResolveApprovalMode(
+        ToolApprovalConfig? approvalPolicy,
+        string approvalModeKey,
+        string toolName,
+        IDictionary<string, object?>? arguments,
+        TrustAudience audience,
+        IToolApprovalMatcher matcher)
+    {
+        if (approvalPolicy is null)
+            return GetMissingApprovalPolicyDefaultMode(toolName, arguments, audience, matcher);
+
+        if (approvalPolicy.ToolOverrides.TryGetValue(approvalModeKey, out var mode))
+            return mode;
+
+        if (!string.Equals(approvalModeKey, toolName, StringComparison.Ordinal)
+            && approvalPolicy.ToolOverrides.TryGetValue(toolName, out mode))
+        {
+            return mode;
+        }
+
+        if (audience == TrustAudience.Personal && matcher.IsFailClosedOnPersonal(toolName, arguments))
+            return ToolApprovalMode.Approval;
+
+        return approvalPolicy.DefaultMode;
+    }
+
+    private IToolApprovalMatcher SelectMatcherForTool(string toolName)
+    {
+        if (string.Equals(toolName, FileWriteTool.ToolName, StringComparison.Ordinal)
+            || string.Equals(toolName, FileEditTool.ToolName, StringComparison.Ordinal))
+        {
+            return _fileApprovalMatcher;
+        }
+
+        return DefaultApprovalMatcher.Instance;
     }
 
     private ShellExecutionMode ResolveShellMode()

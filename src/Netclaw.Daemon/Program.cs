@@ -551,14 +551,43 @@ static void ConfigureDaemonServices(
         .Get<SearchConfig>() ?? new SearchConfig();
     var searchBackend = CreateSearchBackend(searchConfig);
 
-    // Tool path deny-list: prevent agent tools from accessing secrets
-    var toolPathPolicy = new ToolPathPolicy([paths.SecretsPath, paths.WebhooksDirectory, paths.KeysDirectory]);
+    var writeDenyList = new[]
+    {
+        paths.SecretsPath,
+        paths.KeysDirectory,
+        paths.SqliteDbPath,
+        paths.PidFilePath,
+        paths.LockFilePath,
+        paths.RestartManifestPath,
+    };
+    var readDenyList = new[]
+    {
+        paths.SecretsPath,
+        paths.KeysDirectory,
+        paths.WebhooksDirectory,
+    };
+    var shellIndicatorList = new[]
+    {
+        paths.SecretsPath,
+        paths.WebhooksDirectory,
+        paths.KeysDirectory,
+        paths.SqliteDbPath,
+        paths.PidFilePath,
+        paths.LockFilePath,
+        paths.RestartManifestPath,
+    };
+    var toolPathPolicy = new ToolPathPolicy(writeDenyList, readDenyList, shellIndicatorList);
     services.AddSingleton(toolPathPolicy);
 
     var shellCommandPolicy = new ShellCommandPolicy(toolConfig.HardDenyPatterns);
     services.AddSingleton(shellCommandPolicy);
 
-    var toolAccessPolicy = new ToolAccessPolicy(toolConfig, effectivePolicyDefaults, shellCommandPolicy);
+    var fileApprovalMatcher = new FilePathApprovalMatcher(paths.ConfigDirectory);
+    var toolAccessPolicy = new ToolAccessPolicy(
+        toolConfig,
+        effectivePolicyDefaults,
+        shellCommandPolicy,
+        fileApprovalMatcher);
     services.AddSingleton(toolAccessPolicy);
 
     var toolApprovalStore = new ToolApprovalStore(paths.ToolApprovalsPath);
