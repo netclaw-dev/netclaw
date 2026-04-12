@@ -63,7 +63,12 @@ jobs:
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: pages deploy feeds/ --project-name=netclaw-feeds
+          # Pin --branch=dev so release-tag builds (detached HEAD) still
+          # deploy to the production branch instead of a preview alias.
+          # Without this, wrangler infers the branch name from git state
+          # and tag builds land on head.netclaw-feeds.pages.dev while
+          # feeds.netclaw.dev stays frozen on the last dev-branch deploy.
+          command: pages deploy feeds/ --project-name=netclaw-feeds --branch=dev
 
       - name: Validate R2 uploads
         run: |
@@ -73,10 +78,35 @@ jobs:
           m = json.load(open('feeds/skills/.system/manifest.json'))
           print(m['skills'][0]['url'])
           ")
-          echo "Validating: $url"
+          echo "Validating R2 URL: $url"
           status=$(curl -sSL -o /dev/null -w "%{http_code}" "$url")
           if [ "$status" != "200" ]; then
             echo "Validation failed: $url returned HTTP $status" >&2
             exit 1
           fi
-          echo "Validation passed"
+          echo "R2 validation passed"
+
+      - name: Validate custom-domain manifest propagation
+        run: |
+          # Confirm that feeds.netclaw.dev (the production custom domain) is
+          # actually serving the manifest we just generated — not a stale one
+          # from a preview deployment. Fails loudly if Pages routing is wrong.
+          expected_updated_at=$(python3 -c "
+          import json
+          print(json.load(open('feeds/skills/.system/manifest.json'))['updatedAt'])
+          ")
+          for attempt in 1 2 3 4 5 6; do
+            live_updated_at=$(curl -sSL --max-time 15 \
+              https://feeds.netclaw.dev/skills/.system/manifest.json \
+              | python3 -c "import json,sys; print(json.load(sys.stdin).get('updatedAt',''))" \
+              2>/dev/null || true)
+            echo "Attempt $attempt: live=$live_updated_at expected=$expected_updated_at"
+            if [ "$live_updated_at" = "$expected_updated_at" ]; then
+              echo "Custom-domain propagation confirmed"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "Custom-domain validation failed: feeds.netclaw.dev is still serving a stale manifest" >&2
+          echo "This usually means the Pages deploy landed on a preview branch instead of production." >&2
+          exit 1
