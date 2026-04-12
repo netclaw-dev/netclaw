@@ -884,8 +884,10 @@ public class CompactionIntegrationTests : TestKit
         await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
 
         // The last main-model call (post-compaction turn 3) must still
-        // see the file path in its [working-context] block. Filter
-        // observer sidecar calls out by system-prompt marker.
+        // see the file path in its [working-context] block. Since #608,
+        // volatile content (including working-context) is in the User-role
+        // tail message rather than a System message, so we look across
+        // all message roles.
         var mainModelCalls = _fakeChatClient.ReceivedMessages
             .Where(msgs => !(msgs.FirstOrDefault(m => m.Role == Microsoft.Extensions.AI.ChatRole.System)?.Text
                 ?? string.Empty).Contains("session summarizer", StringComparison.OrdinalIgnoreCase))
@@ -893,17 +895,112 @@ public class CompactionIntegrationTests : TestKit
 
         Assert.NotEmpty(mainModelCalls);
         var lastMainCall = mainModelCalls[^1];
-        var systemMessages = lastMainCall
-            .Where(m => m.Role == Microsoft.Extensions.AI.ChatRole.System)
+        var allContent = lastMainCall
             .Select(m => m.Text ?? string.Empty)
             .ToList();
 
-        var hasWorkingContextBlock = systemMessages.Any(s =>
+        var hasWorkingContextBlock = allContent.Any(s =>
             s.Contains("[working-context]", StringComparison.Ordinal)
             && s.Contains("src/Rect.cs", StringComparison.Ordinal));
 
         Assert.True(hasWorkingContextBlock,
-            $"Expected the post-compaction LLM call to include a [working-context] block mentioning src/Rect.cs. System messages:\n{string.Join("\n---\n", systemMessages)}");
+            $"Expected the post-compaction LLM call to include a [working-context] block mentioning src/Rect.cs. All messages:\n{string.Join("\n---\n", allContent)}");
+    }
+
+    [Fact]
+    public async Task Cache_prefix_is_stable_across_two_turns_in_same_session()
+    {
+        // End-to-end regression test for #608. Drives two plain-text turns
+        // through a real actor and asserts that the longest common prefix of
+        // the two LLM calls extends well beyond the single persisted system
+        // prompt. Before the #608 fix, the prefix was exactly 1 message
+        // (persisted prompt) because memory recall and dynamic context
+        // layers were volatile System messages immediately after it. After
+        // the fix, the volatile content lives in a User-role tail so the
+        // prefix should grow to cover the static dynamic context and
+        // conversation history.
+        _fakeChatClient.UsageOverride = new UsageDetails
+        {
+            InputTokenCount = 100,
+            OutputTokenCount = 20,
+            TotalTokenCount = 120
+        };
+
+        var sessionId = new SessionId("test-channel/cache-prefix-stability");
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("cache-prefix-sub");
+
+        await sessionManager.Ask<SessionJoined>(new JoinSession
+        {
+            SessionId = sessionId,
+            Subscriber = subscriber,
+            Filter = OutputFilter.Full
+        }, TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
+
+        // Turn 1.
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "first question"
+        }, TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<UsageOutput>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+
+        // Turn 2.
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "second question"
+        }, TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<UsageOutput>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+
+        // Filter out observer sidecar calls.
+        var mainModelCalls = _fakeChatClient.ReceivedMessages
+            .Where(msgs => !(msgs.FirstOrDefault(m => m.Role == Microsoft.Extensions.AI.ChatRole.System)?.Text
+                ?? string.Empty).Contains("session summarizer", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        Assert.True(mainModelCalls.Count >= 2,
+            $"Expected at least 2 main-model calls; got {mainModelCalls.Count}");
+
+        var turn1 = mainModelCalls[0];
+        var turn2 = mainModelCalls[1];
+
+        var commonPrefix = 0;
+        var minCount = Math.Min(turn1.Count, turn2.Count);
+        for (var i = 0; i < minCount; i++)
+        {
+            if (turn1[i].Role != turn2[i].Role || turn1[i].Text != turn2[i].Text)
+                break;
+            commonPrefix++;
+        }
+
+        // The prefix must extend through at least: [0]=persisted system
+        // prompt, [1]=static dynamic context, [2]=user turn1. Before the
+        // #608 fix this would have been exactly 1 (only the persisted
+        // prompt matched). Three messages is the minimum for the fix to
+        // have taken effect.
+        Assert.True(commonPrefix >= 3,
+            $"Expected cache prefix ≥ 3 messages (persisted prompt + static context + user turn 1), got {commonPrefix}. " +
+            $"Turn 1 has {turn1.Count} messages, turn 2 has {turn2.Count} messages.");
+
+        // Structural guard: no System-role message in either turn should
+        // contain a volatile marker like [memory-recall] or current_utc.
+        foreach (var turn in new[] { turn1, turn2 })
+        {
+            foreach (var msg in turn)
+            {
+                if (msg.Role != Microsoft.Extensions.AI.ChatRole.System)
+                    break;
+                var text = msg.Text ?? string.Empty;
+                Assert.DoesNotContain("[memory-recall]", text);
+                Assert.DoesNotContain("current_utc", text);
+            }
+        }
     }
 }
 

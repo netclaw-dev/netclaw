@@ -60,29 +60,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     private readonly IChatClientProvider _clientProvider;
     private readonly ILoggingAdapter _log;
 
-    /// <summary>
-    /// Attachment-handling hint injected into the dynamic system prompt when
-    /// the resolved <see cref="ToolAudienceProfile"/> grants <c>file_read</c>.
-    /// Source of truth for the netclaw-input-adapters contract's
-    /// agent-facing guidance. Any edits to this string must stay in sync
-    /// with <c>AttachmentNotes</c> and the canonical <c>[attachment]</c>
-    /// line format.
-    /// </summary>
-    internal const string AttachmentContextHint =
-        "[attachments]\n" +
-        "Your session working directory contains an `inbox/` subdirectory where user-uploaded files are placed.\n" +
-        "Each attachment is announced in the inbound message as a single line of the form:\n" +
-        "    [attachment] name=\"...\" mime=\"...\" size=... path=\"inbox/...\" inlined=\"true|false\" [note=\"...\"]\n" +
-        "When `inlined=\"true\"` you can see the file content natively in this turn.\n" +
-        "When `inlined=\"false\"`:\n" +
-        "  - If `note` begins with \"current model has no\": the file exists on disk but you cannot render it natively. " +
-        "Acknowledge the attachment to the user by name in your reply and explain the limitation. Offer tool-based " +
-        "workarounds where applicable (for example, `shell_execute pdftotext` for a PDF on a non-PDF model).\n" +
-        "  - If `note` begins with \"format not inlineable\": use `file_read` or `shell_execute` to process the bytes. " +
-        "This is the normal path for docx, zip, archive, and media files.\n" +
-        "Never silently ignore an attachment the user sent — always acknowledge what you received by name, " +
-        "even if you cannot fully process it.";
-
     // Transient state (not persisted)
     private readonly List<SendUserMessage> _buffer = new();
     private readonly Dictionary<IActorRef, OutputFilter> _subscribers = new();
@@ -2120,9 +2097,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         _turnState.ForceNoToolsActive = forceNoTools;
 
-        var sessionDir = GetSessionDirectory();
-        var messages = ChatMessageConverter.ToAiMessages(_state.History, sessionDir);
-
         // Recall: only resolve on turn-start calls, reuse cache for tool-loop follow-ups
         if (_recallManager.TurnRecallCache is null)
         {
@@ -2159,11 +2133,30 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         }
 
         _activeRecall = _recallManager.TurnRecallCache;
-        SessionRecallManager.InjectIntoMessages(messages, _activeRecall!);
 
-        // Inject dynamic context layers (e.g. tool index, skill index) as transient system messages.
-        // These are NOT persisted — rebuilt on every call so rehydrated sessions stay fresh.
-        InjectDynamicContextLayers(messages);
+        // Build the full message list via the cache-stable assembler.
+        // Static content (persisted prompt, OnceAtStart layers, [session],
+        // [attachments]) sits at the head so the prompt prefix stays
+        // byte-stable across turns. Volatile per-turn content (memory
+        // recall, current time, working context, slash command overlay,
+        // turn restart notice) is consolidated into a single User-role
+        // message appended at the tail so cache misses are confined to
+        // the end of the list. See SessionMessageAssembler for the full
+        // assembly contract. Mark startup injection complete after the
+        // first call to preserve the existing OnceAtStart semantics.
+        var messages = SessionMessageAssembler.Assemble(new ContextAssemblyInput(
+            State: _state,
+            ContextLayers: _contextLayers,
+            StartupContextInjected: _startupContextInjected,
+            SlashCommandSkillContent: _slashCommandSkillContent,
+            SessionPromptOverlay: _sessionPromptOverlay,
+            TurnRestartNotice: _turnRestartNotice,
+            SessionId: _sessionId,
+            SessionsBasePath: _sessionsBasePath,
+            FileReadGranted: HasFileReadGranted(),
+            ActiveRecall: _activeRecall));
+        _startupContextInjected = true;
+
         var self = Self;
         var client = _chatClient;
         var timeout = _config.FirstTokenTimeout;
@@ -2286,77 +2279,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         }
         return false;
     }
-
-    /// <summary>
-    /// Inject dynamic context layers as system messages after the persisted system prompt
-    /// but before user messages. Static (<see cref="ContextLayerTiming.OnceAtStart"/>) layers
-    /// are injected on the first call and again after compaction resets
-    /// <see cref="_startupContextInjected"/>. Per-turn layers are always injected.
-    /// </summary>
-    private void InjectDynamicContextLayers(List<AiChatMessage> messages)
-    {
-        var parts = new List<string>();
-        foreach (var layer in _contextLayers)
-        {
-            if (_startupContextInjected && layer.Timing == ContextLayerTiming.OnceAtStart)
-                continue;
-
-            var content = layer.GetContextLayer();
-            if (!string.IsNullOrWhiteSpace(content))
-                parts.Add(content.Trim());
-        }
-
-        // Slash-command skill injection: if a slash command was invoked this turn,
-        // inject the skill body as a system context part
-        if (_slashCommandSkillContent is not null)
-            parts.Add(_slashCommandSkillContent);
-
-        if (_sessionPromptOverlay is not null)
-            parts.Add(_sessionPromptOverlay);
-
-        if (_turnRestartNotice is not null)
-            parts.Add(_turnRestartNotice);
-
-        // Session identity — allows the agent to reference its own session and media directory
-        var sessionDir = SessionDirectoryHelper.GetSessionDirectory(_sessionId, _sessionsBasePath);
-        var sessionBlock = $"[session]\nid: {_sessionId.Value}"
-            + $"\nmedia_dir: {Path.Combine(sessionDir, SessionDirectoryHelper.MediaSubdirectory)}";
-        parts.Add(sessionBlock);
-
-        // Working context — recent files, open goals, progress markers.
-        // Emitted every turn (not OnceAtStart) so mid-session updates take
-        // effect immediately. Suppressed entirely when the context is empty
-        // so the model doesn't see a barren header.
-        if (!_state.WorkingContext.IsEmpty)
-        {
-            parts.Add(_state.WorkingContext.ToContextBlock());
-        }
-
-        // Attachment-handling hint: conditional on file_read being in the
-        // resolved tool set. Without file_read the agent cannot inspect
-        // inbox files, and advertising the path would be a lie.
-        if (HasFileReadGranted())
-            parts.Add(AttachmentContextHint);
-
-        _startupContextInjected = true;
-
-        var contextMessage = new AiChatMessage(
-            Microsoft.Extensions.AI.ChatRole.System,
-            string.Join("\n\n", parts));
-
-        // Insert after the last system message (the persisted prompt), before user messages
-        var insertIndex = 0;
-        for (var i = 0; i < messages.Count; i++)
-        {
-            if (messages[i].Role == Microsoft.Extensions.AI.ChatRole.System)
-                insertIndex = i + 1;
-            else
-                break;
-        }
-
-        messages.Insert(insertIndex, contextMessage);
-    }
-
 
     private void EnqueueCheckpointFireAndForget(MemoryCheckpointRequest request)
     {
