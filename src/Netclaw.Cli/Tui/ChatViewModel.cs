@@ -313,7 +313,7 @@ public partial class ChatViewModel : ReactiveViewModel
         var resumeId = _resumeSessionId;
         _resumeSessionId = null;
         var sessionId = resumeId is not null
-            ? await _daemonClient.ResumeSessionAsync(resumeId)
+            ? await _daemonClient.ResumeSessionAsync(resumeId, DaemonClient.TuiChannelType)
             : await _daemonClient.EnsureSessionAsync(DaemonClient.TuiChannelType);
         SessionIdDisplay.Value = sessionId;
         _sessionReady = true;

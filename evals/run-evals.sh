@@ -381,7 +381,7 @@ run_prompt() {
     # daemon and keep CLI-side path resolution inside the eval sandbox.
     NETCLAW_DAEMON_ENDPOINT="http://127.0.0.1:$EVAL_PORT" \
     NETCLAW_HOME="$EVAL_HOME" \
-        timeout "$PROMPT_TIMEOUT" "$NETCLAW_BIN" -p "$prompt" \
+        timeout "$PROMPT_TIMEOUT" "$NETCLAW_BIN" chat -p "$prompt" \
         > "$STDOUT_FILE" 2>&1 || true
 
     # Brief pause for daemon log flush

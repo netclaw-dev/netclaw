@@ -55,20 +55,11 @@ static async Task RunAsync(string[] args)
         case CliParseKind.Version:
             Console.WriteLine($"netclaw {BuildInfo.Version} (commit {BuildInfo.CommitHash}, built {BuildInfo.BuildTimestamp})");
             return;
-        case CliParseKind.MissingPromptArg:
-            Console.Error.WriteLine("netclaw: -p/--prompt requires an argument.");
-            Console.Error.WriteLine("Usage: netclaw -p \"your prompt here\"");
-            Environment.ExitCode = 1;
-            return;
         case CliParseKind.Unknown:
             Console.Error.WriteLine($"netclaw: '{parseResult.Mode}' is not a netclaw command. See 'netclaw --help'.");
             WriteGeneralHelp();
             Environment.ExitCode = 2;
             return;
-        case CliParseKind.Headless:
-            headlessPrompt = parseResult.HeadlessPrompt;
-            mode = "headless";
-            break;
         default: // CliParseKind.Known
             mode = parseResult.Mode!;
             break;
@@ -833,10 +824,14 @@ static async Task RunAsync(string[] args)
         }
     }
 
-    // ── Parse --resume flag for chat mode ──
+    // ── Parse chat flags: --resume, -p/--prompt, --json ──
     string? resumeSessionId = null;
+    bool chatJsonOutput = false;
     if (mode is "chat")
     {
+        bool chatHeadless = false;
+        string? chatPrompt = null;
+
         for (var i = 1; i < args.Length; i++)
         {
             if (args[i] is "--resume" or "-r")
@@ -859,11 +854,44 @@ static async Task RunAsync(string[] args)
                 continue;
             }
 
+            if (args[i] is "-p" or "--prompt")
+            {
+                chatHeadless = true;
+                continue;
+            }
+
+            if (args[i] is "--json")
+            {
+                chatJsonOutput = true;
+                continue;
+            }
+
             if (IsHelpToken(args[i]))
             {
                 WriteChatHelp();
                 return;
             }
+
+            // Positional argument: prompt text (when -p is specified)
+            if (chatPrompt is null)
+            {
+                chatPrompt = args[i];
+            }
+        }
+
+        if (chatHeadless)
+        {
+            if (chatPrompt is null)
+            {
+                Console.Error.WriteLine("netclaw: chat -p requires a prompt argument.");
+                Console.Error.WriteLine("Usage: netclaw chat -p \"your prompt here\"");
+                WriteChatHelp();
+                Environment.ExitCode = 1;
+                return;
+            }
+
+            headlessPrompt = chatPrompt;
+            mode = "headless";
         }
     }
 
@@ -901,8 +929,14 @@ static async Task RunAsync(string[] args)
             break;
 
         case "headless":
+            var headlessOpts = new HeadlessOptions
+            {
+                Prompt = headlessPrompt!,
+                ResumeSessionId = resumeSessionId,
+                JsonOutput = chatJsonOutput,
+            };
             webBuilder.Services.AddSingleton<HeadlessChannel>(sp =>
-                ActivatorUtilities.CreateInstance<HeadlessChannel>(sp, headlessPrompt!));
+                ActivatorUtilities.CreateInstance<HeadlessChannel>(sp, headlessOpts));
             webBuilder.Services.AddSingleton<IHostedService>(sp => sp.GetRequiredService<HeadlessChannel>());
             webBuilder.Services.AddSingleton<IChannel>(sp => sp.GetRequiredService<HeadlessChannel>());
             break;
@@ -938,9 +972,9 @@ static void WriteGeneralHelp()
     Console.WriteLine("Commands:");
     Console.WriteLine("  chat                     Interactive TUI chat");
     Console.WriteLine("  chat --resume <id>       Resume an existing session by ID");
+    Console.WriteLine("  chat -p <text>           Headless single-prompt mode (supports --resume, --json)");
     Console.WriteLine("  sessions                 Browse and resume recent sessions (TUI)");
     Console.WriteLine("  sessions --once          List sessions and exit (no TUI, plain text or JSON)");
-    Console.WriteLine("  -p, --prompt <text>      Headless single-prompt mode");
     Console.WriteLine("  doctor                   Configuration diagnostics (offline)");
     Console.WriteLine("  status                   Runtime status from daemon health JSON endpoint");
     Console.WriteLine("  stats                    Usage activity statistics from daemon");
@@ -1024,13 +1058,24 @@ static void WriteDoctorHelp()
 
 static void WriteChatHelp()
 {
-    Console.WriteLine("Usage: netclaw chat [options]");
+    Console.WriteLine("Usage: netclaw chat [options] [prompt]");
     Console.WriteLine();
-    Console.WriteLine("Start an interactive TUI chat session with the daemon.");
+    Console.WriteLine("Start an interactive TUI chat session, or send a headless prompt.");
     Console.WriteLine();
     Console.WriteLine("Options:");
-    Console.WriteLine("  --resume, -r <id>   Resume an existing session by its catalog ID");
-    Console.WriteLine("                      Use `netclaw sessions` to browse available sessions");
+    Console.WriteLine("  --resume, -r <id>   Resume (or create) a session by ID");
+    Console.WriteLine("  -p, --prompt        Send a single headless prompt (non-interactive)");
+    Console.WriteLine("  --json              Output structured JSON (headless mode only)");
+    Console.WriteLine("                      Includes sessionId, response, toolCalls, and usage");
+    Console.WriteLine();
+    Console.WriteLine("Examples:");
+    Console.WriteLine("  netclaw chat                                       Interactive TUI");
+    Console.WriteLine("  netclaw chat --resume abc123                       Resume session in TUI");
+    Console.WriteLine("  netclaw chat -p \"hello\"                            Headless single prompt");
+    Console.WriteLine("  netclaw chat -p --resume my-session \"hello\"        Named session, headless");
+    Console.WriteLine("  netclaw chat -p --resume my-session --json \"hello\" JSON output, named session");
+    Console.WriteLine();
+    Console.WriteLine("Use `netclaw sessions` to browse available sessions.");
 }
 
 static void WriteStatusHelp()

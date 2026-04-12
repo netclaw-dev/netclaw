@@ -60,41 +60,13 @@ public sealed class CliArgsParserTests
     [InlineData("bar")]
     [InlineData("unknown-command")]
     [InlineData("frobble")]
+    [InlineData("-p")]
+    [InlineData("--prompt")]
     public void Parse_unknown_commands_returns_Unknown_with_mode(string command)
     {
         var result = CliArgsParser.Parse([command]);
         Assert.Equal(CliParseKind.Unknown, result.Kind);
         Assert.Equal(command, result.Mode);
-    }
-
-    [Fact]
-    public void Parse_short_prompt_flag_with_arg_returns_Headless()
-    {
-        var result = CliArgsParser.Parse(["-p", "hello world"]);
-        Assert.Equal(CliParseKind.Headless, result.Kind);
-        Assert.Equal("hello world", result.HeadlessPrompt);
-    }
-
-    [Fact]
-    public void Parse_long_prompt_flag_with_arg_returns_Headless()
-    {
-        var result = CliArgsParser.Parse(["--prompt", "some query"]);
-        Assert.Equal(CliParseKind.Headless, result.Kind);
-        Assert.Equal("some query", result.HeadlessPrompt);
-    }
-
-    [Fact]
-    public void Parse_prompt_flag_without_arg_returns_MissingPromptArg()
-    {
-        var result = CliArgsParser.Parse(["-p"]);
-        Assert.Equal(CliParseKind.MissingPromptArg, result.Kind);
-    }
-
-    [Fact]
-    public void Parse_long_prompt_flag_without_arg_returns_MissingPromptArg()
-    {
-        var result = CliArgsParser.Parse(["--prompt"]);
-        Assert.Equal(CliParseKind.MissingPromptArg, result.Kind);
     }
 
     /// <summary>

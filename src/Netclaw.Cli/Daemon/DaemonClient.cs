@@ -244,11 +244,12 @@ public sealed class DaemonClient : IAsyncDisposable
     /// </summary>
     public async Task<string> ResumeSessionAsync(
         string sessionId,
+        Actors.Channels.ChannelType channelType,
         CancellationToken cancellationToken = default)
     {
-        _channelType = TuiChannelType;
+        _channelType = channelType;
         _sessionId = sessionId;
-        return await EnsureSessionInternalAsync(TuiChannelType, cancellationToken);
+        return await EnsureSessionInternalAsync(channelType, cancellationToken);
     }
 
     public async Task SendAsync(ChannelInput input, CancellationToken cancellationToken = default)

@@ -5,18 +5,15 @@ public enum CliParseKind
     NoArgs,
     Help,
     Version,
-    Headless,
     Known,
     Unknown,
-    MissingPromptArg,
 }
 
-public record CliParseResult(CliParseKind Kind, string? Mode = null, string? HeadlessPrompt = null)
+public record CliParseResult(CliParseKind Kind, string? Mode = null)
 {
     public static readonly CliParseResult NoArgs = new(CliParseKind.NoArgs);
     public static readonly CliParseResult Help = new(CliParseKind.Help);
     public static readonly CliParseResult Version = new(CliParseKind.Version);
-    public static readonly CliParseResult MissingPromptArg = new(CliParseKind.MissingPromptArg);
 }
 
 /// <summary>Classifies top-level command-line arguments for the netclaw CLI.</summary>
@@ -49,13 +46,6 @@ public static class CliArgsParser
 
         if (first is "version" or "--version" or "-V")
             return CliParseResult.Version;
-
-        if (first is "-p" or "--prompt")
-        {
-            if (args.Length < 2)
-                return CliParseResult.MissingPromptArg;
-            return new CliParseResult(CliParseKind.Headless, "headless", HeadlessPrompt: args[1]);
-        }
 
         if (KnownCommands.Contains(first))
             return new CliParseResult(CliParseKind.Known, first);

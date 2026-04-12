@@ -67,7 +67,7 @@ Existing configs without `ApprovalPolicy` are unaffected — all tools remain in
 
 ### Headless mode
 
-Headless mode (`netclaw -p "prompt"`) cannot ask for approval — there is no
+Headless mode (`netclaw chat -p "prompt"`) cannot ask for approval — there is no
 interactive user. Approval-gated tools are **automatically denied** in headless
 mode. If you need unrestricted shell in headless scripts, explicitly set
 `shell_execute` to `Auto`:
@@ -186,7 +186,7 @@ Custom patterns are added to the defaults — they don't replace them.
 | Slack | Yes | Text prompt with ABC options (Block Kit buttons planned) |
 | TUI (`netclaw chat`) | Yes | Inline prompt |
 | SignalR (web client) | Yes | Inline prompt |
-| Headless (`netclaw -p`) | No — auto-deny | N/A |
+| Headless (`netclaw chat -p`) | No — auto-deny | N/A |
 | Reminders | No — auto-deny | N/A |
 | Webhooks | No — auto-deny | N/A |
 

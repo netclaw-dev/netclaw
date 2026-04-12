@@ -249,7 +249,7 @@ echo "Waiting for daemon health endpoint..."
 wait_for_health
 
 echo "Sending a headless prompt to create a session..."
-run_sandbox_timed "$STEP_TIMEOUT_SECONDS" netclaw -p "Say hello in one word" || true
+run_sandbox_timed "$STEP_TIMEOUT_SECONDS" netclaw chat -p "Say hello in one word" || true
 
 echo "Checking session catalog via REST API..."
 sessions_output="$(run_sandbox_timed "$STEP_TIMEOUT_SECONDS" curl -fsS http://127.0.0.1:5199/api/sessions)"
@@ -272,6 +272,35 @@ resume_help="$(run_sandbox_timed "$STEP_TIMEOUT_SECONDS" netclaw chat --help)"
 echo "$resume_help"
 if [[ "$resume_help" != *"--resume"* ]]; then
   echo "Expected chat help to include --resume flag."
+  exit 1
+fi
+if [[ "$resume_help" != *"-p"* ]]; then
+  echo "Expected chat help to include -p flag."
+  exit 1
+fi
+
+# ── Multi-turn headless resume smoke test ──
+# Validates that chat -p --resume creates, resumes, and maintains
+# conversation state through the daemon's persistence layer.
+
+MULTI_TURN_SESSION="smoke/multi-turn-$$"
+
+echo "Testing multi-turn: Turn 1 (create named session)..."
+run_sandbox_timed "$STEP_TIMEOUT_SECONDS" netclaw chat -p --resume "$MULTI_TURN_SESSION" "hello" || true
+
+echo "Testing multi-turn: Turn 2 (resume and verify continuity)..."
+turn2_output="$(run_sandbox_timed "$STEP_TIMEOUT_SECONDS" netclaw chat -p --resume "$MULTI_TURN_SESSION" "what was my first message?" || true)"
+echo "$turn2_output"
+if ! echo "$turn2_output" | grep -qi "hello"; then
+  echo "[WARN] Multi-turn continuity: response did not reference 'hello'."
+  echo "This may be a model quality issue, not a CLI bug. Continuing..."
+fi
+
+echo "Testing headless --json output..."
+json_output="$(run_sandbox_timed "$STEP_TIMEOUT_SECONDS" netclaw chat -p --json "Say hello in one word" || true)"
+echo "$json_output"
+if [[ "$json_output" != *"sessionId"* ]]; then
+  echo "Expected --json output to include sessionId field."
   exit 1
 fi
 

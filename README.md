@@ -406,7 +406,7 @@ When no config files exist, the daemon defaults to:
 
 ```
 netclaw chat                  Interactive TUI chat session
-netclaw -p "prompt"           Headless single-prompt mode
+netclaw chat -p "prompt"      Headless single-prompt mode
 netclaw daemon start          Start the daemon as a background process
 netclaw daemon stop           Gracefully stop the daemon (SIGTERM)
 netclaw daemon status         Show daemon PID and uptime

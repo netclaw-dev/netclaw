@@ -1,3 +1,5 @@
+using System.Text;
+using System.Text.Json;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -10,7 +12,7 @@ using R3;
 namespace Netclaw.Cli;
 
 /// <summary>
-/// Headless channel for single-prompt mode (<c>-p</c> / <c>--prompt</c>).
+/// Headless channel for single-prompt mode (<c>chat -p</c>).
 /// Sends one message to the LLM session, streams all output to stdout,
 /// and exits on <see cref="TurnCompleted"/>.
 /// </summary>
@@ -21,11 +23,19 @@ public sealed class HeadlessChannel : IChannel
     private readonly IHostApplicationLifetime _lifetime;
     private readonly TimeProvider _timeProvider;
     private readonly string _prompt;
+    private readonly string? _resumeSessionId;
+    private readonly bool _jsonOutput;
     private readonly ILogger<HeadlessChannel> _logger;
 
     private bool _isConnected;
     private bool _receivedTextDeltaInCurrentTurn;
     private bool _receivedThinkingDeltaInCurrentTurn;
+
+    // JSON output accumulation
+    private readonly StringBuilder _responseBuffer = new();
+    private readonly List<JsonToolCall> _toolCalls = [];
+    private JsonUsage? _usage;
+    private string? _resolvedSessionId;
 
     public Actors.Channels.ChannelType ChannelType => Actors.Channels.ChannelType.Headless;
     public string DisplayName => "Headless Prompt";
@@ -44,14 +54,16 @@ public sealed class HeadlessChannel : IChannel
         NetclawPaths paths,
         IHostApplicationLifetime lifetime,
         TimeProvider timeProvider,
-        string prompt,
+        HeadlessOptions options,
         ILogger<HeadlessChannel> logger)
     {
         _daemonClient = daemonClient;
         _paths = paths;
         _lifetime = lifetime;
         _timeProvider = timeProvider;
-        _prompt = prompt;
+        _prompt = options.Prompt;
+        _resumeSessionId = options.ResumeSessionId;
+        _jsonOutput = options.JsonOutput;
         _logger = logger;
     }
 
@@ -71,22 +83,18 @@ public sealed class HeadlessChannel : IChannel
     {
         try
         {
-            var sessionId = new SessionId($"headless/{Guid.NewGuid():N}");
-
-            // Set up session log file
             _paths.EnsureDirectoriesExist();
-            var logFileName = $"{sessionId.Value.Replace("/", "-", StringComparison.Ordinal)}.log";
-            var logPath = Path.Combine(_paths.LogsDirectory, logFileName);
-            await using var logWriter = new StreamWriter(logPath, append: false) { AutoFlush = true };
-
-            logWriter.WriteLine($"[{_timeProvider.GetUtcNow():o}] Headless session started: {sessionId}");
-            logWriter.WriteLine($"[{_timeProvider.GetUtcNow():o}] PROMPT: {_prompt}");
 
             var turnCompleted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
+            // Log writer is deferred until we know the session ID (after create/resume).
+            // The closure captures this mutable ref so early events are still handled.
+            StreamWriter? logWriter = null;
+
             using var connectionSubscription = _daemonClient.ConnectionEvents.Subscribe(evt =>
             {
-                Log(logWriter, $"CONNECTION: {evt.Message}");
+                if (logWriter is not null)
+                    Log(logWriter, $"CONNECTION: {evt.Message}");
             });
 
             using var subscription = _daemonClient.SessionOutput.Subscribe(output =>
@@ -99,7 +107,27 @@ public sealed class HeadlessChannel : IChannel
             await _daemonClient.ConnectAsync(stopping);
             _isConnected = true;
 
-            sessionId = new SessionId(await _daemonClient.CreateSessionAsync(ChannelType, stopping));
+            // Create or resume session
+            string sessionIdValue;
+            if (_resumeSessionId is not null)
+            {
+                sessionIdValue = await _daemonClient.ResumeSessionAsync(
+                    _resumeSessionId, ChannelType, stopping);
+            }
+            else
+            {
+                sessionIdValue = await _daemonClient.CreateSessionAsync(ChannelType, stopping);
+            }
+
+            _resolvedSessionId = sessionIdValue;
+            var sessionId = new SessionId(sessionIdValue);
+
+            var logFileName = $"{sessionId.Value.Replace("/", "-", StringComparison.Ordinal)}.log";
+            var logPath = Path.Combine(_paths.LogsDirectory, logFileName);
+            logWriter = new StreamWriter(logPath, append: true) { AutoFlush = true };
+
+            logWriter.WriteLine($"[{_timeProvider.GetUtcNow():o}] Headless session started: {sessionId}");
+            logWriter.WriteLine($"[{_timeProvider.GetUtcNow():o}] PROMPT: {_prompt}");
 
             await _daemonClient.SendAsync(new Netclaw.Actors.Channels.ChannelInput
             {
@@ -111,6 +139,7 @@ public sealed class HeadlessChannel : IChannel
             _logger.LogInformation("Headless session started: {SessionId} (log: {LogPath})", sessionId, logPath);
 
             await turnCompleted.Task.WaitAsync(stopping);
+            await logWriter.DisposeAsync();
             _lifetime.StopApplication();
         }
         catch (OperationCanceledException ex)
@@ -128,7 +157,7 @@ public sealed class HeadlessChannel : IChannel
         }
     }
 
-    private void HandleOutput(SessionOutput output, StreamWriter log)
+    private void HandleOutput(SessionOutput output, StreamWriter? log)
     {
         switch (output)
         {
@@ -143,13 +172,19 @@ public sealed class HeadlessChannel : IChannel
                     break;
                 }
 
-                Console.WriteLine(msg.Text);
+                if (_jsonOutput)
+                    _responseBuffer.Append(msg.Text);
+                else
+                    Console.WriteLine(msg.Text);
                 Log(log, $"ASSISTANT: {msg.Text}");
                 break;
 
             case TextDeltaOutput msg:
                 _receivedTextDeltaInCurrentTurn = true;
-                Console.Write(msg.Delta);
+                if (_jsonOutput)
+                    _responseBuffer.Append(msg.Delta);
+                else
+                    Console.Write(msg.Delta);
                 Log(log, $"ASSISTANT_DELTA: {msg.Delta}");
                 break;
 
@@ -170,17 +205,44 @@ public sealed class HeadlessChannel : IChannel
                 break;
 
             case ToolCallOutput msg:
-                Console.WriteLine($"[tool:call] {msg.ToolName}({msg.ArgumentsJson ?? ""})");
+                if (_jsonOutput)
+                {
+                    _toolCalls.Add(new JsonToolCall
+                    {
+                        CallId = msg.CallId,
+                        ToolName = msg.ToolName,
+                        ArgumentsJson = msg.ArgumentsJson
+                    });
+                }
+                else
+                {
+                    Console.WriteLine($"[tool:call] {msg.ToolName}({msg.ArgumentsJson ?? ""})");
+                }
                 Log(log, $"TOOL_CALL: {msg.ToolName} call_id={msg.CallId} args={msg.ArgumentsJson ?? "{}"}");
                 break;
 
             case ToolResultOutput msg:
-                Console.WriteLine($"[tool:result] {msg.ToolName} \u2192 {msg.Result}");
+                if (!_jsonOutput)
+                    Console.WriteLine($"[tool:result] {msg.ToolName} \u2192 {msg.Result}");
                 Log(log, $"TOOL_RESULT: {msg.ToolName} call_id={msg.CallId} result={msg.Result}");
                 break;
 
             case UsageOutput msg:
-                Console.WriteLine($"[usage] in={msg.InputTokens} out={msg.OutputTokens} total={msg.TotalTokens}");
+                if (_jsonOutput)
+                {
+                    _usage = new JsonUsage
+                    {
+                        InputTokens = msg.InputTokens,
+                        OutputTokens = msg.OutputTokens,
+                        TotalTokens = msg.TotalTokens,
+                        CachedInputTokens = msg.CachedInputTokens,
+                        ReasoningTokens = msg.ReasoningTokens
+                    };
+                }
+                else
+                {
+                    Console.WriteLine($"[usage] in={msg.InputTokens} out={msg.OutputTokens} total={msg.TotalTokens}");
+                }
                 Log(log, $"USAGE: in={msg.InputTokens} out={msg.OutputTokens} total={msg.TotalTokens} cached={msg.CachedInputTokens} reasoning={msg.ReasoningTokens} context_window={msg.ContextWindowTokens}");
                 break;
 
@@ -192,7 +254,14 @@ public sealed class HeadlessChannel : IChannel
                 break;
 
             case TurnCompleted msg:
-                Console.WriteLine();
+                if (_jsonOutput)
+                {
+                    WriteJsonEnvelope();
+                }
+                else
+                {
+                    Console.WriteLine();
+                }
                 Log(log, $"TURN_COMPLETED: turn={msg.TurnNumber}");
                 Log(log, "SESSION_ENDED");
                 _receivedTextDeltaInCurrentTurn = false;
@@ -200,34 +269,57 @@ public sealed class HeadlessChannel : IChannel
                 break;
 
             case FileOutput msg:
-                Console.WriteLine($"[file] {msg.FileName} \u2192 {msg.FilePath}");
+                if (!_jsonOutput)
+                    Console.WriteLine($"[file] {msg.FileName} \u2192 {msg.FilePath}");
                 Log(log, $"FILE: name={msg.FileName} path={msg.FilePath} mime={msg.MimeType}");
                 break;
 
             case SubAgentOutput msg:
                 if (msg.Phase == Netclaw.Actors.SubAgents.SubAgentPhase.Started)
                 {
-                    Console.WriteLine($"[subagent:start] {msg.AgentName} ({msg.ToolCount} tools)");
+                    if (!_jsonOutput)
+                        Console.WriteLine($"[subagent:start] {msg.AgentName} ({msg.ToolCount} tools)");
                     Log(log, $"SUBAGENT_START: name={msg.AgentName} tools={msg.ToolCount}");
                 }
                 else
                 {
                     var status = msg.Success ? "success" : "failed";
-                    Console.WriteLine($"[subagent:done] {msg.AgentName} ({status}, {msg.Duration.TotalSeconds:F1}s)");
+                    if (!_jsonOutput)
+                        Console.WriteLine($"[subagent:done] {msg.AgentName} ({status}, {msg.Duration.TotalSeconds:F1}s)");
                     Log(log, $"SUBAGENT_DONE: name={msg.AgentName} success={msg.Success} duration={msg.Duration.TotalSeconds:F1}s");
                 }
                 break;
 
             case CompactionOutput msg:
-                Console.WriteLine($"[compaction] {msg.MessagesBefore} \u2192 {msg.MessagesAfter} messages (keep={msg.KeepCountUsed}, context={msg.PreCompactionInputTokens}/{msg.ContextWindowTokens} tokens)");
+                if (!_jsonOutput)
+                    Console.WriteLine($"[compaction] {msg.MessagesBefore} \u2192 {msg.MessagesAfter} messages (keep={msg.KeepCountUsed}, context={msg.PreCompactionInputTokens}/{msg.ContextWindowTokens} tokens)");
                 Log(log, $"COMPACTION: before={msg.MessagesBefore} after={msg.MessagesAfter} tool_results_cleared={msg.ToolResultsCleared} summarized={msg.Summarized} context_window={msg.ContextWindowTokens} input_tokens={msg.PreCompactionInputTokens} keep_count={msg.KeepCountUsed}");
                 break;
         }
     }
 
-    private void Log(StreamWriter log, string message)
+    private static readonly JsonSerializerOptions s_jsonOptions = new()
     {
-        log.WriteLine($"[{_timeProvider.GetUtcNow():o}] {message}");
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,
+    };
+
+    private void WriteJsonEnvelope()
+    {
+        var envelope = new JsonEnvelope
+        {
+            SessionId = _resolvedSessionId!,
+            Response = _responseBuffer.ToString(),
+            ToolCalls = _toolCalls.Count > 0 ? _toolCalls : null,
+            Usage = _usage
+        };
+
+        Console.WriteLine(JsonSerializer.Serialize(envelope, s_jsonOptions));
+    }
+
+    private void Log(StreamWriter? log, string message)
+    {
+        log?.WriteLine($"[{_timeProvider.GetUtcNow():o}] {message}");
     }
 
     private void WriteFailureLog(string kind, Exception ex)
@@ -243,5 +335,31 @@ public sealed class HeadlessChannel : IChannel
         {
             Console.Error.WriteLine($"[headless:error] Failed to write failure log: {logEx.Message}");
         }
+    }
+
+    // ── JSON output types ──
+
+    private sealed class JsonEnvelope
+    {
+        public required string SessionId { get; init; }
+        public required string Response { get; init; }
+        public List<JsonToolCall>? ToolCalls { get; init; }
+        public JsonUsage? Usage { get; init; }
+    }
+
+    private sealed class JsonToolCall
+    {
+        public required string CallId { get; init; }
+        public required string ToolName { get; init; }
+        public string? ArgumentsJson { get; init; }
+    }
+
+    private sealed class JsonUsage
+    {
+        public long? InputTokens { get; init; }
+        public long? OutputTokens { get; init; }
+        public long? TotalTokens { get; init; }
+        public long? CachedInputTokens { get; init; }
+        public long? ReasoningTokens { get; init; }
     }
 }

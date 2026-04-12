@@ -37,7 +37,7 @@ public sealed class DaemonClientSessionTests
                 outputReceived.TrySetResult();
         });
 
-        var resumedSessionId = await client2.ResumeSessionAsync(originalSessionId, TestContext.Current.CancellationToken);
+        var resumedSessionId = await client2.ResumeSessionAsync(originalSessionId, Netclaw.Actors.Channels.ChannelType.Tui, TestContext.Current.CancellationToken);
 
         // EnsureSession should return the same session ID, not create a new one
         Assert.Equal(originalSessionId, resumedSessionId);

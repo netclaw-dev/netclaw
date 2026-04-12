@@ -55,7 +55,7 @@ reduces `--network host` to bridge mode).
 
 ## What It Tests
 
-The suite runs prompts via `netclaw -p` against the eval container and
+The suite runs prompts via `netclaw chat -p` against the eval container and
 verifies both **stdout output** (tool calls, text content) and **daemon
 log patterns** (skill loading, memory recall, checkpoint formation).
 
@@ -75,7 +75,7 @@ phrasing — not just one magic prompt.
 
 ### Assertion Types
 
-- **stdout assertions** — check `netclaw -p` output for tool calls
+- **stdout assertions** — check `netclaw chat -p` output for tool calls
   (`[tool:call]`), text content, or absence of hallucinated content.
 - **daemon log assertions** — check the daemon's file log (tailed from
   `$EVAL_HOME/logs/daemon-$(date +%F).log`) for structured patterns like
@@ -214,8 +214,8 @@ skips persistence.
   depends on inheriting the host's DNS resolver. Docker Desktop
   (macOS/Windows) degrades `--network host` to bridge mode; set
   `NETCLAW_EVAL_PROVIDER_ENDPOINT` to a reachable IP/hostname instead.
-- **Single-turn only**: `netclaw -p` is one prompt per session. Multi-turn
-  conversation evals are deferred.
+- **Multi-turn support**: `netclaw chat -p --resume <id>` enables multi-turn
+  scripted conversations against a named session.
 - **Identity is borrowed from host**: the container does not
   self-bootstrap identity. CI will need a committed fixture under
   `evals/fixtures/identity/` — tracked as a follow-up.
