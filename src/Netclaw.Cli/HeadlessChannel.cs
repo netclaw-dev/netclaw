@@ -81,25 +81,26 @@ public sealed class HeadlessChannel : IChannel
 
     private async Task RunHeadlessAsync(CancellationToken stopping)
     {
+        // Log writer is deferred until we know the session ID (after create/resume).
+        // Volatile ensures the subscription callback sees the assigned value across threads.
+        StreamWriter? logWriter = null;
+
         try
         {
             _paths.EnsureDirectoriesExist();
 
             var turnCompleted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
-            // Log writer is deferred until we know the session ID (after create/resume).
-            // The closure captures this mutable ref so early events are still handled.
-            StreamWriter? logWriter = null;
-
             using var connectionSubscription = _daemonClient.ConnectionEvents.Subscribe(evt =>
             {
-                if (logWriter is not null)
-                    Log(logWriter, $"CONNECTION: {evt.Message}");
+                var lw = Volatile.Read(ref logWriter);
+                if (lw is not null)
+                    Log(lw, $"CONNECTION: {evt.Message}");
             });
 
             using var subscription = _daemonClient.SessionOutput.Subscribe(output =>
             {
-                HandleOutput(output, logWriter);
+                HandleOutput(output, Volatile.Read(ref logWriter));
                 if (output is TurnCompleted)
                     turnCompleted.TrySetResult();
             });
@@ -124,9 +125,9 @@ public sealed class HeadlessChannel : IChannel
 
             var logFileName = $"{sessionId.Value.Replace("/", "-", StringComparison.Ordinal)}.log";
             var logPath = Path.Combine(_paths.LogsDirectory, logFileName);
-            logWriter = new StreamWriter(logPath, append: true) { AutoFlush = true };
+            Volatile.Write(ref logWriter, new StreamWriter(logPath, append: true) { AutoFlush = true });
 
-            logWriter.WriteLine($"[{_timeProvider.GetUtcNow():o}] Headless session started: {sessionId}");
+            logWriter!.WriteLine($"[{_timeProvider.GetUtcNow():o}] Headless session started: {sessionId}");
             logWriter.WriteLine($"[{_timeProvider.GetUtcNow():o}] PROMPT: {_prompt}");
 
             await _daemonClient.SendAsync(new Netclaw.Actors.Channels.ChannelInput
@@ -139,7 +140,6 @@ public sealed class HeadlessChannel : IChannel
             _logger.LogInformation("Headless session started: {SessionId} (log: {LogPath})", sessionId, logPath);
 
             await turnCompleted.Task.WaitAsync(stopping);
-            await logWriter.DisposeAsync();
             _lifetime.StopApplication();
         }
         catch (OperationCanceledException ex)
@@ -154,6 +154,11 @@ public sealed class HeadlessChannel : IChannel
             WriteFailureLog("FAILED", ex);
             Environment.ExitCode = 1;
             _lifetime.StopApplication();
+        }
+        finally
+        {
+            if (logWriter is not null)
+                await logWriter.DisposeAsync();
         }
     }
 
