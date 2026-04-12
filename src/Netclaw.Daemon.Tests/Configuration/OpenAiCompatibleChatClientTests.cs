@@ -794,30 +794,6 @@ data: [DONE]
         Assert.Equal(2530, response.Usage.AdditionalCounts["predicted_tok_per_sec_x100"]);
     }
 
-    [Fact(Skip = "Integration test — requires live llama.cpp server")]
-    public async Task LiveServer_StreamingResponse_IncludesTimings()
-    {
-        using var httpClient = new HttpClient { BaseAddress = new Uri("https://llm.testlab.petabridge.net") };
-        var endpoint = OpenAiCompatibleEndpoint.FromBaseUrl("https://llm.testlab.petabridge.net");
-        var client = new OpenAiCompatibleChatClient(httpClient, endpoint, "Qwen3.5-27B-UD-Q4_K_XL.gguf");
-
-        var updates = new List<ChatResponseUpdate>();
-        await foreach (var update in client.GetStreamingResponseAsync(
-            [new ChatMessage(ChatRole.User, "Say hello in one word.")],
-            cancellationToken: TestContext.Current.CancellationToken))
-        {
-            updates.Add(update);
-        }
-
-        var response = updates.ToChatResponse();
-        Assert.NotNull(response.Usage);
-        Assert.True(response.Usage.InputTokenCount > 0);
-        // These should be populated from the timings object
-        Assert.NotNull(response.Usage.CachedInputTokenCount);
-        Assert.NotNull(response.Usage.AdditionalCounts);
-        Assert.True(response.Usage.AdditionalCounts.ContainsKey("prompt_us"));
-    }
-
     [Fact]
     public async Task StreamingRequest_IncludesStreamOptions()
     {

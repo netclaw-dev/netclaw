@@ -625,47 +625,67 @@ public sealed class OpenAiCompatibleChatClient : IChatClient
         return details;
     }
 
+    // llama.cpp's OpenAI-compatible endpoint returns a `timings` object alongside
+    // `usage`. Because M.E.AI's UsageDetails.AdditionalCounts is typed
+    // AdditionalPropertiesDictionary<long>, floating-point timing values are encoded
+    // as integer scale factors: microseconds for latency, ×100 for tokens-per-second.
+    // These keys are the only canonical definition; consumers (LlmSessionActor)
+    // duplicate the strings they read and must stay in sync.
+    internal const string PromptUsKey = "prompt_us";
+    internal const string PromptTokPerSecX100Key = "prompt_tok_per_sec_x100";
+    internal const string PredictedUsKey = "predicted_us";
+    internal const string PredictedTokPerSecX100Key = "predicted_tok_per_sec_x100";
+
     /// <summary>
     /// Reads llama.cpp-specific timing fields into <see cref="UsageDetails"/>.
     /// <c>cache_n</c> maps to <see cref="UsageDetails.CachedInputTokenCount"/>;
-    /// throughput and latency fields go into <see cref="UsageDetails.AdditionalCounts"/>.
+    /// throughput and latency fields go into <see cref="UsageDetails.AdditionalCounts"/>
+    /// via integer-encoded keys (see the PromptUsKey/PredictedTokPerSecX100Key
+    /// constants above). Consumers decode by dividing out the scale factor.
     /// </summary>
     internal static void ParseLlamaCppTimings(JsonElement timings, UsageDetails details)
     {
         if (TryGetLong(timings, "cache_n", out var cacheN))
             details.CachedInputTokenCount = cacheN;
 
-        // Prompt (prefill) metrics — stored as microseconds / x100 for integer precision.
-        // Only allocate AdditionalCounts when we have data to put in it.
         if (TryGetDouble(timings, "prompt_ms", out var promptMs))
-            Additional(details)["prompt_us"] = (long)(promptMs * 1000);
+            Additional(details)[PromptUsKey] = (long)(promptMs * 1000);
 
         if (TryGetDouble(timings, "prompt_per_second", out var promptPerSec))
-            Additional(details)["prompt_tok_per_sec_x100"] = (long)(promptPerSec * 100);
+            Additional(details)[PromptTokPerSecX100Key] = (long)(promptPerSec * 100);
 
-        // Generation (decode) metrics
         if (TryGetDouble(timings, "predicted_ms", out var predictedMs))
-            Additional(details)["predicted_us"] = (long)(predictedMs * 1000);
+            Additional(details)[PredictedUsKey] = (long)(predictedMs * 1000);
 
         if (TryGetDouble(timings, "predicted_per_second", out var predictedPerSec))
-            Additional(details)["predicted_tok_per_sec_x100"] = (long)(predictedPerSec * 100);
+            Additional(details)[PredictedTokPerSecX100Key] = (long)(predictedPerSec * 100);
 
         static AdditionalPropertiesDictionary<long> Additional(UsageDetails d)
             => d.AdditionalCounts ??= new AdditionalPropertiesDictionary<long>();
+    }
 
-        static bool TryGetLong(JsonElement obj, string name, out long value)
+    private static bool TryGetLong(JsonElement obj, string name, out long value)
+    {
+        if (obj.TryGetProperty(name, out var prop)
+            && prop.ValueKind == JsonValueKind.Number
+            && prop.TryGetInt64(out value))
         {
-            value = 0;
-            return obj.TryGetProperty(name, out var prop) && prop.ValueKind == JsonValueKind.Number
-                   && (value = prop.GetInt64()) is var _;
+            return true;
         }
+        value = 0;
+        return false;
+    }
 
-        static bool TryGetDouble(JsonElement obj, string name, out double value)
+    private static bool TryGetDouble(JsonElement obj, string name, out double value)
+    {
+        if (obj.TryGetProperty(name, out var prop)
+            && prop.ValueKind == JsonValueKind.Number
+            && prop.TryGetDouble(out value))
         {
-            value = 0;
-            return obj.TryGetProperty(name, out var prop) && prop.ValueKind == JsonValueKind.Number
-                   && (value = prop.GetDouble()) is var _;
+            return true;
         }
+        value = 0;
+        return false;
     }
 
     private static ChatFinishReason? ParseFinishReason(JsonElement choice)

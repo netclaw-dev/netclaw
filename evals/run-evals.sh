@@ -384,7 +384,7 @@ store_metrics() {
 
     local esc_category="${CURRENT_CATEGORY//\'/\'\'}"
     sqlite3 "$RESULTS_DB" \
-        "INSERT OR REPLACE INTO eval_metrics (run_id, category, case_name, run_number, input_tokens, output_tokens, cached_tokens, prompt_ms, predicted_tok_s)
+        "INSERT INTO eval_metrics (run_id, category, case_name, run_number, input_tokens, output_tokens, cached_tokens, prompt_ms, predicted_tok_s)
          VALUES ('$RUN_ID', '$esc_category', '$case_name', $run_number,
                  ${input_tokens:-NULL}, ${output_tokens:-NULL}, ${cached_tokens:-NULL},
                  ${prompt_ms:-NULL}, ${tok_s:-NULL});"

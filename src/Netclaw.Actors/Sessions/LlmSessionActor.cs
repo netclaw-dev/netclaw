@@ -2503,6 +2503,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             ? (double)usage.InputTokenCount.Value / contextWindow
             : null;
 
+        // Decode llama.cpp server-side timing from UsageDetails.AdditionalCounts.
+        // Canonical encoding lives in Netclaw.Providers.SelfHosted.OpenAiCompatibleChatClient
+        // (PromptUsKey, PredictedTokPerSecX100Key). Keep these strings in sync.
         var additional = usage.AdditionalCounts;
         double? promptMs = additional is not null && additional.TryGetValue("prompt_us", out var pUs)
             ? pUs / 1000.0 : null;
