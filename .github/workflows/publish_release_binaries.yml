@@ -224,6 +224,9 @@ jobs:
   publish-docker:
     name: Publish Docker Image
     needs: publish-binaries
+    # Temporarily disabled — not ready to publish netclawd images to GHCR yet.
+    # Flip to `true` (or remove the guard) when the Docker release is ready.
+    if: false
     runs-on: arc-netclaw
     timeout-minutes: 30
     permissions:
