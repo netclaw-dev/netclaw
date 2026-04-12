@@ -68,8 +68,12 @@ public static class SessionOutputDtoMapper
             InputTokens = msg.InputTokens,
             OutputTokens = msg.OutputTokens,
             TotalTokens = msg.TotalTokens,
+            CachedInputTokens = msg.CachedInputTokens,
+            ReasoningTokens = msg.ReasoningTokens,
             ContextWindowTokens = msg.ContextWindowTokens,
-            UsagePercent = msg.UsagePercent
+            UsagePercent = msg.UsagePercent,
+            PromptMs = msg.PromptMs,
+            PredictedPerSecond = msg.PredictedPerSecond,
         },
 
         TurnCompleted msg => new SessionOutputDto
@@ -233,8 +237,12 @@ public static class SessionOutputDtoMapper
                 InputTokens = dto.InputTokens,
                 OutputTokens = dto.OutputTokens,
                 TotalTokens = dto.TotalTokens,
+                CachedInputTokens = dto.CachedInputTokens,
+                ReasoningTokens = dto.ReasoningTokens,
                 ContextWindowTokens = dto.ContextWindowTokens ?? 0,
-                UsagePercent = dto.UsagePercent
+                UsagePercent = dto.UsagePercent,
+                PromptMs = dto.PromptMs,
+                PredictedPerSecond = dto.PredictedPerSecond,
             },
             SessionOutputTypes.TurnCompleted => new TurnCompleted
             {

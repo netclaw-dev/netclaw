@@ -67,8 +67,12 @@ public sealed record SessionOutputDto
     public long? InputTokens { get; init; }
     public long? OutputTokens { get; init; }
     public long? TotalTokens { get; init; }
+    public long? CachedInputTokens { get; init; }
+    public long? ReasoningTokens { get; init; }
     public int? ContextWindowTokens { get; init; }
     public double? UsagePercent { get; init; }
+    public double? PromptMs { get; init; }
+    public double? PredictedPerSecond { get; init; }
 
     // Turn Completed
     public int? TurnNumber { get; init; }
