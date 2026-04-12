@@ -582,6 +582,21 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
     /// </summary>
     internal static string EscapeQuoted(string value)
     {
+        // Fast path: skip allocation when no special characters are present.
+        // This covers the common case of ordinary filenames.
+        var needsProcessing = false;
+        foreach (var c in value)
+        {
+            if (c < ' ' || c == '\\' || c == '"')
+            {
+                needsProcessing = true;
+                break;
+            }
+        }
+
+        if (!needsProcessing)
+            return value;
+
         var sb = new StringBuilder(value.Length + 8);
         foreach (var c in value)
         {

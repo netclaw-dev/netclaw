@@ -480,8 +480,8 @@ public sealed class SlackAttachmentIngressVisionTests : TestKit
     [Fact]
     public async Task Download_failure_posts_stable_message_without_raw_exception_detail()
     {
-        // Arrange: HTTP handler throws an exception whose message contains an
-        // internal detail (IP address) that must not reach the Slack user.
+        // Internal network details (IPs, hostnames) in exception messages must
+        // not reach Slack users — only a stable generic message is safe to show.
         const string internalDetail = "192.168.99.1:443";
         _httpHandler.RespondWithException(
             new HttpRequestException($"Network unreachable: {internalDetail}"));
@@ -507,15 +507,12 @@ public sealed class SlackAttachmentIngressVisionTests : TestKit
             IsDirectMessage: true,
             Files: files));
 
-        // A user-facing rejection reply for report.pdf should be posted.
         await AwaitAssertAsync(() =>
         {
             Assert.Contains(_replyClient.PostedMessages,
                 m => m.Text.Contains("report.pdf", StringComparison.Ordinal));
         }, duration: TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
 
-        // The raw exception message (internal network detail) must not be
-        // surfaced to the user.
         Assert.DoesNotContain(_replyClient.PostedMessages,
             m => m.Text.Contains(internalDetail, StringComparison.Ordinal));
     }

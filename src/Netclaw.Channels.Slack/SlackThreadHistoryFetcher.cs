@@ -145,8 +145,7 @@ public sealed class SlackThreadHistoryFetcher : IThreadHistoryFetcher
         {
             var downloadableFiles = message.Files
                 .Where(f => f.Mimetype is not null
-                    && !string.IsNullOrWhiteSpace(f.UrlPrivateDownload ?? f.UrlPrivate))
-                .ToList();
+                    && !string.IsNullOrWhiteSpace(f.UrlPrivateDownload ?? f.UrlPrivate));
 
             var downloadTasks = downloadableFiles.Select(file => DownloadAndScanFileAsync(file, cancellationToken));
             var results = await Task.WhenAll(downloadTasks);

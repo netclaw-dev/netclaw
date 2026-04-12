@@ -36,34 +36,22 @@ public sealed class SlackAttachmentLineTests
         Assert.Equal(plain, SlackThreadBindingActor.EscapeQuoted(plain));
     }
 
-    [Fact]
-    public void BuildAttachmentLine_with_hostile_name_produces_single_parseable_line()
+    [Theory]
+    [InlineData("evil\nfile\r\nname.pdf", "application/pdf", null)]
+    [InlineData("ok.pdf", "application/pdf", "some\nnote with\r\nnewlines")]
+    public void BuildAttachmentLine_with_hostile_metadata_produces_single_parseable_line(
+        string name, string mimeType, string? note)
     {
         var line = SlackThreadBindingActor.BuildAttachmentLine(
-            name: "evil\nfile\r\nname.pdf",
-            mimeType: "application/pdf",
+            name: name,
+            mimeType: mimeType,
             size: 1234,
-            relativePath: "inbox/evil.pdf",
+            relativePath: "inbox/test.pdf",
             inlined: false,
-            note: null);
+            note: note);
 
         Assert.DoesNotContain("\n", line, StringComparison.Ordinal);
         Assert.DoesNotContain("\r", line, StringComparison.Ordinal);
         Assert.StartsWith("[attachment]", line, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void BuildAttachmentLine_with_hostile_note_produces_single_parseable_line()
-    {
-        var line = SlackThreadBindingActor.BuildAttachmentLine(
-            name: "ok.pdf",
-            mimeType: "application/pdf",
-            size: 100,
-            relativePath: "inbox/ok.pdf",
-            inlined: false,
-            note: "some\nnote with\r\nnewlines");
-
-        Assert.DoesNotContain("\n", line, StringComparison.Ordinal);
-        Assert.DoesNotContain("\r", line, StringComparison.Ordinal);
     }
 }
