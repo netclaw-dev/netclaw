@@ -442,7 +442,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
                 "slack_attachment_rejected name={Name} mime={Mime} reason=download-failed",
                 file.Name, file.MimeType);
             return new AttachmentIngestResult.Rejected(
-                $"Couldn't download `{file.Name}`: {ex.Message}.");
+                $"Couldn't download `{file.Name}` — please try again later.");
         }
 
         if (bytes.Length == 0)
@@ -468,7 +468,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
                 "slack_attachment_rejected name={Name} mime={Mime} reason=scan-exception",
                 file.Name, file.MimeType);
             return new AttachmentIngestResult.Rejected(
-                $"Couldn't scan `{file.Name}`: {ex.Message}.");
+                $"Couldn't scan `{file.Name}` — please try again later.");
         }
 
         if (!scanResult.IsAllowed)
@@ -515,7 +515,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
                 "slack_attachment_rejected name={Name} reason=inbox-write-failed",
                 file.Name);
             return new AttachmentIngestResult.Rejected(
-                $"Couldn't save `{file.Name}` to disk: {ex.Message}.");
+                $"Couldn't save `{file.Name}` — please try again later.");
         }
 
         // Decide inlining based on model modalities and category.
@@ -554,7 +554,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
     /// Formats a single <c>[attachment]</c> announcement line in the
     /// canonical cross-channel shape defined in netclaw-input-adapters.
     /// </summary>
-    private static string BuildAttachmentLine(
+    internal static string BuildAttachmentLine(
         string name,
         string mimeType,
         long size,
@@ -574,9 +574,28 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
         return sb.ToString();
     }
 
-    private static string EscapeQuoted(string value) =>
-        value.Replace("\\", "\\\\", StringComparison.Ordinal)
-             .Replace("\"", "\\\"", StringComparison.Ordinal);
+    /// <summary>
+    /// Escapes a metadata value for safe embedding inside a double-quoted
+    /// attribute on an attachment announcement line. Control characters
+    /// (including CR/LF) are replaced with spaces so hostile filenames
+    /// cannot embed newlines in the single-line format.
+    /// </summary>
+    internal static string EscapeQuoted(string value)
+    {
+        var sb = new StringBuilder(value.Length + 8);
+        foreach (var c in value)
+        {
+            if (c < ' ')
+                sb.Append(' ');
+            else if (c == '\\')
+                sb.Append("\\\\");
+            else if (c == '"')
+                sb.Append("\\\"");
+            else
+                sb.Append(c);
+        }
+        return sb.ToString();
+    }
 
     private static string FormatBytes(long size)
     {

@@ -477,6 +477,49 @@ public sealed class SlackAttachmentIngressVisionTests : TestKit
         Assert.Empty(Directory.GetFiles(inboxDir));
     }
 
+    [Fact]
+    public async Task Download_failure_posts_stable_message_without_raw_exception_detail()
+    {
+        // Arrange: HTTP handler throws an exception whose message contains an
+        // internal detail (IP address) that must not reach the Slack user.
+        const string internalDetail = "192.168.99.1:443";
+        _httpHandler.RespondWithException(
+            new HttpRequestException($"Network unreachable: {internalDetail}"));
+        var gateway = BuildGateway("slack-gw-dl-error");
+
+        var files = new List<SlackFileReference>
+        {
+            new("F_DL_ERR", "report.pdf", "application/pdf", 1024,
+                "https://files.slack.com/files-pri/T1234-F_DL_ERR/report.pdf")
+        };
+
+        gateway.Tell(new SlackInboundMessage(
+            Kind: SlackInboundKind.Message,
+            EventId: new SlackEventId("D_DL_ERR:9000"),
+            ChannelId: new SlackChannelId("D_DL_ERR"),
+            ThreadTs: null,
+            EventTs: new SlackEventTs("9000.1"),
+            UserId: new SlackUserId("U_HUMAN"),
+            BotId: null,
+            Text: "here",
+            Subtype: null,
+            Hidden: false,
+            IsDirectMessage: true,
+            Files: files));
+
+        // A user-facing rejection reply for report.pdf should be posted.
+        await AwaitAssertAsync(() =>
+        {
+            Assert.Contains(_replyClient.PostedMessages,
+                m => m.Text.Contains("report.pdf", StringComparison.Ordinal));
+        }, duration: TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
+
+        // The raw exception message (internal network detail) must not be
+        // surfaced to the user.
+        Assert.DoesNotContain(_replyClient.PostedMessages,
+            m => m.Text.Contains(internalDetail, StringComparison.Ordinal));
+    }
+
     // ── Test doubles ──────────────────────────────────────────────────────
 
     private sealed class ConfigurableFakeSlackFileHandler : DelegatingHandler
@@ -484,6 +527,7 @@ public sealed class SlackAttachmentIngressVisionTests : TestKit
         private int _requestCount;
         private string _contentType = "image/png";
         private byte[] _bytes = FakePngBytes;
+        private Exception? _exceptionToThrow;
 
         public int RequestCount => _requestCount;
 
@@ -491,12 +535,22 @@ public sealed class SlackAttachmentIngressVisionTests : TestKit
         {
             _contentType = contentType;
             _bytes = bytes;
+            _exceptionToThrow = null;
+        }
+
+        public void RespondWithException(Exception exception)
+        {
+            _exceptionToThrow = exception;
         }
 
         protected override Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request, CancellationToken cancellationToken)
         {
             Interlocked.Increment(ref _requestCount);
+
+            if (_exceptionToThrow is not null)
+                return Task.FromException<HttpResponseMessage>(_exceptionToThrow);
+
             var response = new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new ByteArrayContent(_bytes)

@@ -90,6 +90,47 @@ public sealed class SlackThreadHistoryFetcherTests
     }
 
     [Fact]
+    public async Task Historical_non_image_files_are_downloaded_and_included()
+    {
+        // Verify that PDFs and other non-image attachments in thread history are
+        // no longer hard-filtered to image/* — they should be downloaded and
+        // returned as DataContent just like images.
+        _replies.Set("C1", "2000.0", null, new ConversationMessagesResponse
+        {
+            Messages =
+            [
+                new MessageEvent { Ts = "2000.0", User = "U1", Text = "root" },
+                new MessageEvent
+                {
+                    Ts = "2000.1",
+                    User = "U2",
+                    Text = "check this report",
+                    Files =
+                    [
+                        new SlackNet.File
+                        {
+                            Id = "F_PDF",
+                            Name = "report.pdf",
+                            Mimetype = "application/pdf",
+                            Size = 3,
+                            UrlPrivateDownload = "https://files.slack.com/fake/report.pdf"
+                        }
+                    ]
+                }
+            ]
+        });
+
+        var result = await CreateFetcher().FetchThreadHistoryAsync(
+            new SessionId("C1/2000.0"), TestContext.Current.CancellationToken);
+
+        Assert.Equal(2, result.Count);
+        var messageWithPdf = result.First(r =>
+            r.Contents.OfType<DataContent>().Any());
+        Assert.Contains(messageWithPdf.Contents,
+            c => c is DataContent d && d.MediaType == "application/pdf");
+    }
+
+    [Fact]
     public async Task Paginates_through_all_pages()
     {
         _replies.Set("C1", "1000.0", null, new ConversationMessagesResponse

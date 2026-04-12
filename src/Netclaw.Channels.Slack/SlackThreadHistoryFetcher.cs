@@ -143,13 +143,12 @@ public sealed class SlackThreadHistoryFetcher : IThreadHistoryFetcher
 
         if (message.Files is { Count: > 0 })
         {
-            var imageFiles = message.Files
+            var downloadableFiles = message.Files
                 .Where(f => f.Mimetype is not null
-                    && f.Mimetype.StartsWith("image/", StringComparison.OrdinalIgnoreCase)
                     && !string.IsNullOrWhiteSpace(f.UrlPrivateDownload ?? f.UrlPrivate))
                 .ToList();
 
-            var downloadTasks = imageFiles.Select(file => DownloadAndScanFileAsync(file, cancellationToken));
+            var downloadTasks = downloadableFiles.Select(file => DownloadAndScanFileAsync(file, cancellationToken));
             var results = await Task.WhenAll(downloadTasks);
 
             foreach (var result in results)

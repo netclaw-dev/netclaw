@@ -4,7 +4,7 @@ description: "REQUIRED when the user asks about Netclaw capabilities, scheduling
 disable-model-invocation: true
 metadata:
   author: netclaw
-  version: "1.9.0"
+  version: "1.10.0"
 ---
 
 # Netclaw Operations
@@ -142,6 +142,43 @@ Webhook rejected route={Route} reason={Reason} remote_ip={RemoteIp}
 Rejection paths only log + increment counters — they do NOT fire outbound
 operational notifications, so bad or adversarial traffic does not spam the
 configured notification target.
+
+## Inbound Attachments
+
+When a user sends a file in Slack, Netclaw runs the attachment through an
+ingress pipeline before it reaches the LLM:
+
+1. **Policy gate** — checks audience, file category, and per-message file count
+   against `ChannelAttachmentPolicy`
+2. **Size gate** — rejects files above the per-audience byte limit
+3. **Download** — fetches from Slack's private file API with bot-token auth
+4. **Content scan** — runs the configured `IContentScanner` (e.g. antivirus)
+5. **Inbox write** — saves to `~/.netclaw/sessions/{session-id}/inbox/`
+6. **Announcement line** — appends `[attachment]` text to the user turn
+
+The `[attachment]` line format is:
+```
+[attachment] name="..." mime="..." size=N path="inbox/..." inlined="true|false"
+```
+
+`inlined="true"` means the file bytes were forwarded to the model as
+`DataContent` (images and PDFs on vision-capable models). `inlined="false"`
+means the model only sees the path reference.
+
+**Historical thread backfill** follows the same download/scan flow for all
+file types (not just images) — PDFs and other documents from prior thread
+messages are included.
+
+**When attachment ingress fails**, Netclaw posts a stable user-facing message
+(e.g. "Couldn't download `file.pdf` — please try again later.") and logs the
+full exception internally. Exception details are **never** forwarded to Slack.
+
+| Symptom | Check |
+|---------|-------|
+| File rejected before download | audience/category policy gate; check `ChannelAttachmentPolicy` config |
+| Download timeout | bot token valid? Slack network reachable? check `daemon-{date}.log` |
+| Content scan rejection | `netclaw status` scanner section; check scan config |
+| Inbox write failure | disk space? permissions on `~/.netclaw/sessions/`? |
 
 ## Diagnostics
 
