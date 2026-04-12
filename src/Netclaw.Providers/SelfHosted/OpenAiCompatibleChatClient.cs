@@ -588,7 +588,10 @@ public sealed class OpenAiCompatibleChatClient : IChatClient
 
     /// <summary>
     /// Parses the <c>usage</c> object from an OpenAI-compatible response or streaming chunk.
-    /// Returns null when the field is absent or not an object.
+    /// Also reads the llama.cpp <c>timings</c> object when present, mapping <c>cache_n</c>
+    /// to <see cref="UsageDetails.CachedInputTokenCount"/> and storing throughput/latency
+    /// fields in <see cref="UsageDetails.AdditionalCounts"/>.
+    /// Returns null when the usage field is absent or not an object.
     /// </summary>
     internal static UsageDetails? ParseUsage(JsonElement root)
     {
@@ -605,12 +608,64 @@ public sealed class OpenAiCompatibleChatClient : IChatClient
         if (promptTokens is null && completionTokens is null && totalTokens is null)
             return null;
 
-        return new UsageDetails
+        var details = new UsageDetails
         {
             InputTokenCount = promptTokens,
             OutputTokenCount = completionTokens,
             TotalTokenCount = totalTokens ?? (promptTokens ?? 0) + (completionTokens ?? 0)
         };
+
+        // llama.cpp includes a sibling `timings` object with cache and throughput data.
+        // This is not part of the OpenAI spec — gracefully skip when absent.
+        if (root.TryGetProperty("timings", out var timings) && timings.ValueKind == JsonValueKind.Object)
+        {
+            ParseLlamaCppTimings(timings, details);
+        }
+
+        return details;
+    }
+
+    /// <summary>
+    /// Reads llama.cpp-specific timing fields into <see cref="UsageDetails"/>.
+    /// <c>cache_n</c> maps to <see cref="UsageDetails.CachedInputTokenCount"/>;
+    /// throughput and latency fields go into <see cref="UsageDetails.AdditionalCounts"/>.
+    /// </summary>
+    internal static void ParseLlamaCppTimings(JsonElement timings, UsageDetails details)
+    {
+        if (TryGetLong(timings, "cache_n", out var cacheN))
+            details.CachedInputTokenCount = cacheN;
+
+        // Prompt (prefill) metrics — stored as microseconds / x100 for integer precision.
+        // Only allocate AdditionalCounts when we have data to put in it.
+        if (TryGetDouble(timings, "prompt_ms", out var promptMs))
+            Additional(details)["prompt_us"] = (long)(promptMs * 1000);
+
+        if (TryGetDouble(timings, "prompt_per_second", out var promptPerSec))
+            Additional(details)["prompt_tok_per_sec_x100"] = (long)(promptPerSec * 100);
+
+        // Generation (decode) metrics
+        if (TryGetDouble(timings, "predicted_ms", out var predictedMs))
+            Additional(details)["predicted_us"] = (long)(predictedMs * 1000);
+
+        if (TryGetDouble(timings, "predicted_per_second", out var predictedPerSec))
+            Additional(details)["predicted_tok_per_sec_x100"] = (long)(predictedPerSec * 100);
+
+        static AdditionalPropertiesDictionary<long> Additional(UsageDetails d)
+            => d.AdditionalCounts ??= new AdditionalPropertiesDictionary<long>();
+
+        static bool TryGetLong(JsonElement obj, string name, out long value)
+        {
+            value = 0;
+            return obj.TryGetProperty(name, out var prop) && prop.ValueKind == JsonValueKind.Number
+                   && (value = prop.GetInt64()) is var _;
+        }
+
+        static bool TryGetDouble(JsonElement obj, string name, out double value)
+        {
+            value = 0;
+            return obj.TryGetProperty(name, out var prop) && prop.ValueKind == JsonValueKind.Number
+                   && (value = prop.GetDouble()) is var _;
+        }
     }
 
     private static ChatFinishReason? ParseFinishReason(JsonElement choice)

@@ -114,6 +114,21 @@ public sealed record UsageOutput : SessionOutput
     /// are unavailable.
     /// </summary>
     public double? UsagePercent { get; init; }
+
+    // ── Server-side timing (llama.cpp timings object) ──
+
+    /// <summary>
+    /// Server-side prompt processing (prefill) time in milliseconds.
+    /// Sourced from llama.cpp <c>timings.prompt_ms</c>. Null when the
+    /// provider does not report timing data.
+    /// </summary>
+    public double? PromptMs { get; init; }
+
+    /// <summary>
+    /// Server-side output generation throughput in tokens per second.
+    /// Sourced from llama.cpp <c>timings.predicted_per_second</c>.
+    /// </summary>
+    public double? PredictedPerSecond { get; init; }
 }
 
 /// <summary>

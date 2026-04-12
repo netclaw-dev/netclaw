@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.AI;
@@ -36,6 +37,10 @@ public sealed class HeadlessChannel : IChannel
     private readonly List<JsonToolCall> _toolCalls = [];
     private JsonUsage? _usage;
     private string? _resolvedSessionId;
+
+    // Client-side timing
+    private long _promptSentTicks;
+    private long _firstDeltaTicks;
 
     public Actors.Channels.ChannelType ChannelType => Actors.Channels.ChannelType.Headless;
     public string DisplayName => "Headless Prompt";
@@ -130,6 +135,8 @@ public sealed class HeadlessChannel : IChannel
             logWriter!.WriteLine($"[{_timeProvider.GetUtcNow():o}] Headless session started: {sessionId}");
             logWriter.WriteLine($"[{_timeProvider.GetUtcNow():o}] PROMPT: {_prompt}");
 
+            _promptSentTicks = Stopwatch.GetTimestamp();
+
             await _daemonClient.SendAsync(new Netclaw.Actors.Channels.ChannelInput
             {
                 SenderId = "local-user",
@@ -185,6 +192,8 @@ public sealed class HeadlessChannel : IChannel
                 break;
 
             case TextDeltaOutput msg:
+                if (!_receivedTextDeltaInCurrentTurn && _promptSentTicks > 0)
+                    Interlocked.CompareExchange(ref _firstDeltaTicks, Stopwatch.GetTimestamp(), 0);
                 _receivedTextDeltaInCurrentTurn = true;
                 if (_jsonOutput)
                     _responseBuffer.Append(msg.Delta);
@@ -241,14 +250,16 @@ public sealed class HeadlessChannel : IChannel
                         OutputTokens = msg.OutputTokens,
                         TotalTokens = msg.TotalTokens,
                         CachedInputTokens = msg.CachedInputTokens,
-                        ReasoningTokens = msg.ReasoningTokens
+                        ReasoningTokens = msg.ReasoningTokens,
+                        PromptMs = msg.PromptMs,
+                        PredictedPerSecond = msg.PredictedPerSecond,
                     };
                 }
                 else
                 {
                     Console.WriteLine($"[usage] in={msg.InputTokens} out={msg.OutputTokens} total={msg.TotalTokens}");
                 }
-                Log(log, $"USAGE: in={msg.InputTokens} out={msg.OutputTokens} total={msg.TotalTokens} cached={msg.CachedInputTokens} reasoning={msg.ReasoningTokens} context_window={msg.ContextWindowTokens}");
+                Log(log, $"USAGE: in={msg.InputTokens} out={msg.OutputTokens} total={msg.TotalTokens} cached={msg.CachedInputTokens} reasoning={msg.ReasoningTokens} context_window={msg.ContextWindowTokens} prompt_ms={msg.PromptMs} predicted_tok_s={msg.PredictedPerSecond}");
                 break;
 
             case ErrorOutput msg:
@@ -311,12 +322,23 @@ public sealed class HeadlessChannel : IChannel
 
     private void WriteJsonEnvelope()
     {
+        // Client-side timing
+        var now = Stopwatch.GetTimestamp();
+        double? ttftMs = _firstDeltaTicks > 0 && _promptSentTicks > 0
+            ? Stopwatch.GetElapsedTime(_promptSentTicks, _firstDeltaTicks).TotalMilliseconds
+            : null;
+        double? totalMs = _promptSentTicks > 0
+            ? Stopwatch.GetElapsedTime(_promptSentTicks, now).TotalMilliseconds
+            : null;
+
         var envelope = new JsonEnvelope
         {
             SessionId = _resolvedSessionId!,
             Response = _responseBuffer.ToString(),
             ToolCalls = _toolCalls.Count > 0 ? _toolCalls : null,
-            Usage = _usage
+            Usage = _usage,
+            TtftMs = ttftMs.HasValue ? Math.Round(ttftMs.Value, 1) : null,
+            TotalMs = totalMs.HasValue ? Math.Round(totalMs.Value, 1) : null,
         };
 
         Console.WriteLine(JsonSerializer.Serialize(envelope, s_jsonOptions));
@@ -350,6 +372,8 @@ public sealed class HeadlessChannel : IChannel
         public required string Response { get; init; }
         public List<JsonToolCall>? ToolCalls { get; init; }
         public JsonUsage? Usage { get; init; }
+        public double? TtftMs { get; init; }
+        public double? TotalMs { get; init; }
     }
 
     private sealed class JsonToolCall
@@ -366,5 +390,7 @@ public sealed class HeadlessChannel : IChannel
         public long? TotalTokens { get; init; }
         public long? CachedInputTokens { get; init; }
         public long? ReasoningTokens { get; init; }
+        public double? PromptMs { get; init; }
+        public double? PredictedPerSecond { get; init; }
     }
 }
