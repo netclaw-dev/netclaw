@@ -334,6 +334,18 @@ CREATE TABLE IF NOT EXISTS eval_results (
     details     TEXT,
     PRIMARY KEY (run_id, case_name, run_number)
 );
+CREATE TABLE IF NOT EXISTS eval_metrics (
+    run_id            TEXT NOT NULL REFERENCES eval_runs(run_id),
+    category          TEXT NOT NULL,
+    case_name         TEXT NOT NULL,
+    run_number        INTEGER NOT NULL,
+    input_tokens      INTEGER,
+    output_tokens     INTEGER,
+    cached_tokens     INTEGER,
+    prompt_ms         REAL,
+    predicted_tok_s   REAL,
+    PRIMARY KEY (run_id, case_name, run_number)
+);
 SQL
 }
 
@@ -347,6 +359,73 @@ store_result() {
     sqlite3 "$RESULTS_DB" \
         "INSERT INTO eval_results (run_id, category, case_name, run_number, prompt_used, passed, details)
          VALUES ('$RUN_ID', '$esc_category', '$case_name', $run_number, '$esc_prompt', $passed, '$esc_details');"
+}
+
+## Parses the [usage] line from stdout and stores performance metrics.
+## Called after each run_prompt / store_result pair.
+store_metrics() {
+    [[ -z "$RESULTS_DB" ]] && return
+    [[ ! -f "$STDOUT_FILE" ]] && return
+
+    local case_name="$1" run_number="$2"
+    local usage_line
+    usage_line=$(grep -o '\[usage\].*' "$STDOUT_FILE" 2>/dev/null | tail -1) || return 0
+
+    # Parse fields from: [usage] in=X out=Y total=Z cached=C prompt_ms=P tok_s=T
+    local input_tokens output_tokens cached_tokens prompt_ms tok_s
+    input_tokens=$(echo "$usage_line" | grep -oP 'in=\K[0-9]+' || echo "")
+    output_tokens=$(echo "$usage_line" | grep -oP 'out=\K[0-9]+' || echo "")
+    cached_tokens=$(echo "$usage_line" | grep -oP 'cached=\K[0-9]+' || echo "")
+    prompt_ms=$(echo "$usage_line" | grep -oP 'prompt_ms=\K[0-9.]+' || echo "")
+    tok_s=$(echo "$usage_line" | grep -oP 'tok_s=\K[0-9.]+' || echo "")
+
+    # Skip if no metrics found
+    [[ -z "$input_tokens" && -z "$cached_tokens" && -z "$prompt_ms" ]] && return 0
+
+    local esc_category="${CURRENT_CATEGORY//\'/\'\'}"
+    sqlite3 "$RESULTS_DB" \
+        "INSERT OR REPLACE INTO eval_metrics (run_id, category, case_name, run_number, input_tokens, output_tokens, cached_tokens, prompt_ms, predicted_tok_s)
+         VALUES ('$RUN_ID', '$esc_category', '$case_name', $run_number,
+                 ${input_tokens:-NULL}, ${output_tokens:-NULL}, ${cached_tokens:-NULL},
+                 ${prompt_ms:-NULL}, ${tok_s:-NULL});"
+}
+
+print_metrics_summary() {
+    [[ -z "$RESULTS_DB" ]] && return
+
+    local count
+    count=$(sqlite3 "$RESULTS_DB" "SELECT COUNT(*) FROM eval_metrics WHERE run_id='$RUN_ID' AND prompt_ms IS NOT NULL;" 2>/dev/null || echo "0")
+    [[ "$count" == "0" ]] && return
+
+    echo ""
+    echo "── Performance Metrics ──"
+    sqlite3 -header -column "$RESULTS_DB" <<SQL
+SELECT
+    category,
+    COUNT(*) as prompts,
+    CAST(ROUND(AVG(input_tokens)) AS INTEGER) as avg_input,
+    CAST(ROUND(AVG(output_tokens)) AS INTEGER) as avg_output,
+    CAST(ROUND(AVG(cached_tokens)) AS INTEGER) as avg_cached,
+    ROUND(AVG(prompt_ms), 1) as avg_prompt_ms,
+    ROUND(AVG(predicted_tok_s), 1) as avg_tok_s
+FROM eval_metrics
+WHERE run_id='$RUN_ID' AND input_tokens IS NOT NULL
+GROUP BY category;
+SQL
+
+    echo ""
+    sqlite3 -header -column "$RESULTS_DB" <<SQL
+SELECT
+    'overall' as scope,
+    COUNT(*) as prompts,
+    CAST(ROUND(AVG(prompt_ms)) AS INTEGER) as avg_prompt_ms,
+    CAST(ROUND(MIN(prompt_ms)) AS INTEGER) as min_prompt_ms,
+    CAST(ROUND(MAX(prompt_ms)) AS INTEGER) as max_prompt_ms,
+    ROUND(AVG(predicted_tok_s), 1) as avg_tok_s,
+    CAST(ROUND(AVG(cached_tokens)) AS INTEGER) as avg_cached
+FROM eval_metrics
+WHERE run_id='$RUN_ID' AND prompt_ms IS NOT NULL;
+SQL
 }
 
 finalize_db() {
@@ -615,6 +694,7 @@ run_case() {
         fi
 
         store_result "$case_name" "$run" "$prompt" "$passed" "$details"
+        store_metrics "$case_name" "$run"
     done
 
     local score
@@ -793,6 +873,8 @@ main() {
     echo ""
     echo "─────────────────────────────────────────────────"
     echo "Overall: $PASSED_CASES/$TOTAL_CASES cases passed ($overall_score%)"
+
+    print_metrics_summary
 
     if [[ -n "$RESULTS_DB" ]]; then
         echo "Results: $RESULTS_DB (run_id: $RUN_ID)"
