@@ -3,18 +3,26 @@ using System.Collections.Frozen;
 namespace Netclaw.Security;
 
 /// <summary>
-/// Configurable content security policy for file uploads.
+/// Configurable content security policy for file uploads. Layered on top of
+/// <see cref="MagicByteValidator"/>: the validator advertises which MIME
+/// types it knows how to verify, and this policy is the runtime allowlist
+/// that operators can use to further restrict what passes.
 /// </summary>
 public sealed class ContentPolicy
 {
     /// <summary>
-    /// Default maximum file size: 20 MB.
+    /// Default maximum file size: 25 MiB. Tracks
+    /// <c>ChannelAttachmentPolicy.DefaultMaxFileBytes</c> so the scanner
+    /// ceiling and the channel policy ceiling don't drift.
     /// </summary>
-    public const long DefaultMaxFileSizeBytes = 20 * 1024 * 1024;
+    public const long DefaultMaxFileSizeBytes = 25L * 1024 * 1024;
 
     /// <summary>
-    /// MIME types allowed through the content scanner.
-    /// Defaults to image types supported by vision models.
+    /// MIME types allowed through the content scanner. Defaults to the full
+    /// set of MIME types <see cref="MagicByteValidator"/> knows how to verify
+    /// — images, PDF, Office documents, plain/rich text, archives, and
+    /// common audio/video containers. Operators can override this to
+    /// restrict the allowlist further.
     /// </summary>
     public FrozenSet<string> AllowedMimeTypes { get; init; } = DefaultAllowedMimeTypes;
 
@@ -24,11 +32,6 @@ public sealed class ContentPolicy
     public long MaxFileSizeBytes { get; init; } = DefaultMaxFileSizeBytes;
 
     public static readonly FrozenSet<string> DefaultAllowedMimeTypes =
-        new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-        {
-            "image/png",
-            "image/jpeg",
-            "image/gif",
-            "image/webp"
-        }.ToFrozenSet(StringComparer.OrdinalIgnoreCase);
+        MagicByteValidator.GetSupportedMimeTypes()
+            .ToFrozenSet(StringComparer.OrdinalIgnoreCase);
 }

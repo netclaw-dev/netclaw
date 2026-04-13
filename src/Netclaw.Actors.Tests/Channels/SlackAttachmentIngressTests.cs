@@ -40,6 +40,9 @@ public sealed class SlackAttachmentIngressVisionTests : TestKit
     private static readonly byte[] FakeDocxBytes =
         "PK\u0003\u0004fake docx content"u8.ToArray();
 
+    private static readonly byte[] FakePlainTextBytes =
+        "meeting notes\n- discuss Q2 roadmap\n- assign OKRs\n"u8.ToArray();
+
     private readonly RecordingChatClient _chatClient = new();
     private readonly RecordingReplyClient _replyClient = new();
     private readonly ConfigurableFakeSlackFileHandler _httpHandler = new();
@@ -125,7 +128,7 @@ public sealed class SlackAttachmentIngressVisionTests : TestKit
             BotUserId: new SlackUserId("UBOT"),
             DefaultChannelId: null,
             ReplyClient: _replyClient,
-            ContentScanner: scanner ?? new NullContentScanner(),
+            ContentScanner: scanner ?? new MagicByteContentScanner(new ContentPolicy()),
             ThreadHistoryFetcher: EmptyThreadHistoryFetcher.Instance,
             AudienceProfiles: profiles,
             ModelCapabilities: Host.Services.GetRequiredService<ModelCapabilities>(),
@@ -435,6 +438,57 @@ public sealed class SlackAttachmentIngressVisionTests : TestKit
         {
             Assert.True(File.Exists(Path.Combine(inboxDir, "photo_1.png")));
         }, duration: TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task PlainText_in_dm_flows_through_real_magic_byte_scanner()
+    {
+        // Regression: before the MagicByteValidator rewrite, only image MIMEs
+        // passed the scanner — text/plain was rejected with
+        // "File extension '.txt' is not allowed" even though the policy layer
+        // allowed it. This test uses the default (real) MagicByteContentScanner
+        // to prove the broader category support end-to-end.
+        _httpHandler.RespondWith("text/plain", FakePlainTextBytes);
+        var gateway = BuildGateway("slack-gw-plaintext-flow");
+
+        var files = new List<SlackFileReference>
+        {
+            new("F_TXT", "notes.txt", "text/plain", FakePlainTextBytes.Length,
+                "https://files.slack.com/files-pri/T1234-F_TXT/notes.txt")
+        };
+
+        gateway.Tell(new SlackInboundMessage(
+            Kind: SlackInboundKind.Message,
+            EventId: new SlackEventId("D_TXT:3800"),
+            ChannelId: new SlackChannelId("D_TXT"),
+            ThreadTs: null,
+            EventTs: new SlackEventTs("3800.1"),
+            UserId: new SlackUserId("U_HUMAN"),
+            BotId: null,
+            Text: "here are my notes",
+            Subtype: null,
+            Hidden: false,
+            IsDirectMessage: true,
+            Files: files));
+
+        await AwaitAssertAsync(() =>
+        {
+            Assert.Contains(_chatClient.ReceivedMessages,
+                contents => contents.Any(c => c is TextContent t
+                    && t.Text.Contains("[attachment]", StringComparison.Ordinal)
+                    && t.Text.Contains("notes.txt", StringComparison.Ordinal)
+                    && t.Text.Contains("path=\"inbox/notes.txt\"", StringComparison.Ordinal)));
+        }, duration: TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
+
+        var sessionId = new SessionId("D_TXT/3800.1");
+        var inboxPath = Path.Combine(
+            SessionDirectoryHelper.GetOrCreateInboxDirectory(sessionId, _paths.SessionsDirectory),
+            "notes.txt");
+        Assert.True(File.Exists(inboxPath), $"Expected inbox file at {inboxPath}");
+
+        // Scanner should not have posted any rejection reply.
+        Assert.DoesNotContain(_replyClient.PostedMessages,
+            m => m.Text.Contains("Content scanner rejected", StringComparison.Ordinal));
     }
 
     [Fact]
