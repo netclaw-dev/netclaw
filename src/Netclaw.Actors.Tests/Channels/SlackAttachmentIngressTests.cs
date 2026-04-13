@@ -139,10 +139,21 @@ public sealed class SlackAttachmentIngressVisionTests : TestKit
     }
 
     [Fact]
-    public async Task Pdf_in_dm_on_vision_capable_model_is_saved_to_inbox_and_inlined()
+    public async Task Pdf_in_dm_is_saved_to_inbox_path_only_and_never_inlined()
     {
+        // Regression for the "Invalid url format: data:application/pdf;base64"
+        // failure surfaced in session D0AC6CKBK5K/1776091017.523089 on 2026-04-13.
+        // Root cause: the live-ingress path was wrapping PDF bytes as DataContent
+        // (application/pdf), which OpenAiCompatibleChatClient.ToMessage then
+        // serialized as an `image_url` content part with a data:application/pdf
+        // URL — rejected by every OpenAI-compatible upstream (llama.cpp, vLLM,
+        // Ollama). The fix is to stop inlining PDFs at all: the file already
+        // lives in inbox/ and the agent reads it via shell_execute + pdftotext
+        // (see AttachmentNotes.ModelMissingPdf). Vision-capable models are
+        // still exercised here to make sure we don't accidentally re-introduce
+        // the "Image flag implies PDF inline" conflation.
         _httpHandler.RespondWith("application/pdf", FakePdfBytes);
-        var gateway = BuildGateway("slack-gw-pdf-inline");
+        var gateway = BuildGateway("slack-gw-pdf-path-only");
 
         var files = new List<SlackFileReference>
         {
@@ -167,17 +178,28 @@ public sealed class SlackAttachmentIngressVisionTests : TestKit
         await AwaitAssertAsync(() =>
         {
             Assert.Contains(_chatClient.ReceivedMessages,
-                contents => contents.Any(c => c is TextContent t && t.Text.Contains("[attachment]", StringComparison.Ordinal))
-                            && contents.Any(c => c is DataContent d && d.MediaType == "application/pdf"));
+                contents => contents.Any(c => c is TextContent t
+                    && t.Text.Contains("[attachment]", StringComparison.Ordinal)
+                    && t.Text.Contains("report.pdf", StringComparison.Ordinal)));
         }, duration: TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
 
         var announcement = _chatClient.ReceivedMessages
             .SelectMany(m => m)
             .OfType<TextContent>()
-            .First(t => t.Text.Contains("[attachment]", StringComparison.Ordinal));
+            .First(t => t.Text.Contains("[attachment]", StringComparison.Ordinal)
+                     && t.Text.Contains("report.pdf", StringComparison.Ordinal));
         Assert.Contains("report.pdf", announcement.Text, StringComparison.Ordinal);
-        Assert.Contains("inlined=\"true\"", announcement.Text, StringComparison.Ordinal);
+        Assert.Contains("inlined=\"false\"", announcement.Text, StringComparison.Ordinal);
         Assert.Contains("path=\"inbox/report.pdf\"", announcement.Text, StringComparison.Ordinal);
+        Assert.Contains("current model has no native PDF support", announcement.Text, StringComparison.Ordinal);
+
+        // PDFs are never handed to the LLM as DataContent — otherwise they'd
+        // reach OpenAiCompatibleChatClient and be wrapped as a broken image_url.
+        var pdfDataContents = _chatClient.ReceivedMessages
+            .SelectMany(m => m)
+            .OfType<DataContent>()
+            .Where(d => d.MediaType == "application/pdf");
+        Assert.Empty(pdfDataContents);
 
         var sessionId = new SessionId("D1/2000.1");
         var inboxPath = Path.Combine(

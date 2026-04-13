@@ -333,15 +333,13 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
         }
 
         // Resolve the capability view once per message — the active model's
-        // InputModalities determine which accepted categories get inlined
-        // as DataContent versus path-only announcements.
+        // InputModalities determine whether images get inlined as DataContent
+        // versus path-only announcements. PDFs are always path-only: no
+        // provider plugin currently serializes application/pdf inline, and
+        // the agent can always read them from inbox/ via shell_execute +
+        // pdftotext or other file tools.
         var modelCapabilities = _dependencies.ModelCapabilities;
         var inlineImages = modelCapabilities.InputModalities.HasFlag(ModelModality.Image);
-        // Microsoft.Extensions.AI doesn't define a dedicated Pdf modality flag;
-        // provider plugins that natively accept application/pdf use the Image
-        // flag on the document pipeline. This matches how LlmSessionActor's
-        // existing mediaRefs gate surfaces modality support today.
-        var inlinePdfs = modelCapabilities.InputModalities.HasFlag(ModelModality.Image);
 
         var acceptedLines = new List<string>(files.Count);
         var dataContents = new List<DataContent>();
@@ -356,7 +354,6 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
                 audience,
                 policy,
                 inlineImages,
-                inlinePdfs,
                 inboxDir,
                 cancellationToken);
 
@@ -394,7 +391,6 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
         TrustAudience audience,
         ChannelAttachmentPolicy policy,
         bool inlineImages,
-        bool inlinePdfs,
         string inboxDir,
         CancellationToken cancellationToken)
     {
@@ -515,7 +511,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
         }
 
         // Decide inlining based on model modalities and category.
-        var (inlined, note) = ResolveInlineDecision(category, inlineImages, inlinePdfs);
+        var (inlined, note) = ResolveInlineDecision(category, inlineImages);
 
         var relativePath = $"{SessionDirectoryHelper.InboxSubdirectory}/{Path.GetFileName(inboxPath)}";
         var line = BuildAttachmentLine(file.Name, file.MimeType, bytes.Length, relativePath, inlined, note);
@@ -533,14 +529,12 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
 
     private static (bool Inlined, string? Note) ResolveInlineDecision(
         AttachmentCategory category,
-        bool inlineImages,
-        bool inlinePdfs)
+        bool inlineImages)
     {
         return category switch
         {
             AttachmentCategory.Image when inlineImages => (true, null),
             AttachmentCategory.Image => (false, AttachmentNotes.ModelMissingImage),
-            AttachmentCategory.Pdf when inlinePdfs => (true, null),
             AttachmentCategory.Pdf => (false, AttachmentNotes.ModelMissingPdf),
             _ => (false, AttachmentNotes.FormatNotInlineable)
         };
@@ -886,7 +880,6 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
         var profile = ToolAudienceProfileDefaults.GetResolvedProfile(audienceProfiles, audience);
         var attachmentPolicy = profile.ChannelAttachments ?? ChannelAttachmentPolicy.Empty;
         var inlineImages = modelCapabilities.InputModalities.HasFlag(ModelModality.Image);
-        var inlinePdfs = modelCapabilities.InputModalities.HasFlag(ModelModality.Image);
 
         var sb = new StringBuilder();
         sb.AppendLine("[thread history — messages exchanged before this inbound event]");
@@ -920,7 +913,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
                             break;
                         }
 
-                        var (inlined, note) = ResolveInlineDecision(category, inlineImages, inlinePdfs);
+                        var (inlined, note) = ResolveInlineDecision(category, inlineImages);
                         if (!inlined)
                         {
                             var effectiveNote = note ?? AttachmentNotes.FormatNotInlineable;
