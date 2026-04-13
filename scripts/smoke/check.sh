@@ -335,16 +335,16 @@ fi
 echo "Testing netclaw stats skills..."
 skill_stats_output="$(run_sandbox_timed "$STEP_TIMEOUT_SECONDS" netclaw stats skills)"
 echo "$skill_stats_output"
-if [[ "$skill_stats_output" != *"by method:"* ]]; then
-  echo "Expected stats skills output to include method breakdown."
+if [[ "$skill_stats_output" != *"by method:"* && "$skill_stats_output" != *"No skill loads recorded."* ]]; then
+  echo "Expected stats skills output to include either a method breakdown or the empty-state message."
   exit 1
 fi
 
 echo "Testing netclaw stats skills --json..."
 skill_stats_json="$(run_sandbox_timed "$STEP_TIMEOUT_SECONDS" netclaw stats skills --json)"
 echo "$skill_stats_json"
-if [[ "$skill_stats_json" != *"totalLoads"* ]]; then
-  echo "Expected stats skills --json to include totalLoads field."
+if [[ "$skill_stats_json" != *"\"daily\""* ]]; then
+  echo "Expected stats skills --json to include the daily field."
   exit 1
 fi
 

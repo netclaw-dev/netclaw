@@ -192,6 +192,12 @@ else
   fail "stats skills: unexpected exit code $skill_stats_exit (expected 0 or 1)"
 fi
 
+if [[ $skill_stats_exit -eq 0 && "$skill_stats_output" != *"by method:"* && "$skill_stats_output" != *"No skill loads recorded."* ]]; then
+  fail "stats skills: expected method breakdown or empty-state message when command succeeds"
+else
+  pass "stats skills: output shape is valid when command succeeds"
+fi
+
 echo ""
 echo "=== netclaw stats skills --json (daemon-optional) ==="
 set +e
@@ -204,6 +210,12 @@ if [[ $skill_stats_json_exit -le 1 ]]; then
   pass "stats skills --json: exits with valid code $skill_stats_json_exit"
 else
   fail "stats skills --json: unexpected exit code $skill_stats_json_exit (expected 0 or 1)"
+fi
+
+if [[ $skill_stats_json_exit -eq 0 && "$skill_stats_json_output" != *"\"daily\""* ]]; then
+  fail "stats skills --json: expected daily field when command succeeds"
+else
+  pass "stats skills --json: output shape is valid when command succeeds"
 fi
 
 # ── No-args and unknown command behavior ─────────────────────────────────────
