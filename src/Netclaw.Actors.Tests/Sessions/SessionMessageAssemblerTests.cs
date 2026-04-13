@@ -89,12 +89,9 @@ public sealed class SessionMessageAssemblerTests
             $"Expected cache prefix ≥ 3 messages (persisted prompt, static context, user turn1), got {prefix}. " +
             $"Turn 1: [{FormatMessages(turn1Messages)}] Turn 2: [{FormatMessages(turn2Messages)}]");
 
-        // Sanity: the test is not passing vacuously because recall was
-        // silently dropped. Each turn's recall content must actually
-        // appear in its volatile tail, and the turn-specific markers
-        // must not leak into the other turn's assembly. The volatile
-        // tail is the LAST message and is System-role (see
-        // SessionMessageAssembler docs for why it is not User-role).
+        // Guard against passing vacuously if recall was silently dropped:
+        // each turn's marker must appear in its own tail, and must not
+        // leak into the other turn's assembly.
         var turn1Tail = turn1Messages[^1];
         var turn2Tail = turn2Messages[^1];
         Assert.Equal(Microsoft.Extensions.AI.ChatRole.System, turn1Tail.Role);
@@ -110,14 +107,8 @@ public sealed class SessionMessageAssemblerTests
     [Fact]
     public void Volatile_tail_message_is_System_role_at_end_of_list()
     {
-        // The volatile tail (memory recall, current time, working-context,
-        // slash command, overlay, turn restart notice) is emitted as a
-        // System-role message appended to the end of the assembled list.
-        // It must NOT be User-role: a trailing User-role message signals
-        // "new user turn" to chat templates like Qwen3's ChatML, which
-        // causes the model to restart its assistant response on every
-        // tool-loop iteration (the production loop observed in
-        // D0AC6CKBK5K/1776051715.090089 turn 10 on 2026-04-13).
+        // See Volatile_tail_does_not_create_fake_user_turn_after_tool_result
+        // for the full reasoning on why the role must be System, not User.
         var input = MakeInput(
             SeedHistory("hi"),
             FakeRecall("mem-1"),
@@ -164,11 +155,6 @@ public sealed class SessionMessageAssemblerTests
         Assert.Equal(turn1Messages[0].Text, turn2Messages[0].Text);
         Assert.Equal(turn1Messages[1].Text, turn2Messages[1].Text);
 
-        // Working-context update must appear in turn 2's volatile tail
-        // (last message), NOT in the leading static system block at [1].
-        // Both are System-role after the #618 → #626 fix, so we identify
-        // them by position: [1] is the static dynamic context block,
-        // [^1] is the volatile tail.
         var staticSystemBlock = turn2Messages[1].Text ?? string.Empty;
         Assert.DoesNotContain("[working-context]", staticSystemBlock);
 
@@ -180,31 +166,21 @@ public sealed class SessionMessageAssemblerTests
     [Fact]
     public void Recall_is_not_in_leading_system_prefix_even_when_resolved()
     {
-        // The cache-stability invariant: volatile content (memory recall,
-        // current time, working-context, slash-command, etc.) must not
-        // poison the *leading* system prefix that makes up the cacheable
-        // prompt. The volatile block is emitted as a System-role message
-        // at the END of the assembled list (see
-        // SessionMessageAssembler.Assemble), so we inspect only the
-        // contiguous leading System-role block — stop at the first
-        // non-System message.
+        // Cache stability requires that volatile content only appears in the
+        // trailing System-role tail, never in the leading contiguous System
+        // prefix that makes up the cacheable prompt.
         var input = MakeInput(SeedHistory("hi"), FakeRecall("remembered thing"));
         var messages = SessionMessageAssembler.Assemble(input);
 
-        var leadingSystemText = new System.Text.StringBuilder();
         foreach (var msg in messages)
         {
             if (msg.Role != Microsoft.Extensions.AI.ChatRole.System)
                 break;
-            leadingSystemText.AppendLine(msg.Text ?? string.Empty);
+            var text = msg.Text ?? string.Empty;
+            Assert.DoesNotContain("[memory-recall]", text);
+            Assert.DoesNotContain("remembered thing", text);
         }
 
-        var prefix = leadingSystemText.ToString();
-        Assert.DoesNotContain("[memory-recall]", prefix);
-        Assert.DoesNotContain("remembered thing", prefix);
-
-        // And sanity: the recall content IS present in the trailing
-        // System-role volatile tail, otherwise this test is vacuous.
         var tail = messages[^1];
         Assert.Equal(Microsoft.Extensions.AI.ChatRole.System, tail.Role);
         Assert.Contains("[memory-recall]", tail.Text ?? string.Empty);
