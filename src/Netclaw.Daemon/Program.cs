@@ -935,7 +935,8 @@ static void ConfigureDaemonServices(
             var tp = sp.GetRequiredService<TimeProvider>();
             var rc = sp.GetRequiredService<ReminderConfig>();
             var historyStore = sp.GetRequiredService<ReminderHistoryStore>();
-            toolRegistry.WithReminderTools(reminderManager, tp, rc, historyStore);
+            var targetResolver = sp.GetService<Netclaw.Actors.Reminders.IReminderTargetResolver>();
+            toolRegistry.WithReminderTools(reminderManager, tp, rc, historyStore, targetResolver);
 
             // Drain all active LLM sessions during any actor system termination (SIGTERM, daemon stop).
             // Runs in an early CoordinatedShutdown phase while actors are still alive.
