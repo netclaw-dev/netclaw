@@ -1475,6 +1475,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         }
 
         // Execute tools async — results come back as ToolExecutionCompleted
+        TurnLog().Info("turn_tool_call_batch count={Count} tools={Tools}",
+            toolCalls.Count,
+            string.Join(",", toolCalls.Select(tc => tc.Name)));
         foreach (var tc in toolCalls)
         {
             _log.Info("Invoking tool [{ToolName}] (call={CallId}) args={Args}",
