@@ -447,6 +447,107 @@ public sealed class SlackThreadBackfillIntegrationTests : TestKit
         }, duration: TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
     }
 
+    [Fact]
+    public async Task Backfill_document_in_public_channel_is_not_forwarded_as_data_content()
+    {
+        var pipeline = Host.Services.GetRequiredService<SessionPipeline>();
+        var httpClient = new HttpClient(_httpHandler);
+
+        var fetcher = new SlackThreadHistoryFetcher(
+            (channelId, threadTs, limit, cursor, ct) =>
+                Task.FromResult(new SlackNet.WebApi.ConversationMessagesResponse
+                {
+                    Messages =
+                    [
+                        new SlackNet.Events.MessageEvent
+                        {
+                            Ts = threadTs,
+                            User = "U_ROOT",
+                            Text = "thread root"
+                        },
+                        new SlackNet.Events.MessageEvent
+                        {
+                            Ts = $"{threadTs[..^1]}1",
+                            User = "U_ALICE",
+                            Text = "historical doc",
+                            Files =
+                            [
+                                new SlackNet.File
+                                {
+                                    Id = "F_DOCX",
+                                    Name = "notes.docx",
+                                    Mimetype = "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                                    Size = FakePngBytes.Length,
+                                    UrlPrivateDownload = "https://files.slack.com/fake/notes.docx"
+                                }
+                            ]
+                        }
+                    ]
+                }),
+            new SlackChannelOptions { BotToken = new SensitiveString("xoxb-fake") },
+            httpClient,
+            new NullContentScanner(),
+            NullLogger<SlackThreadHistoryFetcher>.Instance);
+
+        var profiles = ToolAudienceProfileDefaults.CreateProfiles();
+        profiles.Public.ChannelAttachments = ToolAudienceProfileDefaults.CreatePublicChannelAttachments();
+
+        var deps = new SlackGatewayDependencies(
+            Pipeline: pipeline,
+            IngressGate: null,
+            ActorSystem: Sys,
+            TimeProvider: TimeProvider.System,
+            Options: new SlackChannelOptions
+            {
+                Enabled = true,
+                MentionOnly = true,
+                AllowedChannelIds = ["C_PUBLIC"],
+                ChannelAudiences = new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["C_PUBLIC"] = "public"
+                },
+                BotToken = new SensitiveString("xoxb-fake-token")
+            },
+            BotUserId: new SlackUserId("UBOT"),
+            DefaultChannelId: null,
+            ReplyClient: _replyClient,
+            ContentScanner: new NullContentScanner(),
+            HttpClient: httpClient,
+            ThreadHistoryFetcher: fetcher,
+            AudienceProfiles: profiles,
+            ModelCapabilities: TestSlackGatewayDeps.DefaultVisionCapableModel,
+            Paths: _paths);
+
+        var gateway = Sys.ActorOf(SlackGatewayActor.CreateProps(deps), "slack-gw-backfill-public-doc");
+
+        gateway.Tell(new SlackInboundMessage(
+            Kind: SlackInboundKind.AppMention,
+            EventId: new SlackEventId("C_PUBLIC:7000.2"),
+            ChannelId: new SlackChannelId("C_PUBLIC"),
+            ThreadTs: new SlackThreadTs("7000.0"),
+            EventTs: new SlackEventTs("7000.2"),
+            UserId: new SlackUserId("U_MENTIONER"),
+            BotId: null,
+            Text: "<@UBOT> please summarize",
+            Subtype: null,
+            Hidden: false,
+            IsDirectMessage: false));
+
+        await AwaitAssertAsync(() =>
+        {
+            Assert.True(_chatClient.CallCount > 0, "Expected at least one LLM call");
+        }, duration: TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
+
+        var messages = _chatClient.LastMessages!;
+        var user = Assert.Single(messages, m => m.Role == AiChatRole.User);
+
+        Assert.Empty(user.Contents.OfType<DataContent>());
+
+        var mergedText = string.Join("", user.Contents.OfType<TextContent>().Select(t => t.Text));
+        Assert.Contains("attachment rejected", mergedText, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("category not allowed", mergedText, StringComparison.OrdinalIgnoreCase);
+    }
+
     // --- Fake replies fetcher ---
 
     private Task<SlackNet.WebApi.ConversationMessagesResponse> FakeRepliesFetcher(

@@ -148,7 +148,6 @@ public static class MagicByteValidator
         if (IsOle(content)) return "application/x-ole-compound-document";
         if (IsRtf(content)) return "application/rtf";
         if (Is7z(content)) return "application/x-7z-compressed";
-        if (IsRar(content)) return "application/vnd.rar";
         if (IsGzip(content)) return "application/gzip";
         if (IsBzip2(content)) return "application/x-bzip2";
         if (IsXz(content)) return "application/x-xz";
@@ -228,8 +227,6 @@ public static class MagicByteValidator
         rules["application/zip"] = new(Exts(".zip"), IsZip);
         rules["application/x-zip-compressed"] = new(Exts(".zip"), IsZip);
         rules["application/x-7z-compressed"] = new(Exts(".7z"), Is7z);
-        rules["application/vnd.rar"] = new(Exts(".rar"), IsRar);
-        rules["application/x-rar-compressed"] = new(Exts(".rar"), IsRar);
         rules["application/gzip"] = new(Exts(".gz", ".tgz"), IsGzip);
         rules["application/x-gzip"] = new(Exts(".gz", ".tgz"), IsGzip);
         rules["application/x-bzip2"] = new(Exts(".bz2"), IsBzip2);
@@ -369,21 +366,6 @@ public static class MagicByteValidator
         c.Length >= 6 &&
         c[0] == 0x37 && c[1] == 0x7A && c[2] == 0xBC && c[3] == 0xAF &&
         c[4] == 0x27 && c[5] == 0x1C;
-
-    /// <summary>
-    /// RAR v1.5–v4 (<c>Rar!\x1A\x07\x00</c>, 7 bytes) or RAR v5+
-    /// (<c>Rar!\x1A\x07\x01\x00</c>, 8 bytes). Tightened from the looser
-    /// 6-byte prefix to require the exact trailing bytes of one variant.
-    /// </summary>
-    private static bool IsRar(ReadOnlySpan<byte> c)
-    {
-        if (c.Length < 7) return false;
-        if (c[0] != 0x52 || c[1] != 0x61 || c[2] != 0x72 || c[3] != 0x21) return false;
-        if (c[4] != 0x1A || c[5] != 0x07) return false;
-        if (c[6] == 0x00) return true; // v4
-        if (c[6] == 0x01 && c.Length >= 8 && c[7] == 0x00) return true; // v5
-        return false;
-    }
 
     /// <summary>
     /// Gzip: <c>1F 8B</c> plus compression method <c>08</c> (DEFLATE).

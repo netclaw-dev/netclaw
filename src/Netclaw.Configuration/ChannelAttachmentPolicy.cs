@@ -105,12 +105,9 @@ public static class AttachmentCategories
     {
         "application/zip" => true,
         "application/x-zip-compressed" => true,
-        "application/x-tar" => true,
         "application/gzip" => true,
         "application/x-gzip" => true,
         "application/x-7z-compressed" => true,
-        "application/x-rar-compressed" => true,
-        "application/vnd.rar" => true,
         "application/x-bzip2" => true,
         "application/x-xz" => true,
         _ => false

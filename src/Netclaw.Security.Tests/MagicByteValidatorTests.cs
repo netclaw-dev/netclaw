@@ -31,7 +31,6 @@ public sealed class MagicByteValidatorTests
 
     // ── Archive signatures ────────────────────────────────────────────────
     private static readonly byte[] SevenZipHeader = [0x37, 0x7A, 0xBC, 0xAF, 0x27, 0x1C, 0x00, 0x04];
-    private static readonly byte[] RarHeader = [0x52, 0x61, 0x72, 0x21, 0x1A, 0x07, 0x00];
     private static readonly byte[] GzipHeader = [0x1F, 0x8B, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00];
     // bzip2: "BZh" + block size '9' + 6-byte BCD-Pi compressed block header (31 41 59 26 53 59)
     private static readonly byte[] Bzip2Header =
@@ -290,14 +289,6 @@ public sealed class MagicByteValidatorTests
     public void Validate_SevenZipAllowed()
     {
         var result = MagicByteValidator.Validate(SevenZipHeader, "application/x-7z-compressed", "archive.7z");
-
-        Assert.True(result.IsAllowed);
-    }
-
-    [Fact]
-    public void Validate_RarAllowed()
-    {
-        var result = MagicByteValidator.Validate(RarHeader, "application/vnd.rar", "archive.rar");
 
         Assert.True(result.IsAllowed);
     }
@@ -721,28 +712,6 @@ public sealed class MagicByteValidatorTests
 
         Assert.False(result.IsAllowed);
         Assert.Equal(ContentScanError.MimeTypeMismatch, result.Error);
-    }
-
-    [Fact]
-    public void Validate_RejectsRarWithoutValidVariantTail()
-    {
-        // Rar!\x1A\x07\xFF — matches the looser 6-byte prefix, but the
-        // tightened check requires v4 (0x00) or v5 (0x01 0x00).
-        byte[] bogusRar = [0x52, 0x61, 0x72, 0x21, 0x1A, 0x07, 0xFF];
-        var result = MagicByteValidator.Validate(bogusRar, "application/vnd.rar", "bogus.rar");
-
-        Assert.False(result.IsAllowed);
-        Assert.Equal(ContentScanError.MimeTypeMismatch, result.Error);
-    }
-
-    [Fact]
-    public void Validate_AcceptsRarV5WithEightByteMagic()
-    {
-        // RAR v5 signature: 8 bytes ending in 01 00.
-        byte[] rarV5 = [0x52, 0x61, 0x72, 0x21, 0x1A, 0x07, 0x01, 0x00, 0x00, 0x00];
-        var result = MagicByteValidator.Validate(rarV5, "application/vnd.rar", "archive.rar");
-
-        Assert.True(result.IsAllowed);
     }
 
     [Fact]
