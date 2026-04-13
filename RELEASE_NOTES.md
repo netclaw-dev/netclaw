@@ -1,3 +1,15 @@
+#### 0.12.1 2026-04-13 ####
+
+Netclaw v0.12.1 — Security hardening: MagicByteValidator extended to non-image types, structured tool-call batch metrics
+
+**Features**
+
+* Added `turn_tool_call_batch` structured metric logging — `LlmSessionActor` now emits a structured log entry for each tool-call batch dispatched during a turn, surfacing batch size and tool names as machine-readable fields for observability pipelines. ([#625](https://github.com/Aaronontheweb/netclaw/pull/625))
+
+**Bug Fixes**
+
+* Fixed MagicByteValidator rejecting PDFs, Office documents, archives, and media despite audience policy allowing them — `MagicByteValidator`'s `AllowedExtensions` previously only accepted image types (PNG/JPG/GIF/WebP), so every non-image attachment sent to a Team or Personal audience was rejected at the content scanner even though `ChannelAttachmentPolicy` had already permitted it at the policy layer. The validator is now rewritten around a MIME-keyed signature-rule table covering every category advertised by the Team audience: PDF, OOXML/ODF, legacy OLE Office, plain/structured text, RTF, zip/7z/rar/gzip/bzip2/xz, and mp3/mp4/wav/ogg/avi/webm/mkv. Each matcher is hardened with type-specific magic-byte checks beyond the minimum header. `ContentPolicy.DefaultAllowedMimeTypes` is seeded from the validator's supported set so the two layers cannot drift, and `DefaultMaxFileSizeBytes` is raised from 20 MB to 25 MiB to match `ChannelAttachmentPolicy`. ([#626](https://github.com/Aaronontheweb/netclaw/pull/626))
+
 #### 0.12.0 2026-04-13 ####
 
 Netclaw v0.12.0 — KV cache-friendly session routing, Slack PDF/document ingress, durable working context, structured compaction, and security hardening

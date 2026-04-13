@@ -473,22 +473,18 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
 
         if (!scanResult.IsAllowed)
         {
+            _log.Warning(
+                "slack_attachment_rejected name={Name} mime={Mime} reason=scan-blocked error={ScanError} message={ScanMessage}",
+                file.Name, file.MimeType, scanResult.Error?.ToString(), scanResult.Message ?? scanResult.Error?.ToString());
+
             if (scanResult.Error == ContentScanError.ScanFailure)
             {
-                // Scanner itself is broken — allow the file through rather than
-                // silently dropping it. The LLM provider will still validate.
-                _log.Error(
-                    "Content scanner failed for file {Name}: {Message} — allowing file through",
-                    file.Name, scanResult.Message);
-            }
-            else
-            {
-                _log.Warning(
-                    "slack_attachment_rejected name={Name} mime={Mime} reason=scan-blocked message={ScanMessage}",
-                    file.Name, file.MimeType, scanResult.Message ?? scanResult.Error?.ToString());
                 return new AttachmentIngestResult.Rejected(
-                    $"Content scanner rejected `{file.Name}`: {scanResult.Message ?? scanResult.Error?.ToString()}.");
+                    $"Couldn't scan `{file.Name}` — please try again later.");
             }
+
+            return new AttachmentIngestResult.Rejected(
+                $"Content scanner rejected `{file.Name}`: {scanResult.Message ?? scanResult.Error?.ToString()}.");
         }
 
         // Write to inbox with filesystem-level collision suffixing and atomic move.
@@ -794,7 +790,12 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
         if (gap.Count == 0)
             return new InboundBuildResult(baseInput, detectorUnavailable);
 
-        var mergedContents = MergeGapWithLiveContents(gap, liveContents);
+        var mergedContents = MergeGapWithLiveContents(
+            gap,
+            liveContents,
+            triggeringMessage.Audience,
+            _dependencies.AudienceProfiles,
+            _dependencies.ModelCapabilities);
         return new InboundBuildResult(baseInput with { Contents = mergedContents }, detectorUnavailable);
     }
 
@@ -875,11 +876,24 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
 
     private readonly record struct CursorAdvanced(string CursorTs);
 
-    private static List<AIContent> MergeGapWithLiveContents(IReadOnlyList<ChannelInput> gap, IReadOnlyList<AIContent> liveContents)
+    private static List<AIContent> MergeGapWithLiveContents(
+        IReadOnlyList<ChannelInput> gap,
+        IReadOnlyList<AIContent> liveContents,
+        TrustAudience audience,
+        ToolAudienceProfiles? audienceProfiles,
+        ModelCapabilities modelCapabilities)
     {
+        var profile = ToolAudienceProfileDefaults.GetResolvedProfile(audienceProfiles, audience);
+        var attachmentPolicy = profile.ChannelAttachments ?? ChannelAttachmentPolicy.Empty;
+        var inlineImages = modelCapabilities.InputModalities.HasFlag(ModelModality.Image);
+        var inlinePdfs = modelCapabilities.InputModalities.HasFlag(ModelModality.Image);
+
         var sb = new StringBuilder();
         sb.AppendLine("[thread history — messages exchanged before this inbound event]");
         sb.AppendLine();
+
+        var merged = new List<AIContent>();
+        var acceptedBackfillData = new List<AIContent>();
 
         foreach (var item in gap)
         {
@@ -894,8 +908,36 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
                     case TextContent text when !string.IsNullOrWhiteSpace(text.Text):
                         sb.AppendLine(text.Text);
                         break;
-                    case DataContent:
-                        imageCount++;
+
+                    case DataContent data:
+                        var mimeType = data.MediaType ?? "application/octet-stream";
+                        var category = AttachmentCategories.FromMime(mimeType);
+
+                        if (!attachmentPolicy.Allows(category))
+                        {
+                            sb.AppendLine(
+                                $"[attachment rejected: historical attachment ({EscapeQuoted(mimeType)}) category not allowed in {audience}]");
+                            break;
+                        }
+
+                        var (inlined, note) = ResolveInlineDecision(category, inlineImages, inlinePdfs);
+                        if (!inlined)
+                        {
+                            var effectiveNote = note ?? AttachmentNotes.FormatNotInlineable;
+                            sb.AppendLine(
+                                $"[attachment] mime=\"{EscapeQuoted(mimeType)}\" inlined=\"false\" note=\"{EscapeQuoted(effectiveNote)}\"");
+                            break;
+                        }
+
+                        acceptedBackfillData.Add(data);
+                        if (category == AttachmentCategory.Image)
+                        {
+                            imageCount++;
+                        }
+                        else
+                        {
+                            sb.AppendLine($"[attachment] mime=\"{EscapeQuoted(mimeType)}\" inlined=\"true\"");
+                        }
                         break;
                 }
             }
@@ -917,20 +959,8 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
             ? sb.ToString()
             : $"{sb}\n\n{liveText}";
 
-        var merged = new List<AIContent> { new TextContent(mergedText) };
-
-        // Gap image DataContent is carried through to the session so vision-
-        // capable models see the prior-thread images. The session actor's
-        // modality gate strips them when the resolved model doesn't support
-        // image input, so non-vision models are unaffected.
-        foreach (var item in gap)
-        {
-            foreach (var content in item.Contents)
-            {
-                if (content is not TextContent)
-                    merged.Add(content);
-            }
-        }
+        merged.Add(new TextContent(mergedText));
+        merged.AddRange(acceptedBackfillData);
 
         foreach (var content in liveContents)
         {

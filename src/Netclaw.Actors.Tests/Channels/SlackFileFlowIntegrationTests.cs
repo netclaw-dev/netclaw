@@ -1174,10 +1174,9 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
     }
 
     [Fact]
-    public async Task Scanner_failure_does_not_silently_drop_image()
+    public async Task Scanner_failure_rejects_attachment_and_does_not_inline()
     {
-        // When the content scanner itself is broken (e.g. TypeInitializationException),
-        // images should still flow through to the LLM rather than being silently dropped.
+        // Scanner failures must fail closed for inbound attachments.
         var pipeline = Host.Services.GetRequiredService<SessionPipeline>();
         var httpClient = new HttpClient(_httpHandler);
 
@@ -1231,8 +1230,11 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
                 "Expected at least one Slack reply to be posted");
         }, duration: TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
 
-        Assert.True(_chatClient.ReceivedImageContent,
-            "Expected LLM to receive image even when scanner is broken");
+        Assert.False(_chatClient.ReceivedImageContent,
+            "Expected LLM not to receive image when scanner fails");
+
+        Assert.Contains(_replyClient.PostedMessages,
+            m => m.Text.Contains("Couldn't scan `drawing.png`", StringComparison.Ordinal));
     }
 
     /// <summary>

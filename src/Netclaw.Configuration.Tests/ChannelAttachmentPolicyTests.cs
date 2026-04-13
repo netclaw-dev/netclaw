@@ -134,7 +134,7 @@ public sealed class AttachmentCategoriesTests
     [InlineData("text/markdown", AttachmentCategory.Document)]
     [InlineData("application/json", AttachmentCategory.Document)]
     [InlineData("application/zip", AttachmentCategory.Archive)]
-    [InlineData("application/x-tar", AttachmentCategory.Archive)]
+    [InlineData("application/x-tar", AttachmentCategory.Other)]
     [InlineData("application/gzip", AttachmentCategory.Archive)]
     [InlineData("application/x-7z-compressed", AttachmentCategory.Archive)]
     [InlineData("video/mp4", AttachmentCategory.Media)]
