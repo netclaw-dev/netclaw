@@ -439,6 +439,7 @@ public sealed class SessionCatalogServiceTests : IDisposable
         public void RecordMemoriesFormed(int count) { }
         public void RecordMemoriesRecalled(int count) { }
         public void RecordSkillsLoaded(int count) { }
+        public void RecordSkillLoaded(string skillName, SkillLoadMethod method) { }
     }
 
     private sealed class AdjustableTimeProvider(DateTimeOffset utcNow) : TimeProvider

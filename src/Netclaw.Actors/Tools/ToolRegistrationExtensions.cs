@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging;
 using ModelContextProtocol.Client;
 using Netclaw.Actors.Reminders;
 using Netclaw.Actors.Skills;
+using Netclaw.Actors.Telemetry;
 using Netclaw.Configuration;
 using Netclaw.Search;
 using Netclaw.Security;
@@ -59,9 +60,10 @@ public static class ToolRegistrationExtensions
         SkillIndexContextLayer skillIndexLayer,
         NetclawPaths paths,
         ISkillContentScanner scanner,
-        IReadOnlyList<ResolvedExternalSource> externalSources)
+        IReadOnlyList<ResolvedExternalSource> externalSources,
+        ISessionMetrics? sessionMetrics = null)
     {
-        registry.Register(new SkillLoadTool(skillRegistry, scanner));
+        registry.Register(new SkillLoadTool(skillRegistry, scanner, sessionMetrics));
         registry.Register(new SkillReadResourceTool(skillRegistry, scanner));
         registry.Register(new SkillManageTool(skillRegistry, skillIndexLayer, paths, scanner, externalSources));
         return registry;

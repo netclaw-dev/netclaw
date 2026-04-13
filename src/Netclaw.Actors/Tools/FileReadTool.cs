@@ -1,5 +1,7 @@
 using System.ComponentModel;
 using System.Text;
+using Netclaw.Actors.Skills;
+using Netclaw.Actors.Telemetry;
 using Netclaw.Configuration;
 using Netclaw.Security;
 using Netclaw.Tools;
@@ -19,17 +21,26 @@ public sealed partial class FileReadTool : NetclawTool<FileReadTool.Params>
     private readonly ToolConfig _config;
     private readonly ToolPathPolicy? _pathPolicy;
     private readonly ScopedFileAccessPolicy _fileAccessPolicy;
+    private readonly SkillRegistry? _skillRegistry;
+    private readonly ISessionMetrics? _sessionMetrics;
 
     public record Params(
         [property: Description("Absolute path to the file to read")] string Path,
         [property: Description("Line number to start reading from (1-based, optional)")] int? Offset = null,
         [property: Description("Maximum number of lines to read (optional)")] int? Limit = null);
 
-    public FileReadTool(ToolConfig config, ToolPathPolicy? pathPolicy = null, NetclawPaths? paths = null)
+    public FileReadTool(
+        ToolConfig config,
+        ToolPathPolicy? pathPolicy = null,
+        NetclawPaths? paths = null,
+        SkillRegistry? skillRegistry = null,
+        ISessionMetrics? sessionMetrics = null)
     {
         _config = config;
         _pathPolicy = pathPolicy;
         _fileAccessPolicy = new ScopedFileAccessPolicy(config, paths);
+        _skillRegistry = skillRegistry;
+        _sessionMetrics = sessionMetrics;
     }
 
     protected override Task<string> ExecuteAsync(Params args, CancellationToken ct)
@@ -57,10 +68,13 @@ public sealed partial class FileReadTool : NetclawTool<FileReadTool.Params>
         {
             if (offset.HasValue || limit.HasValue)
             {
-                return await ReadLinesAsync(authorizedPath, offset ?? 1, limit, _config.MaxOutputChars, ct);
+                var lines = await ReadLinesAsync(authorizedPath, offset ?? 1, limit, _config.MaxOutputChars, ct);
+                RecordSkillReadIfApplicable(authorizedPath);
+                return lines;
             }
 
             var content = await File.ReadAllTextAsync(authorizedPath, Encoding.UTF8, ct);
+            RecordSkillReadIfApplicable(authorizedPath);
             return ShellTool.TruncateOutput(content, _config.MaxOutputChars);
         }
         catch (UnauthorizedAccessException)
@@ -102,5 +116,14 @@ public sealed partial class FileReadTool : NetclawTool<FileReadTool.Params>
         }
 
         return sb.ToString();
+    }
+
+    private void RecordSkillReadIfApplicable(string authorizedPath)
+    {
+        var skill = _skillRegistry?.GetByFilePath(authorizedPath);
+        if (skill is null)
+            return;
+
+        _sessionMetrics?.RecordSkillLoaded(skill.Name, SkillLoadMethod.FileRead);
     }
 }

@@ -1,4 +1,6 @@
 using Netclaw.Actors.Tools;
+using Netclaw.Actors.Skills;
+using Netclaw.Actors.Telemetry;
 using Netclaw.Configuration;
 using Netclaw.Security;
 using Netclaw.Tools;
@@ -162,6 +164,44 @@ public class FileReadToolTests : IDisposable
     }
 
     [Fact]
+    public async Task Reading_registered_skill_file_records_skill_file_read_telemetry()
+    {
+        var paths = new NetclawPaths(_tempDir);
+        var registry = new SkillRegistry();
+        var metrics = new FakeMetrics();
+        var skillFile = Path.Combine(paths.SkillsDirectory, "tracked-skill", "SKILL.md");
+        Directory.CreateDirectory(Path.GetDirectoryName(skillFile)!);
+        await File.WriteAllTextAsync(skillFile, "---\nname: tracked-skill\ndescription: tracked\n---\n\n# Tracked", TestContext.Current.CancellationToken);
+
+        var scan = SkillScanner.Scan(paths.SkillsDirectory);
+        registry.ReplaceAll(scan.AcceptedSkills, scan.Issues);
+
+        var tool = new FileReadTool(new ToolConfig(), paths: paths, skillRegistry: registry, sessionMetrics: metrics);
+
+        await tool.ExecuteAsync(new Dictionary<string, object?> { ["Path"] = skillFile }, CreateTeamContext(), CancellationToken.None);
+
+        var call = Assert.Single(metrics.SkillLoadedCalls);
+        Assert.Equal("tracked-skill", call.SkillName);
+        Assert.Equal(SkillLoadMethod.FileRead, call.Method);
+    }
+
+    [Fact]
+    public async Task Reading_non_skill_file_does_not_record_skill_telemetry()
+    {
+        var paths = new NetclawPaths(_tempDir);
+        var registry = new SkillRegistry();
+        var metrics = new FakeMetrics();
+        var filePath = Path.Combine(_sessionDir, "notes.txt");
+        await File.WriteAllTextAsync(filePath, "notes", TestContext.Current.CancellationToken);
+
+        var tool = new FileReadTool(new ToolConfig(), paths: paths, skillRegistry: registry, sessionMetrics: metrics);
+
+        await tool.ExecuteAsync(new Dictionary<string, object?> { ["Path"] = filePath }, CreatePersonalContext(), CancellationToken.None);
+
+        Assert.Empty(metrics.SkillLoadedCalls);
+    }
+
+    [Fact]
     public async Task Team_context_can_read_file_inside_identity_directory_via_global_read_roots()
     {
         var identityDir = Path.Combine(_tempDir, "identity");
@@ -284,4 +324,19 @@ public class FileReadToolTests : IDisposable
             Boundary = SecurityPolicyDefaults.PublicBoundary,
             ChannelType = "slack"
         };
+
+    private sealed class FakeMetrics : ISessionMetrics
+    {
+        public List<(string SkillName, SkillLoadMethod Method)> SkillLoadedCalls { get; } = [];
+
+        public void RecordTokenUsage(long inputTokens, long outputTokens) { }
+        public void RecordTurnCompleted() { }
+        public void RecordSessionCreated() { }
+        public void RecordMemoriesFormed(int count) { }
+        public void RecordMemoriesRecalled(int count) { }
+        public void RecordSkillsLoaded(int count) { }
+
+        public void RecordSkillLoaded(string skillName, SkillLoadMethod method)
+            => SkillLoadedCalls.Add((skillName, method));
+    }
 }

@@ -4,7 +4,7 @@ description: "REQUIRED when the user asks about Netclaw capabilities, scheduling
 disable-model-invocation: true
 metadata:
   author: netclaw
-  version: "1.10.0"
+  version: "1.11.0"
 ---
 
 # Netclaw Operations
@@ -233,6 +233,7 @@ file. If it should be recalled when relevant → SQLite memory.
 | Self-diagnose | `netclaw doctor` |
 | Runtime health | `netclaw status` |
 | Memory/token stats | `netclaw stats` |
+| Historical skill usage by method/name | `netclaw stats skills` |
 | List/manage skills | `netclaw skill list` |
 | List past sessions | `netclaw sessions --once` |
 | Inspect reminder history | `netclaw reminder history <id> --last 5` |

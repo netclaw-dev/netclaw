@@ -84,6 +84,57 @@ internal sealed class DaemonStatsService(
         };
     }
 
+    public async Task<SkillUsageStats.Response> GetSkillUsageStatsAsync(int? days = null, CancellationToken ct = default)
+    {
+        var actorRef = await dailyStatsActor.GetAsync(ct);
+        var rows = await QuerySkillUsageAsync(actorRef, days ?? 7, ct);
+
+        var daily = rows
+            .GroupBy(r => r.DateKey, StringComparer.Ordinal)
+            .OrderByDescending(g => g.Key, StringComparer.Ordinal)
+            .Select(group => new SkillUsageStats.DailySkillRow
+            {
+                Date = group.Key,
+                TotalLoads = group.Sum(x => x.Count),
+                Methods = group
+                    .GroupBy(x => x.Method)
+                    .Select(methodGroup => new SkillUsageStats.MethodCount
+                    {
+                        Method = methodGroup.Key.ToWireValue(),
+                        Count = methodGroup.Sum(x => x.Count)
+                    })
+                    .OrderByDescending(x => x.Count)
+                    .ThenBy(x => x.Method, StringComparer.Ordinal)
+                    .ToList(),
+                Skills = group
+                    .GroupBy(x => x.SkillName, StringComparer.OrdinalIgnoreCase)
+                    .Select(skillGroup => new SkillUsageStats.SkillCount
+                    {
+                        SkillName = skillGroup.Key,
+                        TotalLoads = skillGroup.Sum(x => x.Count),
+                        Methods = skillGroup
+                            .GroupBy(x => x.Method)
+                            .Select(methodGroup => new SkillUsageStats.MethodCount
+                            {
+                                Method = methodGroup.Key.ToWireValue(),
+                                Count = methodGroup.Sum(x => x.Count)
+                            })
+                            .OrderByDescending(x => x.Count)
+                            .ThenBy(x => x.Method, StringComparer.Ordinal)
+                            .ToList()
+                    })
+                    .OrderByDescending(x => x.TotalLoads)
+                    .ThenBy(x => x.SkillName, StringComparer.OrdinalIgnoreCase)
+                    .ToList()
+            })
+            .ToList();
+
+        return new SkillUsageStats.Response
+        {
+            Daily = daily
+        };
+    }
+
     private static async Task<List<DaemonStats.DailyRow>> QueryDailyStatsAsync(IActorRef actorRef, int days, CancellationToken ct)
     {
         try
@@ -103,6 +154,20 @@ internal sealed class DaemonStatsService(
                     SkillsLoaded = r.SkillsLoaded
                 })
                 .ToList();
+        }
+        catch
+        {
+            return [];
+        }
+    }
+
+    private static async Task<List<DailyStatsActor.DailySkillUsageRow>> QuerySkillUsageAsync(IActorRef actorRef, int days, CancellationToken ct)
+    {
+        try
+        {
+            var result = await actorRef.Ask<DailyStatsActor.QuerySkillUsageStatsResult>(
+                new DailyStatsActor.QuerySkillUsageStats(days), TimeSpan.FromSeconds(5), ct);
+            return result.Rows;
         }
         catch
         {

@@ -3,6 +3,7 @@ using Akka.Hosting;
 using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Telemetry;
 using Netclaw.Channels.Telemetry;
+using Netclaw.Configuration;
 
 namespace Netclaw.Daemon.Gateway;
 
@@ -52,6 +53,14 @@ public sealed class DailyStatsPublisher : ISessionMetrics
     public void RecordSkillsLoaded(int count)
     {
         GetActor()?.Tell(new DailyStatsActor.RecordSkillsLoaded(count));
+    }
+
+    public void RecordSkillLoaded(string skillName, SkillLoadMethod method)
+    {
+        if (string.IsNullOrWhiteSpace(skillName))
+            return;
+
+        GetActor()?.Tell(new DailyStatsActor.RecordSkillLoaded(skillName.Trim(), method));
     }
 
     /// <summary>

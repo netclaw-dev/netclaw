@@ -1,7 +1,9 @@
 using Microsoft.Extensions.DependencyInjection;
 using Netclaw.Actors.Skills;
+using Netclaw.Actors.Telemetry;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
+using Netclaw.Security;
 using Netclaw.Security.Skills;
 
 namespace Netclaw.Daemon.Configuration;
@@ -20,9 +22,14 @@ internal static class SkillToolRegistration
         var skillRegistry = services.GetRequiredService<SkillRegistry>();
         var skillIndexLayer = services.GetRequiredService<SkillIndexContextLayer>();
         var paths = services.GetRequiredService<NetclawPaths>();
+        var toolConfig = services.GetRequiredService<ToolConfig>();
+        var pathPolicy = services.GetService<ToolPathPolicy>();
         var scanner = services.GetRequiredService<ISkillContentScanner>();
         var externalSources = services.GetRequiredService<IReadOnlyList<ResolvedExternalSource>>();
+        var metrics = services.GetService<ISessionMetrics>();
 
-        registry.WithSkillTools(skillRegistry, skillIndexLayer, paths, scanner, externalSources);
+        registry.Replace(new FileReadTool(toolConfig, pathPolicy, paths, skillRegistry, metrics));
+
+        registry.WithSkillTools(skillRegistry, skillIndexLayer, paths, scanner, externalSources, metrics);
     }
 }

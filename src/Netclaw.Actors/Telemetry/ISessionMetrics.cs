@@ -13,4 +13,5 @@ public interface ISessionMetrics
     void RecordMemoriesFormed(int count);
     void RecordMemoriesRecalled(int count);
     void RecordSkillsLoaded(int count);
+    void RecordSkillLoaded(string skillName, Netclaw.Configuration.SkillLoadMethod method);
 }

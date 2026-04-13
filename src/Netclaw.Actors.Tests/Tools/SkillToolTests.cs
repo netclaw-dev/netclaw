@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging.Abstractions;
 using Netclaw.Actors.Skills;
+using Netclaw.Actors.Telemetry;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 using Netclaw.Security;
@@ -54,6 +55,32 @@ public class SkillToolTests : IDisposable
         Assert.Contains("Test Skill", result);
         Assert.Contains("Do the thing.", result);
         Assert.Contains("1.0.0", result);
+    }
+
+    [Fact]
+    public async Task SkillLoad_RecordsDetailedTelemetryForKnownSkill()
+    {
+        WriteSkill("test-skill", """
+            ---
+            name: test-skill
+            description: A test skill.
+            ---
+
+            # Test Skill
+
+            Do the thing.
+            """);
+        ScanSkills();
+
+        var metrics = new FakeMetrics();
+        var tool = new SkillLoadTool(_registry, new NoOpSkillContentScanner(), metrics);
+
+        await tool.ExecuteAsync(
+            new Dictionary<string, object?> { ["Name"] = "test-skill" }, TestContext.Current.CancellationToken);
+
+        var call = Assert.Single(metrics.SkillLoadedCalls);
+        Assert.Equal("test-skill", call.SkillName);
+        Assert.Equal(SkillLoadMethod.SkillLoadTool, call.Method);
     }
 
     [Fact]
@@ -676,5 +703,20 @@ public class SkillToolTests : IDisposable
             if (Directory.Exists(externalDir))
                 Directory.Delete(externalDir, recursive: true);
         }
+    }
+
+    private sealed class FakeMetrics : ISessionMetrics
+    {
+        public List<(string SkillName, SkillLoadMethod Method)> SkillLoadedCalls { get; } = [];
+
+        public void RecordTokenUsage(long inputTokens, long outputTokens) { }
+        public void RecordTurnCompleted() { }
+        public void RecordSessionCreated() { }
+        public void RecordMemoriesFormed(int count) { }
+        public void RecordMemoriesRecalled(int count) { }
+        public void RecordSkillsLoaded(int count) { }
+
+        public void RecordSkillLoaded(string skillName, SkillLoadMethod method)
+            => SkillLoadedCalls.Add((skillName, method));
     }
 }

@@ -302,7 +302,10 @@ static async Task RunAsync(string[] args)
 
     if (mode is "stats")
     {
-        if (args.Length > 1 && IsHelpToken(args[1]))
+        var skillStatsMode = args.Length > 1 && string.Equals(args[1], "skills", StringComparison.OrdinalIgnoreCase);
+        var optionStart = skillStatsMode ? 2 : 1;
+
+        if (args.Length > optionStart && IsHelpToken(args[optionStart]))
         {
             WriteStatsHelp();
             return;
@@ -311,7 +314,7 @@ static async Task RunAsync(string[] args)
         var statsAsJson = false;
         var statsTui = false;
         int? statsDays = null;
-        for (var i = 1; i < args.Length; i++)
+        for (var i = optionStart; i < args.Length; i++)
         {
             var arg = args[i];
             if (arg is "--json")
@@ -413,7 +416,9 @@ static async Task RunAsync(string[] args)
 
         using var host = builder.Build();
         using var scope = host.Services.CreateScope();
-        var exitCode = await RunStatsAsync(scope.ServiceProvider, statsAsJson, statsDays);
+        var exitCode = skillStatsMode
+            ? await RunSkillStatsAsync(scope.ServiceProvider, statsAsJson, statsDays)
+            : await RunStatsAsync(scope.ServiceProvider, statsAsJson, statsDays);
         Environment.ExitCode = exitCode;
         return;
     }
@@ -1096,12 +1101,13 @@ static void WriteStatusHelp()
 static void WriteStatsHelp()
 {
     Console.WriteLine("Usage: netclaw stats [options]");
+    Console.WriteLine("       netclaw stats skills [options]");
     Console.WriteLine();
     Console.WriteLine("Shows usage activity statistics from the running daemon:");
     Console.WriteLine("  - token consumption (input, output)");
     Console.WriteLine("  - session and turn counts");
     Console.WriteLine("  - memory formation and recall counts");
-    Console.WriteLine("  - skill auto-load counts");
+    Console.WriteLine("  - skill load counts");
     Console.WriteLine("  - memory store statistics");
     Console.WriteLine("  - Slack activity counters");
     Console.WriteLine("  - webhook route counts and delivery counters");
@@ -1474,6 +1480,49 @@ static async Task<int> RunStatsAsync(IServiceProvider services, bool jsonOutput,
     }
 }
 
+static async Task<int> RunSkillStatsAsync(IServiceProvider services, bool jsonOutput, int? days = null)
+{
+    var api = services.GetRequiredService<DaemonApi>();
+
+    try
+    {
+        var stats = await api.GetSkillUsageStatsAsync(days);
+
+        if (stats is null)
+        {
+            Console.WriteLine("[FAIL] stats skills: daemon returned an empty stats payload.");
+            return 1;
+        }
+
+        if (jsonOutput)
+        {
+            Console.WriteLine(JsonSerializer.Serialize(stats, new JsonSerializerOptions
+            {
+                WriteIndented = true,
+                PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+            }));
+        }
+        else
+        {
+            WriteSkillStatsResult(stats, days);
+        }
+
+        return 0;
+    }
+    catch (HttpRequestException ex) when (ex.StatusCode is not null)
+    {
+        Console.WriteLine($"[FAIL] stats skills: daemon returned {(int)ex.StatusCode} from {api.Endpoint}");
+        Console.WriteLine("       fix: run `netclaw daemon start` and retry.");
+        return 1;
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"[FAIL] stats skills: unable to reach daemon at {api.Endpoint}: {ex.Message}");
+        Console.WriteLine("       fix: run `netclaw daemon start` and retry.");
+        return 1;
+    }
+}
+
 static void WriteStatsResult(DaemonStats.Response stats, int? days)
 {
     // Header
@@ -1530,6 +1579,40 @@ static void WriteStatsResult(DaemonStats.Response stats, int? days)
         Console.WriteLine();
         Console.WriteLine("reminders:");
         Console.WriteLine($"  scheduled: {reminders.ScheduledCount}    active: {reminders.ActiveExecutions}    failed: {reminders.FailedCount}");
+    }
+}
+
+static void WriteSkillStatsResult(SkillUsageStats.Response stats, int? days)
+{
+    if (days is > 0)
+        Console.WriteLine($"netclaw stats skills — last {days} days");
+    else if (days == 0)
+        Console.WriteLine("netclaw stats skills — all time");
+    else
+        Console.WriteLine("netclaw stats skills — last 7 days");
+
+    Console.WriteLine();
+
+    if (stats.Daily.Count == 0)
+    {
+        Console.WriteLine("No skill loads recorded.");
+        return;
+    }
+
+    foreach (var day in stats.Daily)
+    {
+        Console.WriteLine($"{day.Date}  total={day.TotalLoads:N0}");
+        Console.WriteLine($"  by method: {string.Join(", ", day.Methods.Select(m => $"{m.Method}={m.Count:N0}"))}");
+
+        foreach (var skill in day.Skills.Take(15))
+        {
+            Console.WriteLine($"  {skill.SkillName}: {skill.TotalLoads:N0} ({string.Join(", ", skill.Methods.Select(m => $"{m.Method}={m.Count:N0}"))})");
+        }
+
+        if (day.Skills.Count > 15)
+            Console.WriteLine($"  ... {day.Skills.Count - 15} more skill(s)");
+
+        Console.WriteLine();
     }
 }
 

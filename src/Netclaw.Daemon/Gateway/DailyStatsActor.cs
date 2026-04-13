@@ -18,6 +18,7 @@ public sealed class DailyStatsActor : ReceiveActor, IWithTimers
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<DailyStatsActor> _logger;
     private readonly Dictionary<string, Accumulator> _pending = new();
+    private readonly Dictionary<(string DateKey, string SkillName, SkillLoadMethod Method), long> _pendingSkillUsage = new();
 
     // Process-lifetime totals (never reset, never persisted — lost on restart)
     private long _totalInputTokens;
@@ -61,6 +62,20 @@ public sealed class DailyStatsActor : ReceiveActor, IWithTimers
         {
             if (msg.Count > 0) { GetOrCreate().SkillsLoaded += msg.Count; _totalSkillsLoaded += msg.Count; }
         });
+        Receive<RecordSkillLoaded>(msg =>
+        {
+            var normalizedSkill = msg.SkillName.Trim();
+            if (string.IsNullOrWhiteSpace(normalizedSkill))
+                return;
+
+            GetOrCreate().SkillsLoaded++;
+            _totalSkillsLoaded++;
+
+            var key = (_timeProvider.GetUtcNow().ToString("yyyy-MM-dd"), normalizedSkill, msg.Method);
+            _pendingSkillUsage[key] = _pendingSkillUsage.TryGetValue(key, out var existing)
+                ? existing + 1
+                : 1;
+        });
 
         Receive<Flush>(_ => FlushToSqlite());
 
@@ -74,6 +89,12 @@ public sealed class DailyStatsActor : ReceiveActor, IWithTimers
         Receive<QueryProcessStats>(_ => Sender.Tell(new ProcessStatsResult(
             _totalInputTokens, _totalOutputTokens, _totalTurns,
             _totalMemoriesFormed, _totalMemoriesRecalled, _totalSkillsLoaded)));
+        Receive<QuerySkillUsageStats>(msg =>
+        {
+            var rows = ReadSkillUsageFromSqlite(msg.Days);
+            MergeUnflushedSkillUsage(rows);
+            Sender.Tell(new QuerySkillUsageStatsResult(rows));
+        });
     }
 
     protected override void PreStart()
@@ -102,7 +123,7 @@ public sealed class DailyStatsActor : ReceiveActor, IWithTimers
 
     private void FlushToSqlite()
     {
-        if (_pending.Count == 0)
+        if (_pending.Count == 0 && _pendingSkillUsage.Count == 0)
             return;
 
         try
@@ -110,12 +131,15 @@ public sealed class DailyStatsActor : ReceiveActor, IWithTimers
             using var conn = new SqliteConnection(_connectionString);
             conn.Open();
 
+            using var tx = conn.BeginTransaction();
+
             foreach (var (dateKey, acc) in _pending)
             {
                 if (acc.IsEmpty)
                     continue;
 
                 using var cmd = conn.CreateCommand();
+                cmd.Transaction = tx;
                 cmd.CommandText =
                     """
                     INSERT INTO daily_stats (date_key, input_tokens, output_tokens, turns, sessions,
@@ -141,7 +165,31 @@ public sealed class DailyStatsActor : ReceiveActor, IWithTimers
                 cmd.ExecuteNonQuery();
             }
 
+            foreach (var ((dateKey, skillName, method), count) in _pendingSkillUsage)
+            {
+                if (count <= 0)
+                    continue;
+
+                using var cmd = conn.CreateCommand();
+                cmd.Transaction = tx;
+                cmd.CommandText =
+                    """
+                    INSERT INTO daily_skill_usage (date_key, skill_name, load_method, count)
+                    VALUES ($date, $skill, $method, $count)
+                    ON CONFLICT(date_key, skill_name, load_method) DO UPDATE SET
+                        count = count + $count
+                    """;
+                cmd.Parameters.AddWithValue("$date", dateKey);
+                cmd.Parameters.AddWithValue("$skill", skillName);
+                cmd.Parameters.AddWithValue("$method", method.ToWireValue());
+                cmd.Parameters.AddWithValue("$count", count);
+                cmd.ExecuteNonQuery();
+            }
+
+            tx.Commit();
+
             _pending.Clear();
+            _pendingSkillUsage.Clear();
         }
         catch (Exception ex)
         {
@@ -205,6 +253,59 @@ public sealed class DailyStatsActor : ReceiveActor, IWithTimers
         return rows;
     }
 
+    private List<DailySkillUsageRow> ReadSkillUsageFromSqlite(int days)
+    {
+        var rows = new List<DailySkillUsageRow>();
+
+        try
+        {
+            using var conn = new SqliteConnection(_connectionString);
+            conn.Open();
+
+            using var cmd = conn.CreateCommand();
+            if (days > 0)
+            {
+                var startDate = _timeProvider.GetUtcNow().AddDays(-(days - 1)).ToString("yyyy-MM-dd");
+                cmd.CommandText =
+                    """
+                    SELECT date_key, skill_name, load_method, count
+                    FROM daily_skill_usage
+                    WHERE date_key >= $start
+                    ORDER BY date_key DESC, count DESC, skill_name ASC, load_method ASC
+                    """;
+                cmd.Parameters.AddWithValue("$start", startDate);
+            }
+            else
+            {
+                cmd.CommandText =
+                    """
+                    SELECT date_key, skill_name, load_method, count
+                    FROM daily_skill_usage
+                    ORDER BY date_key DESC, count DESC, skill_name ASC, load_method ASC
+                    """;
+            }
+
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                if (!SkillLoadMethodExtensions.TryFromWireValue(reader.GetString(2), out var method))
+                    continue;
+
+                rows.Add(new DailySkillUsageRow(
+                    DateKey: reader.GetString(0),
+                    SkillName: reader.GetString(1),
+                    Method: method,
+                    Count: reader.GetInt64(3)));
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to query daily skill usage stats");
+        }
+
+        return rows;
+    }
+
     /// <summary>
     /// Merge any unflushed in-memory accumulators into the SQLite-read rows
     /// so the query response is always up-to-date.
@@ -242,13 +343,55 @@ public sealed class DailyStatsActor : ReceiveActor, IWithTimers
         rows.Sort((a, b) => string.Compare(b.DateKey, a.DateKey, StringComparison.Ordinal));
     }
 
+    private void MergeUnflushedSkillUsage(List<DailySkillUsageRow> rows)
+    {
+        foreach (var ((dateKey, skillName, method), count) in _pendingSkillUsage)
+        {
+            if (count <= 0)
+                continue;
+
+            var existing = rows.FindIndex(r => r.DateKey == dateKey
+                && string.Equals(r.SkillName, skillName, StringComparison.Ordinal)
+                && r.Method == method);
+
+            if (existing >= 0)
+            {
+                var row = rows[existing];
+                rows[existing] = row with { Count = row.Count + count };
+            }
+            else
+            {
+                rows.Add(new DailySkillUsageRow(dateKey, skillName, method, count));
+            }
+        }
+
+        rows.Sort((a, b) =>
+        {
+            var dateCompare = string.Compare(b.DateKey, a.DateKey, StringComparison.Ordinal);
+            if (dateCompare != 0)
+                return dateCompare;
+
+            var countCompare = b.Count.CompareTo(a.Count);
+            if (countCompare != 0)
+                return countCompare;
+
+            var skillCompare = string.Compare(a.SkillName, b.SkillName, StringComparison.Ordinal);
+            if (skillCompare != 0)
+                return skillCompare;
+
+            return string.Compare(a.Method.ToWireValue(), b.Method.ToWireValue(), StringComparison.Ordinal);
+        });
+    }
+
     private void EnsureTable()
     {
         try
         {
             using var conn = new SqliteConnection(_connectionString);
             conn.Open();
+            using var tx = conn.BeginTransaction();
             using var cmd = conn.CreateCommand();
+            cmd.Transaction = tx;
             cmd.CommandText =
                 """
                 CREATE TABLE IF NOT EXISTS daily_stats (
@@ -263,6 +406,22 @@ public sealed class DailyStatsActor : ReceiveActor, IWithTimers
                 )
                 """;
             cmd.ExecuteNonQuery();
+
+            using var usageCmd = conn.CreateCommand();
+            usageCmd.Transaction = tx;
+            usageCmd.CommandText =
+                """
+                CREATE TABLE IF NOT EXISTS daily_skill_usage (
+                    date_key    TEXT NOT NULL,
+                    skill_name  TEXT NOT NULL,
+                    load_method TEXT NOT NULL,
+                    count       INTEGER NOT NULL DEFAULT 0,
+                    PRIMARY KEY (date_key, skill_name, load_method)
+                )
+                """;
+            usageCmd.ExecuteNonQuery();
+
+            tx.Commit();
         }
         catch (Exception ex)
         {
@@ -278,8 +437,11 @@ public sealed class DailyStatsActor : ReceiveActor, IWithTimers
     public sealed record RecordMemoriesFormed(int Count);
     public sealed record RecordMemoriesRecalled(int Count);
     public sealed record RecordSkillsLoaded(int Count);
+    public sealed record RecordSkillLoaded(string SkillName, SkillLoadMethod Method);
     public sealed record QueryDailyStats(int Days);
     public sealed record QueryDailyStatsResult(List<DailyStatsRow> Rows);
+    public sealed record QuerySkillUsageStats(int Days);
+    public sealed record QuerySkillUsageStatsResult(List<DailySkillUsageRow> Rows);
     public sealed record QueryProcessStats;
     public sealed record ProcessStatsResult(
         long InputTokensTotal, long OutputTokensTotal, long TurnsCompletedTotal,
@@ -297,6 +459,12 @@ public sealed class DailyStatsActor : ReceiveActor, IWithTimers
         long MemoriesFormed,
         long MemoriesRecalled,
         long SkillsLoaded);
+
+    public sealed record DailySkillUsageRow(
+        string DateKey,
+        string SkillName,
+        SkillLoadMethod Method,
+        long Count);
 
     private sealed class Accumulator
     {

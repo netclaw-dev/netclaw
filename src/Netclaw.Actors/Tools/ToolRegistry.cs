@@ -28,6 +28,12 @@ public sealed class ToolRegistry
         _tools.Add(new ToolRegistration(tool, tool.GrantCategory));
     }
 
+    public void Replace(INetclawTool tool)
+    {
+        _tools.RemoveAll(t => string.Equals(t.Tool.Name, tool.Name, StringComparison.Ordinal));
+        Register(tool);
+    }
+
     /// <summary>
     /// Register an <see cref="AITool"/> directly (for test fakes that don't implement INetclawTool).
     /// </summary>

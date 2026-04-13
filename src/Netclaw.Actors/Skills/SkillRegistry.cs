@@ -17,10 +17,14 @@ public sealed class SkillRegistry
     /// <see cref="SkillEntry.UserInvocable"/> is true.
     /// </summary>
     private readonly Dictionary<string, SkillEntry> _slashCommands = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, SkillEntry> _skillFiles = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, SkillEntry> _skillsByName = new(StringComparer.OrdinalIgnoreCase);
 
     public void Register(SkillEntry skill)
     {
         _skills.Add(skill);
+        _skillsByName[skill.Name] = skill;
+        _skillFiles[Path.GetFullPath(skill.FilePath)] = skill;
         if (skill.UserInvocable)
             _slashCommands[skill.Name] = skill;
     }
@@ -33,6 +37,8 @@ public sealed class SkillRegistry
     {
         _skills.Clear();
         _slashCommands.Clear();
+        _skillFiles.Clear();
+        _skillsByName.Clear();
         _scanIssues = [];
     }
 
@@ -46,6 +52,26 @@ public sealed class SkillRegistry
     }
 
     public IReadOnlyList<SkillEntry> GetAll() => _skills;
+
+    public SkillEntry? GetByName(string name)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+            return null;
+
+        return _skillsByName.TryGetValue(name.Trim(), out var skill)
+            ? skill
+            : null;
+    }
+
+    public SkillEntry? GetByFilePath(string filePath)
+    {
+        if (string.IsNullOrWhiteSpace(filePath))
+            return null;
+
+        return _skillFiles.TryGetValue(Path.GetFullPath(filePath), out var skill)
+            ? skill
+            : null;
+    }
 
     public IReadOnlyList<SkillScanIssue> GetScanIssues() => _scanIssues;
 

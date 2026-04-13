@@ -332,6 +332,22 @@ if [[ "$stats_days" != *"date"* ]]; then
   exit 1
 fi
 
+echo "Testing netclaw stats skills..."
+skill_stats_output="$(run_sandbox_timed "$STEP_TIMEOUT_SECONDS" netclaw stats skills)"
+echo "$skill_stats_output"
+if [[ "$skill_stats_output" != *"by method:"* ]]; then
+  echo "Expected stats skills output to include method breakdown."
+  exit 1
+fi
+
+echo "Testing netclaw stats skills --json..."
+skill_stats_json="$(run_sandbox_timed "$STEP_TIMEOUT_SECONDS" netclaw stats skills --json)"
+echo "$skill_stats_json"
+if [[ "$skill_stats_json" != *"totalLoads"* ]]; then
+  echo "Expected stats skills --json to include totalLoads field."
+  exit 1
+fi
+
 # ── Reminder lifecycle smoke tests ──
 # Schedule a one-shot reminder, wait for it to execute and record history,
 # then cancel it and verify it is fully removed.

@@ -142,10 +142,10 @@ echo "=== netclaw stats --help ==="
 stats_help_exit=0
 stats_help_output="$(run_netclaw stats --help)" || stats_help_exit=$?
 echo "$stats_help_output"
-if [[ $stats_help_exit -eq 0 && "$stats_help_output" == *"--days"* ]]; then
-  pass "stats --help: exits 0 and mentions --days"
+if [[ $stats_help_exit -eq 0 && "$stats_help_output" == *"--days"* && "$stats_help_output" == *"stats skills"* ]]; then
+  pass "stats --help: exits 0 and mentions --days and stats skills"
 else
-  fail "stats --help: exit=$stats_help_exit, missing --days in output"
+  fail "stats --help: exit=$stats_help_exit, missing --days or stats skills in output"
 fi
 
 echo ""
@@ -176,6 +176,34 @@ if [[ $stats_json_exit -le 1 ]]; then
   pass "stats --json: exits with valid code $stats_json_exit"
 else
   fail "stats --json: unexpected exit code $stats_json_exit (expected 0 or 1)"
+fi
+
+echo ""
+echo "=== netclaw stats skills (daemon-optional) ==="
+set +e
+skill_stats_exit=0
+skill_stats_output="$(run_netclaw stats skills 2>&1)"
+skill_stats_exit=$?
+set -e
+echo "$skill_stats_output"
+if [[ $skill_stats_exit -le 1 ]]; then
+  pass "stats skills: exits with valid code $skill_stats_exit"
+else
+  fail "stats skills: unexpected exit code $skill_stats_exit (expected 0 or 1)"
+fi
+
+echo ""
+echo "=== netclaw stats skills --json (daemon-optional) ==="
+set +e
+skill_stats_json_exit=0
+skill_stats_json_output="$(run_netclaw stats skills --json 2>&1)"
+skill_stats_json_exit=$?
+set -e
+echo "$skill_stats_json_output"
+if [[ $skill_stats_json_exit -le 1 ]]; then
+  pass "stats skills --json: exits with valid code $skill_stats_json_exit"
+else
+  fail "stats skills --json: unexpected exit code $skill_stats_json_exit (expected 0 or 1)"
 fi
 
 # ── No-args and unknown command behavior ─────────────────────────────────────

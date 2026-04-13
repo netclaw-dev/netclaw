@@ -99,6 +99,19 @@ public sealed class DaemonApi
         return await JsonSerializer.DeserializeAsync<DaemonStats.Response>(stream, WebJsonOptions, cts.Token);
     }
 
+    public async Task<SkillUsageStats.Response?> GetSkillUsageStatsAsync(int? days = null, CancellationToken ct = default)
+    {
+        using var cts = CreateTimeoutCts(DefaultTimeout, ct);
+        var url = $"{_endpoint}/api/stats/skills";
+        if (days.HasValue)
+            url += $"?days={days.Value}";
+        var client = CreateHttpClient();
+        using var response = await client.GetAsync(url, cts.Token);
+        response.EnsureSuccessStatusCode();
+        var stream = await response.Content.ReadAsStreamAsync(cts.Token);
+        return await JsonSerializer.DeserializeAsync<SkillUsageStats.Response>(stream, WebJsonOptions, cts.Token);
+    }
+
     // ── Reminders ─────────────────────────────────────────────────────
 
     public async Task<HttpResponseMessage> ListRemindersAsync(CancellationToken ct = default)

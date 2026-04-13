@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Text;
 using Netclaw.Actors.Skills;
+using Netclaw.Actors.Telemetry;
 using Netclaw.Configuration;
 using Netclaw.Security.Skills;
 using Netclaw.Tools;
@@ -18,22 +19,23 @@ public sealed partial class SkillLoadTool : NetclawTool<SkillLoadTool.Params>
 {
     private readonly SkillRegistry _skillRegistry;
     private readonly ISkillContentScanner _scanner;
+    private readonly ISessionMetrics? _sessionMetrics;
 
     public record Params(
         [property: Description("Name of the skill to load (e.g., 'search-citation', 'netclaw-memory')")]
         string Name);
 
-    public SkillLoadTool(SkillRegistry skillRegistry, ISkillContentScanner scanner)
+    public SkillLoadTool(SkillRegistry skillRegistry, ISkillContentScanner scanner, ISessionMetrics? sessionMetrics = null)
     {
         _skillRegistry = skillRegistry;
         _scanner = scanner;
+        _sessionMetrics = sessionMetrics;
     }
 
     protected override async Task<string> ExecuteAsync(Params args, CancellationToken ct)
     {
         var name = args.Name.Trim().ToLowerInvariant();
-        var skill = _skillRegistry.GetAll()
-            .FirstOrDefault(s => s.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+        var skill = _skillRegistry.GetByName(name);
 
         if (skill is null)
         {
@@ -58,6 +60,8 @@ public sealed partial class SkillLoadTool : NetclawTool<SkillLoadTool.Params>
         var scanResult = await _scanner.ScanAsync(name, content, ct);
         if (!scanResult.IsAllowed)
             return $"Skill '{name}' blocked by content scan: {scanResult.Reason}";
+
+        _sessionMetrics?.RecordSkillLoaded(skill.Name, SkillLoadMethod.SkillLoadTool);
 
         var sb = new StringBuilder();
         if (scanResult.Verdict == ScanVerdict.Warning)
