@@ -7,16 +7,20 @@
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
-    <VersionPrefix>0.12.1</VersionPrefix>
-    <PackageReleaseNotes>Netclaw v0.12.1 — Security hardening: MagicByteValidator extended to non-image types, structured tool-call batch metrics
+    <VersionPrefix>0.12.2</VersionPrefix>
+    <PackageReleaseNotes>Netclaw v0.12.2 — Skill load telemetry, PDF attachment handling fix, and session recovery improvements
 
 **Features**
 
-* Added `turn_tool_call_batch` structured metric logging — `LlmSessionActor` now emits a structured log entry for each tool-call batch dispatched during a turn, surfacing batch size and tool names as machine-readable fields for observability pipelines. ([#625](https://github.com/Aaronontheweb/netclaw/pull/625))
+* Added skill load telemetry by method and skill name — `SkillLoadTracker` now emits structured metrics for every skill load event, capturing the load method (local, remote, cached) and skill identifier. Enables operators to monitor skill resolution patterns and identify caching inefficiencies or remote feed latency issues. ([#637](https://github.com/Aaronontheweb/netclaw/pull/637))
 
 **Bug Fixes**
 
-* Fixed MagicByteValidator rejecting PDFs, Office documents, archives, and media despite audience policy allowing them — `MagicByteValidator`'s `AllowedExtensions` previously only accepted image types (PNG/JPG/GIF/WebP), so every non-image attachment sent to a Team or Personal audience was rejected at the content scanner even though `ChannelAttachmentPolicy` had already permitted it at the policy layer. The validator is now rewritten around a MIME-keyed signature-rule table covering every category advertised by the Team audience: PDF, OOXML/ODF, legacy OLE Office, plain/structured text, RTF, zip/7z/rar/gzip/bzip2/xz, and mp3/mp4/wav/ogg/avi/webm/mkv. Each matcher is hardened with type-specific magic-byte checks beyond the minimum header. `ContentPolicy.DefaultAllowedMimeTypes` is seeded from the validator's supported set so the two layers cannot drift, and `DefaultMaxFileSizeBytes` is raised from 20 MB to 25 MiB to match `ChannelAttachmentPolicy`. ([#626](https://github.com/Aaronontheweb/netclaw/pull/626))</PackageReleaseNotes>
+* Fixed PDF attachments being inlined as DataContent on vision-capable models — PDF files were being converted to inline DataContent instead of being passed as file references, causing vision models to fail or misinterpret the attachment. PDFs and other document types now correctly flow through as file paths that the agent can reference explicitly. ([#638](https://github.com/Aaronontheweb/netclaw/pull/638))
+
+* Fixed session recovery from volatile-tail loop and legacy domain NOT NULL constraint — sessions could enter an infinite loop during message assembly when the volatile tail became unstable, and legacy database records without domain values would fail on insert due to NOT NULL constraints. Both issues are resolved with defensive tail reconstruction and domain migration for legacy records. ([#634](https://github.com/Aaronontheweb/netclaw/pull/634))
+
+* Fixed eval container missing host system skills — the behavioral eval suite running in Docker containers could not access host-mounted system skills, causing evals to fail on skill-dependent test cases. Host system skills are now properly mounted into the eval container at runtime. ([#633](https://github.com/Aaronontheweb/netclaw/pull/633))</PackageReleaseNotes>
   </PropertyGroup>
   <PropertyGroup>
     <NetCoreTestVersion>net10.0</NetCoreTestVersion>
