@@ -278,9 +278,18 @@ public sealed class SessionMemoryObserverActor : ReceivePersistentActor
 
     private void HandleRecordAcceptedDistillationProposals(RecordAcceptedDistillationProposals msg)
     {
+        // Capture Sender into a local before any async boundary: inside the
+        // Persist callback below, Akka's Sender property reflects whichever
+        // message is currently being processed, not the one that triggered
+        // this handler. If any message arrives at this actor between the
+        // Persist call and the callback firing, Sender would be silently
+        // overwritten and the reply would go to the wrong target (or to
+        // DeadLetters).
+        var replyTo = Sender;
+
         if (msg.Proposals.Count == 0)
         {
-            Sender.Tell(AcceptedDistillationProposalsRecorded.Instance);
+            replyTo.Tell(AcceptedDistillationProposalsRecorded.Instance);
             return;
         }
 
@@ -292,7 +301,7 @@ public sealed class SessionMemoryObserverActor : ReceivePersistentActor
 
         if (proposalContexts.Length == 0)
         {
-            Sender.Tell(AcceptedDistillationProposalsRecorded.Instance);
+            replyTo.Tell(AcceptedDistillationProposalsRecorded.Instance);
             return;
         }
 
@@ -313,7 +322,7 @@ public sealed class SessionMemoryObserverActor : ReceivePersistentActor
             }
 
             _log.Info("session_observer_accepted_proposals_persisted count={Count}", e.Proposals.Count);
-            Sender.Tell(AcceptedDistillationProposalsRecorded.Instance);
+            replyTo.Tell(AcceptedDistillationProposalsRecorded.Instance);
         });
     }
 

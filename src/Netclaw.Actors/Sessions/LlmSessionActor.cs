@@ -348,6 +348,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         Command<ProcessingWatchdogExpired>(_ => { });
         Command<CompactionWorkCompleted>(_ => { });
         Command<CompactionWorkFailed>(_ => { });
+        CommandDistillationAckNoOp();
         Command<SpawnChildActorRequest>(msg => Sender.Tell(Context.ActorOf(msg.Props, msg.ActorName)));
         Command<DeliveryFailed>(HandleDeliveryFailedWhenReady);
         Command<PrepareForDaemonRestart>(_ => RequestRestartDrain());
@@ -874,6 +875,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         Command<SpawnChildActorRequest>(msg => Sender.Tell(Context.ActorOf(msg.Props, msg.ActorName)));
         Command<PrepareForDaemonRestart>(_ => RequestRestartDrain());
+        CommandDistillationAckNoOp();
     }
 
     private void HandleDistillationResult(SessionDistillationCompleted msg)
@@ -1154,6 +1156,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             // Compaction is best-effort — drain buffer and continue
             DrainBufferOrReady();
         });
+
+        CommandDistillationAckNoOp();
     }
 
     /// <summary>
@@ -1327,6 +1331,15 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         => _config.TurnLlmTimeout > _config.SidecarLlmTimeout
             ? _config.TurnLlmTimeout
             : _config.SidecarLlmTimeout;
+
+    // The observer replies to the fire-and-forget RecordAcceptedDistillationProposals
+    // path in HandleDistillationResult. In non-passivation states the reply is purely
+    // informational; without a handler it would hit DeadLetters on every curation
+    // write. Passivating() has its own handler that uses the reply to gate shutdown.
+    private void CommandDistillationAckNoOp()
+    {
+        Command<AcceptedDistillationProposalsRecorded>(_ => { });
+    }
 
     private void CommandSessionContextMessages()
     {

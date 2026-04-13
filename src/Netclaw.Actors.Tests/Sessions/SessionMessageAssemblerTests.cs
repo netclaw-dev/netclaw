@@ -89,12 +89,13 @@ public sealed class SessionMessageAssemblerTests
             $"Expected cache prefix ≥ 3 messages (persisted prompt, static context, user turn1), got {prefix}. " +
             $"Turn 1: [{FormatMessages(turn1Messages)}] Turn 2: [{FormatMessages(turn2Messages)}]");
 
-        // Sanity: the test is not passing vacuously because recall was
-        // silently dropped. Each turn's recall content must actually
-        // appear in its volatile tail, and the turn-specific markers
-        // must not leak into the other turn's assembly.
-        var turn1Tail = turn1Messages.Last(m => m.Role == Microsoft.Extensions.AI.ChatRole.User);
-        var turn2Tail = turn2Messages.Last(m => m.Role == Microsoft.Extensions.AI.ChatRole.User);
+        // Guard against passing vacuously if recall was silently dropped:
+        // each turn's marker must appear in its own tail, and must not
+        // leak into the other turn's assembly.
+        var turn1Tail = turn1Messages[^1];
+        var turn2Tail = turn2Messages[^1];
+        Assert.Equal(Microsoft.Extensions.AI.ChatRole.System, turn1Tail.Role);
+        Assert.Equal(Microsoft.Extensions.AI.ChatRole.System, turn2Tail.Role);
         Assert.Contains(turn1RecallMarker, turn1Tail.Text ?? string.Empty);
         Assert.Contains(turn2RecallMarker, turn2Tail.Text ?? string.Empty);
         Assert.DoesNotContain(turn2RecallMarker,
@@ -104,8 +105,10 @@ public sealed class SessionMessageAssemblerTests
     }
 
     [Fact]
-    public void Volatile_tail_message_is_User_role_at_end_of_list()
+    public void Volatile_tail_message_is_System_role_at_end_of_list()
     {
+        // See Volatile_tail_does_not_create_fake_user_turn_after_tool_result
+        // for the full reasoning on why the role must be System, not User.
         var input = MakeInput(
             SeedHistory("hi"),
             FakeRecall("mem-1"),
@@ -114,7 +117,7 @@ public sealed class SessionMessageAssemblerTests
 
         Assert.NotEmpty(messages);
         var tail = messages[^1];
-        Assert.Equal(Microsoft.Extensions.AI.ChatRole.User, tail.Role);
+        Assert.Equal(Microsoft.Extensions.AI.ChatRole.System, tail.Role);
         Assert.Contains("[memory-recall]", tail.Text ?? string.Empty, StringComparison.Ordinal);
         Assert.Contains("[skill] do a thing", tail.Text ?? string.Empty, StringComparison.Ordinal);
     }
@@ -152,28 +155,118 @@ public sealed class SessionMessageAssemblerTests
         Assert.Equal(turn1Messages[0].Text, turn2Messages[0].Text);
         Assert.Equal(turn1Messages[1].Text, turn2Messages[1].Text);
 
-        // Working-context update should appear in turn 2's volatile tail,
-        // not in any System-role message.
-        var systemPrefixText = string.Join("\n", turn2Messages
-            .Where(m => m.Role == Microsoft.Extensions.AI.ChatRole.System)
-            .Select(m => m.Text ?? string.Empty));
-        Assert.DoesNotContain("[working-context]", systemPrefixText);
-        Assert.Contains("[working-context]",
-            turn2Messages.Last(m => m.Role == Microsoft.Extensions.AI.ChatRole.User).Text ?? string.Empty);
+        var staticSystemBlock = turn2Messages[1].Text ?? string.Empty;
+        Assert.DoesNotContain("[working-context]", staticSystemBlock);
+
+        var tail = turn2Messages[^1];
+        Assert.Equal(Microsoft.Extensions.AI.ChatRole.System, tail.Role);
+        Assert.Contains("[working-context]", tail.Text ?? string.Empty);
     }
 
     [Fact]
-    public void Recall_is_not_in_system_prefix_even_when_resolved()
+    public void Recall_is_not_in_leading_system_prefix_even_when_resolved()
     {
+        // Cache stability requires that volatile content only appears in the
+        // trailing System-role tail, never in the leading contiguous System
+        // prefix that makes up the cacheable prompt.
         var input = MakeInput(SeedHistory("hi"), FakeRecall("remembered thing"));
         var messages = SessionMessageAssembler.Assemble(input);
 
-        var systemText = string.Join("\n", messages
-            .Where(m => m.Role == Microsoft.Extensions.AI.ChatRole.System)
-            .Select(m => m.Text ?? string.Empty));
+        foreach (var msg in messages)
+        {
+            if (msg.Role != Microsoft.Extensions.AI.ChatRole.System)
+                break;
+            var text = msg.Text ?? string.Empty;
+            Assert.DoesNotContain("[memory-recall]", text);
+            Assert.DoesNotContain("remembered thing", text);
+        }
 
-        Assert.DoesNotContain("[memory-recall]", systemText);
-        Assert.DoesNotContain("remembered thing", systemText);
+        var tail = messages[^1];
+        Assert.Equal(Microsoft.Extensions.AI.ChatRole.System, tail.Role);
+        Assert.Contains("[memory-recall]", tail.Text ?? string.Empty);
+        Assert.Contains("remembered thing", tail.Text ?? string.Empty);
+    }
+
+    [Fact]
+    public void Volatile_tail_does_not_create_fake_user_turn_after_tool_result()
+    {
+        // Regression test for the production loop observed in
+        // D0AC6CKBK5K/1776051715.090089 turn 10 on 2026-04-13.
+        //
+        // When a user correction triggers multi-step tool work, the
+        // session actor calls Assemble on every LLM round-trip during
+        // the tool loop. The assembled list mid-loop looks like:
+        //
+        //   [system]    persisted prompt
+        //   [system]    static dynamic context
+        //   [user]      "Public is the most restrictive audience"
+        //   [assistant] "You're right. Let me check." + tool_use(...)
+        //   [tool]      <tool result>
+        //   [???]       volatile tail (memory recall, time, ...)
+        //
+        // If the volatile tail is User-role, Qwen3's ChatML template
+        // reads it as a fresh user turn → the model restarts its
+        // assistant response → it scans back for recent user content to
+        // acknowledge → finds the correction → re-emits "You're right
+        // — I had that backwards" → fires another tool call → loops
+        // indefinitely until context exhaustion (262144/262144 tokens
+        // in the production repro).
+        //
+        // The fix is to emit the volatile tail as a System-role
+        // message. System-role messages at the end read as scaffolding
+        // and the model continues its tool work normally.
+        var history = ImmutableList.Create(
+            new SerializableChatMessage { Role = ProtocolChatRole.System, Content = PersistedSystemPrompt },
+            new SerializableChatMessage
+            {
+                Role = ProtocolChatRole.User,
+                Content = "Public is the most restrictive audience",
+            },
+            new SerializableChatMessage
+            {
+                Role = ProtocolChatRole.Assistant,
+                Content = "You're right. Let me check.",
+            },
+            new SerializableChatMessage
+            {
+                Role = ProtocolChatRole.Tool,
+                Name = "shell_execute",
+                ToolCallId = "call-1",
+                Content = "<tool output>",
+            });
+
+        var input = MakeInput(history, FakeRecall("mem-1"));
+        var messages = SessionMessageAssembler.Assemble(input);
+
+        Assert.NotEmpty(messages);
+
+        // The volatile tail must be the last message AND it must be
+        // System-role (not User), otherwise the chat template sees it
+        // as a new user turn.
+        var tail = messages[^1];
+        Assert.Equal(Microsoft.Extensions.AI.ChatRole.System, tail.Role);
+        Assert.Contains("[memory-recall]", tail.Text ?? string.Empty);
+
+        // Stronger invariant: no User-role message may appear AFTER
+        // the last Tool/Assistant message in the list. If this fires,
+        // the assembler is injecting a fake user turn mid-tool-loop
+        // and we are about to regress the production loop.
+        var lastToolOrAssistantIndex = -1;
+        for (var i = 0; i < messages.Count; i++)
+        {
+            if (messages[i].Role == Microsoft.Extensions.AI.ChatRole.Tool
+                || messages[i].Role == Microsoft.Extensions.AI.ChatRole.Assistant)
+            {
+                lastToolOrAssistantIndex = i;
+            }
+        }
+        Assert.True(lastToolOrAssistantIndex >= 0,
+            "Test fixture setup error: expected at least one Tool or Assistant message in history.");
+
+        for (var i = lastToolOrAssistantIndex + 1; i < messages.Count; i++)
+        {
+            Assert.NotEqual(Microsoft.Extensions.AI.ChatRole.User, messages[i].Role);
+        }
     }
 
     [Fact]
@@ -181,17 +274,19 @@ public sealed class SessionMessageAssemblerTests
     {
         // No recall, no working context, no slash command, no overlay, no
         // restart notice, no EveryTurn layers — the volatile tail should
-        // collapse to nothing and no User-role tail message should be added.
+        // collapse to nothing and no trailing System-role tail message
+        // should be added. The last message should be the user's history
+        // message ("hi"), not an empty System-role tail block.
         var input = MakeInput(SeedHistory("hi"), activeRecall: null);
         var messages = SessionMessageAssembler.Assemble(input);
 
-        // The last message should be the user's history message ("hi"),
-        // not an empty User-role tail block.
-        var lastUserMsg = messages.Last(m => m.Role == Microsoft.Extensions.AI.ChatRole.User);
-        Assert.Equal("hi", lastUserMsg.Text);
+        var last = messages[^1];
+        Assert.Equal(Microsoft.Extensions.AI.ChatRole.User, last.Role);
+        Assert.Equal("hi", last.Text);
+
+        // And no memory-recall block leaked into any message.
         Assert.DoesNotContain(messages, m =>
-            m.Role == Microsoft.Extensions.AI.ChatRole.User
-            && (m.Text?.Contains("[memory-recall]", StringComparison.Ordinal) ?? false));
+            (m.Text?.Contains("[memory-recall]", StringComparison.Ordinal) ?? false));
     }
 
     private static ContextAssemblyInput MakeInput(
