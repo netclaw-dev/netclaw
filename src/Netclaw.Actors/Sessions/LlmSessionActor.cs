@@ -348,6 +348,11 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         Command<ProcessingWatchdogExpired>(_ => { });
         Command<CompactionWorkCompleted>(_ => { });
         Command<CompactionWorkFailed>(_ => { });
+        // Observer replies to the fire-and-forget RecordAcceptedDistillationProposals
+        // path (HandleDistillationResult line ~931) land here in the idle state when
+        // distillation finishes after a turn. They are informational; the passivation
+        // path has its own handler in Passivating() that uses the reply to gate shutdown.
+        Command<AcceptedDistillationProposalsRecorded>(_ => { });
         Command<SpawnChildActorRequest>(msg => Sender.Tell(Context.ActorOf(msg.Props, msg.ActorName)));
         Command<DeliveryFailed>(HandleDeliveryFailedWhenReady);
         Command<PrepareForDaemonRestart>(_ => RequestRestartDrain());
@@ -874,6 +879,11 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         Command<SpawnChildActorRequest>(msg => Sender.Tell(Context.ActorOf(msg.Props, msg.ActorName)));
         Command<PrepareForDaemonRestart>(_ => RequestRestartDrain());
+        // Informational reply from memory-observer to the fire-and-forget
+        // RecordAcceptedDistillationProposals path below. See Ready() for the
+        // full explanation; the passivation path has its own handler that
+        // uses the reply to gate shutdown.
+        Command<AcceptedDistillationProposalsRecorded>(_ => { });
     }
 
     private void HandleDistillationResult(SessionDistillationCompleted msg)
@@ -1154,6 +1164,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             // Compaction is best-effort — drain buffer and continue
             DrainBufferOrReady();
         });
+
+        // Informational reply from memory-observer. See Ready() for context.
+        Command<AcceptedDistillationProposalsRecorded>(_ => { });
     }
 
     /// <summary>

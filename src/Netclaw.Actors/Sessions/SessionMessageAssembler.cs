@@ -48,9 +48,16 @@ public sealed record ContextAssemblyInput(
 ///
 /// All volatile content (memory recall, current time, working context,
 /// slash command, overlay, turn restart) is consolidated into a single
-/// User-role message at the end of the list. Keeping this content out of
-/// the System prefix means cache misses happen only for the new user
-/// turn, not for the entire conversation history.
+/// System-role message at the end of the list. Keeping this content out
+/// of the leading System prefix means cache misses happen only for the
+/// new user turn, not for the entire conversation history. The role is
+/// intentionally System (not User): a trailing User-role message looks
+/// to chat templates like a fresh user turn and causes the model to
+/// restart an assistant response on every tool-loop iteration, which
+/// produces repeating-acknowledgement loops (e.g. "You're absolutely
+/// right — I had that backwards" restated on every tool call). A
+/// trailing System-role message reads as scaffolding and the model
+/// continues its tool work normally.
 /// </summary>
 public static class SessionMessageAssembler
 {
@@ -100,7 +107,7 @@ public static class SessionMessageAssembler
         var volatileBlock = BuildVolatileContextBlock(input);
         if (!string.IsNullOrEmpty(volatileBlock))
         {
-            messages.Add(new AiChatMessage(Microsoft.Extensions.AI.ChatRole.User, volatileBlock));
+            messages.Add(new AiChatMessage(Microsoft.Extensions.AI.ChatRole.System, volatileBlock));
         }
 
         return messages;
