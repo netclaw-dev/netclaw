@@ -1283,9 +1283,26 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
     /// </summary>
     private sealed class RecordingReplyClient : ISlackReplyClient
     {
-        public List<SlackPostMessage> PostedMessages { get; } = [];
-        public List<(SlackChannelId ChannelId, string MessageTs, string Text, IReadOnlyList<Block>? Blocks)> UpdatedMessages { get; } = [];
-        public List<(SlackChannelId ChannelId, SlackThreadTs ThreadTs, string FilePath, string? FileName)> UploadedFiles { get; } = [];
+        private readonly object _lock = new();
+        private readonly List<SlackPostMessage> _postedMessages = [];
+        private readonly List<(SlackChannelId ChannelId, string MessageTs, string Text, IReadOnlyList<Block>? Blocks)> _updatedMessages = [];
+        private readonly List<(SlackChannelId ChannelId, SlackThreadTs ThreadTs, string FilePath, string? FileName)> _uploadedFiles = [];
+
+        public IReadOnlyList<SlackPostMessage> PostedMessages
+        {
+            get { lock (_lock) return _postedMessages.ToList(); }
+        }
+
+        public IReadOnlyList<(SlackChannelId ChannelId, string MessageTs, string Text, IReadOnlyList<Block>? Blocks)> UpdatedMessages
+        {
+            get { lock (_lock) return _updatedMessages.ToList(); }
+        }
+
+        public IReadOnlyList<(SlackChannelId ChannelId, SlackThreadTs ThreadTs, string FilePath, string? FileName)> UploadedFiles
+        {
+            get { lock (_lock) return _uploadedFiles.ToList(); }
+        }
+
         public Queue<Exception> PostFailures { get; } = new();
         public Queue<Exception> UploadFailures { get; } = new();
         public volatile bool BlockPostsUntilCanceled;
@@ -1320,7 +1337,8 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
                 }
             }
 
-            PostedMessages.Add(message);
+            lock (_lock)
+                _postedMessages.Add(message);
             var next = Interlocked.Increment(ref _postSequence);
             return $"{next}.0";
         }
@@ -1332,7 +1350,8 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
             IReadOnlyList<Block>? blocks = null,
             CancellationToken cancellationToken = default)
         {
-            UpdatedMessages.Add((channelId, messageTs, text, blocks));
+            lock (_lock)
+                _updatedMessages.Add((channelId, messageTs, text, blocks));
             return Task.CompletedTask;
         }
 
@@ -1343,7 +1362,8 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
             if (UploadFailures.Count > 0)
                 throw UploadFailures.Dequeue();
 
-            UploadedFiles.Add((channelId, threadTs, filePath, filename));
+            lock (_lock)
+                _uploadedFiles.Add((channelId, threadTs, filePath, filename));
             return Task.CompletedTask;
         }
     }

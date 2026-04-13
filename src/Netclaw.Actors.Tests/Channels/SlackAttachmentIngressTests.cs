@@ -613,17 +613,25 @@ public sealed class SlackAttachmentIngressVisionTests : TestKit
 
     private sealed class RecordingReplyClient : ISlackReplyClient
     {
-        public List<SlackPostMessage> PostedMessages { get; } = [];
+        private readonly object _lock = new();
+        private readonly List<SlackPostMessage> _postedMessages = [];
+
+        public IReadOnlyList<SlackPostMessage> PostedMessages
+        {
+            get { lock (_lock) return _postedMessages.ToList(); }
+        }
 
         public Task PostThreadReplyAsync(SlackPostMessage message, CancellationToken cancellationToken = default)
         {
-            PostedMessages.Add(message);
+            lock (_lock)
+                _postedMessages.Add(message);
             return Task.CompletedTask;
         }
 
         public Task<string> PostThreadReplyWithTsAsync(SlackPostMessage message, CancellationToken cancellationToken = default)
         {
-            PostedMessages.Add(message);
+            lock (_lock)
+                _postedMessages.Add(message);
             return Task.FromResult("fake.ts");
         }
 
