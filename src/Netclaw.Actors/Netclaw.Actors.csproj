@@ -27,6 +27,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <PackageReference Include="Akka.Hosting" VersionOverride="1.5.65" />
     <ProjectReference Include="..\Netclaw.Configuration\Netclaw.Configuration.csproj" />
     <ProjectReference Include="..\Netclaw.Search\Netclaw.Search.csproj" />
     <ProjectReference Include="..\Netclaw.Security\Netclaw.Security.csproj" />
