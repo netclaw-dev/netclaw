@@ -7,11 +7,11 @@ public sealed class MemoryRulesFirstExtractorTests
 {
     private readonly MemoryRulesFirstExtractor _extractor = new(new MemoryPolicyEvaluator());
 
-    private static MemoryCheckpointPayload MakeTurnPayload(string userContent, string? fullContent = null) => new(
+    private static MemoryCheckpointPayload MakeTurnPayload(string userContent) => new(
         SessionId: "D0AC6CKBK5K/1774370274.953879",
         TriggerType: CheckpointTriggerType.TurnComplete.ToWireValue(),
         Source: "session",
-        Content: fullContent ?? userContent,
+        Content: userContent,
         UserContent: userContent,
         AssistantContent: null,
         IsExplicitRequest: false,
