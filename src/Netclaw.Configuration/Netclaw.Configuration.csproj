@@ -19,6 +19,7 @@
     <PackageReference Include="Microsoft.Extensions.Http" />
     <PackageReference Include="NSec.Cryptography" />
     <PackageReference Include="SauceControl.Blake2Fast" />
+    <PackageReference Include="YamlDotNet" />
   </ItemGroup>
 
   <ItemGroup>

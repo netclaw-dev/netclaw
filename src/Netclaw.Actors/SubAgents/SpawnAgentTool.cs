@@ -23,7 +23,13 @@ public sealed partial class SpawnAgentTool : NetclawTool<SpawnAgentTool.Params>
         [property: Description("Name of the subagent to invoke (see available-subagents in context)")]
         string Agent,
         [property: Description("Task description for the subagent — be specific about what you need")]
-        string Task);
+        string Task,
+        [property: Description(
+            "Optional background context the subagent should consider while working on the task. "
+            + "Use this to pass along workspace details, the user's broader goal, or facts the "
+            + "subagent would otherwise have to rediscover. Do NOT duplicate the agent's built-in "
+            + "instructions; use this for THIS invocation's situation.")]
+        string? Context = null);
 
     public SpawnAgentTool(SubAgentDefinitionRegistry registry, SubAgentSpawner spawner)
     {
@@ -53,7 +59,7 @@ public sealed partial class SpawnAgentTool : NetclawTool<SpawnAgentTool.Params>
             return $"Error: Unknown agent '{args.Agent}'. Available agents: {names}";
         }
 
-        var result = await _spawner.SpawnAsync(profile, args.Task, context, ct);
+        var result = await _spawner.SpawnAsync(profile, args.Task, args.Context, context, ct);
 
         return result.Success
             ? result.Output

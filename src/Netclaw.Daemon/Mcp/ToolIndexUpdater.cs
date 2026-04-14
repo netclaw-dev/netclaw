@@ -71,11 +71,10 @@ internal sealed class ToolIndexUpdater : IHostedService
 
     private void LoadFileBasedAgents()
     {
-        var files = _agentLoader.LoadAll();
+        var profiles = _agentLoader.LoadAll();
         var loaded = 0;
-        foreach (var file in files)
+        foreach (var profile in profiles)
         {
-            var profile = file.ToProfile();
             if (_subAgentRegistry.Register(profile))
             {
                 loaded++;
@@ -103,14 +102,26 @@ internal sealed class ToolIndexUpdater : IHostedService
 
         var sb = new StringBuilder();
         sb.AppendLine("[available-subagents — use spawn_agent to delegate]");
+        sb.AppendLine();
+
         foreach (var agent in agents)
         {
-            sb.AppendLine($"- {agent.Name}: {agent.Description} (timeout: {agent.TimeoutSeconds}s)");
+            sb.AppendLine($"## {agent.Name}");
+            sb.AppendLine($"{agent.Description}");
+            sb.Append("Tools: ");
+            sb.AppendLine(string.Join(", ", agent.ToolNames));
+            sb.AppendLine($"Timeout: {agent.TimeoutSeconds}s");
+            sb.AppendLine();
         }
 
+        sb.AppendLine("## How to delegate");
+        sb.AppendLine("Call `spawn_agent(agent: \"<name>\", task: \"<specific task>\", context: \"<optional background>\")`.");
         sb.AppendLine();
-        sb.AppendLine("Use spawn_agent(agent: \"<name>\", task: \"<description>\") to delegate.");
-        sb.AppendLine("Subagents run autonomously with their own tools and return results.");
+        sb.AppendLine("- `task` is what the subagent should do — be concrete and bounded.");
+        sb.AppendLine("- `context` is optional per-invocation background (workspace details, the user's broader goal,");
+        sb.AppendLine("  facts the subagent would otherwise have to rediscover). Do NOT duplicate the agent's built-in");
+        sb.AppendLine("  instructions — use this for THIS invocation's situation.");
+        sb.AppendLine("- Subagents run autonomously with their own tools and return a synthesized result, not a transcript.");
 
         _subAgentDiscoveryLayer.Update(sb.ToString());
         _logger.LogInformation("Subagent discovery layer updated ({Count} agents)", agents.Count);

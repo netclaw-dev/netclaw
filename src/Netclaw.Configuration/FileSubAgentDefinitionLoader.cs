@@ -1,39 +1,31 @@
-using System.Text.Json;
-using System.Text.Json.Serialization;
 using Microsoft.Extensions.Logging;
 
 namespace Netclaw.Configuration;
 
 /// <summary>
-/// Loads subagent definitions from JSON files in the agents directory.
-/// Each agent is a <c>.json</c> file with an optional companion <c>.md</c> prompt file.
+/// Loads subagent definitions from <c>.md</c> files in the agents directory.
+/// Each agent is a single markdown file: YAML frontmatter carries metadata and
+/// the body is the system prompt verbatim. Matches the de facto Claude Code /
+/// OpenCode format and the <c>SKILL.md</c> pattern Netclaw already uses for skills.
 /// Called during startup after MCP discovery so tool names are resolvable.
 /// </summary>
 public sealed class FileSubAgentDefinitionLoader
 {
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        PropertyNameCaseInsensitive = true,
-        ReadCommentHandling = JsonCommentHandling.Skip,
-        AllowTrailingCommas = true
-    };
-
     private readonly string _agentsDirectory;
-    private readonly string _agentsDirectoryFullPath;
     private readonly ILogger<FileSubAgentDefinitionLoader> _logger;
 
     public FileSubAgentDefinitionLoader(NetclawPaths paths, ILogger<FileSubAgentDefinitionLoader> logger)
     {
         _agentsDirectory = paths.AgentsDirectory;
-        _agentsDirectoryFullPath = Path.GetFullPath(_agentsDirectory);
         _logger = logger;
     }
 
     /// <summary>
-    /// Scan the agents directory for <c>*.json</c> files and return parsed profiles.
-    /// Invalid or unreadable files are logged and skipped.
+    /// Scan the agents directory for <c>*.md</c> files and return parsed profiles.
+    /// Malformed files are rejected with a loud warning and skipped — no silent fallback.
+    /// Duplicate <c>name</c> values across files are rejected for all but the first occurrence.
     /// </summary>
-    public IReadOnlyList<SubAgentProfileFile> LoadAll()
+    public IReadOnlyList<SubAgentProfile> LoadAll()
     {
         if (!Directory.Exists(_agentsDirectory))
         {
@@ -41,168 +33,147 @@ public sealed class FileSubAgentDefinitionLoader
             return [];
         }
 
-        var files = Directory.GetFiles(_agentsDirectory, "*.json");
+        var files = Directory.GetFiles(_agentsDirectory, "*.md");
         if (files.Length == 0)
         {
             _logger.LogDebug("No agent definition files found in {Path}", _agentsDirectory);
             return [];
         }
 
-        var results = new List<SubAgentProfileFile>();
-        foreach (var filePath in files)
+        var results = new List<SubAgentProfile>();
+        var seenNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        // Enumerate files in a stable order so duplicate-name diagnostics are deterministic.
+        foreach (var filePath in files.OrderBy(p => p, StringComparer.Ordinal))
         {
-            try
+            var profile = TryParse(filePath);
+            if (profile is null)
+                continue;
+
+            if (!seenNames.Add(profile.Name))
             {
-                var json = File.ReadAllText(filePath);
-                var file = JsonSerializer.Deserialize<SubAgentProfileFile>(json, JsonOptions);
-                if (file is null)
-                {
-                    _logger.LogWarning("Agent definition file is empty or invalid: {Path}", filePath);
-                    continue;
-                }
-
-                if (string.IsNullOrWhiteSpace(file.Name))
-                {
-                    _logger.LogWarning("Agent definition missing 'name': {Path}", filePath);
-                    continue;
-                }
-
-                // Resolve system prompt from companion file or inline
-                if (!string.IsNullOrWhiteSpace(file.SystemPromptFile))
-                {
-                    var promptPath = ResolvePromptPath(file.SystemPromptFile);
-                    if (File.Exists(promptPath))
-                    {
-                        file = file with { ResolvedSystemPrompt = File.ReadAllText(promptPath) };
-                    }
-                    else
-                    {
-                        _logger.LogWarning(
-                            "Agent '{Name}' references prompt file '{PromptFile}' which does not exist — skipping",
-                            file.Name, file.SystemPromptFile);
-                        continue;
-                    }
-                }
-                else if (string.IsNullOrWhiteSpace(file.SystemPrompt))
-                {
-                    _logger.LogWarning(
-                        "Agent '{Name}' has neither 'systemPromptFile' nor 'systemPrompt' — skipping",
-                        file.Name);
-                    continue;
-                }
-
-                if (file.Tools is null || file.Tools.Count == 0)
-                {
-                    _logger.LogWarning("Agent '{Name}' has no tools defined — skipping", file.Name);
-                    continue;
-                }
-
-                var disallowedTools = file.Tools
-                    .Where(t => !SubAgentToolPolicy.IsAllowedForUserFacing(t))
-                    .Distinct(StringComparer.Ordinal)
-                    .OrderBy(t => t, StringComparer.Ordinal)
-                    .ToList();
-                if (disallowedTools.Count > 0)
-                {
-                    _logger.LogWarning(
-                        "Agent '{Name}' references disallowed tools for user-facing agents: {Tools}. Allowed tools: {AllowedTools}. Skipping",
-                        file.Name,
-                        string.Join(", ", disallowedTools),
-                        string.Join(", ", SubAgentToolPolicy.GetAllowedUserFacingTools()));
-                    continue;
-                }
-
-                results.Add(file);
-                _logger.LogInformation("Loaded agent definition: {Name} ({ToolCount} tools, timeout={Timeout}s)",
-                    file.Name, file.Tools.Count, file.TimeoutSeconds);
+                _logger.LogWarning(
+                    "Agent definition at {Path} declares duplicate name '{Name}' — skipping",
+                    filePath,
+                    profile.Name);
+                continue;
             }
-            catch (JsonException ex)
-            {
-                _logger.LogWarning(ex, "Failed to parse agent definition: {Path}", filePath);
-            }
-            catch (IOException ex)
-            {
-                _logger.LogWarning(ex, "Failed to read agent definition: {Path}", filePath);
-            }
+
+            results.Add(profile);
+            _logger.LogInformation(
+                "Loaded agent definition: {Name} ({ToolCount} tools, timeout={Timeout}s)",
+                profile.Name, profile.ToolNames.Count, profile.TimeoutSeconds);
         }
 
         return results;
     }
 
-    private string ResolvePromptPath(string systemPromptFile)
+    private SubAgentProfile? TryParse(string filePath)
     {
-        var combined = Path.Combine(_agentsDirectory, systemPromptFile);
-        var fullPath = Path.GetFullPath(combined);
-        var allowedPrefix = _agentsDirectoryFullPath.EndsWith(Path.DirectorySeparatorChar)
-            ? _agentsDirectoryFullPath
-            : _agentsDirectoryFullPath + Path.DirectorySeparatorChar;
-
-        if (!fullPath.StartsWith(allowedPrefix, StringComparison.Ordinal)
-            && !string.Equals(fullPath, _agentsDirectoryFullPath, StringComparison.Ordinal))
+        string content;
+        try
         {
-            throw new IOException($"Prompt file '{systemPromptFile}' escapes the agents directory.");
+            content = File.ReadAllText(filePath);
+        }
+        catch (IOException ex)
+        {
+            _logger.LogWarning(ex, "Failed to read agent definition: {Path}", filePath);
+            return null;
         }
 
-        return fullPath;
-    }
-}
+        var frontmatter = SubAgentMarkdownParser.ExtractFrontmatter(content);
+        if (frontmatter is null)
+        {
+            _logger.LogWarning(
+                "Agent definition at {Path} has missing or unparseable YAML frontmatter — skipping",
+                filePath);
+            return null;
+        }
 
-/// <summary>
-/// JSON wire type for a subagent definition file.
-/// </summary>
-public sealed record SubAgentProfileFile
-{
-    [JsonPropertyName("name")]
-    public string Name { get; init; } = string.Empty;
+        if (string.IsNullOrWhiteSpace(frontmatter.Name))
+        {
+            _logger.LogWarning("Agent definition at {Path} has no 'name' in frontmatter — skipping", filePath);
+            return null;
+        }
 
-    [JsonPropertyName("description")]
-    public string Description { get; init; } = string.Empty;
+        if (string.IsNullOrWhiteSpace(frontmatter.Description))
+        {
+            _logger.LogWarning(
+                "Agent '{Name}' at {Path} has no 'description' in frontmatter — skipping",
+                frontmatter.Name, filePath);
+            return null;
+        }
 
-    [JsonPropertyName("systemPrompt")]
-    public string? SystemPrompt { get; init; }
+        var systemPrompt = SubAgentMarkdownParser.ExtractBody(content);
+        if (string.IsNullOrWhiteSpace(systemPrompt))
+        {
+            _logger.LogWarning(
+                "Agent '{Name}' at {Path} has an empty system prompt body — skipping",
+                frontmatter.Name, filePath);
+            return null;
+        }
 
-    [JsonPropertyName("systemPromptFile")]
-    public string? SystemPromptFile { get; init; }
+        var tools = frontmatter.Tools ?? [];
+        if (tools.Count == 0)
+        {
+            _logger.LogWarning(
+                "Agent '{Name}' at {Path} has no tools defined — skipping",
+                frontmatter.Name, filePath);
+            return null;
+        }
 
-    [JsonPropertyName("tools")]
-    public List<string> Tools { get; init; } = [];
+        var disallowedTools = tools
+            .Where(t => !SubAgentToolPolicy.IsAllowedForUserFacing(t))
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(t => t, StringComparer.Ordinal)
+            .ToList();
+        if (disallowedTools.Count > 0)
+        {
+            _logger.LogWarning(
+                "Agent '{Name}' at {Path} references disallowed tools for user-facing agents: {Tools}. Allowed tools: {AllowedTools}. Skipping",
+                frontmatter.Name,
+                filePath,
+                string.Join(", ", disallowedTools),
+                string.Join(", ", SubAgentToolPolicy.GetAllowedUserFacingTools()));
+            return null;
+        }
 
-    [JsonPropertyName("modelRole")]
-    public string ModelRole { get; init; } = "Compaction";
-
-    [JsonPropertyName("timeoutSeconds")]
-    public int TimeoutSeconds { get; init; } = 60;
-
-    /// <summary>
-    /// Resolved prompt content from the companion .md file. Not serialized.
-    /// </summary>
-    [JsonIgnore]
-    public string? ResolvedSystemPrompt { get; init; }
-
-    /// <summary>
-    /// Returns the effective system prompt (resolved file content or inline).
-    /// </summary>
-    [JsonIgnore]
-    public string EffectiveSystemPrompt => ResolvedSystemPrompt ?? SystemPrompt ?? string.Empty;
-
-    /// <summary>
-    /// Convert to the runtime <see cref="SubAgentProfile"/> type used by the registry and spawner.
-    /// </summary>
-    public SubAgentProfile ToProfile()
-    {
-        var modelRole = Enum.TryParse<Netclaw.Configuration.ModelRole>(ModelRole, ignoreCase: true, out var parsed)
-            ? parsed
-            : Netclaw.Configuration.ModelRole.Compaction;
+        var modelRole = ParseModelRole(frontmatter.ModelRole);
+        var visibility = ParseVisibility(frontmatter.Visibility);
 
         return new SubAgentProfile
         {
-            Name = Name,
-            Description = Description,
-            SystemPrompt = EffectiveSystemPrompt,
-            ToolNames = Tools,
+            Name = frontmatter.Name.Trim(),
+            Description = frontmatter.Description.Trim(),
+            SystemPrompt = systemPrompt,
+            ToolNames = tools,
             ModelRole = modelRole,
-            TimeoutSeconds = TimeoutSeconds,
-            Visibility = SubAgentVisibility.UserFacing
+            TimeoutSeconds = frontmatter.TimeoutSeconds ?? 60,
+            EmitStructuredFindings = frontmatter.EmitStructuredFindings ?? false,
+            Visibility = visibility
         };
+    }
+
+    private static ModelRole ParseModelRole(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return ModelRole.Compaction;
+
+        return Enum.TryParse<ModelRole>(value, ignoreCase: true, out var parsed)
+            ? parsed
+            : ModelRole.Compaction;
+    }
+
+    private static SubAgentVisibility ParseVisibility(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return SubAgentVisibility.UserFacing;
+
+        // Accept both "user-facing" (hyphenated, matches frontmatter convention)
+        // and "UserFacing" (PascalCase, matches the enum value name).
+        var normalized = value.Replace("-", "", StringComparison.Ordinal);
+        return Enum.TryParse<SubAgentVisibility>(normalized, ignoreCase: true, out var parsed)
+            ? parsed
+            : SubAgentVisibility.UserFacing;
     }
 }
