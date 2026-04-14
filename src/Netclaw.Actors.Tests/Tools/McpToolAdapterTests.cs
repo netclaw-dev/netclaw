@@ -535,13 +535,9 @@ public class McpSchemaSanitizerTests
     [Fact]
     public void SanitizeSchema_RealNotionSearchFixture_StripsLeapYearPattern()
     {
-        // This is the exact schema that SIGSEGV'd llama-server@gpu0 on
-        // 2026-04-14. The two `pattern` fields on created_date_range contain
-        // a ~240-char leap-year ISO-8601 regex with nested alternations that
-        // llama.cpp's _visit_pattern() grinds on until the process core-dumps.
-        // After sanitization, both patterns must be gone and format/description
-        // must survive so the LLM still understands "this is a date".
-        var raw = LoadJsonFixture("notion-search-input.raw.json");
+        // Regression: notion-search's leap-year ISO date `pattern` must be
+        // stripped so llama.cpp's grammar compiler can't SEGV on it.
+        var raw = TestFixtures.Load("notion-search-input.raw.json");
         var schema = JsonDocument.Parse(raw).RootElement;
 
         var sanitized = McpSchemaSanitizer.SanitizeSchema(schema);
@@ -572,13 +568,6 @@ public class McpSchemaSanitizerTests
         Assert.True(sanitized.GetProperty("properties").TryGetProperty("query", out _));
     }
 
-    private static string LoadJsonFixture(string filename)
-    {
-        var path = Path.Combine(AppContext.BaseDirectory, "Tools", "Fixtures", filename);
-        if (!File.Exists(path))
-            throw new FileNotFoundException($"Fixture not found: {path}");
-        return File.ReadAllText(path);
-    }
 
     [Fact]
     public void SanitizeSchema_HandlesNotionSearchSchema()

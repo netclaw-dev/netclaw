@@ -111,35 +111,14 @@ public static class McpSchemaSanitizer
                 // breaks llama.cpp's JSON-schema-to-GBNF grammar conversion.
                 "$schema" => (object?)null,
 
-                // Strip keywords that llama.cpp's json_schema_to_grammar.cpp
-                // either cannot express in GBNF or crashes while expanding.
-                //
-                // `pattern` is the primary killer: regex→GBNF rule expansion
-                // in `_visit_pattern()` has no bounds on rule-string length,
-                // so a pathological pattern (e.g. Notion's leap-year ISO date
-                // regex with nested alternations) can grind for minutes and
-                // then SIGSEGV the server. Confirmed root cause of the
-                // 2026-04-14 Lemonade/gpu0 core dump on notion/notion-search.
-                //
-                // `patternProperties` and `propertyNames` are the same regex
-                // family and share the same crash path.
-                //
-                // `not`, `if`/`then`/`else` are unsupported — the converter
-                // returns "Unrecognized schema" which maps to a fatal error
-                // depending on call-site.
-                //
-                // `multipleOf` is unsupported (no integer arithmetic in GBNF).
-                //
-                // `contentEncoding`/`contentMediaType`/`contentSchema` are
-                // silently ignored by the converter and also disallowed by
-                // OpenAI's strict-mode schema subset — safe to remove and
-                // keeps our output on the converging "safe subset" across
-                // providers.
-                //
-                // Everything else ($ref/$defs, oneOf/anyOf/allOf, enum,
-                // format, minItems/maxItems, minLength/maxLength,
-                // minimum/maximum) is handled by the converter and must be
-                // preserved — real MCP tool schemas rely on these.
+                // Strip keywords llama.cpp's json_schema_to_grammar cannot
+                // express in GBNF. `pattern`/`patternProperties`/`propertyNames`
+                // crash `_visit_pattern()` on pathological regex (unbounded rule
+                // expansion); `not`/`if`/`then`/`else`/`multipleOf` are fatal
+                // "Unrecognized schema"; content* are silently dropped. Keep
+                // $ref/$defs, oneOf/anyOf/allOf, format, enum, and length/
+                // range bounds — converter handles those and real MCP tools
+                // rely on them.
                 "pattern"
                     or "patternProperties"
                     or "propertyNames"
