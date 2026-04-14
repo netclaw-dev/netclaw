@@ -363,7 +363,7 @@ public sealed class SessionMemoryObserverActor : ReceivePersistentActor
             inputTokens = response.Usage?.InputTokenCount;
             outputTokens = response.Usage?.OutputTokenCount;
 
-            var proposals = ParseProposals(text);
+            var proposals = ParseProposals(text, _log.Info);
             var newAnchors = proposals
                 .Where(p => p.Anchor is not null)
                 .Select(p => p.Anchor!.CanonicalName)
@@ -393,25 +393,137 @@ public sealed class SessionMemoryObserverActor : ReceivePersistentActor
         }
     }
 
-    private static IReadOnlyList<MemoryProposal> ParseProposals(string text)
+    /// <summary>
+    /// Parses memory proposals out of an LLM distillation response. The parser
+    /// is robust to common Qwen-style output shapes (preamble text with braces,
+    /// markdown code fences, multiple top-level JSON objects, trailing chatter)
+    /// rather than requiring perfectly-formatted output. When parsing fails,
+    /// the optional <paramref name="logSink"/> receives a structured drop-reason
+    /// event so the failure isn't silent. <c>logSink</c> takes a fully-formatted
+    /// string so this method has no Akka dependency and can be unit-tested
+    /// without an actor system.
+    /// </summary>
+    internal static IReadOnlyList<MemoryProposal> ParseProposals(string text, Action<string>? logSink = null)
     {
         if (string.IsNullOrWhiteSpace(text))
             return [];
 
-        var direct = TryDeserialize(text);
+        var stripped = StripMarkdownFences(text);
+
+        // Fast path: the response is already clean JSON.
+        var direct = TryDeserialize(stripped);
         if (direct is not null)
             return direct;
 
-        var jsonStart = text.IndexOf('{', StringComparison.Ordinal);
-        var jsonEnd = text.LastIndexOf('}');
-        if (jsonStart >= 0 && jsonEnd > jsonStart)
+        // Slow path: walk the response and find every balanced JSON object,
+        // returning the first one that deserializes into a DistillationResponse
+        // with a non-null Proposals array. Handles preamble text, multiple
+        // top-level objects, transcript echoes containing braces, and trailing
+        // chatter — none of which the previous first-`{` to last-`}` substring
+        // heuristic could parse.
+        var candidates = ExtractJsonObjectCandidates(stripped);
+        foreach (var candidate in candidates)
         {
-            var extracted = TryDeserialize(text[jsonStart..(jsonEnd + 1)]);
-            if (extracted is not null)
-                return extracted;
+            var parsed = TryDeserialize(candidate);
+            if (parsed is not null)
+                return parsed;
+        }
+
+        // Surface the silent drop. PR #653 added drop-reason observability for
+        // the rules-extractor path; this is the same principle for the LLM
+        // distillation path. Without these events, a parser regression would
+        // burn LLM tokens and produce zero memories with no diagnostic trail.
+        if (logSink is not null)
+        {
+            var preview = Truncate(text.Trim(), 200);
+            var eventName = candidates.Count == 0
+                ? "session_observer_parse_no_json"
+                : "session_observer_parse_failed";
+            logSink($"{eventName} rawLength={text.Length} candidateCount={candidates.Count} preview={preview}");
         }
 
         return [];
+    }
+
+    internal static string StripMarkdownFences(string text)
+    {
+        var trimmed = text.Trim();
+        if (trimmed.Length < 7 || !trimmed.StartsWith("```", StringComparison.Ordinal))
+            return text;
+
+        var openEnd = trimmed.IndexOf('\n', StringComparison.Ordinal);
+        if (openEnd < 0)
+            return text;
+
+        var closingFence = trimmed.LastIndexOf("```", StringComparison.Ordinal);
+        if (closingFence <= openEnd)
+            return text;
+
+        return trimmed[(openEnd + 1)..closingFence].Trim();
+    }
+
+    internal static IReadOnlyList<string> ExtractJsonObjectCandidates(string text)
+    {
+        var candidates = new List<string>();
+        var i = 0;
+        while (i < text.Length)
+        {
+            if (text[i] != '{')
+            {
+                i++;
+                continue;
+            }
+
+            var end = FindMatchingClose(text, i);
+            if (end < 0)
+                break;
+
+            candidates.Add(text[i..(end + 1)]);
+            i = end + 1;
+        }
+        return candidates;
+    }
+
+    private static int FindMatchingClose(string text, int openIndex)
+    {
+        var depth = 0;
+        var inString = false;
+        var escaped = false;
+        for (var i = openIndex; i < text.Length; i++)
+        {
+            var c = text[i];
+            if (escaped)
+            {
+                escaped = false;
+                continue;
+            }
+            if (inString)
+            {
+                if (c == '\\')
+                {
+                    escaped = true;
+                    continue;
+                }
+                if (c == '"')
+                    inString = false;
+                continue;
+            }
+            switch (c)
+            {
+                case '"':
+                    inString = true;
+                    break;
+                case '{':
+                    depth++;
+                    break;
+                case '}':
+                    depth--;
+                    if (depth == 0)
+                        return i;
+                    break;
+            }
+        }
+        return -1;
     }
 
     private static IReadOnlyList<MemoryProposal>? TryDeserialize(string json)
@@ -450,7 +562,16 @@ public sealed class SessionMemoryObserverActor : ReceivePersistentActor
         You are a session memory distillation sidecar.
         You receive a conversation transcript and a list of memories already
         proposed in this session (existingProposals).
-        Return JSON only: { "proposals": [ ... ] }
+
+        ## Output contract (strict)
+
+        Return ONLY a single JSON object matching the schema below.
+        Do NOT include any text before or after the JSON object.
+        Do NOT wrap the JSON in markdown code fences (no ```json, no ```).
+        Do NOT include explanations, reasoning, preamble, or commentary outside the JSON.
+        Your entire response must start with `{` and end with `}`.
+
+        Top-level shape: { "proposals": [ ... ] }
 
         Your job: curate the user's memory store based on this session.
 
