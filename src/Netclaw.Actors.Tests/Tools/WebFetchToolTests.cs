@@ -128,7 +128,7 @@ public class WebFetchToolTests : IDisposable
     [Fact]
     public void ExtractTextFromHtml_works_on_ddg_fixture()
     {
-        var html = LoadFixture("ddg-lite-akka-dotnet.html");
+        var html = TestFixtures.Load("ddg-lite-akka-dotnet.html");
 
         var text = WebFetchTool.ExtractTextFromHtml(html);
 
@@ -169,7 +169,7 @@ public class WebFetchToolTests : IDisposable
     [Fact]
     public void ExtractTitle_from_ddg_fixture()
     {
-        var html = LoadFixture("ddg-lite-akka-dotnet.html");
+        var html = TestFixtures.Load("ddg-lite-akka-dotnet.html");
         var title = WebFetchTool.ExtractTitle(html);
 
         Assert.NotNull(title);
@@ -681,15 +681,6 @@ public class WebFetchToolTests : IDisposable
         Assert.Equal(expected, WebFetchTool.GetFallbackExtension(contentType, isBinary));
     }
 
-    private static string LoadFixture(string filename)
-    {
-        var assembly = typeof(WebFetchToolTests).Assembly;
-        var resourceName = $"Netclaw.Actors.Tests.Tools.Fixtures.{filename}";
-        using var stream = assembly.GetManifestResourceStream(resourceName)
-            ?? throw new FileNotFoundException($"Fixture not found: {resourceName}");
-        using var reader = new StreamReader(stream);
-        return reader.ReadToEnd();
-    }
 
     /// <summary>
     /// Fake HTTP handler that returns a canned response (text or binary).

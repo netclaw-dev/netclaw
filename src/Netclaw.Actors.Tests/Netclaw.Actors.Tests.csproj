@@ -26,7 +26,8 @@
   </ItemGroup>
 
   <ItemGroup>
-    <EmbeddedResource Include="Tools/Fixtures/*.html" />
+    <None Include="Tools/Fixtures/*.html" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="Tools/Fixtures/*.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>
