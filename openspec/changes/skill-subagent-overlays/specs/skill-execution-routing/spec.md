@@ -75,11 +75,16 @@ metadata.
 In all routed failure cases, the system SHALL NOT silently fall back to inline
 skill execution.
 
+Routed failure output SHALL be user-visible and SHALL include actionable
+remediation guidance (for example: add the missing subagent definition, or
+fix/remove `metadata.subagent` on the skill).
+
 #### Scenario: Unknown target fails without fallback
 
 - **GIVEN** `metadata.subagent` references a target not present in registry
 - **WHEN** activation dispatch attempts routed execution
 - **THEN** activation returns deterministic unknown-subagent failure
+- **AND** the error includes the missing target name and remediation guidance
 - **AND** inline skill execution is not attempted
 
 #### Scenario: Internal-only target fails without fallback
@@ -87,6 +92,7 @@ skill execution.
 - **GIVEN** `metadata.subagent` references a target marked internal-only
 - **WHEN** activation dispatch attempts routed execution
 - **THEN** activation returns deterministic internal-target failure
+- **AND** the error includes target name, visibility reason, and remediation guidance
 - **AND** inline skill execution is not attempted
 
 #### Scenario: Malformed routing metadata fails without fallback
@@ -94,4 +100,5 @@ skill execution.
 - **GIVEN** a skill has malformed `metadata.subagent` value
 - **WHEN** activation dispatch attempts routed execution
 - **THEN** activation returns deterministic metadata-validation failure
+- **AND** the error includes metadata field details and remediation guidance
 - **AND** inline skill execution is not attempted

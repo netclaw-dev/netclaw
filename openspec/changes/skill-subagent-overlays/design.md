@@ -89,6 +89,23 @@ Rationale:
 - Avoids silent misconfiguration and non-obvious behavior drift.
 - Makes authoring errors operator-visible immediately.
 
+### D6. Routed failures must include actionable remediation guidance
+
+When routed activation fails, error output must be user-visible and include a
+brief remediation hint. At minimum, the message includes target name, failure
+reason, and one of: "add the missing subagent definition" or
+"fix/remove metadata.subagent on the skill".
+
+Rationale:
+
+- Preserves fail-loud behavior while reducing dead-end failures for operators.
+- Makes recovery paths explicit without introducing implicit fallback behavior.
+
+Alternative considered:
+
+- Return terse error codes only. Rejected because it increases operator
+  confusion and pushes remediation discovery into docs hunting.
+
 ## Risks / Trade-offs
 
 - [Risk] Existing skills may start failing after adding invalid `metadata.subagent` values. -> Mitigation: add focused validation tests and clear deterministic error text listing accepted format.
@@ -111,5 +128,4 @@ Rollback:
 
 ## Open Questions
 
-- Should deterministic error messaging include a short remediation hint (for example, "set `metadata.subagent` to a known user-facing subagent") in addition to target name and reason?
 - Should `metadata.subagent` validation be enforced at skill scan time only, or both at scan and at dispatch-time (defense-in-depth)?

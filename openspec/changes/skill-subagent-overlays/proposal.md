@@ -8,7 +8,7 @@ Issue #661 exposed an execution-model gap: slash-invoked skills always inline th
 - Introduce deterministic activation precedence for slash-command skill execution: when `metadata.subagent` is present and valid, route to that subagent path before inline skill-body injection.
 - Define routed execution semantics: skill body becomes an additive subagent system-prompt overlay (specialization layer), not main-session user runtime context.
 - Enforce isolation defaults for routed subagent workers: they do not inherit the main session identity prompt stack by default and do not auto-load repo-local `AGENTS.md` by default.
-- Enforce fail-loud semantics with no silent fallback to inline execution for unknown subagent targets, internal-only subagent targets, and malformed routed metadata.
+- Enforce fail-loud semantics with no silent fallback to inline execution for unknown subagent targets, internal-only subagent targets, and malformed routed metadata; routed failures must be user-visible and include remediation guidance.
 
 ## Capabilities
 
@@ -39,7 +39,7 @@ Issue #661 exposed an execution-model gap: slash-invoked skills always inline th
 
 - Fail-loud behavior replaces implicit fallback, improving observability and reducing hidden privilege/behavior drift.
 - Internal-only subagent targets are explicitly denied for user-facing routed skill execution.
-- Operator-visible deterministic errors are required for malformed metadata and unknown targets.
+- Operator-visible deterministic errors are required for malformed metadata and unknown targets, including remediation steps (fix/remove `metadata.subagent` or add the referenced subagent definition).
 
 ### In scope for MVP
 

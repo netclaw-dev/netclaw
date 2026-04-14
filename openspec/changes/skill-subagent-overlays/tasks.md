@@ -24,6 +24,7 @@
 - [ ] 4.2 Return deterministic failure for internal-only routed subagent targets.
 - [ ] 4.3 Return deterministic failure for malformed routed metadata during scan/dispatch.
 - [ ] 4.4 Add explicit guard to prevent any silent fallback to inline execution after routed-path failure.
+- [ ] 4.5 Ensure routed failures are user-visible and include actionable remediation hints.
 
 ## 5. Tests
 
@@ -32,7 +33,8 @@
 - [ ] 5.3 Unit-test routed overlay semantics (skill body added to subagent system prompt, not user context).
 - [ ] 5.4 Unit-test isolation defaults (no inherited identity stack, no repo `AGENTS.md` auto-load).
 - [ ] 5.5 Unit-test failure semantics (unknown target, internal-only target, malformed metadata) and assert no inline fallback.
-- [ ] 5.6 Regression-test scheduled slash payload behavior for routed skills.
+- [ ] 5.6 Unit-test routed failure messages include target/reason/remediation details.
+- [ ] 5.7 Regression-test scheduled slash payload behavior for routed skills.
 
 ## 6. Docs and system-skill updates
 
