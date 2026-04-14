@@ -1,3 +1,19 @@
+#### 0.12.2 2026-04-13 ####
+
+Netclaw v0.12.2 — Skill load telemetry, PDF attachment handling fix, and session recovery improvements
+
+**Features**
+
+* Added skill load telemetry by method and skill name — `SkillLoadTracker` now emits structured metrics for every skill load event, capturing the load method (local, remote, cached) and skill identifier. Enables operators to monitor skill resolution patterns and identify caching inefficiencies or remote feed latency issues. ([#637](https://github.com/Aaronontheweb/netclaw/pull/637))
+
+**Bug Fixes**
+
+* Fixed PDF attachments being inlined as DataContent on vision-capable models — PDF files were being converted to inline DataContent instead of being passed as file references, causing vision models to fail or misinterpret the attachment. PDFs and other document types now correctly flow through as file paths that the agent can reference explicitly. ([#638](https://github.com/Aaronontheweb/netclaw/pull/638))
+
+* Fixed session recovery from volatile-tail loop and legacy domain NOT NULL constraint — sessions could enter an infinite loop during message assembly when the volatile tail became unstable, and legacy database records without domain values would fail on insert due to NOT NULL constraints. Both issues are resolved with defensive tail reconstruction and domain migration for legacy records. ([#634](https://github.com/Aaronontheweb/netclaw/pull/634))
+
+* Fixed eval container missing host system skills — the behavioral eval suite running in Docker containers could not access host-mounted system skills, causing evals to fail on skill-dependent test cases. Host system skills are now properly mounted into the eval container at runtime. ([#633](https://github.com/Aaronontheweb/netclaw/pull/633))
+
 #### 0.12.1 2026-04-13 ####
 
 Netclaw v0.12.1 — Security hardening: MagicByteValidator extended to non-image types, structured tool-call batch metrics

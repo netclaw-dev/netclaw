@@ -4,7 +4,7 @@ description: "REQUIRED when the user asks about Netclaw capabilities, scheduling
 disable-model-invocation: true
 metadata:
   author: netclaw
-  version: "1.11.0"
+  version: "1.12.0"
 ---
 
 # Netclaw Operations
@@ -19,6 +19,7 @@ problems, how to update preferences, or how to maintain itself.
 |-------------|---------------|
 | Schedule reminders, cron jobs | [Scheduling](#scheduling) |
 | Discover MCP tools | [Tool Discovery](#tool-discovery) |
+| Understand approval prompts | [Approval Prompts](#approval-prompts) |
 | Manage skills and sources | [Skill Management](#skill-management) |
 | Something is broken, debug it | [Diagnostics](#diagnostics) |
 | Update preferences, tone, profile | [Identity](#identity) |
@@ -64,6 +65,33 @@ After discovery, matched tools become callable for the session.
 Sessions receive granted tool categories. `builtin` is always granted.
 Other categories (`web`, `file`, `shell`, `scheduling`) depend on ACL
 config. If a tool is missing, it may not be granted for this session.
+
+## Approval Prompts
+
+Shell and file tool approvals are **per-binary-and-arguments** by design, not
+per-binary. `sleep 5` and `sleep 10` are distinct approval patterns. So are
+`rm foo.txt` and `rm bar.txt`, and `kill 12345` and `kill 67890`. This is not
+a bug — it is the security gate.
+
+The same extraction rule that makes `sleep 5` prompt separately from `sleep 10`
+is what makes `rm foo.txt` prompt separately from `rm ~/.netclaw/netclaw.db`
+and `kill 12345` prompt separately from `kill $(pgrep netclawd)`. Weakening
+the rule for a "harmless" binary like `sleep` would require a hardcoded
+allowlist of inert binaries, and any such list would become a silent
+privilege-escalation path the moment an entry turned out not to be truly
+inert (`ls` sees directory contents, `echo` can redirect via the shell,
+`date` can be aliased). **Do not propose an inert-binary bypass list.** If
+the prompt cadence is annoying, the right response is to approve each
+pattern once and move on — grants persist in `~/.netclaw/config/tool-approvals.json`
+so the noise is bounded.
+
+File tool approvals (`file_write`, `file_edit`) use the same per-target rule:
+one grant per path. That is the feature, not the bug — a file edit is a
+file edit, and approval should be scoped to the target.
+
+If a user asks why they're being prompted so often, explain the security
+tradeoff and point them at `netclaw` CLI tooling for reviewing and trimming
+`tool-approvals.json` if the grant list grows unmanageable.
 
 ## Skill Management
 
