@@ -949,7 +949,8 @@ static void ConfigureDaemonServices(
             var tp = sp.GetRequiredService<TimeProvider>();
             var rc = sp.GetRequiredService<ReminderConfig>();
             var historyStore = sp.GetRequiredService<ReminderHistoryStore>();
-            toolRegistry.WithReminderTools(reminderManager, tp, rc, historyStore);
+            var targetResolver = sp.GetService<Netclaw.Actors.Reminders.IReminderTargetResolver>();
+            toolRegistry.WithReminderTools(reminderManager, tp, rc, historyStore, targetResolver);
 
             // Drain all active LLM sessions during any actor system termination (SIGTERM, daemon stop).
             // Runs in an early CoordinatedShutdown phase while actors are still alive.
@@ -1215,35 +1216,15 @@ static void MapReminderEndpoints(WebApplication app)
         string? notifyInstructions = request.NotifyInstructions;
 
         if (!string.IsNullOrWhiteSpace(request.ReportTarget))
-        {
-            var resolver = serviceProvider.GetService<Netclaw.Channels.Slack.ISlackTargetResolver>();
-            if (resolver is null)
-                return Results.BadRequest(new { error = "Slack is not enabled; cannot resolve report target." });
-
-            var resolved = await resolver.ResolveAsync(request.ReportTarget, ct);
-            if (!resolved.Success)
-                return Results.BadRequest(new { error = resolved.ErrorMessage ?? "Failed to resolve report target." });
-
-            if (!string.IsNullOrWhiteSpace(resolved.UserId))
-            {
-                var targetUserId = resolved.UserId;
-                reportToChannel = null;
-                notifyInstructions = $"Send a direct message to Slack user {targetUserId} with your findings, or lack thereof.";
-            }
-            else
-            {
-                reportToChannel = resolved.ChannelId;
-                if (string.IsNullOrWhiteSpace(notifyInstructions))
-                    notifyInstructions = $"Post the result to Slack channel {reportToChannel}.";
-            }
-        }
+            reportToChannel = request.ReportTarget;
 
         // Use caller-provided ID if available, otherwise auto-generate for backward compatibility
         var effectiveId = !string.IsNullOrWhiteSpace(request.Id)
             ? request.Id
             : Netclaw.Actors.Reminders.ReminderIdGenerator.Generate(request.Name).Value;
 
-        var tool = new Netclaw.Actors.Reminders.SetReminderTool(manager, timeProvider, reminderConfig);
+        var reminderResolver = serviceProvider.GetService<Netclaw.Actors.Reminders.IReminderTargetResolver>();
+        var tool = new Netclaw.Actors.Reminders.SetReminderTool(manager, timeProvider, reminderConfig, reminderResolver);
         var toolContext = new Netclaw.Tools.ToolExecutionContext(sessionId: null, sessionDirectory: null);
         toolContext.Audience = authorization?.SourceAudience?.ToWireValue();
         toolContext.ChannelType = "manual";

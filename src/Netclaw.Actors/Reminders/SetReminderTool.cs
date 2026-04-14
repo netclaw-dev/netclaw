@@ -18,6 +18,7 @@ public sealed partial class SetReminderTool : NetclawTool<SetReminderTool.Params
     private readonly IActorRef _reminderManager;
     private readonly TimeProvider _timeProvider;
     private readonly ReminderConfig _config;
+    private readonly IReminderTargetResolver? _targetResolver;
 
     public record Params(
         [property: Description("Stable identifier for this reminder (kebab-case slug, e.g. 'daily-standup'). If a reminder with this ID exists it will be updated.")]
@@ -30,7 +31,7 @@ public sealed partial class SetReminderTool : NetclawTool<SetReminderTool.Params
         string ScheduleType,
         [property: Description("Schedule value: relative time, ISO 8601 datetime, interval duration, or cron expression.")]
         string Schedule,
-        [property: Description("Optional Slack channel ID for reporting. Omit for current-session targeting.")]
+        [property: Description("Optional notification target. Accepts raw channel/user IDs, '#channel-name', or '@username'. Omit for current-session targeting.")]
         string? ReportToChannel = null,
         [property: Description("Optional notify instructions describing how Netclaw should report results.")]
         string? NotifyInstructions = null,
@@ -39,11 +40,16 @@ public sealed partial class SetReminderTool : NetclawTool<SetReminderTool.Params
         [property: Description("Trust audience for this reminder's execution: 'personal' (all tools including web_search, shell), 'team' (restricted tools), or 'public' (minimal tools). Omit to inherit the creating session/channel audience.")]
         string? Audience = null);
 
-    public SetReminderTool(IActorRef reminderManager, TimeProvider timeProvider, ReminderConfig config)
+    public SetReminderTool(
+        IActorRef reminderManager,
+        TimeProvider timeProvider,
+        ReminderConfig config,
+        IReminderTargetResolver? targetResolver = null)
     {
         _reminderManager = reminderManager;
         _timeProvider = timeProvider;
         _config = config;
+        _targetResolver = targetResolver;
     }
 
     protected override Task<string> ExecuteAsync(Params args, CancellationToken ct)
@@ -78,8 +84,27 @@ public sealed partial class SetReminderTool : NetclawTool<SetReminderTool.Params
         string? sessionId = null;
         string? reportToChannel = args.ReportToChannel;
         string? reportToThreadTs = null;
+        var resolvedTargetKind = ReminderTargetKind.Unknown;
 
-        if (context.SessionId is not null && string.IsNullOrEmpty(reportToChannel))
+        if (!string.IsNullOrWhiteSpace(reportToChannel))
+        {
+            if (_targetResolver is null)
+                return $"Error: No notification channel transport is configured; cannot target '{reportToChannel}'.";
+
+            var resolution = await _targetResolver.ResolveAsync(reportToChannel, ct);
+            if (!resolution.Success)
+            {
+                var detail = resolution.ErrorMessage ?? "unresolvable target";
+                return $"Error: Could not resolve reportToChannel '{reportToChannel}': {detail}. Use #channel, @user, or a valid channel ID.";
+            }
+
+            if (string.IsNullOrWhiteSpace(resolution.ResolvedId))
+                return $"Error: Could not resolve reportToChannel '{reportToChannel}': resolver returned an empty canonical target ID.";
+
+            reportToChannel = resolution.ResolvedId;
+            resolvedTargetKind = resolution.Kind;
+        }
+        else if (context.SessionId is not null)
         {
             sessionId = context.SessionId;
 
@@ -88,6 +113,7 @@ public sealed partial class SetReminderTool : NetclawTool<SetReminderTool.Params
             {
                 reportToChannel = parts[0];
                 reportToThreadTs = parts[1];
+                resolvedTargetKind = ReminderTargetKind.Channel;
             }
         }
 
@@ -96,7 +122,12 @@ public sealed partial class SetReminderTool : NetclawTool<SetReminderTool.Params
         {
             notifyInstructions = reportToChannel is null
                 ? "Reply in the originating session thread with a concise result."
-                : $"Post the result to Slack channel {reportToChannel}.";
+                : resolvedTargetKind switch
+                {
+                    ReminderTargetKind.User => $"Send a direct message to user {reportToChannel} with your findings, or lack thereof.",
+                    ReminderTargetKind.Channel => $"Post the result to channel {reportToChannel}.",
+                    _ => $"Send the result to target {reportToChannel}."
+                };
         }
 
         var notifyPolicy = Enum.TryParse<NotificationPolicy>(args.NotifyPolicy, ignoreCase: true, out var parsed)
