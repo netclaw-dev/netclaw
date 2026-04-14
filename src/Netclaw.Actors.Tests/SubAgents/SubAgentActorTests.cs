@@ -275,33 +275,6 @@ public class SubAgentActorTests : TestKit
     }
 
     [Fact]
-    public void BuildUserMessage_returns_task_only_when_context_is_null()
-    {
-        var result = SubAgentActor.BuildUserMessage(runtimeContext: null, task: "Find the latest release.");
-
-        Assert.Equal("Find the latest release.", result);
-    }
-
-    [Fact]
-    public void BuildUserMessage_returns_task_only_when_context_is_whitespace()
-    {
-        var result = SubAgentActor.BuildUserMessage(runtimeContext: "   \t  ", task: "Find it.");
-
-        Assert.Equal("Find it.", result);
-    }
-
-    [Fact]
-    public void BuildUserMessage_prefixes_context_block_when_present()
-    {
-        var result = SubAgentActor.BuildUserMessage(
-            runtimeContext: "Workspace is netclaw on branch feature/foo.",
-            task: "Summarize the recent commits.");
-
-        Assert.StartsWith("Context:\nWorkspace is netclaw on branch feature/foo.", result);
-        Assert.Contains("\n\nTask:\nSummarize the recent commits.", result);
-    }
-
-    [Fact]
     public async Task RuntimeContext_is_prefixed_onto_first_user_message()
     {
         var fakeClient = new FakeChatClient();

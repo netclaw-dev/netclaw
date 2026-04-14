@@ -321,7 +321,7 @@ public sealed class SubAgentActor : ReceiveActor
     /// When runtime context is null or whitespace, returns the raw task string for backward
     /// compatibility with the pre-Context protocol.
     /// </summary>
-    internal static string BuildUserMessage(string? runtimeContext, string task)
+    private static string BuildUserMessage(string? runtimeContext, string task)
     {
         if (string.IsNullOrWhiteSpace(runtimeContext))
             return task;
