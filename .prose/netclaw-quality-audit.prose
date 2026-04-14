@@ -1,0 +1,622 @@
+# NetClaw Pre-OSS Code Quality Audit
+#
+# Fans out one specialist agent per standards group (A..G) in parallel,
+# each producing structured findings. Aggregator merges into a single
+# ranked markdown report + paste-ready tasks.md checklist.
+#
+# The report is the contract: the sibling fix program
+# (netclaw-quality-fix.prose) reads Section 9 of the output and
+# dispatches fix agents against it.
+#
+# Invocation:
+#   /open-prose:prose-compile .prose/netclaw-quality-audit.prose
+#   /open-prose:prose-run .prose/netclaw-quality-audit.prose \
+#     repo_path=/home/petabridge/repositories/stannardlabs/netclaw \
+#     strictness=normal
+#
+# Full rule definitions and design rationale live in
+# /home/petabridge/.claude/plans/reactive-beaming-sprout.md
+
+input repo_path: "Absolute path to the NetClaw repo"
+input strictness: "loose | normal | strict (default: normal)"
+
+# ---------------------------------------------------------------------
+# Shared agent: quality auditor
+# ---------------------------------------------------------------------
+# One template. Per-group prompts supply the rule list and search
+# strategy. Sonnet is fine for the mechanical Grep-confirm-classify
+# loop; opus is reserved for the aggregator.
+
+agent aggregator:
+  model: opus
+  prompt: """
+    You are the aggregator for the NetClaw pre-OSS code quality audit.
+    You receive per-group findings and produce a single ranked markdown
+    report that a sibling fix program can parse. Format discipline is
+    non-negotiable — downstream tools depend on exact section layout.
+  """
+
+agent quality_auditor:
+  model: sonnet
+  prompt: """
+    You are a C# code quality specialist auditing the NetClaw repository
+    at {repo_path}. You will be assigned exactly one standards group
+    with a rule list. For every rule:
+
+      1. Use Glob/Grep to find candidate violations.
+      2. Read each candidate to CONFIRM the hit — do not trust regex alone.
+      3. BEFORE reporting, check for a waiver. A candidate is NOT an
+         unacknowledged finding if any of these holds:
+           a) An inline `// WHY: <reason>` comment appears on the same
+              line as the violation OR on the 1..3 lines immediately
+              preceding it.
+           b) `.slopwatch/baseline.json` contains an entry whose
+              filePath matches the file and whose lineNumber is within
+              3 lines of the violation (slopwatch line numbers drift).
+           c) The rule text itself allows the pattern in this context
+              (e.g., D4 permits broad catches at top-level entry points).
+      4. Classify every confirmed hit into exactly one of:
+           - "unacknowledged" — reported as a hard finding
+           - "acknowledged"   — has // WHY:, counted only
+           - "baselined"      — in baseline.json, counted only
+
+    D5 and D6 are NO-WAIVER. Report them regardless of `// WHY:` state
+    (they are security-critical); still mark classification based on
+    waiver state but include the note "no-waiver rule — escalate".
+
+    Search discipline:
+      - ALWAYS skip: bin/, obj/, .prose/, .slopwatch/, feeds/skills/,
+        artifacts/, publish/, *.g.cs, **/GlobalUsings.g.cs,
+        node_modules/, evals/ fixtures.
+      - Restrict to src/**/*.cs (production + tests). Read
+        Directory.Build.props / Directory.Packages.props / *.csproj
+        only when a rule explicitly targets them.
+      - Use Grep file-type hints and glob filters to cut noise.
+      - Precision over recall. Mark confidence=low for borderline hits;
+        the aggregator routes them to a "Needs Human Review" appendix
+        rather than dropping them.
+
+    Per-rule cap: 10 reported unacknowledged hits. If a rule saturates,
+    append a single summary record noting saturation and approximate
+    total so the backlog generator can treat it as one refactor
+    campaign task rather than 50 individual items.
+
+    Emit a structured report with two sections:
+
+      ## Findings
+      For each confirmed hit, one row of the form:
+        - [<severity>] <rule_id> <file>:<line> (<classification>) —
+          <one-line fix hint>
+            ```csharp
+            <the offending 1-3 lines, trimmed>
+            ```
+          Confidence: <high|medium|low>
+          Waiver reason: <text if acknowledged/baselined, else "none">
+
+      ## Acknowledged Counts
+      Table of rule_id → count for every rule in this group, so the
+      aggregator can flag rules with an unusually high waiver rate
+      (signal that the rule is wrong, not the code).
+
+    Severity rubric:
+      - blocker: D5/D6 security violations, secrets, any "no-waiver" rule
+      - major:   D1 silent fallbacks, B1/B5 test discipline that masks
+                 bugs, F4/F5 wire-format breaks, C1/C4 determinism
+      - minor:   style, F7 XML docs, acknowledged-but-noisy rules
+
+    If strictness == "strict", promote every minor to major before
+    emitting. If "loose", demote every minor to informational and
+    drop from the main findings list.
+  """
+
+# ---------------------------------------------------------------------
+# Parallel fan-out: one session per group
+# ---------------------------------------------------------------------
+# on-fail: "continue" keeps the run alive if one group crashes — the
+# aggregator notes which groups did not run.
+
+parallel (on-fail: "continue"):
+
+  group_a = session: quality_auditor
+    prompt: """
+      AUDIT GROUP A — Value & Type Safety
+      (csharp-coding-standards, type-design-performance, CLAUDE.md)
+
+      Rules:
+        A1. Domain identifiers are value objects, not raw string/int
+            (SessionId, ChannelId, UserId, ToolName, GrantId, TenantId)
+        A2. Value objects never expose `implicit operator` to primitives
+        A3. Classes are `sealed` by default unless inheritance is a
+            design goal (abstract base classes excused)
+        A4. Immutable structs are `readonly struct`
+        A5. DTOs, messages, and events are `record` or
+            `readonly record struct`
+        A6. `<Nullable>enable</Nullable>` project-wide; no blanket
+            `#nullable disable`
+        A7. No null-forgiving `!` on a value object's `.Value` without
+            a guard
+        A8. No primitive obsession in method signatures (3+ consecutive
+            `string` params on a public method)
+
+      Regression anchors (MUST be detected — if missed, rules are broken):
+        A1 — src/Netclaw.Actors/Restart/RestartManifestStore.cs:12-14
+        A1 — src/Netclaw.Channels.Slack/SlackChannelOptions.cs:15,30,32
+        A1 — src/Netclaw.Channels/HeadlessChannel.cs:371
+        A7 — src/Netclaw.Configuration.Tests/Providers/OAuth/OAuthDeviceFlowServiceTests.cs:79
+        A7 — src/Netclaw.Daemon/Services/SchemaMigrator.cs:231
+        A7 — src/Netclaw.Daemon/Configuration/SlackChannelRegistrationExtensions.cs:54
+
+      Search strategy:
+        A1: Grep `public\\s+string\\s+(SessionId|ChannelId|UserId|ToolName|GrantId|TenantId)\\b`
+            in src/**/*.cs. Also fields named `_sessionId`, `_channelId`,
+            etc. typed string.
+        A2: Grep `implicit\\s+operator` — inspect hits inside records or
+            structs whose name ends in "Id", "Name", "Token", "Key", "Uri".
+        A3: Grep `^public\\s+class\\s+\\w+` in src/**/*.cs. Exclude
+            abstract classes, classes inheriting from `ActorBase` /
+            `ReceiveActor` / `UntypedActor` (Akka actors are routinely
+            non-sealed), and static `*Extensions` classes.
+        A4: Grep `public\\s+struct\\s+` — check declaration for `readonly`.
+            Also baseline grep `readonly struct` for context.
+        A5: For `Protocol/` and `Messages/` directories, any `class`
+            (not `record`) is a candidate. Read file to confirm it's
+            used as an Akka message.
+        A6: Grep `#nullable disable` in src/**/*.cs — report every
+            file-scoped hit. Also read Directory.Build.props to confirm
+            `<Nullable>enable</Nullable>` is set project-wide.
+        A7: Grep `\\.Value!` and `\\.\\w+!` where the preceding
+            identifier is a known value-object type.
+        A8: Multiline grep for `public\\s+(async\\s+)?\\w+\\s+\\w+\\(\\s*string\\s+\\w+,\\s*string\\s+\\w+,\\s*string\\s+\\w+`
+            (3 consecutive string params).
+
+      Waiver check and 10-per-rule cap apply.
+    """
+
+  group_b = session: quality_auditor
+    prompt: """
+      AUDIT GROUP B — Test Discipline
+      (akka-testing-patterns, testing-strategy, CLAUDE.md)
+
+      Rules:
+        B1. No Thread.Sleep / Task.Delay in test orchestration
+            (design smell — use AwaitAssertAsync or TestProbe acks)
+        B2. No trivial tests (constructor-assignment asserts,
+            string interpolation tests of the form "a/b", property
+            getters with no logic)
+        B3. No [Fact(Skip=...)] / [Ignore] / disabled tests
+        B4. Async state verified via AwaitAssertAsync or TestProbe acks
+        B5. No .Result / .Wait() in tests
+        B6. Actor tests inherit Akka.Hosting.TestKit, not a custom base
+        B7. External dependencies faked via ConfigureServices, not
+            stub actors
+
+      Regression anchors (EXPECT BASELINED — verify via .slopwatch/baseline.json):
+        B1 — src/Netclaw.Actors.Tests/Memory/SQLiteMemoryStoreTests.cs:263
+        B1 — src/Netclaw.Actors.Tests/Sessions/MemoryRecallScenarioTests.cs:318-322
+        B1 — src/Netclaw.Daemon.Tests/Gateway/DaemonRuntimeStatusServiceTests.cs:62
+
+      Search strategy:
+        B1: Grep `(Thread\\.Sleep|Task\\.Delay)` in src/**/*Tests/**/*.cs.
+            Expect heavy waiver activity.
+        B2: Grep `Assert\\.Equal\\(.*,\\s*new\\s+\\w+` — constructor-
+            assignment smell. Also find test methods <5 lines with a
+            single Assert line.
+        B3: Grep `\\[Fact\\(Skip\\s*=` and `\\[Ignore`.
+        B4: Count test classes with >3 [Fact] methods and ZERO uses of
+            AwaitAssertAsync or TestProbe — medium-confidence "probably
+            sync-tested" candidates.
+        B5: Grep `\\.Result\\b` and `\\.Wait\\(\\)` in tests.
+        B6: Grep `class\\s+\\w+Tests\\s*:` in tests; report any whose
+            parent is NOT `TestKit` / `TestAppBuilderTestKit`.
+        B7: `system.ActorOf(.*Stub|Fake|Mock)` patterns (low confidence).
+
+      Waiver check and 10-per-rule cap apply.
+    """
+
+  group_c = session: quality_auditor
+    prompt: """
+      AUDIT GROUP C — Time & Determinism
+      (CLAUDE.md, csharp-coding-standards)
+
+      Rules:
+        C1. Production never calls DateTime.UtcNow / DateTimeOffset.UtcNow
+            directly — use injected TimeProvider.GetUtcNow()
+        C2. DateTimeOffset preferred over DateTime
+        C3. Tests use FakeTimeProvider where time matters (not wall clock)
+        C4. No un-injected Random / Guid.NewGuid() on determinism-
+            sensitive paths (session ids, retry jitter, test setups)
+
+      Regression anchors (all are C3 — test files should use FakeTimeProvider):
+        C3 — src/Netclaw.Actors.Tests/Memory/SQLiteMemoryStoreTests.cs:37
+        C3 — src/Netclaw.Actors.Tests/Memory/MemoryPolicyGatesTests.cs:14
+        C3 — src/Netclaw.Actors.Tests/Channels/MessageSourceFactoryTests.cs:17
+
+      Search strategy:
+        C1: Grep `(DateTime|DateTimeOffset)\\.UtcNow` in src/**/*.cs.
+            - In src/*.Tests/**: candidates for C3, not C1
+            - In src/** (production): ALL hits are C1 unless the
+              enclosing class already has a TimeProvider field
+              (read to confirm)
+        C2: Grep `\\bDateTime\\b` in production src/**; exclude
+            `DateTimeOffset`. Minor severity; mostly informational.
+        C3: Count test files that import
+            Microsoft.Extensions.Time.Testing vs those that use
+            DateTimeOffset.UtcNow. Report mismatches.
+        C4: Grep `\\bnew\\s+Random\\(\\)` and `Guid\\.NewGuid\\(\\)`
+            in src/** (not tests). Match file/method names against
+            retry, backoff, jitter, session, id, token.
+
+      Waiver check and 10-per-rule cap apply.
+    """
+
+  group_d = session: quality_auditor
+    prompt: """
+      AUDIT GROUP D — Error Handling, Fallbacks & Security
+      (CLAUDE.md, akka-best-practices)
+
+      Rules:
+        D1. No silent fallbacks on misconfiguration or security-
+            relevant paths
+        D2. (waiverable) Bare catch (Exception) that swallows and
+            continues (OK with // WHY:)
+        D3. (waiverable) Empty catch blocks (OK with // WHY:)
+        D4. (waiverable) Narrow exception types in INTERIOR code.
+            Top-level CLI command handlers and daemon entry-point
+            handlers may catch Exception broadly if they log with
+            context and exit non-zero or rethrow.
+        D5. Default-deny on gateway/ACL/tool boundaries — no implicit
+            allow (NO WAIVER — security-critical)
+        D6. No `?? defaultValue` patterns on auth/grant/permission
+            paths (NO WAIVER — security-critical)
+
+      Regression anchors (MUST be detected):
+        D2 — src/Netclaw.Cli/Mcp/McpCommand.cs:365
+        D2 — src/Netclaw.Cli/Mcp/McpCommand.cs:432
+        D2 — src/Netclaw.Cli/Mcp/McpCommand.cs:504
+
+      Search strategy:
+        D1: Grep `\\?\\?|fallback|default` in files under
+            src/Netclaw.Configuration/, src/Netclaw.Security/,
+            src/Netclaw.Providers/. Read each hit — "silent fallback
+            on misconfig" means the code swallows a config error and
+            proceeds with a weaker posture. Confidence=medium at best.
+        D2/D3/D4: Grep `catch\\s*\\(\\s*Exception` in src/**/*.cs.
+            Read next 10 lines:
+              - empty body → D3
+              - body with no rethrow, no log, continues → D2
+              - immediate rethrow / logger.LogError then rethrow → OK
+            Cite the enclosing method name. Known hot spots
+            (McpCommand.cs:365/432/504) MUST surface.
+        D4: Same grep as D2/D3. Classify top-level CLI/daemon handlers
+            as acceptable; interior catches are findings.
+        D5: Grep `Allow\\s*=\\s*true`, `Default.*Allow`,
+            `return\\s+AccessDecision\\.Allow` in src/Netclaw.Security/,
+            Acl/, gateway files. BLOCKER severity. Report even if
+            `// WHY:` is present — D5 is no-waiver.
+        D6: Grep `\\?\\?` in src/Netclaw.Security/, Acl/, Grants/,
+            Auth/ paths. Same no-waiver rule as D5.
+
+      Waiver check applies to D1-D4. D5 and D6 are reported regardless
+      of waiver state (flag them clearly in the fix hint).
+    """
+
+  group_e = session: quality_auditor
+    prompt: """
+      AUDIT GROUP E — Concurrency
+      (csharp-concurrency-patterns, akka-best-practices)
+
+      Rules:
+        E1. (waiverable) `lock` on business logic (OK with // WHY:)
+        E2. No manual `new Thread()`; use Task or actor supervision
+        E3. Producer/consumer uses Akka.Streams (Source/Flow/Sink) OR
+            System.Threading.Channels.Channel<T>. No hand-rolled task
+            queues or unbounded work lists.
+        E4. No `.Select(async o => ...)` + Task.WhenAll chains without
+            bounded parallelism
+        E5. Supervision strategies defined on parents apply to children
+            (not self)
+        E6. Actors use Context.GetLogger(), not DI-injected ILogger<T>
+
+      CRITICAL — E3 is an ANTI-detection:
+        Akka.Streams is NetClaw's default producer/consumer pattern
+        (30+ files use Source/Flow/Sink). DO NOT report Akka.Streams
+        hits. DO NOT report Channel<T> hits — pre-approved sites are
+        SlackThreadBindingActor, SignalRSessionActor,
+        WebhookNotificationService.
+        E3 target: HAND-ROLLED alternatives only:
+          - ConcurrentQueue<T> used as a work queue with a dedicated
+            polling Task
+          - BlockingCollection<T> queues
+          - A long-running Task.Run that drains a work queue in a
+            `while(true)` loop
+          - Unbounded List<Task> + Task.WhenAll on a hot path
+        Mark all E3 candidates confidence=medium and always read context.
+
+      Search strategy:
+        E1: Grep `\\block\\s*\\(` in src/** (excluding tests). For each
+            hit, check 3 lines above for // WHY:. Report unwaived hits.
+        E2: Grep `new\\s+Thread\\s*\\(` in src/**.
+        E3: See above. Target hand-rolled alternatives only.
+        E4: Grep `\\.Select\\s*\\(\\s*(async\\s*)?\\w+\\s*=>\\s*` in
+            src/**. For each, check the next 3 lines for `Task\\.WhenAll`.
+        E5: Grep `OneForOneStrategy|AllForOneStrategy|SupervisorStrategy`
+            — check whether applied on parent or self. Low confidence.
+        E6: Grep `ILogger<` in files whose base classes include
+            ReceiveActor / UntypedActor / ActorBase — those should
+            use Context.GetLogger() instead.
+
+      If E3 + E4 unacknowledged count >20 after first run, paginate:
+      split this group rule-by-rule in a follow-up.
+
+      Waiver check and 10-per-rule cap apply.
+    """
+
+  group_f = session: quality_auditor
+    prompt: """
+      AUDIT GROUP F — Public Contract & Wire Compatibility
+      (csharp-api-design, serialization, CLAUDE.md)
+
+      SCOPE (CRITICAL): NetClaw ships as a hosted executable
+      (CLI + Daemon), NOT as a published NuGet library. "Public
+      contract" is ONLY:
+        1. Config file schema — netclaw-config.v1.schema.json,
+           src/Netclaw.Configuration types
+        2. Persistence / journal types — anything serialized long-term
+        3. Wire protocol messages — cross-process / persisted actor
+           messages (src/Netclaw.Actors/Protocol/**)
+        4. CLI command surface — src/Netclaw.Cli/**Command.cs, argument
+           parsing, exit codes
+        5. MCP tool schemas — src/Netclaw.Tools.*, MCP-related files
+        6. HTTP/SignalR daemon gateway — src/Netclaw.Daemon/Gateway/**
+      Ignore every other `public class`. F is NOT a "public API sprawl"
+      audit.
+
+      Rules:
+        F1. Async methods accept CancellationToken = default (contract
+            surface only)
+        F2. Public returns IReadOnlyList<T>, not List<T> (contract
+            surface only)
+        F3. DROPPED — ConfigureAwait(false) is not meaningful for a
+            hosted executable. DO NOT report.
+        F4. Schema-based serialization (Protobuf / MessagePack / STJ
+            source-gen) for persistence and wire — Newtonsoft only
+            where explicitly justified
+        F5. No polymorphic `$type` discriminators in wire format
+        F6. `additionalProperties: false` honored on all JSON schemas
+        F7. XML doc comments on CONTRACT types only (config records,
+            CLI commands, MCP tool schemas, protocol messages). NOT
+            required on every internal class.
+
+      Search strategy:
+        F1: Grep `public\\s+(async\\s+)?Task` in the six scope paths.
+            Check parameter list for CancellationToken.
+        F2: Grep `public\\s+\\w*List<\\w+>` in the six scope paths —
+            only report when it's a return type, not a field.
+        F4: Grep `Newtonsoft\\.Json` in src/**/*.cs. Any hit in
+            Protocol/, Persistence/, Journal/, persisted actor state
+            is a candidate.
+        F5: Grep `"\\$type"` and `TypeNameHandling` in JSON serializer
+            configurations.
+        F6: Find all *.schema.json under the repo. Confirm each
+            contains `additionalProperties`. Absent or `true` = finding.
+        F7: For each file in the six scope paths, grep `^\\s*public\\s+`
+            and check the preceding line for `///`. Missing XML doc on
+            a public contract type = finding. Severity=minor. Expect
+            many — mark saturated if >10.
+
+      F is the most subjective group. When in doubt, confidence=low.
+
+      Waiver check and 10-per-rule cap apply.
+    """
+
+  group_g = session: quality_auditor
+    prompt: """
+      AUDIT GROUP G — Project Structure & Slopwatch
+      (project-structure, slopwatch, CLAUDE.md)
+
+      Rules:
+        G1. Vertical slice organization under src/ (feature projects,
+            not layers)
+        G2. Central package management via Directory.Packages.props
+        G3. Nullable + TreatWarningsAsErrors via Directory.Build.props
+        G4. (waiverable) #pragma warning disable usage (OK with
+            adjacent // WHY:)
+        G5. No TODO-as-done comments or commented-out code
+        G6. (waiverable) Hardcoded magic values that should be config
+            (OK with // WHY:)
+        G7. dotnet slopwatch analyze passes against baseline (existing
+            baseline entries = acknowledged waivers)
+
+      Search strategy:
+        G1: List directories under src/. Expected vertical slices:
+            Netclaw.Actors, Netclaw.Channels, Netclaw.Channels.Slack,
+            Netclaw.Configuration, Netclaw.Providers, Netclaw.Security,
+            Netclaw.Search, Netclaw.Tools.Abstractions,
+            Netclaw.Tools.Generators, Netclaw.Cli, Netclaw.Daemon,
+            plus matching *.Tests. Any project named "Domain",
+            "Application", "Infrastructure", "Common", or "Core" is a
+            layered-architecture smell.
+        G2: Read Directory.Packages.props. If missing, report. If any
+            *.csproj has a `Version=` attribute on a PackageReference,
+            report.
+        G3: Read Directory.Build.props. Confirm `<Nullable>enable`
+            AND `<TreatWarningsAsErrors>true`. Missing = blocker.
+        G4: Grep `#pragma\\s+warning\\s+disable` in src/**/*.cs. Check
+            preceding 3 lines for // WHY:.
+        G5: Grep `// TODO` in src/**/*.cs. Also heuristic: 5+
+            consecutive comment-only lines inside a method body suggest
+            commented-out code.
+        G6: Subjective — flag magic numbers (>3-digit integers) and
+            suspicious string literals (URLs, paths) in configuration-
+            adjacent files. Low confidence.
+        G7: DO NOT run `dotnet slopwatch analyze` (this is a read-only
+            audit). Instead, read .slopwatch/baseline.json and list
+            existing entries as acknowledged. Informational only.
+
+      G1-G3 are project-level one-shots — report each at most once.
+
+      Waiver check and 10-per-rule cap apply.
+    """
+
+# ---------------------------------------------------------------------
+# Aggregate and rank
+# ---------------------------------------------------------------------
+# Opus for the aggregator: cross-references 7 group outputs, de-dupes
+# false positives, builds the ranked backlog, runs the regression gate.
+
+output audit_report = session: aggregator
+  prompt: """
+    You receive seven per-group reports (group_a..group_g); some may be
+    missing or errored (parallel ran with on-fail: continue).
+
+    Produce ONE markdown report with this EXACT structure. The fix
+    program parses Section 9 — format discipline is non-negotiable.
+
+    ---
+
+    # NetClaw Pre-OSS Code Quality Audit — <YYYY-MM-DD>
+
+    **Verdict:** PASS | WATCH | FAIL
+    **Strictness:** <loose | normal | strict>
+    **Groups run:** <comma-separated list, with "(FAILED)" for any that did not run>
+
+    ## 1. Regression Gate
+
+    The audit is only valid if these known 2026-04-14 hot spots are
+    detected. Any MISSED entry forces verdict=FAIL.
+
+    | Hot Spot | Group | Rule | Expected Status | Actual |
+    |----------|-------|------|-----------------|--------|
+    | SQLiteMemoryStoreTests.cs:37 | C | C3 | DETECTED | ? |
+    | MemoryPolicyGatesTests.cs:14 | C | C3 | DETECTED | ? |
+    | MessageSourceFactoryTests.cs:17 | C | C3 | DETECTED | ? |
+    | SQLiteMemoryStoreTests.cs:263 | B | B1 | DETECTED (baselined OK) | ? |
+    | MemoryRecallScenarioTests.cs:318-322 | B | B1 | DETECTED (baselined OK) | ? |
+    | DaemonRuntimeStatusServiceTests.cs:62 | B | B1 | DETECTED (baselined OK) | ? |
+    | RestartManifestStore.cs:12-14 | A | A1 | DETECTED | ? |
+    | SlackChannelOptions.cs:15,30,32 | A | A1 | DETECTED | ? |
+    | HeadlessChannel.cs:371 | A | A1 | DETECTED | ? |
+    | OAuthDeviceFlowServiceTests.cs:79 | A | A7 | DETECTED | ? |
+    | SchemaMigrator.cs:231 | A | A7 | DETECTED | ? |
+    | SlackChannelRegistrationExtensions.cs:54 | A | A7 | DETECTED | ? |
+    | McpCommand.cs:365 | D | D2 | DETECTED | ? |
+    | McpCommand.cs:432 | D | D2 | DETECTED | ? |
+    | McpCommand.cs:504 | D | D2 | DETECTED | ? |
+
+    ## 2. Executive Summary
+
+    | Group | Unacknowledged | Acknowledged | Baselined | Top Severity |
+    |-------|---------------:|-------------:|----------:|--------------|
+    | A     |                |              |           |              |
+    | B     |                |              |           |              |
+    | C     |                |              |           |              |
+    | D     |                |              |           |              |
+    | E     |                |              |           |              |
+    | F     |                |              |           |              |
+    | G     |                |              |           |              |
+    | **TOTAL** |            |              |           |              |
+
+    ## 3. Top-20 Ranked Fix Backlog
+
+    Ranking key:
+      1. severity (blocker → major → minor)
+      2. blast radius (multi-group hits first)
+      3. high-value path (src/Netclaw.Security/, src/Netclaw.Actors/Protocol/,
+         src/Netclaw.Configuration/)
+      4. alphabetical by file path
+
+    1. **[severity] rule_id** file:line — fix hint
+    2. ...
+
+    ## 4. Per-Group Findings
+
+    ### Group A — Value & Type Safety
+    (up to 10 findings per rule, sorted by severity then file path)
+
+    ### Group B — Test Discipline
+    ...
+
+    ### Group C — Time & Determinism
+    ...
+
+    ### Group D — Error Handling, Fallbacks & Security
+    ...
+
+    ### Group E — Concurrency
+    ...
+
+    ### Group F — Public Contract & Wire Compatibility
+    ...
+
+    ### Group G — Project Structure & Slopwatch
+    ...
+
+    ## 5. Waiver Rate Observations
+
+    Rules with acknowledged_count > 5 indicate the rule may be wrong:
+
+    - <rule_id>: <count> acknowledged hits — <suggestion>
+
+    ## 6. Needs Human Review (low confidence)
+
+    Low-confidence findings without corroboration from a second group.
+    These are NOT in the main backlog; the human decides whether to
+    action them.
+
+    - <rule_id> file:line — <reason>
+
+    ## 7. Groups That Did Not Run
+
+    (empty if all seven completed)
+
+    - <group_id>: <error summary>
+
+    ## 8. tasks.md Checklist
+
+    **This section is the contract read by netclaw-quality-fix.prose.**
+    Format every row EXACTLY as:
+
+      - [ ] <rule_id> <repo-relative-path>:<line> — <fix hint>
+
+    For saturated rules (>10 hits), emit a single campaign row:
+
+      - [ ] Campaign <rule_id> — <description> (~<N> hits)
+
+    No other row formats. No blank lines inside the list. The fix
+    program's drift check depends on this format.
+
+    Example rows:
+      - [ ] A1 src/Netclaw.Actors/Restart/RestartManifestStore.cs:12 — introduce SessionId value object
+      - [ ] D2 src/Netclaw.Cli/Mcp/McpCommand.cs:365 — narrow to FormatException or add // WHY:
+      - [ ] Campaign F7 — XML docs on contract types (~42 hits)
+
+    ---
+
+    Steps:
+
+      1. Parse each group output. Record missing or errored groups.
+      2. Build the Regression Gate table. For each expected hot spot,
+         mark DETECTED (with the actual classification) or MISSED. Any
+         MISSED immediately pins verdict=FAIL.
+      3. Build the Executive Summary.
+      4. Cross-reference: if two groups flag the same file/line,
+         merge and elevate severity by one step.
+      5. Demote confidence=low findings without corroboration to
+         Section 6 (Needs Human Review), NOT the main backlog.
+      6. Build the top-20 ranked backlog using the key above.
+      7. Emit per-group sections with up to 10 findings per rule,
+         plus any saturation summary rows.
+      8. Flag rules with acknowledged_count > 5 in Section 5.
+      9. Emit Section 8 tasks.md checklist in the strict format above.
+          Saturated rules become campaign rows.
+     10. Pick the final verdict:
+          - PASS:  zero blockers, zero MISSED
+          - WATCH: zero blockers, zero MISSED, but >20 major findings
+          - FAIL:  any blocker OR any MISSED hot spot
+         Put the verdict at the very top of the report.
+
+    Return the full markdown as your binding content. Do NOT write
+    files from inside the aggregator — the VM handles the binding
+    write to .prose/runs/<run-id>/bindings/audit_report.md.
+  """
+  context: { group_a, group_b, group_c, group_d, group_e, group_f, group_g }
