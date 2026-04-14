@@ -37,18 +37,27 @@ contract that the drain-on-shutdown follow-up will also reuse.
   `ReportToChannel`/`ReportToThreadTs`. Reminders set without an explicit
   target are persisted with `ReportToChannel = null` and a new `SessionId`
   + `OriginChannelType` pair.
-- **NEW**: `ISessionTransportReanimator` + `SessionTransportRegistry`
-  abstractions. Each channel (`Netclaw.Channels.Slack`,
-  `Netclaw.Channels.Tui`, `Netclaw.Channels.SignalR`) registers a reanimator
-  that can idempotently materialize the binding for a given `SessionId`.
-  Slack has real reanimation work (thread binding re-materialization via a
-  new `SlackGatewayActor.EnsureThreadBinding` message). TUI and SignalR are
-  no-op / best-effort for MVP.
+- **NEW**: A shared protocol message
+  `DeliverTrustedSessionTurn(SessionId, Content, MessageSource)` in
+  `Netclaw.Actors.Protocol`. Channels with a durable server-side transport
+  binding (Slack) add one handler on their gateway that runs the same
+  lookup-or-create chain as the existing inbound handler, but tagged as
+  trusted so the channel-level ACL check is bypassed (reminder audience is
+  already validated at minting time by `reminder-audience-authorization`).
+  No new interface or registry — reminder dispatch is a small switch on
+  `OriginChannelType`, routing Slack reminders to the Slack gateway and
+  non-Slack reminders directly to the session manager.
 - **NEW**: Reminder delivery re-uses the existing `SendUserMessage` ingress
   path. A new optional `ReminderId` carrier on `MessageSource` (ephemeral)
   and `TurnRecorded.SourceReminderId` (persisted, ProtoMember 5) provide
   idempotency for redelivery. `LlmSessionActor` dedups on the recovered
   `ProcessedReminderIds` set before accepting the message.
+- **NEW**: Optional `ChannelInput.AckTarget` (`IActorRef?`) propagated
+  through `ChannelPipeline.MapToCommand` as the `Tell` sender. Regular
+  inbound messages leave it null → unchanged fire-and-forget semantics.
+  Trusted deliveries set it → the session's existing `TryReplyAck` fires
+  naturally back to the reminder dispatcher, no session-side special
+  casing.
 - **CHANGED**: `ReminderManagerActor.HandleReminderFiredAsync` stops acking
   the Akka.Reminders envelope eagerly for Mode B. The envelope is held open
   until the target session replies `CommandAck` (via existing
@@ -88,32 +97,38 @@ warrant a new capability spec.
 ### Modified Capabilities
 
 - `netclaw-scheduling` — add Mode B (session check-back) scenarios, the
-  ack-gated envelope delivery contract, dedup semantics, the transport
-  reanimation contract, and a delivery-guarantees subsection.
+  ack-gated envelope delivery contract, dedup semantics, and a
+  delivery-guarantees subsection.
 - `netclaw-session` — add handling for reminder-originated `SendUserMessage`
   commands, `TurnRecorded.SourceReminderId` persistence, and the
   `ProcessedReminderIds` dedup ledger.
-- `netclaw-input-adapters` — add the reanimation contract every inbound
-  channel must honor (`ISessionTransportReanimator`), plus per-channel
-  expectations for Slack (real work), TUI (no-op), and SignalR
-  (best-effort).
+- `netclaw-input-adapters` — Mode A/B distinction on the internal timer
+  adapter's entity key and session lifecycle, plus the
+  `DeliverTrustedSessionTurn` shared protocol message contract and the
+  `ChannelInput.AckTarget` extension that lets session-side ack replies
+  flow back through the pipeline to the reminder dispatcher.
 
 ## Impact
 
 **Source code**:
 - `src/Netclaw.Actors/Reminders/` — `SetReminderTool`, `ReminderProtocol`,
   `ReminderExecutionActor`, `ReminderManagerActor`
+- `src/Netclaw.Actors/Protocol/Commands.cs` — new
+  `DeliverTrustedSessionTurn` shared protocol message
 - `src/Netclaw.Actors/Protocol/Events.cs` — `TurnRecorded.SourceReminderId`
-  (ProtoMember 5; additive, backward-compatible)
+  (ProtoMember 5; additive)
 - `src/Netclaw.Actors/Channels/MessageSource.cs` — ephemeral
   `ReminderId` field
-- `src/Netclaw.Actors/Channels/ISessionTransportReanimator.cs` **(new)**
+- `src/Netclaw.Actors/Channels/ChannelInput.cs` — optional `AckTarget`
+  field
+- `src/Netclaw.Actors/Channels/ChannelPipeline.cs` — propagate
+  `ChannelInput.AckTarget` as the sender on the session-manager `Tell` in
+  `MapToCommand`
 - `src/Netclaw.Actors/Sessions/` — `SessionState` dedup set,
   `LlmSessionActor` handler dedup pre-check
-- `src/Netclaw.Channels.Slack/` — `SlackGatewayActor.EnsureThreadBinding`,
-  `SlackSessionTransportReanimator`
-- `src/Netclaw.Channels.Tui/` + `src/Netclaw.Channels.SignalR/` —
-  reanimators (mostly no-op)
+- `src/Netclaw.Channels.Slack/SlackGatewayActor.cs` — new
+  `Receive<DeliverTrustedSessionTurn>` handler sharing the lookup-or-create
+  chain with the existing `SlackInboundMessage` handler
 - `src/Netclaw.Configuration/ReminderConfig.cs` + `netclaw-config.v1.schema.json`
 
 **Dependencies**:

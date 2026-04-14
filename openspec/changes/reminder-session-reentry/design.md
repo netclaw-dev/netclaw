@@ -137,40 +137,67 @@ set reconstructs naturally on recovery with zero new replay logic. Additive
 protobuf evolution is backward-compatible with any existing journals (Netclaw
 has none yet, but the hygiene is free).
 
-### D3. `ISessionTransportReanimator` registry, not per-reminder logic
+### D3. Route Mode B through the channel's existing inbound path; no new abstraction
 
-**Decision**: Introduce an `ISessionTransportReanimator` interface with one
-method `Task EnsureBindingAsync(SessionId, CancellationToken)`, plus a
-`SessionTransportRegistry` singleton mapping `ChannelType → reanimator`. Each
-channel project registers its implementation via DI at host startup.
-`ReminderExecutionActor` in Mode B looks up the reanimator by
-`ReminderDefinition.OriginChannelType` and awaits its ensure call before
-dispatching the `SendUserMessage`.
+**Decision**: Mode B delivers reminders by routing them through each
+channel's existing inbound handling path — the same path that wakes up
+passivated sessions every time a real user message arrives. A shared
+protocol message `DeliverTrustedSessionTurn(SessionId, Content,
+MessageSource)` in `Netclaw.Actors.Protocol` is the channel-agnostic
+envelope. Each channel with a durable server-side transport binding
+(Slack) adds one handler on its gateway that parses the SessionId and runs
+the same lookup-or-create chain as the inbound-event handler, tagging the
+ChannelInput as trusted so `SlackAclPolicy.EvaluateInbound` is bypassed.
+Channels without durable server-side bindings (TUI, SignalR) do not need
+a gateway handler at all: the reminder dispatcher tells the session
+manager directly, the session processes the turn, the client sees it on
+next connect.
+
+A tiny `ChannelInput.AckTarget` extension (optional `IActorRef`,
+propagated through `ChannelPipeline.MapToCommand` as the `Tell` sender)
+lets the session's existing `TryReplyAck()` reply directly to the
+reminder dispatcher. Regular inbound messages leave `AckTarget = null`,
+`MapToCommand` falls back to `ActorRefs.NoSender`, and the existing
+fire-and-forget user-message semantics are preserved exactly.
 
 **Alternatives considered**:
 
-- *Hardcoded Slack-only path in `ReminderExecutionActor`.* Rejected — the
-  user explicitly chose broad scope upfront. Slack-only would leave TUI and
-  SignalR reminders silently broken in the same way.
-- *Session actor discovers and reactivates its own transport via a
-  reverse-lookup on a persistent `TransportMetadata` event.* Rejected as too
-  invasive. Would require every inbound path to stamp its metadata on the
-  session, which pollutes `LlmSessionActor`'s contract with transport
-  specifics.
-- *`ReminderExecutionActor` parses `SessionId` format heuristically to pick a
-  transport.* Rejected — couples the execution actor to the session-ID naming
-  conventions of every channel. Using `OriginChannelType` captured at set
-  time is explicit.
+- *`ISessionTransportReanimator` interface + `SessionTransportRegistry`.*
+  Rejected after review. The inbound path already handles lookup-or-create
+  of binding actors, subscribes them to session output, and triggers
+  Akka.Persistence rehydration as natural side effects. Introducing a
+  parallel "ensure binding" abstraction duplicates well-tested machinery
+  behind ceremony. Also split the delivery into two operations (ensure
+  binding, then deliver) that had to be coordinated, where the existing
+  inbound path is atomic.
+- *Synthesizing a fake `SlackInboundMessage` and telling the gateway.*
+  Rejected — `SlackInboundMessage` carries fields that don't apply to a
+  trusted delivery (userId, slack event ID) and goes through inbound dedup
+  and ACL checks that aren't meaningful for a reminder. A dedicated
+  handler is cleaner than lying with a synthetic payload.
+- *Subscriber-based ack (reminder dispatcher joins the session's output
+  stream and watches for a "turn started" event).* Rejected — fragile
+  correlation (which turn is which?) and adds a new output event type just
+  for ack. `ChannelInput.AckTarget` extension is one-field-and-one-line
+  and works for every channel uniformly.
 
-**Rationale**: Cleanly separates "wake up the output path" (transport
-concern) from "deposit a new turn" (session concern). The contract is small
-enough to be trivially implemented as a no-op by channels without durable
-outbound (TUI) and best-effort by channels with transient clients (SignalR).
-Slack carries the real work: a new idempotent
-`SlackGatewayActor.EnsureThreadBinding` message that looks up or creates the
-conversation → thread binding actor chain, reusing the existing binding
-materialization code. The same infrastructure is what the drain-on-shutdown
-follow-up will call on startup to reactivate sessions.
+**Rationale**: This is the pattern the user pushed toward: "routing the
+message through the channel infrastructure and having that reactivate the
+session, even though there wasn't really a user message there." The Slack
+inbound path already does exactly what's needed — lookup-or-create the
+conversation actor, lookup-or-create the thread binding, materialize the
+pipeline, subscribe to session output, deliver the payload. Every
+long-running turn already exercises it in both directions and it is the
+best-tested code path in the channel layer. Reusing it verbatim (with one
+small deviation: skip ACL because audience is already validated) is the
+minimum change that gets reminder re-entry working correctly.
+
+For channels without durable server-side bindings the simplest thing is
+the right thing: tell the session manager directly. No transport to
+reactivate means no reanimation work. The reminder dispatcher has a small
+switch on `OriginChannelType` — honest code reflecting that Slack and
+non-Slack channels actually behave differently, not hidden behind a
+uniform interface that would be a no-op for two of three implementations.
 
 ### D4. Envelope ack gated on session ack, delegated to execution actor
 
@@ -246,8 +273,8 @@ order-of-magnitude negligible compared to transcript size. Follow-up can
 bound to `MaxDeliveryWindow × 2` entries if needed. Not a blocker.
 
 **[R4] Mode B output "invisible" on disconnected TUI or SignalR clients** →
-Mitigation: the reanimator no-ops when no client is connected; reminder
-turns still persist into session state and are visible on reconnect.
+Mitigation: direct session-manager delivery persists the turn into session
+state, which is the authoritative record; clients see it on reconnect.
 Documented in the spec under "delivery to absent transport." Accepted
 trade-off.
 
@@ -257,21 +284,21 @@ redelivery will not be in the dedup set and will re-process → Mitigation:
 this is the *desired* behavior. Failed turns should retry. Add a test case
 proving this.
 
-**[R6] Reanimator race** — a reminder fires for a session that is
-concurrently being re-created by an inbound event. Two actors race to
-create the same binding → Mitigation: `EnsureThreadBinding` is idempotent
-by contract. The underlying gateway/binding actor creation path is already
-idempotent (`GenericChildPerEntityParent` routes by ID). Test case: two
-`EnsureThreadBinding` calls in parallel must produce exactly one binding
-actor.
-
-**[R7] Audience escalation via reminder re-entry** — a reminder could be
+**[R6] Audience escalation via reminder re-entry** — a reminder could be
 created in a low-audience session and then deliver into a higher-audience
 context if the session's effective audience shifts → Mitigation: the
 reminder's stored audience (enforced by the archived
 `reminder-audience-authorization` change) is used to construct the
 `MessageSource`, not the live session's current audience. Validated by a
 test case.
+
+**[R7] Race between reminder delivery and concurrent inbound** — a
+reminder fires for a session while a real inbound event is also
+materializing the same thread binding → Mitigation: the existing
+conversation and thread binding actor lookup-or-create chain is already
+idempotent; Akka actor supervision guarantees a single child per entity
+key. Two parallel attempts to materialize the same binding produce exactly
+one actor. No new race surface is introduced.
 
 ## Actor Topology (after this change)
 
@@ -280,22 +307,58 @@ ReminderManagerActor (singleton)
  └── ReminderExecutionActor (child-per-execution, short-lived)
        ├── Mode A: ISessionPipeline.CreateAsync(reminder/{id}/{ts}) — unchanged
        └── Mode B:
-             1. SessionTransportRegistry.LookUp(OriginChannelType)
-             2. reanimator.EnsureBindingAsync(originalSessionId)
-                  └── (Slack) SlackGatewayActor ! EnsureThreadBinding
-                         └── existing SlackConversationActor / SlackThreadBindingActor
-             3. sessionManager.Ask<CommandAck>(SendUserMessage{
-                   SessionId = originalSessionId,
-                   Source = MessageSource{ ReminderId = "{id}:{fireTs}", ChannelType = OriginChannelType, Audience = storedAudience }
-                })
-             4. On ack: Context.Parent ! AckReminderEnvelope(envelope)
-                On timeout/nack/failure: Context.Parent ! ReminderExecutionCompleted(failure, ackEnvelope=false)
+             switch (_definition.OriginChannelType):
+
+               case ChannelType.Slack:
+                 _slackGateway.Ask<CommandAck>(new DeliverTrustedSessionTurn {
+                     SessionId = originalSessionId,
+                     Content = BuildPrompt(_definition),
+                     Source = new MessageSource {
+                         ReminderId = "{id}:{fireTs}",
+                         ChannelType = Slack,
+                         Audience = storedAudience,
+                         Principal = VerifiedAutomation,
+                         Provenance = {
+                             SourceKind = "reminder",
+                             TransportAuthenticity = LocalProcess,
+                             PayloadTaint = Trusted
+                         }
+                     }
+                 })
+                   │
+                   ▼
+                 SlackGatewayActor handles DeliverTrustedSessionTurn:
+                   parses SessionId → (channelId, threadTs)
+                   runs existing lookup-or-create chain
+                     → SlackConversationActor (by channelId)
+                       → SlackThreadBindingActor (by threadTs)
+                         → materializes pipeline, joins session output
+                         → offers ChannelInput with AckTarget = dispatcher
+                   session.HandleIncomingUserMessage → TryReplyAck
+                     → reply flows through pipeline sender chain
+                     → reminder dispatcher receives CommandAck
+
+               case ChannelType.Tui, SignalR, null:
+                 _sessionManager.Ask<CommandAck>(new SendUserMessage {
+                     SessionId = originalSessionId,
+                     Content = BuildPrompt(_definition),
+                     Source = (same MessageSource as above)
+                 })
+                   │
+                   ▼
+                 LlmSessionActor rehydrates if idle, processes turn,
+                 output persists into session state
+
+             On CommandAck: Context.Parent ! AckReminderEnvelope(envelope)
+             On timeout/nack: Context.Parent ! ReminderExecutionCompleted(failure, ackEnvelope=false)
 ```
 
-The original `SlackThreadBindingActor` — whether freshly created by
-`EnsureThreadBinding` or already alive — is a normal session subscriber and
-receives the reminder turn's streaming output through the existing
-`JoinSession` → `SessionOutput` fan-out. No new output plumbing.
+For Slack, the freshly materialized (or already-live)
+`SlackThreadBindingActor` is a normal session subscriber — it receives the
+reminder turn's streaming output through the existing `JoinSession` →
+`SessionOutput` fan-out and posts the response back to Slack via its
+existing output sink. For TUI/SignalR, the turn persists into session state
+directly; no output plumbing is needed at delivery time.
 
 ## Migration Plan
 

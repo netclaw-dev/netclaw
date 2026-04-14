@@ -67,11 +67,17 @@ Task execution results SHALL be delivered according to the execution mode.
   notification target stored on the reminder definition. Notification targets
   SHALL always be canonical identifiers produced by
   `IReminderTargetResolver` (never raw LLM-supplied strings).
-- **Mode B** (session check-back): the reminder turn is processed inside the
-  originating session; output SHALL flow back through the session's original
-  transport binding, reactivated on demand via an
-  `ISessionTransportReanimator` keyed by `OriginChannelType`. No separate
-  "post to a channel" step is performed.
+- **Mode B** (session check-back): the reminder turn is routed through the
+  originating channel's existing inbound handling path. For channels with a
+  durable server-side transport binding (Slack), the reminder dispatcher
+  tells the channel gateway a `DeliverTrustedSessionTurn` message, which
+  the gateway handles by running the same lookup-or-create chain as its
+  inbound-event handler (conversation actor → thread binding → pipeline →
+  session manager) with the channel-level ACL check bypassed because the
+  reminder's audience is already validated. For channels without durable
+  server-side bindings (TUI, SignalR), the reminder dispatcher tells the
+  session manager directly and the turn persists into session state;
+  clients see it on next connect.
 
 Both modes SHALL support a silent-unless-notable mode where routine results
 are suppressed and only notable findings are posted (Mode A) or delivered as
@@ -85,18 +91,35 @@ a new turn (Mode B).
 - **THEN** the results are posted to the configured Slack channel via the
   reminder's isolated execution session
 
-#### Scenario: Mode B results flow back through originating transport
+#### Scenario: Mode B Slack delivery reuses the channel's inbound path
 
 - **GIVEN** a Mode B reminder created from a Slack thread session whose
-  thread binding has since passivated
+  thread binding may or may not be currently materialized
 - **WHEN** the reminder fires
-- **THEN** the `SlackSessionTransportReanimator` is invoked to re-materialize
-  the thread binding for the originating `{channelId}/{threadTs}` pair
-- **AND** the reminder turn's streaming output is delivered to the
-  reactivated Slack thread binding via the existing `JoinSession` subscriber
-  mechanism
-- **AND** the user sees the reminder response appear in the original Slack
-  thread
+- **THEN** the reminder dispatcher tells `SlackGatewayActor` a
+  `DeliverTrustedSessionTurn` message carrying the originating `SessionId`,
+  the reminder prompt, and a trusted `MessageSource`
+- **AND** the gateway parses the `SessionId` into `(channelId, threadTs)`
+  and runs the same conversation/thread lookup-or-create chain used for
+  inbound Slack events
+- **AND** the resulting `SlackThreadBindingActor` is live and subscribed
+  to the session's output stream
+- **AND** the reminder turn is delivered through the normal `ChannelInput`
+  → `ChannelPipeline` → `SendUserMessage` → session pipeline
+- **AND** the session's streaming response is posted back to the original
+  Slack thread via the binding's existing output sink
+
+#### Scenario: Mode B non-Slack delivery goes directly to the session manager
+
+- **GIVEN** a Mode B reminder created from a TUI or SignalR session with
+  `OriginChannelType` set accordingly
+- **WHEN** the reminder fires
+- **THEN** the reminder dispatcher tells the session manager a
+  `SendUserMessage` directly (no channel gateway involvement)
+- **AND** the session processes the turn
+- **AND** the `TurnRecorded` event persists into the session journal
+- **AND** a connected TUI or SignalR client receives the streaming output
+  if one is attached, or sees the persisted turn on next connect
 
 #### Scenario: Silent-unless-notable suppresses routine results
 
@@ -255,50 +278,6 @@ SHALL reply `CommandAck` without processing a duplicate.
 - **THEN** the session replies `CommandAck` without processing the reminder
   again
 - **AND** the execution actor tells the manager to ack the envelope
-
-### Requirement: Transport reanimation contract for Mode B
-
-The host SHALL register an `ISessionTransportReanimator` implementation for
-every channel type that supports Mode B. The reanimator contract SHALL be
-idempotent: multiple concurrent `EnsureBindingAsync` calls for the same
-`SessionId` SHALL produce exactly one live binding actor. Mode B execution
-SHALL invoke the reanimator (looked up via `SessionTransportRegistry` keyed
-by `OriginChannelType`) before dispatching the `SendUserMessage`.
-
-Reanimators for channels without durable outbound state (e.g., TUI) MAY
-succeed as no-ops; reminder turns still persist into session state and
-appear when the user reconnects.
-
-#### Scenario: Slack reanimator re-materializes thread binding for passivated session
-
-- **GIVEN** a Mode B reminder with `OriginChannelType = Slack` and
-  `SessionId = "C0123ABC/1234567890.123456"`
-- **AND** the `SlackThreadBindingActor` for that thread is not currently
-  materialized
-- **WHEN** the execution actor calls
-  `reanimator.EnsureBindingAsync(sessionId)`
-- **THEN** the `SlackGatewayActor` receives an `EnsureThreadBinding` message
-  and creates the conversation actor (if needed) and the thread binding
-  actor (if needed)
-- **AND** the call returns successfully after the binding is live and
-  subscribed to the session's output stream
-
-#### Scenario: Idempotent reanimation under concurrent calls
-
-- **GIVEN** two parallel `EnsureBindingAsync` calls for the same
-  `SessionId`
-- **WHEN** both calls reach the `SlackGatewayActor`
-- **THEN** exactly one `SlackThreadBindingActor` exists for the thread
-- **AND** both calls complete successfully
-
-#### Scenario: TUI reanimator is a no-op
-
-- **GIVEN** a Mode B reminder with `OriginChannelType = Tui`
-- **WHEN** the execution actor calls `reanimator.EnsureBindingAsync(sessionId)`
-- **THEN** the call completes successfully without materializing any
-  durable outbound binding
-- **AND** the reminder turn is still delivered to the session actor and
-  persisted normally
 
 ### Requirement: Reminder delivery guarantees
 
