@@ -966,8 +966,10 @@ be promoted to milestones in future planning sessions.
 
 These items build on the `SubAgentActor` infrastructure landed in PR #102.
 
-- **Disk-based subagent definitions** — `~/.netclaw/agents/{name}.json` with
-  system prompt, tool allowlist, model role, timeout. Near-term post-MVP.
+- **Disk-based subagent definitions** — `~/.netclaw/agents/{name}.md` with YAML
+  frontmatter (name, description, tools, modelRole, timeoutSeconds, visibility,
+  emitStructuredFindings) and the markdown body as the system prompt. Shipped
+  in #226 (JSON+MD pair) and migrated to single-file frontmatter in #652.
   Prerequisite for `spawn_agent` tool and subagent discovery context layer.
 - **`spawn_agent` tool** — User-facing delegation tool. Operator or frontline
   model can spawn named subagents for specialized tasks. Prerequisite:
