@@ -402,6 +402,10 @@ FodyWeavers.xsd
 # JetBrains Rider
 *.sln.iml
 
+# Verify snapshot test received files (only verified.txt is committed)
+*.received.txt
+*.received.json
+
 # RALPH flight recorder (ephemeral)
 .ralph/
 
