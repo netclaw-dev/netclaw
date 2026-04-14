@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Netclaw.Cli.Json;
 using Netclaw.Configuration;
 
 namespace Netclaw.Cli.Doctor;
@@ -24,7 +25,7 @@ public sealed class InboundWebhookRoutesDoctorCheck(NetclawPaths paths) : IDocto
             var routeName = Path.GetFileNameWithoutExtension(filePath);
             try
             {
-                var route = JsonSerializer.Deserialize<WebhookRouteConfig>(File.ReadAllText(filePath), DoctorJsonConfigReader.JsonOptions)
+                var route = JsonSerializer.Deserialize<WebhookRouteConfig>(File.ReadAllText(filePath), JsonDefaults.ConfigRead)
                     ?? throw new InvalidOperationException($"Webhook route '{routeName}' could not be parsed.");
 
                 ValidateRoute(routeName, route);

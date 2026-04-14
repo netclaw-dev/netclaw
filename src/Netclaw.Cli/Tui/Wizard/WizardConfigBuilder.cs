@@ -1,6 +1,6 @@
 using System.Text.Json;
-using System.Text.Json.Serialization;
 using Netclaw.Cli.Config;
+using Netclaw.Cli.Json;
 using Netclaw.Cli.Mcp;
 using Netclaw.Configuration;
 using Netclaw.Configuration.Secrets;
@@ -44,10 +44,8 @@ public sealed class WizardConfigBuilder
         _paths.EnsureDirectoriesExist();
         var config = BuildConfigDictionary();
 
-        var jsonOptions = new JsonSerializerOptions { WriteIndented = true };
-        jsonOptions.Converters.Add(new JsonStringEnumConverter());
         File.WriteAllText(_paths.NetclawConfigPath,
-            JsonSerializer.Serialize(config, jsonOptions));
+            JsonSerializer.Serialize(config, JsonDefaults.ConfigFile));
     }
 
     /// <summary>
@@ -275,10 +273,8 @@ public sealed class WizardSecretsBuilder
         if (_secrets.Count == 0)
             return;
 
-        var jsonOptions = new JsonSerializerOptions { WriteIndented = true };
-        jsonOptions.Converters.Add(new JsonStringEnumConverter());
         SecretsFileWriter.Write(_paths.SecretsPath, _secrets,
-            options: jsonOptions, protector: SensitiveStringTypeConverter.Protector);
+            options: JsonDefaults.ConfigFile, protector: SensitiveStringTypeConverter.Protector);
     }
 }
 

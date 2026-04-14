@@ -1,6 +1,6 @@
 using System.Text.Json;
-using System.Text.Json.Serialization;
 using Netclaw.Cli.Config;
+using Netclaw.Cli.Json;
 using Netclaw.Cli.Provider;
 using Netclaw.Configuration;
 using Netclaw.Providers;
@@ -12,10 +12,6 @@ namespace Netclaw.Cli.Model;
 /// </summary>
 internal static class ModelCommand
 {
-    private static readonly JsonSerializerOptions DeserializeOptions = new()
-    {
-        Converters = { new JsonStringEnumConverter() }
-    };
     public static async Task<int> RunAsync(
         string[] args, NetclawPaths paths,
         IProviderProbe? probe = null, TextWriter? output = null)
@@ -277,7 +273,7 @@ internal static class ModelCommand
         if (!doc.RootElement.TryGetProperty("Models", out var modelsElement))
             return null;
 
-        return JsonSerializer.Deserialize<ModelSelection>(modelsElement.GetRawText(), DeserializeOptions);
+        return JsonSerializer.Deserialize<ModelSelection>(modelsElement.GetRawText(), JsonDefaults.EnumAware);
     }
 
     private static int WriteHelp(TextWriter writer)

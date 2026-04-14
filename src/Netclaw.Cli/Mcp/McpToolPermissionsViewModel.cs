@@ -1,7 +1,7 @@
 using System.Text.Json;
-using System.Text.Json.Serialization;
 using Netclaw.Cli.Config;
 using Netclaw.Cli.Daemon;
+using Netclaw.Cli.Json;
 using Netclaw.Configuration;
 using R3;
 using Termina.Reactive;
@@ -18,11 +18,6 @@ public enum ToolPermissionsState
 
 public sealed class McpToolPermissionsViewModel : ReactiveViewModel
 {
-    private static readonly JsonSerializerOptions EnumJsonOptions = new()
-    {
-        Converters = { new JsonStringEnumConverter() }
-    };
-
     private readonly NetclawPaths _paths;
     private readonly DaemonApi _daemonApi;
 
@@ -462,7 +457,7 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
             if (!doc.RootElement.TryGetProperty("Tools", out var toolsSection))
                 return new ToolConfig();
 
-            return JsonSerializer.Deserialize<ToolConfig>(toolsSection.GetRawText(), EnumJsonOptions)
+            return JsonSerializer.Deserialize<ToolConfig>(toolsSection.GetRawText(), JsonDefaults.EnumAware)
                 ?? new ToolConfig();
         }
         catch

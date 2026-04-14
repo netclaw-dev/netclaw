@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Netclaw.Cli.Json;
 using Netclaw.Configuration;
 
 namespace Netclaw.Cli.Doctor;
@@ -29,7 +30,7 @@ public sealed class SecurityPolicyDoctorCheck(NetclawPaths paths) : IDoctorCheck
         SecurityPolicyConfig config;
         try
         {
-            config = JsonSerializer.Deserialize<SecurityPolicyConfig>(securityObject, DoctorJsonConfigReader.JsonOptions)
+            config = JsonSerializer.Deserialize<SecurityPolicyConfig>(securityObject, JsonDefaults.ConfigRead)
                      ?? new SecurityPolicyConfig();
         }
         catch (Exception ex)

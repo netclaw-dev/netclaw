@@ -6,6 +6,7 @@ using System.Text.Json;
 using ModelContextProtocol.Client;
 using Netclaw.Cli.Config;
 using Netclaw.Cli.Daemon;
+using Netclaw.Cli.Json;
 using Netclaw.Configuration;
 using Netclaw.Providers.OAuth;
 
@@ -32,8 +33,6 @@ internal readonly record struct McpProbeResult(
 /// </summary>
 internal static class McpCommand
 {
-    private static JsonSerializerOptions JsonOptions => ConfigFileHelper.JsonOptions;
-
     public static async Task<int> RunAsync(string[] args, NetclawPaths paths, DaemonApi? daemonApi = null, TextWriter? output = null)
     {
         var writer = output ?? Console.Out;
@@ -666,7 +665,7 @@ internal static class McpCommand
 
         // Deserialize, toggle, re-serialize
         var entry = JsonSerializer.Deserialize<McpServerEntry>(
-            JsonSerializer.Serialize(mcpServers[name]), JsonOptions) ?? new McpServerEntry();
+            JsonSerializer.Serialize(mcpServers[name])) ?? new McpServerEntry();
         entry.Enabled = enabled;
         mcpServers[name] = SerializeEntry(entry);
 
@@ -833,7 +832,7 @@ internal static class McpCommand
 
     private static JsonElement SerializeEntry(McpServerEntry entry)
     {
-        var json = JsonSerializer.Serialize(entry, JsonOptions);
+        var json = JsonSerializer.Serialize(entry);
         using var doc = JsonDocument.Parse(json);
         return doc.RootElement.Clone();
     }
@@ -1186,8 +1185,7 @@ internal static class McpCommand
             if (!doc.RootElement.TryGetProperty("Tools", out var toolsSection))
                 return new ToolConfig();
 
-            return JsonSerializer.Deserialize<ToolConfig>(toolsSection.GetRawText(),
-                new JsonSerializerOptions { Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() } })
+            return JsonSerializer.Deserialize<ToolConfig>(toolsSection.GetRawText(), JsonDefaults.EnumAware)
                 ?? new ToolConfig();
         }
         catch

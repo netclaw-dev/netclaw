@@ -1,3 +1,4 @@
+using Netclaw.Cli.Json;
 using Netclaw.Configuration;
 using Netclaw.Configuration.Secrets;
 using Netclaw.Providers;
@@ -88,7 +89,7 @@ internal static class ProviderCredentialWriter
                 ["ApiKey"] = apiKey
             };
             SecretsFileWriter.Write(paths.SecretsPath, secrets,
-                options: ConfigFileHelper.JsonOptions, protector: effectiveProtector);
+                options: JsonDefaults.Indented, protector: effectiveProtector);
         }
     }
 }

@@ -4,6 +4,7 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using Microsoft.Extensions.Configuration;
 using Netclaw.Cli.Config;
+using Netclaw.Cli.Json;
 using Netclaw.Configuration;
 
 namespace Netclaw.Cli.Daemon;
@@ -16,7 +17,6 @@ namespace Netclaw.Cli.Daemon;
 /// </summary>
 public sealed class DaemonApi
 {
-    private static readonly JsonSerializerOptions WebJsonOptions = new(JsonSerializerDefaults.Web);
     private static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan LongTimeout = TimeSpan.FromSeconds(30);
 
@@ -69,7 +69,7 @@ public sealed class DaemonApi
         using var response = await client.GetAsync($"{_endpoint}/api/health/status", cts.Token);
         response.EnsureSuccessStatusCode();
         var stream = await response.Content.ReadAsStreamAsync(cts.Token);
-        return await JsonSerializer.DeserializeAsync<DaemonRuntimeStatus.Response>(stream, WebJsonOptions, cts.Token);
+        return await JsonSerializer.DeserializeAsync<DaemonRuntimeStatus.Response>(stream, JsonDefaults.Api, cts.Token);
     }
 
     // ── Sessions ──────────────────────────────────────────────────────
@@ -81,7 +81,7 @@ public sealed class DaemonApi
         using var response = await client.GetAsync($"{_endpoint}/api/sessions", cts.Token);
         response.EnsureSuccessStatusCode();
         var stream = await response.Content.ReadAsStreamAsync(cts.Token);
-        return await JsonSerializer.DeserializeAsync<List<SessionCatalogEntryDto>>(stream, WebJsonOptions, cts.Token) ?? [];
+        return await JsonSerializer.DeserializeAsync<List<SessionCatalogEntryDto>>(stream, JsonDefaults.Api, cts.Token) ?? [];
     }
 
     // ── Stats ─────────────────────────────────────────────────────────
@@ -96,7 +96,7 @@ public sealed class DaemonApi
         using var response = await client.GetAsync(url, cts.Token);
         response.EnsureSuccessStatusCode();
         var stream = await response.Content.ReadAsStreamAsync(cts.Token);
-        return await JsonSerializer.DeserializeAsync<DaemonStats.Response>(stream, WebJsonOptions, cts.Token);
+        return await JsonSerializer.DeserializeAsync<DaemonStats.Response>(stream, JsonDefaults.Api, cts.Token);
     }
 
     public async Task<SkillUsageStats.Response?> GetSkillUsageStatsAsync(int? days = null, CancellationToken ct = default)
@@ -109,7 +109,7 @@ public sealed class DaemonApi
         using var response = await client.GetAsync(url, cts.Token);
         response.EnsureSuccessStatusCode();
         var stream = await response.Content.ReadAsStreamAsync(cts.Token);
-        return await JsonSerializer.DeserializeAsync<SkillUsageStats.Response>(stream, WebJsonOptions, cts.Token);
+        return await JsonSerializer.DeserializeAsync<SkillUsageStats.Response>(stream, JsonDefaults.Api, cts.Token);
     }
 
     // ── Reminders ─────────────────────────────────────────────────────
@@ -219,7 +219,7 @@ public sealed class DaemonApi
         using var response = await client.GetAsync($"{_endpoint}/api/mcp/statuses", cts.Token);
         response.EnsureSuccessStatusCode();
         var stream = await response.Content.ReadAsStreamAsync(cts.Token);
-        return await JsonSerializer.DeserializeAsync<JsonElement>(stream, WebJsonOptions, cts.Token);
+        return await JsonSerializer.DeserializeAsync<JsonElement>(stream, JsonDefaults.Api, cts.Token);
     }
 
     public async Task<List<string>> GetMcpToolNamesAsync(string serverName, CancellationToken ct = default)
@@ -265,7 +265,7 @@ public sealed class DaemonApi
         using var response = await client.GetAsync($"{_endpoint}/api/pair/devices", cts.Token);
         response.EnsureSuccessStatusCode();
         var stream = await response.Content.ReadAsStreamAsync(cts.Token);
-        return await JsonSerializer.DeserializeAsync<List<PairedDeviceInfoDto>>(stream, WebJsonOptions, cts.Token) ?? [];
+        return await JsonSerializer.DeserializeAsync<List<PairedDeviceInfoDto>>(stream, JsonDefaults.Api, cts.Token) ?? [];
     }
 
     /// <summary>
