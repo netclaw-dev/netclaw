@@ -462,7 +462,7 @@ public sealed class SessionMemoryObserverActor : ReceivePersistentActor
                 return new ParseProposalsResult(parsed, ParseProposalsOutcome.Success, candidates.Count, null);
         }
 
-        var preview = Truncate(text.Trim(), 200);
+        var preview = TextTruncation.EllipsisAppend(text.Trim(), 200);
         var outcome = candidates.Count == 0
             ? ParseProposalsOutcome.NoJsonFound
             : ParseProposalsOutcome.ParseFailed;
@@ -586,7 +586,7 @@ public sealed class SessionMemoryObserverActor : ReceivePersistentActor
         TextOutput text when !string.IsNullOrWhiteSpace(text.Text)
             => $"[assistant] {text.Text}",
         ToolCallOutput toolCall
-            => $"[tool] {toolCall.ToolName}({Truncate(toolCall.ArgumentsJson ?? "", 200)})",
+            => $"[tool] {toolCall.ToolName}({TextTruncation.EllipsisAppend(toolCall.ArgumentsJson ?? "", 200)})",
         TurnCompleted tc
             => $"[turn {tc.TurnNumber} {tc.Outcome.ToString().ToLowerInvariant()}]",
         CompactionOutput
@@ -742,9 +742,6 @@ public sealed class SessionMemoryObserverActor : ReceivePersistentActor
         }),
         transcript
     });
-
-    private static string Truncate(string text, int maxLength) =>
-        text.Length <= maxLength ? text : string.Concat(text.AsSpan(0, maxLength), "...");
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
