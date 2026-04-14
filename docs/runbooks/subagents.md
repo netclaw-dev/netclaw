@@ -2,31 +2,61 @@
 
 Subagents are specialist workers that the main Netclaw agent can delegate tasks
 to. Each subagent runs autonomously with its own system prompt, tool set, and
-timeout — then returns a result to the main agent.
+timeout — then returns a synthesized result to the main agent. The delegation
+protects the main session's context window from token-heavy work (deep research,
+broad exploration, long summarization) and lets the main agent stay focused on
+conversation and coordination.
 
 ## How it works
 
 ### Discovery
 
 On every LLM turn, the main agent's system prompt includes an
-`[available-subagents]` section listing all user-facing subagents:
+`[available-subagents]` section that enumerates every user-facing subagent along
+with its description, tools, and timeout:
 
 ```
 [available-subagents — use spawn_agent to delegate]
-- research-assistant: Deep web research with search and citation (timeout: 120s)
-- code-analyst: Analyze code, run commands, and review files (timeout: 120s)
-- summarizer: Summarize documents and content concisely (timeout: 60s)
 
-Use spawn_agent(agent: "<name>", task: "<description>") to delegate.
-Subagents run autonomously with their own tools and return results.
+## research-assistant
+Deep web research with search and citation
+Tools: web_search, web_fetch, file_read, attach_file
+Timeout: 120s
+
+## code-analyst
+Analyze code, run commands, and review files
+Tools: file_read
+Timeout: 120s
+
+## summarizer
+Summarize documents and content concisely
+Tools: file_read
+Timeout: 60s
+
+## How to delegate
+Call `spawn_agent(agent: "<name>", task: "<specific task>", context: "<optional background>")`.
+
+- `task` is what the subagent should do — be concrete and bounded.
+- `context` is optional per-invocation background (workspace details, the user's broader goal,
+  facts the subagent would otherwise have to rediscover). Do NOT duplicate the agent's built-in
+  instructions — use this for THIS invocation's situation.
+- Subagents run autonomously with their own tools and return a synthesized result, not a transcript.
 ```
 
 The main agent sees this on every turn, so it always knows what subagents are
-available and when delegation is appropriate.
+available and how to specialize them per call.
 
 ### Invocation
 
-The main agent calls the `spawn_agent` tool:
+The main agent calls the `spawn_agent` tool. The tool takes three arguments:
+
+| Argument | Required | Description |
+|---|---|---|
+| `agent` | Yes | Name of a registered user-facing subagent. |
+| `task` | Yes | Specific, bounded description of what the subagent should do. |
+| `context` | No | Per-invocation background (workspace details, broader goal, facts the subagent would otherwise rediscover). |
+
+Example without context:
 
 ```json
 {
@@ -35,13 +65,28 @@ The main agent calls the `spawn_agent` tool:
 }
 ```
 
-The task description becomes the subagent's user message. Be specific — the
-subagent has no conversation history from the main session.
+Example with context (the parent session passes workspace state that the cold
+subagent can't see):
+
+```json
+{
+  "agent": "code-analyst",
+  "task": "Summarize the session lifecycle in LlmSessionActor.cs",
+  "context": "Workspace is the netclaw repo on branch feature/subagent-stats. The user is investigating an adoption gap and wants a high-level map of how sessions create and reap subagents."
+}
+```
+
+When `context` is populated, it is prefixed onto the subagent's first user
+message as a `Context:` block followed by a `Task:` block. The agent's system
+prompt (loaded from disk) is **not** modified — it stays verbatim and
+reproducible across invocations. When `context` is null or whitespace the
+first user message is just the raw task, identical to the pre-context protocol.
 
 ### Execution
 
 1. The `spawn_agent` tool resolves the named agent from the definition registry.
-2. Tools listed in the agent's definition are resolved from the tool registry.
+2. Tools listed in the agent's definition are resolved from the tool registry
+   and filtered against `SubAgentToolPolicy` for user-facing agents.
 3. A `SubAgentActor` is spawned as a **child of the session actor** (supervised,
    lifecycle-managed — stops when the session stops).
 4. The subagent runs an autonomous LLM loop: call tools, process results, repeat.
@@ -75,56 +120,39 @@ not inferred from free-form work logs or tool transcripts.
 
 ## Defining subagents
 
-Agent definitions live in `~/.netclaw/agents/`. Each agent is a JSON file with
-an optional companion markdown file for the system prompt.
+Agent definitions live in `~/.netclaw/agents/`. Each agent is a **single
+markdown file** with YAML frontmatter carrying the metadata and the body
+carrying the system prompt verbatim — the same `SKILL.md` convention the Netclaw
+skill system uses and the de facto format used by Claude Code and OpenCode.
 
 ### File structure
 
 ```
 ~/.netclaw/agents/
-  research-assistant.json    # agent definition
-  research-assistant.md      # system prompt (referenced from JSON)
-  code-analyst.json
+  research-assistant.md
   code-analyst.md
-  summarizer.json
   summarizer.md
 ```
 
-### JSON definition
+One file per agent. No JSON sidecar. The filename is a convenience for humans;
+the authoritative agent name comes from the `name` field in the frontmatter.
 
-```json
-{
-  "name": "research-assistant",
-  "description": "Deep web research with search and citation",
-  "systemPromptFile": "research-assistant.md",
-  "tools": ["web_search", "web_fetch", "file_read", "attach_file"],
-  "modelRole": "Compaction",
-  "timeoutSeconds": 120
-}
-```
-
-| Field | Required | Description |
-|-------|----------|-------------|
-| `name` | Yes | Unique identifier. Used in `spawn_agent(agent: "<name>")`. |
-| `description` | Yes | One-line description shown in the discovery context layer. |
-| `systemPromptFile` | No | Path to a `.md` file (relative to `~/.netclaw/agents/`) containing the system prompt. Paths outside this directory are rejected. |
-| `systemPrompt` | No | Inline system prompt string. Used if `systemPromptFile` is absent. |
-| `tools` | Yes | List of tool names the subagent can use. For user-facing file-based agents, only `web_search`, `web_fetch`, `file_read`, and `attach_file` are allowed. |
-| `modelRole` | No | `"Compaction"` (default, cheaper/faster) or `"Main"` (full model). |
-| `timeoutSeconds` | No | Wall-clock timeout in seconds (default: 60). |
-
-You must provide either `systemPromptFile` or `systemPrompt`. If both are
-present, the file takes precedence.
-
-### System prompt
-
-The companion `.md` file is the subagent's system prompt — its personality,
-instructions, and behavioral guidelines. This is what makes a subagent useful:
+### Frontmatter fields
 
 ```markdown
-You are a research assistant. Your job is to help the user by searching the
-web, gathering information from multiple sources, and synthesizing findings
-into clear, well-organized summaries.
+---
+name: research-assistant
+description: Deep web research with search and citation
+tools: [web_search, web_fetch, file_read, attach_file]
+modelRole: Compaction
+timeoutSeconds: 120
+visibility: user-facing
+emitStructuredFindings: false
+---
+
+You are a research assistant. Your job is to help the user by searching
+the web, gathering information from multiple sources, and synthesizing
+findings into clear, well-organized summaries.
 
 ## Guidelines
 
@@ -136,16 +164,50 @@ into clear, well-organized summaries.
 - Be thorough but concise — focus on facts and actionable information.
 ```
 
-Tips for writing effective subagent prompts:
+| Field | Required | Default | Description |
+|-------|----------|---------|-------------|
+| `name` | Yes | — | Unique identifier. Used in `spawn_agent(agent: "<name>")`. Duplicate names across files are rejected with a warning. |
+| `description` | Yes | — | One-line description shown in the `[available-subagents]` discovery block. |
+| `tools` | Yes | — | List of tool names the subagent can use. For user-facing agents, only `web_search`, `web_fetch`, `file_read`, and `attach_file` are allowed. |
+| `modelRole` | No | `Compaction` | `Compaction` (cheaper/faster) or `Main` (full model). |
+| `timeoutSeconds` | No | `60` | Wall-clock timeout in seconds. |
+| `visibility` | No | `user-facing` | `user-facing` (visible to `spawn_agent`) or `internal` (platform-owned, hidden). Accepts both hyphenated and PascalCase. |
+| `emitStructuredFindings` | No | `false` | When true, successful output becomes a memory-candidate finding for parent-session review. |
 
-- **Be specific about the output format.** The main agent receives the subagent's
-  final text response — make sure it's structured and useful.
+The body below the closing `---` is the subagent's system prompt — verbatim.
+Write it as markdown: headers, lists, code blocks. No placeholder interpolation
+or templating; the body is loaded and handed to the subagent's LLM exactly as
+written.
+
+### Loader behavior (fail loud)
+
+At daemon startup, `FileSubAgentDefinitionLoader` scans `~/.netclaw/agents/*.md`
+and logs a specific warning for every file it rejects. A rejection does not
+stop the scan — other valid files in the same directory still load. Rejection
+reasons:
+
+- Missing or unparseable YAML frontmatter
+- Missing required field (`name`, `description`, or `tools`)
+- Empty body (system prompt)
+- Empty `tools` list
+- One or more tools not in the user-facing allowlist
+- Duplicate `name` across files (the alphabetically-first file wins)
+
+Non-`.md` files in the agents directory (`stray.json`, `README.txt`, etc.) are
+ignored at the glob layer and never logged.
+
+### Writing effective subagent prompts
+
+- **Be specific about the output format.** The main agent receives the
+  subagent's final text response — make sure it's structured and useful.
 - **Reference tools by name.** The subagent only has the tools listed in its
   definition. Tell it which tools to use and when.
 - **Set boundaries.** Tell the subagent what NOT to do (e.g., "do not modify
   code unless explicitly asked").
-- **Keep it focused.** A subagent with a narrow, clear purpose works better than
-  a generalist.
+- **Keep it focused.** A subagent with a narrow, clear purpose works better
+  than a generalist. Per-invocation specialization is what the `context`
+  parameter on `spawn_agent` is for — don't bake transient details into the
+  agent file.
 
 ### Available tool names
 
@@ -158,8 +220,9 @@ These are the built-in tool names you can reference in agent definitions:
 | `file_read` | Read file contents |
 | `attach_file` | Attach a file to the response |
 
-User-facing file-defined agents cannot request `shell`, `file_write`, `search_tools`,
-or raw MCP tool names. Those remain available to platform-owned/internal subagents.
+User-facing file-defined agents cannot request `shell_execute`, `file_write`,
+`search_tools`, or raw MCP tool names. Those remain available to
+platform-owned/internal subagents.
 
 ## Built-in agents
 
@@ -177,21 +240,18 @@ Tools: `file_read`. Timeout: 60s.
 
 ## Creating a custom agent
 
-1. Create a JSON file in `~/.netclaw/agents/`:
-
-```json
-{
-  "name": "github-helper",
-  "description": "Create issues, review PRs, and manage GitHub repos",
-  "systemPromptFile": "github-helper.md",
-  "tools": ["file_read"],
-  "timeoutSeconds": 90
-}
-```
-
-2. Create the companion prompt file:
+Create a single `.md` file in `~/.netclaw/agents/`:
 
 ```markdown
+---
+name: github-reviewer
+description: Read local PR notes and summarize next steps for the parent session
+tools: [file_read]
+modelRole: Compaction
+timeoutSeconds: 90
+visibility: user-facing
+---
+
 You are a GitHub review assistant. Read local notes and summarize what the
 parent session should do next.
 
@@ -199,14 +259,17 @@ parent session should do next.
 
 - Do not execute commands or modify files directly.
 - Format output as markdown for readability.
+- Cite file paths with line numbers when referencing specific content.
 ```
 
-3. Restart the daemon. The agent will be loaded and appear in the discovery
-   context layer.
+Restart the daemon. The agent loads at startup after MCP servers connect (so
+MCP tool names are resolvable) and appears in the `[available-subagents]`
+discovery block.
 
-Agents are loaded at daemon startup after MCP servers connect, so MCP tool names
-are resolvable. If a tool name in your definition doesn't match any registered
-tool, the agent is skipped with a warning in the logs.
+If a tool name in your frontmatter doesn't match any registered tool, or falls
+outside the user-facing allowlist, the agent is skipped with a specific
+warning in the daemon log naming both the file and the disallowed tool — look
+there first when a new agent "doesn't show up."
 
 ## Limitations
 
@@ -216,10 +279,15 @@ tool, the agent is skipped with a warning in the logs.
 - Subagents have a **maximum of 10 tool iterations** before being forced to
   produce a text response.
 - Subagents run on the **compaction model** by default (cheaper/faster). Set
-  `"modelRole": "Main"` if the task requires the full model's capabilities.
+  `modelRole: Main` in frontmatter if the task requires the full model's
+  capabilities.
 - Subagents **cannot write durable cross-session memory** directly. They can
   return structured findings to the parent session for policy evaluation.
 - Findings envelopes are intended for durable conclusion candidates only.
   Work-log or transcript-shaped envelopes are rejected by the parent-session
   review path.
 - There is no inter-subagent communication — each subagent is independent.
+- There is no per-agent model selection yet. `modelRole` routes through the
+  three-slot `NetclawChatClientProvider` role system, which currently resolves
+  to a single configured model for most installs. Per-agent model selection
+  is tracked in a follow-on issue pending a multi-model provider architecture.
