@@ -111,6 +111,47 @@ public static class McpSchemaSanitizer
                 // breaks llama.cpp's JSON-schema-to-GBNF grammar conversion.
                 "$schema" => (object?)null,
 
+                // Strip keywords that llama.cpp's json_schema_to_grammar.cpp
+                // either cannot express in GBNF or crashes while expanding.
+                //
+                // `pattern` is the primary killer: regex→GBNF rule expansion
+                // in `_visit_pattern()` has no bounds on rule-string length,
+                // so a pathological pattern (e.g. Notion's leap-year ISO date
+                // regex with nested alternations) can grind for minutes and
+                // then SIGSEGV the server. Confirmed root cause of the
+                // 2026-04-14 Lemonade/gpu0 core dump on notion/notion-search.
+                //
+                // `patternProperties` and `propertyNames` are the same regex
+                // family and share the same crash path.
+                //
+                // `not`, `if`/`then`/`else` are unsupported — the converter
+                // returns "Unrecognized schema" which maps to a fatal error
+                // depending on call-site.
+                //
+                // `multipleOf` is unsupported (no integer arithmetic in GBNF).
+                //
+                // `contentEncoding`/`contentMediaType`/`contentSchema` are
+                // silently ignored by the converter and also disallowed by
+                // OpenAI's strict-mode schema subset — safe to remove and
+                // keeps our output on the converging "safe subset" across
+                // providers.
+                //
+                // Everything else ($ref/$defs, oneOf/anyOf/allOf, enum,
+                // format, minItems/maxItems, minLength/maxLength,
+                // minimum/maximum) is handled by the converter and must be
+                // preserved — real MCP tool schemas rely on these.
+                "pattern"
+                    or "patternProperties"
+                    or "propertyNames"
+                    or "not"
+                    or "if"
+                    or "then"
+                    or "else"
+                    or "multipleOf"
+                    or "contentEncoding"
+                    or "contentMediaType"
+                    or "contentSchema" => (object?)null,
+
                 // Handle type arrays like ["string", "null"] -> "string"
                 "type" when property.Value.ValueKind == JsonValueKind.Array =>
                     SimplifyTypeArray(property.Value),

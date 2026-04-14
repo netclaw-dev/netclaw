@@ -683,12 +683,10 @@ public class WebFetchToolTests : IDisposable
 
     private static string LoadFixture(string filename)
     {
-        var assembly = typeof(WebFetchToolTests).Assembly;
-        var resourceName = $"Netclaw.Actors.Tests.Tools.Fixtures.{filename}";
-        using var stream = assembly.GetManifestResourceStream(resourceName)
-            ?? throw new FileNotFoundException($"Fixture not found: {resourceName}");
-        using var reader = new StreamReader(stream);
-        return reader.ReadToEnd();
+        var path = Path.Combine(AppContext.BaseDirectory, "Tools", "Fixtures", filename);
+        if (!File.Exists(path))
+            throw new FileNotFoundException($"Fixture not found: {path}");
+        return File.ReadAllText(path);
     }
 
     /// <summary>
