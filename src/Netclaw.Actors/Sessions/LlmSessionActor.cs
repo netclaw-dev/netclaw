@@ -2550,6 +2550,13 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             ?? sourceMessageId
             ?? Guid.NewGuid().ToString("N")[..8];
         _activeChannelType = source?.ChannelType;
+
+        CrashContextSnapshot.Update(
+            _sessionId.Value,
+            _activeTurnId,
+            _activeMessageId,
+            _activeChannelType?.ToWireValue(),
+            _timeProvider.GetUtcNow());
     }
 
     private ILoggingAdapter TurnLog()

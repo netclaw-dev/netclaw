@@ -84,4 +84,72 @@ public sealed class DaemonLifecycleNotifier
             Context = context,
         });
     }
+
+    /// <summary>
+    /// Announces that the daemon encountered a process-level crash path.
+    /// Emission is best-effort and must not throw.
+    /// </summary>
+    public void NotifyCrashing(
+        string reason,
+        Exception exception,
+        string? crashLogPath = null,
+        IReadOnlyDictionary<string, string>? additionalContext = null)
+    {
+        var pid = Environment.ProcessId;
+        var exceptionType = exception.GetType().FullName ?? exception.GetType().Name;
+        var exceptionMessage = string.IsNullOrWhiteSpace(exception.Message)
+            ? "(no exception message)"
+            : exception.Message;
+
+        _logger.LogCritical(
+            exception,
+            "Netclaw daemon crashing (PID {Pid}, reason: {Reason}, exceptionType: {ExceptionType})",
+            pid,
+            reason,
+            exceptionType);
+
+        var context = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["pid"] = pid.ToString(CultureInfo.InvariantCulture),
+            ["reason"] = reason,
+            ["exceptionType"] = exceptionType,
+            ["exceptionMessage"] = Trim(exceptionMessage, 400),
+        };
+
+        if (!string.IsNullOrWhiteSpace(crashLogPath))
+            context["crashLogPath"] = crashLogPath!;
+
+        if (additionalContext is not null)
+        {
+            foreach (var pair in additionalContext)
+                context[pair.Key] = pair.Value;
+        }
+
+        try
+        {
+            _sink.Emit(new OperationalAlert
+            {
+                AlertId = Guid.NewGuid().ToString("N")[..12],
+                Type = "daemon.crashing",
+                Category = AlertType.DaemonCrashed,
+                Severity = "critical",
+                Summary = $"Netclaw daemon crashing: {reason} ({exceptionType})",
+                Timestamp = _timeProvider.GetUtcNow(),
+                Source = pid.ToString(CultureInfo.InvariantCulture),
+                Context = context,
+            });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to emit daemon crashing alert");
+        }
+    }
+
+    private static string Trim(string value, int maxChars)
+    {
+        if (value.Length <= maxChars)
+            return value;
+
+        return value[..maxChars];
+    }
 }

@@ -16,6 +16,7 @@ public static class DoctorRegistrationExtensions
         services.AddSingleton<IDoctorCheck, SecretsJsonDoctorCheck>();
         services.AddSingleton<IDoctorCheck, SlackAuthDoctorCheck>();
         services.AddSingleton<IDoctorCheck, SqliteProvisioningDoctorCheck>();
+        services.AddSingleton<IDoctorCheck, DaemonCrashDoctorCheck>();
         services.AddSingleton<IDoctorCheck, MemoryCheckpointHealthDoctorCheck>();
         services.AddSingleton<IDoctorCheck, McpServersDoctorCheck>();
         services.AddSingleton<IDoctorCheck, ContextWindowDoctorCheck>();

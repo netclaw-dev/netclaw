@@ -17,6 +17,7 @@ public enum AlertType
     WebhookRouteInvalid,
     DaemonStarted,
     DaemonStopping,
+    DaemonCrashed,
     UpdateAvailable,
 }
 

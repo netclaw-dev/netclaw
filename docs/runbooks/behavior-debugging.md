@@ -21,6 +21,17 @@ message loops, dropped sessions, or unexpected policy decisions).
 3. If session rows are created but Slack has no reply, focus on outbound adapter
    path (Slack thread binding actor and Slack post client).
 
+4. Check crash evidence immediately when behavior looks like a sudden process
+   disappearance:
+
+   ```bash
+   ls -lt "$HOME/.netclaw/logs"/crash-*.log
+   netclaw doctor
+   ```
+
+   `netclaw doctor` includes a daemon crash-log check that flags recent
+   `Netclaw daemon*` crash files and points to remediation.
+
 ## Enable Debug Logging
 
 Set these in `~/.netclaw/config/netclaw.json`:

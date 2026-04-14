@@ -4,7 +4,7 @@ description: "REQUIRED when the user asks about Netclaw capabilities, scheduling
 disable-model-invocation: true
 metadata:
   author: netclaw
-  version: "1.12.0"
+  version: "1.13.0"
 ---
 
 # Netclaw Operations
@@ -213,7 +213,7 @@ full exception internally. Exception details are **never** forwarded to Slack.
 When something seems wrong with Netclaw itself:
 
 1. Run `netclaw doctor` via `shell_execute` — validates config, providers,
-   MCP connections, memory health
+   MCP connections, memory health, and recent daemon crash logs
 2. If doctor reports fixable issues, run `netclaw doctor --fix --dry-run` to
    preview auto-repairs (schema-driven: stale properties, enum coercion, missing defaults)
 3. Run `netclaw status` via `shell_execute` — live runtime state from daemon
@@ -226,6 +226,10 @@ When something seems wrong with Netclaw itself:
 | Missing tools | `netclaw mcp list`; check MCP connection state |
 | Memory recall degraded | `netclaw status` memory section |
 | Daemon won't start | crash logs at `~/.netclaw/logs/crash-*.log` |
+
+If webhook notifications are configured, daemon crash paths emit
+`daemon.crashing` operational alerts with context (PID, reason, and latest known
+session/turn snapshot when available).
 
 Doctor checks include `exposure-mode`, which validates that the `Daemon`
 config section (if present) specifies a supported exposure mode and that

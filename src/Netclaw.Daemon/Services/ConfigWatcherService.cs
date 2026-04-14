@@ -81,19 +81,33 @@ public sealed class ConfigWatcherService : IHostedService, IDisposable
 
     private void OnFileChanged(object sender, FileSystemEventArgs e)
     {
-        if (!IsWatchedFile(e.Name))
-            return;
+        try
+        {
+            if (!IsWatchedFile(e.Name))
+                return;
 
-        _logger.LogDebug("Config file changed: {FileName}", e.Name);
-        ScheduleReload();
+            _logger.LogDebug("Config file changed: {FileName}", e.Name);
+            ScheduleReload();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Unhandled exception in config watcher Changed callback for {FileName}", e.Name);
+        }
     }
 
     private void OnFileDeleted(object sender, FileSystemEventArgs e)
     {
-        if (!IsWatchedFile(e.Name))
-            return;
+        try
+        {
+            if (!IsWatchedFile(e.Name))
+                return;
 
-        _logger.LogWarning("Config file deleted: {FileName}. Keeping current config.", e.Name);
+            _logger.LogWarning("Config file deleted: {FileName}. Keeping current config.", e.Name);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Unhandled exception in config watcher Deleted callback for {FileName}", e.Name);
+        }
     }
 
     private void ScheduleReload()

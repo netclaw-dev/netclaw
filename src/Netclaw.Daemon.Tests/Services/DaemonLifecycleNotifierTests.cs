@@ -56,6 +56,27 @@ public sealed class DaemonLifecycleNotifierTests
         Assert.Equal("Netclaw daemon stopping: update", alert.Summary);
     }
 
+    [Fact]
+    public void NotifyCrashing_EmitsCriticalAlert()
+    {
+        var ex = new InvalidOperationException("kaboom");
+
+        _sut.NotifyCrashing(
+            "daemon-unhandled",
+            ex,
+            "/tmp/crash-20260414-182900.log",
+            new Dictionary<string, string> { ["latest_session_id"] = "C123/171313.123" });
+
+        var alert = Assert.Single(_sink.Alerts);
+        Assert.Equal("daemon.crashing", alert.Type);
+        Assert.Equal(AlertType.DaemonCrashed, alert.Category);
+        Assert.Equal("critical", alert.Severity);
+        Assert.NotNull(alert.Context);
+        Assert.Equal("daemon-unhandled", alert.Context["reason"]);
+        Assert.Equal("/tmp/crash-20260414-182900.log", alert.Context["crashLogPath"]);
+        Assert.Equal("C123/171313.123", alert.Context["latest_session_id"]);
+    }
+
     private sealed class RecordingSink : IOperationalNotificationSink
     {
         public List<OperationalAlert> Alerts { get; } = [];
