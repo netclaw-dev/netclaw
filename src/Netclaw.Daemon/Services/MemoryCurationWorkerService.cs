@@ -92,6 +92,10 @@ internal sealed class MemoryCurationWorkerService(
         {
             logger.LogDebug("Memory curation worker stopped.");
         }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Memory curation worker terminated due to an unexpected exception.");
+        }
     }
 
     public void Dispose()

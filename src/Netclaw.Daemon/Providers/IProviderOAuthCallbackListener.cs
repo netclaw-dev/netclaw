@@ -1,4 +1,5 @@
 using Netclaw.Providers.OAuth;
+using Microsoft.Extensions.Logging;
 
 namespace Netclaw.Daemon.Providers;
 
@@ -10,14 +11,29 @@ internal interface IProviderOAuthCallbackListener
 internal sealed class ProviderOAuthCallbackListener : IProviderOAuthCallbackListener
 {
     private readonly OAuthPkceService _pkceService;
+    private readonly ILogger<ProviderOAuthCallbackListener> _logger;
 
-    public ProviderOAuthCallbackListener(OAuthPkceService pkceService)
+    public ProviderOAuthCallbackListener(
+        OAuthPkceService pkceService,
+        ILogger<ProviderOAuthCallbackListener> logger)
     {
         _pkceService = pkceService;
+        _logger = logger;
     }
 
     public void StartListening(string redirectUri, string state)
     {
-        _ = _pkceService.ListenForCallbackAsync(redirectUri, state);
+        var task = _pkceService.ListenForCallbackAsync(redirectUri, state);
+        _ = task.ContinueWith(t =>
+            {
+                var exception = t.Exception?.GetBaseException();
+                _logger.LogWarning(
+                    exception,
+                    "Provider OAuth callback listener failed for state {State}",
+                    state);
+            },
+            CancellationToken.None,
+            TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
     }
 }

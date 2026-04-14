@@ -25,6 +25,7 @@ namespace Netclaw.Actors.SubAgents;
 public sealed class SubAgentActor : ReceiveActor
 {
     private const int MaxToolIterations = 10;
+    private const string EmptyResponseMarker = "(no response)";
 
     private readonly SubAgentDefinition _definition;
     private readonly IChatClient _chatClient;
@@ -133,6 +134,18 @@ public sealed class SubAgentActor : ReceiveActor
 
             // Final text response — we're done
             var text = ExtractText(lastMessage);
+            if (string.IsNullOrWhiteSpace(text) || text == EmptyResponseMarker)
+            {
+                // LLM returned neither tool calls nor usable text. Surface as failure
+                // so the parent session sees a real error instead of fabricating
+                // "subagent still working" from an empty tool result.
+                _log.Warning(
+                    "SubAgent [{AgentName}] LLM returned empty response (no text content, no tool calls) — reporting as failure",
+                    _definition.Name);
+                Complete(false, "Subagent returned an empty response (no text content and no tool calls). "
+                    + "The provider may have dropped reasoning content or the model produced no output.");
+                return;
+            }
             Complete(true, text);
         });
 
@@ -311,7 +324,7 @@ public sealed class SubAgentActor : ReceiveActor
             }
         }
 
-        return sb.Length > 0 ? sb.ToString() : "(no response)";
+        return sb.Length > 0 ? sb.ToString() : EmptyResponseMarker;
     }
 
     // ── Static async helpers (same pattern as LlmSessionActor) ──
@@ -321,8 +334,23 @@ public sealed class SubAgentActor : ReceiveActor
     {
         try
         {
-            // No streaming for subagents — just get the complete response
-            var response = await client.GetResponseAsync(messages, options, ct);
+            // Use streaming to match the main session path. The non-streaming
+            // GetResponseAsync path drops reasoning content for some providers
+            // (e.g., Qwen emits <think> blocks that surface as TextReasoningContent
+            // only in streaming mode), leaving the assistant message with no
+            // TextContent and causing the subagent to report empty "(no response)".
+            var updates = new List<ChatResponseUpdate>();
+            await foreach (var update in client.GetStreamingResponseAsync(messages, options, ct))
+            {
+                updates.Add(update);
+            }
+
+            var response = updates.ToChatResponse();
+            if (response.Messages.Count == 0)
+            {
+                response = new ChatResponse(new AiChatMessage(Microsoft.Extensions.AI.ChatRole.Assistant, []));
+            }
+
             self.Tell(new LlmResponseReceived { Response = response });
         }
         catch (Exception ex)

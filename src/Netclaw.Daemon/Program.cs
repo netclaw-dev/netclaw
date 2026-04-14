@@ -40,20 +40,22 @@ using Netclaw.Search;
 using Netclaw.Security;
 using static Microsoft.Extensions.Logging.LogLevel;
 
+var bootstrapPaths = new NetclawPaths();
+bootstrapPaths.EnsureDirectoriesExist();
+using var crashMonitor = DaemonCrashMonitor.Register(bootstrapPaths);
+
 try
 {
     // Acquire an exclusive lock file before anything else. This is the OS-level
     // singleton guard — a second netclawd instance will fail to open the file
     // and exit immediately. The lock survives soft restarts (same process) and
     // is released by the OS on crash (fd closed → flock released).
-    var paths = new NetclawPaths();
-    paths.EnsureDirectoriesExist();
 
     FileStream lockFile;
     try
     {
         lockFile = new FileStream(
-            paths.LockFilePath,
+            bootstrapPaths.LockFilePath,
             FileMode.OpenOrCreate,
             FileAccess.ReadWrite,
             FileShare.None);
@@ -72,17 +74,17 @@ try
         do
         {
             restartSignal.Reset();
-            await RunDaemonAsync(args, restartSignal);
+            await RunDaemonAsync(args, restartSignal, crashMonitor);
         } while (restartSignal.RestartRequested);
     }
 }
 catch (Exception ex)
 {
-    WriteCrashLog(ex);
+    crashMonitor.RecordTopLevelException(ex);
     throw;
 }
 
-static async Task RunDaemonAsync(string[] args, DaemonRestartSignal restartSignal)
+static async Task RunDaemonAsync(string[] args, DaemonRestartSignal restartSignal, DaemonCrashMonitor crashMonitor)
 {
     // Anchor process CWD to a user-owned temp directory.
     // Without this, the daemon runs from its install location (e.g. /usr/local/bin),
@@ -154,6 +156,7 @@ static async Task RunDaemonAsync(string[] args, DaemonRestartSignal restartSigna
     builder.Services.AddSingleton<IDaemonRestartCoordinator>(sp => sp.GetRequiredService<DaemonRestartCoordinator>());
 
     var app = builder.Build();
+    crashMonitor.AttachServices(app.Services);
 
     // Eagerly resolve so StartedAt reflects daemon startup, not first request.
     app.Services.GetRequiredService<DaemonStartClock>();
@@ -380,14 +383,25 @@ static async Task RunDaemonAsync(string[] args, DaemonRestartSignal restartSigna
 
     // Fire startup notification after all hosted services are ready
     app.Lifetime.ApplicationStarted.Register(() =>
-        app.Services.GetRequiredService<DaemonLifecycleNotifier>().NotifyStarted());
+    {
+        try
+        {
+            app.Services.GetRequiredService<DaemonLifecycleNotifier>().NotifyStarted();
+        }
+        catch (Exception ex)
+        {
+            CrashLogWriter.Write(ex, "daemon-started-hook");
+        }
+    });
 
-    await app.RunAsync();
-}
-
-static void WriteCrashLog(Exception ex)
-{
-    CrashLogWriter.Write(ex, "daemon");
+    try
+    {
+        await app.RunAsync();
+    }
+    finally
+    {
+        crashMonitor.DetachServices();
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════

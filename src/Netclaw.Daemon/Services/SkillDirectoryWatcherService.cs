@@ -91,26 +91,47 @@ public sealed class SkillDirectoryWatcherService : BackgroundService
 
     private void OnFileEvent(object sender, FileSystemEventArgs e)
     {
-        if (ShouldIgnore(e.FullPath))
-            return;
+        try
+        {
+            if (ShouldIgnore(e.FullPath))
+                return;
 
-        _logger.LogDebug("Skill file {ChangeType}: {Path}", e.ChangeType, e.FullPath);
-        ResetDebounceTimer();
+            _logger.LogDebug("Skill file {ChangeType}: {Path}", e.ChangeType, e.FullPath);
+            ResetDebounceTimer();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Unhandled exception in skill watcher file callback for {Path}", e.FullPath);
+        }
     }
 
     private void OnRenameEvent(object sender, RenamedEventArgs e)
     {
-        if (ShouldIgnore(e.FullPath) && ShouldIgnore(e.OldFullPath))
-            return;
+        try
+        {
+            if (ShouldIgnore(e.FullPath) && ShouldIgnore(e.OldFullPath))
+                return;
 
-        _logger.LogDebug("Skill file renamed: {OldPath} -> {Path}", e.OldFullPath, e.FullPath);
-        ResetDebounceTimer();
+            _logger.LogDebug("Skill file renamed: {OldPath} -> {Path}", e.OldFullPath, e.FullPath);
+            ResetDebounceTimer();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Unhandled exception in skill watcher rename callback for {Path}", e.FullPath);
+        }
     }
 
     private void OnWatcherError(object sender, ErrorEventArgs e)
     {
-        _logger.LogWarning(e.GetException(), "FileSystemWatcher error — triggering recovery rescan");
-        ResetDebounceTimer();
+        try
+        {
+            _logger.LogWarning(e.GetException(), "FileSystemWatcher error — triggering recovery rescan");
+            ResetDebounceTimer();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Unhandled exception in skill watcher error callback");
+        }
     }
 
     private void ResetDebounceTimer()
