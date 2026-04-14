@@ -111,6 +111,26 @@ public static class McpSchemaSanitizer
                 // breaks llama.cpp's JSON-schema-to-GBNF grammar conversion.
                 "$schema" => (object?)null,
 
+                // Strip keywords llama.cpp's json_schema_to_grammar cannot
+                // express in GBNF. `pattern`/`patternProperties`/`propertyNames`
+                // crash `_visit_pattern()` on pathological regex (unbounded rule
+                // expansion); `not`/`if`/`then`/`else`/`multipleOf` are fatal
+                // "Unrecognized schema"; content* are silently dropped. Keep
+                // $ref/$defs, oneOf/anyOf/allOf, format, enum, and length/
+                // range bounds — converter handles those and real MCP tools
+                // rely on them.
+                "pattern"
+                    or "patternProperties"
+                    or "propertyNames"
+                    or "not"
+                    or "if"
+                    or "then"
+                    or "else"
+                    or "multipleOf"
+                    or "contentEncoding"
+                    or "contentMediaType"
+                    or "contentSchema" => (object?)null,
+
                 // Handle type arrays like ["string", "null"] -> "string"
                 "type" when property.Value.ValueKind == JsonValueKind.Array =>
                     SimplifyTypeArray(property.Value),

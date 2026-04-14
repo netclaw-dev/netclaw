@@ -410,6 +410,165 @@ public class McpSchemaSanitizerTests
         Assert.Equal(JsonValueKind.Null, defaultProp.ValueKind);
     }
 
+    [Theory]
+    [InlineData("pattern", "\"^\\\\d{4}-\\\\d{2}-\\\\d{2}$\"")]
+    [InlineData("patternProperties", "{ \"^x-\": { \"type\": \"string\" } }")]
+    [InlineData("propertyNames", "{ \"pattern\": \"^[a-z]+$\" }")]
+    [InlineData("not", "{ \"type\": \"null\" }")]
+    [InlineData("if", "{ \"properties\": { \"kind\": { \"const\": \"a\" } } }")]
+    [InlineData("then", "{ \"required\": [\"x\"] }")]
+    [InlineData("else", "{ \"required\": [\"y\"] }")]
+    [InlineData("multipleOf", "10")]
+    [InlineData("contentEncoding", "\"base64\"")]
+    [InlineData("contentMediaType", "\"image/png\"")]
+    [InlineData("contentSchema", "{ \"type\": \"string\" }")]
+    public void SanitizeSchema_Strips_LlamaCppIncompatibleKeyword(string keyword, string valueJson)
+    {
+        // These keywords either crash llama.cpp's json_schema_to_grammar
+        // converter (pattern/patternProperties/propertyNames regex family),
+        // are unsupported and fatal (not, if/then/else, multipleOf), or are
+        // silently dropped (contentEncoding/MediaType/Schema). We strip them
+        // uniformly so a pathological MCP tool schema can't take down the
+        // backend.
+        var schema = JsonDocument.Parse($$"""
+            {
+                "type": "object",
+                "properties": {
+                    "field": {
+                        "type": "string",
+                        "description": "Kept verbatim",
+                        "{{keyword}}": {{valueJson}}
+                    }
+                }
+            }
+            """).RootElement;
+
+        var sanitized = McpSchemaSanitizer.SanitizeSchema(schema);
+        var field = sanitized.GetProperty("properties").GetProperty("field");
+
+        Assert.False(field.TryGetProperty(keyword, out _), $"{keyword} should be stripped");
+        // Adjacent metadata is preserved so the LLM still understands the field
+        Assert.Equal("string", field.GetProperty("type").GetString());
+        Assert.Equal("Kept verbatim", field.GetProperty("description").GetString());
+    }
+
+    [Fact]
+    public void SanitizeSchema_StripsPattern_FromNestedArrayItems()
+    {
+        // Regression coverage: recursion through SanitizeSchemaArray and the
+        // items handler must still reach strip rules so a pathological pattern
+        // inside a nested array item can't slip through.
+        var schema = JsonDocument.Parse("""
+            {
+                "type": "object",
+                "properties": {
+                    "dates": {
+                        "type": "array",
+                        "items": {
+                            "type": "string",
+                            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                        }
+                    }
+                }
+            }
+            """).RootElement;
+
+        var sanitized = McpSchemaSanitizer.SanitizeSchema(schema);
+        var items = sanitized.GetProperty("properties")
+            .GetProperty("dates")
+            .GetProperty("items");
+
+        Assert.False(items.TryGetProperty("pattern", out _));
+        Assert.Equal("string", items.GetProperty("type").GetString());
+    }
+
+    [Fact]
+    public void SanitizeSchema_Preserves_LlamaCppSupportedKeywords()
+    {
+        // Guard against future over-stripping. These keywords are handled by
+        // llama.cpp's converter and must survive sanitization — real MCP tool
+        // schemas (including Notion's) rely on them.
+        var schema = JsonDocument.Parse("""
+            {
+                "type": "object",
+                "properties": {
+                    "date": {
+                        "type": "string",
+                        "format": "date",
+                        "minLength": 10,
+                        "maxLength": 10
+                    },
+                    "count": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 1000
+                    },
+                    "mode": { "enum": ["a", "b", "c"] },
+                    "ids": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "minItems": 1,
+                        "maxItems": 100
+                    },
+                    "union": {
+                        "oneOf": [
+                            { "type": "string" },
+                            { "type": "integer" }
+                        ]
+                    }
+                },
+                "required": ["date"]
+            }
+            """).RootElement;
+
+        var sanitized = McpSchemaSanitizer.SanitizeSchema(schema);
+        var props = sanitized.GetProperty("properties");
+
+        Assert.Equal("date", props.GetProperty("date").GetProperty("format").GetString());
+        Assert.Equal(10, props.GetProperty("date").GetProperty("minLength").GetInt32());
+        Assert.Equal(1000, props.GetProperty("count").GetProperty("maximum").GetInt32());
+        Assert.Equal(3, props.GetProperty("mode").GetProperty("enum").GetArrayLength());
+        Assert.Equal(100, props.GetProperty("ids").GetProperty("maxItems").GetInt32());
+        Assert.Equal(2, props.GetProperty("union").GetProperty("oneOf").GetArrayLength());
+    }
+
+    [Fact]
+    public void SanitizeSchema_RealNotionSearchFixture_StripsLeapYearPattern()
+    {
+        // Regression: notion-search's leap-year ISO date `pattern` must be
+        // stripped so llama.cpp's grammar compiler can't SEGV on it.
+        var raw = TestFixtures.Load("notion-search-input.raw.json");
+        var schema = JsonDocument.Parse(raw).RootElement;
+
+        var sanitized = McpSchemaSanitizer.SanitizeSchema(schema);
+
+        var dateRange = sanitized
+            .GetProperty("properties")
+            .GetProperty("filters")
+            .GetProperty("properties")
+            .GetProperty("created_date_range")
+            .GetProperty("properties");
+
+        var startDate = dateRange.GetProperty("start_date");
+        var endDate = dateRange.GetProperty("end_date");
+
+        Assert.False(startDate.TryGetProperty("pattern", out _),
+            "leap-year regex pattern on start_date must be stripped");
+        Assert.False(endDate.TryGetProperty("pattern", out _),
+            "leap-year regex pattern on end_date must be stripped");
+
+        // `format: date` survives — llama.cpp has a built-in date format rule
+        // that constrains the LLM output without needing the regex.
+        Assert.Equal("date", startDate.GetProperty("format").GetString());
+        Assert.Equal("date", endDate.GetProperty("format").GetString());
+
+        // Core schema structure is intact
+        Assert.Equal("object", sanitized.GetProperty("type").GetString());
+        Assert.Equal(2, sanitized.GetProperty("required").GetArrayLength());
+        Assert.True(sanitized.GetProperty("properties").TryGetProperty("query", out _));
+    }
+
+
     [Fact]
     public void SanitizeSchema_HandlesNotionSearchSchema()
     {

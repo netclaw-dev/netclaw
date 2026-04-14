@@ -1,0 +1,86 @@
+{
+  "type": "object",
+  "properties": {
+    "query": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Semantic search query over your entire Notion workspace and connected sources (Slack, Google Drive, Github, Jira, Microsoft Teams, Sharepoint, OneDrive, or Linear). For best results, don't provide more than one question per tool call. Use a separate \"search\" tool call for each search you want to perform.\nAlternatively, the query can be a substring or keyword to find users by matching against their name or email address. For example: \"john\" or \"john@example.com\""
+    },
+    "query_type": {
+      "type": "string",
+      "enum": [
+        "internal",
+        "user"
+      ]
+    },
+    "content_search_mode": {
+      "type": "string",
+      "enum": [
+        "workspace_search",
+        "ai_search"
+      ]
+    },
+    "data_source_url": {
+      "description": "Optionally, provide the URL of a Data source to search. This will perform a semantic search over the pages in the Data Source. Note: must be a Data Source, not a Database. <data-source> tags are part of the Notion flavored Markdown format returned by tools like fetch. The full spec is available in the create-pages tool description.",
+      "type": "string"
+    },
+    "page_url": {
+      "description": "Optionally, provide the URL or ID of a page to search within. This will perform a semantic search over the content within and under the specified page. Accepts either a full page URL (e.g. https://notion.so/workspace/Page-Title-1234567890) or just the page ID (UUIDv4) with or without dashes.",
+      "type": "string"
+    },
+    "teamspace_id": {
+      "description": "Optionally, provide the ID of a teamspace to restrict search results to. This will perform a search over content within the specified teamspace only. Accepts the teamspace ID (UUIDv4) with or without dashes.",
+      "type": "string"
+    },
+    "filters": {
+      "description": "Optionally provide filters to apply to the search results. Only valid when query_type is 'internal'.",
+      "type": "object",
+      "properties": {
+        "created_date_range": {
+          "description": "Optional filter to only produce search results created within the specified date range.",
+          "type": "object",
+          "properties": {
+            "start_date": {
+              "description": "The start date of the date range as an ISO 8601 date string, if any.",
+              "type": "string",
+              "format": "date",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+            },
+            "end_date": {
+              "description": "The end date of the date range as an ISO 8601 date string, if any.",
+              "type": "string",
+              "format": "date",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+            }
+          },
+          "additionalProperties": true
+        },
+        "created_by_user_ids": {
+          "description": "Optional filter to only produce search results created by the Notion users that have the specified user IDs.",
+          "maxItems": 100,
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "page_size": {
+      "description": "Maximum number of results to return (default 10). Lower values reduce response size.",
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 25
+    },
+    "max_highlight_length": {
+      "description": "Maximum character length for result highlights (default 200). Set to 0 to omit highlights entirely.",
+      "type": "integer",
+      "minimum": -9007199254740991,
+      "maximum": 500
+    }
+  },
+  "required": [
+    "query",
+    "filters"
+  ]
+}
