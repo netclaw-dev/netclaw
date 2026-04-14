@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Netclaw.Cli.Config;
+using Netclaw.Cli.Json;
 using Netclaw.Configuration;
 using Netclaw.Providers;
 using Netclaw.Providers.OAuth;
@@ -311,14 +312,6 @@ internal static class ProviderCommand
     /// <summary>
     /// Load provider entries from merged config + secrets files.
     /// </summary>
-    private static readonly JsonSerializerOptions DeserializeOptions = new()
-    {
-        Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() }
-    };
-
-    /// <summary>
-    /// Load provider entries from merged config + secrets files.
-    /// </summary>
     internal static Dictionary<string, ProviderEntry> LoadProviders(NetclawPaths paths)
     {
         var configText = File.Exists(paths.NetclawConfigPath)
@@ -335,7 +328,7 @@ internal static class ProviderCommand
         {
             foreach (var prop in configProviders.EnumerateObject())
             {
-                var entry = JsonSerializer.Deserialize<ProviderEntry>(prop.Value.GetRawText(), DeserializeOptions)
+                var entry = JsonSerializer.Deserialize<ProviderEntry>(prop.Value.GetRawText(), JsonDefaults.EnumAware)
                     ?? new ProviderEntry();
                 result[prop.Name] = entry;
             }

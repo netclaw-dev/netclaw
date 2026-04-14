@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Netclaw.Cli.Json;
 using Netclaw.Configuration;
 using Netclaw.Configuration.Secrets;
 
@@ -10,8 +11,6 @@ namespace Netclaw.Cli.Config;
 /// </summary>
 internal static class ConfigFileHelper
 {
-    internal static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
-
     /// <summary>
     /// Load both netclaw.json and secrets.json as mutable dictionaries.
     /// Missing files get a default <c>{ "configVersion": 1 }</c> skeleton.
@@ -90,7 +89,7 @@ internal static class ConfigFileHelper
         var dir = Path.GetDirectoryName(path);
         if (dir is not null)
             Directory.CreateDirectory(dir);
-        File.WriteAllText(path, JsonSerializer.Serialize(data, JsonOptions));
+        File.WriteAllText(path, JsonSerializer.Serialize(data, JsonDefaults.Indented));
     }
 
     /// <summary>
@@ -99,7 +98,7 @@ internal static class ConfigFileHelper
     internal static void WriteSecretsFile(Configuration.NetclawPaths paths, Dictionary<string, object> data)
     {
         var protector = SecretsProtection.CreateProtector(paths);
-        SecretsFileWriter.Write(paths.SecretsPath, data, options: JsonOptions, protector: protector);
+        SecretsFileWriter.Write(paths.SecretsPath, data, options: JsonDefaults.Indented, protector: protector);
     }
 
     internal static string DecryptIfEncrypted(Configuration.NetclawPaths paths, string? value)

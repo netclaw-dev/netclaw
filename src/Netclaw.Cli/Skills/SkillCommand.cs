@@ -1,8 +1,8 @@
 using System.Text.Json;
-using System.Text.Json.Serialization;
 using Microsoft.Extensions.Configuration;
 using Netclaw.Actors.Skills;
 using Netclaw.Cli.Config;
+using Netclaw.Cli.Json;
 using Netclaw.Configuration;
 
 namespace Netclaw.Cli.Skills;
@@ -13,12 +13,6 @@ namespace Netclaw.Cli.Skills;
 /// </summary>
 internal static class SkillCommand
 {
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        WriteIndented = true,
-        Converters = { new JsonStringEnumConverter() }
-    };
-
     public static Task<int> RunAsync(string[] args, NetclawPaths paths)
     {
         var subcommand = args.Length > 1 ? args[1] : "list";
@@ -541,7 +535,7 @@ internal static class SkillCommand
         var dict = ConfigFileHelper.LoadJsonDict(paths.NetclawConfigPath);
 
         // Serialize the config to a JsonElement so it round-trips cleanly
-        var serialized = JsonSerializer.SerializeToElement(config, JsonOptions);
+        var serialized = JsonSerializer.SerializeToElement(config, JsonDefaults.ConfigFile);
         dict["ExternalSkills"] = serialized;
 
         ConfigFileHelper.WriteConfigFile(paths.NetclawConfigPath, dict);

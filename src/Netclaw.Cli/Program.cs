@@ -10,6 +10,7 @@ using Netclaw.Channels;
 using Netclaw.Channels.Slack;
 using Netclaw.Cli;
 using Netclaw.Cli.Daemon;
+using Netclaw.Cli.Json;
 using Netclaw.Cli.Doctor;
 using Netclaw.Cli.Mcp;
 using Netclaw.Cli.Reminder;
@@ -1167,10 +1168,7 @@ static void WriteDoctorJsonResult(DoctorRunResult result, DoctorFixPlan? fixPlan
         }
     };
 
-    Console.WriteLine(JsonSerializer.Serialize(payload, new JsonSerializerOptions
-    {
-        WriteIndented = true
-    }));
+    Console.WriteLine(JsonSerializer.Serialize(payload, JsonDefaults.Indented));
 }
 
 static void WriteDoctorFixPlan(DoctorFixPlan plan, bool dryRun)
@@ -1250,8 +1248,7 @@ static async Task<int> RunStatusAsync(IServiceProvider services, bool jsonOutput
 
         if (jsonOutput)
         {
-            var node = JsonSerializer.SerializeToNode(
-                status, new JsonSerializerOptions(JsonSerializerDefaults.Web))!;
+            var node = JsonSerializer.SerializeToNode(status, JsonDefaults.Api)!;
             var updateNode = (node["update"] as JsonObject) ?? new JsonObject();
             var updateAvailable = string.Equals(cliUpdate.State, "update-available", StringComparison.Ordinal);
             updateNode["available"] = updateAvailable;
@@ -1260,7 +1257,7 @@ static async Task<int> RunStatusAsync(IServiceProvider services, bool jsonOutput
             updateNode["latestVersion"] = updateAvailable ? cliUpdate.LatestVersion : null;
             updateNode["releaseNotesUrl"] = updateAvailable ? cliUpdate.ReleaseNotesUrl : null;
             node["update"] = updateNode;
-            Console.WriteLine(node.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
+            Console.WriteLine(node.ToJsonString(JsonDefaults.Indented));
         }
         else
         {
@@ -1300,10 +1297,7 @@ static async Task<int> RunSessionsOnceAsync(IServiceProvider services, bool json
 
         if (jsonOutput)
         {
-            Console.WriteLine(JsonSerializer.Serialize(sessions, new JsonSerializerOptions
-            {
-                WriteIndented = true
-            }));
+            Console.WriteLine(JsonSerializer.Serialize(sessions, JsonDefaults.Indented));
         }
         else
         {
@@ -1453,11 +1447,7 @@ static async Task<int> RunStatsAsync(IServiceProvider services, bool jsonOutput,
 
         if (jsonOutput)
         {
-            Console.WriteLine(JsonSerializer.Serialize(stats, new JsonSerializerOptions
-            {
-                WriteIndented = true,
-                PropertyNamingPolicy = JsonNamingPolicy.CamelCase
-            }));
+            Console.WriteLine(JsonSerializer.Serialize(stats, JsonDefaults.IndentedCamelCase));
         }
         else
         {
@@ -1496,11 +1486,7 @@ static async Task<int> RunSkillStatsAsync(IServiceProvider services, bool jsonOu
 
         if (jsonOutput)
         {
-            Console.WriteLine(JsonSerializer.Serialize(stats, new JsonSerializerOptions
-            {
-                WriteIndented = true,
-                PropertyNamingPolicy = JsonNamingPolicy.CamelCase
-            }));
+            Console.WriteLine(JsonSerializer.Serialize(stats, JsonDefaults.IndentedCamelCase));
         }
         else
         {

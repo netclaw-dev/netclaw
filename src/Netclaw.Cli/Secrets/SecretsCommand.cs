@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Netclaw.Cli.Json;
 using Netclaw.Configuration;
 using Netclaw.Configuration.Secrets;
 
@@ -11,8 +12,6 @@ namespace Netclaw.Cli.Secrets;
 /// </summary>
 internal static class SecretsCommand
 {
-    private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
-
     public static int Run(string[] args, NetclawPaths paths, TextWriter? output = null)
     {
         var writer = output ?? Console.Out;
@@ -81,7 +80,7 @@ internal static class SecretsCommand
 
         // Write with encryption — the protector encrypts all plaintext leaves
         var protector = SecretsProtection.CreateProtector(paths);
-        var json = root.ToJsonString(JsonOptions);
+        var json = root.ToJsonString(JsonDefaults.Indented);
         SecretsFileWriter.Write(paths.SecretsPath, json, protector);
 
         writer.WriteLine($"Set {keyPath} (encrypted).");

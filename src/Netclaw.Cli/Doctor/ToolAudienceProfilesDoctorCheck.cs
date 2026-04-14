@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Tools;
+using Netclaw.Cli.Json;
 using Netclaw.Configuration;
 
 namespace Netclaw.Cli.Doctor;
@@ -47,7 +48,7 @@ public sealed class ToolAudienceProfilesDoctorCheck(NetclawPaths paths) : IDocto
         ToolConfig toolConfig;
         try
         {
-            toolConfig = JsonSerializer.Deserialize<ToolConfig>(toolsObject, DoctorJsonConfigReader.JsonOptions) ?? new ToolConfig();
+            toolConfig = JsonSerializer.Deserialize<ToolConfig>(toolsObject, JsonDefaults.ConfigRead) ?? new ToolConfig();
         }
         catch (Exception ex)
         {
@@ -58,7 +59,7 @@ public sealed class ToolAudienceProfilesDoctorCheck(NetclawPaths paths) : IDocto
         }
 
         var mcpServers = root["McpServers"] is JsonObject mcpObj
-            ? JsonSerializer.Deserialize<Dictionary<string, McpServerEntry>>(mcpObj, DoctorJsonConfigReader.JsonOptions) ?? new()
+            ? JsonSerializer.Deserialize<Dictionary<string, McpServerEntry>>(mcpObj, JsonDefaults.ConfigRead) ?? new()
             : new();
 
         var errors = new List<string>();
