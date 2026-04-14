@@ -109,13 +109,45 @@ public sealed class SlackTargetResolverTests
         Assert.Equal("C777", result.ChannelId);
     }
 
+    [Fact]
+    public async Task Resolve_raw_channel_id_skips_directory_lookup()
+    {
+        var lookup = new FakeSlackTargetLookupClient();
+        var resolver = new SlackTargetResolver(lookup);
+
+        var result = await resolver.ResolveAsync("C0123ABC", TestContext.Current.CancellationToken);
+
+        Assert.True(result.Success);
+        Assert.Equal("C0123ABC", result.ChannelId);
+        Assert.Equal(0, lookup.ChannelListCallCount);
+        Assert.Equal(0, lookup.UserListCallCount);
+    }
+
+    [Fact]
+    public async Task Resolve_raw_user_id_skips_directory_lookup()
+    {
+        var lookup = new FakeSlackTargetLookupClient();
+        var resolver = new SlackTargetResolver(lookup);
+
+        var result = await resolver.ResolveAsync("U0456XYZ", TestContext.Current.CancellationToken);
+
+        Assert.True(result.Success);
+        Assert.Equal("U0456XYZ", result.UserId);
+        Assert.Equal(0, lookup.ChannelListCallCount);
+        Assert.Equal(0, lookup.UserListCallCount);
+    }
+
     private sealed class FakeSlackTargetLookupClient : ISlackTargetLookupClient
     {
         public IReadOnlyList<SlackChannelPage> ChannelPages { get; init; } = [];
         public IReadOnlyList<SlackUserPage> UserPages { get; init; } = [];
+        public int ChannelListCallCount { get; private set; }
+        public int UserListCallCount { get; private set; }
 
         public Task<SlackChannelPage> ListChannelsAsync(string? cursor, CancellationToken ct = default)
         {
+            ChannelListCallCount++;
+
             if (ChannelPages.Count == 0)
                 return Task.FromResult(new SlackChannelPage([], null));
 
@@ -132,6 +164,8 @@ public sealed class SlackTargetResolverTests
 
         public Task<SlackUserPage> ListUsersAsync(string? cursor, CancellationToken ct = default)
         {
+            UserListCallCount++;
+
             if (UserPages.Count == 0)
                 return Task.FromResult(new SlackUserPage([], null));
 

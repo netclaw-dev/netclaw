@@ -425,8 +425,8 @@ public class SetReminderToolTests : TestKit
         var resolver = new TestResolver
         {
             ResultFor = (input) => input == "#general"
-                ? new ReminderTargetResolution(true, "C0123ABC", null)
-                : new ReminderTargetResolution(false, null, $"unexpected target {input}")
+                ? new ReminderTargetResolution(true, "C0123ABC", ReminderTargetKind.Channel, null)
+                : new ReminderTargetResolution(false, null, ReminderTargetKind.Unknown, $"unexpected target {input}")
         };
         var tool = new SetReminderTool(probe, _timeProvider, new ReminderConfig(), resolver);
 
@@ -466,6 +466,7 @@ public class SetReminderToolTests : TestKit
             ResultFor = (_) => new ReminderTargetResolution(
                 false,
                 null,
+                ReminderTargetKind.Unknown,
                 "Could not resolve Slack target '#nope'. Use #channel, @user, or a Slack ID (C..., G..., U...).")
         };
         var tool = new SetReminderTool(probe, _timeProvider, new ReminderConfig(), resolver);
@@ -544,6 +545,70 @@ public class SetReminderToolTests : TestKit
             NextFire: _timeProvider.GetUtcNow().AddMinutes(5)));
 
         await execution;
+    }
+
+    [Fact]
+    public async Task Resolves_user_target_to_dm_notify_instructions()
+    {
+        var probe = CreateTestProbe();
+        var resolver = new TestResolver
+        {
+            ResultFor = (input) => input == "@aaron"
+                ? new ReminderTargetResolution(true, "U0456XYZ", ReminderTargetKind.User, null)
+                : new ReminderTargetResolution(false, null, ReminderTargetKind.Unknown, $"unexpected target {input}")
+        };
+        var tool = new SetReminderTool(probe, _timeProvider, new ReminderConfig(), resolver);
+
+        var execution = Task.Run(async () =>
+        {
+            return await tool.ExecuteAsync(new Dictionary<string, object?>
+            {
+                ["Id"] = "user-target",
+                ["Name"] = "user-target",
+                ["Prompt"] = "Send results",
+                ["ScheduleType"] = "once",
+                ["Schedule"] = "15m",
+                ["ReportToChannel"] = "@aaron"
+            });
+        });
+
+        var cmd = await probe.ExpectMsgAsync<SaveReminderCommand>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal("U0456XYZ", cmd.Definition.ReportToChannel);
+        Assert.Equal("Send a direct message to user U0456XYZ with your findings, or lack thereof.", cmd.Definition.NotifyInstructions);
+        Assert.Equal(1, resolver.CallCount);
+
+        probe.Reply(new ReminderSavedResponse(
+            new ReminderId(cmd.Definition.Id),
+            cmd.Definition.Title,
+            Success: true,
+            NextFire: _timeProvider.GetUtcNow().AddMinutes(15)));
+
+        await execution;
+    }
+
+    [Fact]
+    public async Task Rejects_resolver_success_with_empty_resolved_id()
+    {
+        var probe = CreateTestProbe();
+        var resolver = new TestResolver
+        {
+            ResultFor = (_) => new ReminderTargetResolution(true, null, ReminderTargetKind.Channel, null)
+        };
+        var tool = new SetReminderTool(probe, _timeProvider, new ReminderConfig(), resolver);
+
+        var result = await tool.ExecuteAsync(new Dictionary<string, object?>
+        {
+            ["Id"] = "empty-target-id",
+            ["Name"] = "empty-target-id",
+            ["Prompt"] = "Send status",
+            ["ScheduleType"] = "once",
+            ["Schedule"] = "30m",
+            ["ReportToChannel"] = "#general"
+        }, TestContext.Current.CancellationToken);
+
+        Assert.Contains("resolver returned an empty canonical target ID", result);
+        Assert.Equal(1, resolver.CallCount);
+        await probe.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(100), TestContext.Current.CancellationToken);
     }
 
     private sealed class TestResolver : IReminderTargetResolver

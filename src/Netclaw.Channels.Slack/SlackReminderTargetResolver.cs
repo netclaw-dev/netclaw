@@ -12,9 +12,16 @@ public sealed class SlackReminderTargetResolver(ISlackTargetResolver slackResolv
     public async Task<ReminderTargetResolution> ResolveAsync(string target, CancellationToken ct = default)
     {
         var result = await slackResolver.ResolveAsync(target, ct);
+        var kind = result.ChannelId is not null
+            ? ReminderTargetKind.Channel
+            : result.UserId is not null
+                ? ReminderTargetKind.User
+                : ReminderTargetKind.Unknown;
+
         return new ReminderTargetResolution(
             result.Success,
             result.ChannelId ?? result.UserId,
+            kind,
             result.ErrorMessage);
     }
 }

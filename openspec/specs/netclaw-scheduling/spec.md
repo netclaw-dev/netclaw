@@ -206,6 +206,8 @@ deferring the failure to reminder execution time.
 - **WHEN** the LLM calls `set_reminder` with `reportToChannel: "@aaronontheweb"`
 - **THEN** the persisted `ReminderDefinition.ReportToChannel` equals
   `U0456XYZ`
+- **AND** default notify instructions direct the agent to send a direct
+  message to that resolved user ID
 
 #### Scenario: Raw channel ID passes through without an API call
 

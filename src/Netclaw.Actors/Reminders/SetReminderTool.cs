@@ -84,6 +84,7 @@ public sealed partial class SetReminderTool : NetclawTool<SetReminderTool.Params
         string? sessionId = null;
         string? reportToChannel = args.ReportToChannel;
         string? reportToThreadTs = null;
+        var resolvedTargetKind = ReminderTargetKind.Unknown;
 
         if (!string.IsNullOrWhiteSpace(reportToChannel))
         {
@@ -97,7 +98,11 @@ public sealed partial class SetReminderTool : NetclawTool<SetReminderTool.Params
                 return $"Error: Could not resolve reportToChannel '{reportToChannel}': {detail}. Use #channel, @user, or a valid channel ID.";
             }
 
+            if (string.IsNullOrWhiteSpace(resolution.ResolvedId))
+                return $"Error: Could not resolve reportToChannel '{reportToChannel}': resolver returned an empty canonical target ID.";
+
             reportToChannel = resolution.ResolvedId;
+            resolvedTargetKind = resolution.Kind;
         }
         else if (context.SessionId is not null)
         {
@@ -108,6 +113,7 @@ public sealed partial class SetReminderTool : NetclawTool<SetReminderTool.Params
             {
                 reportToChannel = parts[0];
                 reportToThreadTs = parts[1];
+                resolvedTargetKind = ReminderTargetKind.Channel;
             }
         }
 
@@ -116,7 +122,12 @@ public sealed partial class SetReminderTool : NetclawTool<SetReminderTool.Params
         {
             notifyInstructions = reportToChannel is null
                 ? "Reply in the originating session thread with a concise result."
-                : $"Post the result to channel {reportToChannel}.";
+                : resolvedTargetKind switch
+                {
+                    ReminderTargetKind.User => $"Send a direct message to user {reportToChannel} with your findings, or lack thereof.",
+                    ReminderTargetKind.Channel => $"Post the result to channel {reportToChannel}.",
+                    _ => $"Send the result to target {reportToChannel}."
+                };
         }
 
         var notifyPolicy = Enum.TryParse<NotificationPolicy>(args.NotifyPolicy, ignoreCase: true, out var parsed)
