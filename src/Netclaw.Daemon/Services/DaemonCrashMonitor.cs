@@ -110,9 +110,9 @@ internal sealed class DaemonCrashMonitor : IDisposable
             context["private_memory_mb"] = (process.PrivateMemorySize64 / (1024 * 1024)).ToString();
             context["gc_total_memory_mb"] = (GC.GetTotalMemory(forceFullCollection: false) / (1024 * 1024)).ToString();
         }
-        catch
+        catch (Exception ex)
         {
-            // Best effort only.
+            TryLogMonitorFailure("Failed to capture process metrics for crash diagnostics.", ex);
         }
 
         var latestTurn = CrashContextSnapshot.GetLatest();
@@ -203,9 +203,9 @@ internal sealed class DaemonCrashMonitor : IDisposable
                 return;
             }
         }
-        catch
+        catch (Exception loggingFailure)
         {
-            // Fall through to stderr.
+            Console.Error.WriteLine($"[Netclaw.Daemon.CrashMonitor] Failed to write monitor warning via logger factory: {loggingFailure}");
         }
 
         Console.Error.WriteLine($"[Netclaw.Daemon.CrashMonitor] {message} {exception}");
