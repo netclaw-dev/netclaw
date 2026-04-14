@@ -4,6 +4,7 @@ using System.Text.Json;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Netclaw.Cli.Json;
 using Netclaw.Configuration;
 using Netclaw.Actors.Protocol;
 using Netclaw.Channels;
@@ -319,12 +320,6 @@ public sealed class HeadlessChannel : IChannel
         }
     }
 
-    private static readonly JsonSerializerOptions s_jsonOptions = new()
-    {
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,
-    };
-
     private void WriteJsonEnvelope()
     {
         // Client-side timing
@@ -346,7 +341,7 @@ public sealed class HeadlessChannel : IChannel
             TotalMs = totalMs.HasValue ? Math.Round(totalMs.Value, 1) : null,
         };
 
-        Console.WriteLine(JsonSerializer.Serialize(envelope, s_jsonOptions));
+        Console.WriteLine(JsonSerializer.Serialize(envelope, JsonDefaults.CliOutput));
     }
 
     private void Log(StreamWriter? log, string message)

@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Netclaw.Cli.Json;
 using Netclaw.Configuration;
 
 namespace Netclaw.Cli.Config;
@@ -27,6 +28,6 @@ internal sealed class ClientConfigFile
 
         File.WriteAllText(
             paths.ClientConfigPath,
-            JsonSerializer.Serialize(new ClientConfigFile { Endpoint = endpoint.TrimEnd('/') }, ConfigFileHelper.JsonOptions));
+            JsonSerializer.Serialize(new ClientConfigFile { Endpoint = endpoint.TrimEnd('/') }, JsonDefaults.Indented));
     }
 }

@@ -358,7 +358,20 @@ internal sealed class FakeChatClient : IChatClient
         IEnumerable<ChatMessage> messages,
         ChatOptions? options = null,
         CancellationToken cancellationToken = default)
-        => throw new NotSupportedException("SubAgentActor does not use streaming");
+        => CreateStreamingUpdatesAsync(messages, options, cancellationToken);
+
+    private async IAsyncEnumerable<ChatResponseUpdate> CreateStreamingUpdatesAsync(
+        IEnumerable<ChatMessage> messages,
+        ChatOptions? options,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        var response = await GetResponseAsync(messages, options, cancellationToken);
+        foreach (var update in response.ToChatResponseUpdates())
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            yield return update;
+        }
+    }
 
     public object? GetService(Type serviceType, object? serviceKey = null) => null;
     public void Dispose() { }
