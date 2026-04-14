@@ -97,7 +97,7 @@ public sealed partial class SetReminderTool : NetclawTool<SetReminderTool.Params
                 return $"Error: Could not resolve reportToChannel '{reportToChannel}': {detail}. Use #channel, @user, or a valid channel ID.";
             }
 
-            reportToChannel = resolution.ResolvedChannelId ?? resolution.ResolvedUserId;
+            reportToChannel = resolution.ResolvedId;
         }
         else if (context.SessionId is not null)
         {
@@ -116,7 +116,7 @@ public sealed partial class SetReminderTool : NetclawTool<SetReminderTool.Params
         {
             notifyInstructions = reportToChannel is null
                 ? "Reply in the originating session thread with a concise result."
-                : $"Post the result to Slack channel {reportToChannel}.";
+                : $"Post the result to channel {reportToChannel}.";
         }
 
         var notifyPolicy = Enum.TryParse<NotificationPolicy>(args.NotifyPolicy, ignoreCase: true, out var parsed)

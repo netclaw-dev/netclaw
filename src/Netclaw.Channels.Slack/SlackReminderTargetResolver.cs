@@ -14,8 +14,7 @@ public sealed class SlackReminderTargetResolver(ISlackTargetResolver slackResolv
         var result = await slackResolver.ResolveAsync(target, ct);
         return new ReminderTargetResolution(
             result.Success,
-            result.ErrorMessage,
-            result.ChannelId,
-            result.UserId);
+            result.ChannelId ?? result.UserId,
+            result.ErrorMessage);
     }
 }

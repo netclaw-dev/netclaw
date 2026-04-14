@@ -1230,7 +1230,8 @@ static void MapReminderEndpoints(WebApplication app)
             ? request.Id
             : Netclaw.Actors.Reminders.ReminderIdGenerator.Generate(request.Name).Value;
 
-        var tool = new Netclaw.Actors.Reminders.SetReminderTool(manager, timeProvider, reminderConfig);
+        var reminderResolver = serviceProvider.GetService<Netclaw.Actors.Reminders.IReminderTargetResolver>();
+        var tool = new Netclaw.Actors.Reminders.SetReminderTool(manager, timeProvider, reminderConfig, reminderResolver);
         var toolContext = new Netclaw.Tools.ToolExecutionContext(sessionId: null, sessionDirectory: null);
         toolContext.Audience = authorization?.SourceAudience?.ToWireValue();
         toolContext.ChannelType = "manual";

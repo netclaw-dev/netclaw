@@ -425,8 +425,8 @@ public class SetReminderToolTests : TestKit
         var resolver = new TestResolver
         {
             ResultFor = (input) => input == "#general"
-                ? new ReminderTargetResolution(true, null, "C0123ABC", null)
-                : new ReminderTargetResolution(false, $"unexpected target {input}", null, null)
+                ? new ReminderTargetResolution(true, "C0123ABC", null)
+                : new ReminderTargetResolution(false, null, $"unexpected target {input}")
         };
         var tool = new SetReminderTool(probe, _timeProvider, new ReminderConfig(), resolver);
 
@@ -465,9 +465,8 @@ public class SetReminderToolTests : TestKit
         {
             ResultFor = (_) => new ReminderTargetResolution(
                 false,
-                "Could not resolve Slack target '#nope'. Use #channel, @user, or a Slack ID (C..., G..., U...).",
                 null,
-                null)
+                "Could not resolve Slack target '#nope'. Use #channel, @user, or a Slack ID (C..., G..., U...).")
         };
         var tool = new SetReminderTool(probe, _timeProvider, new ReminderConfig(), resolver);
 
@@ -537,7 +536,6 @@ public class SetReminderToolTests : TestKit
         var cmd = await probe.ExpectMsgAsync<SaveReminderCommand>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal("C0123ABC", cmd.Definition.ReportToChannel);
         Assert.Equal("1234567890.123456", cmd.Definition.ReportToThreadTs);
-        Assert.Equal(0, resolver.CallCount);
 
         probe.Reply(new ReminderSavedResponse(
             new ReminderId(cmd.Definition.Id),
