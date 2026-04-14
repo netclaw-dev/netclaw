@@ -16,12 +16,16 @@ SHALL depend on the reminder's mode:
   the entity key SHALL be the persisted `SessionId` and the timer fire SHALL
   re-enter the existing session actor (rehydrating from Akka.Persistence if
   currently passivated), NOT create a new session. Mode B delivery SHALL
-  route through the originating channel's existing inbound path when the
-  channel has a durable server-side transport binding (Slack): the reminder
-  dispatcher tells the channel gateway a `DeliverTrustedSessionTurn`
-  message, and the gateway runs the same lookup-or-create chain used for
-  inbound events. For channels without durable server-side bindings (TUI,
-  SignalR), the reminder dispatcher tells the session manager directly.
+  route through the originating channel's existing inbound path. The
+  reminder dispatcher tells the appropriate gateway a
+  `DeliverTrustedSessionTurn` message based on `OriginChannelType`:
+  `ChannelType.Slack` → `SlackGatewayActor`; `ChannelType.Tui` or
+  `ChannelType.SignalR` → `SignalRGatewayActor` (both TUI and SignalR
+  route through the SignalR gateway because TUI is a SignalR client, not
+  a separate transport). The gateway runs the same lookup-or-create chain
+  used for inbound events. Any other `OriginChannelType` is rejected at
+  `set_reminder` time — Mode B requires an addressable server-side
+  gateway.
 - In both Mode A and Mode B, the dispatched `SendUserMessage` SHALL carry a
   `MessageSource` whose `ReminderId` field is populated with
   `{reminderId}:{fireTimestampMs}` for idempotent redelivery dedup at the
@@ -59,18 +63,23 @@ SHALL depend on the reminder's mode:
   `LlmSessionActor`
 - **AND** NO new session actor with a `schedule/...` entity key is created
 
-#### Scenario: Mode B non-Slack reminder bypasses channel gateway
+#### Scenario: Mode B SignalR reminder routes through SignalR gateway
 
-- **GIVEN** a Mode B reminder persists `SessionId = "tui/abc123"` and
-  `OriginChannelType = Tui`
+- **GIVEN** a Mode B reminder persists `SessionId = "signalr/abc123"` and
+  `OriginChannelType = Tui` (or `SignalR`)
 - **WHEN** the Akka timer fires
-- **THEN** the reminder dispatcher tells the session manager a
-  `SendUserMessage` directly (no channel gateway involvement)
-- **AND** the session actor for `tui/abc123` rehydrates if idle and
-  processes the turn
-- **AND** the `TurnRecorded` event persists into the session journal
-- **AND** a connected TUI client receives streaming output if attached, or
-  sees the persisted turn on next `netclaw chat --resume`
+- **THEN** the reminder dispatcher tells `SignalRGatewayActor` a
+  `DeliverTrustedSessionTurn` message (the same gateway handles both
+  `Tui` and `SignalR` because TUI is a SignalR client subtype)
+- **AND** the gateway runs the same lookup-or-create chain used by
+  `SessionRegistry.StartSignalRSession`
+- **AND** the `ChannelInput` is queued into the existing pipeline for the
+  session, which delivers a `SendUserMessage` to the existing
+  `LlmSessionActor`
+- **AND** NO new session actor with a `schedule/...` entity key is created
+- **AND** if a TUI client is connected, it receives the streaming response
+  in real time; otherwise the turn persists and is visible on next
+  `netclaw chat --resume`
 
 #### Scenario: Timer adapter does not fire for paused tasks
 
@@ -129,20 +138,52 @@ DeliverTrustedSessionTurn(
     MessageSource Source) : IWithSessionId
 ```
 
-Channels that host a durable server-side transport binding (currently
-Slack) MAY register a handler for this message on their gateway actor. The
-handler SHALL parse `SessionId` into channel-specific addressing (e.g.,
-`{channelId}/{threadTs}` for Slack), SHALL run the same lookup-or-create
-chain used for real inbound events to reach the session's transport
-binding, and SHALL queue the content into the existing pipeline with the
-supplied `MessageSource` as provenance. The channel-level inbound ACL check
-(e.g., `SlackAclPolicy.EvaluateInbound`) SHALL be bypassed because the
-supplied `MessageSource.Principal` is `VerifiedAutomation` and the stored
+Every server-side channel in the daemon SHALL register a handler for
+this message on its gateway actor. The handler SHALL:
+
+1. Parse `SessionId` into channel-specific addressing.
+2. Run the same lookup-or-create chain used for real inbound events to
+   reach the session's pipeline queue (factored into a shared helper
+   with the inbound-event handler).
+3. Read `Sender` (the caller's `Ask` temp actor) and create a
+   `ChannelInput` with `AckTarget = Sender`, carrying the supplied
+   `MessageSource` as provenance.
+4. Offer the `ChannelInput` into the pipeline queue via
+   `inputQueue.OfferAsync(...)`.
+5. **NOT reply to the `Ask` directly in the happy path.** The
+   `CommandAck` reply to the caller flows from the downstream
+   `LlmSessionActor`'s `TryReplyAck()` through `ChannelPipeline`'s
+   sender propagation (via `AckTarget`) back to the temp actor.
+6. **Reply `CommandNack` directly to `Sender` only** when `OfferAsync`
+   returns a non-`Enqueued` result (queue closed, dropped, failure),
+   signaling that the channel refused the message without routing it.
+
+The channel-level inbound ACL check (e.g.,
+`SlackAclPolicy.EvaluateInbound`) SHALL be bypassed because the supplied
+`MessageSource.Principal` is `VerifiedAutomation` and the stored
 reminder audience is already validated at minting time by
 `reminder-audience-authorization`.
 
-Channels without durable server-side bindings SHALL NOT register a handler.
-Callers MUST route through the session manager directly for such channels.
+**Ack semantic**: the caller's `Ask<CommandAck>` completes when the
+downstream `LlmSessionActor` has updated its in-memory state and fired
+`TryReplyAck()` — meaning "the session has accepted this turn for
+processing." This is stronger than "the channel has received the
+message" and closes the in-process gap between gateway-offer and
+stream-stage-run that a gateway-level ack would leave open.
+
+The daemon currently hosts two gateways that MUST implement this handler:
+
+- **`SlackGatewayActor`** — parses `{channelId}/{threadTs}` SessionIds,
+  runs the conversation → thread binding lookup-or-create chain.
+- **`SignalRGatewayActor`** (in `src/Netclaw.Daemon/Gateway/`) — parses
+  `signalr/{guid}` SessionIds, runs the lookup-or-create chain used by
+  `SessionRegistry.StartSignalRSession`. When no SignalR client is
+  currently connected for the target session, the gateway SHALL still
+  route the turn to the underlying `LlmSessionActor` via the pipeline;
+  streaming output SHALL be dropped per the existing
+  `OverflowStrategy.DropHead` behavior and the completed turn SHALL be
+  visible to the user on next `ResumeSessionAsync`. This mirrors the
+  current semantic when a TUI client disconnects mid-tool-call.
 
 #### Scenario: Slack gateway handles DeliverTrustedSessionTurn
 
@@ -158,13 +199,43 @@ Callers MUST route through the session manager directly for such channels.
 - **AND** `SlackAclPolicy.EvaluateInbound` is NOT invoked (bypassed because
   the provenance indicates a trusted delivery)
 
+#### Scenario: SignalR gateway handles DeliverTrustedSessionTurn with connected client
+
+- **GIVEN** a Mode B reminder fires for `SessionId = "signalr/abc123"`
+- **AND** a SignalR client is currently connected for that session
+- **WHEN** `SignalRGatewayActor` receives a `DeliverTrustedSessionTurn`
+  with that `SessionId` and a trusted `MessageSource`
+- **THEN** the gateway runs the same lookup-or-create chain used by
+  `SessionRegistry.StartSignalRSession` to reach the existing
+  `SignalRSessionActor` for the session
+- **AND** the `ChannelInput` with the reminder content and
+  `AckTarget = Sender` is queued into the session pipeline
+- **AND** the streaming response reaches the connected client in real
+  time via the existing `SignalRSessionActor` → `SessionHub` bridge
+
+#### Scenario: SignalR gateway handles DeliverTrustedSessionTurn with no client connected
+
+- **GIVEN** a Mode B reminder fires for `SessionId = "signalr/abc123"`
+- **AND** no SignalR client is currently connected for that session
+  (e.g., TUI client exited between reminder set and fire)
+- **WHEN** `SignalRGatewayActor` receives a `DeliverTrustedSessionTurn`
+- **THEN** the gateway still routes the turn to the underlying
+  `LlmSessionActor` via the session pipeline
+- **AND** the session processes the turn and persists `TurnRecorded`
+- **AND** streaming output is dropped per the existing
+  `OverflowStrategy.DropHead` behavior of the output subscriber
+- **AND** the session replies `CommandAck` to the dispatcher via
+  `AckTarget`, allowing the reminder envelope to be acked exactly once
+- **AND** the completed turn is visible when the user next calls
+  `ResumeSessionAsync`
+
 #### Scenario: Concurrent inbound and trusted delivery produce a single binding
 
-- **GIVEN** a real inbound Slack event and a Mode B reminder
-  `DeliverTrustedSessionTurn` arrive at `SlackGatewayActor` in parallel,
-  both targeting the same `(channelId, threadTs)` pair
+- **GIVEN** a real inbound event and a Mode B reminder
+  `DeliverTrustedSessionTurn` arrive at the same gateway in parallel,
+  both targeting the same session addressing
 - **WHEN** both handlers run concurrently
-- **THEN** exactly one `SlackConversationActor` exists for the channel
-- **AND** exactly one `SlackThreadBindingActor` exists for the thread
-- **AND** both messages are successfully queued into the single thread
-  binding's pipeline in arrival order
+- **THEN** exactly one conversation/session actor chain exists for the
+  session
+- **AND** both messages are successfully queued into the same pipeline
+  in arrival order

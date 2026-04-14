@@ -31,22 +31,27 @@ contract that the drain-on-shutdown follow-up will also reuse.
   triggered when `set_reminder` is invoked from an addressable session and
   the LLM does not supply `reportToChannel`. The reminder runs a new turn
   **inside the originating session**, not in an isolated `reminder/{id}`
-  session. Output flows back through the originating transport (Slack
-  thread, TUI, SignalR).
+  session. Output flows back through the originating channel (Slack
+  thread, or the SignalR hub when a client is connected).
 - `SetReminderTool` stops leaking `context.SessionId` into
   `ReportToChannel`/`ReportToThreadTs`. Reminders set without an explicit
   target are persisted with `ReportToChannel = null` and a new `SessionId`
   + `OriginChannelType` pair.
 - **NEW**: A shared protocol message
   `DeliverTrustedSessionTurn(SessionId, Content, MessageSource)` in
-  `Netclaw.Actors.Protocol`. Channels with a durable server-side transport
-  binding (Slack) add one handler on their gateway that runs the same
-  lookup-or-create chain as the existing inbound handler, but tagged as
-  trusted so the channel-level ACL check is bypassed (reminder audience is
-  already validated at minting time by `reminder-audience-authorization`).
-  No new interface or registry — reminder dispatch is a small switch on
-  `OriginChannelType`, routing Slack reminders to the Slack gateway and
-  non-Slack reminders directly to the session manager.
+  `Netclaw.Actors.Protocol`. The daemon has two server-side channels and
+  each one's gateway gains a handler for it: **Slack**
+  (`Netclaw.Channels.Slack/SlackGatewayActor`) and **SignalR**
+  (`src/Netclaw.Daemon/Gateway/`: `SessionHub` + `SessionRegistry` +
+  `SignalRGatewayActor`). The `netclaw chat` TUI is a SignalR client, not
+  a separate channel — both `ChannelType.Tui` and `ChannelType.SignalR`
+  route through the same SignalR gateway chain on the daemon side. Each
+  handler parses `SessionId` and runs the same lookup-or-create code the
+  channel's inbound-event handler uses, tagged as trusted so the
+  channel-level inbound ACL is bypassed (reminder audience already
+  validated at minting time by `reminder-audience-authorization`). No new
+  interface or registry — reminder dispatch is a two-case switch on
+  `OriginChannelType`.
 - **NEW**: Reminder delivery re-uses the existing `SendUserMessage` ingress
   path. A new optional `ReminderId` carrier on `MessageSource` (ephemeral)
   and `TurnRecorded.SourceReminderId` (persisted, ProtoMember 5) provide
@@ -69,11 +74,11 @@ contract that the drain-on-shutdown follow-up will also reuse.
 - **NEW**: `ReminderConfig` surfaces `AckTimeout`, `MaxDeliveryAttempts`,
   and `MaxDeliveryWindow` and wires them into the Akka.Reminders client.
   JSON schema is updated per the Configuration Schema Sync Rule.
-- **NEW scenarios** on the `netclaw-scheduling` capability documenting Mode B
-  semantics, dedup behavior, transport reanimation contract, and a
-  "delivery guarantees" section explicitly documenting the
-  crash-during-processing gap (same semantic as regular user messages
-  today; subsumed by the drain-on-shutdown follow-up).
+- **NEW scenarios** on the `netclaw-scheduling` capability documenting
+  Mode B semantics, dedup behavior, and a "delivery guarantees" section
+  explicitly documenting the crash-during-processing gap (same semantic as
+  regular user messages today; subsumed by the drain-on-shutdown
+  follow-up).
 
 Explicitly **out of scope** for this change:
 
@@ -83,9 +88,13 @@ Explicitly **out of scope** for this change:
   follow-up (related issues #403, #419).
 - Automatic shutdown-drain via self-reminder. The infrastructure this
   change builds makes it trivial to add later, but is not implemented here.
-- Output delivery to disconnected TUI/SignalR clients. Reminder turns
-  persist into session state normally; clients see them when they
-  reconnect. Documented as a known limitation.
+- Real-time output delivery to disconnected SignalR clients. Reminder
+  turns still persist into session state normally via the underlying
+  `LlmSessionActor`; the streaming output is dropped (the existing
+  `OverflowStrategy.DropHead` behavior when no subscriber is attached)
+  and clients see the completed turn on next `ResumeSessionAsync`. This
+  is the same semantic that applies when a TUI client disconnects
+  mid-tool-call today.
 
 ## Capabilities
 
@@ -104,7 +113,8 @@ warrant a new capability spec.
   `ProcessedReminderIds` dedup ledger.
 - `netclaw-input-adapters` — Mode A/B distinction on the internal timer
   adapter's entity key and session lifecycle, plus the
-  `DeliverTrustedSessionTurn` shared protocol message contract and the
+  `DeliverTrustedSessionTurn` shared protocol message contract
+  (implemented by both Slack and SignalR gateways symmetrically) and the
   `ChannelInput.AckTarget` extension that lets session-side ack replies
   flow back through the pipeline to the reminder dispatcher.
 
@@ -127,8 +137,12 @@ warrant a new capability spec.
 - `src/Netclaw.Actors/Sessions/` — `SessionState` dedup set,
   `LlmSessionActor` handler dedup pre-check
 - `src/Netclaw.Channels.Slack/SlackGatewayActor.cs` — new
-  `Receive<DeliverTrustedSessionTurn>` handler sharing the lookup-or-create
-  chain with the existing `SlackInboundMessage` handler
+  `Receive<DeliverTrustedSessionTurn>` handler sharing the
+  lookup-or-create chain with the existing `SlackInboundMessage` handler
+- `src/Netclaw.Daemon/Gateway/SignalRGatewayActor.cs` (or the gateway
+  implementation at that path) — new `Receive<DeliverTrustedSessionTurn>`
+  handler sharing the lookup-or-create chain with the existing
+  `StartSignalRSession` path
 - `src/Netclaw.Configuration/ReminderConfig.cs` + `netclaw-config.v1.schema.json`
 
 **Dependencies**:
