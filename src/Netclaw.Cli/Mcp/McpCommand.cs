@@ -665,7 +665,7 @@ internal static class McpCommand
 
         // Deserialize, toggle, re-serialize
         var entry = JsonSerializer.Deserialize<McpServerEntry>(
-            JsonSerializer.Serialize(mcpServers[name]), JsonDefaults.Indented) ?? new McpServerEntry();
+            JsonSerializer.Serialize(mcpServers[name])) ?? new McpServerEntry();
         entry.Enabled = enabled;
         mcpServers[name] = SerializeEntry(entry);
 
@@ -832,7 +832,7 @@ internal static class McpCommand
 
     private static JsonElement SerializeEntry(McpServerEntry entry)
     {
-        var json = JsonSerializer.Serialize(entry, JsonDefaults.Indented);
+        var json = JsonSerializer.Serialize(entry);
         using var doc = JsonDocument.Parse(json);
         return doc.RootElement.Clone();
     }

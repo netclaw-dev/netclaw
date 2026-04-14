@@ -9,16 +9,18 @@ namespace Netclaw.Cli.Json;
 /// </summary>
 internal static class JsonDefaults
 {
+    private static readonly JsonStringEnumConverter EnumConverter = new();
+
     /// <summary>
     /// Daemon API communication: camelCase names, case-insensitive reads, numeric-string handling.
     /// Equivalent to <see cref="JsonSerializerDefaults.Web"/>.
     /// </summary>
-    public static readonly JsonSerializerOptions Api = new(JsonSerializerDefaults.Web);
+    internal static readonly JsonSerializerOptions Api = new(JsonSerializerDefaults.Web);
 
     /// <summary>
     /// Headless-channel JSON envelope output: camelCase names, nulls omitted.
     /// </summary>
-    public static readonly JsonSerializerOptions CliOutput = new()
+    internal static readonly JsonSerializerOptions CliOutput = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
@@ -27,7 +29,7 @@ internal static class JsonDefaults
     /// <summary>
     /// Pretty-printed terminal output.
     /// </summary>
-    public static readonly JsonSerializerOptions Indented = new()
+    internal static readonly JsonSerializerOptions Indented = new()
     {
         WriteIndented = true,
     };
@@ -35,25 +37,25 @@ internal static class JsonDefaults
     /// <summary>
     /// Config and secrets file serialization: pretty-printed with enum values as strings.
     /// </summary>
-    public static readonly JsonSerializerOptions ConfigFile = new()
+    internal static readonly JsonSerializerOptions ConfigFile = new()
     {
         WriteIndented = true,
-        Converters = { new JsonStringEnumConverter() },
+        Converters = { EnumConverter },
     };
 
     /// <summary>
     /// Config file deserialization: Web defaults (camelCase, case-insensitive) plus enum values as strings.
     /// </summary>
-    public static readonly JsonSerializerOptions ConfigRead = new(JsonSerializerDefaults.Web)
+    internal static readonly JsonSerializerOptions ConfigRead = new(JsonSerializerDefaults.Web)
     {
-        Converters = { new JsonStringEnumConverter() },
+        Converters = { EnumConverter },
     };
 
     /// <summary>
     /// Pretty-printed terminal output with camelCase property names.
     /// Used for structured JSON output (stats, sessions) that maps to daemon API response shapes.
     /// </summary>
-    public static readonly JsonSerializerOptions IndentedCamelCase = new()
+    internal static readonly JsonSerializerOptions IndentedCamelCase = new()
     {
         WriteIndented = true,
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
@@ -62,8 +64,8 @@ internal static class JsonDefaults
     /// <summary>
     /// Deserialization of data containing enum values serialized as strings.
     /// </summary>
-    public static readonly JsonSerializerOptions EnumAware = new()
+    internal static readonly JsonSerializerOptions EnumAware = new()
     {
-        Converters = { new JsonStringEnumConverter() },
+        Converters = { EnumConverter },
     };
 }
