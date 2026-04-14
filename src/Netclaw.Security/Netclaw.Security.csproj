@@ -11,6 +11,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <PackageReference Include="YamlDotNet" />
     <ProjectReference Include="..\Netclaw.Configuration\Netclaw.Configuration.csproj" />
   </ItemGroup>
 
