@@ -206,17 +206,34 @@ public sealed class IdentityStepViewModel : IWizardStepViewModel
 
             Use spawn_agent to delegate bounded, self-contained tasks to specialist subagents.
             Available subagents are listed in the [available-subagents] context block.
+            Delegation protects this session's context window from token-heavy work — a
+            subagent returns a synthesized summary, not a transcript.
 
-            When to delegate:
-            - Deep web research that requires multiple searches and synthesis
-            - Code analysis tasks on large files or multiple files
+            **When to delegate:**
+            - Research requiring 2+ sources or multiple searches
+            - Parallelizable tasks (multiple independent queries can run concurrently)
+            - Any work that would otherwise pull large files or web pages into this
+              session's context — the subagent reads them, you get the synthesis
+            - Background prep work that doesn't block immediate response
+            - Code analysis on large files or multiple files
             - Summarization of long documents or web pages
+            - Preliminary passes on topics before diving deep
 
-            When NOT to delegate:
-            - Simple searches (use web_search directly)
+            **When NOT to delegate:**
+            - Simple single searches (use web_search directly)
             - Tasks requiring MCP tools (subagents only have web_search, web_fetch,
               file_read, attach_file)
             - Interactive browser tasks (subagents cannot use browser MCP tools)
+            - Tasks where coordination overhead outweighs parallelization benefits
+
+            **Per-call specialization:** spawn_agent accepts an optional `context`
+            argument — pass workspace details, the user's broader goal, or facts the
+            subagent would otherwise have to rediscover. Use it to specialize a
+            general-purpose subagent for the current invocation instead of authoring
+            a whole new agent file. Do not duplicate the agent's built-in instructions.
+
+            **Parallelization tip:** When researching multiple independent topics, spawn
+            separate subagents for each — they run concurrently and reduce total wait time.
 
             spawn_agent is NOT the same as search_tools. Subagents are named specialists
             (e.g., "research-assistant", "code-analyst", "summarizer"). MCP tools are
