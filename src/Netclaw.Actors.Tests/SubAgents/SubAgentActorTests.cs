@@ -274,6 +274,84 @@ public class SubAgentActorTests : TestKit
         Assert.Equal(SubAgentFindingRecallMode.Searchable, result.Findings[0].RecallMode);
     }
 
+    [Fact]
+    public void BuildUserMessage_returns_task_only_when_context_is_null()
+    {
+        var result = SubAgentActor.BuildUserMessage(runtimeContext: null, task: "Find the latest release.");
+
+        Assert.Equal("Find the latest release.", result);
+    }
+
+    [Fact]
+    public void BuildUserMessage_returns_task_only_when_context_is_whitespace()
+    {
+        var result = SubAgentActor.BuildUserMessage(runtimeContext: "   \t  ", task: "Find it.");
+
+        Assert.Equal("Find it.", result);
+    }
+
+    [Fact]
+    public void BuildUserMessage_prefixes_context_block_when_present()
+    {
+        var result = SubAgentActor.BuildUserMessage(
+            runtimeContext: "Workspace is netclaw on branch feature/foo.",
+            task: "Summarize the recent commits.");
+
+        Assert.StartsWith("Context:\nWorkspace is netclaw on branch feature/foo.", result);
+        Assert.Contains("\n\nTask:\nSummarize the recent commits.", result);
+    }
+
+    [Fact]
+    public async Task RuntimeContext_is_prefixed_onto_first_user_message()
+    {
+        var fakeClient = new FakeChatClient();
+        var definition = CreateDefinition();
+        var agent = Sys.ActorOf(SubAgentActor.CreateProps(definition, fakeClient));
+
+        var result = await agent.Ask<SubAgentResult>(
+            new RunSubAgent
+            {
+                Task = "Summarize the recent commits.",
+                RuntimeContext = "Workspace is netclaw on branch feature/foo.",
+                Timeout = TimeSpan.FromSeconds(5)
+            },
+            TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        Assert.True(result.Success);
+        Assert.NotNull(fakeClient.LastReceivedMessages);
+
+        // System prompt is message 0, user message is message 1.
+        Assert.Equal(2, fakeClient.LastReceivedMessages.Count);
+        Assert.Equal(ChatRole.User, fakeClient.LastReceivedMessages[1].Role);
+
+        var userText = fakeClient.LastReceivedMessages[1].Text;
+        Assert.Contains("Context:", userText);
+        Assert.Contains("Workspace is netclaw on branch feature/foo.", userText);
+        Assert.Contains("Task:", userText);
+        Assert.Contains("Summarize the recent commits.", userText);
+    }
+
+    [Fact]
+    public async Task Null_RuntimeContext_leaves_first_user_message_as_raw_task()
+    {
+        var fakeClient = new FakeChatClient();
+        var definition = CreateDefinition();
+        var agent = Sys.ActorOf(SubAgentActor.CreateProps(definition, fakeClient));
+
+        var result = await agent.Ask<SubAgentResult>(
+            new RunSubAgent
+            {
+                Task = "Do the thing.",
+                Timeout = TimeSpan.FromSeconds(5)
+            },
+            TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        Assert.True(result.Success);
+        Assert.NotNull(fakeClient.LastReceivedMessages);
+        Assert.Equal("Do the thing.", fakeClient.LastReceivedMessages[1].Text);
+        Assert.DoesNotContain("Context:", fakeClient.LastReceivedMessages[1].Text);
+    }
+
     /// <summary>
     /// IChatClient that always throws on GetResponseAsync.
     /// </summary>
@@ -306,6 +384,11 @@ internal sealed class FakeChatClient : IChatClient
 
     public int CallCount => _callCount;
 
+    /// <summary>
+    /// Snapshot of the messages passed to the most recent call. Replaced on every call.
+    /// </summary>
+    public IReadOnlyList<ChatMessage>? LastReceivedMessages { get; private set; }
+
     public TimeSpan Delay { get; set; } = TimeSpan.Zero;
 
     /// <summary>
@@ -329,6 +412,7 @@ internal sealed class FakeChatClient : IChatClient
         CancellationToken cancellationToken = default)
     {
         Interlocked.Increment(ref _callCount);
+        LastReceivedMessages = messages.ToList();
 
         if (Delay > TimeSpan.Zero)
             await Task.Delay(Delay, cancellationToken);

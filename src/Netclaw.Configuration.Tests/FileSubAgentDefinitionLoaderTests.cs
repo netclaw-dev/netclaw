@@ -24,6 +24,13 @@ public class FileSubAgentDefinitionLoaderTests : IDisposable
             Directory.Delete(_tempDir, recursive: true);
     }
 
+    private string WriteAgent(string fileName, string content)
+    {
+        var path = Path.Combine(_paths.AgentsDirectory, fileName);
+        File.WriteAllText(path, content);
+        return path;
+    }
+
     [Fact]
     public void LoadAll_returns_empty_when_no_files()
     {
@@ -32,156 +39,148 @@ public class FileSubAgentDefinitionLoaderTests : IDisposable
     }
 
     [Fact]
-    public void LoadAll_loads_inline_system_prompt()
+    public void LoadAll_parses_full_frontmatter_and_body()
     {
-        File.WriteAllText(Path.Combine(_paths.AgentsDirectory, "test.json"), """
-            {
-              "name": "test-agent",
-              "description": "A test agent",
-              "systemPrompt": "You are a test agent.",
-              "tools": ["web_search"],
-              "timeoutSeconds": 30
-            }
+        WriteAgent("research-assistant.md", """
+            ---
+            name: research-assistant
+            description: Deep research
+            tools: [web_search, web_fetch]
+            modelRole: Main
+            timeoutSeconds: 120
+            visibility: user-facing
+            emitStructuredFindings: true
+            ---
+
+            You are a researcher.
+            Follow sources carefully.
             """);
 
         var results = _loader.LoadAll();
+
         Assert.Single(results);
-        Assert.Equal("test-agent", results[0].Name);
-        Assert.Equal("You are a test agent.", results[0].EffectiveSystemPrompt);
+        var profile = results[0];
+        Assert.Equal("research-assistant", profile.Name);
+        Assert.Equal("Deep research", profile.Description);
+        Assert.Contains("You are a researcher.", profile.SystemPrompt);
+        Assert.Contains("Follow sources carefully.", profile.SystemPrompt);
+        Assert.Equal(new[] { "web_search", "web_fetch" }, profile.ToolNames);
+        Assert.Equal(ModelRole.Main, profile.ModelRole);
+        Assert.Equal(120, profile.TimeoutSeconds);
+        Assert.True(profile.EmitStructuredFindings);
+        Assert.Equal(SubAgentVisibility.UserFacing, profile.Visibility);
     }
 
     [Fact]
-    public void LoadAll_loads_system_prompt_from_file()
+    public void LoadAll_defaults_model_role_to_compaction_and_timeout_to_60()
     {
-        File.WriteAllText(Path.Combine(_paths.AgentsDirectory, "test.json"), """
-            {
-              "name": "test-agent",
-              "description": "A test agent",
-              "systemPromptFile": "test.md",
-              "tools": ["web_search"]
-            }
+        WriteAgent("minimal.md", """
+            ---
+            name: minimal
+            description: Minimal agent
+            tools: [web_search]
+            ---
+
+            You are minimal.
             """);
-        File.WriteAllText(Path.Combine(_paths.AgentsDirectory, "test.md"),
-            "You are a test agent from a file.");
 
         var results = _loader.LoadAll();
+
         Assert.Single(results);
-        Assert.Equal("You are a test agent from a file.", results[0].EffectiveSystemPrompt);
+        Assert.Equal(ModelRole.Compaction, results[0].ModelRole);
+        Assert.Equal(60, results[0].TimeoutSeconds);
+        Assert.False(results[0].EmitStructuredFindings);
+        Assert.Equal(SubAgentVisibility.UserFacing, results[0].Visibility);
     }
 
     [Fact]
-    public void LoadAll_skips_missing_prompt_file()
+    public void LoadAll_skips_file_with_no_frontmatter()
     {
-        File.WriteAllText(Path.Combine(_paths.AgentsDirectory, "test.json"), """
-            {
-              "name": "test-agent",
-              "description": "A test agent",
-              "systemPromptFile": "nonexistent.md",
-              "tools": ["web_search"]
-            }
+        WriteAgent("bare.md", "Just a body. No frontmatter at all.");
+
+        var results = _loader.LoadAll();
+
+        Assert.Empty(results);
+    }
+
+    [Fact]
+    public void LoadAll_skips_malformed_frontmatter()
+    {
+        WriteAgent("broken.md", """
+            ---
+            name: broken
+            description: [unclosed list
+            ---
+
+            body
             """);
 
         var results = _loader.LoadAll();
+
+        Assert.Empty(results);
+    }
+
+    [Fact]
+    public void LoadAll_skips_agent_missing_name()
+    {
+        WriteAgent("noname.md", """
+            ---
+            description: Has a description but no name
+            tools: [web_search]
+            ---
+
+            body
+            """);
+
+        var results = _loader.LoadAll();
+
+        Assert.Empty(results);
+    }
+
+    [Fact]
+    public void LoadAll_skips_agent_missing_description()
+    {
+        WriteAgent("nodesc.md", """
+            ---
+            name: nodesc
+            tools: [web_search]
+            ---
+
+            body
+            """);
+
+        var results = _loader.LoadAll();
+
+        Assert.Empty(results);
+    }
+
+    [Fact]
+    public void LoadAll_skips_agent_with_empty_body()
+    {
+        WriteAgent("empty-body.md", """
+            ---
+            name: empty-body
+            description: Has frontmatter but nothing after it
+            tools: [web_search]
+            ---
+            """);
+
+        var results = _loader.LoadAll();
+
         Assert.Empty(results);
     }
 
     [Fact]
     public void LoadAll_skips_agent_with_no_tools()
     {
-        File.WriteAllText(Path.Combine(_paths.AgentsDirectory, "test.json"), """
-            {
-              "name": "test-agent",
-              "description": "A test agent",
-              "systemPrompt": "You are a test agent.",
-              "tools": []
-            }
-            """);
+        WriteAgent("no-tools.md", """
+            ---
+            name: no-tools
+            description: A test agent
+            tools: []
+            ---
 
-        var results = _loader.LoadAll();
-        Assert.Empty(results);
-    }
-
-    [Fact]
-    public void LoadAll_skips_agent_with_no_name()
-    {
-        File.WriteAllText(Path.Combine(_paths.AgentsDirectory, "test.json"), """
-            {
-              "description": "A test agent",
-              "systemPrompt": "You are a test agent.",
-              "tools": ["web_search"]
-            }
-            """);
-
-        var results = _loader.LoadAll();
-        Assert.Empty(results);
-    }
-
-    [Fact]
-    public void LoadAll_skips_invalid_json()
-    {
-        File.WriteAllText(Path.Combine(_paths.AgentsDirectory, "bad.json"), "not json at all");
-
-        var results = _loader.LoadAll();
-        Assert.Empty(results);
-    }
-
-    [Fact]
-    public void ToProfile_converts_correctly()
-    {
-        File.WriteAllText(Path.Combine(_paths.AgentsDirectory, "test.json"), """
-            {
-              "name": "research-assistant",
-              "description": "Deep research",
-              "systemPrompt": "You are a researcher.",
-              "tools": ["web_search", "web_fetch"],
-              "modelRole": "Main",
-              "timeoutSeconds": 120
-            }
-            """);
-
-        var results = _loader.LoadAll();
-        var profile = results[0].ToProfile();
-
-        Assert.Equal("research-assistant", profile.Name);
-        Assert.Equal("Deep research", profile.Description);
-        Assert.Equal("You are a researcher.", profile.SystemPrompt);
-        Assert.Equal(["web_search", "web_fetch"], profile.ToolNames);
-        Assert.Equal(ModelRole.Main, profile.ModelRole);
-        Assert.Equal(120, profile.TimeoutSeconds);
-        Assert.Equal(SubAgentVisibility.UserFacing, profile.Visibility);
-    }
-
-    [Fact]
-    public void ToProfile_defaults_model_role_to_compaction()
-    {
-        File.WriteAllText(Path.Combine(_paths.AgentsDirectory, "test.json"), """
-            {
-              "name": "test",
-              "description": "Test",
-              "systemPrompt": "Test.",
-              "tools": ["web_search"]
-            }
-            """);
-
-        var results = _loader.LoadAll();
-        var profile = results[0].ToProfile();
-
-        Assert.Equal(ModelRole.Compaction, profile.ModelRole);
-        Assert.Equal(60, profile.TimeoutSeconds);
-    }
-
-    [Fact]
-    public void LoadAll_skips_prompt_path_outside_agents_directory()
-    {
-        var escapedPath = Path.Combine("..", "outside.md");
-        File.WriteAllText(Path.Combine(_tempDir, "outside.md"), "secret");
-        File.WriteAllText(Path.Combine(_paths.AgentsDirectory, "test.json"), $$"""
-            {
-              "name": "test-agent",
-              "description": "A test agent",
-              "systemPromptFile": "{{escapedPath}}",
-              "tools": ["web_search"]
-            }
+            You are a test agent.
             """);
 
         var results = _loader.LoadAll();
@@ -192,14 +191,85 @@ public class FileSubAgentDefinitionLoaderTests : IDisposable
     [Fact]
     public void LoadAll_skips_user_facing_agent_with_disallowed_tools()
     {
-        File.WriteAllText(Path.Combine(_paths.AgentsDirectory, "test.json"), """
-            {
-              "name": "test-agent",
-              "description": "A test agent",
-              "systemPrompt": "You are a test agent.",
-              "tools": ["web_search", "file_write", "shell_execute"]
-            }
+        WriteAgent("bad-tools.md", """
+            ---
+            name: bad-tools
+            description: A test agent
+            tools: [web_search, file_write, shell_execute]
+            ---
+
+            You are a test agent.
             """);
+
+        var results = _loader.LoadAll();
+
+        Assert.Empty(results);
+    }
+
+    [Fact]
+    public void LoadAll_rejects_duplicate_names_across_files()
+    {
+        WriteAgent("first.md", """
+            ---
+            name: shared
+            description: First agent
+            tools: [web_search]
+            ---
+
+            First body.
+            """);
+        WriteAgent("second.md", """
+            ---
+            name: shared
+            description: Second agent
+            tools: [web_fetch]
+            ---
+
+            Second body.
+            """);
+
+        var results = _loader.LoadAll();
+
+        Assert.Single(results);
+        // Deterministic ordering picks the first file alphabetically.
+        Assert.Equal("First agent", results[0].Description);
+    }
+
+    [Fact]
+    public void LoadAll_accepts_pascal_case_visibility_and_hyphenated_visibility()
+    {
+        WriteAgent("hyphenated.md", """
+            ---
+            name: hyphenated
+            description: Hyphenated visibility value
+            tools: [web_search]
+            visibility: user-facing
+            ---
+
+            body
+            """);
+        WriteAgent("pascal.md", """
+            ---
+            name: pascal
+            description: PascalCase visibility value
+            tools: [web_search]
+            visibility: UserFacing
+            ---
+
+            body
+            """);
+
+        var results = _loader.LoadAll();
+
+        Assert.Equal(2, results.Count);
+        Assert.All(results, r => Assert.Equal(SubAgentVisibility.UserFacing, r.Visibility));
+    }
+
+    [Fact]
+    public void LoadAll_ignores_non_md_files()
+    {
+        WriteAgent("ignored.json", """{"name":"json","description":"ignored"}""");
+        WriteAgent("ignored.txt", "plain text");
 
         var results = _loader.LoadAll();
 

@@ -46,6 +46,7 @@ public sealed class SubAgentSpawner
     public async Task<SubAgentResult> SpawnAsync(
         SubAgentProfile profile,
         string task,
+        string? runtimeContext,
         ToolExecutionContext context,
         CancellationToken ct = default)
     {
@@ -110,6 +111,7 @@ public sealed class SubAgentSpawner
                 new RunSubAgent
                 {
                     Task = task,
+                    RuntimeContext = runtimeContext,
                     Timeout = subAgentTimeout,
                     SessionScopeId = subAgentScopeId,
                     Audience = context.Audience,

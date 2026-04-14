@@ -35,8 +35,15 @@ public sealed record SubAgentDefinition
 /// </summary>
 public sealed record RunSubAgent
 {
-    /// <summary>The task for the subagent to perform (becomes the user message).</summary>
+    /// <summary>The task for the subagent to perform (becomes part of the user message).</summary>
     public required string Task { get; init; }
+
+    /// <summary>
+    /// Optional per-invocation background context from the parent session. When present,
+    /// it is prefixed onto the subagent's first user message as a "Context:" block so the
+    /// agent's static system prompt (loaded from disk) remains reproducible.
+    /// </summary>
+    public string? RuntimeContext { get; init; }
 
     /// <summary>Wall-clock timeout set by the caller.</summary>
     public required TimeSpan Timeout { get; init; }

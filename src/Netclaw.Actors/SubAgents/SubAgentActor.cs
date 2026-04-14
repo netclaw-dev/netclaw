@@ -106,9 +106,11 @@ public sealed class SubAgentActor : ReceiveActor
             _timeoutSchedule = Context.System.Scheduler.ScheduleTellOnceCancelable(
                 msg.Timeout, Self, SubAgentTimeout.Instance, ActorRefs.NoSender);
 
-            // Build initial conversation: system prompt + task as user message
+            // Build initial conversation: system prompt (from file, verbatim) + task as user message.
+            // If the caller supplied runtime context, prefix it onto the user message so the
+            // system prompt stays reproducible across invocations.
             _history.Add(new AiChatMessage(Microsoft.Extensions.AI.ChatRole.System, _definition.SystemPrompt));
-            _history.Add(new AiChatMessage(Microsoft.Extensions.AI.ChatRole.User, msg.Task));
+            _history.Add(new AiChatMessage(Microsoft.Extensions.AI.ChatRole.User, BuildUserMessage(msg.RuntimeContext, msg.Task)));
 
             _log.Info("SubAgent [{AgentName}] starting (tools={ToolCount}, timeout={Timeout})",
                 _definition.Name, _aiTools.Count, msg.Timeout);
@@ -310,6 +312,21 @@ public sealed class SubAgentActor : ReceiveActor
                 Evidence = []
             }
         ];
+    }
+
+    /// <summary>
+    /// Compose the initial user message for the subagent. When <paramref name="runtimeContext"/>
+    /// is present, prefixes a <c>Context:</c> block ahead of the <c>Task:</c> block so the
+    /// parent-supplied background stays visually separated from the agent's task.
+    /// When runtime context is null or whitespace, returns the raw task string for backward
+    /// compatibility with the pre-Context protocol.
+    /// </summary>
+    internal static string BuildUserMessage(string? runtimeContext, string task)
+    {
+        if (string.IsNullOrWhiteSpace(runtimeContext))
+            return task;
+
+        return $"Context:\n{runtimeContext.Trim()}\n\nTask:\n{task}";
     }
 
     private static string ExtractText(AiChatMessage message)

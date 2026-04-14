@@ -305,6 +305,8 @@ public sealed class IdentityStepViewModel : IWizardStepViewModel
 
     /// <summary>
     /// Seeds default subagent definition files to the agents directory.
+    /// Each agent is a single <c>.md</c> file with YAML frontmatter, matching
+    /// the <c>SKILL.md</c> pattern and the Claude Code / OpenCode convention.
     /// Does not overwrite existing files so operator customizations are preserved.
     /// </summary>
     public void SeedBuiltInAgents(NetclawPaths paths)
@@ -312,18 +314,16 @@ public sealed class IdentityStepViewModel : IWizardStepViewModel
         var agentsDir = paths.AgentsDirectory;
         Directory.CreateDirectory(agentsDir);
 
-        SeedAgentFile(agentsDir, "research-assistant.json", """
-            {
-              "name": "research-assistant",
-              "description": "Deep web research with search and citation",
-              "systemPromptFile": "research-assistant.md",
-              "tools": ["web_search", "web_fetch", "file_read", "attach_file"],
-              "modelRole": "Compaction",
-              "timeoutSeconds": 120
-            }
-            """);
-
         SeedAgentFile(agentsDir, "research-assistant.md", """
+            ---
+            name: research-assistant
+            description: Deep web research with search and citation
+            tools: [web_search, web_fetch, file_read, attach_file]
+            modelRole: Compaction
+            timeoutSeconds: 120
+            visibility: user-facing
+            ---
+
             You are a research assistant. Your job is to help the user by searching the
             web, gathering information from multiple sources, and synthesizing findings
             into clear, well-organized summaries.
@@ -340,18 +340,16 @@ public sealed class IdentityStepViewModel : IWizardStepViewModel
             - If a search returns no useful results, say so rather than guessing.
             """);
 
-        SeedAgentFile(agentsDir, "code-analyst.json", """
-            {
-              "name": "code-analyst",
-              "description": "Analyze code, run commands, and review files",
-              "systemPromptFile": "code-analyst.md",
-              "tools": ["file_read"],
-              "modelRole": "Compaction",
-              "timeoutSeconds": 120
-            }
-            """);
-
         SeedAgentFile(agentsDir, "code-analyst.md", """
+            ---
+            name: code-analyst
+            description: Analyze code, run commands, and review files
+            tools: [file_read]
+            modelRole: Compaction
+            timeoutSeconds: 120
+            visibility: user-facing
+            ---
+
             You are a code analyst. Your job is to read source code, run build and test
             commands, and provide clear analysis of code quality, structure, and issues.
 
@@ -364,18 +362,16 @@ public sealed class IdentityStepViewModel : IWizardStepViewModel
             - Do not modify code or run commands directly; return analysis for the parent session to act on.
             """);
 
-        SeedAgentFile(agentsDir, "summarizer.json", """
-            {
-              "name": "summarizer",
-              "description": "Summarize documents and content concisely",
-              "systemPromptFile": "summarizer.md",
-              "tools": ["file_read"],
-              "modelRole": "Compaction",
-              "timeoutSeconds": 60
-            }
-            """);
-
         SeedAgentFile(agentsDir, "summarizer.md", """
+            ---
+            name: summarizer
+            description: Summarize documents and content concisely
+            tools: [file_read]
+            modelRole: Compaction
+            timeoutSeconds: 60
+            visibility: user-facing
+            ---
+
             You are a summarizer. Your job is to read content and produce concise,
             structured summaries that capture the essential information.
 
