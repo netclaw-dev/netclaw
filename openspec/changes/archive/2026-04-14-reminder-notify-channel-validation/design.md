@@ -132,11 +132,13 @@ original raw input in prose. The execution-time routing decision uses
   transport would need its own adapter anyway; #644 will formalize
   transport-keyed registration.
 
-- **[Trade-off] The resolver result type flattens channel vs. user into
-  either-or fields** (`ResolvedChannelId`, `ResolvedUserId`). The tool picks
-  whichever is non-null when writing back to `ReportToChannel`. A future
-  change may want both stored separately, but today the downstream path
-  only reads `ReportToChannel` as a single routing target.
+- **[Trade-off] The resolver result type collapses channel and user into a
+  single `ResolvedId` field.** The adapter (e.g. `SlackReminderTargetResolver`)
+  coalesces `channelId ?? userId` once at the transport boundary. A future
+  change that needs to distinguish channel vs. user targets at the reminder
+  layer would have to reintroduce that distinction — today the downstream
+  path only reads `ReportToChannel` as a single routing target, so a single
+  opaque identifier is sufficient.
 
 ## Migration Plan
 
