@@ -1,8 +1,8 @@
 using Akka.Actor;
 using Akka.Hosting;
 using Akka.Hosting.TestKit;
-using Microsoft.Data.Sqlite;
 using Netclaw.Actors.Memory;
+using Netclaw.Actors.Tests.Memory;
 using Netclaw.Configuration;
 using Xunit;
 
@@ -55,7 +55,7 @@ public sealed class SessionMemoryObserverStorageIntegrationTests : TestKit
         {
             var curationActor = Sys.ActorOf(
                 MemoryCurationActor.CreateProps(store),
-                $"curation-create-{Guid.NewGuid():N}");
+                "curation-create");
 
             var probe = CreateTestProbe("curation-create-probe");
             var operation = MakeOperation(
@@ -101,7 +101,7 @@ public sealed class SessionMemoryObserverStorageIntegrationTests : TestKit
         {
             var curationActor = Sys.ActorOf(
                 MemoryCurationActor.CreateProps(store),
-                $"curation-batch-{Guid.NewGuid():N}");
+                "curation-batch");
 
             var probe = CreateTestProbe("curation-batch-probe");
             var operations = new[]
@@ -158,7 +158,7 @@ public sealed class SessionMemoryObserverStorageIntegrationTests : TestKit
         {
             var curationActor = Sys.ActorOf(
                 MemoryCurationActor.CreateProps(store),
-                $"curation-empty-{Guid.NewGuid():N}");
+                "curation-empty");
 
             var probe = CreateTestProbe("curation-empty-probe");
             curationActor.Tell(new EvaluateProposals([]), probe.Ref);
@@ -215,27 +215,5 @@ public sealed class SessionMemoryObserverStorageIntegrationTests : TestKit
             FreshnessAtMs: TimeProvider.System.GetUtcNow().ToUnixTimeMilliseconds(),
             ExpiresAtMs: null);
 
-    private async Task CleanupAsync()
-    {
-        if (!Directory.Exists(_dbDir))
-            return;
-
-        SqliteConnection.ClearAllPools();
-        for (var i = 0; i < 8; i++)
-        {
-            try
-            {
-                Directory.Delete(_dbDir, recursive: true);
-                return;
-            }
-            catch (IOException) when (i < 7)
-            {
-                await Task.Delay(25 * (i + 1));
-            }
-            catch (UnauthorizedAccessException) when (i < 7)
-            {
-                await Task.Delay(25 * (i + 1));
-            }
-        }
-    }
+    private Task CleanupAsync() => SqliteTempDirectoryCleanup.TryDeleteDirectoryAsync(_dbDir);
 }

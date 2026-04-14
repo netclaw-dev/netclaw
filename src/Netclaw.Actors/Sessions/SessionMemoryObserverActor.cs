@@ -363,7 +363,25 @@ public sealed class SessionMemoryObserverActor : ReceivePersistentActor
             inputTokens = response.Usage?.InputTokenCount;
             outputTokens = response.Usage?.OutputTokenCount;
 
-            var proposals = ParseProposals(text, _log.Info);
+            var parseResult = ParseProposals(text);
+            switch (parseResult.Outcome)
+            {
+                case ParseProposalsOutcome.NoJsonFound:
+                    _log.Info(
+                        "session_observer_parse_no_json rawLength={RawLength} candidateCount={CandidateCount} preview={Preview}",
+                        text.Length,
+                        parseResult.CandidateCount,
+                        parseResult.Preview);
+                    break;
+                case ParseProposalsOutcome.ParseFailed:
+                    _log.Info(
+                        "session_observer_parse_failed rawLength={RawLength} candidateCount={CandidateCount} preview={Preview}",
+                        text.Length,
+                        parseResult.CandidateCount,
+                        parseResult.Preview);
+                    break;
+            }
+            var proposals = parseResult.Proposals;
             var newAnchors = proposals
                 .Where(p => p.Anchor is not null)
                 .Select(p => p.Anchor!.CanonicalName)
@@ -394,59 +412,71 @@ public sealed class SessionMemoryObserverActor : ReceivePersistentActor
     }
 
     /// <summary>
-    /// Parses memory proposals out of an LLM distillation response. The parser
-    /// is robust to common Qwen-style output shapes (preamble text with braces,
-    /// markdown code fences, multiple top-level JSON objects, trailing chatter)
-    /// rather than requiring perfectly-formatted output. When parsing fails,
-    /// the optional <paramref name="logSink"/> receives a structured drop-reason
-    /// event so the failure isn't silent. <c>logSink</c> takes a fully-formatted
-    /// string so this method has no Akka dependency and can be unit-tested
-    /// without an actor system.
+    /// Outcome of a <see cref="ParseProposals"/> call. Returned alongside the
+    /// proposal list so callers can emit structured log events (with named
+    /// placeholders) for the failure modes without the parser needing an
+    /// Akka <c>ILoggingAdapter</c> dependency.
     /// </summary>
-    internal static IReadOnlyList<MemoryProposal> ParseProposals(string text, Action<string>? logSink = null)
+    internal enum ParseProposalsOutcome
+    {
+        /// <summary>Input was null or whitespace; no LLM call was wasted.</summary>
+        EmptyInput,
+        /// <summary>Proposals were successfully extracted from the response.</summary>
+        Success,
+        /// <summary>
+        /// No JSON object could be located in the response at all
+        /// (e.g. refusal text, malformed output with no braces).
+        /// </summary>
+        NoJsonFound,
+        /// <summary>
+        /// One or more JSON object candidates were located but none deserialized
+        /// into a <c>DistillationResponse</c> with a non-null <c>Proposals</c>
+        /// array. Distinct from <see cref="NoJsonFound"/> because it points at
+        /// schema/format issues rather than the model not producing JSON at all.
+        /// </summary>
+        ParseFailed,
+    }
+
+    internal sealed record ParseProposalsResult(
+        IReadOnlyList<MemoryProposal> Proposals,
+        ParseProposalsOutcome Outcome,
+        int CandidateCount,
+        string? Preview);
+
+    internal static ParseProposalsResult ParseProposals(string text)
     {
         if (string.IsNullOrWhiteSpace(text))
-            return [];
+            return new ParseProposalsResult([], ParseProposalsOutcome.EmptyInput, 0, null);
 
         var stripped = StripMarkdownFences(text);
 
-        // Fast path: the response is already clean JSON.
         var direct = TryDeserialize(stripped);
         if (direct is not null)
-            return direct;
+            return new ParseProposalsResult(direct, ParseProposalsOutcome.Success, 0, null);
 
-        // Slow path: walk the response and find every balanced JSON object,
-        // returning the first one that deserializes into a DistillationResponse
-        // with a non-null Proposals array. Handles preamble text, multiple
-        // top-level objects, transcript echoes containing braces, and trailing
-        // chatter — none of which the previous first-`{` to last-`}` substring
-        // heuristic could parse.
         var candidates = ExtractJsonObjectCandidates(stripped);
         foreach (var candidate in candidates)
         {
             var parsed = TryDeserialize(candidate);
             if (parsed is not null)
-                return parsed;
+                return new ParseProposalsResult(parsed, ParseProposalsOutcome.Success, candidates.Count, null);
         }
 
-        // Surface the silent drop. PR #653 added drop-reason observability for
-        // the rules-extractor path; this is the same principle for the LLM
-        // distillation path. Without these events, a parser regression would
-        // burn LLM tokens and produce zero memories with no diagnostic trail.
-        if (logSink is not null)
-        {
-            var preview = Truncate(text.Trim(), 200);
-            var eventName = candidates.Count == 0
-                ? "session_observer_parse_no_json"
-                : "session_observer_parse_failed";
-            logSink($"{eventName} rawLength={text.Length} candidateCount={candidates.Count} preview={preview}");
-        }
-
-        return [];
+        var preview = Truncate(text.Trim(), 200);
+        var outcome = candidates.Count == 0
+            ? ParseProposalsOutcome.NoJsonFound
+            : ParseProposalsOutcome.ParseFailed;
+        return new ParseProposalsResult([], outcome, candidates.Count, preview);
     }
 
     internal static string StripMarkdownFences(string text)
     {
+        // Fast path: skip the trim allocation when the input clearly has no
+        // fence. Any leading whitespace is preserved unchanged because the
+        // caller (ParseProposals) re-checks via direct deserialization first.
+        if (text.Length == 0 || !ContainsFenceMarker(text))
+            return text;
+
         var trimmed = text.Trim();
         if (trimmed.Length < 7 || !trimmed.StartsWith("```", StringComparison.Ordinal))
             return text;
@@ -460,6 +490,18 @@ public sealed class SessionMemoryObserverActor : ReceivePersistentActor
             return text;
 
         return trimmed[(openEnd + 1)..closingFence].Trim();
+    }
+
+    private static bool ContainsFenceMarker(string text)
+    {
+        // Scan once for any `` ` `` — far cheaper than a string-allocating
+        // .Trim() before we know whether a fence is even present.
+        for (var i = 0; i < text.Length; i++)
+        {
+            if (text[i] == '`')
+                return true;
+        }
+        return false;
     }
 
     internal static IReadOnlyList<string> ExtractJsonObjectCandidates(string text)

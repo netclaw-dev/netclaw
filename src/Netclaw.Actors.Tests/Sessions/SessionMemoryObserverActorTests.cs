@@ -583,7 +583,15 @@ public sealed class SessionMemoryObserverActorTests : TestKit
             transcript: "user: synthetic transcript line one\nassistant: synthetic response line one",
             existingProposals: [new ProposedMemoryContext("synthetic-anchor", "Synthetic Anchor", "snippet")]);
 
-        return Verifier.Verify(prompt, extension: "txt");
+        // The user prompt is a single-line serialized JSON. Pretty-print it
+        // before snapshotting so any future diff is readable per-field rather
+        // than a wall-of-text on one line.
+        using var doc = System.Text.Json.JsonDocument.Parse(prompt);
+        var indented = System.Text.Json.JsonSerializer.Serialize(
+            doc.RootElement,
+            new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+
+        return Verifier.Verify(indented, extension: "json");
     }
 
     // ── Parser tests (Fix 1c) ──────────────────────────────────────────
@@ -618,10 +626,15 @@ public sealed class SessionMemoryObserverActorTests : TestKit
         """;
 
     [Fact]
-    public void ParseProposals_returns_empty_for_null_or_whitespace()
+    public void ParseProposals_reports_empty_input_for_null_or_whitespace()
     {
-        Assert.Empty(SessionMemoryObserverActor.ParseProposals(string.Empty));
-        Assert.Empty(SessionMemoryObserverActor.ParseProposals("   \n\t  "));
+        var empty = SessionMemoryObserverActor.ParseProposals(string.Empty);
+        Assert.Empty(empty.Proposals);
+        Assert.Equal(SessionMemoryObserverActor.ParseProposalsOutcome.EmptyInput, empty.Outcome);
+
+        var whitespace = SessionMemoryObserverActor.ParseProposals("   \n\t  ");
+        Assert.Empty(whitespace.Proposals);
+        Assert.Equal(SessionMemoryObserverActor.ParseProposalsOutcome.EmptyInput, whitespace.Outcome);
     }
 
     [Fact]
@@ -629,7 +642,8 @@ public sealed class SessionMemoryObserverActorTests : TestKit
     {
         var result = SessionMemoryObserverActor.ParseProposals(CleanProposalJson);
 
-        var proposal = Assert.Single(result);
+        Assert.Equal(SessionMemoryObserverActor.ParseProposalsOutcome.Success, result.Outcome);
+        var proposal = Assert.Single(result.Proposals);
         Assert.Equal("test-anchor", proposal.Anchor!.CanonicalName);
     }
 
@@ -637,23 +651,25 @@ public sealed class SessionMemoryObserverActorTests : TestKit
     public void ParseProposals_succeeds_on_empty_proposals_array()
     {
         var result = SessionMemoryObserverActor.ParseProposals(@"{ ""proposals"": [] }");
-        Assert.Empty(result);
+
+        Assert.Equal(SessionMemoryObserverActor.ParseProposalsOutcome.Success, result.Outcome);
+        Assert.Empty(result.Proposals);
     }
 
     [Fact]
     public void ParseProposals_recovers_from_preamble_text_with_braces()
     {
-        // This is the failure mode that was breaking ~28% of distillations.
-        // Qwen emits chain-of-thought before the JSON, often containing
-        // brace-delimited enumerations like "{tools, decisions, projects}".
-        // The old parser took the substring from the first `{` (in the
-        // preamble enumeration) to the last `}` (closing the JSON object),
-        // which produced malformed JSON.
+        // The smoking-gun failure mode: Qwen emits chain-of-thought before
+        // the JSON, often containing brace-delimited enumerations like
+        // "{tools, decisions, projects}". The old parser took the substring
+        // from the first `{` in the preamble to the last `}` of the real
+        // JSON object, producing malformed JSON.
         var text = "Looking at the conversation I see {tools, decisions, projects} mentioned. Here's my analysis:\n\n" + CleanProposalJson;
 
         var result = SessionMemoryObserverActor.ParseProposals(text);
 
-        var proposal = Assert.Single(result);
+        Assert.Equal(SessionMemoryObserverActor.ParseProposalsOutcome.Success, result.Outcome);
+        var proposal = Assert.Single(result.Proposals);
         Assert.Equal("test-anchor", proposal.Anchor!.CanonicalName);
     }
 
@@ -664,7 +680,8 @@ public sealed class SessionMemoryObserverActorTests : TestKit
 
         var result = SessionMemoryObserverActor.ParseProposals(text);
 
-        var proposal = Assert.Single(result);
+        Assert.Equal(SessionMemoryObserverActor.ParseProposalsOutcome.Success, result.Outcome);
+        var proposal = Assert.Single(result.Proposals);
         Assert.Equal("test-anchor", proposal.Anchor!.CanonicalName);
     }
 
@@ -675,7 +692,8 @@ public sealed class SessionMemoryObserverActorTests : TestKit
 
         var result = SessionMemoryObserverActor.ParseProposals(text);
 
-        var proposal = Assert.Single(result);
+        Assert.Equal(SessionMemoryObserverActor.ParseProposalsOutcome.Success, result.Outcome);
+        var proposal = Assert.Single(result.Proposals);
         Assert.Equal("test-anchor", proposal.Anchor!.CanonicalName);
     }
 
@@ -686,72 +704,65 @@ public sealed class SessionMemoryObserverActorTests : TestKit
 
         var result = SessionMemoryObserverActor.ParseProposals(text);
 
-        var proposal = Assert.Single(result);
+        Assert.Equal(SessionMemoryObserverActor.ParseProposalsOutcome.Success, result.Outcome);
+        var proposal = Assert.Single(result.Proposals);
         Assert.Equal("test-anchor", proposal.Anchor!.CanonicalName);
     }
 
     [Fact]
     public void ParseProposals_recovers_from_multiple_json_objects()
     {
-        // First object is some unrelated stray JSON, second is the real proposals.
+        // First object is unrelated stray JSON, second is the real proposals.
         // The walker should try each candidate in order until one parses to a
         // DistillationResponse with a non-null Proposals list.
         var text = "{ \"unrelatedField\": \"some value\" }\n\n" + CleanProposalJson;
 
         var result = SessionMemoryObserverActor.ParseProposals(text);
 
-        var proposal = Assert.Single(result);
+        Assert.Equal(SessionMemoryObserverActor.ParseProposalsOutcome.Success, result.Outcome);
+        var proposal = Assert.Single(result.Proposals);
         Assert.Equal("test-anchor", proposal.Anchor!.CanonicalName);
     }
 
     [Fact]
-    public void ParseProposals_returns_empty_on_refusal_text_with_no_json()
+    public void ParseProposals_reports_no_json_found_on_refusal_text()
     {
-        var result = SessionMemoryObserverActor.ParseProposals("There is nothing memory-worthy in this conversation.");
-        Assert.Empty(result);
+        var result = SessionMemoryObserverActor.ParseProposals(
+            "There is nothing memory-worthy in this conversation.");
+
+        Assert.Empty(result.Proposals);
+        Assert.Equal(SessionMemoryObserverActor.ParseProposalsOutcome.NoJsonFound, result.Outcome);
+        Assert.Equal(0, result.CandidateCount);
+        Assert.NotNull(result.Preview);
     }
 
     [Fact]
-    public void ParseProposals_returns_empty_on_truncated_json()
+    public void ParseProposals_reports_parse_failed_when_candidates_exist_but_none_match()
+    {
+        // Walker finds two stray JSON objects, neither of which deserialize
+        // into a DistillationResponse with a non-null Proposals array.
+        // Should be ParseFailed (NOT NoJsonFound), because the distinction
+        // matters for diagnosing prompt vs format issues.
+        var result = SessionMemoryObserverActor.ParseProposals(
+            "{ \"unrelated\": \"data\" } and { \"more\": \"unrelated\" }");
+
+        Assert.Empty(result.Proposals);
+        Assert.Equal(SessionMemoryObserverActor.ParseProposalsOutcome.ParseFailed, result.Outcome);
+        Assert.Equal(2, result.CandidateCount);
+        Assert.NotNull(result.Preview);
+    }
+
+    [Fact]
+    public void ParseProposals_reports_parse_failed_on_truncated_json()
     {
         var truncated = "{ \"proposals\": [ { \"title\": \"foo\", \"content\": \"bar\"";
 
         var result = SessionMemoryObserverActor.ParseProposals(truncated);
 
-        Assert.Empty(result);
-    }
-
-    [Fact]
-    public void ParseProposals_logs_no_json_event_when_no_braces_present()
-    {
-        // Verify the structured drop-reason event fires (Failure Mode D
-        // observability — the whole point of Fix 1a). Without this log event,
-        // a parser regression burns LLM tokens and produces zero memories
-        // with no diagnostic trail.
-        var messages = new List<string>();
-
-        SessionMemoryObserverActor.ParseProposals(
-            "There is nothing memory-worthy in this conversation.",
-            messages.Add);
-
-        Assert.Contains(messages, m => m.Contains("session_observer_parse_no_json", StringComparison.Ordinal));
-    }
-
-    [Fact]
-    public void ParseProposals_logs_parse_failed_event_when_candidates_exist_but_none_parse()
-    {
-        // Walker finds two stray JSON objects, neither of which deserialize
-        // into a DistillationResponse with a non-null Proposals array.
-        // Should produce a parse_failed event (NOT a no_json event), because
-        // the distinction matters for diagnosing prompt vs format issues.
-        var messages = new List<string>();
-
-        SessionMemoryObserverActor.ParseProposals(
-            "{ \"unrelated\": \"data\" } and { \"more\": \"unrelated\" }",
-            messages.Add);
-
-        Assert.Contains(messages, m => m.Contains("session_observer_parse_failed", StringComparison.Ordinal));
-        Assert.DoesNotContain(messages, m => m.Contains("session_observer_parse_no_json", StringComparison.Ordinal));
+        Assert.Empty(result.Proposals);
+        // Truncated JSON has an opening `{` but no matching close, so the
+        // walker reports zero candidates → NoJsonFound. Locks the contract.
+        Assert.Equal(SessionMemoryObserverActor.ParseProposalsOutcome.NoJsonFound, result.Outcome);
     }
 
     // ── ExtractJsonObjectCandidates / StripMarkdownFences direct unit tests ──
