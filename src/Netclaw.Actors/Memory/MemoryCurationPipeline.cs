@@ -1,9 +1,29 @@
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Netclaw.Configuration;
 using Netclaw.Security;
 
 namespace Netclaw.Actors.Memory;
+
+public enum MemoryExtractionDropReason
+{
+    None = 0,
+    EmptyContent,
+    EphemeralContent,
+    SecretLikeContent,
+    PolicyRejected,
+    TurnCompleteNoProjectFact,
+    TraceNotExplicit,
+    FingerprintDuplicate,
+    PayloadDeserializationFailed,
+}
+
+public sealed record MemoryExtractionResult(
+    IReadOnlyList<MemoryCheckpointCandidate> Candidates,
+    MemoryExtractionDropReason DropReason,
+    string? DropDetail = null);
 
 public sealed record MemoryCheckpointPayload(
     string SessionId,
@@ -67,18 +87,23 @@ public sealed class MemoryRulesFirstExtractor(MemoryPolicyEvaluator policy)
     public IReadOnlyList<MemoryCheckpointCandidate> Extract(
         MemoryCheckpointPayload payload,
         IReadOnlySet<string> fingerprintSet)
+        => ExtractWithDiagnostics(payload, fingerprintSet).Candidates;
+
+    public MemoryExtractionResult ExtractWithDiagnostics(
+        MemoryCheckpointPayload payload,
+        IReadOnlySet<string> fingerprintSet)
     {
         var results = new List<MemoryCheckpointCandidate>();
 
         var content = payload.Content?.Trim() ?? string.Empty;
         if (string.IsNullOrWhiteSpace(content))
-            return results;
+            return new MemoryExtractionResult(results, MemoryExtractionDropReason.EmptyContent);
 
         if (IsEphemeral(content))
-            return results;
+            return new MemoryExtractionResult(results, MemoryExtractionDropReason.EphemeralContent);
 
         if (SecretOutputRedactor.ContainsSecretLikeContent(content))
-            return results;
+            return new MemoryExtractionResult(results, MemoryExtractionDropReason.SecretLikeContent);
 
         var decision = policy.EvaluateWrite(
             payload.Sensitivity,
@@ -87,7 +112,7 @@ public sealed class MemoryRulesFirstExtractor(MemoryPolicyEvaluator policy)
             payload.IsExplicitRequest,
             payload.Audience);
         if (!decision.Allowed)
-            return results;
+            return new MemoryExtractionResult(results, MemoryExtractionDropReason.PolicyRejected, decision.Reason);
 
         if (MemoryDomainEnumExtensions.TryFromWireValue(payload.TriggerType, out CheckpointTriggerType trigger)
             && trigger == CheckpointTriggerType.TurnComplete
@@ -97,12 +122,14 @@ public sealed class MemoryRulesFirstExtractor(MemoryPolicyEvaluator policy)
             if (promoted is not null)
                 results.Add(promoted);
 
-            return results;
+            return results.Count > 0
+                ? new MemoryExtractionResult(results, MemoryExtractionDropReason.None)
+                : new MemoryExtractionResult(results, MemoryExtractionDropReason.TurnCompleteNoProjectFact);
         }
 
         var memoryClass = ResolveMemoryClass(payload);
         if (memoryClass == MemoryClass.Trace && !payload.IsExplicitRequest)
-            return results;
+            return new MemoryExtractionResult(results, MemoryExtractionDropReason.TraceNotExplicit);
 
         var resolvedAudienceWire = MemoryPolicyEvaluator.ResolveAudience(payload.Audience, TrustAudience.Public);
         SecurityPolicyDefaults.TryParseAudience(resolvedAudienceWire, out var parsedAudience);
@@ -115,7 +142,7 @@ public sealed class MemoryRulesFirstExtractor(MemoryPolicyEvaluator policy)
         var anchorType = kind == MemoryKind.Record ? "event" : "concept";
         var fingerprint = BuildFingerprint(kind.ToWireValue(), title, content);
         if (fingerprintSet.Contains(fingerprint))
-            return results;
+            return new MemoryExtractionResult(results, MemoryExtractionDropReason.FingerprintDuplicate);
 
         results.Add(new MemoryCheckpointCandidate(
             Kind: kind,
@@ -138,7 +165,7 @@ public sealed class MemoryRulesFirstExtractor(MemoryPolicyEvaluator policy)
             MemoryId: payload.MemoryId,
             SupersedesRecordId: payload.SupersedesRecordId));
 
-        return results;
+        return new MemoryExtractionResult(results, MemoryExtractionDropReason.None);
     }
 
     private static MemoryClass ResolveMemoryClass(MemoryCheckpointPayload payload)
@@ -462,8 +489,13 @@ public sealed class MemoryRulesFirstExtractor(MemoryPolicyEvaluator policy)
     }
 }
 
-public sealed class MemoryCurationEngine(SQLiteMemoryStore store, MemoryRulesFirstExtractor rules)
+public sealed class MemoryCurationEngine(
+    SQLiteMemoryStore store,
+    MemoryRulesFirstExtractor rules,
+    ILogger<MemoryCurationEngine>? logger = null)
 {
+    private readonly ILogger<MemoryCurationEngine> _logger = logger ?? NullLogger<MemoryCurationEngine>.Instance;
+
     public async Task<IReadOnlyList<SQLiteMemoryCurationOperation>> CurateAsync(
         SQLiteMemoryCheckpoint checkpoint,
         CancellationToken ct = default)
@@ -474,18 +506,42 @@ public sealed class MemoryCurationEngine(SQLiteMemoryStore store, MemoryRulesFir
             if (checkpoint.TriggerType == CheckpointTriggerType.ObservedMemoryProposals.ToWireValue())
             {
                 var observed = JsonSerializer.Deserialize<ObservedMemoryCheckpointPayload>(checkpoint.PayloadJson);
-                return observed?.Operations ?? [];
+                var observedOps = observed?.Operations ?? [];
+                if (observedOps.Count == 0)
+                {
+                    _logger.LogInformation(
+                        "memory_checkpoint_dropped_before_curation CheckpointId={CheckpointId} SessionId={SessionId} TriggerType={TriggerType} DropReason={DropReason}",
+                        checkpoint.CheckpointId,
+                        checkpoint.SessionId,
+                        checkpoint.TriggerType,
+                        "ObservedProposalsEmpty");
+                }
+                return observedOps;
             }
 
             payload = JsonSerializer.Deserialize<MemoryCheckpointPayload>(checkpoint.PayloadJson);
         }
-        catch
+        catch (JsonException ex)
         {
+            _logger.LogWarning(ex,
+                "memory_checkpoint_dropped_before_curation CheckpointId={CheckpointId} SessionId={SessionId} TriggerType={TriggerType} DropReason={DropReason}",
+                checkpoint.CheckpointId,
+                checkpoint.SessionId,
+                checkpoint.TriggerType,
+                MemoryExtractionDropReason.PayloadDeserializationFailed);
             return [];
         }
 
         if (payload is null)
+        {
+            _logger.LogInformation(
+                "memory_checkpoint_dropped_before_curation CheckpointId={CheckpointId} SessionId={SessionId} TriggerType={TriggerType} DropReason={DropReason}",
+                checkpoint.CheckpointId,
+                checkpoint.SessionId,
+                checkpoint.TriggerType,
+                MemoryExtractionDropReason.PayloadDeserializationFailed);
             return [];
+        }
 
         var resolvedAudienceWire = MemoryPolicyEvaluator.ResolveAudience(payload.Audience, TrustAudience.Public);
         SecurityPolicyDefaults.TryParseAudience(resolvedAudienceWire, out var parsedAudience);
@@ -498,9 +554,22 @@ public sealed class MemoryCurationEngine(SQLiteMemoryStore store, MemoryRulesFir
             .Select(x => MemoryRulesFirstExtractor.BuildFingerprint(x.Kind, x.Title, x.Snippet))
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-        var candidates = rules.Extract(payload, fingerprints);
+        var extraction = rules.ExtractWithDiagnostics(payload, fingerprints);
+        var candidates = extraction.Candidates;
         if (candidates.Count == 0)
+        {
+            _logger.LogInformation(
+                "memory_checkpoint_dropped_before_curation CheckpointId={CheckpointId} SessionId={SessionId} TriggerType={TriggerType} IsExplicitRequest={IsExplicitRequest} ContentLength={ContentLength} UserContentLength={UserContentLength} DropReason={DropReason} DropDetail={DropDetail}",
+                checkpoint.CheckpointId,
+                checkpoint.SessionId,
+                checkpoint.TriggerType,
+                payload.IsExplicitRequest,
+                payload.Content?.Length ?? 0,
+                payload.UserContent?.Length ?? 0,
+                extraction.DropReason,
+                extraction.DropDetail ?? string.Empty);
             return [];
+        }
 
         return candidates.Select(c => new SQLiteMemoryCurationOperation(
             Kind: c.Kind.ToWireValue(),
