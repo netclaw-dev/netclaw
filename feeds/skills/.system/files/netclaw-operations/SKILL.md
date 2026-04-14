@@ -38,9 +38,16 @@ problems, how to update preferences, or how to maintain itself.
 | `cron` | `"0 */6 * * *"`, `"0 9 * * MON-FRI"` |
 
 Parameters: `name` (human-readable), `prompt` (what to execute),
-`schedule_type`, `schedule`, `report_to_channel` (optional Slack channel),
-`notify_instructions` (optional formatting), `audience` (optional execution
-audience: `public`, `team`, or `personal`).
+`schedule_type`, `schedule`, `report_to_channel` (optional notification
+target), `notify_instructions` (optional formatting), `audience` (optional
+execution audience: `public`, `team`, or `personal`).
+
+`report_to_channel` accepts a `#channel-name`, an `@username`, or a raw
+channel/user ID. Names are resolved to canonical IDs at reminder creation
+time — you do not need to look up internal Slack IDs first. If the target
+cannot be resolved (typo, missing channel, wrong workspace), `set_reminder`
+returns an error immediately instead of silently saving a broken reminder.
+Omit `report_to_channel` to post results back to the current session/thread.
 
 If `audience` is omitted during conversational scheduling, the reminder inherits
 the audience of the channel/session that created it. A reminder cannot be

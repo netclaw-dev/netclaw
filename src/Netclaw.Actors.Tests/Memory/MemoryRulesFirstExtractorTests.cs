@@ -43,4 +43,48 @@ public sealed class MemoryRulesFirstExtractorTests
 
         Assert.NotEmpty(result);
     }
+
+    [Fact]
+    public void Turn_complete_without_project_fact_reports_no_project_fact()
+    {
+        var payload = MakeTurnPayload("This is just a short chat reply.");
+
+        var result = _extractor.ExtractWithDiagnostics(payload, new HashSet<string>());
+
+        Assert.Empty(result.Candidates);
+        Assert.Equal(MemoryExtractionDropReason.TurnCompleteNoProjectFact, result.DropReason);
+    }
+
+    [Fact]
+    public void Empty_content_reports_empty_content_drop_reason()
+    {
+        var payload = MakeTurnPayload(string.Empty);
+
+        var result = _extractor.ExtractWithDiagnostics(payload, new HashSet<string>());
+
+        Assert.Empty(result.Candidates);
+        Assert.Equal(MemoryExtractionDropReason.EmptyContent, result.DropReason);
+    }
+
+    [Fact]
+    public void Ephemeral_content_reports_ephemeral_drop_reason()
+    {
+        var payload = MakeTurnPayload("thanks");
+
+        var result = _extractor.ExtractWithDiagnostics(payload, new HashSet<string>());
+
+        Assert.Empty(result.Candidates);
+        Assert.Equal(MemoryExtractionDropReason.EphemeralContent, result.DropReason);
+    }
+
+    [Fact]
+    public void Accepted_project_statement_reports_no_drop_reason()
+    {
+        var payload = MakeTurnPayload("Our deployment pipeline uses GitHub Actions for CI/CD");
+
+        var result = _extractor.ExtractWithDiagnostics(payload, new HashSet<string>());
+
+        Assert.NotEmpty(result.Candidates);
+        Assert.Equal(MemoryExtractionDropReason.None, result.DropReason);
+    }
 }

@@ -1,4 +1,5 @@
 using Netclaw.Actors.Channels;
+using Netclaw.Actors.Reminders;
 using Netclaw.Channels;
 using Netclaw.Channels.Slack;
 using Netclaw.Channels.Slack.Tools;
@@ -40,6 +41,7 @@ public static class SlackChannelRegistrationExtensions
         services.AddSingleton<ISlackOutboundClient, SlackOutboundClient>();
         services.AddSingleton<ISlackTargetLookupClient, SlackApiTargetLookupClient>();
         services.AddSingleton<ISlackTargetResolver, SlackTargetResolver>();
+        services.AddSingleton<IReminderTargetResolver, SlackReminderTargetResolver>();
         services.AddSingleton<SlackApprovalHandler>();
         services.AddKeyedSingleton<IChannel, SlackChannel>(SlackChannelKey);
         services.AddSingleton<IChannel>(sp =>
