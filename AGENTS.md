@@ -272,3 +272,11 @@ Specialist agents:
 - If a workflow repeats twice, extract or refine a skill/workflow doc.
 - Put volatile detail in repo-owned docs, not this constitution.
 - Keep this file stable and high-signal.
+- **Compressing a skill into a rule is a retrieval operation, not a
+  memory operation.** When distilling a dotnet-skills skill (or any
+  upstream authority) into an audit rule, review rubric, or one-line
+  bullet, open the skill first. Preserve the distinctions the skill
+  draws — not just its headline. Rules that collapse two orthogonal
+  axes into one sentence produce false positives that burn
+  trust in the audit. If a rule cannot be written without losing a
+  distinction the source makes, drop it rather than eliding.

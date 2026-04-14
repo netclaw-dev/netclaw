@@ -187,8 +187,17 @@ parallel (on-fail: "continue"):
         B4. Async state verified via AwaitAssertAsync or TestProbe acks
         B5. No .Result / .Wait() in tests
         B6. Actor tests inherit Akka.Hosting.TestKit, not a custom base
-        B7. External dependencies faked via ConfigureServices, not
-            stub actors
+        B7. Inside hosted Akka.Hosting.TestKit / TestAppBuilderTestKit
+            tests: SERVICE dependencies of actors are faked via
+            ConfigureServices; ACTOR collaborators are faked via
+            TestProbe or a trivial stub actor. Do NOT substitute a
+            stub actor for a production actor under the same typed
+            actor key inside a hosted test — that masks DI/wiring
+            bugs. Bare-ActorSystem fixtures for plain (non-actor)
+            service SUTs are OUT OF SCOPE for this rule: protocol-
+            level stubs there are legitimate (see akka-testing-
+            patterns Best Practice #4: "Use TestProbes for
+            dependencies").
 
       Regression anchors (EXPECT BASELINED — verify via .slopwatch/baseline.json):
         B1 — src/Netclaw.Actors.Tests/Memory/SQLiteMemoryStoreTests.cs:263
@@ -208,7 +217,17 @@ parallel (on-fail: "continue"):
         B5: Grep `\\.Result\\b` and `\\.Wait\\(\\)` in tests.
         B6: Grep `class\\s+\\w+Tests\\s*:` in tests; report any whose
             parent is NOT `TestKit` / `TestAppBuilderTestKit`.
-        B7: `system.ActorOf(.*Stub|Fake|Mock)` patterns (low confidence).
+        B7: `system.ActorOf(.*Stub|Fake|Mock)` patterns — but ONLY
+            flag when the enclosing test class inherits `TestKit` /
+            `TestAppBuilderTestKit` (i.e. a hosted Akka.Hosting test).
+            Bare `ActorSystem.Create(...)` fixtures are OUT OF SCOPE:
+            protocol-level stubs on a bare ActorSystem are the
+            minimum viable fake for a non-actor service SUT whose
+            only actor collaborator is an `IActorRef` or
+            `IRequiredActor<T>`. Also exempt `CreateTestProbe(...)`
+            and `TestProbe` usages entirely (they ARE the upstream
+            skill's Best Practice #4). Low confidence; route to
+            Section 6 "Needs Human Review", not the main backlog.
 
       Waiver check and 10-per-rule cap apply.
     """
