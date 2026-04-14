@@ -1,3 +1,15 @@
+#### 0.13.1 2026-04-14 ####
+
+Netclaw v0.13.1 — llama.cpp JSON Schema compatibility fix and AGENTS.md documentation improvement
+
+**Bug Fixes**
+
+* Fixed SIGFAULT with Notion MCP tools on llama.cpp backends — `McpSchemaSanitizer` now strips JSON Schema keywords that llama.cpp's grammar engine cannot handle (`$schema`, `$id`, `$ref`, `$defs`, `additionalProperties`, `unevaluatedProperties`). Notion's MCP tool schemas use these keywords extensively, causing llama.cpp to SIGFAULT during grammar compilation when those tools were in scope. The sanitizer runs unconditionally on all MCP tool definitions before they reach the model. ([#664](https://github.com/Aaronontheweb/netclaw/pull/664))
+
+**Documentation**
+
+* Added meta-lesson on skill compression to AGENTS.md — the AGENTS.md seed now includes a "Compressing a skill into a rule is a retrieval operation" guidance block, clarifying that distilling a dotnet-skills skill or other upstream authority into an audit rule or review rubric requires opening the source first to preserve the distinctions it draws. Rules that collapse two orthogonal axes into one sentence produce false positives; if a distinction cannot be written without losing nuance, drop the rule rather than elide the distinction. ([#663](https://github.com/Aaronontheweb/netclaw/pull/663))
+
 #### 0.13.0 2026-04-14 ####
 
 Netclaw v0.13.0 — Subagent single-file markdown format, reminder target validation, memory observability, and hardened daemon crash handling
