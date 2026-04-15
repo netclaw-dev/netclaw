@@ -63,12 +63,15 @@ public sealed class SlackConversationActor : ReceiveActor
 
             if (decision.Kind is SlackRoutingDecisionKind.Ignore)
             {
-                var ignoreReason = decision.IgnoreReason?.ToString() ?? "Unknown";
+                // decision.IgnoreReason is non-null here by SlackRoutingDecision
+                // factory invariant (Ignore-kind is only constructed via Ignore(reason)).
+                var ignoreReason = decision.IgnoreReason!.Value;
                 _log.Info(
                     "slack_event_filtered event={0} reason=routing_policy_ignore ignoreReason={1}",
                     message.EventId,
                     ignoreReason);
-                ChannelTelemetry.RecordSlackEventFiltered($"routing_policy_ignore:{ignoreReason}");
+                ChannelTelemetry.RecordSlackEventFiltered(
+                    SlackRoutingDecision.TelemetryLabelFor(ignoreReason));
                 return;
             }
 
