@@ -80,18 +80,16 @@ internal sealed class SignalRSessionActor : ReceiveActor, IWithUnboundedStash, I
             }
         });
 
-        // Mode B reminder arrival on a fresh actor (no connected client).
-        // Lazily initialize the pipeline using defaults so the reminder can
-        // still be delivered even though no StartSignalRSession has been
-        // seen. Output is dropped when there's no current connection, but
-        // the turn still persists via TurnRecorded.
+        // A reminder can fire against a passivated session with no
+        // connected client, so we initialize the pipeline lazily without
+        // a prior StartSignalRSession. Output is dropped if no client is
+        // connected; the turn still persists via TurnRecorded.
         ReceiveAsync<DeliverTrustedSessionTurn>(async msg =>
         {
             try
             {
                 await EnsureInitializedAsync();
                 Become(Active);
-                // Replay the trusted turn through the Active-phase handler.
                 Self.Forward(msg);
                 Stash.UnstashAll();
             }
@@ -178,12 +176,6 @@ internal sealed class SignalRSessionActor : ReceiveActor, IWithUnboundedStash, I
             Context.Stop(Self);
         });
 
-        // Mode B reminder re-entry. Build a ChannelInput with the trusted
-        // reminder content + MessageSource.AckTarget = Sender, write it to
-        // the pipeline input queue. Output is delivered to the currently
-        // connected client (if any) via the existing OutputReceived path;
-        // otherwise persisted via TurnRecorded and visible on next
-        // ResumeSessionAsync.
         ReceiveAsync<DeliverTrustedSessionTurn>(async msg =>
         {
             var ackTarget = Sender;

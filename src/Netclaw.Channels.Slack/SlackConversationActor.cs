@@ -179,10 +179,7 @@ public sealed class SlackConversationActor : ReceiveActor
             thread.Forward(message);
         });
 
-        // Mode B reminder re-entry. SlackGatewayActor has already parsed
-        // the SessionId; we look up (or create) the thread binding and
-        // forward so that Sender (the dispatcher's Ask temp actor) reaches
-        // the leaf binding. No ACL call — trusted delivery path.
+        // No ACL call — audience was validated at reminder mint time.
         Receive<DeliverTrustedSessionTurn>(message =>
         {
             if (!SlackGatewayActor.TryParseSlackSessionId(message.SessionId, out var parsedChannel, out var threadTs)

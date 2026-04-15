@@ -465,23 +465,18 @@ public sealed partial class ReminderManagerActor : ReceiveActor
             _log.Info("Concurrency limit reached ({0}), deferring reminder '{1}'",
                 MaxConcurrentExecutions, reminderId.Value);
             _deferredQueue.Enqueue(reminderId);
-            // Mode A deferred: ack immediately (today's behavior — Mode A
-            // runs in an isolated session and the LLM posts outward on its
-            // own, so envelope ack is fire-and-forget). Mode B deferred:
-            // also ack because the concurrency gate is hit before we can
-            // dispatch to the gateway; the caller has to rely on the
-            // reminder retry/auto-pause path if deferred work can't make
-            // progress (same semantic Mode A has today).
+            // Ack even Mode B envelopes on the deferred path — the
+            // concurrency gate fires before we can dispatch to the
+            // gateway, so holding the envelope open would starve
+            // Akka.Reminders' retry budget on nothing.
             await _client!.AckAsync(envelope);
             return;
         }
 
-        // Mode B: the execution actor holds the envelope open and calls
-        // AckAsync itself after the target session has acknowledged the
-        // turn. Envelope un-ack = Akka.Reminders redelivery per policy.
-        // Mode A: eager ack as today; execution runs fire-and-forget.
         if (isModeB)
         {
+            // Execution actor holds the envelope open and acks itself
+            // once the target session has confirmed receipt.
             StartExecution(definition, envelope);
         }
         else

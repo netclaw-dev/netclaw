@@ -169,39 +169,23 @@ internal sealed class ReminderExecutionActor : ReceiveActor
 
     /// <summary>
     /// Mode B path: dispatches the reminder as a <c>DeliverTrustedSessionTurn</c>
-    /// to the originating channel's gateway, waits for the target session's
-    /// <c>CommandAck</c> via the Ask-gated <c>MessageSource.AckTarget</c>
-    /// propagation, then calls <c>IReminderClient.AckAsync(envelope)</c>
-    /// exactly once on success. On timeout, <c>CommandNack</c>, or any
-    /// exception, <c>AckAsync</c> is NOT called and Akka.Reminders redelivers
-    /// the envelope per its built-in policy. No session pipeline is
-    /// materialized here — output flows back through the originating
-    /// channel's existing subscriber machinery.
+    /// to the originating channel's gateway and calls
+    /// <c>IReminderClient.AckAsync(envelope)</c> exactly once once the
+    /// target session has acknowledged receipt via the
+    /// <c>MessageSource.AckTarget</c>-propagated <c>CommandAck</c>. On
+    /// timeout, <c>CommandNack</c>, or any exception, <c>AckAsync</c> is
+    /// NOT called and Akka.Reminders redelivers per its built-in policy.
     /// </summary>
     private async Task InitializeModeBAsync()
     {
-        if (_envelope is null)
-        {
-            ReportAndStop(false, "Mode B execution actor is missing its envelope");
-            return;
-        }
-
-        if (_reminderClient is null)
-        {
-            ReportAndStop(false, "Mode B reminder client is not initialized");
-            return;
-        }
-
         try
         {
             var sessionId = new SessionId(_definition.SessionId!);
             _sessionIdValue = sessionId.Value;
+            var originChannelType = _definition.OriginChannelType!.Value;
 
             if (_definition.Audience is not { } audience)
                 throw new InvalidOperationException($"Reminder '{_definition.Id}' is missing a persisted execution audience.");
-
-            if (_definition.OriginChannelType is not { } originChannelType)
-                throw new InvalidOperationException($"Mode B reminder '{_definition.Id}' is missing OriginChannelType.");
 
             var reminderDeliveryKey = $"{_definition.Id}:{_dispatchedAt.ToUnixTimeMilliseconds()}";
 
@@ -226,7 +210,6 @@ internal sealed class ReminderExecutionActor : ReceiveActor
                 },
                 ReceivedAt = _dispatchedAt,
                 ReminderId = reminderDeliveryKey
-                // AckTarget is set by the gateway leaf handler from its Sender
             };
 
             var gateway = ResolveGatewayFor(originChannelType);
@@ -236,8 +219,7 @@ internal sealed class ReminderExecutionActor : ReceiveActor
                 return;
             }
 
-            var prompt = BuildPrompt(_definition);
-            var deliverMsg = new DeliverTrustedSessionTurn(sessionId, prompt, source);
+            var deliverMsg = new DeliverTrustedSessionTurn(sessionId, BuildPrompt(_definition), source);
 
             try
             {
@@ -248,7 +230,7 @@ internal sealed class ReminderExecutionActor : ReceiveActor
                         _log.Info(
                             "reminder_mode_b_dispatch_acked execution_id={ExecutionId} reminder_id={ReminderId} session_id={SessionId}",
                             _executionId, _definition.Id, sessionId.Value);
-                        var ackResponse = await _reminderClient.AckAsync(_envelope);
+                        var ackResponse = await _reminderClient!.AckAsync(_envelope!);
                         if (ackResponse.ResponseCode != ReminderAckResponseCode.Success)
                         {
                             _log.Warning(
