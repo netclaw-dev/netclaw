@@ -17,6 +17,7 @@ remain an isolated worker by default:
   enabled by a future opt-in setting.
 - It SHALL NOT auto-load repo-local `AGENTS.md` unless explicitly enabled by a
   future opt-in setting.
+- It SHALL inherit audience/boundary context from the launching invocation.
 
 #### Scenario: Subagent completes with text response and findings
 
@@ -60,6 +61,14 @@ remain an isolated worker by default:
 - **GIVEN** a slash-invoked skill routes execution via `metadata.subagent`
 - **WHEN** the routed subagent prompt is assembled
 - **THEN** repo-local `AGENTS.md` is not auto-loaded by default
+
+#### Scenario: Routed subagent inherits launch audience
+
+- **GIVEN** a routed subagent activation launched from a parent invocation with
+  audience `team`
+- **WHEN** the subagent executes tool calls
+- **THEN** tool execution context audience is `team`
+- **AND** routed execution does not widen audience to a broader default
 
 ## ADDED Requirements
 

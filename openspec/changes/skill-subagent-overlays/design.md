@@ -19,6 +19,7 @@ The change must preserve default-deny behavior and explicitly prohibit silent fa
 - Route deterministically to the named user-facing subagent when metadata is valid.
 - Treat skill body as additive subagent system-prompt overlay on routed path.
 - Keep routed workers isolated from main-session identity stack and repo-local `AGENTS.md` by default.
+- Ensure routed workers inherit the launch audience/boundary context from the parent invocation.
 - Fail loudly for unknown, internal-only, or malformed routed targets, with no inline fallback.
 - Preserve existing audience-based tool authorization on routed paths for MVP.
 
@@ -127,6 +128,22 @@ Alternative considered:
 
 - Enforce intersection of audience policy, subagent tool list, and skill
   `allowed-tools` now. Rejected as a larger policy redesign.
+
+### D8. Routed subagents inherit launch audience context
+
+Routed subagent executions inherit audience/boundary/channel context from the
+launching invocation.
+
+Rationale:
+
+- Keeps tool authorization aligned with existing audience policy decisions.
+- Prevents accidental escalation by running delegated work under a broader
+  audience than the parent turn.
+
+Alternative considered:
+
+- Default delegated runs to personal audience when context is present. Rejected
+  because it can bypass tighter audience constraints from the caller.
 
 ### D6. Routed failures must include actionable remediation guidance
 

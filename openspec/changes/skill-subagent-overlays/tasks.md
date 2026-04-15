@@ -40,6 +40,7 @@
 - [ ] 5.7 Regression-test scheduled slash payload behavior for routed skills.
 - [ ] 5.8 Test parity across activation entry points (slash, scheduled slash, and tool-driven activation).
 - [ ] 5.9 Test routed executions keep existing audience-governed tool authorization behavior.
+- [ ] 5.10 Test routed subagents inherit audience/boundary context from the launching invocation.
 
 ## 6. Docs and system-skill updates
 

@@ -1,6 +1,6 @@
 ## Context
 
-Issue #649 extends subagent frontmatter model selection on top of two existing/planned contracts: #647 introduces the subagent frontmatter surface and #648 introduces a named model/client registry for multi-model routing. Today subagents rely on `modelRole` (defaulting to compaction-role behavior), which is not sufficient when operators need deterministic, per-subagent targeting to a specific named model/client profile.
+Issue #649 extends subagent frontmatter model selection on top of two existing/planned contracts: #647 introduces the subagent frontmatter surface and #648 introduces a named model/client registry for multi-model routing. Today subagents rely on `modelRole`, which is not sufficient when operators need deterministic, per-subagent targeting to a specific named model/client profile.
 
 This is a cross-cutting change across parsing, model resolution, startup validation, and diagnostics:
 
