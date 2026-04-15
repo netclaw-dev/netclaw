@@ -11,11 +11,17 @@ public class SkillRegistryTests
         string description = "desc",
         string? category = null,
         bool disableModelInvocation = false,
-        string? allowedTools = null) =>
+        string? allowedTools = null,
+        string? subagent = null,
+        bool hasSubagentMetadata = false,
+        string? subagentError = null) =>
         new(name, name, description, $"/skills/{name}/SKILL.md", $"/skills/{name}", category)
         {
             DisableModelInvocation = disableModelInvocation,
-            AllowedTools = allowedTools
+            AllowedTools = allowedTools,
+            Subagent = subagent,
+            HasSubagentRoutingMetadata = hasSubagentMetadata,
+            SubagentMetadataError = subagentError
         };
 
     [Fact]
@@ -243,6 +249,41 @@ public class SkillRegistryTests
         registry.Clear();
 
         Assert.False(registry.TryResolveSlashCommand("/ops", out _, out _));
+    }
+
+    [Fact]
+    public void ActivationRouter_returns_routed_when_valid_metadata_subagent_present()
+    {
+        var skill = MakeEntry("ops", subagent: "operations-helper", hasSubagentMetadata: true);
+
+        var decision = SkillActivationRouter.Resolve(skill);
+
+        Assert.False(decision.IsError);
+        Assert.Equal(SkillActivationPath.Routed, decision.Path);
+        Assert.Equal("operations-helper", decision.RoutedSubagent);
+    }
+
+    [Fact]
+    public void ActivationRouter_returns_inline_when_metadata_subagent_absent()
+    {
+        var skill = MakeEntry("ops");
+
+        var decision = SkillActivationRouter.Resolve(skill);
+
+        Assert.False(decision.IsError);
+        Assert.Equal(SkillActivationPath.Inline, decision.Path);
+    }
+
+    [Fact]
+    public void ActivationRouter_returns_deterministic_error_when_metadata_subagent_invalid()
+    {
+        var skill = MakeEntry("ops", hasSubagentMetadata: true, subagentError: "value must not be empty.");
+
+        var decision = SkillActivationRouter.Resolve(skill);
+
+        Assert.True(decision.IsError);
+        Assert.Contains("invalid metadata.subagent", decision.ErrorMessage!, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("/ops", decision.ErrorMessage!, StringComparison.Ordinal);
     }
 
     // --- Multi-root index tests ---

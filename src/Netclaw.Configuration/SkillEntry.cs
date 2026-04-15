@@ -68,4 +68,22 @@ public sealed record SkillEntry(
     /// Flat-file skills cannot have resources (no subdirectories).
     /// </summary>
     public bool IsFlatFile { get; init; }
+
+    /// <summary>
+    /// Whether the skill explicitly declares <c>metadata.subagent</c>.
+    /// When false, activation defaults to inline skill execution.
+    /// </summary>
+    public bool HasSubagentRoutingMetadata { get; init; }
+
+    /// <summary>
+    /// Declarative subagent route target from <c>metadata.subagent</c>.
+    /// Null when omitted or invalid.
+    /// </summary>
+    public string? Subagent { get; init; }
+
+    /// <summary>
+    /// Parse/validation error for <c>metadata.subagent</c>, captured during scan.
+    /// Dispatch-time validation remains authoritative.
+    /// </summary>
+    public string? SubagentMetadataError { get; init; }
 }

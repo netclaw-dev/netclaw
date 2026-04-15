@@ -74,6 +74,7 @@ public class SkillScannerTests : IDisposable
             metadata:
               version: "1.2.0"
               author: example-org
+              subagent: operations-helper
             ---
 
             # PDF Processing
@@ -86,6 +87,32 @@ public class SkillScannerTests : IDisposable
         Assert.Equal("Requires poppler-utils", result.AcceptedSkills[0].Compatibility);
         Assert.Equal("Bash(pdftotext:*) Read", result.AcceptedSkills[0].AllowedTools);
         Assert.Equal("1.2.0", result.AcceptedSkills[0].Version);
+        Assert.True(result.AcceptedSkills[0].HasSubagentRoutingMetadata);
+        Assert.Equal("operations-helper", result.AcceptedSkills[0].Subagent);
+        Assert.Null(result.AcceptedSkills[0].SubagentMetadataError);
+    }
+
+    [Fact]
+    public void Invalid_metadata_subagent_is_recorded_as_warning_and_kept_for_dispatch_time_failure()
+    {
+        WriteSkill("bad-route", """
+            ---
+            name: bad-route
+            description: Has malformed routing metadata.
+            metadata:
+              subagent: ""
+            ---
+
+            # Bad Route
+            """);
+
+        var result = SkillScanner.Scan(_skillsDir);
+
+        Assert.Single(result.AcceptedSkills);
+        Assert.True(result.AcceptedSkills[0].HasSubagentRoutingMetadata);
+        Assert.Null(result.AcceptedSkills[0].Subagent);
+        Assert.NotNull(result.AcceptedSkills[0].SubagentMetadataError);
+        Assert.Contains(result.Issues, i => i.Kind == SkillScanIssueKind.InvalidSubagentMetadata);
     }
 
     [Fact]

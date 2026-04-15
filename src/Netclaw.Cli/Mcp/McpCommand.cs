@@ -48,19 +48,21 @@ internal static class McpCommand
             "enable" => RunToggle(args, paths, enabled: true, writer),
             "disable" => RunToggle(args, paths, enabled: false, writer),
             "tools" => await RunToolsAsync(args, paths, daemonApi, writer),
+            "permissions" => await RunToolsAsync(args, paths, daemonApi, writer),
             "help" or "-h" or "--help" => WriteHelp(writer),
             _ => WriteHelp(writer)
         };
     }
 
-    private static int RunAdd(string[] args, NetclawPaths paths, TextWriter writer)
+    internal static int RunAdd(string[] args, NetclawPaths paths, TextWriter writer)
     {
-        // Parse: netclaw mcp add [--transport <type>] [--client-id <id>] [--scope <scopes>] [--env KEY=VALUE]... [--header "Key: Value"]... <name> [command/url] [-- args...]
+        // Parse: netclaw mcp add [--transport <type>] [--client-id <id>] [--scope <scopes>] [--env KEY=VALUE]... [--header "Key: Value"]... [--grant-all] <name> [command/url] [-- args...]
         string? transport = null;
         string? oauthClientId = null;
         string? oauthScope = null;
         var envVars = new Dictionary<string, string>();
         var headers = new Dictionary<string, string>();
+        var grantAll = false;
         string? name = null;
         string? commandOrUrl = null;
         string[]? commandArgs = null;
@@ -80,6 +82,12 @@ internal static class McpCommand
             if (args[i] == "--")
             {
                 afterDash = true;
+                continue;
+            }
+
+            if (args[i] == "--grant-all")
+            {
+                grantAll = true;
                 continue;
             }
 
@@ -191,6 +199,8 @@ internal static class McpCommand
         var mcpServers = GetOrCreateSection(config, "McpServers");
         mcpServers[name] = SerializeEntry(entry);
 
+        ApplySecureDefaultsForNewServer(config, name, grantAll);
+
         WriteConfigFile(paths.NetclawConfigPath, config);
 
         // Write sensitive values to secrets.json
@@ -209,7 +219,57 @@ internal static class McpCommand
         }
 
         writer.WriteLine($"Added MCP server '{name}' ({transport})");
+        writer.WriteLine();
+        if (grantAll)
+        {
+            writer.WriteLine("Security: all tools are reachable for any audience that allows this server");
+            writer.WriteLine("          (legacy null-grants behavior — you passed --grant-all).");
+        }
+        else
+        {
+            writer.WriteLine("Security: 0 tools granted for any audience. Personal/Team/Public tool grants");
+            writer.WriteLine("          were written as empty lists to block all tools until you opt in.");
+        }
+        writer.WriteLine("Approval defaults: Personal=Approval, Team=Approval, Public=Deny");
+        writer.WriteLine($"Next: run `netclaw mcp permissions` to grant tools and adjust approvals for '{name}'.");
         return 0;
+    }
+
+    /// <summary>
+    /// Writes fail-closed defaults for a newly added MCP server across all
+    /// audience profiles: empty <c>McpServerToolGrants[serverName]</c> lists
+    /// (skipped when <paramref name="grantAll"/> is true) and
+    /// <c>ApprovalPolicy.McpServerDefaults[serverName]</c> per-audience
+    /// entries (Personal=Approval, Team=Approval, Public=Deny). The
+    /// <c>ApprovalPolicy</c> section is created if missing.
+    /// </summary>
+    private static void ApplySecureDefaultsForNewServer(
+        Dictionary<string, object> config, string serverName, bool grantAll)
+    {
+        var toolsSection = GetOrCreateSection(config, "Tools");
+        var profilesSection = GetOrCreateSection(toolsSection, "AudienceProfiles");
+
+        (string audience, string approvalMode)[] audiences =
+        [
+            ("Personal", "Approval"),
+            ("Team", "Approval"),
+            ("Public", "Deny"),
+        ];
+
+        foreach (var (audienceName, approvalMode) in audiences)
+        {
+            var audienceSection = GetOrCreateSection(profilesSection, audienceName);
+
+            if (!grantAll)
+            {
+                var grants = GetOrCreateSection(audienceSection, "McpServerToolGrants");
+                grants[serverName] = new List<string>();
+            }
+
+            var approvalPolicy = GetOrCreateSection(audienceSection, "ApprovalPolicy");
+            var serverDefaults = GetOrCreateSection(approvalPolicy, "McpServerDefaults");
+            serverDefaults[serverName] = approvalMode;
+        }
     }
 
     private static async Task<int> RunAuthAsync(string[] args, NetclawPaths paths, DaemonApi? daemonApi, TextWriter writer)
@@ -1011,6 +1071,8 @@ internal static class McpCommand
             }
         }
 
+        writer.WriteLine();
+        writer.WriteLine("Edit interactively: netclaw mcp permissions");
         return 0;
     }
 
@@ -1199,22 +1261,30 @@ internal static class McpCommand
         writer.WriteLine("Usage: netclaw mcp <subcommand>");
         writer.WriteLine();
         writer.WriteLine("Subcommands:");
-        writer.WriteLine("  add        Add an MCP server profile");
-        writer.WriteLine("  auth       Authorize an OAuth-enabled MCP server");
-        writer.WriteLine("  list       List configured MCP servers with daemon-reported status");
-        writer.WriteLine("  get        Show details for an MCP server");
-        writer.WriteLine("  remove     Remove an MCP server profile");
-        writer.WriteLine("  enable     Enable a disabled MCP server");
-        writer.WriteLine("  disable    Disable an MCP server without removing it");
-        writer.WriteLine("  tools      Show and manage per-audience tool grants");
+        writer.WriteLine("  add          Add an MCP server profile (fail-closed by default)");
+        writer.WriteLine("  auth         Authorize an OAuth-enabled MCP server");
+        writer.WriteLine("  list         List configured MCP servers with daemon-reported status");
+        writer.WriteLine("  get          Show details for an MCP server");
+        writer.WriteLine("  remove       Remove an MCP server profile");
+        writer.WriteLine("  enable       Enable a disabled MCP server");
+        writer.WriteLine("  disable      Disable an MCP server without removing it");
+        writer.WriteLine("  permissions  Interactively edit per-audience tool grants and approval modes (recommended)");
+        writer.WriteLine("  tools        Read-only view of per-audience tool grants from the CLI");
+        writer.WriteLine();
+        writer.WriteLine("Flags for 'add':");
+        writer.WriteLine("  --grant-all  CI escape hatch. Skip the empty-grants writes and leave tool");
+        writer.WriteLine("               grants null (legacy \"all pass\" behavior). Approval defaults");
+        writer.WriteLine("               (Personal=Approval, Team=Approval, Public=Deny) are still written.");
         writer.WriteLine();
         writer.WriteLine("Examples:");
         writer.WriteLine("  netclaw mcp add --transport stdio memorizer -- npx -y @memorizer/mcp-server");
         writer.WriteLine("  netclaw mcp add --transport http --header \"Authorization: Bearer tok-...\" myapi https://api.example.com/mcp");
         writer.WriteLine("  netclaw mcp add --transport http textforge https://textforge.net/mcp");
+        writer.WriteLine("  netclaw mcp add --grant-all --transport stdio trusted -- /usr/local/bin/trusted");
         writer.WriteLine("  netclaw mcp auth forge");
         writer.WriteLine("  netclaw mcp list");
-        writer.WriteLine("  netclaw mcp tools memorizer");
+        writer.WriteLine("  netclaw mcp permissions                                    # interactive TUI editor");
+        writer.WriteLine("  netclaw mcp tools memorizer                                # read-only CLI view");
         writer.WriteLine("  netclaw mcp tools memorizer --snapshot --audience team");
         writer.WriteLine("  netclaw mcp tools memorizer --grant search_memories,get --audience team");
         return 0;

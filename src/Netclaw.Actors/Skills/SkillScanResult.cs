@@ -15,6 +15,7 @@ public enum SkillScanIssueKind
     ResourceEnumerationFailed,
     FlatFileMissingFrontmatter,
     FlatFileNoDescription,
+    InvalidSubagentMetadata,
 }
 
 public sealed record SkillScanIssue(

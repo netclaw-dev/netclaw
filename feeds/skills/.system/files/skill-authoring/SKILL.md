@@ -3,7 +3,7 @@ name: skill-authoring
 description: "How to create, edit, and manage Netclaw skills. Read this when you need to synthesize a new skill from a session, understand the skill file format, or use the skill_manage tool."
 metadata:
   author: netclaw
-  version: "1.5.0"
+  version: "1.6.1"
 ---
 
 # Skill Authoring
@@ -86,6 +86,7 @@ argument-hint: "[target environment]"
 metadata:
   author: your-name
   version: "1.0.0"
+  subagent: operations-helper
 ---
 ```
 
@@ -97,6 +98,7 @@ metadata:
 | `disable-model-invocation` | When `true`, the LLM cannot auto-load this skill. Only the user can invoke it via `/name`. Use for side-effect workflows where timing matters (deploys, diagnostics) |
 | `user-invocable` | When `false`, the user cannot invoke via `/name`. Only the LLM auto-loads it. Use for background guidance (reference material, policies) |
 | `argument-hint` | Shown after the slash command name for discoverability (e.g., `/deploy [env]`) |
+| `metadata.subagent` | Optional declarative route target. When set, first-party activation uses the named user-facing subagent instead of inline skill injection |
 | `metadata.version` | Semantic version for cache invalidation and feed tracking |
 | `metadata.author` | Author identifier |
 
@@ -105,6 +107,34 @@ metadata:
 Every skill's `name` automatically becomes a slash command:
 - Skill named `deploy-prod` → user types `/deploy-prod staging`
 - The skill content loads as context, `staging` becomes the user's message
+
+If `metadata.subagent` is present and valid:
+- slash activation routes to that user-facing subagent
+- skill markdown body is appended as a subagent system overlay (not user context)
+- the main-session identity stack and repo `AGENTS.md` are not auto-inherited by default
+- unknown/internal/malformed routed targets fail loudly with no inline fallback
+
+### `metadata.subagent` consequences and failure modes
+
+Use `metadata.subagent` when you want a skill to always execute through a
+specific specialist worker. This is optional; omit it when inline skill
+injection is preferred.
+
+Hard consequences when you opt in:
+- The skill now depends on a matching user-facing subagent definition being
+  present at runtime (from `~/.netclaw/agents/*.md`).
+- If the target subagent is missing, `/skill-name` fails with a deterministic
+  "not registered" error and the turn is skipped.
+- If the target exists but is `internal` visibility, `/skill-name` fails with a
+  deterministic "internal-only" error and the turn is skipped.
+- If `metadata.subagent` is malformed, activation fails with a deterministic
+  metadata error and no inline fallback is attempted.
+
+Authoring guidance:
+- Keep `metadata.subagent` aligned with a real, user-facing subagent name.
+- If portability matters, document the required subagent in the skill body.
+- If you cannot guarantee the subagent will exist, leave `metadata.subagent`
+  unset so the skill can run inline.
 
 **Invocation control matrix:**
 

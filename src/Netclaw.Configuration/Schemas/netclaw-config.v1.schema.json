@@ -608,7 +608,17 @@
         },
         "ToolOverrides": {
           "type": "object",
-          "description": "Per-tool approval mode overrides. Keys are tool names (e.g., shell_execute, mcp:server:tool) or matcher-specific keys such as file_write:control-plane and file_edit:control-plane.",
+          "default": {},
+          "description": "Per-tool approval mode overrides. Keys are exact tool names (e.g., shell_execute, file_write) or MCP tool keys of the form {serverName}/{toolName} (e.g., notion/create-pages) or matcher-specific keys such as file_write:control-plane and file_edit:control-plane.",
+          "additionalProperties": {
+            "type": "string",
+            "enum": ["Auto", "Approval", "Deny"]
+          }
+        },
+        "McpServerDefaults": {
+          "type": "object",
+          "default": {},
+          "description": "Per-MCP-server approval mode defaults. Keys are MCP server names (e.g., notion). Applies to all tools exposed by that server unless an exact entry in ToolOverrides takes precedence. Tools discovered on the server after config was written inherit this default automatically.",
           "additionalProperties": {
             "type": "string",
             "enum": ["Auto", "Approval", "Deny"]

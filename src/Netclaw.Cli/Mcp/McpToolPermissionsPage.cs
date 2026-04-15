@@ -37,7 +37,7 @@ public sealed class McpToolPermissionsPage : ReactivePage<McpToolPermissionsView
         return new PanelNode()
             .WithBorder(BorderStyle.Rounded)
             .WithBorderColor(Color.Cyan)
-            .WithContent(new TextNode("MCP Tool Permissions")
+            .WithContent(new TextNode("MCP Permissions")
                 .WithForeground(Color.White)
                 .Bold());
     }
@@ -122,13 +122,21 @@ public sealed class McpToolPermissionsPage : ReactivePage<McpToolPermissionsView
         var serverAllowed = ViewModel.IsServerAllowedForSelectedAudience();
         var accessMarker = serverAllowed ? "\u2713" : " ";
 
+        var serverDefault = ViewModel.GetServerDefault();
+        var serverDefaultLabel = $"[{serverDefault}]";
+
         var layout = Layouts.Vertical()
             .WithChild(new TextNode($"  Server: {server}").WithForeground(Color.White).Bold())
             .WithChild(new TextNode($"  Audience: {audienceSelector}").WithForeground(Color.Cyan).Bold())
             .WithSpacing(1)
             .WithChild(new TextNode($"  [{accessMarker}] Server enabled for {audienceLabel}")
                 .WithForeground(serverAllowed ? Color.White : Color.Yellow))
+            .WithChild(new TextNode($"  [M] Server default: {serverDefaultLabel}")
+                .WithForeground(ColorForMode(serverDefault)))
             .WithSpacing(1);
+
+        // Find the longest tool name for column alignment.
+        var maxToolNameLen = tools.Count > 0 ? tools.Max(t => t.Length) : 0;
 
         for (var i = 0; i < tools.Count; i++)
         {
@@ -137,7 +145,11 @@ public sealed class McpToolPermissionsPage : ReactivePage<McpToolPermissionsView
             var granted = serverAllowed && ViewModel.IsToolGranted(tool);
             var prefix = isFocused ? " \u25b6 " : "   ";
             var marker = granted ? "\u2713" : " ";
-            var line = $"{prefix}[{marker}] {tool}";
+            var paddedName = tool.PadRight(maxToolNameLen);
+            var (effectiveMode, inherited) = ViewModel.GetEffectiveMode(tool);
+            var modeBadge = $"[{effectiveMode}]";
+            var inheritSuffix = inherited ? "(def)" : "(override)";
+            var line = $"{prefix}[{marker}] {paddedName}  {modeBadge,-12} {inheritSuffix}";
 
             var node = new TextNode(line);
             if (!serverAllowed)
@@ -160,6 +172,13 @@ public sealed class McpToolPermissionsPage : ReactivePage<McpToolPermissionsView
         return layout;
     }
 
+    private static Color ColorForMode(ToolApprovalMode mode) => mode switch
+    {
+        ToolApprovalMode.Approval => Color.Yellow,
+        ToolApprovalMode.Deny => Color.Red,
+        _ => Color.White
+    };
+
     private LayoutNode BuildFooter()
     {
         var footerNode = new DynamicLayoutNode(() =>
@@ -168,7 +187,7 @@ public sealed class McpToolPermissionsPage : ReactivePage<McpToolPermissionsView
             {
                 ToolPermissionsState.ServerList => "[Enter] Select  [Esc] Quit  [Ctrl+Q] Quit",
                 ToolPermissionsState.ToolGrid =>
-                    "[\u2190/\u2192] Audience  [\u2191/\u2193] Navigate  [Enter] Toggle  [A] All  [E] Enable/Disable  [S] Save  [Esc] Back" +
+                    "[\u2190/\u2192] Audience  [\u2191/\u2193] Navigate  [Enter] Toggle  [A] All  [E] Enable/Disable  [M] Server default  [P] Tool mode  [S] Save  [Esc] Back" +
                     (ViewModel.HasUnsavedChanges ? "  *unsaved*" : ""),
                 _ => ""
             };
@@ -248,6 +267,16 @@ public sealed class McpToolPermissionsPage : ReactivePage<McpToolPermissionsView
                 case ConsoleKey.E:
                     ViewModel.ToggleServerAccess();
                     return;
+
+                case ConsoleKey.M:
+                    ViewModel.CycleServerDefault();
+                    return;
+
+                case ConsoleKey.P:
+                    if (ViewModel.IsServerAllowedForSelectedAudience()
+                        && ViewModel.DiscoveredTools.Count > 0)
+                        ViewModel.CycleToolOverride(ViewModel.DiscoveredTools[_toolCursor]);
+                    return;
             }
 
             if (keyInfo.KeyChar == 's')
@@ -265,6 +294,20 @@ public sealed class McpToolPermissionsPage : ReactivePage<McpToolPermissionsView
             if (keyInfo.KeyChar == 'e')
             {
                 ViewModel.ToggleServerAccess();
+                return;
+            }
+
+            if (keyInfo.KeyChar == 'm')
+            {
+                ViewModel.CycleServerDefault();
+                return;
+            }
+
+            if (keyInfo.KeyChar == 'p'
+                && ViewModel.IsServerAllowedForSelectedAudience()
+                && ViewModel.DiscoveredTools.Count > 0)
+            {
+                ViewModel.CycleToolOverride(ViewModel.DiscoveredTools[_toolCursor]);
                 return;
             }
 
