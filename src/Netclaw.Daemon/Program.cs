@@ -879,7 +879,9 @@ static void ConfigureDaemonServices(
         sp.GetService<ToolAccessPolicy>(),
         sp.GetService<TrustContextDeriver>(),
         sp.GetService<SkillRegistry>(),
-        sp.GetService<IToolApprovalService>()));
+        sp.GetService<IToolApprovalService>(),
+        sp.GetService<SubAgentDefinitionRegistry>(),
+        sp.GetService<SubAgentSpawner>()));
 
     services.AddSingleton(sp => new SessionMemoryServices(
         sp.GetService<IMemoryExtractor>() ?? NullMemoryExtractor.Instance,

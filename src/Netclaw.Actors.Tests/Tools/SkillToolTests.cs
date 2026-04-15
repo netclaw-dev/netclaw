@@ -1,5 +1,7 @@
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.AI;
 using Netclaw.Actors.Skills;
+using Netclaw.Actors.SubAgents;
 using Netclaw.Actors.Telemetry;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
@@ -114,6 +116,134 @@ public class SkillToolTests : IDisposable
             new Dictionary<string, object?> { ["Name"] = "bad-skill" }, TestContext.Current.CancellationToken);
 
         Assert.Contains("blocked by content scan", result);
+    }
+
+    [Fact]
+    public async Task SkillLoad_PrioritizesRoutedPath_WhenMetadataSubagentPresent()
+    {
+        WriteSkill("routed-skill", """
+            ---
+            name: routed-skill
+            description: Routed skill.
+            metadata:
+              subagent: operations-helper
+            ---
+
+            # Routed Skill
+
+            Inline body should not be returned by skill_load.
+            """);
+        ScanSkills();
+
+        var tool = new SkillLoadTool(_registry, new NoOpSkillContentScanner());
+        var result = await tool.ExecuteAsync(
+            new Dictionary<string, object?> { ["Name"] = "routed-skill" },
+            TestContext.Current.CancellationToken);
+
+        Assert.Contains("routes to subagent", result, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Inline body should not be returned", result, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task SkillLoad_RoutedUnknownTarget_uses_deterministic_router_error()
+    {
+        var routed = new SkillEntry(
+            "route-missing",
+            "Route Missing",
+            "Route to a missing subagent.",
+            "/skills/route-missing/SKILL.md",
+            "/skills/route-missing",
+            null)
+        {
+            HasSubagentRoutingMetadata = true,
+            Subagent = "missing-helper"
+        };
+        _registry.Register(routed);
+
+        var subAgentRegistry = new SubAgentDefinitionRegistry();
+        var tool = new SkillLoadTool(
+            _registry,
+            new NoOpSkillContentScanner(),
+            sessionMetrics: null,
+            subAgentRegistry,
+            CreateSubAgentSpawner());
+
+        var result = await tool.ExecuteAsync(new Dictionary<string, object?>
+        {
+            ["Name"] = "route-missing",
+            ["Task"] = "check health"
+        }, TestContext.Current.CancellationToken);
+
+        Assert.Equal(SkillActivationRouter.UnknownTargetError("route-missing", "missing-helper"), result);
+    }
+
+    [Fact]
+    public async Task SkillLoad_RoutedInternalTarget_uses_deterministic_router_error()
+    {
+        var routed = new SkillEntry(
+            "route-internal",
+            "Route Internal",
+            "Route to an internal subagent.",
+            "/skills/route-internal/SKILL.md",
+            "/skills/route-internal",
+            null)
+        {
+            HasSubagentRoutingMetadata = true,
+            Subagent = "internal-helper"
+        };
+        _registry.Register(routed);
+
+        var subAgentRegistry = new SubAgentDefinitionRegistry();
+        subAgentRegistry.Register(new SubAgentProfile
+        {
+            Name = "internal-helper",
+            Description = "Internal helper",
+            SystemPrompt = "You are internal.",
+            ToolNames = ["file_read"],
+            Visibility = SubAgentVisibility.Internal
+        });
+
+        var tool = new SkillLoadTool(
+            _registry,
+            new NoOpSkillContentScanner(),
+            sessionMetrics: null,
+            subAgentRegistry,
+            CreateSubAgentSpawner());
+
+        var result = await tool.ExecuteAsync(new Dictionary<string, object?>
+        {
+            ["Name"] = "route-internal",
+            ["Task"] = "check health"
+        }, TestContext.Current.CancellationToken);
+
+        Assert.Equal(SkillActivationRouter.InternalTargetError("route-internal", "internal-helper"), result);
+    }
+
+    [Fact]
+    public async Task SkillLoad_RoutedMetadataError_fails_before_inline_fallback()
+    {
+        var routed = new SkillEntry(
+            "route-bad-meta",
+            "Route Bad Meta",
+            "Route with malformed metadata.",
+            "/skills/route-bad-meta/SKILL.md",
+            "/skills/route-bad-meta",
+            null)
+        {
+            HasSubagentRoutingMetadata = true,
+            SubagentMetadataError = "value must not be empty."
+        };
+        _registry.Register(routed);
+
+        var tool = new SkillLoadTool(_registry, new NoOpSkillContentScanner());
+        var result = await tool.ExecuteAsync(new Dictionary<string, object?>
+        {
+            ["Name"] = "route-bad-meta",
+            ["Task"] = "check health"
+        }, TestContext.Current.CancellationToken);
+
+        Assert.Contains("invalid metadata.subagent", result, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("routed execution is unavailable", result, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -590,6 +720,26 @@ public class SkillToolTests : IDisposable
     private SkillManageTool CreateManageTool(ISkillContentScanner? scanner = null)
         => new(_registry, _indexLayer, _paths, scanner ?? new NoOpSkillContentScanner(), Array.Empty<ResolvedExternalSource>());
 
+    private static SubAgentSpawner CreateSubAgentSpawner()
+    {
+        var registry = new ToolRegistry();
+        var policy = new ToolAccessPolicy(
+            new ToolConfig(),
+            new EffectivePolicyDefaults(
+                DeploymentPosture.Personal,
+                TrustAudience.Personal,
+                ShellExecutionMode.HostAllowed,
+                UsedStrictFallback: false),
+            new ShellCommandPolicy());
+
+        return new SubAgentSpawner(
+            new NoOpChatClientProvider(),
+            registry,
+            policy,
+            approvalService: null,
+            NullLogger<SubAgentSpawner>.Instance);
+    }
+
     private static ISkillContentScanner CreateRegexScanner()
         => new RegexSkillContentScanner(
             new RegexPromptInjectionDetector(NullLogger<RegexPromptInjectionDetector>.Instance),
@@ -718,5 +868,36 @@ public class SkillToolTests : IDisposable
 
         public void RecordSkillLoaded(string skillName, SkillLoadMethod method)
             => SkillLoadedCalls.Add((skillName, method));
+    }
+
+    private sealed class NoOpChatClientProvider : IChatClientProvider
+    {
+        private readonly IChatClient _client = new NoOpChatClient();
+
+        public IChatClient GetClient(ModelRole role) => _client;
+    }
+
+    private sealed class NoOpChatClient : IChatClient
+    {
+        public Task<ChatResponse> GetResponseAsync(
+            IEnumerable<ChatMessage> messages,
+            ChatOptions? options = null,
+            CancellationToken cancellationToken = default)
+            => Task.FromResult(new ChatResponse(new ChatMessage(ChatRole.Assistant, "noop")));
+
+        public async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
+            IEnumerable<ChatMessage> messages,
+            ChatOptions? options = null,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            await Task.CompletedTask;
+            yield break;
+        }
+
+        public object? GetService(Type serviceType, object? serviceKey = null) => null;
+
+        public void Dispose()
+        {
+        }
     }
 }

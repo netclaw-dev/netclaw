@@ -1,5 +1,6 @@
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Memory;
+using Netclaw.Actors.SubAgents;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 using Netclaw.Security;
@@ -27,7 +28,9 @@ public sealed record SessionToolServices(
     ToolAccessPolicy? AccessPolicy,
     TrustContextDeriver? TrustDeriver,
     Skills.SkillRegistry? SkillRegistry,
-    IToolApprovalService? ApprovalService = null);
+    IToolApprovalService? ApprovalService = null,
+    SubAgentDefinitionRegistry? SubAgentRegistry = null,
+    SubAgentSpawner? SubAgentSpawner = null);
 
 /// <summary>
 /// Memory infrastructure for recall, checkpoint, and curation.

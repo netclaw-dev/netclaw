@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using Netclaw.Actors.SubAgents;
 using System.Text;
 using Netclaw.Actors.Skills;
 using Netclaw.Actors.Telemetry;
@@ -20,19 +21,35 @@ public sealed partial class SkillLoadTool : NetclawTool<SkillLoadTool.Params>
     private readonly SkillRegistry _skillRegistry;
     private readonly ISkillContentScanner _scanner;
     private readonly ISessionMetrics? _sessionMetrics;
+    private readonly SubAgentDefinitionRegistry? _subAgentRegistry;
+    private readonly SubAgentSpawner? _subAgentSpawner;
 
     public record Params(
         [property: Description("Name of the skill to load (e.g., 'search-citation', 'netclaw-memory')")]
-        string Name);
+        string Name,
+        [property: Description("Optional task used when the skill routes via metadata.subagent. Required for routed skill execution.")]
+        string? Task = null,
+        [property: Description("Optional runtime context passed to the routed subagent for this invocation.")]
+        string? Context = null);
 
-    public SkillLoadTool(SkillRegistry skillRegistry, ISkillContentScanner scanner, ISessionMetrics? sessionMetrics = null)
+    public SkillLoadTool(
+        SkillRegistry skillRegistry,
+        ISkillContentScanner scanner,
+        ISessionMetrics? sessionMetrics = null,
+        SubAgentDefinitionRegistry? subAgentRegistry = null,
+        SubAgentSpawner? subAgentSpawner = null)
     {
         _skillRegistry = skillRegistry;
         _scanner = scanner;
         _sessionMetrics = sessionMetrics;
+        _subAgentRegistry = subAgentRegistry;
+        _subAgentSpawner = subAgentSpawner;
     }
 
     protected override async Task<string> ExecuteAsync(Params args, CancellationToken ct)
+        => await ExecuteAsync(args, ToolExecutionContext.Empty, ct);
+
+    protected override async Task<string> ExecuteAsync(Params args, ToolExecutionContext context, CancellationToken ct)
     {
         var name = args.Name.Trim().ToLowerInvariant();
         var skill = _skillRegistry.GetByName(name);
@@ -43,6 +60,60 @@ public sealed partial class SkillLoadTool : NetclawTool<SkillLoadTool.Params>
             return available.Count > 0
                 ? $"Skill '{name}' not found. Available skills: {string.Join(", ", available)}"
                 : $"Skill '{name}' not found. No skills are currently registered.";
+        }
+
+        var decision = SkillActivationRouter.Resolve(skill);
+        if (decision.IsError)
+            return decision.ErrorMessage!;
+
+        if (decision.Path == SkillActivationPath.Routed)
+        {
+            if (_subAgentRegistry is null || _subAgentSpawner is null)
+            {
+                return $"Skill '{name}' routes to subagent '{decision.RoutedSubagent}', but routed skill execution is unavailable in this runtime.";
+            }
+
+            if (string.IsNullOrWhiteSpace(args.Task))
+            {
+                return $"Skill '{name}' routes to subagent '{decision.RoutedSubagent}'. Provide a non-empty task when invoking skill_load for this skill.";
+            }
+
+            var profile = _subAgentRegistry.TryGetByName(decision.RoutedSubagent!);
+            if (profile is null)
+                return SkillActivationRouter.UnknownTargetError(skill.Name, decision.RoutedSubagent!);
+
+            if (profile.Visibility != SubAgentVisibility.UserFacing)
+                return SkillActivationRouter.InternalTargetError(skill.Name, decision.RoutedSubagent!);
+
+            string routedContent;
+            string routedBody;
+            try
+            {
+                routedContent = File.ReadAllText(skill.FilePath);
+                routedBody = SkillScanner.ExtractBody(routedContent);
+            }
+            catch (IOException ex)
+            {
+                return $"Failed to read skill file: {ex.Message}";
+            }
+
+            var routedScanResult = await _scanner.ScanAsync(name, routedContent, ct);
+            if (!routedScanResult.IsAllowed)
+                return $"Skill '{name}' blocked by content scan: {routedScanResult.Reason}";
+
+            _sessionMetrics?.RecordSkillLoaded(skill.Name, SkillLoadMethod.SkillLoadTool);
+
+            var routedResult = await _subAgentSpawner.SpawnAsync(
+                profile,
+                args.Task,
+                args.Context,
+                context,
+                ct,
+                systemPromptOverlay: routedBody);
+
+            return routedResult.Success
+                ? routedResult.Output
+                : $"Subagent '{profile.Name}' failed: {routedResult.Output}";
         }
 
         string body;

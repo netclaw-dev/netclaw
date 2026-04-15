@@ -10,6 +10,8 @@ using Microsoft.Extensions.AI;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Memory;
 using Netclaw.Actors.Protocol;
+using Netclaw.Actors.Skills;
+using Netclaw.Actors.SubAgents;
 using Netclaw.Actors.Sessions.Handlers;
 using Netclaw.Actors.Sessions.Pipelines;
 using Netclaw.Actors.Text;
@@ -136,6 +138,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     // Skill registry for slash-command dispatch
     private readonly Skills.SkillRegistry? _skillRegistry;
+    private readonly SubAgentDefinitionRegistry? _subAgentRegistry;
+    private readonly SubAgentSpawner? _subAgentSpawner;
 
     // Memory recall state (transient — reset at turn boundaries and compaction)
     private readonly SessionRecallManager _recallManager = new();
@@ -179,6 +183,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         _promptProvider = services.PromptProvider;
         _contextLayers = services.ContextLayers;
         _skillRegistry = tools?.SkillRegistry;
+        _subAgentRegistry = tools?.SubAgentRegistry;
+        _subAgentSpawner = tools?.SubAgentSpawner;
         _toolExecutor = tools?.ToolExecutor;
         _auditLogger = tools?.AuditLogger;
         _toolAccessPolicy = tools?.AccessPolicy;
@@ -874,6 +880,26 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         });
 
         Command<SpawnChildActorRequest>(msg => Sender.Tell(Context.ActorOf(msg.Props, msg.ActorName)));
+        Command<RoutedSkillExecutionCompleted>(HandleRoutedSkillExecutionCompleted);
+        Command<RoutedSkillExecutionFailed>(msg =>
+            FailCurrentTurn(
+                $"Skill '/{msg.SkillName}' routed to subagent '{msg.SubagentName}' failed: {msg.ErrorMessage}",
+                new InvalidOperationException(msg.ErrorMessage),
+                ErrorCategory.ToolFailure));
+        Command<RoutedSkillSubAgentActivity>(msg =>
+        {
+            EmitOutput(new SubAgentOutput
+            {
+                SessionId = _sessionId,
+                TimestampMs = msg.TimestampMs,
+                AgentName = msg.AgentName,
+                Phase = msg.Phase,
+                ToolCount = msg.ToolCount,
+                Success = msg.Success ?? false,
+                Duration = msg.Duration ?? TimeSpan.Zero,
+                FindingsCount = msg.FindingsCount
+            }, OutputFilter.ToolCalls);
+        });
         Command<PrepareForDaemonRestart>(_ => RequestRestartDrain());
         CommandDistillationAckNoOp();
     }
@@ -1809,6 +1835,27 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         Command<SessionDistillationCompleted>(msg => HandleDistillationResult(msg));
 
+        Command<RoutedSkillExecutionCompleted>(HandleRoutedSkillExecutionCompleted);
+        Command<RoutedSkillExecutionFailed>(msg =>
+            FailCurrentTurn(
+                $"Skill '/{msg.SkillName}' routed to subagent '{msg.SubagentName}' failed: {msg.ErrorMessage}",
+                new InvalidOperationException(msg.ErrorMessage),
+                ErrorCategory.ToolFailure));
+        Command<RoutedSkillSubAgentActivity>(msg =>
+        {
+            EmitOutput(new SubAgentOutput
+            {
+                SessionId = _sessionId,
+                TimestampMs = msg.TimestampMs,
+                AgentName = msg.AgentName,
+                Phase = msg.Phase,
+                ToolCount = msg.ToolCount,
+                Success = msg.Success ?? false,
+                Duration = msg.Duration ?? TimeSpan.Zero,
+                FindingsCount = msg.FindingsCount
+            }, OutputFilter.ToolCalls);
+        });
+
         Command<WarmSession>(cmd =>
         {
             _pendingRestartNotice = cmd.RestartNotice;
@@ -2217,8 +2264,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     /// <summary>
     /// Handles slash-command dispatch. If the user message starts with / and matches
-    /// a registered skill, injects the skill content as a transient system message
-    /// and passes the remainder as user content. Returns true if handled.
+    /// a registered skill, activation path selection is deterministic:
+    /// metadata.subagent route first, then inline injection when metadata is absent.
     /// </summary>
     private bool TryHandleSlashCommand(string userContent, List<SerializableMediaReference> mediaRefs)
     {
@@ -2227,45 +2274,28 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         if (_skillRegistry.TryResolveSlashCommand(userContent, out var skill, out var remainder))
         {
-            // Load the skill content and inject as transient system message
-            string skillBody;
-            try
+            var decision = SkillActivationRouter.Resolve(skill!);
+            if (decision.IsError)
             {
-                var content = File.ReadAllText(skill!.FilePath);
-                skillBody = Skills.SkillScanner.ExtractBody(content);
-            }
-            catch (IOException ex)
-            {
-                _log.Warning("Failed to read skill file for slash command /{SkillName}: {Error}",
-                    skill!.Name, ex.Message);
                 EmitOutput(new TextOutput
                 {
                     SessionId = _sessionId,
-                    Text = $"Failed to load skill /{skill.Name}: {ex.Message}\n\nThe skill file may be missing or corrupted."
+                    Text = decision.ErrorMessage!
                 }, OutputFilter.Text);
-                EmitOutput(new TurnCompleted { SessionId = _sessionId, TurnNumber = _state.TurnCount, Outcome = TurnOutcome.Skipped });
+                EmitOutput(new TurnCompleted
+                {
+                    SessionId = _sessionId,
+                    TurnNumber = _state.TurnCount,
+                    Outcome = TurnOutcome.Skipped
+                });
                 TryReplyAck();
-                return true; // Handled — do NOT fall through to LLM
+                return true;
             }
 
-            _sessionMetrics?.RecordSkillLoaded(skill.Name, SkillLoadMethod.SlashCommand);
+            if (decision.Path == SkillActivationPath.Routed)
+                return TryHandleRoutedSlashCommand(skill!, remainder, mediaRefs, decision.RoutedSubagent!);
 
-            // Inject skill as system context, use remainder as user message
-            var effectiveUserContent = string.IsNullOrWhiteSpace(remainder)
-                ? $"The user invoked /{skill.Name}. Follow the skill instructions."
-                : remainder;
-
-            _state = _state.AddUserMessage(effectiveUserContent, mediaRefs.Count > 0 ? mediaRefs : null);
-            TryReplyAck();
-            _recallManager.ResetForNewTurn();
-
-            // Inject skill content as a one-time system message for this turn
-            _slashCommandSkillContent = skillBody;
-            FireInitialTurnLlmCall(effectiveUserContent);
-            _slashCommandSkillContent = null;
-
-            TransitionTo(SessionPhase.Processing);
-            return true;
+            return HandleInlineSlashCommand(skill!, remainder, mediaRefs);
         }
 
         // Unrecognized slash command — send deterministic error
@@ -2280,6 +2310,245 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         EmitOutput(new TurnCompleted { SessionId = _sessionId, TurnNumber = _state.TurnCount, Outcome = TurnOutcome.Skipped });
         TryReplyAck();
         return true;
+    }
+
+    private bool HandleInlineSlashCommand(SkillEntry skill, string remainder, List<SerializableMediaReference> mediaRefs)
+    {
+        string skillBody;
+        try
+        {
+            var content = File.ReadAllText(skill.FilePath);
+            skillBody = Skills.SkillScanner.ExtractBody(content);
+        }
+        catch (IOException ex)
+        {
+            _log.Warning("Failed to read skill file for slash command /{SkillName}: {Error}",
+                skill.Name, ex.Message);
+            EmitOutput(new TextOutput
+            {
+                SessionId = _sessionId,
+                Text = $"Failed to load skill /{skill.Name}: {ex.Message}\n\nThe skill file may be missing or corrupted."
+            }, OutputFilter.Text);
+            EmitOutput(new TurnCompleted { SessionId = _sessionId, TurnNumber = _state.TurnCount, Outcome = TurnOutcome.Skipped });
+            TryReplyAck();
+            return true;
+        }
+
+        _sessionMetrics?.RecordSkillLoaded(skill.Name, SkillLoadMethod.SlashCommand);
+
+        var effectiveUserContent = string.IsNullOrWhiteSpace(remainder)
+            ? $"The user invoked /{skill.Name}. Follow the skill instructions."
+            : remainder;
+
+        _state = _state.AddUserMessage(effectiveUserContent, mediaRefs.Count > 0 ? mediaRefs : null);
+        TryReplyAck();
+        _recallManager.ResetForNewTurn();
+
+        _slashCommandSkillContent = skillBody;
+        FireInitialTurnLlmCall(effectiveUserContent);
+        _slashCommandSkillContent = null;
+
+        TransitionTo(SessionPhase.Processing);
+        return true;
+    }
+
+    private bool TryHandleRoutedSlashCommand(SkillEntry skill, string remainder, List<SerializableMediaReference> mediaRefs, string routedSubagent)
+    {
+        if (_subAgentRegistry is null || _subAgentSpawner is null)
+        {
+            EmitOutput(new TextOutput
+            {
+                SessionId = _sessionId,
+                Text = $"Skill '/{skill.Name}' routes to subagent '{routedSubagent}', but subagent routing is not available in this runtime."
+            }, OutputFilter.Text);
+            EmitOutput(new TurnCompleted
+            {
+                SessionId = _sessionId,
+                TurnNumber = _state.TurnCount,
+                Outcome = TurnOutcome.Skipped
+            });
+            TryReplyAck();
+            return true;
+        }
+
+        var profile = _subAgentRegistry.TryGetByName(routedSubagent);
+        if (profile is null)
+        {
+            EmitOutput(new TextOutput
+            {
+                SessionId = _sessionId,
+                Text = SkillActivationRouter.UnknownTargetError(skill.Name, routedSubagent)
+            }, OutputFilter.Text);
+            EmitOutput(new TurnCompleted
+            {
+                SessionId = _sessionId,
+                TurnNumber = _state.TurnCount,
+                Outcome = TurnOutcome.Skipped
+            });
+            TryReplyAck();
+            return true;
+        }
+
+        if (profile.Visibility != SubAgentVisibility.UserFacing)
+        {
+            EmitOutput(new TextOutput
+            {
+                SessionId = _sessionId,
+                Text = SkillActivationRouter.InternalTargetError(skill.Name, routedSubagent)
+            }, OutputFilter.Text);
+            EmitOutput(new TurnCompleted
+            {
+                SessionId = _sessionId,
+                TurnNumber = _state.TurnCount,
+                Outcome = TurnOutcome.Skipped
+            });
+            TryReplyAck();
+            return true;
+        }
+
+        string skillBody;
+        try
+        {
+            var content = File.ReadAllText(skill.FilePath);
+            skillBody = Skills.SkillScanner.ExtractBody(content);
+        }
+        catch (IOException ex)
+        {
+            _log.Warning("Failed to read skill file for routed slash command /{SkillName}: {Error}",
+                skill.Name, ex.Message);
+            EmitOutput(new TextOutput
+            {
+                SessionId = _sessionId,
+                Text = $"Failed to load skill /{skill.Name}: {ex.Message}\n\nThe skill file may be missing or corrupted."
+            }, OutputFilter.Text);
+            EmitOutput(new TurnCompleted { SessionId = _sessionId, TurnNumber = _state.TurnCount, Outcome = TurnOutcome.Skipped });
+            TryReplyAck();
+            return true;
+        }
+
+        _sessionMetrics?.RecordSkillLoaded(skill.Name, SkillLoadMethod.SlashCommand);
+
+        var effectiveTask = string.IsNullOrWhiteSpace(remainder)
+            ? $"The user invoked /{skill.Name}. Execute the routed skill instructions and return a concise result."
+            : remainder;
+
+        _state = _state.AddUserMessage(effectiveTask, mediaRefs.Count > 0 ? mediaRefs : null);
+        TryReplyAck();
+        _recallManager.ResetForNewTurn();
+
+        _ = ExecuteRoutedSkillAsync(Self, skill, profile, effectiveTask, skillBody);
+        TransitionTo(SessionPhase.Processing);
+        return true;
+    }
+
+    private async Task ExecuteRoutedSkillAsync(
+        IActorRef self,
+        SkillEntry skill,
+        SubAgentProfile profile,
+        string task,
+        string skillBody)
+    {
+        try
+        {
+            var context = new ToolExecutionContext(_sessionId.Value, GetSessionDirectory())
+            {
+                Audience = _currentTurnSource is null ? null : _currentTurnSource.Audience.ToWireValue(),
+                Boundary = _currentTurnSource?.Boundary,
+                ChannelType = _currentTurnSource is null ? null : _currentTurnSource.ChannelType.ToWireValue(),
+                SupportsInteractiveApproval = false,
+            };
+
+            context.SpawnChildActor = async (props, name, ct) =>
+                await self.Ask<IActorRef>(
+                    new SpawnChildActorRequest
+                    {
+                        Props = (Props)props,
+                        ActorName = name
+                    },
+                    timeout: _config.ToolExecutionTimeout,
+                    cancellationToken: ct);
+
+            context.OnSubAgentActivity = info =>
+            {
+                self.Tell(new RoutedSkillSubAgentActivity(
+                    _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
+                    info.AgentName,
+                    info.IsStarted ? SubAgentPhase.Started : SubAgentPhase.Completed,
+                    info.ToolCount,
+                    info.Success,
+                    info.Duration,
+                    info.Findings.Count));
+            };
+
+            var result = await _subAgentSpawner!.SpawnAsync(
+                profile,
+                task,
+                runtimeContext: null,
+                context,
+                CancellationToken.None,
+                systemPromptOverlay: skillBody);
+
+            self.Tell(new RoutedSkillExecutionCompleted(skill.Name, profile.Name, result));
+        }
+        catch (Exception ex)
+        {
+            self.Tell(new RoutedSkillExecutionFailed(skill.Name, profile.Name, ex.Message));
+        }
+    }
+
+    private void HandleRoutedSkillExecutionCompleted(RoutedSkillExecutionCompleted msg)
+    {
+        if (!msg.Result.Success)
+        {
+            FailCurrentTurn(
+                $"Skill '/{msg.SkillName}' routed to subagent '{msg.SubagentName}' failed: {msg.Result.Output}",
+                new InvalidOperationException(msg.Result.Output),
+                ErrorCategory.ToolFailure);
+            return;
+        }
+
+        var userMsg = _state.FindLastUserMessage();
+        var turnEvent = new TurnRecorded
+        {
+            SessionId = _sessionId,
+            UserMessage = userMsg ?? new SerializableChatMessage
+            {
+                Role = Protocol.ChatRole.User,
+                Content = string.Empty
+            },
+            AssistantReply = new SerializableChatMessage
+            {
+                Role = Protocol.ChatRole.Assistant,
+                Content = msg.Result.Output
+            },
+            RecordedAtMs = NowMs()
+        };
+
+        Persist(turnEvent, evt =>
+        {
+            _state = _state with
+            {
+                History = _state.History.Add(evt.AssistantReply),
+                TurnCount = _state.TurnCount + 1
+            };
+
+            EmitOutput(new TextOutput
+            {
+                SessionId = _sessionId,
+                Text = msg.Result.Output
+            }, OutputFilter.Text);
+
+            EmitOutput(new TurnCompleted
+            {
+                SessionId = _sessionId,
+                TurnNumber = _state.TurnCount,
+                Outcome = TurnOutcome.Completed
+            });
+
+            MaybeSnapshot();
+            MaybeGenerateTitle();
+            DrainBufferedMessagesOrBecomeReady();
+        });
     }
 
     // Transient: skill body injected by slash-command dispatch for the current turn
@@ -2541,6 +2810,25 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         IReadOnlyList<string> Patterns,
         TrustAudience Audience,
         string? RequesterSenderId);
+
+    private sealed record RoutedSkillExecutionCompleted(
+        string SkillName,
+        string SubagentName,
+        SubAgentResult Result);
+
+    private sealed record RoutedSkillExecutionFailed(
+        string SkillName,
+        string SubagentName,
+        string ErrorMessage);
+
+    private sealed record RoutedSkillSubAgentActivity(
+        long TimestampMs,
+        string AgentName,
+        SubAgentPhase Phase,
+        int ToolCount,
+        bool? Success,
+        TimeSpan? Duration,
+        int FindingsCount);
 
     private void BindTurnTelemetry(MessageSource? source)
     {

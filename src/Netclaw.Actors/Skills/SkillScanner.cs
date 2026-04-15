@@ -351,8 +351,25 @@ public static partial class SkillScanner
             }
         }
 
-        return BuildSkillEntry(frontmatter, content, name, canonicalPath, canonicalRoot, category: null)
-            with { ResourcePaths = null, IsFlatFile = true };
+        var entry = BuildSkillEntry(frontmatter, content, name, canonicalPath, canonicalRoot, category: null);
+        var (hasSubagentMetadata, subagent, subagentError) = ParseSubagentMetadata(frontmatter);
+        if (hasSubagentMetadata && subagentError is not null)
+        {
+            issues.Add(new SkillScanIssue(
+                Path: canonicalPath,
+                Kind: SkillScanIssueKind.InvalidSubagentMetadata,
+                Message: $"Invalid metadata.subagent: {subagentError}",
+                SkillName: name));
+        }
+
+        return entry with
+        {
+            ResourcePaths = null,
+            IsFlatFile = true,
+            HasSubagentRoutingMetadata = hasSubagentMetadata,
+            Subagent = subagent,
+            SubagentMetadataError = subagentError
+        };
     }
 
     /// <summary>
@@ -444,8 +461,24 @@ public static partial class SkillScanner
         if (issues.Count > issueCountBeforeResourceScan)
             return null;
 
-        return BuildSkillEntry(fm, content, name, filePath, skillDirectory, category)
-            with { ResourcePaths = resourcePaths };
+        var entry = BuildSkillEntry(fm, content, name, filePath, skillDirectory, category);
+        var (hasSubagentMetadata, subagent, subagentError) = ParseSubagentMetadata(fm);
+        if (hasSubagentMetadata && subagentError is not null)
+        {
+            issues.Add(new SkillScanIssue(
+                Path: filePath,
+                Kind: SkillScanIssueKind.InvalidSubagentMetadata,
+                Message: $"Invalid metadata.subagent: {subagentError}",
+                SkillName: name));
+        }
+
+        return entry with
+        {
+            ResourcePaths = resourcePaths,
+            HasSubagentRoutingMetadata = hasSubagentMetadata,
+            Subagent = subagent,
+            SubagentMetadataError = subagentError
+        };
     }
 
     /// <summary>
@@ -464,7 +497,7 @@ public static partial class SkillScanner
 
         string? version = null;
         if (fm.Metadata is not null && fm.Metadata.TryGetValue("version", out var versionValue))
-            version = versionValue;
+            version = versionValue?.ToString();
 
         return new SkillEntry(
             Name: name,
@@ -482,6 +515,27 @@ public static partial class SkillScanner
             UserInvocable = fm.UserInvocable,
             ArgumentHint = fm.ArgumentHint
         };
+    }
+
+    private static (bool HasSubagentMetadata, string? Subagent, string? Error) ParseSubagentMetadata(SkillFrontmatter fm)
+    {
+        if (fm.Metadata is null || !fm.Metadata.TryGetValue("subagent", out var rawValue))
+            return (false, null, null);
+
+        if (rawValue is not string text)
+        {
+            var typeName = rawValue?.GetType().Name ?? "null";
+            return (true, null, $"expected string value but found {typeName}.");
+        }
+
+        var trimmed = text.Trim();
+        if (trimmed.Length == 0)
+            return (true, null, "value must not be empty.");
+
+        if (!SkillActivationRouter.IsValidSubagentName(trimmed))
+            return (true, null, $"'{trimmed}' is not a valid subagent name (expected lowercase kebab-case).");
+
+        return (true, trimmed, null);
     }
 
     /// <summary>
@@ -712,5 +766,5 @@ public sealed class SkillFrontmatter
     [YamlMember(Alias = "argument-hint")]
     public string? ArgumentHint { get; set; }
 
-    public Dictionary<string, string>? Metadata { get; set; }
+    public Dictionary<string, object?>? Metadata { get; set; }
 }
