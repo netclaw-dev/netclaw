@@ -18,7 +18,8 @@ public class SlackRoutingPolicyTests
             threadExists: false,
             containsBotMention: false);
 
-        Assert.Equal(SlackRoutingDecision.Ignore, decision);
+        Assert.Equal(SlackRoutingDecisionKind.Ignore, decision.Kind);
+        Assert.Equal(SlackRoutingIgnoreReason.ChannelMentionRequired, decision.IgnoreReason);
     }
 
     [Fact]
@@ -34,7 +35,8 @@ public class SlackRoutingPolicyTests
             threadExists: false,
             containsBotMention: true);
 
-        Assert.Equal(SlackRoutingDecision.StartOrContinue, decision);
+        Assert.Equal(SlackRoutingDecisionKind.StartOrContinue, decision.Kind);
+        Assert.Null(decision.IgnoreReason);
     }
 
     [Fact]
@@ -50,7 +52,8 @@ public class SlackRoutingPolicyTests
             threadExists: true,
             containsBotMention: false);
 
-        Assert.Equal(SlackRoutingDecision.ContinueOnly, decision);
+        Assert.Equal(SlackRoutingDecisionKind.ContinueOnly, decision.Kind);
+        Assert.Null(decision.IgnoreReason);
     }
 
     [Fact]
@@ -68,7 +71,8 @@ public class SlackRoutingPolicyTests
             threadExists: false,
             containsBotMention: false);
 
-        Assert.Equal(SlackRoutingDecision.StartOrContinue, decision);
+        Assert.Equal(SlackRoutingDecisionKind.StartOrContinue, decision.Kind);
+        Assert.Null(decision.IgnoreReason);
     }
 
     [Fact]
@@ -84,7 +88,8 @@ public class SlackRoutingPolicyTests
             threadExists: false,
             containsBotMention: false);
 
-        Assert.Equal(SlackRoutingDecision.StartOrContinue, decision);
+        Assert.Equal(SlackRoutingDecisionKind.StartOrContinue, decision.Kind);
+        Assert.Null(decision.IgnoreReason);
     }
 
     [Fact]
@@ -100,7 +105,8 @@ public class SlackRoutingPolicyTests
             threadExists: false,
             containsBotMention: false);
 
-        Assert.Equal(SlackRoutingDecision.Ignore, decision);
+        Assert.Equal(SlackRoutingDecisionKind.Ignore, decision.Kind);
+        Assert.Equal(SlackRoutingIgnoreReason.DmNotAllowed, decision.IgnoreReason);
     }
 
     [Fact]
@@ -116,7 +122,8 @@ public class SlackRoutingPolicyTests
             threadExists: false,
             containsBotMention: false);
 
-        Assert.Equal(SlackRoutingDecision.Ignore, decision);
+        Assert.Equal(SlackRoutingDecisionKind.Ignore, decision.Kind);
+        Assert.Equal(SlackRoutingIgnoreReason.DmMentionRequired, decision.IgnoreReason);
     }
 
     [Fact]
@@ -132,7 +139,8 @@ public class SlackRoutingPolicyTests
             threadExists: false,
             containsBotMention: true);
 
-        Assert.Equal(SlackRoutingDecision.StartOrContinue, decision);
+        Assert.Equal(SlackRoutingDecisionKind.StartOrContinue, decision.Kind);
+        Assert.Null(decision.IgnoreReason);
     }
 
     [Fact]
@@ -152,7 +160,8 @@ public class SlackRoutingPolicyTests
             threadExists: true,
             containsBotMention: false);
 
-        Assert.Equal(SlackRoutingDecision.ContinueOnly, decision);
+        Assert.Equal(SlackRoutingDecisionKind.ContinueOnly, decision.Kind);
+        Assert.Null(decision.IgnoreReason);
     }
 
     [Fact]
@@ -172,7 +181,8 @@ public class SlackRoutingPolicyTests
             threadExists: false,
             containsBotMention: true);
 
-        Assert.Equal(SlackRoutingDecision.StartOrContinue, decision);
+        Assert.Equal(SlackRoutingDecisionKind.StartOrContinue, decision.Kind);
+        Assert.Null(decision.IgnoreReason);
     }
 
     [Fact]
@@ -192,7 +202,8 @@ public class SlackRoutingPolicyTests
             threadExists: false,
             containsBotMention: false);
 
-        Assert.Equal(SlackRoutingDecision.StartOrContinue, decision);
+        Assert.Equal(SlackRoutingDecisionKind.StartOrContinue, decision.Kind);
+        Assert.Null(decision.IgnoreReason);
     }
 
     [Fact]
@@ -212,7 +223,8 @@ public class SlackRoutingPolicyTests
             threadExists: false,
             containsBotMention: false);
 
-        Assert.Equal(SlackRoutingDecision.StartOrContinue, decision);
+        Assert.Equal(SlackRoutingDecisionKind.StartOrContinue, decision.Kind);
+        Assert.Null(decision.IgnoreReason);
     }
 
     [Fact]
@@ -232,7 +244,8 @@ public class SlackRoutingPolicyTests
             threadExists: true,
             containsBotMention: false);
 
-        Assert.Equal(SlackRoutingDecision.ContinueOnly, decision);
+        Assert.Equal(SlackRoutingDecisionKind.ContinueOnly, decision.Kind);
+        Assert.Null(decision.IgnoreReason);
     }
 
     [Fact]
@@ -249,7 +262,9 @@ public class SlackRoutingPolicyTests
             threadExists: false,
             containsBotMention: false);
 
-        Assert.Equal(SlackRoutingDecision.Ignore, decision);
+        // hasContent=false wins before the subtype check, so this is NoContent
+        Assert.Equal(SlackRoutingDecisionKind.Ignore, decision.Kind);
+        Assert.Equal(SlackRoutingIgnoreReason.NoContent, decision.IgnoreReason);
     }
 
     [Fact]
@@ -265,7 +280,8 @@ public class SlackRoutingPolicyTests
             threadExists: false,
             containsBotMention: false);
 
-        Assert.Equal(SlackRoutingDecision.Ignore, decision);
+        Assert.Equal(SlackRoutingDecisionKind.Ignore, decision.Kind);
+        Assert.Equal(SlackRoutingIgnoreReason.UnsupportedSubtype, decision.IgnoreReason);
     }
 
     [Fact]
@@ -281,7 +297,142 @@ public class SlackRoutingPolicyTests
             threadExists: false,
             containsBotMention: false);
 
-        Assert.Equal(SlackRoutingDecision.Ignore, decision);
+        Assert.Equal(SlackRoutingDecisionKind.Ignore, decision.Kind);
+        Assert.Equal(SlackRoutingIgnoreReason.NoContent, decision.IgnoreReason);
+    }
+
+    [Fact]
+    public void HiddenMessage_IsIgnored()
+    {
+        var message = CreateMessage(text: "hello", threadTs: null, isDirectMessage: true, hidden: true);
+
+        var decision = SlackRoutingPolicy.Evaluate(
+            message,
+            mentionOnly: false,
+            allowDirectMessages: true,
+            mentionRequiredInDm: false,
+            threadExists: false,
+            containsBotMention: false);
+
+        Assert.Equal(SlackRoutingDecisionKind.Ignore, decision.Kind);
+        Assert.Equal(SlackRoutingIgnoreReason.HiddenMessage, decision.IgnoreReason);
+    }
+
+    [Fact]
+    public void DirectMessage_WithFileShareSubtype_IsRouted()
+    {
+        // Regression coverage for the 13:38 Gemma image incident class:
+        // a DM carrying a file_share subtype with an attached image must
+        // reach StartOrContinue without a mention.
+        var files = new List<SlackFileReference>
+        {
+            new("F1", "image.png", "image/png", 160_591, "https://files.slack.com/F1/image.png")
+        };
+        var message = CreateMessage(
+            text: "What does this image show?",
+            threadTs: null,
+            isDirectMessage: true,
+            files: files,
+            subtype: "file_share");
+
+        var decision = SlackRoutingPolicy.Evaluate(
+            message,
+            mentionOnly: true,
+            allowDirectMessages: true,
+            mentionRequiredInDm: false,
+            threadExists: false,
+            containsBotMention: false);
+
+        Assert.Equal(SlackRoutingDecisionKind.StartOrContinue, decision.Kind);
+        Assert.Null(decision.IgnoreReason);
+    }
+
+    [Fact]
+    public void DirectMessage_WithFilesNoSubtype_IsRouted()
+    {
+        // Modern Slack file uploads may deliver a plain message event with
+        // files populated and no subtype at all. Must also route.
+        var files = new List<SlackFileReference>
+        {
+            new("F1", "image.png", "image/png", 1024, "https://files.slack.com/F1/image.png")
+        };
+        var message = CreateMessage(
+            text: "",
+            threadTs: null,
+            isDirectMessage: true,
+            files: files);
+
+        var decision = SlackRoutingPolicy.Evaluate(
+            message,
+            mentionOnly: true,
+            allowDirectMessages: true,
+            mentionRequiredInDm: false,
+            threadExists: false,
+            containsBotMention: false);
+
+        Assert.Equal(SlackRoutingDecisionKind.StartOrContinue, decision.Kind);
+        Assert.Null(decision.IgnoreReason);
+    }
+
+    [Fact]
+    public void DirectMessage_HiddenFileShare_IsIgnoredAsHidden()
+    {
+        // Slack's message_changed / edited delivery can re-deliver a file_share
+        // message with hidden=true. Must be dropped as HiddenMessage, not as
+        // UnsupportedSubtype — the policy order matters here.
+        var files = new List<SlackFileReference>
+        {
+            new("F1", "image.png", "image/png", 1024, "https://files.slack.com/F1/image.png")
+        };
+        var message = CreateMessage(
+            text: "What does this image show?",
+            threadTs: null,
+            isDirectMessage: true,
+            files: files,
+            subtype: "file_share",
+            hidden: true);
+
+        var decision = SlackRoutingPolicy.Evaluate(
+            message,
+            mentionOnly: true,
+            allowDirectMessages: true,
+            mentionRequiredInDm: false,
+            threadExists: false,
+            containsBotMention: false);
+
+        Assert.Equal(SlackRoutingDecisionKind.Ignore, decision.Kind);
+        Assert.Equal(SlackRoutingIgnoreReason.HiddenMessage, decision.IgnoreReason);
+    }
+
+    [Fact]
+    public void BlockActionKind_IsIgnoredAsWrongKind()
+    {
+        // BlockAction events are routed through a different code path; the
+        // inbound message routing policy must defensively refuse them.
+        var message = new SlackInboundMessage(
+            Kind: SlackInboundKind.BlockAction,
+            EventId: new SlackEventId("C0:1"),
+            ChannelId: new SlackChannelId("C0"),
+            ThreadTs: null,
+            EventTs: new SlackEventTs("1740468000.000001"),
+            UserId: new SlackUserId("U123"),
+            BotId: null,
+            Text: "hello",
+            Subtype: null,
+            Hidden: false,
+            IsDirectMessage: false,
+            Files: null);
+
+        var decision = SlackRoutingPolicy.Evaluate(
+            message,
+            mentionOnly: false,
+            allowDirectMessages: true,
+            mentionRequiredInDm: false,
+            threadExists: false,
+            containsBotMention: false);
+
+        Assert.Equal(SlackRoutingDecisionKind.Ignore, decision.Kind);
+        Assert.Equal(SlackRoutingIgnoreReason.WrongKind, decision.IgnoreReason);
     }
 
     private static SlackInboundMessage CreateMessage(
@@ -289,7 +440,8 @@ public class SlackRoutingPolicyTests
         string? threadTs,
         bool isDirectMessage,
         IReadOnlyList<SlackFileReference>? files = null,
-        string? subtype = null)
+        string? subtype = null,
+        bool hidden = false)
     {
         return new SlackInboundMessage(
             Kind: SlackInboundKind.Message,
@@ -301,7 +453,7 @@ public class SlackRoutingPolicyTests
             BotId: null,
             Text: text,
             Subtype: subtype,
-            Hidden: false,
+            Hidden: hidden,
             IsDirectMessage: isDirectMessage,
             Files: files);
     }

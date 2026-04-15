@@ -61,14 +61,18 @@ public sealed class SlackConversationActor : ReceiveActor
                 threadExists,
                 containsMention);
 
-            if (decision is SlackRoutingDecision.Ignore)
+            if (decision.Kind is SlackRoutingDecisionKind.Ignore)
             {
-                _log.Info("slack_event_filtered event={0} reason=routing_policy_ignore", message.EventId);
-                ChannelTelemetry.RecordSlackEventFiltered("routing_policy_ignore");
+                var ignoreReason = decision.IgnoreReason?.ToString() ?? "Unknown";
+                _log.Info(
+                    "slack_event_filtered event={0} reason=routing_policy_ignore ignoreReason={1}",
+                    message.EventId,
+                    ignoreReason);
+                ChannelTelemetry.RecordSlackEventFiltered($"routing_policy_ignore:{ignoreReason}");
                 return;
             }
 
-            if (decision is SlackRoutingDecision.ContinueOnly && !threadExists)
+            if (decision.Kind is SlackRoutingDecisionKind.ContinueOnly && !threadExists)
             {
                 _log.Info("slack_event_dropped event={0} reason=thread_not_initialized", message.EventId);
                 ChannelTelemetry.RecordSlackEventDropped("thread_not_initialized");
