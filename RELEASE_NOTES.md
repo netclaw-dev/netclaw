@@ -1,3 +1,25 @@
+#### 0.14.0 2026-04-15 ####
+
+Netclaw v0.14.0 — Skill-defined subagent routing, Mode B reminder session re-entry, fail-closed MCP add, and security patch
+
+**Features**
+
+* Added `metadata.subagent` routing for skill-defined activations — skills can now declare a `subagent` field in their YAML frontmatter to route activations to a named subagent instead of executing inline. The router fails loudly when the target subagent is missing or misconfigured, matching the project's no-silent-fallback policy. A new `subagent-authoring` system skill documents the frontmatter contract and guides operators through defining file-based subagents. ([#672](https://github.com/Aaronontheweb/netclaw/pull/672))
+
+* Added Mode B reminder session re-entry — reminders fired from Slack or SignalR sessions can now check back into the originating session when they fire instead of requiring a `report_to_channel` target. Omitting `report_to_channel` from `set_reminder` enables session check-back; the reminder re-enters the session as if the user sent a follow-up message. Fixes [#660](https://github.com/Aaronontheweb/netclaw/issues/660). ([#670](https://github.com/Aaronontheweb/netclaw/pull/670))
+
+* Added fail-closed `mcp add`, server-default approval policy, and `netclaw mcp permissions` TUI — `netclaw mcp add` now assigns empty grants and an `Approval` default to every newly registered server, preventing new tools from executing without explicit operator authorization. The new `netclaw mcp permissions` command provides a terminal UI for managing per-server and per-tool approval modes without editing config files directly. ([#679](https://github.com/Aaronontheweb/netclaw/pull/679))
+
+**Security**
+
+* Patched CVE-2026-26171 and CVE-2026-33116 — `System.Security.Cryptography.Xml` is pinned to 10.0.6 to address two vulnerabilities in XML cryptography handling. ([#681](https://github.com/Aaronontheweb/netclaw/pull/681))
+
+**Bug Fixes**
+
+* Fixed false daemon crash alerts from SlackNet dispose race — `SlackNet`'s `ReconnectingWebSocket` can throw a `TaskCanceledException` during disposal while the daemon is shutting down, which was being surfaced as a crash alert to operators. This exception is now swallowed on the shutdown path so config hot-reloads and daemon restarts no longer generate spurious alerts. ([#680](https://github.com/Aaronontheweb/netclaw/pull/680))
+
+* Fixed Slack routing drops logging no reason — when the routing policy silently dropped a message, operators had no way to determine which policy rule caused the drop. Routing decisions now carry a structured `IgnoreReason` that is surfaced in the structured log at the point of discard, making policy debugging actionable without source inspection. ([#682](https://github.com/Aaronontheweb/netclaw/pull/682))
+
 #### 0.13.1 2026-04-14 ####
 
 Netclaw v0.13.1 — llama.cpp JSON Schema compatibility fix and AGENTS.md documentation improvement

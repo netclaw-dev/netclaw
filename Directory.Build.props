@@ -7,16 +7,26 @@
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
-    <VersionPrefix>0.13.1</VersionPrefix>
-    <PackageReleaseNotes>Netclaw v0.13.1 — llama.cpp JSON Schema compatibility fix and AGENTS.md documentation improvement
+    <VersionPrefix>0.14.0</VersionPrefix>
+    <PackageReleaseNotes>Netclaw v0.14.0 — Skill-defined subagent routing, Mode B reminder session re-entry, fail-closed MCP add, and security patch
+
+**Features**
+
+* Added `metadata.subagent` routing for skill-defined activations — skills can now declare a `subagent` field in their YAML frontmatter to route activations to a named subagent instead of executing inline. The router fails loudly when the target subagent is missing or misconfigured, matching the project's no-silent-fallback policy. A new `subagent-authoring` system skill documents the frontmatter contract and guides operators through defining file-based subagents. ([#672](https://github.com/Aaronontheweb/netclaw/pull/672))
+
+* Added Mode B reminder session re-entry — reminders fired from Slack or SignalR sessions can now check back into the originating session when they fire instead of requiring a `report_to_channel` target. Omitting `report_to_channel` from `set_reminder` enables session check-back; the reminder re-enters the session as if the user sent a follow-up message. Fixes [#660](https://github.com/Aaronontheweb/netclaw/issues/660). ([#670](https://github.com/Aaronontheweb/netclaw/pull/670))
+
+* Added fail-closed `mcp add`, server-default approval policy, and `netclaw mcp permissions` TUI — `netclaw mcp add` now assigns empty grants and an `Approval` default to every newly registered server, preventing new tools from executing without explicit operator authorization. The new `netclaw mcp permissions` command provides a terminal UI for managing per-server and per-tool approval modes without editing config files directly. ([#679](https://github.com/Aaronontheweb/netclaw/pull/679))
+
+**Security**
+
+* Patched CVE-2026-26171 and CVE-2026-33116 — `System.Security.Cryptography.Xml` is pinned to 10.0.6 to address two vulnerabilities in XML cryptography handling. ([#681](https://github.com/Aaronontheweb/netclaw/pull/681))
 
 **Bug Fixes**
 
-* Fixed SIGFAULT with Notion MCP tools on llama.cpp backends — `McpSchemaSanitizer` now strips JSON Schema keywords that llama.cpp's grammar engine cannot handle (`$schema`, `$id`, `$ref`, `$defs`, `additionalProperties`, `unevaluatedProperties`). Notion's MCP tool schemas use these keywords extensively, causing llama.cpp to SIGFAULT during grammar compilation when those tools were in scope. The sanitizer runs unconditionally on all MCP tool definitions before they reach the model. ([#664](https://github.com/Aaronontheweb/netclaw/pull/664))
+* Fixed false daemon crash alerts from SlackNet dispose race — `SlackNet`'s `ReconnectingWebSocket` can throw a `TaskCanceledException` during disposal while the daemon is shutting down, which was being surfaced as a crash alert to operators. This exception is now swallowed on the shutdown path so config hot-reloads and daemon restarts no longer generate spurious alerts. ([#680](https://github.com/Aaronontheweb/netclaw/pull/680))
 
-**Documentation**
-
-* Added meta-lesson on skill compression to AGENTS.md — the AGENTS.md seed now includes a "Compressing a skill into a rule is a retrieval operation" guidance block, clarifying that distilling a dotnet-skills skill or other upstream authority into an audit rule or review rubric requires opening the source first to preserve the distinctions it draws. Rules that collapse two orthogonal axes into one sentence produce false positives; if a distinction cannot be written without losing nuance, drop the rule rather than elide the distinction. ([#663](https://github.com/Aaronontheweb/netclaw/pull/663))</PackageReleaseNotes>
+* Fixed Slack routing drops logging no reason — when the routing policy silently dropped a message, operators had no way to determine which policy rule caused the drop. Routing decisions now carry a structured `IgnoreReason` that is surfaced in the structured log at the point of discard, making policy debugging actionable without source inspection. ([#682](https://github.com/Aaronontheweb/netclaw/pull/682))</PackageReleaseNotes>
   </PropertyGroup>
   <PropertyGroup>
     <NetCoreTestVersion>net10.0</NetCoreTestVersion>
