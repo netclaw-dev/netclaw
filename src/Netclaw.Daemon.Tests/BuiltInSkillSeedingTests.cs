@@ -28,6 +28,8 @@ public sealed class BuiltInSkillSeedingTests : IDisposable
     [InlineData("netclaw-operations")]
     [InlineData("netclaw-memory")]
     [InlineData("search-citation")]
+    [InlineData("skill-authoring")]
+    [InlineData("subagent-authoring")]
     public void BuiltInSkills_contains_SKILL_md_for_each_system_skill(string skillName)
     {
         var skillPath = Path.Combine(AppContext.BaseDirectory, "BuiltInSkills", skillName, "SKILL.md");
@@ -66,6 +68,8 @@ public sealed class BuiltInSkillSeedingTests : IDisposable
         Assert.Contains("netclaw-operations", seededSkills);
         Assert.Contains("netclaw-memory", seededSkills);
         Assert.Contains("search-citation", seededSkills);
+        Assert.Contains("skill-authoring", seededSkills);
+        Assert.Contains("subagent-authoring", seededSkills);
 
         // Verify SKILL.md exists in each
         foreach (var skillDir in Directory.GetDirectories(skillsDir))

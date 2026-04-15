@@ -1,0 +1,12 @@
+﻿{
+  "sessionId": "synthetic/snapshot",
+  "turnCount": 3,
+  "existingProposals": [
+    {
+      "anchor": "synthetic-anchor",
+      "title": "Synthetic Anchor",
+      "content": "snippet"
+    }
+  ],
+  "transcript": "user: synthetic transcript line one\nassistant: synthetic response line one"
+}

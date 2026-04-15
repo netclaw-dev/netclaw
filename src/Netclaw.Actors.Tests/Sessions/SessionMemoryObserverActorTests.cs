@@ -6,6 +6,7 @@ using Microsoft.Extensions.AI;
 using Netclaw.Actors.Memory;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Sessions;
+using VerifyXunit;
 using Xunit;
 
 namespace Netclaw.Actors.Tests.Sessions;
@@ -524,6 +525,295 @@ public sealed class SessionMemoryObserverActorTests : TestKit
         // Must contain both example memory classes
         Assert.Contains("\"memoryClass\": \"evidence\"", prompt, StringComparison.Ordinal);
         Assert.Contains("\"memoryClass\": \"durable_fact\"", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void DistillationSystemPrompt_forbids_preamble_postscript_and_markdown_fences()
+    {
+        var prompt = SessionMemoryObserverActor.BuildDistillationSystemPrompt();
+
+        Assert.Contains("Do NOT include any text before or after the JSON", prompt, StringComparison.Ordinal);
+        Assert.Contains("Do NOT wrap the JSON in markdown code fences", prompt, StringComparison.Ordinal);
+        Assert.Contains("must start with `{` and end with `}`", prompt, StringComparison.Ordinal);
+    }
+
+    // ── Prompt snapshot tests (Fix 2.5) ────────────────────────────────
+    //
+    // These tests lock down the distillation prompts via Verify snapshot
+    // testing. They catch ANY byte-level change to the prompt (added or
+    // removed examples, reworded instructions, casing changes, whitespace
+    // edits) and force human review on every prompt edit by producing a
+    // readable diff between the current prompt and the approved baseline.
+    //
+    // When the prompt intentionally changes:
+    //   1. Run this test — it will fail with a `*.received.txt` file
+    //      written next to the test source containing the new prompt.
+    //   2. Compare it to the existing `*.verified.txt` baseline (the diff
+    //      tool will pop up automatically in IDE; CLI users can `diff`
+    //      the two files).
+    //   3. If the change is intentional, replace the verified file with
+    //      the received file (`mv ...received.txt ...verified.txt`).
+    //   4. Commit the prompt change and the updated `verified.txt`
+    //      together.
+    //
+    // What this does NOT catch: semantic changes that keep the same
+    // byte-shape (none in practice), and prompt drift in the model itself
+    // (that's what the eval suite is for). What it DOES catch: the casual
+    // edit that drops an example, swaps a field name, or tightens a rule
+    // in a way that breaks the contract Qwen has been honoring in
+    // production.
+    //
+    // Synthetic content note: the user-prompt snapshot is built from
+    // entirely synthetic inputs. No real session transcripts are baked
+    // into the verified file (per the discretion rule).
+
+    [Fact]
+    public Task DistillationSystemPrompt_matches_approved_snapshot()
+    {
+        var prompt = SessionMemoryObserverActor.BuildDistillationSystemPrompt();
+        return Verifier.Verify(prompt, extension: "txt");
+    }
+
+    [Fact]
+    public Task DistillationUserPromptTemplate_matches_approved_snapshot()
+    {
+        var prompt = SessionMemoryObserverActor.BuildDistillationUserPrompt(
+            sessionId: "synthetic/snapshot",
+            turnCount: 3,
+            transcript: "user: synthetic transcript line one\nassistant: synthetic response line one",
+            existingProposals: [new ProposedMemoryContext("synthetic-anchor", "Synthetic Anchor", "snippet")]);
+
+        // The user prompt is a single-line serialized JSON. Pretty-print it
+        // before snapshotting so any future diff is readable per-field rather
+        // than a wall-of-text on one line.
+        using var doc = System.Text.Json.JsonDocument.Parse(prompt);
+        var indented = System.Text.Json.JsonSerializer.Serialize(
+            doc.RootElement,
+            new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+
+        return Verifier.Verify(indented, extension: "json");
+    }
+
+    // ── Parser tests (Fix 1c) ──────────────────────────────────────────
+    //
+    // The pre-fix parser used `text[IndexOf('{')..LastIndexOf('}')]` which
+    // captured everything between the first `{` (often inside preamble or
+    // an echoed transcript snippet) and the last `}` of the actual JSON
+    // object, producing malformed JSON and silently returning an empty
+    // proposal list. These tests exercise the failure shapes Qwen3.5-27B
+    // produces in production: preamble braces, markdown fences, refusal
+    // text, multiple JSON objects, trailing chatter.
+
+    private const string CleanProposalJson = """
+        {
+          "proposals": [
+            {
+              "operation": "upsert_document",
+              "memoryClass": "durable_fact",
+              "subjectKind": "user",
+              "subjectValue": "self",
+              "anchor": { "canonicalName": "test-anchor", "anchorType": "preference" },
+              "title": "Test Anchor",
+              "content": "Test content for the anchor.",
+              "aliases": ["alias-one"],
+              "facets": ["test_facet"],
+              "recallMode": "auto",
+              "sensitivity": "normal",
+              "confidence": 0.9
+            }
+          ]
+        }
+        """;
+
+    [Fact]
+    public void ParseProposals_reports_empty_input_for_null_or_whitespace()
+    {
+        var empty = SessionMemoryObserverActor.ParseProposals(string.Empty);
+        Assert.Empty(empty.Proposals);
+        Assert.Equal(SessionMemoryObserverActor.ParseProposalsOutcome.EmptyInput, empty.Outcome);
+
+        var whitespace = SessionMemoryObserverActor.ParseProposals("   \n\t  ");
+        Assert.Empty(whitespace.Proposals);
+        Assert.Equal(SessionMemoryObserverActor.ParseProposalsOutcome.EmptyInput, whitespace.Outcome);
+    }
+
+    [Fact]
+    public void ParseProposals_succeeds_on_clean_json()
+    {
+        var result = SessionMemoryObserverActor.ParseProposals(CleanProposalJson);
+
+        Assert.Equal(SessionMemoryObserverActor.ParseProposalsOutcome.Success, result.Outcome);
+        var proposal = Assert.Single(result.Proposals);
+        Assert.Equal("test-anchor", proposal.Anchor!.CanonicalName);
+    }
+
+    [Fact]
+    public void ParseProposals_succeeds_on_empty_proposals_array()
+    {
+        var result = SessionMemoryObserverActor.ParseProposals(@"{ ""proposals"": [] }");
+
+        Assert.Equal(SessionMemoryObserverActor.ParseProposalsOutcome.Success, result.Outcome);
+        Assert.Empty(result.Proposals);
+    }
+
+    [Fact]
+    public void ParseProposals_recovers_from_preamble_text_with_braces()
+    {
+        // The smoking-gun failure mode: Qwen emits chain-of-thought before
+        // the JSON, often containing brace-delimited enumerations like
+        // "{tools, decisions, projects}". The old parser took the substring
+        // from the first `{` in the preamble to the last `}` of the real
+        // JSON object, producing malformed JSON.
+        var text = "Looking at the conversation I see {tools, decisions, projects} mentioned. Here's my analysis:\n\n" + CleanProposalJson;
+
+        var result = SessionMemoryObserverActor.ParseProposals(text);
+
+        Assert.Equal(SessionMemoryObserverActor.ParseProposalsOutcome.Success, result.Outcome);
+        var proposal = Assert.Single(result.Proposals);
+        Assert.Equal("test-anchor", proposal.Anchor!.CanonicalName);
+    }
+
+    [Fact]
+    public void ParseProposals_recovers_from_markdown_code_fence_wrapper()
+    {
+        var text = "```json\n" + CleanProposalJson + "\n```";
+
+        var result = SessionMemoryObserverActor.ParseProposals(text);
+
+        Assert.Equal(SessionMemoryObserverActor.ParseProposalsOutcome.Success, result.Outcome);
+        var proposal = Assert.Single(result.Proposals);
+        Assert.Equal("test-anchor", proposal.Anchor!.CanonicalName);
+    }
+
+    [Fact]
+    public void ParseProposals_recovers_from_unlabeled_code_fence_wrapper()
+    {
+        var text = "```\n" + CleanProposalJson + "\n```";
+
+        var result = SessionMemoryObserverActor.ParseProposals(text);
+
+        Assert.Equal(SessionMemoryObserverActor.ParseProposalsOutcome.Success, result.Outcome);
+        var proposal = Assert.Single(result.Proposals);
+        Assert.Equal("test-anchor", proposal.Anchor!.CanonicalName);
+    }
+
+    [Fact]
+    public void ParseProposals_recovers_from_trailing_chatter()
+    {
+        var text = CleanProposalJson + "\n\nLet me know if you need anything else!";
+
+        var result = SessionMemoryObserverActor.ParseProposals(text);
+
+        Assert.Equal(SessionMemoryObserverActor.ParseProposalsOutcome.Success, result.Outcome);
+        var proposal = Assert.Single(result.Proposals);
+        Assert.Equal("test-anchor", proposal.Anchor!.CanonicalName);
+    }
+
+    [Fact]
+    public void ParseProposals_recovers_from_multiple_json_objects()
+    {
+        // First object is unrelated stray JSON, second is the real proposals.
+        // The walker should try each candidate in order until one parses to a
+        // DistillationResponse with a non-null Proposals list.
+        var text = "{ \"unrelatedField\": \"some value\" }\n\n" + CleanProposalJson;
+
+        var result = SessionMemoryObserverActor.ParseProposals(text);
+
+        Assert.Equal(SessionMemoryObserverActor.ParseProposalsOutcome.Success, result.Outcome);
+        var proposal = Assert.Single(result.Proposals);
+        Assert.Equal("test-anchor", proposal.Anchor!.CanonicalName);
+    }
+
+    [Fact]
+    public void ParseProposals_reports_no_json_found_on_refusal_text()
+    {
+        var result = SessionMemoryObserverActor.ParseProposals(
+            "There is nothing memory-worthy in this conversation.");
+
+        Assert.Empty(result.Proposals);
+        Assert.Equal(SessionMemoryObserverActor.ParseProposalsOutcome.NoJsonFound, result.Outcome);
+        Assert.Equal(0, result.CandidateCount);
+        Assert.NotNull(result.Preview);
+    }
+
+    [Fact]
+    public void ParseProposals_reports_parse_failed_when_candidates_exist_but_none_match()
+    {
+        // Walker finds two stray JSON objects, neither of which deserialize
+        // into a DistillationResponse with a non-null Proposals array.
+        // Should be ParseFailed (NOT NoJsonFound), because the distinction
+        // matters for diagnosing prompt vs format issues.
+        var result = SessionMemoryObserverActor.ParseProposals(
+            "{ \"unrelated\": \"data\" } and { \"more\": \"unrelated\" }");
+
+        Assert.Empty(result.Proposals);
+        Assert.Equal(SessionMemoryObserverActor.ParseProposalsOutcome.ParseFailed, result.Outcome);
+        Assert.Equal(2, result.CandidateCount);
+        Assert.NotNull(result.Preview);
+    }
+
+    [Fact]
+    public void ParseProposals_reports_parse_failed_on_truncated_json()
+    {
+        var truncated = "{ \"proposals\": [ { \"title\": \"foo\", \"content\": \"bar\"";
+
+        var result = SessionMemoryObserverActor.ParseProposals(truncated);
+
+        Assert.Empty(result.Proposals);
+        // Truncated JSON has an opening `{` but no matching close, so the
+        // walker reports zero candidates → NoJsonFound. Locks the contract.
+        Assert.Equal(SessionMemoryObserverActor.ParseProposalsOutcome.NoJsonFound, result.Outcome);
+    }
+
+    // ── ExtractJsonObjectCandidates / StripMarkdownFences direct unit tests ──
+
+    [Fact]
+    public void StripMarkdownFences_strips_json_fenced_block()
+    {
+        var input = "```json\n{\"key\":\"value\"}\n```";
+        Assert.Equal("{\"key\":\"value\"}", SessionMemoryObserverActor.StripMarkdownFences(input));
+    }
+
+    [Fact]
+    public void StripMarkdownFences_returns_input_unchanged_when_no_fence()
+    {
+        var input = "{\"key\":\"value\"}";
+        Assert.Equal(input, SessionMemoryObserverActor.StripMarkdownFences(input));
+    }
+
+    [Fact]
+    public void ExtractJsonObjectCandidates_finds_each_top_level_object()
+    {
+        var text = "preamble {\"a\":1} more {\"b\":2,\"nested\":{\"c\":3}} trailing";
+
+        var candidates = SessionMemoryObserverActor.ExtractJsonObjectCandidates(text);
+
+        Assert.Equal(2, candidates.Count);
+        Assert.Equal("{\"a\":1}", candidates[0]);
+        Assert.Equal("{\"b\":2,\"nested\":{\"c\":3}}", candidates[1]);
+    }
+
+    [Fact]
+    public void ExtractJsonObjectCandidates_ignores_braces_inside_strings()
+    {
+        // Brace inside a JSON string literal must not affect depth counting.
+        var text = "{\"text\":\"contains } brace\"}";
+
+        var candidates = SessionMemoryObserverActor.ExtractJsonObjectCandidates(text);
+
+        var single = Assert.Single(candidates);
+        Assert.Equal(text, single);
+    }
+
+    [Fact]
+    public void ExtractJsonObjectCandidates_handles_escaped_quotes_inside_strings()
+    {
+        var text = "{\"text\":\"escaped \\\" quote and } brace\"}";
+
+        var candidates = SessionMemoryObserverActor.ExtractJsonObjectCandidates(text);
+
+        var single = Assert.Single(candidates);
+        Assert.Equal(text, single);
     }
 
     /// <summary>

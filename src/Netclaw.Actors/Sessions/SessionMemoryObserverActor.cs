@@ -363,7 +363,25 @@ public sealed class SessionMemoryObserverActor : ReceivePersistentActor
             inputTokens = response.Usage?.InputTokenCount;
             outputTokens = response.Usage?.OutputTokenCount;
 
-            var proposals = ParseProposals(text);
+            var parseResult = ParseProposals(text);
+            switch (parseResult.Outcome)
+            {
+                case ParseProposalsOutcome.NoJsonFound:
+                    _log.Info(
+                        "session_observer_parse_no_json rawLength={RawLength} candidateCount={CandidateCount} preview={Preview}",
+                        text.Length,
+                        parseResult.CandidateCount,
+                        parseResult.Preview);
+                    break;
+                case ParseProposalsOutcome.ParseFailed:
+                    _log.Info(
+                        "session_observer_parse_failed rawLength={RawLength} candidateCount={CandidateCount} preview={Preview}",
+                        text.Length,
+                        parseResult.CandidateCount,
+                        parseResult.Preview);
+                    break;
+            }
+            var proposals = parseResult.Proposals;
             var newAnchors = proposals
                 .Where(p => p.Anchor is not null)
                 .Select(p => p.Anchor!.CanonicalName)
@@ -393,25 +411,161 @@ public sealed class SessionMemoryObserverActor : ReceivePersistentActor
         }
     }
 
-    private static IReadOnlyList<MemoryProposal> ParseProposals(string text)
+    /// <summary>
+    /// Outcome of a <see cref="ParseProposals"/> call. Returned alongside the
+    /// proposal list so callers can emit structured log events (with named
+    /// placeholders) for the failure modes without the parser needing an
+    /// Akka <c>ILoggingAdapter</c> dependency.
+    /// </summary>
+    internal enum ParseProposalsOutcome
+    {
+        /// <summary>Input was null or whitespace; no LLM call was wasted.</summary>
+        EmptyInput,
+        /// <summary>Proposals were successfully extracted from the response.</summary>
+        Success,
+        /// <summary>
+        /// No JSON object could be located in the response at all
+        /// (e.g. refusal text, malformed output with no braces).
+        /// </summary>
+        NoJsonFound,
+        /// <summary>
+        /// One or more JSON object candidates were located but none deserialized
+        /// into a <c>DistillationResponse</c> with a non-null <c>Proposals</c>
+        /// array. Distinct from <see cref="NoJsonFound"/> because it points at
+        /// schema/format issues rather than the model not producing JSON at all.
+        /// </summary>
+        ParseFailed,
+    }
+
+    internal sealed record ParseProposalsResult(
+        IReadOnlyList<MemoryProposal> Proposals,
+        ParseProposalsOutcome Outcome,
+        int CandidateCount,
+        string? Preview);
+
+    internal static ParseProposalsResult ParseProposals(string text)
     {
         if (string.IsNullOrWhiteSpace(text))
-            return [];
+            return new ParseProposalsResult([], ParseProposalsOutcome.EmptyInput, 0, null);
 
-        var direct = TryDeserialize(text);
+        var stripped = StripMarkdownFences(text);
+
+        var direct = TryDeserialize(stripped);
         if (direct is not null)
-            return direct;
+            return new ParseProposalsResult(direct, ParseProposalsOutcome.Success, 0, null);
 
-        var jsonStart = text.IndexOf('{', StringComparison.Ordinal);
-        var jsonEnd = text.LastIndexOf('}');
-        if (jsonStart >= 0 && jsonEnd > jsonStart)
+        var candidates = ExtractJsonObjectCandidates(stripped);
+        foreach (var candidate in candidates)
         {
-            var extracted = TryDeserialize(text[jsonStart..(jsonEnd + 1)]);
-            if (extracted is not null)
-                return extracted;
+            var parsed = TryDeserialize(candidate);
+            if (parsed is not null)
+                return new ParseProposalsResult(parsed, ParseProposalsOutcome.Success, candidates.Count, null);
         }
 
-        return [];
+        var preview = TextTruncation.EllipsisAppend(text.Trim(), 200);
+        var outcome = candidates.Count == 0
+            ? ParseProposalsOutcome.NoJsonFound
+            : ParseProposalsOutcome.ParseFailed;
+        return new ParseProposalsResult([], outcome, candidates.Count, preview);
+    }
+
+    internal static string StripMarkdownFences(string text)
+    {
+        // Fast path: skip the trim allocation when the input clearly has no
+        // fence. Any leading whitespace is preserved unchanged because the
+        // caller (ParseProposals) re-checks via direct deserialization first.
+        if (text.Length == 0 || !ContainsFenceMarker(text))
+            return text;
+
+        var trimmed = text.Trim();
+        if (trimmed.Length < 7 || !trimmed.StartsWith("```", StringComparison.Ordinal))
+            return text;
+
+        var openEnd = trimmed.IndexOf('\n', StringComparison.Ordinal);
+        if (openEnd < 0)
+            return text;
+
+        var closingFence = trimmed.LastIndexOf("```", StringComparison.Ordinal);
+        if (closingFence <= openEnd)
+            return text;
+
+        return trimmed[(openEnd + 1)..closingFence].Trim();
+    }
+
+    private static bool ContainsFenceMarker(string text)
+    {
+        // Scan once for any `` ` `` — far cheaper than a string-allocating
+        // .Trim() before we know whether a fence is even present.
+        for (var i = 0; i < text.Length; i++)
+        {
+            if (text[i] == '`')
+                return true;
+        }
+        return false;
+    }
+
+    internal static IReadOnlyList<string> ExtractJsonObjectCandidates(string text)
+    {
+        var candidates = new List<string>();
+        var i = 0;
+        while (i < text.Length)
+        {
+            if (text[i] != '{')
+            {
+                i++;
+                continue;
+            }
+
+            var end = FindMatchingClose(text, i);
+            if (end < 0)
+                break;
+
+            candidates.Add(text[i..(end + 1)]);
+            i = end + 1;
+        }
+        return candidates;
+    }
+
+    private static int FindMatchingClose(string text, int openIndex)
+    {
+        var depth = 0;
+        var inString = false;
+        var escaped = false;
+        for (var i = openIndex; i < text.Length; i++)
+        {
+            var c = text[i];
+            if (escaped)
+            {
+                escaped = false;
+                continue;
+            }
+            if (inString)
+            {
+                if (c == '\\')
+                {
+                    escaped = true;
+                    continue;
+                }
+                if (c == '"')
+                    inString = false;
+                continue;
+            }
+            switch (c)
+            {
+                case '"':
+                    inString = true;
+                    break;
+                case '{':
+                    depth++;
+                    break;
+                case '}':
+                    depth--;
+                    if (depth == 0)
+                        return i;
+                    break;
+            }
+        }
+        return -1;
     }
 
     private static IReadOnlyList<MemoryProposal>? TryDeserialize(string json)
@@ -432,7 +586,7 @@ public sealed class SessionMemoryObserverActor : ReceivePersistentActor
         TextOutput text when !string.IsNullOrWhiteSpace(text.Text)
             => $"[assistant] {text.Text}",
         ToolCallOutput toolCall
-            => $"[tool] {toolCall.ToolName}({Truncate(toolCall.ArgumentsJson ?? "", 200)})",
+            => $"[tool] {toolCall.ToolName}({TextTruncation.EllipsisAppend(toolCall.ArgumentsJson ?? "", 200)})",
         TurnCompleted tc
             => $"[turn {tc.TurnNumber} {tc.Outcome.ToString().ToLowerInvariant()}]",
         CompactionOutput
@@ -450,7 +604,16 @@ public sealed class SessionMemoryObserverActor : ReceivePersistentActor
         You are a session memory distillation sidecar.
         You receive a conversation transcript and a list of memories already
         proposed in this session (existingProposals).
-        Return JSON only: { "proposals": [ ... ] }
+
+        ## Output contract (strict)
+
+        Return ONLY a single JSON object matching the schema below.
+        Do NOT include any text before or after the JSON object.
+        Do NOT wrap the JSON in markdown code fences (no ```json, no ```).
+        Do NOT include explanations, reasoning, preamble, or commentary outside the JSON.
+        Your entire response must start with `{` and end with `}`.
+
+        Top-level shape: { "proposals": [ ... ] }
 
         Your job: curate the user's memory store based on this session.
 
@@ -579,9 +742,6 @@ public sealed class SessionMemoryObserverActor : ReceivePersistentActor
         }),
         transcript
     });
-
-    private static string Truncate(string text, int maxLength) =>
-        text.Length <= maxLength ? text : string.Concat(text.AsSpan(0, maxLength), "...");
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {

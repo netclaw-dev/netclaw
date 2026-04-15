@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using Netclaw.Actors.Skills;
+using Netclaw.Actors.SubAgents;
 using Netclaw.Actors.Telemetry;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
@@ -27,9 +28,19 @@ internal static class SkillToolRegistration
         var scanner = services.GetRequiredService<ISkillContentScanner>();
         var externalSources = services.GetRequiredService<IReadOnlyList<ResolvedExternalSource>>();
         var metrics = services.GetService<ISessionMetrics>();
+        var subAgentRegistry = services.GetService<SubAgentDefinitionRegistry>();
+        var subAgentSpawner = services.GetService<SubAgentSpawner>();
 
         registry.Replace(new FileReadTool(toolConfig, pathPolicy, paths, skillRegistry, metrics));
 
-        registry.WithSkillTools(skillRegistry, skillIndexLayer, paths, scanner, externalSources, metrics);
+        registry.WithSkillTools(
+            skillRegistry,
+            skillIndexLayer,
+            paths,
+            scanner,
+            externalSources,
+            metrics,
+            subAgentRegistry,
+            subAgentSpawner);
     }
 }

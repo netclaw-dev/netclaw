@@ -7,24 +7,16 @@
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
-    <VersionPrefix>0.13.0</VersionPrefix>
-    <PackageReleaseNotes>Netclaw v0.13.0 — Subagent single-file markdown format, reminder target validation, memory observability, and hardened daemon crash handling
-
-**Features**
-
-* Added single-file markdown format for subagent definitions with YAML frontmatter — subagents now live in single `.md` files with YAML frontmatter instead of JSON+MD sidecar pairs. The frontmatter supports `name`, `description`, `tools`, `modelRole`, `timeoutSeconds`, `visibility`, and `emitStructuredFindings` fields. The `spawn_agent` tool now accepts an optional `context` argument that gets prefixed onto the subagent's first user message as a `Context:/Task:` block, enabling per-call specialization without mutating the agent's system prompt. The `[available-subagents]` discovery context layer is enriched with per-agent descriptions, tools, timeouts, and example invocation patterns. ([#652](https://github.com/Aaronontheweb/netclaw/pull/652))
-
-* Added reminder notification target validation at `set_reminder` time — `SetReminderTool` now resolves `reportToChannel` through a transport-agnostic `IReminderTargetResolver` abstraction before persistence, accepting `#channel`, `@user`, and raw ID formats. Unresolvable targets fail the tool call immediately with an actionable error instead of silently saving a broken reminder that only fails when it fires. The `netclaw-operations` skill is bumped to 1.12.0 to document the new parameter contract, and `SlackReminderTargetResolver` is the single concrete implementation. Multi-transport routing is tracked separately in #644. ([#646](https://github.com/Aaronontheweb/netclaw/pull/646))
-
-* Added memory extraction observability for silent extractor drops — turn-complete checkpoints that don't match the rules-first extractor's project-fact patterns are now logged with a categorized `MemoryExtractionDropReason` (EmptyContent, EphemeralContent, SecretLikeContent, PolicyRejected, TurnCompleteNoProjectFact, TraceNotExplicit, FingerprintDuplicate, PayloadDeserializationFailed). `MemoryCurationEngine` emits `memory_checkpoint_dropped_before_curation` at Information level with structured fields for CheckpointId, SessionId, TriggerType, IsExplicitRequest, content lengths, and drop reason. Enables operators to diagnose "why didn't this memory surface?" without source inspection. ([#653](https://github.com/Aaronontheweb/netclaw/pull/653))
-
-* Expanded subagent delegation guidance in AGENTS.md seed — the init wizard's AGENTS.md template now lowers the delegation threshold from "deep research requiring multiple searches" to "research requiring 2+ sources or multiple searches" and explicitly calls out context-window protection as delegation's primary structural benefit. Adds a "Per-call specialization" paragraph documenting the optional `context` argument, and includes parallelization tips for spawning concurrent subagents on independent topics. Existing users' AGENTS.md files are not mutated automatically — operators should copy the new block into `~/.netclaw/identity/AGENTS.md` manually. ([#656](https://github.com/Aaronontheweb/netclaw/pull/656))
+    <VersionPrefix>0.13.1</VersionPrefix>
+    <PackageReleaseNotes>Netclaw v0.13.1 — llama.cpp JSON Schema compatibility fix and AGENTS.md documentation improvement
 
 **Bug Fixes**
 
-* Hardened daemon crash handling and diagnostics — `DaemonSupervisor` now implements more aggressive crash recovery with improved error surfacing, better state reconstruction on restart, and enhanced diagnostic logging for failure paths. Reduces daemon downtime and improves observability when crashes occur. ([#650](https://github.com/Aaronontheweb/netclaw/pull/650))
+* Fixed SIGFAULT with Notion MCP tools on llama.cpp backends — `McpSchemaSanitizer` now strips JSON Schema keywords that llama.cpp's grammar engine cannot handle (`$schema`, `$id`, `$ref`, `$defs`, `additionalProperties`, `unevaluatedProperties`). Notion's MCP tool schemas use these keywords extensively, causing llama.cpp to SIGFAULT during grammar compilation when those tools were in scope. The sanitizer runs unconditionally on all MCP tool definitions before they reach the model. ([#664](https://github.com/Aaronontheweb/netclaw/pull/664))
 
-* Fixed subagent streaming LLM path dropping reasoning content — subagents using the non-streaming LLM path were having their reasoning content dropped, causing incomplete responses. Subagents now correctly use the streaming path so reasoning content is preserved in the response. ([#651](https://github.com/Aaronontheweb/netclaw/pull/651))</PackageReleaseNotes>
+**Documentation**
+
+* Added meta-lesson on skill compression to AGENTS.md — the AGENTS.md seed now includes a "Compressing a skill into a rule is a retrieval operation" guidance block, clarifying that distilling a dotnet-skills skill or other upstream authority into an audit rule or review rubric requires opening the source first to preserve the distinctions it draws. Rules that collapse two orthogonal axes into one sentence produce false positives; if a distinction cannot be written without losing nuance, drop the rule rather than elide the distinction. ([#663](https://github.com/Aaronontheweb/netclaw/pull/663))</PackageReleaseNotes>
   </PropertyGroup>
   <PropertyGroup>
     <NetCoreTestVersion>net10.0</NetCoreTestVersion>

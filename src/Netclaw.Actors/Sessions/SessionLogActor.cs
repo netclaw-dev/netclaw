@@ -86,7 +86,7 @@ public sealed class SessionLogActor : ReceiveActor
             var mediaNote = msg.MediaReferences.Count > 0
                 ? $" (+{msg.MediaReferences.Count} media)"
                 : string.Empty;
-            _writer.WriteLine($"[{_timeProvider.GetUtcNow():o}] User: {Truncate(msg.Content, 1000)}{mediaNote}");
+            _writer.WriteLine($"[{_timeProvider.GetUtcNow():o}] User: {TextTruncation.EllipsisAppend(msg.Content, 1000)}{mediaNote}");
         }
         catch (Exception ex)
         {
@@ -102,10 +102,10 @@ public sealed class SessionLogActor : ReceiveActor
         {
             var line = output switch
             {
-                TextOutput text => $"Assistant: {Truncate(text.Text, 1000)}",
+                TextOutput text => $"Assistant: {TextTruncation.EllipsisAppend(text.Text, 1000)}",
                 ToolCallOutput toolCall => FormatToolCall(toolCall),
-                ToolResultOutput toolResult => $"Tool result: {toolResult.ToolName} (call={toolResult.CallId}) → {Truncate(toolResult.Result, 1000)}",
-                ThinkingOutput thinking => $"Thinking: {Truncate(thinking.Text, 1000)}",
+                ToolResultOutput toolResult => $"Tool result: {toolResult.ToolName} (call={toolResult.CallId}) → {TextTruncation.EllipsisAppend(toolResult.Result, 1000)}",
+                ThinkingOutput thinking => $"Thinking: {TextTruncation.EllipsisAppend(thinking.Text, 1000)}",
                 UsageOutput usage => $"Usage: in={usage.InputTokens} out={usage.OutputTokens} cached={usage.CachedInputTokens} reasoning={usage.ReasoningTokens} context={usage.UsagePercent:P0}",
                 TurnCompleted tc => $"Turn {tc.TurnNumber} {tc.Outcome.ToString().ToLowerInvariant()}",
                 SessionTitleOutput title => $"Title set: {title.Title}",
@@ -135,11 +135,8 @@ public sealed class SessionLogActor : ReceiveActor
     private static string FormatToolCall(ToolCallOutput toolCall)
     {
         var args = toolCall.ArgumentsJson is not null
-            ? $" args={Truncate(toolCall.ArgumentsJson, 1000)}"
+            ? $" args={TextTruncation.EllipsisAppend(toolCall.ArgumentsJson, 1000)}"
             : string.Empty;
         return $"Tool call: {toolCall.ToolName} (call={toolCall.CallId}){args}";
     }
-
-    private static string Truncate(string text, int maxLength) =>
-        text.Length <= maxLength ? text : string.Concat(text.AsSpan(0, maxLength), "...");
 }

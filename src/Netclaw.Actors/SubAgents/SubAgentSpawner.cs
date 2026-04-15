@@ -48,7 +48,8 @@ public sealed class SubAgentSpawner
         string task,
         string? runtimeContext,
         ToolExecutionContext context,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        string? systemPromptOverlay = null)
     {
         if (context.SpawnChildActor is null)
         {
@@ -76,7 +77,7 @@ public sealed class SubAgentSpawner
         var definition = new SubAgentDefinition
         {
             Name = profile.Name,
-            SystemPrompt = profile.SystemPrompt,
+            SystemPrompt = AppendSystemPromptOverlay(profile.SystemPrompt, systemPromptOverlay),
             Tools = tools,
             ModelRole = profile.ModelRole,
             EmitStructuredFindings = profile.EmitStructuredFindings
@@ -199,5 +200,17 @@ public sealed class SubAgentSpawner
     private static void TryStopSubAgent(IActorRef subAgent)
     {
         subAgent.Tell(PoisonPill.Instance);
+    }
+
+    private static string AppendSystemPromptOverlay(string basePrompt, string? overlay)
+    {
+        if (string.IsNullOrWhiteSpace(overlay))
+            return basePrompt;
+
+        return string.Concat(
+            basePrompt.TrimEnd(),
+            "\n\n",
+            "[Skill Overlay]\n",
+            overlay.Trim());
     }
 }

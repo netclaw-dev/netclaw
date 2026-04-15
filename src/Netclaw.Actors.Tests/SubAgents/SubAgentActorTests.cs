@@ -215,20 +215,33 @@ public class SubAgentActorTests : TestKit
             ]
         };
 
+        var toolConfig = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
+        toolConfig.AudienceProfiles.Team.McpServersMode = ToolProfileMode.All;
+        var policy = new ToolAccessPolicy(
+            toolConfig,
+            new EffectivePolicyDefaults(
+                DeploymentPosture.Personal,
+                TrustAudience.Personal,
+                ShellExecutionMode.HostAllowed,
+                UsedStrictFallback: false),
+            new ShellCommandPolicy());
+
         var definition = CreateDefinition([fakePlaywrightTool]);
-        var agent = Sys.ActorOf(SubAgentActor.CreateProps(definition, fakeClient));
+        var agent = Sys.ActorOf(SubAgentActor.CreateProps(definition, fakeClient, policy, approvalService: null));
 
         var result = await agent.Ask<SubAgentResult>(
             new RunSubAgent
             {
                 Task = "Open example.com",
                 Timeout = TimeSpan.FromSeconds(5),
-                SessionScopeId = "session/subagent-scope"
+                SessionScopeId = "session/subagent-scope",
+                Audience = TrustAudience.Team.ToWireValue()
             },
             TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         Assert.True(result.Success);
         Assert.Equal("session/subagent-scope", invoker.SessionId);
+        Assert.Equal(TrustAudience.Team.ToWireValue(), invoker.Audience);
         Assert.Equal("browser_playwright", invoker.ServerName);
         Assert.Equal("navigate_page", invoker.ToolName);
     }
@@ -439,6 +452,7 @@ internal sealed class RecordingMcpToolInvoker(string result) : IMcpToolInvoker
     public string? ServerName { get; private set; }
     public string? ToolName { get; private set; }
     public string? SessionId { get; private set; }
+    public string? Audience { get; private set; }
 
     public Task<string> InvokeAsync(
         string serverName,
@@ -450,6 +464,7 @@ internal sealed class RecordingMcpToolInvoker(string result) : IMcpToolInvoker
         ServerName = serverName;
         ToolName = toolName;
         SessionId = context?.SessionId;
+        Audience = context?.Audience;
         return Task.FromResult(result);
     }
 }
