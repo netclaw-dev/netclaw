@@ -1598,8 +1598,72 @@ public class LlmSessionIntegrationTests : TestKit
         }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(sessionId, dupAck.SessionId);
 
-        await subscriber.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(500), cancellationToken: TestContext.Current.CancellationToken);
-        Assert.Equal(callsAfterFirst, _fakeChatClient.ReceivedMessages.Count);
+        await AwaitAssertAsync(() =>
+        {
+            Assert.Equal(callsAfterFirst, _fakeChatClient.ReceivedMessages.Count);
+            return Task.CompletedTask;
+        }, TimeSpan.FromSeconds(1), TimeSpan.FromMilliseconds(100), cancellationToken: TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task Reminder_redelivery_is_deduped_while_first_turn_is_in_flight()
+    {
+        var sessionId = new SessionId("dedup-inflight/thread");
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("dedup-inflight-probe");
+
+        await sessionManager.Ask<SessionJoined>(new JoinSession
+        {
+            SessionId = sessionId,
+            Subscriber = subscriber,
+            Filter = OutputFilter.TextOnly
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
+
+        var reminderSource = ReminderSource("check-pr:1712000000001");
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _fakeChatClient.NextResponseGate = gate;
+
+        var firstAck = await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Check PR #123 again",
+            Source = reminderSource
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal(sessionId, firstAck.SessionId);
+
+        await AwaitAssertAsync(() =>
+        {
+            Assert.Equal(1, _fakeChatClient.CallCount);
+            return Task.CompletedTask;
+        }, TimeSpan.FromSeconds(3), TimeSpan.FromMilliseconds(100), cancellationToken: TestContext.Current.CancellationToken);
+
+        var callsWhileBlocked = _fakeChatClient.CallCount;
+
+        var duplicateAck = await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Check PR #123 again",
+            Source = reminderSource
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal(sessionId, duplicateAck.SessionId);
+
+        await AwaitAssertAsync(() =>
+        {
+            Assert.Equal(callsWhileBlocked, _fakeChatClient.CallCount);
+            return Task.CompletedTask;
+        }, TimeSpan.FromSeconds(1), TimeSpan.FromMilliseconds(100), cancellationToken: TestContext.Current.CancellationToken);
+
+        gate.TrySetResult();
+
+        await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+
+        await AwaitAssertAsync(() =>
+        {
+            Assert.Equal(callsWhileBlocked, _fakeChatClient.CallCount);
+            return Task.CompletedTask;
+        }, TimeSpan.FromSeconds(1), TimeSpan.FromMilliseconds(100), cancellationToken: TestContext.Current.CancellationToken);
     }
 
     [Fact]

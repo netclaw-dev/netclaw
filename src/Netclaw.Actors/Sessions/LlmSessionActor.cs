@@ -64,6 +64,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     // Transient state (not persisted)
     private readonly List<SendUserMessage> _buffer = new();
+    private readonly HashSet<string> _inFlightReminderIds = new(StringComparer.Ordinal);
     private readonly Dictionary<IActorRef, OutputFilter> _subscribers = new();
     private readonly List<AITool> _availableTools = new();
     private readonly Dictionary<string, PendingToolInteraction> _pendingToolInteractions = new(StringComparer.Ordinal);
@@ -379,11 +380,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 return;
             }
 
-            // Reminder redelivery dedup (Mode B). Mirror of the Ready-phase
-            // pre-check at the top of HandleIncomingUserMessage.
             var reminderId = cmd.Source?.ReminderId;
-            if (!string.IsNullOrEmpty(reminderId)
-                && _state.ProcessedReminderIds.Contains(reminderId))
+            if (IsReminderDedupHit(reminderId, includeBuffered: true))
             {
                 TurnLog().Info(
                     "reminder_mode_b_dedup_hit reminder={ReminderId} phase=processing",
@@ -1014,6 +1012,16 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 return;
             }
 
+            var reminderId = cmd.Source?.ReminderId;
+            if (IsReminderDedupHit(reminderId, includeBuffered: true))
+            {
+                TurnLog().Info(
+                    "reminder_mode_b_dedup_hit reminder={ReminderId} phase=compacting",
+                    reminderId);
+                TryReplyAck();
+                return;
+            }
+
             _log.Info("Buffering user message (compaction in progress)");
             _buffer.Add(cmd);
             TryReplyAck();
@@ -1614,6 +1622,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         Persist(turnEvent, evt =>
         {
+            CompleteReminderInFlight(evt.SourceReminderId);
+
             var processed = _state.ProcessedReminderIds;
             if (!string.IsNullOrEmpty(evt.SourceReminderId))
             {
@@ -1754,12 +1764,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     private void HandleIncomingUserMessage(SendUserMessage cmd)
     {
-        // Reminder redelivery dedup (Mode B). If this SendUserMessage carries
-        // a ReminderId we've already processed, ack and return without
-        // modifying state. See reminder-session-reentry design D2.
         var reminderId = cmd.Source?.ReminderId;
-        if (!string.IsNullOrEmpty(reminderId)
-            && _state.ProcessedReminderIds.Contains(reminderId))
+        if (IsReminderDedupHit(reminderId, includeBuffered: true))
         {
             TurnLog().Info(
                 "reminder_mode_b_dedup_hit reminder={ReminderId}",
@@ -1767,6 +1773,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             TryReplyAck();
             return;
         }
+
+        ReserveInFlightReminderId(reminderId);
 
         _deliveryRetry.Clear();
         _currentTurnSource = cmd.Source;
@@ -1830,6 +1838,37 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         _compactionOverflowRetryCount = 0;
         FireInitialTurnLlmCall(userContent);
         TransitionTo(SessionPhase.Processing);
+    }
+
+    private bool IsReminderDedupHit(string? reminderId, bool includeBuffered)
+    {
+        if (string.IsNullOrEmpty(reminderId))
+            return false;
+
+        if (_state.ProcessedReminderIds.Contains(reminderId))
+            return true;
+
+        if (_inFlightReminderIds.Contains(reminderId))
+            return true;
+
+        if (!includeBuffered)
+            return false;
+
+        return _buffer.Any(buffered =>
+            !string.IsNullOrEmpty(buffered.Source?.ReminderId)
+            && string.Equals(buffered.Source!.ReminderId, reminderId, StringComparison.Ordinal));
+    }
+
+    private void ReserveInFlightReminderId(string? reminderId)
+    {
+        if (!string.IsNullOrEmpty(reminderId))
+            _inFlightReminderIds.Add(reminderId);
+    }
+
+    private void CompleteReminderInFlight(string? reminderId)
+    {
+        if (!string.IsNullOrEmpty(reminderId))
+            _inFlightReminderIds.Remove(reminderId);
     }
 
     private bool ShouldCompact()
@@ -2562,6 +2601,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         Persist(turnEvent, evt =>
         {
+            CompleteReminderInFlight(evt.SourceReminderId);
+
             var processed = _state.ProcessedReminderIds;
             if (!string.IsNullOrEmpty(evt.SourceReminderId))
             {
@@ -2803,6 +2844,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     private void FailCurrentTurn(string errorMessage, Exception cause, ErrorCategory category = ErrorCategory.Unknown)
     {
+        CompleteReminderInFlight(_currentTurnSource?.ReminderId);
         _deliveryRetry.Clear();
         _pendingToolInteractions.Clear();
         Timers.Cancel(StreamingRetryTimerKey);

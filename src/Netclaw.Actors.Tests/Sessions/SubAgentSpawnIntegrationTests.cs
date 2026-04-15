@@ -425,8 +425,72 @@ public class SubAgentSpawnIntegrationTests : TestKit
         }, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
         Assert.Equal(sessionId, duplicateAck.SessionId);
 
-        await subscriber.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(500), TestContext.Current.CancellationToken);
-        Assert.Equal(callsAfterFirst, _clientProvider.Compaction.CallCount);
+        await AwaitAssertAsync(() =>
+        {
+            Assert.Equal(callsAfterFirst, _clientProvider.Compaction.CallCount);
+            return Task.CompletedTask;
+        }, TimeSpan.FromSeconds(1), TimeSpan.FromMilliseconds(100), cancellationToken: TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task Reminder_sourced_routed_slash_duplicate_is_deduped_while_first_execution_in_flight()
+    {
+        var sessionId = new SessionId("test-channel/routed-slash-reminder-dedup-inflight");
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("routed-slash-reminder-dedup-inflight-events");
+
+        await sessionManager.Ask<SessionJoined>(new JoinSession
+        {
+            SessionId = sessionId,
+            Subscriber = subscriber,
+            Filter = OutputFilter.Full
+        }, TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
+
+        var reminderSource = BuildReminderSource("ops-route:1712000000001");
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _clientProvider.Compaction.NextResponseGate = gate;
+
+        var firstAck = await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "/ops-route check scheduled health",
+            Source = reminderSource
+        }, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+        Assert.Equal(sessionId, firstAck.SessionId);
+
+        await AwaitAssertAsync(() =>
+        {
+            Assert.Equal(1, _clientProvider.Compaction.CallCount);
+            return Task.CompletedTask;
+        }, TimeSpan.FromSeconds(3), TimeSpan.FromMilliseconds(100), cancellationToken: TestContext.Current.CancellationToken);
+
+        var callsWhileBlocked = _clientProvider.Compaction.CallCount;
+
+        var duplicateAck = await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "/ops-route check scheduled health",
+            Source = reminderSource
+        }, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+        Assert.Equal(sessionId, duplicateAck.SessionId);
+
+        await AwaitAssertAsync(() =>
+        {
+            Assert.Equal(callsWhileBlocked, _clientProvider.Compaction.CallCount);
+            return Task.CompletedTask;
+        }, TimeSpan.FromSeconds(1), TimeSpan.FromMilliseconds(100), cancellationToken: TestContext.Current.CancellationToken);
+
+        gate.TrySetResult();
+
+        await ExpectTextOutputAsync(subscriber, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        await ExpectTurnCompletedAsync(subscriber, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+
+        await AwaitAssertAsync(() =>
+        {
+            Assert.Equal(callsWhileBlocked, _clientProvider.Compaction.CallCount);
+            return Task.CompletedTask;
+        }, TimeSpan.FromSeconds(1), TimeSpan.FromMilliseconds(100), cancellationToken: TestContext.Current.CancellationToken);
     }
 
     [Fact]
