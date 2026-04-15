@@ -603,9 +603,9 @@ static async Task RunAsync(string[] args)
     {
         var mcpSubcommand = args.Length > 1 ? args[1] : "help";
 
-        if (mcpSubcommand is "tools" && args.Length <= 2)
+        if ((mcpSubcommand is "tools" && args.Length <= 2) || mcpSubcommand is "permissions")
         {
-            // Bare `netclaw mcp tools` → TUI mode
+            // Bare `netclaw mcp tools` or `netclaw mcp permissions` → TUI mode
             var builder = Host.CreateApplicationBuilder(args);
             ConfigureConfigServices(builder.Services, builder.Configuration);
             builder.Logging.ClearProviders();

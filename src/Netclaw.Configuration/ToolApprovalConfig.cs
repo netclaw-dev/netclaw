@@ -27,16 +27,60 @@ public sealed class ToolApprovalConfig
     public ToolApprovalMode DefaultMode { get; set; } = ToolApprovalMode.Auto;
 
     /// <summary>
-    /// Per-tool approval mode overrides. Keys are tool names
-    /// (e.g., "shell_execute", "mcp:server-name:tool-name", "file_write").
+    /// Per-tool approval mode overrides. Keys are exact tool names
+    /// (e.g., "shell_execute", "file_write"). For MCP tools the key format is
+    /// "{serverName}/{toolName}" (for example "notion/create-pages"). An exact
+    /// entry here always wins over <see cref="McpServerDefaults"/> and
+    /// <see cref="DefaultMode"/>.
     /// </summary>
     public Dictionary<string, ToolApprovalMode> ToolOverrides { get; set; } = new(StringComparer.Ordinal);
 
     /// <summary>
-    /// Returns the effective approval mode for a tool, checking overrides first.
+    /// Per-MCP-server approval mode defaults. Keys are MCP server names
+    /// (e.g., "notion"). Applies to any tool whose name matches
+    /// "{serverName}/*" unless an exact entry in <see cref="ToolOverrides"/>
+    /// takes precedence. Tools discovered on the server after config was
+    /// written inherit this default automatically.
+    /// </summary>
+    public Dictionary<string, ToolApprovalMode> McpServerDefaults { get; set; } = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Returns the effective approval mode for a tool using the three-step
+    /// precedence: exact <see cref="ToolOverrides"/> entry →
+    /// <see cref="McpServerDefaults"/> entry (when the tool name is an MCP
+    /// tool of the form "{serverName}/{toolName}") → <see cref="DefaultMode"/>.
     /// </summary>
     public ToolApprovalMode GetEffectiveMode(string toolName)
     {
-        return ToolOverrides.TryGetValue(toolName, out var mode) ? mode : DefaultMode;
+        return TryGetExplicitMode(toolName, out var mode) ? mode : DefaultMode;
+    }
+
+    /// <summary>
+    /// Checks whether the tool has an explicit entry in either
+    /// <see cref="ToolOverrides"/> (exact match) or
+    /// <see cref="McpServerDefaults"/> (by server prefix). This is the
+    /// shared precedence logic used by both <see cref="GetEffectiveMode"/>
+    /// and the runtime <c>ToolAccessPolicy.ResolveApprovalMode</c> path so
+    /// the two callers cannot drift.
+    /// </summary>
+    public bool TryGetExplicitMode(string toolName, out ToolApprovalMode mode)
+    {
+        if (ToolOverrides.TryGetValue(toolName, out mode))
+        {
+            return true;
+        }
+
+        var slashIndex = toolName.IndexOf('/', StringComparison.Ordinal);
+        if (slashIndex > 0)
+        {
+            var serverName = toolName[..slashIndex];
+            if (McpServerDefaults.TryGetValue(serverName, out mode))
+            {
+                return true;
+            }
+        }
+
+        mode = default;
+        return false;
     }
 }

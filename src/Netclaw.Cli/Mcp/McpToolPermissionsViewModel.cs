@@ -44,7 +44,18 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
     private readonly Dictionary<string, Dictionary<string, HashSet<string>>> _pendingGrants = new();
     // Track pending server access changes: (audience, server) → allowed
     private readonly Dictionary<(string Audience, string Server), bool> _pendingServerAccess = new();
-    public bool HasUnsavedChanges => _pendingGrants.Count > 0 || _pendingServerAccess.Count > 0;
+    // Track pending server-level approval defaults: (audience, server) → mode
+    private readonly Dictionary<(string Audience, string Server), ToolApprovalMode> _pendingServerDefaults = new();
+    // Track pending per-tool approval overrides: (audience, server, tool) → mode.
+    // A null value is the "inherit" sentinel: the entry is removed from
+    // ToolOverrides on save so the effective mode falls through to the
+    // server default / global default.
+    private readonly Dictionary<(string Audience, string Server, string Tool), ToolApprovalMode?> _pendingToolOverrides = new();
+    public bool HasUnsavedChanges =>
+        _pendingGrants.Count > 0
+        || _pendingServerAccess.Count > 0
+        || _pendingServerDefaults.Count > 0
+        || _pendingToolOverrides.Count > 0;
 
     public override void OnActivated()
     {
@@ -92,6 +103,27 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
     {
         SelectedServer = serverName;
         _ = LoadToolsForServerAsync(serverName);
+    }
+
+    /// <summary>
+    /// Test seam: wires up the view for a specific server and tool list
+    /// without touching the daemon. Reloads the audience profiles from
+    /// disk so tests can exercise <see cref="Save"/> end-to-end.
+    /// </summary>
+    internal void InitializeForTests(string serverName, IEnumerable<string> tools)
+    {
+        SelectedServer = serverName;
+        DiscoveredTools.Clear();
+        DiscoveredTools.AddRange(tools);
+        Profiles = LoadToolConfig().AudienceProfiles;
+        if (!_pendingGrants.ContainsKey(serverName))
+            InitializePendingGrantsFromConfig(serverName);
+        CurrentState.Value = ToolPermissionsState.ToolGrid;
+    }
+
+    internal void SetSelectedAudienceForTests(TrustAudience audience)
+    {
+        SelectedAudience = audience;
     }
 
     private async Task LoadToolsForServerAsync(string serverName)
@@ -158,6 +190,143 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
         var idx = Array.IndexOf(AudienceValues, SelectedAudience);
         SelectedAudience = AudienceValues[(idx - 1 + AudienceValues.Length) % AudienceValues.Length];
         NotifyStateChanged();
+    }
+
+    private static readonly ToolApprovalMode[] ServerDefaultCycle =
+        [ToolApprovalMode.Auto, ToolApprovalMode.Approval, ToolApprovalMode.Deny];
+
+    /// <summary>
+    /// Advances the server-default approval mode for the current audience/server
+    /// pair through Auto → Approval → Deny → Auto. The starting point is the
+    /// currently resolved effective default (pending or config).
+    /// </summary>
+    public void CycleServerDefault()
+    {
+        if (SelectedServer is null)
+            return;
+
+        var audience = AudienceName(SelectedAudience);
+        var key = (audience, SelectedServer);
+
+        var current = _pendingServerDefaults.TryGetValue(key, out var pending)
+            ? pending
+            : ResolveProfile(SelectedAudience).ApprovalPolicy?.McpServerDefaults.TryGetValue(SelectedServer, out var configMode) == true
+                ? configMode
+                : ToolApprovalMode.Auto;
+
+        var idx = Array.IndexOf(ServerDefaultCycle, current);
+        var next = ServerDefaultCycle[(idx + 1) % ServerDefaultCycle.Length];
+        _pendingServerDefaults[key] = next;
+
+        NotifyStateChanged();
+    }
+
+    /// <summary>
+    /// Advances the per-tool approval override for <paramref name="toolName"/>
+    /// under the current audience/server pair through
+    /// inherit (null) → Auto → Approval → Deny → inherit. The "inherit" state
+    /// removes any existing <c>ToolOverrides[{server}/{tool}]</c> entry on save.
+    /// </summary>
+    public void CycleToolOverride(string toolName)
+    {
+        if (SelectedServer is null)
+            return;
+
+        var audience = AudienceName(SelectedAudience);
+        var key = (audience, SelectedServer, toolName);
+
+        ToolApprovalMode? current;
+        if (_pendingToolOverrides.TryGetValue(key, out var pending))
+        {
+            current = pending;
+        }
+        else
+        {
+            var exactKey = $"{SelectedServer}/{toolName}";
+            current = ResolveProfile(SelectedAudience).ApprovalPolicy?.ToolOverrides.TryGetValue(exactKey, out var configMode) == true
+                ? configMode
+                : null;
+        }
+
+        // Cycle: inherit (null) → Auto → Approval → Deny → inherit
+        ToolApprovalMode? next = current switch
+        {
+            null => ToolApprovalMode.Auto,
+            ToolApprovalMode.Auto => ToolApprovalMode.Approval,
+            ToolApprovalMode.Approval => ToolApprovalMode.Deny,
+            ToolApprovalMode.Deny => null,
+            _ => null
+        };
+
+        _pendingToolOverrides[key] = next;
+
+        NotifyStateChanged();
+    }
+
+    /// <summary>
+    /// Returns the effective approval mode for a tool under the currently
+    /// selected server and audience, plus a flag indicating whether the mode
+    /// was inherited from the server default / global default (true) or came
+    /// from an explicit per-tool entry (false).
+    /// </summary>
+    public (ToolApprovalMode Mode, bool IsInherited) GetEffectiveMode(string toolName)
+    {
+        if (SelectedServer is null)
+            return (ToolApprovalMode.Auto, true);
+
+        var audience = AudienceName(SelectedAudience);
+        var profile = ResolveProfile(SelectedAudience);
+        var approvalPolicy = profile.ApprovalPolicy;
+
+        // Step 1: pending per-tool override.
+        var toolKey = (audience, SelectedServer, toolName);
+        if (_pendingToolOverrides.TryGetValue(toolKey, out var pendingOverride))
+        {
+            if (pendingOverride is { } explicitMode)
+                return (explicitMode, false);
+            // null = inherit → skip and continue resolution.
+        }
+        else if (approvalPolicy is not null)
+        {
+            // Step 2: config ToolOverrides[{server}/{tool}]
+            var exactKey = $"{SelectedServer}/{toolName}";
+            if (approvalPolicy.ToolOverrides.TryGetValue(exactKey, out var configExact))
+                return (configExact, false);
+        }
+
+        // Step 3: pending server default.
+        var serverKey = (audience, SelectedServer);
+        if (_pendingServerDefaults.TryGetValue(serverKey, out var pendingDefault))
+            return (pendingDefault, true);
+
+        // Step 4: config McpServerDefaults[server]
+        if (approvalPolicy is not null
+            && approvalPolicy.McpServerDefaults.TryGetValue(SelectedServer, out var configDefault))
+            return (configDefault, true);
+
+        // Step 5: global DefaultMode (inherit).
+        return (approvalPolicy?.DefaultMode ?? ToolApprovalMode.Auto, true);
+    }
+
+    /// <summary>
+    /// Returns the server-default approval mode for the currently selected
+    /// audience/server pair, consulting pending edits first, then config.
+    /// </summary>
+    public ToolApprovalMode GetServerDefault()
+    {
+        if (SelectedServer is null)
+            return ToolApprovalMode.Auto;
+
+        var audience = AudienceName(SelectedAudience);
+        if (_pendingServerDefaults.TryGetValue((audience, SelectedServer), out var pending))
+            return pending;
+
+        var approvalPolicy = ResolveProfile(SelectedAudience).ApprovalPolicy;
+        if (approvalPolicy is not null
+            && approvalPolicy.McpServerDefaults.TryGetValue(SelectedServer, out var configMode))
+            return configMode;
+
+        return ToolApprovalMode.Auto;
     }
 
     public bool IsToolGranted(string toolName)
@@ -337,20 +506,65 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
             foreach (var (audienceName, tools) in audienceGrants)
             {
                 var audienceSection = ConfigFileHelper.GetOrCreateSection(profilesSection, audienceName);
-
-                var grants = audienceSection.TryGetValue("McpServerToolGrants", out var existing)
-                    && existing is Dictionary<string, object> dict
-                        ? dict
-                        : new Dictionary<string, object>();
-
+                var grants = ConfigFileHelper.GetOrCreateSection(audienceSection, "McpServerToolGrants");
                 grants[serverName] = tools.Order(StringComparer.Ordinal).ToList();
-                audienceSection["McpServerToolGrants"] = grants;
+            }
+        }
+
+        // Write server-default approval modes (ApprovalPolicy.McpServerDefaults)
+        foreach (var ((audienceName, serverName), mode) in _pendingServerDefaults)
+        {
+            var audienceSection = ConfigFileHelper.GetOrCreateSection(profilesSection, audienceName);
+            var approvalPolicy = ConfigFileHelper.GetOrCreateSection(audienceSection, "ApprovalPolicy");
+            var serverDefaults = ConfigFileHelper.GetOrCreateSection(approvalPolicy, "McpServerDefaults");
+            serverDefaults[serverName] = mode.ToString();
+
+            // Mirror into in-memory profile so GetEffectiveMode / GetServerDefault
+            // reflect the saved value immediately without a config reload.
+            var profile = audienceName switch
+            {
+                "Public" => Profiles.Public,
+                "Team" => Profiles.Team,
+                _ => Profiles.Personal
+            };
+            profile.ApprovalPolicy ??= new ToolApprovalConfig();
+            profile.ApprovalPolicy.McpServerDefaults[serverName] = mode;
+        }
+
+        // Write per-tool approval overrides (ApprovalPolicy.ToolOverrides)
+        foreach (var ((audienceName, serverName, toolName), mode) in _pendingToolOverrides)
+        {
+            var audienceSection = ConfigFileHelper.GetOrCreateSection(profilesSection, audienceName);
+            var approvalPolicy = ConfigFileHelper.GetOrCreateSection(audienceSection, "ApprovalPolicy");
+            var toolOverrides = ConfigFileHelper.GetOrCreateSection(approvalPolicy, "ToolOverrides");
+            var exactKey = $"{serverName}/{toolName}";
+
+            var profile = audienceName switch
+            {
+                "Public" => Profiles.Public,
+                "Team" => Profiles.Team,
+                _ => Profiles.Personal
+            };
+            profile.ApprovalPolicy ??= new ToolApprovalConfig();
+
+            if (mode is null)
+            {
+                // Inherit sentinel: remove the exact override on disk and in memory.
+                toolOverrides.Remove(exactKey);
+                profile.ApprovalPolicy.ToolOverrides.Remove(exactKey);
+            }
+            else
+            {
+                toolOverrides[exactKey] = mode.Value.ToString();
+                profile.ApprovalPolicy.ToolOverrides[exactKey] = mode.Value;
             }
         }
 
         ConfigFileHelper.WriteConfigFile(_paths.NetclawConfigPath, config);
         _pendingGrants.Clear();
         _pendingServerAccess.Clear();
+        _pendingServerDefaults.Clear();
+        _pendingToolOverrides.Clear();
 
         StatusMessage.Value = "Saved to netclaw.json. Restart daemon to apply changes.";
         CurrentState.Value = ToolPermissionsState.ToolGrid;

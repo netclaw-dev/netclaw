@@ -119,6 +119,15 @@ public sealed class ToolAudienceProfilesDoctorCheck(NetclawPaths paths) : IDocto
                 "all discovered tools are exposed. Consider adding per-tool grants for supply-chain protection.");
         }
 
+        // Warning: MCP servers reachable for Personal with no approval default.
+        var missingApproval = FindMcpServersMissingPersonalApprovalDefault(toolConfig.AudienceProfiles, mcpServers);
+        if (missingApproval.Count > 0)
+        {
+            warnings.Add(
+                $"MCP server(s) {string.Join(", ", missingApproval)} have no approval default on Personal — " +
+                "tools invoke without prompting. Run `netclaw mcp permissions` to set a server default.");
+        }
+
         if (warnings.Count > 0)
         {
             return Task.FromResult(DoctorCheckResult.Warning(
@@ -192,6 +201,49 @@ public sealed class ToolAudienceProfilesDoctorCheck(NetclawPaths paths) : IDocto
         }
 
         return allowedServers.Except(grantedServers, StringComparer.OrdinalIgnoreCase).Order().ToList();
+    }
+
+    /// <summary>
+    /// Finds enabled MCP servers that are reachable by the Personal audience
+    /// (via <c>McpServersMode = All</c>) but have no
+    /// <c>ApprovalPolicy.McpServerDefaults[server]</c> entry AND no
+    /// <c>ToolOverrides</c> entries keyed by <c>{server}/*</c>. Such servers
+    /// invoke their tools without any approval prompt on Personal.
+    /// </summary>
+    private static List<string> FindMcpServersMissingPersonalApprovalDefault(
+        ToolAudienceProfiles profiles,
+        IReadOnlyDictionary<string, McpServerEntry> mcpServers)
+    {
+        var personal = profiles.Personal;
+        if (personal.McpServersMode != ToolProfileMode.All)
+            return [];
+
+        var result = new List<string>();
+        foreach (var (serverName, entry) in mcpServers)
+        {
+            if (!entry.Enabled)
+                continue;
+
+            var approvalPolicy = personal.ApprovalPolicy;
+            if (approvalPolicy is null)
+            {
+                result.Add(serverName);
+                continue;
+            }
+
+            if (approvalPolicy.McpServerDefaults.ContainsKey(serverName))
+                continue;
+
+            var serverPrefix = $"{serverName}/";
+            var hasPerToolOverride = approvalPolicy.ToolOverrides.Keys.Any(
+                k => k.StartsWith(serverPrefix, StringComparison.Ordinal));
+            if (hasPerToolOverride)
+                continue;
+
+            result.Add(serverName);
+        }
+
+        return result.Order(StringComparer.OrdinalIgnoreCase).ToList();
     }
 
     private static void CheckApprovalMismatch(ToolConfig toolConfig, List<string> warnings)
