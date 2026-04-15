@@ -248,7 +248,6 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
                 : null;
         }
 
-        // Cycle: inherit (null) → Auto → Approval → Deny → inherit
         ToolApprovalMode? next = current switch
         {
             null => ToolApprovalMode.Auto,
@@ -274,37 +273,34 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
         if (SelectedServer is null)
             return (ToolApprovalMode.Auto, true);
 
+        // Precedence mirrors ToolApprovalConfig.TryGetExplicitMode but layers
+        // pending edits on top of the config so the view reflects unsaved state.
         var audience = AudienceName(SelectedAudience);
         var profile = ResolveProfile(SelectedAudience);
         var approvalPolicy = profile.ApprovalPolicy;
 
-        // Step 1: pending per-tool override.
         var toolKey = (audience, SelectedServer, toolName);
         if (_pendingToolOverrides.TryGetValue(toolKey, out var pendingOverride))
         {
             if (pendingOverride is { } explicitMode)
                 return (explicitMode, false);
-            // null = inherit → skip and continue resolution.
+            // inherit sentinel (null) — fall through.
         }
         else if (approvalPolicy is not null)
         {
-            // Step 2: config ToolOverrides[{server}/{tool}]
             var exactKey = $"{SelectedServer}/{toolName}";
             if (approvalPolicy.ToolOverrides.TryGetValue(exactKey, out var configExact))
                 return (configExact, false);
         }
 
-        // Step 3: pending server default.
         var serverKey = (audience, SelectedServer);
         if (_pendingServerDefaults.TryGetValue(serverKey, out var pendingDefault))
             return (pendingDefault, true);
 
-        // Step 4: config McpServerDefaults[server]
         if (approvalPolicy is not null
             && approvalPolicy.McpServerDefaults.TryGetValue(SelectedServer, out var configDefault))
             return (configDefault, true);
 
-        // Step 5: global DefaultMode (inherit).
         return (approvalPolicy?.DefaultMode ?? ToolApprovalMode.Auto, true);
     }
 
@@ -511,52 +507,32 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
             }
         }
 
-        // Write server-default approval modes (ApprovalPolicy.McpServerDefaults)
+        // Mirroring in-memory Profiles alongside the on-disk writes lets
+        // GetEffectiveMode / GetServerDefault reflect saved values without
+        // a full config reload.
         foreach (var ((audienceName, serverName), mode) in _pendingServerDefaults)
         {
-            var audienceSection = ConfigFileHelper.GetOrCreateSection(profilesSection, audienceName);
-            var approvalPolicy = ConfigFileHelper.GetOrCreateSection(audienceSection, "ApprovalPolicy");
-            var serverDefaults = ConfigFileHelper.GetOrCreateSection(approvalPolicy, "McpServerDefaults");
+            var (approvalSection, inMemoryPolicy) = GetOrCreateApprovalPolicy(profilesSection, audienceName);
+            var serverDefaults = ConfigFileHelper.GetOrCreateSection(approvalSection, "McpServerDefaults");
             serverDefaults[serverName] = mode.ToString();
-
-            // Mirror into in-memory profile so GetEffectiveMode / GetServerDefault
-            // reflect the saved value immediately without a config reload.
-            var profile = audienceName switch
-            {
-                "Public" => Profiles.Public,
-                "Team" => Profiles.Team,
-                _ => Profiles.Personal
-            };
-            profile.ApprovalPolicy ??= new ToolApprovalConfig();
-            profile.ApprovalPolicy.McpServerDefaults[serverName] = mode;
+            inMemoryPolicy.McpServerDefaults[serverName] = mode;
         }
 
-        // Write per-tool approval overrides (ApprovalPolicy.ToolOverrides)
         foreach (var ((audienceName, serverName, toolName), mode) in _pendingToolOverrides)
         {
-            var audienceSection = ConfigFileHelper.GetOrCreateSection(profilesSection, audienceName);
-            var approvalPolicy = ConfigFileHelper.GetOrCreateSection(audienceSection, "ApprovalPolicy");
-            var toolOverrides = ConfigFileHelper.GetOrCreateSection(approvalPolicy, "ToolOverrides");
+            var (approvalSection, inMemoryPolicy) = GetOrCreateApprovalPolicy(profilesSection, audienceName);
+            var toolOverrides = ConfigFileHelper.GetOrCreateSection(approvalSection, "ToolOverrides");
             var exactKey = $"{serverName}/{toolName}";
-
-            var profile = audienceName switch
-            {
-                "Public" => Profiles.Public,
-                "Team" => Profiles.Team,
-                _ => Profiles.Personal
-            };
-            profile.ApprovalPolicy ??= new ToolApprovalConfig();
 
             if (mode is null)
             {
-                // Inherit sentinel: remove the exact override on disk and in memory.
                 toolOverrides.Remove(exactKey);
-                profile.ApprovalPolicy.ToolOverrides.Remove(exactKey);
+                inMemoryPolicy.ToolOverrides.Remove(exactKey);
             }
             else
             {
                 toolOverrides[exactKey] = mode.Value.ToString();
-                profile.ApprovalPolicy.ToolOverrides[exactKey] = mode.Value;
+                inMemoryPolicy.ToolOverrides[exactKey] = mode.Value;
             }
         }
 
@@ -610,6 +586,21 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
         }
 
         NotifyStateChanged();
+    }
+
+    private (Dictionary<string, object> ApprovalSection, ToolApprovalConfig InMemoryPolicy)
+        GetOrCreateApprovalPolicy(Dictionary<string, object> profilesSection, string audienceName)
+    {
+        var audienceSection = ConfigFileHelper.GetOrCreateSection(profilesSection, audienceName);
+        var approvalSection = ConfigFileHelper.GetOrCreateSection(audienceSection, "ApprovalPolicy");
+        var profile = audienceName switch
+        {
+            "Public" => Profiles.Public,
+            "Team" => Profiles.Team,
+            _ => Profiles.Personal
+        };
+        profile.ApprovalPolicy ??= new ToolApprovalConfig();
+        return (approvalSection, profile.ApprovalPolicy);
     }
 
     private static bool IsServerAllowed(string serverName, ToolAudienceProfile profile)
