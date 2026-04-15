@@ -2556,15 +2556,23 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 Role = Protocol.ChatRole.Assistant,
                 Content = msg.Result.Output
             },
-            RecordedAtMs = NowMs()
+            RecordedAtMs = NowMs(),
+            SourceReminderId = _currentTurnSource?.ReminderId
         };
 
         Persist(turnEvent, evt =>
         {
+            var processed = _state.ProcessedReminderIds;
+            if (!string.IsNullOrEmpty(evt.SourceReminderId))
+            {
+                processed = processed.Add(evt.SourceReminderId);
+            }
+
             _state = _state with
             {
                 History = _state.History.Add(evt.AssistantReply),
-                TurnCount = _state.TurnCount + 1
+                TurnCount = _state.TurnCount + 1,
+                ProcessedReminderIds = processed
             };
 
             EmitOutput(new TextOutput

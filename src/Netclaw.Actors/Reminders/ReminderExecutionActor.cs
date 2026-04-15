@@ -200,7 +200,11 @@ internal sealed class ReminderExecutionActor : ReceiveActor
                 MessageId = reminderDeliveryKey,
                 TurnId = reminderDeliveryKey,
                 Audience = audience,
-                Boundary = SecurityPolicyDefaults.LocalDaemonBoundary,
+                Boundary = _definition.Boundary
+                    ?? SecurityPolicyDefaults.ResolveBoundary(
+                        boundary: null,
+                        channelType: originChannelType.ToWireValue(),
+                        audience: audience),
                 Principal = PrincipalClassification.VerifiedAutomation,
                 Provenance = new SourceProvenance
                 {

@@ -397,7 +397,7 @@ public sealed class SlackActorHierarchyTests(ITestOutputHelper output) : TestKit
         ChannelType = ChannelType.Slack,
         SenderId = "reminder-system",
         Audience = TrustAudience.Personal,
-        Boundary = SecurityPolicyDefaults.LocalDaemonBoundary,
+        Boundary = SecurityPolicyDefaults.SlackWorkspaceBoundary,
         Principal = PrincipalClassification.VerifiedAutomation,
         Provenance = new SourceProvenance
         {

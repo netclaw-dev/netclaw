@@ -120,6 +120,13 @@ public sealed record ReminderDefinition
     /// </summary>
     public TrustAudience? Audience { get; init; }
 
+    /// <summary>
+    /// Persisted execution boundary for this reminder.
+    /// For Mode B reminders this should mirror the creating session's
+    /// effective trust boundary so reminder re-entry does not widen scope.
+    /// </summary>
+    public string? Boundary { get; init; }
+
     public string CreatedBy { get; init; } = "system";
     public long CreatedAtMs { get; set; }
     public long UpdatedAtMs { get; set; }

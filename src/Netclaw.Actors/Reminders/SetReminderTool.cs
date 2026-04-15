@@ -159,6 +159,13 @@ public sealed partial class SetReminderTool : NetclawTool<SetReminderTool.Params
             sourceAudience = parsedSourceAudience;
         }
 
+        string? boundary = null;
+        if (!string.IsNullOrWhiteSpace(context.Boundary))
+            boundary = context.Boundary.Trim();
+
+        if (string.IsNullOrWhiteSpace(boundary) && sourceAudience is { } resolvedSourceAudience)
+            boundary = SecurityPolicyDefaults.ResolveBoundaryFromAudience(resolvedSourceAudience);
+
         var definition = new ReminderDefinition
         {
             Id = id.Value,
@@ -168,6 +175,7 @@ public sealed partial class SetReminderTool : NetclawTool<SetReminderTool.Params
             NotifyInstructions = notifyInstructions,
             NotifyPolicy = notifyPolicy,
             Audience = audience,
+            Boundary = boundary,
             Enabled = true,
             SessionId = sessionId,
             OriginChannelType = originChannelType,

@@ -197,6 +197,7 @@ public class SetReminderToolTests : TestKit
         var context = new ToolExecutionContext("C0123ABC/1234567890.123456", null)
         {
             Audience = "team",
+            Boundary = SecurityPolicyDefaults.SlackWorkspaceBoundary,
             ChannelType = "slack"
         };
 
@@ -223,6 +224,7 @@ public class SetReminderToolTests : TestKit
         Assert.Null(cmd.Definition.ReportToThreadTs);
         Assert.Equal("Reply in this session with the result.", cmd.Definition.NotifyInstructions);
         Assert.Equal(TrustAudience.Team, cmd.Authorization?.SourceAudience);
+        Assert.Equal(SecurityPolicyDefaults.SlackWorkspaceBoundary, cmd.Definition.Boundary);
         Assert.Equal(ReminderWriteMode.Upsert, cmd.WriteMode);
 
         probe.Reply(new ReminderSavedResponse(
@@ -306,6 +308,7 @@ public class SetReminderToolTests : TestKit
         Assert.Null(cmd.Definition.OriginChannelType);
         Assert.Null(cmd.Definition.ReportToChannel);
         Assert.Null(cmd.Definition.ReportToThreadTs);
+        Assert.Null(cmd.Definition.Boundary);
 
         probe.Reply(new ReminderSavedResponse(
             new ReminderId(cmd.Definition.Id),

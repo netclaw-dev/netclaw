@@ -159,11 +159,18 @@ public sealed partial class ReminderManagerActor : ReceiveActor
             return;
         }
 
+        var effectiveAudience = authorization.EffectiveAudience ?? TrustAudience.Public;
+        var effectiveBoundary = ResolveReminderBoundary(
+            cmd.Definition.Boundary,
+            cmd.Definition.OriginChannelType,
+            effectiveAudience);
+
         var normalized = cmd.Definition with
         {
             Id = id.Value,
             Title = title,
             Audience = authorization.EffectiveAudience,
+            Boundary = effectiveBoundary,
             CreatedBy = string.IsNullOrWhiteSpace(cmd.Definition.CreatedBy)
                 ? "system"
                 : cmd.Definition.CreatedBy
@@ -247,6 +254,15 @@ public sealed partial class ReminderManagerActor : ReceiveActor
         }
 
         return ReminderAudienceAuthorizationResult.Success(effectiveAudience);
+    }
+
+    private static string ResolveReminderBoundary(
+        string? requestedBoundary,
+        ChannelType? originChannelType,
+        TrustAudience effectiveAudience)
+    {
+        var channelType = (originChannelType ?? ChannelType.Reminder).ToWireValue();
+        return SecurityPolicyDefaults.ResolveBoundary(requestedBoundary, channelType, effectiveAudience);
     }
 
     private async Task HandleCancelAsync(CancelReminderCommand cmd)

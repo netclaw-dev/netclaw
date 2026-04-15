@@ -344,6 +344,7 @@ public class ReminderManagerActorTests : TestKit
         Assert.Contains("Check PR #123", delivered.Content);
         Assert.Equal(ChannelType.Slack, delivered.Source.ChannelType);
         Assert.Equal(TrustAudience.Team, delivered.Source.Audience);
+        Assert.Equal(SecurityPolicyDefaults.SlackWorkspaceBoundary, delivered.Source.Boundary);
         Assert.NotNull(delivered.Source.ReminderId);
         Assert.StartsWith("mode-b-anchor:", delivered.Source.ReminderId);
         Assert.Equal(PrincipalClassification.VerifiedAutomation, delivered.Source.Principal);
