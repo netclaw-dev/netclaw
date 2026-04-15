@@ -57,6 +57,8 @@ public class SubAgentSpawnIntegrationTests : TestKit
                 UsedStrictFallback: false),
             new ShellCommandPolicy());
         var subAgentRegistry = new SubAgentDefinitionRegistry();
+        var subAgentPaths = new NetclawPaths(Path.Combine(Path.GetTempPath(), $"netclaw-subagents-{Guid.NewGuid():N}"));
+        subAgentPaths.EnsureDirectoriesExist();
         subAgentRegistry.Register(new SubAgentProfile
         {
             Name = "summarizer",
@@ -75,7 +77,8 @@ public class SubAgentSpawnIntegrationTests : TestKit
                 registry,
                 toolAccessPolicy,
                 approvalService: null,
-                Microsoft.Extensions.Logging.Abstractions.NullLogger<SubAgentSpawner>.Instance)));
+                Microsoft.Extensions.Logging.Abstractions.NullLogger<SubAgentSpawner>.Instance),
+            subAgentPaths));
         registry.Register(new FakeNetclawTool("file_read", "stub file content", "file"));
 
         services.AddSingleton(registry);

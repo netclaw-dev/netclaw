@@ -29,14 +29,14 @@ public sealed class FileSubAgentDefinitionLoader
     {
         if (!Directory.Exists(_agentsDirectory))
         {
-            _logger.LogDebug("Agents directory does not exist: {Path}", _agentsDirectory);
+            _logger.LogWarning("Agents directory does not exist: {Path}", _agentsDirectory);
             return [];
         }
 
         var files = Directory.GetFiles(_agentsDirectory, "*.md");
         if (files.Length == 0)
         {
-            _logger.LogDebug("No agent definition files found in {Path}", _agentsDirectory);
+            _logger.LogWarning("No agent definition files found in {Path}", _agentsDirectory);
             return [];
         }
 

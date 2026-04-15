@@ -18,6 +18,7 @@ public sealed partial class SpawnAgentTool : NetclawTool<SpawnAgentTool.Params>
 {
     private readonly SubAgentDefinitionRegistry _registry;
     private readonly SubAgentSpawner _spawner;
+    private readonly NetclawPaths _paths;
 
     public record Params(
         [property: Description("Name of the subagent to invoke (see available-subagents in context)")]
@@ -31,10 +32,11 @@ public sealed partial class SpawnAgentTool : NetclawTool<SpawnAgentTool.Params>
             + "instructions; use this for THIS invocation's situation.")]
         string? Context = null);
 
-    public SpawnAgentTool(SubAgentDefinitionRegistry registry, SubAgentSpawner spawner)
+    public SpawnAgentTool(SubAgentDefinitionRegistry registry, SubAgentSpawner spawner, NetclawPaths paths)
     {
         _registry = registry;
         _spawner = spawner;
+        _paths = paths;
     }
 
     protected override Task<string> ExecuteAsync(Params args, CancellationToken ct)
@@ -53,7 +55,7 @@ public sealed partial class SpawnAgentTool : NetclawTool<SpawnAgentTool.Params>
         {
             var available = _registry.GetUserFacing();
             if (available.Count == 0)
-                return $"Error: No subagents are available. Agent '{args.Agent}' not found.";
+                return $"Error: No subagents are available. Agent '{args.Agent}' not found. Author one at {_paths.AgentsDirectory}/*.md or define a skill with metadata.subagent once #661 lands.";
 
             var names = string.Join(", ", available.Select(a => a.Name));
             return $"Error: Unknown agent '{args.Agent}'. Available agents: {names}";

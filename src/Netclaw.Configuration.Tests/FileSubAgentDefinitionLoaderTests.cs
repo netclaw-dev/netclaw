@@ -35,6 +35,30 @@ public class FileSubAgentDefinitionLoaderTests : IDisposable
     }
 
     [Fact]
+    public void LoadAll_logs_warning_when_agents_directory_is_missing()
+    {
+        Directory.Delete(_paths.AgentsDirectory, recursive: true);
+
+        var results = _loader.LoadAll();
+
+        Assert.Empty(results);
+        Assert.Contains(_logger.Warnings, w =>
+            w.Contains("does not exist", StringComparison.OrdinalIgnoreCase)
+            && w.Contains(_paths.AgentsDirectory, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void LoadAll_logs_warning_when_agents_directory_has_no_markdown_files()
+    {
+        var results = _loader.LoadAll();
+
+        Assert.Empty(results);
+        Assert.Contains(_logger.Warnings, w =>
+            w.Contains("No agent definition files found", StringComparison.OrdinalIgnoreCase)
+            && w.Contains(_paths.AgentsDirectory, StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void LoadAll_parses_full_frontmatter_and_body()
     {
         WriteAgent("research-assistant.md", """

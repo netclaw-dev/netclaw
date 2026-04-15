@@ -15,6 +15,7 @@ namespace Netclaw.Daemon.Mcp;
 /// </summary>
 internal sealed class ToolIndexUpdater : IHostedService
 {
+    private readonly NetclawPaths _paths;
     private readonly McpShadowCatalogWriter _shadowCatalogWriter;
     private readonly ToolRegistry _toolRegistry;
     private readonly MemoryIndexContextLayer _memoryIndexLayer;
@@ -25,6 +26,7 @@ internal sealed class ToolIndexUpdater : IHostedService
     private readonly ILogger<ToolIndexUpdater> _logger;
 
     public ToolIndexUpdater(
+        NetclawPaths paths,
         McpShadowCatalogWriter shadowCatalogWriter,
         ToolRegistry toolRegistry,
         MemoryIndexContextLayer memoryIndexLayer,
@@ -34,6 +36,7 @@ internal sealed class ToolIndexUpdater : IHostedService
         SubAgentSpawner subAgentSpawner,
         ILogger<ToolIndexUpdater> logger)
     {
+        _paths = paths;
         _shadowCatalogWriter = shadowCatalogWriter;
         _toolRegistry = toolRegistry;
         _memoryIndexLayer = memoryIndexLayer;
@@ -52,7 +55,7 @@ internal sealed class ToolIndexUpdater : IHostedService
         LoadFileBasedAgents();
 
         // Register spawn_agent tool now that all agents and the spawner are available.
-        _toolRegistry.Register(new SpawnAgentTool(_subAgentRegistry, _subAgentSpawner));
+        _toolRegistry.Register(new SpawnAgentTool(_subAgentRegistry, _subAgentSpawner, _paths));
 
         // Write catalogs after all tools are registered.
         _shadowCatalogWriter.WriteCatalogs();
@@ -96,7 +99,22 @@ internal sealed class ToolIndexUpdater : IHostedService
         var agents = _subAgentRegistry.GetUserFacing();
         if (agents.Count == 0)
         {
-            _subAgentDiscoveryLayer.Update(string.Empty);
+            var allowedTools = string.Join(", ", SubAgentToolPolicy.GetAllowedUserFacingTools());
+            var emptyState = new StringBuilder();
+            emptyState.AppendLine("[available-subagents — use spawn_agent to delegate]");
+            emptyState.AppendLine();
+            emptyState.AppendLine("No user-facing subagents are currently registered.");
+            emptyState.AppendLine($"Agents directory: {_paths.AgentsDirectory}");
+            emptyState.AppendLine($"Allowed tools for user-facing agents: {allowedTools}");
+            emptyState.AppendLine();
+            emptyState.AppendLine("To add one: create an agent definition at <agents-directory>/<name>.md and reload the daemon.");
+            emptyState.AppendLine("Then call `spawn_agent(agent: \"<name>\", task: \"<specific task>\", context: \"<optional background>\")`.");
+
+            _subAgentDiscoveryLayer.Update(emptyState.ToString());
+            _logger.LogWarning(
+                "Subagent discovery layer updated with empty-state guidance (agentsDirectory={AgentsDirectory}, allowedTools={AllowedTools})",
+                _paths.AgentsDirectory,
+                allowedTools);
             return;
         }
 
