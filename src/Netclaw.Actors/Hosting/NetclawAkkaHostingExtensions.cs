@@ -60,6 +60,11 @@ public static class NetclawAkkaHostingExtensions
     /// <summary>
     /// Registers the reminder manager as a singleton actor and wires
     /// the local Akka.Reminders scheduler to deliver payloads to it.
+    /// Uses Akka.Reminders' built-in default settings throughout — no
+    /// configuration surface exposed. If operators ever need to tune
+    /// <c>AckTimeout</c>, <c>MaxRetryBackoff</c>, or
+    /// <c>MaxDeliveryAttempts</c>, a configuration knob can be added at
+    /// that point. Right now: YAGNI.
     /// </summary>
     public static AkkaConfigurationBuilder WithReminderManager(
         this AkkaConfigurationBuilder builder,
@@ -117,7 +122,7 @@ public static class NetclawAkkaHostingExtensions
 
     /// <summary>
     /// Convenience method that registers all Netclaw actor infrastructure.
-    /// Requires <see cref="SessionConfig"/> and <see cref="Microsoft.Extensions.AI.IChatClient"/>
+    /// Requires <c>SessionConfig</c> and <see cref="Microsoft.Extensions.AI.IChatClient"/>
     /// to be registered in DI.
     /// </summary>
     public static AkkaConfigurationBuilder WithNetclawActors(

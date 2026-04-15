@@ -64,6 +64,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     // Transient state (not persisted)
     private readonly List<SendUserMessage> _buffer = new();
+    private readonly HashSet<string> _inFlightReminderIds = new(StringComparer.Ordinal);
     private readonly Dictionary<IActorRef, OutputFilter> _subscribers = new();
     private readonly List<AITool> _availableTools = new();
     private readonly Dictionary<string, PendingToolInteraction> _pendingToolInteractions = new(StringComparer.Ordinal);
@@ -376,6 +377,16 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             {
                 _log.Info("Rejecting new user message while restart drain is pending");
                 TryReplyNack(SessionIngressGate.RestartInProgressMessage);
+                return;
+            }
+
+            var reminderId = cmd.Source?.ReminderId;
+            if (IsReminderDedupHit(reminderId, includeBuffered: true))
+            {
+                TurnLog().Info(
+                    "reminder_mode_b_dedup_hit reminder={ReminderId} phase=processing",
+                    reminderId);
+                TryReplyAck();
                 return;
             }
 
@@ -1001,6 +1012,16 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 return;
             }
 
+            var reminderId = cmd.Source?.ReminderId;
+            if (IsReminderDedupHit(reminderId, includeBuffered: true))
+            {
+                TurnLog().Info(
+                    "reminder_mode_b_dedup_hit reminder={ReminderId} phase=compacting",
+                    reminderId);
+                TryReplyAck();
+                return;
+            }
+
             _log.Info("Buffering user message (compaction in progress)");
             _buffer.Add(cmd);
             TryReplyAck();
@@ -1595,15 +1616,25 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 Content = string.Empty
             },
             AssistantReply = reply,
-            RecordedAtMs = NowMs()
+            RecordedAtMs = NowMs(),
+            SourceReminderId = _currentTurnSource?.ReminderId
         };
 
         Persist(turnEvent, evt =>
         {
+            CompleteReminderInFlight(evt.SourceReminderId);
+
+            var processed = _state.ProcessedReminderIds;
+            if (!string.IsNullOrEmpty(evt.SourceReminderId))
+            {
+                processed = processed.Add(evt.SourceReminderId);
+            }
+
             _state = _state with
             {
                 History = _state.History.Add(evt.AssistantReply),
-                TurnCount = _state.TurnCount + 1
+                TurnCount = _state.TurnCount + 1,
+                ProcessedReminderIds = processed
             };
 
             EmitResponseOutputs(lastMessage, usage, includeText: true, includeThinking: true);
@@ -1733,6 +1764,18 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     private void HandleIncomingUserMessage(SendUserMessage cmd)
     {
+        var reminderId = cmd.Source?.ReminderId;
+        if (IsReminderDedupHit(reminderId, includeBuffered: true))
+        {
+            TurnLog().Info(
+                "reminder_mode_b_dedup_hit reminder={ReminderId}",
+                reminderId);
+            TryReplyAck();
+            return;
+        }
+
+        ReserveInFlightReminderId(reminderId);
+
         _deliveryRetry.Clear();
         _currentTurnSource = cmd.Source;
         _currentTrustContext = _trustContextDeriver?.Derive(cmd.Source);
@@ -1795,6 +1838,37 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         _compactionOverflowRetryCount = 0;
         FireInitialTurnLlmCall(userContent);
         TransitionTo(SessionPhase.Processing);
+    }
+
+    private bool IsReminderDedupHit(string? reminderId, bool includeBuffered)
+    {
+        if (string.IsNullOrEmpty(reminderId))
+            return false;
+
+        if (_state.ProcessedReminderIds.Contains(reminderId))
+            return true;
+
+        if (_inFlightReminderIds.Contains(reminderId))
+            return true;
+
+        if (!includeBuffered)
+            return false;
+
+        return _buffer.Any(buffered =>
+            !string.IsNullOrEmpty(buffered.Source?.ReminderId)
+            && string.Equals(buffered.Source!.ReminderId, reminderId, StringComparison.Ordinal));
+    }
+
+    private void ReserveInFlightReminderId(string? reminderId)
+    {
+        if (!string.IsNullOrEmpty(reminderId))
+            _inFlightReminderIds.Add(reminderId);
+    }
+
+    private void CompleteReminderInFlight(string? reminderId)
+    {
+        if (!string.IsNullOrEmpty(reminderId))
+            _inFlightReminderIds.Remove(reminderId);
     }
 
     private bool ShouldCompact()
@@ -2521,15 +2595,25 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 Role = Protocol.ChatRole.Assistant,
                 Content = msg.Result.Output
             },
-            RecordedAtMs = NowMs()
+            RecordedAtMs = NowMs(),
+            SourceReminderId = _currentTurnSource?.ReminderId
         };
 
         Persist(turnEvent, evt =>
         {
+            CompleteReminderInFlight(evt.SourceReminderId);
+
+            var processed = _state.ProcessedReminderIds;
+            if (!string.IsNullOrEmpty(evt.SourceReminderId))
+            {
+                processed = processed.Add(evt.SourceReminderId);
+            }
+
             _state = _state with
             {
                 History = _state.History.Add(evt.AssistantReply),
-                TurnCount = _state.TurnCount + 1
+                TurnCount = _state.TurnCount + 1,
+                ProcessedReminderIds = processed
             };
 
             EmitOutput(new TextOutput
@@ -2760,6 +2844,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     private void FailCurrentTurn(string errorMessage, Exception cause, ErrorCategory category = ErrorCategory.Unknown)
     {
+        CompleteReminderInFlight(_currentTurnSource?.ReminderId);
         _deliveryRetry.Clear();
         _pendingToolInteractions.Clear();
         Timers.Cancel(StreamingRetryTimerKey);

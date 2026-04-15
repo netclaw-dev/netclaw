@@ -1,11 +1,16 @@
 using System.Globalization;
 using System.Text.RegularExpressions;
-using Netclaw.Configuration;
 
 namespace Netclaw.Actors.Reminders;
 
 public static partial class ReminderScheduleParser
 {
+    /// <summary>
+    /// Minimum allowed interval for recurring reminders. Guardrail against
+    /// accidental tight loops — not operator-configurable.
+    /// </summary>
+    internal const int MinIntervalSeconds = 60;
+
     [GeneratedRegex(
         "^(?:every\\s+)?(\\d+)\\s*(s|sec|secs|seconds?|m|min|mins|minutes?|h|hr|hrs|hours?|d|days?)$",
         RegexOptions.IgnoreCase | RegexOptions.Compiled)]
@@ -14,8 +19,7 @@ public static partial class ReminderScheduleParser
     public static (ReminderSchedule? Schedule, string? Error) Parse(
         string scheduleType,
         string scheduleValue,
-        TimeProvider timeProvider,
-        ReminderConfig config)
+        TimeProvider timeProvider)
     {
         var type = scheduleType.ToLowerInvariant() switch
         {
@@ -52,8 +56,8 @@ public static partial class ReminderScheduleParser
                 var interval = ParseDuration(scheduleValue);
                 if (interval is null)
                     return (null, $"Cannot parse interval '{scheduleValue}'. Use format like '30m', '2h', '1d'.");
-                if (interval.Value.TotalSeconds < config.MinIntervalSeconds)
-                    return (null, $"Minimum interval is {config.MinIntervalSeconds} seconds.");
+                if (interval.Value.TotalSeconds < MinIntervalSeconds)
+                    return (null, $"Minimum interval is {MinIntervalSeconds} seconds.");
 
                 return (new ReminderSchedule
                 {

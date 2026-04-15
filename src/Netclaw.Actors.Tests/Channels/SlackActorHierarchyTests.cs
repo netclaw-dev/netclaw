@@ -3,9 +3,11 @@ using Akka.Hosting;
 using Akka.Hosting.TestKit;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Tests.Channels.TestHelpers;
 using Netclaw.Channels.Slack;
+using Netclaw.Configuration;
 using Netclaw.Security;
 using Xunit;
 
@@ -294,5 +296,117 @@ public sealed class SlackActorHierarchyTests(ITestOutputHelper output) : TestKit
             ReceiveAny(msg => target.Tell(msg));
         }
     }
+
+    // ── Mode B reminder re-entry (DeliverTrustedSessionTurn) ──
+
+    [Fact]
+    public async Task Gateway_routes_DeliverTrustedSessionTurn_to_conversation_by_channel_id()
+    {
+        var sink = CreateTestProbe("mode-b-gateway-sink");
+        var deps = CreateDependencies(
+            conversationPropsFactory: (_, _) => Props.Create(() => new ForwardActor(sink.Ref)));
+
+        var gateway = Sys.ActorOf(SlackGatewayActor.CreateProps(deps), "slack-gateway-mode-b-gw");
+
+        var msg = new DeliverTrustedSessionTurn(
+            SessionId: new SessionId("C1/1712000000.000001"),
+            Content: "Check PR #123",
+            Source: ReminderSource("r:1"));
+
+        gateway.Tell(msg);
+
+        var routed = await sink.ExpectMsgAsync<DeliverTrustedSessionTurn>(
+            cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal("C1/1712000000.000001", routed.SessionId.Value);
+        Assert.Equal("Check PR #123", routed.Content);
+    }
+
+    [Fact]
+    public async Task Gateway_rejects_DeliverTrustedSessionTurn_with_invalid_session_id_format()
+    {
+        var sink = CreateTestProbe("mode-b-gateway-sink-invalid");
+        var deps = CreateDependencies(
+            conversationPropsFactory: (_, _) => Props.Create(() => new ForwardActor(sink.Ref)));
+
+        var gateway = Sys.ActorOf(SlackGatewayActor.CreateProps(deps), "slack-gateway-mode-b-invalid");
+
+        var probe = CreateTestProbe("reminder-dispatcher");
+        gateway.Tell(
+            new DeliverTrustedSessionTurn(
+                SessionId: new SessionId("no-slash"),
+                Content: "hello",
+                Source: ReminderSource("r:x")),
+            probe.Ref);
+
+        var nack = await probe.ExpectMsgAsync<CommandNack>(
+            cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Contains("Invalid", nack.Reason, StringComparison.OrdinalIgnoreCase);
+        await sink.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(200), cancellationToken: TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task Conversation_routes_DeliverTrustedSessionTurn_to_thread_binding()
+    {
+        var sink = CreateTestProbe("mode-b-conversation-sink");
+        var deps = CreateDependencies(
+            threadPropsFactory: (_, _, _, _) => Props.Create(() => new ForwardActor(sink.Ref)));
+
+        var conversation = Sys.ActorOf(
+            SlackConversationActor.CreateProps(new SlackChannelId("C1"), deps),
+            "slack-conversation-mode-b-fwd");
+
+        var msg = new DeliverTrustedSessionTurn(
+            SessionId: new SessionId("C1/2000.000001"),
+            Content: "reminder body",
+            Source: ReminderSource("r:conv"));
+
+        conversation.Tell(msg);
+
+        var routed = await sink.ExpectMsgAsync<DeliverTrustedSessionTurn>(
+            cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal("C1/2000.000001", routed.SessionId.Value);
+    }
+
+    [Fact]
+    public async Task Conversation_rejects_DeliverTrustedSessionTurn_for_other_channel()
+    {
+        var sink = CreateTestProbe("mode-b-conversation-sink-mismatch");
+        var deps = CreateDependencies(
+            threadPropsFactory: (_, _, _, _) => Props.Create(() => new ForwardActor(sink.Ref)));
+
+        var conversation = Sys.ActorOf(
+            SlackConversationActor.CreateProps(new SlackChannelId("C1"), deps),
+            "slack-conversation-mode-b-mismatch");
+
+        var probe = CreateTestProbe("mismatch-dispatcher");
+        conversation.Tell(
+            new DeliverTrustedSessionTurn(
+                SessionId: new SessionId("C2/2000.000001"),
+                Content: "wrong channel",
+                Source: ReminderSource("r:wrong")),
+            probe.Ref);
+
+        var nack = await probe.ExpectMsgAsync<CommandNack>(
+            cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Contains("mismatch", nack.Reason, StringComparison.OrdinalIgnoreCase);
+        await sink.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(200), cancellationToken: TestContext.Current.CancellationToken);
+    }
+
+    private static MessageSource ReminderSource(string reminderId) => new()
+    {
+        ChannelType = ChannelType.Slack,
+        SenderId = "reminder-system",
+        Audience = TrustAudience.Personal,
+        Boundary = SecurityPolicyDefaults.SlackWorkspaceBoundary,
+        Principal = PrincipalClassification.VerifiedAutomation,
+        Provenance = new SourceProvenance
+        {
+            TransportAuthenticity = TransportAuthenticity.LocalProcess,
+            PayloadTaint = PayloadTaint.Trusted,
+            SourceKind = "reminder"
+        },
+        ReceivedAt = DateTimeOffset.UtcNow,
+        ReminderId = reminderId
+    };
 
 }

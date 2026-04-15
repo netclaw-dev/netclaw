@@ -1,10 +1,13 @@
 using System.Text;
 using Akka.Actor;
 using Akka.Event;
+using Akka.Hosting;
+using Akka.Reminders;
 using Akka.Streams;
 using Akka.Streams.Dsl;
 using Microsoft.Extensions.AI;
 using Netclaw.Actors.Channels;
+using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Protocol;
 using Netclaw.Configuration;
 
@@ -17,13 +20,21 @@ namespace Netclaw.Actors.Reminders;
 /// </summary>
 internal sealed class ReminderExecutionActor : ReceiveActor
 {
+    /// <summary>
+    /// Per-execution timeout that forces a stuck reminder turn to terminate.
+    /// Netclaw-specific — no Akka.Reminders equivalent.
+    /// </summary>
+    internal const int ExecutionTimeoutSeconds = 300;
+
     private readonly Guid _executionId;
     private readonly ReminderDefinition _definition;
     private readonly ISessionPipeline _pipeline;
     private readonly ReminderHistoryStore _historyStore;
     private readonly TimeProvider _timeProvider;
+    private readonly ReminderEnvelope<ReminderPayload>? _envelope;
     private readonly ILoggingAdapter _log;
     private readonly DateTimeOffset _dispatchedAt;
+    private IReminderClient? _reminderClient;
 
     private readonly StringBuilder _buffer = new();
     private bool _sawTextDelta;
@@ -37,32 +48,35 @@ internal sealed class ReminderExecutionActor : ReceiveActor
     private ActorMaterializer? _materializer;
     private MaterializedSession? _session;
 
+    private bool IsModeB => _envelope is not null;
+
     public static Props CreateProps(
         Guid executionId,
         ReminderDefinition definition,
         ISessionPipeline pipeline,
-        ReminderConfig config,
         TimeProvider timeProvider,
-        ReminderHistoryStore historyStore) =>
-        Props.Create(() => new ReminderExecutionActor(executionId, definition, pipeline, config, timeProvider, historyStore));
+        ReminderHistoryStore historyStore,
+        ReminderEnvelope<ReminderPayload>? envelope = null) =>
+        Props.Create(() => new ReminderExecutionActor(executionId, definition, pipeline, timeProvider, historyStore, envelope));
 
     public ReminderExecutionActor(
         Guid executionId,
         ReminderDefinition definition,
         ISessionPipeline pipeline,
-        ReminderConfig config,
         TimeProvider timeProvider,
-        ReminderHistoryStore historyStore)
+        ReminderHistoryStore historyStore,
+        ReminderEnvelope<ReminderPayload>? envelope = null)
     {
         _executionId = executionId;
         _definition = definition;
         _pipeline = pipeline;
         _historyStore = historyStore;
         _timeProvider = timeProvider;
+        _envelope = envelope;
         _dispatchedAt = timeProvider.GetUtcNow();
         _log = Context.GetLogger();
 
-        Context.SetReceiveTimeout(TimeSpan.FromSeconds(config.ExecutionTimeoutSeconds));
+        Context.SetReceiveTimeout(TimeSpan.FromSeconds(ExecutionTimeoutSeconds));
 
         Receive<ExecutionOutput>(HandleOutput);
         Receive<ExecutionStarted>(_ => { });
@@ -78,10 +92,16 @@ internal sealed class ReminderExecutionActor : ReceiveActor
     protected override void PreStart()
     {
         _log.Info(
-            $"ReminderExecution Dispatched: execution_id={_executionId} reminder_id={_definition.Id} title={_definition.Title} schedule_type={_definition.Schedule.Type} dispatched_at={_dispatchedAt}");
+            $"ReminderExecution Dispatched: execution_id={_executionId} reminder_id={_definition.Id} title={_definition.Title} schedule_type={_definition.Schedule.Type} dispatched_at={_dispatchedAt} mode={(IsModeB ? "B" : "A")}");
+
+        if (IsModeB)
+        {
+            _reminderClient = ReminderClientExtension.Get(Context.System)
+                .CreateClient(new ReminderEntity(ReminderManagerActor.ShardRegionName, ReminderManagerActor.EntityId));
+        }
 
         Self.Tell(new ExecutionStarted());
-        RunTask(InitializeAsync);
+        RunTask(IsModeB ? InitializeModeBAsync : InitializeAsync);
     }
 
     private async Task InitializeAsync()
@@ -145,6 +165,125 @@ internal sealed class ReminderExecutionActor : ReceiveActor
             LogFullException(ex, "ReminderExecution InitializationFailed");
             ReportAndStop(false, ex.Message);
         }
+    }
+
+    /// <summary>
+    /// Mode B path: dispatches the reminder as a <c>DeliverTrustedSessionTurn</c>
+    /// to the originating channel's gateway and calls
+    /// <c>IReminderClient.AckAsync(envelope)</c> exactly once once the
+    /// target session has acknowledged receipt via the
+    /// <c>MessageSource.AckTarget</c>-propagated <c>CommandAck</c>. On
+    /// timeout, <c>CommandNack</c>, or any exception, <c>AckAsync</c> is
+    /// NOT called and Akka.Reminders redelivers per its built-in policy.
+    /// </summary>
+    private async Task InitializeModeBAsync()
+    {
+        try
+        {
+            var sessionId = new SessionId(_definition.SessionId!);
+            _sessionIdValue = sessionId.Value;
+            var originChannelType = _definition.OriginChannelType!.Value;
+
+            if (_definition.Audience is not { } audience)
+                throw new InvalidOperationException($"Reminder '{_definition.Id}' is missing a persisted execution audience.");
+
+            var reminderDeliveryKey = $"{_definition.Id}:{_dispatchedAt.ToUnixTimeMilliseconds()}";
+
+            _log.Info(
+                "ReminderExecution ModeB Initialized: execution_id={ExecutionId} reminder_id={ReminderId} session_id={SessionId} origin={Origin} audience={Audience}",
+                _executionId, _definition.Id, sessionId.Value, originChannelType, audience);
+
+            var source = new MessageSource
+            {
+                ChannelType = originChannelType,
+                SenderId = "reminder-system",
+                MessageId = reminderDeliveryKey,
+                TurnId = reminderDeliveryKey,
+                Audience = audience,
+                Boundary = _definition.Boundary
+                    ?? SecurityPolicyDefaults.ResolveBoundary(
+                        boundary: null,
+                        channelType: originChannelType.ToWireValue(),
+                        audience: audience),
+                Principal = PrincipalClassification.VerifiedAutomation,
+                Provenance = new SourceProvenance
+                {
+                    TransportAuthenticity = TransportAuthenticity.LocalProcess,
+                    PayloadTaint = PayloadTaint.Trusted,
+                    SourceKind = "reminder"
+                },
+                ReceivedAt = _dispatchedAt,
+                ReminderId = reminderDeliveryKey
+            };
+
+            var gateway = ResolveGatewayFor(originChannelType);
+            if (gateway is null)
+            {
+                ReportAndStop(false, $"Mode B unsupported origin channel type: {originChannelType}");
+                return;
+            }
+
+            var deliverMsg = new DeliverTrustedSessionTurn(sessionId, BuildPrompt(_definition), source);
+
+            try
+            {
+                var ack = await gateway.Ask<object>(deliverMsg, ReminderSettings.DefaultAckTimeout);
+                switch (ack)
+                {
+                    case CommandAck:
+                        _log.Info(
+                            "reminder_mode_b_dispatch_acked execution_id={ExecutionId} reminder_id={ReminderId} session_id={SessionId}",
+                            _executionId, _definition.Id, sessionId.Value);
+                        var ackResponse = await _reminderClient!.AckAsync(_envelope!);
+                        if (ackResponse.ResponseCode != ReminderAckResponseCode.Success)
+                        {
+                            _log.Warning(
+                                "reminder_ack_non_success execution_id={ExecutionId} reminder_id={ReminderId} response={ResponseCode} message={Message}",
+                                _executionId, _definition.Id, ackResponse.ResponseCode, ackResponse.Message);
+                        }
+                        ReportAndStop(true);
+                        break;
+
+                    case CommandNack nack:
+                        _log.Warning(
+                            "reminder_mode_b_session_nack execution_id={ExecutionId} reminder_id={ReminderId} session_id={SessionId} reason={Reason}",
+                            _executionId, _definition.Id, sessionId.Value, nack.Reason);
+                        ReportAndStop(false, $"Session rejected reminder delivery: {nack.Reason}");
+                        break;
+
+                    default:
+                        _log.Warning(
+                            "reminder_mode_b_unexpected_reply execution_id={ExecutionId} reminder_id={ReminderId} reply_type={ReplyType}",
+                            _executionId, _definition.Id, ack?.GetType().FullName ?? "null");
+                        ReportAndStop(false, "Unexpected reply from channel gateway");
+                        break;
+                }
+            }
+            catch (AskTimeoutException)
+            {
+                _log.Warning(
+                    "reminder_mode_b_timeout execution_id={ExecutionId} reminder_id={ReminderId} session_id={SessionId} timeout={Timeout}",
+                    _executionId, _definition.Id, sessionId.Value, ReminderSettings.DefaultAckTimeout);
+                ReportAndStop(false, "Timed out waiting for session ack");
+            }
+        }
+        catch (Exception ex)
+        {
+            LogFullException(ex, "ReminderExecution ModeB InitializationFailed");
+            ReportAndStop(false, ex.Message);
+        }
+    }
+
+    private IActorRef? ResolveGatewayFor(ChannelType originChannelType)
+    {
+        var registry = ActorRegistry.For(Context.System);
+        return originChannelType switch
+        {
+            ChannelType.Slack => registry.TryGet<SlackGatewayActorKey>(out var slack) ? slack : null,
+            ChannelType.Tui => registry.TryGet<SignalRGatewayActorKey>(out var signalr) ? signalr : null,
+            ChannelType.SignalR => registry.TryGet<SignalRGatewayActorKey>(out var signalr2) ? signalr2 : null,
+            _ => null
+        };
     }
 
     private static string BuildPrompt(ReminderDefinition definition)

@@ -29,6 +29,23 @@ public sealed class SendUserMessage : IWithSessionId
 }
 
 /// <summary>
+/// Channel-agnostic trusted-turn delivery for Mode B reminder re-entry.
+/// Issued by <c>ReminderExecutionActor</c> to the originating channel's
+/// gateway actor. Gateways route this message down their existing
+/// inbound-routing hierarchy via <c>Forward</c> (preserving the
+/// dispatcher's <c>Ask&lt;CommandAck&gt;</c> temp actor as <c>Sender</c>)
+/// until the leaf binding/session actor offers a <see cref="Channels.ChannelInput"/>
+/// to the pipeline with <see cref="Channels.MessageSource.AckTarget"/>
+/// populated from that <c>Sender</c>. No channel-level inbound ACL check
+/// is performed — the reminder's audience is validated at minting time
+/// by <c>reminder-audience-authorization</c>.
+/// </summary>
+public sealed record DeliverTrustedSessionTurn(
+    SessionId SessionId,
+    string Content,
+    Channels.MessageSource Source) : IWithSessionId;
+
+/// <summary>
 /// User's response to a <see cref="ToolInteractionRequest"/>.
 /// Routed from the channel adapter to the session actor to complete the
 /// blocked tool's <see cref="System.Threading.Tasks.TaskCompletionSource{T}"/>.

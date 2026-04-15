@@ -80,6 +80,27 @@ internal sealed class SignalRSessionActor : ReceiveActor, IWithUnboundedStash, I
             }
         });
 
+        // A reminder can fire against a passivated session with no
+        // connected client, so we initialize the pipeline lazily without
+        // a prior StartSignalRSession. Output is dropped if no client is
+        // connected; the turn still persists via TurnRecorded.
+        ReceiveAsync<DeliverTrustedSessionTurn>(async msg =>
+        {
+            try
+            {
+                await EnsureInitializedAsync();
+                Become(Active);
+                Self.Forward(msg);
+                Stash.UnstashAll();
+            }
+            catch (Exception ex)
+            {
+                _log.Error(ex, "Failed to initialize SignalR session pipeline for Mode B reminder; stopping actor");
+                Sender.Tell(CommandNack.For(_sessionId, $"SignalR pipeline init failed: {ex.Message}"));
+                Context.Stop(Self);
+            }
+        });
+
         ReceiveAny(_ => Stash.Stash());
     }
 
@@ -153,6 +174,56 @@ internal sealed class SignalRSessionActor : ReceiveActor, IWithUnboundedStash, I
         {
             _log.Debug("Shutdown requested for session {SessionId}", _sessionId.Value);
             Context.Stop(Self);
+        });
+
+        ReceiveAsync<DeliverTrustedSessionTurn>(async msg =>
+        {
+            var ackTarget = Sender;
+
+            var writer = _inputQueue;
+            if (writer is null)
+            {
+                _log.Warning(
+                    "SignalR input queue not initialized; rejecting Mode B reminder for {SessionId}",
+                    _sessionId.Value);
+                ackTarget.Tell(CommandNack.For(_sessionId, "SignalR pipeline not initialized"));
+                return;
+            }
+
+            var input = new ChannelInput
+            {
+                SenderId = msg.Source.SenderId,
+                ChannelId = msg.Source.ChannelId,
+                MessageId = msg.Source.MessageId,
+                Audience = msg.Source.Audience,
+                Boundary = msg.Source.Boundary,
+                Principal = msg.Source.Principal,
+                Provenance = msg.Source.Provenance,
+                Contents = [new Microsoft.Extensions.AI.TextContent(msg.Content)],
+                ReceivedAt = msg.Source.ReceivedAt,
+                ReminderId = msg.Source.ReminderId,
+                AckTarget = ackTarget
+            };
+
+            try
+            {
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                await writer.WriteAsync(input, cts.Token);
+                _log.Debug(
+                    "reminder_mode_b_dispatch session={Session} reminder={Reminder}",
+                    _sessionId.Value, msg.Source.ReminderId);
+            }
+            catch (OperationCanceledException)
+            {
+                _log.Warning("Timed out enqueueing Mode B reminder for session {SessionId}", _sessionId.Value);
+                ackTarget.Tell(CommandNack.For(_sessionId, "SignalR pipeline enqueue timeout"));
+            }
+            catch (ChannelClosedException)
+            {
+                _log.Warning("SignalR input queue closed; rejecting Mode B reminder for {SessionId}", _sessionId.Value);
+                ackTarget.Tell(CommandNack.For(_sessionId, "SignalR input queue closed"));
+                Self.Tell(new ReinitializePipeline("input queue closed during Mode B delivery"));
+            }
         });
     }
 
@@ -293,11 +364,22 @@ internal sealed record ShutdownSignalRSession(SessionId SessionId) : ISignalRSes
 
 /// <summary>
 /// Routes messages to <see cref="SignalRSessionActor"/> children by session ID.
+/// Channel-internal messages implement <see cref="ISignalRSessionMessage"/>
+/// and match first. Upstream protocol messages (e.g.
+/// <see cref="Actors.Protocol.DeliverTrustedSessionTurn"/> for Mode B reminder
+/// re-entry) implement the public <see cref="Actors.Protocol.IWithSessionId"/>
+/// interface and are routed via the fallback pattern below — this keeps
+/// <see cref="ISignalRSessionMessage"/> <c>internal</c> while still allowing
+/// shared protocol messages to reach the correct session actor.
 /// </summary>
 internal sealed class SignalRMessageExtractor : Akka.Cluster.Sharding.HashCodeMessageExtractor
 {
     public SignalRMessageExtractor() : base(40) { }
 
-    public override string? EntityId(object message)
-        => message is ISignalRSessionMessage msg ? msg.SessionId.Value : null;
+    public override string? EntityId(object message) => message switch
+    {
+        ISignalRSessionMessage msg => msg.SessionId.Value,
+        Actors.Protocol.IWithSessionId wid => wid.SessionId.Value,
+        _ => null
+    };
 }

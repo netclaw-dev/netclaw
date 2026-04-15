@@ -1,3 +1,5 @@
+using Akka.Hosting;
+using Akka.Hosting.TestKit;
 using Microsoft.Extensions.AI;
 using Netclaw.Actors.Channels;
 using Netclaw.Configuration;
@@ -5,8 +7,12 @@ using Xunit;
 
 namespace Netclaw.Actors.Tests.Channels;
 
-public sealed class MessageSourceFactoryTests
+public sealed class MessageSourceFactoryTests : TestKit
 {
+    public MessageSourceFactoryTests(ITestOutputHelper output) : base(output: output) { }
+
+    protected override void ConfigureAkka(AkkaConfigurationBuilder builder, IServiceProvider provider) { }
+
     [Fact]
     public void Create_uses_strict_pipeline_defaults_when_input_has_no_hints()
     {
@@ -66,5 +72,45 @@ public sealed class MessageSourceFactoryTests
         Assert.Equal(TransportAuthenticity.Verified, result.Provenance.TransportAuthenticity);
         Assert.Equal(PayloadTaint.Community, result.Provenance.PayloadTaint);
         Assert.Equal("slack", result.Provenance.SourceKind);
+    }
+
+    [Fact]
+    public void Create_propagates_null_ReminderId_and_AckTarget_by_default()
+    {
+        var input = new ChannelInput
+        {
+            SenderId = "user-1",
+            Contents = [new TextContent("hello")],
+            ReceivedAt = DateTimeOffset.UtcNow
+        };
+
+        var options = new SessionPipelineOptions { ChannelType = ChannelType.Slack };
+
+        var result = MessageSourceFactory.Create(input, options, "turn-1");
+
+        Assert.Null(result.ReminderId);
+        Assert.Null(result.AckTarget);
+    }
+
+    [Fact]
+    public void Create_propagates_ReminderId_and_AckTarget_from_ChannelInput()
+    {
+        var probe = CreateTestProbe("ack-probe");
+
+        var input = new ChannelInput
+        {
+            SenderId = "reminder-system",
+            Contents = [new TextContent("check PR")],
+            ReceivedAt = DateTimeOffset.UtcNow,
+            ReminderId = "check-pr:1712000000000",
+            AckTarget = probe.Ref
+        };
+
+        var options = new SessionPipelineOptions { ChannelType = ChannelType.Slack };
+
+        var result = MessageSourceFactory.Create(input, options, "turn-1");
+
+        Assert.Equal("check-pr:1712000000000", result.ReminderId);
+        Assert.Same(probe.Ref, result.AckTarget);
     }
 }

@@ -1,3 +1,4 @@
+using Akka.Actor;
 using Netclaw.Configuration;
 
 namespace Netclaw.Actors.Channels;
@@ -5,6 +6,9 @@ namespace Netclaw.Actors.Channels;
 /// <summary>
 /// Ephemeral metadata describing where a user message originated.
 /// Used for ACL checks and audit logging — NOT persisted with the session.
+/// <see cref="Protocol.SendUserMessage.Source"/> is marked
+/// <c>[ProtoIgnore]</c> so runtime-only fields such as
+/// <see cref="AckTarget"/> and <see cref="ReminderId"/> are safe to add.
 /// </summary>
 public sealed record MessageSource
 {
@@ -61,4 +65,29 @@ public sealed record MessageSource
     /// When the message was received by the channel.
     /// </summary>
     public DateTimeOffset ReceivedAt { get; init; }
+
+    /// <summary>
+    /// Ephemeral dedup and forensic key for reminder-originated deliveries.
+    /// Format is <c>"{reminderId}:{fireTimestampMs}"</c>. Null for regular
+    /// user messages. The target session pre-checks this value against its
+    /// in-memory <see cref="Sessions.SessionState.ProcessedReminderIds"/>
+    /// ledger to catch Akka.Reminders redeliveries. Persisted through to
+    /// <see cref="Protocol.TurnRecorded.SourceReminderId"/> when the turn
+    /// is recorded. This field is runtime-only — <see cref="MessageSource"/>
+    /// is never serialized.
+    /// </summary>
+    public string? ReminderId { get; init; }
+
+    /// <summary>
+    /// Optional reply target for ack-gated trusted deliveries. When set,
+    /// <see cref="ChannelPipeline"/>'s stream sink uses this ref as the
+    /// <c>sender</c> argument on its <c>Tell</c> to the session manager, so
+    /// that the session's existing <c>TryReplyAck</c> routes
+    /// <see cref="Protocol.CommandAck"/>/<see cref="Protocol.CommandNack"/>
+    /// back to the dispatcher's <c>Ask</c> temp actor. Regular inbound
+    /// messages leave this null, preserving fire-and-forget semantics.
+    /// This field is runtime-only — an <see cref="IActorRef"/> is not
+    /// serializable and <see cref="MessageSource"/> is never persisted.
+    /// </summary>
+    public IActorRef? AckTarget { get; init; }
 }

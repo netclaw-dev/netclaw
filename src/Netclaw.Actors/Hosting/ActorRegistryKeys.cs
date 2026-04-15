@@ -25,3 +25,21 @@ public sealed class DailyStatsActorKey;
 /// Marker type for ActorRegistry lookup of the tool approval actor.
 /// </summary>
 public sealed class ToolApprovalActorKey;
+
+/// <summary>
+/// Marker type for <see cref="Akka.Hosting.IActorRegistry"/> lookup of the
+/// SignalR gateway parent actor (GenericChildPerEntityParent routing to
+/// SignalRSessionActors). Resolved by the reminder dispatcher to deliver
+/// Mode B reminder turns back through the SignalR channel's existing
+/// routing hierarchy.
+/// </summary>
+public sealed class SignalRGatewayActorKey;
+
+/// <summary>
+/// Marker type for <see cref="Akka.Hosting.IActorRegistry"/> lookup of the
+/// Slack gateway parent actor (SlackGatewayActor → SlackConversationActor →
+/// SlackThreadBindingActor). Resolved by the reminder dispatcher to deliver
+/// Mode B reminder turns back through the Slack channel's existing
+/// routing hierarchy.
+/// </summary>
+public sealed class SlackGatewayActorKey;

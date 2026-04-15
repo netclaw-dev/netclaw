@@ -1,8 +1,10 @@
 using Akka.Actor;
+using Akka.Hosting;
 using Akka.Pattern;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Netclaw.Actors.Channels;
+using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Protocol;
 using Netclaw.Configuration;
 using Netclaw.Security;
@@ -157,6 +159,11 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
                     HttpClient: httpClient,
                     PromptInjectionDetector: _promptInjectionDetector)),
                 "slack-gateway");
+
+            // Publish the gateway under SlackGatewayActorKey so the reminder
+            // dispatcher can resolve it via IRequiredActor<SlackGatewayActorKey>
+            // for Mode B DeliverTrustedSessionTurn delivery.
+            ActorRegistry.For(_system).Register<SlackGatewayActorKey>(_gateway);
 
             await _socketModeClient.Connect(cancellationToken: cancellationToken);
             _connected = true;

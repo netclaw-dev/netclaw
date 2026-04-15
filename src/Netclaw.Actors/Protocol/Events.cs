@@ -41,6 +41,18 @@ public sealed class TurnRecorded
     [ProtoMember(4)]
     public long RecordedAtMs { get; set; }
 
+    /// <summary>
+    /// Populated when this turn originated from a reminder firing.
+    /// Format is <c>"{reminderId}:{fireTimestampMs}"</c>, matching the value
+    /// placed on <see cref="Channels.MessageSource.ReminderId"/> by the
+    /// reminder dispatcher. Null for regular user turns. Used for forensics
+    /// and to rebuild the in-memory reminder dedup ledger
+    /// (<see cref="Sessions.SessionState.ProcessedReminderIds"/>) from
+    /// event replay.
+    /// </summary>
+    [ProtoMember(5)]
+    public string? SourceReminderId { get; set; }
+
     public DateTimeOffset RecordedAt => DateTimeOffset.FromUnixTimeMilliseconds(RecordedAtMs);
 }
 

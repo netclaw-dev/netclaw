@@ -15,7 +15,7 @@ public class GetReminderHistoryToolTests : IDisposable
         Directory.CreateDirectory(_tempDir);
         var paths = new NetclawPaths(_tempDir);
         Directory.CreateDirectory(paths.RemindersDirectory);
-        _store = new ReminderHistoryStore(paths, new ReminderConfig { HistoryMaxRecords = 500 });
+        _store = new ReminderHistoryStore(paths);
         _tool = new GetReminderHistoryTool(_store);
     }
 

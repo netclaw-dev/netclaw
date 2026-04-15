@@ -5,12 +5,6 @@ using Netclaw.Daemon.Gateway;
 namespace Netclaw.Daemon;
 
 /// <summary>
-/// Marker type for <see cref="Akka.Hosting.IActorRegistry"/> lookup of the SignalR
-/// gateway parent actor (GenericChildPerEntityParent routing to SignalRSessionActors).
-/// </summary>
-public sealed class SignalRGatewayActorKey;
-
-/// <summary>
 /// Akka.Hosting extension that registers the SignalR session gateway actor.
 /// </summary>
 public static class SignalRGatewayHostingExtensions

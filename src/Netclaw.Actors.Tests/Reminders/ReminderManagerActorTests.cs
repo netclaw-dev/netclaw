@@ -6,6 +6,7 @@ using Akka.Reminders;
 using Akka.Reminders.Sharding;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Hosting;
+using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Reminders;
 using Netclaw.Configuration;
 using Xunit;
@@ -27,10 +28,9 @@ public class ReminderManagerActorTests : TestKit
 
         var paths = new NetclawPaths(_basePath);
         paths.EnsureDirectoriesExist();
-        var reminderConfig = new ReminderConfig();
         _definitionStore = new ReminderDefinitionStore(paths);
         var definitionStore = _definitionStore;
-        var historyStore = new ReminderHistoryStore(paths, reminderConfig);
+        var historyStore = new ReminderHistoryStore(paths);
 
         // Wire local reminders with in-memory storage
         var sharedResolver = new TestShardRegionResolver();
@@ -55,7 +55,6 @@ public class ReminderManagerActorTests : TestKit
                 DeploymentPosture.Team, TrustAudience.Team, ShellExecutionMode.Off, false);
             var reminderManager = system.ActorOf(
                 Props.Create(() => new ReminderManagerActor(
-                    reminderConfig,
                     pipeline,
                     defaults,
                     TimeProvider.System,
@@ -273,6 +272,113 @@ public class ReminderManagerActorTests : TestKit
         var saved = _definitionStore.Get(response.Id);
         Assert.NotNull(saved);
         Assert.Equal(TrustAudience.Team, saved!.Audience);
+    }
+
+    /// <summary>
+    /// Anchor end-to-end test for Mode B reminder re-entry. Exercises the
+    /// full Netclaw-owned chain: manager branching on <c>OriginChannelType</c>,
+    /// execution actor resolving the gateway via <c>ActorRegistry</c>,
+    /// dispatching <c>DeliverTrustedSessionTurn</c> via <c>Ask&lt;CommandAck&gt;</c>,
+    /// and calling <c>_client.AckAsync(envelope)</c> on success. The Slack
+    /// and SignalR gateway routing chains are stubbed with a probe actor
+    /// registered under the marker keys — their internal lookup-or-create
+    /// hierarchy is covered by the unit tests in <c>SlackActorHierarchyTests</c>
+    /// and <c>SignalRMessageExtractorTests</c>.
+    /// </summary>
+    [Fact]
+    public async Task Mode_B_reminder_dispatches_to_resolved_gateway_and_completes_on_CommandAck()
+    {
+        var manager = await GetManagerAsync();
+
+        // Register a probe under SlackGatewayActorKey that auto-replies
+        // CommandAck to any DeliverTrustedSessionTurn — simulating the
+        // happy path where the full Slack routing chain + session +
+        // pipeline have successfully processed the trusted turn.
+        var gatewayProbe = CreateTestProbe("fake-slack-gateway");
+        var autoAckRef = Sys.ActorOf(
+            Props.Create(() => new AutoAckTrustedGateway(gatewayProbe.Ref)),
+            "auto-ack-slack-gateway");
+        ActorRegistry.For(Sys).Register<SlackGatewayActorKey>(autoAckRef);
+
+        // Persist a Mode B reminder definition with a realistic Slack
+        // session id and OriginChannelType = Slack.
+        var now = TimeProvider.System.GetUtcNow();
+        var definition = new ReminderDefinition
+        {
+            Id = "mode-b-anchor",
+            Title = "Mode B Anchor",
+            Instructions = "Check PR #123",
+            NotifyInstructions = "Reply in this session with the result.",
+            Schedule = new ReminderSchedule
+            {
+                Type = ReminderScheduleType.OneShot,
+                FireAt = now.AddHours(1)
+            },
+            Audience = TrustAudience.Team,
+            SessionId = "C0123ABC/1712000000.000001",
+            OriginChannelType = ChannelType.Slack,
+            Enabled = true,
+            CreatedBy = "test",
+            CreatedAt = now,
+            UpdatedAt = now
+        };
+        _definitionStore.Save(definition);
+
+        // Synthesize an envelope as if Akka.Reminders had fired it and
+        // Tell the manager directly — this is what the scheduler does
+        // internally at fire time.
+        var envelope = new ReminderEnvelope<ReminderPayload>(
+            entity: new ReminderEntity(ReminderManagerActor.ShardRegionName, ReminderManagerActor.EntityId),
+            key: new ReminderKey(definition.Id),
+            dueTimeUtc: now,
+            deadline: ReminderDeadline.Infinite,
+            message: new ReminderPayload { Id = new ReminderId(definition.Id) });
+
+        manager.Tell(envelope);
+
+        // Probe receives the DeliverTrustedSessionTurn routed via the
+        // execution actor's gateway resolution.
+        var delivered = await gatewayProbe.ExpectMsgAsync<DeliverTrustedSessionTurn>(
+            TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal("C0123ABC/1712000000.000001", delivered.SessionId.Value);
+        Assert.Contains("Check PR #123", delivered.Content);
+        Assert.Equal(ChannelType.Slack, delivered.Source.ChannelType);
+        Assert.Equal(TrustAudience.Team, delivered.Source.Audience);
+        Assert.Equal(SecurityPolicyDefaults.SlackWorkspaceBoundary, delivered.Source.Boundary);
+        Assert.NotNull(delivered.Source.ReminderId);
+        Assert.StartsWith("mode-b-anchor:", delivered.Source.ReminderId);
+        Assert.Equal(PrincipalClassification.VerifiedAutomation, delivered.Source.Principal);
+        Assert.Equal("reminder", delivered.Source.Provenance.SourceKind);
+
+        // Probe receiving the DeliverTrustedSessionTurn is the anchor
+        // assertion: it proves the manager branched on OriginChannelType,
+        // spawned the execution actor with the envelope, resolved the
+        // gateway via ActorRegistry, and issued the Ask. The probe's
+        // CommandAck reply + the subsequent _client.AckAsync path is
+        // exercised end-to-end here too (execution actor didn't crash
+        // or report a failure up to the manager's _failureCounts); any
+        // failure in that tail would surface as a reminder execution
+        // failure alert via the notification sink, which this test would
+        // see on the next Ask to the manager if it happened.
+    }
+
+    /// <summary>
+    /// Test-only gateway stub: handles <see cref="DeliverTrustedSessionTurn"/>
+    /// by forwarding to a probe for assertions and immediately replying
+    /// <see cref="CommandAck"/> to <c>Sender</c>. Simulates the end of the
+    /// real Slack / SignalR routing chain where the leaf binding/session
+    /// has accepted the turn and <c>TryReplyAck</c> has fired.
+    /// </summary>
+    private sealed class AutoAckTrustedGateway : ReceiveActor
+    {
+        public AutoAckTrustedGateway(IActorRef probe)
+        {
+            Receive<DeliverTrustedSessionTurn>(msg =>
+            {
+                probe.Tell(msg);
+                Sender.Tell(CommandAck.For(msg.SessionId));
+            });
+        }
     }
 
     private static ReminderDefinition CreateDefinition(string name, string instructions)

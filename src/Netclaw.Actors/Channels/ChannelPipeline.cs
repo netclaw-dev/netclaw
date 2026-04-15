@@ -67,7 +67,9 @@ public static class MessageSourceFactory
             Boundary = SecurityPolicyDefaults.ResolveBoundary(input.Boundary ?? options.DefaultBoundary, options.ChannelType.ToWireValue(), input.Audience ?? options.DefaultAudience),
             Principal = input.Principal ?? options.DefaultPrincipal,
             Provenance = input.Provenance ?? options.DefaultProvenance,
-            ReceivedAt = input.ReceivedAt
+            ReceivedAt = input.ReceivedAt,
+            ReminderId = input.ReminderId,
+            AckTarget = input.AckTarget
         };
 }
 
@@ -244,7 +246,14 @@ public sealed class SessionPipeline : ISessionPipeline
                 sessionManager.Tell(joinMsg, ActorRefs.NoSender);
                 if (promptOverlayMsg is not null)
                     sessionManager.Tell(promptOverlayMsg, ActorRefs.NoSender);
-                sessionManager.Tell(cmd, ActorRefs.NoSender);
+
+                // Trusted deliveries (e.g. Mode B reminders) carry an ephemeral
+                // AckTarget on their MessageSource so that the session's
+                // TryReplyAck routes CommandAck/CommandNack back to the
+                // dispatcher's Ask temp actor. Regular inbound ingress
+                // leaves AckTarget null → existing NoSender fire-and-forget.
+                var ackTarget = cmd.Source?.AckTarget ?? ActorRefs.NoSender;
+                sessionManager.Tell(cmd, ackTarget);
             }));
 
         // Outbound: pre-materialized subscriber → kill switch → exposed Source.

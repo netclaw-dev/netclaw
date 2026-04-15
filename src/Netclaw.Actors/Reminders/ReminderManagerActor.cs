@@ -17,7 +17,20 @@ public sealed partial class ReminderManagerActor : ReceiveActor
     public const string ShardRegionName = "netclaw-reminders";
     public const string EntityId = "manager";
 
-    private readonly ReminderConfig _config;
+    /// <summary>
+    /// Maximum number of concurrent reminder executions. Not configurable —
+    /// if we ever need to tune this, add a knob then.
+    /// </summary>
+    internal const int MaxConcurrentExecutions = 3;
+
+    /// <summary>
+    /// Consecutive execution failures after which a reminder is auto-paused.
+    /// Not configurable. Must stay strictly below Akka.Reminders'
+    /// <c>MaxDeliveryAttempts</c> (default 10) so Netclaw's auto-pause fires
+    /// first — the two counters are kept out of conflict by inspection.
+    /// </summary>
+    internal const int FailurePauseThreshold = 5;
+
     private readonly ISessionPipeline _pipeline;
     private readonly EffectivePolicyDefaults _defaults;
     private readonly TimeProvider _timeProvider;
@@ -33,7 +46,6 @@ public sealed partial class ReminderManagerActor : ReceiveActor
     private readonly Dictionary<ReminderId, int> _failureCounts = [];
 
     public ReminderManagerActor(
-        ReminderConfig config,
         ISessionPipeline pipeline,
         EffectivePolicyDefaults defaults,
         TimeProvider timeProvider,
@@ -41,7 +53,6 @@ public sealed partial class ReminderManagerActor : ReceiveActor
         ReminderHistoryStore historyStore,
         IOperationalNotificationSink notificationSink)
     {
-        _config = config;
         _pipeline = pipeline;
         _defaults = defaults;
         _timeProvider = timeProvider;
@@ -148,11 +159,18 @@ public sealed partial class ReminderManagerActor : ReceiveActor
             return;
         }
 
+        var effectiveAudience = authorization.EffectiveAudience ?? TrustAudience.Public;
+        var effectiveBoundary = ResolveReminderBoundary(
+            cmd.Definition.Boundary,
+            cmd.Definition.OriginChannelType,
+            effectiveAudience);
+
         var normalized = cmd.Definition with
         {
             Id = id.Value,
             Title = title,
             Audience = authorization.EffectiveAudience,
+            Boundary = effectiveBoundary,
             CreatedBy = string.IsNullOrWhiteSpace(cmd.Definition.CreatedBy)
                 ? "system"
                 : cmd.Definition.CreatedBy
@@ -236,6 +254,15 @@ public sealed partial class ReminderManagerActor : ReceiveActor
         }
 
         return ReminderAudienceAuthorizationResult.Success(effectiveAudience);
+    }
+
+    private static string ResolveReminderBoundary(
+        string? requestedBoundary,
+        ChannelType? originChannelType,
+        TrustAudience effectiveAudience)
+    {
+        var channelType = (originChannelType ?? ChannelType.Reminder).ToWireValue();
+        return SecurityPolicyDefaults.ResolveBoundary(requestedBoundary, channelType, effectiveAudience);
     }
 
     private async Task HandleCancelAsync(CancelReminderCommand cmd)
@@ -447,17 +474,32 @@ public sealed partial class ReminderManagerActor : ReceiveActor
             }
         }
 
-        if (_activeExecutionIds.Count >= _config.MaxConcurrentExecutions)
+        var isModeB = definition.SessionId is not null && definition.OriginChannelType is not null;
+
+        if (_activeExecutionIds.Count >= MaxConcurrentExecutions)
         {
             _log.Info("Concurrency limit reached ({0}), deferring reminder '{1}'",
-                _config.MaxConcurrentExecutions, reminderId.Value);
+                MaxConcurrentExecutions, reminderId.Value);
             _deferredQueue.Enqueue(reminderId);
+            // Ack even Mode B envelopes on the deferred path — the
+            // concurrency gate fires before we can dispatch to the
+            // gateway, so holding the envelope open would starve
+            // Akka.Reminders' retry budget on nothing.
             await _client!.AckAsync(envelope);
             return;
         }
 
-        StartExecution(definition);
-        await _client!.AckAsync(envelope);
+        if (isModeB)
+        {
+            // Execution actor holds the envelope open and acks itself
+            // once the target session has confirmed receipt.
+            StartExecution(definition, envelope);
+        }
+        else
+        {
+            StartExecution(definition);
+            await _client!.AckAsync(envelope);
+        }
     }
 
     private async Task HandleExecutionCompletedAsync(ReminderExecutionCompleted completed)
@@ -481,7 +523,7 @@ public sealed partial class ReminderManagerActor : ReceiveActor
             _log.Warning("Reminder '{0}' execution failed ({1}/{2}): {3}",
                 completed.Id.Value,
                 count,
-                _config.FailurePauseThreshold,
+                FailurePauseThreshold,
                 completed.ErrorMessage);
 
             _notificationSink.Emit(new OperationalAlert
@@ -501,11 +543,11 @@ public sealed partial class ReminderManagerActor : ReceiveActor
                 }
             });
 
-            if (count >= _config.FailurePauseThreshold)
+            if (count >= FailurePauseThreshold)
             {
                 _log.Warning("Reminder '{0}' hit failure threshold ({1}), disabling",
                     completed.Id.Value,
-                    _config.FailurePauseThreshold);
+                    FailurePauseThreshold);
 
                 _notificationSink.Emit(new OperationalAlert
                 {
@@ -607,7 +649,7 @@ public sealed partial class ReminderManagerActor : ReceiveActor
         }
     }
 
-    private void StartExecution(ReminderDefinition definition)
+    private void StartExecution(ReminderDefinition definition, ReminderEnvelope<ReminderPayload>? envelope = null)
     {
         var executionId = Guid.NewGuid();
         _activeExecutionIds.Add(executionId);
@@ -618,17 +660,19 @@ public sealed partial class ReminderManagerActor : ReceiveActor
                 executionId,
                 definition,
                 _pipeline,
-                _config,
                 _timeProvider,
-                _historyStore),
+                _historyStore,
+                envelope),
             actorName);
 
-        _log.Info("Started execution actor for reminder '{0}': {1}", definition.Id, executionActor.Path);
+        _log.Info(
+            "Started execution actor for reminder '{0}' mode={1}: {2}",
+            definition.Id, envelope is null ? "A" : "B", executionActor.Path);
     }
 
     private async Task ProcessDeferredQueueAsync()
     {
-        while (_deferredQueue.Count > 0 && _activeExecutionIds.Count < _config.MaxConcurrentExecutions)
+        while (_deferredQueue.Count > 0 && _activeExecutionIds.Count < MaxConcurrentExecutions)
         {
             var nextId = _deferredQueue.Dequeue();
             var definition = _definitionStore.Get(nextId);

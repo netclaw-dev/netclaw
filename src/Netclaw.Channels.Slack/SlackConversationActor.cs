@@ -1,5 +1,6 @@
 using Akka.Actor;
 using Akka.Event;
+using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
 using Netclaw.Channels.Telemetry;
 
@@ -182,6 +183,31 @@ public sealed class SlackConversationActor : ReceiveActor
                 return;
             }
 
+            thread.Forward(message);
+        });
+
+        // No ACL call — audience was validated at reminder mint time.
+        Receive<DeliverTrustedSessionTurn>(message =>
+        {
+            if (!SlackGatewayActor.TryParseSlackSessionId(message.SessionId, out var parsedChannel, out var threadTs)
+                || parsedChannel != _conversationId)
+            {
+                _log.Warning(
+                    "Dropping DeliverTrustedSessionTurn for wrong conversation session={Session} expected_channel={Channel}",
+                    message.SessionId.Value, _conversationId.Value);
+                Sender.Tell(CommandNack.For(message.SessionId, "Conversation mismatch"));
+                return;
+            }
+
+            var threadActorName = Uri.EscapeDataString(threadTs.Value);
+            var existingThread = Context.Child(threadActorName);
+            var thread = existingThread.IsNobody()
+                ? Context.ActorOf(CreateThreadProps(_conversationId, threadTs), threadActorName)
+                : existingThread;
+
+            _log.Debug(
+                "Routing DeliverTrustedSessionTurn to thread binding session={Session} thread={Thread}",
+                message.SessionId.Value, threadTs.Value);
             thread.Forward(message);
         });
     }

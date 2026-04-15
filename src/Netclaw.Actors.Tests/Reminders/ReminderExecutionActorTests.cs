@@ -22,7 +22,7 @@ public class ReminderExecutionActorTests : TestKit, IDisposable
         Directory.CreateDirectory(_tempDir);
         var paths = new NetclawPaths(_tempDir);
         Directory.CreateDirectory(paths.RemindersDirectory);
-        _historyStore = new ReminderHistoryStore(paths, new ReminderConfig());
+        _historyStore = new ReminderHistoryStore(paths);
     }
 
     void IDisposable.Dispose()
@@ -274,7 +274,6 @@ public class ReminderExecutionActorTests : TestKit, IDisposable
                     executionId,
                     definition,
                     pipeline,
-                    new ReminderConfig(),
                     TimeProvider.System,
                     historyStore),
                 "exec");

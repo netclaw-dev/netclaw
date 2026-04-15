@@ -117,7 +117,7 @@ public sealed class ReminderTargetResolutionPathTests : IDisposable
     }
 
     private SetReminderTool CreateTool(IActorRef reminderManager, IReminderTargetResolver resolver)
-        => new(reminderManager, _timeProvider, new ReminderConfig(), resolver);
+        => new(reminderManager, _timeProvider, resolver);
 
     private static ToolExecutionContext BuildManualToolContext() => new(sessionId: null, sessionDirectory: null)
     {

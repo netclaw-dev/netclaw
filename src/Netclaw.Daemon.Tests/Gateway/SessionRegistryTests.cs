@@ -4,6 +4,7 @@ using Akka.Actor;
 using Akka.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
 using Netclaw.Actors.Channels;
+using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Protocol;
 using Netclaw.Configuration;
 using Netclaw.Daemon.Gateway;

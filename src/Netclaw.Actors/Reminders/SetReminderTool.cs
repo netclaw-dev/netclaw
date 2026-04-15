@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using Akka.Actor;
+using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
 using Netclaw.Configuration;
 using Netclaw.Tools;
@@ -17,7 +18,6 @@ public sealed partial class SetReminderTool : NetclawTool<SetReminderTool.Params
 {
     private readonly IActorRef _reminderManager;
     private readonly TimeProvider _timeProvider;
-    private readonly ReminderConfig _config;
     private readonly IReminderTargetResolver? _targetResolver;
 
     public record Params(
@@ -43,12 +43,10 @@ public sealed partial class SetReminderTool : NetclawTool<SetReminderTool.Params
     public SetReminderTool(
         IActorRef reminderManager,
         TimeProvider timeProvider,
-        ReminderConfig config,
         IReminderTargetResolver? targetResolver = null)
     {
         _reminderManager = reminderManager;
         _timeProvider = timeProvider;
-        _config = config;
         _targetResolver = targetResolver;
     }
 
@@ -72,8 +70,7 @@ public sealed partial class SetReminderTool : NetclawTool<SetReminderTool.Params
         var (schedule, error) = ReminderScheduleParser.Parse(
             args.ScheduleType,
             args.Schedule,
-            _timeProvider,
-            _config);
+            _timeProvider);
 
         if (schedule is null)
             return $"Error: {error}";
@@ -84,10 +81,13 @@ public sealed partial class SetReminderTool : NetclawTool<SetReminderTool.Params
         string? sessionId = null;
         string? reportToChannel = args.ReportToChannel;
         string? reportToThreadTs = null;
+        ChannelType? originChannelType = null;
         var resolvedTargetKind = ReminderTargetKind.Unknown;
 
         if (!string.IsNullOrWhiteSpace(reportToChannel))
         {
+            // Mode A: explicit notification target. Resolved and persisted
+            // as a canonical identifier.
             if (_targetResolver is null)
                 return $"Error: No notification channel transport is configured; cannot target '{reportToChannel}'.";
 
@@ -106,22 +106,30 @@ public sealed partial class SetReminderTool : NetclawTool<SetReminderTool.Params
         }
         else if (context.SessionId is not null)
         {
-            sessionId = context.SessionId;
-
-            var parts = context.SessionId.Split('/');
-            if (parts.Length >= 2)
+            // Mode B: session check-back. Persist the originating session
+            // and its channel type so the reminder dispatcher can route a
+            // DeliverTrustedSessionTurn through the right gateway when it
+            // fires. Mode B is only supported for channels with a trusted
+            // delivery gateway — reject anything else loudly.
+            if (!ChannelTypeExtensions.TryFromWireValue(context.ChannelType, out var parsedChannelType))
             {
-                reportToChannel = parts[0];
-                reportToThreadTs = parts[1];
-                resolvedTargetKind = ReminderTargetKind.Channel;
+                return $"Error: Mode B reminders require an origin channel with a gateway (Slack, Tui, SignalR). Current channel type: {context.ChannelType ?? "unknown"}.";
             }
+
+            if (parsedChannelType is not (ChannelType.Slack or ChannelType.Tui or ChannelType.SignalR))
+            {
+                return $"Error: Mode B reminders require an origin channel with a gateway (Slack, Tui, SignalR). Current channel type: {parsedChannelType}.";
+            }
+
+            sessionId = context.SessionId;
+            originChannelType = parsedChannelType;
         }
 
         var notifyInstructions = args.NotifyInstructions;
         if (string.IsNullOrWhiteSpace(notifyInstructions))
         {
             notifyInstructions = reportToChannel is null
-                ? "Reply in the originating session thread with a concise result."
+                ? "Reply in this session with the result."
                 : resolvedTargetKind switch
                 {
                     ReminderTargetKind.User => $"Send a direct message to user {reportToChannel} with your findings, or lack thereof.",
@@ -151,6 +159,13 @@ public sealed partial class SetReminderTool : NetclawTool<SetReminderTool.Params
             sourceAudience = parsedSourceAudience;
         }
 
+        string? boundary = null;
+        if (!string.IsNullOrWhiteSpace(context.Boundary))
+            boundary = context.Boundary.Trim();
+
+        if (string.IsNullOrWhiteSpace(boundary) && sourceAudience is { } resolvedSourceAudience)
+            boundary = SecurityPolicyDefaults.ResolveBoundaryFromAudience(resolvedSourceAudience);
+
         var definition = new ReminderDefinition
         {
             Id = id.Value,
@@ -160,8 +175,10 @@ public sealed partial class SetReminderTool : NetclawTool<SetReminderTool.Params
             NotifyInstructions = notifyInstructions,
             NotifyPolicy = notifyPolicy,
             Audience = audience,
+            Boundary = boundary,
             Enabled = true,
             SessionId = sessionId,
+            OriginChannelType = originChannelType,
             ReportToChannel = reportToChannel,
             ReportToThreadTs = reportToThreadTs,
             CreatedBy = "llm-tool",

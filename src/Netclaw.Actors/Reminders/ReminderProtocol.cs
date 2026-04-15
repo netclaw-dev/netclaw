@@ -94,6 +94,15 @@ public sealed record ReminderDefinition
     /// </summary>
     public string? SessionId { get; init; }
 
+    /// <summary>
+    /// Channel type of the originating session for Mode B (session check-back)
+    /// reminders. Populated when <see cref="SessionId"/> is set and
+    /// <see cref="ReportToChannel"/> is null. The reminder dispatcher uses
+    /// this to route <c>DeliverTrustedSessionTurn</c> to the correct gateway
+    /// (Slack vs. SignalR/TUI). Null for Mode A reminders.
+    /// </summary>
+    public Channels.ChannelType? OriginChannelType { get; init; }
+
     public string? ReportToChannel { get; init; }
     public string? ReportToThreadTs { get; init; }
 
@@ -110,6 +119,13 @@ public sealed record ReminderDefinition
     /// fail closed if they cannot resolve or authorize this audience.
     /// </summary>
     public TrustAudience? Audience { get; init; }
+
+    /// <summary>
+    /// Persisted execution boundary for this reminder.
+    /// For Mode B reminders this should mirror the creating session's
+    /// effective trust boundary so reminder re-entry does not widen scope.
+    /// </summary>
+    public string? Boundary { get; init; }
 
     public string CreatedBy { get; init; } = "system";
     public long CreatedAtMs { get; set; }

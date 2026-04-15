@@ -32,7 +32,7 @@ public sealed class ReminderEndpointAuthorizationTests : IDisposable
         var paths = new NetclawPaths(_tempDir);
         paths.EnsureDirectoriesExist();
         _definitionStore = new ReminderDefinitionStore(paths);
-        _historyStore = new ReminderHistoryStore(paths, new ReminderConfig());
+        _historyStore = new ReminderHistoryStore(paths);
     }
 
     public void Dispose()
@@ -49,7 +49,6 @@ public sealed class ReminderEndpointAuthorizationTests : IDisposable
         builder.Services.AddSingleton(_definitionStore);
         builder.Services.AddSingleton(_historyStore);
         builder.Services.AddSingleton(TimeProvider.System);
-        builder.Services.AddSingleton(new ReminderConfig());
         builder.Services.AddSingleton(new EffectivePolicyDefaults(
             DeploymentPosture.Team,
             TrustAudience.Team,

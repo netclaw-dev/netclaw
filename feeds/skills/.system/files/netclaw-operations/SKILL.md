@@ -47,7 +47,17 @@ channel/user ID. Names are resolved to canonical IDs at reminder creation
 time — you do not need to look up internal Slack IDs first. If the target
 cannot be resolved (typo, missing channel, wrong workspace), `set_reminder`
 returns an error immediately instead of silently saving a broken reminder.
-Omit `report_to_channel` to post results back to the current session/thread.
+
+**Omit `report_to_channel` to use session check-back (Mode B):** the
+reminder will deposit its result as a new turn in the originating
+Slack thread or TUI session when it fires, regardless of whether that
+session is still active. The session rehydrates from persistence if it
+passivated between scheduling and firing, then processes the reminder
+prompt just like a normal user message. This is the preferred mode for
+deferred work — "in 5 minutes, check PR #123 again" — because the agent
+yields its context window until the reminder fires. Mode B is only
+available from Slack and TUI sessions; headless/webhook contexts require
+an explicit `report_to_channel`.
 
 If `audience` is omitted during conversational scheduling, the reminder inherits
 the audience of the channel/session that created it. A reminder cannot be
