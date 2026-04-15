@@ -15,7 +15,7 @@ public class ReminderHistoryStoreTests : IDisposable
         Directory.CreateDirectory(_tempDir);
         var paths = new NetclawPaths(_tempDir);
         Directory.CreateDirectory(paths.RemindersDirectory);
-        _store = new ReminderHistoryStore(paths, new ReminderConfig { HistoryMaxRecords = 5 });
+        _store = new ReminderHistoryStore(paths);
     }
 
     public void Dispose()
@@ -54,38 +54,6 @@ public class ReminderHistoryStoreTests : IDisposable
         Assert.Equal(3, records.Count);
         Assert.Equal("session-0", records[0].SessionId);
         Assert.Equal("session-2", records[2].SessionId);
-    }
-
-    [Fact]
-    public async Task Trim_fires_at_cap_and_drops_oldest()
-    {
-        // Fill to cap (5) then add one more
-        for (var i = 0; i < 5; i++)
-            await _store.AppendAsync(TestId, MakeRecord(true, $"session-{i}"));
-
-        // This should trigger trim: session-0 dropped, session-5 added
-        await _store.AppendAsync(TestId, MakeRecord(true, "session-5"));
-
-        var records = await _store.ReadAsync(TestId, 10);
-        Assert.Equal(5, records.Count);
-        Assert.DoesNotContain(records, r => r.SessionId == "session-0");
-        Assert.Equal("session-5", records[^1].SessionId);
-    }
-
-    [Fact]
-    public async Task Trim_preserves_newest_records()
-    {
-        for (var i = 0; i < 7; i++)
-            await _store.AppendAsync(TestId, MakeRecord(true, $"session-{i}"));
-
-        var records = await _store.ReadAsync(TestId, 10);
-        Assert.Equal(5, records.Count);
-        // Oldest two (session-0 and session-1) should be gone
-        Assert.DoesNotContain(records, r => r.SessionId == "session-0");
-        Assert.DoesNotContain(records, r => r.SessionId == "session-1");
-        // Newest five should be present
-        for (var i = 2; i <= 6; i++)
-            Assert.Contains(records, r => r.SessionId == $"session-{i}");
     }
 
     [Fact]

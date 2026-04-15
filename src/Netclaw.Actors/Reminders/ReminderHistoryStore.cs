@@ -9,26 +9,30 @@ namespace Netclaw.Actors.Reminders;
 ///
 /// Each reminder gets an append-only <c>{id}.history.jsonl</c> file alongside
 /// its definition file. Entries are newline-delimited JSON objects, one per line.
-/// When the record count would exceed <see cref="ReminderConfig.HistoryMaxRecords"/>,
-/// the oldest entries are trimmed via an atomic tmp-file rename.
+/// When the record count would exceed <see cref="MaxRecords"/>, the oldest
+/// entries are trimmed via an atomic tmp-file rename.
 ///
 /// Single-writer per reminder ID is assumed — enforced by the concurrency gate in
 /// <see cref="ReminderManagerActor"/> (at most one execution per reminder at a time).
 /// </summary>
 public sealed class ReminderHistoryStore
 {
+    /// <summary>
+    /// Maximum number of execution history records retained per reminder.
+    /// Not operator-configurable — if we ever need to tune this, add a knob then.
+    /// </summary>
+    internal const int MaxRecords = 500;
+
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
         Converters = { new JsonStringEnumConverter() }
     };
 
     private readonly string _directory;
-    private readonly int _maxRecords;
 
-    public ReminderHistoryStore(NetclawPaths paths, ReminderConfig config)
+    public ReminderHistoryStore(NetclawPaths paths)
     {
         _directory = paths.RemindersDirectory;
-        _maxRecords = config.HistoryMaxRecords;
         Directory.CreateDirectory(_directory);
     }
 
@@ -52,15 +56,15 @@ public sealed class ReminderHistoryStore
         // Filter empty lines that may result from previous writes
         var nonEmpty = existingLines.Where(l => !string.IsNullOrWhiteSpace(l)).ToArray();
 
-        if (nonEmpty.Length < _maxRecords)
+        if (nonEmpty.Length < MaxRecords)
         {
             await File.AppendAllTextAsync(path, line + '\n');
         }
         else
         {
             // Trim: keep last (max - 1) existing entries, then append new one
-            var kept = nonEmpty.Length > _maxRecords - 1
-                ? nonEmpty[^(_maxRecords - 1)..]
+            var kept = nonEmpty.Length > MaxRecords - 1
+                ? nonEmpty[^(MaxRecords - 1)..]
                 : nonEmpty;
 
             var tmpPath = $"{path}.tmp";

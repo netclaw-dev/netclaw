@@ -222,24 +222,27 @@ with `SignalRMessageExtractor` → `SignalRSessionActor`):
 **Reminder dispatcher switch** (`ReminderExecutionActor` Mode B path):
 
 ```csharp
-var msg = new DeliverTrustedSessionTurn { ... };
-switch (_definition.OriginChannelType)
-{
-    case ChannelType.Slack:
-        var ack = await _slackGateway.Ask<CommandAck>(msg, _config.SessionDispatchTimeout);
-        break;
-    case ChannelType.Tui:
-    case ChannelType.SignalR:
-        var ack = await _signalRGateway.Ask<CommandAck>(msg, _config.SessionDispatchTimeout);
-        break;
-    default:  // Headless, Webhook, Reminder, null
-        // Rejected at set_reminder time; cannot reach here.
-        throw new InvalidOperationException($"...");
-}
+var msg = new DeliverTrustedSessionTurn(sessionId, content, source);
+var gateway = ResolveGatewayFor(_definition.OriginChannelType);
+var ack = await gateway.Ask<object>(msg, ReminderSettings.DefaultAckTimeout);
 ```
 
-The two gateway refs are injected as `IRequiredActor<SlackGatewayActorKey>`
-and `IRequiredActor<SignalRGatewayActorKey>`, with both keys declared in
+Where `ResolveGatewayFor` looks the gateway ref up in the `ActorRegistry`
+at runtime (the execution actor is created by `Context.ActorOf`, not via
+DI, so it can't use `IRequiredActor<T>` directly):
+
+```csharp
+private IActorRef? ResolveGatewayFor(ChannelType originChannelType) =>
+    originChannelType switch
+    {
+        ChannelType.Slack    => registry.TryGet<SlackGatewayActorKey>(out var r)   ? r : null,
+        ChannelType.Tui      => registry.TryGet<SignalRGatewayActorKey>(out var r) ? r : null,
+        ChannelType.SignalR  => registry.TryGet<SignalRGatewayActorKey>(out var r) ? r : null,
+        _                    => null  // rejected at set_reminder time
+    };
+```
+
+Both marker keys are declared in
 `src/Netclaw.Actors/Hosting/ActorRegistryKeys.cs` alongside the existing
 marker types (`SessionManagerActorKey`, etc.). The `SignalRGatewayActorKey`
 type moves from `src/Netclaw.Daemon/SignalRGatewayHostingExtensions.cs` to
@@ -310,8 +313,8 @@ Concretely:
 3. The execution actor builds `DeliverTrustedSessionTurn(SessionId, Content,
    MessageSource)` and issues `Ask<CommandAck>` against the appropriate
    channel gateway (`SlackGatewayActor` or `SignalRGatewayActor`, selected
-   by `OriginChannelType`) with a timeout from
-   `ReminderConfig.SessionDispatchTimeout`.
+   by `OriginChannelType`) with a timeout of
+   `ReminderSettings.DefaultAckTimeout` (Akka.Reminders library default).
 4. The gateway routes the message down its existing hierarchy as D3
    describes. The session's `TryReplyAck` fires a `CommandAck` reply to the
    Ask temp actor via `MessageSource.AckTarget` → `ChannelPipeline`'s
@@ -367,64 +370,61 @@ response code that we log and proceed past.
   call) is the right boundary because it is fast and semantically "session
   will process this."
 
-### D5. Minimal `ReminderConfig` surface; collapse redundant retry knobs
+### D5. No config surface — library defaults + internal consts
 
-Four config properties on `ReminderConfig`, three of them optional in the
-default JSON template:
+**Revised mid-implementation from an earlier draft that exposed four
+`ReminderConfig` properties.** Netclaw has no users yet, and every
+proposed knob was either redundant with an Akka.Reminders built-in
+default (`AckTimeout`, `MaxRetryBackoff`, `MaxDeliveryAttempts`) or
+measuring the same thing in two frames (`SessionDispatchTimeout` vs.
+`AckTimeout`). YAGNI: delete `ReminderConfig` entirely. If and when a
+real operator asks for a specific tunable, add one knob at that point.
 
-```csharp
-public sealed class ReminderConfig
-{
-    // Existing — also used to derive library MaxDeliveryAttempts:
-    public int FailurePauseThreshold { get; init; } = 5;
+Concretely:
 
-    // New optional tunables (forwarded to ReminderSettings at
-    // WithReminders() time; not written to default netclaw.json):
-    public TimeSpan AckTimeout        { get; init; } = TimeSpan.FromSeconds(10);
-    public TimeSpan MaxRetryBackoff   { get; init; } = TimeSpan.FromMinutes(10);
+- **`ReminderConfig` is deleted.** No DI registration, no JSON schema
+  section, no default-template entry.
+- **Akka.Reminders runs with library defaults.** `WithLocalReminders`
+  does not call `WithSettings(...)` — `AckTimeout = 10s`,
+  `MaxRetryBackoff = 10min`, `MaxDeliveryAttempts = 10`, and friends
+  all use the library's shipped values.
+- **Mode B execution actor references `ReminderSettings.DefaultAckTimeout`
+  directly** (the library's public static field) as the timeout for
+  its `Ask<CommandAck>` dispatch to a channel gateway. If the library
+  ever changes the default, Netclaw tracks it automatically.
+- **Netclaw-specific values live as `internal const` at their
+  consumption sites**, not as injected config:
+  - `ReminderManagerActor.MaxConcurrentExecutions = 3`
+  - `ReminderManagerActor.FailurePauseThreshold = 5`
+  - `ReminderExecutionActor.ExecutionTimeoutSeconds = 300`
+  - `ReminderScheduleParser.MinIntervalSeconds = 60`
+  - `ReminderHistoryStore.MaxRecords = 500`
 
-    // New Netclaw-internal timeout (not forwarded to library):
-    public TimeSpan SessionDispatchTimeout { get; init; } = TimeSpan.FromSeconds(8);
-}
-```
+**Interaction with library `MaxDeliveryAttempts`**: Netclaw's auto-pause
+threshold (5) is strictly below the library's default retry budget (10),
+so in practice Netclaw's per-reminder auto-pause fires first and
+operators see the `paused` state in `netclaw reminders list` before the
+library marks an occurrence terminally failed. If a future library
+upgrade lowers the default below 5, we'd need to either lower the
+Netclaw const or set `MaxDeliveryAttempts` explicitly — both are
+one-line changes, easy to discover when it happens.
 
-**`MaxDeliveryAttempts` is not a user-facing knob.** At
-`WithReminders(settings)` configuration time, Netclaw sets
-`settings.MaxDeliveryAttempts = FailurePauseThreshold` internally. The two
-counters (Netclaw-side `_failureCounts` in `ReminderManagerActor` and
-library-side `AttemptCount` on the scheduled reminder) then fire
-simultaneously on the Nth consecutive failure: Netclaw auto-pauses the
-task locally (visible via `netclaw reminders list`), library marks the
-occurrence terminally Failed in its storage. Consistent state, no drift,
-operators only see one knob.
+**Alternatives considered (all rejected)**:
 
-**`SessionDispatchTimeout < AckTimeout` invariant**: 8 seconds < 10 seconds
-by default. Netclaw's internal `Ask<CommandAck>` times out before
-Akka.Reminders considers the envelope ack-timed-out, so we fail loudly on
-our side first (logged as `reminder_mode_b_timeout`) before the library
-triggers its own redelivery machinery. This keeps operational logs focused
-on the proximate cause.
-
-**JSON schema handling**: the schema for `netclaw-config.v1.schema.json`
-declares all four properties as optional with their default values
-documented inline. The default `netclaw.json` template (written by
-`netclaw config init` / wizard / `doctor --fix`) does NOT include the three
-optional tuning knobs. Operators who need to tune see the schema
-documentation and add them explicitly. The default config stays focused on
-the essentials.
-
-**Alternatives considered**:
-
-- *Expose `MaxDeliveryAttempts` separately.* Rejected per the user's
-  observation that it's measuring essentially the same thing as
-  `FailurePauseThreshold`. Having both creates configuration drift risk and
-  requires an "invariant check at startup" that nobody would notice.
-- *Hardcode the Akka.Reminders defaults and never expose them.* Rejected —
-  operators need to tune `AckTimeout` for deployments with cold-journal
-  rehydrate latency, and `MaxRetryBackoff` for deployments where quick
-  retry is preferred over exponential slowdown.
-- *Put tunables on individual reminders via `set_reminder`.* Rejected as
-  over-engineering for MVP. Can come later if there's a real demand signal.
+- *Expose the four properties as originally planned.* Rejected on
+  YAGNI grounds: no user asks for these, and exposing them creates
+  configuration-drift surface (especially between
+  `FailurePauseThreshold`, library `MaxDeliveryAttempts`, and the
+  redundant `SessionDispatchTimeout`/`AckTimeout` pair). Netclaw has
+  no users yet — "if we don't need it today, we don't need it
+  tomorrow."
+- *Expose only `FailurePauseThreshold`.* Rejected — no actual demand
+  signal. Internal const is sufficient, and the invariant "auto-pause
+  threshold < library `MaxDeliveryAttempts`" is easier to enforce by
+  inspection than by runtime validation.
+- *Put tunables on individual reminders via `set_reminder`.* Rejected
+  as over-engineering for MVP. Can come later if there's a real demand
+  signal.
 
 ## Known failure modes and explicit tradeoffs
 
@@ -507,10 +507,8 @@ ReminderManagerActor (singleton)
                  }
              }
 
-             switch (_definition.OriginChannelType) {
-                 case Slack:      ack = await _slackGateway.Ask<CommandAck>(msg, SessionDispatchTimeout);
-                 case Tui/SignalR: ack = await _signalRGateway.Ask<CommandAck>(msg, SessionDispatchTimeout);
-             }
+             var gateway = ResolveGatewayFor(_definition.OriginChannelType);
+             ack = await gateway.Ask<object>(msg, ReminderSettings.DefaultAckTimeout);
                 │
                 ▼
              Channel gateway routes msg down the hierarchy via Forward,

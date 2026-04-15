@@ -70,6 +70,56 @@ public sealed class SlackGatewayActor : ReceiveActor
                 message.ChannelId, message.ThreadTs, message.CallId);
             conversation.Forward(message);
         });
+
+        // Mode B reminder re-entry. A reminder dispatcher Asks this gateway
+        // with a DeliverTrustedSessionTurn; we parse the SessionId into
+        // (channelId, threadTs), route down the existing lookup-or-create
+        // hierarchy, and let the leaf binding actor offer the ChannelInput
+        // to the pipeline with the Ask temp actor preserved as AckTarget.
+        // No ACL call — audience was validated at reminder mint time.
+        Receive<DeliverTrustedSessionTurn>(message =>
+        {
+            if (!TryParseSlackSessionId(message.SessionId, out var channelId, out _))
+            {
+                _log.Warning(
+                    "Dropping DeliverTrustedSessionTurn with unparseable Slack SessionId {SessionId}",
+                    message.SessionId.Value);
+                Sender.Tell(CommandNack.For(message.SessionId, "Invalid Slack SessionId format"));
+                return;
+            }
+
+            var actorName = Uri.EscapeDataString(channelId.Value);
+            var conversationProps = _dependencies.ConversationPropsFactory?.Invoke(channelId, _dependencies)
+                ?? SlackConversationActor.CreateProps(channelId, _dependencies);
+            var conversation = Context.Child(actorName)
+                .GetOrElse(() => Context.ActorOf(conversationProps, actorName));
+
+            _log.Debug(
+                "Routing DeliverTrustedSessionTurn session={Session} channel={Channel}",
+                message.SessionId.Value, channelId.Value);
+            conversation.Forward(message);
+        });
+    }
+
+    internal static bool TryParseSlackSessionId(
+        SessionId sessionId,
+        out SlackChannelId channelId,
+        out SlackThreadTs threadTs)
+    {
+        channelId = default!;
+        threadTs = default!;
+
+        var value = sessionId.Value;
+        if (string.IsNullOrEmpty(value))
+            return false;
+
+        var slashIdx = value.IndexOf('/', StringComparison.Ordinal);
+        if (slashIdx <= 0 || slashIdx == value.Length - 1)
+            return false;
+
+        channelId = new SlackChannelId(value[..slashIdx]);
+        threadTs = new SlackThreadTs(value[(slashIdx + 1)..]);
+        return true;
     }
 
     public static Props CreateProps(SlackGatewayDependencies dependencies) =>

@@ -373,6 +373,19 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 return;
             }
 
+            // Reminder redelivery dedup (Mode B). Mirror of the Ready-phase
+            // pre-check at the top of HandleIncomingUserMessage.
+            var reminderId = cmd.Source?.ReminderId;
+            if (!string.IsNullOrEmpty(reminderId)
+                && _state.ProcessedReminderIds.Contains(reminderId))
+            {
+                TurnLog().Info(
+                    "reminder_mode_b_dedup_hit reminder={ReminderId} phase=processing",
+                    reminderId);
+                TryReplyAck();
+                return;
+            }
+
             _deliveryRetry.Clear();
             _log.Info("Buffering user message (LLM call in progress)");
             _buffer.Add(cmd);
@@ -1569,15 +1582,23 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 Content = string.Empty
             },
             AssistantReply = reply,
-            RecordedAtMs = NowMs()
+            RecordedAtMs = NowMs(),
+            SourceReminderId = _currentTurnSource?.ReminderId
         };
 
         Persist(turnEvent, evt =>
         {
+            var processed = _state.ProcessedReminderIds;
+            if (!string.IsNullOrEmpty(evt.SourceReminderId))
+            {
+                processed = processed.Add(evt.SourceReminderId);
+            }
+
             _state = _state with
             {
                 History = _state.History.Add(evt.AssistantReply),
-                TurnCount = _state.TurnCount + 1
+                TurnCount = _state.TurnCount + 1,
+                ProcessedReminderIds = processed
             };
 
             EmitResponseOutputs(lastMessage, usage, includeText: true, includeThinking: true);
@@ -1707,6 +1728,20 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     private void HandleIncomingUserMessage(SendUserMessage cmd)
     {
+        // Reminder redelivery dedup (Mode B). If this SendUserMessage carries
+        // a ReminderId we've already processed, ack and return without
+        // modifying state. See reminder-session-reentry design D2.
+        var reminderId = cmd.Source?.ReminderId;
+        if (!string.IsNullOrEmpty(reminderId)
+            && _state.ProcessedReminderIds.Contains(reminderId))
+        {
+            TurnLog().Info(
+                "reminder_mode_b_dedup_hit reminder={ReminderId}",
+                reminderId);
+            TryReplyAck();
+            return;
+        }
+
         _deliveryRetry.Clear();
         _currentTurnSource = cmd.Source;
         _currentTrustContext = _trustContextDeriver?.Derive(cmd.Source);

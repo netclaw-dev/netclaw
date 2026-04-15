@@ -104,13 +104,16 @@ problem; we just need to add one new protocol message and one new
   change). `SlackChannel.StartAsync` adds a one-line
   `registry.Register<SlackGatewayActorKey>(_gateway)` call. Reminder
   dispatcher resolves both via `IRequiredActor<>`.
-- **NEW**: `ReminderConfig` exposes four properties (one existing, three
-  new) for tuning reminder delivery behavior. Only `FailurePauseThreshold`
-  is written into the default `netclaw.json` template; the other three
-  (`AckTimeout`, `MaxRetryBackoff`, `SessionDispatchTimeout`) are optional
-  tuning knobs declared in the JSON schema but not in the default config.
-  Internally, `MaxDeliveryAttempts` is derived from `FailurePauseThreshold`
-  so there's only one operator-facing failure-threshold setting.
+- **DELETED**: `src/Netclaw.Configuration/ReminderConfig.cs`. No
+  reminder config surface is exposed to operators. Akka.Reminders runs
+  with its built-in defaults (`AckTimeout = 10s`,
+  `MaxRetryBackoff = 10min`, `MaxDeliveryAttempts = 10`); Netclaw-specific
+  values (`MaxConcurrentExecutions`, `FailurePauseThreshold`,
+  `ExecutionTimeoutSeconds`, `MinIntervalSeconds`, `HistoryMaxRecords`)
+  live as `internal const` on their consuming classes. Mode B execution
+  actor references `ReminderSettings.DefaultAckTimeout` directly so it
+  tracks library defaults automatically. If an operator ever needs to
+  tune one of these, add a single knob at that point — see design D5.
 - **NEW scenarios** on the `netclaw-scheduling` capability documenting Mode
   B semantics, dedup behavior, and an explicit "Reminder delivery
   guarantees" section that enumerates each crash window and marks it as
@@ -201,15 +204,16 @@ None. Session re-entry is a new mode on an existing capability.
   `Receive<DeliverTrustedSessionTurn>` handler that constructs a
   `ChannelInput` with `MessageSource.AckTarget = Sender` and offers it to
   the pipeline queue
-- `src/Netclaw.Configuration/ReminderConfig.cs` — new `AckTimeout`,
-  `MaxRetryBackoff`, `SessionDispatchTimeout` properties
-- `src/Netclaw.Configuration/Schemas/netclaw-config.v1.schema.json` —
-  optional schema declarations for the three new tunables (not written to
-  default config template)
-- `src/Netclaw.Actors/Hosting/NetclawAkkaHostingExtensions.cs` (or wherever
-  `WithReminders` is called) — derive library `MaxDeliveryAttempts` from
-  `FailurePauseThreshold`; forward `AckTimeout` and `MaxRetryBackoff` to
-  `ReminderSettings`
+- **DELETED** `src/Netclaw.Configuration/ReminderConfig.cs` — no config
+  surface (see design D5). Consumers had their `ReminderConfig` parameter
+  removed from constructors and call sites:
+  `ReminderManagerActor`, `ReminderExecutionActor`, `SetReminderTool`,
+  `ReminderHistoryStore`, `ReminderScheduleParser`, `WithReminderTools`,
+  `WithReminderManager`, `WithNetclawActors`, and the daemon's minimal-API
+  reminder endpoints in `Program.cs`.
+- `src/Netclaw.Actors/Hosting/NetclawAkkaHostingExtensions.cs` — no
+  `ReminderSettings` override; `WithLocalReminders` runs with library
+  defaults throughout.
 
 **Dependencies**:
 
@@ -217,8 +221,8 @@ None. Session re-entry is a new mode on an existing capability.
   (`Directory.Packages.props:7`). No upgrade required — envelope-ack and
   redelivery machinery is already present (`AckTimeout`, `AckDeadline`,
   `AwaitingAckReminders`, `CheckAckTimeouts`, `MaxDeliveryAttempts`,
-  `MaxRetryBackoff` confirmed via DLL inspection). We are currently
-  configuring none of it; this change exposes and uses it.
+  `MaxRetryBackoff` confirmed via DLL inspection). We rely on the
+  library's shipped defaults for all of these.
 
 **Persisted state**:
 
@@ -260,19 +264,20 @@ None. Session re-entry is a new mode on an existing capability.
 
 **Operational**:
 
-- Four config properties in `ReminderConfig` (`FailurePauseThreshold`,
-  `AckTimeout`, `MaxRetryBackoff`, `SessionDispatchTimeout`). Only
-  `FailurePauseThreshold` is written into the default `netclaw.json`
-  template; the three tuning knobs are schema-documented but opt-in.
+- **No new config surface.** `ReminderConfig` deleted; Akka.Reminders
+  library defaults apply, Netclaw-specific values live as `internal const`
+  on consuming classes. See design D5.
 - New log events: `reminder_mode_b_dispatch`, `reminder_mode_b_dedup_hit`,
   `reminder_mode_b_session_nack`, `reminder_mode_b_timeout`,
   `reminder_ack_non_success`.
 - Existing `reminder-execution-history` capability continues to capture
   Mode B executions; the stored `sessionId` now matches the originating
   session, not a synthetic `reminder/{id}/{ts}` value.
-- Existing `FailurePauseThreshold` auto-pause mechanism provides visible
-  operator state when a reminder exceeds its configured retry count —
-  visible via `netclaw reminders list` as today.
+- Existing `FailurePauseThreshold` auto-pause mechanism (now an internal
+  const of 5) provides visible operator state when a reminder exceeds its
+  failure count — visible via `netclaw reminders list` as today. Fires
+  strictly before Akka.Reminders' library default retry cap (10) so the
+  paused state is observable to operators.
 - No new runtime dependencies or infrastructure. Single-process MVP
   posture preserved.
 

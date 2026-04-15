@@ -34,14 +34,35 @@ public sealed record SessionState
     /// </summary>
     public WorkingContext WorkingContext { get; init; } = WorkingContext.Empty;
 
+    /// <summary>
+    /// In-memory best-effort dedup ledger for reminder-originated turns.
+    /// Populated by <see cref="Apply(TurnRecorded)"/> from non-null
+    /// <see cref="TurnRecorded.SourceReminderId"/> values and preserved
+    /// across compaction by <see cref="Apply(SessionCompacted)"/>.
+    /// Deliberately NOT persisted to <see cref="SessionSnapshot"/> — on
+    /// snapshot-based recovery the set starts empty and rebuilds from
+    /// post-snapshot journal replay. Duplicates across snapshot recovery
+    /// boundaries are an explicitly accepted tradeoff; see
+    /// <c>reminder-session-reentry</c> design doc D2.
+    /// </summary>
+    public IImmutableSet<string> ProcessedReminderIds { get; init; } =
+        ImmutableHashSet<string>.Empty;
+
     // ── Event application (pure functions) ──
 
     public SessionState Apply(TurnRecorded evt)
     {
+        var processed = ProcessedReminderIds;
+        if (!string.IsNullOrEmpty(evt.SourceReminderId))
+        {
+            processed = processed.Add(evt.SourceReminderId);
+        }
+
         return this with
         {
             History = History.Add(evt.UserMessage).Add(evt.AssistantReply),
-            TurnCount = TurnCount + 1
+            TurnCount = TurnCount + 1,
+            ProcessedReminderIds = processed
         };
     }
 
@@ -70,7 +91,12 @@ public sealed record SessionState
             History = builder.ToImmutable(),
             // WorkingContext survives compaction. The event MAY carry an
             // update; if null, retain the existing value on this state.
-            WorkingContext = evt.WorkingContext ?? WorkingContext
+            WorkingContext = evt.WorkingContext ?? WorkingContext,
+            // ProcessedReminderIds survives compaction so that redeliveries
+            // of reminders whose turns were compacted still dedup. The set
+            // rebuilds from event replay on recovery and is not persisted
+            // to SessionSnapshot.
+            ProcessedReminderIds = ProcessedReminderIds
         };
     }
 

@@ -1,3 +1,4 @@
+using Akka.Actor;
 using Microsoft.Extensions.AI;
 using Netclaw.Configuration;
 
@@ -58,4 +59,23 @@ public sealed record ChannelInput
     /// When the message was received by the channel.
     /// </summary>
     public DateTimeOffset ReceivedAt { get; init; }
+
+    /// <summary>
+    /// Ephemeral reminder dedup and forensic key. Set by channel leaf actors
+    /// when handling a <c>DeliverTrustedSessionTurn</c> (Mode B reminder
+    /// re-entry). Propagated through to
+    /// <see cref="MessageSource.ReminderId"/> by
+    /// <see cref="MessageSourceFactory"/>. Null for regular inbound ingress.
+    /// </summary>
+    public string? ReminderId { get; init; }
+
+    /// <summary>
+    /// Ephemeral ack reply target. Set by channel leaf actors when handling
+    /// a <c>DeliverTrustedSessionTurn</c> to the <c>Sender</c> preserved via
+    /// the gateway's <c>Forward</c> chain. The pipeline's stream sink uses
+    /// this ref as the <c>sender</c> argument on its <c>Tell</c> to the
+    /// session manager. Null for regular inbound ingress, which preserves
+    /// fire-and-forget semantics via <see cref="ActorRefs.NoSender"/>.
+    /// </summary>
+    public IActorRef? AckTarget { get; init; }
 }

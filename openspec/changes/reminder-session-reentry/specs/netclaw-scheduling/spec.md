@@ -260,24 +260,25 @@ the reminder SHALL be persisted with both fields null (headless execution).
 
 Netclaw's reminder manager SHALL track consecutive execution failures per
 reminder via `_failureCounts` and SHALL auto-pause a reminder when the
-count reaches `ReminderConfig.FailurePauseThreshold`. A successful
+count reaches an internal `FailurePauseThreshold` constant. A successful
 execution SHALL reset the failure count to zero. Paused reminders SHALL
 remain persisted with `status: "paused"` and SHALL be visible via
 `netclaw reminders list`.
 
-`ReminderConfig.FailurePauseThreshold` SHALL also drive the underlying
-`Akka.Reminders.ReminderSettings.MaxDeliveryAttempts` at
-`WithReminders(...)` configuration time. Both counters therefore fire at
-the same point — Netclaw's auto-pause on the Nth consecutive failure
-coincides with Akka.Reminders marking the occurrence as terminally
-`Failed` in its internal storage. This eliminates configuration drift
-between two conceptually-equivalent settings and guarantees that
-operators never experience a "silent death" of a reminder that was
-missed by both mechanisms. There is no separate `MaxDeliveryAttempts`
-configuration knob exposed to operators.
+`FailurePauseThreshold` is not operator-configurable — it lives as an
+`internal const` on `ReminderManagerActor`. `Akka.Reminders` applies its
+own separate retry budget (`MaxDeliveryAttempts`, library default) to
+envelope delivery; Netclaw's auto-pause threshold is set strictly below
+the library's default so the Netclaw-side pause fires first in practice
+and operators see a `paused` reminder in `netclaw reminders list` before
+the library would mark an occurrence terminally failed. If either
+default changes in a way that breaks this ordering, add back a single
+operator knob.
 
 The reminder manager SHALL enforce a maximum concurrent execution limit
-(`MaxConcurrentExecutions`) and SHALL enforce a per-execution timeout.
+(`MaxConcurrentExecutions`, internal const) and SHALL enforce a
+per-execution timeout (`ExecutionTimeoutSeconds`, internal const on
+`ReminderExecutionActor`).
 
 #### Scenario: Consecutive failures auto-pause task
 
@@ -296,21 +297,14 @@ The reminder manager SHALL enforce a maximum concurrent execution limit
 - **THEN** the internal failure count for that reminder is reset to zero
 - **AND** subsequent failures start counting from zero again
 
-#### Scenario: FailurePauseThreshold drives library MaxDeliveryAttempts
-
-- **GIVEN** `ReminderConfig.FailurePauseThreshold = 7`
-- **WHEN** the daemon configures `WithReminders(...)` at startup
-- **THEN** the underlying `ReminderSettings.MaxDeliveryAttempts` equals 7
-- **AND** both Netclaw's auto-pause and Akka.Reminders' terminal-failure
-  marking trigger at the 7th consecutive failure
-
 #### Scenario: Max concurrent execution limit enforced
 
-- **GIVEN** `MaxConcurrentExecutions = 4` and 4 reminders are currently executing
-- **WHEN** a 5th reminder fires
-- **THEN** the 5th reminder is deferred to an internal queue
-- **AND** the Akka.Reminders envelope is still acked (Mode A deferred path)
-  OR held open until the reminder is picked up (Mode B deferred path)
+- **GIVEN** `MaxConcurrentExecutions` is reached and that many reminders are currently executing
+- **WHEN** another reminder fires
+- **THEN** the new reminder is deferred to an internal queue
+- **AND** the Akka.Reminders envelope is still acked (both Mode A and
+  Mode B deferred paths — a reminder that can't be dispatched yet is
+  acked and the library's retry/auto-pause machinery covers starvation)
 
 #### Scenario: Execution timeout enforced
 
@@ -335,16 +329,19 @@ The execution actor SHALL dispatch
 `DeliverTrustedSessionTurn(SessionId, Content, MessageSource)` to the
 target channel gateway using `Ask<CommandAck>` (Slack via
 `SlackGatewayActor`, SignalR/TUI via `SignalRGatewayActor`, selected by
-`OriginChannelType`) with a timeout from
-`ReminderConfig.SessionDispatchTimeout`. The gateway's handler SHALL
-propagate the message down its existing routing hierarchy via `Forward`
-(preserving `Sender`), until it reaches the leaf binding/session actor,
-which reads `Sender` and places it on the outgoing `ChannelInput` as
-`MessageSource.AckTarget`. `ChannelPipeline.MapToCommand`'s stream sink
-SHALL use `cmd.Source?.AckTarget ?? ActorRefs.NoSender` as the `Tell`
-sender when delivering to the session manager. `LlmSessionActor`'s
-existing `TryReplyAck()` fires `CommandAck` to that sender, completing
-the dispatcher's `Ask`.
+`OriginChannelType`) with a timeout of
+`ReminderSettings.DefaultAckTimeout` (Akka.Reminders' shipped default,
+currently 10 seconds — referencing the library constant directly so
+Netclaw tracks any future library change automatically). The gateway's
+handler SHALL propagate the message down its existing routing hierarchy
+via `Forward` (preserving `Sender`), until it reaches the leaf binding/
+session actor, which reads `Sender` and places it on the outgoing
+`ChannelInput` as `MessageSource.AckTarget`.
+`ChannelPipeline.MapToCommand`'s stream sink SHALL use
+`cmd.Source?.AckTarget ?? ActorRefs.NoSender` as the `Tell` sender when
+delivering to the session manager. `LlmSessionActor`'s existing
+`TryReplyAck()` fires `CommandAck` to that sender, completing the
+dispatcher's `Ask`.
 
 On `CommandAck`, the execution actor SHALL call
 `await _client.AckAsync(envelope)`, inspect the
@@ -354,8 +351,8 @@ bookkeeping. On Ask-timeout, `CommandNack`, or any gateway/transport
 exception, the execution actor SHALL NOT call `AckAsync`; it SHALL
 tell the parent a `ReminderExecutionCompleted(success=false)` with an
 error message. The un-acked envelope SHALL be redelivered by
-`Aaron.Akka.Reminders` per its configured `AckTimeout` and
-`MaxDeliveryAttempts`.
+`Aaron.Akka.Reminders` per its built-in `AckTimeout` and
+`MaxDeliveryAttempts` defaults.
 
 For Mode A reminders, the manager SHALL continue to call
 `_client.AckAsync(envelope)` eagerly after spawning the execution actor
@@ -399,14 +396,13 @@ processed a second time, which is an explicitly accepted tradeoff.
 - **GIVEN** a Mode B reminder fires and the target channel gateway has
   been dispatched a `DeliverTrustedSessionTurn`
 - **AND** the pipeline or session fails to reply `CommandAck` within
-  `SessionDispatchTimeout`
+  `ReminderSettings.DefaultAckTimeout`
 - **WHEN** the execution actor's `Ask<CommandAck>` times out
 - **THEN** the execution actor does NOT call `_client.AckAsync(envelope)`
 - **AND** the execution actor tells `Context.Parent` a
   `ReminderExecutionCompleted(success=false)` with a timeout error
 - **AND** `Aaron.Akka.Reminders` marks the envelope as ack-timed-out
-  and redelivers it per the configured `MaxDeliveryAttempts` (derived
-  from `FailurePauseThreshold`)
+  and redelivers it per its built-in `MaxDeliveryAttempts` default
 
 #### Scenario: Redelivered reminder is deduped on the target session
 
@@ -564,69 +560,3 @@ drain-on-shutdown follow-up.
 - **WHEN** the tool returns its success message
 - **THEN** the message conveys that the reminder will fire and deliver
   a new turn to the originating session
-
-### Requirement: Configurable reminder delivery tunables
-
-`ReminderConfig` SHALL expose the following properties:
-
-- `FailurePauseThreshold` (int, default 5) — existing. Drives both
-  Netclaw's per-reminder consecutive-failure auto-pause and the
-  underlying `ReminderSettings.MaxDeliveryAttempts` at
-  `WithReminders(...)` configuration time. Always written to the
-  default `netclaw.json` template.
-- `AckTimeout` (TimeSpan, default 10s) — new optional. Forwarded to
-  `ReminderSettings.AckTimeout`. Controls how long the Akka.Reminders
-  scheduler waits for an envelope ack before considering delivery
-  timed-out and redelivering. NOT written to the default template.
-- `MaxRetryBackoff` (TimeSpan, default 10min) — new optional.
-  Forwarded to `ReminderSettings.MaxRetryBackoff`. Caps the
-  exponential backoff between delivery retries. NOT written to the
-  default template.
-- `SessionDispatchTimeout` (TimeSpan, default 8s) — new optional.
-  Netclaw-internal. Controls how long `ReminderExecutionActor` waits
-  on its `Ask<CommandAck>` to the channel gateway before failing the
-  execution. Default is set below `AckTimeout` so Netclaw fails its
-  Ask before Akka.Reminders considers the envelope ack-timed-out —
-  operators see the proximate cause (`reminder_mode_b_timeout`) first.
-  NOT written to the default template.
-
-Values SHALL be schema-validated via `netclaw-config.v1.schema.json`
-per the Configuration Schema Sync Rule. The three optional tuning
-knobs SHALL be declared in the JSON schema with defaults documented
-inline but SHALL NOT be written into the default `netclaw.json`
-template by `netclaw config init`, the wizard, or `netclaw doctor
---fix`. Operators who need to tune add them explicitly.
-
-#### Scenario: FailurePauseThreshold written to default config
-
-- **GIVEN** a fresh `netclaw config init` run
-- **WHEN** the wizard writes `netclaw.json`
-- **THEN** `reminders.failurePauseThreshold` is present with the
-  default value (5)
-
-#### Scenario: Optional tunables absent from default config
-
-- **GIVEN** a fresh `netclaw config init` run
-- **WHEN** the wizard writes `netclaw.json`
-- **THEN** `reminders.ackTimeout`, `reminders.maxRetryBackoff`, and
-  `reminders.sessionDispatchTimeout` are NOT present in the written
-  file
-- **AND** the runtime uses the built-in defaults
-- **AND** the JSON schema still declares them as valid optional
-  properties with defaults documented
-
-#### Scenario: AckTimeout tuned via netclaw.json
-
-- **GIVEN** `netclaw.json` sets `reminders.ackTimeout` to `"00:00:30"`
-- **WHEN** the daemon starts
-- **THEN** the underlying `ReminderSettings.AckTimeout` equals 30 seconds
-- **AND** schema validation passes
-
-#### Scenario: Invalid SessionDispatchTimeout rejected at startup
-
-- **GIVEN** `netclaw.json` sets `reminders.sessionDispatchTimeout` to
-  a negative or zero value
-- **WHEN** the daemon starts
-- **THEN** `ConfigSchemaDoctorCheck` rejects the configuration with a
-  clear error message
-- **AND** the daemon fails to start (fail-loud)
