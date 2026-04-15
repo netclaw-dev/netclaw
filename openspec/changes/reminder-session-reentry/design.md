@@ -7,8 +7,8 @@ requested by the LLM via a `set_reminder` tool. Today `ReminderExecutionActor`
 runs every reminder in an isolated session keyed `reminder/{id}/{fireTs}` and
 relies on the LLM to post results outward via `send_slack_message` or similar
 tools. This works for external notification ("ping #ops when the build fails")
-but breaks for the more interesting check-back use case ("in 5 minutes, look
-at PR #123 again and continue the conversation") because:
+but breaks for the more interesting check-back use case ("in 5 minutes, look at
+PR #123 again and continue the conversation") because:
 
 1. Results land in an isolated session, not the session that requested them.
 2. `SetReminderTool` papers over the gap by extracting `context.SessionId` into
@@ -16,75 +16,89 @@ at PR #123 again and continue the conversation") because:
    the LLM to call `send_slack_message` with a target that was never resolved
    by the target-resolver (issue #660).
 3. Even without that defect, the original session's output transport binding
-   (`SlackThreadBindingActor`, TUI binding, SignalR binding) may have
-   passivated between the reminder being set and fired; there is no way to
-   reactivate it on demand.
+   may have passivated between the reminder being set and fired; there is no
+   way to re-reach it without going through the channel's normal inbound
+   routing path.
 4. `ReminderManagerActor.HandleReminderFiredAsync` acks the Akka.Reminders
    envelope immediately after `StartExecution`, collapsing the package's
    at-least-once guarantee into fire-and-forget — exactly where we'd most
    want the retry behavior.
 
-The spike of `LlmSessionActor` (phase-1 investigation) found that the existing
-`SendUserMessage` ingress path already does everything Mode B needs:
-`HandleIncomingUserMessage` already fires `TryReplyAck()` after in-memory
-state update; `CommandAck`/`CommandNack` are the existing ack types;
-`MessageSource` is per-message ephemeral metadata that can carry a transient
-dedup key; `JoinSession` is already how any subscriber attaches to a session's
-output stream. The design below reuses all of this rather than inventing new
-commands.
+The spike of `LlmSessionActor` found that the existing `SendUserMessage`
+ingress path already does everything Mode B needs: `HandleIncomingUserMessage`
+fires `TryReplyAck()` after in-memory state update; `CommandAck`/`CommandNack`
+are the existing ack types; `MessageSource` is per-message ephemeral metadata
+that can carry a transient dedup key and an ack reply target; the
+`GenericChildPerEntityParent` on the SignalR gateway and the hand-rolled
+`Context.Child.GetOrElse` chain on the Slack gateway both already lookup-or-
+create the right child by session identity. The design below reuses all of
+this — the reminder dispatcher adds exactly one new message type plus one
+`Receive<>` handler per actor level in each existing routing chain, and the
+actor identity schemes naturally solve the routing problem without new
+abstractions.
 
-Netclaw has no users yet, so this design ignores backward compatibility
-concerns for persisted reminder definitions — broken reminders from the
-issue-#660 path will simply be reset by operators who encounter them. Protobuf
-evolution on `TurnRecorded` remains additive (ProtoMember 5) because that
-costs nothing and is good hygiene.
+Netclaw has no users yet, so this design ignores backward compatibility for
+persisted reminder definitions. Broken reminders from the issue-#660 path will
+simply be reset by operators who encounter them. Protobuf evolution on
+`TurnRecorded` remains additive (new `SourceReminderId` field at
+`[ProtoMember(5)]`) because that costs nothing and gives us forensic
+observability ("which turns originated from which reminder") whether or not
+we use it for dedup.
 
 ## Goals / Non-Goals
 
 **Goals:**
 
 - Fix issue #660 so `set_reminder` without `reportToChannel` works when
-  invoked from a Slack thread, TUI session, or SignalR session.
+  invoked from a Slack thread, TUI session (SignalR-backed), or any future
+  SignalR client.
 - Establish **session re-entry** as a first-class mode for reminders: a
-  reminder fires → a new turn is deposited into the *originating* session's
-  mailbox → the session rehydrates from Akka.Persistence if idle → processes
-  the turn normally → output flows back through the original transport.
+  reminder fires → the reminder dispatcher sends a `DeliverTrustedSessionTurn`
+  to the originating channel's gateway → the gateway uses its existing
+  inbound-routing logic (`Forward` down the hierarchy) to reach the session
+  actor → the session rehydrates from Akka.Persistence if idle → processes
+  the turn normally → output flows back through the original transport via
+  the same subscriber machinery that handles inbound user messages.
 - Close the eager-ack gap: Mode B holds the Akka.Reminders envelope open
   until the target session replies `CommandAck`. On timeout or `CommandNack`,
   the envelope stays un-acked and Akka.Reminders redelivers per its built-in
   policy (no custom retry layer).
-- Provide an idempotency boundary so redelivery does not double-process a
-  reminder turn that was successfully accepted.
-- Establish a generic `ISessionTransportReanimator` contract so any channel
-  (Slack, TUI, SignalR, future adapters) can be reactivated from outside an
-  inbound event. This is the same infrastructure the drain-on-shutdown
-  follow-up will reuse.
-- Surface the Akka.Reminders tunables that already exist in 0.6.0-beta2
-  (`AckTimeout`, `MaxDeliveryAttempts`, `MaxDeliveryWindow`) as Netclaw
-  config so operators can tune redelivery behavior.
+- Expose enough Akka.Reminders tuning for operators to adjust delivery
+  behavior without drowning them in knobs.
+- Accept that duplicate reminder processing is a tolerable outcome in rare
+  crash-window scenarios, and design accordingly (best-effort in-memory
+  dedup rather than durable guarantees).
 
 **Non-Goals:**
 
-- Durable ingress queue on `LlmSessionActor` (session-wide feature; belongs
-  in the drain-on-shutdown follow-up, issues #403 / #419).
-- Automatic shutdown-drain via self-reminder. The reanimation contract makes
-  this possible as a follow-up, but it is not implemented here.
-- Output delivery to disconnected TUI or SignalR clients. Reminder turns
-  persist into session state normally; clients see them when they reconnect.
-  Documented as a known limitation.
+- Durable ingress queue on `LlmSessionActor`. A session-wide change that
+  affects every `SendUserMessage` code path, belongs in the drain-on-shutdown
+  follow-up (issues #403 / #419).
+- Automatic shutdown-drain via self-reminder. The infrastructure this change
+  builds makes it feasible as a follow-up, but it is not implemented here.
+- Snapshot persistence of the dedup ledger. In-memory only; duplicates
+  across snapshot recovery boundaries are acceptable.
+- Any new abstraction layer for "session transport reanimation." Rejected —
+  each channel's existing routing hierarchy already handles lookup-or-create
+  and session rehydration as natural side effects of its inbound path.
 - Backward compatibility for persisted reminder definitions. Netclaw has no
   users yet.
 - Upgrade or modification to `Aaron.Akka.Reminders 0.6.0-beta2`. DLL
   inspection confirms the needed machinery is already present.
+- Extracting `src/Netclaw.Daemon/Gateway/*` into a standalone
+  `Netclaw.Channels.SignalR` project for architectural symmetry with
+  `Netclaw.Channels.Slack`. Worth doing, filed as a follow-up issue; out of
+  scope for this change.
 
 ## Decisions
 
-### D1. Reuse `SendUserMessage` ingress instead of a new `EnterSessionFromReminder` command
+### D1. Reuse `SendUserMessage` ingress; no new session command
 
-**Decision**: Mode B delivers reminders via the existing `SendUserMessage` →
+Mode B delivers reminders via the existing `SendUserMessage` →
 `HandleIncomingUserMessage` → `TryReplyAck` path. Reminder provenance rides
-on two new fields: an ephemeral `MessageSource.ReminderId` (dedup key) and
-a persistent `TurnRecorded.SourceReminderId` (ProtoMember 5, additive).
+on two new fields: an ephemeral `MessageSource.ReminderId` (dedup key,
+forensic tag) and a persistent `TurnRecorded.SourceReminderId` (`ProtoMember
+5`, additive).
 
 **Alternatives considered**:
 
@@ -106,461 +120,464 @@ with the existing drain/restart mechanism. The ack semantic is "session
 accepted the message and will process it" — explicitly *not* "durably
 committed" — which matches how `SendUserMessage` already works today. The
 crash-during-processing failure mode is the same as for regular user
-messages and is subsumed by the drain-on-shutdown follow-up.
+messages and is an accepted tradeoff.
 
-### D2. Dedup via `TurnRecorded.SourceReminderId` rebuilt on recovery
+### D2. Best-effort in-memory dedup, rebuilt from event replay, not snapshot-persisted
 
-**Decision**: Persist `SourceReminderId` (format: `"{reminderId}:{fireTs}"`)
-as an optional field on `TurnRecorded`. `SessionState` maintains an
-`ImmutableHashSet<string> ProcessedReminderIds` folded in the
-`Apply(TurnRecorded)` handler. `HandleIncomingUserMessage` (and the
-`Processing`-phase `Command<SendUserMessage>` buffer handler) pre-checks
-`cmd.Source?.ReminderId` against this set and replies `CommandAck` without
-processing on a hit.
+Duplicate reminder processing is an accepted tradeoff. The LLM itself can
+typically detect a duplicate reminder prompt in its recent context and
+respond appropriately. Dedup is a nice-to-have that catches the common "ack
+lost in flight, same actor lifetime" case cheaply — not a correctness
+requirement.
+
+Concretely:
+
+- `TurnRecorded` gains an optional `string? SourceReminderId`
+  (`[ProtoMember(5)]`), populated as `{reminderId}:{fireTimestampMs}` when
+  the turn originated from a reminder. Persisted in the journal.
+- `SessionState` maintains an in-memory
+  `ImmutableHashSet<string> ProcessedReminderIds`. `Apply(TurnRecorded evt)`
+  folds `evt.SourceReminderId` into the set when non-null.
+  `Apply(SessionCompacted evt)` preserves the set.
+- `LlmSessionActor.HandleIncomingUserMessage` (and the `Processing`-phase
+  `Command<SendUserMessage>` buffer handler) pre-checks
+  `cmd.Source?.ReminderId` against the set before accepting the message. On
+  a hit, reply `CommandAck` and return without processing.
+- The set is **not** serialized to `SessionSnapshot`. On snapshot-based
+  recovery, the set starts empty and is rebuilt from post-snapshot
+  `TurnRecorded` replay via the existing `Apply` handler. Reminders that
+  were processed before the snapshot are no longer in the set, but by then
+  Akka.Reminders' internal `MaxDeliveryWindow` has almost certainly expired
+  anyway.
 
 **Alternatives considered**:
 
-- *New `ReminderDepositSeen` persistent event separate from `TurnRecorded`.*
-  Rejected (see D1). Doubles journal events per reminder-originated turn
-  for no benefit.
-- *In-memory-only dedup (no persistence).* Rejected — would lose dedup
-  across daemon restarts. Akka.Reminders redelivers across restarts, so
-  the dedup ledger must also survive.
-- *Bounded LRU instead of unbounded set.* Deferred. For MVP, one string
-  per reminder-originated turn is cheap (tens of KB even at thousands of
-  reminders). If it becomes a problem a follow-up can bound to
-  `MaxDeliveryWindow × 2` worth of entries.
+- *Drop dedup entirely.* Rejected in favor of keeping it as a cheap
+  best-effort catch for the common case. `TurnRecorded.SourceReminderId` is
+  also useful for forensics ("which turns were reminder-originated")
+  independent of dedup.
+- *Persist the dedup ledger to `SessionSnapshot`.* Rejected — the user has
+  explicitly stated that duplicate reminder processing is acceptable. The
+  additional protobuf field, snapshot round-trip tests, and recovery-path
+  logic are not worth preventing a rare edge-case duplicate.
+- *Bounded LRU with a TTL tied to `MaxDeliveryWindow`.* Deferred. For MVP,
+  one short string per reminder turn is cheap (tens of KB for thousands of
+  entries) and the set only grows within a single actor lifetime.
 
-**Rationale**: Reuses the existing `TurnRecorded` event stream, which is
-already the canonical record of "things the session processed." The dedup
-set reconstructs naturally on recovery with zero new replay logic. Additive
-protobuf evolution is backward-compatible with any existing journals (Netclaw
-has none yet, but the hygiene is free).
+**Rationale**: Reuses the existing `TurnRecorded` event stream and its
+recovery replay path. Zero new persistent schema surface. Matches the
+"duplicates are acceptable" framing the user articulated explicitly.
 
-### D3. Route Mode B through each channel's existing inbound path; no new abstraction
+### D3. Reuse existing channel routing hierarchies; no new abstraction
 
-**Decision**: Mode B delivers reminders by routing them through each
-channel's existing inbound handling path — the same path that wakes up
-passivated sessions every time a real user message arrives. A shared
-protocol message `DeliverTrustedSessionTurn(SessionId, Content,
-MessageSource)` in `Netclaw.Actors.Protocol` is the channel-agnostic
-envelope. Each channel's gateway adds one handler that parses the
-SessionId and runs the same lookup-or-create chain as its inbound-event
-handler, tagging the `ChannelInput` as trusted so the channel-level
-inbound ACL is bypassed (the reminder's stored audience was validated at
-minting time).
+Mode B delivery routes through each channel's existing inbound-routing
+actor hierarchy. Each actor level in the chain gets one new
+`Receive<DeliverTrustedSessionTurn>` handler that mirrors the actor's
+existing inbound handlers: lookup-or-create the appropriate child for this
+SessionId's component, then `Forward(msg)` down. `Forward` preserves the
+original `Sender` (the Ask temp actor from the reminder dispatcher's
+`Ask<CommandAck>`), so by the time the message reaches the leaf binding
+actor, `Sender` is still the dispatcher's temp actor.
 
-The daemon currently hosts two channels, both with full server-side
-gateway infrastructure:
+**Slack side** (`SlackGatewayActor` → `SlackConversationActor` →
+`SlackThreadBindingActor`):
 
-- **Slack** (`Netclaw.Channels.Slack`) — `SlackGatewayActor` +
-  `SlackConversationActor` + `SlackThreadBindingActor`, session keyed
-  `{channelId}/{threadTs}`. Server-side binding lifecycle is decoupled
-  from any client — there is no "user connection" to track; the Slack
-  API is always reachable via the outbound client.
-- **SignalR** (`src/Netclaw.Daemon/Gateway/`) — `SessionHub` (ASP.NET
-  Core SignalR) + `SessionRegistry` + `SignalRGatewayActor` +
-  `SignalRSessionActor`, session keyed `signalr/{guid}`. TUI
-  (`netclaw chat`) is one client of this hub, not a separate channel —
-  `DaemonClient` wraps a `HubConnection`. `SessionRegistry` preserves
-  the caller's self-identifying `ChannelType` value (`ChannelType.Tui`
-  for TUI clients) but both `Tui` and `SignalR` route through the same
-  gateway chain on the daemon side. For the spec TUI is not a first-class
-  channel; it is a client of SignalR.
+1. `SlackGatewayActor.Receive<DeliverTrustedSessionTurn>`: parse
+   `SessionId → (channelId, threadTs)`, lookup-or-create conversation by
+   `channelId` using the same `Context.Child(name).GetOrElse(...)` pattern
+   the existing `SlackInboundMessage` handler uses, `conversation.Forward(msg)`.
+2. `SlackConversationActor.Receive<DeliverTrustedSessionTurn>`: lookup-or-
+   create thread binding by `threadTs` (same pattern), `binding.Forward(msg)`.
+   **No `SlackAclPolicy.EvaluateInbound` call** — it's a different message
+   handler from the inbound-event handler, so there's no "shared code with a
+   flag" situation.
+3. `SlackThreadBindingActor.Receive<DeliverTrustedSessionTurn>`: read
+   `Sender`, build `ChannelInput` with the reminder content, the supplied
+   `MessageSource` (carrying `ReminderId`, trusted provenance, stored
+   audience), and `MessageSource.AckTarget = Sender`. Offer into the
+   pipeline queue via `inputQueue.OfferAsync(...)`. On non-`Enqueued` offer
+   result, Tell `Sender` a `CommandNack` directly.
 
-Both gateways gain a `Receive<DeliverTrustedSessionTurn>` handler that
-reuses the channel's existing lookup-or-create chain. The reminder
-dispatcher's Mode B switch has two cases: `ChannelType.Slack` →
-`SlackGatewayActor`; `ChannelType.Tui | ChannelType.SignalR` →
-`SignalRGatewayActor`. Any other `OriginChannelType` (`Headless`,
-`Webhook`, `Reminder`, `null`) has no gateway and Mode B is rejected at
-`set_reminder` time.
+**SignalR side** (`SignalRGatewayActor` using `GenericChildPerEntityParent`
+with `SignalRMessageExtractor` → `SignalRSessionActor`):
 
-**Connected-client semantics for SignalR are free from the existing
-disconnect path.** When a TUI client disconnects today, `SessionRegistry`
-tells `SignalRSessionActor` `ShutdownSignalRSession`, which calls
-`Context.Stop(Self)` and tears down the bridge's input queue and output
-subscriber. The underlying `LlmSessionActor` (a separate persistent actor
-routed by `GenericChildPerEntityParent` — not a child of
-`SignalRSessionActor`) **keeps running**: any in-flight tool call
-completes, `TurnRecorded` persists to the journal, streaming output goes
-to the now-empty subscriber slot and is dropped per
-`OverflowStrategy.DropHead`. When the user reconnects via
-`ResumeSessionAsync`, they see the completed turn in the transcript.
+1. Extend `SignalRMessageExtractor.EntityId` to also match `IWithSessionId`
+   as a fallback:
+   ```csharp
+   public override string? EntityId(object message) => message switch
+   {
+       ISignalRSessionMessage msg => msg.SessionId.Value,
+       IWithSessionId wid => wid.SessionId.Value,
+       _ => null
+   };
+   ```
+   One-line change. `ISignalRSessionMessage` stays `internal` — no upstream
+   leak. `IWithSessionId` is an existing public interface in
+   `Netclaw.Actors.Protocol` that `DeliverTrustedSessionTurn` implements.
+2. `SignalRSessionActor.Receive<DeliverTrustedSessionTurn>`: read `Sender`,
+   build `ChannelInput` with `MessageSource.AckTarget = Sender`, offer into
+   the session's pipeline queue. Same shape as the Slack binding actor's
+   handler.
 
-Reminder-on-disconnected-client is the identical scenario with a
-different trigger: deliver the reminder's `SendUserMessage` to the
-session, let the underlying session actor process it, persist the turn,
-drop the streaming output if nobody's subscribed, user sees it on
-reconnect. No new disconnect-handling code is needed in the SignalR
-gateway — the existing subscriber fan-out handles the
-connected/disconnected cases uniformly. The gateway's
-`DeliverTrustedSessionTurn` handler can just run its lookup-or-create
-chain and let whatever subscribers exist (or don't) consume the output.
+**Reminder dispatcher switch** (`ReminderExecutionActor` Mode B path):
 
-A tiny `ChannelInput.AckTarget` extension (optional `IActorRef`,
-propagated through `ChannelPipeline.MapToCommand` as the `Tell` sender)
-lets the session's existing `TryReplyAck()` reply directly to the
-reminder dispatcher. Regular inbound messages leave `AckTarget = null`,
-`MapToCommand` falls back to `ActorRefs.NoSender`, and the existing
-fire-and-forget user-message semantics are preserved exactly.
+```csharp
+var msg = new DeliverTrustedSessionTurn { ... };
+switch (_definition.OriginChannelType)
+{
+    case ChannelType.Slack:
+        var ack = await _slackGateway.Ask<CommandAck>(msg, _config.SessionDispatchTimeout);
+        break;
+    case ChannelType.Tui:
+    case ChannelType.SignalR:
+        var ack = await _signalRGateway.Ask<CommandAck>(msg, _config.SessionDispatchTimeout);
+        break;
+    default:  // Headless, Webhook, Reminder, null
+        // Rejected at set_reminder time; cannot reach here.
+        throw new InvalidOperationException($"...");
+}
+```
+
+The two gateway refs are injected as `IRequiredActor<SlackGatewayActorKey>`
+and `IRequiredActor<SignalRGatewayActorKey>`, with both keys declared in
+`src/Netclaw.Actors/Hosting/ActorRegistryKeys.cs` alongside the existing
+marker types (`SessionManagerActorKey`, etc.). The `SignalRGatewayActorKey`
+type moves from `src/Netclaw.Daemon/SignalRGatewayHostingExtensions.cs` to
+`ActorRegistryKeys.cs`; the new `SlackGatewayActorKey` is added as a
+sibling; `SlackChannel.StartAsync` adds a one-line `registry.Register<
+SlackGatewayActorKey>(_gateway)` call alongside its existing lifecycle
+management.
+
+**`MessageSource.AckTarget` propagation**: `MessageSource` gains an optional
+`IActorRef? AckTarget` field. It is already the ephemeral, non-persisted
+metadata carrier on `SendUserMessage` (`[ProtoIgnore]`), so an `IActorRef`
+is safe to add. `ChannelPipeline.MapToCommand` reads
+`input.Source?.AckTarget` when the stream sink `Tell`s the session manager,
+using it as the sender if present or `ActorRefs.NoSender` otherwise. The
+session's existing `TryReplyAck()` then replies to `Sender` (the Ask temp
+actor) and the dispatcher's `Ask<CommandAck>` completes.
 
 **Alternatives considered**:
 
 - *`ISessionTransportReanimator` interface + `SessionTransportRegistry`.*
-  Rejected after review. The inbound path already handles lookup-or-create
-  of binding actors, subscribes them to session output, and triggers
-  Akka.Persistence rehydration as natural side effects. Introducing a
-  parallel "ensure binding" abstraction duplicates well-tested machinery
-  behind ceremony. Also split the delivery into two operations (ensure
-  binding, then deliver) that had to be coordinated, where the existing
-  inbound path is atomic.
-- *Treat TUI and SignalR asymmetrically from Slack, with
-  direct-to-session-manager fallback for non-Slack reminders.* Rejected
-  after verifying that SignalR *is* a first-class channel with a gateway
-  chain parallel to Slack's; the earlier draft was based on an incorrect
-  assumption about the codebase. Symmetric handling is simpler and
-  uniform.
-- *Synthesizing a fake `SlackInboundMessage` and telling the gateway.*
-  Rejected — `SlackInboundMessage` carries fields that don't apply to a
-  trusted delivery (userId, slack event ID) and goes through inbound dedup
-  and ACL checks that aren't meaningful for a reminder. A dedicated
-  handler is cleaner than lying with a synthetic payload.
-- *Subscriber-based ack (reminder dispatcher joins the session's output
-  stream and watches for a "turn started" event).* Rejected — fragile
-  correlation (which turn is which?) and adds a new output event type just
-  for ack. `ChannelInput.AckTarget` extension is one-field-and-one-line
-  and works for every channel uniformly.
+  Rejected. The inbound path already handles lookup-or-create of binding
+  actors, subscribes them to session output, and triggers Akka.Persistence
+  rehydration as natural side effects. Introducing a parallel "ensure
+  binding" abstraction duplicates well-tested machinery behind ceremony.
+- *Factor a "lookup-or-create conversation → binding" helper shared between
+  the inbound handler and the trusted-delivery handler.* Rejected. Each
+  level of the hierarchy already knows how to route its children via a
+  trivial `Context.Child(name).GetOrElse(...)` pattern. Adding one more
+  `Receive<>` handler per level is smaller than extracting a helper and
+  keeps the new code visible next to the existing routing logic it mirrors.
+- *Treat SignalR asymmetrically (direct-to-session-manager bypass).*
+  Rejected after verifying that SignalR has the same gateway-based routing
+  shape as Slack via `GenericChildPerEntityParent`. The `IWithSessionId`
+  extractor fallback lets the shared `DeliverTrustedSessionTurn` route
+  through the SignalR gateway without channel-specific wrapping.
+- *Synthesize a fake `SlackInboundMessage` / SignalR hub event instead of
+  adding a new message type.* Rejected — the existing inbound messages
+  carry fields that don't apply to trusted delivery (userId, event IDs,
+  connection IDs) and go through dedup and ACL checks that aren't
+  meaningful for a reminder. A dedicated handler is cleaner than lying with
+  a synthetic payload.
 
-**Rationale**: This is the pattern the user pushed toward: "routing the
-message through the channel infrastructure and having that reactivate the
-session, even though there wasn't really a user message there." Both
-Slack and SignalR inbound paths already do exactly what's needed —
-lookup-or-create the conversation/session bridge, materialize the
-pipeline, subscribe to session output, deliver the payload. Every
-long-running turn already exercises them in both directions and they are
-the best-tested code paths in the channel layer. Reusing them verbatim
-(with one deviation: skip ACL because audience is already validated) is
-the minimum change that gets reminder re-entry working correctly, and
-uniform across both channels.
+**Rationale**: The actor identity scheme already naturally solves the
+routing problem. For Slack, each level of the two-level hierarchy knows how
+to route by its piece of the SessionId (channelId, threadTs). For SignalR,
+`GenericChildPerEntityParent` routes by the full SessionId via the
+extractor. All we need is one new message type, a trivial one-line
+extractor fallback, and one new `Receive<>` handler per actor level. No
+new abstraction, no registry, no interface.
 
-### D4. Envelope ack gated on session receipt via `IReminderClient.AckAsync`; gateway does not reply
+### D4. Envelope ack gated on session receipt via `IReminderClient.AckAsync`
 
-**Decision**: Mode B envelopes are acked via
-`IReminderClient.AckAsync(envelope)` — the public documented API — called
-by `ReminderExecutionActor` after it has confirmed the target session
-has received the reminder turn. The ack semantic is "the target session
-has accepted the message" (in-memory state updated), not "the gateway
-has accepted it for delivery."
+Mode B envelopes are acked via `IReminderClient.AckAsync(envelope)` — the
+public documented API — called by `ReminderExecutionActor` after it has
+received `CommandAck` from the target session. The ack semantic is "the
+target session has accepted the message into its in-memory state" (the
+session's `_state.AddUserMessage(...)` + `TryReplyAck()` has fired), not
+"the turn has completed and `TurnRecorded` is persisted."
 
-Concretely, the dispatch chain is:
+Concretely:
 
-1. `ReminderManagerActor.HandleReminderFiredAsync` (Mode B branch)
-   spawns `ReminderExecutionActor`, passes the `ReminderEnvelope`
-   explicitly as a constructor arg. Does NOT call
-   `_client.AckAsync(envelope)`.
+1. `ReminderManagerActor.HandleReminderFiredAsync` (Mode B branch) spawns
+   `ReminderExecutionActor`, passes the `ReminderEnvelope` explicitly as a
+   constructor arg. Does **not** call `_client.AckAsync(envelope)`.
 2. The execution actor acquires `IReminderClient` via
    `ReminderClientExtension.Get(Context.System)` at startup (standard
    extension pattern).
-3. The execution actor builds `DeliverTrustedSessionTurn(SessionId,
-   Content, MessageSource)` and issues `Ask<CommandAck>` against the
-   appropriate channel gateway (`SlackGatewayActor` or
-   `SignalRGatewayActor`, selected by `OriginChannelType`). The Ask's
-   temp actor becomes `Sender` when the gateway handler runs.
-4. The gateway handler reads `Sender` (the Ask temp actor), runs the
-   shared lookup-or-create helper for its channel's inbound chain, and
-   offers a `ChannelInput { AckTarget = Sender, ... }` into the
-   pipeline queue via `inputQueue.OfferAsync(...)`. **The gateway handler
-   does not reply itself** — the reply is expected to come from the
-   downstream session via `AckTarget`. The gateway only replies
-   directly when `OfferAsync` returns a non-`Enqueued` result (queue
-   closed, backpressure dropped, failure), in which case it replies
-   `CommandNack` to signal that the channel refused the message.
-5. `ChannelPipeline.MapToCommand` propagates `input.AckTarget` as the
-   sender when it `Tell`s `SendUserMessage` to the session manager.
-6. `LlmSessionActor.HandleIncomingUserMessage` adds the user message to
-   in-memory state and calls `TryReplyAck()`, which replies
-   `CommandAck` to `Sender` — which is the Ask's temp actor. The
-   execution actor's `await Ask<CommandAck>(...)` completes.
-7. The execution actor calls
+3. The execution actor builds `DeliverTrustedSessionTurn(SessionId, Content,
+   MessageSource)` and issues `Ask<CommandAck>` against the appropriate
+   channel gateway (`SlackGatewayActor` or `SignalRGatewayActor`, selected
+   by `OriginChannelType`) with a timeout from
+   `ReminderConfig.SessionDispatchTimeout`.
+4. The gateway routes the message down its existing hierarchy as D3
+   describes. The session's `TryReplyAck` fires a `CommandAck` reply to the
+   Ask temp actor via `MessageSource.AckTarget` → `ChannelPipeline`'s
+   sender propagation.
+5. On `CommandAck`, the execution actor calls
    `await _client.AckAsync(_envelope)`, inspects the
-   `ReminderAckResponse.ResponseCode`, logs on non-success, and then
-   tells `Context.Parent` a `ReminderExecutionCompleted(success=true)`
-   for bookkeeping (failure counters, history).
-8. The session's turn execution proceeds asynchronously. `TurnRecorded`
-   is persisted whenever the LLM turn completes.
+   `ReminderAckResponse.ResponseCode`, logs on non-`Success`, then tells
+   `Context.Parent` a `ReminderExecutionCompleted(success=true)` for
+   bookkeeping (failure counters, history records).
+6. On `CommandNack`, Ask-timeout, or any gateway exception, the execution
+   actor does **not** call `AckAsync`. It tells the parent a
+   `ReminderExecutionCompleted(success=false)` with an error message. The
+   un-acked envelope is redelivered by Akka.Reminders per its configured
+   policy.
 
-On any failure before the session acks (gateway refuses with
-`CommandNack`, Ask times out because the queue drained slowly or the
-session never replied, transport exception), the execution actor does
-**not** call `AckAsync`. It tells the parent
-`ReminderExecutionCompleted(success=false)` with an error message, then
-stops. The un-acked envelope is redelivered by `Aaron.Akka.Reminders`
-per its configured `AckTimeout` / `ProcessAckTimeouts` /
-`MaxDeliveryAttempts`.
+**Why `_client.AckAsync(envelope)` and not reply-to-sender**:
+`IReminderClient.AckAsync` is the public documented API. Decompiled, it
+constructs a `ReminderProtocol.ReminderAck` and `Ask`s the scheduler proxy
+with a 15-second timeout — the same thing reply-to-sender would do, but
+behind a stable API that insulates us from any future changes to the
+library's internal actor topology or ack message format. Acquiring the
+client from the ActorSystem extension is a one-line standard pattern.
 
-**Why session-gated instead of gateway-gated**: a gateway-level ack (the
-simpler alternative — "reply as soon as I've accepted the ChannelInput
-into the pipeline queue") leaves a narrow crash window between "gateway
-offered to queue" and "stream stage processed the ChannelInput and
-reached the session actor." That window is in-process and small, but
-it's a delivery hole that Design A closes for free because we already
-have `ChannelInput.AckTarget` in the plan. Closing this gap costs us
-nothing — the gateway handler just doesn't reply itself and lets the
-session reply flow back via `AckTarget`. See "Known failure modes and
-explicit tradeoffs" below for the documented gaps that remain.
-
-**Why `_client.AckAsync(envelope)` instead of reply-to-sender with a
-hand-constructed `ReminderAck`**: `IReminderClient.AckAsync` is the
-public documented API. Its implementation in
-`Aaron.Akka.Reminders 0.6.0-beta2` is itself an
-`Ask<ReminderAckResponse>` against the scheduler proxy, so it's already
-Ask-based with response-code visibility. Using the client insulates us
-from any future changes to the library's internal actor topology or ack
-message format. Acquiring the client from the ActorSystem extension is
-a one-line standard pattern, not "plumbing."
+**Duplicate-ack safety** (from decompiling the scheduler's `ReminderAck`
+handler): if the execution actor calls `AckAsync` twice for the same
+envelope (e.g., after a redelivery that was deduped by the session), the
+scheduler handles the duplicate cleanly — appends the second sender to an
+existing `BufferedAckWrite.ReplyTo` list if the first ack hasn't flushed
+yet, or creates a new entry that the storage layer handles idempotently if
+it has. Neither path throws from `AckAsync`. Worst case is a non-`Success`
+response code that we log and proceed past.
 
 **Alternatives considered**:
 
-- *Gateway-level ack ("reply when the pipeline queue has accepted the
-  ChannelInput").* Rejected — leaves an in-process crash window between
-  gateway-offer and stream-stage-processing that Design A closes for
-  free with `ChannelInput.AckTarget`.
-- *Reply-to-sender from the execution child with a hand-constructed
-  `ReminderProtocol.ReminderAck`, bypassing `IReminderClient`.*
-  Rejected — `IReminderClient.AckAsync` is the public supported API and
-  insulates us from implementation changes. The "no client plumbing"
-  argument was premature optimization of a non-problem — extensions are
-  the designed-for singleton-lookup pattern.
+- *Ack in the manager via `Ask`ing the session directly from
+  `HandleReminderFiredAsync`.* Rejected — would block the manager's mailbox
+  on the Ask. The manager is a singleton and must stay responsive to other
+  reminder events.
+- *Custom retry loop in the manager with a sidecar table of un-acked
+  envelopes.* Rejected — Akka.Reminders already implements this; we just
+  need to not eager-ack.
+- *Reply-to-sender with a hand-constructed `ReminderProtocol.ReminderAck`,
+  bypassing `IReminderClient`.* Rejected — the client is the public API,
+  and the "no plumbing" argument was premature optimization of a
+  non-problem (extensions are the designed-for singleton-lookup pattern).
 - *Bouncing the ack through `ReminderManagerActor` via a new
   `AckReminderEnvelope` message.* Rejected — unnecessary mailbox hop,
   serializes ack processing on the manager's singleton mailbox for no
   benefit.
-- *Wait for `TurnCompleted` before acking.* Rejected — LLM turns
-  commonly exceed any reasonable `AckTimeout`. The session's in-memory
+- *Wait for `TurnCompleted` before acking.* Rejected — LLM turns commonly
+  exceed any reasonable `AckTimeout`. The session's in-memory
   `CommandAck` (fired after `_state.AddUserMessage` but before the LLM
-  call) is the right boundary because it is fast and semantically
-  "session will process this."
-- *Custom retry loop in the manager with a sidecar table of un-acked
-  envelopes.* Rejected — Akka.Reminders already implements this, we
-  just need to let it do its job by not eager-acking.
+  call) is the right boundary because it is fast and semantically "session
+  will process this."
 
-### Known failure modes and explicit tradeoffs
+### D5. Minimal `ReminderConfig` surface; collapse redundant retry knobs
 
-This section is normative — the spec's "Reminder delivery guarantees"
-requirement references it.
+Four config properties on `ReminderConfig`, three of them optional in the
+default JSON template:
 
-**Guaranteed** (at-least-once, dedup-safe):
+```csharp
+public sealed class ReminderConfig
+{
+    // Existing — also used to derive library MaxDeliveryAttempts:
+    public int FailurePauseThreshold { get; init; } = 5;
 
-- *Crash before gateway receives `DeliverTrustedSessionTurn`*: envelope
-  un-acked, Akka.Reminders redelivers on next fire.
-- *Crash after gateway offered to pipeline queue but before stream stage
-  processed the `ChannelInput`*: Ask temp actor never receives a reply
-  from the session, execution actor's Ask times out without calling
-  `AckAsync`, envelope un-acked, Akka.Reminders redelivers. Design A
-  closes this gap that Design B would have left open.
-- *Crash after session received the message but before execution actor
-  calls `AckAsync`*: envelope un-acked, Akka.Reminders redelivers. On
-  redelivery, if `TurnRecorded` already persisted, the session's
-  `ProcessedReminderIds` dedup catches it. If `TurnRecorded` has not yet
-  persisted, the redelivery is processed as a fresh turn (desired
-  retry).
-- *Ack message lost in flight between execution actor and scheduler
-  proxy*: Akka.Reminders redelivers on `AckTimeout`, dedup catches the
-  duplicate.
+    // New optional tunables (forwarded to ReminderSettings at
+    // WithReminders() time; not written to default netclaw.json):
+    public TimeSpan AckTimeout        { get; init; } = TimeSpan.FromSeconds(10);
+    public TimeSpan MaxRetryBackoff   { get; init; } = TimeSpan.FromMinutes(10);
 
-**Not guaranteed, explicit tradeoff**:
+    // New Netclaw-internal timeout (not forwarded to library):
+    public TimeSpan SessionDispatchTimeout { get; init; } = TimeSpan.FromSeconds(8);
+}
+```
 
-- **Crash after execution actor calls `AckAsync` and before the session
-  persists `TurnRecorded`**: the envelope is acked from Akka.Reminders'
-  perspective, but the session may have only reached in-memory state
-  (via `_state.AddUserMessage`) and not yet written `TurnRecorded` to
-  the journal. If the daemon crashes in this window — which spans the
-  entire LLM turn execution, potentially minutes — the reminder turn
-  is lost on restart.
+**`MaxDeliveryAttempts` is not a user-facing knob.** At
+`WithReminders(settings)` configuration time, Netclaw sets
+`settings.MaxDeliveryAttempts = FailurePauseThreshold` internally. The two
+counters (Netclaw-side `_failureCounts` in `ReminderManagerActor` and
+library-side `AttemptCount` on the scheduled reminder) then fire
+simultaneously on the Nth consecutive failure: Netclaw auto-pauses the
+task locally (visible via `netclaw reminders list`), library marks the
+occurrence terminally Failed in its storage. Consistent state, no drift,
+operators only see one knob.
 
-  This is **the same failure mode that applies to every regular
-  `SendUserMessage` today**. A normal Slack user sending a message
-  faces the identical window: `TryReplyAck` fires after in-memory state
-  update, the LLM call runs, and a crash before `TurnRecorded` loses
-  that message. We are not making reminders worse than user messages.
+**`SessionDispatchTimeout < AckTimeout` invariant**: 8 seconds < 10 seconds
+by default. Netclaw's internal `Ask<CommandAck>` times out before
+Akka.Reminders considers the envelope ack-timed-out, so we fail loudly on
+our side first (logged as `reminder_mode_b_timeout`) before the library
+triggers its own redelivery machinery. This keeps operational logs focused
+on the proximate cause.
 
-  Fixing this gap requires a **durable ingress queue on
-  `LlmSessionActor`** (persist user messages on receipt, mark them
-  processed when `TurnRecorded` is written) — a session-wide change
-  that affects every `SendUserMessage` code path, not reminders
-  specifically. That work belongs in the drain-on-shutdown follow-up
-  (issues #403 and #419) where it can be designed holistically across
-  all ingress.
-
-  **Explicit tradeoff decision**: accept this gap for Mode B reminders
-  in this change. Document it in the spec under "Reminder delivery
-  guarantees" as an explicit out-of-scope item. Operators who need
-  stronger guarantees should track the drain-on-shutdown follow-up.
-
-### D5. Config surface in `ReminderConfig`, schema-synced
-
-**Decision**: Add three properties to `ReminderConfig`: `AckTimeout`
-(TimeSpan), `MaxDeliveryAttempts` (int), `MaxDeliveryWindow` (TimeSpan).
-Wire them into the `ReminderClient` construction in
-`NetclawAkkaHostingExtensions`. Default values match Akka.Reminders' own
-defaults (read from the package at implementation time). Update
-`netclaw-config.v1.schema.json` per the Configuration Schema Sync Rule in
-CLAUDE.md, using string `default` values with named enum discriminators
-where applicable so that `netclaw doctor --fix` can auto-correct stale
-configs.
+**JSON schema handling**: the schema for `netclaw-config.v1.schema.json`
+declares all four properties as optional with their default values
+documented inline. The default `netclaw.json` template (written by
+`netclaw config init` / wizard / `doctor --fix`) does NOT include the three
+optional tuning knobs. Operators who need to tune see the schema
+documentation and add them explicitly. The default config stays focused on
+the essentials.
 
 **Alternatives considered**:
 
+- *Expose `MaxDeliveryAttempts` separately.* Rejected per the user's
+  observation that it's measuring essentially the same thing as
+  `FailurePauseThreshold`. Having both creates configuration drift risk and
+  requires an "invariant check at startup" that nobody would notice.
 - *Hardcode the Akka.Reminders defaults and never expose them.* Rejected —
-  operators need to be able to tune redelivery behavior for their
-  deployment (e.g., longer `AckTimeout` when replay latency is high on a
-  congested journal).
-- *Put the knobs on individual reminders via `set_reminder`.* Rejected as
-  over-engineering for MVP. Per-reminder tunables can come later if there's
-  a real demand signal.
+  operators need to tune `AckTimeout` for deployments with cold-journal
+  rehydrate latency, and `MaxRetryBackoff` for deployments where quick
+  retry is preferred over exponential slowdown.
+- *Put tunables on individual reminders via `set_reminder`.* Rejected as
+  over-engineering for MVP. Can come later if there's a real demand signal.
 
-**Rationale**: Standard Netclaw config pattern. No novel surface area.
+## Known failure modes and explicit tradeoffs
 
-## Risks / Trade-offs
+This section is normative — the spec's "Reminder delivery guarantees"
+requirement references it directly.
 
-**[R1] Crash-during-processing loses the reminder turn** → Mitigation: same
-failure mode as regular user messages today. Subsumed by the
-drain-on-shutdown follow-up (issues #403 / #419). Documented in the
-`netclaw-scheduling` spec delta under "delivery guarantees." Accepted trade-off.
+**Guaranteed (at-least-once, caught by redelivery or dedup)**:
 
-**[R2] Journal replay latency on rehydrate can exceed a short `AckTimeout`**
-→ Mitigation: default `AckTimeout` to 30 seconds (well above expected
-rehydrate p99 on SQLite journals). Log rehydrate duration so operators can
-tune. Config knob is schema-validated.
+- *Crash before the channel gateway receives `DeliverTrustedSessionTurn`*:
+  envelope un-acked, Akka.Reminders redelivers on next fire.
+- *Crash after gateway offer but before the stream stage processes the
+  `ChannelInput`*: the Ask temp actor never receives a reply from the
+  session, execution actor's Ask times out without calling `AckAsync`,
+  envelope un-acked, Akka.Reminders redelivers. **This is why
+  session-gated ack is strictly better than gateway-level ack** — a
+  gateway-level ack would have closed out the envelope in this window and
+  lost the reminder.
+- *Crash after session received the message but before execution actor
+  calls `_client.AckAsync`*: envelope un-acked, Akka.Reminders redelivers.
+  On redelivery, the session's in-memory dedup set may catch it (if the
+  turn had time to persist `TurnRecorded` before the crash and the actor
+  hadn't been forced to restart from snapshot). If the dedup misses, the
+  redelivered reminder is processed as a fresh turn — which is the
+  desired retry behavior.
+- *Ack message lost in flight between execution actor and scheduler
+  proxy*: Akka.Reminders redelivers on its own `AckTimeout`, session dedup
+  likely catches the duplicate.
 
-**[R3] Dedup ledger growth unbounded for long-lived sessions with many
-reminders** → Mitigation: one short string per reminder turn (~30 bytes);
-order-of-magnitude negligible compared to transcript size. Follow-up can
-bound to `MaxDeliveryWindow × 2` entries if needed. Not a blocker.
+**Explicitly not guaranteed (accepted tradeoff)**:
 
-**[R4] Mode B output "invisible" on disconnected TUI or SignalR clients** →
-Mitigation: direct session-manager delivery persists the turn into session
-state, which is the authoritative record; clients see it on reconnect.
-Documented in the spec under "delivery to absent transport." Accepted
-trade-off.
+- *Crash after `_client.AckAsync(envelope)` returns success but before the
+  session's LLM turn completes and persists `TurnRecorded`*: envelope is
+  acked from Akka.Reminders' perspective, session state has the user
+  message in memory but not in the journal, crash loses the in-memory
+  state. On restart, the reminder is not redelivered (envelope is acked)
+  and the session has no record of it — the reminder is lost.
 
-**[R5] Ephemeral vs persistent dedup mismatch** — if a turn starts
-processing but fails mid-LLM-call without persisting `TurnRecorded`, a
-redelivery will not be in the dedup set and will re-process → Mitigation:
-this is the *desired* behavior. Failed turns should retry. Add a test case
-proving this.
+  This window can span the entire LLM turn execution (seconds to minutes
+  for tool-heavy reasoning). **It is the same failure mode every regular
+  `SendUserMessage` has today** — Mode B reminders do not introduce a new
+  failure class. Closing this gap requires a durable ingress queue on
+  `LlmSessionActor`, which is session-wide work that belongs in the
+  drain-on-shutdown follow-up (issues #403, #419).
 
-**[R6] Audience escalation via reminder re-entry** — a reminder could be
-created in a low-audience session and then deliver into a higher-audience
-context if the session's effective audience shifts → Mitigation: the
-reminder's stored audience (enforced by the archived
-`reminder-audience-authorization` change) is used to construct the
-`MessageSource`, not the live session's current audience. Validated by a
-test case.
+- *Duplicate reminder processing across snapshot recovery boundaries*: if
+  `LlmSessionActor` is recovered from a snapshot rather than replaying the
+  full journal, the `ProcessedReminderIds` dedup set starts empty. A
+  redelivery of a pre-snapshot reminder would then be processed as a
+  fresh turn. In practice this requires the reminder to still be within
+  Akka.Reminders' `MaxDeliveryWindow` after a snapshot has been taken,
+  which is a narrow timing window.
 
-**[R7] Race between reminder delivery and concurrent inbound** — a
-reminder fires for a session while a real inbound event is also
-materializing the same thread binding → Mitigation: the existing
-conversation and thread binding actor lookup-or-create chain is already
-idempotent; Akka actor supervision guarantees a single child per entity
-key. Two parallel attempts to materialize the same binding produce exactly
-one actor. No new race surface is introduced.
+  **Accepted tradeoff per the explicit "duplicates are acceptable" framing**:
+  the LLM itself typically recognizes a duplicate prompt in its recent
+  context and responds appropriately. The few-bytes-per-entry cost of
+  persisting the dedup set was not worth preventing a rare edge-case
+  duplicate.
 
-## Actor Topology (after this change)
+Operators who need stronger guarantees should track the drain-on-shutdown
+follow-up. This change deliberately ships with the same crash-durability
+semantics that regular user messages already have.
+
+## Actor topology (after this change)
 
 ```
 ReminderManagerActor (singleton)
  └── ReminderExecutionActor (child-per-execution, short-lived)
        ├── Mode A: ISessionPipeline.CreateAsync(reminder/{id}/{ts}) — unchanged
        └── Mode B:
-             let msg = new DeliverTrustedSessionTurn {
-                 SessionId = originalSessionId,
+             var msg = new DeliverTrustedSessionTurn {
+                 SessionId = _definition.SessionId,
                  Content = BuildPrompt(_definition),
                  Source = new MessageSource {
                      ReminderId = "{id}:{fireTs}",
                      ChannelType = _definition.OriginChannelType,
-                     Audience = storedAudience,
+                     Audience = _definition.Audience,
                      Principal = VerifiedAutomation,
-                     Provenance = {
-                         SourceKind = "reminder",
-                         TransportAuthenticity = LocalProcess,
-                         PayloadTaint = Trusted
-                     }
+                     Provenance = { SourceKind = "reminder", ... },
+                     AckTarget = null   // set by gateway handler from its Sender
                  }
              }
 
-             switch (_definition.OriginChannelType):
+             switch (_definition.OriginChannelType) {
+                 case Slack:      ack = await _slackGateway.Ask<CommandAck>(msg, SessionDispatchTimeout);
+                 case Tui/SignalR: ack = await _signalRGateway.Ask<CommandAck>(msg, SessionDispatchTimeout);
+             }
+                │
+                ▼
+             Channel gateway routes msg down the hierarchy via Forward,
+             each level reads Sender and preserves it. At the leaf:
+                │
+                ▼
+             SlackThreadBindingActor.Receive<DeliverTrustedSessionTurn>   OR
+             SignalRSessionActor.Receive<DeliverTrustedSessionTurn>:
+                read Sender
+                build ChannelInput {
+                    Source = msg.Source with { AckTarget = Sender }
+                }
+                inputQueue.OfferAsync(channelInput)
+                → stream stage runs MapToCommand → sessionManager.Tell(
+                    cmd, sender: cmd.Source.AckTarget)
+                → LlmSessionActor.HandleIncomingUserMessage runs,
+                  pre-check dedup hit? reply CommandAck, return
+                  else: _state.AddUserMessage, TryReplyAck (replies to Sender,
+                        which is the Ask temp actor), then FireInitialTurnLlmCall
+                → Ask temp actor receives CommandAck, completes dispatcher's Task
 
-               case ChannelType.Slack:
-                 _slackGateway.Ask<CommandAck>(msg)
-                   │
-                   ▼
-                 SlackGatewayActor.Receive<DeliverTrustedSessionTurn>:
-                   parses SessionId → (channelId, threadTs)
-                   runs existing lookup-or-create helper:
-                     → SlackConversationActor (by channelId)
-                       → SlackThreadBindingActor (by threadTs)
-                         → materializes pipeline, joins session output
-                         → offers ChannelInput{ AckTarget = Sender }
-                             (SlackAclPolicy.EvaluateInbound bypassed — trusted provenance)
+             On CommandAck: await _client.AckAsync(envelope)
+                            log non-Success response codes
+                            Context.Parent ! ReminderExecutionCompleted(success=true)
+                            Context.Stop(Self)
 
-               case ChannelType.Tui | ChannelType.SignalR:
-                 _signalRGateway.Ask<CommandAck>(msg)
-                   │
-                   ▼
-                 SignalRGatewayActor.Receive<DeliverTrustedSessionTurn>:
-                   parses SessionId → signalr/{guid}
-                   runs existing lookup-or-create helper shared with
-                     SessionRegistry's StartSignalRSession path:
-                     → SignalRSessionActor (if a client is connected)
-                         → existing pipeline subscriber receives streaming output
-                     → else: no bridge materialized; session processes and
-                       persists the turn regardless, output is dropped per
-                       Source.ActorRef OverflowStrategy.DropHead
-                   offers ChannelInput{ AckTarget = Sender } into whichever
-                   path exists
-
-               default (ChannelType.Headless, Webhook, Reminder, null):
-                 // Rejected at set_reminder time; cannot reach here.
-
-             Both gateways: session.HandleIncomingUserMessage → TryReplyAck
-               → reply flows through pipeline sender chain
-               → reminder dispatcher receives CommandAck
-
-             On CommandAck (reply from LlmSessionActor via AckTarget):
-               await _client.AckAsync(envelope)       // public IReminderClient API
-               Context.Parent ! ReminderExecutionCompleted(success=true)
-             On timeout/CommandNack/gateway exception:
-               // do NOT call AckAsync
-               Context.Parent ! ReminderExecutionCompleted(success=false, error)
-               (envelope un-acked → Akka.Reminders redelivers per configured policy)
-
-  The gateway handler does NOT reply to the Ask directly. It reads
-  `Sender` (the Ask temp actor), constructs ChannelInput with
-  `AckTarget = Sender`, and offers to the pipeline queue. The reply
-  flows from the LlmSessionActor's TryReplyAck back through AckTarget
-  to the Ask's temp actor, which completes the execution child's Task.
-  Gateway replies CommandNack directly only when OfferAsync returns
-  a non-Enqueued result (queue closed, dropped, failure).
+             On timeout / CommandNack / exception:
+                            // Do NOT call AckAsync
+                            Context.Parent ! ReminderExecutionCompleted(success=false, error)
+                            Context.Stop(Self)
+                            (envelope remains un-acked → Akka.Reminders redelivers)
 ```
 
-In both channels, the freshly materialized (or already-live) binding
-actor is a normal session subscriber — it receives the reminder turn's
-streaming output through the existing `JoinSession` → `SessionOutput`
-fan-out and delivers it to the client transport (Slack API or SignalR
-hub). For SignalR with no connected client, the turn still persists into
-session state via the existing `LlmSessionActor` → `TurnRecorded` path;
-the user sees it on next `ResumeSessionAsync`. This mirrors the current
-disconnect semantics: when a TUI client exits mid-tool-call today, the
-session keeps running, the tool completes, and `TurnRecorded` is
-persisted without anyone subscribed.
+In both channels, the reminder turn's streaming output is delivered back
+to the client transport (Slack API via the thread binding's existing
+output sink, or SignalR hub via the existing `SignalRSessionActor` bridge)
+via whatever output subscribers exist at that moment. For SignalR with no
+connected client, the output is dropped per the existing
+`Source.ActorRef` `OverflowStrategy.DropHead` behavior; the turn still
+persists via `TurnRecorded` and is visible on next `ResumeSessionAsync`.
+This mirrors the current semantic when a TUI client exits mid-tool-call.
 
-## Migration Plan
+## Migration plan
 
 None. Netclaw has no users. This change ships with the next dev build.
 
-## Open Questions
+## Open questions
 
-None blocking. All design decisions are resolved; implementation can proceed
-to the specs and tasks artifacts.
+None blocking. All design decisions are resolved; implementation can
+proceed to the tasks artifact.
+
+## Follow-ups to file after merge
+
+1. **Graceful drain and restart via reminder reactivation** — on shutdown,
+   enumerate live sessions with in-flight turns; schedule one-shot
+   reminders per session to fire on next startup; Mode B path deposits the
+   resume prompt into each session mailbox. References issues #403 and
+   #419 and the "Reminder delivery guarantees" section of this change.
+2. **Extract SignalR channel from `Netclaw.Daemon` into
+   `Netclaw.Channels.SignalR`** — pure code-organization cleanup,
+   eliminates the asymmetry between Slack (standalone channel project)
+   and SignalR (colocated with the daemon), gives future channels a
+   consistent template to follow.
+3. **Expose Akka.Reminders terminal-failure state via `IReminderClient`
+   query** — upstream work in `Aaron.Akka.Reminders` to add a
+   `ListTerminallyFailedRemindersAsync` or equivalent, plus downstream
+   Netclaw changes to expose that state via `netclaw reminders list`.
+   Nice-to-have for operator visibility of reminders that exhausted
+   `MaxDeliveryAttempts` without Netclaw's auto-pause firing first (which
+   can only happen if `FailurePauseThreshold` is pathologically high).

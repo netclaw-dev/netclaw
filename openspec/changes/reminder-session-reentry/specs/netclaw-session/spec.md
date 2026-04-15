@@ -26,10 +26,12 @@ approval decision (session-scoped for ApproveOnce, persistent via
 `ToolApprovalStore` for ApproveAlways).
 
 The persisted `TurnRecorded` event SHALL carry an optional
-`SourceReminderId` field (protobuf tag 5). When a `SendUserMessage` arrives
-with `MessageSource.ReminderId` set, the resulting `TurnRecorded` event
-SHALL copy that value into `SourceReminderId` so that reminder-originated
-turns are distinguishable in the journal and survive recovery.
+`SourceReminderId` field (protobuf tag 5, additive). When a
+`SendUserMessage` arrives with `MessageSource.ReminderId` set, the
+resulting `TurnRecorded` event SHALL copy that value into
+`SourceReminderId` so that reminder-originated turns are distinguishable
+in the journal (for forensics) and survive recovery (so the in-memory
+dedup set can be rebuilt via event replay).
 
 #### Scenario: Persist and emit assistant reply
 
@@ -85,28 +87,42 @@ turns are distinguishable in the journal and survive recovery.
 
 ## ADDED Requirements
 
-### Requirement: Reminder redelivery dedup
+### Requirement: Reminder redelivery best-effort dedup
 
 `SessionState` SHALL maintain an in-memory
 `ImmutableHashSet<string> ProcessedReminderIds`, folded in the
 `Apply(TurnRecorded)` handler from each recovered or live event's
-`SourceReminderId` when non-null. `LlmSessionActor` SHALL pre-check
-`cmd.Source?.ReminderId` against this set at the top of both the `Ready`-phase
+`SourceReminderId` when non-null. `Apply(SessionCompacted)` SHALL preserve
+the set across compaction (similar to how `WorkingContext` is preserved).
+The set SHALL NOT be persisted to `SessionSnapshot`: on snapshot-based
+recovery the set starts empty and rebuilds from post-snapshot event replay
+via the normal `Apply(TurnRecorded)` path.
+
+`LlmSessionActor` SHALL pre-check `cmd.Source?.ReminderId` against
+`ProcessedReminderIds` at the top of both the `Ready`-phase
 `HandleIncomingUserMessage` method and the `Processing`-phase
-`Command<SendUserMessage>` buffer handler. On a dedup hit, the session SHALL
-reply `CommandAck` to the sender without modifying state, persisting events,
-or dispatching an LLM call.
+`Command<SendUserMessage>` buffer handler. On a dedup hit, the session
+SHALL reply `CommandAck` to the sender without modifying state,
+persisting events, or dispatching an LLM call.
 
 The dedup check SHALL happen *before* any audience enforcement, ACL
 evaluation, or prompt construction, so that a redelivery from
 Akka.Reminders is handled entirely in memory and cannot trigger spurious
 side effects.
 
+**Best-effort semantics**: dedup is not guaranteed across snapshot
+recovery boundaries. A reminder processed before a snapshot and
+redelivered after a snapshot-based recovery will be processed as a fresh
+turn. This is an explicitly accepted tradeoff — the LLM itself typically
+recognizes a duplicate prompt in its recent context and responds
+appropriately, and persisting the dedup ledger to snapshot adds
+complexity without proportional value.
+
 #### Scenario: Redelivered reminder hits dedup in Ready phase
 
 - **GIVEN** the session is in `Ready` phase with
-  `ProcessedReminderIds = { "check-pr:1712000000000" }` recovered from the
-  journal
+  `ProcessedReminderIds = { "check-pr:1712000000000" }` rebuilt from
+  post-snapshot journal replay
 - **WHEN** a `SendUserMessage` arrives with
   `MessageSource.ReminderId = "check-pr:1712000000000"`
 - **THEN** the session replies `CommandAck` to the sender
@@ -122,13 +138,28 @@ side effects.
 - **THEN** the session replies `CommandAck` without buffering the message
 - **AND** the in-flight turn is unaffected
 
-#### Scenario: Dedup set rebuilt on recovery
+#### Scenario: Dedup set rebuilt from post-snapshot event replay
 
-- **GIVEN** a session journal contains three `TurnRecorded` events, two with
-  non-null `SourceReminderId` and one regular user turn
-- **WHEN** the session actor recovers
+- **GIVEN** a session journal contains three `TurnRecorded` events after
+  the most recent snapshot, two with non-null `SourceReminderId` and one
+  regular user turn
+- **WHEN** the session actor recovers from the snapshot and replays
+  subsequent events
 - **THEN** `ProcessedReminderIds` contains exactly the two reminder IDs
+  from the post-snapshot events
 - **AND** subsequent redeliveries of those reminders are deduped
+
+#### Scenario: Dedup set starts empty on snapshot-only recovery
+
+- **GIVEN** a session journal where all `TurnRecorded` events are
+  older than the most recent snapshot
+- **WHEN** the session actor recovers from that snapshot
+- **THEN** `ProcessedReminderIds` starts empty (the snapshot does not
+  carry the set)
+- **AND** a subsequent redelivery of a pre-snapshot reminder (still
+  within `MaxDeliveryWindow`) is NOT deduped and is processed as a fresh
+  turn
+- **AND** the outcome is logged but not treated as an error
 
 #### Scenario: Non-reminder user messages are not deduped
 
