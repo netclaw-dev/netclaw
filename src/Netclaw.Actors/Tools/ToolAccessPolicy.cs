@@ -197,14 +197,22 @@ public sealed class ToolAccessPolicy
         if (approvalPolicy is null)
             return GetMissingApprovalPolicyDefaultMode(toolName, arguments, audience, matcher);
 
-        if (approvalPolicy.ToolOverrides.TryGetValue(approvalModeKey, out var mode))
-            return mode;
-
+        // Matcher-derived argument-aware key (e.g. "file_write:control-plane").
+        // This only fires when the matcher produced a distinct key; it is
+        // unrelated to MCP tool names and therefore never consults
+        // McpServerDefaults.
         if (!string.Equals(approvalModeKey, toolName, StringComparison.Ordinal)
-            && approvalPolicy.ToolOverrides.TryGetValue(toolName, out mode))
+            && approvalPolicy.ToolOverrides.TryGetValue(approvalModeKey, out var matcherMode))
         {
-            return mode;
+            return matcherMode;
         }
+
+        // No-matcher-key case shares the three-step precedence with
+        // ToolApprovalConfig.GetEffectiveMode: exact ToolOverrides[toolName]
+        // → McpServerDefaults[serverName] → fall-through. This keeps the
+        // two callers consistent by construction.
+        if (approvalPolicy.TryGetExplicitMode(toolName, out var explicitMode))
+            return explicitMode;
 
         if (audience == TrustAudience.Personal && matcher.IsFailClosedOnPersonal(toolName, arguments))
             return ToolApprovalMode.Approval;

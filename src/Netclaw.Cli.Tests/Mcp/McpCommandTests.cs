@@ -101,6 +101,162 @@ public sealed class McpCommandTests : IDisposable
         Assert.Equal("Bearer tok-123", loaded["myapi"].Headers?["Authorization"]);
     }
 
+    // ── Fail-closed defaults for new MCP servers ──
+
+    [Fact]
+    public async Task Add_WritesEmptyGrantsAndApprovalDefaultsAcrossAudiences()
+    {
+        var args = new[] { "mcp", "add", "--transport", "http", "notion", "https://mcp.notion.com/mcp" };
+        var exitCode = await McpCommand.RunAsync(args, _paths, output: _output);
+
+        Assert.Equal(0, exitCode);
+
+        var doc = ReadConfigFile(_paths.NetclawConfigPath);
+        var profiles = doc.RootElement.GetProperty("Tools").GetProperty("AudienceProfiles");
+
+        foreach (var audience in new[] { "Personal", "Team", "Public" })
+        {
+            var profile = profiles.GetProperty(audience);
+            var grants = profile.GetProperty("McpServerToolGrants").GetProperty("notion");
+            Assert.Equal(JsonValueKind.Array, grants.ValueKind);
+            Assert.Equal(0, grants.GetArrayLength());
+
+            var approvalMode = profile
+                .GetProperty("ApprovalPolicy")
+                .GetProperty("McpServerDefaults")
+                .GetProperty("notion")
+                .GetString();
+
+            var expected = audience == "Public" ? "Deny" : "Approval";
+            Assert.Equal(expected, approvalMode);
+        }
+
+        var output = _output.ToString();
+        Assert.Contains("0 tools granted", output);
+        Assert.Contains("netclaw mcp permissions", output);
+        Assert.Contains("Personal=Approval", output);
+        Assert.Contains("Public=Deny", output);
+    }
+
+    [Fact]
+    public async Task Add_WithGrantAll_SkipsGrantsButWritesApprovalDefaults()
+    {
+        var args = new[] { "mcp", "add", "--grant-all", "--transport", "stdio", "trusted", "--", "/usr/local/bin/trusted" };
+        var exitCode = await McpCommand.RunAsync(args, _paths, output: _output);
+
+        Assert.Equal(0, exitCode);
+
+        var doc = ReadConfigFile(_paths.NetclawConfigPath);
+        var profiles = doc.RootElement.GetProperty("Tools").GetProperty("AudienceProfiles");
+
+        foreach (var audience in new[] { "Personal", "Team", "Public" })
+        {
+            var profile = profiles.GetProperty(audience);
+
+            // No grants written — either missing section or missing key.
+            var hasGrants = profile.TryGetProperty("McpServerToolGrants", out var grants)
+                && grants.ValueKind == JsonValueKind.Object
+                && grants.TryGetProperty("trusted", out _);
+            Assert.False(hasGrants);
+
+            var approvalMode = profile
+                .GetProperty("ApprovalPolicy")
+                .GetProperty("McpServerDefaults")
+                .GetProperty("trusted")
+                .GetString();
+            var expected = audience == "Public" ? "Deny" : "Approval";
+            Assert.Equal(expected, approvalMode);
+        }
+
+        Assert.Contains("legacy null-grants behavior", _output.ToString());
+    }
+
+    [Fact]
+    public async Task Add_DoesNotMutateExistingServers()
+    {
+        // Pre-populate an existing server manually, with null grants.
+        var initial = new Dictionary<string, object>
+        {
+            ["configVersion"] = 1,
+            ["McpServers"] = new Dictionary<string, object>
+            {
+                ["old-server"] = new Dictionary<string, object>
+                {
+                    ["Transport"] = "stdio",
+                    ["Command"] = "npx",
+                    ["Enabled"] = true
+                }
+            }
+        };
+        Directory.CreateDirectory(Path.GetDirectoryName(_paths.NetclawConfigPath)!);
+        File.WriteAllText(_paths.NetclawConfigPath, JsonSerializer.Serialize(initial));
+
+        var args = new[] { "mcp", "add", "--transport", "http", "new-server", "https://new.example/mcp" };
+        var exitCode = await McpCommand.RunAsync(args, _paths, output: _output);
+
+        Assert.Equal(0, exitCode);
+
+        var doc = ReadConfigFile(_paths.NetclawConfigPath);
+        var profiles = doc.RootElement.GetProperty("Tools").GetProperty("AudienceProfiles");
+
+        foreach (var audience in new[] { "Personal", "Team", "Public" })
+        {
+            var profile = profiles.GetProperty(audience);
+
+            // old-server MUST NOT have defaults written.
+            Assert.True(profile.TryGetProperty("McpServerToolGrants", out var grants));
+            Assert.False(grants.TryGetProperty("old-server", out _));
+            Assert.True(grants.TryGetProperty("new-server", out _));
+
+            var approvalDefaults = profile
+                .GetProperty("ApprovalPolicy")
+                .GetProperty("McpServerDefaults");
+            Assert.False(approvalDefaults.TryGetProperty("old-server", out _));
+            Assert.True(approvalDefaults.TryGetProperty("new-server", out _));
+        }
+    }
+
+    [Fact]
+    public async Task Add_CreatesApprovalPolicySectionWhenMissing()
+    {
+        var initial = new Dictionary<string, object>
+        {
+            ["configVersion"] = 1,
+            ["Tools"] = new Dictionary<string, object>
+            {
+                ["AudienceProfiles"] = new Dictionary<string, object>
+                {
+                    ["Personal"] = new Dictionary<string, object>
+                    {
+                        // No ApprovalPolicy section yet.
+                        ["McpServersMode"] = "All"
+                    }
+                }
+            }
+        };
+        Directory.CreateDirectory(Path.GetDirectoryName(_paths.NetclawConfigPath)!);
+        File.WriteAllText(_paths.NetclawConfigPath, JsonSerializer.Serialize(initial));
+
+        var args = new[] { "mcp", "add", "--transport", "http", "notion", "https://mcp.notion.com/mcp" };
+        var exitCode = await McpCommand.RunAsync(args, _paths, output: _output);
+
+        Assert.Equal(0, exitCode);
+
+        var doc = ReadConfigFile(_paths.NetclawConfigPath);
+        var personal = doc.RootElement
+            .GetProperty("Tools")
+            .GetProperty("AudienceProfiles")
+            .GetProperty("Personal");
+
+        Assert.True(personal.TryGetProperty("ApprovalPolicy", out var approvalPolicy));
+        Assert.Equal(
+            "Approval",
+            approvalPolicy.GetProperty("McpServerDefaults").GetProperty("notion").GetString());
+
+        // Pre-existing property should still be there.
+        Assert.Equal("All", personal.GetProperty("McpServersMode").GetString());
+    }
+
     [Fact]
     public async Task List_NoServers_ShowsEmptyMessage()
     {

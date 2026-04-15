@@ -603,9 +603,9 @@ static async Task RunAsync(string[] args)
     {
         var mcpSubcommand = args.Length > 1 ? args[1] : "help";
 
-        if (mcpSubcommand is "tools" && args.Length <= 2)
+        if ((mcpSubcommand is "tools" or "permissions") && args.Length <= 2)
         {
-            // Bare `netclaw mcp tools` → TUI mode
+            // Bare `netclaw mcp tools` or `netclaw mcp permissions` → TUI mode
             var builder = Host.CreateApplicationBuilder(args);
             ConfigureConfigServices(builder.Services, builder.Configuration);
             builder.Logging.ClearProviders();
@@ -621,9 +621,9 @@ static async Task RunAsync(string[] args)
             return;
         }
 
-        if (mcpSubcommand is "auth" or "list" or "tools")
+        if (mcpSubcommand is "auth" or "list" or "tools" or "permissions")
         {
-            // auth/list/tools need the daemon — spin up DI to get DaemonApi
+            // auth/list/tools/permissions need the daemon — spin up DI to get DaemonApi
             var builder = Host.CreateApplicationBuilder(args);
             ConfigureConfigServices(builder.Services, builder.Configuration);
             builder.Logging.ClearProviders();

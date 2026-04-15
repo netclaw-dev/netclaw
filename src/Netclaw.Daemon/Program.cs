@@ -42,7 +42,9 @@ using static Microsoft.Extensions.Logging.LogLevel;
 
 var bootstrapPaths = new NetclawPaths();
 bootstrapPaths.EnsureDirectoriesExist();
-using var crashMonitor = DaemonCrashMonitor.Register(bootstrapPaths);
+using var crashMonitor = DaemonCrashMonitor.Register(
+    bootstrapPaths,
+    benignUnobservedFilters: [KnownBenignExceptions.IsSlackNetReconnectingWebSocketDisposeRace]);
 
 try
 {

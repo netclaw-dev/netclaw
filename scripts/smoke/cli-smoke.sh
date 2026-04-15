@@ -88,6 +88,26 @@ else
   fail "sessions --help: exit=$sessions_help_exit, missing --once in output"
 fi
 
+echo ""
+echo "=== netclaw mcp permissions --help ==="
+set +e
+mcp_permissions_help_exit=0
+if [[ -n "${NETCLAW_CLI:-}" ]]; then
+  mcp_permissions_help_output="$(timeout 15s "$NETCLAW_CLI" mcp permissions --help 2>&1)"
+else
+  mcp_permissions_help_output="$(timeout 15s dotnet run --project "$CLI_PROJECT" --no-build -c "$BUILD_CONFIG" -- mcp permissions --help 2>&1)"
+fi
+mcp_permissions_help_exit=$?
+set -e
+echo "$mcp_permissions_help_output"
+if [[ $mcp_permissions_help_exit -eq 0 && "$mcp_permissions_help_output" == *"Usage: netclaw mcp tools <server> [options]"* && "$mcp_permissions_help_output" == *"--audience <name>"* ]]; then
+  pass "mcp permissions --help: exits 0 and prints CLI help"
+elif [[ $mcp_permissions_help_exit -eq 124 ]]; then
+  fail "mcp permissions --help: timed out (possible TUI launch)"
+else
+  fail "mcp permissions --help: exit=$mcp_permissions_help_exit, expected CLI help output"
+fi
+
 # ── Daemon-requiring commands (non-zero on daemon unavailable is accepted) ───
 
 echo ""

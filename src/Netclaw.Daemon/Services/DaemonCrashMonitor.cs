@@ -12,12 +12,20 @@ internal sealed class DaemonCrashMonitor : IDisposable
     private readonly string _logsDirectory;
     private readonly UnhandledExceptionEventHandler _unhandledHandler;
     private readonly EventHandler<UnobservedTaskExceptionEventArgs> _unobservedTaskHandler;
+    // Passed in at construction so the array is fully published before the
+    // TaskScheduler.UnobservedTaskException handler subscribes below — no
+    // memory-model race with the finalizer thread.
+    private readonly Func<Exception, bool>[] _benignUnobservedFilters;
     private IServiceProvider? _services;
 
-    private DaemonCrashMonitor(string logsDirectory, TimeProvider? timeProvider = null)
+    private DaemonCrashMonitor(
+        string logsDirectory,
+        TimeProvider? timeProvider,
+        Func<Exception, bool>[] benignUnobservedFilters)
     {
         _logsDirectory = logsDirectory;
         _timeProvider = timeProvider ?? TimeProvider.System;
+        _benignUnobservedFilters = benignUnobservedFilters;
 
         _unhandledHandler = HandleUnhandledException;
         _unobservedTaskHandler = HandleUnobservedTaskException;
@@ -26,8 +34,14 @@ internal sealed class DaemonCrashMonitor : IDisposable
         TaskScheduler.UnobservedTaskException += _unobservedTaskHandler;
     }
 
-    public static DaemonCrashMonitor Register(NetclawPaths paths, TimeProvider? timeProvider = null)
-        => new(paths.LogsDirectory, timeProvider);
+    public static DaemonCrashMonitor Register(
+        NetclawPaths paths,
+        TimeProvider? timeProvider = null,
+        IReadOnlyList<Func<Exception, bool>>? benignUnobservedFilters = null)
+        => new(
+            paths.LogsDirectory,
+            timeProvider,
+            benignUnobservedFilters is null ? [] : benignUnobservedFilters.ToArray());
 
     public void AttachServices(IServiceProvider services)
     {
@@ -60,8 +74,35 @@ internal sealed class DaemonCrashMonitor : IDisposable
 
     private void HandleUnobservedTaskException(object? sender, UnobservedTaskExceptionEventArgs args)
     {
+        if (IsBenignUnobservedException(args.Exception))
+        {
+            TryLogMonitorFailure(
+                "Observed a known-benign unobserved task exception; skipping crash report.",
+                args.Exception);
+            args.SetObserved();
+            return;
+        }
+
         HandleCrash("daemon-unobserved", args.Exception, isTerminating: false, isUnobservedTask: true);
         args.SetObserved();
+    }
+
+    private bool IsBenignUnobservedException(Exception exception)
+    {
+        foreach (var filter in _benignUnobservedFilters)
+        {
+            try
+            {
+                if (filter(exception))
+                    return true;
+            }
+            catch (Exception filterFailure)
+            {
+                TryLogMonitorFailure("Benign-unobserved filter threw while inspecting an exception.", filterFailure);
+            }
+        }
+
+        return false;
     }
 
     private void HandleCrash(string reason, Exception exception, bool isTerminating, bool isUnobservedTask)

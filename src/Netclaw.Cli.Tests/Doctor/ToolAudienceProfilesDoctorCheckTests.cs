@@ -274,6 +274,177 @@ public sealed class ToolAudienceProfilesDoctorCheckTests : IDisposable
         Assert.DoesNotContain("without an explicit shell_execute approval gate", result.Message);
     }
 
+    // ── MCP server missing Personal approval-default warning ──
+
+    [Fact]
+    public async Task McpServerWithoutPersonalApprovalDefault_TriggersWarning()
+    {
+        WriteConfig(
+            """
+            {
+              "configVersion": 1,
+              "Tools": {
+                "AudienceProfiles": {
+                  "Personal": {
+                    "ToolsMode": "All",
+                    "McpServersMode": "All",
+                    "McpServerToolGrants": {
+                      "notion": ["create-pages"]
+                    },
+                    "ReadFiles": { "Mode": "All" },
+                    "WriteFiles": { "Mode": "All" },
+                    "AttachFiles": { "Mode": "All" }
+                  }
+                }
+              },
+              "McpServers": {
+                "notion": { "Transport": "http", "Url": "https://mcp.notion.com/mcp", "Enabled": true }
+              }
+            }
+            """);
+
+        var check = new ToolAudienceProfilesDoctorCheck(_paths);
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(DoctorSeverity.Warning, result.Severity);
+        Assert.Contains("notion", result.Message);
+        Assert.Contains("approval default on Personal", result.Message);
+        Assert.Contains("netclaw mcp permissions", result.Message);
+    }
+
+    [Fact]
+    public async Task McpServerWithPersonalApprovalDefault_DoesNotTriggerWarning()
+    {
+        WriteConfig(
+            """
+            {
+              "configVersion": 1,
+              "Tools": {
+                "AudienceProfiles": {
+                  "Personal": {
+                    "ToolsMode": "All",
+                    "McpServersMode": "All",
+                    "McpServerToolGrants": { "notion": ["create-pages"] },
+                    "ApprovalPolicy": {
+                      "McpServerDefaults": { "notion": "Approval" }
+                    },
+                    "ReadFiles": { "Mode": "All" },
+                    "WriteFiles": { "Mode": "All" },
+                    "AttachFiles": { "Mode": "All" }
+                  }
+                }
+              },
+              "McpServers": {
+                "notion": { "Transport": "http", "Url": "https://mcp.notion.com/mcp", "Enabled": true }
+              }
+            }
+            """);
+
+        var check = new ToolAudienceProfilesDoctorCheck(_paths);
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.DoesNotContain("approval default on Personal", result.Message);
+    }
+
+    [Fact]
+    public async Task McpServerWithPerToolOverride_DoesNotTriggerWarning()
+    {
+        WriteConfig(
+            """
+            {
+              "configVersion": 1,
+              "Tools": {
+                "AudienceProfiles": {
+                  "Personal": {
+                    "ToolsMode": "All",
+                    "McpServersMode": "All",
+                    "McpServerToolGrants": { "notion": ["create-pages"] },
+                    "ApprovalPolicy": {
+                      "ToolOverrides": { "notion/create-pages": "Approval" }
+                    },
+                    "ReadFiles": { "Mode": "All" },
+                    "WriteFiles": { "Mode": "All" },
+                    "AttachFiles": { "Mode": "All" }
+                  }
+                }
+              },
+              "McpServers": {
+                "notion": { "Transport": "http", "Url": "https://mcp.notion.com/mcp", "Enabled": true }
+              }
+            }
+            """);
+
+        var check = new ToolAudienceProfilesDoctorCheck(_paths);
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.DoesNotContain("approval default on Personal", result.Message);
+    }
+
+    [Fact]
+    public async Task MissingApprovalWarning_DoesNotFireForServerNotInMcpServers()
+    {
+        // Server is in AllowedMcpServers but not in McpServers (stale allowlist).
+        WriteConfig(
+            """
+            {
+              "configVersion": 1,
+              "Tools": {
+                "AudienceProfiles": {
+                  "Personal": {
+                    "ToolsMode": "All",
+                    "McpServersMode": "All",
+                    "AllowedMcpServers": ["notion"],
+                    "ReadFiles": { "Mode": "All" },
+                    "WriteFiles": { "Mode": "All" },
+                    "AttachFiles": { "Mode": "All" }
+                  }
+                }
+              }
+            }
+            """);
+
+        var check = new ToolAudienceProfilesDoctorCheck(_paths);
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.DoesNotContain("approval default on Personal", result.Message);
+    }
+
+    [Fact]
+    public async Task MissingApprovalWarning_IsWarningSeverityNotError()
+    {
+        WriteConfig(
+            """
+            {
+              "configVersion": 1,
+              "Tools": {
+                "ShellMode": "HostAllowed",
+                "AudienceProfiles": {
+                  "Personal": {
+                    "ToolsMode": "All",
+                    "McpServersMode": "All",
+                    "ApprovalPolicy": {
+                      "ToolOverrides": { "shell_execute": "Approval" }
+                    },
+                    "ReadFiles": { "Mode": "Roots", "Roots": ["/tmp"] },
+                    "WriteFiles": { "Mode": "Roots", "Roots": ["/tmp"] },
+                    "AttachFiles": { "Mode": "Roots", "Roots": ["/tmp"] }
+                  }
+                }
+              },
+              "McpServers": {
+                "notion": { "Transport": "http", "Url": "https://mcp.notion.com/mcp", "Enabled": true }
+              }
+            }
+            """);
+
+        var check = new ToolAudienceProfilesDoctorCheck(_paths);
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
+
+        // Warning, not error — tests the "warnings only (2)" exit code path.
+        Assert.Equal(DoctorSeverity.Warning, result.Severity);
+        Assert.Contains("approval default on Personal", result.Message);
+    }
+
     private void WriteConfig(object config)
     {
         File.WriteAllText(

@@ -341,4 +341,172 @@ public sealed class ToolApprovalGateTests
         Assert.True(decision.Allowed);
         Assert.False(decision.NeedsApproval);
     }
+
+    // ── MCP server default precedence ──
+
+    private static ToolAccessPolicy CreateMcpApprovalPolicy(ToolApprovalConfig approvalPolicy)
+    {
+        var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
+        config.AudienceProfiles.Personal.AllowedMcpServers.Add("notion");
+        config.AudienceProfiles.Personal.ApprovalPolicy = approvalPolicy;
+        return new ToolAccessPolicy(
+            config,
+            new EffectivePolicyDefaults(
+                DeploymentPosture.Personal,
+                TrustAudience.Personal,
+                ShellExecutionMode.HostAllowed,
+                UsedStrictFallback: false));
+    }
+
+    private static McpToolAdapter McpTool(string serverName, string toolName)
+    {
+        var func = AIFunctionFactory.Create(() => "result", toolName, toolName);
+        return new McpToolAdapter(func, serverName, toolName);
+    }
+
+    [Fact]
+    public void mcp_server_default_applies_when_no_exact_override()
+    {
+        var approvalPolicy = new ToolApprovalConfig
+        {
+            DefaultMode = ToolApprovalMode.Auto,
+            McpServerDefaults = new Dictionary<string, ToolApprovalMode>(StringComparer.Ordinal)
+            {
+                ["notion"] = ToolApprovalMode.Approval
+            }
+        };
+        var policy = CreateMcpApprovalPolicy(approvalPolicy);
+
+        var decision = policy.AuthorizeInvocation(
+            McpTool("notion", "create-pages"),
+            PersonalContext());
+
+        Assert.True(decision.NeedsApproval);
+        Assert.Equal("notion/create-pages", decision.ApprovalContext!.ToolName);
+    }
+
+    [Fact]
+    public void mcp_exact_override_beats_server_default()
+    {
+        var approvalPolicy = new ToolApprovalConfig
+        {
+            DefaultMode = ToolApprovalMode.Auto,
+            McpServerDefaults = new Dictionary<string, ToolApprovalMode>(StringComparer.Ordinal)
+            {
+                ["notion"] = ToolApprovalMode.Deny
+            },
+            ToolOverrides = new Dictionary<string, ToolApprovalMode>(StringComparer.Ordinal)
+            {
+                ["notion/search"] = ToolApprovalMode.Auto
+            }
+        };
+        var policy = CreateMcpApprovalPolicy(approvalPolicy);
+
+        var decision = policy.AuthorizeInvocation(
+            McpTool("notion", "search"),
+            PersonalContext());
+
+        Assert.True(decision.Allowed);
+        Assert.False(decision.NeedsApproval);
+    }
+
+    [Fact]
+    public void mcp_server_default_beats_default_mode()
+    {
+        var approvalPolicy = new ToolApprovalConfig
+        {
+            DefaultMode = ToolApprovalMode.Auto,
+            McpServerDefaults = new Dictionary<string, ToolApprovalMode>(StringComparer.Ordinal)
+            {
+                ["notion"] = ToolApprovalMode.Deny
+            }
+        };
+        var policy = CreateMcpApprovalPolicy(approvalPolicy);
+
+        var decision = policy.AuthorizeInvocation(
+            McpTool("notion", "create-pages"),
+            PersonalContext());
+
+        Assert.False(decision.Allowed);
+        Assert.Equal("tool_denied_by_approval_policy", decision.DenyReason);
+    }
+
+    [Fact]
+    public void shell_execute_does_not_match_mcp_server_default()
+    {
+        // shell_execute has no slash, so the MCP server default lookup
+        // SHALL NOT trigger. The existing fail-closed-on-Personal matcher
+        // must still fire instead.
+        var approvalPolicy = new ToolApprovalConfig
+        {
+            DefaultMode = ToolApprovalMode.Auto,
+            McpServerDefaults = new Dictionary<string, ToolApprovalMode>(StringComparer.Ordinal)
+            {
+                ["shell_execute"] = ToolApprovalMode.Deny
+            }
+        };
+        var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
+        config.AudienceProfiles.Personal.ApprovalPolicy = approvalPolicy;
+        var policy = new ToolAccessPolicy(
+            config,
+            new EffectivePolicyDefaults(
+                DeploymentPosture.Personal,
+                TrustAudience.Personal,
+                ShellExecutionMode.HostAllowed,
+                UsedStrictFallback: false));
+
+        var args = new Dictionary<string, object?> { ["Command"] = "git pull --ff-only" };
+        var decision = policy.AuthorizeInvocation(ShellTool(), PersonalContext(), args);
+
+        // Shell default matcher fails closed on Personal → approval, not deny.
+        Assert.True(decision.NeedsApproval);
+    }
+
+    [Fact]
+    public void resolve_approval_mode_and_get_effective_mode_agree_for_mcp_tool()
+    {
+        var approvalPolicy = new ToolApprovalConfig
+        {
+            DefaultMode = ToolApprovalMode.Auto,
+            McpServerDefaults = new Dictionary<string, ToolApprovalMode>(StringComparer.Ordinal)
+            {
+                ["notion"] = ToolApprovalMode.Approval
+            },
+            ToolOverrides = new Dictionary<string, ToolApprovalMode>(StringComparer.Ordinal)
+            {
+                ["notion/search"] = ToolApprovalMode.Auto
+            }
+        };
+
+        // GetEffectiveMode is the single source of truth.
+        Assert.Equal(ToolApprovalMode.Approval, approvalPolicy.GetEffectiveMode("notion/create-pages"));
+        Assert.Equal(ToolApprovalMode.Auto, approvalPolicy.GetEffectiveMode("notion/search"));
+
+        // Runtime path through ToolAccessPolicy must return the same modes.
+        var policy = CreateMcpApprovalPolicy(approvalPolicy);
+
+        var approval = policy.AuthorizeInvocation(McpTool("notion", "create-pages"), PersonalContext());
+        Assert.True(approval.NeedsApproval);
+
+        var auto = policy.AuthorizeInvocation(McpTool("notion", "search"), PersonalContext());
+        Assert.True(auto.Allowed);
+        Assert.False(auto.NeedsApproval);
+    }
+
+    [Fact]
+    public void mcp_tool_without_server_default_falls_through_to_default_mode()
+    {
+        var approvalPolicy = new ToolApprovalConfig
+        {
+            DefaultMode = ToolApprovalMode.Auto
+        };
+        var policy = CreateMcpApprovalPolicy(approvalPolicy);
+
+        var decision = policy.AuthorizeInvocation(
+            McpTool("notion", "create-pages"),
+            PersonalContext());
+
+        Assert.True(decision.Allowed);
+        Assert.False(decision.NeedsApproval);
+    }
 }
