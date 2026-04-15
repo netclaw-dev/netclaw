@@ -5,8 +5,10 @@ Issue #661 exposed an execution-model gap: slash-invoked skills always inline th
 ## What Changes
 
 - Add declarative skill routing metadata: `metadata.subagent: <name>` in skill frontmatter, aligned with AgentSkills metadata extension conventions.
-- Introduce deterministic activation precedence for slash-command skill execution: when `metadata.subagent` is present and valid, route to that subagent path before inline skill-body injection.
+- Introduce deterministic activation precedence for all first-party skill activation entry points: when `metadata.subagent` is present and valid, route to that subagent path before inline skill-body injection.
 - Define routed execution semantics: skill body becomes an additive subagent system-prompt overlay (specialization layer), not main-session user runtime context.
+- Enforce dispatch-time validation for routed metadata on every activation request.
+- Keep routed tool authorization audience-governed for MVP; no new skill-level tool gate in this change.
 - Enforce isolation defaults for routed subagent workers: they do not inherit the main session identity prompt stack by default and do not auto-load repo-local `AGENTS.md` by default.
 - Enforce fail-loud semantics with no silent fallback to inline execution for unknown subagent targets, internal-only subagent targets, and malformed routed metadata; routed failures must be user-visible and include remediation guidance.
 
@@ -27,6 +29,7 @@ Issue #661 exposed an execution-model gap: slash-invoked skills always inline th
 
 - Skill parsing and registry surfaces that materialize frontmatter metadata.
 - Slash-command dispatch flow in session handling, including scheduled slash payload handling.
+- Any other first-party skill activation entry points that execute skills (for example tool-driven activation paths).
 - Subagent registry/spawner validation and prompt assembly for routed execution.
 - Subagent prompt construction boundary and context-layer composition behavior.
 
@@ -44,6 +47,7 @@ Issue #661 exposed an execution-model gap: slash-invoked skills always inline th
 ### In scope for MVP
 
 - Metadata parsing/validation for `metadata.subagent`.
+- Dispatch-time metadata validation on each activation request.
 - Deterministic routing precedence and routed overlay semantics.
 - Isolation defaults for routed subagent workers.
 - Failure semantics and regression tests for no-fallback guarantees.
@@ -53,6 +57,7 @@ Issue #661 exposed an execution-model gap: slash-invoked skills always inline th
 
 - Automatic migration of existing skill metadata to add `metadata.subagent`.
 - Dynamic runtime policy that allows fallback from routed path to inline path.
+- Skill-level tool-scope intersection policy (e.g., audience policy ∩ subagent tools ∩ `allowed-tools`).
 - Broad redesign of subagent prompt assembly beyond routed skill overlay and stated isolation defaults.
 
 ### Source PRDs

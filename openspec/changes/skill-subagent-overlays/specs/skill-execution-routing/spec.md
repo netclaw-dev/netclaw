@@ -12,6 +12,10 @@ required.
 When present, the value SHALL be interpreted as a subagent registry target
 identifier and SHALL be validated as a non-empty string name.
 
+Validation of `metadata.subagent` SHALL be enforced at dispatch time on each
+activation request. Scan-time validation MAY emit warnings, but dispatch-time
+validation is authoritative.
+
 #### Scenario: Skill declares routing target
 
 - **GIVEN** a skill contains `metadata.subagent: operations-helper`
@@ -27,9 +31,13 @@ identifier and SHALL be validated as a non-empty string name.
 
 ### Requirement: Deterministic activation path selection
 
-For skill activations that support slash command dispatch, path selection SHALL
-be deterministic and SHALL evaluate `metadata.subagent` before inline
+For first-party skill activation entry points, path selection SHALL be
+deterministic and SHALL evaluate `metadata.subagent` before inline
 skill-body injection.
+
+First-party activation entry points include slash-command dispatch, scheduled
+slash payload dispatch, and any tool-driven activation path implemented by the
+runtime.
 
 If a valid routed target exists, the system SHALL execute the routed subagent
 path and SHALL NOT execute inline path for the same activation.
@@ -41,11 +49,40 @@ path and SHALL NOT execute inline path for the same activation.
 - **THEN** the routed subagent path is selected
 - **AND** inline skill-body injection is not used
 
+#### Scenario: Tool-driven activation follows same routing rules
+
+- **GIVEN** a skill activation request arrives through a tool-driven activation path
+- **AND** the target skill has valid `metadata.subagent`
+- **WHEN** activation dispatch resolves execution path
+- **THEN** the routed subagent path is selected
+- **AND** inline skill-body injection is not used
+
 #### Scenario: Inline path selected when routing metadata absent
 
 - **GIVEN** a matched slash command skill with no `metadata.subagent`
 - **WHEN** activation dispatch resolves execution path
 - **THEN** inline skill-body injection path is selected
+
+### Requirement: Routed tool authorization remains audience-governed for MVP
+
+On routed executions, the system SHALL apply existing audience/boundary policy
+and subagent tool registration constraints.
+
+This change SHALL NOT introduce an additional runtime tool gate based on skill
+`allowed-tools` metadata.
+
+#### Scenario: Routed execution honors existing audience policy
+
+- **GIVEN** a routed activation with `metadata.subagent`
+- **WHEN** the subagent executes tool calls
+- **THEN** tool authorization uses existing audience/boundary and subagent tool policy
+
+#### Scenario: Skill allowed-tools is not an additional runtime gate
+
+- **GIVEN** a routed activation where skill frontmatter includes `allowed-tools`
+- **WHEN** runtime tool authorization is evaluated
+- **THEN** authorization behavior remains unchanged by this change
+- **AND** no additional skill-level tool intersection gate is applied
 
 ### Requirement: Skill body overlay semantics for routed execution
 

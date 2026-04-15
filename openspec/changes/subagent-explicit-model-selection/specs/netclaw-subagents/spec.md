@@ -2,17 +2,13 @@
 
 ### Requirement: Subagent model role convention
 
-Subagents SHALL use `ModelRole.Compaction` by default when no explicit model is
-provided. The `SubAgentDefinition.ModelRole` property SHALL allow override
-per-definition.
+When explicit `model` is absent, subagents SHALL preserve existing
+`ModelRole`-based selection defaults and override behavior.
 
 Subagent definitions MAY also specify an explicit `model` string (from
 frontmatter) that references a named model/client registry entry. When explicit
 `model` is present, the system SHALL use explicit model selection and SHALL NOT
 use `ModelRole` for that subagent invocation.
-
-When explicit `model` is absent, the system SHALL preserve existing
-`ModelRole` behavior.
 
 When both `model` and `ModelRole` are set, `model` SHALL take precedence.
 
@@ -20,17 +16,11 @@ If explicit `model` cannot be resolved against the named model/client registry,
 subagent load/startup SHALL fail deterministically and SHALL NOT silently fall
 back to `ModelRole`.
 
-#### Scenario: Subagent uses compaction model when explicit model is absent
+#### Scenario: Existing model-role behavior remains when explicit model is absent
 
-- **GIVEN** `Models.Compaction` is configured in `netclaw.json`
-- **WHEN** a subagent is spawned without explicit `model`
-- **THEN** the subagent uses the compaction model selected by `ModelRole`
-
-#### Scenario: Compaction model falls back to main when explicit model is absent
-
-- **GIVEN** `Models.Compaction` is not configured
-- **WHEN** a subagent is spawned without explicit `model`
-- **THEN** the subagent uses the main model as existing `ModelRole` fallback
+- **GIVEN** a subagent definition does not set explicit `model`
+- **WHEN** a subagent is loaded and spawned
+- **THEN** the system uses the existing `ModelRole` selection behavior unchanged
 
 #### Scenario: Explicit model selects named registry entry
 

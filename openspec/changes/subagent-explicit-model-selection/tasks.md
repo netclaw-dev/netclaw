@@ -41,4 +41,4 @@
 
 - [ ] 7.1 Run targeted test suites covering subagent parsing, model resolution, and startup validation paths.
 - [ ] 7.2 Run `dotnet slopwatch analyze` and resolve any newly introduced violations.
-- [ ] 7.3 Run `openspec verify --change "subagent-explicit-model-selection"` to confirm implementation readiness and artifact consistency.
+- [ ] 7.3 Run `openspec validate "subagent-explicit-model-selection"` to confirm implementation readiness and artifact consistency.

@@ -1,15 +1,17 @@
 ## 1. Skill metadata and routing contract (Issue #661)
 
 - [ ] 1.1 Add `metadata.subagent` parsing to skill frontmatter model and preserve it on `SkillEntry` metadata.
-- [ ] 1.2 Add validation for `metadata.subagent` (type, empty/malformed name) with deterministic error output.
-- [ ] 1.3 Add or update `skill-execution-routing` capability implementation scaffolding to encode deterministic precedence and no-fallback behavior.
+- [ ] 1.2 Add dispatch-time validation for `metadata.subagent` (type, empty/malformed name) with deterministic error output.
+- [ ] 1.3 Optionally add scan-time warnings for malformed routed metadata; dispatch-time checks remain authoritative.
+- [ ] 1.4 Add or update `skill-execution-routing` capability implementation scaffolding to encode deterministic precedence and no-fallback behavior.
 
-## 2. Slash-command dispatch changes
+## 2. Activation routing consistency across entry points
 
-- [ ] 2.1 Update slash-command activation flow to check `metadata.subagent` before inline skill-body injection.
-- [ ] 2.2 Implement routed execution branch that invokes the subagent registry/spawner for valid user-facing targets.
-- [ ] 2.3 Preserve existing inline behavior only when `metadata.subagent` is absent.
-- [ ] 2.4 Apply identical deterministic dispatch behavior to scheduled slash payloads (reminders/jobs).
+- [ ] 2.1 Introduce a shared activation router used by all first-party activation entry points.
+- [ ] 2.2 Update slash-command activation flow to check `metadata.subagent` before inline skill-body injection.
+- [ ] 2.3 Update scheduled slash payload handling (reminders/jobs) to use the same router.
+- [ ] 2.4 Update tool-driven skill activation entry points to use the same router.
+- [ ] 2.5 Preserve existing inline behavior only when `metadata.subagent` is absent.
 
 ## 3. Routed subagent prompt assembly and isolation
 
@@ -17,6 +19,7 @@
 - [ ] 3.2 Ensure routed path does not treat skill body as user runtime context.
 - [ ] 3.3 Enforce default isolation: no inherited main-session identity prompt stack unless explicitly configured in a future opt-in.
 - [ ] 3.4 Enforce default isolation: no auto-load of repo-local `AGENTS.md` unless explicitly configured in a future opt-in.
+- [ ] 3.5 Preserve existing audience-governed tool authorization on routed executions (no new skill-level runtime tool gate in MVP).
 
 ## 4. Fail-loud guardrails and deterministic errors
 
@@ -35,6 +38,8 @@
 - [ ] 5.5 Unit-test failure semantics (unknown target, internal-only target, malformed metadata) and assert no inline fallback.
 - [ ] 5.6 Unit-test routed failure messages include target/reason/remediation details.
 - [ ] 5.7 Regression-test scheduled slash payload behavior for routed skills.
+- [ ] 5.8 Test parity across activation entry points (slash, scheduled slash, and tool-driven activation).
+- [ ] 5.9 Test routed executions keep existing audience-governed tool authorization behavior.
 
 ## 6. Docs and system-skill updates
 
@@ -46,4 +51,4 @@
 
 - [ ] 7.1 Run targeted tests for slash command dispatch, skill parsing, and subagent execution changes.
 - [ ] 7.2 Run `dotnet slopwatch analyze` and resolve any new violations.
-- [ ] 7.3 Run `openspec verify --change "skill-subagent-overlays"` and confirm artifacts remain implementation-ready.
+- [ ] 7.3 Run `openspec validate "skill-subagent-overlays"` and confirm artifacts remain implementation-ready.

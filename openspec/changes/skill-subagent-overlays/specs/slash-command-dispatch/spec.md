@@ -8,6 +8,9 @@ The system SHALL intercept user messages starting with `/` in the session
 actor before LLM dispatch. For matched commands, execution path SHALL be
 deterministic:
 
+Slash-command dispatch SHALL use the same shared skill-activation routing
+resolver used by other first-party activation entry points.
+
 - If the matched skill has valid `metadata.subagent`, the system SHALL route to
   the named user-facing subagent execution path.
 - If the matched skill has no `metadata.subagent`, the system SHALL inject skill
