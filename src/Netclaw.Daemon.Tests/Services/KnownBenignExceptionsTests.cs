@@ -5,71 +5,61 @@ namespace Netclaw.Daemon.Tests.Services;
 
 public sealed class KnownBenignExceptionsTests
 {
+    private const string RealStackMarker =
+        "at SlackNet.ReconnectingWebSocket.Connect(Func`1 getWebSocketUrl, CancellationToken cancellationToken)";
+
     [Fact]
     public void IsSlackNetReconnectingWebSocketDisposeRace_Null_ReturnsFalse()
     {
         Assert.False(KnownBenignExceptions.IsSlackNetReconnectingWebSocketDisposeRace(null));
     }
 
-    [Fact]
-    public void IsSlackNetReconnectingWebSocketDisposeRace_UnrelatedExceptionType_ReturnsFalse()
+    [Theory]
+    [MemberData(nameof(PredicateCases))]
+    public void IsSlackNetReconnectingWebSocketDisposeRace_MatchesExpected(
+        Exception exception,
+        bool expected)
     {
-        var exception = new InvalidOperationException("boom");
-        Assert.False(KnownBenignExceptions.IsSlackNetReconnectingWebSocketDisposeRace(exception));
+        Assert.Equal(expected, KnownBenignExceptions.IsSlackNetReconnectingWebSocketDisposeRace(exception));
     }
 
-    [Fact]
-    public void IsSlackNetReconnectingWebSocketDisposeRace_OdeWithoutMarker_ReturnsFalse()
+    public static IEnumerable<object[]> PredicateCases()
     {
-        var exception = new FakeObjectDisposedException(
-            objectName: "CancellationTokenSource",
-            stackTrace: "at SomeOther.Library.Foo()\nat SomeOther.Library.Bar()");
+        yield return [new InvalidOperationException("unrelated"), false];
 
-        Assert.False(KnownBenignExceptions.IsSlackNetReconnectingWebSocketDisposeRace(exception));
-    }
+        yield return [
+            new FakeObjectDisposedException("cts", "at SomeOther.Library.Foo()"),
+            false];
 
-    [Fact]
-    public void IsSlackNetReconnectingWebSocketDisposeRace_OdeWithMarker_ReturnsTrue()
-    {
-        var exception = new FakeObjectDisposedException(
-            objectName: "CancellationTokenSource",
-            stackTrace:
-                "at System.Threading.CancellationTokenSource.get_Token()\n" +
-                "at SlackNet.ReconnectingWebSocket.Connect(Func`1 getWebSocketUrl, CancellationToken cancellationToken)\n" +
-                "at SlackNet.ReconnectingWebSocket.ReconnectOnClose(Func`1 getWebSocketUrl, CancellationToken cancellationToken)");
+        yield return [
+            new FakeObjectDisposedException("cts", stackTrace: null),
+            false];
 
-        Assert.True(KnownBenignExceptions.IsSlackNetReconnectingWebSocketDisposeRace(exception));
-    }
+        yield return [
+            new FakeObjectDisposedException("cts", RealStackMarker),
+            true];
 
-    [Fact]
-    public void IsSlackNetReconnectingWebSocketDisposeRace_AggregateWrappingMatchingOde_ReturnsTrue()
-    {
-        var inner = new FakeObjectDisposedException(
-            objectName: "CancellationTokenSource",
-            stackTrace: "at SlackNet.ReconnectingWebSocket.Connect(...)");
+        yield return [
+            new AggregateException(new FakeObjectDisposedException("cts", RealStackMarker)),
+            true];
 
-        var aggregate = new AggregateException(inner);
+        yield return [
+            new AggregateException(new InvalidOperationException("not slacknet")),
+            false];
 
-        Assert.True(KnownBenignExceptions.IsSlackNetReconnectingWebSocketDisposeRace(aggregate));
-    }
+        // Multiple inners, one matches — Flatten().InnerExceptions must find it.
+        yield return [
+            new AggregateException(
+                new InvalidOperationException("unrelated"),
+                new FakeObjectDisposedException("cts", RealStackMarker)),
+            true];
 
-    [Fact]
-    public void IsSlackNetReconnectingWebSocketDisposeRace_AggregateWrappingUnrelatedException_ReturnsFalse()
-    {
-        var inner = new InvalidOperationException("not slacknet");
-        var aggregate = new AggregateException(inner);
-
-        Assert.False(KnownBenignExceptions.IsSlackNetReconnectingWebSocketDisposeRace(aggregate));
-    }
-
-    [Fact]
-    public void IsSlackNetReconnectingWebSocketDisposeRace_OdeWithNullStackTrace_ReturnsFalse()
-    {
-        var exception = new FakeObjectDisposedException(
-            objectName: "CancellationTokenSource",
-            stackTrace: null);
-
-        Assert.False(KnownBenignExceptions.IsSlackNetReconnectingWebSocketDisposeRace(exception));
+        // Nested aggregate with the match buried two levels deep.
+        yield return [
+            new AggregateException(
+                new AggregateException(
+                    new FakeObjectDisposedException("cts", RealStackMarker))),
+            true];
     }
 
     private sealed class FakeObjectDisposedException : ObjectDisposedException
