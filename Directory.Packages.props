@@ -8,7 +8,7 @@
     <OpenTelemetryVersion>1.13.1</OpenTelemetryVersion>
     <SlackNetVersion>0.17.10</SlackNetVersion>
     <MicrosoftExtensionsAIVersion>10.4.1</MicrosoftExtensionsAIVersion>
-    <MicrosoftAspNetCoreVersion>10.0.5</MicrosoftAspNetCoreVersion>
+    <MicrosoftAspNetCoreVersion>10.0.6</MicrosoftAspNetCoreVersion>
   </PropertyGroup>
   <!-- App dependencies -->
   <ItemGroup>
