@@ -30,7 +30,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
     private PostResult? _lastFailedPost;
     private readonly List<PendingApprovalRequest> _pendingApprovalRequests = [];
 
-    private SessionPipelineHandle? _handle;
+    private readonly SessionPipelineHandle _handle;
     private bool _threadHistoryFetchAttempted;
     private SlackEventTs? _cursorTs;
     private static readonly object ReinitializeTimerKey = new();
@@ -53,6 +53,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
         _threadTs = threadTs;
         _dependencies = dependencies;
         _promptInjectionDetector = dependencies.PromptInjectionDetector ?? new NullPromptInjectionDetector();
+        _handle = new SessionPipelineHandle(dependencies.Pipeline, Context.GetLogger(), "slack-thread");
         _log = Context.GetLogger()
             .WithContext("Adapter", "slack")
             .WithContext("SessionId", _sessionId.Value)
@@ -83,7 +84,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
 
     protected override void PostStop()
     {
-        _handle?.DisposeAsync().AsTask().GetAwaiter().GetResult();
+        _handle.Dispose();
         base.PostStop();
     }
 
@@ -120,7 +121,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
         CommandAsync<ThreadOutput>(HandleOutputAsync);
         Command<OutputStreamTerminated>(msg =>
         {
-            if (_handle is null || msg.Generation != _handle.Generation)
+            if (msg.Generation != _handle.Generation)
                 return;
 
             var reason = msg.Cause is null
@@ -176,7 +177,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
             return;
         }
 
-        var writer = _handle?.InputQueue;
+        var writer = _handle.InputQueue;
         if (writer is null)
         {
             _log.Warning("Slack thread input queue is not initialized; rejecting Mode B reminder");
@@ -292,7 +293,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
                 return;
             }
 
-            var writer = _handle?.InputQueue;
+            var writer = _handle.InputQueue;
             if (writer is null)
             {
                 _log.Warning("Slack thread input queue is not initialized; dropping inbound message");
@@ -698,8 +699,6 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
 
     private async Task EnsureInitializedAsync()
     {
-        _handle ??= new SessionPipelineHandle(_dependencies.Pipeline, _log, "slack-thread");
-
         if (_handle.IsInitialized)
             return;
 
@@ -1002,17 +1001,8 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
 
     private async Task ReinitializePipelineAsync(string reason)
     {
-        if (_handle is null)
-            return;
-
-        var self = Self;
         await _handle.ReinitializeAsync(
             reason,
-            Context,
-            _sessionId,
-            BuildOptions(),
-            output => self.Tell(new ThreadOutput(output)),
-            (gen, cause) => self.Tell(new OutputStreamTerminated(gen, cause)),
             () => Timers.StartSingleTimer(
                 ReinitializeTimerKey,
                 new ReinitializePipeline("retry after failed reinit"),

@@ -33,7 +33,7 @@ internal sealed class ReminderExecutionActor : ReceiveActor
     private IReminderClient? _reminderClient;
 
     private readonly SessionPipelineHandle _handle;
-    private readonly ExecutionOutputAccumulator _accumulator = new();
+    private readonly ExecutionOutputAccumulator _accumulator;
     private bool _completed;
     private string? _sessionIdValue;
     private HistoryRecord? _pendingHistory;
@@ -65,6 +65,15 @@ internal sealed class ReminderExecutionActor : ReceiveActor
         _dispatchedAt = timeProvider.GetUtcNow();
         _log = Context.GetLogger();
         _handle = new SessionPipelineHandle(pipeline, _log, "reminder-exec");
+        _accumulator = new ExecutionOutputAccumulator((tool, callId, succeeded) =>
+        {
+            if (succeeded)
+                _log.Info("ReminderExecution NotifySucceeded: execution_id={0} reminder_id={1} tool={2} call_id={3}",
+                    _executionId, _definition.Id, tool, callId);
+            else
+                _log.Warning("ReminderExecution NotifyFailed: execution_id={0} reminder_id={1} tool={2} call_id={3}",
+                    _executionId, _definition.Id, tool, callId);
+        });
 
         Context.SetReceiveTimeout(TimeSpan.FromSeconds(ExecutionTimeoutSeconds));
 
@@ -358,7 +367,7 @@ internal sealed class ReminderExecutionActor : ReceiveActor
 
         try
         {
-            _handle.DisposeAsync().AsTask().GetAwaiter().GetResult();
+            _handle.Dispose();
         }
         catch (Exception ex)
         {

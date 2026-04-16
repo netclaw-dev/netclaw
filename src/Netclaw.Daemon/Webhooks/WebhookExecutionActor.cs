@@ -147,7 +147,7 @@ internal sealed class WebhookExecutionActor : ReceiveActor
     {
         try
         {
-            _handle.DisposeAsync().AsTask().GetAwaiter().GetResult();
+            _handle.Dispose();
         }
         catch (Exception ex)
         {

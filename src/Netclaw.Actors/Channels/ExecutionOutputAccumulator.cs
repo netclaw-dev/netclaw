@@ -22,17 +22,31 @@ public enum OutputAction
 
 /// <summary>
 /// Tracks output accumulation and notification result state for fire-and-forget
-/// execution actors (reminders, webhooks). Pure C# — no Akka dependency.
+/// execution actors (reminders, webhooks). Pure C# �� no Akka dependency.
 /// </summary>
 public sealed class ExecutionOutputAccumulator
 {
     private const string NotificationToolName = "send_slack_message";
 
+    private readonly Action<string, string, bool>? _onNotifyTracked;
     private readonly StringBuilder _buffer = new();
     private bool _sawTextDelta;
     private bool _notifyAttempted;
     private bool _notifyFailed;
     private string? _notifyFailureDetail;
+
+    /// <summary>
+    /// Creates an accumulator with an optional notification tracking callback.
+    /// </summary>
+    /// <param name="onNotifyTracked">
+    /// Optional callback invoked when a <c>send_slack_message</c> tool result is processed.
+    /// Parameters: (toolName, callId, succeeded). Allows callers to add their own
+    /// diagnostic logging without coupling the accumulator to a logging framework.
+    /// </param>
+    public ExecutionOutputAccumulator(Action<string, string, bool>? onNotifyTracked = null)
+    {
+        _onNotifyTracked = onNotifyTracked;
+    }
 
     /// <summary>
     /// The error message from the most recent <see cref="ErrorOutput"/>,
@@ -142,10 +156,12 @@ public sealed class ExecutionOutputAccumulator
         {
             _notifyFailed = true;
             _notifyFailureDetail = result;
+            _onNotifyTracked?.Invoke(toolResult.ToolName, toolResult.CallId, false);
             return;
         }
 
         _notifyFailed = false;
         _notifyFailureDetail = null;
+        _onNotifyTracked?.Invoke(toolResult.ToolName, toolResult.CallId, true);
     }
 }

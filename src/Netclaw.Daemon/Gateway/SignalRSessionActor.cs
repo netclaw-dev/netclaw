@@ -169,14 +169,8 @@ internal sealed class SignalRSessionActor : ReceiveActor, IWithUnboundedStash, I
 
         ReceiveAsync<ReinitializePipeline>(async msg =>
         {
-            var self = Self;
             await _handle.ReinitializeAsync(
                 msg.Reason,
-                Context,
-                _sessionId,
-                BuildOptions(),
-                output => self.Tell(new OutputReceived(output)),
-                (gen, cause) => self.Tell(new OutputStreamTerminated(gen, cause)),
                 () => Timers.StartSingleTimer(
                     ReinitializeTimerKey,
                     new ReinitializePipeline("retry after failed reinit"),
@@ -258,7 +252,7 @@ internal sealed class SignalRSessionActor : ReceiveActor, IWithUnboundedStash, I
 
     protected override void PostStop()
     {
-        _handle.DisposeAsync().AsTask().GetAwaiter().GetResult();
+        _handle.Dispose();
         base.PostStop();
     }
 

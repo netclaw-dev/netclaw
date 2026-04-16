@@ -17,7 +17,7 @@ namespace Netclaw.Actors.Channels;
 ///   <item>Short-lived (fire-and-forget) for execution actors (Reminders, Webhooks)</item>
 /// </list>
 /// </summary>
-public sealed class SessionPipelineHandle : IAsyncDisposable
+public sealed class SessionPipelineHandle
 {
     private readonly ISessionPipeline _pipeline;
     private readonly ILoggingAdapter _log;
@@ -28,6 +28,13 @@ public sealed class SessionPipelineHandle : IAsyncDisposable
     private ChannelWriter<ChannelInput>? _inputQueue;
     private int _pipelineGeneration;
     private bool _isReinitializing;
+
+    // Stored from first InitializeWithChannelAsync for reinit
+    private IActorContext? _storedContext;
+    private SessionId? _storedSessionId;
+    private SessionPipelineOptions? _storedOptions;
+    private Action<SessionOutput>? _storedOnOutput;
+    private Action<int, Exception?>? _storedOnStreamTerminated;
 
     public SessionPipelineHandle(
         ISessionPipeline pipeline,
@@ -51,16 +58,8 @@ public sealed class SessionPipelineHandle : IAsyncDisposable
 
     /// <summary>
     /// Idempotent pipeline creation for long-lived actors that use <see cref="Source.Channel{T}(int, bool)"/>
-    /// for ongoing input. Returns the <see cref="ChannelWriter{T}"/> for the caller to write input.
-    /// Wires output stream termination detection via the <paramref name="onStreamTerminated"/> callback.
+    /// for ongoing input. Stores all parameters for use by <see cref="ReinitializeAsync"/>.
     /// </summary>
-    /// <param name="context">The owning actor's context (used to scope the materializer).</param>
-    /// <param name="sessionId">Session identity.</param>
-    /// <param name="options">Channel-specific pipeline options.</param>
-    /// <param name="onOutput">Callback invoked for each <see cref="SessionOutput"/> (typically <c>output => self.Tell(new MyWrapper(output))</c>).</param>
-    /// <param name="onStreamTerminated">Callback with <c>(generation, cause)</c> when the output stream terminates.</param>
-    /// <param name="cancellationToken">Cancellation token for pipeline creation.</param>
-    /// <returns>The <see cref="ChannelWriter{T}"/> for writing input.</returns>
     public async Task<ChannelWriter<ChannelInput>> InitializeWithChannelAsync(
         IActorContext context,
         SessionId sessionId,
@@ -71,6 +70,13 @@ public sealed class SessionPipelineHandle : IAsyncDisposable
     {
         if (_session is not null)
             return _inputQueue!;
+
+        // Store for reinit
+        _storedContext = context;
+        _storedSessionId = sessionId;
+        _storedOptions = options;
+        _storedOnOutput = onOutput;
+        _storedOnStreamTerminated = onStreamTerminated;
 
         _log.Info("Initializing {0} session pipeline", _materializerNamePrefix);
 
@@ -113,12 +119,6 @@ public sealed class SessionPipelineHandle : IAsyncDisposable
     /// <see cref="Source.Queue{T}(int,OverflowStrategy)"/>, offer input once, and complete.
     /// Does not wire stream-terminated detection (the actor stops on <c>TurnCompleted</c>/<c>ErrorOutput</c>).
     /// </summary>
-    /// <param name="context">The owning actor's context (used to scope the materializer).</param>
-    /// <param name="sessionId">Session identity.</param>
-    /// <param name="options">Channel-specific pipeline options.</param>
-    /// <param name="onOutput">Callback invoked for each <see cref="SessionOutput"/>.</param>
-    /// <param name="cancellationToken">Cancellation token for pipeline creation.</param>
-    /// <returns>The <see cref="ISourceQueueWithComplete{T}"/> for offering input and completing.</returns>
     public async Task<ISourceQueueWithComplete<ChannelInput>> InitializeWithQueueAsync(
         IActorContext context,
         SessionId sessionId,
@@ -150,21 +150,22 @@ public sealed class SessionPipelineHandle : IAsyncDisposable
     }
 
     /// <summary>
-    /// Tears down the current pipeline and re-initializes. Guards against concurrent
-    /// reinitialization. On failure, invokes <paramref name="onReinitFailed"/>.
-    /// Only used by long-lived binding actors.
+    /// Tears down the current pipeline and re-initializes using the parameters
+    /// stored from the original <see cref="InitializeWithChannelAsync"/> call.
+    /// Guards against concurrent reinitialization. On failure, invokes
+    /// <paramref name="onReinitFailed"/>.
     /// </summary>
-    public async Task ReinitializeAsync(
-        string reason,
-        IActorContext context,
-        SessionId sessionId,
-        SessionPipelineOptions options,
-        Action<SessionOutput> onOutput,
-        Action<int, Exception?> onStreamTerminated,
-        Action onReinitFailed)
+    public async Task ReinitializeAsync(string reason, Action onReinitFailed)
     {
         if (_isReinitializing)
             return;
+
+        if (_storedContext is null || _storedSessionId is null || _storedOptions is null
+            || _storedOnOutput is null || _storedOnStreamTerminated is null)
+        {
+            _log.Warning("Cannot reinitialize {0} pipeline: not yet initialized via channel mode", _materializerNamePrefix);
+            return;
+        }
 
         _isReinitializing = true;
         try
@@ -183,7 +184,9 @@ public sealed class SessionPipelineHandle : IAsyncDisposable
             _materializer?.Dispose();
             _materializer = null;
 
-            await InitializeWithChannelAsync(context, sessionId, options, onOutput, onStreamTerminated);
+            await InitializeWithChannelAsync(
+                _storedContext, _storedSessionId.Value, _storedOptions,
+                _storedOnOutput, _storedOnStreamTerminated);
         }
         catch (Exception ex)
         {
@@ -200,7 +203,7 @@ public sealed class SessionPipelineHandle : IAsyncDisposable
     /// Synchronous cleanup for actor <c>PostStop</c>. Completes input queue,
     /// disposes session and materializer.
     /// </summary>
-    public ValueTask DisposeAsync()
+    public void Dispose()
     {
         _inputQueue?.TryComplete();
 
@@ -214,7 +217,5 @@ public sealed class SessionPipelineHandle : IAsyncDisposable
         }
 
         _materializer?.Dispose();
-
-        return ValueTask.CompletedTask;
     }
 }
