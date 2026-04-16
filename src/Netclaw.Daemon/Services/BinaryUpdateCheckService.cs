@@ -91,20 +91,17 @@ internal sealed class BinaryUpdateCheckService : BackgroundService
 
     private void EmitUpdateAlert(UpdateCheckResult result)
     {
-        _notificationSink?.Emit(new OperationalAlert
-        {
-            AlertId = Guid.NewGuid().ToString("N"),
-            Type = "update.available",
-            Category = AlertType.UpdateAvailable,
-            Summary = $"Netclaw update available: {result.CurrentVersion} → {result.LatestVersion}. Run 'netclaw update' to upgrade.",
-            Timestamp = _timeProvider.GetUtcNow(),
-            Severity = "info",
-            Source = result.LatestVersion,
-            Context = new Dictionary<string, string>
+        _notificationSink?.Emit(OperationalAlert.Create(
+            _timeProvider,
+            type: "update.available",
+            category: AlertType.UpdateAvailable,
+            summary: $"Netclaw update available: {result.CurrentVersion} → {result.LatestVersion}. Run 'netclaw update' to upgrade.",
+            severity: "info",
+            source: result.LatestVersion,
+            context: new Dictionary<string, string>
             {
                 ["currentVersion"] = result.CurrentVersion,
                 ["latestVersion"] = result.LatestVersion,
-            },
-        });
+            }));
     }
 }

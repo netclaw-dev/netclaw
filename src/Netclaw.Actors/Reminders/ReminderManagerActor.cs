@@ -526,22 +526,19 @@ public sealed partial class ReminderManagerActor : ReceiveActor
                 FailurePauseThreshold,
                 completed.ErrorMessage);
 
-            _notificationSink.Emit(new OperationalAlert
-            {
-                AlertId = Guid.NewGuid().ToString("N")[..12],
-                Type = "reminder.execution.failed",
-                Category = AlertType.ReminderExecutionFailed,
-                Summary = $"Reminder '{title}' execution failed: {completed.ErrorMessage}",
-                Timestamp = _timeProvider.GetUtcNow(),
-                Severity = "warning",
-                Source = completed.Id.Value,
-                Context = new Dictionary<string, string>
+            _notificationSink.Emit(OperationalAlert.Create(
+                _timeProvider,
+                type: "reminder.execution.failed",
+                category: AlertType.ReminderExecutionFailed,
+                summary: $"Reminder '{title}' execution failed: {completed.ErrorMessage}",
+                severity: "warning",
+                source: completed.Id.Value,
+                context: new Dictionary<string, string>
                 {
                     ["reminderId"] = completed.Id.Value,
                     ["title"] = title,
                     ["error"] = completed.ErrorMessage ?? "unknown",
-                }
-            });
+                }));
 
             if (count >= FailurePauseThreshold)
             {
@@ -549,22 +546,19 @@ public sealed partial class ReminderManagerActor : ReceiveActor
                     completed.Id.Value,
                     FailurePauseThreshold);
 
-                _notificationSink.Emit(new OperationalAlert
-                {
-                    AlertId = Guid.NewGuid().ToString("N")[..12],
-                    Type = "reminder.auto_disabled",
-                    Category = AlertType.ReminderAutoDisabled,
-                    Summary = $"Reminder '{title}' disabled after {count} consecutive failures",
-                    Timestamp = _timeProvider.GetUtcNow(),
-                    Severity = "critical",
-                    Source = completed.Id.Value,
-                    Context = new Dictionary<string, string>
+                _notificationSink.Emit(OperationalAlert.Create(
+                    _timeProvider,
+                    type: "reminder.auto_disabled",
+                    category: AlertType.ReminderAutoDisabled,
+                    summary: $"Reminder '{title}' disabled after {count} consecutive failures",
+                    severity: "critical",
+                    source: completed.Id.Value,
+                    context: new Dictionary<string, string>
                     {
                         ["reminderId"] = completed.Id.Value,
                         ["title"] = title,
                         ["failureCount"] = count.ToString(),
-                    }
-                });
+                    }));
 
                 await DisableReminderInternalAsync(completed.Id);
                 _failureCounts.Remove(completed.Id);

@@ -346,21 +346,18 @@ internal sealed class McpOAuthService
         {
             _logger.LogWarning("Access token expired for MCP server '{Name}' with no refresh token", serverName.Value);
 
-            _notificationSink.Emit(new OperationalAlert
-            {
-                AlertId = Guid.NewGuid().ToString("N")[..12],
-                Type = "mcp.auth.expired",
-                Category = AlertType.McpAuthExpired,
-                Summary = $"MCP server '{serverName.Value}' access token expired with no refresh token. Run: netclaw mcp auth {serverName.Value}",
-                Timestamp = _timeProvider.GetUtcNow(),
-                Severity = "warning",
-                Source = serverName.Value,
-                Context = new Dictionary<string, string>
+            _notificationSink.Emit(OperationalAlert.Create(
+                _timeProvider,
+                type: "mcp.auth.expired",
+                category: AlertType.McpAuthExpired,
+                summary: $"MCP server '{serverName.Value}' access token expired with no refresh token. Run: netclaw mcp auth {serverName.Value}",
+                severity: "warning",
+                source: serverName.Value,
+                context: new Dictionary<string, string>
                 {
                     ["serverName"] = serverName.Value,
                     ["reason"] = "no_refresh_token",
-                }
-            });
+                }));
 
             return null;
         }
@@ -404,21 +401,18 @@ internal sealed class McpOAuthService
                 _tokens.TryRemove(serverName, out _);
                 PersistTokens();
 
-                _notificationSink.Emit(new OperationalAlert
-                {
-                    AlertId = Guid.NewGuid().ToString("N")[..12],
-                    Type = "mcp.auth.expired",
-                    Category = AlertType.McpAuthExpired,
-                    Summary = $"MCP server '{serverName.Value}' refresh token rejected (invalid_grant). Run: netclaw mcp auth {serverName.Value}",
-                    Timestamp = _timeProvider.GetUtcNow(),
-                    Severity = "warning",
-                    Source = serverName.Value,
-                    Context = new Dictionary<string, string>
+                _notificationSink.Emit(OperationalAlert.Create(
+                    _timeProvider,
+                    type: "mcp.auth.expired",
+                    category: AlertType.McpAuthExpired,
+                    summary: $"MCP server '{serverName.Value}' refresh token rejected (invalid_grant). Run: netclaw mcp auth {serverName.Value}",
+                    severity: "warning",
+                    source: serverName.Value,
+                    context: new Dictionary<string, string>
                     {
                         ["serverName"] = serverName.Value,
                         ["reason"] = "invalid_grant",
-                    }
-                });
+                    }));
 
                 return null;
             }

@@ -2921,7 +2921,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         _activeMessageId = sourceMessageId;
         _activeTurnId = source?.TurnId
             ?? sourceMessageId
-            ?? Guid.NewGuid().ToString("N")[..8];
+            ?? IdGen.ShortId();
         _activeChannelType = source?.ChannelType;
 
         CrashContextSnapshot.Update(

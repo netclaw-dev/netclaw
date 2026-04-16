@@ -11,7 +11,7 @@ public sealed class TelemetryDoctorCheck(NetclawPaths paths) : IDoctorCheck
         if (readError is not null)
             return Task.FromResult(DoctorCheckResult.Pass("Telemetry", "Skipped (base config is missing or invalid)."));
 
-        if (root!["Telemetry"] is not JsonObject telemetry || !ReadBool(telemetry, "Enabled"))
+        if (root!["Telemetry"] is not JsonObject telemetry || !DoctorJsonConfigReader.ReadBool(telemetry, "Enabled"))
             return Task.FromResult(DoctorCheckResult.Pass("Telemetry", "Telemetry disabled or not configured."));
 
         var endpoint = telemetry["Otlp"]?["Endpoint"]?.GetValue<string>();
@@ -33,7 +33,4 @@ public sealed class TelemetryDoctorCheck(NetclawPaths paths) : IDoctorCheck
 
         return Task.FromResult(DoctorCheckResult.Pass("Telemetry", "Telemetry endpoint is valid."));
     }
-
-    private static bool ReadBool(JsonObject obj, string property)
-        => obj[property] is JsonValue v && v.TryGetValue<bool>(out var b) && b;
 }

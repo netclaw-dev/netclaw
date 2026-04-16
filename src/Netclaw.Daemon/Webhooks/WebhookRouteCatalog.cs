@@ -236,22 +236,19 @@ public sealed class WebhookRouteCatalog
         if (!emitAlert)
             return;
 
-        _notificationSink.Emit(new OperationalAlert
-        {
-            AlertId = Guid.NewGuid().ToString("N")[..12],
-            Type = "webhook.route.invalid",
-            Category = AlertType.WebhookRouteInvalid,
-            Summary = $"Webhook route '{routeName}' is unavailable: {reason}",
-            Timestamp = _timeProvider.GetUtcNow(),
-            Severity = "warning",
-            Source = routeName,
-            Context = new Dictionary<string, string>
+        _notificationSink.Emit(OperationalAlert.Create(
+            _timeProvider,
+            type: "webhook.route.invalid",
+            category: AlertType.WebhookRouteInvalid,
+            summary: $"Webhook route '{routeName}' is unavailable: {reason}",
+            severity: "warning",
+            source: routeName,
+            context: new Dictionary<string, string>
             {
                 ["route"] = routeName,
                 ["file"] = filePath,
                 ["reason"] = reason,
-            }
-        });
+            }));
     }
 
     private string GetRouteFilePath(string routeName)

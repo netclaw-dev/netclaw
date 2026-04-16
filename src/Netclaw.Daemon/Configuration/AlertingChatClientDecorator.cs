@@ -74,16 +74,13 @@ public sealed class AlertingChatClientDecorator : IChatClient
 
     private void EmitUnreachableAlert(Exception ex)
     {
-        _notificationSink.Emit(new OperationalAlert
-        {
-            AlertId = Guid.NewGuid().ToString("N")[..12],
-            Type = "provider.unreachable",
-            Category = AlertType.ProviderUnreachable,
-            Summary = "LLM provider unreachable — no fallback configured",
-            Timestamp = _timeProvider.GetUtcNow(),
-            Severity = "critical",
-            Context = new Dictionary<string, string> { ["error"] = ex.Message }
-        });
+        _notificationSink.Emit(OperationalAlert.Create(
+            _timeProvider,
+            type: "provider.unreachable",
+            category: AlertType.ProviderUnreachable,
+            summary: "LLM provider unreachable — no fallback configured",
+            severity: "critical",
+            context: new Dictionary<string, string> { ["error"] = ex.Message }));
     }
 
     public object? GetService(Type serviceType, object? serviceKey = null)

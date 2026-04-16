@@ -292,7 +292,7 @@ public sealed class ModelManagerViewModel : ReactiveViewModel
         _probeCts = new CancellationTokenSource();
         var ct = _probeCts.Token;
         var providerType = provider.Entry.Type;
-        var probeId = Guid.NewGuid().ToString("N")[..8];
+        var probeId = IdGen.ShortId();
         var stopwatch = Stopwatch.StartNew();
         Exception? probeException = null;
 

@@ -719,7 +719,7 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
         _probeCts = new CancellationTokenSource();
         var ct = _probeCts.Token;
         var providerType = NewProviderType ?? "unknown";
-        var probeId = Guid.NewGuid().ToString("N")[..8];
+        var probeId = IdGen.ShortId();
         var stopwatch = Stopwatch.StartNew();
         Exception? probeException = null;
 
@@ -856,7 +856,7 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
                 return candidate;
         }
 
-        return $"my-{type}-{Guid.NewGuid().ToString("N")[..6]}";
+        return $"my-{type}-{IdGen.Suffix()}";
     }
 
     private void ClearAddState()

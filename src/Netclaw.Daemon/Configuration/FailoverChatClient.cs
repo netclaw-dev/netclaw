@@ -166,30 +166,24 @@ public sealed class FailoverChatClient : IChatClient
 
     private void EmitFailoverAlert(Exception ex)
     {
-        _notificationSink.Emit(new OperationalAlert
-        {
-            AlertId = Guid.NewGuid().ToString("N")[..12],
-            Type = "provider.failover",
-            Category = AlertType.ProviderFailover,
-            Summary = "Primary LLM provider failed, failing over to fallback",
-            Timestamp = _timeProvider.GetUtcNow(),
-            Severity = "warning",
-            Context = new Dictionary<string, string> { ["error"] = ex.Message }
-        });
+        _notificationSink.Emit(OperationalAlert.Create(
+            _timeProvider,
+            type: "provider.failover",
+            category: AlertType.ProviderFailover,
+            summary: "Primary LLM provider failed, failing over to fallback",
+            severity: "warning",
+            context: new Dictionary<string, string> { ["error"] = ex.Message }));
     }
 
     private void EmitUnreachableAlert(Exception ex)
     {
-        _notificationSink.Emit(new OperationalAlert
-        {
-            AlertId = Guid.NewGuid().ToString("N")[..12],
-            Type = "provider.unreachable",
-            Category = AlertType.ProviderUnreachable,
-            Summary = "All LLM providers failed — primary and fallback both unreachable",
-            Timestamp = _timeProvider.GetUtcNow(),
-            Severity = "critical",
-            Context = new Dictionary<string, string> { ["error"] = ex.Message }
-        });
+        _notificationSink.Emit(OperationalAlert.Create(
+            _timeProvider,
+            type: "provider.unreachable",
+            category: AlertType.ProviderUnreachable,
+            summary: "All LLM providers failed — primary and fallback both unreachable",
+            severity: "critical",
+            context: new Dictionary<string, string> { ["error"] = ex.Message }));
     }
 
     public object? GetService(Type serviceType, object? serviceKey = null)
