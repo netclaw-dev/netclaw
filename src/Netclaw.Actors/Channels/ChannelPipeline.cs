@@ -302,7 +302,7 @@ public sealed class SessionPipeline : ISessionPipeline
         NetclawPaths paths)
     {
         var turnId = string.IsNullOrWhiteSpace(input.MessageId)
-            ? Guid.NewGuid().ToString("N")[..8]
+            ? IdGen.ShortId()
             : input.MessageId!;
 
         var textParts = input.Contents.OfType<TextContent>().Select(t => t.Text);

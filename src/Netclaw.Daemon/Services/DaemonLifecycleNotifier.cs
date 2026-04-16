@@ -33,20 +33,17 @@ public sealed class DaemonLifecycleNotifier
         var pid = Environment.ProcessId;
         _logger.LogInformation("Netclaw daemon started (PID {Pid})", pid);
 
-        _sink.Emit(new OperationalAlert
-        {
-            AlertId = Guid.NewGuid().ToString("N")[..12],
-            Type = "daemon.started",
-            Category = AlertType.DaemonStarted,
-            Severity = "info",
-            Summary = "Netclaw daemon started",
-            Timestamp = _timeProvider.GetUtcNow(),
-            Source = pid.ToString(CultureInfo.InvariantCulture),
-            Context = new Dictionary<string, string>
+        _sink.Emit(OperationalAlert.Create(
+            _timeProvider,
+            type: "daemon.started",
+            category: AlertType.DaemonStarted,
+            summary: "Netclaw daemon started",
+            severity: "info",
+            source: pid.ToString(CultureInfo.InvariantCulture),
+            context: new Dictionary<string, string>
             {
                 ["pid"] = pid.ToString(CultureInfo.InvariantCulture),
-            },
-        });
+            }));
     }
 
     /// <summary>
@@ -72,17 +69,14 @@ public sealed class DaemonLifecycleNotifier
                 context[pair.Key] = pair.Value;
         }
 
-        _sink.Emit(new OperationalAlert
-        {
-            AlertId = Guid.NewGuid().ToString("N")[..12],
-            Type = "daemon.stopping",
-            Category = AlertType.DaemonStopping,
-            Severity = "info",
-            Summary = $"Netclaw daemon stopping: {reason}",
-            Timestamp = _timeProvider.GetUtcNow(),
-            Source = pid.ToString(CultureInfo.InvariantCulture),
-            Context = context,
-        });
+        _sink.Emit(OperationalAlert.Create(
+            _timeProvider,
+            type: "daemon.stopping",
+            category: AlertType.DaemonStopping,
+            summary: $"Netclaw daemon stopping: {reason}",
+            severity: "info",
+            source: pid.ToString(CultureInfo.InvariantCulture),
+            context: context));
     }
 
     /// <summary>
@@ -127,17 +121,14 @@ public sealed class DaemonLifecycleNotifier
 
         try
         {
-            _sink.Emit(new OperationalAlert
-            {
-                AlertId = Guid.NewGuid().ToString("N")[..12],
-                Type = "daemon.crashing",
-                Category = AlertType.DaemonCrashed,
-                Severity = "critical",
-                Summary = $"Netclaw daemon crashing: {reason} ({exceptionType})",
-                Timestamp = _timeProvider.GetUtcNow(),
-                Source = pid.ToString(CultureInfo.InvariantCulture),
-                Context = context,
-            });
+            _sink.Emit(OperationalAlert.Create(
+                _timeProvider,
+                type: "daemon.crashing",
+                category: AlertType.DaemonCrashed,
+                summary: $"Netclaw daemon crashing: {reason} ({exceptionType})",
+                severity: "critical",
+                source: pid.ToString(CultureInfo.InvariantCulture),
+                context: context));
         }
         catch (Exception ex)
         {

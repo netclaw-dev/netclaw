@@ -172,17 +172,14 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
         }
         catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
         {
-            _notificationSink.Emit(new OperationalAlert
-            {
-                AlertId = Guid.NewGuid().ToString("N")[..12],
-                Type = "channel.disconnected",
-                Category = AlertType.ChannelDisconnected,
-                Summary = $"Slack channel failed to connect: {ex.Message}",
-                Timestamp = _timeProvider.GetUtcNow(),
-                Severity = "warning",
-                Source = "slack",
-                Context = new Dictionary<string, string> { ["channel"] = "slack" }
-            });
+            _notificationSink.Emit(OperationalAlert.Create(
+                _timeProvider,
+                "channel.disconnected",
+                AlertType.ChannelDisconnected,
+                $"Slack channel failed to connect: {ex.Message}",
+                "warning",
+                source: "slack",
+                context: new Dictionary<string, string> { ["channel"] = "slack" }));
             throw;
         }
     }

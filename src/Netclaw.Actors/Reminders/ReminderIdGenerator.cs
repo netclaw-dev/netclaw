@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using Netclaw.Configuration;
 
 namespace Netclaw.Actors.Reminders;
 
@@ -29,7 +30,7 @@ public static partial class ReminderIdGenerator
     public static ReminderId Generate(string title)
     {
         var slug = Normalize(title);
-        var suffix = Guid.NewGuid().ToString("N")[..6];
+        var suffix = IdGen.Suffix();
         return new ReminderId($"{slug}-{suffix}");
     }
 }

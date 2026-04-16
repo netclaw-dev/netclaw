@@ -16,7 +16,7 @@ public sealed class SlackAuthDoctorCheck(NetclawPaths paths, ISlackProbe slackPr
         if (readError is not null)
             return DoctorCheckResult.Pass(CheckName, "Skipped (base config is missing or invalid).");
 
-        if (root!["Slack"] is not JsonObject slack || !ReadBool(slack, "Enabled"))
+        if (root!["Slack"] is not JsonObject slack || !DoctorJsonConfigReader.ReadBool(slack, "Enabled"))
             return DoctorCheckResult.Pass(CheckName, "Slack is disabled.");
 
         // Read bot token from secrets.json
@@ -74,6 +74,4 @@ public sealed class SlackAuthDoctorCheck(NetclawPaths paths, ISlackProbe slackPr
         }
     }
 
-    private static bool ReadBool(JsonObject obj, string property)
-        => obj[property] is JsonValue v && v.TryGetValue<bool>(out var b) && b;
 }

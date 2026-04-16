@@ -40,7 +40,7 @@ public sealed class DoctorFixService(NetclawPaths paths)
             appliedFixes.Add("configVersion");
         }
 
-        if (obj["Slack"] is JsonObject slack && ReadBool(slack, "Enabled"))
+        if (obj["Slack"] is JsonObject slack && DoctorJsonConfigReader.ReadBool(slack, "Enabled"))
         {
             var hasAllowedChannels = slack["AllowedChannelIds"] is JsonArray { Count: > 0 };
             var hasDefaultChannel = !string.IsNullOrWhiteSpace(slack["DefaultChannelId"]?.GetValue<string>())
@@ -53,7 +53,7 @@ public sealed class DoctorFixService(NetclawPaths paths)
             }
         }
 
-        if (obj["Telemetry"] is JsonObject telemetry && ReadBool(telemetry, "Enabled"))
+        if (obj["Telemetry"] is JsonObject telemetry && DoctorJsonConfigReader.ReadBool(telemetry, "Enabled"))
         {
             telemetry["Otlp"] ??= new JsonObject();
             if (telemetry["Otlp"] is JsonObject otlp
@@ -150,8 +150,6 @@ public sealed class DoctorFixService(NetclawPaths paths)
             await File.WriteAllTextAsync(fix.FilePath, fix.UpdatedText, cancellationToken);
     }
 
-    private static bool ReadBool(JsonObject obj, string property)
-        => obj[property] is JsonValue v && v.TryGetValue<bool>(out var b) && b;
 }
 
 public sealed record DoctorFixPlan(IReadOnlyList<DoctorFileFix> Fixes)

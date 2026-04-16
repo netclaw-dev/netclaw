@@ -1,4 +1,3 @@
-using System.Globalization;
 using Netclaw.Configuration;
 
 namespace Netclaw.Cli.Doctor;
@@ -23,11 +22,11 @@ public sealed class DaemonCrashDoctorCheck(
         }
 
         var latest = recentCrashes[0];
-        var occurredAt = TryParseCrashTimestamp(latest.Name)
-            ?.ToString("u", CultureInfo.InvariantCulture)
-            ?? latest.LastWriteTimeUtc.ToString("u", CultureInfo.InvariantCulture);
+        var occurredAt = CrashLogHelper.TryParseCrashTimestamp(latest.Name)
+            ?.ToString("u", System.Globalization.CultureInfo.InvariantCulture)
+            ?? latest.LastWriteTimeUtc.ToString("u", System.Globalization.CultureInfo.InvariantCulture);
 
-        var restartedSinceLatestCrash = IsCrashLogStale(latest, paths.PidFilePath);
+        var restartedSinceLatestCrash = CrashLogHelper.IsCrashLogStale(latest, paths.PidFilePath);
         var restartNote = restartedSinceLatestCrash
             ? "daemon appears to have restarted since this crash"
             : "daemon has not recorded a newer PID timestamp since this crash";
@@ -67,33 +66,4 @@ public sealed class DaemonCrashDoctorCheck(
         }
     }
 
-    private static bool IsCrashLogStale(FileInfo crashLog, string pidFilePath)
-    {
-        var pidFile = new FileInfo(pidFilePath);
-        return pidFile.Exists && pidFile.LastWriteTimeUtc > crashLog.LastWriteTimeUtc;
-    }
-
-    private static DateTimeOffset? TryParseCrashTimestamp(string fileName)
-    {
-        // crash-YYYYMMDD-HHMMSS.log (+ optional suffixes)
-        var stem = Path.GetFileNameWithoutExtension(fileName);
-        const string prefix = "crash-";
-        if (!stem.StartsWith(prefix, StringComparison.Ordinal))
-            return null;
-
-        var payload = stem[prefix.Length..];
-        if (payload.Length < 15)
-            return null;
-
-        var timestampPart = payload[..15];
-        if (!DateTimeOffset.TryParseExact(
-                timestampPart,
-                "yyyyMMdd-HHmmss",
-                CultureInfo.InvariantCulture,
-                DateTimeStyles.AssumeUniversal,
-                out var parsed))
-            return null;
-
-        return parsed.ToUniversalTime();
-    }
 }

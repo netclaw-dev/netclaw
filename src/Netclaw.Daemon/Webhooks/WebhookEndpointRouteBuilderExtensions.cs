@@ -127,23 +127,20 @@ public static class WebhookEndpointRouteBuilderExtensions
                 "Webhook accepted route={Route} reason={Reason} remote_ip={RemoteIp} delivery_id={DeliveryId} event_type={EventType}",
                 registeredRoute.Name, "accepted", remoteIp, verification.DeliveryId, verification.EventType);
 
-            notificationSink.Emit(new OperationalAlert
-            {
-                AlertId = Guid.NewGuid().ToString("N")[..12],
-                Type = "webhook.received",
-                Category = AlertType.WebhookReceived,
-                Summary = $"Webhook '{registeredRoute.Name}' received event '{verification.EventType ?? "unknown"}'",
-                Timestamp = now,
-                Severity = "info",
-                Source = registeredRoute.Name,
-                Context = new Dictionary<string, string>
+            notificationSink.Emit(OperationalAlert.Create(
+                timeProvider,
+                "webhook.received",
+                AlertType.WebhookReceived,
+                $"Webhook '{registeredRoute.Name}' received event '{verification.EventType ?? "unknown"}'",
+                "info",
+                source: registeredRoute.Name,
+                context: new Dictionary<string, string>
                 {
                     ["route"] = registeredRoute.Name,
                     ["event"] = verification.EventType ?? "unknown",
                     ["deliveryId"] = verification.DeliveryId ?? "generated",
                     ["sessionId"] = sessionId.Value,
-                }
-            });
+                }));
 
             executionService.StartInvocation(invocation);
             return Results.Json(

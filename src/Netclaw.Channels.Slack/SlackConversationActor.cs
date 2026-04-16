@@ -3,6 +3,7 @@ using Akka.Event;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
 using Netclaw.Channels.Telemetry;
+using Netclaw.Configuration;
 
 namespace Netclaw.Channels.Slack;
 
@@ -106,7 +107,7 @@ public sealed class SlackConversationActor : ReceiveActor
 
             var sessionId = new SessionId($"{_conversationId.Value}/{threadTs.Value}");
             var turnId = string.IsNullOrWhiteSpace(message.EventId.Value)
-                ? Guid.NewGuid().ToString("N")[..8]
+                ? IdGen.ShortId()
                 : message.EventId.Value;
             var log = _log
                 .WithContext("SlackThreadTs", threadTs.Value)

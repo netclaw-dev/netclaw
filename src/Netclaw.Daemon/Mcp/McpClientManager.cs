@@ -606,36 +606,30 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
 
     private void EmitAuthAlert(McpServerName serverName, string summary, string reason)
     {
-        _notificationSink.Emit(new OperationalAlert
-        {
-            AlertId = Guid.NewGuid().ToString("N")[..12],
-            Type = "mcp.auth.expired",
-            Category = AlertType.McpAuthExpired,
-            Summary = summary,
-            Timestamp = _timeProvider.GetUtcNow(),
-            Severity = "warning",
-            Source = serverName.Value,
-            Context = new Dictionary<string, string>
+        _notificationSink.Emit(OperationalAlert.Create(
+            _timeProvider,
+            "mcp.auth.expired",
+            AlertType.McpAuthExpired,
+            summary,
+            "warning",
+            source: serverName.Value,
+            context: new Dictionary<string, string>
             {
                 ["serverName"] = serverName.Value,
                 ["reason"] = reason,
-            }
-        });
+            }));
     }
 
     private void EmitDisconnectedAlert(McpServerName serverName, string summary)
     {
-        _notificationSink.Emit(new OperationalAlert
-        {
-            AlertId = Guid.NewGuid().ToString("N")[..12],
-            Type = "mcp.server.disconnected",
-            Category = AlertType.McpServerDisconnected,
-            Summary = summary,
-            Timestamp = _timeProvider.GetUtcNow(),
-            Severity = "warning",
-            Source = serverName.Value,
-            Context = new Dictionary<string, string> { ["serverName"] = serverName.Value }
-        });
+        _notificationSink.Emit(OperationalAlert.Create(
+            _timeProvider,
+            "mcp.server.disconnected",
+            AlertType.McpServerDisconnected,
+            summary,
+            "warning",
+            source: serverName.Value,
+            context: new Dictionary<string, string> { ["serverName"] = serverName.Value }));
     }
 
     private static IEnumerable<string>? ParseScopes(string? scopeString)

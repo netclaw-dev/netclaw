@@ -1,4 +1,3 @@
-using System.Globalization;
 using System.Text.Json.Nodes;
 using Netclaw.Configuration;
 
@@ -46,16 +45,16 @@ public sealed class SqliteProvisioningDoctorCheck(NetclawPaths paths) : IDoctorC
         }
 
         // If the daemon was restarted after the crash, the crash log is stale.
-        if (IsCrashLogStale(latestCrash, paths.PidFilePath))
+        if (CrashLogHelper.IsCrashLogStale(latestCrash, paths.PidFilePath))
         {
             return Task.FromResult(DoctorCheckResult.Pass(
                 CheckName,
                 $"SQLite crash detected ({latestCrash.Name}) but daemon has been restarted since."));
         }
 
-        var occurredAt = TryParseCrashTimestamp(latestCrash.Name)
-            ?.ToString("u", CultureInfo.InvariantCulture)
-            ?? latestCrash.LastWriteTimeUtc.ToString("u", CultureInfo.InvariantCulture);
+        var occurredAt = CrashLogHelper.TryParseCrashTimestamp(latestCrash.Name)
+            ?.ToString("u", System.Globalization.CultureInfo.InvariantCulture)
+            ?? latestCrash.LastWriteTimeUtc.ToString("u", System.Globalization.CultureInfo.InvariantCulture);
 
         return Task.FromResult(DoctorCheckResult.Error(
             CheckName,
@@ -100,33 +99,4 @@ public sealed class SqliteProvisioningDoctorCheck(NetclawPaths paths) : IDoctorC
             || crashText.Contains("SchemaMigrator.MigrateAsync", StringComparison.Ordinal);
     }
 
-    /// <summary>
-    /// Returns true if the PID file was written after the crash log, meaning the daemon
-    /// was restarted since the crash and the crash log is stale.
-    /// </summary>
-    private static bool IsCrashLogStale(FileInfo crashLog, string pidFilePath)
-    {
-        var pidFile = new FileInfo(pidFilePath);
-        return pidFile.Exists && pidFile.LastWriteTimeUtc > crashLog.LastWriteTimeUtc;
-    }
-
-    private static DateTimeOffset? TryParseCrashTimestamp(string fileName)
-    {
-        // crash-YYYYMMDD-HHMMSS.log
-        var stem = Path.GetFileNameWithoutExtension(fileName);
-        const string prefix = "crash-";
-        if (!stem.StartsWith(prefix, StringComparison.Ordinal))
-            return null;
-
-        var payload = stem[prefix.Length..];
-        if (!DateTimeOffset.TryParseExact(
-                payload,
-                "yyyyMMdd-HHmmss",
-                CultureInfo.InvariantCulture,
-                DateTimeStyles.AssumeUniversal,
-                out var parsed))
-            return null;
-
-        return parsed.ToUniversalTime();
-    }
 }
