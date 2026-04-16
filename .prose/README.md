@@ -17,11 +17,23 @@ Fans out auditors in parallel, produces a ranked report with a
   strictness=normal
 ```
 
-Output lands at `.prose/runs/<run-id>/bindings/audit_report.md`. Copy
-it to `audit-reports/pre-oss-quality-audit-<date>.md` — the fix
-workflow takes a repo-relative path.
+## 2. Snapshot the audit report
 
-## 2. Fix — dry run (default)
+The fix workflow takes a repo-relative path, so copy the latest run's
+binding into `audit-reports/` under a dated filename AND a stable
+`latest-quality-audit.md` that the fix commands below point at.
+
+Run from the repo root in a normal shell (`!` prefix in this session):
+
+```bash
+mkdir -p audit-reports && \
+  cp "$(ls -td .prose/runs/*/bindings/audit_report.md | head -1)" \
+     "audit-reports/pre-oss-quality-audit-$(date +%Y%m%d).md" && \
+  cp "$(ls -td .prose/runs/*/bindings/audit_report.md | head -1)" \
+     audit-reports/latest-quality-audit.md
+```
+
+## 3. Fix — dry run (default)
 
 Parses the audit's Section 8, drift-checks, prints diffs. No edits,
 no commits.
@@ -33,10 +45,10 @@ no commits.
 ```
 /open-prose:prose-run .prose/netclaw-quality-fix.prose \
   repo_path=/home/petabridge/repositories/stannardlabs/netclaw \
-  report_path=audit-reports/pre-oss-quality-audit-<date>.md
+  report_path=audit-reports/latest-quality-audit.md
 ```
 
-## 3. Fix — live
+## 4. Fix — live
 
 Applies fixes on a fresh `netclaw/quality-fix-<date>` branch with
 build/test gates. Requires a clean working tree and a non-default
@@ -45,6 +57,6 @@ current branch.
 ```
 /open-prose:prose-run .prose/netclaw-quality-fix.prose \
   repo_path=/home/petabridge/repositories/stannardlabs/netclaw \
-  report_path=audit-reports/pre-oss-quality-audit-<date>.md \
+  report_path=audit-reports/latest-quality-audit.md \
   dry_run=false
 ```
