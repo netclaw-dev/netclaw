@@ -7,6 +7,7 @@ using Netclaw.Actors.Channels;
 using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Protocol;
 using Netclaw.Configuration;
+using Netclaw.Tools;
 
 namespace Netclaw.Actors.Reminders;
 
@@ -65,7 +66,7 @@ internal sealed class ReminderExecutionActor : ReceiveActor
         _dispatchedAt = timeProvider.GetUtcNow();
         _log = Context.GetLogger();
         _handle = new SessionPipelineHandle(pipeline, _log, "reminder-exec");
-        _accumulator = new ExecutionOutputAccumulator((tool, callId, succeeded) =>
+        _accumulator = new ExecutionOutputAccumulator(new ToolName("send_slack_message"), (tool, callId, succeeded) =>
         {
             if (succeeded)
                 _log.Info("ReminderExecution NotifySucceeded: execution_id={0} reminder_id={1} tool={2} call_id={3}",

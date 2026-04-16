@@ -1,6 +1,7 @@
 using System.Text;
 using Netclaw.Actors.Protocol;
 using Netclaw.Configuration;
+using Netclaw.Tools;
 
 namespace Netclaw.Actors.Channels;
 
@@ -26,8 +27,7 @@ public enum OutputAction
 /// </summary>
 public sealed class ExecutionOutputAccumulator
 {
-    private const string NotificationToolName = "send_slack_message";
-
+    private readonly ToolName _notificationToolName;
     private readonly Action<string, string, bool>? _onNotifyTracked;
     private readonly StringBuilder _buffer = new();
     private bool _sawTextDelta;
@@ -36,15 +36,21 @@ public sealed class ExecutionOutputAccumulator
     private string? _notifyFailureDetail;
 
     /// <summary>
-    /// Creates an accumulator with an optional notification tracking callback.
+    /// Creates an accumulator.
     /// </summary>
-    /// <param name="onNotifyTracked">
-    /// Optional callback invoked when a <c>send_slack_message</c> tool result is processed.
-    /// Parameters: (toolName, callId, succeeded). Allows callers to add their own
-    /// diagnostic logging without coupling the accumulator to a logging framework.
+    /// <param name="notificationToolName">
+    /// The tool whose results are tracked for notification success/failure.
+    /// The accumulator has no channel knowledge — callers supply the tool they care about.
     /// </param>
-    public ExecutionOutputAccumulator(Action<string, string, bool>? onNotifyTracked = null)
+    /// <param name="onNotifyTracked">
+    /// Optional callback invoked when a matching tool result is processed.
+    /// Parameters: (toolName, callId, succeeded).
+    /// </param>
+    public ExecutionOutputAccumulator(
+        ToolName notificationToolName,
+        Action<string, string, bool>? onNotifyTracked = null)
     {
+        _notificationToolName = notificationToolName;
         _onNotifyTracked = onNotifyTracked;
     }
 
@@ -146,7 +152,7 @@ public sealed class ExecutionOutputAccumulator
 
     private void TrackNotificationResult(ToolResultOutput toolResult)
     {
-        if (!string.Equals(toolResult.ToolName, NotificationToolName, StringComparison.Ordinal))
+        if (!string.Equals(toolResult.ToolName, _notificationToolName.Value, StringComparison.Ordinal))
             return;
 
         _notifyAttempted = true;

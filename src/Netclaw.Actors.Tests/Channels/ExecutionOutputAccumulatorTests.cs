@@ -1,6 +1,7 @@
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
 using Netclaw.Configuration;
+using Netclaw.Tools;
 using Xunit;
 
 namespace Netclaw.Actors.Tests.Channels;
@@ -8,11 +9,12 @@ namespace Netclaw.Actors.Tests.Channels;
 public sealed class ExecutionOutputAccumulatorTests
 {
     private static readonly SessionId TestSessionId = new("test/session");
+    private static readonly ToolName TestNotifyTool = new("send_slack_message");
 
     [Fact]
     public void TextDeltaOutput_accumulates_text()
     {
-        var acc = new ExecutionOutputAccumulator();
+        var acc = new ExecutionOutputAccumulator(TestNotifyTool);
 
         var action1 = acc.ProcessOutput(new TextDeltaOutput { SessionId = TestSessionId, Delta = "Hello " });
         var action2 = acc.ProcessOutput(new TextDeltaOutput { SessionId = TestSessionId, Delta = "world" });
@@ -25,7 +27,7 @@ public sealed class ExecutionOutputAccumulatorTests
     [Fact]
     public void TextOutput_accumulates_when_no_prior_delta()
     {
-        var acc = new ExecutionOutputAccumulator();
+        var acc = new ExecutionOutputAccumulator(TestNotifyTool);
 
         acc.ProcessOutput(new TextOutput { SessionId = TestSessionId, Text = "Full text" });
 
@@ -35,7 +37,7 @@ public sealed class ExecutionOutputAccumulatorTests
     [Fact]
     public void TextOutput_ignored_after_TextDeltaOutput()
     {
-        var acc = new ExecutionOutputAccumulator();
+        var acc = new ExecutionOutputAccumulator(TestNotifyTool);
 
         acc.ProcessOutput(new TextDeltaOutput { SessionId = TestSessionId, Delta = "streamed" });
         acc.ProcessOutput(new TextOutput { SessionId = TestSessionId, Text = "assembled" });
@@ -46,7 +48,7 @@ public sealed class ExecutionOutputAccumulatorTests
     [Fact]
     public void TurnCompleted_returns_TurnCompleted_action()
     {
-        var acc = new ExecutionOutputAccumulator();
+        var acc = new ExecutionOutputAccumulator(TestNotifyTool);
 
         var action = acc.ProcessOutput(new TurnCompleted { SessionId = TestSessionId, TurnNumber = 1 });
 
@@ -56,7 +58,7 @@ public sealed class ExecutionOutputAccumulatorTests
     [Fact]
     public void ErrorOutput_returns_Error_action_and_stores_details()
     {
-        var acc = new ExecutionOutputAccumulator();
+        var acc = new ExecutionOutputAccumulator(TestNotifyTool);
         var cause = new InvalidOperationException("inner");
 
         var action = acc.ProcessOutput(new ErrorOutput
@@ -76,7 +78,7 @@ public sealed class ExecutionOutputAccumulatorTests
     [Fact]
     public void BufferFlush_returns_Continue()
     {
-        var acc = new ExecutionOutputAccumulator();
+        var acc = new ExecutionOutputAccumulator(TestNotifyTool);
 
         var action = acc.ProcessOutput(new BufferFlush { SessionId = TestSessionId });
 
@@ -86,7 +88,7 @@ public sealed class ExecutionOutputAccumulatorTests
     [Fact]
     public void Tracks_successful_notification_tool_result()
     {
-        var acc = new ExecutionOutputAccumulator();
+        var acc = new ExecutionOutputAccumulator(TestNotifyTool);
 
         acc.ProcessOutput(new ToolResultOutput
         {
@@ -103,7 +105,7 @@ public sealed class ExecutionOutputAccumulatorTests
     [Fact]
     public void Tracks_failed_notification_tool_result()
     {
-        var acc = new ExecutionOutputAccumulator();
+        var acc = new ExecutionOutputAccumulator(TestNotifyTool);
 
         acc.ProcessOutput(new ToolResultOutput
         {
@@ -120,7 +122,7 @@ public sealed class ExecutionOutputAccumulatorTests
     [Fact]
     public void Ignores_non_notification_tool_results()
     {
-        var acc = new ExecutionOutputAccumulator();
+        var acc = new ExecutionOutputAccumulator(TestNotifyTool);
 
         acc.ProcessOutput(new ToolResultOutput
         {
@@ -138,7 +140,7 @@ public sealed class ExecutionOutputAccumulatorTests
     [Fact]
     public void No_failure_when_no_notify_instructions()
     {
-        var acc = new ExecutionOutputAccumulator();
+        var acc = new ExecutionOutputAccumulator(TestNotifyTool);
 
         var result = acc.BuildNotifyFailureMessage(hasNotifyInstructions: false, NotificationPolicy.Required);
 
@@ -148,7 +150,7 @@ public sealed class ExecutionOutputAccumulatorTests
     [Fact]
     public void Required_policy_fails_when_no_notification_sent()
     {
-        var acc = new ExecutionOutputAccumulator();
+        var acc = new ExecutionOutputAccumulator(TestNotifyTool);
 
         var result = acc.BuildNotifyFailureMessage(hasNotifyInstructions: true, NotificationPolicy.Required);
 
@@ -158,7 +160,7 @@ public sealed class ExecutionOutputAccumulatorTests
     [Fact]
     public void Conditional_policy_succeeds_when_no_notification_sent()
     {
-        var acc = new ExecutionOutputAccumulator();
+        var acc = new ExecutionOutputAccumulator(TestNotifyTool);
 
         var result = acc.BuildNotifyFailureMessage(hasNotifyInstructions: true, NotificationPolicy.Conditional);
 
@@ -168,7 +170,7 @@ public sealed class ExecutionOutputAccumulatorTests
     [Fact]
     public void Succeeds_when_notification_attempted_and_succeeded()
     {
-        var acc = new ExecutionOutputAccumulator();
+        var acc = new ExecutionOutputAccumulator(TestNotifyTool);
         acc.ProcessOutput(new ToolResultOutput
         {
             SessionId = TestSessionId,
@@ -185,7 +187,7 @@ public sealed class ExecutionOutputAccumulatorTests
     [Fact]
     public void Fails_when_notification_attempted_and_errored()
     {
-        var acc = new ExecutionOutputAccumulator();
+        var acc = new ExecutionOutputAccumulator(TestNotifyTool);
         acc.ProcessOutput(new ToolResultOutput
         {
             SessionId = TestSessionId,

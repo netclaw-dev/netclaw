@@ -4,6 +4,7 @@ using Microsoft.Extensions.AI;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
 using Netclaw.Configuration;
+using Netclaw.Tools;
 
 namespace Netclaw.Daemon.Webhooks;
 
@@ -16,7 +17,8 @@ internal sealed class WebhookExecutionActor : ReceiveActor
     private readonly DateTimeOffset _dispatchedAt;
 
     private readonly SessionPipelineHandle _handle;
-    private readonly ExecutionOutputAccumulator _accumulator = new();
+    private static readonly ToolName NotificationTool = new("send_slack_message");
+    private readonly ExecutionOutputAccumulator _accumulator = new(NotificationTool);
     private bool _completed;
 
     public static Props CreateProps(
