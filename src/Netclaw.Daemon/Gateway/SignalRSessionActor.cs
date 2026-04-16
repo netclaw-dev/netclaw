@@ -1,8 +1,6 @@
 using System.Threading.Channels;
 using Akka.Actor;
 using Akka.Event;
-using Akka.Streams;
-using Akka.Streams.Dsl;
 using Microsoft.AspNetCore.SignalR;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
@@ -12,28 +10,19 @@ namespace Netclaw.Daemon.Gateway;
 
 /// <summary>
 /// Per-session binding actor for SignalR connections.
-/// Owns a <see cref="ActorMaterializer"/> scoped to this actor context so that
+/// Uses <see cref="SessionPipelineHandle"/> for pipeline lifecycle so that
 /// all Akka.Streams stage actors become children and are automatically stopped
-/// when this actor stops — eliminating the StreamSupervisor actor leak that
-/// occurred when streams were materialized at the system level.
+/// when this actor stops.
 /// </summary>
-/// <remarks>
-/// Mirrors the pattern used by <c>SlackThreadBindingActor</c> for Slack sessions.
-/// </remarks>
 internal sealed class SignalRSessionActor : ReceiveActor, IWithUnboundedStash, IWithTimers
 {
     private readonly SessionId _sessionId;
-    private readonly ISessionPipeline _pipeline;
     private readonly IHubContext<SessionHub, ISessionHubClient> _hubContext;
     private readonly ILoggingAdapter _log;
 
-    private ActorMaterializer? _materializer;
-    private MaterializedSession? _session;
-    private ChannelWriter<ChannelInput>? _inputQueue;
+    private readonly SessionPipelineHandle _handle;
     private SignalRConnectionId _currentConnectionId;
     private Actors.Channels.ChannelType _channelType = Actors.Channels.ChannelType.Tui;
-    private int _pipelineGeneration;
-    private bool _isReinitializing;
 
     private static readonly TimeSpan PipelineInitTimeout = TimeSpan.FromSeconds(15);
     private static readonly object ReinitializeTimerKey = new();
@@ -47,11 +36,11 @@ internal sealed class SignalRSessionActor : ReceiveActor, IWithUnboundedStash, I
         IHubContext<SessionHub, ISessionHubClient> hubContext)
     {
         _sessionId = new SessionId(entityId);
-        _pipeline = pipeline;
         _hubContext = hubContext;
         _log = Context.GetLogger()
             .WithContext("Adapter", "signalr")
             .WithContext("SessionId", _sessionId.Value);
+        _handle = new SessionPipelineHandle(pipeline, _log, "signalr");
 
         Initializing();
     }
@@ -59,6 +48,20 @@ internal sealed class SignalRSessionActor : ReceiveActor, IWithUnboundedStash, I
     public static Props CreateProps(string entityId, ISessionPipeline pipeline,
         IHubContext<SessionHub, ISessionHubClient> hubContext)
         => Props.Create(() => new SignalRSessionActor(entityId, pipeline, hubContext));
+
+    private SessionPipelineOptions BuildOptions() => new()
+    {
+        ChannelType = _channelType,
+        DefaultAudience = TrustAudience.Personal,
+        DefaultBoundary = SecurityPolicyDefaults.LocalDaemonBoundary,
+        DefaultPrincipal = PrincipalClassification.Operator,
+        DefaultProvenance = new SourceProvenance
+        {
+            TransportAuthenticity = TransportAuthenticity.LocalProcess,
+            PayloadTaint = PayloadTaint.Trusted,
+            SourceKind = "signalr"
+        }
+    };
 
     private void Initializing()
     {
@@ -80,10 +83,6 @@ internal sealed class SignalRSessionActor : ReceiveActor, IWithUnboundedStash, I
             }
         });
 
-        // A reminder can fire against a passivated session with no
-        // connected client, so we initialize the pipeline lazily without
-        // a prior StartSignalRSession. Output is dropped if no client is
-        // connected; the turn still persists via TurnRecorded.
         ReceiveAsync<DeliverTrustedSessionTurn>(async msg =>
         {
             try
@@ -114,7 +113,7 @@ internal sealed class SignalRSessionActor : ReceiveActor, IWithUnboundedStash, I
 
         ReceiveAsync<EnqueueSignalRInput>(async msg =>
         {
-            var writer = _inputQueue;
+            var writer = _handle.InputQueue;
             if (writer is null)
             {
                 _log.Warning("Input queue not initialized; dropping message for session {SessionId}", _sessionId.Value);
@@ -157,7 +156,7 @@ internal sealed class SignalRSessionActor : ReceiveActor, IWithUnboundedStash, I
 
         Receive<OutputStreamTerminated>(msg =>
         {
-            if (msg.Generation != _pipelineGeneration)
+            if (msg.Generation != _handle.Generation)
                 return;
 
             var reason = msg.Cause is null
@@ -168,7 +167,21 @@ internal sealed class SignalRSessionActor : ReceiveActor, IWithUnboundedStash, I
             Self.Tell(new ReinitializePipeline(reason));
         });
 
-        ReceiveAsync<ReinitializePipeline>(async msg => await ReinitializePipelineAsync(msg.Reason));
+        ReceiveAsync<ReinitializePipeline>(async msg =>
+        {
+            var self = Self;
+            await _handle.ReinitializeAsync(
+                msg.Reason,
+                Context,
+                _sessionId,
+                BuildOptions(),
+                output => self.Tell(new OutputReceived(output)),
+                (gen, cause) => self.Tell(new OutputStreamTerminated(gen, cause)),
+                () => Timers.StartSingleTimer(
+                    ReinitializeTimerKey,
+                    new ReinitializePipeline("retry after failed reinit"),
+                    TimeSpan.FromSeconds(2)));
+        });
 
         Receive<ShutdownSignalRSession>(_ =>
         {
@@ -180,7 +193,7 @@ internal sealed class SignalRSessionActor : ReceiveActor, IWithUnboundedStash, I
         {
             var ackTarget = Sender;
 
-            var writer = _inputQueue;
+            var writer = _handle.InputQueue;
             if (writer is null)
             {
                 _log.Warning(
@@ -227,105 +240,26 @@ internal sealed class SignalRSessionActor : ReceiveActor, IWithUnboundedStash, I
         });
     }
 
-    protected override void PostStop()
-    {
-        _inputQueue?.TryComplete();
-        _session?.DisposeAsync().AsTask().GetAwaiter().GetResult();
-        _materializer?.Dispose();
-        base.PostStop();
-    }
-
     private async Task EnsureInitializedAsync()
     {
-        if (_session is not null)
+        if (_handle.IsInitialized)
             return;
 
-        _log.Info("Initializing SignalR session pipeline");
         var self = Self;
-
-        _materializer = Context.Materializer(namePrefix: "signalr");
-
         using var initCts = new CancellationTokenSource(PipelineInitTimeout);
-        var materialized = await _pipeline.CreateAsync(
+        await _handle.InitializeWithChannelAsync(
+            Context,
             _sessionId,
-            new SessionPipelineOptions
-            {
-                ChannelType = _channelType,
-                DefaultAudience = TrustAudience.Personal,
-                DefaultBoundary = SecurityPolicyDefaults.LocalDaemonBoundary,
-                DefaultPrincipal = PrincipalClassification.Operator,
-                DefaultProvenance = new SourceProvenance
-                {
-                    TransportAuthenticity = TransportAuthenticity.LocalProcess,
-                    PayloadTaint = PayloadTaint.Trusted,
-                    SourceKind = "signalr"
-                }
-            },
-            materializer: _materializer,
-            cancellationToken: initCts.Token);
-
-        var inputQueue = Source.Channel<ChannelInput>(512, true)
-            .ToMaterialized(materialized.Input, Keep.Left)
-            .Run(_materializer);
-
-        var generation = ++_pipelineGeneration;
-        var outputCompletion = materialized.Output
-            .ToMaterialized(
-                Sink.ForEach<SessionOutput>(output => self.Tell(new OutputReceived(output))),
-                Keep.Right)
-            .Run(_materializer);
-
-        _ = outputCompletion.ContinueWith(t =>
-            {
-                var cause = t.IsFaulted ? t.Exception?.GetBaseException() : null;
-                self.Tell(new OutputStreamTerminated(generation, cause));
-            },
-            CancellationToken.None,
-            TaskContinuationOptions.ExecuteSynchronously,
-            TaskScheduler.Default);
-
-        _session = materialized;
-        _inputQueue = inputQueue;
-
-        _log.Info("SignalR session pipeline initialized");
+            BuildOptions(),
+            output => self.Tell(new OutputReceived(output)),
+            (gen, cause) => self.Tell(new OutputStreamTerminated(gen, cause)),
+            initCts.Token);
     }
 
-    private async Task ReinitializePipelineAsync(string reason)
+    protected override void PostStop()
     {
-        if (_isReinitializing)
-            return;
-
-        _isReinitializing = true;
-        try
-        {
-            _log.Warning("Reinitializing SignalR session pipeline: {Reason}", reason);
-
-            _inputQueue?.TryComplete();
-            _inputQueue = null;
-
-            if (_session is not null)
-            {
-                await _session.DisposeAsync();
-                _session = null;
-            }
-
-            _materializer?.Dispose();
-            _materializer = null;
-
-            await EnsureInitializedAsync();
-        }
-        catch (Exception ex)
-        {
-            _log.Error(ex, "SignalR pipeline reinitialization failed; scheduling retry");
-            Timers.StartSingleTimer(
-                ReinitializeTimerKey,
-                new ReinitializePipeline("retry after failed reinit"),
-                TimeSpan.FromSeconds(2));
-        }
-        finally
-        {
-            _isReinitializing = false;
-        }
+        _handle.DisposeAsync().AsTask().GetAwaiter().GetResult();
+        base.PostStop();
     }
 
     // ─── Message protocol ───────────────────────────────────────────────────
@@ -364,13 +298,6 @@ internal sealed record ShutdownSignalRSession(SessionId SessionId) : ISignalRSes
 
 /// <summary>
 /// Routes messages to <see cref="SignalRSessionActor"/> children by session ID.
-/// Channel-internal messages implement <see cref="ISignalRSessionMessage"/>
-/// and match first. Upstream protocol messages (e.g.
-/// <see cref="Actors.Protocol.DeliverTrustedSessionTurn"/> for Mode B reminder
-/// re-entry) implement the public <see cref="Actors.Protocol.IWithSessionId"/>
-/// interface and are routed via the fallback pattern below — this keeps
-/// <see cref="ISignalRSessionMessage"/> <c>internal</c> while still allowing
-/// shared protocol messages to reach the correct session actor.
 /// </summary>
 internal sealed class SignalRMessageExtractor : Akka.Cluster.Sharding.HashCodeMessageExtractor
 {

@@ -208,9 +208,9 @@ public sealed class SessionPipelineHandle : IAsyncDisposable
         {
             _session?.DisposeAsync().AsTask().GetAwaiter().GetResult();
         }
-        catch
+        catch (Exception ex)
         {
-            // Best-effort cleanup during actor shutdown
+            _log.Debug(ex, "Failed to dispose {0} session during cleanup", _materializerNamePrefix);
         }
 
         _materializer?.Dispose();

@@ -4,8 +4,6 @@ using System.Threading.Tasks;
 using Akka.Actor;
 using Akka.Event;
 using Akka.Persistence;
-using Akka.Streams;
-using Akka.Streams.Dsl;
 using Microsoft.Extensions.AI;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
@@ -32,11 +30,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
     private PostResult? _lastFailedPost;
     private readonly List<PendingApprovalRequest> _pendingApprovalRequests = [];
 
-    private ActorMaterializer? _materializer;
-    private MaterializedSession? _session;
-    private ChannelWriter<ChannelInput>? _inputQueue;
-    private int _pipelineGeneration;
-    private bool _isReinitializing;
+    private SessionPipelineHandle? _handle;
     private bool _threadHistoryFetchAttempted;
     private SlackEventTs? _cursorTs;
     private static readonly object ReinitializeTimerKey = new();
@@ -89,9 +83,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
 
     protected override void PostStop()
     {
-        _inputQueue?.TryComplete();
-        _session?.DisposeAsync().AsTask().GetAwaiter().GetResult();
-        _materializer?.Dispose();
+        _handle?.DisposeAsync().AsTask().GetAwaiter().GetResult();
         base.PostStop();
     }
 
@@ -128,7 +120,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
         CommandAsync<ThreadOutput>(HandleOutputAsync);
         Command<OutputStreamTerminated>(msg =>
         {
-            if (msg.Generation != _pipelineGeneration)
+            if (_handle is null || msg.Generation != _handle.Generation)
                 return;
 
             var reason = msg.Cause is null
@@ -184,7 +176,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
             return;
         }
 
-        var writer = _inputQueue;
+        var writer = _handle?.InputQueue;
         if (writer is null)
         {
             _log.Warning("Slack thread input queue is not initialized; rejecting Mode B reminder");
@@ -300,7 +292,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
                 return;
             }
 
-            var writer = _inputQueue;
+            var writer = _handle?.InputQueue;
             if (writer is null)
             {
                 _log.Warning("Slack thread input queue is not initialized; dropping inbound message");
@@ -689,62 +681,37 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
         public sealed record Rejected(string UserFacingReason) : AttachmentIngestResult;
     }
 
+    private SessionPipelineOptions BuildOptions() => new()
+    {
+        ChannelType = Actors.Channels.ChannelType.Slack,
+        DefaultAudience = TrustAudience.Public,
+        DefaultBoundary = SecurityPolicyDefaults.SlackWorkspaceBoundary,
+        DefaultPrincipal = PrincipalClassification.UntrustedExternal,
+        DefaultProvenance = new SourceProvenance
+        {
+            TransportAuthenticity = TransportAuthenticity.Verified,
+            PayloadTaint = PayloadTaint.Public,
+            SourceKind = "slack"
+        },
+        Filter = OutputFilter.Text | OutputFilter.Files
+    };
+
     private async Task EnsureInitializedAsync()
     {
-        if (_session is not null)
+        _handle ??= new SessionPipelineHandle(_dependencies.Pipeline, _log, "slack-thread");
+
+        if (_handle.IsInitialized)
             return;
 
-        _log.Info("Initializing Slack thread binding pipeline");
         var self = Self;
-
-        // Create a materializer scoped to this actor — all stream actors become
-        // children and are stopped automatically when this actor passivates.
-        _materializer = Context.Materializer(namePrefix: "slack-thread");
-
         using var initCts = new CancellationTokenSource(OperationTimeout);
-        var materialized = await _dependencies.Pipeline.CreateAsync(
+        await _handle.InitializeWithChannelAsync(
+            Context,
             _sessionId,
-            new SessionPipelineOptions
-            {
-                ChannelType = Actors.Channels.ChannelType.Slack,
-                DefaultAudience = TrustAudience.Public,
-                DefaultBoundary = SecurityPolicyDefaults.SlackWorkspaceBoundary,
-                DefaultPrincipal = PrincipalClassification.UntrustedExternal,
-                DefaultProvenance = new SourceProvenance
-                {
-                    TransportAuthenticity = TransportAuthenticity.Verified,
-                    PayloadTaint = PayloadTaint.Public,
-                    SourceKind = "slack"
-                },
-                Filter = OutputFilter.Text | OutputFilter.Files
-            },
-            materializer: _materializer,
-            cancellationToken: initCts.Token);
-
-        var inputQueue = Source.Channel<ChannelInput>(512, true)
-            .ToMaterialized(materialized.Input, Keep.Left)
-            .Run(_materializer);
-
-        var generation = ++_pipelineGeneration;
-        var outputCompletion = materialized.Output
-            .ToMaterialized(
-                Sink.ForEach<SessionOutput>(output => self.Tell(new ThreadOutput(output))),
-                Keep.Right)
-            .Run(_materializer);
-
-        _ = outputCompletion.ContinueWith(t =>
-            {
-                var cause = t.IsFaulted ? t.Exception?.GetBaseException() : null;
-                self.Tell(new OutputStreamTerminated(generation, cause));
-            },
-            CancellationToken.None,
-            TaskContinuationOptions.ExecuteSynchronously,
-            TaskScheduler.Default);
-
-        _session = materialized;
-        _inputQueue = inputQueue;
-
-        _log.Info("Slack thread binding pipeline initialized");
+            BuildOptions(),
+            output => self.Tell(new ThreadOutput(output)),
+            (gen, cause) => self.Tell(new OutputStreamTerminated(gen, cause)),
+            initCts.Token);
     }
 
     private async Task<InboundBuildResult> BuildInputForInboundAsync(
@@ -1035,40 +1002,21 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
 
     private async Task ReinitializePipelineAsync(string reason)
     {
-        if (_isReinitializing)
+        if (_handle is null)
             return;
 
-        _isReinitializing = true;
-        try
-        {
-            _log.Warning("Reinitializing Slack thread pipeline: {Reason}", reason);
-
-            _inputQueue?.TryComplete();
-            _inputQueue = null;
-
-            if (_session is not null)
-            {
-                await _session.DisposeAsync();
-                _session = null;
-            }
-
-            _materializer?.Dispose();
-            _materializer = null;
-
-            await EnsureInitializedAsync();
-        }
-        catch (Exception ex)
-        {
-            _log.Error(ex, "Slack thread pipeline reinitialization failed; scheduling retry");
-            Timers.StartSingleTimer(
+        var self = Self;
+        await _handle.ReinitializeAsync(
+            reason,
+            Context,
+            _sessionId,
+            BuildOptions(),
+            output => self.Tell(new ThreadOutput(output)),
+            (gen, cause) => self.Tell(new OutputStreamTerminated(gen, cause)),
+            () => Timers.StartSingleTimer(
                 ReinitializeTimerKey,
                 new ReinitializePipeline("retry after failed reinit"),
-                TimeSpan.FromSeconds(2));
-        }
-        finally
-        {
-            _isReinitializing = false;
-        }
+                TimeSpan.FromSeconds(2)));
     }
 
     private async Task HandleOutputAsync(ThreadOutput threadOutput)

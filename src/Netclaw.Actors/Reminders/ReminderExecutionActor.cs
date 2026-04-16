@@ -1,10 +1,7 @@
-using System.Text;
 using Akka.Actor;
 using Akka.Event;
 using Akka.Hosting;
 using Akka.Reminders;
-using Akka.Streams;
-using Akka.Streams.Dsl;
 using Microsoft.Extensions.AI;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Hosting;
@@ -28,7 +25,6 @@ internal sealed class ReminderExecutionActor : ReceiveActor
 
     private readonly Guid _executionId;
     private readonly ReminderDefinition _definition;
-    private readonly ISessionPipeline _pipeline;
     private readonly ReminderHistoryStore _historyStore;
     private readonly TimeProvider _timeProvider;
     private readonly ReminderEnvelope<ReminderPayload>? _envelope;
@@ -36,17 +32,11 @@ internal sealed class ReminderExecutionActor : ReceiveActor
     private readonly DateTimeOffset _dispatchedAt;
     private IReminderClient? _reminderClient;
 
-    private readonly StringBuilder _buffer = new();
-    private bool _sawTextDelta;
+    private readonly SessionPipelineHandle _handle;
+    private readonly ExecutionOutputAccumulator _accumulator = new();
     private bool _completed;
-    private bool _notifyAttempted;
-    private bool _notifyFailed;
-    private string? _notifyFailureDetail;
     private string? _sessionIdValue;
     private HistoryRecord? _pendingHistory;
-
-    private ActorMaterializer? _materializer;
-    private MaterializedSession? _session;
 
     private bool IsModeB => _envelope is not null;
 
@@ -69,12 +59,12 @@ internal sealed class ReminderExecutionActor : ReceiveActor
     {
         _executionId = executionId;
         _definition = definition;
-        _pipeline = pipeline;
         _historyStore = historyStore;
         _timeProvider = timeProvider;
         _envelope = envelope;
         _dispatchedAt = timeProvider.GetUtcNow();
         _log = Context.GetLogger();
+        _handle = new SessionPipelineHandle(pipeline, _log, "reminder-exec");
 
         Context.SetReceiveTimeout(TimeSpan.FromSeconds(ExecutionTimeoutSeconds));
 
@@ -119,34 +109,25 @@ internal sealed class ReminderExecutionActor : ReceiveActor
             _log.Info(
                 $"ReminderExecution Initialized: execution_id={_executionId} reminder_id={_definition.Id} session_id={sessionId.Value} audience={audience} source=stored-definition");
 
-            _materializer = Context.Materializer(namePrefix: "reminder-exec");
-
-            var materialized = await _pipeline.CreateAsync(sessionId, new SessionPipelineOptions
-            {
-                ChannelType = Channels.ChannelType.Reminder,
-                DefaultAudience = audience,
-                DefaultBoundary = SecurityPolicyDefaults.LocalDaemonBoundary,
-                DefaultPrincipal = PrincipalClassification.VerifiedAutomation,
-                DefaultProvenance = new SourceProvenance
-                {
-                    TransportAuthenticity = TransportAuthenticity.LocalProcess,
-                    PayloadTaint = PayloadTaint.Trusted,
-                    SourceKind = "reminder"
-                },
-                Filter = OutputFilter.TextStreaming | OutputFilter.ToolCalls
-            }, materializer: _materializer);
-
             var self = Self;
-
-            var inputQueue = Source.Queue<ChannelInput>(8, OverflowStrategy.Backpressure)
-                .ToMaterialized(materialized.Input, Keep.Left)
-                .Run(_materializer);
-
-            materialized.Output
-                .To(Sink.ForEach<SessionOutput>(output => self.Tell(new ExecutionOutput(output))))
-                .Run(_materializer);
-
-            _session = materialized;
+            var inputQueue = await _handle.InitializeWithQueueAsync(
+                Context,
+                sessionId,
+                new SessionPipelineOptions
+                {
+                    ChannelType = Channels.ChannelType.Reminder,
+                    DefaultAudience = audience,
+                    DefaultBoundary = SecurityPolicyDefaults.LocalDaemonBoundary,
+                    DefaultPrincipal = PrincipalClassification.VerifiedAutomation,
+                    DefaultProvenance = new SourceProvenance
+                    {
+                        TransportAuthenticity = TransportAuthenticity.LocalProcess,
+                        PayloadTaint = PayloadTaint.Trusted,
+                        SourceKind = "reminder"
+                    },
+                    Filter = OutputFilter.TextStreaming | OutputFilter.ToolCalls
+                },
+                output => self.Tell(new ExecutionOutput(output)));
 
             var prompt = BuildPrompt(_definition);
 
@@ -300,48 +281,34 @@ internal sealed class ReminderExecutionActor : ReceiveActor
 
     private void HandleOutput(ExecutionOutput wrapper)
     {
-        switch (wrapper.Output)
+        var action = _accumulator.ProcessOutput(wrapper.Output);
+        switch (action)
         {
-            case TextDeltaOutput delta:
-                _buffer.Append(delta.Delta);
-                _sawTextDelta = true;
-                break;
-
-            case TextOutput text:
-                if (!_sawTextDelta)
-                    _buffer.Append(text.Text);
-                break;
-
-            case ToolResultOutput toolResult:
-                TrackNotificationResult(toolResult);
-                break;
-
-            case BufferFlush:
-                // Reminder accumulates full text for final result -- no mid-turn flush needed.
-                break;
-
-            case TurnCompleted:
-                var result = _buffer.ToString().Trim();
-                var notifyFailureMessage = BuildNotifyFailureMessage();
+            case OutputAction.TurnCompleted:
+            {
+                var result = _accumulator.GetAccumulatedText();
+                var notifyFailureMessage = _accumulator.BuildNotifyFailureMessage(
+                    !string.IsNullOrWhiteSpace(_definition.NotifyInstructions),
+                    _definition.NotifyPolicy);
                 var success = notifyFailureMessage is null;
                 _log.Info(
-                    $"ReminderExecution Completed: execution_id={_executionId} reminder_id={_definition.Id} title={_definition.Title} success={success} output_length={result.Length} notify_attempted={_notifyAttempted} notify_failed={_notifyFailed} dispatched_at={_dispatchedAt} completed_at={_timeProvider.GetUtcNow()}");
-
-                if (string.IsNullOrWhiteSpace(result))
-                    result = $"(Reminder '{_definition.Title}' executed but produced no output)";
+                    $"ReminderExecution Completed: execution_id={_executionId} reminder_id={_definition.Id} title={_definition.Title} success={success} output_length={result.Length} notify_attempted={_accumulator.NotifyAttempted} notify_failed={_accumulator.NotifyFailed} dispatched_at={_dispatchedAt} completed_at={_timeProvider.GetUtcNow()}");
 
                 ReportAndStop(success, notifyFailureMessage);
                 break;
+            }
 
-            case ErrorOutput err:
+            case OutputAction.Error:
+            {
                 var completedAt = _timeProvider.GetUtcNow();
-                var failedMsg = $"ReminderExecution Failed: execution_id={_executionId} reminder_id={_definition.Id} title={_definition.Title} success=false error_type={err.Category} error_message={err.Message} dispatched_at={_dispatchedAt} completed_at={completedAt}";
-                if (err.Cause is not null)
-                    _log.Error(err.Cause, "{0}\n{1}", failedMsg, err.Cause.ToString());
+                var failedMsg = $"ReminderExecution Failed: execution_id={_executionId} reminder_id={_definition.Id} title={_definition.Title} success=false error_type={_accumulator.LastErrorCategory} error_message={_accumulator.LastErrorMessage} dispatched_at={_dispatchedAt} completed_at={completedAt}";
+                if (_accumulator.LastErrorCause is not null)
+                    _log.Error(_accumulator.LastErrorCause, "{0}\n{1}", failedMsg, _accumulator.LastErrorCause.ToString());
                 else
                     _log.Warning("{0}", failedMsg);
-                ReportAndStop(false, err.Message);
+                ReportAndStop(false, _accumulator.LastErrorMessage);
                 break;
+            }
         }
     }
 
@@ -374,58 +341,6 @@ internal sealed class ReminderExecutionActor : ReceiveActor
         Context.Stop(Self);
     }
 
-    private void TrackNotificationResult(ToolResultOutput toolResult)
-    {
-        if (!string.Equals(toolResult.ToolName, "send_slack_message", StringComparison.Ordinal))
-            return;
-
-        _notifyAttempted = true;
-
-        var result = toolResult.Result?.Trim() ?? string.Empty;
-        if (result.StartsWith("Error", StringComparison.OrdinalIgnoreCase))
-        {
-            _notifyFailed = true;
-            _notifyFailureDetail = result;
-            _log.Warning(
-                "ReminderExecution NotifyFailed: execution_id={0} reminder_id={1} tool={2} call_id={3} detail={4}",
-                _executionId,
-                _definition.Id,
-                toolResult.ToolName,
-                toolResult.CallId,
-                result);
-            return;
-        }
-
-        _notifyFailed = false;
-        _notifyFailureDetail = null;
-        _log.Info(
-            "ReminderExecution NotifySucceeded: execution_id={0} reminder_id={1} tool={2} call_id={3}",
-            _executionId,
-            _definition.Id,
-            toolResult.ToolName,
-            toolResult.CallId);
-    }
-
-    private string? BuildNotifyFailureMessage()
-    {
-        if (string.IsNullOrWhiteSpace(_definition.NotifyInstructions))
-            return null;
-
-        if (!_notifyAttempted)
-        {
-            // Conditional policy: the LLM decided nothing warranted notification — that's OK.
-            if (_definition.NotifyPolicy == NotificationPolicy.Conditional)
-                return null;
-
-            return "Notification instructions were provided but no notification tool was invoked.";
-        }
-
-        if (_notifyFailed)
-            return _notifyFailureDetail ?? "Notification tool returned an unspecified error.";
-
-        return null;
-    }
-
     protected override void PostStop()
     {
         if (_pendingHistory is not null)
@@ -443,8 +358,7 @@ internal sealed class ReminderExecutionActor : ReceiveActor
 
         try
         {
-            _session?.DisposeAsync().AsTask().GetAwaiter().GetResult();
-            _materializer?.Dispose();
+            _handle.DisposeAsync().AsTask().GetAwaiter().GetResult();
         }
         catch (Exception ex)
         {
