@@ -5,6 +5,28 @@ namespace Netclaw.Cli.Doctor;
 
 internal static class DoctorJsonConfigReader
 {
+    /// <summary>
+    /// Reads a boolean property from a <see cref="JsonObject"/>. Returns <c>false</c>
+    /// if the property is missing, not a boolean, or not <c>true</c>.
+    /// </summary>
+    public static bool ReadBool(JsonObject obj, string property)
+        => obj[property] is JsonValue v && v.TryGetValue<bool>(out var b) && b;
+
+    /// <summary>
+    /// Reads a string array property from a <see cref="JsonObject"/>. Returns an empty
+    /// list if the property is missing or not an array.
+    /// </summary>
+    public static List<string> ReadStringArray(JsonObject obj, string property)
+    {
+        if (obj[property] is not JsonArray arr)
+            return [];
+
+        return arr.Select(v => v?.GetValue<string>())
+            .Where(s => !string.IsNullOrWhiteSpace(s))
+            .Cast<string>()
+            .ToList();
+    }
+
     public static (JsonObject? Root, DoctorCheckResult? Error) TryReadConfig(NetclawPaths paths)
     {
         if (!File.Exists(paths.NetclawConfigPath))

@@ -1,0 +1,151 @@
+using System.Text;
+using Netclaw.Actors.Protocol;
+using Netclaw.Configuration;
+
+namespace Netclaw.Actors.Channels;
+
+/// <summary>
+/// What the caller should do after processing an output via
+/// <see cref="ExecutionOutputAccumulator.ProcessOutput"/>.
+/// </summary>
+public enum OutputAction
+{
+    /// <summary>Output was accumulated; no caller action needed.</summary>
+    Continue,
+
+    /// <summary>Turn completed; caller should finalize and stop.</summary>
+    TurnCompleted,
+
+    /// <summary>Error received; caller should report failure and stop.</summary>
+    Error
+}
+
+/// <summary>
+/// Tracks output accumulation and notification result state for fire-and-forget
+/// execution actors (reminders, webhooks). Pure C# — no Akka dependency.
+/// </summary>
+public sealed class ExecutionOutputAccumulator
+{
+    private const string NotificationToolName = "send_slack_message";
+
+    private readonly StringBuilder _buffer = new();
+    private bool _sawTextDelta;
+    private bool _notifyAttempted;
+    private bool _notifyFailed;
+    private string? _notifyFailureDetail;
+
+    /// <summary>
+    /// The error message from the most recent <see cref="ErrorOutput"/>,
+    /// or <c>null</c> if no error has been received.
+    /// </summary>
+    public string? LastErrorMessage { get; private set; }
+
+    /// <summary>
+    /// The underlying exception from the most recent <see cref="ErrorOutput"/>,
+    /// or <c>null</c> if no error has been received or the error had no cause.
+    /// </summary>
+    public Exception? LastErrorCause { get; private set; }
+
+    /// <summary>
+    /// The <see cref="ErrorCategory"/> of the most recent error, if any.
+    /// </summary>
+    public ErrorCategory? LastErrorCategory { get; private set; }
+
+    /// <summary>
+    /// Returns the accumulated text output, trimmed.
+    /// </summary>
+    public string GetAccumulatedText() => _buffer.ToString().Trim();
+
+    /// <summary>
+    /// Whether a notification tool was invoked during this execution.
+    /// </summary>
+    public bool NotifyAttempted => _notifyAttempted;
+
+    /// <summary>
+    /// Whether the most recent notification attempt failed.
+    /// </summary>
+    public bool NotifyFailed => _notifyFailed;
+
+    /// <summary>
+    /// Processes a <see cref="SessionOutput"/> and returns the action the caller should take.
+    /// </summary>
+    public OutputAction ProcessOutput(SessionOutput output)
+    {
+        switch (output)
+        {
+            case TextDeltaOutput delta:
+                _buffer.Append(delta.Delta);
+                _sawTextDelta = true;
+                return OutputAction.Continue;
+
+            case TextOutput text:
+                if (!_sawTextDelta)
+                    _buffer.Append(text.Text);
+                return OutputAction.Continue;
+
+            case ToolResultOutput toolResult:
+                TrackNotificationResult(toolResult);
+                return OutputAction.Continue;
+
+            case BufferFlush:
+                return OutputAction.Continue;
+
+            case TurnCompleted:
+                return OutputAction.TurnCompleted;
+
+            case ErrorOutput err:
+                LastErrorMessage = err.Message;
+                LastErrorCause = err.Cause;
+                LastErrorCategory = err.Category;
+                return OutputAction.Error;
+
+            default:
+                return OutputAction.Continue;
+        }
+    }
+
+    /// <summary>
+    /// Evaluates notification policy to determine if the execution should be
+    /// considered a failure due to notification issues. Returns <c>null</c> on
+    /// success, or an error message string describing the notification failure.
+    /// </summary>
+    /// <param name="hasNotifyInstructions">Whether notification instructions were configured.</param>
+    /// <param name="notifyPolicy">The notification policy for this execution.</param>
+    public string? BuildNotifyFailureMessage(bool hasNotifyInstructions, NotificationPolicy notifyPolicy)
+    {
+        if (!hasNotifyInstructions)
+            return null;
+
+        if (!_notifyAttempted)
+        {
+            if (notifyPolicy == NotificationPolicy.Conditional)
+                return null;
+
+            return "Notification instructions were provided but no notification tool was invoked.";
+        }
+
+        if (_notifyFailed)
+            return _notifyFailureDetail ?? "Notification tool returned an unspecified error.";
+
+        return null;
+    }
+
+    private void TrackNotificationResult(ToolResultOutput toolResult)
+    {
+        if (!string.Equals(toolResult.ToolName, NotificationToolName, StringComparison.Ordinal))
+            return;
+
+        _notifyAttempted = true;
+
+        var result = toolResult.Result?.Trim() ?? string.Empty;
+        if (result.StartsWith("Error", StringComparison.OrdinalIgnoreCase))
+        {
+            _notifyFailed = true;
+            _notifyFailureDetail = result;
+            return;
+        }
+
+        _notifyFailed = false;
+        _notifyFailureDetail = null;
+    }
+}

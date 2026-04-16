@@ -62,4 +62,27 @@ public sealed record OperationalAlert
     /// Deduplication key built from Type and Source.
     /// </summary>
     public string DeduplicationKey => Source is not null ? $"{Type}:{Source}" : Type;
+
+    /// <summary>
+    /// Creates an <see cref="OperationalAlert"/> with a generated <see cref="IdGen.AlertId"/>
+    /// and current timestamp from the provided <paramref name="timeProvider"/>.
+    /// </summary>
+    public static OperationalAlert Create(
+        TimeProvider timeProvider,
+        string type,
+        AlertType category,
+        string summary,
+        string severity,
+        string? source = null,
+        Dictionary<string, string>? context = null) => new()
+    {
+        AlertId = IdGen.AlertId(),
+        Type = type,
+        Category = category,
+        Summary = summary,
+        Timestamp = timeProvider.GetUtcNow(),
+        Severity = severity,
+        Source = source,
+        Context = context
+    };
 }
