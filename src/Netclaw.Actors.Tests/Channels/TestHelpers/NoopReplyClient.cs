@@ -12,7 +12,7 @@ internal sealed class NoopReplyClient : ISlackReplyClient
 
     public Task UpdateThreadMessageAsync(
         SlackChannelId channelId,
-        string messageTs,
+        SlackEventTs messageTs,
         string text,
         IReadOnlyList<SlackNet.Blocks.Block>? blocks = null,
         CancellationToken cancellationToken = default)

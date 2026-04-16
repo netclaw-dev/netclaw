@@ -24,7 +24,7 @@ public sealed class SlackThreadHistoryFetcher : IThreadHistoryFetcher
     /// without faking the entire <see cref="IConversationsApi"/> surface.
     /// </summary>
     public delegate Task<ConversationMessagesResponse> RepliesFetcher(
-        string channelId, string threadTs, int limit, string? cursor, CancellationToken ct);
+        SlackChannelId channelId, SlackThreadTs threadTs, int limit, string? cursor, CancellationToken ct);
 
     private readonly RepliesFetcher _repliesFetcher;
     private readonly SlackChannelOptions _options;
@@ -57,7 +57,7 @@ public sealed class SlackThreadHistoryFetcher : IThreadHistoryFetcher
         ILogger<SlackThreadHistoryFetcher> logger)
         : this(
             (channelId, threadTs, limit, cursor, ct) =>
-                conversationsApi.Replies(channelId, threadTs, limit: limit, cursor: cursor, cancellationToken: ct),
+                conversationsApi.Replies(channelId.Value, threadTs.Value, limit: limit, cursor: cursor, cancellationToken: ct),
             options, httpClient, contentScanner, logger)
     {
     }
@@ -74,8 +74,8 @@ public sealed class SlackThreadHistoryFetcher : IThreadHistoryFetcher
             return [];
         }
 
-        var channelId = parts[0];
-        var threadTs = parts[1];
+        var channelId = new SlackChannelId(parts[0]);
+        var threadTs = new SlackThreadTs(parts[1]);
 
         try
         {
@@ -94,8 +94,8 @@ public sealed class SlackThreadHistoryFetcher : IThreadHistoryFetcher
     }
 
     private async Task<IReadOnlyList<ChannelInput>> FetchRepliesAsync(
-        string channelId,
-        string threadTs,
+        SlackChannelId channelId,
+        SlackThreadTs threadTs,
         CancellationToken cancellationToken)
     {
         var results = new List<ChannelInput>();
@@ -133,7 +133,7 @@ public sealed class SlackThreadHistoryFetcher : IThreadHistoryFetcher
 
     private async Task<ChannelInput?> ConvertMessageAsync(
         SlackNet.Events.MessageEvent message,
-        string channelId,
+        SlackChannelId channelId,
         CancellationToken cancellationToken)
     {
         var contents = new List<AIContent>();
@@ -165,8 +165,8 @@ public sealed class SlackThreadHistoryFetcher : IThreadHistoryFetcher
         return new ChannelInput
         {
             SenderId = message.User,
-            ChannelId = channelId,
-            MessageId = $"{channelId}:{message.Ts ?? string.Empty}",
+            ChannelId = channelId.Value,
+            MessageId = $"{channelId.Value}:{message.Ts ?? string.Empty}",
             Contents = contents,
             ReceivedAt = receivedAt
         };

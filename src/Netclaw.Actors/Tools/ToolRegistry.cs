@@ -78,14 +78,14 @@ public sealed class ToolRegistry
     /// <summary>
     /// Returns tools discovered from one MCP server.
     /// </summary>
-    public IReadOnlyList<INetclawTool> GetToolsForServer(string serverName, int maxResults)
+    public IReadOnlyList<INetclawTool> GetToolsForServer(McpServerName serverName, int maxResults)
     {
-        if (string.IsNullOrWhiteSpace(serverName) || maxResults <= 0)
+        if (string.IsNullOrWhiteSpace(serverName.Value) || maxResults <= 0)
             return [];
 
         return _tools
             .Where(t => t.Tool is McpToolAdapter mcp
-                        && string.Equals(mcp.ServerName, serverName, StringComparison.OrdinalIgnoreCase))
+                        && string.Equals(mcp.ServerName, serverName.Value, StringComparison.OrdinalIgnoreCase))
             .Select(t => t.Tool)
             .OrderBy(t => t.Name, StringComparer.Ordinal)
             .Take(maxResults)
@@ -116,7 +116,7 @@ public sealed class ToolRegistry
     /// Search tools by keyword, matching against name and description.
     /// Returns up to <paramref name="maxResults"/> matching tools.
     /// </summary>
-    public IReadOnlyList<INetclawTool> SearchTools(string query, string? serverFilter, int maxResults)
+    public IReadOnlyList<INetclawTool> SearchTools(string query, McpServerName? serverFilter, int maxResults)
     {
         var queryParts = TokenizeQuery(query);
 
@@ -129,7 +129,7 @@ public sealed class ToolRegistry
                 // Apply server filter if specified
                 if (serverFilter is not null && t.Tool is McpToolAdapter mcp)
                 {
-                    if (!string.Equals(mcp.ServerName, serverFilter, StringComparison.OrdinalIgnoreCase))
+                    if (!string.Equals(mcp.ServerName, serverFilter.Value.Value, StringComparison.OrdinalIgnoreCase))
                         return false;
                 }
                 else if (serverFilter is not null)
@@ -152,7 +152,7 @@ public sealed class ToolRegistry
     /// <summary>
     /// Returns fuzzy suggestions when direct keyword matching returns no tools.
     /// </summary>
-    public IReadOnlyList<INetclawTool> SuggestTools(string query, string? serverFilter, int maxResults)
+    public IReadOnlyList<INetclawTool> SuggestTools(string query, McpServerName? serverFilter, int maxResults)
     {
         var normalizedQuery = NormalizeSearchText(query);
         if (string.IsNullOrWhiteSpace(normalizedQuery))
@@ -269,7 +269,7 @@ public sealed class ToolRegistry
             .ToList();
     }
 
-    private static bool PassesServerFilter(INetclawTool tool, string? serverFilter)
+    private static bool PassesServerFilter(INetclawTool tool, McpServerName? serverFilter)
     {
         if (serverFilter is null)
             return true;
@@ -277,7 +277,7 @@ public sealed class ToolRegistry
         if (tool is not McpToolAdapter mcp)
             return false;
 
-        return string.Equals(mcp.ServerName, serverFilter, StringComparison.OrdinalIgnoreCase);
+        return string.Equals(mcp.ServerName, serverFilter.Value.Value, StringComparison.OrdinalIgnoreCase);
     }
 
     private static string NormalizeSearchText(string text)

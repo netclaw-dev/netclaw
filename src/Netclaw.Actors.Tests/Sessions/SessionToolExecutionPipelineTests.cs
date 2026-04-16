@@ -64,7 +64,7 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
             TimeSpan.FromSeconds(2),
             cancellationToken: TestContext.Current.CancellationToken);
 
-        approvalChannel.Complete(approvalRequest.CallId, ApprovalDecision.ApprovedOnce);
+        approvalChannel.Complete(new ToolCallId(approvalRequest.CallId), ApprovalDecision.ApprovedOnce);
 
         var completed = await probe.ExpectMsgAsync<ToolExecutionCompleted>(
             TimeSpan.FromSeconds(3),
@@ -112,7 +112,7 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
         await AwaitAssertAsync(() =>
         {
             var firstRequest = Assert.Single(approvals);
-            approvalChannel.Complete(firstRequest.CallId, ApprovalDecision.ApprovedOnce);
+            approvalChannel.Complete(new ToolCallId(firstRequest.CallId), ApprovalDecision.ApprovedOnce);
         }, duration: TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
 
         var completed = await probe.ExpectMsgAsync<ToolExecutionCompleted>(

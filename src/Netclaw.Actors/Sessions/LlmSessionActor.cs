@@ -769,7 +769,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 await _approvalService.RecordApprovalAsync(
                     _sessionId.Value,
                     pending.Audience,
-                    pending.ToolName,
+                    new ToolName(pending.ToolName),
                     pending.Patterns,
                     persistent: decision == ApprovalDecision.ApprovedAlways,
                     CancellationToken.None);
@@ -780,7 +780,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             ResumeToolExecutionWatchdogAfterApprovalWait();
 
             // Complete the TCS so the blocked pipeline task can proceed
-            _approvalChannel.Complete(msg.CallId, decision);
+            _approvalChannel.Complete(new ToolCallId(msg.CallId), decision);
         });
 
         Command<LlmCallFailed>(msg =>

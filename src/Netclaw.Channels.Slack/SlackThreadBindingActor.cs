@@ -1307,7 +1307,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
         public bool ShouldNotifySession => FailureKind is not null;
     }
 
-    private async Task<string?> HandleApprovalRequestAsync(ToolInteractionRequest request)
+    private async Task<SlackEventTs?> HandleApprovalRequestAsync(ToolInteractionRequest request)
     {
         try
         {
@@ -1322,7 +1322,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
             _log.Info("Posted approval request for tool {ToolName} call={CallId}",
                 request.ToolName, request.CallId);
 
-            return promptMessageTs;
+            return new SlackEventTs(promptMessageTs);
         }
         catch (Exception ex)
         {
@@ -1359,7 +1359,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
 
     private async Task TryResolveApprovalPromptAsync(PendingApprovalRequest pending, string selectedKey, string senderId)
     {
-        if (string.IsNullOrWhiteSpace(pending.PromptMessageTs))
+        if (pending.PromptMessageTs is not { } promptTs)
             return;
 
         try
@@ -1376,7 +1376,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
             using var cts = new CancellationTokenSource(OperationTimeout);
             await _dependencies.ReplyClient.UpdateThreadMessageAsync(
                 _channelId,
-                pending.PromptMessageTs,
+                promptTs,
                 text,
                 blocks,
                 cts.Token);
@@ -1442,7 +1442,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
     {
         public ToolInteractionRequest Request { get; } = request;
 
-        public string? PromptMessageTs { get; set; }
+        public SlackEventTs? PromptMessageTs { get; set; }
     }
 
     private sealed record InitializePipeline

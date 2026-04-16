@@ -3,6 +3,7 @@ using Akka.Hosting;
 using Netclaw.Actors.Hosting;
 using Netclaw.Configuration;
 using Netclaw.Security;
+using Netclaw.Tools;
 
 namespace Netclaw.Actors.Tools;
 
@@ -18,7 +19,7 @@ public sealed class AkkaToolApprovalService : IToolApprovalService
     public async Task<IReadOnlyList<string>> GetUnapprovedPatternsAsync(
         string? sessionId,
         TrustAudience audience,
-        string toolName,
+        ToolName toolName,
         IReadOnlyList<string> patterns,
         CancellationToken ct = default)
     {
@@ -34,7 +35,7 @@ public sealed class AkkaToolApprovalService : IToolApprovalService
     public async Task RecordApprovalAsync(
         string sessionId,
         TrustAudience audience,
-        string toolName,
+        ToolName toolName,
         IReadOnlyList<string> patterns,
         bool persistent,
         CancellationToken ct = default)

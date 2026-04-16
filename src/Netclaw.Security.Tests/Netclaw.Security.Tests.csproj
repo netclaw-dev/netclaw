@@ -16,6 +16,7 @@
 
   <ItemGroup>
     <ProjectReference Include="../Netclaw.Security/Netclaw.Security.csproj" />
+    <ProjectReference Include="../Netclaw.Tools.Abstractions/Netclaw.Tools.Abstractions.csproj" />
   </ItemGroup>
 
 </Project>

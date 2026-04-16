@@ -1,6 +1,7 @@
 using Akka.Actor;
 using Netclaw.Configuration;
 using Netclaw.Security;
+using Netclaw.Tools;
 
 namespace Netclaw.Actors.Tools;
 
@@ -33,7 +34,7 @@ internal sealed class ToolApprovalActor : ReceiveActor
                 AddSessionApproval(msg.SessionId, msg.Audience, msg.ToolName, pattern);
 
                 if (msg.Persistent)
-                    _persistentStore?.AddApproval(msg.Audience, msg.ToolName, pattern);
+                    _persistentStore?.AddApproval(msg.Audience, msg.ToolName.Value, pattern);
             }
 
             Sender.Tell(ToolApprovalRecorded.Instance);
@@ -43,11 +44,11 @@ internal sealed class ToolApprovalActor : ReceiveActor
     public static Props CreateProps(ToolApprovalStore? persistentStore = null)
         => Props.Create(() => new ToolApprovalActor(persistentStore));
 
-    private bool IsApproved(string? sessionId, TrustAudience audience, string toolName, string pattern)
+    private bool IsApproved(string? sessionId, TrustAudience audience, ToolName toolName, string pattern)
     {
         if (!string.IsNullOrWhiteSpace(sessionId)
             && _sessionApprovals.TryGetValue(BuildSessionKey(sessionId, audience), out var toolMap)
-            && toolMap.TryGetValue(toolName, out var patterns)
+            && toolMap.TryGetValue(toolName.Value, out var patterns)
             && ApprovalPatternMatching.MatchesAny(pattern, patterns))
         {
             return true;
@@ -56,10 +57,10 @@ internal sealed class ToolApprovalActor : ReceiveActor
         if (_persistentStore is null)
             return false;
 
-        return ApprovalPatternMatching.MatchesAny(pattern, _persistentStore.GetApprovedPatterns(audience, toolName));
+        return ApprovalPatternMatching.MatchesAny(pattern, _persistentStore.GetApprovedPatterns(audience, toolName.Value));
     }
 
-    private void AddSessionApproval(string sessionId, TrustAudience audience, string toolName, string pattern)
+    private void AddSessionApproval(string sessionId, TrustAudience audience, ToolName toolName, string pattern)
     {
         var sessionKey = BuildSessionKey(sessionId, audience);
         if (!_sessionApprovals.TryGetValue(sessionKey, out var toolMap))
@@ -68,10 +69,10 @@ internal sealed class ToolApprovalActor : ReceiveActor
             _sessionApprovals[sessionKey] = toolMap;
         }
 
-        if (!toolMap.TryGetValue(toolName, out var patterns))
+        if (!toolMap.TryGetValue(toolName.Value, out var patterns))
         {
             patterns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            toolMap[toolName] = patterns;
+            toolMap[toolName.Value] = patterns;
         }
 
         patterns.Add(pattern);

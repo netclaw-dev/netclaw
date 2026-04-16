@@ -4,6 +4,7 @@ using Netclaw.Cli.Daemon;
 using Netclaw.Configuration;
 using Netclaw.Providers;
 using Netclaw.Providers.OAuth;
+using Netclaw.Tools;
 using R3;
 
 namespace Netclaw.Cli.Tui;
@@ -74,7 +75,7 @@ public sealed class OAuthFlowCoordinator : IDisposable
     /// Returns a <see cref="CancellationToken"/> that fires when the flow ends.
     /// </summary>
     public CancellationToken StartMcpBrowserFlow(
-        string serverName, Action? onSuccess = null)
+        McpServerName serverName, Action? onSuccess = null)
     {
         Cancel();
         _cts = new CancellationTokenSource();
@@ -212,10 +213,10 @@ public sealed class OAuthFlowCoordinator : IDisposable
     }
 
     private Task RunMcpBrowserFlowAsync(
-        string serverName, Action? onSuccess, CancellationToken ct)
+        McpServerName serverName, Action? onSuccess, CancellationToken ct)
     {
         return RunBrowserFlowCoreAsync(
-            startFlow: async token => await _daemonApi!.StartMcpOAuthAsync(serverName, token),
+            startFlow: async token => await _daemonApi!.StartMcpOAuthAsync(serverName.Value, token),
             pollStatus: (state, token) => _daemonApi!.GetMcpOAuthStatusByStateAsync(state, token),
             parseResult: _ => null, // MCP tokens are persisted daemon-side
             onSuccess: _ => onSuccess?.Invoke(),

@@ -9,6 +9,7 @@ using Netclaw.Cli.Daemon;
 using Netclaw.Cli.Json;
 using Netclaw.Configuration;
 using Netclaw.Providers.OAuth;
+using Netclaw.Tools;
 
 namespace Netclaw.Cli.Mcp;
 
@@ -63,7 +64,6 @@ internal static class McpCommand
         var envVars = new Dictionary<string, string>();
         var headers = new Dictionary<string, string>();
         var grantAll = false;
-        string? name = null;
         string? commandOrUrl = null;
         string[]? commandArgs = null;
 
@@ -136,7 +136,7 @@ internal static class McpCommand
             return 1;
         }
 
-        name = positional[0];
+        var serverName = new McpServerName(positional[0]);
         transport ??= "stdio";
 
         if (transport is "stdio")
@@ -197,9 +197,9 @@ internal static class McpCommand
         var (config, secrets) = LoadConfigFiles(paths);
 
         var mcpServers = GetOrCreateSection(config, "McpServers");
-        mcpServers[name] = SerializeEntry(entry);
+        mcpServers[serverName.Value] = SerializeEntry(entry);
 
-        ApplySecureDefaultsForNewServer(config, name, grantAll);
+        ApplySecureDefaultsForNewServer(config, serverName, grantAll);
 
         WriteConfigFile(paths.NetclawConfigPath, config);
 
@@ -214,11 +214,11 @@ internal static class McpCommand
             if (headers.Count > 0)
                 serverSecrets["Headers"] = headers;
 
-            secretMcp[name] = JsonSerializer.SerializeToElement(serverSecrets);
+            secretMcp[serverName.Value] = JsonSerializer.SerializeToElement(serverSecrets);
             WriteSecretsFile(paths, secrets);
         }
 
-        writer.WriteLine($"Added MCP server '{name}' ({transport})");
+        writer.WriteLine($"Added MCP server '{serverName.Value}' ({transport})");
         writer.WriteLine();
         if (grantAll)
         {
@@ -231,7 +231,7 @@ internal static class McpCommand
             writer.WriteLine("          were written as empty lists to block all tools until you opt in.");
         }
         writer.WriteLine("Approval defaults: Personal=Approval, Team=Approval, Public=Deny");
-        writer.WriteLine($"Next: run `netclaw mcp permissions` to grant tools and adjust approvals for '{name}'.");
+        writer.WriteLine($"Next: run `netclaw mcp permissions` to grant tools and adjust approvals for '{serverName.Value}'.");
         return 0;
     }
 
@@ -244,7 +244,7 @@ internal static class McpCommand
     /// <c>ApprovalPolicy</c> section is created if missing.
     /// </summary>
     private static void ApplySecureDefaultsForNewServer(
-        Dictionary<string, object> config, string serverName, bool grantAll)
+        Dictionary<string, object> config, McpServerName serverName, bool grantAll)
     {
         var toolsSection = GetOrCreateSection(config, "Tools");
         var profilesSection = GetOrCreateSection(toolsSection, "AudienceProfiles");
@@ -263,12 +263,12 @@ internal static class McpCommand
             if (!grantAll)
             {
                 var grants = GetOrCreateSection(audienceSection, "McpServerToolGrants");
-                grants[serverName] = new List<string>();
+                grants[serverName.Value] = new List<string>();
             }
 
             var approvalPolicy = GetOrCreateSection(audienceSection, "ApprovalPolicy");
             var serverDefaults = GetOrCreateSection(approvalPolicy, "McpServerDefaults");
-            serverDefaults[serverName] = approvalMode;
+            serverDefaults[serverName.Value] = approvalMode;
         }
     }
 
@@ -286,28 +286,28 @@ internal static class McpCommand
             return 1;
         }
 
-        var name = args[2];
+        var serverName = new McpServerName(args[2]);
         var servers = LoadMcpServers(paths);
 
-        if (!servers.TryGetValue(name, out var entry))
+        if (!servers.TryGetValue(serverName.Value, out var entry))
         {
-            writer.WriteLine($"MCP server '{name}' not found.");
+            writer.WriteLine($"MCP server '{serverName.Value}' not found.");
             return 1;
         }
 
         if (entry.Transport is "stdio" || string.IsNullOrWhiteSpace(entry.Url))
         {
-            writer.WriteLine($"MCP server '{name}' uses stdio transport. OAuth is only for HTTP/SSE servers.");
+            writer.WriteLine($"MCP server '{serverName.Value}' uses stdio transport. OAuth is only for HTTP/SSE servers.");
             return 1;
         }
 
         // 1. Start the OAuth flow via daemon
-        writer.WriteLine($"Starting OAuth authorization for '{name}'...");
+        writer.WriteLine($"Starting OAuth authorization for '{serverName.Value}'...");
 
         HttpResponseMessage startResponse;
         try
         {
-            startResponse = await daemonApi.StartMcpOAuthAsync(name);
+            startResponse = await daemonApi.StartMcpOAuthAsync(serverName.Value);
         }
         catch (HttpRequestException)
         {
@@ -372,7 +372,7 @@ internal static class McpCommand
             var pollResult = await pollTask;
             if (pollResult)
             {
-                writer.WriteLine($"Authorization complete for '{name}'.");
+                writer.WriteLine($"Authorization complete for '{serverName.Value}'.");
                 return 0;
             }
         }
@@ -381,13 +381,13 @@ internal static class McpCommand
             var pasteResult = await pasteTask;
             if (pasteResult)
             {
-                writer.WriteLine($"Authorization complete for '{name}'.");
+                writer.WriteLine($"Authorization complete for '{serverName.Value}'.");
                 return 0;
             }
         }
 
-        writer.WriteLine($"Authorization failed or timed out for '{name}'.");
-        writer.WriteLine("Try again with: netclaw mcp auth " + name);
+        writer.WriteLine($"Authorization failed or timed out for '{serverName.Value}'.");
+        writer.WriteLine("Try again with: netclaw mcp auth " + serverName.Value);
         return 1;
     }
 
@@ -577,11 +577,12 @@ internal static class McpCommand
         writer.WriteLine($"{"Name",-20} {"Transport",-10} {"Enabled",-8} {"Status"}");
         foreach (var (name, entry) in servers)
         {
+            var serverName = new McpServerName(name);
             var enabled = entry.Enabled ? "yes" : "no";
             var statusText = !entry.Enabled
                 ? "disabled"
                 : daemonStatuses is not null
-                    ? FormatDaemonStatus(daemonStatuses, name)
+                    ? FormatDaemonStatus(daemonStatuses, serverName)
                         ?? "status unavailable — restart daemon to load this config"
                     : "status unavailable — daemon unavailable";
 
@@ -591,12 +592,12 @@ internal static class McpCommand
         return daemonError is null ? 0 : 1;
     }
 
-    private static string? FormatDaemonStatus(JsonElement? daemonStatuses, string serverName)
+    private static string? FormatDaemonStatus(JsonElement? daemonStatuses, McpServerName serverName)
     {
         if (daemonStatuses is null)
             return null;
 
-        if (!daemonStatuses.Value.TryGetProperty(serverName, out var entry))
+        if (!daemonStatuses.Value.TryGetProperty(serverName.Value, out var entry))
             return null;
 
         var state = entry.GetProperty("state").GetString();
@@ -606,7 +607,7 @@ internal static class McpCommand
         return state switch
         {
             "Connected" => $"connected ({toolCount} tools)",
-            "AwaitingAuth" => "awaiting auth — run: netclaw mcp auth " + serverName,
+            "AwaitingAuth" => "awaiting auth — run: netclaw mcp auth " + serverName.Value,
             "AuthFailed" => $"auth failed ({error ?? "authentication rejected"})",
             "Unreachable" => $"unreachable — {error ?? "connection failed"}",
             "Disabled" => "disabled",
@@ -622,16 +623,16 @@ internal static class McpCommand
             return 1;
         }
 
-        var name = args[2];
+        var serverName = new McpServerName(args[2]);
         var servers = LoadMcpServers(paths);
 
-        if (!servers.TryGetValue(name, out var entry))
+        if (!servers.TryGetValue(serverName.Value, out var entry))
         {
-            writer.WriteLine($"MCP server '{name}' not found.");
+            writer.WriteLine($"MCP server '{serverName.Value}' not found.");
             return 1;
         }
 
-        writer.WriteLine($"Name:       {name}");
+        writer.WriteLine($"Name:       {serverName.Value}");
         writer.WriteLine($"Transport:  {entry.Transport}");
 
         if (entry.Command is not null)
@@ -677,19 +678,19 @@ internal static class McpCommand
             return 1;
         }
 
-        var name = args[2];
+        var serverName = new McpServerName(args[2]);
         var (config, secrets) = LoadConfigFiles(paths);
 
         var removed = false;
         var mcpServers = GetSectionOrNull(config, "McpServers");
-        if (mcpServers?.Remove(name) == true)
+        if (mcpServers?.Remove(serverName.Value) == true)
         {
             WriteConfigFile(paths.NetclawConfigPath, config);
             removed = true;
         }
 
         var secretMcp = GetSectionOrNull(secrets, "McpServers");
-        if (secretMcp?.Remove(name) == true)
+        if (secretMcp?.Remove(serverName.Value) == true)
         {
             WriteSecretsFile(paths, secrets);
             removed = true;
@@ -697,11 +698,11 @@ internal static class McpCommand
 
         if (removed)
         {
-            writer.WriteLine($"Removed MCP server '{name}'");
+            writer.WriteLine($"Removed MCP server '{serverName.Value}'");
             return 0;
         }
 
-        writer.WriteLine($"MCP server '{name}' not found.");
+        writer.WriteLine($"MCP server '{serverName.Value}' not found.");
         return 1;
     }
 
@@ -713,31 +714,31 @@ internal static class McpCommand
             return 1;
         }
 
-        var name = args[2];
+        var serverName = new McpServerName(args[2]);
         var (config, _) = LoadConfigFiles(paths);
 
         var mcpServers = GetSectionOrNull(config, "McpServers");
-        if (mcpServers is null || !mcpServers.ContainsKey(name))
+        if (mcpServers is null || !mcpServers.ContainsKey(serverName.Value))
         {
-            writer.WriteLine($"MCP server '{name}' not found.");
+            writer.WriteLine($"MCP server '{serverName.Value}' not found.");
             return 1;
         }
 
         // Deserialize, toggle, re-serialize
         var entry = JsonSerializer.Deserialize<McpServerEntry>(
-            JsonSerializer.Serialize(mcpServers[name])) ?? new McpServerEntry();
+            JsonSerializer.Serialize(mcpServers[serverName.Value])) ?? new McpServerEntry();
         entry.Enabled = enabled;
-        mcpServers[name] = SerializeEntry(entry);
+        mcpServers[serverName.Value] = SerializeEntry(entry);
 
         WriteConfigFile(paths.NetclawConfigPath, config);
-        writer.WriteLine($"{(enabled ? "Enabled" : "Disabled")} MCP server '{name}'");
+        writer.WriteLine($"{(enabled ? "Enabled" : "Disabled")} MCP server '{serverName.Value}'");
         return 0;
     }
 
     private static readonly TimeSpan ProbeTimeout = TimeSpan.FromSeconds(15);
 
     internal static async Task<McpProbeResult> ProbeServerAsync(
-        string name, McpServerEntry entry, CancellationToken ct = default)
+        McpServerName serverName, McpServerEntry entry, CancellationToken ct = default)
     {
         if (!entry.Enabled)
             return new McpProbeResult(McpProbeStatus.Disabled, 0, null);
@@ -747,7 +748,7 @@ internal static class McpCommand
 
         try
         {
-            await using var client = await CreateOneOffClientAsync(name, entry);
+            await using var client = await CreateOneOffClientAsync(serverName, entry);
             var tools = await client.ListToolsAsync(cancellationToken: timeoutCts.Token);
             return new McpProbeResult(McpProbeStatus.Connected, tools.Count, null);
         }
@@ -780,7 +781,7 @@ internal static class McpCommand
         }
     }
 
-    internal static async Task<McpClient> CreateOneOffClientAsync(string name, McpServerEntry entry)
+    internal static async Task<McpClient> CreateOneOffClientAsync(McpServerName serverName, McpServerEntry entry)
     {
         IClientTransport transport;
 
@@ -795,7 +796,7 @@ internal static class McpCommand
                 Command = entry.Command!,
                 Arguments = entry.Arguments ?? [],
                 EnvironmentVariables = envVars,
-                Name = name,
+                Name = serverName.Value,
                 ShutdownTimeout = TimeSpan.FromSeconds(10),
             });
         }
@@ -804,7 +805,7 @@ internal static class McpCommand
             transport = new HttpClientTransport(new HttpClientTransportOptions
             {
                 Endpoint = new Uri(entry.Url!),
-                Name = name,
+                Name = serverName.Value,
                 AdditionalHeaders = entry.Headers is { Count: > 0 }
                     ? new Dictionary<string, string>(entry.Headers) : null,
                 TransportMode = entry.Transport is "sse"
@@ -900,7 +901,7 @@ internal static class McpCommand
     private static async Task<int> RunToolsAsync(string[] args, NetclawPaths paths, DaemonApi? daemonApi, TextWriter writer)
     {
         // Parse: netclaw mcp tools <server> [--snapshot] [--audience <name>] [--grant t1,t2] [--revoke t1,t2]
-        string? serverName = null;
+        string? serverNameRaw = null;
         string? audienceFilter = null;
         var snapshot = false;
         List<string>? grantTools = null;
@@ -926,17 +927,19 @@ internal static class McpCommand
                     WriteToolsHelp(writer);
                     return 0;
                 default:
-                    if (serverName is null && !args[i].StartsWith('-'))
-                        serverName = args[i];
+                    if (serverNameRaw is null && !args[i].StartsWith('-'))
+                        serverNameRaw = args[i];
                     break;
             }
         }
 
-        if (serverName is null)
+        if (serverNameRaw is null)
         {
             WriteToolsHelp(writer);
             return 1;
         }
+
+        var serverName = new McpServerName(serverNameRaw);
 
         // Validate audience name if provided
         TrustAudience? targetAudience = null;
@@ -961,7 +964,7 @@ internal static class McpCommand
         List<string> discoveredTools;
         try
         {
-            discoveredTools = await daemonApi.GetMcpToolNamesAsync(serverName, CancellationToken.None);
+            discoveredTools = await daemonApi.GetMcpToolNamesAsync(serverName.Value, CancellationToken.None);
         }
         catch (HttpRequestException)
         {
@@ -976,7 +979,7 @@ internal static class McpCommand
 
         if (discoveredTools.Count == 0)
         {
-            writer.WriteLine($"No tools discovered for server '{serverName}'.");
+            writer.WriteLine($"No tools discovered for server '{serverName.Value}'.");
             writer.WriteLine("The server may be disconnected or have no tools. Check `netclaw mcp list`.");
             return 1;
         }
@@ -1024,10 +1027,10 @@ internal static class McpCommand
     }
 
     private static int RunToolsList(
-        string serverName, TrustAudience? audienceFilter, List<string> discoveredTools,
+        McpServerName serverName, TrustAudience? audienceFilter, List<string> discoveredTools,
         ToolAudienceProfiles profiles, TextWriter writer)
     {
-        writer.WriteLine($"Tools for server '{serverName}' ({discoveredTools.Count} discovered):");
+        writer.WriteLine($"Tools for server '{serverName.Value}' ({discoveredTools.Count} discovered):");
         writer.WriteLine();
 
         var maxNameLen = Math.Max(discoveredTools.Max(t => t.Length), 4);
@@ -1045,9 +1048,10 @@ internal static class McpCommand
 
             foreach (var tool in discoveredTools)
             {
+                var toolName = new ToolName(tool);
                 writer.Write("  ");
                 writer.Write(tool.PadRight(maxNameLen + 2));
-                writer.WriteLine(FormatGrantStatus(serverName, tool, profile).TrimEnd());
+                writer.WriteLine(FormatGrantStatus(serverName, toolName, profile).TrimEnd());
             }
         }
         else
@@ -1062,11 +1066,12 @@ internal static class McpCommand
 
             foreach (var tool in discoveredTools)
             {
+                var toolName = new ToolName(tool);
                 writer.Write("  ");
                 writer.Write(tool.PadRight(maxNameLen + 2));
-                writer.Write(FormatGrantStatus(serverName, tool, profiles.Public));
-                writer.Write(FormatGrantStatus(serverName, tool, profiles.Team));
-                writer.Write(FormatGrantStatus(serverName, tool, profiles.Personal));
+                writer.Write(FormatGrantStatus(serverName, toolName, profiles.Public));
+                writer.Write(FormatGrantStatus(serverName, toolName, profiles.Team));
+                writer.Write(FormatGrantStatus(serverName, toolName, profiles.Personal));
                 writer.WriteLine();
             }
         }
@@ -1076,21 +1081,21 @@ internal static class McpCommand
         return 0;
     }
 
-    private static string FormatGrantStatus(string serverName, string toolName, ToolAudienceProfile profile)
+    private static string FormatGrantStatus(McpServerName serverName, ToolName toolName, ToolAudienceProfile profile)
     {
         if (profile.McpServerToolGrants is null)
             return "\u2731        "; // ✱ = all (no grants configured)
 
-        if (!profile.McpServerToolGrants.TryGetValue(serverName, out var allowedTools))
+        if (!profile.McpServerToolGrants.TryGetValue(serverName.Value, out var allowedTools))
             return "\u2731        "; // ✱ = server not in grants, all tools pass
 
-        return allowedTools.Contains(toolName, StringComparer.Ordinal)
+        return allowedTools.Contains(toolName.Value, StringComparer.Ordinal)
             ? "\u2713        " // ✓ = granted
             : "-        ";    // - = blocked
     }
 
     private static int RunToolsSnapshot(
-        string serverName, TrustAudience? targetAudience, List<string> discoveredTools,
+        McpServerName serverName, TrustAudience? targetAudience, List<string> discoveredTools,
         ToolAudienceProfiles profiles, NetclawPaths paths, TextWriter writer)
     {
         var (config, _) = LoadConfigFiles(paths);
@@ -1116,13 +1121,13 @@ internal static class McpCommand
             };
 
             var serverAllowed = profile.McpServersMode == ToolProfileMode.All
-                || profile.AllowedMcpServers.Contains(serverName, StringComparer.OrdinalIgnoreCase);
+                || profile.AllowedMcpServers.Contains(serverName.Value, StringComparer.OrdinalIgnoreCase);
 
             if (!serverAllowed)
             {
                 if (targetAudience is not null)
                 {
-                    writer.WriteLine($"Server '{serverName}' is not allowed by the {audienceName} audience profile.");
+                    writer.WriteLine($"Server '{serverName.Value}' is not allowed by the {audienceName} audience profile.");
                     return 1;
                 }
 
@@ -1135,25 +1140,25 @@ internal static class McpCommand
                     ? dict
                     : new Dictionary<string, object>();
 
-            grants[serverName] = discoveredTools;
+            grants[serverName.Value] = discoveredTools;
             audienceSection["McpServerToolGrants"] = grants;
             updated++;
         }
 
         if (updated == 0)
         {
-            writer.WriteLine($"Server '{serverName}' is not allowed by any audience profile. Nothing to snapshot.");
+            writer.WriteLine($"Server '{serverName.Value}' is not allowed by any audience profile. Nothing to snapshot.");
             return 1;
         }
 
         WriteConfigFile(paths.NetclawConfigPath, config);
-        writer.WriteLine($"Snapshot complete: {discoveredTools.Count} tools from '{serverName}' written to McpServerToolGrants for {updated} audience profile(s).");
+        writer.WriteLine($"Snapshot complete: {discoveredTools.Count} tools from '{serverName.Value}' written to McpServerToolGrants for {updated} audience profile(s).");
         writer.WriteLine("New tools added by the server will not be exposed until you update the grants.");
         return 0;
     }
 
     private static int RunToolsGrantRevoke(
-        string serverName, TrustAudience audience, List<string> discoveredTools,
+        McpServerName serverName, TrustAudience audience, List<string> discoveredTools,
         List<string>? grantTools, List<string>? revokeTools,
         ToolAudienceProfiles profiles, NetclawPaths paths, TextWriter writer)
     {
@@ -1172,7 +1177,7 @@ internal static class McpCommand
         if (unknownGrants.Count > 0 || unknownRevokes.Count > 0)
         {
             var unknown = unknownGrants.Concat(unknownRevokes).Distinct().ToList();
-            writer.WriteLine($"Error: tool(s) not found on server '{serverName}': {string.Join(", ", unknown)}");
+            writer.WriteLine($"Error: tool(s) not found on server '{serverName.Value}': {string.Join(", ", unknown)}");
             writer.WriteLine("Use `netclaw mcp tools <server>` to see available tools.");
             return 1;
         }
@@ -1180,7 +1185,7 @@ internal static class McpCommand
         // Build the updated tool set
         HashSet<string> currentTools;
         if (profile.McpServerToolGrants is { } existing
-            && existing.TryGetValue(serverName, out var currentList))
+            && existing.TryGetValue(serverName.Value, out var currentList))
         {
             currentTools = new HashSet<string>(currentList, StringComparer.Ordinal);
         }
@@ -1209,7 +1214,7 @@ internal static class McpCommand
                 ? dict
                 : new Dictionary<string, object>();
 
-        grants[serverName] = currentTools.Order(StringComparer.Ordinal).ToList();
+        grants[serverName.Value] = currentTools.Order(StringComparer.Ordinal).ToList();
         audienceSection["McpServerToolGrants"] = grants;
 
         WriteConfigFile(paths.NetclawConfigPath, config);
@@ -1220,7 +1225,7 @@ internal static class McpCommand
         if (revokeTools is { Count: > 0 })
             changes.Add($"revoked {revokeTools.Count}");
 
-        writer.WriteLine($"Updated {audienceName} profile for '{serverName}': {string.Join(", ", changes)} tool(s). {currentTools.Count} total granted.");
+        writer.WriteLine($"Updated {audienceName} profile for '{serverName.Value}': {string.Join(", ", changes)} tool(s). {currentTools.Count} total granted.");
         return 0;
     }
 

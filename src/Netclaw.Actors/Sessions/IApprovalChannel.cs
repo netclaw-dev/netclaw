@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using Netclaw.Tools;
 
 namespace Netclaw.Actors.Sessions;
 
@@ -35,13 +36,13 @@ internal interface IApprovalChannel
     /// task (on thread pool) without consuming a thread. Returns <see cref="ApprovalDecision.TimedOut"/>
     /// if no decision arrives within <paramref name="timeout"/>.
     /// </summary>
-    Task<ApprovalDecision> WaitForApprovalAsync(string callId, TimeSpan timeout, CancellationToken ct);
+    Task<ApprovalDecision> WaitForApprovalAsync(ToolCallId callId, TimeSpan timeout, CancellationToken ct);
 
     /// <summary>
     /// Completes a pending approval request. Called by the session actor when a
     /// <see cref="Protocol.ToolInteractionResponse"/> message arrives.
     /// </summary>
-    void Complete(string callId, ApprovalDecision decision);
+    void Complete(ToolCallId callId, ApprovalDecision decision);
 }
 
 /// <summary>
@@ -50,9 +51,9 @@ internal interface IApprovalChannel
 /// </summary>
 internal sealed class ApprovalChannel : IApprovalChannel
 {
-    private readonly ConcurrentDictionary<string, TaskCompletionSource<ApprovalDecision>> _pending = new();
+    private readonly ConcurrentDictionary<ToolCallId, TaskCompletionSource<ApprovalDecision>> _pending = new();
 
-    public async Task<ApprovalDecision> WaitForApprovalAsync(string callId, TimeSpan timeout, CancellationToken ct)
+    public async Task<ApprovalDecision> WaitForApprovalAsync(ToolCallId callId, TimeSpan timeout, CancellationToken ct)
     {
         var tcs = _pending.GetOrAdd(callId, _ => new TaskCompletionSource<ApprovalDecision>(TaskCreationOptions.RunContinuationsAsynchronously));
 
@@ -78,7 +79,7 @@ internal sealed class ApprovalChannel : IApprovalChannel
         }
     }
 
-    public void Complete(string callId, ApprovalDecision decision)
+    public void Complete(ToolCallId callId, ApprovalDecision decision)
     {
         if (_pending.TryGetValue(callId, out var tcs))
             tcs.TrySetResult(decision);

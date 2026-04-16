@@ -24,17 +24,13 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
     private readonly int _maxToolDescriptionChars;
     private readonly int _maxToolSchemaWarnChars;
 
-    private readonly ConcurrentDictionary<string, McpClient> _clients =
-        new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<McpServerName, McpClient> _clients = new();
 
-    private readonly ConcurrentDictionary<string, Dictionary<string, AIFunction>> _sharedToolFunctions =
-        new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<McpServerName, Dictionary<string, AIFunction>> _sharedToolFunctions = new();
 
-    private readonly ConcurrentDictionary<string, McpServerStatus> _statuses =
-        new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<McpServerName, McpServerStatus> _statuses = new();
 
-    private readonly ConcurrentDictionary<string, bool> _sessionScopedServers =
-        new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<McpServerName, bool> _sessionScopedServers = new();
 
     private readonly ConcurrentDictionary<string, Lazy<Task<ScopedClientHandle>>> _scopedClients =
         new(StringComparer.OrdinalIgnoreCase);
@@ -69,15 +65,16 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
     {
         foreach (var (name, entry) in _serverEntries)
         {
+            var serverName = new McpServerName(name);
             if (!entry.Enabled)
             {
-                _statuses[name] = new McpServerStatus(name, McpConnectionState.Disabled, 0, null);
-                _sessionScopedServers.TryRemove(name, out _);
+                _statuses[serverName] = new McpServerStatus(serverName, McpConnectionState.Disabled, 0, null);
+                _sessionScopedServers.TryRemove(serverName, out _);
                 _logger.LogInformation("MCP server '{Name}' is disabled, skipping", name);
                 continue;
             }
 
-            await ConnectAsync(name, entry, cancellationToken);
+            await ConnectAsync(serverName, entry, cancellationToken);
         }
     }
 
@@ -88,11 +85,11 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
             try
             {
                 await client.DisposeAsync();
-                _logger.LogInformation("MCP client '{Name}' shut down", name);
+                _logger.LogInformation("MCP client '{Name}' shut down", name.Value);
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Error shutting down MCP client '{Name}'", name);
+                _logger.LogWarning(ex, "Error shutting down MCP client '{Name}'", name.Value);
             }
         }
 
@@ -103,17 +100,17 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         await DisposeAllScopedClientsAsync();
     }
 
-    public McpClient? GetClient(string serverName)
+    public McpClient? GetClient(McpServerName serverName)
     {
         return _clients.GetValueOrDefault(serverName);
     }
 
-    public IReadOnlyDictionary<string, McpServerStatus> GetServerStatuses() => _statuses;
+    public IReadOnlyDictionary<McpServerName, McpServerStatus> GetServerStatuses() => _statuses;
 
     /// <summary>
     /// Returns discovered tool names for a connected MCP server.
     /// </summary>
-    public IReadOnlyList<string> GetToolNames(string serverName)
+    public IReadOnlyList<string> GetToolNames(McpServerName serverName)
     {
         if (!_sharedToolFunctions.TryGetValue(serverName, out var tools))
             return [];
@@ -121,15 +118,15 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         return tools.Keys.Order(StringComparer.Ordinal).ToList();
     }
 
-    public async Task<bool> TryReconnectAsync(string serverName, CancellationToken ct = default)
+    public async Task<bool> TryReconnectAsync(McpServerName serverName, CancellationToken ct = default)
     {
-        if (!_serverEntries.TryGetValue(serverName, out var entry) || !entry.Enabled)
+        if (!_serverEntries.TryGetValue(serverName.Value, out var entry) || !entry.Enabled)
             return false;
 
         if (_clients.TryRemove(serverName, out var existing))
         {
             try { await existing.DisposeAsync(); }
-            catch (Exception ex) { _logger.LogDebug(ex, "Error disposing MCP client '{Name}' during reconnect", serverName); }
+            catch (Exception ex) { _logger.LogDebug(ex, "Error disposing MCP client '{Name}' during reconnect", serverName.Value); }
         }
 
         _sharedToolFunctions.TryRemove(serverName, out _);
@@ -145,27 +142,30 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         ToolExecutionContext? context,
         CancellationToken ct = default)
     {
-        if (UsesSessionScopedClient(serverName))
-            return await InvokeScopedAsync(serverName, toolName, arguments, context, ct);
+        var server = new McpServerName(serverName);
+        var tool = new ToolName(toolName);
 
-        return await InvokeSharedAsync(serverName, toolName, arguments, ct);
+        if (UsesSessionScopedClient(server))
+            return await InvokeScopedAsync(server, tool, arguments, context, ct);
+
+        return await InvokeSharedAsync(server, tool, arguments, ct);
     }
 
     private async Task<string> InvokeSharedAsync(
-        string serverName,
-        string toolName,
+        McpServerName serverName,
+        ToolName toolName,
         IDictionary<string, object?>? arguments,
         CancellationToken ct)
     {
-        if (!TryGetSharedFunction(serverName, toolName, out var function) || function is null)
+        if (!TryGetSharedFunction(serverName, toolName.Value, out var function) || function is null)
         {
             var reconnected = await TryReconnectAsync(serverName, ct);
             if (!reconnected
-                || !TryGetSharedFunction(serverName, toolName, out function)
+                || !TryGetSharedFunction(serverName, toolName.Value, out function)
                 || function is null)
             {
                 throw new InvalidOperationException(
-                    $"MCP server '{serverName}' is unavailable or tool '{toolName}' is not registered.");
+                    $"MCP server '{serverName.Value}' is unavailable or tool '{toolName.Value}' is not registered.");
             }
         }
 
@@ -177,11 +177,11 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         {
             _logger.LogDebug(ex,
                 "MCP tool '{ToolName}' failed on shared client '{ServerName}', attempting reconnect",
-                toolName, serverName);
+                toolName.Value, serverName.Value);
 
             var reconnected = await TryReconnectAsync(serverName, ct);
             if (!reconnected
-                || !TryGetSharedFunction(serverName, toolName, out var retryFunction)
+                || !TryGetSharedFunction(serverName, toolName.Value, out var retryFunction)
                 || retryFunction is null)
                 throw;
 
@@ -190,8 +190,8 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
     }
 
     private async Task<string> InvokeScopedAsync(
-        string serverName,
-        string toolName,
+        McpServerName serverName,
+        ToolName toolName,
         IDictionary<string, object?>? arguments,
         ToolExecutionContext? context,
         CancellationToken ct)
@@ -206,10 +206,10 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         {
             handle.Touch(_timeProvider.GetUtcNow());
 
-            if (!handle.Tools.TryGetValue(toolName, out var function))
+            if (!handle.Tools.TryGetValue(toolName.Value, out var function))
             {
                 throw new InvalidOperationException(
-                    $"MCP tool '{toolName}' is not available on server '{serverName}'.");
+                    $"MCP tool '{toolName.Value}' is not available on server '{serverName.Value}'.");
             }
 
             return await InvokeFunctionAsync(function, arguments, ct);
@@ -234,7 +234,7 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         return result?.ToString() ?? "";
     }
 
-    private bool TryGetSharedFunction(string serverName, string toolName, out AIFunction? function)
+    private bool TryGetSharedFunction(McpServerName serverName, string toolName, out AIFunction? function)
     {
         function = null;
 
@@ -244,17 +244,17 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         return serverTools.TryGetValue(toolName, out function);
     }
 
-    private bool UsesSessionScopedClient(string serverName)
+    private bool UsesSessionScopedClient(McpServerName serverName)
     {
         return _sessionScopedServers.TryGetValue(serverName, out var enabled) && enabled;
     }
 
     private async Task<ScopedClientHandle> GetOrCreateScopedClientHandleAsync(
-        string serverName,
+        McpServerName serverName,
         string scopeId,
         CancellationToken ct)
     {
-        var key = BuildScopedClientKey(serverName, scopeId);
+        var key = BuildScopedClientKey(serverName.Value, scopeId);
 
         while (true)
         {
@@ -278,31 +278,31 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         }
     }
 
-    private async Task<ScopedClientHandle> CreateScopedClientHandleAsync(string serverName)
+    private async Task<ScopedClientHandle> CreateScopedClientHandleAsync(McpServerName serverName)
     {
-        if (!_serverEntries.TryGetValue(serverName, out var entry))
+        if (!_serverEntries.TryGetValue(serverName.Value, out var entry))
         {
-            throw new InvalidOperationException($"MCP server '{serverName}' is not configured.");
+            throw new InvalidOperationException($"MCP server '{serverName.Value}' is not configured.");
         }
 
         var client = await CreateClientAsync(serverName, entry, CancellationToken.None, updateStatusOnAuthFailure: false);
         if (client is null)
-            throw new InvalidOperationException($"MCP server '{serverName}' requires OAuth authorization.");
+            throw new InvalidOperationException($"MCP server '{serverName.Value}' requires OAuth authorization.");
 
         var tools = await client.ListToolsAsync(cancellationToken: CancellationToken.None);
         var toolMap = CreateFunctionMap(tools);
 
         _logger.LogInformation(
             "Created scoped MCP client for server '{ServerName}' (tools={ToolCount})",
-            serverName,
+            serverName.Value,
             tools.Count);
 
         return new ScopedClientHandle(client, toolMap, _timeProvider.GetUtcNow());
     }
 
-    private async Task DisposeScopedClientsForServerAsync(string serverName)
+    private async Task DisposeScopedClientsForServerAsync(McpServerName serverName)
     {
-        var prefix = serverName + "::";
+        var prefix = serverName.Value + "::";
 
         foreach (var (key, _) in _scopedClients.ToArray())
         {
@@ -398,7 +398,7 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         }
     }
 
-    private async Task<bool> ConnectAsync(string name, McpServerEntry entry, CancellationToken ct)
+    private async Task<bool> ConnectAsync(McpServerName name, McpServerEntry entry, CancellationToken ct)
     {
         try
         {
@@ -412,13 +412,13 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
             _sharedToolFunctions[name] = CreateFunctionMap(tools);
             _sessionScopedServers[name] = RequiresSessionScopedClient(name, entry);
 
-            _toolRegistry.WithMcpTools(name, tools, entry.GrantCategory, this,
+            _toolRegistry.WithMcpTools(name.Value, tools, entry.GrantCategory, this,
                 _maxToolDescriptionChars, _maxToolSchemaWarnChars, _logger);
             _statuses[name] = new McpServerStatus(name, McpConnectionState.Connected, tools.Count, null);
 
             LogToolDrift(name, tools);
 
-            _logger.LogInformation("MCP server '{Name}' connected ({ToolCount} tools)", name, tools.Count);
+            _logger.LogInformation("MCP server '{Name}' connected ({ToolCount} tools)", name.Value, tools.Count);
             return true;
         }
         catch (Exception ex)
@@ -433,28 +433,28 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
 
             if (failureStatus.State is McpConnectionState.AwaitingAuth)
             {
-                _logger.LogWarning(ex, "MCP server '{Name}' requires OAuth authorization", name);
-                EmitAuthAlert(name, $"MCP server '{name}' requires OAuth authorization. Run: netclaw mcp auth {name}", "authorization_required");
+                _logger.LogWarning(ex, "MCP server '{Name}' requires OAuth authorization", name.Value);
+                EmitAuthAlert(name, $"MCP server '{name.Value}' requires OAuth authorization. Run: netclaw mcp auth {name.Value}", "authorization_required");
             }
             else if (failureStatus.State is McpConnectionState.AuthFailed)
             {
-                _logger.LogWarning(ex, "MCP server '{Name}' authentication failed", name);
+                _logger.LogWarning(ex, "MCP server '{Name}' authentication failed", name.Value);
 
                 if (hasOAuthRuntimeHints || hasCachedTokens)
                 {
                     EmitAuthAlert(name,
-                        $"MCP server '{name}' authentication failed. Run: netclaw mcp auth {name}",
+                        $"MCP server '{name.Value}' authentication failed. Run: netclaw mcp auth {name.Value}",
                         hasCachedTokens ? "token_rejected" : "credentials_rejected");
                 }
                 else
                 {
-                    EmitDisconnectedAlert(name, $"MCP server '{name}' authentication failed: {failureStatus.ErrorMessage}");
+                    EmitDisconnectedAlert(name, $"MCP server '{name.Value}' authentication failed: {failureStatus.ErrorMessage}");
                 }
             }
             else
             {
-                _logger.LogWarning(ex, "Failed to connect to MCP server '{Name}'", name);
-                EmitDisconnectedAlert(name, $"MCP server '{name}' connection failed: {failureStatus.ErrorMessage}");
+                _logger.LogWarning(ex, "Failed to connect to MCP server '{Name}'", name.Value);
+                EmitDisconnectedAlert(name, $"MCP server '{name.Value}' connection failed: {failureStatus.ErrorMessage}");
             }
 
             return false;
@@ -462,7 +462,7 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
     }
 
     private async Task<McpClient?> CreateClientAsync(
-        string name,
+        McpServerName name,
         McpServerEntry entry,
         CancellationToken ct,
         bool updateStatusOnAuthFailure)
@@ -478,8 +478,8 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
                 if (metadata is not null)
                 {
                     _statuses[name] = CreateAwaitingAuthStatus(name);
-                    _logger.LogWarning("MCP server '{Name}' requires OAuth authorization", name);
-                    EmitAuthAlert(name, $"MCP server '{name}' requires OAuth authorization. Run: netclaw mcp auth {name}", "authorization_required");
+                    _logger.LogWarning("MCP server '{Name}' requires OAuth authorization", name.Value);
+                    EmitAuthAlert(name, $"MCP server '{name.Value}' requires OAuth authorization. Run: netclaw mcp auth {name.Value}", "authorization_required");
 
                     return null;
                 }
@@ -494,7 +494,7 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         }, cancellationToken: ct);
     }
 
-    private IClientTransport CreateTransport(string serverName, McpServerEntry entry)
+    private IClientTransport CreateTransport(McpServerName serverName, McpServerEntry entry)
     {
         if (entry.Transport is "stdio")
         {
@@ -510,7 +510,7 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
                         kvp => (string?)kvp.Value,
                         StringComparer.OrdinalIgnoreCase)
                     : null,
-                Name = serverName,
+                Name = serverName.Value,
                 ShutdownTimeout = TimeSpan.FromSeconds(10),
             });
         }
@@ -522,7 +522,7 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         return new HttpClientTransport(new HttpClientTransportOptions
         {
             Endpoint = new Uri(entry.Url!),
-            Name = serverName,
+            Name = serverName.Value,
             AdditionalHeaders = headers,
             TransportMode = entry.Transport is "sse"
                 ? HttpTransportMode.Sse
@@ -531,7 +531,7 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         });
     }
 
-    private ClientOAuthOptions? BuildOAuthOptions(string serverName, McpServerEntry entry)
+    private ClientOAuthOptions? BuildOAuthOptions(McpServerName serverName, McpServerEntry entry)
     {
         var metadata = _oauthService.GetCachedMetadata(serverName);
 
@@ -561,13 +561,13 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         };
     }
 
-    private bool HasOAuthRuntimeHints(string serverName, McpServerEntry entry)
+    private bool HasOAuthRuntimeHints(McpServerName serverName, McpServerEntry entry)
         => !string.IsNullOrWhiteSpace(entry.OAuthClientId)
            || !string.IsNullOrWhiteSpace(entry.OAuthScope)
            || _oauthService.GetCachedMetadata(serverName) is not null;
 
     internal static McpServerStatus BuildConnectionFailureStatus(
-        string serverName,
+        McpServerName serverName,
         McpServerEntry entry,
         Exception ex,
         bool hasCachedTokens,
@@ -584,27 +584,27 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         return CreateUnreachableStatus(serverName, ex);
     }
 
-    internal static McpServerStatus CreateAwaitingAuthStatus(string serverName)
+    internal static McpServerStatus CreateAwaitingAuthStatus(McpServerName serverName)
         => new(serverName, McpConnectionState.AwaitingAuth, 0,
-            $"OAuth authorization required. Run: netclaw mcp auth {serverName}");
+            $"OAuth authorization required. Run: netclaw mcp auth {serverName.Value}");
 
-    internal static McpServerStatus CreateAuthFailedStatus(string serverName, Exception ex, bool oauthManaged)
+    internal static McpServerStatus CreateAuthFailedStatus(McpServerName serverName, Exception ex, bool oauthManaged)
     {
         var statusText = GetHttpStatusText(ex);
         var detail = string.IsNullOrWhiteSpace(statusText)
             ? "Authentication rejected by server."
             : $"Authentication rejected by server ({statusText}).";
         var guidance = oauthManaged
-            ? $" Run: netclaw mcp auth {serverName}"
+            ? $" Run: netclaw mcp auth {serverName.Value}"
             : " Check configured credentials or headers.";
         return new(serverName, McpConnectionState.AuthFailed, 0, detail + guidance);
     }
 
-    internal static McpServerStatus CreateUnreachableStatus(string serverName, Exception ex)
+    internal static McpServerStatus CreateUnreachableStatus(McpServerName serverName, Exception ex)
         => new(serverName, McpConnectionState.Unreachable, 0,
             string.IsNullOrWhiteSpace(ex.Message) ? "Failed to reach MCP server." : ex.Message);
 
-    private void EmitAuthAlert(string serverName, string summary, string reason)
+    private void EmitAuthAlert(McpServerName serverName, string summary, string reason)
     {
         _notificationSink.Emit(new OperationalAlert
         {
@@ -614,16 +614,16 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
             Summary = summary,
             Timestamp = _timeProvider.GetUtcNow(),
             Severity = "warning",
-            Source = serverName,
+            Source = serverName.Value,
             Context = new Dictionary<string, string>
             {
-                ["serverName"] = serverName,
+                ["serverName"] = serverName.Value,
                 ["reason"] = reason,
             }
         });
     }
 
-    private void EmitDisconnectedAlert(string serverName, string summary)
+    private void EmitDisconnectedAlert(McpServerName serverName, string summary)
     {
         _notificationSink.Emit(new OperationalAlert
         {
@@ -633,8 +633,8 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
             Summary = summary,
             Timestamp = _timeProvider.GetUtcNow(),
             Severity = "warning",
-            Source = serverName,
-            Context = new Dictionary<string, string> { ["serverName"] = serverName }
+            Source = serverName.Value,
+            Context = new Dictionary<string, string> { ["serverName"] = serverName.Value }
         });
     }
 
@@ -682,7 +682,7 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         return null;
     }
 
-    private static string[] BuildStdioArguments(string serverName, McpServerEntry entry)
+    private static string[] BuildStdioArguments(McpServerName serverName, McpServerEntry entry)
     {
         var args = entry.Arguments is { Length: > 0 }
             ? entry.Arguments.ToList()
@@ -707,12 +707,12 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         return map;
     }
 
-    private static bool RequiresSessionScopedClient(string serverName, McpServerEntry entry)
+    private static bool RequiresSessionScopedClient(McpServerName serverName, McpServerEntry entry)
         => IsPlaywrightServer(serverName, entry);
 
-    private static bool IsPlaywrightServer(string serverName, McpServerEntry entry)
+    private static bool IsPlaywrightServer(McpServerName serverName, McpServerEntry entry)
     {
-        if (serverName.Equals(PlaywrightServerName, StringComparison.OrdinalIgnoreCase))
+        if (serverName.Value.Equals(PlaywrightServerName, StringComparison.OrdinalIgnoreCase))
             return true;
 
         if (!string.IsNullOrWhiteSpace(entry.Command)
@@ -752,7 +752,7 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
     /// Compares discovered tools against <see cref="ToolAudienceProfile.McpServerToolGrants"/>
     /// across all audience profiles and logs warnings for drift.
     /// </summary>
-    private void LogToolDrift(string serverName, IList<McpClientTool> discoveredTools)
+    private void LogToolDrift(McpServerName serverName, IList<McpClientTool> discoveredTools)
     {
         var profiles = _toolConfig.AudienceProfiles;
         var allGrantedTools = new HashSet<string>(StringComparer.Ordinal);
@@ -763,7 +763,7 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
             if (profile.McpServerToolGrants is not { } grants)
                 continue;
 
-            if (!grants.TryGetValue(serverName, out var tools))
+            if (!grants.TryGetValue(serverName.Value, out var tools))
                 continue;
 
             hasAnyGrants = true;
@@ -785,7 +785,7 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
             _logger.LogWarning(
                 "MCP server '{Name}' exposes {Count} tool(s) not granted to any audience: {Tools}. " +
                 "Review and add to McpServerToolGrants if intended.",
-                serverName, ungranted.Count, string.Join(", ", ungranted));
+                serverName.Value, ungranted.Count, string.Join(", ", ungranted));
         }
 
         if (stale.Count > 0)
@@ -793,7 +793,7 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
             _logger.LogWarning(
                 "McpServerToolGrants for '{Name}' contains {Count} tool(s) not found on server: {Tools}. " +
                 "These may have been removed or renamed.",
-                serverName, stale.Count, string.Join(", ", stale));
+                serverName.Value, stale.Count, string.Join(", ", stale));
         }
     }
 
@@ -887,7 +887,7 @@ internal enum McpConnectionState
 }
 
 internal sealed record McpServerStatus(
-    string Name,
+    McpServerName Name,
     McpConnectionState State,
     int ToolCount,
     string? ErrorMessage);

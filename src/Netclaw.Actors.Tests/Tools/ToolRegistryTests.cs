@@ -1,5 +1,6 @@
 using Microsoft.Extensions.AI;
 using Netclaw.Actors.Tools;
+using Netclaw.Tools;
 using Xunit;
 
 namespace Netclaw.Actors.Tests.Tools;
@@ -108,7 +109,7 @@ public class ToolRegistryTests
         registry.Register(new McpToolAdapter(
             CreateFakeTool("store"), "github", "store"));
 
-        var results = registry.SearchTools("store", "memorizer", 10);
+        var results = registry.SearchTools("store", new McpServerName("memorizer"), 10);
 
         Assert.Single(results);
         Assert.Equal("memorizer/store", results[0].Name);
@@ -136,7 +137,7 @@ public class ToolRegistryTests
         registry.Register(new McpToolAdapter(
             CreateFakeTool("navigate_page"), "playwright", "navigate_page"));
 
-        var results = registry.SuggestTools("navgite pg", "playwright", 10);
+        var results = registry.SuggestTools("navgite pg", new McpServerName("playwright"), 10);
 
         Assert.NotEmpty(results);
         Assert.All(results, r => Assert.StartsWith("playwright/", r.Name, StringComparison.Ordinal));

@@ -259,11 +259,11 @@ public sealed class ToolApprovalGateTests
     public void file_write_emits_distinct_per_path_patterns()
     {
         var matcher = new FilePathApprovalMatcher(ControlPlaneRoot);
-        var netclawJson = matcher.ExtractPatterns("file_write",
+        var netclawJson = matcher.ExtractPatterns(new ToolName("file_write"),
             new Dictionary<string, object?> { ["Path"] = ControlPlaneRoot + "/netclaw.json" });
-        var toolApprovals = matcher.ExtractPatterns("file_write",
+        var toolApprovals = matcher.ExtractPatterns(new ToolName("file_write"),
             new Dictionary<string, object?> { ["Path"] = ControlPlaneRoot + "/tool-approvals.json" });
-        var devices = matcher.ExtractPatterns("file_write",
+        var devices = matcher.ExtractPatterns(new ToolName("file_write"),
             new Dictionary<string, object?> { ["Path"] = ControlPlaneRoot + "/devices.json" });
 
         Assert.NotEqual(netclawJson[0], toolApprovals[0]);

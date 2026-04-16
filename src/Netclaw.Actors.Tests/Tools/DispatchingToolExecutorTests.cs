@@ -5,6 +5,7 @@ using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 using Netclaw.Security;
+using Netclaw.Tools;
 using Xunit;
 
 namespace Netclaw.Actors.Tests.Tools;
@@ -628,7 +629,7 @@ public class DispatchingToolExecutorTests
             await approvalService.RecordApprovalAsync(
                 "signalr/thread-filtered",
                 TrustAudience.Personal,
-                "shell_execute",
+                new ToolName("shell_execute"),
                 ["pwd"],
                 persistent: false,
                 TestContext.Current.CancellationToken);
@@ -723,7 +724,7 @@ public class DispatchingToolExecutorTests
             await approvalService.RecordApprovalAsync(
                 "signalr/thread-1",
                 TrustAudience.Personal,
-                toolCall.Name,
+                new ToolName(toolCall.Name),
                 firstAttempt.ApprovalContext.UnapprovedPatterns,
                 persistent: false,
                 TestContext.Current.CancellationToken);

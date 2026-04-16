@@ -1,4 +1,5 @@
 using Netclaw.Configuration;
+using Netclaw.Tools;
 using R3;
 using Termina.Extensions;
 using Termina.Input;
@@ -94,7 +95,7 @@ public sealed class McpToolPermissionsPage : ReactivePage<McpToolPermissionsView
             {
                 if (selected.Count > 0)
                 {
-                    var serverName = selected[0].Split("  (", 2)[0].Trim();
+                    var serverName = new McpServerName(selected[0].Split("  (", 2)[0].Trim());
                     ViewModel.SelectServer(serverName);
                 }
             })
@@ -142,11 +143,12 @@ public sealed class McpToolPermissionsPage : ReactivePage<McpToolPermissionsView
         {
             var tool = tools[i];
             var isFocused = i == _toolCursor;
-            var granted = serverAllowed && ViewModel.IsToolGranted(tool);
+            var toolName = new ToolName(tool);
+            var granted = serverAllowed && ViewModel.IsToolGranted(toolName);
             var prefix = isFocused ? " \u25b6 " : "   ";
             var marker = granted ? "\u2713" : " ";
             var paddedName = tool.PadRight(maxToolNameLen);
-            var (effectiveMode, inherited) = ViewModel.GetEffectiveMode(tool);
+            var (effectiveMode, inherited) = ViewModel.GetEffectiveMode(toolName);
             var modeBadge = $"[{effectiveMode}]";
             var inheritSuffix = inherited ? "(def)" : "(override)";
             var line = $"{prefix}[{marker}] {paddedName}  {modeBadge,-12} {inheritSuffix}";
@@ -252,7 +254,7 @@ public sealed class McpToolPermissionsPage : ReactivePage<McpToolPermissionsView
                 case ConsoleKey.Enter:
                     if (ViewModel.IsServerAllowedForSelectedAudience()
                         && ViewModel.DiscoveredTools.Count > 0)
-                        ViewModel.ToggleTool(ViewModel.DiscoveredTools[_toolCursor]);
+                        ViewModel.ToggleTool(new ToolName(ViewModel.DiscoveredTools[_toolCursor]));
                     return;
 
                 case ConsoleKey.S:
@@ -275,7 +277,7 @@ public sealed class McpToolPermissionsPage : ReactivePage<McpToolPermissionsView
                 case ConsoleKey.P:
                     if (ViewModel.IsServerAllowedForSelectedAudience()
                         && ViewModel.DiscoveredTools.Count > 0)
-                        ViewModel.CycleToolOverride(ViewModel.DiscoveredTools[_toolCursor]);
+                        ViewModel.CycleToolOverride(new ToolName(ViewModel.DiscoveredTools[_toolCursor]));
                     return;
             }
 
@@ -307,7 +309,7 @@ public sealed class McpToolPermissionsPage : ReactivePage<McpToolPermissionsView
                 && ViewModel.IsServerAllowedForSelectedAudience()
                 && ViewModel.DiscoveredTools.Count > 0)
             {
-                ViewModel.CycleToolOverride(ViewModel.DiscoveredTools[_toolCursor]);
+                ViewModel.CycleToolOverride(new ToolName(ViewModel.DiscoveredTools[_toolCursor]));
                 return;
             }
 

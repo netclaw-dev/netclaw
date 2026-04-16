@@ -1,6 +1,7 @@
 using System.Net;
 using Netclaw.Configuration;
 using Netclaw.Daemon.Mcp;
+using Netclaw.Tools;
 using Xunit;
 
 namespace Netclaw.Daemon.Tests.Mcp;
@@ -18,7 +19,7 @@ public sealed class McpClientManagerStatusTests
         };
 
         var status = McpClientManager.BuildConnectionFailureStatus(
-            "notion",
+            new McpServerName("notion"),
             entry,
             new HttpRequestException(httpRequestError: HttpRequestError.Unknown, "Unauthorized", null, HttpStatusCode.Unauthorized),
             hasCachedTokens: false,
@@ -38,7 +39,7 @@ public sealed class McpClientManagerStatusTests
         };
 
         var status = McpClientManager.BuildConnectionFailureStatus(
-            "notion",
+            new McpServerName("notion"),
             entry,
             new HttpRequestException(httpRequestError: HttpRequestError.Unknown, "Forbidden", null, HttpStatusCode.Forbidden),
             hasCachedTokens: true,
@@ -59,7 +60,7 @@ public sealed class McpClientManagerStatusTests
         };
 
         var status = McpClientManager.BuildConnectionFailureStatus(
-            "notion",
+            new McpServerName("notion"),
             entry,
             new HttpRequestException("Connection refused"),
             hasCachedTokens: false,

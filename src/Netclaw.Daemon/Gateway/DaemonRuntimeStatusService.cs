@@ -13,6 +13,7 @@ using Netclaw.Configuration.Feeds;
 using Netclaw.Daemon.Configuration;
 using Netclaw.Daemon.Mcp;
 using Netclaw.Daemon.Services;
+using Netclaw.Tools;
 
 namespace Netclaw.Daemon.Gateway;
 
@@ -154,15 +155,15 @@ internal sealed class DaemonRuntimeStatusService(
 
         return mcpClientManager
             .GetServerStatuses()
-            .OrderBy(x => x.Key, StringComparer.OrdinalIgnoreCase)
+            .OrderBy(x => x.Key.Value, StringComparer.OrdinalIgnoreCase)
             .Select(x => ToConnector(x.Key, x.Value))
             .ToList();
     }
 
-    internal static DaemonRuntimeStatus.Connector ToConnector(string name, McpServerStatus status)
+    internal static DaemonRuntimeStatus.Connector ToConnector(McpServerName name, McpServerStatus status)
     {
-        var key = $"mcp:{name}";
-        var displayName = $"MCP/{name}";
+        var key = $"mcp:{name.Value}";
+        var displayName = $"MCP/{name.Value}";
 
         return status.State switch
         {

@@ -3,6 +3,7 @@ using Netclaw.Cli.Config;
 using Netclaw.Cli.Daemon;
 using Netclaw.Cli.Json;
 using Netclaw.Configuration;
+using Netclaw.Tools;
 using R3;
 using Termina.Reactive;
 
@@ -99,9 +100,9 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
         NotifyStateChanged();
     }
 
-    public void SelectServer(string serverName)
+    public void SelectServer(McpServerName serverName)
     {
-        SelectedServer = serverName;
+        SelectedServer = serverName.Value;
         _ = LoadToolsForServerAsync(serverName);
     }
 
@@ -110,13 +111,13 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
     /// without touching the daemon. Reloads the audience profiles from
     /// disk so tests can exercise <see cref="Save"/> end-to-end.
     /// </summary>
-    internal void InitializeForTests(string serverName, IEnumerable<string> tools)
+    internal void InitializeForTests(McpServerName serverName, IEnumerable<string> tools)
     {
-        SelectedServer = serverName;
+        SelectedServer = serverName.Value;
         DiscoveredTools.Clear();
         DiscoveredTools.AddRange(tools);
         Profiles = LoadToolConfig().AudienceProfiles;
-        if (!_pendingGrants.ContainsKey(serverName))
+        if (!_pendingGrants.ContainsKey(serverName.Value))
             InitializePendingGrantsFromConfig(serverName);
         CurrentState.Value = ToolPermissionsState.ToolGrid;
     }
@@ -126,19 +127,19 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
         SelectedAudience = audience;
     }
 
-    private async Task LoadToolsForServerAsync(string serverName)
+    private async Task LoadToolsForServerAsync(McpServerName serverName)
     {
-        StatusMessage.Value = $"Loading tools for {serverName}...";
+        StatusMessage.Value = $"Loading tools for {serverName.Value}...";
         NotifyStateChanged();
 
         try
         {
-            var tools = await _daemonApi.GetMcpToolNamesAsync(serverName, CancellationToken.None);
+            var tools = await _daemonApi.GetMcpToolNamesAsync(serverName.Value, CancellationToken.None);
             DiscoveredTools.Clear();
             DiscoveredTools.AddRange(tools);
 
             // Initialize pending grants from current config if not already edited
-            if (!_pendingGrants.ContainsKey(serverName))
+            if (!_pendingGrants.ContainsKey(serverName.Value))
                 InitializePendingGrantsFromConfig(serverName);
 
             StatusMessage.Value = "";
@@ -152,7 +153,7 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
         NotifyStateChanged();
     }
 
-    private void InitializePendingGrantsFromConfig(string serverName)
+    private void InitializePendingGrantsFromConfig(McpServerName serverName)
     {
         var audienceGrants = new Dictionary<string, HashSet<string>>();
 
@@ -164,7 +165,7 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
         })
         {
             if (profile.McpServerToolGrants is { } grants
-                && grants.TryGetValue(serverName, out var tools))
+                && grants.TryGetValue(serverName.Value, out var tools))
             {
                 audienceGrants[name] = new HashSet<string>(tools, StringComparer.Ordinal);
             }
@@ -172,7 +173,7 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
         }
 
         if (audienceGrants.Count > 0)
-            _pendingGrants[serverName] = audienceGrants;
+            _pendingGrants[serverName.Value] = audienceGrants;
     }
 
     private static readonly TrustAudience[] AudienceValues =
@@ -227,13 +228,13 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
     /// inherit (null) → Auto → Approval → Deny → inherit. The "inherit" state
     /// removes any existing <c>ToolOverrides[{server}/{tool}]</c> entry on save.
     /// </summary>
-    public void CycleToolOverride(string toolName)
+    public void CycleToolOverride(ToolName toolName)
     {
         if (SelectedServer is null)
             return;
 
         var audience = AudienceName(SelectedAudience);
-        var key = (audience, SelectedServer, toolName);
+        var key = (audience, SelectedServer, toolName.Value);
 
         ToolApprovalMode? current;
         if (_pendingToolOverrides.TryGetValue(key, out var pending))
@@ -242,7 +243,7 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
         }
         else
         {
-            var exactKey = $"{SelectedServer}/{toolName}";
+            var exactKey = $"{SelectedServer}/{toolName.Value}";
             current = ResolveProfile(SelectedAudience).ApprovalPolicy?.ToolOverrides.TryGetValue(exactKey, out var configMode) == true
                 ? configMode
                 : null;
@@ -268,7 +269,7 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
     /// was inherited from the server default / global default (true) or came
     /// from an explicit per-tool entry (false).
     /// </summary>
-    public (ToolApprovalMode Mode, bool IsInherited) GetEffectiveMode(string toolName)
+    public (ToolApprovalMode Mode, bool IsInherited) GetEffectiveMode(ToolName toolName)
     {
         if (SelectedServer is null)
             return (ToolApprovalMode.Auto, true);
@@ -279,7 +280,7 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
         var profile = ResolveProfile(SelectedAudience);
         var approvalPolicy = profile.ApprovalPolicy;
 
-        var toolKey = (audience, SelectedServer, toolName);
+        var toolKey = (audience, SelectedServer, toolName.Value);
         if (_pendingToolOverrides.TryGetValue(toolKey, out var pendingOverride))
         {
             if (pendingOverride is { } explicitMode)
@@ -288,7 +289,7 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
         }
         else if (approvalPolicy is not null)
         {
-            var exactKey = $"{SelectedServer}/{toolName}";
+            var exactKey = $"{SelectedServer}/{toolName.Value}";
             if (approvalPolicy.ToolOverrides.TryGetValue(exactKey, out var configExact))
                 return (configExact, false);
         }
@@ -325,7 +326,7 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
         return ToolApprovalMode.Auto;
     }
 
-    public bool IsToolGranted(string toolName)
+    public bool IsToolGranted(ToolName toolName)
     {
         if (SelectedServer is null)
             return false;
@@ -341,7 +342,7 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
         if (_pendingGrants.TryGetValue(SelectedServer, out var serverGrants)
             && serverGrants.TryGetValue(audienceName, out var tools))
         {
-            return tools.Contains(toolName);
+            return tools.Contains(toolName.Value);
         }
 
         // No pending grants = check config
@@ -359,7 +360,7 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
             if (!pendingAccess)
                 return false;
         }
-        else if (!IsServerAllowed(SelectedServer, profile))
+        else if (!IsServerAllowed(new McpServerName(SelectedServer), profile))
         {
             return false;
         }
@@ -372,7 +373,7 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
         if (!profile.McpServerToolGrants.TryGetValue(SelectedServer, out var configTools))
             return true;
 
-        return configTools.Contains(toolName, StringComparer.Ordinal);
+        return configTools.Contains(toolName.Value, StringComparer.Ordinal);
     }
 
     public void ToggleAll()
@@ -381,7 +382,7 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
             return;
 
         // If any tool is granted, deselect all. Otherwise select all.
-        var anyGranted = DiscoveredTools.Any(IsToolGranted);
+        var anyGranted = DiscoveredTools.Any(t => IsToolGranted(new ToolName(t)));
 
         var audienceName = SelectedAudience switch
         {
@@ -403,7 +404,7 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
         NotifyStateChanged();
     }
 
-    public void ToggleTool(string toolName)
+    public void ToggleTool(ToolName toolName)
     {
         if (SelectedServer is null)
             return;
@@ -446,8 +447,8 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
             serverGrants[audienceName] = tools;
         }
 
-        if (!tools.Remove(toolName))
-            tools.Add(toolName);
+        if (!tools.Remove(toolName.Value))
+            tools.Add(toolName.Value);
 
         NotifyStateChanged();
     }
@@ -559,7 +560,7 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
             return pending;
 
         var profile = ResolveProfile(SelectedAudience);
-        return IsServerAllowed(SelectedServer, profile);
+        return IsServerAllowed(new McpServerName(SelectedServer), profile);
     }
 
     public void ToggleServerAccess()
@@ -603,12 +604,12 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
         return (approvalSection, profile.ApprovalPolicy);
     }
 
-    private static bool IsServerAllowed(string serverName, ToolAudienceProfile profile)
+    private static bool IsServerAllowed(McpServerName serverName, ToolAudienceProfile profile)
     {
         if (profile.McpServersMode == ToolProfileMode.All)
             return true;
 
-        return profile.AllowedMcpServers.Contains(serverName, StringComparer.OrdinalIgnoreCase);
+        return profile.AllowedMcpServers.Contains(serverName.Value, StringComparer.OrdinalIgnoreCase);
     }
 
     private ToolAudienceProfile ResolveProfile(TrustAudience audience) => audience switch

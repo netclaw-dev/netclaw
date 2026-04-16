@@ -6,6 +6,7 @@ using Netclaw.Configuration;
 using Netclaw.Configuration.Secrets;
 using Netclaw.Daemon.Mcp;
 using Netclaw.Providers.OAuth;
+using Netclaw.Tools;
 using Xunit;
 
 namespace Netclaw.Daemon.Tests.Mcp;
@@ -28,13 +29,13 @@ public sealed class McpOAuthServiceTests : IDisposable
 
         var entry = CreateHttpEntry();
 
-        var (_, initialState) = await service.StartAuthorizationFlowAsync("textforge", entry, CancellationToken.None);
+        var (_, initialState) = await service.StartAuthorizationFlowAsync(new McpServerName("textforge"), entry, CancellationToken.None);
         await service.CompleteAuthorizationAsync("first-code", initialState, CancellationToken.None);
 
-        var (_, reauthState) = await service.StartAuthorizationFlowAsync("textforge", entry, CancellationToken.None);
+        var (_, reauthState) = await service.StartAuthorizationFlowAsync(new McpServerName("textforge"), entry, CancellationToken.None);
 
         Assert.Equal(McpOAuthFlowStatus.Pending, service.GetFlowStatusByState(reauthState));
-        Assert.Equal(McpOAuthFlowStatus.Pending, service.GetFlowStatus("textforge"));
+        Assert.Equal(McpOAuthFlowStatus.Pending, service.GetFlowStatus(new McpServerName("textforge")));
     }
 
     [Fact]
@@ -44,7 +45,7 @@ public sealed class McpOAuthServiceTests : IDisposable
             CreateDiscoveryClient(),
             CreatePkceService(JsonResponse(new { error = "invalid_request" }, HttpStatusCode.BadRequest)));
 
-        var (_, state) = await service.StartAuthorizationFlowAsync("textforge", CreateHttpEntry(), CancellationToken.None);
+        var (_, state) = await service.StartAuthorizationFlowAsync(new McpServerName("textforge"), CreateHttpEntry(), CancellationToken.None);
 
         await Assert.ThrowsAsync<HttpRequestException>(
             () => service.CompleteAuthorizationAsync("bad-code", state, CancellationToken.None));
@@ -73,7 +74,7 @@ public sealed class McpOAuthServiceTests : IDisposable
                 protector);
 
             var entry = CreateHttpEntry();
-            var (_, state) = await service1.StartAuthorizationFlowAsync("notion", entry, CancellationToken.None);
+            var (_, state) = await service1.StartAuthorizationFlowAsync(new McpServerName("notion"), entry, CancellationToken.None);
             await service1.CompleteAuthorizationAsync("auth-code", state, CancellationToken.None);
 
             // Verify tokens were encrypted on disk
@@ -86,7 +87,7 @@ public sealed class McpOAuthServiceTests : IDisposable
                 CreatePkceService(JsonResponse(new { access_token = "unused" })),
                 protector);
 
-            var tokenSet = service2.GetTokenSet("notion");
+            var tokenSet = service2.GetTokenSet(new McpServerName("notion"));
             Assert.NotNull(tokenSet);
             Assert.Equal("access-tok", tokenSet.AccessToken.Value);
             Assert.NotNull(tokenSet.RefreshToken);

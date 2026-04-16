@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using ModelContextProtocol.Authentication;
 using Netclaw.Configuration;
+using Netclaw.Tools;
 
 namespace Netclaw.Daemon.Mcp;
 
@@ -10,14 +11,14 @@ namespace Netclaw.Daemon.Mcp;
 /// </summary>
 internal sealed class McpTokenCacheAdapter : ITokenCache
 {
-    private readonly string _serverName;
-    private readonly ConcurrentDictionary<string, McpOAuthTokenSet> _tokens;
+    private readonly McpServerName _serverName;
+    private readonly ConcurrentDictionary<McpServerName, McpOAuthTokenSet> _tokens;
     private readonly Action _persistTokens;
     private readonly TimeProvider _timeProvider;
 
     public McpTokenCacheAdapter(
-        string serverName,
-        ConcurrentDictionary<string, McpOAuthTokenSet> tokens,
+        McpServerName serverName,
+        ConcurrentDictionary<McpServerName, McpOAuthTokenSet> tokens,
         Action persistTokens,
         TimeProvider timeProvider)
     {

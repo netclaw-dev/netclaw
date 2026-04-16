@@ -5,6 +5,7 @@ using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 using Netclaw.Daemon.Mcp;
 using Netclaw.Providers.OAuth;
+using Netclaw.Tools;
 using Xunit;
 
 namespace Netclaw.Daemon.Tests.Mcp;
@@ -167,9 +168,9 @@ public class McpStdioSmokeTests : IAsyncDisposable
             await manager.StartAsync(CancellationToken.None);
 
             var statuses = manager.GetServerStatuses();
-            Assert.True(statuses.ContainsKey("everything"));
+            Assert.True(statuses.ContainsKey(new McpServerName("everything")));
 
-            var status = statuses["everything"];
+            var status = statuses[new McpServerName("everything")];
             Assert.Equal(McpConnectionState.Connected, status.State);
             Assert.True(status.ToolCount > 0, $"Expected tools, got {status.ToolCount}");
             Assert.Null(status.ErrorMessage);
@@ -180,7 +181,7 @@ public class McpStdioSmokeTests : IAsyncDisposable
             Assert.All(allRegs, r => Assert.StartsWith("everything/", r.Tool.Name));
 
             // GetClient should return a live client
-            var client = manager.GetClient("everything");
+            var client = manager.GetClient(new McpServerName("everything"));
             Assert.NotNull(client);
         }
         finally

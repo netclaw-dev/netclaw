@@ -65,7 +65,7 @@ public sealed class DispatchingToolExecutor : IToolExecutor
             var unapproved = await _approvalService.GetUnapprovedPatternsAsync(
                 context?.SessionId,
                 audience,
-                toolCall.Name,
+                new ToolName(toolCall.Name),
                 approvalContext.UnapprovedPatterns,
                 ct);
 

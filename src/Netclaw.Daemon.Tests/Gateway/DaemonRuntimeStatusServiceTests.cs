@@ -13,6 +13,7 @@ using Netclaw.Daemon.Gateway;
 using Netclaw.Daemon.Mcp;
 using Netclaw.Daemon.Services;
 using Netclaw.Providers.OAuth;
+using Netclaw.Tools;
 using Xunit;
 
 namespace Netclaw.Daemon.Tests.Gateway;
@@ -208,16 +209,16 @@ public sealed class DaemonRuntimeStatusServiceTests : IAsyncLifetime
     [Fact]
     public async Task IncludesAuthRequiredAndAuthFailedMcpConnectorStatuses()
     {
-        var authRequired = McpClientManager.CreateAwaitingAuthStatus("textforge");
+        var authRequired = McpClientManager.CreateAwaitingAuthStatus(new McpServerName("textforge"));
         var authFailed = McpClientManager.CreateAuthFailedStatus(
-            "notion",
+            new McpServerName("notion"),
             new HttpRequestException(httpRequestError: HttpRequestError.Unknown, "Unauthorized", null, HttpStatusCode.Unauthorized),
             oauthManaged: true);
 
         var connectors = new[]
         {
-            DaemonRuntimeStatusService.ToConnector("textforge", authRequired),
-            DaemonRuntimeStatusService.ToConnector("notion", authFailed),
+            DaemonRuntimeStatusService.ToConnector(new McpServerName("textforge"), authRequired),
+            DaemonRuntimeStatusService.ToConnector(new McpServerName("notion"), authFailed),
         };
 
         var authRequiredConnector = connectors.Single(c => c.Key == "mcp:textforge");

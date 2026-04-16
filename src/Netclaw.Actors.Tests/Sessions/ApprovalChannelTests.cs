@@ -1,4 +1,5 @@
 using Netclaw.Actors.Sessions;
+using Netclaw.Tools;
 using Xunit;
 
 namespace Netclaw.Actors.Tests.Sessions;
@@ -10,10 +11,10 @@ public sealed class ApprovalChannelTests
     {
         var channel = new ApprovalChannel();
 
-        var waitTask = channel.WaitForApprovalAsync("call-1", TimeSpan.FromSeconds(30), CancellationToken.None);
+        var waitTask = channel.WaitForApprovalAsync(new ToolCallId("call-1"), TimeSpan.FromSeconds(30), CancellationToken.None);
 
         // Complete from another context (simulating actor mailbox)
-        channel.Complete("call-1", ApprovalDecision.ApprovedOnce);
+        channel.Complete(new ToolCallId("call-1"), ApprovalDecision.ApprovedOnce);
 
         var result = await waitTask;
         Assert.Equal(ApprovalDecision.ApprovedOnce, result);
@@ -24,8 +25,8 @@ public sealed class ApprovalChannelTests
     {
         var channel = new ApprovalChannel();
 
-        var waitTask = channel.WaitForApprovalAsync("call-2", TimeSpan.FromSeconds(30), CancellationToken.None);
-        channel.Complete("call-2", ApprovalDecision.ApprovedAlways);
+        var waitTask = channel.WaitForApprovalAsync(new ToolCallId("call-2"), TimeSpan.FromSeconds(30), CancellationToken.None);
+        channel.Complete(new ToolCallId("call-2"), ApprovalDecision.ApprovedAlways);
 
         Assert.Equal(ApprovalDecision.ApprovedAlways, await waitTask);
     }
@@ -35,8 +36,8 @@ public sealed class ApprovalChannelTests
     {
         var channel = new ApprovalChannel();
 
-        var waitTask = channel.WaitForApprovalAsync("call-2b", TimeSpan.FromSeconds(30), CancellationToken.None);
-        channel.Complete("call-2b", ApprovalDecision.ApprovedSession);
+        var waitTask = channel.WaitForApprovalAsync(new ToolCallId("call-2b"), TimeSpan.FromSeconds(30), CancellationToken.None);
+        channel.Complete(new ToolCallId("call-2b"), ApprovalDecision.ApprovedSession);
 
         Assert.Equal(ApprovalDecision.ApprovedSession, await waitTask);
     }
@@ -46,8 +47,8 @@ public sealed class ApprovalChannelTests
     {
         var channel = new ApprovalChannel();
 
-        var waitTask = channel.WaitForApprovalAsync("call-3", TimeSpan.FromSeconds(30), CancellationToken.None);
-        channel.Complete("call-3", ApprovalDecision.Denied);
+        var waitTask = channel.WaitForApprovalAsync(new ToolCallId("call-3"), TimeSpan.FromSeconds(30), CancellationToken.None);
+        channel.Complete(new ToolCallId("call-3"), ApprovalDecision.Denied);
 
         Assert.Equal(ApprovalDecision.Denied, await waitTask);
     }
@@ -57,7 +58,7 @@ public sealed class ApprovalChannelTests
     {
         var channel = new ApprovalChannel();
 
-        var result = await channel.WaitForApprovalAsync("call-timeout", TimeSpan.FromMilliseconds(50), CancellationToken.None);
+        var result = await channel.WaitForApprovalAsync(new ToolCallId("call-timeout"), TimeSpan.FromMilliseconds(50), CancellationToken.None);
 
         Assert.Equal(ApprovalDecision.TimedOut, result);
     }
@@ -69,7 +70,7 @@ public sealed class ApprovalChannelTests
         using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(50));
 
         await Assert.ThrowsAsync<OperationCanceledException>(async () =>
-            await channel.WaitForApprovalAsync("call-cancel", TimeSpan.FromSeconds(30), cts.Token));
+            await channel.WaitForApprovalAsync(new ToolCallId("call-cancel"), TimeSpan.FromSeconds(30), cts.Token));
     }
 
     [Fact]
@@ -77,8 +78,8 @@ public sealed class ApprovalChannelTests
     {
         var channel = new ApprovalChannel();
 
-        var waitTask = channel.WaitForApprovalAsync("call-infinite", Timeout.InfiniteTimeSpan, CancellationToken.None);
-        channel.Complete("call-infinite", ApprovalDecision.Denied);
+        var waitTask = channel.WaitForApprovalAsync(new ToolCallId("call-infinite"), Timeout.InfiniteTimeSpan, CancellationToken.None);
+        channel.Complete(new ToolCallId("call-infinite"), ApprovalDecision.Denied);
 
         // If infinite-timeout were broken (e.g. timeout task fired immediately),
         // the wait would resolve to TimedOut instead of the Denied we just signaled.
@@ -90,7 +91,7 @@ public sealed class ApprovalChannelTests
     {
         var channel = new ApprovalChannel();
         // Should not throw
-        channel.Complete("nonexistent", ApprovalDecision.Denied);
+        channel.Complete(new ToolCallId("nonexistent"), ApprovalDecision.Denied);
     }
 
     [Fact]
@@ -98,11 +99,11 @@ public sealed class ApprovalChannelTests
     {
         var channel = new ApprovalChannel();
 
-        var wait1 = channel.WaitForApprovalAsync("call-a", TimeSpan.FromSeconds(30), CancellationToken.None);
-        var wait2 = channel.WaitForApprovalAsync("call-b", TimeSpan.FromSeconds(30), CancellationToken.None);
+        var wait1 = channel.WaitForApprovalAsync(new ToolCallId("call-a"), TimeSpan.FromSeconds(30), CancellationToken.None);
+        var wait2 = channel.WaitForApprovalAsync(new ToolCallId("call-b"), TimeSpan.FromSeconds(30), CancellationToken.None);
 
-        channel.Complete("call-b", ApprovalDecision.Denied);
-        channel.Complete("call-a", ApprovalDecision.ApprovedSession);
+        channel.Complete(new ToolCallId("call-b"), ApprovalDecision.Denied);
+        channel.Complete(new ToolCallId("call-a"), ApprovalDecision.ApprovedSession);
 
         Assert.Equal(ApprovalDecision.ApprovedSession, await wait1);
         Assert.Equal(ApprovalDecision.Denied, await wait2);

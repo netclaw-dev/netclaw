@@ -4,6 +4,7 @@ using Microsoft.Extensions.Configuration;
 using Netclaw.Cli.Daemon;
 using Netclaw.Cli.Mcp;
 using Netclaw.Configuration;
+using Netclaw.Tools;
 using Xunit;
 
 namespace Netclaw.Cli.Tests.Mcp;
@@ -39,7 +40,7 @@ public sealed class McpToolPermissionsViewModelTests : IDisposable
     public void CycleServerDefault_StartingFromAuto_LandsOnDenyAfterTwoCycles()
     {
         var vm = CreateVm();
-        vm.InitializeForTests("notion", new[] { "create-pages", "search" });
+        vm.InitializeForTests(new McpServerName("notion"), new[] { "create-pages", "search" });
         vm.SetSelectedAudienceForTests(TrustAudience.Personal);
 
         vm.CycleServerDefault();
@@ -56,30 +57,30 @@ public sealed class McpToolPermissionsViewModelTests : IDisposable
     public void CycleToolOverride_FromInherit_CyclesThroughAllModes()
     {
         var vm = CreateVm();
-        vm.InitializeForTests("notion", new[] { "create-pages" });
+        vm.InitializeForTests(new McpServerName("notion"), new[] { "create-pages" });
         vm.SetSelectedAudienceForTests(TrustAudience.Personal);
 
         // Initial: inherit (effective mode resolves from server default / global default).
-        var (_, isInherited) = vm.GetEffectiveMode("create-pages");
+        var (_, isInherited) = vm.GetEffectiveMode(new ToolName("create-pages"));
         Assert.True(isInherited);
 
-        vm.CycleToolOverride("create-pages");
-        var step1 = vm.GetEffectiveMode("create-pages");
+        vm.CycleToolOverride(new ToolName("create-pages"));
+        var step1 = vm.GetEffectiveMode(new ToolName("create-pages"));
         Assert.Equal(ToolApprovalMode.Auto, step1.Mode);
         Assert.False(step1.IsInherited);
 
-        vm.CycleToolOverride("create-pages");
-        var step2 = vm.GetEffectiveMode("create-pages");
+        vm.CycleToolOverride(new ToolName("create-pages"));
+        var step2 = vm.GetEffectiveMode(new ToolName("create-pages"));
         Assert.Equal(ToolApprovalMode.Approval, step2.Mode);
         Assert.False(step2.IsInherited);
 
-        vm.CycleToolOverride("create-pages");
-        var step3 = vm.GetEffectiveMode("create-pages");
+        vm.CycleToolOverride(new ToolName("create-pages"));
+        var step3 = vm.GetEffectiveMode(new ToolName("create-pages"));
         Assert.Equal(ToolApprovalMode.Deny, step3.Mode);
         Assert.False(step3.IsInherited);
 
-        vm.CycleToolOverride("create-pages");
-        var step4 = vm.GetEffectiveMode("create-pages");
+        vm.CycleToolOverride(new ToolName("create-pages"));
+        var step4 = vm.GetEffectiveMode(new ToolName("create-pages"));
         Assert.True(step4.IsInherited);
     }
 
@@ -87,7 +88,7 @@ public sealed class McpToolPermissionsViewModelTests : IDisposable
     public void Save_WritesServerDefaultsAndOverridesAndRemovesInheritedEntries()
     {
         var vm = CreateVm();
-        vm.InitializeForTests("notion", new[] { "create-pages", "search" });
+        vm.InitializeForTests(new McpServerName("notion"), new[] { "create-pages", "search" });
         vm.SetSelectedAudienceForTests(TrustAudience.Personal);
 
         // Cycle server default twice: Auto → Approval → Deny.
@@ -95,13 +96,13 @@ public sealed class McpToolPermissionsViewModelTests : IDisposable
         vm.CycleServerDefault();
 
         // Cycle create-pages once → Auto (explicit override).
-        vm.CycleToolOverride("create-pages");
+        vm.CycleToolOverride(new ToolName("create-pages"));
 
         // Cycle search four times back to inherit.
-        vm.CycleToolOverride("search");
-        vm.CycleToolOverride("search");
-        vm.CycleToolOverride("search");
-        vm.CycleToolOverride("search");
+        vm.CycleToolOverride(new ToolName("search"));
+        vm.CycleToolOverride(new ToolName("search"));
+        vm.CycleToolOverride(new ToolName("search"));
+        vm.CycleToolOverride(new ToolName("search"));
 
         vm.Save();
 
@@ -147,10 +148,10 @@ public sealed class McpToolPermissionsViewModelTests : IDisposable
         File.WriteAllText(_paths.NetclawConfigPath, configJson);
 
         var vm = CreateVm();
-        vm.InitializeForTests("notion", new[] { "create-pages" });
+        vm.InitializeForTests(new McpServerName("notion"), new[] { "create-pages" });
         vm.SetSelectedAudienceForTests(TrustAudience.Personal);
 
-        var (mode, inherited) = vm.GetEffectiveMode("create-pages");
+        var (mode, inherited) = vm.GetEffectiveMode(new ToolName("create-pages"));
         Assert.Equal(ToolApprovalMode.Approval, mode);
         Assert.True(inherited);
         Assert.Equal(ToolApprovalMode.Approval, vm.GetServerDefault());

@@ -48,7 +48,7 @@ public sealed class SlackReplyClient(ISlackApiClient slackApiClient) : ISlackRep
 
     public async Task UpdateThreadMessageAsync(
         SlackChannelId channelId,
-        string messageTs,
+        SlackEventTs messageTs,
         string text,
         IReadOnlyList<Block>? blocks = null,
         CancellationToken cancellationToken = default)
@@ -58,7 +58,7 @@ public sealed class SlackReplyClient(ISlackApiClient slackApiClient) : ISlackRep
             await slackApiClient.Chat.Update(new MessageUpdate
             {
                 ChannelId = channelId.Value,
-                Ts = messageTs,
+                Ts = messageTs.Value,
                 Text = text,
                 Blocks = blocks?.ToList()
             }, cancellationToken);

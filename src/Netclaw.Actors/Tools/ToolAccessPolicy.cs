@@ -58,10 +58,10 @@ public sealed class ToolAccessPolicy
     private bool IsToolExposed(INetclawTool tool, TrustAudience audience)
     {
         if (tool is McpToolAdapter mcp)
-            return _profileResolver.IsMcpServerAllowed(mcp.ServerName, audience)
-                && _profileResolver.IsMcpToolAllowed(mcp.ServerName, mcp.BareToolName, audience);
+            return _profileResolver.IsMcpServerAllowed(new McpServerName(mcp.ServerName), audience)
+                && _profileResolver.IsMcpToolAllowed(new McpServerName(mcp.ServerName), new ToolName(mcp.BareToolName), audience);
 
-        if (!_profileResolver.IsToolAllowed(tool.Name, CreateContext(audience)))
+        if (!_profileResolver.IsToolAllowed(new ToolName(tool.Name), CreateContext(audience)))
             return false;
 
         if (IsShellTool(tool))
@@ -80,20 +80,23 @@ public sealed class ToolAccessPolicy
     {
         if (tool is McpToolAdapter mcp)
         {
-            if (!_profileResolver.IsMcpServerAllowed(mcp.ServerName, context))
+            if (!_profileResolver.IsMcpServerAllowed(new McpServerName(mcp.ServerName), context))
                 return ToolAccessDecision.Deny("mcp_server_not_allowed_for_audience_profile");
 
-            if (!_profileResolver.IsMcpToolAllowed(mcp.ServerName, mcp.BareToolName, context))
+            if (!_profileResolver.IsMcpToolAllowed(new McpServerName(mcp.ServerName), new ToolName(mcp.BareToolName), context))
                 return ToolAccessDecision.Deny("mcp_tool_not_allowed_for_audience_profile");
 
-            return CheckApprovalGate(tool.Name, context, arguments, DefaultApprovalMatcher.Instance);
+            var mcpToolName = new ToolName(tool.Name);
+            return CheckApprovalGate(mcpToolName, context, arguments, DefaultApprovalMatcher.Instance);
         }
 
-        if (!_profileResolver.IsToolAllowed(tool.Name, context))
+        var toolName = new ToolName(tool.Name);
+
+        if (!_profileResolver.IsToolAllowed(toolName, context))
             return ToolAccessDecision.Deny("tool_not_allowed_for_audience_profile");
 
         if (!IsShellTool(tool))
-            return CheckApprovalGate(tool.Name, context, arguments, SelectMatcherForTool(tool.Name));
+            return CheckApprovalGate(toolName, context, arguments, SelectMatcherForTool(toolName));
 
         var shellMode = ResolveShellMode();
         if (shellMode == ShellExecutionMode.Off)
@@ -114,7 +117,7 @@ public sealed class ToolAccessPolicy
                 return ToolAccessDecision.Deny($"hard_deny_{hardDenyDecision.DenyCategory ?? "unknown"}");
         }
 
-        return CheckApprovalGate(tool.Name, context, arguments, ShellApprovalMatcher.Instance);
+        return CheckApprovalGate(toolName, context, arguments, ShellApprovalMatcher.Instance);
     }
 
     private static string? ExtractShellCommand(IDictionary<string, object?>? arguments)
@@ -132,7 +135,7 @@ public sealed class ToolAccessPolicy
     }
 
     private ToolAccessDecision CheckApprovalGate(
-        string toolName,
+        ToolName toolName,
         ToolExecutionContext? context,
         IDictionary<string, object?>? arguments,
         IToolApprovalMatcher matcher)
@@ -161,7 +164,7 @@ public sealed class ToolAccessPolicy
         var allPatterns = matcher.ExtractPatterns(toolName, arguments);
         var displayText = matcher.FormatForDisplay(toolName, arguments);
         var approvalContext = new ToolApprovalContext(
-            toolName,
+            toolName.Value,
             displayText,
             allPatterns,
             [
@@ -175,7 +178,7 @@ public sealed class ToolAccessPolicy
     }
 
     private static ToolApprovalMode GetMissingApprovalPolicyDefaultMode(
-        string toolName,
+        ToolName toolName,
         IDictionary<string, object?>? arguments,
         TrustAudience audience,
         IToolApprovalMatcher matcher)
@@ -189,7 +192,7 @@ public sealed class ToolAccessPolicy
     private static ToolApprovalMode ResolveApprovalMode(
         ToolApprovalConfig? approvalPolicy,
         string approvalModeKey,
-        string toolName,
+        ToolName toolName,
         IDictionary<string, object?>? arguments,
         TrustAudience audience,
         IToolApprovalMatcher matcher)
@@ -201,7 +204,7 @@ public sealed class ToolAccessPolicy
         // This only fires when the matcher produced a distinct key; it is
         // unrelated to MCP tool names and therefore never consults
         // McpServerDefaults.
-        if (!string.Equals(approvalModeKey, toolName, StringComparison.Ordinal)
+        if (!string.Equals(approvalModeKey, toolName.Value, StringComparison.Ordinal)
             && approvalPolicy.ToolOverrides.TryGetValue(approvalModeKey, out var matcherMode))
         {
             return matcherMode;
@@ -211,7 +214,7 @@ public sealed class ToolAccessPolicy
         // ToolApprovalConfig.GetEffectiveMode: exact ToolOverrides[toolName]
         // → McpServerDefaults[serverName] → fall-through. This keeps the
         // two callers consistent by construction.
-        if (approvalPolicy.TryGetExplicitMode(toolName, out var explicitMode))
+        if (approvalPolicy.TryGetExplicitMode(toolName.Value, out var explicitMode))
             return explicitMode;
 
         if (audience == TrustAudience.Personal && matcher.IsFailClosedOnPersonal(toolName, arguments))
@@ -220,10 +223,10 @@ public sealed class ToolAccessPolicy
         return approvalPolicy.DefaultMode;
     }
 
-    private IToolApprovalMatcher SelectMatcherForTool(string toolName)
+    private IToolApprovalMatcher SelectMatcherForTool(ToolName toolName)
     {
-        if (string.Equals(toolName, FileWriteTool.ToolName, StringComparison.Ordinal)
-            || string.Equals(toolName, FileEditTool.ToolName, StringComparison.Ordinal))
+        if (string.Equals(toolName.Value, FileWriteTool.ToolName, StringComparison.Ordinal)
+            || string.Equals(toolName.Value, FileEditTool.ToolName, StringComparison.Ordinal))
         {
             return _fileApprovalMatcher;
         }

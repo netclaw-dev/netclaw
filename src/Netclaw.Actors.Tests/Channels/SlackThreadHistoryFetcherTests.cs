@@ -182,12 +182,12 @@ public sealed class SlackThreadHistoryFetcherTests
         }
 
         public Task<ConversationMessagesResponse> FetchAsync(
-            string channelId, string threadTs, int limit, string? cursor, CancellationToken ct)
+            SlackChannelId channelId, SlackThreadTs threadTs, int limit, string? cursor, CancellationToken ct)
         {
             if (ThrowOnFetch is not null)
                 throw ThrowOnFetch;
 
-            var key = $"{channelId}:{threadTs}:{cursor ?? ""}";
+            var key = $"{channelId.Value}:{threadTs.Value}:{cursor ?? ""}";
             return _responses.TryGetValue(key, out var response)
                 ? Task.FromResult(response)
                 : Task.FromResult(new ConversationMessagesResponse());

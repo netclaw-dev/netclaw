@@ -37,7 +37,7 @@ internal sealed class McpShadowCatalogWriter
         {
             var fileName = ToSafeFileName(summary.ServerName) + ".md";
             var filePath = Path.Combine(_paths.McpShadowDirectory, fileName);
-            var tools = _toolRegistry.GetToolsForServer(summary.ServerName, int.MaxValue);
+            var tools = _toolRegistry.GetToolsForServer(new McpServerName(summary.ServerName), int.MaxValue);
 
             var content = BuildServerCatalog(summary, tools);
             File.WriteAllText(filePath, content);

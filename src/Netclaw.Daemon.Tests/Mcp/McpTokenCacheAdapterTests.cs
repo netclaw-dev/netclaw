@@ -2,19 +2,20 @@ using System.Collections.Concurrent;
 using ModelContextProtocol.Authentication;
 using Netclaw.Configuration;
 using Netclaw.Daemon.Mcp;
+using Netclaw.Tools;
 using Xunit;
 
 namespace Netclaw.Daemon.Tests.Mcp;
 
 public sealed class McpTokenCacheAdapterTests
 {
-    private readonly ConcurrentDictionary<string, McpOAuthTokenSet> _tokens = new();
+    private readonly ConcurrentDictionary<McpServerName, McpOAuthTokenSet> _tokens = new();
     private int _persistCallCount;
 
     private McpTokenCacheAdapter CreateAdapter(string serverName = "test-server")
     {
         return new McpTokenCacheAdapter(
-            serverName,
+            new McpServerName(serverName),
             _tokens,
             () => Interlocked.Increment(ref _persistCallCount),
             TimeProvider.System);
@@ -73,7 +74,7 @@ public sealed class McpTokenCacheAdapterTests
     [Fact]
     public async Task StoreTokensAsync_PreservesExistingClientIdAndUrl()
     {
-        _tokens["test-server"] = new McpOAuthTokenSet
+        _tokens[new McpServerName("test-server")] = new McpOAuthTokenSet
         {
             AccessToken = new SensitiveString("old-token"),
             ClientId = "my-client-id",
@@ -89,7 +90,7 @@ public sealed class McpTokenCacheAdapterTests
             ObtainedAt = DateTimeOffset.UtcNow,
         }, CancellationToken.None);
 
-        var tokenSet = _tokens["test-server"];
+        var tokenSet = _tokens[new McpServerName("test-server")];
         Assert.Equal("new-token", tokenSet.AccessToken.Value);
         Assert.Equal("my-client-id", tokenSet.ClientId);
         Assert.Equal("https://mcp.example.com", tokenSet.McpServerUrl);
@@ -98,7 +99,7 @@ public sealed class McpTokenCacheAdapterTests
     [Fact]
     public async Task StoreTokensAsync_PreservesExistingRefreshTokenWhenResponseOmitsIt()
     {
-        _tokens["test-server"] = new McpOAuthTokenSet
+        _tokens[new McpServerName("test-server")] = new McpOAuthTokenSet
         {
             AccessToken = new SensitiveString("old-token"),
             RefreshToken = new SensitiveString("existing-refresh"),
@@ -113,7 +114,7 @@ public sealed class McpTokenCacheAdapterTests
             ObtainedAt = DateTimeOffset.UtcNow,
         }, CancellationToken.None);
 
-        var tokenSet = _tokens["test-server"];
+        var tokenSet = _tokens[new McpServerName("test-server")];
         Assert.Equal("new-token", tokenSet.AccessToken.Value);
         Assert.Equal("existing-refresh", tokenSet.RefreshToken?.Value);
     }

@@ -761,7 +761,7 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
         await AwaitAssertAsync(() =>
         {
             var updated = Assert.Single(_replyClient.UpdatedMessages);
-            Assert.Equal("1.0", updated.MessageTs);
+            Assert.Equal(new SlackEventTs("1.0"), updated.MessageTs);
             Assert.Contains("Tool approval resolved", updated.Text, StringComparison.Ordinal);
             Assert.DoesNotContain(updated.Blocks ?? [], block => block is ActionsBlock);
         }, duration: TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
@@ -916,7 +916,7 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
         await AwaitAssertAsync(() =>
         {
             var updated = Assert.Single(_replyClient.UpdatedMessages);
-            Assert.Equal("1.0", updated.MessageTs);
+            Assert.Equal(new SlackEventTs("1.0"), updated.MessageTs);
             Assert.Contains(ApprovalOptionKeys.ApproveSessionLabel, updated.Text, StringComparison.OrdinalIgnoreCase);
             Assert.DoesNotContain(updated.Blocks ?? [], block => block is ActionsBlock);
         }, duration: TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
@@ -1285,7 +1285,7 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
     {
         private readonly object _lock = new();
         private readonly List<SlackPostMessage> _postedMessages = [];
-        private readonly List<(SlackChannelId ChannelId, string MessageTs, string Text, IReadOnlyList<Block>? Blocks)> _updatedMessages = [];
+        private readonly List<(SlackChannelId ChannelId, SlackEventTs MessageTs, string Text, IReadOnlyList<Block>? Blocks)> _updatedMessages = [];
         private readonly List<(SlackChannelId ChannelId, SlackThreadTs ThreadTs, string FilePath, string? FileName)> _uploadedFiles = [];
 
         public IReadOnlyList<SlackPostMessage> PostedMessages
@@ -1293,7 +1293,7 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
             get { lock (_lock) return _postedMessages.ToList(); }
         }
 
-        public IReadOnlyList<(SlackChannelId ChannelId, string MessageTs, string Text, IReadOnlyList<Block>? Blocks)> UpdatedMessages
+        public IReadOnlyList<(SlackChannelId ChannelId, SlackEventTs MessageTs, string Text, IReadOnlyList<Block>? Blocks)> UpdatedMessages
         {
             get { lock (_lock) return _updatedMessages.ToList(); }
         }
@@ -1345,7 +1345,7 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
 
         public Task UpdateThreadMessageAsync(
             SlackChannelId channelId,
-            string messageTs,
+            SlackEventTs messageTs,
             string text,
             IReadOnlyList<Block>? blocks = null,
             CancellationToken cancellationToken = default)

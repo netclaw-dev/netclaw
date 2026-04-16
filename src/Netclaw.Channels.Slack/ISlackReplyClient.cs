@@ -10,7 +10,7 @@ public interface ISlackReplyClient
 
     Task UpdateThreadMessageAsync(
         SlackChannelId channelId,
-        string messageTs,
+        SlackEventTs messageTs,
         string text,
         IReadOnlyList<Block>? blocks = null,
         CancellationToken cancellationToken = default);

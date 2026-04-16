@@ -160,7 +160,7 @@ public sealed class McpServersDoctorCheck(NetclawPaths paths, DaemonApi daemonAp
             }
 
             var probeEntry = fullServers.TryGetValue(name, out var full) ? full : entry;
-            var probe = await McpCommand.ProbeServerAsync(name, probeEntry, cancellationToken);
+            var probe = await McpCommand.ProbeServerAsync(new Netclaw.Tools.McpServerName(name), probeEntry, cancellationToken);
 
             switch (probe.Status)
             {

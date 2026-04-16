@@ -1,3 +1,5 @@
+using Netclaw.Tools;
+
 namespace Netclaw.Security;
 
 /// <summary>
@@ -15,7 +17,7 @@ public interface IToolApprovalMatcher
     /// control-plane file vs. a write to a user file) can be gated
     /// independently.
     /// </summary>
-    string GetApprovalModeKey(string toolName, IDictionary<string, object?>? arguments);
+    string GetApprovalModeKey(ToolName toolName, IDictionary<string, object?>? arguments);
 
     /// <summary>
     /// Returns true if this invocation must require interactive approval on
@@ -23,24 +25,24 @@ public interface IToolApprovalMatcher
     /// Encapsulates the fail-closed decision so callers do not have to inspect
     /// tool names or approval-key string formats.
     /// </summary>
-    bool IsFailClosedOnPersonal(string toolName, IDictionary<string, object?>? arguments);
+    bool IsFailClosedOnPersonal(ToolName toolName, IDictionary<string, object?>? arguments);
 
     /// <summary>
     /// Extracts the intent-level pattern from a tool call's arguments.
     /// For shell: verb-chain prefix (e.g., "git push" from "git push origin main").
     /// For other tools: the tool name itself.
     /// </summary>
-    IReadOnlyList<string> ExtractPatterns(string toolName, IDictionary<string, object?>? arguments);
+    IReadOnlyList<string> ExtractPatterns(ToolName toolName, IDictionary<string, object?>? arguments);
 
     /// <summary>
     /// Checks if the tool call matches any approved pattern.
     /// </summary>
-    bool IsApproved(string toolName, IDictionary<string, object?>? arguments, IEnumerable<string> approvedPatterns);
+    bool IsApproved(ToolName toolName, IDictionary<string, object?>? arguments, IEnumerable<string> approvedPatterns);
 
     /// <summary>
     /// Formats the tool call for display in the approval prompt.
     /// </summary>
-    string FormatForDisplay(string toolName, IDictionary<string, object?>? arguments);
+    string FormatForDisplay(ToolName toolName, IDictionary<string, object?>? arguments);
 }
 
 /// <summary>
@@ -51,13 +53,13 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
 {
     public static readonly ShellApprovalMatcher Instance = new();
 
-    public string GetApprovalModeKey(string toolName, IDictionary<string, object?>? arguments)
-        => toolName;
+    public string GetApprovalModeKey(ToolName toolName, IDictionary<string, object?>? arguments)
+        => toolName.Value;
 
-    public bool IsFailClosedOnPersonal(string toolName, IDictionary<string, object?>? arguments)
+    public bool IsFailClosedOnPersonal(ToolName toolName, IDictionary<string, object?>? arguments)
         => true;
 
-    public IReadOnlyList<string> ExtractPatterns(string toolName, IDictionary<string, object?>? arguments)
+    public IReadOnlyList<string> ExtractPatterns(ToolName toolName, IDictionary<string, object?>? arguments)
     {
         var command = GetCommand(arguments);
         if (string.IsNullOrWhiteSpace(command))
@@ -69,7 +71,7 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         return patterns.ToList();
     }
 
-    public bool IsApproved(string toolName, IDictionary<string, object?>? arguments, IEnumerable<string> approvedPatterns)
+    public bool IsApproved(ToolName toolName, IDictionary<string, object?>? arguments, IEnumerable<string> approvedPatterns)
     {
         var commandPatterns = ExtractPatterns(toolName, arguments);
         if (commandPatterns.Count == 0)
@@ -85,7 +87,7 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         return true;
     }
 
-    public string FormatForDisplay(string toolName, IDictionary<string, object?>? arguments)
+    public string FormatForDisplay(ToolName toolName, IDictionary<string, object?>? arguments)
     {
         return GetCommand(arguments) ?? "(empty command)";
     }
@@ -132,30 +134,30 @@ public sealed class DefaultApprovalMatcher : IToolApprovalMatcher
 {
     public static readonly DefaultApprovalMatcher Instance = new();
 
-    public string GetApprovalModeKey(string toolName, IDictionary<string, object?>? arguments)
-        => toolName;
+    public string GetApprovalModeKey(ToolName toolName, IDictionary<string, object?>? arguments)
+        => toolName.Value;
 
-    public bool IsFailClosedOnPersonal(string toolName, IDictionary<string, object?>? arguments)
+    public bool IsFailClosedOnPersonal(ToolName toolName, IDictionary<string, object?>? arguments)
         => false;
 
-    public IReadOnlyList<string> ExtractPatterns(string toolName, IDictionary<string, object?>? arguments)
+    public IReadOnlyList<string> ExtractPatterns(ToolName toolName, IDictionary<string, object?>? arguments)
     {
-        return [toolName];
+        return [toolName.Value];
     }
 
-    public bool IsApproved(string toolName, IDictionary<string, object?>? arguments, IEnumerable<string> approvedPatterns)
+    public bool IsApproved(ToolName toolName, IDictionary<string, object?>? arguments, IEnumerable<string> approvedPatterns)
     {
         foreach (var approved in approvedPatterns)
         {
-            if (string.Equals(toolName, approved, StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(toolName.Value, approved, StringComparison.OrdinalIgnoreCase))
                 return true;
         }
 
         return false;
     }
 
-    public string FormatForDisplay(string toolName, IDictionary<string, object?>? arguments)
+    public string FormatForDisplay(ToolName toolName, IDictionary<string, object?>? arguments)
     {
-        return toolName;
+        return toolName.Value;
     }
 }

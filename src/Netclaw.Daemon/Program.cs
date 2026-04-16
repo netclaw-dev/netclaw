@@ -37,6 +37,7 @@ using Netclaw.Daemon.Security;
 using Netclaw.Daemon.Services;
 using Netclaw.Daemon.Webhooks;
 using Netclaw.Search;
+using Netclaw.Tools;
 using Netclaw.Security;
 using static Microsoft.Extensions.Logging.LogLevel;
 
@@ -277,7 +278,7 @@ static async Task RunDaemonAsync(string[] args, DaemonRestartSignal restartSigna
         if (string.IsNullOrWhiteSpace(entry.Url))
             return Results.BadRequest(new { error = $"MCP server '{name}' has no URL (OAuth requires HTTP transport)" });
 
-        var (authUrl, state) = await oauthService.StartAuthorizationFlowAsync(name, entry, ct);
+        var (authUrl, state) = await oauthService.StartAuthorizationFlowAsync(new McpServerName(name), entry, ct);
         return Results.Ok(new { authorizationUrl = authUrl, state });
     }).RequireAuthorization();
 
@@ -309,8 +310,8 @@ static async Task RunDaemonAsync(string[] args, DaemonRestartSignal restartSigna
                 var reconnectLogger = context.RequestServices.GetRequiredService<ILogger<McpClientManager>>();
                 _ = Task.Run(async () =>
                 {
-                    try { await mcpManager.TryReconnectAsync(serverName, CancellationToken.None); }
-                    catch (Exception ex) { reconnectLogger.LogWarning(ex, "Post-OAuth reconnect failed for MCP server '{Name}'", serverName); }
+                    try { await mcpManager.TryReconnectAsync(serverName.Value, CancellationToken.None); }
+                    catch (Exception ex) { reconnectLogger.LogWarning(ex, "Post-OAuth reconnect failed for MCP server '{Name}'", serverName.Value.Value); }
                 }, CancellationToken.None);
             }
 
@@ -331,7 +332,7 @@ static async Task RunDaemonAsync(string[] args, DaemonRestartSignal restartSigna
     {
         var statuses = mcpManager.GetServerStatuses();
         var result = statuses.ToDictionary(
-            kvp => kvp.Key,
+            kvp => kvp.Key.Value,
             kvp => new
             {
                 state = kvp.Value.State.ToString(),
@@ -343,13 +344,13 @@ static async Task RunDaemonAsync(string[] args, DaemonRestartSignal restartSigna
 
     app.MapGet("/api/mcp/tools/{name}", (string name, McpClientManager mcpManager) =>
     {
-        var tools = mcpManager.GetToolNames(name);
+        var tools = mcpManager.GetToolNames(new McpServerName(name));
         return Results.Ok(tools);
     }).RequireAuthorization();
 
     app.MapGet("/api/mcp/oauth/status/{name}", (string name, McpOAuthService oauthService) =>
     {
-        var status = oauthService.GetFlowStatus(name);
+        var status = oauthService.GetFlowStatus(new McpServerName(name));
         return Results.Ok(new { status = status.ToString() });
     }).RequireAuthorization();
 

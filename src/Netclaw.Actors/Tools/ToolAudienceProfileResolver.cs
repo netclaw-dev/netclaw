@@ -59,7 +59,7 @@ internal sealed class ToolAudienceProfileResolver
         return roots;
     }
 
-    public bool IsToolAllowed(string toolName, ToolExecutionContext? context)
+    public bool IsToolAllowed(ToolName toolName, ToolExecutionContext? context)
     {
         if (!IsProfileManagedTool(toolName))
             return true;
@@ -69,16 +69,16 @@ internal sealed class ToolAudienceProfileResolver
         if (profile.ToolsMode == ToolProfileMode.All)
             return true;
 
-        return profile.AllowedTools.Contains(toolName, StringComparer.Ordinal);
+        return profile.AllowedTools.Contains(toolName.Value, StringComparer.Ordinal);
     }
 
-    public bool IsMcpServerAllowed(string serverName, ToolExecutionContext? context)
+    public bool IsMcpServerAllowed(McpServerName serverName, ToolExecutionContext? context)
     {
         var profile = ResolveProfile(context);
         return IsMcpServerAllowed(serverName, profile);
     }
 
-    public bool IsMcpServerAllowed(string serverName, TrustAudience audience)
+    public bool IsMcpServerAllowed(McpServerName serverName, TrustAudience audience)
     {
         var profile = ResolveProfile(audience);
         return IsMcpServerAllowed(serverName, profile);
@@ -91,13 +91,13 @@ internal sealed class ToolAudienceProfileResolver
     /// - The server has no entry in the grants dictionary, or
     /// - The tool name appears in the server's grant list.
     /// </summary>
-    public bool IsMcpToolAllowed(string serverName, string toolName, TrustAudience audience)
+    public bool IsMcpToolAllowed(McpServerName serverName, ToolName toolName, TrustAudience audience)
     {
         var profile = ResolveProfile(audience);
         return IsMcpToolAllowed(serverName, toolName, profile);
     }
 
-    public bool IsMcpToolAllowed(string serverName, string toolName, ToolExecutionContext? context)
+    public bool IsMcpToolAllowed(McpServerName serverName, ToolName toolName, ToolExecutionContext? context)
     {
         var profile = ResolveProfile(context);
         return IsMcpToolAllowed(serverName, toolName, profile);
@@ -148,27 +148,27 @@ internal sealed class ToolAudienceProfileResolver
             ? parsed
             : SecurityPolicyDefaults.ResolveAudienceFromSessionId(context?.SessionId);
 
-    private static bool IsMcpServerAllowed(string serverName, ToolAudienceProfile profile)
+    private static bool IsMcpServerAllowed(McpServerName serverName, ToolAudienceProfile profile)
     {
         if (profile.McpServersMode == ToolProfileMode.All)
             return true;
 
-        return profile.AllowedMcpServers.Contains(serverName, StringComparer.OrdinalIgnoreCase);
+        return profile.AllowedMcpServers.Contains(serverName.Value, StringComparer.OrdinalIgnoreCase);
     }
 
-    private static bool IsMcpToolAllowed(string serverName, string toolName, ToolAudienceProfile profile)
+    private static bool IsMcpToolAllowed(McpServerName serverName, ToolName toolName, ToolAudienceProfile profile)
     {
         if (profile.McpServerToolGrants is not { } grants)
             return true;
 
-        if (!grants.TryGetValue(serverName, out var allowedTools))
+        if (!grants.TryGetValue(serverName.Value, out var allowedTools))
             return true;
 
-        return allowedTools.Contains(toolName, StringComparer.Ordinal);
+        return allowedTools.Contains(toolName.Value, StringComparer.Ordinal);
     }
 
-    private static bool IsProfileManagedTool(string toolName)
-        => toolName is "shell_execute"
+    private static bool IsProfileManagedTool(ToolName toolName)
+        => toolName.Value is "shell_execute"
             or "file_read"
             or "file_write"
             or "attach_file"

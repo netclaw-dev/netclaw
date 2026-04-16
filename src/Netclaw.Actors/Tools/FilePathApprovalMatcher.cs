@@ -1,4 +1,5 @@
 using Netclaw.Security;
+using Netclaw.Tools;
 
 namespace Netclaw.Actors.Tools;
 
@@ -19,25 +20,25 @@ public sealed class FilePathApprovalMatcher : IToolApprovalMatcher
         _controlPlaneRoot = NormalizePath(controlPlaneRoot);
     }
 
-    public string GetApprovalModeKey(string toolName, IDictionary<string, object?>? arguments)
+    public string GetApprovalModeKey(ToolName toolName, IDictionary<string, object?>? arguments)
     {
         return TryGetControlPlaneRelativePath(arguments, out _)
-            ? toolName + ControlPlaneModeKeySuffix
-            : toolName;
+            ? toolName.Value + ControlPlaneModeKeySuffix
+            : toolName.Value;
     }
 
-    public bool IsFailClosedOnPersonal(string toolName, IDictionary<string, object?>? arguments)
+    public bool IsFailClosedOnPersonal(ToolName toolName, IDictionary<string, object?>? arguments)
         => TryGetControlPlaneRelativePath(arguments, out _);
 
-    public IReadOnlyList<string> ExtractPatterns(string toolName, IDictionary<string, object?>? arguments)
+    public IReadOnlyList<string> ExtractPatterns(ToolName toolName, IDictionary<string, object?>? arguments)
     {
         if (TryGetControlPlaneRelativePath(arguments, out var relativePath))
-            return [toolName + ControlPlaneModeKeySuffix + ":" + relativePath];
+            return [toolName.Value + ControlPlaneModeKeySuffix + ":" + relativePath];
 
-        return [toolName];
+        return [toolName.Value];
     }
 
-    public bool IsApproved(string toolName, IDictionary<string, object?>? arguments, IEnumerable<string> approvedPatterns)
+    public bool IsApproved(ToolName toolName, IDictionary<string, object?>? arguments, IEnumerable<string> approvedPatterns)
     {
         var patterns = ExtractPatterns(toolName, arguments);
         foreach (var pattern in patterns)
@@ -59,12 +60,12 @@ public sealed class FilePathApprovalMatcher : IToolApprovalMatcher
         return true;
     }
 
-    public string FormatForDisplay(string toolName, IDictionary<string, object?>? arguments)
+    public string FormatForDisplay(ToolName toolName, IDictionary<string, object?>? arguments)
     {
         if (TryGetPath(arguments, out var path))
-            return $"{toolName}: {path}";
+            return $"{toolName.Value}: {path}";
 
-        return toolName;
+        return toolName.Value;
     }
 
     private bool TryGetControlPlaneRelativePath(

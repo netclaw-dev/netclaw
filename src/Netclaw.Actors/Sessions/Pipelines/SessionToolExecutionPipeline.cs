@@ -213,7 +213,7 @@ internal static class SessionToolExecutionPipeline
             var ctx = approvalEx.ApprovalContext;
             var approvalWaitTimeout = approvalTimeout ?? Timeout.InfiniteTimeSpan;
             var waitTask = approvalChannel.WaitForApprovalAsync(
-                tc.CallId,
+                new ToolCallId(tc.CallId),
                 approvalWaitTimeout,
                 CancellationToken.None);
 

@@ -7,6 +7,7 @@ using ModelContextProtocol.Authentication;
 using Netclaw.Configuration;
 using Netclaw.Configuration.Secrets;
 using Netclaw.Providers.OAuth;
+using Netclaw.Tools;
 
 namespace Netclaw.Daemon.Mcp;
 
@@ -33,14 +34,14 @@ internal sealed class McpOAuthService
     private readonly ISecretsProtector? _protector;
 
     // In-memory caches, loaded from disk at construction
-    private readonly ConcurrentDictionary<string, McpOAuthTokenSet> _tokens = new();
-    private readonly ConcurrentDictionary<string, McpOAuthServerMetadata> _metadata = new();
+    private readonly ConcurrentDictionary<McpServerName, McpOAuthTokenSet> _tokens = new();
+    private readonly ConcurrentDictionary<McpServerName, McpOAuthServerMetadata> _metadata = new();
 
     // Maps PKCE state → flow context for token persistence after callback
     private readonly ConcurrentDictionary<string, McpOAuthFlowContext> _stateToContext = new();
 
     // Maps PKCE state → server name for recently completed flows (for auto-reconnect)
-    private readonly ConcurrentDictionary<string, string> _lastCompletedServerName = new();
+    private readonly ConcurrentDictionary<string, McpServerName> _lastCompletedServerName = new();
 
     public McpOAuthService(
         HttpClient httpClient,
@@ -70,7 +71,7 @@ internal sealed class McpOAuthService
     /// well-known metadata endpoints. Returns null if no OAuth is needed.
     /// </summary>
     public async Task<McpOAuthServerMetadata?> TryDiscoverMetadataAsync(
-        string serverName, string serverUrl, CancellationToken ct)
+        McpServerName serverName, string serverUrl, CancellationToken ct)
     {
         serverUrl = serverUrl.TrimEnd('/');
 
@@ -169,7 +170,7 @@ internal sealed class McpOAuthService
     /// dynamic client registration.
     /// </summary>
     public async Task<string> EnsureClientRegisteredAsync(
-        string serverName, McpServerEntry entry, McpOAuthServerMetadata metadata, CancellationToken ct)
+        McpServerName serverName, McpServerEntry entry, McpOAuthServerMetadata metadata, CancellationToken ct)
     {
         // Static client ID takes precedence
         if (!string.IsNullOrWhiteSpace(entry.OAuthClientId))
@@ -187,7 +188,7 @@ internal sealed class McpOAuthService
         // Dynamic client registration
         if (string.IsNullOrWhiteSpace(metadata.RegistrationEndpoint))
             throw new InvalidOperationException(
-                $"MCP server '{serverName}' requires OAuth but no client_id is configured " +
+                $"MCP server '{serverName.Value}' requires OAuth but no client_id is configured " +
                 "and the auth server doesn't support dynamic client registration. " +
                 $"Set OAuthClientId in the MCP server config.");
 
@@ -211,7 +212,7 @@ internal sealed class McpOAuthService
         _metadata[serverName] = metadata;
         PersistMetadata();
 
-        _logger.LogInformation("Registered OAuth client for MCP server '{Name}': {ClientId}", serverName, clientId);
+        _logger.LogInformation("Registered OAuth client for MCP server '{Name}': {ClientId}", serverName.Value, clientId);
         return clientId;
     }
 
@@ -222,11 +223,11 @@ internal sealed class McpOAuthService
     /// <see cref="OAuthPkceService"/> for PKCE generation and URL construction.
     /// </summary>
     public async Task<(string AuthorizationUrl, string State)> StartAuthorizationFlowAsync(
-        string serverName, McpServerEntry entry, CancellationToken ct)
+        McpServerName serverName, McpServerEntry entry, CancellationToken ct)
     {
         var metadata = await TryDiscoverMetadataAsync(serverName, entry.Url!, ct)
             ?? throw new InvalidOperationException(
-                $"MCP server '{serverName}' does not advertise OAuth metadata. " +
+                $"MCP server '{serverName.Value}' does not advertise OAuth metadata. " +
                 "No /.well-known/oauth-protected-resource was found.");
         var clientId = await EnsureClientRegisteredAsync(serverName, entry, metadata, ct);
 
@@ -268,7 +269,7 @@ internal sealed class McpOAuthService
         // Prune abandoned flows older than 10 minutes
         PruneStaleFlowContexts();
 
-        _logger.LogInformation("Started OAuth flow for MCP server '{Name}' (state={State})", serverName, state);
+        _logger.LogInformation("Started OAuth flow for MCP server '{Name}' (state={State})", serverName.Value, state);
         return (authUrl, state);
     }
 
@@ -303,7 +304,7 @@ internal sealed class McpOAuthService
             // Cache the server name so callers can trigger reconnect after cleanup
             _lastCompletedServerName[state] = context.ServerName;
 
-            _logger.LogInformation("OAuth flow completed for MCP server '{Name}'", context.ServerName);
+            _logger.LogInformation("OAuth flow completed for MCP server '{Name}'", context.ServerName.Value);
         }
         finally
         {
@@ -316,10 +317,11 @@ internal sealed class McpOAuthService
     /// Returns the server name for a recently completed OAuth flow (by state).
     /// Used to trigger auto-reconnect after token acquisition.
     /// </summary>
-    public string? GetServerNameForState(string state)
+    public McpServerName? GetServerNameForState(string state)
     {
-        _lastCompletedServerName.TryRemove(state, out var name);
-        return name;
+        if (_lastCompletedServerName.TryRemove(state, out var name))
+            return name;
+        return null;
     }
 
     // ── Token Access ───────────────────────────────────────────────────
@@ -330,7 +332,7 @@ internal sealed class McpOAuthService
     /// if no token is available or refresh fails.
     /// </summary>
     public async Task<string?> GetValidTokenAsync(
-        string serverName, McpServerEntry entry, CancellationToken ct)
+        McpServerName serverName, McpServerEntry entry, CancellationToken ct)
     {
         if (!_tokens.TryGetValue(serverName, out var tokenSet))
             return null;
@@ -342,20 +344,20 @@ internal sealed class McpOAuthService
         // Attempt refresh
         if (tokenSet.RefreshToken is null)
         {
-            _logger.LogWarning("Access token expired for MCP server '{Name}' with no refresh token", serverName);
+            _logger.LogWarning("Access token expired for MCP server '{Name}' with no refresh token", serverName.Value);
 
             _notificationSink.Emit(new OperationalAlert
             {
                 AlertId = Guid.NewGuid().ToString("N")[..12],
                 Type = "mcp.auth.expired",
                 Category = AlertType.McpAuthExpired,
-                Summary = $"MCP server '{serverName}' access token expired with no refresh token. Run: netclaw mcp auth {serverName}",
+                Summary = $"MCP server '{serverName.Value}' access token expired with no refresh token. Run: netclaw mcp auth {serverName.Value}",
                 Timestamp = _timeProvider.GetUtcNow(),
                 Severity = "warning",
-                Source = serverName,
+                Source = serverName.Value,
                 Context = new Dictionary<string, string>
                 {
-                    ["serverName"] = serverName,
+                    ["serverName"] = serverName.Value,
                     ["reason"] = "no_refresh_token",
                 }
             });
@@ -369,11 +371,11 @@ internal sealed class McpOAuthService
     // ── Token Refresh ──────────────────────────────────────────────────
 
     private async Task<string?> RefreshTokenAsync(
-        string serverName, McpServerEntry entry, McpOAuthTokenSet tokenSet, CancellationToken ct)
+        McpServerName serverName, McpServerEntry entry, McpOAuthTokenSet tokenSet, CancellationToken ct)
     {
         if (!_metadata.TryGetValue(serverName, out var metadata))
         {
-            _logger.LogWarning("No cached metadata for MCP server '{Name}', cannot refresh token", serverName);
+            _logger.LogWarning("No cached metadata for MCP server '{Name}', cannot refresh token", serverName.Value);
             return null;
         }
 
@@ -398,7 +400,7 @@ internal sealed class McpOAuthService
 
             if (result is null)
             {
-                _logger.LogWarning("Refresh token rejected for MCP server '{Name}' (invalid_grant). Re-authorization required.", serverName);
+                _logger.LogWarning("Refresh token rejected for MCP server '{Name}' (invalid_grant). Re-authorization required.", serverName.Value);
                 _tokens.TryRemove(serverName, out _);
                 PersistTokens();
 
@@ -407,13 +409,13 @@ internal sealed class McpOAuthService
                     AlertId = Guid.NewGuid().ToString("N")[..12],
                     Type = "mcp.auth.expired",
                     Category = AlertType.McpAuthExpired,
-                    Summary = $"MCP server '{serverName}' refresh token rejected (invalid_grant). Run: netclaw mcp auth {serverName}",
+                    Summary = $"MCP server '{serverName.Value}' refresh token rejected (invalid_grant). Run: netclaw mcp auth {serverName.Value}",
                     Timestamp = _timeProvider.GetUtcNow(),
                     Severity = "warning",
-                    Source = serverName,
+                    Source = serverName.Value,
                     Context = new Dictionary<string, string>
                     {
-                        ["serverName"] = serverName,
+                        ["serverName"] = serverName.Value,
                         ["reason"] = "invalid_grant",
                     }
                 });
@@ -433,12 +435,12 @@ internal sealed class McpOAuthService
             _tokens[serverName] = newTokenSet;
             PersistTokens();
 
-            _logger.LogInformation("Token refreshed for MCP server '{Name}'", serverName);
+            _logger.LogInformation("Token refreshed for MCP server '{Name}'", serverName.Value);
             return newTokenSet.AccessToken.Value;
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Failed to refresh token for MCP server '{Name}'", serverName);
+            _logger.LogWarning(ex, "Failed to refresh token for MCP server '{Name}'", serverName.Value);
             return null;
         }
     }
@@ -450,19 +452,19 @@ internal sealed class McpOAuthService
     /// token management to Netclaw's existing <see cref="McpOAuthTokenSet"/>
     /// persistence for the given server.
     /// </summary>
-    internal ITokenCache CreateTokenCache(string serverName)
+    internal ITokenCache CreateTokenCache(McpServerName serverName)
         => new McpTokenCacheAdapter(serverName, _tokens, PersistTokens, _timeProvider);
 
     /// <summary>Returns the cached token set for the given server, or null.</summary>
-    internal McpOAuthTokenSet? GetTokenSet(string serverName)
+    internal McpOAuthTokenSet? GetTokenSet(McpServerName serverName)
         => _tokens.TryGetValue(serverName, out var ts) ? ts : null;
 
     /// <summary>Returns the cached OAuth metadata for the given server, or null.</summary>
-    internal McpOAuthServerMetadata? GetCachedMetadata(string serverName)
+    internal McpOAuthServerMetadata? GetCachedMetadata(McpServerName serverName)
         => _metadata.TryGetValue(serverName, out var m) ? m : null;
 
     /// <summary>Persists a DCR-issued client_id into the metadata cache.</summary>
-    internal void UpdateMetadataClientId(string serverName, string clientId)
+    internal void UpdateMetadataClientId(McpServerName serverName, string clientId)
     {
         if (_metadata.TryGetValue(serverName, out var meta))
         {
@@ -474,7 +476,7 @@ internal sealed class McpOAuthService
 
     // ── Flow Status (for CLI polling) ──────────────────────────────────
 
-    public McpOAuthFlowStatus GetFlowStatus(string serverName)
+    public McpOAuthFlowStatus GetFlowStatus(McpServerName serverName)
     {
         // An active flow takes precedence over any previously stored token.
         foreach (var ctx in _stateToContext.Values)
@@ -517,7 +519,7 @@ internal sealed class McpOAuthService
             if (ctx.CreatedAt < cutoff)
             {
                 if (_stateToContext.TryRemove(state, out _))
-                    _logger.LogDebug("Pruned abandoned OAuth flow context (state={State}, server={Server})", state, ctx.ServerName);
+                    _logger.LogDebug("Pruned abandoned OAuth flow context (state={State}, server={Server})", state, ctx.ServerName.Value);
             }
         }
     }
@@ -568,7 +570,7 @@ internal sealed class McpOAuthService
             if (tokens is not null)
             {
                 foreach (var (key, value) in tokens)
-                    _tokens[key] = value;
+                    _tokens[new McpServerName(key)] = value;
 
                 _logger.LogDebug("Loaded OAuth tokens for {Count} server(s) from {Path}", tokens.Count, _paths.SecretsPath);
             }
@@ -590,7 +592,7 @@ internal sealed class McpOAuthService
             if (metadata is not null)
             {
                 foreach (var (key, value) in metadata)
-                    _metadata[key] = value;
+                    _metadata[new McpServerName(key)] = value;
             }
         }
         catch (Exception ex)
@@ -617,7 +619,7 @@ internal sealed class McpOAuthService
             }
 
             secrets[TokensSectionKey] = JsonSerializer.SerializeToElement(
-                new Dictionary<string, McpOAuthTokenSet>(_tokens), JsonOptions);
+                _tokens.ToDictionary(kvp => kvp.Key.Value, kvp => kvp.Value), JsonOptions);
 
             SecretsFileWriter.Write(_paths.SecretsPath, secrets,
                 options: JsonOptions, protector: _protector);
@@ -633,7 +635,7 @@ internal sealed class McpOAuthService
         try
         {
             var json = JsonSerializer.Serialize(
-                new Dictionary<string, McpOAuthServerMetadata>(_metadata), JsonOptions);
+                _metadata.ToDictionary(kvp => kvp.Key.Value, kvp => kvp.Value), JsonOptions);
             File.WriteAllText(_paths.McpOAuthMetadataPath, json);
         }
         catch (Exception ex)
@@ -656,7 +658,7 @@ internal enum McpOAuthFlowStatus
 /// into a persistable <see cref="McpOAuthTokenSet"/> after callback.
 /// </summary>
 internal sealed record McpOAuthFlowContext(
-    string ServerName,
+    McpServerName ServerName,
     string ClientId,
     string? ResourceIndicator,
     DateTimeOffset CreatedAt);
