@@ -79,7 +79,7 @@ public sealed class AlertingChatClientDecorator : IChatClient
             "provider.unreachable",
             AlertType.ProviderUnreachable,
             "LLM provider unreachable — no fallback configured",
-            "critical",
+            AlertSeverity.Critical,
             context: new Dictionary<string, string> { ["error"] = ex.Message }));
     }
 

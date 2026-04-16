@@ -1,6 +1,16 @@
 namespace Netclaw.Configuration;
 
 /// <summary>
+/// Severity levels for operational alerts.
+/// </summary>
+public enum AlertSeverity
+{
+    Info,
+    Warning,
+    Critical
+}
+
+/// <summary>
 /// Categories of operational alerts that can be emitted by daemon components.
 /// </summary>
 public enum AlertType
@@ -42,8 +52,8 @@ public sealed record OperationalAlert
     /// <summary>UTC timestamp when the event occurred.</summary>
     public required DateTimeOffset Timestamp { get; init; }
 
-    /// <summary>Severity level: "info", "warning", "critical".</summary>
-    public required string Severity { get; init; }
+    /// <summary>Severity level.</summary>
+    public required AlertSeverity Severity { get; init; }
 
     /// <summary>
     /// Stable source identifier for deduplication (e.g., MCP server name, channel name).
@@ -72,7 +82,7 @@ public sealed record OperationalAlert
         string type,
         AlertType category,
         string summary,
-        string severity,
+        AlertSeverity severity,
         string? source = null,
         Dictionary<string, string>? context = null) => new()
     {

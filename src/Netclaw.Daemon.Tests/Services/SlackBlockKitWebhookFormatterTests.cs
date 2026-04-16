@@ -12,7 +12,7 @@ public sealed class SlackBlockKitWebhookFormatterTests : IAsyncDisposable
 {
     private static OperationalAlert CreateAlert(
         string type = "mcp.auth.expired",
-        string severity = "warning",
+        AlertSeverity severity = AlertSeverity.Warning,
         string? source = null,
         Dictionary<string, string>? context = null)
     {
@@ -43,7 +43,7 @@ public sealed class SlackBlockKitWebhookFormatterTests : IAsyncDisposable
 
         Assert.True(root.TryGetProperty("text", out var text));
         Assert.Contains("mcp.auth.expired", text.GetString());
-        Assert.Contains("warning", text.GetString());
+        Assert.Contains("Warning", text.GetString());
     }
 
     [Fact]
@@ -107,11 +107,10 @@ public sealed class SlackBlockKitWebhookFormatterTests : IAsyncDisposable
     }
 
     [Theory]
-    [InlineData("critical", ":red_circle:")]
-    [InlineData("warning", ":warning:")]
-    [InlineData("info", ":information_source:")]
-    [InlineData("unknown", ":grey_question:")]
-    public void Build_SeverityEmoji_MapsCorrectly(string severity, string expectedEmoji)
+    [InlineData(AlertSeverity.Critical, ":red_circle:")]
+    [InlineData(AlertSeverity.Warning, ":warning:")]
+    [InlineData(AlertSeverity.Info, ":information_source:")]
+    public void Build_SeverityEmoji_MapsCorrectly(AlertSeverity severity, string expectedEmoji)
     {
         var alert = CreateAlert(severity: severity);
 

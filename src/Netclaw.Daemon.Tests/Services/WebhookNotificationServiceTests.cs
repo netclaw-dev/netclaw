@@ -21,7 +21,7 @@ public sealed class WebhookNotificationServiceTests : IAsyncDisposable
             Category = category,
             Summary = $"Test alert: {type}",
             Timestamp = DateTimeOffset.UtcNow,
-            Severity = "warning",
+            Severity = AlertSeverity.Warning,
             Source = source,
             Context = source is not null
                 ? new Dictionary<string, string> { ["serverName"] = source }

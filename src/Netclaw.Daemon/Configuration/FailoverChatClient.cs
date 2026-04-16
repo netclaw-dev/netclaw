@@ -171,7 +171,7 @@ public sealed class FailoverChatClient : IChatClient
             "provider.failover",
             AlertType.ProviderFailover,
             "Primary LLM provider failed, failing over to fallback",
-            "warning",
+            AlertSeverity.Warning,
             context: new Dictionary<string, string> { ["error"] = ex.Message }));
     }
 
@@ -182,7 +182,7 @@ public sealed class FailoverChatClient : IChatClient
             "provider.unreachable",
             AlertType.ProviderUnreachable,
             "All LLM providers failed — primary and fallback both unreachable",
-            "critical",
+            AlertSeverity.Critical,
             context: new Dictionary<string, string> { ["error"] = ex.Message }));
     }
 

@@ -241,7 +241,7 @@ public sealed class WebhookRouteCatalog
             "webhook.route.invalid",
             AlertType.WebhookRouteInvalid,
             $"Webhook route '{routeName}' is unavailable: {reason}",
-            "warning",
+            AlertSeverity.Warning,
             source: routeName,
             context: new Dictionary<string, string>
             {

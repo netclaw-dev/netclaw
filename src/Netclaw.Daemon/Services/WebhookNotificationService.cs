@@ -230,7 +230,7 @@ public sealed class WebhookNotificationService : BackgroundService, IOperational
     {
         AlertId = alert.AlertId,
         Type = alert.Type,
-        Severity = alert.Severity,
+        Severity = alert.Severity.ToString().ToLowerInvariant(),
         Summary = alert.Summary,
         Timestamp = alert.Timestamp,
         Source = "netclaw",

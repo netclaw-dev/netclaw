@@ -96,7 +96,7 @@ internal sealed class BinaryUpdateCheckService : BackgroundService
             "update.available",
             AlertType.UpdateAvailable,
             $"Netclaw update available: {result.CurrentVersion} → {result.LatestVersion}. Run 'netclaw update' to upgrade.",
-            "info",
+            AlertSeverity.Info,
             source: result.LatestVersion,
             context: new Dictionary<string, string>
             {

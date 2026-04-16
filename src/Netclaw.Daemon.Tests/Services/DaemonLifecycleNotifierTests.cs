@@ -26,7 +26,7 @@ public sealed class DaemonLifecycleNotifierTests
         var alert = Assert.Single(_sink.Alerts);
         Assert.Equal("daemon.started", alert.Type);
         Assert.Equal(AlertType.DaemonStarted, alert.Category);
-        Assert.Equal("info", alert.Severity);
+        Assert.Equal(AlertSeverity.Info, alert.Severity);
         Assert.NotNull(alert.Context);
         Assert.True(alert.Context.ContainsKey("pid"));
         Assert.Equal(Environment.ProcessId.ToString(), alert.Context["pid"]);
@@ -40,7 +40,7 @@ public sealed class DaemonLifecycleNotifierTests
         var alert = Assert.Single(_sink.Alerts);
         Assert.Equal("daemon.stopping", alert.Type);
         Assert.Equal(AlertType.DaemonStopping, alert.Category);
-        Assert.Equal("info", alert.Severity);
+        Assert.Equal(AlertSeverity.Info, alert.Severity);
         Assert.NotNull(alert.Context);
         Assert.Equal("cli-stop", alert.Context["reason"]);
         Assert.Equal(Environment.ProcessId.ToString(), alert.Context["pid"]);
@@ -70,7 +70,7 @@ public sealed class DaemonLifecycleNotifierTests
         var alert = Assert.Single(_sink.Alerts);
         Assert.Equal("daemon.crashing", alert.Type);
         Assert.Equal(AlertType.DaemonCrashed, alert.Category);
-        Assert.Equal("critical", alert.Severity);
+        Assert.Equal(AlertSeverity.Critical, alert.Severity);
         Assert.NotNull(alert.Context);
         Assert.Equal("daemon-unhandled", alert.Context["reason"]);
         Assert.Equal("/tmp/crash-20260414-182900.log", alert.Context["crashLogPath"]);

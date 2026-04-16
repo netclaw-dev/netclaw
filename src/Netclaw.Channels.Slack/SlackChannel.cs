@@ -177,7 +177,7 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
                 "channel.disconnected",
                 AlertType.ChannelDisconnected,
                 $"Slack channel failed to connect: {ex.Message}",
-                "warning",
+                AlertSeverity.Warning,
                 source: "slack",
                 context: new Dictionary<string, string> { ["channel"] = "slack" }));
             throw;

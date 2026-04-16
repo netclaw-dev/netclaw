@@ -74,7 +74,7 @@ public sealed class BinaryUpdateCheckServiceTests : IDisposable
         var alert = sink.Alerts[0];
         Assert.Equal(AlertType.UpdateAvailable, alert.Category);
         Assert.Equal("update.available", alert.Type);
-        Assert.Equal("info", alert.Severity);
+        Assert.Equal(AlertSeverity.Info, alert.Severity);
         Assert.Contains("0.2.0", alert.Summary);
     }
 

@@ -16,14 +16,14 @@ public sealed class OperationalAlertCreateTests
             type: "provider.unreachable",
             category: AlertType.ProviderUnreachable,
             summary: "LLM provider unreachable",
-            severity: "critical",
+            severity: AlertSeverity.Critical,
             source: "anthropic",
             context: context);
 
         Assert.Equal("provider.unreachable", alert.Type);
         Assert.Equal(AlertType.ProviderUnreachable, alert.Category);
         Assert.Equal("LLM provider unreachable", alert.Summary);
-        Assert.Equal("critical", alert.Severity);
+        Assert.Equal(AlertSeverity.Critical, alert.Severity);
         Assert.Equal("anthropic", alert.Source);
         Assert.Same(context, alert.Context);
         Assert.Equal(fakeTime.GetUtcNow(), alert.Timestamp);
@@ -37,7 +37,7 @@ public sealed class OperationalAlertCreateTests
             type: "test.alert",
             category: AlertType.DaemonStarted,
             summary: "Test",
-            severity: "info");
+            severity: AlertSeverity.Info);
 
         Assert.Equal(12, alert.AlertId.Length);
         Assert.Matches("^[0-9a-f]{12}$", alert.AlertId);
@@ -51,7 +51,7 @@ public sealed class OperationalAlertCreateTests
             type: "test.alert",
             category: AlertType.DaemonStarted,
             summary: "Test",
-            severity: "info");
+            severity: AlertSeverity.Info);
 
         Assert.Null(alert.Source);
         Assert.Null(alert.Context);

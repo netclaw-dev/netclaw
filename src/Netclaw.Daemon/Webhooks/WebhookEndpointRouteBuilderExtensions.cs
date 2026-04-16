@@ -132,7 +132,7 @@ public static class WebhookEndpointRouteBuilderExtensions
                 "webhook.received",
                 AlertType.WebhookReceived,
                 $"Webhook '{registeredRoute.Name}' received event '{verification.EventType ?? "unknown"}'",
-                "info",
+                AlertSeverity.Info,
                 source: registeredRoute.Name,
                 context: new Dictionary<string, string>
                 {

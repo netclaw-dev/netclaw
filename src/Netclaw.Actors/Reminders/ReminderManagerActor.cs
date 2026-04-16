@@ -531,7 +531,7 @@ public sealed partial class ReminderManagerActor : ReceiveActor
                 "reminder.execution.failed",
                 AlertType.ReminderExecutionFailed,
                 $"Reminder '{title}' execution failed: {completed.ErrorMessage}",
-                "warning",
+                AlertSeverity.Warning,
                 source: completed.Id.Value,
                 context: new Dictionary<string, string>
                 {
@@ -551,7 +551,7 @@ public sealed partial class ReminderManagerActor : ReceiveActor
                     "reminder.auto_disabled",
                     AlertType.ReminderAutoDisabled,
                     $"Reminder '{title}' disabled after {count} consecutive failures",
-                    "critical",
+                    AlertSeverity.Critical,
                     source: completed.Id.Value,
                     context: new Dictionary<string, string>
                     {

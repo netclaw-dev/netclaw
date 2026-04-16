@@ -38,7 +38,7 @@ public sealed class DaemonLifecycleNotifier
             type: "daemon.started",
             category: AlertType.DaemonStarted,
             summary: "Netclaw daemon started",
-            severity: "info",
+            severity: AlertSeverity.Info,
             source: pid.ToString(CultureInfo.InvariantCulture),
             context: new Dictionary<string, string>
             {
@@ -74,7 +74,7 @@ public sealed class DaemonLifecycleNotifier
             type: "daemon.stopping",
             category: AlertType.DaemonStopping,
             summary: $"Netclaw daemon stopping: {reason}",
-            severity: "info",
+            severity: AlertSeverity.Info,
             source: pid.ToString(CultureInfo.InvariantCulture),
             context: context));
     }
@@ -126,7 +126,7 @@ public sealed class DaemonLifecycleNotifier
                 type: "daemon.crashing",
                 category: AlertType.DaemonCrashed,
                 summary: $"Netclaw daemon crashing: {reason} ({exceptionType})",
-                severity: "critical",
+                severity: AlertSeverity.Critical,
                 source: pid.ToString(CultureInfo.InvariantCulture),
                 context: context));
         }

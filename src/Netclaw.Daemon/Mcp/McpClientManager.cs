@@ -611,7 +611,7 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
             "mcp.auth.expired",
             AlertType.McpAuthExpired,
             summary,
-            "warning",
+            AlertSeverity.Warning,
             source: serverName.Value,
             context: new Dictionary<string, string>
             {
@@ -627,7 +627,7 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
             "mcp.server.disconnected",
             AlertType.McpServerDisconnected,
             summary,
-            "warning",
+            AlertSeverity.Warning,
             source: serverName.Value,
             context: new Dictionary<string, string> { ["serverName"] = serverName.Value }));
     }

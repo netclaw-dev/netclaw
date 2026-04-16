@@ -71,11 +71,11 @@ public static class SlackWebhookPayloadBuilder
         return fields;
     }
 
-    private static string SeverityEmoji(string severity) => severity.ToLowerInvariant() switch
+    private static string SeverityEmoji(AlertSeverity severity) => severity switch
     {
-        "critical" => ":red_circle:",
-        "warning" => ":warning:",
-        "info" => ":information_source:",
+        AlertSeverity.Critical => ":red_circle:",
+        AlertSeverity.Warning => ":warning:",
+        AlertSeverity.Info => ":information_source:",
         _ => ":grey_question:",
     };
 }

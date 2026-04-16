@@ -351,7 +351,7 @@ internal sealed class McpOAuthService
                 "mcp.auth.expired",
                 AlertType.McpAuthExpired,
                 $"MCP server '{serverName.Value}' access token expired with no refresh token. Run: netclaw mcp auth {serverName.Value}",
-                "warning",
+                AlertSeverity.Warning,
                 source: serverName.Value,
                 context: new Dictionary<string, string>
                 {
@@ -406,7 +406,7 @@ internal sealed class McpOAuthService
                     "mcp.auth.expired",
                     AlertType.McpAuthExpired,
                     $"MCP server '{serverName.Value}' refresh token rejected (invalid_grant). Run: netclaw mcp auth {serverName.Value}",
-                    "warning",
+                    AlertSeverity.Warning,
                     source: serverName.Value,
                     context: new Dictionary<string, string>
                     {
