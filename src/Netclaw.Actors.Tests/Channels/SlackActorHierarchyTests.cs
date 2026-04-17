@@ -1,4 +1,5 @@
 using Akka.Actor;
+using Akka.Configuration;
 using Akka.Hosting;
 using Akka.Hosting.TestKit;
 using Microsoft.Extensions.DependencyInjection;
@@ -15,6 +16,12 @@ namespace Netclaw.Actors.Tests.Channels;
 
 public sealed class SlackActorHierarchyTests(ITestOutputHelper output) : TestKit(output: output)
 {
+    // Raise the default ExpectMsg timeout from 3s to 5s to prevent flaky failures
+    // under CI ThreadPool pressure (multiple test classes spin up parallel IHost +
+    // ActorSystem instances, competing for ThreadPool threads).
+    protected override Config? Config =>
+        ConfigurationFactory.ParseString("akka.test.default-timeout = 5s");
+
     protected override void ConfigureServices(HostBuilderContext context, IServiceCollection services)
     {
     }

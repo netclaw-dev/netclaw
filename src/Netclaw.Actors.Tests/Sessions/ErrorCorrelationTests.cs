@@ -1,4 +1,3 @@
-using System.Runtime.CompilerServices;
 using Akka.Actor;
 using Akka.Hosting;
 using Akka.Hosting.TestKit;
@@ -178,18 +177,17 @@ public sealed class ErrorCorrelationTests(ITestOutputHelper output) : TestKit(ou
             CancellationToken cancellationToken = default)
             => Task.FromException<ChatResponse>(new NotSupportedException("Streaming path only."));
 
-        public async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
+        public IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
             IEnumerable<ChatMessage> messages,
             ChatOptions? options = null,
-            [EnumeratorCancellation] CancellationToken cancellationToken = default)
-        {
-            await Task.Yield();
-            // GetException() returns non-null, but the compiler cannot prove it,
-            // so the null check keeps yield break reachable and avoids CS0162.
-            var ex = GetException();
-            if (ex is not null) throw ex;
-            yield break;
-        }
+            CancellationToken cancellationToken = default)
+            // Throw synchronously so the LlmCallFailed message is enqueued in
+            // the actor's mailbox before the actor finishes processing the
+            // SendUserMessage. Using Task.Yield() here defers the exception to
+            // the thread pool, creating a race where LlmCallFailed delivery
+            // depends on thread pool scheduling and can exceed ExpectMsgAsync
+            // timeouts under load.
+            => throw GetException();
 
         private Exception GetException() => ThrowTimeout
             ? (Exception)new TimeoutException("Simulated provider timeout")
