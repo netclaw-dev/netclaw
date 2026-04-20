@@ -80,12 +80,18 @@ public sealed class ShellApprovalMatcherTests
             Args("git add . && git commit -m fix && git push"), approved));
     }
 
-    [Fact]
-    public void IsApproved_prefix_match()
+    [Theory]
+    [InlineData("gh", "gh --help", true)]        // Single-token exact match
+    [InlineData("gh", "gh pr create", false)]    // Single-token should NOT prefix match
+    [InlineData("git push", "git push origin main", true)]  // Multi-token prefix match
+    [InlineData("git push", "git pull", false)]  // Multi-token no match
+    [InlineData("git pu", "git push", false)]    // Partial token no match (word boundary)
+    [InlineData("gh pr", "gh pr create", true)]  // Multi-token prefix match
+    [InlineData("gh pr", "gh issue list", false)] // Multi-token no match
+    public void IsApproved_pattern_matching(string pattern, string command, bool expected)
     {
-        var approved = new[] { "git" };
-        Assert.True(_matcher.IsApproved(new ToolName("shell_execute"),
-            Args("git push origin main"), approved));
+        var approved = new[] { pattern };
+        Assert.Equal(expected, _matcher.IsApproved(new ToolName("shell_execute"), Args(command), approved));
     }
 
     [Fact]

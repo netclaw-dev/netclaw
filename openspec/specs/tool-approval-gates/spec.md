@@ -199,11 +199,19 @@ a custom matcher. New tool types MAY provide their own matchers.
 - **WHEN** the approval system extracts the pattern
 - **THEN** `DefaultApprovalMatcher` extracts `memorizer/store` (the tool name)
 
-#### Scenario: Approved pattern matches invocation
+#### Scenario: Multi-token pattern prefix matches invocation
 
 - **GIVEN** `git push` is in the Personal approval list for `shell_execute`
 - **WHEN** the agent runs `git push --tags origin main`
-- **THEN** `ShellApprovalMatcher.IsApproved` returns true (prefix match)
+- **THEN** `ShellApprovalMatcher.IsApproved` returns true (prefix match on word boundary)
+
+#### Scenario: Single-token pattern requires exact match
+
+- **GIVEN** `gh` is in the Personal approval list for `shell_execute`
+- **WHEN** the agent runs `gh pr create`
+- **THEN** `ShellApprovalMatcher.IsApproved` returns false
+- **AND** single-token patterns do NOT prefix-match multi-token verb chains
+- **NOTE** This prevents approving `gh --help` from also approving `gh pr create`
 
 ### Requirement: Mid-turn approval pause
 

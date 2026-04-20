@@ -68,15 +68,31 @@ public sealed class ToolApprovalActorTests : TestKit
     }
 
     [Fact]
-    public async Task Prefix_match_broader_approval_covers_specific()
+    public async Task Single_token_approval_requires_exact_match()
     {
         var ct = TestContext.Current.CancellationToken;
         var actor = Sys.ActorOf(ToolApprovalActor.CreateProps());
         var service = CreateService(actor);
 
-        await service.RecordApprovalAsync("session-a", TrustAudience.Personal, new ToolName("shell_execute"), ["git"], persistent: false, ct);
+        await service.RecordApprovalAsync("session-a", TrustAudience.Personal, new ToolName("shell_execute"), ["gh"], persistent: false, ct);
 
-        var unapproved = await service.GetUnapprovedPatternsAsync("session-a", TrustAudience.Personal, new ToolName("shell_execute"), ["git push"], ct);
+        // Single-token "gh" should NOT match "gh pr" — prevents approving
+        // "gh --help" from also approving "gh pr create"
+        var unapproved = await service.GetUnapprovedPatternsAsync("session-a", TrustAudience.Personal, new ToolName("shell_execute"), ["gh pr"], ct);
+        Assert.Equal(["gh pr"], unapproved);
+    }
+
+    [Fact]
+    public async Task Multi_token_approval_prefix_matches()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var actor = Sys.ActorOf(ToolApprovalActor.CreateProps());
+        var service = CreateService(actor);
+
+        await service.RecordApprovalAsync("session-a", TrustAudience.Personal, new ToolName("shell_execute"), ["git push"], persistent: false, ct);
+
+        // Multi-token "git push" should match "git push origin" via prefix
+        var unapproved = await service.GetUnapprovedPatternsAsync("session-a", TrustAudience.Personal, new ToolName("shell_execute"), ["git push origin"], ct);
         Assert.Empty(unapproved);
     }
 
