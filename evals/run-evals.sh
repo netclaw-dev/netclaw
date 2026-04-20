@@ -336,30 +336,87 @@ start_eval_daemon() {
 # ─── Memory Seeding ──────────────────────────────────────────────────────────
 
 seed_eval_memories() {
-    local db_path="$EVAL_HOME/data/netclaw.db"
+    local db_path="/root/.netclaw/netclaw.db"
     local fixtures_path="$REPO_ROOT/evals/fixtures/eval-memories.json"
-    local seeder="$REPO_ROOT/evals/seed-memories.py"
 
     if [[ ! -f "$fixtures_path" ]]; then
         echo "WARN: no eval fixtures at $fixtures_path — memory tests may fail" >&2
         return
     fi
 
+    # Wait for the daemon to create the database.
     local deadline=$((SECONDS + 30))
     while (( SECONDS < deadline )); do
-        if [[ -f "$db_path" ]]; then
+        if docker exec "$EVAL_CONTAINER_NAME" test -f "$db_path" 2>/dev/null; then
             break
         fi
         sleep 1
     done
 
-    if [[ ! -f "$db_path" ]]; then
-        echo "WARN: netclaw.db not found at $db_path after 30s — skipping memory seeding" >&2
+    if ! docker exec "$EVAL_CONTAINER_NAME" test -f "$db_path" 2>/dev/null; then
+        echo "WARN: netclaw.db not found in container after 30s — skipping memory seeding" >&2
         return
     fi
 
-    if python3 "$seeder" --db-path "$db_path" --fixtures "$fixtures_path"; then
-        echo "→ Seeded eval memories from $fixtures_path"
+    # Seed memories by running sqlite3 inside the container.
+    # The seeding script is copied into the container and executed there
+    # because the DB is owned by root and not writable from the host.
+    local seed_sql
+    seed_sql=$(python3 -c "
+import json
+import time
+
+def now_ms():
+    return int(time.time() * 1000)
+
+with open('$fixtures_path') as f:
+    fixtures = json.load(f)
+
+ts = now_ms()
+statements = []
+
+for doc in fixtures.get('seedDocuments', []):
+    recall_mode = doc.get('recallMode', 'auto')
+    sensitivity = doc.get('sensitivity', 'normal')
+    if recall_mode == 'auto' and sensitivity == 'secret':
+        recall_mode = 'manual'
+
+    # Escape single quotes for SQL
+    title = doc['title'].replace(\"'\", \"''\")
+    body = doc['markdownBody'].replace(\"'\", \"''\")
+
+    statements.append(f'''
+INSERT OR REPLACE INTO memory_anchors(anchor_id, anchor_type, canonical_name, parent_anchor_id,
+  sensitivity, recall_mode, confidence, freshness_at, status, created_at, updated_at)
+VALUES('{doc[\"anchorId\"]}', '{doc[\"anchorType\"]}', '{doc[\"canonicalName\"]}', NULL,
+  '{sensitivity}', '{recall_mode}', {doc[\"confidence\"]}, {ts}, 'active', {ts}, {ts});
+''')
+
+    statements.append(f'''
+INSERT OR REPLACE INTO memory_documents(document_id, anchor_id, memory_class, title, markdown_body,
+  update_semantics, boundary, audience, sensitivity, recall_mode, confidence, freshness_at, created_at, updated_at)
+VALUES('{doc[\"documentId\"]}', '{doc[\"anchorId\"]}', 'durable_fact', '{title}', '{body}',
+  'merge-document', 'boundary:trusted-instance', 'public', '{sensitivity}', '{recall_mode}',
+  {doc[\"confidence\"]}, {ts}, {ts}, {ts});
+''')
+
+    statements.append(f'''
+INSERT OR REPLACE INTO memory_documents_fts(document_id, title, body, aliases, facets)
+VALUES('{doc[\"documentId\"]}', '{title}', '{body}', '', '');
+''')
+
+print(''.join(statements))
+")
+
+    if [[ -z "$seed_sql" ]]; then
+        echo "WARN: failed to generate seed SQL — memory tests may fail" >&2
+        return
+    fi
+
+    if echo "$seed_sql" | docker exec -i "$EVAL_CONTAINER_NAME" sqlite3 "$db_path"; then
+        local count
+        count=$(python3 -c "import json; print(len(json.load(open('$fixtures_path')).get('seedDocuments', [])))")
+        echo "→ Seeded $count eval memories into container"
     else
         echo "WARN: memory seeding failed — memory tests may fail" >&2
     fi
