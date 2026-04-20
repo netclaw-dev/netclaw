@@ -112,7 +112,7 @@ Task execution results SHALL be delivered according to
 - `None`: no external delivery SHALL be performed. Execution history
   SHALL still be recorded.
 
-Optional `ReminderDefinition.ResultGuidance` SHALL guide the content
+Optional `ReminderDefinition.DeliveryInstructions` SHALL guide the content
 the LLM produces for `Channel` and `CurrentSession` deliveries but
 SHALL NOT affect routing.
 

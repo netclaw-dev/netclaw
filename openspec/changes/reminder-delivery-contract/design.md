@@ -37,7 +37,7 @@ no migration cost.
 - Replace the mixed `ReportToChannel`/`NotifyInstructions`/`NotifyPolicy`
   surface with four independent structured fields:
   `delivery.kind`, `delivery.transport`, `delivery.address`,
-  `deliveryRequired`, `resultGuidance`.
+  `deliveryRequired`, `deliveryInstructions`.
 - Make execution mode a direct function of `delivery.kind`, not an
   inference.
 - Fold in #644: key `IReminderTargetResolver` by transport so future
@@ -67,7 +67,7 @@ no migration cost.
 ```
 delivery: { kind, transport?, address? }
 deliveryRequired: bool
-resultGuidance: string?
+deliveryInstructions: string?
 ```
 
 Rationale: the LLM should never have to encode routing choices in free
