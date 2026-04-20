@@ -247,7 +247,7 @@ start_eval_daemon() {
     # index files under identity/tooling/shadow/ at startup and a :ro mount
     # would crash it. The copy pattern gives us isolation (the container
     # never touches host state) without forcing read-only semantics.
-    mkdir -p "$EVAL_HOME/identity" "$EVAL_HOME/logs"
+    mkdir -p "$EVAL_HOME/identity" "$EVAL_HOME/logs" "$EVAL_HOME/data"
     cp -r "$HOME/.netclaw/identity/." "$EVAL_HOME/identity/"
 
     # Copy host system skills into the eval home so the Skill Discovery
@@ -269,6 +269,7 @@ start_eval_daemon() {
         run -d --rm
         --name "$EVAL_CONTAINER_NAME"
         --network host
+        -v "$EVAL_HOME/data:/root/.netclaw"
         -v "$EVAL_HOME/identity:/root/.netclaw/identity"
         -v "$EVAL_HOME/skills:/root/.netclaw/skills"
         -v "$EVAL_HOME/logs:/root/.netclaw/logs"
@@ -330,6 +331,38 @@ start_eval_daemon() {
     docker logs "$EVAL_CONTAINER_NAME" >&2 2>&1 || true
     [[ -f "$DAEMON_LOG" ]] && tail -50 "$DAEMON_LOG" >&2 || true
     exit 2
+}
+
+# ─── Memory Seeding ──────────────────────────────────────────────────────────
+
+seed_eval_memories() {
+    local db_path="$EVAL_HOME/data/netclaw.db"
+    local fixtures_path="$REPO_ROOT/evals/fixtures/eval-memories.json"
+    local seeder="$REPO_ROOT/evals/seed-memories.py"
+
+    if [[ ! -f "$fixtures_path" ]]; then
+        echo "WARN: no eval fixtures at $fixtures_path — memory tests may fail" >&2
+        return
+    fi
+
+    local deadline=$((SECONDS + 30))
+    while (( SECONDS < deadline )); do
+        if [[ -f "$db_path" ]]; then
+            break
+        fi
+        sleep 1
+    done
+
+    if [[ ! -f "$db_path" ]]; then
+        echo "WARN: netclaw.db not found at $db_path after 30s — skipping memory seeding" >&2
+        return
+    fi
+
+    if python3 "$seeder" --db-path "$db_path" --fixtures "$fixtures_path"; then
+        echo "→ Seeded eval memories from $fixtures_path"
+    else
+        echo "WARN: memory seeding failed — memory tests may fail" >&2
+    fi
 }
 
 # ─── SQLite Setup ─────────────────────────────────────────────────────────────
@@ -1079,6 +1112,7 @@ main() {
 
     start_eval_daemon
     init_db
+    seed_eval_memories
 
     RUN_ID=$(cat /proc/sys/kernel/random/uuid 2>/dev/null || python3 -c "import uuid; print(uuid.uuid4())")
     STARTED_AT=$(date -Iseconds)
