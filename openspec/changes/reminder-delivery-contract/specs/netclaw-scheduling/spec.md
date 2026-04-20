@@ -112,7 +112,7 @@ Task execution results SHALL be delivered according to
 - `None`: no external delivery SHALL be performed. Execution history
   SHALL still be recorded.
 
-Optional `ReminderDefinition.ResultTemplate` SHALL guide the content
+Optional `ReminderDefinition.ResultGuidance` SHALL guide the content
 the LLM produces for `Channel` and `CurrentSession` deliveries but
 SHALL NOT affect routing.
 
@@ -225,6 +225,9 @@ For `delivery.kind = None`:
 - `delivery.transport` and `delivery.address` SHALL both be null.
 - All `Delivery.*` fields except `Kind` SHALL be null in the persisted
   definition.
+- `DeliveryRequired` SHALL be ignored for `None` deliveries since there
+  is no delivery to fail. The field MAY be set to any value; it has no
+  effect on execution outcome.
 
 #### Scenario: Hash-prefixed Slack channel resolved to canonical ID
 

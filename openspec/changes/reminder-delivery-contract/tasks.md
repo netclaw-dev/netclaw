@@ -3,21 +3,21 @@
 ## 1. Protocol / data model
 
 - [ ] 1.1 Add `DeliveryKind` enum (`CurrentSession = 0`, `Channel = 1`, `None = 2`) and `ReminderDelivery` class to `src/Netclaw.Actors/Reminders/ReminderProtocol.cs`. Carries `Kind`, `Transport`, `Address`, `SessionId`, `OriginChannelType`. Protobuf-attributed for journal serialization.
-- [ ] 1.2 Replace `ReportToChannel`, `ReportToThreadTs`, `NotifyInstructions`, `NotifyPolicy`, `SessionId`, `OriginChannelType` on `ReminderDefinition` with a single required `Delivery` field (the struct above) plus `DeliveryRequired` (bool, default `true`) and `ResultTemplate` (nullable string).
-- [ ] 1.3 Update `ReminderInfo` list/get response record to mirror the new shape: expose `Delivery`, `DeliveryRequired`, `ResultTemplate`; drop removed fields.
+- [ ] 1.2 Replace `ReportToChannel`, `ReportToThreadTs`, `NotifyInstructions`, `NotifyPolicy`, `SessionId`, `OriginChannelType` on `ReminderDefinition` with a single required `Delivery` field (the struct above) plus `DeliveryRequired` (bool, default `true`) and `ResultGuidance` (nullable string).
+- [ ] 1.3 Update `ReminderInfo` list/get response record to mirror the new shape: expose `Delivery`, `DeliveryRequired`, `ResultGuidance`; drop removed fields.
 - [ ] 1.4 Drop `NotificationPolicy` enum and any call sites that read it once all code paths have migrated to `DeliveryRequired` (boolean is simpler; the enum was redundant).
 - [ ] 1.5 Add `ReminderDeliveryObserved(string ReminderDeliveryKey, ChannelType ChannelType) : IWithSessionId`-ish internal record in `src/Netclaw.Actors/Reminders/` (or `Protocol/` if preferred) — fields needed: reminder delivery key (`{id}:{fireTimestampMs}`), `ChannelType`, optional outbound-delivery timestamp. Not serialized (actor-local signal).
 - [ ] 1.6 Confirm protobuf evolution: new `ReminderDefinition` shape is a clean break; no protobuf member numbers are reused from the old fields.
 
 ## 2. Tool surface (`SetReminderTool`)
 
-- [ ] 2.1 Replace `Params.ReportToChannel`, `NotifyInstructions`, `NotifyPolicy` with `Delivery DeliveryKind`, `string? DeliveryTransport`, `string? DeliveryAddress`, `bool DeliveryRequired = true`, `string? ResultTemplate`. Update `[Description]` attributes to explain each field. `DeliveryKind` is required — no default.
+- [ ] 2.1 Replace `Params.ReportToChannel`, `NotifyInstructions`, `NotifyPolicy` with `Delivery DeliveryKind`, `string? DeliveryTransport`, `string? DeliveryAddress`, `bool DeliveryRequired = true`, `string? ResultGuidance`. Update `[Description]` attributes to explain each field. `DeliveryKind` is required — no default.
 - [ ] 2.2 Replace the validation block (lines ~81–139 of today's file) with a switch on `DeliveryKind`:
   - `CurrentSession` → require parseable `context.ChannelType ∈ {Slack, Tui, SignalR}`; reject non-null `DeliveryTransport`/`DeliveryAddress`; persist `Delivery.SessionId = context.SessionId`, `Delivery.OriginChannelType = parsedType`, other fields null.
   - `Channel` → require both `DeliveryTransport` and `DeliveryAddress`; look up `IReminderTargetResolver` by `Transport`; canonicalize address; persist `Delivery.Transport = lowered`, `Delivery.Address = canonical`. Reject transports without a canonical notification tool (SignalR, Tui) with a helpful error.
   - `None` → reject non-null transport/address; all `Delivery.*` except `Kind` are null.
 - [ ] 2.3 Remove the synthetic `NotifyInstructions` fallback ("Reply in this session with the result." / "Send to user X" / "Post to channel Y"). That whole code path goes away.
-- [ ] 2.4 Inject `IEnumerable<IReminderTargetResolver>` (was single un-keyed resolver). Build a case-insensitive `Transport → resolver` dictionary once in the constructor; detect duplicates at construction time and throw (fail-loud per spec).
+- [ ] 2.4 Inject `IEnumerable<IReminderTargetResolver>` (was single un-keyed resolver). Build a case-insensitive `Transport → resolver` dictionary. Detect duplicate `Transport` values at DI container build / host startup (not tool construction) and fail the daemon boot with a clear error naming the duplicate transport.
 - [ ] 2.5 When `DeliveryKind = Channel` but no resolver matches the requested `Transport`, return an actionable error that names the unknown transport and lists registered transports.
 - [ ] 2.6 Update the tool's success-response string to describe the new delivery kind instead of the old mode-by-inference text.
 
@@ -45,7 +45,7 @@
   - If `DeliveryRequired = false` → ack envelope immediately (today's behavior).
   - If `DeliveryRequired = true` → subscribe to `ReminderDeliveryObserved` signals (probably via a topic/eventstream keyed by `ReminderDeliveryKey`) and set a receive-timeout of `DeliveryObservedTimeout` (new internal const, 30s — strictly greater than `ReminderSettings.DefaultAckTimeout`). Ack envelope + report `success=true` only when the signal arrives.
 - [ ] 5.5 On `DeliveryObservedTimeout` while waiting: do NOT ack envelope; report `ReminderExecutionCompleted(success=false, "delivery not observed within {timeout}")`.
-- [ ] 5.6 Prompt construction: replace `BuildPrompt` uses of `NotifyInstructions` with `ResultTemplate`. For `CurrentSession`, the prompt is `Instructions + (ResultTemplate is null ? "" : "\n\nResult guidance: " + ResultTemplate)`. For `Channel`, append `"Post the result to {transport} target {address}."` + optional `ResultTemplate`. For `None`, no notification section.
+- [ ] 5.6 Prompt construction: replace `BuildPrompt` uses of `NotifyInstructions` with `ResultGuidance`. For `CurrentSession`, the prompt is `Instructions + (ResultGuidance is null ? "" : "\n\nResult guidance: " + ResultGuidance)`. For `Channel`, append `"Post the result to {transport} target {address}."` + optional `ResultGuidance`. For `None`, no notification section.
 - [ ] 5.7 Generalize `ExecutionOutputAccumulator` construction: accept the expected notification tool name as a ctor parameter (derived from `Delivery.Transport`). Default mapping: `"slack" → "send_slack_message"`. For `Kind = None`, pass `null` to indicate no tool expected, and skip the failure check.
 - [ ] 5.8 Mode A eager-ack behavior (`Channel` / `None`) remains unchanged — manager acks envelope, execution tracks its own success via accumulator.
 
@@ -68,8 +68,9 @@
 - [ ] 8.1 Rewrite the Scheduling section of `feeds/skills/.system/files/netclaw-operations/SKILL.md` against the new tool surface. Emphasize:
   - Pick `delivery.kind` explicitly every time (`current_session` / `channel` / `none`).
   - Do NOT try to "reply in this session" via a tool; `current_session` handles routing.
+  - `current_session` works even if the user closes their client — the session rehydrates from Akka.Persistence when the reminder fires.
   - `channel` always needs both `transport` and `address`.
-  - `resultTemplate` is for CONTENT only.
+  - `resultGuidance` is for CONTENT only.
   - `deliveryRequired = false` is only for audit/cleanup tasks.
 - [ ] 8.2 Bump `metadata.version` (from current 1.14.0 to 1.15.0) per the skill sync rule.
 

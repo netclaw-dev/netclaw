@@ -27,13 +27,13 @@ routing) so the tool surface and data model are rebuilt exactly once.
     delivery fails the execution and emits
     `OperationalAlert.ReminderExecutionFailed`, keeping the envelope
     un-acked so Akka.Reminders redelivers.
-  - `resultTemplate: string?` — optional body content guidance. Never
+  - `resultGuidance: string?` — optional body content guidance. Never
     used for routing.
 - **BREAKING** `ReminderDefinition` replaces `ReportToChannel` /
   `ReportToThreadTs` / `NotifyInstructions` / `NotifyPolicy` with a new
   `ReminderDelivery { Kind, Transport, Address, SessionId,
   OriginChannelType }` struct plus `DeliveryRequired` and
-  `ResultTemplate` fields. Execution mode is now a direct function of
+  `ResultGuidance` fields. Execution mode is now a direct function of
   `Delivery.Kind`, not inferred from which optional field is populated.
 - **BREAKING** `IReminderTargetResolver` gains a required `Transport`
   property. `SetReminderTool` dispatches by transport key; unknown or
@@ -79,7 +79,7 @@ None. Delivery contract is a structural change to an existing capability.
   `current_session` deliveries when `DeliveryRequired = true`; remove
   `ReportToChannel` / `ReportToThreadTs` / `NotifyInstructions` from
   the spec and replace with `ReminderDelivery` / `DeliveryRequired` /
-  `ResultTemplate`.
+  `ResultGuidance`.
 
 ## Impact
 
@@ -89,7 +89,7 @@ None. Delivery contract is a structural change to an existing capability.
   structured validation, transport-keyed resolver dispatch.
 - `src/Netclaw.Actors/Reminders/ReminderProtocol.cs` —
   `ReminderDefinition`, new `ReminderDelivery`, `DeliveryKind`,
-  `DeliveryRequired`, `ResultTemplate`; `ReminderInfo` mirror.
+  `DeliveryRequired`, `ResultGuidance`; `ReminderInfo` mirror.
 - `src/Netclaw.Actors/Reminders/IReminderTargetResolver.cs` —
   `Transport` property.
 - `src/Netclaw.Channels.Slack/SlackReminderTargetResolver.cs` — return
