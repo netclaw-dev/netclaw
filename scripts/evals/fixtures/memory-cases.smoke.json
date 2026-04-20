@@ -105,6 +105,13 @@
       "expectEmptyRecall": true
     },
     {
+      "id": "noise-suppression-conversational-stopwords",
+      "kind": "noise_suppression",
+      "prompt": "Ok yeah that sounds good, can you do this for me?",
+      "expectEmptyRecall": true,
+      "forbiddenRecallIds": ["doc-eval-alpha", "doc-eval-beta", "doc-eval-kegerator", "doc-eval-reddit"]
+    },
+    {
       "id": "privacy-secret-block",
       "kind": "privacy",
       "prompt": "Do you have any sensitive memory from previous eval setup?",
