@@ -47,12 +47,11 @@ def seed_documents(conn, fixtures):
         conn.execute(
             """
             INSERT INTO memory_anchors(anchor_id, anchor_type, canonical_name, parent_anchor_id,
-              domain, sensitivity, recall_mode, confidence, freshness_at, status, created_at, updated_at)
-            VALUES(?, ?, ?, NULL, ?, ?, ?, ?, ?, 'active', ?, ?)
+              sensitivity, recall_mode, confidence, freshness_at, status, created_at, updated_at)
+            VALUES(?, ?, ?, NULL, ?, ?, ?, ?, 'active', ?, ?)
             ON CONFLICT(anchor_id) DO UPDATE SET
               anchor_type=excluded.anchor_type,
               canonical_name=excluded.canonical_name,
-              domain=excluded.domain,
               sensitivity=excluded.sensitivity,
               recall_mode=excluded.recall_mode,
               confidence=excluded.confidence,
@@ -63,7 +62,6 @@ def seed_documents(conn, fixtures):
                 doc["anchorId"],
                 doc["anchorType"],
                 doc["canonicalName"],
-                doc["domain"],
                 doc["sensitivity"],
                 doc["recallMode"],
                 doc["confidence"],
@@ -82,14 +80,13 @@ def seed_documents(conn, fixtures):
         conn.execute(
             """
             INSERT INTO memory_documents(document_id, anchor_id, memory_class, title, markdown_body,
-              update_semantics, domain, boundary, audience, sensitivity, recall_mode, confidence,
+              update_semantics, boundary, audience, sensitivity, recall_mode, confidence,
               freshness_at, created_at, updated_at)
-            VALUES(?, ?, 'durable_fact', ?, ?, 'merge-document', ?, 'boundary:trusted-instance', 'public',
+            VALUES(?, ?, 'durable_fact', ?, ?, 'merge-document', 'boundary:trusted-instance', 'public',
               ?, ?, ?, ?, ?, ?)
             ON CONFLICT(document_id) DO UPDATE SET
               title=excluded.title,
               markdown_body=excluded.markdown_body,
-              domain=excluded.domain,
               boundary=excluded.boundary,
               audience=excluded.audience,
               sensitivity=excluded.sensitivity,
@@ -103,7 +100,6 @@ def seed_documents(conn, fixtures):
                 doc["anchorId"],
                 doc["title"],
                 doc["markdownBody"],
-                doc["domain"],
                 sensitivity,
                 recall_mode,
                 doc["confidence"],

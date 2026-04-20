@@ -149,6 +149,11 @@ public sealed class MemoryRecallScenarioTests : IAsyncLifetime
             "a the and or",
             expected: [],
             forbidden: NoiseBand);
+        // Conversational stopwords (issue #693) — should produce empty recall.
+        yield return Row("P21",
+            "ok can that this yeah sure",
+            expected: [],
+            forbidden: NoiseBand);
     }
 
     [Theory]

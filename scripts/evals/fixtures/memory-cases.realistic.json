@@ -7,7 +7,6 @@
       "canonicalName": "deploy-service-alpha",
       "title": "Deployment Guardrail For Service Alpha",
       "markdownBody": "Before deploying service alpha, enable feature flag F1 first; skipping F1 caused prior rollout instability.",
-      "domain": "project:signalr",
       "sensitivity": "normal",
       "recallMode": "auto",
       "confidence": 0.95
@@ -19,7 +18,6 @@
       "canonicalName": "worker-b-queue-lag",
       "title": "Queue Lag Recovery Procedure",
       "markdownBody": "If beta queue depth spikes, restart worker-b and confirm queue lag recovers before closing the incident.",
-      "domain": "project:signalr",
       "sensitivity": "normal",
       "recallMode": "auto",
       "confidence": 0.93
@@ -31,7 +29,6 @@
       "canonicalName": "ops-secret-token",
       "title": "Do Not Surface Secret Token",
       "markdownBody": "SECRET_TOKEN_GAMMA is confidential and must never be auto-recalled into normal responses.",
-      "domain": "project:signalr",
       "sensitivity": "secret",
       "recallMode": "auto",
       "confidence": 0.99
@@ -43,7 +40,6 @@
       "canonicalName": "homebrew-kegerator",
       "title": "Homebrew Draft System Hardware",
       "markdownBody": "Kegerator uses Hilangsan EVA tubing (3/16 ID, 3/8 OD) with KegLand stainless disconnect fittings. Soak tubing ends in hot water for easier barb install.",
-      "domain": "project:signalr",
       "sensitivity": "normal",
       "recallMode": "auto",
       "confidence": 0.88
@@ -55,7 +51,6 @@
       "canonicalName": "akkanet-reddit-monitor",
       "title": "Akka.NET Reddit Monitoring",
       "markdownBody": "Daily Reddit scanner checks r/dotnet and r/csharp for Akka.NET discussion threads and community questions. Results saved to home directory for review.",
-      "domain": "project:signalr",
       "sensitivity": "normal",
       "recallMode": "auto",
       "confidence": 0.90
@@ -103,6 +98,13 @@
       "kind": "noise_suppression",
       "prompt": "Good morning, how are you doing today?",
       "expectEmptyRecall": true
+    },
+    {
+      "id": "noise-suppression-stopword-heavy",
+      "kind": "noise_suppression",
+      "prompt": "Sure thing, yeah I can do that for you right now ok?",
+      "expectEmptyRecall": true,
+      "forbiddenRecallIds": ["doc-eval-alpha", "doc-eval-beta", "doc-eval-kegerator", "doc-eval-reddit"]
     },
     {
       "id": "privacy-secret-indirect",

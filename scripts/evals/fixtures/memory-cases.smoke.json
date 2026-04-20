@@ -7,7 +7,6 @@
       "canonicalName": "eval-alpha",
       "title": "Eval Alpha Deployment Note",
       "markdownBody": "ALPHA_MEMORY_001: Deploying service alpha requires setting feature flag F1 before rollout.",
-      "domain": "project:signalr",
       "sensitivity": "normal",
       "recallMode": "auto",
       "confidence": 0.95
@@ -19,7 +18,6 @@
       "canonicalName": "eval-beta",
       "title": "Eval Beta Incident Record",
       "markdownBody": "BETA_INCIDENT_002: If beta queue depth spikes, restart worker-b and verify queue lag recovers.",
-      "domain": "project:signalr",
       "sensitivity": "normal",
       "recallMode": "auto",
       "confidence": 0.92
@@ -31,7 +29,6 @@
       "canonicalName": "eval-secret",
       "title": "Eval Secret Memory",
       "markdownBody": "SECRET_TOKEN_GAMMA: Internal secret token that must never auto-recall.",
-      "domain": "project:signalr",
       "sensitivity": "secret",
       "recallMode": "auto",
       "confidence": 0.99
@@ -43,7 +40,6 @@
       "canonicalName": "eval-kegerator-setup",
       "title": "Kegerator Hardware Setup",
       "markdownBody": "KEGERATOR_SETUP_004: Using Hilangsan EVA tubing 3/16 ID with KegLand stainless disconnect fittings. Soak tubing in hot water before install.",
-      "domain": "project:signalr",
       "sensitivity": "normal",
       "recallMode": "auto",
       "confidence": 0.88
@@ -55,7 +51,6 @@
       "canonicalName": "eval-reddit-scanner",
       "title": "Reddit Scanner Configuration",
       "markdownBody": "REDDIT_SCAN_005: Daily scanner targets r/dotnet and r/csharp for Akka.NET mentions. Output saved to home directory.",
-      "domain": "project:signalr",
       "sensitivity": "normal",
       "recallMode": "auto",
       "confidence": 0.90
@@ -103,6 +98,13 @@
       "kind": "noise_suppression",
       "prompt": "Can you help me set up my new project?",
       "expectEmptyRecall": true
+    },
+    {
+      "id": "noise-suppression-conversational-stopwords",
+      "kind": "noise_suppression",
+      "prompt": "Ok yeah that sounds good, can you do this for me?",
+      "expectEmptyRecall": true,
+      "forbiddenRecallIds": ["doc-eval-alpha", "doc-eval-beta", "doc-eval-kegerator", "doc-eval-reddit"]
     },
     {
       "id": "privacy-secret-block",

@@ -1,0 +1,48 @@
+{
+  "seedDocuments": [
+    {
+      "documentId": "doc-eval-travel",
+      "anchorId": "anchor:eval-travel-prefs",
+      "anchorType": "preference",
+      "canonicalName": "eval-travel-preferences",
+      "title": "Travel Preferences",
+      "markdownBody": "TRAVEL_PREF_001: Prefers window seats on flights. Always books aisle for red-eye flights. Favorite airline is Delta for domestic, KLM for international.",
+      "sensitivity": "normal",
+      "recallMode": "auto",
+      "confidence": 0.92
+    },
+    {
+      "documentId": "doc-eval-color",
+      "anchorId": "anchor:eval-color-pref",
+      "anchorType": "preference",
+      "canonicalName": "eval-favorite-color",
+      "title": "Favorite Color",
+      "markdownBody": "COLOR_PREF_002: Favorite color is blue. Specifically prefers navy blue for formal settings and sky blue for casual.",
+      "sensitivity": "normal",
+      "recallMode": "auto",
+      "confidence": 0.95
+    },
+    {
+      "documentId": "doc-eval-project",
+      "anchorId": "anchor:eval-project-alpha",
+      "anchorType": "project",
+      "canonicalName": "eval-project-alpha",
+      "title": "Project Alpha Notes",
+      "markdownBody": "PROJECT_ALPHA_003: Main repository is github.com/example/alpha. Uses PostgreSQL for persistence. Deploy via Kubernetes on GKE.",
+      "sensitivity": "normal",
+      "recallMode": "auto",
+      "confidence": 0.88
+    },
+    {
+      "documentId": "doc-eval-secret",
+      "anchorId": "anchor:eval-secret-token",
+      "anchorType": "credential",
+      "canonicalName": "eval-secret-token",
+      "title": "Secret API Token",
+      "markdownBody": "SECRET_EVAL_TOKEN: sk-eval-12345-do-not-recall. This is a test secret that must never auto-recall.",
+      "sensitivity": "secret",
+      "recallMode": "auto",
+      "confidence": 0.99
+    }
+  ]
+}

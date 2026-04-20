@@ -48,13 +48,13 @@ public sealed class DeterministicRetrievalRequestPlanner
             ExcludeExpired: true);
     }
 
-    // Capitalized words that commonly start English sentences and questions
-    // but carry no semantic weight as anchors. Broader than the tokenizer's
-    // stopword list because anchor hints are substring-matched against doc
-    // content, so even common function words ("the", "my", "our") can cause
-    // false positives (issue #582). Kept distinct from tokenizer stopwords
-    // so lexical matching on nouns like "can" and "will" still works.
-    private static readonly HashSet<string> AnchorHintStopWords = new(StringComparer.OrdinalIgnoreCase)
+    // Words that commonly appear in conversational messages but carry no
+    // semantic weight for recall. Used to filter both anchor hints (issue #582)
+    // AND lexical terms (issue #693). Production evidence showed that generic
+    // words like "can", "that", "ok" cause false positives even as lexical
+    // terms — a query containing "ok can that this" would match any memory
+    // containing the word "that", polluting the recall with unrelated content.
+    private static readonly HashSet<string> RecallStopWords = new(StringComparer.OrdinalIgnoreCase)
     {
         // Question/modal words
         "which", "what", "when", "where", "how", "why", "who", "whose",
@@ -70,6 +70,8 @@ public sealed class DeterministicRetrievalRequestPlanner
         "tell", "show", "give", "let", "please", "kindly",
         // Conjunctions / sentence glue
         "but", "so", "yet", "and", "or", "nor", "for",
+        // Conversational fillers
+        "ok", "okay", "yeah", "yes", "no", "sure", "right", "well",
     };
 
     private static IEnumerable<string> InferAnchorHints(AutomaticRecallRequest request, string prompt, IReadOnlyList<string> tokens)
@@ -82,7 +84,7 @@ public sealed class DeterministicRetrievalRequestPlanner
         {
             // Filter sentence-start capitalized stopwords. These pull
             // unrelated ops/eval docs into recall (issue #582).
-            if (AnchorHintStopWords.Contains(match.Value))
+            if (RecallStopWords.Contains(match.Value))
                 continue;
             yield return match.Value;
         }
@@ -134,14 +136,21 @@ public sealed class DeterministicRetrievalRequestPlanner
 
     private static IReadOnlyList<string> CapLexicalTerms(IReadOnlyList<string> tokens, IReadOnlyList<string> anchorHints)
     {
-        if (tokens.Count <= MaxLexicalTerms)
-            return tokens;
+        // Filter conversational stopwords that cause false positives (issue #693).
+        // Generic words like "ok", "can", "that" match any memory containing them.
+        var filtered = tokens.Where(t => !RecallStopWords.Contains(t)).ToList();
+
+        if (filtered.Count == 0)
+            return filtered;
+
+        if (filtered.Count <= MaxLexicalTerms)
+            return filtered;
 
         var anchorSet = new HashSet<string>(anchorHints, StringComparer.OrdinalIgnoreCase);
 
         // Promote tokens that appear in anchor hints, then sort remaining by
         // length descending (longer tokens are more discriminative).
-        return tokens
+        return filtered
             .OrderByDescending(t => anchorSet.Contains(t) ? 1 : 0)
             .ThenByDescending(t => t.Length)
             .Take(MaxLexicalTerms)
