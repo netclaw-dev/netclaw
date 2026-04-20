@@ -1,10 +1,21 @@
 #!/usr/bin/env bash
+# Memory recall quality eval runner.
+#
+# DEFAULT: Runs in Docker container (isolated, reproducible).
+# Set USE_HOST=1 to run against the host's netclaw installation instead.
+#
+# Usage:
+#   ./scripts/evals/memory-score.sh              # Docker mode (default)
+#   USE_HOST=1 ./scripts/evals/memory-score.sh   # Host mode (legacy)
+#   SUITE=realistic ./scripts/evals/memory-score.sh
+#
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 OUT_DIR="${OUT_DIR:-$ROOT_DIR/artifacts/evals/memory}"
 SUITE="${SUITE:-smoke}"
 PROFILE="${PROFILE:-fast}"
+USE_HOST="${USE_HOST:-0}"
 
 if [[ -n "${FIXTURES:-}" ]]; then
   FIXTURES="$FIXTURES"
