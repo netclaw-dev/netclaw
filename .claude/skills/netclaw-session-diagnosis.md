@@ -69,6 +69,7 @@ Output: `Recovery complete (turns=N, history=N)`
 
 ### Step 4: Check memory recall
 
+**Summary event:**
 ```bash
 grep "turn_memory_recall" ~/.netclaw/logs/daemon-${DATE}.log | grep "D0AC6CKBK5K/1774023557.531309"
 ```
@@ -79,6 +80,23 @@ Key fields:
 - `itemCount=N` → N memories recalled, check `itemIds`
 - `durationMs=0` → instant return (possibly empty store or fast search)
 - `durationMs>300` → approaching the 300ms timeout
+
+**Detailed retrieval events** (for diagnosing recall quality issues):
+```bash
+grep "D0AC6CKBK5K/1774023557.531309" ~/.netclaw/logs/daemon-${DATE}.log | grep "memory_retrieval"
+```
+
+| Event | Purpose |
+|-------|---------|
+| `memory_retrieval_request_plan` | Query tokenization: `lexicalTerms`, `facets`, `softScopes`, `anchorHints` |
+| `memory_retrieval_candidate_selection` | All candidates with selector scores: `rawCount`, `selectedCount`, `scored={id=score\|...}` |
+| `memory_retrieval_final` | Floor filtering: `injectedCount`, `filteredByFloor`, `appliedFloor`, `items={id=score\|...}` |
+| `progressive_recall_exhausted` | When all candidates were already injected in prior turns |
+
+**Diagnosing recall poisoning** (irrelevant memories injected):
+- Check `lexicalTerms` in `memory_retrieval_request_plan` — generic words like `ok|can|that|this` cause false positives
+- Check `filteredByFloor` in `memory_retrieval_final` — if 0 with high `rawCount`, floor isn't filtering
+- Look at earlier turns in the session to find when irrelevant memories were first injected
 
 ### Step 5: Check skill auto-loading
 
