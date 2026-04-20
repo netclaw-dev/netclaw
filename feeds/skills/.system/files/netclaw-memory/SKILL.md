@@ -3,7 +3,7 @@ name: netclaw-memory
 description: "REQUIRED before using find_memories, get_memories, store_memory, or update_memory. Read this first when the user asks what you remember, wants something saved, or asks about past conversations."
 metadata:
   author: netclaw
-  version: "1.1.0"
+  version: "1.2.0"
 ---
 
 # Netclaw Memory
@@ -103,11 +103,15 @@ When memory behavior looks wrong:
 
 Useful log events:
 
-- `memory_recall_plan_resolved`
-- `memory_recall_plan_fallback`
+**Recall pipeline** (grep for `memory_retrieval`):
+- `memory_retrieval_request_plan` — query tokenization, facets, soft scopes, anchor hints
+- `memory_retrieval_candidate_selection` — all candidates with selector scores
+- `memory_retrieval_final` — floor filtering results, final injected items
+- `turn_memory_recall` — summary event with item count and duration
+
+**Formation pipeline** (grep for `memory_observation`):
 - `memory_observation_sidecar_completed`
 - `memory_observation_gate_result`
-- `turn_memory_recall`
 
 ## Eval Gate
 
