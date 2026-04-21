@@ -1,3 +1,25 @@
+#### 0.14.2 2026-04-21 ####
+
+Netclaw v0.14.2 — Structured reminder delivery, protobuf serialization, subagent robustness, and web-content-retrieval skill
+
+**Features**
+
+* Added structured reminder delivery contract — `set_reminder` now uses a `delivery` object with a required `kind` field (`current_session`, `channel`, or `none`) that directly selects the execution mode, replacing the previous implicit inference from optional fields. A new `deliveryRequired` boolean controls policy; `deliveryInstructions` carries content guidance only. Transport-keyed resolver dispatch uses `ChannelType.ToWireValue()` for reliable routing across Slack and future transports. Closes [#690](https://github.com/Aaronontheweb/netclaw/issues/690). ([#692](https://github.com/Aaronontheweb/netclaw/pull/692))
+
+* Added protobuf-net serializer with stable manifests — `NetclawProtobufSerializer` uses constant manifest strings (`sid-v1`, `sum-v1`, `tr-v1`, etc.) decoupled from .NET type names, enabling safe schema evolution without migration steps. The `WithNetclawSerialization()` extension disables the `System.Object` JSON fallback so unregistered types fail loudly instead of silently falling back. Existing persisted events remain readable; new events use the more efficient binary format. ([#705](https://github.com/Aaronontheweb/netclaw/pull/705))
+
+* Added `web-content-retrieval` system skill — the agent now loads a built-in skill covering URL handling, browser automation guidance, and social media content retrieval so it can advise on web fetch workflows without requiring a custom skill. ([#702](https://github.com/Aaronontheweb/netclaw/pull/702))
+
+* Made subagent tools optional — omitting the `tools` field in a subagent's YAML frontmatter now causes the subagent to inherit all session tools, including MCP tools (Notion, GitHub, etc.). Previously the field was required and restricted to four built-in tools, making MCP-powered subagents impossible to define. When `tools` is specified it acts as a whitelist; when omitted all session tools are available. ([#703](https://github.com/Aaronontheweb/netclaw/pull/703))
+
+* Migrated webhook notification policy to `deliveryRequired` boolean — the `NotifyPolicy` enum on `set_webhook` and webhook config is replaced by a `deliveryRequired` boolean that is consistent with the reminder delivery contract. ([#704](https://github.com/Aaronontheweb/netclaw/pull/704))
+
+**Bug Fixes**
+
+* Fixed daemon crash on subagent timeout — the subagent cancellation callback was capturing `Self` at registration time instead of before registration, causing a `NotSupportedException` when the callback fired on a thread-pool thread with no active actor context. The resulting unhandled `AggregateException` terminated the entire daemon, killing all active sessions. The fix also converts the scheduling to the `IWithTimers` pattern per project conventions. ([#707](https://github.com/Aaronontheweb/netclaw/pull/707))
+
+* Fixed `netclaw-operations` skill hidden from agent skill index — the skill had an incorrect `disable-model-invocation: true` flag that prevented it from appearing in the agent's skill discovery index, causing the agent to be unaware of operations guidance. ([#702](https://github.com/Aaronontheweb/netclaw/pull/702))
+
 #### 0.14.0 2026-04-15 ####
 
 Netclaw v0.14.0 — Skill-defined subagent routing, Mode B reminder session re-entry, fail-closed MCP add, and security patch
