@@ -240,61 +240,39 @@ build_local_image() {
 
 # ─── Eval Daemon Lifecycle ────────────────────────────────────────────────────
 
+# Substitute {{PLACEHOLDER}} tokens in identity templates with eval defaults.
+substitute_identity_template() {
+    local template_file="$1"
+    local output_file="$2"
+    sed -e 's/{{AGENT_NAME}}/Netclaw/g' \
+        -e 's/{{STYLE_DESCRIPTION}}/Be concise and casual. Keep responses short and conversational./g' \
+        -e 's/{{USER_NAME}}/Eval User/g' \
+        -e 's/{{USER_TIMEZONE}}/UTC/g' \
+        -e 's|{{SYSTEM_SKILLS_DIR}}|/root/.netclaw/skills/.system/files|g' \
+        -e 's|{{IDENTITY_DIR}}|/root/.netclaw/identity|g' \
+        -e 's|{{SOUL_PATH}}|/root/.netclaw/identity/SOUL.md|g' \
+        -e 's|{{AGENTS_PATH}}|/root/.netclaw/identity/AGENTS.md|g' \
+        -e 's|{{TOOLING_PATH}}|/root/.netclaw/identity/TOOLING.md|g' \
+        -e 's|{{SOUL_DETAIL_DIR}}|/root/.netclaw/identity/soul|g' \
+        -e 's|{{AGENTS_DETAIL_DIR}}|/root/.netclaw/identity/agents|g' \
+        -e 's|{{TOOLING_DETAIL_DIR}}|/root/.netclaw/identity/tooling|g' \
+        -e 's|{{SKILLS_DIR}}|/root/.netclaw/skills|g' \
+        -e 's|{{WORKSPACES_DIR}}|/root/.netclaw/workspaces|g' \
+        "$template_file" > "$output_file"
+}
+
 start_eval_daemon() {
-    # Copy host identity files into the eval home so the container sees a
-    # writable, throwaway copy. Use identity templates from the repo source,
-    # not the host's ~/.netclaw/identity — host files can be contaminated with
-    # user-specific names (e.g., "ArdyBot") that break identity evals.
-    # Templates have {{PLACEHOLDER}} tokens that we substitute with eval defaults.
+    # Use identity templates from the repo source, not the host's ~/.netclaw/identity
+    # — host files can be contaminated with user-specific names (e.g., "ArdyBot")
+    # that break identity evals. Templates have {{PLACEHOLDER}} tokens that we
+    # substitute with eval defaults.
     mkdir -p "$EVAL_HOME/identity" "$EVAL_HOME/logs" "$EVAL_HOME/data"
     local template_dir="$REPO_ROOT/src/Netclaw.Cli/Resources/identity"
     if [[ -d "$template_dir" ]]; then
         # Substitute placeholders with eval-appropriate defaults
-        sed -e 's/{{AGENT_NAME}}/Netclaw/g' \
-            -e 's/{{STYLE_DESCRIPTION}}/Be concise and casual. Keep responses short and conversational./g' \
-            -e 's/{{USER_NAME}}/Eval User/g' \
-            -e 's/{{USER_TIMEZONE}}/UTC/g' \
-            -e 's|{{SYSTEM_SKILLS_DIR}}|/root/.netclaw/skills/.system/files|g' \
-            -e 's|{{IDENTITY_DIR}}|/root/.netclaw/identity|g' \
-            -e 's|{{SOUL_PATH}}|/root/.netclaw/identity/SOUL.md|g' \
-            -e 's|{{AGENTS_PATH}}|/root/.netclaw/identity/AGENTS.md|g' \
-            -e 's|{{TOOLING_PATH}}|/root/.netclaw/identity/TOOLING.md|g' \
-            -e 's|{{SOUL_DETAIL_DIR}}|/root/.netclaw/identity/soul|g' \
-            -e 's|{{AGENTS_DETAIL_DIR}}|/root/.netclaw/identity/agents|g' \
-            -e 's|{{TOOLING_DETAIL_DIR}}|/root/.netclaw/identity/tooling|g' \
-            -e 's|{{SKILLS_DIR}}|/root/.netclaw/skills|g' \
-            -e 's|{{WORKSPACES_DIR}}|/root/.netclaw/workspaces|g' \
-            "$template_dir/SOUL.template.md" > "$EVAL_HOME/identity/SOUL.md"
-        sed -e 's/{{AGENT_NAME}}/Netclaw/g' \
-            -e 's/{{STYLE_DESCRIPTION}}/Be concise and casual. Keep responses short and conversational./g' \
-            -e 's/{{USER_NAME}}/Eval User/g' \
-            -e 's/{{USER_TIMEZONE}}/UTC/g' \
-            -e 's|{{SYSTEM_SKILLS_DIR}}|/root/.netclaw/skills/.system/files|g' \
-            -e 's|{{IDENTITY_DIR}}|/root/.netclaw/identity|g' \
-            -e 's|{{SOUL_PATH}}|/root/.netclaw/identity/SOUL.md|g' \
-            -e 's|{{AGENTS_PATH}}|/root/.netclaw/identity/AGENTS.md|g' \
-            -e 's|{{TOOLING_PATH}}|/root/.netclaw/identity/TOOLING.md|g' \
-            -e 's|{{SOUL_DETAIL_DIR}}|/root/.netclaw/identity/soul|g' \
-            -e 's|{{AGENTS_DETAIL_DIR}}|/root/.netclaw/identity/agents|g' \
-            -e 's|{{TOOLING_DETAIL_DIR}}|/root/.netclaw/identity/tooling|g' \
-            -e 's|{{SKILLS_DIR}}|/root/.netclaw/skills|g' \
-            -e 's|{{WORKSPACES_DIR}}|/root/.netclaw/workspaces|g' \
-            "$template_dir/AGENTS.template.md" > "$EVAL_HOME/identity/AGENTS.md"
-        sed -e 's/{{AGENT_NAME}}/Netclaw/g' \
-            -e 's/{{STYLE_DESCRIPTION}}/Be concise and casual. Keep responses short and conversational./g' \
-            -e 's/{{USER_NAME}}/Eval User/g' \
-            -e 's/{{USER_TIMEZONE}}/UTC/g' \
-            -e 's|{{SYSTEM_SKILLS_DIR}}|/root/.netclaw/skills/.system/files|g' \
-            -e 's|{{IDENTITY_DIR}}|/root/.netclaw/identity|g' \
-            -e 's|{{SOUL_PATH}}|/root/.netclaw/identity/SOUL.md|g' \
-            -e 's|{{AGENTS_PATH}}|/root/.netclaw/identity/AGENTS.md|g' \
-            -e 's|{{TOOLING_PATH}}|/root/.netclaw/identity/TOOLING.md|g' \
-            -e 's|{{SOUL_DETAIL_DIR}}|/root/.netclaw/identity/soul|g' \
-            -e 's|{{AGENTS_DETAIL_DIR}}|/root/.netclaw/identity/agents|g' \
-            -e 's|{{TOOLING_DETAIL_DIR}}|/root/.netclaw/identity/tooling|g' \
-            -e 's|{{SKILLS_DIR}}|/root/.netclaw/skills|g' \
-            -e 's|{{WORKSPACES_DIR}}|/root/.netclaw/workspaces|g' \
-            "$template_dir/TOOLING.template.md" > "$EVAL_HOME/identity/TOOLING.md"
+        substitute_identity_template "$template_dir/SOUL.template.md" "$EVAL_HOME/identity/SOUL.md"
+        substitute_identity_template "$template_dir/AGENTS.template.md" "$EVAL_HOME/identity/AGENTS.md"
+        substitute_identity_template "$template_dir/TOOLING.template.md" "$EVAL_HOME/identity/TOOLING.md"
     else
         echo "ERROR: no identity templates at $template_dir/ — Identity evals will fail." >&2
         exit 1
