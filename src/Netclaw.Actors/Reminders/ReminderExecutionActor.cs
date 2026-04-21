@@ -66,15 +66,19 @@ internal sealed class ReminderExecutionActor : ReceiveActor
         _dispatchedAt = timeProvider.GetUtcNow();
         _log = Context.GetLogger();
         _handle = new SessionPipelineHandle(pipeline, _log, "reminder-exec");
-        _accumulator = new ExecutionOutputAccumulator(new ToolName("send_slack_message"), (tool, callId, succeeded) =>
-        {
-            if (succeeded)
-                _log.Info("ReminderExecution NotifySucceeded: execution_id={0} reminder_id={1} tool={2} call_id={3}",
-                    _executionId, _definition.Id, tool, callId);
-            else
-                _log.Warning("ReminderExecution NotifyFailed: execution_id={0} reminder_id={1} tool={2} call_id={3}",
-                    _executionId, _definition.Id, tool, callId);
-        });
+
+        var notificationToolName = definition.Delivery.GetNotificationToolName();
+        _accumulator = new ExecutionOutputAccumulator(
+            notificationToolName is not null ? new ToolName(notificationToolName) : new ToolName("__none__"),
+            (tool, callId, succeeded) =>
+            {
+                if (succeeded)
+                    _log.Info("ReminderExecution NotifySucceeded: execution_id={0} reminder_id={1} tool={2} call_id={3}",
+                        _executionId, _definition.Id, tool, callId);
+                else
+                    _log.Warning("ReminderExecution NotifyFailed: execution_id={0} reminder_id={1} tool={2} call_id={3}",
+                        _executionId, _definition.Id, tool, callId);
+            });
 
         Context.SetReceiveTimeout(TimeSpan.FromSeconds(ExecutionTimeoutSeconds));
 

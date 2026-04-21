@@ -147,7 +147,7 @@ public sealed partial class SetReminderTool : NetclawTool<SetReminderTool.Params
                 }
 
                 // Reject session-only transports (SignalR/TUI don't have channel notification tools)
-                if (transport is "signalr" or "tui")
+                if (transport == ChannelType.SignalR.ToWireValue() || transport == ChannelType.Tui.ToWireValue())
                     return $"Error: Transport '{transport}' does not support channel delivery. Use current_session instead.";
 
                 // Resolve address to canonical ID

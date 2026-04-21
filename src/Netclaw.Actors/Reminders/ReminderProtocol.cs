@@ -79,6 +79,18 @@ public sealed class ReminderDelivery
     /// </summary>
     [ProtoMember(5)]
     public Channels.ChannelType? OriginChannelType { get; set; }
+
+    /// <summary>
+    /// Gets the notification tool name for Channel delivery based on the transport.
+    /// Returns null for non-Channel delivery kinds or unknown transports.
+    /// </summary>
+    public string? GetNotificationToolName() => Kind == DeliveryKind.Channel
+        ? Transport?.ToLowerInvariant() switch
+        {
+            "slack" => "send_slack_message",
+            _ => null
+        }
+        : null;
 }
 
 /// <summary>
