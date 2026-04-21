@@ -6,6 +6,7 @@ using Microsoft.Extensions.Logging;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Hosting;
 using Netclaw.Configuration;
+using Netclaw.Security;
 
 namespace Netclaw.Channels.Discord;
 
@@ -16,6 +17,7 @@ public sealed class DiscordChannel : IChannel
     private readonly SessionIngressGate _ingressGate;
     private readonly IDiscordGatewayClient _gatewayClient;
     private readonly IDiscordReplyClient _replyClient;
+    private readonly IPromptInjectionDetector _promptInjectionDetector;
     private readonly IOperationalNotificationSink _notificationSink;
     private readonly TimeProvider _timeProvider;
     private readonly DiscordChannelOptions _options;
@@ -30,6 +32,7 @@ public sealed class DiscordChannel : IChannel
         SessionIngressGate ingressGate,
         IDiscordGatewayClient gatewayClient,
         IDiscordReplyClient replyClient,
+        IPromptInjectionDetector? promptInjectionDetector,
         IOperationalNotificationSink notificationSink,
         TimeProvider timeProvider,
         DiscordChannelOptions options,
@@ -40,6 +43,7 @@ public sealed class DiscordChannel : IChannel
         _ingressGate = ingressGate;
         _gatewayClient = gatewayClient;
         _replyClient = replyClient;
+        _promptInjectionDetector = promptInjectionDetector ?? new NullPromptInjectionDetector();
         _notificationSink = notificationSink;
         _timeProvider = timeProvider;
         _options = options;
@@ -83,7 +87,8 @@ public sealed class DiscordChannel : IChannel
                     DefaultChannelId: !string.IsNullOrWhiteSpace(_options.DefaultChannelId)
                         ? new DiscordChannelId(_options.DefaultChannelId)
                         : null,
-                    ReplyClient: _replyClient)),
+                    ReplyClient: _replyClient,
+                    PromptInjectionDetector: _promptInjectionDetector)),
                 "discord-gateway");
 
             ActorRegistry.For(_system).Register<DiscordGatewayActorKey>(_gateway);

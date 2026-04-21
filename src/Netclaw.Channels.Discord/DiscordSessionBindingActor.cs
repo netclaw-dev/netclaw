@@ -7,6 +7,7 @@ using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Reminders;
 using Netclaw.Channels.Telemetry;
 using Netclaw.Configuration;
+using Netclaw.Security;
 
 namespace Netclaw.Channels.Discord;
 
@@ -17,7 +18,16 @@ internal sealed class DiscordSessionBindingActor : ReceiveActor, IWithUnboundedS
     private readonly DiscordReplyChannelId _replyChannelId;
     private readonly DiscordThreadOrMessageId _threadOrMessageId;
     private readonly DiscordMessageId? _rootMessageId;
+    private const int MaxDiscordMessageLength = 2000;
+    private const string EmptyTurnFallbackText =
+        ":warning: I didn't manage to produce a reply. Please try rephrasing or sending your message again.";
+    private const string LiveInjectionBlockedWarning =
+        ":warning: Message blocked by prompt-injection policy.";
+    private const string LiveDetectorUnavailableWarning =
+        ":warning: I couldn't safely analyze your message — please try again in a moment.";
+
     private readonly DiscordGatewayDependencies _dependencies;
+    private readonly IPromptInjectionDetector _promptInjectionDetector;
     private readonly SessionPipelineHandle _handle;
     private readonly ILoggingAdapter _log;
     private readonly List<PendingApprovalRequest> _pendingApprovalRequests = [];
@@ -27,6 +37,7 @@ internal sealed class DiscordSessionBindingActor : ReceiveActor, IWithUnboundedS
     private static readonly object ReinitializeTimerKey = new();
     private static readonly TimeSpan IdlePassivationTimeout = TimeSpan.FromHours(1);
     private bool _deliveredThisTurn;
+    private int _turnNumber;
 
     public IStash Stash { get; set; } = null!;
     public ITimerScheduler Timers { get; set; } = null!;
@@ -45,6 +56,7 @@ internal sealed class DiscordSessionBindingActor : ReceiveActor, IWithUnboundedS
         _threadOrMessageId = threadOrMessageId;
         _rootMessageId = rootMessageId;
         _dependencies = dependencies;
+        _promptInjectionDetector = dependencies.PromptInjectionDetector ?? new NullPromptInjectionDetector();
 
         _log = Context.GetLogger()
             .WithContext("Adapter", "discord")
@@ -145,6 +157,7 @@ internal sealed class DiscordSessionBindingActor : ReceiveActor, IWithUnboundedS
 
         ReceiveAsync<ReinitializePipeline>(async msg =>
         {
+            _deliveredThisTurn = false;
             await _handle.ReinitializeAsync(
                 msg.Reason,
                 () => Timers.StartSingleTimer(
@@ -194,6 +207,25 @@ internal sealed class DiscordSessionBindingActor : ReceiveActor, IWithUnboundedS
             && await TryHandleTextApprovalResponseAsync(message, selectedKey))
         {
             return;
+        }
+
+        var classification = await ClassifyAsync(message.Text, "discord-live");
+        switch (classification.Outcome)
+        {
+            case ClassificationOutcome.Block:
+                _log.Warning("Blocked Discord message due to prompt injection risk: {Reason}", classification.Reason);
+                ChannelTelemetry.RecordDiscordEventDropped("prompt_injection_high");
+                await SafeReplyAsync(LiveInjectionBlockedWarning);
+                return;
+
+            case ClassificationOutcome.DetectorUnavailable:
+                _log.Warning("Prompt injection detector unavailable for live message — dropping");
+                ChannelTelemetry.RecordDiscordEventDropped("prompt_injection_detector_unavailable");
+                await SafeReplyAsync(LiveDetectorUnavailableWarning);
+                return;
+
+            case ClassificationOutcome.Allow:
+                break;
         }
 
         var writer = _handle.InputQueue;
@@ -329,6 +361,11 @@ internal sealed class DiscordSessionBindingActor : ReceiveActor, IWithUnboundedS
                         completed.TimestampMs));
                 }
 
+                if (!_deliveredThisTurn)
+                    await SafeReplyAsync(EmptyTurnFallbackText);
+
+                _turnNumber = completed.TurnNumber;
+                _pendingApprovalRequests.Clear();
                 _deliveredThisTurn = false;
                 break;
         }
@@ -336,22 +373,103 @@ internal sealed class DiscordSessionBindingActor : ReceiveActor, IWithUnboundedS
 
     private async Task SafeReplyAsync(string text)
     {
+        var chunks = ChunkMessage(text);
+        foreach (var chunk in chunks)
+        {
+            try
+            {
+                var startedAt = _dependencies.TimeProvider.GetTimestamp();
+                await _dependencies.ReplyClient.PostReplyAsync(new DiscordPostMessage(
+                    ReplyChannelId: _replyChannelId,
+                    Text: chunk,
+                    RootMessageId: _rootMessageId));
+                var duration = _dependencies.TimeProvider.GetElapsedTime(startedAt).TotalMilliseconds;
+                ChannelTelemetry.RecordDiscordReplyPosted(duration);
+            }
+            catch (Exception ex)
+            {
+                _log.Warning(ex, "Failed posting Discord reply for session {0}", _sessionId.Value);
+                ChannelTelemetry.RecordDiscordReplyFailed(0d);
+                await NotifyDeliveryFailedAsync(DeliveryFailureKind.TransportFailure, ex.Message);
+                return;
+            }
+        }
+    }
+
+    private async Task NotifyDeliveryFailedAsync(DeliveryFailureKind failureKind, string errorMessage)
+    {
         try
         {
-            var startedAt = _dependencies.TimeProvider.GetTimestamp();
-            await _dependencies.ReplyClient.PostReplyAsync(new DiscordPostMessage(
-                ReplyChannelId: _replyChannelId,
-                Text: text,
-                RootMessageId: _rootMessageId));
-            var duration = _dependencies.TimeProvider.GetElapsedTime(startedAt).TotalMilliseconds;
-            ChannelTelemetry.RecordDiscordReplyPosted(duration);
+            await _dependencies.Pipeline.SendFeedbackAsync(new DeliveryFailed
+            {
+                SessionId = _sessionId,
+                TurnNumber = _turnNumber,
+                ChannelType = ChannelType.Discord,
+                FailureKind = failureKind,
+                ErrorMessage = errorMessage
+            });
         }
         catch (Exception ex)
         {
-            _log.Warning(ex, "Failed posting Discord reply for session {0}", _sessionId.Value);
-            ChannelTelemetry.RecordDiscordReplyFailed(0d);
+            _log.Error(ex, "Failed to send delivery feedback to session");
         }
     }
+
+    internal static List<string> ChunkMessage(string text)
+    {
+        if (text.Length <= MaxDiscordMessageLength)
+            return [text];
+
+        var chunks = new List<string>();
+        var remaining = text.AsSpan();
+        while (remaining.Length > 0)
+        {
+            if (remaining.Length <= MaxDiscordMessageLength)
+            {
+                chunks.Add(remaining.ToString());
+                break;
+            }
+
+            var splitAt = MaxDiscordMessageLength;
+            var newlineIdx = remaining[..splitAt].LastIndexOf('\n');
+            if (newlineIdx > 0)
+                splitAt = newlineIdx + 1;
+
+            chunks.Add(remaining[..splitAt].ToString());
+            remaining = remaining[splitAt..];
+        }
+
+        return chunks;
+    }
+
+    private async Task<Classification> ClassifyAsync(string? text, string sourceContext)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return new Classification(ClassificationOutcome.Allow, null);
+
+        PromptInjectionResult detection;
+        try
+        {
+            detection = await _promptInjectionDetector.DetectAsync(text, sourceContext);
+        }
+        catch (Exception ex)
+        {
+            _log.Warning(ex, "Prompt injection detector failed for source={Source}", sourceContext);
+            return new Classification(ClassificationOutcome.DetectorUnavailable, ex.Message);
+        }
+
+        if (detection.Risk != PromptInjectionRisk.High)
+            return new Classification(ClassificationOutcome.Allow, null);
+
+        var reason = string.IsNullOrWhiteSpace(detection.Message)
+            ? "High-risk prompt injection pattern detected"
+            : detection.Message;
+        return new Classification(ClassificationOutcome.Block, reason);
+    }
+
+    private enum ClassificationOutcome { Allow, Block, DetectorUnavailable }
+
+    private readonly record struct Classification(ClassificationOutcome Outcome, string? Reason);
 
     private sealed record InitializePipeline
     {

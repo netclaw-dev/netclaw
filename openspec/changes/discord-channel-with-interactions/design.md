@@ -45,6 +45,8 @@ Stakeholders are owner-operators who run Netclaw in Discord-first environments a
 
 **Alternative considered:** interaction-only approvals with timeout fallback. Rejected because timeouts are non-deterministic UX and increase failure ambiguity.
 
+**MVP status:** Interaction rendering (Discord buttons/components) is deferred until the concrete `IDiscordReplyClient` implementation supports message components. The deterministic text fallback path is fully implemented and functional — it serves as the only approval UX in MVP. The inbound interaction response path is wired (via `DiscordGatewayInteraction` and `DiscordApprovalResponse`), so when interaction rendering is added, the response handling is already in place.
+
 ### D3. Extend adapter contracts, not session contracts
 
 **Choice:** Add Discord-specific requirements under new `netclaw-discord-socket` capability and extend `netclaw-input-adapters` metadata/routing requirements, while keeping session actor contracts unchanged.

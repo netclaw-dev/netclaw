@@ -3,6 +3,7 @@ using Akka.Event;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
 using Netclaw.Channels.Telemetry;
+using Netclaw.Security;
 
 namespace Netclaw.Channels.Discord;
 
@@ -73,6 +74,7 @@ public sealed class DiscordGatewayActor : ReceiveActor
                             sessionId,
                             message.ChannelId,
                             message.ReplyChannelId,
+                            message.ThreadOrMessageId,
                             message.RootMessageId,
                             _dependencies)
                         ?? DiscordSessionBindingActor.CreateProps(
@@ -125,6 +127,47 @@ public sealed class DiscordGatewayActor : ReceiveActor
                 SenderId: interaction.SenderId,
                 RequesterSenderId: interaction.RequesterSenderId));
         });
+
+        // No ACL call — audience was validated at reminder mint time by
+        // the reminder-audience-authorization capability.
+        Receive<DeliverTrustedSessionTurn>(message =>
+        {
+            if (!TryParseDiscordSessionId(message.SessionId, out var channelId, out var threadOrMessageId))
+            {
+                _log.Warning(
+                    "Dropping DeliverTrustedSessionTurn with unparseable Discord SessionId {SessionId}",
+                    message.SessionId.Value);
+                Sender.Tell(CommandNack.For(message.SessionId, "Invalid Discord SessionId format"));
+                return;
+            }
+
+            var actorName = BuildActorName(channelId, threadOrMessageId);
+            var replyChannelId = new DiscordReplyChannelId(threadOrMessageId.Value);
+            var props = _dependencies.SessionPropsFactory?.Invoke(
+                            message.SessionId,
+                            channelId,
+                            replyChannelId,
+                            threadOrMessageId,
+                            null,
+                            _dependencies)
+                        ?? DiscordSessionBindingActor.CreateProps(
+                            message.SessionId,
+                            channelId,
+                            replyChannelId,
+                            threadOrMessageId,
+                            null,
+                            _dependencies);
+
+            var existing = Context.Child(actorName);
+            var sessionBinding = existing.IsNobody()
+                ? Context.ActorOf(props, actorName)
+                : existing;
+
+            _log.Debug(
+                "Routing DeliverTrustedSessionTurn session={Session} channel={Channel} threadOrMessage={ThreadOrMessage}",
+                message.SessionId.Value, channelId.Value, threadOrMessageId.Value);
+            sessionBinding.Forward(message);
+        });
     }
 
     public static Props CreateProps(DiscordGatewayDependencies dependencies) =>
@@ -132,6 +175,27 @@ public sealed class DiscordGatewayActor : ReceiveActor
 
     private static string BuildActorName(DiscordChannelId channelId, DiscordThreadOrMessageId threadOrMessageId)
         => Uri.EscapeDataString($"{channelId.Value}:{threadOrMessageId.Value}");
+
+    internal static bool TryParseDiscordSessionId(
+        SessionId sessionId,
+        out DiscordChannelId channelId,
+        out DiscordThreadOrMessageId threadOrMessageId)
+    {
+        channelId = default;
+        threadOrMessageId = default;
+
+        var value = sessionId.Value;
+        if (string.IsNullOrEmpty(value))
+            return false;
+
+        var slashIdx = value.IndexOf('/', StringComparison.Ordinal);
+        if (slashIdx <= 0 || slashIdx == value.Length - 1)
+            return false;
+
+        channelId = new DiscordChannelId(value[..slashIdx]);
+        threadOrMessageId = new DiscordThreadOrMessageId(value[(slashIdx + 1)..]);
+        return true;
+    }
 
     private bool TryMarkEventProcessed(DiscordEventId eventId)
     {
@@ -159,4 +223,5 @@ public sealed record DiscordGatewayDependencies(
     DiscordChannelOptions Options,
     DiscordChannelId? DefaultChannelId,
     IDiscordReplyClient ReplyClient,
-    Func<SessionId, DiscordChannelId, DiscordReplyChannelId, DiscordMessageId?, DiscordGatewayDependencies, Props>? SessionPropsFactory = null);
+    IPromptInjectionDetector? PromptInjectionDetector = null,
+    Func<SessionId, DiscordChannelId, DiscordReplyChannelId, DiscordThreadOrMessageId, DiscordMessageId?, DiscordGatewayDependencies, Props>? SessionPropsFactory = null);

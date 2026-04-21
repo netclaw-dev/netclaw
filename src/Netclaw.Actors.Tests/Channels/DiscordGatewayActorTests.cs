@@ -29,7 +29,7 @@ public sealed class DiscordGatewayActorTests(ITestOutputHelper output) : TestKit
     {
         var sink = CreateTestProbe("discord-sink-route");
         var deps = CreateDependencies(
-            sessionPropsFactory: (sessionId, channelId, replyChannelId, rootMessageId, _) =>
+            sessionPropsFactory: (sessionId, channelId, replyChannelId, threadOrMessageId, rootMessageId, _) =>
                 Props.Create(() => new ForwardActor(sink.Ref)));
 
         var gateway = Sys.ActorOf(DiscordGatewayActor.CreateProps(deps), "discord-gateway-test-route");
@@ -82,7 +82,7 @@ public sealed class DiscordGatewayActorTests(ITestOutputHelper output) : TestKit
     {
         var sink = CreateTestProbe("discord-sink-slash");
         var deps = CreateDependencies(
-            sessionPropsFactory: (_, _, _, _, _) => Props.Create(() => new ForwardActor(sink.Ref)));
+            sessionPropsFactory: (_, _, _, _, _, _) => Props.Create(() => new ForwardActor(sink.Ref)));
 
         var gateway = Sys.ActorOf(DiscordGatewayActor.CreateProps(deps), "discord-gateway-test-slash");
         const string slashText = "/netclaw-operations check daemon health";
@@ -114,7 +114,7 @@ public sealed class DiscordGatewayActorTests(ITestOutputHelper output) : TestKit
                 AllowedUserIds = ["u-allowed"],
                 AllowDirectMessages = false
             },
-            sessionPropsFactory: (_, _, _, _, _) => Props.Create(() => new ForwardActor(sink.Ref)));
+            sessionPropsFactory: (_, _, _, _, _, _) => Props.Create(() => new ForwardActor(sink.Ref)));
 
         var gateway = Sys.ActorOf(DiscordGatewayActor.CreateProps(deps), "discord-gateway-test-deny");
 
@@ -136,7 +136,7 @@ public sealed class DiscordGatewayActorTests(ITestOutputHelper output) : TestKit
     {
         var sink = CreateTestProbe("discord-sink-interaction");
         var deps = CreateDependencies(
-            sessionPropsFactory: (_, _, _, _, _) => Props.Create(() => new ForwardActor(sink.Ref)));
+            sessionPropsFactory: (_, _, _, _, _, _) => Props.Create(() => new ForwardActor(sink.Ref)));
 
         var gateway = Sys.ActorOf(DiscordGatewayActor.CreateProps(deps), "discord-gateway-test-interaction");
 
@@ -168,9 +168,92 @@ public sealed class DiscordGatewayActorTests(ITestOutputHelper output) : TestKit
         Assert.Equal("u-1", interaction.SenderId.Value);
     }
 
+    [Fact]
+    public async Task Gateway_drops_duplicate_event_ids()
+    {
+        var sink = CreateTestProbe("discord-sink-dedup");
+        var deps = CreateDependencies(
+            sessionPropsFactory: (_, _, _, _, _, _) => Props.Create(() => new ForwardActor(sink.Ref)));
+
+        var gateway = Sys.ActorOf(DiscordGatewayActor.CreateProps(deps), "discord-gateway-test-dedup");
+
+        gateway.Tell(CreateMessage(
+            eventId: "ev-dup",
+            channelId: "ch-7",
+            replyChannelId: "ch-7",
+            messageId: "m-1",
+            threadOrMessageId: "m-1",
+            rootMessageId: "m-1",
+            senderId: "u-1",
+            text: "first"));
+
+        await sink.ExpectMsgAsync<DiscordThreadInbound>(cancellationToken: TestContext.Current.CancellationToken);
+
+        gateway.Tell(CreateMessage(
+            eventId: "ev-dup",
+            channelId: "ch-7",
+            replyChannelId: "ch-7",
+            messageId: "m-2",
+            threadOrMessageId: "m-1",
+            rootMessageId: "m-1",
+            senderId: "u-1",
+            text: "duplicate"));
+
+        await ExpectNoMsgAsync(TimeSpan.FromMilliseconds(250), TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task Gateway_accepts_messages_with_empty_event_id()
+    {
+        var sink = CreateTestProbe("discord-sink-empty-eid");
+        var deps = CreateDependencies(
+            sessionPropsFactory: (_, _, _, _, _, _) => Props.Create(() => new ForwardActor(sink.Ref)));
+
+        var gateway = Sys.ActorOf(DiscordGatewayActor.CreateProps(deps), "discord-gateway-test-empty-eid");
+
+        gateway.Tell(CreateMessage(
+            eventId: "",
+            channelId: "ch-7",
+            replyChannelId: "ch-7",
+            messageId: "m-1",
+            threadOrMessageId: "m-1",
+            rootMessageId: "m-1",
+            senderId: "u-1",
+            text: "no event id"));
+
+        await sink.ExpectMsgAsync<DiscordThreadInbound>(cancellationToken: TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task Gateway_drops_bot_messages()
+    {
+        var sink = CreateTestProbe("discord-sink-bot");
+        var deps = CreateDependencies(
+            sessionPropsFactory: (_, _, _, _, _, _) => Props.Create(() => new ForwardActor(sink.Ref)));
+
+        var gateway = Sys.ActorOf(DiscordGatewayActor.CreateProps(deps), "discord-gateway-test-bot");
+
+        var botMessage = new DiscordGatewayMessage(
+            EventId: new DiscordEventId("ev-bot"),
+            ChannelId: new DiscordChannelId("ch-7"),
+            ReplyChannelId: new DiscordReplyChannelId("ch-7"),
+            MessageId: new DiscordMessageId("m-1"),
+            ThreadOrMessageId: new DiscordThreadOrMessageId("m-1"),
+            RootMessageId: new DiscordMessageId("m-1"),
+            SenderId: new DiscordUserId("u-bot"),
+            IsBotMessage: true,
+            IsDirectMessage: false,
+            Text: "bot message",
+            ReceivedAt: TimeProvider.System.GetUtcNow());
+
+        gateway.Tell(botMessage);
+
+        await ExpectNoMsgAsync(TimeSpan.FromMilliseconds(250), TestContext.Current.CancellationToken);
+    }
+
     private static DiscordGatewayDependencies CreateDependencies(
         DiscordChannelOptions? options = null,
-        Func<SessionId, DiscordChannelId, DiscordReplyChannelId, DiscordMessageId?, DiscordGatewayDependencies, Props>? sessionPropsFactory = null)
+        Func<SessionId, DiscordChannelId, DiscordReplyChannelId, DiscordThreadOrMessageId, DiscordMessageId?, DiscordGatewayDependencies, Props>? sessionPropsFactory = null)
     {
         return new DiscordGatewayDependencies(
             Pipeline: null!,
