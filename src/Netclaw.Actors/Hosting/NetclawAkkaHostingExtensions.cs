@@ -5,8 +5,10 @@ using Akka.Reminders;
 using Akka.Reminders.Sharding;
 using Akka.Reminders.Sqlite;
 using Akka.Reminders.Sqlite.Configuration;
+using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Reminders;
 using Netclaw.Actors.Routing;
+using Netclaw.Actors.Serialization;
 using Netclaw.Actors.Sessions;
 using Netclaw.Actors.Tools;
 
@@ -134,5 +136,39 @@ public static class NetclawAkkaHostingExtensions
             .WithSessionManager()
             .WithToolApprovalActor()
             .WithReminderManager(reminderStorageOptions);
+    }
+
+    /// <summary>
+    /// Configures protobuf-net serialization for Netclaw protocol types.
+    /// Registered types use efficient protobuf encoding; our serializer throws
+    /// for unregistered manifests to fail loudly on schema drift.
+    /// </summary>
+    public static AkkaConfigurationBuilder WithNetclawSerialization(
+        this AkkaConfigurationBuilder builder)
+    {
+        var boundTypes = new[]
+        {
+            typeof(SessionId),
+            typeof(SendUserMessage),
+            typeof(SerializableChatMessage),
+            typeof(SerializableMediaReference),
+            typeof(SerializableToolCall),
+            typeof(TurnRecorded),
+            typeof(SessionTitleSet),
+            typeof(SessionCompacted),
+            typeof(SessionSnapshot),
+            typeof(TurnBroadcast),
+            typeof(CompactionBroadcast),
+            typeof(WorkingContext),
+            typeof(ReminderId),
+            typeof(ReminderDelivery),
+            typeof(ReminderSchedule),
+            typeof(ReminderPayload),
+        };
+
+        return builder.WithCustomSerializer(
+            serializerIdentifier: "netclaw-protobuf",
+            boundTypes: boundTypes,
+            serializerFactory: system => new NetclawProtobufSerializer(system));
     }
 }

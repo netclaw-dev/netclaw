@@ -943,6 +943,7 @@ static void ConfigureDaemonServices(
             }
             : null;
 
+        akkaBuilder.WithNetclawSerialization();
         akkaBuilder.WithNetclawActors(reminderStorage);
         akkaBuilder.WithSignalRGateway();
         akkaBuilder.WithDailyStatsActor();

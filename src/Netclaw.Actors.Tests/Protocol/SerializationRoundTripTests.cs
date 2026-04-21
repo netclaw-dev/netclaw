@@ -1,18 +1,30 @@
+using Akka.Hosting;
+using Akka.Hosting.TestKit;
+using Akka.Serialization;
+using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Protocol;
+using Netclaw.Actors.Reminders;
 using Netclaw.Actors.Sessions;
-using ProtoBuf;
 using Xunit;
 
 namespace Netclaw.Actors.Tests.Protocol;
 
-public sealed class SerializationRoundTripTests
+public sealed class SerializationRoundTripTests : TestKit
 {
-    private static T RoundTrip<T>(T value)
+    public SerializationRoundTripTests(ITestOutputHelper output) : base(output: output) { }
+
+    protected override void ConfigureAkka(AkkaConfigurationBuilder builder, IServiceProvider provider)
     {
-        using var ms = new MemoryStream();
-        Serializer.Serialize(ms, value);
-        ms.Position = 0;
-        return Serializer.Deserialize<T>(ms);
+        builder.WithNetclawSerialization();
+    }
+
+    private T RoundTrip<T>(T value)
+    {
+        var serialization = Sys.Serialization;
+        var serializer = serialization.FindSerializerFor(value);
+        var bytes = serializer.ToBinary(value);
+        var manifest = serializer is SerializerWithStringManifest swm ? swm.Manifest(value) : string.Empty;
+        return (T)serialization.Deserialize(bytes, serializer.Identifier, manifest);
     }
 
     [Fact]
@@ -217,7 +229,6 @@ public sealed class SerializationRoundTripTests
     [Fact]
     public void SerializableChatMessage_round_trips_without_media_references()
     {
-        // Verify backward compatibility — messages without media still work
         var original = new SerializableChatMessage
         {
             Role = ChatRole.User,
@@ -233,8 +244,6 @@ public sealed class SerializationRoundTripTests
     [Fact]
     public void WorkingContext_round_trips()
     {
-        // WorkingContext uses ImmutableList<string> which is not a standard
-        // ProtoBuf-net collection type. Verify the surrogate path works.
         var original = WorkingContext.Empty
             .AddRecentFile("src/Rect.cs")
             .AddRecentFile("src/Thickness.cs");
@@ -262,5 +271,30 @@ public sealed class SerializationRoundTripTests
         Assert.Equal(original.SessionId, result.SessionId);
         Assert.Equal(original.Summary, result.Summary);
         Assert.Equal(original.CompactedAtMs, result.CompactedAtMs);
+    }
+
+    [Fact]
+    public void ReminderPayload_round_trips()
+    {
+        var original = new ReminderPayload
+        {
+            Id = new ReminderId("daily-standup")
+        };
+
+        var result = RoundTrip(original);
+
+        Assert.Equal("daily-standup", result.Id.Value);
+    }
+
+    [Fact]
+    public void Unknown_manifest_throws_on_deserialize()
+    {
+        var serializer = new Serialization.NetclawProtobufSerializer((Akka.Actor.ExtendedActorSystem)Sys);
+        var bytes = new byte[] { 0x08, 0x01 };
+
+        var ex = Record.Exception(() => serializer.FromBinary(bytes, "unknown-manifest-v99"));
+
+        Assert.NotNull(ex);
+        Assert.Contains("Unknown manifest", ex.Message);
     }
 }
