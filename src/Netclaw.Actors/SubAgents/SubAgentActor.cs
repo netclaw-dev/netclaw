@@ -22,10 +22,11 @@ namespace Netclaw.Actors.SubAgents;
 /// No persistence, no subscribers, no streaming, no compaction.
 /// Designed to be spawned as a child of a session actor or standalone under a supervisor.
 /// </summary>
-public sealed class SubAgentActor : ReceiveActor
+public sealed class SubAgentActor : ReceiveActor, IWithTimers
 {
     private const int MaxToolIterations = 10;
     private const string EmptyResponseMarker = "(no response)";
+    private const string TimeoutTimerKey = "subagent-timeout";
 
     private readonly SubAgentDefinition _definition;
     private readonly IChatClient _chatClient;
@@ -40,8 +41,9 @@ public sealed class SubAgentActor : ReceiveActor
     private readonly List<AiChatMessage> _history = new();
     private int _toolIterationCount;
     private IActorRef _replyTo = ActorRefs.Nobody;
-    private ICancelable? _timeoutSchedule;
     private CancellationTokenSource? _executionCts;
+
+    public ITimerScheduler Timers { get; set; } = null!;
     private CancellationTokenRegistration _externalCancellationRegistration;
     private ToolExecutionContext _toolExecutionContext = ToolExecutionContext.Empty;
 
@@ -100,11 +102,11 @@ public sealed class SubAgentActor : ReceiveActor
             _toolExecutionContext.ChannelType = msg.ChannelType;
             _toolExecutionContext.SupportsInteractiveApproval = false;
             _executionCts = new CancellationTokenSource();
-            _externalCancellationRegistration = msg.Cancellation.Register(() => Self.Tell(SubAgentCancelled.Instance));
+            var self = Self; // Capture before callback — Self requires active actor context
+            _externalCancellationRegistration = msg.Cancellation.Register(() => self.Tell(SubAgentCancelled.Instance));
 
             // Schedule wall-clock timeout
-            _timeoutSchedule = Context.System.Scheduler.ScheduleTellOnceCancelable(
-                msg.Timeout, Self, SubAgentTimeout.Instance, ActorRefs.NoSender);
+            Timers.StartSingleTimer(TimeoutTimerKey, SubAgentTimeout.Instance, msg.Timeout);
 
             // Build initial conversation: system prompt (from file, verbatim) + task as user message.
             // If the caller supplied runtime context, prefix it onto the user message so the
@@ -248,7 +250,7 @@ public sealed class SubAgentActor : ReceiveActor
     private void Complete(bool success, string output)
     {
         _executionCts?.Cancel();
-        _timeoutSchedule?.Cancel();
+        Timers.Cancel(TimeoutTimerKey);
         _externalCancellationRegistration.Dispose();
         _executionCts?.Dispose();
         _executionCts = null;
