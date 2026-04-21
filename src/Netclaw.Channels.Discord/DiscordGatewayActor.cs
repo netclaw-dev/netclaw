@@ -67,27 +67,13 @@ public sealed class DiscordGatewayActor : ReceiveActor
                 return;
             }
 
-            var actorName = BuildActorName(message.ChannelId, message.ThreadOrMessageId);
-            var existing = Context.Child(actorName);
             var sessionId = new SessionId($"{message.ChannelId.Value}/{message.ThreadOrMessageId.Value}");
-            var props = _dependencies.SessionPropsFactory?.Invoke(
-                            sessionId,
-                            message.ChannelId,
-                            message.ReplyChannelId,
-                            message.ThreadOrMessageId,
-                            message.RootMessageId,
-                            _dependencies)
-                        ?? DiscordSessionBindingActor.CreateProps(
-                            sessionId,
-                            message.ChannelId,
-                            message.ReplyChannelId,
-                            message.ThreadOrMessageId,
-                            message.RootMessageId,
-                            _dependencies);
-
-            var sessionBinding = existing.IsNobody()
-                ? Context.ActorOf(props, actorName)
-                : existing;
+            var sessionBinding = GetOrCreateSessionBinding(
+                sessionId,
+                message.ChannelId,
+                message.ReplyChannelId,
+                message.ThreadOrMessageId,
+                message.RootMessageId);
 
             ChannelTelemetry.RecordDiscordEventRouted("message");
             sessionBinding.Forward(new DiscordThreadInbound(
@@ -128,8 +114,6 @@ public sealed class DiscordGatewayActor : ReceiveActor
                 RequesterSenderId: interaction.RequesterSenderId));
         });
 
-        // No ACL call — audience was validated at reminder mint time by
-        // the reminder-audience-authorization capability.
         Receive<DeliverTrustedSessionTurn>(message =>
         {
             if (!TryParseDiscordSessionId(message.SessionId, out var channelId, out var threadOrMessageId))
@@ -141,27 +125,9 @@ public sealed class DiscordGatewayActor : ReceiveActor
                 return;
             }
 
-            var actorName = BuildActorName(channelId, threadOrMessageId);
             var replyChannelId = new DiscordReplyChannelId(threadOrMessageId.Value);
-            var props = _dependencies.SessionPropsFactory?.Invoke(
-                            message.SessionId,
-                            channelId,
-                            replyChannelId,
-                            threadOrMessageId,
-                            null,
-                            _dependencies)
-                        ?? DiscordSessionBindingActor.CreateProps(
-                            message.SessionId,
-                            channelId,
-                            replyChannelId,
-                            threadOrMessageId,
-                            null,
-                            _dependencies);
-
-            var existing = Context.Child(actorName);
-            var sessionBinding = existing.IsNobody()
-                ? Context.ActorOf(props, actorName)
-                : existing;
+            var sessionBinding = GetOrCreateSessionBinding(
+                message.SessionId, channelId, replyChannelId, threadOrMessageId, rootMessageId: null);
 
             _log.Debug(
                 "Routing DeliverTrustedSessionTurn session={Session} channel={Channel} threadOrMessage={ThreadOrMessage}",
@@ -173,8 +139,27 @@ public sealed class DiscordGatewayActor : ReceiveActor
     public static Props CreateProps(DiscordGatewayDependencies dependencies) =>
         Props.Create(() => new DiscordGatewayActor(dependencies));
 
+    private IActorRef GetOrCreateSessionBinding(
+        SessionId sessionId,
+        DiscordChannelId channelId,
+        DiscordReplyChannelId replyChannelId,
+        DiscordThreadOrMessageId threadOrMessageId,
+        DiscordMessageId? rootMessageId)
+    {
+        var actorName = BuildActorName(channelId, threadOrMessageId);
+        var existing = Context.Child(actorName);
+        if (!existing.IsNobody())
+            return existing;
+
+        var props = _dependencies.SessionPropsFactory?.Invoke(
+                        sessionId, channelId, replyChannelId, threadOrMessageId, rootMessageId, _dependencies)
+                    ?? DiscordSessionBindingActor.CreateProps(
+                        sessionId, channelId, replyChannelId, threadOrMessageId, rootMessageId, _dependencies);
+        return Context.ActorOf(props, actorName);
+    }
+
     private static string BuildActorName(DiscordChannelId channelId, DiscordThreadOrMessageId threadOrMessageId)
-        => Uri.EscapeDataString($"{channelId.Value}:{threadOrMessageId.Value}");
+        => $"{channelId.Value}:{threadOrMessageId.Value}";
 
     internal static bool TryParseDiscordSessionId(
         SessionId sessionId,
@@ -202,10 +187,9 @@ public sealed class DiscordGatewayActor : ReceiveActor
         if (string.IsNullOrWhiteSpace(eventId.Value))
             return true;
 
-        if (_processedEventIds.ContainsKey(eventId))
+        if (!_processedEventIds.TryAdd(eventId, 0))
             return false;
 
-        _processedEventIds[eventId] = 0;
         _processedEventOrder.Enqueue(eventId);
 
         while (_processedEventIds.Count > MaxProcessedEventIds

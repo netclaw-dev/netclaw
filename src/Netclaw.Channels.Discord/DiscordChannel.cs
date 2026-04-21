@@ -1,7 +1,6 @@
 using Akka.Actor;
 using Akka.Hosting;
 using Akka.Pattern;
-using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Hosting;
@@ -129,8 +128,9 @@ public sealed class DiscordChannel : IChannel
             {
                 await _gateway.GracefulStop(TimeSpan.FromSeconds(5));
             }
-            catch
+            catch (Exception ex)
             {
+                _logger.LogWarning(ex, "Discord gateway actor did not stop gracefully; forcing stop");
                 _system.Stop(_gateway);
             }
 

@@ -344,8 +344,7 @@ internal sealed class DiscordSessionBindingActor : ReceiveActor, IWithUnboundedS
             case ToolInteractionRequest request when string.Equals(request.Kind, "approval", StringComparison.OrdinalIgnoreCase):
                 _pendingApprovalRequests.Add(new PendingApprovalRequest(
                     request.CallId,
-                    request.RequesterSenderId is null ? null : new DiscordUserId(request.RequesterSenderId),
-                    _dependencies.TimeProvider.GetUtcNow()));
+                    request.RequesterSenderId is null ? null : new DiscordUserId(request.RequesterSenderId)));
 
                 ChannelTelemetry.RecordDiscordApprovalFallbackActivated("text_prompt");
                 await SafeReplyAsync(DiscordApprovalPromptBuilder.BuildTextPrompt(request));
@@ -376,9 +375,9 @@ internal sealed class DiscordSessionBindingActor : ReceiveActor, IWithUnboundedS
         var chunks = ChunkMessage(text);
         foreach (var chunk in chunks)
         {
+            var startedAt = _dependencies.TimeProvider.GetTimestamp();
             try
             {
-                var startedAt = _dependencies.TimeProvider.GetTimestamp();
                 await _dependencies.ReplyClient.PostReplyAsync(new DiscordPostMessage(
                     ReplyChannelId: _replyChannelId,
                     Text: chunk,
@@ -388,8 +387,9 @@ internal sealed class DiscordSessionBindingActor : ReceiveActor, IWithUnboundedS
             }
             catch (Exception ex)
             {
+                var duration = _dependencies.TimeProvider.GetElapsedTime(startedAt).TotalMilliseconds;
                 _log.Warning(ex, "Failed posting Discord reply for session {0}", _sessionId.Value);
-                ChannelTelemetry.RecordDiscordReplyFailed(0d);
+                ChannelTelemetry.RecordDiscordReplyFailed(duration);
                 await NotifyDeliveryFailedAsync(DeliveryFailureKind.TransportFailure, ex.Message);
                 return;
             }

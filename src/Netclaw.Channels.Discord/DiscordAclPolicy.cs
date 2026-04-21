@@ -20,10 +20,10 @@ public static class DiscordAclPolicy
             && !IsAllowedChannel(message.ChannelId, options, defaultChannelId))
             return DiscordAclDecision.Deny("channel_not_allowed");
 
-        if (!IsAllowedUser(message.SenderId, options))
+        var isExplicitUser = options.AllowedUserIds.Contains(message.SenderId.Value, StringComparer.Ordinal);
+        if (options.AllowedUserIds.Length > 0 && !isExplicitUser)
             return DiscordAclDecision.Deny("user_not_allowed");
 
-        var isExplicitUser = options.AllowedUserIds.Contains(message.SenderId.Value, StringComparer.Ordinal);
         var isExplicitChannel = options.AllowedChannelIds.Contains(message.ChannelId.Value, StringComparer.Ordinal);
 
         var audienceResult = ResolveAudience(message, options, isExplicitUser, isExplicitChannel);
@@ -57,14 +57,6 @@ public static class DiscordAclPolicy
             return true;
 
         return options.AllowedChannelIds.Contains(channelId.Value, StringComparer.Ordinal);
-    }
-
-    public static bool IsAllowedUser(DiscordUserId senderId, DiscordChannelOptions options)
-    {
-        if (options.AllowedUserIds.Length == 0)
-            return true;
-
-        return options.AllowedUserIds.Contains(senderId.Value, StringComparer.Ordinal);
     }
 
     internal static AudienceResult ResolveAudience(

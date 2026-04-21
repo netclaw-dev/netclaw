@@ -28,5 +28,4 @@ public sealed record DiscordApprovalResponse(
 
 internal sealed record PendingApprovalRequest(
     string CallId,
-    DiscordUserId? RequesterSenderId,
-    DateTimeOffset RequestedAt);
+    DiscordUserId? RequesterSenderId);
