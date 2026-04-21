@@ -263,4 +263,21 @@ public sealed class SerializationRoundTripTests
         Assert.Equal(original.Summary, result.Summary);
         Assert.Equal(original.CompactedAtMs, result.CompactedAtMs);
     }
+
+    private sealed class UnregisteredType
+    {
+        public string Value { get; init; } = "test";
+    }
+
+    [Fact]
+    public void Unregistered_type_throws()
+    {
+        var unregistered = new UnregisteredType { Value = "should fail" };
+
+        Assert.ThrowsAny<Exception>(() =>
+        {
+            using var ms = new MemoryStream();
+            Serializer.Serialize(ms, unregistered);
+        });
+    }
 }
