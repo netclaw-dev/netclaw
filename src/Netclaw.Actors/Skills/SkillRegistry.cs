@@ -95,9 +95,8 @@ public sealed class SkillRegistry
     }
 
     /// <summary>
-    /// Generates a compressed pipe-delimited skill index for injection into the
-    /// LLM context layer. Points the agent directly at files on disk so it can
-    /// read them with <c>file_read</c> — no tool invocation decision required.
+    /// Generates a skill index for injection into the LLM context layer.
+    /// Includes skill descriptions so the model knows WHEN to load each skill.
     /// Skills with <c>DisableModelInvocation</c> are excluded from the index
     /// (they remain invokable via slash commands).
     /// </summary>
@@ -127,7 +126,7 @@ public sealed class SkillRegistry
             sb.AppendLine($"[skills]|root: {skillsRoot}|invoke via /name");
         }
 
-        sb.AppendLine("|IMPORTANT: Prefer retrieval-led reasoning over pre-training-led reasoning");
+        sb.AppendLine("|Load skill via file_read BEFORE using related features.");
 
         // Group by category, null category = root-level user skills
         var groups = visible
@@ -136,13 +135,27 @@ public sealed class SkillRegistry
 
         foreach (var group in groups)
         {
-            var files = string.Join(",", group
-                .OrderBy(static s => s.Name, StringComparer.Ordinal)
-                .Select(static s => $"{s.Name}/SKILL.md"));
-            sb.AppendLine($"|{group.Key}:{{{files}}}");
+            sb.AppendLine($"|{group.Key}:");
+            foreach (var skill in group.OrderBy(static s => s.Name, StringComparer.Ordinal))
+            {
+                var desc = TruncateDescription(skill.Description, maxLength: 120);
+                sb.AppendLine($"|  {skill.Name}: {desc}");
+            }
         }
 
         return sb.ToString();
+    }
+
+    private static string TruncateDescription(string description, int maxLength)
+    {
+        if (string.IsNullOrWhiteSpace(description))
+            return "(no description)";
+
+        description = description.Trim();
+        if (description.Length <= maxLength)
+            return description;
+
+        return description[..(maxLength - 3)] + "...";
     }
 
 

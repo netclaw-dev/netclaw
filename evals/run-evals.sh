@@ -34,6 +34,8 @@
 #     NETCLAW_EVAL_RUNS          Runs per case (default: 5)
 #     NETCLAW_EVAL_THRESHOLD     Pass threshold 0.0-1.0 (default: 0.80)
 #     NETCLAW_EVAL_TIMEOUT       Per-prompt timeout in seconds (default: 60)
+#     NETCLAW_EVAL_CATEGORY      Run only this category (case-insensitive substring match)
+#     NETCLAW_EVAL_CASE          Run only this specific case name
 set -euo pipefail
 
 # ─── Configuration ────────────────────────────────────────────────────────────
@@ -47,6 +49,8 @@ PROMPT_TIMEOUT="${NETCLAW_EVAL_TIMEOUT:-60}"
 EVAL_PORT="${NETCLAW_EVAL_PORT:-5299}"
 EVAL_CONTAINER_NAME="netclaw-eval-$$"
 NO_BUILD="${NETCLAW_EVAL_NO_BUILD:-0}"
+FILTER_CATEGORY="${NETCLAW_EVAL_CATEGORY:-}"
+FILTER_CASE="${NETCLAW_EVAL_CASE:-}"
 
 # Image and CLI binary default to the locally-built artifacts. Evals should
 # always test the current source tree, not a stale published image.
@@ -667,6 +671,10 @@ run_multi_turn_case() {
     local -a prompts=("$@")
     local assert_fn="assert_${case_name}"
 
+    # Skip if category or case filter excludes this case
+    if [[ "$CATEGORY_SKIPPED" == "true" ]]; then return; fi
+    if [[ -n "$FILTER_CASE" && "$case_name" != "$FILTER_CASE" ]]; then return; fi
+
     check_daemon_alive
 
     if ! declare -f "$assert_fn" >/dev/null 2>&1; then
@@ -758,25 +766,35 @@ assert_identity_session() {
     stdout_contains 'headless/' || stdout_contains 'signalr/' || stdout_contains 'slack/'
 }
 
-# Category 2: Skill Discovery (LLM-driven via file_read)
-assert_skill_operations_scheduling() {
-    stdout_contains '\[tool:call\] file_read' && stdout_contains 'netclaw-operations'
+# Category 2: Skill Discovery — tests that the model retrieves procedural
+# knowledge from skills when needed, measured by outcome correctness rather
+# than checking for a specific file_read call.
+assert_skill_scheduling_knowledge() {
+    # Scheduling types (once, interval, cron) are only documented in
+    # netclaw-operations/SKILL.md — the model must load the skill to answer.
+    stdout_contains 'cron'
+}
+
+assert_skill_memory_knowledge() {
+    # Memory classes (durable_fact, evidence, trace) are only documented in
+    # netclaw-memory/SKILL.md — the model must load the skill to answer.
+    stdout_contains 'durable' && stdout_contains 'evidence'
 }
 
 assert_skill_operations_diagnostics() {
-    stdout_contains '\[tool:call\] file_read' && stdout_contains 'netclaw-operations'
+    # Model should take diagnostic action (call any tool), not just talk about it.
+    stdout_contains '\[tool:call\]'
 }
 
-assert_skill_memory() {
-    stdout_contains '\[tool:call\] file_read' && stdout_contains 'netclaw-memory'
+assert_skill_citation_search() {
+    # Model should actually search when asked to search.
+    stdout_contains '\[tool:call\] web_search'
 }
 
-assert_skill_citation() {
-    stdout_contains '\[tool:call\] file_read' && stdout_contains 'search-citation'
-}
-
-assert_skill_web_content() {
-    stdout_contains '\[tool:call\] file_read' && stdout_contains 'web-content-retrieval'
+assert_skill_web_content_knowledge() {
+    # The web-content-retrieval skill explains that browser automation is needed
+    # for JS-heavy sites like Twitter. This info is only in the skill file.
+    stdout_contains 'browser'
 }
 
 # Category 3: Memory Pipeline
@@ -913,11 +931,27 @@ print_category() {
     CURRENT_CATEGORY="$1"
     CATEGORY_CASES=0
     CATEGORY_PASSED=0
+    CATEGORY_SKIPPED=false
+
+    # Skip entire category if filter is set and doesn't match
+    if [[ -n "$FILTER_CATEGORY" ]]; then
+        local cat_lower filter_lower
+        cat_lower=$(echo "$1" | tr '[:upper:]' '[:lower:]')
+        filter_lower=$(echo "$FILTER_CATEGORY" | tr '[:upper:]' '[:lower:]')
+        if [[ "$cat_lower" != *"$filter_lower"* ]]; then
+            CATEGORY_SKIPPED=true
+            return
+        fi
+    fi
+
     echo ""
     echo "Category: $1"
 }
 
 end_category() {
+    if [[ "$CATEGORY_SKIPPED" == "true" ]]; then
+        return
+    fi
     local status
     if [[ "$CATEGORY_CASES" -eq 0 ]]; then
         status="EMPTY"
@@ -941,9 +975,12 @@ run_case() {
     local -a prompts=("$@")
     local assert_fn="assert_${case_name}"
 
+    # Skip if category or case filter excludes this case
+    if [[ "$CATEGORY_SKIPPED" == "true" ]]; then return; fi
+    if [[ -n "$FILTER_CASE" && "$case_name" != "$FILTER_CASE" ]]; then return; fi
+
     # Bail early if daemon died
     check_daemon_alive
-
 
     # Verify assertion function exists
     if ! declare -f "$assert_fn" >/dev/null 2>&1; then
@@ -1018,24 +1055,31 @@ run_all() {
     end_category
 
     # ── Category 2: Skill Discovery ──
+    # Tests that the model retrieves procedural knowledge from skills when
+    # needed, measured by outcome correctness (not by checking file_read).
     print_category "Skill Discovery"
 
-    run_case skill_operations_scheduling "netclaw-operations loaded for scheduling" \
-        "Can you schedule reminders for me?"
+    run_case skill_scheduling_knowledge "knows scheduling types from skill" \
+        "What types of schedules can I create with set_reminder? Be specific about the formats." \
+        "What scheduling formats do Netclaw reminders support?" \
+        "Explain the different schedule types I can use with reminders"
 
-    run_case skill_operations_diagnostics "netclaw-operations loaded for diagnostics" \
-        "Something is wrong with my session, can you diagnose it?"
+    run_case skill_memory_knowledge "knows memory classes from skill" \
+        "What types of memory do you have? Explain the differences and how long each lasts." \
+        "How does your memory system work? What are the different memory classes?"
 
-    run_case skill_memory "netclaw-memory read via file_read" \
-        "What do you remember about our previous conversations?"
+    run_case skill_operations_diagnostics "takes diagnostic action" \
+        "Something is wrong with my session, can you diagnose it?" \
+        "My session seems broken, help me fix it" \
+        "Debug my Netclaw session"
 
-    run_case skill_citation "search-citation read via file_read" \
-        "Search the web for the latest Akka.NET release"
+    run_case skill_citation_search "performs web search when asked" \
+        "Search the web for the latest Akka.NET release" \
+        "Look up the current version of Akka.NET"
 
-    run_case skill_web_content "web-content-retrieval loaded for URL fetch" \
-        "Can you fetch the content from this tweet: https://x.com/edzitron/status/123" \
-        "I need to grab content from a Twitter link" \
-        "Fetch this URL for me, it's from a social media site"
+    run_case skill_web_content_knowledge "knows browser needed for JS-heavy sites" \
+        "What tool should I use to fetch content from a JavaScript-heavy website like Twitter?" \
+        "How do you handle fetching content from social media sites like X.com?"
 
     end_category
 

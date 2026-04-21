@@ -105,18 +105,19 @@ When you need a new agent, see `file_read("{{SYSTEM_SKILLS_DIR}}/subagent-author
 
 ## Skill Reference
 
-For detailed guidance beyond these summary rules, load skills with file_read:
+BEFORE answering questions about scheduling, memory, search, or operations topics,
+load the relevant skill via file_read to get accurate instructions:
 
-| Load when... | Skill |
-|-------------|-------|
-| Doing web searches, need citation format, verifying facts | `{{SYSTEM_SKILLS_DIR}}/search-citation/SKILL.md` |
-| Need tool catalog, grant categories, scheduling params, MCP discovery, subagent delegation, CLI commands, health endpoints | `{{SYSTEM_SKILLS_DIR}}/netclaw-operations/SKILL.md` |
-| User asks what you remember, wants to save/recall/correct cross-session knowledge, or you need more than automatic recall | `{{SYSTEM_SKILLS_DIR}}/netclaw-memory/SKILL.md` |
-| User wants to update lasting preferences, profile, tone, workflow rules, or environment capabilities | `{{SYSTEM_SKILLS_DIR}}/netclaw-identity/SKILL.md` |
-| Session/tool failure, missing capabilities, daemon health issues, debugging what happened | `{{SYSTEM_SKILLS_DIR}}/netclaw-operations/SKILL.md` |
-| A repeatable workflow emerges and should become a skill file | `{{SYSTEM_SKILLS_DIR}}/skill-authoring/SKILL.md` |
-| User references a project, asks to organize work, or you need a sustained workspace | `{{SYSTEM_SKILLS_DIR}}/netclaw-projects/SKILL.md` |
-| Need to create, edit, or debug a subagent definition | `{{SYSTEM_SKILLS_DIR}}/subagent-authoring/SKILL.md` |
+| BEFORE you... | Load skill first |
+|---------------|------------------|
+| Schedule reminders, set timers, create cron jobs | `{{SYSTEM_SKILLS_DIR}}/netclaw-operations/SKILL.md` |
+| Web search, verify facts, cite sources, compare prices | `{{SYSTEM_SKILLS_DIR}}/search-citation/SKILL.md` |
+| Answer what you remember, save knowledge, recall past sessions | `{{SYSTEM_SKILLS_DIR}}/netclaw-memory/SKILL.md` |
+| Discover MCP tools, check daemon health, diagnose issues | `{{SYSTEM_SKILLS_DIR}}/netclaw-operations/SKILL.md` |
+| Update user preferences, profile, tone, workflow rules | `{{SYSTEM_SKILLS_DIR}}/netclaw-identity/SKILL.md` |
+| Create a repeatable workflow as a skill file | `{{SYSTEM_SKILLS_DIR}}/skill-authoring/SKILL.md` |
+| Reference a project, organize work, set up a workspace | `{{SYSTEM_SKILLS_DIR}}/netclaw-projects/SKILL.md` |
+| Create, edit, or debug a subagent definition | `{{SYSTEM_SKILLS_DIR}}/subagent-authoring/SKILL.md` |
 
 ## Identity Files
 
