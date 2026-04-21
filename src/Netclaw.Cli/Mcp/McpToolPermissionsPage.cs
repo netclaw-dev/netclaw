@@ -133,8 +133,15 @@ public sealed class McpToolPermissionsPage : ReactivePage<McpToolPermissionsView
             .WithChild(new TextNode($"  [{accessMarker}] Server enabled for {audienceLabel}")
                 .WithForeground(serverAllowed ? Color.White : Color.Yellow))
             .WithChild(new TextNode($"  [M] Server default: {serverDefaultLabel}")
-                .WithForeground(ColorForMode(serverDefault)))
-            .WithSpacing(1);
+                .WithForeground(ColorForMode(serverDefault)));
+
+        if (!string.IsNullOrEmpty(ViewModel.StatusMessage.Value))
+        {
+            layout = layout.WithSpacing(1)
+                .WithChild(new TextNode($"  {ViewModel.StatusMessage.Value}").WithForeground(Color.Green));
+        }
+
+        layout = layout.WithSpacing(1);
 
         // Find the longest tool name for column alignment.
         var maxToolNameLen = tools.Count > 0 ? tools.Max(t => t.Length) : 0;
@@ -165,12 +172,6 @@ public sealed class McpToolPermissionsPage : ReactivePage<McpToolPermissionsView
             layout = layout.WithChild(node);
         }
 
-        if (!string.IsNullOrEmpty(ViewModel.StatusMessage.Value))
-        {
-            layout = layout.WithSpacing(1)
-                .WithChild(new TextNode($"  {ViewModel.StatusMessage.Value}").WithForeground(Color.Green));
-        }
-
         return layout;
     }
 
@@ -189,10 +190,16 @@ public sealed class McpToolPermissionsPage : ReactivePage<McpToolPermissionsView
             {
                 ToolPermissionsState.ServerList => "[Enter] Select  [Esc] Quit  [Ctrl+Q] Quit",
                 ToolPermissionsState.ToolGrid =>
-                    "[\u2190/\u2192] Audience  [\u2191/\u2193] Navigate  [Enter] Toggle  [A] All  [E] Enable/Disable  [M] Server default  [P] Tool mode  [S] Save  [Esc] Back" +
-                    (ViewModel.HasUnsavedChanges ? "  *unsaved*" : ""),
+                    "[\u2190/\u2192] Audience  [\u2191/\u2193] Navigate  [Enter] Toggle  [A] All  [E] Enable/Disable  [M] Server default  [P] Tool mode  [S] Save  [Esc] Back",
                 _ => ""
             };
+
+            if (ViewModel.CurrentState.Value == ToolPermissionsState.ToolGrid && ViewModel.HasUnsavedChanges)
+            {
+                return Layouts.Horizontal()
+                    .WithChild(new TextNode(hints).WithForeground(Color.BrightBlack))
+                    .WithChild(new TextNode("  *unsaved*").WithForeground(Color.Yellow));
+            }
 
             return new TextNode(hints).WithForeground(Color.BrightBlack);
         });
