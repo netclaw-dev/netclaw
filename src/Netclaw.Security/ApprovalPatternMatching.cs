@@ -14,7 +14,10 @@ public static class ApprovalPatternMatching
             if (string.Equals(candidate, approved, StringComparison.OrdinalIgnoreCase))
                 return true;
 
-            if (candidate.StartsWith(approved, StringComparison.OrdinalIgnoreCase)
+            // Only do prefix matching for multi-token patterns (contains space).
+            // Single-token patterns like "gh" should not match "gh pr".
+            if (approved.Contains(" ", StringComparison.Ordinal)
+                && candidate.StartsWith(approved, StringComparison.OrdinalIgnoreCase)
                 && candidate.Length > approved.Length
                 && candidate[approved.Length] == ' ')
             {
