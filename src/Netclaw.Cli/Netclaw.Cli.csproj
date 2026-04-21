@@ -30,4 +30,8 @@
     <ProjectReference Include="..\Netclaw.Providers\Netclaw.Providers.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <EmbeddedResource Include="Resources\identity\*.md" />
+  </ItemGroup>
+
 </Project>
