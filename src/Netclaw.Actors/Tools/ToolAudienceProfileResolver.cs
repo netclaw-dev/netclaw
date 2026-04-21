@@ -175,9 +175,5 @@ internal sealed class ToolAudienceProfileResolver
             or "skill_manage"
             or "set_webhook"
             or "list_webhooks"
-            or "delete_webhook"
-            or "set_reminder"
-            or "list_reminders"
-            or "cancel_reminder"
-            or "get_reminder_history";
+            or "delete_webhook";
 }
