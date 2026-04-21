@@ -20,6 +20,7 @@ using Netclaw.Cli.Provider;
 using Netclaw.Cli.Tui;
 using Netclaw.Cli.Skills;
 using Netclaw.Cli.Update;
+using Netclaw.Cli.Webhooks;
 using Netclaw.Configuration;
 using Netclaw.Providers;
 using Netclaw.Providers.OAuth;
@@ -760,6 +761,15 @@ static async Task RunAsync(string[] args)
         return;
     }
 
+    // ── Webhook management ──
+    if (mode is "webhooks")
+    {
+        var paths = new NetclawPaths();
+        paths.EnsureDirectoriesExist();
+        Environment.ExitCode = await WebhooksCommand.RunAsync(args, paths);
+        return;
+    }
+
     // ── Secrets management ──
     if (mode is "secrets")
     {
@@ -991,6 +1001,7 @@ static void WriteGeneralHelp()
     Console.WriteLine("  model                    Manage model assignments (TUI) or use subcommands");
     Console.WriteLine("  reminder                 Manage scheduled reminders (daemon-required)");
     Console.WriteLine("  skill                    Manage skills and skill sources");
+    Console.WriteLine("  webhooks                 Manage inbound webhook routes");
     Console.WriteLine("  secrets                  Manage encrypted secrets (set key/value pairs)");
     Console.WriteLine("  init                     First-run setup wizard");
     Console.WriteLine("  update                   Check for and install updates");

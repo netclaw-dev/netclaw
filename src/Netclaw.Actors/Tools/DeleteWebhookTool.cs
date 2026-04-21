@@ -25,11 +25,9 @@ public sealed partial class DeleteWebhookTool : NetclawTool<DeleteWebhookTool.Pa
         if (string.IsNullOrWhiteSpace(args.RouteName))
             return Task.FromResult("Error: 'routeName' is required.");
 
-        return Task.FromResult(_store.Delete(NormalizeRouteName(args.RouteName))
-            ? $"Webhook route '{NormalizeRouteName(args.RouteName)}' deleted."
-            : $"Webhook route '{NormalizeRouteName(args.RouteName)}' not found.");
+        var routeName = WebhookRouteStore.NormalizeRouteName(args.RouteName);
+        return Task.FromResult(_store.Delete(routeName)
+            ? $"Webhook route '{routeName}' deleted."
+            : $"Webhook route '{routeName}' not found.");
     }
-
-    private static string NormalizeRouteName(string value)
-        => value.Trim().ToLowerInvariant();
 }

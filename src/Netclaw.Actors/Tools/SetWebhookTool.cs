@@ -67,7 +67,7 @@ public sealed partial class SetWebhookTool : NetclawTool<SetWebhookTool.Params>
         if (!TryParseAudience(args.Audience, out var audience, out var audienceError))
             return Task.FromResult(audienceError!);
 
-        var routeName = NormalizeRouteName(args.RouteName);
+        var routeName = WebhookRouteStore.NormalizeRouteName(args.RouteName);
         var definition = new WebhookRouteConfig
         {
             Enabled = args.Enabled ?? true,
@@ -102,9 +102,6 @@ public sealed partial class SetWebhookTool : NetclawTool<SetWebhookTool.Params>
         _store.Save(routeName, definition);
         return Task.FromResult($"Webhook route '{routeName}' saved at /api/webhooks/{routeName}. Secret stored in the route file; keep it aligned with the sender configuration.");
     }
-
-    private static string NormalizeRouteName(string value)
-        => value.Trim().ToLowerInvariant();
 
     private static bool TryParseAudience(string? value, out TrustAudience audience, out string? error)
     {

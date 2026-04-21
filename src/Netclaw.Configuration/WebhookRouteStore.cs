@@ -21,6 +21,31 @@ public sealed class WebhookRouteStore
         Directory.CreateDirectory(_paths.WebhooksDirectory);
     }
 
+    /// <summary>
+    /// Normalizes a route name to lowercase kebab-case format.
+    /// </summary>
+    public static string NormalizeRouteName(string value)
+        => value.Trim().ToLowerInvariant();
+
+    /// <summary>
+    /// Attempts to read a single route by name. More efficient than <see cref="ListRouteFiles"/>
+    /// when you only need one route.
+    /// </summary>
+    public bool TryGet(string routeName, out (string FilePath, WebhookRouteConfig? Definition) result)
+    {
+        lock (_sync)
+        {
+            var filePath = GetPath(routeName);
+            if (!File.Exists(filePath))
+            {
+                result = default;
+                return false;
+            }
+            result = (filePath, TryRead(filePath));
+            return true;
+        }
+    }
+
     public IReadOnlyList<(string RouteName, string FilePath, WebhookRouteConfig? Definition)> ListRouteFiles()
     {
         lock (_sync)
