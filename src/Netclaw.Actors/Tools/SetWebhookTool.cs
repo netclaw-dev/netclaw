@@ -54,8 +54,9 @@ public sealed partial class SetWebhookTool : NetclawTool<SetWebhookTool.Params>
 
     protected override Task<string> ExecuteAsync(Params args, CancellationToken ct)
     {
-        if (string.IsNullOrWhiteSpace(args.RouteName))
-            return Task.FromResult("Error: 'routeName' is required.");
+        if (!WebhookRouteStore.TryNormalizeRouteName(args.RouteName, out var routeName, out var routeError))
+            return Task.FromResult($"Error: {routeError}");
+
         if (string.IsNullOrWhiteSpace(args.Prompt))
             return Task.FromResult("Error: 'prompt' is required.");
         if (string.IsNullOrWhiteSpace(args.Secret))
@@ -67,7 +68,6 @@ public sealed partial class SetWebhookTool : NetclawTool<SetWebhookTool.Params>
         if (!TryParseAudience(args.Audience, out var audience, out var audienceError))
             return Task.FromResult(audienceError!);
 
-        var routeName = WebhookRouteStore.NormalizeRouteName(args.RouteName);
         var definition = new WebhookRouteConfig
         {
             Enabled = args.Enabled ?? true,

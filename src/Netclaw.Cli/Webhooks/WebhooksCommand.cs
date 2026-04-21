@@ -37,7 +37,23 @@ internal static class WebhooksCommand
         var json = HasFlag(args, "--json");
         var all = HasFlag(args, "--all");
 
-        var routes = store.ListRouteFiles();
+        var routes = store.ListRouteFiles()
+            .Select(route =>
+            {
+                var validationErrors = route.Definition is null
+                    ? ["Webhook route file could not be parsed."]
+                    : WebhookRouteValidator.Validate(route.RouteName, route.Definition);
+                var isValid = validationErrors.Count == 0;
+
+                return new
+                {
+                    route.RouteName,
+                    route.Definition,
+                    IsValid = isValid,
+                    Status = !isValid ? "invalid" : (route.Definition!.Enabled ? "enabled" : "disabled"),
+                };
+            })
+            .ToList();
 
         if (routes.Count == 0)
         {
@@ -56,14 +72,14 @@ internal static class WebhooksCommand
         if (json)
         {
             var items = routes
-                .Where(r => all || r.Definition?.Enabled != false)
+                .Where(r => all || r.Status != "disabled")
                 .Select(r => new
                 {
                     name = r.RouteName,
-                    status = r.Definition is null ? "invalid" : (r.Definition.Enabled ? "enabled" : "disabled"),
-                    audience = r.Definition?.Audience.ToString().ToLowerInvariant() ?? "unknown",
-                    verification = r.Definition?.Verification.Kind.ToString().ToLowerInvariant() ?? "unknown",
-                    deliveryRequired = r.Definition?.DeliveryRequired ?? false
+                    status = r.Status,
+                    audience = r.IsValid ? r.Definition!.Audience.ToString().ToLowerInvariant() : "unknown",
+                    verification = r.IsValid ? r.Definition!.Verification.Kind.ToString().ToLowerInvariant() : "unknown",
+                    deliveryRequired = r.IsValid && r.Definition!.DeliveryRequired
                 })
                 .ToList();
             Console.WriteLine(JsonSerializer.Serialize(items, JsonDefaults.IndentedCamelCase));
@@ -81,14 +97,14 @@ internal static class WebhooksCommand
 
         foreach (var route in routes)
         {
-            var status = route.Definition is null ? "invalid" : (route.Definition.Enabled ? "enabled" : "disabled");
+            var status = route.Status;
 
             if (!all && status == "disabled")
                 continue;
 
-            var audience = route.Definition?.Audience.ToString().ToLowerInvariant() ?? "-";
-            var verification = route.Definition?.Verification.Kind.ToString().ToLowerInvariant() ?? "-";
-            var delivery = route.Definition?.DeliveryRequired == true ? "required" : "optional";
+            var audience = route.IsValid ? route.Definition!.Audience.ToString().ToLowerInvariant() : "-";
+            var verification = route.IsValid ? route.Definition!.Verification.Kind.ToString().ToLowerInvariant() : "-";
+            var delivery = route.IsValid && route.Definition!.DeliveryRequired ? "required" : "optional";
 
             Console.WriteLine(
                 $"{route.RouteName,-colName}  {status,-colStatus}  {audience,-colAudience}  {verification,-colVerification}  {delivery}");
@@ -107,7 +123,9 @@ internal static class WebhooksCommand
             return 1;
         }
 
-        var routeName = WebhookRouteStore.NormalizeRouteName(args[2]);
+        if (!TryParseRouteName(args[2], out var routeName))
+            return 1;
+
         var json = HasFlag(args, "--json");
         var showSecret = HasFlag(args, "--show-secret");
 
@@ -126,6 +144,16 @@ internal static class WebhooksCommand
         }
 
         var route = match.Definition;
+        var validationErrors = WebhookRouteValidator.Validate(routeName, route);
+        if (validationErrors.Count > 0)
+        {
+            Console.Error.WriteLine($"[FAIL] Webhook route '{routeName}' has validation errors:");
+            foreach (var error in validationErrors)
+                Console.Error.WriteLine($"  - {error}");
+
+            Console.Error.WriteLine($"       Run 'netclaw webhooks validate {routeName}' for details.");
+            return 1;
+        }
 
         if (json)
         {
@@ -239,10 +267,18 @@ internal static class WebhooksCommand
             return args.Length < 3 ? 1 : 0;
         }
 
-        var routeName = WebhookRouteStore.NormalizeRouteName(args[2]);
+        if (!TryParseRouteName(args[2], out var routeName))
+            return 1;
+
         var dryRun = HasFlag(args, "--dry-run");
         var createOnly = HasFlag(args, "--create-only");
         var updateOnly = HasFlag(args, "--update-only");
+
+        if (createOnly && updateOnly)
+        {
+            Console.Error.WriteLine("[FAIL] --create-only and --update-only cannot be used together.");
+            return 1;
+        }
 
         var exists = store.TryGet(routeName, out var existing);
 
@@ -260,20 +296,28 @@ internal static class WebhooksCommand
 
         // Start with existing config or defaults
         var route = existing.Definition ?? new WebhookRouteConfig();
+        route.Verification ??= new WebhookVerificationConfig();
+        route.Events ??= [];
 
         // Parse prompt
-        var prompt = ResolveTextInput(args, "--prompt", "--prompt-file");
-        if (prompt is not null)
+        if (!TryResolveTextInput(args, "--prompt", "--prompt-file", out var prompt, out var hasPrompt))
+            return 1;
+
+        if (hasPrompt)
             route.Prompt = prompt;
 
         // Parse secret
-        var secret = ResolveSecret(args);
-        if (secret is not null)
+        if (!TryResolveSecret(args, out var secret, out var hasSecret))
+            return 1;
+
+        if (hasSecret)
             route.Verification.Secret = new SensitiveString(secret);
 
         // Parse verification kind
-        var verificationKind = GetFlagValue(args, "--verification-kind");
-        if (verificationKind is not null)
+        if (!TryGetFlagValue(args, "--verification-kind", out var verificationKind, out var hasVerificationKind))
+            return 1;
+
+        if (hasVerificationKind)
         {
             if (!Enum.TryParse<WebhookVerifierKind>(verificationKind, ignoreCase: true, out var kind))
             {
@@ -284,36 +328,50 @@ internal static class WebhooksCommand
         }
 
         // Parse verification headers
-        var signatureHeader = GetFlagValue(args, "--signature-header");
-        if (signatureHeader is not null)
+        if (!TryGetFlagValue(args, "--signature-header", out var signatureHeader, out var hasSignatureHeader))
+            return 1;
+
+        if (hasSignatureHeader)
             route.Verification.SignatureHeaderName = signatureHeader;
 
-        var signaturePrefix = GetFlagValue(args, "--signature-prefix");
-        if (signaturePrefix is not null)
+        if (!TryGetFlagValue(args, "--signature-prefix", out var signaturePrefix, out var hasSignaturePrefix))
+            return 1;
+
+        if (hasSignaturePrefix)
             route.Verification.SignaturePrefix = signaturePrefix;
 
-        var secretHeader = GetFlagValue(args, "--secret-header");
-        if (secretHeader is not null)
+        if (!TryGetFlagValue(args, "--secret-header", out var secretHeader, out var hasSecretHeader))
+            return 1;
+
+        if (hasSecretHeader)
             route.Verification.SecretHeaderName = secretHeader;
 
-        var eventHeader = GetFlagValue(args, "--event-header");
-        if (eventHeader is not null)
+        if (!TryGetFlagValue(args, "--event-header", out var eventHeader, out var hasEventHeader))
+            return 1;
+
+        if (hasEventHeader)
             route.Verification.EventHeaderName = eventHeader;
 
-        var deliveryHeader = GetFlagValue(args, "--delivery-header");
-        if (deliveryHeader is not null)
+        if (!TryGetFlagValue(args, "--delivery-header", out var deliveryHeader, out var hasDeliveryHeader))
+            return 1;
+
+        if (hasDeliveryHeader)
             route.Verification.DeliveryIdHeaderName = deliveryHeader;
 
         // Parse events
-        var events = GetFlagValue(args, "--events");
-        if (events is not null)
+        if (!TryGetFlagValue(args, "--events", out var events, out var hasEvents))
+            return 1;
+
+        if (hasEvents)
         {
             route.Events = events.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
         }
 
         // Parse audience
-        var audience = GetFlagValue(args, "--audience");
-        if (audience is not null)
+        if (!TryGetFlagValue(args, "--audience", out var audience, out var hasAudience))
+            return 1;
+
+        if (hasAudience)
         {
             if (!Enum.TryParse<TrustAudience>(audience, ignoreCase: true, out var aud))
             {
@@ -324,25 +382,39 @@ internal static class WebhooksCommand
         }
 
         // Parse notification settings
-        var notifyInstructions = ResolveTextInput(args, "--notify-instructions", "--notify-instructions-file");
-        if (notifyInstructions is not null)
+        if (!TryResolveTextInput(args, "--notify-instructions", "--notify-instructions-file", out var notifyInstructions, out var hasNotifyInstructions))
+            return 1;
+
+        if (hasNotifyInstructions)
             route.NotifyInstructions = notifyInstructions;
 
-        if (HasFlag(args, "--delivery-required"))
+        var deliveryRequired = HasFlag(args, "--delivery-required");
+        var noDeliveryRequired = HasFlag(args, "--no-delivery-required");
+        if (deliveryRequired && noDeliveryRequired)
+        {
+            Console.Error.WriteLine("[FAIL] --delivery-required and --no-delivery-required cannot be used together.");
+            return 1;
+        }
+
+        if (deliveryRequired)
             route.DeliveryRequired = true;
-        if (HasFlag(args, "--no-delivery-required"))
+        if (noDeliveryRequired)
             route.DeliveryRequired = false;
 
-        var notificationChannel = GetFlagValue(args, "--notification-channel");
-        if (notificationChannel is not null)
+        if (!TryGetFlagValue(args, "--notification-channel", out var notificationChannel, out var hasNotificationChannel))
+            return 1;
+
+        if (hasNotificationChannel)
         {
             route.NotificationTarget ??= new NotificationTargetConfig();
             route.NotificationTarget.ChannelId = notificationChannel;
         }
 
         // Parse limits
-        var maxBody = GetFlagValue(args, "--max-body");
-        if (maxBody is not null)
+        if (!TryGetFlagValue(args, "--max-body", out var maxBody, out var hasMaxBody))
+            return 1;
+
+        if (hasMaxBody)
         {
             if (!int.TryParse(maxBody, out var bytes) || bytes < 1)
             {
@@ -352,8 +424,10 @@ internal static class WebhooksCommand
             route.MaxBodyBytes = bytes;
         }
 
-        var rateLimit = GetFlagValue(args, "--rate-limit");
-        if (rateLimit is not null)
+        if (!TryGetFlagValue(args, "--rate-limit", out var rateLimit, out var hasRateLimit))
+            return 1;
+
+        if (hasRateLimit)
         {
             if (!int.TryParse(rateLimit, out var limit) || limit < 1)
             {
@@ -364,9 +438,17 @@ internal static class WebhooksCommand
         }
 
         // Parse enabled/disabled
-        if (HasFlag(args, "--enabled"))
+        var enabled = HasFlag(args, "--enabled");
+        var disabled = HasFlag(args, "--disabled");
+        if (enabled && disabled)
+        {
+            Console.Error.WriteLine("[FAIL] --enabled and --disabled cannot be used together.");
+            return 1;
+        }
+
+        if (enabled)
             route.Enabled = true;
-        if (HasFlag(args, "--disabled"))
+        if (disabled)
             route.Enabled = false;
 
         // Validate
@@ -409,7 +491,9 @@ internal static class WebhooksCommand
             return 1;
         }
 
-        var routeName = WebhookRouteStore.NormalizeRouteName(args[2]);
+        if (!TryParseRouteName(args[2], out var routeName))
+            return 1;
+
         var force = HasFlag(args, "--force") || HasFlag(args, "-f");
 
         if (!force)
@@ -443,8 +527,10 @@ internal static class WebhooksCommand
             return 1;
         }
 
-        var routeName = WebhookRouteStore.NormalizeRouteName(args[2]);
-        var filePath = Path.Combine(paths.WebhooksDirectory, $"{routeName}.json");
+        if (!TryParseRouteName(args[2], out var routeName))
+            return 1;
+
+        var filePath = Path.GetFullPath(Path.Combine(paths.WebhooksDirectory, $"{routeName}.json"));
 
         if (!File.Exists(filePath))
         {
@@ -489,69 +575,160 @@ internal static class WebhooksCommand
     private static bool HasFlag(string[] args, string flag)
         => args.Any(a => string.Equals(a, flag, StringComparison.OrdinalIgnoreCase));
 
-    private static string? GetFlagValue(string[] args, string flag)
+    private static bool TryGetFlagValue(string[] args, string flag, out string value, out bool isSpecified)
     {
+        value = string.Empty;
+        isSpecified = false;
+
         for (var i = 0; i < args.Length; i++)
         {
             if (args[i].StartsWith($"{flag}=", StringComparison.OrdinalIgnoreCase))
-                return args[i][(flag.Length + 1)..];
+            {
+                value = args[i][(flag.Length + 1)..];
+                isSpecified = true;
+                return true;
+            }
 
             if (i < args.Length - 1 && string.Equals(args[i], flag, StringComparison.OrdinalIgnoreCase))
-                return args[i + 1];
+            {
+                if (LooksLikeFlagToken(args[i + 1]))
+                {
+                    Console.Error.WriteLine($"[FAIL] Missing value for {flag}.");
+                    return false;
+                }
+
+                value = args[i + 1];
+                isSpecified = true;
+                return true;
+            }
+
+            if (i == args.Length - 1 && string.Equals(args[i], flag, StringComparison.OrdinalIgnoreCase))
+            {
+                Console.Error.WriteLine($"[FAIL] Missing value for {flag}.");
+                return false;
+            }
         }
-        return null;
+
+        return true;
     }
 
-    private static string? ResolveTextInput(string[] args, string inlineFlag, string fileFlag)
+    private static bool TryResolveTextInput(
+        string[] args,
+        string inlineFlag,
+        string fileFlag,
+        out string value,
+        out bool isSpecified)
     {
-        var fileValue = GetFlagValue(args, fileFlag);
-        if (fileValue is not null)
+        value = string.Empty;
+        isSpecified = false;
+
+        if (!TryGetFlagValue(args, inlineFlag, out var inlineValue, out var hasInlineValue))
+            return false;
+
+        if (!TryGetFlagValue(args, fileFlag, out var fileValue, out var hasFileValue))
+            return false;
+
+        if (hasInlineValue && hasFileValue)
+        {
+            Console.Error.WriteLine($"[FAIL] Use either {inlineFlag} or {fileFlag}, not both.");
+            return false;
+        }
+
+        if (hasFileValue)
         {
             if (!File.Exists(fileValue))
             {
                 Console.Error.WriteLine($"[FAIL] File not found: {fileValue}");
-                return null;
+                return false;
             }
-            return File.ReadAllText(fileValue).Trim();
+
+            value = File.ReadAllText(fileValue).Trim();
+            isSpecified = true;
+            return true;
         }
 
-        return GetFlagValue(args, inlineFlag);
+        if (hasInlineValue)
+        {
+            value = inlineValue;
+            isSpecified = true;
+        }
+
+        return true;
     }
 
-    private static string? ResolveSecret(string[] args)
+    private static bool TryResolveSecret(string[] args, out string value, out bool isSpecified)
     {
-        var secretFile = GetFlagValue(args, "--secret-file");
-        if (secretFile is not null)
+        value = string.Empty;
+        isSpecified = false;
+
+        if (!TryGetFlagValue(args, "--secret-file", out var secretFile, out var hasSecretFile))
+            return false;
+
+        if (!TryGetFlagValue(args, "--secret-env", out var secretEnv, out var hasSecretEnv))
+            return false;
+
+        if (!TryGetFlagValue(args, "--secret", out var inlineSecret, out var hasInlineSecret))
+            return false;
+
+        var sourceCount = (hasSecretFile ? 1 : 0) + (hasSecretEnv ? 1 : 0) + (hasInlineSecret ? 1 : 0);
+        if (sourceCount > 1)
+        {
+            Console.Error.WriteLine("[FAIL] Use only one secret source: --secret, --secret-file, or --secret-env.");
+            return false;
+        }
+
+        if (hasSecretFile)
         {
             if (!File.Exists(secretFile))
             {
                 Console.Error.WriteLine($"[FAIL] Secret file not found: {secretFile}");
-                return null;
+                return false;
             }
-            return File.ReadAllText(secretFile).Trim();
+
+            value = File.ReadAllText(secretFile).Trim();
+            isSpecified = true;
+            return true;
         }
 
-        var secretEnv = GetFlagValue(args, "--secret-env");
-        if (secretEnv is not null)
+        if (hasSecretEnv)
         {
-            var value = Environment.GetEnvironmentVariable(secretEnv);
+            value = Environment.GetEnvironmentVariable(secretEnv) ?? string.Empty;
             if (string.IsNullOrEmpty(value))
             {
                 Console.Error.WriteLine($"[FAIL] Environment variable '{secretEnv}' is not set or empty.");
-                return null;
+                return false;
             }
-            return value;
+
+            isSpecified = true;
+            return true;
         }
 
-        var inlineSecret = GetFlagValue(args, "--secret");
-        if (inlineSecret is not null)
+        if (hasInlineSecret)
         {
             Console.Error.WriteLine("warning: --secret exposes the value in shell history; consider --secret-file or --secret-env");
-            return inlineSecret;
+            value = inlineSecret;
+            isSpecified = true;
+            return true;
         }
 
-        return null;
+        return true;
     }
+
+    private static bool TryParseRouteName(string rawRouteName, out string routeName)
+    {
+        routeName = string.Empty;
+
+        if (!WebhookRouteStore.TryNormalizeRouteName(rawRouteName, out routeName, out var error))
+        {
+            Console.Error.WriteLine($"[FAIL] {error}");
+            return false;
+        }
+
+        return true;
+    }
+
+    private static bool LooksLikeFlagToken(string token)
+        => token.StartsWith("-", StringComparison.Ordinal);
 
     // ── Help ──
 

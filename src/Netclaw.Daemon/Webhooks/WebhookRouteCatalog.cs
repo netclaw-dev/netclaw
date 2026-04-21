@@ -191,42 +191,7 @@ public sealed class WebhookRouteCatalog
 
     private static void ValidateRoute(string routeName, WebhookRouteConfig route)
     {
-        if (string.IsNullOrWhiteSpace(route.Prompt))
-            throw new InvalidOperationException($"Webhook route '{routeName}' is missing a Prompt.");
-
-        if (route.Verification.Secret is null || string.IsNullOrWhiteSpace(route.Verification.Secret.Value))
-            throw new InvalidOperationException($"Webhook route '{routeName}' is missing a verification secret.");
-
-        if (route.MaxBodyBytes < 1)
-            throw new InvalidOperationException($"Webhook route '{routeName}' must set MaxBodyBytes >= 1.");
-
-        if (route.RateLimitPerMinute < 1)
-            throw new InvalidOperationException($"Webhook route '{routeName}' must set RateLimitPerMinute >= 1.");
-
-        if (route.Events.Any(string.IsNullOrWhiteSpace))
-            throw new InvalidOperationException($"Webhook route '{routeName}' contains a blank event filter.");
-
-        if (route.DeliveryRequired
-            && route.NotificationTarget is null
-            && !string.IsNullOrWhiteSpace(route.NotifyInstructions))
-        {
-            throw new InvalidOperationException(
-                $"Webhook route '{routeName}' must set NotificationTarget when DeliveryRequired is true and NotifyInstructions are provided.");
-        }
-
-        if (route.NotificationTarget is { Kind: NotificationTargetKind.Slack } target
-            && string.IsNullOrWhiteSpace(target.ChannelId))
-        {
-            throw new InvalidOperationException(
-                $"Webhook route '{routeName}' must set NotificationTarget.ChannelId for Slack targets.");
-        }
-
-        if (route.Verification.Kind == WebhookVerifierKind.Hmac
-            && string.IsNullOrWhiteSpace(route.Verification.SignatureHeaderName)
-            && string.IsNullOrWhiteSpace(route.Verification.SignaturePrefix))
-        {
-            return;
-        }
+        WebhookRouteValidator.ValidateOrThrow(routeName, route);
     }
 
     private void RemoveRoute(string routeName, string reason, string filePath, bool emitAlert)

@@ -14,8 +14,20 @@ public static class WebhookRouteValidator
     {
         var errors = new List<string>();
 
-        if (string.IsNullOrWhiteSpace(routeName))
-            errors.Add("Route name must not be empty.");
+        if (route is null)
+        {
+            errors.Add("Webhook route definition is missing.");
+            return errors;
+        }
+
+        if (!WebhookRouteStore.TryNormalizeRouteName(routeName, out _, out var routeNameError))
+            errors.Add(routeNameError!);
+
+        if (route.Verification is null)
+        {
+            errors.Add("Verification settings are required.");
+            return errors;
+        }
 
         if (string.IsNullOrWhiteSpace(route.Prompt))
             errors.Add("Prompt is required.");
@@ -58,4 +70,12 @@ public static class WebhookRouteValidator
         if (errors.Count > 0)
             throw new InvalidOperationException(errors[0]);
     }
+
+    /// <summary>
+    /// Validates a route name and returns a user-facing error if invalid.
+    /// </summary>
+    public static string? ValidateRouteName(string routeName)
+        => WebhookRouteStore.TryNormalizeRouteName(routeName, out _, out var error)
+            ? null
+            : error;
 }
