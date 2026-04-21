@@ -14,7 +14,7 @@ The daemon SHALL expose named inbound webhook routes from one JSON file per
 route under `NetclawPaths/config/webhooks/`. Top-level `netclaw.json` SHALL only
 control whether the inbound webhook feature is enabled. Each route SHALL be
 reachable at a stable HTTP path derived from its route filename/name and SHALL
-define the audience, prompt overlay, notify instructions, notify policy,
+define the audience, prompt overlay, notify instructions, `DeliveryRequired`,
 verification settings, and optional notification target used for accepted
 deliveries.
 
@@ -83,21 +83,25 @@ input.
 - **THEN** the normalized payload is provided as delivery-specific input to the
   session
 
-### Requirement: Reminder-style notify policy
+### Requirement: Reminder-style delivery requirement
 
-Webhook routes SHALL reuse reminder-style notification semantics. `Conditional`
-routes MAY complete without human-facing notification. `Required` routes SHALL
-be treated as failed if no notification is produced for the configured target.
+Webhook routes SHALL reuse reminder-style notification semantics.
+`DeliveryRequired=false` means human-facing notification is optional.
+`DeliveryRequired=true` means notification delivery is required when
+notification instructions are present. If delivery is required and no
+notification is produced for the configured target, execution SHALL be treated
+as failed.
 
-#### Scenario: Conditional route may skip notification
+#### Scenario: DeliveryRequired=false may skip notification
 
-- **GIVEN** a webhook route has `NotifyPolicy = Conditional`
+- **GIVEN** a webhook route has `DeliveryRequired = false`
 - **WHEN** the agent decides the delivery requires no human-facing update
 - **THEN** the webhook execution completes successfully without notification
 
-#### Scenario: Required route fails without notification
+#### Scenario: DeliveryRequired=true fails without notification
 
-- **GIVEN** a webhook route has `NotifyPolicy = Required`
+- **GIVEN** a webhook route has `DeliveryRequired = true`
+- **AND** notification instructions are present
 - **WHEN** the webhook execution completes without producing a notification to
   the configured target
 - **THEN** the execution is marked failed
@@ -132,7 +136,7 @@ identify the route, delivery, and event that fired.
 
 #### Scenario: Human notification skipped still emits receipt alert
 
-- **GIVEN** a webhook route uses `NotifyPolicy = Conditional`
+- **GIVEN** a webhook route uses `DeliveryRequired = false`
 - **AND** the agent chooses not to notify a human-facing channel
 - **WHEN** the delivery is accepted and processed
 - **THEN** the operational receipt alert is still emitted
@@ -287,8 +291,9 @@ never emitted in production.
 
 #### Scenario: Required notification succeeds when agent invokes notification tool
 
-- **GIVEN** a webhook route configures `NotifyPolicy = Required` with a Slack
+- **GIVEN** a webhook route configures `DeliveryRequired = true` with a Slack
   notification target
+- **AND** notification instructions are present
 - **WHEN** the agent successfully invokes the Slack notification tool during
   the webhook session
 - **THEN** the webhook execution completes successfully
@@ -297,7 +302,8 @@ never emitted in production.
 
 #### Scenario: Required notification still fails when no notification tool invoked
 
-- **GIVEN** a webhook route configures `NotifyPolicy = Required`
+- **GIVEN** a webhook route configures `DeliveryRequired = true`
+- **AND** notification instructions are present
 - **WHEN** the agent completes its turn without invoking any notification tool
 - **THEN** the webhook execution is marked failed with the "no notification
   tool was invoked" reason

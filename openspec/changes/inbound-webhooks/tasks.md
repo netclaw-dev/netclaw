@@ -11,7 +11,7 @@
 
 - [x] 2.1 Add `ChannelType.Webhook` and session-launch plumbing for accepted deliveries.
 - [x] 2.2 Add additive route prompt-overlay injection so webhook routes augment the base system prompt without replacing it.
-- [x] 2.3 Implement webhook invocation execution that normalizes the payload, launches one autonomous session per accepted delivery, and tracks `NotifyPolicy` success/failure.
+- [x] 2.3 Implement webhook invocation execution that normalizes the payload, launches one autonomous session per accepted delivery, and tracks `DeliveryRequired` success/failure semantics.
 - [x] 2.4 Emit deterministic operational receipt alerts for accepted deliveries with route/event/delivery metadata, separate from human-facing notification behavior.
 
 ## 3. Human-facing notification routing
@@ -21,7 +21,7 @@
 
 ## 4. Validation and documentation
 
-- [x] 4.1 Add tests for route-file discovery, filename-derived route resolution, hot reload on edit, invalid-edit fail-closed removal, verifier failures, request-size rejection, duplicate suppression, rate limiting, accepted-session launch, prompt overlay injection, and `Required` vs `Conditional` notify behavior.
+- [x] 4.1 Add tests for route-file discovery, filename-derived route resolution, hot reload on edit, invalid-edit fail-closed removal, verifier failures, request-size rejection, duplicate suppression, rate limiting, accepted-session launch, prompt overlay injection, and `DeliveryRequired=true` vs `DeliveryRequired=false` behavior.
 - [x] 4.2 Add tests that route load/reload/unload failures emit operational alerts and that accepted-delivery receipt alerts remain separate from reminder-style human notifications.
 - [x] 4.3 Update config and operator docs for webhook feature enablement in `netclaw.json`, per-route file registration under `config/webhooks`, ingress security expectations, secret-bearing config handling, and Slack notification-target setup.
 - [ ] 4.4 Update any required system skill/docs for config-format changes and run the relevant test/quality gates (`dotnet test`, `dotnet slopwatch analyze`, and evals if skill content changes).

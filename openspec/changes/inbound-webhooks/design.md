@@ -2,8 +2,8 @@
 
 Netclaw already has one automation pattern that works well: reminders create a
 fresh session, inject reminder-specific instructions, run autonomously, and
-optionally notify a Slack destination according to a simple `NotifyPolicy`
-(`Required` or `Conditional`). Webhooks need the same shape, but with verified
+optionally notify a Slack destination according to a simple
+`DeliveryRequired` flag. Webhooks need the same shape, but with verified
 HTTP ingress, route-owned trust metadata, and deterministic operational receipt
 alerts.
 
@@ -28,8 +28,8 @@ existing proactive-thread path.
 - Launch one autonomous webhook session per accepted delivery.
 - Inject route instructions as additive session context, not as a replacement
   for the global identity prompt.
-- Reuse reminder-style notify semantics (`Required` / `Conditional`) and prompt-
-  driven human notification behavior.
+- Reuse reminder-style delivery requirement semantics (`DeliveryRequired`) and
+  prompt-driven human notification behavior.
 - Emit deterministic operational receipt alerts for accepted deliveries.
 - Fail closed on invalid route-file edits and emit operational alerts for route
   load/unload failures.
@@ -56,7 +56,7 @@ HTTP path segment. Each route file provides:
 - audience
 - prompt overlay
 - notify instructions
-- notify policy
+- delivery required flag
 - notification target
 
 This keeps the main config small, lets operators manage routes individually, and
@@ -158,11 +158,12 @@ not the route instructions themselves.
 
 ### 6. Human-facing notifications reuse reminder semantics but create new Slack sessions
 
-Webhook routes reuse the same simple notification policy reminders already use:
+Webhook routes reuse the same simple notification delivery requirement reminders
+already use:
 
-- `Conditional`: the agent may skip human-facing notification if nothing needs
-  reporting.
-- `Required`: the agent must produce some notification to the configured target.
+- `DeliveryRequired=false`: human-facing notification is optional.
+- `DeliveryRequired=true`: notification delivery is required when notification
+  instructions are present.
 
 When the agent decides to notify Slack, it uses the existing proactive-thread
 mechanism. That creates a Slack-native thread/session. The original webhook
@@ -183,7 +184,7 @@ Webhooks should reuse the reminder pattern conceptually:
 
 - one autonomous session per invocation
 - route-specific instructions
-- simple notify policy
+- simple delivery required flag
 - optional human-facing channel notification
 
 But reminders remain unchanged as persisted schedule definitions in this change.
