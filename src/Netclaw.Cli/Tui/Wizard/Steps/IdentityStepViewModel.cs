@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Text.RegularExpressions;
 using Netclaw.Configuration;
 
 namespace Netclaw.Cli.Tui.Wizard.Steps;
@@ -164,14 +165,13 @@ public sealed class IdentityStepViewModel : IWizardStepViewModel
         return reader.ReadToEnd();
     }
 
+    private static readonly Regex PlaceholderPattern = new(@"\{\{[A-Z_]+\}\}", RegexOptions.Compiled);
+
     private static string SubstitutePlaceholders(string template, Dictionary<string, string> substitutions)
     {
-        var result = template;
-        foreach (var (placeholder, value) in substitutions)
-        {
-            result = result.Replace(placeholder, value);
-        }
-        return result;
+        // Single-pass replacement — one allocation for the result instead of N intermediate strings.
+        return PlaceholderPattern.Replace(template, match =>
+            substitutions.TryGetValue(match.Value, out var value) ? value : match.Value);
     }
 
     /// <summary>

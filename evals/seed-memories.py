@@ -17,16 +17,8 @@ def now_ms():
 
 
 def seed_documents(conn, fixtures):
-    doc_ids = [d["documentId"] for d in fixtures.get("seedDocuments", [])]
-    anchor_ids = [d["anchorId"] for d in fixtures.get("seedDocuments", [])]
-    if doc_ids:
-        placeholders = ",".join("?" for _ in doc_ids)
-        conn.execute(f"DELETE FROM memory_documents_fts WHERE document_id IN ({placeholders})", doc_ids)
-        conn.execute(f"DELETE FROM memory_documents WHERE document_id IN ({placeholders})", doc_ids)
-    if anchor_ids:
-        placeholders = ",".join("?" for _ in anchor_ids)
-        conn.execute(f"DELETE FROM memory_anchors WHERE anchor_id IN ({placeholders})", anchor_ids)
-
+    # ON CONFLICT clauses handle upserts for anchors and documents.
+    # FTS table uses INSERT OR REPLACE (no ON CONFLICT support in FTS5).
     ts = now_ms()
     for doc in fixtures["seedDocuments"]:
         conn.execute(
@@ -95,7 +87,7 @@ def seed_documents(conn, fixtures):
 
         conn.execute(
             """
-            INSERT INTO memory_documents_fts(document_id, title, body, aliases, facets)
+            INSERT OR REPLACE INTO memory_documents_fts(document_id, title, body, aliases, facets)
             VALUES(?, ?, ?, '', '')
             """,
             (doc["documentId"], doc["title"], doc["markdownBody"]),
