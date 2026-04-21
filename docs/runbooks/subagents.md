@@ -25,7 +25,7 @@ Timeout: 120s
 
 ## code-analyst
 Analyze code, run commands, and review files
-Tools: file_read
+Tools: (inherits all)
 Timeout: 120s
 
 ## summarizer
@@ -228,7 +228,7 @@ definitions — you can edit or delete them.
 Tools: `web_search`, `web_fetch`, `file_read`, `attach_file`. Timeout: 120s.
 
 **code-analyst** — Analyze code, run commands, and review files.
-Tools: `file_read`. Timeout: 120s.
+Tools: (inherits all). Timeout: 120s.
 
 **summarizer** — Summarize documents and content concisely.
 Tools: `file_read`. Timeout: 60s.

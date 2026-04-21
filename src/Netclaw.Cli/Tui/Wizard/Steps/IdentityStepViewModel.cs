@@ -238,7 +238,6 @@ public sealed class IdentityStepViewModel : IWizardStepViewModel
             ---
             name: code-analyst
             description: Analyze code, run commands, and review files
-            tools: [file_read]
             modelRole: Compaction
             timeoutSeconds: 120
             visibility: user-facing
@@ -250,10 +249,10 @@ public sealed class IdentityStepViewModel : IWizardStepViewModel
             ## Guidelines
 
             - Read files with file_read to understand code structure.
+            - Use shell_execute to run git, build, and test commands as needed.
             - Report findings with file paths and line numbers.
             - Focus on actionable observations — bugs, performance issues, design concerns.
             - Use markdown formatting with code blocks for examples.
-            - Do not modify code or run commands directly; return analysis for the parent session to act on.
             """);
 
         SeedAgentFile(agentsDir, "summarizer.md", """
