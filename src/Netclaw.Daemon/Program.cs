@@ -1215,35 +1215,9 @@ static void MapReminderEndpoints(WebApplication app)
         var manager = await actor.GetAsync(ct);
         var authorization = ResolveReminderAuthorizationContext(mapper, httpContext);
 
-        // Use caller-provided ID if available, otherwise auto-generate for backward compatibility
         var effectiveId = !string.IsNullOrWhiteSpace(request.Id)
             ? request.Id
             : Netclaw.Actors.Reminders.ReminderIdGenerator.Generate(request.Name).Value;
-
-        // Resolve delivery kind with backward compatibility
-        var deliveryKind = request.DeliveryKind;
-        var deliveryTransport = request.DeliveryTransport;
-        var deliveryAddress = request.DeliveryAddress;
-        var deliveryInstructions = request.DeliveryInstructions;
-
-        // Legacy field migration: if new fields not set but legacy fields are, map them
-        if (string.IsNullOrWhiteSpace(deliveryKind))
-        {
-            var legacyTarget = request.ReportTarget ?? request.ReportToChannel;
-            if (!string.IsNullOrWhiteSpace(legacyTarget))
-            {
-                deliveryKind = "channel";
-                deliveryTransport = "slack";
-                deliveryAddress = legacyTarget;
-            }
-            else
-            {
-                deliveryKind = "none";
-            }
-        }
-
-        if (string.IsNullOrWhiteSpace(deliveryInstructions) && !string.IsNullOrWhiteSpace(request.NotifyInstructions))
-            deliveryInstructions = request.NotifyInstructions;
 
         var reminderResolvers = serviceProvider.GetServices<Netclaw.Actors.Reminders.IReminderTargetResolver>();
         var tool = new Netclaw.Actors.Reminders.SetReminderTool(manager, timeProvider, reminderResolvers);
@@ -1258,11 +1232,11 @@ static void MapReminderEndpoints(WebApplication app)
                 ["Prompt"] = request.Prompt,
                 ["ScheduleType"] = request.ScheduleType,
                 ["Schedule"] = request.Schedule,
-                ["DeliveryKind"] = deliveryKind,
-                ["DeliveryTransport"] = deliveryTransport,
-                ["DeliveryAddress"] = deliveryAddress,
+                ["DeliveryKind"] = request.DeliveryKind,
+                ["DeliveryTransport"] = request.DeliveryTransport,
+                ["DeliveryAddress"] = request.DeliveryAddress,
                 ["DeliveryRequired"] = request.DeliveryRequired,
-                ["DeliveryInstructions"] = deliveryInstructions,
+                ["DeliveryInstructions"] = request.DeliveryInstructions,
                 ["Audience"] = request.Audience
             }, toolContext, ct);
 
@@ -1460,20 +1434,11 @@ sealed record CreateReminderRequest
     public required string Prompt { get; init; }
     public required string ScheduleType { get; init; }
     public required string Schedule { get; init; }
-
-    // New delivery contract fields
-    public string? DeliveryKind { get; init; }
+    public required string DeliveryKind { get; init; }
     public string? DeliveryTransport { get; init; }
     public string? DeliveryAddress { get; init; }
     public bool DeliveryRequired { get; init; } = true;
     public string? DeliveryInstructions { get; init; }
-
-    // Legacy fields for backward compatibility
-    public string? ReportToChannel { get; init; }
-    public string? ReportTarget { get; init; }
-    public string? NotifyInstructions { get; init; }
-    public string? NotifyPolicy { get; init; }
-
     public string? Audience { get; init; }
 }
 
