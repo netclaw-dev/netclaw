@@ -176,7 +176,9 @@ jobs:
         files: 'archives/*'
 
     - name: Install Wrangler
-      run: npm install --global wrangler@3.90.0 --include=optional
+      run: |
+        npm install wrangler@3.90.0 --include=optional
+        echo "$(pwd)/node_modules/.bin" >> $GITHUB_PATH
 
     - name: Upload CLI archive to R2
       env:
@@ -382,7 +384,9 @@ jobs:
         cp scripts/install.ps1 ./feeds/releases/install.ps1
 
     - name: Install Wrangler
-      run: npm install --global wrangler@3.90.0 --include=optional
+      run: |
+        npm install wrangler@3.90.0 --include=optional
+        echo "$(pwd)/node_modules/.bin" >> $GITHUB_PATH
 
     - name: Upload release manifest to R2
       env:

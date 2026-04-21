@@ -39,7 +39,9 @@ jobs:
             --existing-manifest ./feeds/skills/.system/existing-manifest.json
 
       - name: Install Wrangler
-        run: npm install --global wrangler@3.90.0 --include=optional
+        run: |
+          npm install wrangler@3.90.0 --include=optional
+          echo "$(pwd)/node_modules/.bin" >> $GITHUB_PATH
 
       - name: Upload skill files to R2
         env:
