@@ -59,8 +59,7 @@ jobs:
             echo "Uploading $r2_key"
             wrangler r2 object put "netclaw-skills/$r2_key" \
               --file="$local_path" \
-              --content-type=text/markdown \
-              --remote
+              --content-type=text/markdown
           done < "$UPLOAD_LIST"
 
       - name: Deploy manifest to Cloudflare Pages
