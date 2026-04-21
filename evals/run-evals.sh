@@ -240,29 +240,51 @@ build_local_image() {
 
 # ─── Eval Daemon Lifecycle ────────────────────────────────────────────────────
 
-start_eval_daemon() {
-    # Copy host identity files into the eval home so the container sees a
-    # writable, throwaway copy. Mounting the operator's real
-    # ~/.netclaw/identity directly doesn't work — the daemon writes shadow
-    # index files under identity/tooling/shadow/ at startup and a :ro mount
-    # would crash it. The copy pattern gives us isolation (the container
-    # never touches host state) without forcing read-only semantics.
-    mkdir -p "$EVAL_HOME/identity" "$EVAL_HOME/logs" "$EVAL_HOME/data"
-    cp -r "$HOME/.netclaw/identity/." "$EVAL_HOME/identity/"
+# Substitute {{PLACEHOLDER}} tokens in identity templates with eval defaults.
+substitute_identity_template() {
+    local template_file="$1"
+    local output_file="$2"
+    sed -e 's/{{AGENT_NAME}}/Netclaw/g' \
+        -e 's/{{STYLE_DESCRIPTION}}/Be concise and casual. Keep responses short and conversational./g' \
+        -e 's/{{USER_NAME}}/Eval User/g' \
+        -e 's/{{USER_TIMEZONE}}/UTC/g' \
+        -e 's|{{SYSTEM_SKILLS_DIR}}|/root/.netclaw/skills/.system/files|g' \
+        -e 's|{{IDENTITY_DIR}}|/root/.netclaw/identity|g' \
+        -e 's|{{SOUL_PATH}}|/root/.netclaw/identity/SOUL.md|g' \
+        -e 's|{{AGENTS_PATH}}|/root/.netclaw/identity/AGENTS.md|g' \
+        -e 's|{{TOOLING_PATH}}|/root/.netclaw/identity/TOOLING.md|g' \
+        -e 's|{{SOUL_DETAIL_DIR}}|/root/.netclaw/identity/soul|g' \
+        -e 's|{{AGENTS_DETAIL_DIR}}|/root/.netclaw/identity/agents|g' \
+        -e 's|{{TOOLING_DETAIL_DIR}}|/root/.netclaw/identity/tooling|g' \
+        -e 's|{{SKILLS_DIR}}|/root/.netclaw/skills|g' \
+        -e 's|{{WORKSPACES_DIR}}|/root/.netclaw/workspaces|g' \
+        "$template_file" > "$output_file"
+}
 
-    # Copy host system skills into the eval home so the Skill Discovery
-    # assertions can actually find netclaw-operations / netclaw-memory /
-    # search-citation on disk. Only `.system/` is copied — operator-
-    # installed user skills stay out of the eval run for reproducibility.
-    # Without this copy the eval container starts with an empty skills
-    # directory and every Skill Discovery case fails on file_read of a
-    # nonexistent path (see daemon logs for ENOENT).
-    mkdir -p "$EVAL_HOME/skills"
-    if [[ -d "$HOME/.netclaw/skills/.system" ]]; then
-        mkdir -p "$EVAL_HOME/skills/.system"
-        cp -r "$HOME/.netclaw/skills/.system/." "$EVAL_HOME/skills/.system/"
+start_eval_daemon() {
+    # Use identity templates from the repo source, not the host's ~/.netclaw/identity
+    # — host files can be contaminated with user-specific names (e.g., "ArdyBot")
+    # that break identity evals. Templates have {{PLACEHOLDER}} tokens that we
+    # substitute with eval defaults.
+    mkdir -p "$EVAL_HOME/identity" "$EVAL_HOME/logs" "$EVAL_HOME/data"
+    local template_dir="$REPO_ROOT/src/Netclaw.Cli/Resources/identity"
+    if [[ -d "$template_dir" ]]; then
+        # Substitute placeholders with eval-appropriate defaults
+        substitute_identity_template "$template_dir/SOUL.template.md" "$EVAL_HOME/identity/SOUL.md"
+        substitute_identity_template "$template_dir/AGENTS.template.md" "$EVAL_HOME/identity/AGENTS.md"
+        substitute_identity_template "$template_dir/TOOLING.template.md" "$EVAL_HOME/identity/TOOLING.md"
     else
-        echo "WARN: no system skills at $HOME/.netclaw/skills/.system/ — Skill Discovery evals will fail. Run netclaw daemon at least once on the host to trigger the system skill sync." >&2
+        echo "ERROR: no identity templates at $template_dir/ — Identity evals will fail." >&2
+        exit 1
+    fi
+
+    # Copy system skills from the repo into the eval home so Skill Discovery
+    # tests use the skills being developed, not whatever is synced on the host.
+    mkdir -p "$EVAL_HOME/skills/.system/files"
+    if [[ -d "$REPO_ROOT/feeds/skills/.system/files" ]]; then
+        cp -r "$REPO_ROOT/feeds/skills/.system/files/." "$EVAL_HOME/skills/.system/files/"
+    else
+        echo "WARN: no system skills at $REPO_ROOT/feeds/skills/.system/files/ — Skill Discovery evals will fail." >&2
     fi
 
     local -a docker_args=(
@@ -338,9 +360,15 @@ start_eval_daemon() {
 seed_eval_memories() {
     local db_path="/root/.netclaw/netclaw.db"
     local fixtures_path="$REPO_ROOT/evals/fixtures/eval-memories.json"
+    local seed_script="$REPO_ROOT/evals/seed-memories.py"
 
     if [[ ! -f "$fixtures_path" ]]; then
         echo "WARN: no eval fixtures at $fixtures_path — memory tests may fail" >&2
+        return
+    fi
+
+    if [[ ! -f "$seed_script" ]]; then
+        echo "WARN: no seed script at $seed_script — memory tests may fail" >&2
         return
     fi
 
@@ -358,62 +386,14 @@ seed_eval_memories() {
         return
     fi
 
-    # Seed memories by running sqlite3 inside the container.
-    # The seeding script is copied into the container and executed there
-    # because the DB is owned by root and not writable from the host.
-    local seed_sql
-    seed_sql=$(python3 -c "
-import json
-import time
+    # Copy seed script and fixtures into the container, then run inside.
+    # The DB is owned by root, so we must execute within the container.
+    docker cp "$seed_script" "$EVAL_CONTAINER_NAME:/tmp/seed-memories.py"
+    docker cp "$fixtures_path" "$EVAL_CONTAINER_NAME:/tmp/eval-memories.json"
 
-def now_ms():
-    return int(time.time() * 1000)
-
-with open('$fixtures_path') as f:
-    fixtures = json.load(f)
-
-ts = now_ms()
-statements = []
-
-for doc in fixtures.get('seedDocuments', []):
-    recall_mode = doc.get('recallMode', 'auto')
-    sensitivity = doc.get('sensitivity', 'normal')
-    if recall_mode == 'auto' and sensitivity == 'secret':
-        recall_mode = 'manual'
-
-    # Escape single quotes for SQL
-    title = doc['title'].replace(\"'\", \"''\")
-    body = doc['markdownBody'].replace(\"'\", \"''\")
-
-    statements.append(f'''
-INSERT OR REPLACE INTO memory_anchors(anchor_id, anchor_type, canonical_name, parent_anchor_id,
-  sensitivity, recall_mode, confidence, freshness_at, status, created_at, updated_at)
-VALUES('{doc[\"anchorId\"]}', '{doc[\"anchorType\"]}', '{doc[\"canonicalName\"]}', NULL,
-  '{sensitivity}', '{recall_mode}', {doc[\"confidence\"]}, {ts}, 'active', {ts}, {ts});
-''')
-
-    statements.append(f'''
-INSERT OR REPLACE INTO memory_documents(document_id, anchor_id, memory_class, title, markdown_body,
-  update_semantics, boundary, audience, sensitivity, recall_mode, confidence, freshness_at, created_at, updated_at)
-VALUES('{doc[\"documentId\"]}', '{doc[\"anchorId\"]}', 'durable_fact', '{title}', '{body}',
-  'merge-document', 'boundary:trusted-instance', 'public', '{sensitivity}', '{recall_mode}',
-  {doc[\"confidence\"]}, {ts}, {ts}, {ts});
-''')
-
-    statements.append(f'''
-INSERT OR REPLACE INTO memory_documents_fts(document_id, title, body, aliases, facets)
-VALUES('{doc[\"documentId\"]}', '{title}', '{body}', '', '');
-''')
-
-print(''.join(statements))
-")
-
-    if [[ -z "$seed_sql" ]]; then
-        echo "WARN: failed to generate seed SQL — memory tests may fail" >&2
-        return
-    fi
-
-    if echo "$seed_sql" | docker exec -i "$EVAL_CONTAINER_NAME" sqlite3 "$db_path"; then
+    if docker exec "$EVAL_CONTAINER_NAME" python3 /tmp/seed-memories.py \
+        --db-path "$db_path" \
+        --fixtures /tmp/eval-memories.json; then
         local count
         count=$(python3 -c "import json; print(len(json.load(open('$fixtures_path')).get('seedDocuments', [])))")
         echo "→ Seeded $count eval memories into container"
@@ -795,6 +775,10 @@ assert_skill_citation() {
     stdout_contains '\[tool:call\] file_read' && stdout_contains 'search-citation'
 }
 
+assert_skill_web_content() {
+    stdout_contains '\[tool:call\] file_read' && stdout_contains 'web-content-retrieval'
+}
+
 # Category 3: Memory Pipeline
 assert_memory_recall_active() {
     daemon_log_contains 'turn_memory_recall.*degraded=False'
@@ -1047,6 +1031,11 @@ run_all() {
 
     run_case skill_citation "search-citation read via file_read" \
         "Search the web for the latest Akka.NET release"
+
+    run_case skill_web_content "web-content-retrieval loaded for URL fetch" \
+        "Can you fetch the content from this tweet: https://x.com/edzitron/status/123" \
+        "I need to grab content from a Twitter link" \
+        "Fetch this URL for me, it's from a social media site"
 
     end_category
 
