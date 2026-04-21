@@ -1,9 +1,9 @@
 ---
 name: netclaw-memory
-description: "REQUIRED before using find_memories, get_memories, store_memory, or update_memory. Read this first when the user asks what you remember, wants something saved, or asks about past conversations."
+description: "REQUIRED when the user asks what you remember, recall, or know from past conversations, previous sessions, or cross-session memory. Also before using memory tools: find_memories, get_memories, store_memory, update_memory."
 metadata:
   author: netclaw
-  version: "1.2.0"
+  version: "1.3.0"
 ---
 
 # Netclaw Memory

@@ -1,9 +1,9 @@
 ---
 name: netclaw-operations
-description: "REQUIRED when the user asks about Netclaw capabilities, scheduling, diagnostics, identity updates, or self-maintenance. Read this first — it routes you to the right detail file."
+description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "1.15.1"
+  version: "1.16.0"
 ---
 
 # Netclaw Operations

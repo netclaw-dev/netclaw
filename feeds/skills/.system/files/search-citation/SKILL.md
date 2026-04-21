@@ -1,9 +1,9 @@
 ---
 name: search-citation
-description: "REQUIRED before any web_search or web_fetch call. Read this first when the user asks you to search, look up, verify, price-check, or find anything online. Contains citation format rules and source-handling policies."
+description: "REQUIRED when the user asks you to search, look up, verify, buy, shop, compare, price-check, find current info, or check facts online. Contains citation format rules for web_search and web_fetch."
 metadata:
   author: netclaw
-  version: "1.0.0"
+  version: "1.1.0"
 ---
 
 ## Critical Rules Summary

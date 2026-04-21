@@ -92,14 +92,14 @@ public class SkillRegistryTests
     }
 
     [Fact]
-    public void GenerateIndex_includes_skill_file_path()
+    public void GenerateIndex_includes_skill_with_description()
     {
         var registry = new SkillRegistry();
         registry.Register(MakeEntry("my-skill", "Short description"));
 
         var index = registry.GenerateIndex("/test/skills");
 
-        Assert.Contains("my-skill/SKILL.md", index);
+        Assert.Contains("my-skill: Short description", index);
     }
 
     [Fact]
@@ -122,8 +122,10 @@ public class SkillRegistryTests
 
         var index = registry.GenerateIndex("/test/skills");
 
-        Assert.Contains("|.system:{netclaw-memory/SKILL.md}", index);
-        Assert.Contains("|user:{my-workflow/SKILL.md}", index);
+        Assert.Contains("|.system:", index);
+        Assert.Contains("netclaw-memory: Memory guidance", index);
+        Assert.Contains("|user:", index);
+        Assert.Contains("my-workflow: Workflow help", index);
     }
 
     [Fact]
@@ -136,8 +138,8 @@ public class SkillRegistryTests
 
         var index = registry.GenerateIndex("/test/skills");
 
-        Assert.DoesNotContain("ops/SKILL.md", index);
-        Assert.Contains("memory/SKILL.md", index);
+        Assert.DoesNotContain("ops:", index);
+        Assert.Contains("memory: Memory guidance", index);
     }
 
     [Fact]
