@@ -250,19 +250,13 @@ start_eval_daemon() {
     mkdir -p "$EVAL_HOME/identity" "$EVAL_HOME/logs" "$EVAL_HOME/data"
     cp -r "$HOME/.netclaw/identity/." "$EVAL_HOME/identity/"
 
-    # Copy host system skills into the eval home so the Skill Discovery
-    # assertions can actually find netclaw-operations / netclaw-memory /
-    # search-citation on disk. Only `.system/` is copied — operator-
-    # installed user skills stay out of the eval run for reproducibility.
-    # Without this copy the eval container starts with an empty skills
-    # directory and every Skill Discovery case fails on file_read of a
-    # nonexistent path (see daemon logs for ENOENT).
-    mkdir -p "$EVAL_HOME/skills"
-    if [[ -d "$HOME/.netclaw/skills/.system" ]]; then
-        mkdir -p "$EVAL_HOME/skills/.system"
-        cp -r "$HOME/.netclaw/skills/.system/." "$EVAL_HOME/skills/.system/"
+    # Copy system skills from the repo into the eval home so Skill Discovery
+    # tests use the skills being developed, not whatever is synced on the host.
+    mkdir -p "$EVAL_HOME/skills/.system/files"
+    if [[ -d "$REPO_ROOT/feeds/skills/.system/files" ]]; then
+        cp -r "$REPO_ROOT/feeds/skills/.system/files/." "$EVAL_HOME/skills/.system/files/"
     else
-        echo "WARN: no system skills at $HOME/.netclaw/skills/.system/ — Skill Discovery evals will fail. Run netclaw daemon at least once on the host to trigger the system skill sync." >&2
+        echo "WARN: no system skills at $REPO_ROOT/feeds/skills/.system/files/ — Skill Discovery evals will fail." >&2
     fi
 
     local -a docker_args=(
