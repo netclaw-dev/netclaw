@@ -1009,6 +1009,7 @@ static void ConfigureDaemonServices(
     services.AddSingleton<ISessionPipeline>(sp => sp.GetRequiredService<SessionPipeline>());
 
     services.AddSlackChannelIntegration(configuration);
+    services.AddDiscordChannelIntegration(configuration);
 
     // Config hot-reload watcher
     services.AddSingleton<ConfigWatcherService>();

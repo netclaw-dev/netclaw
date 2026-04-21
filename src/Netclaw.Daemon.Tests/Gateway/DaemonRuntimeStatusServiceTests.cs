@@ -5,6 +5,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Netclaw.Actors.Memory;
 using Netclaw.Actors.Tools;
 using Netclaw.Channels;
+using Netclaw.Channels.Discord;
 using Netclaw.Channels.Slack;
 using Netclaw.Channels.Telemetry;
 using Netclaw.Configuration;
@@ -87,6 +88,7 @@ public sealed class DaemonRuntimeStatusServiceTests : IAsyncLifetime
             TimeProvider.System,
             channels: Array.Empty<IChannel>(),
             slackOptions: new SlackChannelOptions { Enabled = false },
+            discordOptions: new DiscordChannelOptions { Enabled = false },
             persistenceOptions: new DaemonPersistenceOptions(),
             telemetryOptions: Options.Create(new TelemetryOptions()),
             modelCapabilities: DefaultModelCapabilities,
@@ -108,6 +110,7 @@ public sealed class DaemonRuntimeStatusServiceTests : IAsyncLifetime
             TimeProvider.System,
             channels: Array.Empty<IChannel>(),
             slackOptions: new SlackChannelOptions { Enabled = true, AllowedChannelIds = ["C1"] },
+            discordOptions: new DiscordChannelOptions { Enabled = false },
             persistenceOptions: new DaemonPersistenceOptions(),
             telemetryOptions: Options.Create(new TelemetryOptions()),
             modelCapabilities: DefaultModelCapabilities,
@@ -129,6 +132,7 @@ public sealed class DaemonRuntimeStatusServiceTests : IAsyncLifetime
             TimeProvider.System,
             channels: Array.Empty<IChannel>(),
             slackOptions: new SlackChannelOptions { Enabled = false },
+            discordOptions: new DiscordChannelOptions { Enabled = false },
             persistenceOptions: new DaemonPersistenceOptions(),
             telemetryOptions: Options.Create(new TelemetryOptions()),
             modelCapabilities: DefaultModelCapabilities,
@@ -189,6 +193,7 @@ public sealed class DaemonRuntimeStatusServiceTests : IAsyncLifetime
                 TimeProvider.System,
                 channels: Array.Empty<IChannel>(),
                 slackOptions: new SlackChannelOptions { Enabled = false },
+                discordOptions: new DiscordChannelOptions { Enabled = false },
                 persistenceOptions: new DaemonPersistenceOptions(),
                 telemetryOptions: Options.Create(new TelemetryOptions()),
                 modelCapabilities: DefaultModelCapabilities,
@@ -253,6 +258,7 @@ public sealed class DaemonRuntimeStatusServiceTests : IAsyncLifetime
             TimeProvider.System,
             channels: Array.Empty<IChannel>(),
             slackOptions: new SlackChannelOptions { Enabled = false },
+            discordOptions: new DiscordChannelOptions { Enabled = false },
             persistenceOptions: new DaemonPersistenceOptions(),
             telemetryOptions: Options.Create(new TelemetryOptions()),
             modelCapabilities: DefaultModelCapabilities,
@@ -286,6 +292,7 @@ public sealed class DaemonRuntimeStatusServiceTests : IAsyncLifetime
             TimeProvider.System,
             channels: Array.Empty<IChannel>(),
             slackOptions: new SlackChannelOptions { Enabled = false },
+            discordOptions: new DiscordChannelOptions { Enabled = false },
             persistenceOptions: new DaemonPersistenceOptions(),
             telemetryOptions: Options.Create(new TelemetryOptions()),
             modelCapabilities: DefaultModelCapabilities,

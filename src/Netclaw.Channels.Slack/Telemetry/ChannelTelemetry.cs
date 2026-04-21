@@ -36,6 +36,39 @@ public static class ChannelTelemetry
     private static readonly Histogram<double> SlackReplyDurationMs =
         Meter.CreateHistogram<double>("netclaw.slack.reply.duration.ms", unit: "ms");
 
+    private static readonly Counter<long> DiscordEventsReceived =
+        Meter.CreateCounter<long>("netclaw.discord.events.received");
+
+    private static readonly Counter<long> DiscordEventsDropped =
+        Meter.CreateCounter<long>("netclaw.discord.events.dropped");
+
+    private static readonly Counter<long> DiscordEventsFiltered =
+        Meter.CreateCounter<long>("netclaw.discord.events.filtered");
+
+    private static readonly Counter<long> DiscordEventsRouted =
+        Meter.CreateCounter<long>("netclaw.discord.events.routed");
+
+    private static readonly Counter<long> DiscordMessagesEnqueued =
+        Meter.CreateCounter<long>("netclaw.discord.messages.enqueued");
+
+    private static readonly Counter<long> DiscordRepliesPosted =
+        Meter.CreateCounter<long>("netclaw.discord.replies.posted");
+
+    private static readonly Counter<long> DiscordRepliesRejected =
+        Meter.CreateCounter<long>("netclaw.discord.replies.rejected");
+
+    private static readonly Counter<long> DiscordRepliesFailed =
+        Meter.CreateCounter<long>("netclaw.discord.replies.failed");
+
+    private static readonly Counter<long> DiscordInteractionErrors =
+        Meter.CreateCounter<long>("netclaw.discord.interactions.errors");
+
+    private static readonly Counter<long> DiscordApprovalFallbackActivated =
+        Meter.CreateCounter<long>("netclaw.discord.approval.fallback_activated");
+
+    private static readonly Histogram<double> DiscordReplyDurationMs =
+        Meter.CreateHistogram<double>("netclaw.discord.reply.duration.ms", unit: "ms");
+
     private static long _slackEventsReceivedTotal;
     private static long _slackEventsDroppedTotal;
     private static long _slackEventsFilteredTotal;
@@ -44,6 +77,16 @@ public static class ChannelTelemetry
     private static long _slackRepliesPostedTotal;
     private static long _slackRepliesRejectedTotal;
     private static long _slackRepliesFailedTotal;
+    private static long _discordEventsReceivedTotal;
+    private static long _discordEventsDroppedTotal;
+    private static long _discordEventsFilteredTotal;
+    private static long _discordEventsRoutedTotal;
+    private static long _discordMessagesEnqueuedTotal;
+    private static long _discordRepliesPostedTotal;
+    private static long _discordRepliesRejectedTotal;
+    private static long _discordRepliesFailedTotal;
+    private static long _discordInteractionErrorsTotal;
+    private static long _discordApprovalFallbackActivatedTotal;
 
     public sealed record Snapshot(
         long SlackEventsReceived,
@@ -53,7 +96,17 @@ public static class ChannelTelemetry
         long SlackMessagesEnqueued,
         long SlackRepliesPosted,
         long SlackRepliesRejected,
-        long SlackRepliesFailed);
+        long SlackRepliesFailed,
+        long DiscordEventsReceived,
+        long DiscordEventsDropped,
+        long DiscordEventsFiltered,
+        long DiscordEventsRouted,
+        long DiscordMessagesEnqueued,
+        long DiscordRepliesPosted,
+        long DiscordRepliesRejected,
+        long DiscordRepliesFailed,
+        long DiscordInteractionErrors,
+        long DiscordApprovalFallbackActivated);
 
     public static void RecordSlackEventReceived(string kind)
     {
@@ -105,6 +158,68 @@ public static class ChannelTelemetry
         SlackReplyDurationMs.Record(durationMs);
     }
 
+    public static void RecordDiscordEventReceived(string kind)
+    {
+        Interlocked.Increment(ref _discordEventsReceivedTotal);
+        DiscordEventsReceived.Add(1, new KeyValuePair<string, object?>("kind", kind));
+    }
+
+    public static void RecordDiscordEventDropped(string reason)
+    {
+        Interlocked.Increment(ref _discordEventsDroppedTotal);
+        DiscordEventsDropped.Add(1, new KeyValuePair<string, object?>("reason", reason));
+    }
+
+    public static void RecordDiscordEventFiltered(string reason)
+    {
+        Interlocked.Increment(ref _discordEventsFilteredTotal);
+        DiscordEventsFiltered.Add(1, new KeyValuePair<string, object?>("reason", reason));
+    }
+
+    public static void RecordDiscordEventRouted(string kind)
+    {
+        Interlocked.Increment(ref _discordEventsRoutedTotal);
+        DiscordEventsRouted.Add(1, new KeyValuePair<string, object?>("kind", kind));
+    }
+
+    public static void RecordDiscordMessageEnqueued()
+    {
+        Interlocked.Increment(ref _discordMessagesEnqueuedTotal);
+        DiscordMessagesEnqueued.Add(1);
+    }
+
+    public static void RecordDiscordReplyPosted(double durationMs)
+    {
+        Interlocked.Increment(ref _discordRepliesPostedTotal);
+        DiscordRepliesPosted.Add(1);
+        DiscordReplyDurationMs.Record(durationMs);
+    }
+
+    public static void RecordDiscordReplyRejected(string? errorCode)
+    {
+        Interlocked.Increment(ref _discordRepliesRejectedTotal);
+        DiscordRepliesRejected.Add(1, new KeyValuePair<string, object?>("error_code", errorCode ?? "unknown"));
+    }
+
+    public static void RecordDiscordReplyFailed(double durationMs)
+    {
+        Interlocked.Increment(ref _discordRepliesFailedTotal);
+        DiscordRepliesFailed.Add(1);
+        DiscordReplyDurationMs.Record(durationMs);
+    }
+
+    public static void RecordDiscordInteractionError(string reason)
+    {
+        Interlocked.Increment(ref _discordInteractionErrorsTotal);
+        DiscordInteractionErrors.Add(1, new KeyValuePair<string, object?>("reason", reason));
+    }
+
+    public static void RecordDiscordApprovalFallbackActivated(string reason)
+    {
+        Interlocked.Increment(ref _discordApprovalFallbackActivatedTotal);
+        DiscordApprovalFallbackActivated.Add(1, new KeyValuePair<string, object?>("reason", reason));
+    }
+
     public static Snapshot GetSnapshot()
         => new(
             SlackEventsReceived: Interlocked.Read(ref _slackEventsReceivedTotal),
@@ -114,7 +229,17 @@ public static class ChannelTelemetry
             SlackMessagesEnqueued: Interlocked.Read(ref _slackMessagesEnqueuedTotal),
             SlackRepliesPosted: Interlocked.Read(ref _slackRepliesPostedTotal),
             SlackRepliesRejected: Interlocked.Read(ref _slackRepliesRejectedTotal),
-            SlackRepliesFailed: Interlocked.Read(ref _slackRepliesFailedTotal));
+            SlackRepliesFailed: Interlocked.Read(ref _slackRepliesFailedTotal),
+            DiscordEventsReceived: Interlocked.Read(ref _discordEventsReceivedTotal),
+            DiscordEventsDropped: Interlocked.Read(ref _discordEventsDroppedTotal),
+            DiscordEventsFiltered: Interlocked.Read(ref _discordEventsFilteredTotal),
+            DiscordEventsRouted: Interlocked.Read(ref _discordEventsRoutedTotal),
+            DiscordMessagesEnqueued: Interlocked.Read(ref _discordMessagesEnqueuedTotal),
+            DiscordRepliesPosted: Interlocked.Read(ref _discordRepliesPostedTotal),
+            DiscordRepliesRejected: Interlocked.Read(ref _discordRepliesRejectedTotal),
+            DiscordRepliesFailed: Interlocked.Read(ref _discordRepliesFailedTotal),
+            DiscordInteractionErrors: Interlocked.Read(ref _discordInteractionErrorsTotal),
+            DiscordApprovalFallbackActivated: Interlocked.Read(ref _discordApprovalFallbackActivatedTotal));
 
     internal static void ResetForTests()
     {
@@ -126,5 +251,15 @@ public static class ChannelTelemetry
         Interlocked.Exchange(ref _slackRepliesPostedTotal, 0);
         Interlocked.Exchange(ref _slackRepliesRejectedTotal, 0);
         Interlocked.Exchange(ref _slackRepliesFailedTotal, 0);
+        Interlocked.Exchange(ref _discordEventsReceivedTotal, 0);
+        Interlocked.Exchange(ref _discordEventsDroppedTotal, 0);
+        Interlocked.Exchange(ref _discordEventsFilteredTotal, 0);
+        Interlocked.Exchange(ref _discordEventsRoutedTotal, 0);
+        Interlocked.Exchange(ref _discordMessagesEnqueuedTotal, 0);
+        Interlocked.Exchange(ref _discordRepliesPostedTotal, 0);
+        Interlocked.Exchange(ref _discordRepliesRejectedTotal, 0);
+        Interlocked.Exchange(ref _discordRepliesFailedTotal, 0);
+        Interlocked.Exchange(ref _discordInteractionErrorsTotal, 0);
+        Interlocked.Exchange(ref _discordApprovalFallbackActivatedTotal, 0);
     }
 }

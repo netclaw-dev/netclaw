@@ -146,6 +146,7 @@ public static class SecurityPolicyDefaults
             switch (channelType.Trim().ToLowerInvariant())
             {
                 case "slack":
+                case "discord":
                     return TrustedInstanceBoundary;
                 case "signalr":
                 case "tui":
@@ -179,7 +180,7 @@ public static class SecurityPolicyDefaults
         return channelType.Trim().ToLowerInvariant() switch
         {
             "signalr" or "tui" or "headless" or "console" or "manual" => TrustAudience.Personal,
-            "slack" or "reminder" or "timer" => TrustAudience.Team,
+            "slack" or "discord" or "reminder" or "timer" => TrustAudience.Team,
             _ => TrustAudience.Public
         };
     }

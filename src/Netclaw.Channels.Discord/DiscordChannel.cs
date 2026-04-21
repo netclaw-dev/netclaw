@@ -1,0 +1,143 @@
+using Akka.Actor;
+using Akka.Pattern;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+using Netclaw.Actors.Channels;
+using Netclaw.Configuration;
+
+namespace Netclaw.Channels.Discord;
+
+public sealed class DiscordChannel : IChannel
+{
+    private readonly ActorSystem _system;
+    private readonly ISessionPipeline _pipeline;
+    private readonly SessionIngressGate _ingressGate;
+    private readonly IDiscordGatewayClient _gatewayClient;
+    private readonly IDiscordReplyClient _replyClient;
+    private readonly IOperationalNotificationSink _notificationSink;
+    private readonly TimeProvider _timeProvider;
+    private readonly DiscordChannelOptions _options;
+    private readonly ILogger<DiscordChannel> _logger;
+
+    private IActorRef? _gateway;
+    private volatile bool _connected;
+
+    public DiscordChannel(
+        ActorSystem system,
+        ISessionPipeline pipeline,
+        SessionIngressGate ingressGate,
+        IDiscordGatewayClient gatewayClient,
+        IDiscordReplyClient replyClient,
+        IOperationalNotificationSink notificationSink,
+        TimeProvider timeProvider,
+        DiscordChannelOptions options,
+        ILogger<DiscordChannel> logger)
+    {
+        _system = system;
+        _pipeline = pipeline;
+        _ingressGate = ingressGate;
+        _gatewayClient = gatewayClient;
+        _replyClient = replyClient;
+        _notificationSink = notificationSink;
+        _timeProvider = timeProvider;
+        _options = options;
+        _logger = logger;
+    }
+
+    public ChannelType ChannelType => ChannelType.Discord;
+
+    public string DisplayName => "Discord";
+
+    public ValueTask<ChannelHealth> GetHealthAsync(CancellationToken cancellationToken = default)
+    {
+        if (!_options.Enabled)
+            return ValueTask.FromResult(new ChannelHealth(ChannelHealthStatus.Degraded, "Discord channel disabled."));
+
+        if (_connected)
+            return ValueTask.FromResult(new ChannelHealth(ChannelHealthStatus.Healthy));
+
+        return ValueTask.FromResult(new ChannelHealth(ChannelHealthStatus.Disconnected, "Discord gateway disconnected."));
+    }
+
+    public async Task StartAsync(CancellationToken cancellationToken)
+    {
+        if (!_options.Enabled)
+        {
+            _logger.LogInformation("Discord channel disabled by configuration.");
+            return;
+        }
+
+        if (_options.BotToken is null || string.IsNullOrWhiteSpace(_options.BotToken.Value))
+            throw new InvalidOperationException("Discord is enabled but Discord:BotToken is not configured.");
+
+        try
+        {
+            _gateway = _system.ActorOf(
+                DiscordGatewayActor.CreateProps(new DiscordGatewayDependencies(
+                    Pipeline: _pipeline,
+                    IngressGate: _ingressGate,
+                    TimeProvider: _timeProvider,
+                    Options: _options,
+                    DefaultChannelId: !string.IsNullOrWhiteSpace(_options.DefaultChannelId)
+                        ? new DiscordChannelId(_options.DefaultChannelId)
+                        : null,
+                    ReplyClient: _replyClient)),
+                "discord-gateway");
+
+            _gatewayClient.MessageReceived += HandleMessageReceivedAsync;
+            _gatewayClient.InteractionReceived += HandleInteractionReceivedAsync;
+
+            await _gatewayClient.ConnectAsync(_options.BotToken.Value, cancellationToken);
+            _connected = true;
+
+            _logger.LogInformation("Discord channel connected.");
+        }
+        catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+        {
+            _notificationSink.Emit(OperationalAlert.Create(
+                _timeProvider,
+                "channel.disconnected",
+                AlertType.ChannelDisconnected,
+                $"Discord channel failed to connect: {ex.Message}",
+                AlertSeverity.Warning,
+                source: "discord",
+                context: new Dictionary<string, string> { ["channel"] = "discord" }));
+            throw;
+        }
+    }
+
+    public async Task StopAsync(CancellationToken cancellationToken)
+    {
+        _connected = false;
+
+        _gatewayClient.MessageReceived -= HandleMessageReceivedAsync;
+        _gatewayClient.InteractionReceived -= HandleInteractionReceivedAsync;
+        await _gatewayClient.DisconnectAsync(cancellationToken);
+
+        if (_gateway is not null)
+        {
+            try
+            {
+                await _gateway.GracefulStop(TimeSpan.FromSeconds(5));
+            }
+            catch
+            {
+                _system.Stop(_gateway);
+            }
+
+            _gateway = null;
+        }
+    }
+
+    private Task HandleMessageReceivedAsync(DiscordGatewayMessage message)
+    {
+        _gateway?.Tell(message);
+        return Task.CompletedTask;
+    }
+
+    private Task HandleInteractionReceivedAsync(DiscordGatewayInteraction interaction)
+    {
+        _gateway?.Tell(interaction);
+        return Task.CompletedTask;
+    }
+}

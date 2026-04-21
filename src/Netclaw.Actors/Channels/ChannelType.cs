@@ -10,7 +10,8 @@ public enum ChannelType
     Headless,
     SignalR,
     Reminder,
-    Webhook
+    Webhook,
+    Discord
 }
 
 public static class ChannelTypeExtensions
@@ -23,12 +24,14 @@ public static class ChannelTypeExtensions
         ChannelType.SignalR => "signalr",
         ChannelType.Reminder => "reminder",
         ChannelType.Webhook => "webhook",
+        ChannelType.Discord => "discord",
         _ => throw new ArgumentOutOfRangeException(nameof(value), value, null)
     };
 
     public static bool SupportsInteractiveApproval(this ChannelType value) => value switch
     {
         ChannelType.Slack => true,
+        ChannelType.Discord => true,
         ChannelType.Tui => true,
         ChannelType.SignalR => true,
         _ => false
@@ -48,6 +51,8 @@ public static class ChannelTypeExtensions
         { value = ChannelType.Reminder; return true; }
         if (string.Equals(wire, "webhook", StringComparison.OrdinalIgnoreCase))
         { value = ChannelType.Webhook; return true; }
+        if (string.Equals(wire, "discord", StringComparison.OrdinalIgnoreCase))
+        { value = ChannelType.Discord; return true; }
         value = default;
         return false;
     }

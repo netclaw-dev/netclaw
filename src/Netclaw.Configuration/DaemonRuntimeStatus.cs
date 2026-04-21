@@ -72,6 +72,8 @@ public static class DaemonRuntimeStatus
         public string? OtlpEndpoint { get; init; }
 
         public SlackCounters? SlackCounters { get; init; }
+
+        public DiscordCounters? DiscordCounters { get; init; }
     }
 
     public sealed class SlackCounters : IWireType
@@ -89,6 +91,27 @@ public static class DaemonRuntimeStatus
         public long RepliesRejected { get; init; }
 
         public long RepliesFailed { get; init; }
+    }
+
+    public sealed class DiscordCounters : IWireType
+    {
+        public long EventsReceived { get; init; }
+
+        public long EventsDropped { get; init; }
+
+        public long EventsRouted { get; init; }
+
+        public long MessagesEnqueued { get; init; }
+
+        public long RepliesPosted { get; init; }
+
+        public long RepliesRejected { get; init; }
+
+        public long RepliesFailed { get; init; }
+
+        public long InteractionErrors { get; init; }
+
+        public long ApprovalFallbackActivated { get; init; }
     }
 
     public sealed class Model : IWireType

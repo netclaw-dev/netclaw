@@ -38,6 +38,31 @@
       },
       "additionalProperties": false
     },
+    "Discord": {
+      "type": "object",
+      "properties": {
+        "Enabled": { "type": "boolean" },
+        "DefaultChannelId": { "type": ["string", "null"] },
+        "AllowDirectMessages": { "type": "boolean" },
+        "AllowedChannelIds": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "AllowedUserIds": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "ChannelAudiences": {
+          "type": "object",
+          "description": "Per-channel audience overrides. Keys are channel IDs or 'dm'. Values are 'personal', 'team', or 'public'.",
+          "additionalProperties": {
+            "type": "string",
+            "enum": ["personal", "team", "public"]
+          }
+        }
+      },
+      "additionalProperties": false
+    },
     "Logging": {
       "type": "object",
       "properties": {

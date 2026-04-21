@@ -21,6 +21,7 @@
   <ItemGroup>
     <ProjectReference Include="../Netclaw.Actors/Netclaw.Actors.csproj" />
     <ProjectReference Include="../Netclaw.Channels/Netclaw.Channels.csproj" />
+    <ProjectReference Include="../Netclaw.Channels.Discord/Netclaw.Channels.Discord.csproj" />
     <ProjectReference Include="../Netclaw.Channels.Slack/Netclaw.Channels.Slack.csproj" />
     <ProjectReference Include="../Netclaw.Configuration/Netclaw.Configuration.csproj" />
     <ProjectReference Include="../Netclaw.Tools.Abstractions/Netclaw.Tools.Abstractions.csproj" />
