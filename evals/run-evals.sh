@@ -795,6 +795,10 @@ assert_skill_citation() {
     stdout_contains '\[tool:call\] file_read' && stdout_contains 'search-citation'
 }
 
+assert_skill_web_content() {
+    stdout_contains '\[tool:call\] file_read' && stdout_contains 'web-content-retrieval'
+}
+
 # Category 3: Memory Pipeline
 assert_memory_recall_active() {
     daemon_log_contains 'turn_memory_recall.*degraded=False'
@@ -1047,6 +1051,11 @@ run_all() {
 
     run_case skill_citation "search-citation read via file_read" \
         "Search the web for the latest Akka.NET release"
+
+    run_case skill_web_content "web-content-retrieval loaded for URL fetch" \
+        "Can you fetch the content from this tweet: https://x.com/edzitron/status/123" \
+        "I need to grab content from a Twitter link" \
+        "Fetch this URL for me, it's from a social media site"
 
     end_category
 
