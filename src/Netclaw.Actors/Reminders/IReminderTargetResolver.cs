@@ -26,9 +26,15 @@ public sealed record ReminderTargetResolution(
 /// Resolves a user- or LLM-supplied reminder notification target
 /// (channel name, user handle, or raw channel/user ID) into a canonical
 /// identifier that can be persisted on a <see cref="ReminderDefinition"/>.
-/// Transport-agnostic so non-Slack channels can plug in later.
+/// Keyed by <see cref="Transport"/> so multiple transports can be registered.
 /// </summary>
 public interface IReminderTargetResolver
 {
+    /// <summary>
+    /// Transport identifier (e.g., "slack", "discord"). Used to dispatch
+    /// resolution requests to the correct resolver at set_reminder time.
+    /// </summary>
+    string Transport { get; }
+
     Task<ReminderTargetResolution> ResolveAsync(string target, CancellationToken ct = default);
 }

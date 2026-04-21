@@ -162,7 +162,7 @@ public sealed partial class ReminderManagerActor : ReceiveActor
         var effectiveAudience = authorization.EffectiveAudience ?? TrustAudience.Public;
         var effectiveBoundary = ResolveReminderBoundary(
             cmd.Definition.Boundary,
-            cmd.Definition.OriginChannelType,
+            cmd.Definition.Delivery.OriginChannelType,
             effectiveAudience);
 
         var normalized = cmd.Definition with
@@ -474,7 +474,7 @@ public sealed partial class ReminderManagerActor : ReceiveActor
             }
         }
 
-        var isModeB = definition.SessionId is not null && definition.OriginChannelType is not null;
+        var isCurrentSessionDelivery = definition.Delivery.Kind == DeliveryKind.CurrentSession;
 
         if (_activeExecutionIds.Count >= MaxConcurrentExecutions)
         {
@@ -489,14 +489,15 @@ public sealed partial class ReminderManagerActor : ReceiveActor
             return;
         }
 
-        if (isModeB)
+        if (isCurrentSessionDelivery)
         {
-            // Execution actor holds the envelope open and acks itself
-            // once the target session has confirmed receipt.
+            // CurrentSession: execution actor holds the envelope open and acks
+            // itself once the target session has confirmed receipt.
             StartExecution(definition, envelope);
         }
         else
         {
+            // Channel/None: ack envelope eagerly, execution tracks its own success
             StartExecution(definition);
             await _client!.AckAsync(envelope);
         }
@@ -814,14 +815,12 @@ public sealed partial class ReminderManagerActor : ReceiveActor
         Id: new ReminderId(d.Id),
         Title: d.Title,
         Instructions: d.Instructions,
-        NotifyInstructions: d.NotifyInstructions,
-        NotifyPolicy: d.NotifyPolicy,
+        Delivery: d.Delivery,
+        DeliveryRequired: d.DeliveryRequired,
+        DeliveryInstructions: d.DeliveryInstructions,
         Schedule: d.Schedule,
         NextFire: nextFire,
         Enabled: d.Enabled,
-        SessionId: d.SessionId,
-        ReportToChannel: d.ReportToChannel,
-        ReportToThreadTs: d.ReportToThreadTs,
         AgentDefinitionId: d.AgentDefinitionId,
         Audience: d.Audience);
 

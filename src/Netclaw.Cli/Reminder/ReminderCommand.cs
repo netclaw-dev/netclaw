@@ -390,8 +390,8 @@ internal static class ReminderCommand
             return "Reminder title is required.";
         if (string.IsNullOrWhiteSpace(definition.Instructions))
             return "Reminder instructions are required.";
-        if (string.IsNullOrWhiteSpace(definition.NotifyInstructions))
-            return "Reminder notifyInstructions is required.";
+        if (definition.Delivery is null)
+            return "Reminder delivery is required.";
         if (definition.Schedule is null)
             return "Reminder schedule is required.";
 

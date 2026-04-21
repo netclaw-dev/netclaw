@@ -102,7 +102,8 @@ public sealed class ReminderEndpointAuthorizationTests : IDisposable
                 Id = request.Id,
                 Title = request.Name,
                 Instructions = request.Prompt,
-                NotifyInstructions = request.NotifyInstructions ?? "Reply in thread.",
+                Delivery = new ReminderDelivery { Kind = DeliveryKind.None },
+                DeliveryInstructions = request.NotifyInstructions ?? "Reply in thread.",
                 Schedule = new ReminderSchedule
                 {
                     Type = ReminderScheduleType.OneShot,
@@ -222,7 +223,8 @@ public sealed class ReminderEndpointAuthorizationTests : IDisposable
                 Id = "rest-import-missing-audience",
                 Title = "rest-import-missing-audience",
                 Instructions = "check status",
-                NotifyInstructions = "reply",
+                Delivery = new ReminderDelivery { Kind = DeliveryKind.None },
+                DeliveryInstructions = "reply",
                 Schedule = new ReminderSchedule
                 {
                     Type = ReminderScheduleType.OneShot,

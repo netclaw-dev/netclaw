@@ -2,52 +2,52 @@
 
 ## 1. Protocol / data model
 
-- [ ] 1.1 Add `DeliveryKind` enum (`CurrentSession = 0`, `Channel = 1`, `None = 2`) and `ReminderDelivery` class to `src/Netclaw.Actors/Reminders/ReminderProtocol.cs`. Carries `Kind`, `Transport`, `Address`, `SessionId`, `OriginChannelType`. Protobuf-attributed for journal serialization.
-- [ ] 1.2 Replace `ReportToChannel`, `ReportToThreadTs`, `NotifyInstructions`, `NotifyPolicy`, `SessionId`, `OriginChannelType` on `ReminderDefinition` with a single required `Delivery` field (the struct above) plus `DeliveryRequired` (bool, default `true`) and `DeliveryInstructions` (nullable string).
-- [ ] 1.3 Update `ReminderInfo` list/get response record to mirror the new shape: expose `Delivery`, `DeliveryRequired`, `DeliveryInstructions`; drop removed fields.
+- [x] 1.1 Add `DeliveryKind` enum (`CurrentSession = 0`, `Channel = 1`, `None = 2`) and `ReminderDelivery` class to `src/Netclaw.Actors/Reminders/ReminderProtocol.cs`. Carries `Kind`, `Transport`, `Address`, `SessionId`, `OriginChannelType`. Protobuf-attributed for journal serialization.
+- [x] 1.2 Replace `ReportToChannel`, `ReportToThreadTs`, `NotifyInstructions`, `NotifyPolicy`, `SessionId`, `OriginChannelType` on `ReminderDefinition` with a single required `Delivery` field (the struct above) plus `DeliveryRequired` (bool, default `true`) and `DeliveryInstructions` (nullable string).
+- [x] 1.3 Update `ReminderInfo` list/get response record to mirror the new shape: expose `Delivery`, `DeliveryRequired`, `DeliveryInstructions`; drop removed fields.
 - [ ] 1.4 Drop `NotificationPolicy` enum and any call sites that read it once all code paths have migrated to `DeliveryRequired` (boolean is simpler; the enum was redundant).
 - [ ] 1.5 Add `ReminderDeliveryObserved(string ReminderDeliveryKey, ChannelType ChannelType) : IWithSessionId`-ish internal record in `src/Netclaw.Actors/Reminders/` (or `Protocol/` if preferred) — fields needed: reminder delivery key (`{id}:{fireTimestampMs}`), `ChannelType`, optional outbound-delivery timestamp. Not serialized (actor-local signal).
-- [ ] 1.6 Confirm protobuf evolution: new `ReminderDefinition` shape is a clean break; no protobuf member numbers are reused from the old fields.
+- [x] 1.6 Confirm protobuf evolution: new `ReminderDefinition` shape is a clean break; no protobuf member numbers are reused from the old fields.
 
 ## 2. Tool surface (`SetReminderTool`)
 
-- [ ] 2.1 Replace `Params.ReportToChannel`, `NotifyInstructions`, `NotifyPolicy` with `Delivery DeliveryKind`, `string? DeliveryTransport`, `string? DeliveryAddress`, `bool DeliveryRequired = true`, `string? DeliveryInstructions`. Update `[Description]` attributes to explain each field. `DeliveryKind` is required — no default.
-- [ ] 2.2 Replace the validation block (lines ~81–139 of today's file) with a switch on `DeliveryKind`:
+- [x] 2.1 Replace `Params.ReportToChannel`, `NotifyInstructions`, `NotifyPolicy` with `Delivery DeliveryKind`, `string? DeliveryTransport`, `string? DeliveryAddress`, `bool DeliveryRequired = true`, `string? DeliveryInstructions`. Update `[Description]` attributes to explain each field. `DeliveryKind` is required — no default.
+- [x] 2.2 Replace the validation block (lines ~81–139 of today's file) with a switch on `DeliveryKind`:
   - `CurrentSession` → require parseable `context.ChannelType ∈ {Slack, Tui, SignalR}`; reject non-null `DeliveryTransport`/`DeliveryAddress`; persist `Delivery.SessionId = context.SessionId`, `Delivery.OriginChannelType = parsedType`, other fields null.
   - `Channel` → require both `DeliveryTransport` and `DeliveryAddress`; look up `IReminderTargetResolver` by `Transport`; canonicalize address; persist `Delivery.Transport = lowered`, `Delivery.Address = canonical`. Reject transports without a canonical notification tool (SignalR, Tui) with a helpful error.
   - `None` → reject non-null transport/address; all `Delivery.*` except `Kind` are null.
-- [ ] 2.3 Remove the synthetic `NotifyInstructions` fallback ("Reply in this session with the result." / "Send to user X" / "Post to channel Y"). That whole code path goes away.
-- [ ] 2.4 Inject `IEnumerable<IReminderTargetResolver>` (was single un-keyed resolver). Build a case-insensitive `Transport → resolver` dictionary. Detect duplicate `Transport` values at DI container build / host startup (not tool construction) and fail the daemon boot with a clear error naming the duplicate transport.
-- [ ] 2.5 When `DeliveryKind = Channel` but no resolver matches the requested `Transport`, return an actionable error that names the unknown transport and lists registered transports.
-- [ ] 2.6 Update the tool's success-response string to describe the new delivery kind instead of the old mode-by-inference text.
+- [x] 2.3 Remove the synthetic `NotifyInstructions` fallback ("Reply in this session with the result." / "Send to user X" / "Post to channel Y"). That whole code path goes away.
+- [x] 2.4 Inject `IEnumerable<IReminderTargetResolver>` (was single un-keyed resolver). Build a case-insensitive `Transport → resolver` dictionary. Detect duplicate `Transport` values at DI container build / host startup (not tool construction) and fail the daemon boot with a clear error naming the duplicate transport.
+- [x] 2.5 When `DeliveryKind = Channel` but no resolver matches the requested `Transport`, return an actionable error that names the unknown transport and lists registered transports.
+- [x] 2.6 Update the tool's success-response string to describe the new delivery kind instead of the old mode-by-inference text.
 
 ## 3. Target resolver interface (folds in #644)
 
-- [ ] 3.1 Add `string Transport { get; }` to `IReminderTargetResolver`.
-- [ ] 3.2 Implement `Transport => "slack"` on `SlackReminderTargetResolver`.
-- [ ] 3.3 Audit DI registrations in all hosting extensions: resolvers are registered as `IEnumerable<IReminderTargetResolver>` (one per transport). Verify startup fails loud if two resolvers report the same `Transport` (duplicate detected when the tool is constructed).
-- [ ] 3.4 Unit test: `SetReminderTool` picks the correct resolver by transport; unknown transport returns a well-formed error.
+- [x] 3.1 Add `string Transport { get; }` to `IReminderTargetResolver`.
+- [x] 3.2 Implement `Transport => "slack"` on `SlackReminderTargetResolver`.
+- [x] 3.3 Audit DI registrations in all hosting extensions: resolvers are registered as `IEnumerable<IReminderTargetResolver>` (one per transport). Verify startup fails loud if two resolvers report the same `Transport` (duplicate detected when the tool is constructed).
+- [x] 3.4 Unit test: `SetReminderTool` picks the correct resolver by transport; unknown transport returns a well-formed error.
 
 ## 4. Execution dispatch (`ReminderManagerActor`)
 
-- [ ] 4.1 Replace `isModeB = definition.SessionId is not null && definition.OriginChannelType is not null` with a direct switch on `definition.Delivery.Kind`.
-- [ ] 4.2 Branch for `CurrentSession`: spawn `ReminderExecutionActor`, pass envelope, do NOT eagerly ack.
-- [ ] 4.3 Branch for `Channel` and `None`: spawn `ReminderExecutionActor` (no envelope), then eagerly `_client.AckAsync(envelope)` as today.
-- [ ] 4.4 Deferred-queue branch (`_activeExecutionIds.Count >= MaxConcurrentExecutions`) continues to ack eagerly for all kinds — comment documents why (can't hold envelope indefinitely on nothing).
-- [ ] 4.5 `HandleExecutionCompletedAsync`: existing alert path (`OperationalAlert.ReminderExecutionFailed`) continues to fire on `success=false`. Verify no regression.
+- [x] 4.1 Replace `isModeB = definition.SessionId is not null && definition.OriginChannelType is not null` with a direct switch on `definition.Delivery.Kind`.
+- [x] 4.2 Branch for `CurrentSession`: spawn `ReminderExecutionActor`, pass envelope, do NOT eagerly ack.
+- [x] 4.3 Branch for `Channel` and `None`: spawn `ReminderExecutionActor` (no envelope), then eagerly `_client.AckAsync(envelope)` as today.
+- [x] 4.4 Deferred-queue branch (`_activeExecutionIds.Count >= MaxConcurrentExecutions`) continues to ack eagerly for all kinds — comment documents why (can't hold envelope indefinitely on nothing).
+- [x] 4.5 `HandleExecutionCompletedAsync`: existing alert path (`OperationalAlert.ReminderExecutionFailed`) continues to fire on `success=false`. Verify no regression.
 
 ## 5. Execution actor (`ReminderExecutionActor`)
 
-- [ ] 5.1 Replace `IsModeB` with `RoutesBackToOriginSession => _definition.Delivery.Kind == DeliveryKind.CurrentSession`. Rename `InitializeModeBAsync` → `InitializeCurrentSessionAsync`.
-- [ ] 5.2 Collapse `InitializeAsync` (today's Mode A) into one function handling both `Channel` and `None`. When `Kind = None`, skip loading the notification tool and skip the notify-failure check in `HandleOutput`. Prompt construction omits the "Notification instructions" section.
-- [ ] 5.3 `InitializeCurrentSessionAsync`: read `Delivery.SessionId` and `Delivery.OriginChannelType` from the new struct. `MessageSource.ReminderId` continues to be `{_definition.Id}:{_dispatchedAt.ToUnixTimeMilliseconds()}`.
+- [x] 5.1 Replace `IsModeB` with `RoutesBackToOriginSession => _definition.Delivery.Kind == DeliveryKind.CurrentSession`. Rename `InitializeModeBAsync` → `InitializeCurrentSessionAsync`.
+- [x] 5.2 Collapse `InitializeAsync` (today's Mode A) into one function handling both `Channel` and `None`. When `Kind = None`, skip loading the notification tool and skip the notify-failure check in `HandleOutput`. Prompt construction omits the "Notification instructions" section.
+- [x] 5.3 `InitializeCurrentSessionAsync`: read `Delivery.SessionId` and `Delivery.OriginChannelType` from the new struct. `MessageSource.ReminderId` continues to be `{_definition.Id}:{_dispatchedAt.ToUnixTimeMilliseconds()}`.
 - [ ] 5.4 On `CommandAck` from the session:
   - If `DeliveryRequired = false` → ack envelope immediately (today's behavior).
   - If `DeliveryRequired = true` → subscribe to `ReminderDeliveryObserved` signals (probably via a topic/eventstream keyed by `ReminderDeliveryKey`) and set a receive-timeout of `DeliveryObservedTimeout` (new internal const, 30s — strictly greater than `ReminderSettings.DefaultAckTimeout`). Ack envelope + report `success=true` only when the signal arrives.
 - [ ] 5.5 On `DeliveryObservedTimeout` while waiting: do NOT ack envelope; report `ReminderExecutionCompleted(success=false, "delivery not observed within {timeout}")`.
-- [ ] 5.6 Prompt construction: replace `BuildPrompt` uses of `NotifyInstructions` with `DeliveryInstructions`. For `CurrentSession`, the prompt is `Instructions + (DeliveryInstructions is null ? "" : "\n\nResult guidance: " + DeliveryInstructions)`. For `Channel`, append `"Post the result to {transport} target {address}."` + optional `DeliveryInstructions`. For `None`, no notification section.
-- [ ] 5.7 Generalize `ExecutionOutputAccumulator` construction: accept the expected notification tool name as a ctor parameter (derived from `Delivery.Transport`). Default mapping: `"slack" → "send_slack_message"`. For `Kind = None`, pass `null` to indicate no tool expected, and skip the failure check.
-- [ ] 5.8 Mode A eager-ack behavior (`Channel` / `None`) remains unchanged — manager acks envelope, execution tracks its own success via accumulator.
+- [x] 5.6 Prompt construction: replace `BuildPrompt` uses of `NotifyInstructions` with `DeliveryInstructions`. For `CurrentSession`, the prompt is `Instructions + (DeliveryInstructions is null ? "" : "\n\nResult guidance: " + DeliveryInstructions)`. For `Channel`, append `"Post the result to {transport} target {address}."` + optional `DeliveryInstructions`. For `None`, no notification section.
+- [x] 5.7 Generalize `ExecutionOutputAccumulator` construction: accept the expected notification tool name as a ctor parameter (derived from `Delivery.Transport`). Default mapping: `"slack" → "send_slack_message"`. For `Kind = None`, pass `null` to indicate no tool expected, and skip the failure check.
+- [x] 5.8 Mode A eager-ack behavior (`Channel` / `None`) remains unchanged — manager acks envelope, execution tracks its own success via accumulator.
 
 ## 6. Outbound delivery signal (`ChannelPipeline`)
 
@@ -76,7 +76,7 @@
 
 ## 9. Tests
 
-- [ ] 9.1 `SetReminderToolTests`: replace Mode A/B-named tests with delivery-kind-named tests.
+- [x] 9.1 `SetReminderToolTests`: replace Mode A/B-named tests with delivery-kind-named tests.
   - `current_session` happy path from Slack / Tui / SignalR sessions.
   - `current_session` rejects with non-addressable channel type.
   - `current_session` rejects if transport/address supplied.
@@ -87,18 +87,18 @@
   - `channel` rejects if transport or address missing.
   - `none` happy path.
   - `none` rejects transport/address.
-- [ ] 9.2 `ReminderExecutionActorTests`:
+- [x] 9.2 `ReminderExecutionActorTests`:
   - `Channel` kind uses transport-derived accumulator tool name; missing tool call + `DeliveryRequired=true` → `success=false`.
   - `None` kind completes on natural turn end; no accumulator check; envelope acked by manager eagerly.
   - `CurrentSession` with `DeliveryRequired=true` waits for `ReminderDeliveryObserved` before acking envelope; timeout → failure + alert.
   - `CurrentSession` with `DeliveryRequired=false` acks on `CommandAck` alone.
-- [ ] 9.3 `ReminderManagerActorTests`:
+- [x] 9.3 `ReminderManagerActorTests`:
   - `CurrentSession` branch passes envelope to child; no eager manager ack.
   - `Channel` and `None` branches call `_client.AckAsync` eagerly after spawn.
   - Deferred-queue path still eagerly acks regardless of kind.
 - [ ] 9.4 `ChannelPipeline` test: outbound reminder-sourced turn emits `ReminderDeliveryObserved`; outbound non-reminder turn does not.
 - [ ] 9.5 `ReminderDefinitionStoreTests`: stale-schema row deleted + alert emitted.
-- [ ] 9.6 `SlackReminderTargetResolverTests`: `Transport` property returns `"slack"`.
+- [x] 9.6 `SlackReminderTargetResolverTests`: `Transport` property returns `"slack"`.
 - [ ] 9.7 Integration-ish: end-to-end `ReminderManagerActorTests` anchor test for `CurrentSession` with `DeliveryRequired=true` — envelope held, `ReminderDeliveryObserved` delivered, envelope acked exactly once.
 
 ## 10. Evals
@@ -111,8 +111,8 @@
 
 ## 11. Quality gates + finalization
 
-- [ ] 11.1 `dotnet build` — 0 warnings, 0 errors across affected projects.
-- [ ] 11.2 `dotnet test` — all suites green.
+- [x] 11.1 `dotnet build` — 0 warnings, 0 errors across affected projects.
+- [x] 11.2 `dotnet test` — all suites green.
 - [ ] 11.3 `dotnet slopwatch analyze` — no new violations vs baseline.
 - [ ] 11.4 `openspec validate reminder-delivery-contract` passes.
 - [ ] 11.5 `/opsx-verify reminder-delivery-contract` — confirm implementation matches artifacts before archive.

@@ -125,23 +125,23 @@ public sealed class ExecutionOutputAccumulator
     }
 
     /// <summary>
-    /// Evaluates notification policy to determine if the execution should be
+    /// Evaluates delivery requirements to determine if the execution should be
     /// considered a failure due to notification issues. Returns <c>null</c> on
     /// success, or an error message string describing the notification failure.
     /// </summary>
-    /// <param name="hasNotifyInstructions">Whether notification instructions were configured.</param>
-    /// <param name="notifyPolicy">The notification policy for this execution.</param>
-    public string? BuildNotifyFailureMessage(bool hasNotifyInstructions, NotificationPolicy notifyPolicy)
+    /// <param name="requiresChannelDelivery">Whether this is a Channel delivery that expects a notification tool call.</param>
+    /// <param name="deliveryRequired">Whether delivery is required for success.</param>
+    public string? BuildNotifyFailureMessage(bool requiresChannelDelivery, bool deliveryRequired)
     {
-        if (!hasNotifyInstructions)
+        if (!requiresChannelDelivery)
             return null;
 
         if (!_notifyAttempted)
         {
-            if (notifyPolicy == NotificationPolicy.Conditional)
+            if (!deliveryRequired)
                 return null;
 
-            return "Notification instructions were provided but no notification tool was invoked.";
+            return "Channel delivery was required but no notification tool was invoked.";
         }
 
         if (_notifyFailed)

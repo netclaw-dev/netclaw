@@ -180,7 +180,7 @@ public class ReminderManagerActorTests : TestKit
             Id = "zombie-oneshot",
             Title = "Expired one-shot",
             Instructions = "This already fired",
-            NotifyInstructions = "n/a",
+            Delivery = new ReminderDelivery { Kind = DeliveryKind.None },
             Schedule = new ReminderSchedule
             {
                 Type = ReminderScheduleType.OneShot,
@@ -308,15 +308,19 @@ public class ReminderManagerActorTests : TestKit
             Id = "mode-b-anchor",
             Title = "Mode B Anchor",
             Instructions = "Check PR #123",
-            NotifyInstructions = "Reply in this session with the result.",
+            Delivery = new ReminderDelivery
+            {
+                Kind = DeliveryKind.CurrentSession,
+                SessionId = "C0123ABC/1712000000.000001",
+                OriginChannelType = ChannelType.Slack
+            },
+            DeliveryInstructions = "Reply in this session with the result.",
             Schedule = new ReminderSchedule
             {
                 Type = ReminderScheduleType.OneShot,
                 FireAt = now.AddHours(1)
             },
             Audience = TrustAudience.Team,
-            SessionId = "C0123ABC/1712000000.000001",
-            OriginChannelType = ChannelType.Slack,
             Enabled = true,
             CreatedBy = "test",
             CreatedAt = now,
@@ -391,7 +395,8 @@ public class ReminderManagerActorTests : TestKit
             Id = id.Value,
             Title = name,
             Instructions = instructions,
-            NotifyInstructions = "Reply in-thread with concise status.",
+            Delivery = new ReminderDelivery { Kind = DeliveryKind.Channel, Transport = "slack", Address = "#general" },
+            DeliveryInstructions = "Reply in-thread with concise status.",
             Schedule = new ReminderSchedule
             {
                 Type = ReminderScheduleType.OneShot,

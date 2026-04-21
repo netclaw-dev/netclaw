@@ -953,8 +953,8 @@ static void ConfigureDaemonServices(
             var reminderManager = registry.Get<Netclaw.Actors.Hosting.ReminderManagerActorKey>();
             var tp = sp.GetRequiredService<TimeProvider>();
             var historyStore = sp.GetRequiredService<ReminderHistoryStore>();
-            var targetResolver = sp.GetService<Netclaw.Actors.Reminders.IReminderTargetResolver>();
-            toolRegistry.WithReminderTools(reminderManager, tp, historyStore, targetResolver);
+            var targetResolvers = sp.GetServices<Netclaw.Actors.Reminders.IReminderTargetResolver>();
+            toolRegistry.WithReminderTools(reminderManager, tp, historyStore, targetResolvers);
 
             // Drain all active LLM sessions during any actor system termination (SIGTERM, daemon stop).
             // Runs in an early CoordinatedShutdown phase while actors are still alive.
@@ -1226,8 +1226,8 @@ static void MapReminderEndpoints(WebApplication app)
             ? request.Id
             : Netclaw.Actors.Reminders.ReminderIdGenerator.Generate(request.Name).Value;
 
-        var reminderResolver = serviceProvider.GetService<Netclaw.Actors.Reminders.IReminderTargetResolver>();
-        var tool = new Netclaw.Actors.Reminders.SetReminderTool(manager, timeProvider, reminderResolver);
+        var reminderResolvers = serviceProvider.GetServices<Netclaw.Actors.Reminders.IReminderTargetResolver>();
+        var tool = new Netclaw.Actors.Reminders.SetReminderTool(manager, timeProvider, reminderResolvers);
         var toolContext = new Netclaw.Tools.ToolExecutionContext(sessionId: null, sessionDirectory: null);
         toolContext.Audience = authorization?.SourceAudience?.ToWireValue();
         toolContext.ChannelType = "manual";
@@ -1391,10 +1391,11 @@ static void MapReminderEndpoints(WebApplication app)
             schedule = Netclaw.Actors.Reminders.ListRemindersTool.DescribeSchedule(r.Schedule),
             nextFire = Netclaw.Actors.Reminders.SetReminderTool.FormatNextFire(r.NextFire),
             instructions = r.Instructions,
-            notifyInstructions = r.NotifyInstructions,
-            notifyPolicy = r.NotifyPolicy.ToString().ToLowerInvariant(),
-            sessionId = r.SessionId,
-            reportToChannel = r.ReportToChannel,
+            deliveryKind = r.Delivery.Kind.ToString().ToLowerInvariant(),
+            deliveryTransport = r.Delivery.Transport,
+            deliveryAddress = r.Delivery.Address,
+            deliveryRequired = r.DeliveryRequired,
+            deliveryInstructions = r.DeliveryInstructions,
             audience = r.Audience?.ToWireValue(),
         });
     });
