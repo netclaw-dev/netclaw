@@ -113,30 +113,9 @@ public sealed class FileSubAgentDefinitionLoader
             return null;
         }
 
+        // Tools are optional. When omitted, the subagent inherits session tools at spawn time.
+        // This matches Claude Code's agent format where tools are not specified.
         var tools = frontmatter.Tools ?? [];
-        if (tools.Count == 0)
-        {
-            _logger.LogWarning(
-                "Agent '{Name}' at {Path} has no tools defined — skipping",
-                frontmatter.Name, filePath);
-            return null;
-        }
-
-        var disallowedTools = tools
-            .Where(t => !SubAgentToolPolicy.IsAllowedForUserFacing(t))
-            .Distinct(StringComparer.Ordinal)
-            .OrderBy(t => t, StringComparer.Ordinal)
-            .ToList();
-        if (disallowedTools.Count > 0)
-        {
-            _logger.LogWarning(
-                "Agent '{Name}' at {Path} references disallowed tools for user-facing agents: {Tools}. Allowed tools: {AllowedTools}. Skipping",
-                frontmatter.Name,
-                filePath,
-                string.Join(", ", disallowedTools),
-                string.Join(", ", SubAgentToolPolicy.GetAllowedUserFacingTools()));
-            return null;
-        }
 
         var modelRole = ParseModelRole(frontmatter.ModelRole);
         var visibility = ParseVisibility(frontmatter.Visibility);

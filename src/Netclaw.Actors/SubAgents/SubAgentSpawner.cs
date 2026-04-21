@@ -168,19 +168,18 @@ public sealed class SubAgentSpawner
 
     private IReadOnlyList<INetclawTool> ResolveTools(SubAgentProfile profile)
     {
+        // When no tools specified, inherit all registered tools (matches Claude Code behavior).
+        // When tools are specified, use them as a whitelist to limit access.
+        if (profile.ToolNames.Count == 0)
+        {
+            return _toolRegistry.GetAllRegistrations()
+                .Select(r => r.Tool)
+                .ToList();
+        }
+
         var tools = new List<INetclawTool>();
         foreach (var name in profile.ToolNames)
         {
-            if (profile.Visibility == SubAgentVisibility.UserFacing
-                && !SubAgentToolPolicy.IsAllowedForUserFacing(name))
-            {
-                _logger.LogWarning(
-                    "SubAgent [{AgentName}] references tool '{ToolName}' which is not allowed for user-facing agents — skipping",
-                    profile.Name,
-                    name);
-                continue;
-            }
-
             var tool = _toolRegistry.GetByName(name);
             if (tool is not null)
             {
