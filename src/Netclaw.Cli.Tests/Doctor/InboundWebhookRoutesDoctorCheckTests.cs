@@ -85,7 +85,7 @@ public sealed class InboundWebhookRoutesDoctorCheckTests : IDisposable
         var result = await check.RunAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(DoctorSeverity.Error, result.Severity);
-        Assert.Contains("missing a Prompt", result.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Prompt is required", result.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     private void WriteRouteFile(string routeName, WebhookRouteConfig route)
